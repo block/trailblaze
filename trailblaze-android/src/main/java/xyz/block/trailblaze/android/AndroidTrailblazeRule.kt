@@ -65,6 +65,7 @@ import xyz.block.trailblaze.scripting.fetch.OkHttpFetchExtension
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
+import xyz.block.trailblaze.toolcalls.carriesPayload
 import xyz.block.trailblaze.yaml.DirectionStep
 import xyz.block.trailblaze.yaml.TrailConfig
 import xyz.block.trailblaze.yaml.TrailYamlItem
@@ -334,6 +335,18 @@ open class AndroidTrailblazeRule(
 
   val trailblazeAgent: MaestroTrailblazeAgent by lazy {
     agentOverride ?: when (trailblazeLoggingRule.driverTypeOverride) {
+      // Refused, not fallen through. ANDROID_TEST drives the app in-process through Espresso and
+      // the app's own Compose rule, which this rule has neither of, so the `else` branch below
+      // would silently replay the trail on Maestro instead — a green run on a driver nobody asked
+      // for. A trail pinned to ANDROID_TEST belongs in an instrumentation test built on
+      // `AndroidTestTrailblazeTest` (module `:trailblaze-android-test`).
+      TrailblazeDriverType.ANDROID_TEST -> throw TrailblazeException(
+        "AndroidTrailblazeRule cannot run the ANDROID_TEST driver: it drives the app in-process " +
+          "through Espresso and the app's own AndroidComposeTestRule, and this rule owns neither. " +
+          "Run this trail from an AndroidTestTrailblazeTest subclass (:trailblaze-android-test), " +
+          "or pick a driver this rule supports " +
+          "(${TrailblazeDriverType.DEFAULT_ANDROID.name}).",
+      )
       TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY -> AccessibilityTrailblazeAgent(
         trailblazeLogger = trailblazeLoggingRule.logger,
         trailblazeDeviceInfoProvider = trailblazeLoggingRule.trailblazeDeviceInfoProvider,
@@ -891,6 +904,9 @@ open class AndroidTrailblazeRule(
       target = target,
       sessionId = sessionId,
       deviceInfo = trailblazeLoggingRule.trailblazeDeviceInfoProvider(),
+      // Standard WHATWG `fetch`, OkHttp-backed — the same binding every host launcher installs,
+      // so a scripted tool's HTTP works identically on-device and host-dispatched.
+      engineExtension = OkHttpFetchExtension(),
     )
 
   override fun run(
@@ -1084,17 +1100,3 @@ open class AndroidTrailblazeRule(
     )
   }
 }
-
-/**
- * `true` when this [TrailblazeToolResult.Success] carries data the on-device-RPC return path
- * should mirror onto [xyz.block.trailblaze.llm.RunYamlResponse.toolMessage] /
- * [xyz.block.trailblaze.llm.RunYamlResponse.toolStructuredContent]. Empty `Success()` values
- * (produced by `handleConfig(...)`, by prompt-steps whose recorded path resolves without a
- * narrative, and by action-style tools whose return value is just a verdict) are NOT payload-
- * bearing and must not overwrite a previous data-returning Success in the trail-item fold.
- *
- * Pulled out to a top-level extension so the fold logic in [AndroidTrailblazeRule.runSuspend]
- * is unit-testable without standing up the full Android instrumentation harness.
- */
-internal fun TrailblazeToolResult.Success.carriesPayload(): Boolean =
-  message != null || structuredContent != null

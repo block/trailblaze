@@ -130,6 +130,12 @@ open class AppCommand : Callable<Int> {
    */
   private fun launchInBackground(): Int {
     val port = parent.getEffectivePort()
+    // Before the probe below: a device's `adb forward` on the configured port answers /ping, and
+    // "already running" for a port no daemon can bind would exit 0 on a configuration error.
+    TrailblazeDevicePort.requireDaemonPortsOutsideDeviceAllocationRange(
+      httpPort = port,
+      httpsPort = parent.getEffectiveHttpsPort(),
+    )
 
     // Single DaemonClient instance for all checks in this method.
     return DaemonClient(port = port).use { daemon ->
@@ -229,12 +235,14 @@ open class AppCommand : Callable<Int> {
     }
   }
 
+  // Both use the unchecked port: they act on a daemon that is already running, and one started
+  // before the device-allocation-range check existed still has to be stoppable and reportable.
   private fun doStop(): Int {
-    return shutdownDaemonAndWait(parent.getEffectivePort())
+    return shutdownDaemonAndWait(parent.getRunningDaemonPortUnchecked())
   }
 
   private fun doStatus(): Int {
-    return DaemonClient(port = parent.getEffectivePort()).use { daemon ->
+    return DaemonClient(port = parent.getRunningDaemonPortUnchecked()).use { daemon ->
       if (!daemon.isRunningBlocking()) {
         Console.log("Trailblaze daemon is not running.")
         Console.log("")

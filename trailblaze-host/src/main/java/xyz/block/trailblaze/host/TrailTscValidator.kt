@@ -7,8 +7,8 @@ import java.util.concurrent.TimeUnit
 import xyz.block.trailblaze.agent.trail.toJsonArgs
 import xyz.block.trailblaze.toolcalls.TrailblazeToolDescriptor
 import xyz.block.trailblaze.toolcalls.coerceArgsToDescriptorTypes
+import xyz.block.trailblaze.toolcalls.commands.SwitchDeviceTrailblazeTool
 import xyz.block.trailblaze.util.Console
-import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.TrailblazeToolYamlWrapper
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
 import xyz.block.trailblaze.yaml.unified.TrailDocument
@@ -21,6 +21,20 @@ import xyz.block.trailblaze.yaml.unified.UnifiedTrail
  * throwaway TypeScript file and compiling it with the bundled `tsc`. A unified trail's per-step
  * `recording:` classifier slots are each validated in full (no closest-wins lowering), so a bad
  * call in any device's slot is caught and attributed to its step + classifier.
+ *
+ * ## One trail, one target per DEVICE — not per trail
+ *
+ * A multi-device configuration gives each named device its own `target:`, and the runtime honors that
+ * per device — a companion's agent resolves ITS target's tools, not the session target's (see
+ * [xyz.block.trailblaze.host.yaml.MultiDeviceConfigurationResolver.resolveMemberTargets]). So a trail
+ * is not checked against one surface: [attributeRecordedCalls] replays each configuration leg
+ * statically, tracking which member is active across the leg's `switchDevice` handovers, and every
+ * call is checked against the surface of the target THAT member runs. The calls partition by target
+ * and each partition gets its own gen file under its own trailmap.
+ *
+ * Validating a mixed-target trail against a single target reds on every tool that exists only on the
+ * other member's surface, which is why such a trail previously had to omit its `target:` entirely and
+ * get no type-checking at all.
  *
  * ## Why this exists
  *
@@ -133,6 +147,12 @@ object TrailTscValidator {
      * unified-format trail. Null for v1 trails, whose recordings aren't classifier-keyed.
      */
     val classifier: String? = null,
+    /**
+     * The configuration member this call dispatches on, when its leg is a multi-device configuration
+     * leg. Null for an ordinary single-device leg. Carried so a finding on a shared leg names the
+     * device it was judged as, rather than leaving a reader to re-derive it from the handovers.
+     */
+    val deviceName: String? = null,
   )
 
   /** A generated throwaway `.trail.gen.ts` source plus its `genLine -> call` mapping table. */
@@ -146,10 +166,16 @@ object TrailTscValidator {
     val toolName: String,
     val tsCode: String,
     val message: String,
-    /** The trail's `target:` value (null for a no-`target:` trail). Used to classify exemptions. */
+    /**
+     * The target this call was checked against — the device's own `target:` in a multi-device
+     * configuration, else the trail's `config.target:` (null when it declares none). Used to
+     * classify exemptions.
+     */
     val target: String? = null,
     /** The unified-format classifier slot the offending call sits in; null for v1 trails. */
     val classifier: String? = null,
+    /** The configuration member the call dispatches on; null on a single-device leg. */
+    val deviceName: String? = null,
   )
 
   /**
@@ -176,6 +202,12 @@ object TrailTscValidator {
      */
     val skippedNoManifest: Map<String, Int> = emptyMap(),
     val skippedNoRecording: Int,
+    /**
+     * Recorded calls dropped because the static replay of a multi-device leg could no longer say
+     * which device is active — see [attributeRecordedCalls]. Reported so the coverage this costs is
+     * visible rather than silently missing; never fatal, since no target could be attributed.
+     */
+    val skippedUndeterminedDevice: Int = 0,
     val errors: List<String>,
     /**
      * Findings that FAIL the build: on a non-exempt target. Empty when the gate is satisfied.
@@ -217,7 +249,7 @@ object TrailTscValidator {
     for (call in calls) {
       val lineNo = lines.size + 1 // 1-based line this statement will occupy
       val label = singleLine(call.stepLabel).take(70)
-      val slot = call.classifier?.let { " [${singleLine(it)}]" } ?: ""
+      val slot = call.classifier?.let { " [${slotLabel(it, call.deviceName)}]" } ?: ""
       lines.add("  ${calleeExpr(call.toolName)}(${call.argsJson}); // step ${call.stepIndex}$slot: $label")
       table[lineNo] = call
     }
@@ -239,6 +271,14 @@ object TrailTscValidator {
     } else {
       "client.tools[${jsonStringLiteral(toolName)}]"
     }
+
+  /**
+   * How a call's recording leg is named in generated comments and report rows: the classifier slot,
+   * plus the configuration member the call dispatches on when the leg is a multi-device one
+   * (`register-kitchen → kitchen`). Both halves are YAML-sourced, so both go through [singleLine].
+   */
+  private fun slotLabel(classifier: String, deviceName: String?): String =
+    singleLine(classifier) + (deviceName?.let { " → ${singleLine(it)}" } ?: "")
 
   /**
    * Collapse CR/LF to spaces so interpolated YAML-sourced text (a step label, a classifier key —
@@ -265,7 +305,11 @@ object TrailTscValidator {
   data class GenFileMeta(
     val trailRelPath: String,
     val table: Map<Int, RecordedCall>,
-    /** The source trail's `target:` value (null for a no-`target:` trail); flows onto each [Finding]. */
+    /**
+     * The target this gen file was compiled against; flows onto each [Finding]. One trail can
+     * produce several gen files — one per target its devices run — so this is the GROUP's target,
+     * not necessarily the trail's `config.target:`.
+     */
     val target: String? = null,
   )
 
@@ -306,6 +350,7 @@ object TrailTscValidator {
               message = message,
               target = meta.target,
               classifier = call.classifier,
+              deviceName = call.deviceName,
             ),
           )
           current = findings.size - 1
@@ -326,6 +371,12 @@ object TrailTscValidator {
    * `tools/trailblaze-client.d.ts` + `tools/tsconfig.json`). Side-effecting: writes and deletes
    * throwaway `*.trail.gen.ts` files under each trailmap's `tools/` dir, and spawns one `tsc` per
    * trailmap that has trails to validate.
+   *
+   * A trail's calls are partitioned by the target the device that dispatches them runs (see
+   * [attributeRecordedCalls]), so a multi-device trail whose members declare different `target:`s
+   * stages one gen file per target rather than being checked — wrongly — against a single surface.
+   * The skip buckets are counted per trail-and-target for the same reason: such a trail can have one
+   * member's target validated and another's read as a permanent skip.
    *
    * Never throws — per-trail and per-trailmap failures are captured into [Report.errors] so a
    * single bad file can't abort the whole pass.
@@ -369,6 +420,7 @@ object TrailTscValidator {
     val skippedNoSurface = mutableMapOf<String, Int>()
     val skippedNoManifest = mutableMapOf<String, Int>()
     var skippedNoRecording = 0
+    var skippedUndeterminedDevice = 0
     var discovered = 0
 
     // A trail staged for validation: its gen-file source + target path + the remap metadata. Gen
@@ -391,50 +443,57 @@ object TrailTscValidator {
         // One version-aware parse per trail; the format is detected from CONTENT, never the
         // filename (a unified trail may be a bare `trail.yaml` or carry any name).
         val doc = yaml.decodeTrailDocument(text)
-        val target = when (doc) {
-          is TrailDocument.Unified -> doc.trail.config.target
-        }
-        val trailmapDir = target?.let { trailmapDirByName[it] }
-        if (trailmapDir == null) {
-          val key = target ?: NO_TARGET_KEY
-          // Split a no-loaded-surface trail two ways:
-          //  - a target with a reachable manifest (in [knownManifestTargets]) whose surface just
-          //    wasn't loaded in this run → skipped-no-surface (fatal on an all-workspace pass, so an
-          //    uncovered target can't slip in silently).
-          //  - a target with NO manifest anywhere (placeholder / package-id targets, the no-target:
-          //    case) → skipped-no-manifest: it can never be validated, so it's a permanent, non-fatal
-          //    skip rather than something a hand-maintained exemption list has to carry.
-          if (key in knownManifestTargets) {
-            skippedNoSurface[key] = (skippedNoSurface[key] ?: 0) + 1
-          } else {
-            skippedNoManifest[key] = (skippedNoManifest[key] ?: 0) + 1
-          }
-          continue
-        }
-        val descriptors = descriptorsByTrailmap.getOrPut(trailmapDir) {
-          TrailValidationDescriptorSidecar.read(trailmapDir)
-        }
-        val calls = extractRecordedCalls(doc, descriptors)
-        if (calls.isEmpty()) {
+        val attribution = attributeRecordedCalls(doc)
+        skippedUndeterminedDevice += attribution.undeterminedDeviceCalls
+        if (attribution.calls.isEmpty()) {
           skippedNoRecording++
           continue
         }
-        val gen = generateGenFile(rel, calls)
-        // Unique gen-file name per trail: a sanitized stem (readable) plus a stable hash of the
-        // full relative path, so two distinct trails that sanitize to the same stem can't collide
-        // (the gen files share one `tools/` dir and are keyed by basename in remap).
-        val stem = rel.replace(Regex("[^A-Za-z0-9]"), "_")
-        val unique = Integer.toHexString(rel.hashCode())
-        val genPath = trailmapDir.resolve("tools").resolve("${stem}_$unique.trail.gen.ts")
-        stagedByTrailmap.getOrPut(trailmapDir) { mutableListOf() }
-          .add(Staged(genPath, gen.source, GenFileMeta(rel, gen.table, target), calls.size))
+        // One gen file per target this trail's devices run. Grouping preserves encounter order, so
+        // each target's file keeps the trail's own call order.
+        for ((target, attributed) in attribution.calls.groupBy { it.target }) {
+          val trailmapDir = target?.let { trailmapDirByName[it] }
+          if (trailmapDir == null) {
+            val key = target ?: NO_TARGET_KEY
+            // Split a no-loaded-surface target two ways:
+            //  - a target with a reachable manifest (in [knownManifestTargets]) whose surface just
+            //    wasn't loaded in this run → skipped-no-surface (fatal on an all-workspace pass, so an
+            //    uncovered target can't slip in silently).
+            //  - a target with NO manifest anywhere (placeholder / package-id targets, the no-target:
+            //    case) → skipped-no-manifest: it can never be validated, so it's a permanent, non-fatal
+            //    skip rather than something a hand-maintained exemption list has to carry.
+            if (key in knownManifestTargets) {
+              skippedNoSurface[key] = (skippedNoSurface[key] ?: 0) + 1
+            } else {
+              skippedNoManifest[key] = (skippedNoManifest[key] ?: 0) + 1
+            }
+            continue
+          }
+          val descriptors = descriptorsByTrailmap.getOrPut(trailmapDir) {
+            TrailValidationDescriptorSidecar.read(trailmapDir)
+          }
+          val calls = attributed.map { it.toRecordedCall(descriptors) }
+          val gen = generateGenFile(rel, calls)
+          // Unique gen-file name per trail: a sanitized stem (readable) plus a stable hash of the
+          // full relative path, so two distinct trails that sanitize to the same stem can't collide
+          // (the gen files share one `tools/` dir and are keyed by basename in remap). No target in
+          // the name: distinct targets resolve to distinct trailmap dirs, so one trail contributes at
+          // most one gen file per dir.
+          val stem = rel.replace(Regex("[^A-Za-z0-9]"), "_")
+          val unique = Integer.toHexString(rel.hashCode())
+          val genPath = trailmapDir.resolve("tools").resolve("${stem}_$unique.trail.gen.ts")
+          stagedByTrailmap.getOrPut(trailmapDir) { mutableListOf() }
+            .add(Staged(genPath, gen.source, GenFileMeta(rel, gen.table, target), calls.size))
+        }
       } catch (e: Exception) {
         errors.add("$rel: ${e::class.simpleName}: ${e.message}")
       }
     }
 
     val findings = mutableListOf<Finding>()
-    var validated = 0
+    // Trails, not staged gen files: a mixed-target trail stages one file per target and must still
+    // count once.
+    val validatedTrails = mutableSetOf<String>()
     var toolCalls = 0
     for ((trailmapDir, staged) in stagedByTrailmap) {
       val tsconfig = trailmapDir.resolve("tools").resolve("tsconfig.json")
@@ -447,7 +506,7 @@ object TrailTscValidator {
         val output = runTsc(jsRuntime, tscJs, tsconfig, timeoutMs, trailmapDir.fileName.toString())
         val metas = staged.associate { it.genPath.fileName.toString() to it.meta }
         findings += remap(output, metas)
-        validated += staged.size
+        staged.forEach { validatedTrails.add(it.meta.trailRelPath) }
         toolCalls += staged.sumOf { it.callCount }
       } catch (e: Exception) {
         errors.add("${trailmapDir.fileName}: tsc run failed: ${e::class.simpleName}: ${e.message}")
@@ -461,12 +520,13 @@ object TrailTscValidator {
 
     return Report(
       trailsDiscovered = discovered,
-      trailsValidated = validated,
+      trailsValidated = validatedTrails.size,
       toolCallsChecked = toolCalls,
       findings = findings,
       skippedNoSurface = skippedNoSurface,
       skippedNoManifest = skippedNoManifest,
       skippedNoRecording = skippedNoRecording,
+      skippedUndeterminedDevice = skippedUndeterminedDevice,
       errors = errors,
       fatalFindings = classification.fatalFindings,
       fatalMissingSurfaceTargets = classification.fatalMissingSurfaceTargets,
@@ -524,83 +584,268 @@ object TrailTscValidator {
   internal fun isTrailFile(fileName: String): Boolean =
     fileName.endsWith(".trail.yaml") || fileName == "trail.yaml"
 
-  /**
-   * PURE. Flatten a parsed trail's recorded tool calls into [RecordedCall]s, format-aware:
-   *
-   *  - **v1** — per-step recordings under `prompts:` ([TrailYamlItem.PromptsTrailItem]) and a
-   *    top-level `tools:` block ([TrailYamlItem.ToolTrailItem], reported as step 0).
-   *  - **Unified** — EVERY per-step `recording:` classifier slot (`android:`, `ios-iphone:`, …)
-   *    contributes its tool list, each call tagged with its classifier for attribution. No
-   *    closest-wins lowering here: validation checks all slots, not one device's resolution.
-   *    The trailhead's per-classifier bootstrap tools are validated the same way as step 0.
-   *
-   * A trail with no recorded calls yields an empty list (caller treats it as skipped-no-recording).
-   *
-   * [descriptorsByName] carries the tool's declared parameter types (from the emitter's arg-type
-   * sidecar) so each recorded call's scalar args can be coerced back to their declared types before
-   * transpiling — see [toRecordedCall]. Empty (the default) means no coercion, matching the
-   * pre-sidecar behavior and keeping the pure codegen tests device- and sidecar-free.
-   */
-  internal fun extractRecordedCalls(
-    doc: TrailDocument,
-    descriptorsByName: Map<String, TrailblazeToolDescriptor> = emptyMap(),
-  ): List<RecordedCall> = when (doc) {
-    is TrailDocument.Unified -> extractUnifiedRecordedCalls(doc.trail, descriptorsByName)
-  }
-
-  private fun extractUnifiedRecordedCalls(
-    trail: UnifiedTrail,
-    descriptorsByName: Map<String, TrailblazeToolDescriptor>,
-  ): List<RecordedCall> {
-    val calls = mutableListOf<RecordedCall>()
-    forEachRecordedTool(trail) { stepIndex, label, classifier, tool ->
-      calls.add(tool.toRecordedCall(stepIndex = stepIndex, label = label, classifier = classifier, descriptorsByName = descriptorsByName))
-    }
-    return calls
-  }
+  /** One recorded leg: the tools a single step declares under a single `recording:` slot. */
+  internal data class RecordedLeg(
+    /** The trailhead is the deterministic step 0; `trail:` entries are their index + 1. */
+    val stepIndex: Int,
+    val stepLabel: String,
+    val classifier: String,
+    val tools: List<TrailblazeToolYamlWrapper>,
+  )
 
   /**
-   * Single owner of the recorded-tool flatten over a unified trail: the trailhead is the
-   * deterministic step 0, list steps are index + 1, and every classifier slot's every tool is
-   * visited. Both the recording type-checker ([extractRecordedCalls]) and [SelectorDialectLint]
-   * consume this, so the step-index convention can't drift between them.
+   * Single owner of the recorded-leg walk over a unified trail: the trailhead is the deterministic
+   * step 0, list steps are index + 1, and every classifier slot is visited. Everything that reads a
+   * trail's recordings here goes through this, so the step-index convention can't drift.
+   *
+   * Legs rather than a flat tool list because attribution is per leg and ORDERED within it — a
+   * `switchDevice` moves the session for the calls that follow it in the same leg, and for nothing
+   * else.
    */
-  internal fun forEachRecordedTool(
-    trail: UnifiedTrail,
-    action: (stepIndex: Int, stepLabel: String, classifier: String, tool: TrailblazeToolYamlWrapper) -> Unit,
-  ) {
+  internal fun recordedLegs(trail: UnifiedTrail): List<RecordedLeg> = buildList {
     trail.trailhead?.let { trailhead ->
       trailhead.recordings.forEach { (classifier, tools) ->
-        tools.forEach { action(0, trailhead.step, classifier, it) }
+        add(RecordedLeg(0, trailhead.step, classifier, tools))
       }
     }
     trail.trail.forEachIndexed { index, step ->
       step.recordings.forEach { (classifier, tools) ->
-        tools.forEach { action(index + 1, step.step, classifier, it) }
+        add(RecordedLeg(index + 1, step.step, classifier, tools))
       }
     }
   }
 
-  private fun TrailblazeToolYamlWrapper.toRecordedCall(
-    stepIndex: Int,
-    label: String,
-    classifier: String? = null,
-    descriptorsByName: Map<String, TrailblazeToolDescriptor> = emptyMap(),
-  ): RecordedCall {
-    val rawArgs = toJsonArgs()
-    // Re-align each scalar arg to its declared type BEFORE transpiling: a recorded quoted
-    // passcode/flag surfaces as a JSON number/boolean (kaml drops quote style), which `tsc`
-    // would otherwise flag as `number not assignable to string` on a faithfully-recorded trail.
-    // This is the same coercion replay applies at dispatch; here it clears the false findings.
-    val descriptor = descriptorsByName[name]
-    val args = if (descriptor != null) coerceArgsToDescriptorTypes(rawArgs, descriptor) else rawArgs
-    return RecordedCall(
-      toolName = name,
-      argsJson = args.toString(),
-      stepIndex = stepIndex,
-      stepLabel = label,
-      classifier = classifier,
-    )
+  /**
+   * One recorded call plus the device that dispatches it and the target that device runs — the unit
+   * [validate] partitions by. Holds the raw wrapper because the arg-type coercion needs the
+   * descriptors of the target's OWN trailmap, which the caller only resolves after grouping.
+   */
+  internal data class AttributedCall(
+    /** The target this call is checked against; null when neither the device nor the trail names one. */
+    val target: String?,
+    /** The configuration member dispatching this call; null on an ordinary single-device leg. */
+    val deviceName: String?,
+    val stepIndex: Int,
+    val stepLabel: String,
+    val classifier: String,
+    val tool: TrailblazeToolYamlWrapper,
+  ) {
+    /**
+     * Transpile-ready form. [descriptorsByName] carries the tool's declared parameter types (from
+     * the emitter's arg-type sidecar) so recorded scalar args can be coerced back to their declared
+     * types before transpiling. Empty means no coercion.
+     */
+    internal fun toRecordedCall(
+      descriptorsByName: Map<String, TrailblazeToolDescriptor> = emptyMap(),
+    ): RecordedCall {
+      val rawArgs = tool.toJsonArgs()
+      // Re-align each scalar arg to its declared type BEFORE transpiling: a recorded quoted
+      // passcode/flag surfaces as a JSON number/boolean (kaml drops quote style), which `tsc`
+      // would otherwise flag as `number not assignable to string` on a faithfully-recorded trail.
+      // This is the same coercion replay applies at dispatch; here it clears the false findings.
+      val descriptor = descriptorsByName[tool.name]
+      val args = if (descriptor != null) coerceArgsToDescriptorTypes(rawArgs, descriptor) else rawArgs
+      return RecordedCall(
+        toolName = tool.name,
+        argsJson = args.toString(),
+        stepIndex = stepIndex,
+        stepLabel = stepLabel,
+        classifier = classifier,
+        deviceName = deviceName,
+      )
+    }
+  }
+
+  /** Every attributable recorded call of a trail, plus what attribution could not reach. */
+  internal data class Attribution(
+    val calls: List<AttributedCall>,
+    /**
+     * Calls dropped because the static replay lost track of the active device AND the configuration
+     * is mixed-target, so which surface applies is undecidable. Counted rather than guessed at:
+     * attributing them to the last known member would check them against a surface the run may never
+     * use, and a wrong FATAL finding on a trail that replays fine is worse than the reported gap. A
+     * single-target configuration keeps its coverage here — see [attributeRecordedCalls].
+     */
+    val undeterminedDeviceCalls: Int = 0,
+  )
+
+  /**
+   * PURE. Attribute every recorded tool call of a parsed trail to the device that dispatches it and
+   * the target that device runs. EVERY `recording:` classifier slot contributes (`android:`,
+   * `ios-iphone:`, …) — no closest-wins lowering, so validation checks all slots rather than one
+   * device's resolution — and the trailhead's bootstrap tools are treated as step 0.
+   *
+   * ## Which target a call is checked against
+   *
+   * - **A leg keyed by a multi-device configuration name** is replayed statically, exactly the way
+   *   the runtime dispatches it: the session starts on the FIRST declared member and each recorded
+   *   `switchDevice` moves it, ACROSS legs — which device is active is session state, so a handover
+   *   in one step is still in force in the next. Each call is attributed to the active member and
+   *   checked against that
+   *   member's own `target:` override, falling back to the trail's `config.target:`. This is what
+   *   [xyz.block.trailblaze.host.yaml.MultiDeviceConfigurationResolver.resolveMemberTargets] does at
+   *   run time; without it a mixed-target cast reds on every tool that exists only on the other
+   *   member's surface. The `switchDevice` call itself is attributed to the member active BEFORE it,
+   *   which is the device that dispatches it.
+   * - **A leg keyed by a plain classifier, on a trail declaring exactly one configuration**, is a
+   *   FALLBACK leg of that same configuration, not a separate single-device run: the trail always
+   *   binds the configuration (`selectConfigurationName`), and the lowering puts the selected
+   *   configuration at the head of the resolution chain, letting a classifier key match when the
+   *   configuration key is absent (`UnifiedTrailAdapter`). The session is the same one, so such a leg
+   *   is replayed with the same member roster and the same active device — a `switchDevice` recorded
+   *   in it reroutes the tools after it, exactly as `activeAgent()` does at run time.
+   * - **Any other leg** — no configuration declared, or several, where which one binds is a run-time
+   *   selection — has no roster to replay against and falls back to the trail's `config.target:`.
+   *
+   * One step's slots are ALTERNATIVES, not a sequence — the lowering picks a single closest match, so
+   * a run executes at most one of them. All of them are still validated (any can be the winner on
+   * some device), but each replays from the device the step STARTED on, and only the winning slot's
+   * handover carries to the next step: a configuration-keyed slot where one exists, otherwise the
+   * fallback slots' result where they agree. Otherwise an unreachable slot's `switchDevice` would
+   * decide which surface the next step is checked against.
+   *
+   * ## Where it stops
+   *
+   * Past a handover the replay can't resolve — an undeclared or memory-interpolated `switchDevice`
+   * name, or a `switchDevice` nested in a conditional branch that may or may not run — the active
+   * device is genuinely undecidable, and stays that way for the rest of the configuration's legs.
+   * This mirrors [SelectorDialectLint]'s replay, which abandons a leg at the same points and for the
+   * same reason.
+   *
+   * The remaining calls are still checked when every member of the configuration resolves to the
+   * SAME target: the target is decided regardless of who is active, so only the device name is lost.
+   * Only a mixed-target configuration gives up its coverage there, counted into
+   * [Attribution.undeterminedDeviceCalls] rather than attributed to a guess.
+   *
+   * The replay RESUMES at the next top-level `switchDevice` naming a declared member: that is
+   * unconditional at run time — `switchTo(name)` leaves that member active whatever preceded it — so
+   * everything after it is decided again even though the switch itself dispatched on an unknown
+   * device. Without this, one conditional handover cost the rest of the trail its coverage.
+   */
+  internal fun attributeRecordedCalls(doc: TrailDocument): Attribution = when (doc) {
+    is TrailDocument.Unified -> attributeRecordedCalls(doc.trail)
+  }
+
+  private fun attributeRecordedCalls(trail: UnifiedTrail): Attribution {
+    val sessionTarget = trail.config.target
+    val configurations = trail.config.devices.orEmpty().filterValues { it.isConfiguration }
+    // A trail declaring exactly one configuration always binds it, and the lowering puts the
+    // selected configuration at the HEAD of the resolution chain (UnifiedTrailAdapter) — so a leg
+    // keyed by a plain classifier is a fallback leg of that same configuration, running on the same
+    // session. It gets the same member roster and the same active-device state, handovers included.
+    val soleConfigurationName = configurations.entries.singleOrNull()?.key
+
+    // Which member each configuration is currently on. The first declared member is the start
+    // device, and this is SESSION state: a handover in step N is still in force in step N+1, the way
+    // SessionDeviceBindings.activeName and SelectorDialectLint's replay both hold it. Reset per leg
+    // it would forget the handover and check step N+1's companion-only tools against the start
+    // member's target — the false FATAL this pass exists to remove.
+    val activeMemberByConfiguration: MutableMap<String, String?> = configurations
+      .filterValues { it.devices.orEmpty().isNotEmpty() }
+      .mapValuesTo(mutableMapOf()) { (_, configuration) -> configuration.devices.orEmpty().keys.first() }
+
+    val calls = mutableListOf<AttributedCall>()
+    var undetermined = 0
+    // One step's slots are ALTERNATIVES, not a sequence: the lowering picks the single closest
+    // match, so a run executes at most one of them. They are all validated — any of them can be the
+    // winner on some device — but each replays from the device the step STARTED on, and the state
+    // committed for the next step is the winning slot's alone. Replaying them as a sequence would
+    // let an unreachable slot's `switchDevice` decide which surface the next step is checked against.
+    for ((_, step) in recordedLegs(trail).groupBy { it.stepIndex }) {
+      val resultsByConfiguration = mutableMapOf<String, MutableList<Pair<Boolean, String?>>>()
+      for (leg in step) {
+        val configurationName =
+          if (leg.classifier in configurations) leg.classifier else soleConfigurationName
+        val members = configurationName?.let { configurations.getValue(it).devices.orEmpty() }.orEmpty()
+        if (configurationName == null || members.isEmpty()) {
+          // No configuration governs this leg: either the trail declares none, or it declares several
+          // and which one binds is a run-time selection, so there is no roster to replay against.
+          leg.tools.forEach { tool ->
+            calls.add(
+              AttributedCall(
+                target = sessionTarget,
+                deviceName = null,
+                stepIndex = leg.stepIndex,
+                stepLabel = leg.stepLabel,
+                classifier = leg.classifier,
+                tool = tool,
+              ),
+            )
+          }
+          continue
+        }
+        // Every member resolving to the same target decides the target no matter which one is active,
+        // so an unresolvable handover there costs the device NAME but not the type-checking. Most
+        // multi-device trails are this shape; dropping their whole leg would be the bulk of the gate.
+        val memberTargets = members.values.mapTo(mutableSetOf()) { it.target ?: sessionTarget }
+
+        var activeMember: String? = activeMemberByConfiguration[configurationName]
+        for (tool in leg.tools) {
+          val member = activeMember
+          if (member == null) {
+            if (memberTargets.size == 1) {
+              calls.add(
+                AttributedCall(
+                  target = memberTargets.first(),
+                  deviceName = null,
+                  stepIndex = leg.stepIndex,
+                  stepLabel = leg.stepLabel,
+                  classifier = leg.classifier,
+                  tool = tool,
+                ),
+              )
+            } else {
+              undetermined++
+            }
+            // A top-level `switchDevice` naming a declared member is unconditional at run time —
+            // `switchTo(name)` leaves that member active whatever was active before, and it is
+            // idempotent when it already was. So the replay RESUMES here: it still cannot say which
+            // device dispatched the switch itself, but everything after it is decided again.
+            if (tool.name == SwitchDeviceTrailblazeTool.ADVERTISED_TOOL_NAME) {
+              activeMember = MultiDeviceHandoverGuard.readTargetName(tool)?.takeIf { it in members.keys }
+            }
+            continue
+          }
+          calls.add(
+            AttributedCall(
+              target = members.getValue(member).target ?: sessionTarget,
+              deviceName = member,
+              stepIndex = leg.stepIndex,
+              stepLabel = leg.stepLabel,
+              classifier = leg.classifier,
+              tool = tool,
+            ),
+          )
+          activeMember = when {
+            tool.name == SwitchDeviceTrailblazeTool.ADVERTISED_TOOL_NAME ->
+              // An unreadable or undeclared name resolves to nothing the replay can follow. The name
+              // itself is reported by SelectorDialectLint's handover pass, not here.
+              MultiDeviceHandoverGuard.readTargetName(tool)?.takeIf { it in members.keys }
+            // A handover nested in a conditional dispatches for real, but whether its branch runs is a
+            // run-time question, so past one the active device is undecidable. Asked against the
+            // bindable names so a predicate switch that can only throw (caught, false verdict, same
+            // device) doesn't cost the rest of the leg its coverage.
+            MultiDeviceHandoverGuard.canMoveSession(tool, members.keys) -> null
+            else -> member
+          }
+        }
+        resultsByConfiguration.getOrPut(configurationName) { mutableListOf() }
+          .add((leg.classifier == configurationName) to activeMember)
+      }
+      // Commit the winning slot's device, carrying an undetermined one forward with it: an
+      // unresolvable handover does not become resolvable because the step ended. A configuration-keyed
+      // slot always wins where one exists — it heads the resolution chain. Among fallback slots alone
+      // (`android:` vs `ios-iphone:`) the winner is the run's device, so they only decide the next
+      // step where they agree; where they disagree the device is genuinely run-dependent.
+      resultsByConfiguration.forEach { (name, results) ->
+        val keyed = results.firstOrNull { (isKeyed, _) -> isKeyed }
+        activeMemberByConfiguration[name] = when {
+          keyed != null -> keyed.second
+          else -> results.map { (_, member) -> member }.distinct().singleOrNull()
+        }
+      }
+    }
+    return Attribution(calls, undetermined)
   }
 
   /**
@@ -652,6 +897,14 @@ object TrailTscValidator {
     appendLine("Trails validated:         ${report.trailsValidated}")
     appendLine("Tool calls type-checked:  ${report.toolCallsChecked}")
     if (report.skippedNoRecording > 0) appendLine("Skipped (no recording):   ${report.skippedNoRecording}")
+    if (report.skippedUndeterminedDevice > 0) {
+      // Named rather than folded into a total: this is coverage the pass gave up, and a silent
+      // omission would read as "everything was checked".
+      appendLine(
+        "Skipped (device undetermined after a handover this gate can't resolve statically): " +
+          "${report.skippedUndeterminedDevice} tool call(s)",
+      )
+    }
     if (report.skippedNoManifest.isNotEmpty()) {
       // Permanent, non-fatal skips: no trailmap manifest exists for these target strings.
       appendLine("Skipped (no manifest):    ${report.skippedNoManifest}")
@@ -691,7 +944,7 @@ object TrailTscValidator {
         currentTrail = f.trailRelPath
       }
       val short = f.message.substringBefore(". ").take(140)
-      val slot = f.classifier?.let { " [${singleLine(it)}]" } ?: ""
+      val slot = f.classifier?.let { " [${slotLabel(it, f.deviceName)}]" } ?: ""
       appendLine("     · step ${f.stepIndex}$slot \"${singleLine(f.stepLabel).take(48)}\" — tool ${f.toolName}: $short  [${f.tsCode}]")
     }
   }

@@ -395,6 +395,7 @@ class BridgeUiActionExecutor(
     return root.aggregate().mapNotNull { node ->
       when (val detail = node.driverDetail) {
         is DriverNodeDetail.AndroidAccessibility -> describeAndroidAccessibilityNode(detail)
+        is DriverNodeDetail.AndroidView -> describeAndroidViewNode(detail)
         is DriverNodeDetail.AndroidMaestro -> describeAndroidMaestroNode(detail)
         is DriverNodeDetail.IosMaestro -> describeIosMaestroNode(detail)
         is DriverNodeDetail.IosAxe -> detail.resolveText()
@@ -417,6 +418,26 @@ class BridgeUiActionExecutor(
       ?: return null
     val label = rawLabel.truncate(MAX_LABEL_LENGTH)
     val type = inferTypeFromAndroidAccessibility(detail)
+    return if (type != null) "[$type] $label" else label
+  }
+
+  /**
+   * Extracts a label from a [DriverNodeDetail.AndroidView] node, or null if not actionable.
+   *
+   * No importance or systemui filtering, unlike [describeAndroidAccessibilityNode]: an in-process
+   * View tree only ever spans the app's own windows and carries neither property.
+   */
+  private fun describeAndroidViewNode(detail: DriverNodeDetail.AndroidView): String? {
+    val actionable = detail.isClickable || detail.isEditable || detail.isScrollable ||
+      detail.isChecked != null
+    if (!actionable) return null
+
+    val rawLabel = detail.text?.takeIf { it.isNotBlank() }
+      ?: detail.contentDescription?.takeIf { it.isNotBlank() }
+      ?: detail.hintText?.takeIf { it.isNotBlank() }
+      ?: return null
+    val label = rawLabel.truncate(MAX_LABEL_LENGTH)
+    val type = inferTypeFromAndroidView(detail)
     return if (type != null) "[$type] $label" else label
   }
 
@@ -506,6 +527,28 @@ class BridgeUiActionExecutor(
     }
   }
 
+  /**
+   * Infers element type from [DriverNodeDetail.AndroidView] properties.
+   *
+   * A non-null `isChecked` is this shape's "is Checkable" signal, so it stands in for
+   * [DriverNodeDetail.AndroidAccessibility.isCheckable] — including its precedence over the
+   * class-name checks below, which keeps a Switch reporting the same type on both shapes.
+   */
+  private fun inferTypeFromAndroidView(detail: DriverNodeDetail.AndroidView): String? {
+    if (detail.isEditable) return ELEMENT_TYPE_INPUT
+    if (detail.isScrollable) return ELEMENT_TYPE_SCROLL
+    if (detail.isChecked != null) return ELEMENT_TYPE_CHECKBOX
+    val cls = detail.className?.substringAfterLast('.', "")?.lowercase() ?: return null
+    return when {
+      CLS_SWITCH in cls || CLS_TOGGLE in cls -> ELEMENT_TYPE_TOGGLE
+      CLS_RADIO in cls -> ELEMENT_TYPE_RADIO
+      CLS_TAB in cls -> ELEMENT_TYPE_TAB
+      CLS_BUTTON in cls -> ELEMENT_TYPE_BUTTON
+      CLS_IMAGE in cls && detail.isClickable -> ELEMENT_TYPE_ICON
+      else -> null
+    }
+  }
+
   /** Infers element type from [DriverNodeDetail.AndroidMaestro] properties. */
   private fun inferTypeFromAndroidMaestro(detail: DriverNodeDetail.AndroidMaestro): String? {
     if (!detail.hintText.isNullOrBlank()) return ELEMENT_TYPE_INPUT
@@ -552,6 +595,14 @@ class BridgeUiActionExecutor(
           if (detail.packageName?.startsWith("com.android.systemui") == true) return@mapNotNull null
           // Skip actionable elements — they're already in the main list
           val actionable = detail.isClickable || detail.isEditable || detail.isScrollable || detail.isCheckable
+          if (actionable) return@mapNotNull null
+          detail.text?.takeIf { it.isNotBlank() }
+            ?: detail.contentDescription?.takeIf { it.isNotBlank() }
+        }
+        is DriverNodeDetail.AndroidView -> {
+          // Predicate mirrors describeAndroidViewNode so the two lists stay a partition.
+          val actionable = detail.isClickable || detail.isEditable || detail.isScrollable ||
+            detail.isChecked != null
           if (actionable) return@mapNotNull null
           detail.text?.takeIf { it.isNotBlank() }
             ?: detail.contentDescription?.takeIf { it.isNotBlank() }
@@ -698,10 +749,12 @@ private fun String.truncate(max: Int): String =
 /** Detects platform from the TrailblazeNode tree by checking root and first child. */
 private fun detectPlatform(tree: TrailblazeNode): String? {
   if (tree.driverDetail is DriverNodeDetail.AndroidAccessibility) return "android"
+  if (tree.driverDetail is DriverNodeDetail.AndroidView) return "android"
   if (tree.driverDetail is DriverNodeDetail.IosMaestro) return "ios"
   // Check first child (root may be a wrapper with generic detail)
   val firstChild = tree.children.firstOrNull() ?: return null
   if (firstChild.driverDetail is DriverNodeDetail.AndroidAccessibility) return "android"
+  if (firstChild.driverDetail is DriverNodeDetail.AndroidView) return "android"
   if (firstChild.driverDetail is DriverNodeDetail.IosMaestro) return "ios"
   return null
 }

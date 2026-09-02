@@ -30,6 +30,13 @@ package xyz.block.trailblaze.scripting
  *  - `// __TRAILBLAZE_REGISTRATION__` — the registration footer (single-export by tool name here;
  *    multi-export enumeration in the Gradle forms).
  *
+ * The multi-export footer itself lives in the template too, between
+ * `// __TRAILBLAZE_MULTI_EXPORT_REGISTRATION_BEGIN__` and `..._END__`, for exactly the reason the
+ * rest of the wrapper does: three renderers that cannot import each other were each carrying their
+ * own copy, so they could disagree and register different tools from the same source. Every
+ * renderer strips the block from what it emits; the multi-export ones substitute it for
+ * `// __TRAILBLAZE_REGISTRATION__`.
+ *
  * Substituting a whole `// __TOKEN__\n` line means an empty replacement removes the line cleanly
  * (no stray blank). The blank lines that both forms share are baked into the template literally.
  */
@@ -43,6 +50,8 @@ internal object InProcessScriptedToolWrapperTemplate {
   const val IMPORT_SOURCE_TOKEN: String = "__TRAILBLAZE_IMPORT_SOURCE__"
   const val PRELUDE_TOKEN_LINE: String = "// __TRAILBLAZE_PRELUDE__\n"
   const val REGISTRATION_TOKEN_LINE: String = "// __TRAILBLAZE_REGISTRATION__\n"
+  const val MULTI_EXPORT_BEGIN_LINE: String = "// __TRAILBLAZE_MULTI_EXPORT_REGISTRATION_BEGIN__\n"
+  const val MULTI_EXPORT_END_LINE: String = "// __TRAILBLAZE_MULTI_EXPORT_REGISTRATION_END__\n"
 
   /** Read the committed template text from the classpath, raising a directed error if it's absent. */
   private val template: String by lazy {
@@ -77,8 +86,13 @@ internal object InProcessScriptedToolWrapperTemplate {
     registration: String,
   ): String =
     template
+      .substringBefore(MULTI_EXPORT_BEGIN_LINE)
       .replace(HEADER_TOKEN_LINE, header)
       .replace(IMPORT_SOURCE_TOKEN, importSource)
       .replace(PRELUDE_TOKEN_LINE, prelude)
       .replace(REGISTRATION_TOKEN_LINE, registration)
+
+  /** The template's multi-export footer — see [MULTI_EXPORT_BEGIN_LINE]. */
+  fun multiExportRegistration(): String =
+    template.substringAfter(MULTI_EXPORT_BEGIN_LINE).substringBefore(MULTI_EXPORT_END_LINE)
 }

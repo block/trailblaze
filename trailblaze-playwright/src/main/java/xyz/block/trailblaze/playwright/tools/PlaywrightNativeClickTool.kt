@@ -52,7 +52,7 @@ data class PlaywrightNativeClickTool(
       // out loudly with a diagnostic instead of firing into the void. The agent already
       // pre-resolves the click center in `resolveToolCenter` for the screenshot overlay,
       // so we don't need to compute coords here.
-      locator!!.first().click()
+      locator!!.click()
 
       val urlAfter = page.url()
       val navigated = urlBefore != urlAfter

@@ -4,7 +4,8 @@ config:
   id: 'wikipedia/test-custom-main-page-section'
   target: wikipedia
   devices:
-    web: PLAYWRIGHT_NATIVE
+    web:
+      driver: PLAYWRIGHT_NATIVE
   title: 'Wikipedia (scripted): verify all four main-page sections via one tool'
 
 trail:

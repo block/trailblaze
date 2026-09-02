@@ -56,20 +56,27 @@ enum class ViewHierarchyDetail {
   OFFSCREEN_ELEMENTS,
 
   /**
-   * Include elements that are in the viewport but visually covered (painted under)
-   * another element (modal, popup, toast, autocomplete dropdown, etc.).
+   * Include elements that are in the viewport but covered by another element
+   * (modal, popup, toast, autocomplete dropdown, etc.) such that a click would
+   * not reach them.
    *
-   * Uses VISUAL paint order (`document.elementsFromPoint`), not click hit-testing
-   * (`document.elementFromPoint`). The two differ for `pointer-events: none`
-   * overlays — common for non-modal toasts that visually float on top while leaving
-   * the page beneath interactive. The visual signal is the right one for SoM
-   * because the LLM reasons from the screenshot: if it can't see an element, it
-   * shouldn't be told the element is actionable in the prompt.
+   * Occlusion is decided by CLICK hit-testing, not visual paint order: the check
+   * is a 1:1 port of Playwright's `expectHitTarget` — the same actionability rule
+   * that produces `<el> intercepts pointer events` errors during `locator.click()`.
+   * An element counts as occluded exactly when Playwright would refuse to click it.
+   * See `BATCH_VIEWPORT_CHECK_JS` in [PlaywrightScreenState] for the ported algorithm.
    *
-   * By default these are filtered out of the compact element list. When this
-   * detail is requested, occluded elements are included with `(occluded)`
-   * annotations so the LLM can see what's hidden under the overlay and decide
-   * whether to dismiss it first.
+   * A consequence: a `pointer-events: none` overlay does NOT occlude what it covers,
+   * because the click passes through to the element beneath. A visual paint-order
+   * rule (`elementsFromPoint` with pointer-events forced on) was tried and reverted in
+   * PR #2917 — it produced systematic false positives for every transparent
+   * full-viewport wrapper (focus traps, drawer roots, route transitions, ambient
+   * layers), hiding large parts of a perfectly interactive page from the LLM. Matching
+   * Playwright's own decision is what keeps this signal trustworthy.
+   *
+   * By default occluded elements are filtered out of the compact element list. When
+   * this detail is requested, they are included with `(occluded)` annotations so the
+   * LLM can see what's behind the overlay and decide whether to dismiss it first.
    */
   OCCLUDED_ELEMENTS,
 }

@@ -398,7 +398,7 @@ open class PlaywrightDeviceScreenStream(
             || target.getAttribute('alt')
             || target.getAttribute('title')
             || '';
-          const name = rawName.trim().replace(/\s+/g, ' ').substring(0, 80);
+          const name = rawName.trim().replace(/\s+/g, ' ').substring(0, $ARIA_NAME_MAX_CHARS);
           return {
             role,
             name,
@@ -522,14 +522,8 @@ open class PlaywrightDeviceScreenStream(
             n && n.matches && n.matches(
               'a, button, input, select, textarea, label, [role=button], [role=link], [role=tab], [role=menuitem], [role=checkbox], [role=radio], [role=switch], [tabindex]:not([tabindex="-1"])'
             );
-          const implicitRole = (tag) => ({
-            a: 'link', button: 'button', input: 'textbox', select: 'combobox', textarea: 'textbox',
-            h1: 'heading', h2: 'heading', h3: 'heading', h4: 'heading', h5: 'heading', h6: 'heading',
-            img: 'img', nav: 'navigation', main: 'main', header: 'banner', footer: 'contentinfo',
-            aside: 'complementary', form: 'form', dialog: 'dialog', section: 'region',
-            ul: 'list', ol: 'list', li: 'listitem', table: 'table',
-          }[tag] || null);
-          const roleOf = (n) => n.getAttribute('role') || implicitRole(n.tagName.toLowerCase());
+          $IMPLICIT_ROLE_JS
+          const roleOf = (n) => n.getAttribute('role') || implicitRole(n);
           const directText = (n) => {
             // Direct text children only — avoids pulling in noise from nested controls
             // (e.g. an icon's aria-label leaking into the parent button's name).
@@ -542,19 +536,13 @@ open class PlaywrightDeviceScreenStream(
             }
             return out;
           };
-          const labelledByText = (n) => {
-            const ids = (n.getAttribute('aria-labelledby') || '').split(/\s+/).filter(Boolean);
-            if (!ids.length) return '';
-            const parts = [];
-            for (const id of ids) {
-              const e = document.getElementById(id);
-              if (e && e.textContent) parts.push(e.textContent.trim());
-            }
-            return parts.join(' ').trim();
-          };
+          $LABEL_NAME_JS
           const accessibleName = (n) => {
             const t = labelledByText(n)
               || n.getAttribute('aria-label')
+              // Ahead of `value`, per the accessible-name spec: a checkbox labelled
+              // "Remember me" should be named that, not "on".
+              || associatedLabelText(n)
               || n.value
               || directText(n)
               || (n.textContent || '').trim()
@@ -562,7 +550,7 @@ open class PlaywrightDeviceScreenStream(
               || n.getAttribute('alt')
               || n.getAttribute('title')
               || '';
-            return t.trim().replace(/\s+/g, ' ').substring(0, 80);
+            return t.trim().replace(/\s+/g, ' ').substring(0, $ARIA_NAME_MAX_CHARS);
           };
 
           const out = [];
@@ -613,6 +601,98 @@ open class PlaywrightDeviceScreenStream(
   }
 
   /**
+   * Captures the identifier signals of `document.activeElement` as a [ClickCandidate]
+   * (depth 0, no ancestor walk), or null when nothing useful is focused (no active
+   * element, or focus sits on `<body>`/`<html>`).
+   *
+   * Used by the recorder to pin typed text to a durable selector for the field that
+   * held focus at record time, instead of `css=:focus` — which at replay resolves to
+   * whatever happens to be focused after settles and autofocus dialogs, frequently not
+   * the recorded field.
+   */
+  fun resolveFocusedElement(): ClickCandidate? {
+    return kotlinx.coroutines.runBlocking(pageManager.playwrightDispatcher) {
+      val js =
+        """
+        () => {
+          const el = document.activeElement;
+          if (!el || el === document.body || el === document.documentElement) return null;
+          $IMPLICIT_ROLE_JS
+          $LABEL_NAME_JS
+          // Deliberately NOT `el.value`, which the tap path does consult: this snapshot is
+          // taken mid-typing, so naming the field by its own contents would bake the typed
+          // text into the selector and break replay on any other input.
+          // NOT truncated, unlike the tap walk: this name becomes an EXACT-match ARIA selector,
+          // and a clipped one cannot match the control it was recorded from. Safe to leave whole
+          // because every source here is a label or attribute, never concatenated descendant
+          // text — so there is no unbounded case to guard against.
+          const name = (labelledByText(el)
+            || el.getAttribute('aria-label')
+            || associatedLabelText(el)
+            || el.getAttribute('placeholder')
+            || el.getAttribute('title')
+            || '').trim().replace(/\s+/g, ' ');
+          return {
+            depth: 0,
+            tag: el.tagName.toLowerCase(),
+            role: el.getAttribute('role') || implicitRole(el) || '',
+            name,
+            id: el.id || '',
+            dataTestId: el.getAttribute('data-testid') || el.getAttribute('data-test-id') || '',
+            nameAttr: el.getAttribute('name') || '',
+            ariaLabel: el.getAttribute('aria-label') || '',
+            interactive: true,
+          };
+        }
+        """.trimIndent()
+
+      val map = try {
+        pageManager.currentPage.evaluate(js) as? Map<*, *>
+      } catch (e: Exception) {
+        if (e is kotlinx.coroutines.CancellationException) throw e
+        null
+      } ?: return@runBlocking null
+
+      ClickCandidate(
+        depth = (map["depth"] as? Number)?.toInt() ?: 0,
+        tag = (map["tag"] as? String).orEmpty(),
+        role = (map["role"] as? String).orEmpty(),
+        name = (map["name"] as? String).orEmpty(),
+        id = (map["id"] as? String).orEmpty(),
+        dataTestId = (map["dataTestId"] as? String).orEmpty(),
+        nameAttr = (map["nameAttr"] as? String).orEmpty(),
+        ariaLabel = (map["ariaLabel"] as? String).orEmpty(),
+        interactive = (map["interactive"] as? Boolean) ?: true,
+      )
+    }
+  }
+
+  /**
+   * Ordinal of `document.activeElement` among everything [selector] matches, or null when it
+   * is already the first match (replay's `.first()` lands there anyway) or isn't in the set.
+   *
+   * Duplicate controls — OTP digit boxes, repeated table rows — share every identifier the
+   * focus snapshot reads, so a selector alone cannot say WHICH one the text went into: a
+   * burst typed into box 2 replays into box 1. One `evaluateAll` round trip resolves the
+   * whole match set and locates focus within it.
+   */
+  fun focusedOrdinalIn(selector: TrailblazeNodeSelector): Int? {
+    return kotlinx.coroutines.runBlocking(pageManager.playwrightDispatcher) {
+      try {
+        val locator = PlaywrightExecutableTool.nodeSelectorToReadinessLocator(
+          pageManager.currentPage,
+          selector,
+        ) ?: return@runBlocking null
+        val index = locator.evaluateAll("els => els.indexOf(document.activeElement)") as? Number
+        index?.toInt()?.takeIf { it > 0 }
+      } catch (e: Exception) {
+        if (e is kotlinx.coroutines.CancellationException) throw e
+        null
+      }
+    }
+  }
+
+  /**
    * Round-trip-verifies a recorded selector against the live page: resolves the selector
    * to a Playwright [Locator] (via the same [PlaywrightExecutableTool.nodeSelectorToReadinessLocator]
    * the replay path uses), reads the FIRST match's bounding box, and checks whether
@@ -655,6 +735,81 @@ open class PlaywrightDeviceScreenStream(
   }
 
   companion object {
+    /**
+     * Cap on an accessible name read from DOM TEXT, where the value is unbounded — a `<nav>`'s
+     * `textContent` concatenates every descendant link. The old 80 was short enough to clip
+     * ordinary button and label text, and a clipped name recorded as an exact-match ARIA
+     * selector can never resolve, so it is generous now. The tap path round-trip-verifies its
+     * selectors, so a name still too long to match self-rejects there.
+     */
+    private const val ARIA_NAME_MAX_CHARS: Int = 300
+
+    /**
+     * Defines `labelledByText(el)` and `associatedLabelText(el)` for the page scripts below.
+     * Injected into both the tap-candidate walk and the focus snapshot, for the same
+     * anti-drift reason as [IMPLICIT_ROLE_JS].
+     *
+     * A control named only by its `<label>` — `<label>Email <input></label>`, or
+     * `<label for="e">` — carries no name-bearing ATTRIBUTE at all, so reading only
+     * `aria-label`/`placeholder`/`title` leaves it unidentified and the recorder falls back
+     * to `css=:focus`. `HTMLElement.labels` is what makes this cheap: it already resolves
+     * both the `for=` and the wrapping form, exactly as the accessible-name spec does.
+     */
+    private val LABEL_NAME_JS: String = """
+      const labelledByText = (n) => {
+        const ids = (n.getAttribute('aria-labelledby') || '').split(/\s+/).filter(Boolean);
+        if (!ids.length) return '';
+        const parts = [];
+        for (const id of ids) {
+          const e = document.getElementById(id);
+          if (e && e.textContent) parts.push(e.textContent.trim());
+        }
+        return parts.join(' ').trim();
+      };
+      const associatedLabelText = (n) => {
+        // Undefined on anything not labelable (a <div>, a landmark) — guard, don't assume.
+        const labels = n.labels;
+        if (!labels || !labels.length) return '';
+        return Array.from(labels)
+          .map((l) => (l.textContent || '').trim())
+          .filter(Boolean)
+          .join(' ');
+      };
+    """.trimIndent()
+
+    /**
+     * Defines `implicitRole(el)` for the page scripts below — injected into both the
+     * tap-candidate walk and the focus snapshot so the two can't drift apart.
+     *
+     * `<input>` MUST consult its `type`: a recorded `ariaRole` replays through `getByRole`,
+     * whose role match is exact, so calling every input a `textbox` produces a locator that
+     * never resolves for `type="search"` (`searchbox`), `number` (`spinbutton`), `checkbox`,
+     * `radio`, `range` (`slider`), or the button-like types. Mirrors the role table in
+     * `PlaywrightScreenState`'s ARIA-snapshot fallback, which already had this right.
+     */
+    private val IMPLICIT_ROLE_JS: String = """
+      const IMPLICIT_INPUT_ROLES = {
+        checkbox: 'checkbox', radio: 'radio', range: 'slider', number: 'spinbutton',
+        search: 'searchbox', submit: 'button', reset: 'button', button: 'button',
+        image: 'button',
+      };
+      const IMPLICIT_TAG_ROLES = {
+        a: 'link', button: 'button', select: 'combobox', textarea: 'textbox',
+        h1: 'heading', h2: 'heading', h3: 'heading', h4: 'heading', h5: 'heading', h6: 'heading',
+        img: 'img', nav: 'navigation', main: 'main', header: 'banner', footer: 'contentinfo',
+        aside: 'complementary', form: 'form', dialog: 'dialog', section: 'region',
+        ul: 'list', ol: 'list', li: 'listitem', table: 'table',
+      };
+      const implicitRole = (el) => {
+        const tag = el.tagName.toLowerCase();
+        if (tag !== 'input') return IMPLICIT_TAG_ROLES[tag] || null;
+        const type = (el.getAttribute('type') || 'text').toLowerCase();
+        // A hidden input has no role at all; everything unrecognized is a text entry.
+        if (type === 'hidden') return null;
+        return IMPLICIT_INPUT_ROLES[type] || 'textbox';
+      };
+    """.trimIndent()
+
     /**
      * How long each screencast pump parks on `waitForTimeout` before yielding the Playwright
      * thread. Short enough that taps/navigation interleave with sub-100ms latency, long enough

@@ -19,6 +19,10 @@ import xyz.block.trailblaze.util.Console
  * Runs entirely standalone (no daemon): reads the logs from disk, profiles every session found,
  * and writes one self-contained HTML file at `<logs-dir>/trailblaze_performance_analysis.html`.
  *
+ * A session that also has a `trace.json` (the in-process `TrailblazeTracer` spans) profiles at
+ * full resolution — each tool decomposed into the HTTP calls, Maestro driver ops, and selector
+ * matching it actually did. Without one, the timeline stops at tool totals.
+ *
  * Examples:
  *   trailblaze profile                 - profile the configured logs directory
  *   trailblaze profile ./logs          - profile a specific logs directory (e.g. CI artifacts)

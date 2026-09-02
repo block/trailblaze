@@ -71,22 +71,22 @@ data class PlaywrightNativeVerifyValueTool(
       when (type) {
         VerifyValueType.TEXT -> {
           try {
-            assertThat(resolved.first()).containsText(expected)
+            assertThat(resolved).containsText(expected)
           } catch (_: AssertionError) {
             // Text content check failed — fall back to input value check for form fields
             // (input, textarea, select) where the content lives in .value, not .textContent.
             Console.log("### Text check failed, retrying as input value for '$description'")
-            assertThat(resolved.first()).hasValue(expected)
+            assertThat(resolved).hasValue(expected)
           }
         }
-        VerifyValueType.VALUE -> assertThat(resolved.first()).hasValue(expected)
+        VerifyValueType.VALUE -> assertThat(resolved).hasValue(expected)
         VerifyValueType.ATTRIBUTE -> {
           if (attribute.isBlank()) {
             return TrailblazeToolResult.Error.ExceptionThrown(
               "Attribute name is required when type is 'attribute'.",
             )
           }
-          assertThat(resolved.first()).hasAttribute(attribute, expected)
+          assertThat(resolved).hasAttribute(attribute, expected)
         }
       }
       TrailblazeToolResult.Success(

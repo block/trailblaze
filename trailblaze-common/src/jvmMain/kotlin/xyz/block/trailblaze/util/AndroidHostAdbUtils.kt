@@ -6,6 +6,7 @@ import dadb.adbserver.AdbServer
 import xyz.block.trailblaze.android.tools.shellEscape
 import xyz.block.trailblaze.device.InstalledApp
 import xyz.block.trailblaze.device.parseInstalledAppsFromDumpsys
+import xyz.block.trailblaze.device.redactBulkPayloadsForLog
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.model.AppVersionInfo
@@ -47,8 +48,10 @@ object AndroidHostAdbUtils {
   private val AUTH_TOKEN_ARG_REGEX =
     Regex("""('?trailblaze\.llm\.auth\.token\.[^'\s]+'?\s+)((?:'[^']*'|\\'|[^\s'])+)""")
 
+  // Also strip base64 file bodies: `writeFileAs` carries a file's bytes inside the command line,
+  // and those bodies (seeded auth/session files) are the ones tools already mask in session logs.
   internal fun redactSecretsForLog(command: String): String =
-    AUTH_TOKEN_ARG_REGEX.replace(command) { "${it.groupValues[1]}<redacted>" }
+    redactBulkPayloadsForLog(AUTH_TOKEN_ARG_REGEX.replace(command) { "${it.groupValues[1]}<redacted>" })
 
   // Drains the Dadb client cache and any active port forwards on JVM exit. Without this, a
   // long-running daemon (`./trailblaze app start`) leaves dadb sockets and host-side forward

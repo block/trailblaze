@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.playwright
 
+import com.microsoft.playwright.Locator
 import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Clock
 import xyz.block.trailblaze.AgentMemory
@@ -317,12 +318,15 @@ class PlaywrightTrailblazeAgent(
           detail.ariaDescriptor == elementRef.descriptor && detail.nthIndex == elementRef.nthIndex
         }
       } else {
-        // Direct ARIA descriptor or CSS selector — match by descriptor
+        // Direct ARIA descriptor or CSS selector — match by descriptor. Refs carry the
+        // CSS.escape()d testid (see buildCssSelectorForLocator) while the tree stores the
+        // raw attribute value, so the testid comparison must go through the parser.
+        val refTestId = dataTestIdFromCssRef(ref)
         tree.findFirst { node ->
           val detail = node.driverDetail as? DriverNodeDetail.Web ?: return@findFirst false
           detail.ariaDescriptor == ref ||
             detail.cssSelector == ref.removePrefix("css=") ||
-            detail.dataTestId == ref.removePrefix("css=[data-testid=\"")?.removeSuffix("\"]")
+            (refTestId != null && detail.dataTestId == refTestId)
         }
       }
 
@@ -460,6 +464,12 @@ class PlaywrightTrailblazeAgent(
    * This must happen pre-execution because clicks can cause navigation, after which
    * the target element no longer exists on the page.
    * Returns (0, 0) if the tool has no target or the element can't be resolved.
+   *
+   * Resolution here only places the screenshot overlay dot — it must never become the
+   * expensive part of an action. Hence the short [OVERLAY_CENTER_TIMEOUT_MS] budget
+   * instead of the full element-resolution timeout: if the element isn't attached
+   * almost immediately, the action itself will do the real (fully budgeted) wait and
+   * the overlay just goes without a dot.
    */
   private fun resolveToolCenter(
     tool: PlaywrightExecutableTool,
@@ -480,6 +490,7 @@ class PlaywrightTrailblazeAgent(
         ref != null || nodeSelector != null -> {
           val (resolved, _) = PlaywrightExecutableTool.validateAndResolveRef(
             browserManager.currentPage, ref, "", context, nodeSelector,
+            timeoutMs = OVERLAY_CENTER_TIMEOUT_MS,
           )
           resolved ?: return 0 to 0
         }
@@ -487,7 +498,11 @@ class PlaywrightTrailblazeAgent(
           browserManager.currentPage.getByText(tool.text)
         else -> return 0 to 0
       }
-      val box = locator.first().boundingBox()
+      // boundingBox() has its own attach-wait (30s default) — bound it too, or the
+      // getByText branch stalls the overlay on absent text.
+      val box = locator.first().boundingBox(
+        Locator.BoundingBoxOptions().setTimeout(OVERLAY_CENTER_TIMEOUT_MS),
+      )
       if (box != null) {
         val centerX = (box.x + box.width / 2).toInt()
         val centerY = (box.y + box.height / 2).toInt()
@@ -497,6 +512,67 @@ class PlaywrightTrailblazeAgent(
       }
     } catch (_: Exception) {
       0 to 0
+    }
+  }
+}
+
+/**
+ * Budget for resolving an element purely to place the screenshot overlay dot. Missing
+ * the dot must never cost an action the full element-resolution timeout.
+ */
+private const val OVERLAY_CENTER_TIMEOUT_MS: Double = 1_000.0
+
+// The capture excludes `"` so it stops at the attribute's closing quote instead of
+// greedily swallowing one — a ref carrying a quote, or gaining a trailing clause, must
+// fail to parse rather than yield a wrong test id.
+private val CSS_TESTID_REF = Regex("""css=\[data-test-?id="([^"]*)"]""")
+
+/**
+ * Extracts the raw data-testid value from a `css=[data-testid="..."]` (or
+ * `data-test-id`) ref, or null for any other ref shape.
+ *
+ * Refs embed the CSS.escape()d attribute value (the producer must emit a valid
+ * selector), while [DriverNodeDetail.Web.dataTestId] holds the raw attribute — so
+ * comparing the two requires undoing the escaping, not string surgery on the ref.
+ */
+internal fun dataTestIdFromCssRef(ref: String): String? {
+  val escaped = CSS_TESTID_REF.matchEntire(ref)?.groupValues?.get(1) ?: return null
+  return cssUnescape(escaped)
+}
+
+/**
+ * Reverses `CSS.escape`: `\c` character escapes (e.g. `foo\.bar`) and 1-6 digit hex
+ * code-point escapes with their optional trailing space (e.g. `\31 x` for a leading
+ * digit). Anything unescaped passes through unchanged.
+ */
+private fun cssUnescape(escaped: String): String = buildString {
+  var i = 0
+  while (i < escaped.length) {
+    val c = escaped[i]
+    if (c != '\\' || i + 1 >= escaped.length) {
+      append(c)
+      i++
+      continue
+    }
+    var j = i + 1
+    var hex = ""
+    while (j < escaped.length && hex.length < 6 && escaped[j].digitToIntOrNull(16) != null) {
+      hex += escaped[j]
+      j++
+    }
+    if (hex.isEmpty()) {
+      // Simple character escape: \. \: \[ etc.
+      append(escaped[i + 1])
+      i += 2
+    } else {
+      // Six hex digits can name a value past the last valid code point, and `\0` is not a
+      // character either. The CSS spec maps both to U+FFFD; appendCodePoint would instead
+      // throw, turning a malformed ref into an exception where the contract is a null parse.
+      val codePoint = hex.toInt(16)
+      appendCodePoint(if (codePoint == 0 || codePoint > Character.MAX_CODE_POINT) 0xFFFD else codePoint)
+      // A space after a hex escape is the escape's terminator, not content.
+      if (j < escaped.length && escaped[j] == ' ') j++
+      i = j
     }
   }
 }

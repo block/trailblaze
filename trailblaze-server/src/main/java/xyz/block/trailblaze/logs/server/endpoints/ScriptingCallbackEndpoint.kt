@@ -7,6 +7,8 @@ import io.ktor.server.response.respond
 import io.ktor.server.response.respondText
 import io.ktor.server.routing.Routing
 import io.ktor.server.routing.post
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import xyz.block.trailblaze.scripting.callback.JsScriptingCallbackDispatcher
@@ -121,70 +123,77 @@ object ScriptingCallbackEndpoint {
     val maxDepth = JsScriptingCallbackDispatcher.resolveMaxDepth()
     val maxBodyBytes = resolveMaxBodyBytes()
     post("/scripting/callback") {
-      // Loopback gate — the daemon binds to all interfaces (::), so without this a remote
-      // caller on the same network could POST `/scripting/callback` and dispatch arbitrary
-      // tools against whatever session is currently in flight. Subprocess tool scripts run on
-      // the host alongside the daemon; legitimate callers are always loopback.
-      val remoteAddress = call.request.local.remoteAddress
-      if (!isLoopback(remoteAddress)) {
-        Console.log("[scripting/callback] BLOCKED non-loopback request from $remoteAddress")
-        call.respond(
-          HttpStatusCode.Forbidden,
-          "Scripting callback is only available from loopback (got $remoteAddress)",
+      // Hop off the Netty call dispatcher (same pattern as `post("/mcp")`): dispatching a
+      // tool can block for its full execution — up to the callback timeout — and Ktor's
+      // pinned-call executor binds each HTTP connection to one event-loop thread for its
+      // lifetime. A handler that parks here parks that event-loop thread, and every other
+      // connection pinned to it (CLI `/cli/run-status` polls included) starves with it.
+      withContext(Dispatchers.IO) {
+        // Loopback gate — the daemon binds to all interfaces (::), so without this a remote
+        // caller on the same network could POST `/scripting/callback` and dispatch arbitrary
+        // tools against whatever session is currently in flight. Subprocess tool scripts run on
+        // the host alongside the daemon; legitimate callers are always loopback.
+        val remoteAddress = call.request.local.remoteAddress
+        if (!isLoopback(remoteAddress)) {
+          Console.log("[scripting/callback] BLOCKED non-loopback request from $remoteAddress")
+          call.respond(
+            HttpStatusCode.Forbidden,
+            "Scripting callback is only available from loopback (got $remoteAddress)",
+          )
+          return@withContext
+        }
+
+        // Reject oversized payloads before buffering. A buggy subprocess emitting a giant JSON args
+        // string could OOM the daemon in the `call.receive<String>()` below — this check fires on
+        // the declared Content-Length, so a client that lies about the header (or omits it entirely
+        // via chunked transfer) bypasses the cap. That's acceptable: subprocesses are trusted (they
+        // run on the host, already have write access to the process), and Ktor's own transport-level
+        // limits apply to chunked bodies. The check catches the realistic "accidental OOM" class.
+        val declaredContentLength = call.request.headers["Content-Length"]?.toLongOrNull()
+        if (declaredContentLength != null && declaredContentLength > maxBodyBytes) {
+          Console.log(
+            "[scripting/callback] REJECTED body size $declaredContentLength > max $maxBodyBytes " +
+              "from ${call.request.local.remoteAddress}",
+          )
+          call.respond(
+            HttpStatusCode.PayloadTooLarge,
+            "JsScriptingCallbackRequest body size $declaredContentLength exceeds max $maxBodyBytes bytes",
+          )
+          return@withContext
+        }
+
+        val bodyText = try {
+          call.receive<String>()
+        } catch (e: Exception) {
+          Console.log("[scripting/callback] Failed to read body: ${e.message}")
+          call.respond(HttpStatusCode.BadRequest, "Failed to read request body: ${e.message}")
+          return@withContext
+        }
+
+        val request: JsScriptingCallbackRequest = try {
+          json.decodeFromString(JsScriptingCallbackRequest.serializer(), bodyText)
+        } catch (e: SerializationException) {
+          // Malformed request envelope (missing fields, wrong types) — respond 400. Using 400
+          // rather than a 200 + JsScriptingCallbackResult.Error because this is a protocol-level framing
+          // error, not a dispatch failure the subprocess can branch on. The subprocess's HTTP
+          // client should surface it as a thrown error.
+          Console.log("[scripting/callback] Malformed request: ${e.message}")
+          call.respond(HttpStatusCode.BadRequest, "Malformed JsScriptingCallbackRequest JSON: ${e.message}")
+          return@withContext
+        }
+
+        // Core dispatch (version / registry lookup / session match / depth gate / timeout /
+        // TrailblazeToolResult mapping) lives in [JsScriptingCallbackDispatcher] so the on-device
+        // QuickJS binding in `:trailblaze-scripting-bundle` produces identical semantics. This
+        // endpoint keeps only the HTTP-specific concerns around it (loopback gate, body-size
+        // cap, content-type, JSON framing).
+        val result = JsScriptingCallbackDispatcher.dispatch(
+          request = request,
+          maxDepth = maxDepth,
+          timeoutMs = timeoutMs,
         )
-        return@post
+        respondResult(result)
       }
-
-      // Reject oversized payloads before buffering. A buggy subprocess emitting a giant JSON args
-      // string could OOM the daemon in the `call.receive<String>()` below — this check fires on
-      // the declared Content-Length, so a client that lies about the header (or omits it entirely
-      // via chunked transfer) bypasses the cap. That's acceptable: subprocesses are trusted (they
-      // run on the host, already have write access to the process), and Ktor's own transport-level
-      // limits apply to chunked bodies. The check catches the realistic "accidental OOM" class.
-      val declaredContentLength = call.request.headers["Content-Length"]?.toLongOrNull()
-      if (declaredContentLength != null && declaredContentLength > maxBodyBytes) {
-        Console.log(
-          "[scripting/callback] REJECTED body size $declaredContentLength > max $maxBodyBytes " +
-            "from ${call.request.local.remoteAddress}",
-        )
-        call.respond(
-          HttpStatusCode.PayloadTooLarge,
-          "JsScriptingCallbackRequest body size $declaredContentLength exceeds max $maxBodyBytes bytes",
-        )
-        return@post
-      }
-
-      val bodyText = try {
-        call.receive<String>()
-      } catch (e: Exception) {
-        Console.log("[scripting/callback] Failed to read body: ${e.message}")
-        call.respond(HttpStatusCode.BadRequest, "Failed to read request body: ${e.message}")
-        return@post
-      }
-
-      val request: JsScriptingCallbackRequest = try {
-        json.decodeFromString(JsScriptingCallbackRequest.serializer(), bodyText)
-      } catch (e: SerializationException) {
-        // Malformed request envelope (missing fields, wrong types) — respond 400. Using 400
-        // rather than a 200 + JsScriptingCallbackResult.Error because this is a protocol-level framing
-        // error, not a dispatch failure the subprocess can branch on. The subprocess's HTTP
-        // client should surface it as a thrown error.
-        Console.log("[scripting/callback] Malformed request: ${e.message}")
-        call.respond(HttpStatusCode.BadRequest, "Malformed JsScriptingCallbackRequest JSON: ${e.message}")
-        return@post
-      }
-
-      // Core dispatch (version / registry lookup / session match / depth gate / timeout /
-      // TrailblazeToolResult mapping) lives in [JsScriptingCallbackDispatcher] so the on-device
-      // QuickJS binding in `:trailblaze-scripting-bundle` produces identical semantics. This
-      // endpoint keeps only the HTTP-specific concerns around it (loopback gate, body-size
-      // cap, content-type, JSON framing).
-      val result = JsScriptingCallbackDispatcher.dispatch(
-        request = request,
-        maxDepth = maxDepth,
-        timeoutMs = timeoutMs,
-      )
-      respondResult(result)
     }
   }
 

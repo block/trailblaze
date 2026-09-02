@@ -27,7 +27,28 @@ import java.util.concurrent.atomic.AtomicInteger
  */
 class TrailblazeToolExecutionContext(
   screenState: ScreenState?,
-  val traceId: TraceId?,
+  /**
+   * The trace the CURRENT dispatch belongs to — stamped onto every log this dispatch emits
+   * (tool logs, driver logs, the delegating wrapper) so readers can tell which tool call a
+   * device action came from.
+   *
+   * `var`, for the same reason [screenState] is: a shared tool-batch context (see
+   * [ToolBatchScope]) is built once for a whole recording but is dispatched into once per
+   * recorded tool, and each of those dispatches is its own trace.
+   * [xyz.block.trailblaze.BaseTrailblazeAgent.runTrailblazeTools] reassigns this before each
+   * dispatch into a shared batch. Frozen at the first tool, every log in the recording would
+   * claim one trace, and a session report that groups by trace collapses the entire authored
+   * step into a single row.
+   *
+   * The invariant on the other side: a nested `ctx.tools.X()` sub-call stays on its PARENT's
+   * trace, so a composite's internals read as that one call's children rather than as steps of
+   * their own. Most agents get that for free by dispatching through
+   * [xyz.block.trailblaze.BaseTrailblazeAgent.nestedToolExecutorFor], which never touches this
+   * field. An agent that instead re-enters `runTrailblazeTools` for nested calls (the Compose RPC
+   * agent does, to keep its post-batch screenshot) must pass this field's CURRENT value back in,
+   * so its reassignment is a no-op rather than a rewrite to a stale dispatch's trace.
+   */
+  var traceId: TraceId?,
   val trailblazeDeviceInfo: TrailblazeDeviceInfo,
   val sessionProvider: TrailblazeSessionProvider,
   /**

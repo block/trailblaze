@@ -252,7 +252,13 @@ function UnifiedStepsTable({ data }) {
 // onSaveYaml. Recordings are bound to their step by identity, so reorder/rename carries them (no
 // text-realignment guesswork the multi-file bundle needed). `target` scopes the tool-call editor's
 // autocomplete. onSaveYaml(yaml) -> { success, error }.
-function UnifiedStepsBoard({ yaml, target, onSaveYaml, onRunFragment, catalog = [] }) {
+// `onRunRange(from, to, mode)` opens the Run trail dialog for a contiguous step span: 0-based
+// inclusive indices, `mode` 'play' (replay the recordings that are there) or 'record' (let the agent
+// drive and merge what it records back into these steps). The board reports the RANGE, not a YAML
+// fragment: a record run's save-back
+// has to be scoped by the same window the server slices with, and only the server can know which file
+// it writes (see /api/trail/record-range).
+function UnifiedStepsBoard({ yaml, target, onSaveYaml, onRunRange, catalog = [] }) {
   useLucide();
   const devices = TB.useDevices();
   const [model, setModel] = React.useState(() => parseUnifiedModel(yaml));
@@ -319,20 +325,33 @@ function UnifiedStepsBoard({ yaml, target, onSaveYaml, onRunFragment, catalog = 
     if (i >= r.start && i <= r.end) return { anchor: i, start: i, end: i };
     return { anchor: r.anchor, start: Math.min(r.anchor, i), end: Math.max(r.anchor, i) };
   });
-  const runSelected = () => {
-    if (!runRange || !onRunFragment) return;
-    const partial = window.TM.sliceSteps(model, runRange.start, runRange.end);
-    if (partial) onRunFragment(serializeUnifiedModel(partial), runCount);
+  // A range is indices into the FILE: the dialog reads the trail from disk, and a Record run's
+  // save-back is checked against what is on disk too. So pending edits are written first, and a save
+  // that fails cancels the handoff rather than running steps the board is no longer showing.
+  const handOffRange = async (from, to, mode) => {
+    if (!onRunRange) return;
+    if (dirty && !(await persist(model))) return;
+    onRunRange(from, to, mode);
   };
+  const runSelected = (mode) => { if (runRange) handOffRange(runRange.start, runRange.end, mode); };
+  // "From here to the end" - the common case by a wide margin: the device is already in the state the
+  // earlier steps would put it in, so only the tail is worth running.
+  const runFromHere = (i, mode) => handOffRange(i, model.steps.length - 1, mode);
 
   // Persist a specific model to the file. Takes the model explicitly (not `curYaml`, which lags a
   // just-applied setState) so an edit-then-save gesture writes the fresh state in one go.
+  // Returns whether the file now holds `nextModel`, which is what a caller that only makes sense
+  // against the saved file (handing a step range to the Run dialog) has to know.
   async function persist(nextModel) {
-    if (!onSaveYaml || !nextModel) return;
+    if (!onSaveYaml || !nextModel) return false;
     setSaving(true); setErr(null);
-    try { const r = await onSaveYaml(serializeUnifiedModel(nextModel)); if (r && r.success === false) setErr(r.error || 'Could not save.'); }
-    catch (e) { setErr(String((e && e.message) || e)); }
+    let ok = false;
+    try {
+      const r = await onSaveYaml(serializeUnifiedModel(nextModel));
+      if (r && r.success === false) setErr(r.error || 'Could not save.'); else ok = true;
+    } catch (e) { setErr(String((e && e.message) || e)); }
     setSaving(false);
+    return ok;
   }
   const save = () => persist(model);
   // Dispatch a cell's tool calls to a connected device of that platform (like Test YAML) — resolve +
@@ -417,6 +436,16 @@ function UnifiedStepsBoard({ yaml, target, onSaveYaml, onRunFragment, catalog = 
             style={{ flex: 1, minWidth: 0, resize: 'none', overflow: 'hidden', background: 'transparent', border: 'none', outline: 'none', color: 'var(--text-standard)', font: 'inherit', fontSize: 13, lineHeight: 1.5, paddingTop: 1 }} />
           {!isTh && (
             <span style={{ display: 'flex', gap: 1, flex: '0 0 auto', opacity: hov ? 0.8 : 0, transition: 'opacity .12s ease', pointerEvents: hov ? 'auto' : 'none' }}>
+              {onRunRange && (
+                <React.Fragment>
+                  <span {...clickable(() => runFromHere(rowKey, 'play'))} aria-label={`Play from step ${rowKey + 1} to the end`}
+                    title={rowKey === model.steps.length - 1 ? 'Play this step' : `Play steps ${rowKey + 1}-${model.steps.length} (from here to the end)`}
+                    style={{ cursor: 'pointer' }}><Ico n="play" s={15} /></span>
+                  <span {...clickable(() => runFromHere(rowKey, 'record'))} aria-label={`Record from step ${rowKey + 1} to the end`}
+                    title={rowKey === model.steps.length - 1 ? 'Record this step' : `Record steps ${rowKey + 1}-${model.steps.length} (from here to the end)`}
+                    style={{ cursor: 'pointer' }}><Ico n="circle-dot" s={15} c="var(--tb-pass)" /></span>
+                </React.Fragment>
+              )}
               <span {...clickable(() => moveStep(rowKey, -1))} aria-label="Move step up" title="Move up" style={{ cursor: 'pointer', opacity: rowKey === 0 ? 0.4 : 1 }}><Ico n="chevron-up" s={15} /></span>
               <span {...clickable(() => moveStep(rowKey, 1))} aria-label="Move step down" title="Move down" style={{ cursor: 'pointer', opacity: rowKey === model.steps.length - 1 ? 0.4 : 1 }}><Ico n="chevron-down" s={15} /></span>
               <span {...clickable(() => delStep(rowKey))} aria-label="Delete step" title="Delete step" style={{ cursor: 'pointer' }}><Ico n="x" s={15} /></span>
@@ -438,11 +467,14 @@ function UnifiedStepsBoard({ yaml, target, onSaveYaml, onRunFragment, catalog = 
         <Btn kind="primary" sm ico={saving ? 'loader-2' : 'save'} spin={saving} disabled={!dirty || saving} onClick={save}>Save</Btn>
         {dirty && <span className="tb-sub" style={{ fontSize: 12, color: 'var(--tb-amber)' }}>Unsaved changes</span>}
         {err && <span style={{ fontSize: 12, color: 'var(--tb-fail)' }}>{err}</span>}
-        {runCount > 0 && onRunFragment && (
+        {runCount > 0 && onRunRange && (
           <React.Fragment>
-            <Btn kind="primary" sm ico="play" onClick={runSelected}>Run {runCount === 1 ? 'step' : `${runCount} steps`}</Btn>
+            <Btn kind="primary" sm ico="play" onClick={() => runSelected('play')}>Play {runCount === 1 ? 'step' : `${runCount} steps`}</Btn>
+            <Btn kind="ghost" sm ico="circle-dot" onClick={() => runSelected('record')}>Record {runCount === 1 ? 'step' : `${runCount} steps`}</Btn>
             <Btn kind="ghost" sm onClick={() => setRunRange(null)}>Clear selection</Btn>
-            <span className="tb-sub" style={{ fontSize: 11.5 }}>Starts from the device’s current screen.</span>
+            <span className="tb-sub" style={{ fontSize: 11.5 }}>
+              Starts from the device’s current screen.{dirty ? ' Saves your edits first.' : ''}
+            </span>
           </React.Fragment>
         )}
         <span className="tb-unified-steps-toolbar-spacer" style={{ flex: 1 }} />
@@ -658,7 +690,7 @@ function LegacyStepsRunList({ steps, go, toolMap }) {
 
 // `yaml` (optional): parse steps from this YAML directly instead of fetching by trail id — lets a
 // folder file (not in the workspace index) reuse this view. `configTrail` overrides the config card.
-function StepsMode({ trail, go, yaml, configTrail, editable, onSave, onSaved }) {
+function StepsMode({ trail, go, openRun, yaml, configTrail, editable, onSave, onSaved }) {
   const detail = TB.useTrailDetail(yaml == null && trail ? trail.id : null);
   const effYaml = yaml != null ? yaml : detail.data?.yaml;
   const loading = yaml == null && detail.loading;
@@ -701,7 +733,10 @@ function StepsMode({ trail, go, yaml, configTrail, editable, onSave, onSaved }) 
       <div>
         {canEdit
           ? <UnifiedStepsBoard yaml={effYaml} target={cfgObj.target} onSaveYaml={saveYaml} catalog={catalog.data || []}
-              onRunFragment={go ? (fragmentYaml, count) => go('interact', { openYaml: true, yaml: fragmentYaml, name: count === 1 ? 'Selected step' : `${count} selected steps` }) : null} />
+              // The Run trail dialog, seeded with the step range, rather than a hop to the Test YAML
+              // screen: the dialog is where devices get picked, and it opens over the trail instead of
+              // navigating away from it.
+              onRunRange={openRun && trail ? (from, to, mode) => openRun(trail, { stepRange: { from, to }, mode }) : null} />
           : unified
             ? <UnifiedStepsTable data={unified} />
             : <EmptyState ico="list" title="No steps" />}
@@ -734,7 +769,11 @@ function YamlMode({ trail }) {
 // sessions). Otherwise sessions are fetched and matched to this trail.
 function RunsMode({ trail, go, runs }) {
   const sessions = TB.useSessions();
-  const matches = runs != null ? runs : (sessions.data || []).filter((s) => s.title === trail.title || (s.title || '').includes(trail.id));
+  // `trailId` first: a run of part of the trail is titled "Partial: ..." by the slicer, so a
+  // title match alone drops exactly the runs this dialog's Play button now produces.
+  const matches = runs != null ? runs : (sessions.data || []).filter(
+    (s) => s.trailId === trail.id || s.title === trail.title || (s.title || '').includes(trail.id),
+  );
   if (runs == null && sessions.loading) return <Skeleton rows={3} />;
   if (matches.length === 0) return <EmptyState ico="history" title="No runs yet" sub="Hit Run trail to see results land here." />;
   return (
@@ -951,7 +990,7 @@ function TrailDetailView({ trail, configTrail, yaml, editable = true, tools, onS
         {/* Non-edit tabs are cheap to remount; render them in their own scroll container, hidden while editing. */}
         {!isEdit && (
           <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
-            {tab === 'steps' && <StepsMode trail={configTrail || trail} configTrail={configTrail} yaml={yaml} go={go} editable={editable} onSave={onSave} onSaved={onSaved} />}
+            {tab === 'steps' && <StepsMode trail={configTrail || trail} configTrail={configTrail} yaml={yaml} go={go} openRun={openRun} editable={editable} onSave={onSave} onSaved={onSaved} />}
             {tab === 'runs' && <RunsMode trail={trail} runs={runs} go={go} />}
             {tab === 'variants' && hasVariants && <VariantsMode variants={variants} currentId={currentId} onSelect={onSelectVariant} openRun={openRun} />}
           </div>
@@ -959,7 +998,8 @@ function TrailDetailView({ trail, configTrail, yaml, editable = true, tools, onS
         {/* Editor stays mounted once opened; toggled via `display` so Monaco + the LSP socket survive switches. */}
         {editEverOpened && (
           <div style={{ flex: 1, minHeight: 0, display: isEdit ? 'flex' : 'none', flexDirection: 'column' }}>
-            <TrailYamlEditor content={yaml} editable={editable} tools={tools} onSave={onSave} onSaved={onSaved} dirtyRef={dirtyRef} highlight={highlight} resetKey={resetKey} trailId={resetKey} enableToolRun />
+            <TrailYamlEditor content={yaml} editable={editable} tools={tools} onSave={onSave} onSaved={onSaved} dirtyRef={dirtyRef} highlight={highlight} resetKey={resetKey} trailId={resetKey}
+              onRunFromStep={openRun && trail ? (index, total) => openRun(trail, { stepRange: { from: index, to: total - 1, total } }) : null} />
           </div>
         )}
       </div>

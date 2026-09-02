@@ -11,6 +11,10 @@ import kotlin.time.Duration.Companion.seconds
 import kotlinx.datetime.Instant
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import xyz.block.trailblaze.api.AgentDriverAction
 import xyz.block.trailblaze.api.CaptureCoverage
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
@@ -24,6 +28,7 @@ import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.report.models.CiSummaryReport
 import xyz.block.trailblaze.report.models.Outcome
+import xyz.block.trailblaze.report.models.SkippedTrail
 import xyz.block.trailblaze.report.utils.LogsRepo
 
 /**
@@ -197,6 +202,219 @@ class CliReportGeneratorTest {
     } finally {
       tempDir.deleteRecursively()
     }
+  }
+
+  @Test
+  fun `generateJsonReport names the trail file each row ran`() {
+    // Two writers produce this artifact - this daemon-CLI path and the gradle CLI's
+    // GenerateTestResultsCliCommand - and consumers read one schema. `trail_file_path` is what a
+    // consumer asks "was a trail ever expected of this row?", so a row missing it here would look
+    // like a test that was never a trail, which is how a report reader discounts a pass.
+    val tempDir = Files.createTempDirectory("cli-report-gen-trail-path-test").toFile()
+    try {
+      val sessionId = SessionId("2026_09_01_trail_path_session")
+      val deviceInfo = androidDeviceInfo()
+      val started = Instant.parse("2026-09-01T12:00:00Z")
+
+      writeLog(
+        sessionDir = sessionDirFor(tempDir, sessionId),
+        fileName = "001_TrailblazeSessionStatusChangeLog.json",
+        log = TrailblazeLog.TrailblazeSessionStatusChangeLog(
+          sessionStatus = SessionStatus.Started(
+            trailConfig = null,
+            trailFilePath = "trails/estate/C4242-checkout.trail.yaml",
+            hasRecordedSteps = true,
+            testMethodName = "payAtCheckout",
+            testClassName = "CheckoutTest",
+            trailblazeDeviceInfo = deviceInfo,
+            trailblazeDeviceId = deviceInfo.trailblazeDeviceId,
+            rawYaml = null,
+          ),
+          session = sessionId,
+          timestamp = started,
+        ),
+      )
+      writeLog(
+        sessionDir = sessionDirFor(tempDir, sessionId),
+        fileName = "002_TrailblazeSessionStatusChangeLog.json",
+        log = TrailblazeLog.TrailblazeSessionStatusChangeLog(
+          sessionStatus = SessionStatus.Ended.Succeeded(durationMs = 5_000),
+          session = sessionId,
+          timestamp = started.plus(5.seconds),
+        ),
+      )
+
+      // A session with ONLY an Ended log - what a test that returns before calling the rule leaves
+      // behind, since the Started log is emitted from inside it. This is the row the whole field
+      // exists to identify.
+      val harnessId = SessionId("2026_09_01_harness_session")
+      writeLog(
+        sessionDir = sessionDirFor(tempDir, harnessId),
+        fileName = "001_TrailblazeSessionStatusChangeLog.json",
+        log = TrailblazeLog.TrailblazeSessionStatusChangeLog(
+          sessionStatus = SessionStatus.Ended.Succeeded(durationMs = 48),
+          session = harnessId,
+          timestamp = started,
+        ),
+      )
+
+      val logsRepo = LogsRepo(logsDir = tempDir, watchFileSystem = false)
+      val output = generator.generateJsonReport(
+        logsRepo,
+        sessionIds = listOf(sessionId, harnessId),
+      )
+      assertNotNull(output, "generateJsonReport should have written a file")
+
+      val text = output.readText()
+      val report = Json { ignoreUnknownKeys = true }.decodeFromString<CiSummaryReport>(text)
+      assertEquals(
+        "trails/estate/C4242-checkout.trail.yaml",
+        report.results.single { it.session_id == sessionId }.trail_file_path,
+      )
+      assertNull(report.results.single { it.session_id == harnessId }.trail_file_path)
+
+      // Asserted on the encoded document, not the decoded object: a consumer distinguishes "named
+      // no trail" from "this report predates the field" by whether the KEY is there, and decoding
+      // erases that difference. This writer serializes with its own `Json` instance, separate from
+      // the gradle CLI's, so an `explicitNulls = false` added to it would drop the key on exactly
+      // these rows and silently restore the verdict this field exists to correct.
+      val encodedHarnessRow = Json.parseToJsonElement(text)
+        .jsonObject
+        .getValue("results")
+        .jsonArray
+        .single { it.jsonObject.getValue("session_id").jsonPrimitive.content == harnessId.value }
+        .jsonObject
+      assertEquals(
+        JsonNull,
+        encodedHarnessRow["trail_file_path"],
+        "expected an explicit null; got ${encodedHarnessRow["trail_file_path"]}",
+      )
+    } finally {
+      tempDir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun `generateJsonReport reports a blank trail file path as none at all`() {
+    // A blank path answers "which trail did this row run?" with nothing, and a consumer reading the
+    // field for null would disagree with one reading it for emptiness. Normalizing at the writer is
+    // what keeps that from being two different verdicts on one row.
+    val tempDir = Files.createTempDirectory("cli-report-gen-blank-trail-path-test").toFile()
+    try {
+      val sessionId = SessionId("2026_09_01_blank_path_session")
+      val deviceInfo = androidDeviceInfo()
+      val started = Instant.parse("2026-09-01T12:00:00Z")
+
+      writeLog(
+        sessionDir = sessionDirFor(tempDir, sessionId),
+        fileName = "001_TrailblazeSessionStatusChangeLog.json",
+        log = TrailblazeLog.TrailblazeSessionStatusChangeLog(
+          sessionStatus = SessionStatus.Started(
+            trailConfig = null,
+            trailFilePath = "   ",
+            hasRecordedSteps = true,
+            testMethodName = "payAtCheckout",
+            testClassName = "CheckoutTest",
+            trailblazeDeviceInfo = deviceInfo,
+            trailblazeDeviceId = deviceInfo.trailblazeDeviceId,
+            rawYaml = null,
+          ),
+          session = sessionId,
+          timestamp = started,
+        ),
+      )
+      writeLog(
+        sessionDir = sessionDirFor(tempDir, sessionId),
+        fileName = "002_TrailblazeSessionStatusChangeLog.json",
+        log = TrailblazeLog.TrailblazeSessionStatusChangeLog(
+          sessionStatus = SessionStatus.Ended.Succeeded(durationMs = 5_000),
+          session = sessionId,
+          timestamp = started.plus(5.seconds),
+        ),
+      )
+
+      val logsRepo = LogsRepo(logsDir = tempDir, watchFileSystem = false)
+      val output = generator.generateJsonReport(logsRepo, sessionIds = listOf(sessionId))
+      assertNotNull(output, "generateJsonReport should have written a file")
+
+      val report = Json { ignoreUnknownKeys = true }
+        .decodeFromString<CiSummaryReport>(output.readText())
+      assertNull(report.results.single().trail_file_path)
+    } finally {
+      tempDir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun `generateJsonReport lists the skips its sibling HTML report lists`() {
+    // The two artifacts are halves of one report, generated from one call in ReportCommand, and
+    // the JSON is documented as the machine-readable equal of what a reader sees. A held-back
+    // trail present in one and absent from the other means neither can be trusted to be the run.
+    val tempDir = Files.createTempDirectory("cli-report-gen-skips-test").toFile()
+    try {
+      val sessionId = SessionId("2026_08_27_android_ran_session")
+      writeEndedSession(tempDir, sessionId)
+      val logsRepo = LogsRepo(logsDir = tempDir, watchFileSystem = false)
+
+      val output = generator.generateJsonReport(
+        logsRepo,
+        sessionIds = listOf(sessionId),
+        skips = listOf(
+          SkippedTrail(
+            trail_path = "/repo/trails/checkout/refund.trail.yaml",
+            title = "Refund a payment",
+            test_key = "checkout/refund",
+            reason = "backend outage, see #2194",
+            platform = "android",
+            device_classifier = "android-phone",
+            recorded_at_epoch_ms = 1_700_000_000_000,
+          ),
+        ),
+      )
+      assertNotNull(output, "generateJsonReport should have written a file")
+
+      val report = Json { ignoreUnknownKeys = true }
+        .decodeFromString<CiSummaryReport>(output.readText())
+      val skipped = report.results.single { it.outcome == Outcome.SKIPPED }
+      assertEquals("checkout/refund", skipped.test_key)
+      assertEquals("backend outage, see #2194", skipped.failure_reason)
+      assertEquals(2, report.results.size, "the trail that ran must still be there")
+    } finally {
+      tempDir.deleteRecursively()
+    }
+  }
+
+  /** A minimal session that reaches a terminal status, so `buildSessionResult` produces a row. */
+  private fun writeEndedSession(logsDir: File, sessionId: SessionId) {
+    val deviceInfo = androidDeviceInfo()
+    val started = Instant.parse("2026-08-27T12:00:00Z")
+    writeLog(
+      sessionDir = sessionDirFor(logsDir, sessionId),
+      fileName = "001_TrailblazeSessionStatusChangeLog.json",
+      log = TrailblazeLog.TrailblazeSessionStatusChangeLog(
+        sessionStatus = SessionStatus.Started(
+          trailConfig = null,
+          trailFilePath = "trails/checkout/pay.trail.yaml",
+          hasRecordedSteps = false,
+          testMethodName = "pay",
+          testClassName = "CheckoutTest",
+          trailblazeDeviceInfo = deviceInfo,
+          trailblazeDeviceId = deviceInfo.trailblazeDeviceId,
+          rawYaml = null,
+        ),
+        session = sessionId,
+        timestamp = started,
+      ),
+    )
+    writeLog(
+      sessionDir = sessionDirFor(logsDir, sessionId),
+      fileName = "002_TrailblazeSessionStatusChangeLog.json",
+      log = TrailblazeLog.TrailblazeSessionStatusChangeLog(
+        sessionStatus = SessionStatus.Ended.Succeeded(durationMs = 5_000),
+        session = sessionId,
+        timestamp = started.plus(5.seconds),
+      ),
+    )
   }
 
   private fun sessionDirFor(logsDir: File, sessionId: SessionId): File =

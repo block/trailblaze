@@ -44,7 +44,7 @@ data class PlaywrightNativeVerifyElementVisibleTool(
       val (locator, error) =
         PlaywrightExecutableTool.validateAndResolveRef(page, ref, description, context, nodeSelector)
       if (error != null) return error
-      assertThat(locator!!.first()).isVisible()
+      assertThat(locator!!).isVisible()
       TrailblazeToolResult.Success(message = "Verified element '$description' is visible.")
     } catch (e: AssertionError) {
       TrailblazeToolResult.Error.ExceptionThrown(

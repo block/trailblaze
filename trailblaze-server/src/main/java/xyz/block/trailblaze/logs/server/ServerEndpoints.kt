@@ -17,6 +17,7 @@ import io.ktor.server.routing.route
 import io.ktor.server.routing.routing
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.server.endpoints.AgentLogEndpoint
+import xyz.block.trailblaze.logs.server.endpoints.CliDaemonCapabilities
 import xyz.block.trailblaze.logs.server.endpoints.CliExecEndpoint
 import xyz.block.trailblaze.logs.server.endpoints.CliExecRequest
 import xyz.block.trailblaze.logs.server.endpoints.CliExecResponse
@@ -183,6 +184,10 @@ object ServerEndpoints {
           callbacks.statusProvider().copy(
             activeRuns = summaries.size,
             activeRunSummaries = summaries,
+            // Stamped here, not by the app's provider: capabilities describe THIS server build's
+            // request handling, so an app that forgets them must not be able to under-report and
+            // make a caller refuse a daemon that would have honored its request.
+            capabilities = CliDaemonCapabilities.ALL,
           )
         }
         callbacks.onCliExecRequest?.let { CliExecEndpoint.register(this, it) }

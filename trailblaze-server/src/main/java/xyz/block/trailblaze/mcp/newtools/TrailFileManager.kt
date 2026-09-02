@@ -17,6 +17,7 @@ import xyz.block.trailblaze.yaml.TrailblazeToolYamlWrapper
 import xyz.block.trailblaze.yaml.TrailblazeYaml
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.yaml.VerificationStep
+import xyz.block.trailblaze.yaml.unified.TrailblazeDeviceDefinition
 import xyz.block.trailblaze.yaml.unified.UnifiedTrailAdapter
 import xyz.block.trailblaze.yaml.unified.UnifiedTrailStep
 import kotlinx.serialization.json.JsonObject
@@ -121,6 +122,8 @@ class TrailFileManager(
     val promptSteps: List<PromptStep>? = null,
     val filePath: String? = null,
     val error: String? = null,
+    /** The multi-device configuration these items were lowered for, or null for single-device. */
+    val selectedDeviceConfiguration: String? = null,
   )
 
   /**
@@ -156,14 +159,27 @@ class TrailFileManager(
    * @param name Trail name (used for the directory slug)
    * @param recordedItems The lowered trail items for this one device's session
    * @param platform Optional platform for the classifier / sibling filename
+   * @param selectedDeviceConfiguration The multi-device configuration the session bound
+   *   ([xyz.block.trailblaze.logs.model.SessionStatus.Started.selectedDeviceConfiguration]), or null
+   *   for a single-device session. It keys the recording slot instead of the platform.
+   * @param castToDeclare The configuration definition to DECLARE under
+   *   [selectedDeviceConfiguration] when the destination declares no device layout of its own —
+   *   synthesized from an interactive session's named-device roster so the saved trail carries the
+   *   `config.devices:` cast its configuration-keyed legs need to replay. A destination that already
+   *   declares any device (a cast, a single-device entry, or a classifier-keyed leg) wins and the
+   *   save refuses instead — see [UnifiedRecordingWriter.mergeIntoUnified].
    */
   fun saveTrailItems(
     name: String,
     recordedItems: List<TrailYamlItem>,
     platform: TrailblazeDevicePlatform? = null,
+    selectedDeviceConfiguration: String? = null,
+    castToDeclare: TrailblazeDeviceDefinition? = null,
   ): SaveResult = writeRoutedTrail(
     name = name,
     platform = platform,
+    selectedDeviceConfiguration = selectedDeviceConfiguration,
+    castToDeclare = castToDeclare,
     trailItemsForMerge = { recordedItems },
   )
 
@@ -173,10 +189,17 @@ class TrailFileManager(
    * merge [trailItemsForMerge] into the directory's shared unified `trail.yaml` under the
    * platform's classifier slot, or write a per-classifier `<platform>.trail.yaml` sibling —
    * refusing to shadow an existing unified trail. Both destinations hold unified YAML.
+   *
+   * A session that bound a multi-device configuration keys its slot by that configuration's NAME
+   * and always merges: the sibling layout names its file after the device and can't declare a cast,
+   * so a configuration routed there would write the classifier-keyed leg the keying exists to
+   * prevent.
    */
   private fun writeRoutedTrail(
     name: String,
     platform: TrailblazeDevicePlatform?,
+    selectedDeviceConfiguration: String? = null,
+    castToDeclare: TrailblazeDeviceDefinition? = null,
     trailItemsForMerge: () -> List<TrailYamlItem>,
   ): SaveResult {
     return try {
@@ -189,8 +212,10 @@ class TrailFileManager(
 
       // A unified trail keys each device's tools under a classifier slot, so a save with no
       // platform has nothing to key on. Refuse rather than inventing a device-agnostic slot —
-      // mirrors loadTrail's "bind a device first" stance for the same reason.
-      val classifier = platform?.name?.lowercase().orEmpty()
+      // mirrors loadTrail's "bind a device first" stance for the same reason. A configuration
+      // session's name IS the slot key, so it needs no platform (blank counts as absent).
+      val configuration = selectedDeviceConfiguration?.takeIf { it.isNotBlank() }
+      val classifier = configuration ?: platform?.name?.lowercase().orEmpty()
       if (classifier.isBlank()) {
         return SaveResult(
           success = false,
@@ -208,8 +233,8 @@ class TrailFileManager(
       val fileName = "$classifier.trail.yaml"
       val trailItems = trailItemsForMerge()
 
-      if (UnifiedRecordingWriter.shouldMergeIntoSharedTrail(trailDir, classifier)) {
-        return saveTrailAsUnified(trailDir, trailItems, classifier, fileName)
+      if (configuration != null || UnifiedRecordingWriter.shouldMergeIntoSharedTrail(trailDir, classifier)) {
+        return saveTrailAsUnified(trailDir, trailItems, classifier, fileName, configuration, castToDeclare)
       }
 
       // Per-classifier sibling. Refuse to drop one into (or overwrite a `trail.yaml` in) a
@@ -249,23 +274,21 @@ class TrailFileManager(
     trailItems: List<TrailYamlItem>,
     classifier: String,
     siblingFileName: String,
-  ): SaveResult = when (val outcome = UnifiedRecordingWriter.mergeIntoUnified(trailDir, trailItems, classifier)) {
+    selectedDeviceConfiguration: String? = null,
+    castToDeclare: TrailblazeDeviceDefinition? = null,
+  ): SaveResult = when (
+    val outcome = UnifiedRecordingWriter.mergeIntoUnified(
+      trailFileOrDir = trailDir,
+      recordedItems = trailItems,
+      classifier = classifier,
+      selectedDeviceConfiguration = selectedDeviceConfiguration,
+      castToDeclare = castToDeclare,
+    )
+    ) {
     is UnifiedRecordingWriter.MergeOutcome.Merged -> {
       Console.log("[TrailFileManager] Merged trail into: ${outcome.target.absolutePath} (classifier `$classifier`)")
       SaveResult(success = true, filePath = outcome.target.absolutePath)
     }
-
-    is UnifiedRecordingWriter.MergeOutcome.MultiToolTrailheadUnsupported ->
-      // A multi-tool trailhead has no unified representation at all, so a sibling file can't
-      // preserve it either — refuse instead of writing a trail that won't parse. (Unreachable on
-      // the MCP authoring path, which never builds a multi-tool trailhead; kept correct
-      // defensively.)
-      SaveResult(
-        success = false,
-        error = "Recording not saved: its trailhead records ${outcome.toolCount} tools and a " +
-          "unified trailhead holds at most one per classifier. Split the extra tools into the " +
-          "first trail step, then retry.",
-      )
 
     is UnifiedRecordingWriter.MergeOutcome.NoTarget ->
       SaveResult(
@@ -288,6 +311,52 @@ class TrailFileManager(
         success = false,
         error = UnifiedRecordingWriter.multiDeviceMergeSkippedMessage(outcome.target, outcome.configurationNames),
       )
+
+    is UnifiedRecordingWriter.MergeOutcome.ConfigurationNotDeclared ->
+      SaveResult(
+        success = false,
+        error = UnifiedRecordingWriter.configurationNotDeclaredMessage(
+          outcome.target,
+          outcome.configurationName,
+          outcome.declaredConfigurationNames,
+        ),
+      )
+
+    is UnifiedRecordingWriter.MergeOutcome.SynthesizedCastWouldBeShadowed ->
+      SaveResult(
+        success = false,
+        error = UnifiedRecordingWriter.synthesizedCastShadowedMessage(outcome.target, outcome.siblingFileNames),
+      )
+
+    // This path saves a whole recording, so it passes no step window and neither partial-recording
+    // refusal can fire. Reported rather than ignored so a future caller that does pass one gets the
+    // real message instead of a silent success.
+    is UnifiedRecordingWriter.MergeOutcome.StepWindowOutOfRange ->
+      SaveResult(
+        success = false,
+        error = UnifiedRecordingWriter.stepWindowOutOfRangeMessage(
+          outcome.target,
+          outcome.window,
+          outcome.existingStepCount,
+        ),
+      )
+
+    is UnifiedRecordingWriter.MergeOutcome.StepWindowMismatch ->
+      SaveResult(
+        success = false,
+        error = UnifiedRecordingWriter.stepWindowMismatchMessage(
+          outcome.target,
+          outcome.window,
+          outcome.expectedStepCount,
+          outcome.recordedStepCount,
+        ),
+      )
+
+    is UnifiedRecordingWriter.MergeOutcome.TrailChangedUnderRun ->
+      SaveResult(
+        success = false,
+        error = UnifiedRecordingWriter.trailChangedUnderRunMessage(outcome.target, outcome.changed),
+      )
   }
 
   /**
@@ -298,11 +367,16 @@ class TrailFileManager(
    *   per-classifier recordings (v1 trails ignore the list). Callers loading for EXECUTION must
    *   pass the session device's classifiers — see [deviceClassifiersFor] for the semantics
    *   (platform-only limitation, and why empty means "refuse a unified-with-recordings trail").
+   * @param requestedDeviceConfiguration Which `config.devices:` CONFIGURATION entry to lower. Null
+   *   derives it — see [selectDeviceConfiguration]. Configuration names are invisible to classifier
+   *   lineage, so a two-device trail loaded without one lowers every configuration-keyed step with
+   *   NO recording and reads as unrecorded.
    * @return LoadResult with parsed trail data
    */
   fun loadTrail(
     filePath: String,
     deviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList(),
+    requestedDeviceConfiguration: String? = null,
   ): LoadResult {
     val file = try {
       validateWithinTrailsDir(File(filePath), filePath)
@@ -315,7 +389,16 @@ class TrailFileManager(
 
     return try {
       val yamlContent = file.readText()
-      val trailItems = trailblazeYaml.decodeTrail(yamlContent, deviceClassifiers = deviceClassifiers)
+      val selection = selectDeviceConfiguration(yamlContent, requestedDeviceConfiguration, trailblazeYaml)
+      selection.errorMessage()?.let { message ->
+        return LoadResult(success = false, error = message)
+      }
+      val selectedDeviceConfiguration = (selection as DeviceConfigurationSelection.Selected).name
+      val trailItems = trailblazeYaml.decodeTrail(
+        yamlContent,
+        deviceClassifiers = deviceClassifiers,
+        selectedDeviceConfiguration = selectedDeviceConfiguration,
+      )
       val config = trailblazeYaml.extractTrailConfig(trailItems)
 
       // Extract prompt steps from the trail
@@ -329,6 +412,7 @@ class TrailFileManager(
         config = config,
         promptSteps = promptSteps,
         filePath = filePath,
+        selectedDeviceConfiguration = selectedDeviceConfiguration,
       )
     } catch (e: IllegalStateException) {
       // decodeTrail's unified-with-recordings guard: the trail needs device classifiers to lower

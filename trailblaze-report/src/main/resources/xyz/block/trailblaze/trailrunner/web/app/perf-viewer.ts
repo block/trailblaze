@@ -253,6 +253,7 @@ function PERF_VIEWER(): void {
       bg: v('--bg'), bg2: v('--bg2'), bg3: v('--bg3'), line: v('--line'), line2: v('--line2'),
       txt: v('--txt'), sub: v('--sub'), focus: v('--focus'),
       tool: v('--accent-8'), llm: v('--violet-9'), maestro: v('--cyan-9'), driver: v('--neutral-7'),
+      trace: v('--forest-9'),
       fail: v('--error-9'), pass: v('--success-9'), amber: v('--warning-9'),
       stepOk: v('--success-3'), stepFail: v('--error-3'), stepHead: v('--neutral-4'),
     };
@@ -265,7 +266,7 @@ function PERF_VIEWER(): void {
   const ROW_H = 18;
   const ROW_GAP = 2;
   const SECTION_GAP = 8;
-  const kindColor = (sp: PerfSpan): string => (!sp.ok ? pal.fail : sp.kind === 'llm' ? pal.llm : sp.kind === 'maestro' ? pal.maestro : sp.kind === 'driver' ? pal.driver : pal.tool);
+  const kindColor = (sp: PerfSpan): string => (!sp.ok ? pal.fail : sp.kind === 'llm' ? pal.llm : sp.kind === 'maestro' ? pal.maestro : sp.kind === 'driver' ? pal.driver : sp.kind === 'trace' ? pal.trace : pal.tool);
 
   interface Hit { x0: number; x1: number; y0: number; y1: number; side: 'a' | 'b'; id?: number; step?: number }
   let hits: Hit[] = [];
@@ -696,7 +697,9 @@ function PERF_VIEWER(): void {
     const sp = data.spans[st.focus.id];
     const step = sp.step != null ? data.steps[sp.step] : null;
     const dl: Array<[string, string]> = [
-      ['Kind', sp.kind + (sp.kind === 'driver' ? ' (device clock)' : '')],
+      ['Kind', sp.kind === 'driver' ? 'driver (device clock)'
+        : sp.kind === 'trace' ? `trace${sp.cat ? ` (${sp.cat})` : ''}${sp.spanKind ? ` · ${sp.spanKind}` : ''}`
+        : sp.kind],
       ['Start', fmtMs(sp.s)],
       ['End', fmtMs(sp.e)],
       ['Duration', fmtMs(sp.dur)],
@@ -706,6 +709,7 @@ function PERF_VIEWER(): void {
     if (sp.cost != null) dl.push(['LLM cost', fmtUsd(sp.cost)]);
     if (sp.tokens) dl.push(['Tokens', sp.tokens]);
     if (step) dl.push(['Step', `${(sp.step as number) + 1}. ${step.label}${step.trailhead ? ' (trailhead)' : ''}`]);
+    if (sp.tid != null) dl.push(['Thread', sp.pid != null ? `${sp.tid} (pid ${sp.pid})` : String(sp.tid)]);
     if (sp.shot) dl.push(['Screenshot', sp.shot]);
     dl.push(['Result', sp.ok ? 'ok' : 'failed']);
     el.hidden = false;

@@ -3,7 +3,8 @@ config:
   target: contacts
   description: Launch Contacts via the custom scripted tool, then enter a name in the create-contact form.
   devices:
-    android: ANDROID_ONDEVICE_INSTRUMENTATION
+    android:
+      driver: ANDROID_ONDEVICE_INSTRUMENTATION
 
 trail:
   - step: "Launch the Contacts app via the custom scripted tool"

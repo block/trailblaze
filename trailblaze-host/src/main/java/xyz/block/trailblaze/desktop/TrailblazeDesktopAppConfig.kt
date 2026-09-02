@@ -16,6 +16,8 @@ import xyz.block.trailblaze.llm.TrailblazeLlmModelList
 import xyz.block.trailblaze.llm.TrailblazeLlmProvider
 import xyz.block.trailblaze.model.AppVersionInfo
 import xyz.block.trailblaze.model.DesktopAppRunYamlParams
+import xyz.block.trailblaze.host.driver.HostDriverDescriptor
+import xyz.block.trailblaze.host.driver.HostDriverDescriptorRegistry
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.trailrunner.DefaultTrailRunnerExtension
@@ -155,6 +157,30 @@ abstract class TrailblazeDesktopAppConfig(
    */
   open val deviceClassifierIconProvider: DeviceClassifierIconProvider =
     DefaultDeviceClassifierIconProvider
+
+  /**
+   * The drivers this app plugs in — see [HostDriverDescriptor].
+   *
+   * Declaring one here is what makes its devices discoverable, listable, runnable and
+   * capturable; an app that omits a driver doesn't get it at all. Drivers that haven't been
+   * converted to descriptors yet need no entry, and are reached through the `when` arms that
+   * still handle them.
+   *
+   * Empty by default so a distribution opts in to each driver rather than inheriting whatever
+   * happens to be on the classpath.
+   */
+  open val hostDriverDescriptors: Set<HostDriverDescriptor> = emptySet()
+
+  /**
+   * [hostDriverDescriptors] as the registry every host call site reads, checked against the
+   * drivers this app claims to support so a driver that's enabled-but-unplugged fails here at
+   * startup rather than when someone runs on it.
+   */
+  val hostDriverDescriptorRegistry: HostDriverDescriptorRegistry by lazy {
+    HostDriverDescriptorRegistry(hostDriverDescriptors).apply {
+      validateCovers(trailblazeSettingsRepo.getAllSupportedDriverTypes())
+    }
+  }
 
   /**
    * The Trail Runner web-UI extension seam. Downstream builds override this to layer their own

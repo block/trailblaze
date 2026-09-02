@@ -3,10 +3,13 @@ package xyz.block.trailblaze.usages
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import xyz.block.trailblaze.devices.TrailblazeClassifierLineage
+import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
 import xyz.block.trailblaze.yaml.TrailblazeToolYamlWrapper
 import xyz.block.trailblaze.yaml.unified.UnifiedTrail
 import xyz.block.trailblaze.yaml.unified.UnifiedTrailStep
+import xyz.block.trailblaze.yaml.unified.UnifiedTrailTargets
 
 /**
  * Extracts direct tool usage from a parsed [UnifiedTrail] — which tools its recordings invoke,
@@ -57,6 +60,94 @@ object TrailToolUsageScanner {
     trail.trailhead?.let { scanStep(null, it) }
     trail.trail.forEachIndexed { index, step -> scanStep(index, step) }
     return byTool
+  }
+
+  /**
+   * Which of the trail's declared device classifiers actually reach the tool, given the [steps] a
+   * [toolUsages] scan attributed to it.
+   *
+   * This is the question a consumer selecting lanes to run has to answer, and it is NOT
+   * `steps.flatMap { it.classifiers }`: a recording is chosen at replay by **closest-wins**
+   * resolution, so a device whose step declares a more specific non-invoking key never reaches an
+   * `all:` invocation. A trail keying `all:` and `ios-iphone:` in one step, with the tool only under
+   * `all:`, does not invoke it on an iPhone. Answering that requires the lineage, which is why it
+   * lives here rather than in the KDoc as homework for every caller.
+   *
+   * The candidate set is [UnifiedTrailTargets.declaredClassifiers] — the framework's existing answer
+   * to "what does this trail carry direction for", so this cannot drift from device selection or the
+   * desktop Trails browser. It may include `all`, which is a real coverage token in this vocabulary
+   * ("the leg nothing more specific claims") and not filtered out; a trail that keys only `all:`
+   * legitimately answers `[all]`.
+   *
+   * MULTI-DEVICE CONFIGURATIONS are resolved the way selection resolves them, not skipped. A
+   * configuration's legs are keyed by the configuration NAME (`pos-pair:`), which no member device's
+   * lineage contains — so a chain walk alone answers "reaches nothing" for every member of a trail
+   * that records under its configuration, which is every such trail. Selection is what makes those
+   * legs reachable: `UnifiedTrailAdapter.lowerToTrailItems` puts the selected configuration's name
+   * at the HEAD of the chain and excludes only the OTHER configurations' names, so each attempt
+   * below mirrors one runnable session. A trail that declares a configuration has NO
+   * configuration-free session — `MultiDeviceConfigurationResolver.resolve` always selects the
+   * sole declared configuration, and rejects a trail declaring more than one — so the plain
+   * single-device chain is attempted only when the trail declares none. In a configured trail a
+   * member resolves with its configuration at the head of its chain, where it can shadow a broader
+   * leg (`all:`); a classifier no configuration casts never runs the trail at all, so it has no
+   * sessions and reaches nothing. A classifier reaches the tool when any of its sessions does.
+   */
+  fun invokingClassifiers(trail: UnifiedTrail, steps: List<TrailStepToolUsage>): Set<String> {
+    if (steps.isEmpty()) return emptySet()
+    val configurationNames = trail.config.multiDeviceConfigurationNames
+    val configurationsByMember = configurationMembership(trail)
+    // Hoisted out of the per-classifier walk below: the same step sets are re-read for every
+    // candidate classifier, and `classifiers` is a List whose membership test is linear.
+    val resolvableSteps = steps.map { step ->
+      ResolvableStep(
+        declaredKeys = step.declaredClassifiers.toSet(),
+        invokingKeys = step.classifiers.toSet(),
+      )
+    }
+    return UnifiedTrailTargets.declaredClassifiers(trail).filterTo(LinkedHashSet()) { classifier ->
+      val chain = TrailblazeClassifierLineage
+        .chainFor(TrailblazeDeviceClassifier(classifier))
+        .map { it.classifier }
+      // Each entry is one session this classifier can run in. `null` — select nothing, exclude
+      // every configuration name — exists only when the trail declares no configuration: a trail
+      // that declares one always replays with it selected. A member's sessions are the
+      // configurations casting it; a classifier no configuration casts never runs a configured
+      // trail at all, so it gets no sessions and reaches nothing.
+      val sessions: List<String?> = when {
+        configurationNames.isEmpty() -> listOf(null)
+        else -> configurationsByMember[classifier].orEmpty()
+      }
+      sessions.any { selectedConfiguration ->
+        val resolutionChain = listOfNotNull(selectedConfiguration) + chain
+        val excludedKeys = configurationNames - setOfNotNull(selectedConfiguration)
+        resolvableSteps.any { step ->
+          TrailblazeClassifierLineage.closestDeclaredKey(
+            declaredKeys = step.declaredKeys,
+            resolutionChain = resolutionChain,
+            excludedKeys = excludedKeys,
+          ) in step.invokingKeys
+        }
+      }
+    }
+  }
+
+  /** One step's keys as sets, so the per-classifier walk re-reads them without rebuilding them. */
+  private class ResolvableStep(val declaredKeys: Set<String>, val invokingKeys: Set<String>)
+
+  /**
+   * Member classifier → the multi-device configurations that cast it. A device can appear in more
+   * than one configuration, and each is a separately selectable session with its own recordings, so
+   * every one of them is a way that member might reach the tool.
+   */
+  private fun configurationMembership(trail: UnifiedTrail): Map<String, List<String>> {
+    val byMember = LinkedHashMap<String, MutableList<String>>()
+    trail.config.devices?.forEach { (name, definition) ->
+      definition.devices?.values?.forEach { member ->
+        member.classifier?.let { byMember.getOrPut(it) { mutableListOf() }.add(name) }
+      }
+    }
+    return byMember
   }
 
   /**

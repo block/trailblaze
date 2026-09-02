@@ -158,16 +158,18 @@ class CompileCommand : Callable<Int> {
     // shape ... No `ScriptedToolEnrichment` was wired" even though daemon-time
     // codegen would resolve it correctly.
     //
-    // When the resolver returns null (no `bun` on PATH, missing TRAILBLAZE_SDK_DIR,
-    // ts-json-schema-generator not installed), log a one-line breadcrumb so the
-    // downstream "enrichment not wired" loader error has a root cause sitting next
-    // to it in the same log instead of arriving with no context.
+    // When the resolver returns null (no `bun` on PATH, or no usable SDK tree and no
+    // bundled shim), log a one-line breadcrumb so the downstream "enrichment not wired"
+    // loader error has a root cause sitting next to it in the same log instead of
+    // arriving with no context.
     val scriptedToolEnrichment = AnalyzerScriptedToolEnrichment.resolveFromEnvironment()
     if (scriptedToolEnrichment == null) {
       Console.info(
         "trailblaze $commandLabel: scripted-tool analyzer unavailable — meta-only " +
-          "descriptors will fail to load. Ensure `bun` is on PATH and the SDK at " +
-          "TRAILBLAZE_SDK_DIR carries node_modules/ts-json-schema-generator.",
+          "descriptors will fail to load. Ensure `bun` is on PATH. Release CLIs bundle " +
+          "the analyzer shim; a dev build without the bundle needs `bun install` in " +
+          "sdks/typescript, and a TRAILBLAZE_SDK_DIR override must itself carry " +
+          "node_modules/ts-json-schema-generator.",
       )
     }
     // Reference validation and the typed-surface emitter below both have to see toolsets and

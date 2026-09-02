@@ -348,6 +348,34 @@ function tbBootLoaderHtml(heading: string): string {
   return `<div id="tb-boot" role="status"><div class="tb-boot-spinner" aria-hidden="true"></div><div class="tb-boot-title">${safe}</div><div class="tb-boot-note">Loading report…</div></div>`;
 }
 
+// A `blob:` attachment value is an object URL over bytes only the page that minted it holds (the
+// zip pipeline mints one per materialized media file), so it must not travel into a document that
+// outlives that page: reopened elsewhere it resolves to nothing and Open reports the attachment as
+// missing. Embedded `data:` values and `/static` links are portable and stay. Everything stripped
+// leaves null rather than an empty map, so the viewer's "any attachments?" check reads the same as
+// a session that referenced none.
+function withoutRuntimeAttachments(attachments: Record<string, string> | null | undefined): { attachments: Record<string, string> | null; changed: boolean } {
+  if (!attachments) return { attachments: attachments || null, changed: false };
+  const kept = Object.entries(attachments).filter(([, uri]) => !/^blob:/i.test(String(uri)));
+  if (kept.length === Object.keys(attachments).length) return { attachments, changed: false };
+  return { attachments: kept.length ? Object.fromEntries(kept) : null, changed: true };
+}
+
+// The same rule for one embedded `#tb-session-<i>` chunk, as the viewer's chunked export needs it:
+// that path ships the cloned chunks verbatim, and a document rendered with the object URLs kept
+// (the zip viewer's in-page iframe) carries them inside those chunks. Returns null when there is
+// nothing to rewrite — no blob: values, an unparseable chunk — so the caller leaves the node alone
+// and a megabyte chunk is never reserialized for nothing.
+function chunkJsonWithoutRuntimeAttachments(json: string): string | null {
+  if (!/blob:/i.test(String(json == null ? '' : json))) return null;
+  let payload: SessionPayload | null = null;
+  try { payload = JSON.parse(json); } catch (e) { return null; }
+  if (!payload || typeof payload !== 'object') return null;
+  const stripped = withoutRuntimeAttachments(payload.attachments);
+  if (!stripped.changed) return null;
+  return toInertJson({ ...payload, attachments: stripped.attachments });
+}
+
 // Re-key the hoisted sprite chunk for an exported subset of sessions: #tb-sprites is keyed by
 // session index, and indices shift when a subset is exported (session 3 of 5 becomes session 0 of
 // 1). `spriteFor(video, originalIndex)` resolves one session's sheet URIs in order (inline
@@ -358,4 +386,4 @@ function rekeySprites(exported: SessionPayload[], all: SessionPayload[], spriteF
   return sprites;
 }
 
-export { parseEventJsonish, eventValueText, normalizeEventPayload, eventPrettyText, rawPrettyText, inflateGzText, deflateGzText, inflateGzJsonArray, inflateEventsGz, inflateLlmMessagesGz, inflateGzJsonRecord, jsonToYaml, transcriptToolCallYaml, transcriptToolResultDisplay, toInertJson, inertScriptBody, tbBootLoaderHtml, rekeySprites };
+export { parseEventJsonish, eventValueText, normalizeEventPayload, eventPrettyText, rawPrettyText, inflateGzText, deflateGzText, inflateGzJsonArray, inflateEventsGz, inflateLlmMessagesGz, inflateGzJsonRecord, jsonToYaml, transcriptToolCallYaml, transcriptToolResultDisplay, toInertJson, inertScriptBody, tbBootLoaderHtml, rekeySprites, withoutRuntimeAttachments, chunkJsonWithoutRuntimeAttachments };

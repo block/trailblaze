@@ -18,7 +18,8 @@ config:
   id: sample-app/mcp-tools/mobile-list-installed-apps
   target: xyz.block.trailblaze.examples.sampleapp
   devices:
-    android-phone: ANDROID_ONDEVICE_INSTRUMENTATION
+    android-phone:
+      driver: ANDROID_ONDEVICE_INSTRUMENTATION
 
 trail:
   - step: List the apps installed on the device

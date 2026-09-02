@@ -103,7 +103,33 @@ object TrailblazeNodeSelectorResolver {
     val searchScope = selector.childOf?.let { childOfSelector ->
       when (val parentResult = resolve(root, childOfSelector, depth + 1)) {
         is ResolveResult.SingleMatch -> parentResult.node.aggregate().drop(1)
-        is ResolveResult.MultipleMatches -> parentResult.nodes.flatMap { it.aggregate().drop(1) }
+        is ResolveResult.MultipleMatches -> {
+          // The scope is a SET of nodes, but a flat union duplicates: when one anchor match
+          // contains another (an ancestor chain, which the estate bridge's descendant-shaped
+          // containsChild produces routinely), every node under the inner anchor enters the
+          // union once per enclosing anchor, and each duplicate then counts as its own match
+          // downstream — one widget reported as dozens of "elements". In a tree, two nodes'
+          // descendant sets overlap ONLY when one contains the other, so keeping just the
+          // anchors no other anchor contains yields the identical union, duplicate-free.
+          val anchors = parentResult.nodes
+          // Each anchor's descendants ONCE. `aggregate()` walks the whole subtree, and the
+          // containment scan below asks about every ordered pair, so recomputing it inside the
+          // scan makes a deep tree with many anchors quadratic in full subtree walks.
+          val descendants = anchors.map { anchor ->
+            anchor.aggregate().drop(1).mapTo(ArrayList<TrailblazeNode>()) { it }
+          }
+          anchors
+            .filterIndexed { candidateIndex, candidate ->
+              anchors.indices.none { otherIndex ->
+                otherIndex != candidateIndex &&
+                  descendants[otherIndex].any { it === candidate }
+              }
+            }
+            // Identity-distinct: an anchor list that itself carried duplicates (a nested childOf
+            // resolved before this fix existed cannot, but defensive) must not reintroduce them.
+            .let { outer -> outer.filterIndexed { i, n -> outer.subList(0, i).none { it === n } } }
+            .flatMap { it.aggregate().drop(1) }
+        }
         is ResolveResult.NoMatch -> return ResolveResult.NoMatch(selector)
       }
     } ?: root.aggregate()
@@ -111,6 +137,16 @@ object TrailblazeNodeSelectorResolver {
     // Step 2: Apply driver match + spatial + hierarchy predicates, sort by position
     val matched = searchScope
       .filter { node -> matchesSelector(node, selector, root, depth) }
+      // Top level only: the outer result names the widget acted on, so one widget must be one
+      // match. An anchor resolved mid-recursion (childOf, spatial) must NOT collapse — childOf
+      // unions every match's descendants into the search scope, and collapsing an ancestor chain
+      // to its innermost node there would shrink a merged container's scope to a text wrapper.
+      // Projected-shape selectors only: the collapse undoes a density mismatch, so it applies
+      // exactly where one exists. A bare positional selector deliberately enumerates every node,
+      // a native in-process selector was authored against this tree's own density, and a
+      // projected selector on a projected tree (the accessibility driver's own path) has no
+      // mismatch to undo — each of those keeps its recorded match count untouched.
+      .let { if (depth == 0 && selector.projectsContent()) collapseNestedDuplicates(it) else it }
       .sortedWith(
         compareBy(
           { it.bounds?.top ?: Int.MAX_VALUE },
@@ -195,7 +231,20 @@ object TrailblazeNodeSelectorResolver {
 
     // Hierarchy: containsChild — depth incremented to guard against nested containsChild chains
     selector.containsChild?.let { childSelector ->
-      if (!node.children.any { child -> matchesSelector(child, childSelector, root, depth + 1) }) return false
+      val directChildMatches =
+        node.children.any { child -> matchesSelector(child, childSelector, root, depth + 1) }
+      // Densification rule for bridged evaluation: "child" in a selector recorded against a
+      // PROJECTED tree (accessibility, UiAutomator) means "the node directly under this one
+      // there" — and the dense in-process tree inserts wrapper nodes the projection pruned, so
+      // the same relationship is descendant-shaped here. Relaxing to descendants is exactly the
+      // densification, and only the densification: it applies only when a projected-shape child
+      // selector is evaluated against an in-process node, so native `androidView:`/`compose:`
+      // selectors (authored against this tree) keep strict direct-child semantics.
+      val bridgedDescendantMatches = !directChildMatches &&
+        isProjectedAndroidShape(childSelector.driverMatch) &&
+        isInProcessAndroidDetail(node.driverDetail) &&
+        node.aggregate().drop(1).any { desc -> matchesSelector(desc, childSelector, root, depth + 1) }
+      if (!directChildMatches && !bridgedDescendantMatches) return false
     }
 
     // Hierarchy: containsDescendants — must match ALL, depth incremented
@@ -208,6 +257,57 @@ object TrailblazeNodeSelectorResolver {
     }
 
     return true
+  }
+
+  /**
+   * Whether the selector's content constraint was recorded against a PROJECTED Android tree
+   * (accessibility or UiAutomator): its own driver match is a projected shape, or it is a
+   * structural selector whose containsChild constraint carries one. That is the shape whose
+   * density can mismatch the tree it is evaluated on — a bare positional selector says nothing
+   * about content, and a native in-process shape was authored against the dense tree itself.
+   */
+  private fun TrailblazeNodeSelector.projectsContent(): Boolean =
+    isProjectedAndroidShape(driverMatch) ||
+      (driverMatch == null && containsChild?.let { isProjectedAndroidShape(it.driverMatch) } == true)
+
+  /** A selector shape recorded from a projected Android tree (accessibility or UiAutomator). */
+  private fun isProjectedAndroidShape(match: DriverNodeMatch?): Boolean =
+    match is DriverNodeMatch.AndroidAccessibility || match is DriverNodeMatch.AndroidMaestro
+
+  /** A node from the ANDROID_TEST driver's dense in-process hybrid tree. */
+  private fun isInProcessAndroidDetail(detail: DriverNodeDetail): Boolean =
+    detail is DriverNodeDetail.AndroidView || detail is DriverNodeDetail.Compose
+
+  /**
+   * Collapses matches that are one widget seen at two tree densities into the innermost node.
+   *
+   * A projected tree (accessibility, UiAutomator) MERGES a widget into one node — a clickable
+   * container whose content description and its child text both read "More" is a single node
+   * there. The dense in-process tree keeps them apart, so the same selector matches both, and a
+   * strict resolver reports an ambiguity the recording's tree could never produce. When one match
+   * is an ancestor of another, they are the same widget, not two candidates: keep the innermost
+   * (its bounds are the tightest), and let genuinely distinct widgets stay ambiguous.
+   *
+   * Runs BEFORE the index step so a recorded `index:` counts widgets the way the projected tree
+   * did — one per widget — rather than shifting by however many wrappers the dense tree adds.
+   * Strictly narrowing: it can only reduce a match set, never admit a node that did not match.
+   *
+   * Per-pair as well as per-selector, a match only ever collapses into an IN-PROCESS descendant:
+   * on a projected tree — the accessibility driver evaluating its own recordings — an ancestor
+   * and descendant matching the same predicate are genuinely two nodes of that tree, and recorded
+   * `index:` selectors counted both.
+   */
+  private fun collapseNestedDuplicates(matched: List<TrailblazeNode>): List<TrailblazeNode> {
+    if (matched.size < 2) return matched
+    return matched.filter { candidate ->
+      // Drop a match that contains another match: the inner one is the same widget, seen closer.
+      val descendants = candidate.aggregate().drop(1)
+      matched.none { other ->
+        other !== candidate &&
+          isInProcessAndroidDetail(other.driverDetail) &&
+          descendants.any { it === other }
+      }
+    }
   }
 
   /** Resolves the first match's bounds from a selector. */
@@ -229,9 +329,27 @@ object TrailblazeNodeSelectorResolver {
     match: DriverNodeMatch,
   ): Boolean = when (match) {
     is DriverNodeMatch.AndroidAccessibility ->
-      detail is DriverNodeDetail.AndroidAccessibility && matchesAndroidAccessibility(detail, match)
+      when (detail) {
+        is DriverNodeDetail.AndroidAccessibility -> matchesAndroidAccessibility(detail, match)
+        // Canonical-selector bridge: an a11y-shaped selector — the one shape every Android
+        // driver can evaluate — also resolves against the ANDROID_TEST driver's in-process
+        // hybrid tree. See matchesAndroidAccessibilityAgainstView / ...AgainstCompose.
+        is DriverNodeDetail.AndroidView -> matchesAndroidAccessibilityAgainstView(detail, match)
+        is DriverNodeDetail.Compose -> matchesAndroidAccessibilityAgainstCompose(detail, match)
+        else -> false
+      }
+    is DriverNodeMatch.AndroidView ->
+      detail is DriverNodeDetail.AndroidView && matchesAndroidView(detail, match)
     is DriverNodeMatch.AndroidMaestro ->
-      detail is DriverNodeDetail.AndroidMaestro && matchesAndroidMaestro(detail, match)
+      when (detail) {
+        is DriverNodeDetail.AndroidMaestro -> matchesAndroidMaestro(detail, match)
+        // Estate bridge: the instrumentation-driver recordings this repo already holds are
+        // Maestro-shaped, and they must replay on the in-process hybrid tree without being
+        // re-recorded. See matchesAndroidMaestroAgainstView / ...AgainstCompose.
+        is DriverNodeDetail.AndroidView -> matchesAndroidMaestroAgainstView(detail, match)
+        is DriverNodeDetail.Compose -> matchesAndroidMaestroAgainstCompose(detail, match)
+        else -> false
+      }
     is DriverNodeMatch.Web ->
       detail is DriverNodeDetail.Web && matchesWeb(detail, match)
     is DriverNodeMatch.Compose ->
@@ -285,6 +403,179 @@ object TrailblazeNodeSelectorResolver {
     return true
   }
 
+  /**
+   * Canonical-selector bridge, View half: evaluates an [DriverNodeMatch.AndroidAccessibility]
+   * selector against a [DriverNodeDetail.AndroidView] node from the ANDROID_TEST driver's
+   * in-process hybrid tree.
+   *
+   * The a11y shape is the CANONICAL selector: it is the one shape the out-of-process
+   * accessibility driver can always evaluate, so a trail recorded in it replays on either
+   * driver — in-process for speed where the signature match allows it, accessibility
+   * everywhere else. This bridge is what lets the in-process driver accept that shape without
+   * trails carrying a per-backend selector (the `androidView`/`compose` keys leak which
+   * toolkit drew a widget — an app refactor from Views to Compose breaks such a trail on a
+   * screen that reads identically).
+   *
+   * Field mapping is strict, mirroring [matchesIosMaestroAgainstAxe]'s rule: a predicate the
+   * View tree cannot answer FAILS the constraint (and falls to the recorded-coordinate
+   * fallback at replay) rather than being silently ignored — a selector must never match more
+   * loosely here than it would on the tree it was authored against. Unanswerable on a View
+   * node: [DriverNodeMatch.AndroidAccessibility.uniqueId], `composeTestTagRegex`,
+   * `labeledByTextRegex`, `paneTitleRegex`, `roleDescriptionRegex`, `isHeading` and
+   * `isMultiLine`. The collection row/column predicates ARE answered — the View collector reads
+   * the same `CollectionItemInfo` the a11y tree publishes, which is what a grid-position selector
+   * needs, since a placeholder tile has no other distinguishing property. `isCheckable` maps to
+   * the View convention that a non-`Checkable` view reports `isChecked == null`.
+   *
+   * Dialect is [MatchDialect.NATIVE] on both sides of the bridge — the a11y shape is strict
+   * (regex-or-exact, case-sensitive), and it stays strict here.
+   */
+  private fun matchesAndroidAccessibilityAgainstView(
+    detail: DriverNodeDetail.AndroidView,
+    match: DriverNodeMatch.AndroidAccessibility,
+  ): Boolean {
+    // Predicates the View tree cannot answer: set means no match, never silently ignored.
+    if (match.uniqueId != null) return false
+    if (match.composeTestTagRegex != null) return false
+    if (match.labeledByTextRegex != null) return false
+    if (match.paneTitleRegex != null) return false
+    if (match.roleDescriptionRegex != null) return false
+    if (match.isHeading != null) return false
+    if (match.isMultiLine != null) return false
+
+    // Collection position IS answerable here: the collector reads the same CollectionItemInfo the
+    // a11y tree publishes. Strict all the same — a view that is not a collection item reports null
+    // and so fails a constraint naming a position, rather than matching it loosely.
+    match.collectionItemRowIndex?.let { if (detail.collectionItemRowIndex != it) return false }
+    match.collectionItemColumnIndex?.let { if (detail.collectionItemColumnIndex != it) return false }
+
+    // The a11y class name, not the runtime one: a canonical selector was recorded against a tree
+    // that only ever published `View.getAccessibilityClassName()`, so `android.view.View` there
+    // means "a plain view" and matches nothing against `com.example.…SomeRow`. Falls back to the
+    // runtime class for a tree whose collector does not report the a11y name.
+    if (!requirePattern(match.classNameRegex, detail.accessibilityClassName ?: detail.className)) {
+      return false
+    }
+    if (!requirePattern(match.resourceIdRegex, detail.resourceId)) return false
+    // Same text-resolution contract as the a11y tree: text > hintText > contentDescription.
+    if (!requirePattern(match.textRegex, detail.resolveText())) return false
+    if (!requirePattern(match.contentDescriptionRegex, detail.contentDescription)) return false
+    if (!requirePattern(match.hintTextRegex, detail.hintText)) return false
+    if (!requirePattern(match.stateDescriptionRegex, detail.stateDescription)) return false
+    if (!requireEqual(match.isEnabled, detail.isEnabled)) return false
+    if (!requireEqual(match.isClickable, detail.isClickable)) return false
+    // Checkability is expressed on the View shape as isChecked's nullability.
+    if (!requireEqual(match.isCheckable, detail.isChecked != null)) return false
+    match.isChecked?.let { if (detail.isChecked != it) return false }
+    if (!requireEqual(match.isSelected, detail.isSelected)) return false
+    if (!requireEqual(match.isFocused, detail.isFocused)) return false
+    if (!requireEqual(match.isEditable, detail.isEditable)) return false
+    if (!requireEqual(match.isScrollable, detail.isScrollable)) return false
+    if (!requireEqual(match.isPassword, detail.isPassword)) return false
+    if (!requireEqual(match.inputType, detail.inputType)) return false
+    return true
+  }
+
+  /**
+   * Canonical-selector bridge, Compose half: evaluates an
+   * [DriverNodeMatch.AndroidAccessibility] selector against a [DriverNodeDetail.Compose] node.
+   * See [matchesAndroidAccessibilityAgainstView] for why the bridge exists and the strictness
+   * rule; the notes here are the Compose-specific mappings.
+   *
+   * - `resourceIdRegex` matches [DriverNodeDetail.Compose.testTag]: with
+   *   `testTagsAsResourceId` enabled the a11y tree reports a Compose node's testTag verbatim
+   *   as its `viewIdResourceName`, so a canonical selector recorded from the a11y tree names
+   *   the same string this tree calls the testTag.
+   * - `isClickable`/`isScrollable`/`isEditable` map to the semantics actions
+   *   (`hasClickAction`/`hasScrollAction`/`hasSetTextAction`) — the same sources Compose's
+   *   own accessibility delegate projects those a11y booleans from.
+   * - Checkability maps to [DriverNodeDetail.Compose.toggleableState]: non-null means
+   *   checkable, and `"On"` means checked.
+   * - The a11y tree is MERGED and this tree is UNMERGED, so a text selector that matches a
+   *   merged container on the a11y tree matches the descendant Text node here. That is the
+   *   intended outcome: interactions already ascend from a matched node to its action
+   *   ancestor, so both drivers act on the same widget.
+   *
+   * - `classNameRegex` matches [DriverNodeDetail.Compose.accessibilityClassName], the class the
+   *   a11y projection fabricates for a semantics node — which is the only class name a recording
+   *   made against that tree can be naming. A collector that projects none leaves the field null
+   *   and the predicate declines, as it did for every Compose node before the projection existed.
+   *
+   * Unanswerable on a Compose node (set means no match): `uniqueId`, `hintTextRegex`,
+   * `labeledByTextRegex`, `roleDescriptionRegex`, `isMultiLine`, and `inputType`.
+   */
+  private fun matchesAndroidAccessibilityAgainstCompose(
+    detail: DriverNodeDetail.Compose,
+    match: DriverNodeMatch.AndroidAccessibility,
+  ): Boolean {
+    // Predicates the Compose semantics tree cannot answer: set means no match.
+    if (match.uniqueId != null) return false
+    if (match.hintTextRegex != null) return false
+    if (match.labeledByTextRegex != null) return false
+    if (match.roleDescriptionRegex != null) return false
+    if (match.isMultiLine != null) return false
+    if (match.inputType != null) return false
+
+    // Declines rather than matches when the collector projected nothing: a null here means "this
+    // tree cannot answer the question", and treating that as a match would let a className
+    // selector select every Compose node on the screen.
+    match.classNameRegex?.let { pattern ->
+      if (!requirePattern(pattern, detail.accessibilityClassName ?: return false)) return false
+    }
+    if (!requirePattern(match.resourceIdRegex, detail.testTag)) return false
+    if (!requirePattern(match.composeTestTagRegex, detail.testTag)) return false
+    // Compose resolveText: editableText > text > contentDescription.
+    if (!requirePattern(match.textRegex, detail.resolveText())) return false
+    if (!requirePattern(match.contentDescriptionRegex, detail.contentDescription)) return false
+    if (!requirePattern(match.stateDescriptionRegex, detail.stateDescription)) return false
+    if (!requirePattern(match.paneTitleRegex, detail.paneTitle)) return false
+    if (!requireEqual(match.isEnabled, detail.isEnabled)) return false
+    if (!requireEqual(match.isClickable, detail.hasClickAction)) return false
+    if (!requireEqual(match.isCheckable, detail.toggleableState != null)) return false
+    match.isChecked?.let { if ((detail.toggleableState == "On") != it) return false }
+    if (!requireEqual(match.isSelected, detail.isSelected)) return false
+    if (!requireEqual(match.isFocused, detail.isFocused)) return false
+    if (!requireEqual(match.isEditable, detail.hasSetTextAction)) return false
+    if (!requireEqual(match.isScrollable, detail.hasScrollAction)) return false
+    if (!requireEqual(match.isPassword, detail.isPassword)) return false
+    if (!requireEqual(match.isHeading, detail.isHeading)) return false
+    match.collectionItemRowIndex?.let { if (detail.collectionItemRowIndex != it) return false }
+    match.collectionItemColumnIndex?.let { if (detail.collectionItemColumnIndex != it) return false }
+    return true
+  }
+
+  /**
+   * Matches a native View-tree selector. Deliberately uses the default [MatchDialect.NATIVE]:
+   * `androidView` selectors are authored against a tree captured in-process from the real view
+   * objects, never round-tripped through Maestro, so they get strict case-sensitive semantics
+   * rather than the lenient dialect [matchesAndroidMaestro] must preserve.
+   */
+  private fun matchesAndroidView(
+    detail: DriverNodeDetail.AndroidView,
+    match: DriverNodeMatch.AndroidView,
+  ): Boolean {
+    if (!requirePattern(match.classNameRegex, detail.className)) return false
+    if (!requirePattern(match.resourceIdRegex, detail.resourceId)) return false
+    if (!requirePattern(match.tagRegex, detail.tag)) return false
+    // textRegex matches resolveText() (text > hintText > contentDescription)
+    if (!requirePattern(match.textRegex, detail.resolveText())) return false
+    if (!requirePattern(match.contentDescriptionRegex, detail.contentDescription)) return false
+    if (!requirePattern(match.hintTextRegex, detail.hintText)) return false
+    if (!requirePattern(match.stateDescriptionRegex, detail.stateDescription)) return false
+    if (!requirePattern(match.errorTextRegex, detail.errorText)) return false
+    if (!requireEqual(match.isEnabled, detail.isEnabled)) return false
+    if (!requireEqual(match.isClickable, detail.isClickable)) return false
+    // A non-Checkable view has isChecked == null, so `isChecked: false` matches only views that
+    // are checkable and currently unchecked — not every view on the screen.
+    if (!requireEqual(match.isChecked, detail.isChecked)) return false
+    if (!requireEqual(match.isSelected, detail.isSelected)) return false
+    if (!requireEqual(match.isFocused, detail.isFocused)) return false
+    if (!requireEqual(match.isEditable, detail.isEditable)) return false
+    if (!requireEqual(match.isPassword, detail.isPassword)) return false
+    if (!requireEqual(match.inputType, detail.inputType)) return false
+    return true
+  }
+
   private fun matchesAndroidMaestro(
     detail: DriverNodeDetail.AndroidMaestro,
     match: DriverNodeMatch.AndroidMaestro,
@@ -301,6 +592,101 @@ object TrailblazeNodeSelectorResolver {
     if (!requireEqual(match.focused, detail.focused)) return false
     if (!requireEqual(match.checked, detail.checked)) return false
     if (!requireEqual(match.selected, detail.selected)) return false
+    return true
+  }
+
+  /**
+   * Estate bridge, View half: evaluates a [DriverNodeMatch.AndroidMaestro] selector — as recorded
+   * under the UiAutomator-backed instrumentation driver — against a [DriverNodeDetail.AndroidView]
+   * node from the ANDROID_TEST driver's in-process hybrid tree.
+   *
+   * The field mapping is derived from what Maestro's own Android tree reports, not by analogy to
+   * any other bridge: UiAutomator's `text` attribute is the accessibility projection of the same
+   * View this tree holds directly, `resourceId` is `viewIdResourceName`, and `accessibilityText`
+   * is the content description. Maestro's `text` filter matches the text OR the accessibility
+   * text (its `TreeNode` cluster folds them — `resolveText()` on the Maestro shape is
+   * `text ?: hintText ?: accessibilityText`), so `textRegex` here accepts any of the three text
+   * carriers rather than only the first non-null one. [MatchDialect.MAESTRO] throughout: the
+   * selector was authored under Orchestra's lenient semantics (case-insensitive, dotAll, invalid
+   * pattern degrades to a literal), and that is what it must keep meaning here.
+   *
+   * `classNameRegex` reads `accessibilityClassName ?: className`, the same pair the canonical
+   * bridge uses, because Maestro's tree takes its class from `AccessibilityNodeInfo.className` —
+   * so the recorded value is the ACCESSIBILITY class. A custom subclass that reports
+   * `android.widget.TextView` to accessibility while its runtime class is
+   * `com.example.…SomethingView` was recorded as the former, and comparing the latter resolves
+   * to no element at all.
+   *
+   * State predicates map directly onto the View properties the accessibility projection reads
+   * them from. `checked` treats a non-checkable View (`isChecked == null`) as unchecked, because
+   * that is what UiAutomator reports for it.
+   */
+  private fun matchesAndroidMaestroAgainstView(
+    detail: DriverNodeDetail.AndroidView,
+    match: DriverNodeMatch.AndroidMaestro,
+  ): Boolean {
+    val dialect = MatchDialect.MAESTRO
+    match.textRegex?.let { pattern ->
+      if (!matchesAnyPattern(pattern, dialect, detail.text, detail.hintText, detail.contentDescription)) {
+        return false
+      }
+    }
+    if (!requirePattern(match.resourceIdRegex, detail.resourceId, dialect)) return false
+    if (!requirePattern(match.accessibilityTextRegex, detail.contentDescription, dialect)) return false
+    if (!requirePattern(
+        match.classNameRegex,
+        detail.accessibilityClassName ?: detail.className,
+        dialect,
+      )
+    ) {
+      return false
+    }
+    if (!requirePattern(match.hintTextRegex, detail.hintText, dialect)) return false
+    if (!requireEqual(match.clickable, detail.isClickable)) return false
+    if (!requireEqual(match.enabled, detail.isEnabled)) return false
+    if (!requireEqual(match.focused, detail.isFocused)) return false
+    match.checked?.let { if ((detail.isChecked ?: false) != it) return false }
+    if (!requireEqual(match.selected, detail.isSelected)) return false
+    return true
+  }
+
+  /**
+   * Estate bridge, Compose half. See [matchesAndroidMaestroAgainstView] for the dialect rule and
+   * where the mapping comes from; the notes here are Compose-specific.
+   *
+   * - `resourceIdRegex` matches [DriverNodeDetail.Compose.testTag]: `testTagsAsResourceId` is how
+   *   UiAutomator saw a Compose node's tag when the selector was recorded, so the recorded
+   *   "resource id" IS the testTag.
+   * - `textRegex` accepts the editable text, the static text, or the content description — the
+   *   cluster Maestro's `text` filter folds on its own tree.
+   * - State predicates map to the semantics the accessibility projection derives them from:
+   *   `clickable` → `hasClickAction`, `checked` → `toggleableState == "On"`.
+   *
+   * `classNameRegex` and `hintTextRegex` FAIL the constraint: a semantics node has no runtime
+   * class (UiAutomator fabricates one for it) and no hint, so a selector pinning either cannot be
+   * faithfully evaluated here — matching nothing is louder and safer than silently dropping a
+   * recorded constraint.
+   */
+  private fun matchesAndroidMaestroAgainstCompose(
+    detail: DriverNodeDetail.Compose,
+    match: DriverNodeMatch.AndroidMaestro,
+  ): Boolean {
+    if (match.classNameRegex != null) return false
+    if (match.hintTextRegex != null) return false
+
+    val dialect = MatchDialect.MAESTRO
+    match.textRegex?.let { pattern ->
+      if (!matchesAnyPattern(pattern, dialect, detail.editableText, detail.text, detail.contentDescription)) {
+        return false
+      }
+    }
+    if (!requirePattern(match.resourceIdRegex, detail.testTag, dialect)) return false
+    if (!requirePattern(match.accessibilityTextRegex, detail.contentDescription, dialect)) return false
+    if (!requireEqual(match.clickable, detail.hasClickAction)) return false
+    if (!requireEqual(match.enabled, detail.isEnabled)) return false
+    if (!requireEqual(match.focused, detail.isFocused)) return false
+    match.checked?.let { if ((detail.toggleableState == "On") != it) return false }
+    if (!requireEqual(match.selected, detail.isSelected)) return false
     return true
   }
 
@@ -332,6 +718,15 @@ object TrailblazeNodeSelectorResolver {
     if (!requireEqual(match.isFocused, detail.isFocused)) return false
     if (!requireEqual(match.isSelected, detail.isSelected)) return false
     if (!requireEqual(match.isPassword, detail.isPassword)) return false
+    if (!requireEqual(match.collectionItemRowIndex, detail.collectionItemRowIndex)) return false
+    if (!requireEqual(match.collectionItemColumnIndex, detail.collectionItemColumnIndex)) return false
+    if (!requirePattern(match.stateDescriptionRegex, detail.stateDescription)) return false
+    if (!requireEqual(match.isHeading, detail.isHeading)) return false
+    if (!requirePattern(match.paneTitleRegex, detail.paneTitle)) return false
+    if (!requireEqual(match.isDialog, detail.isDialog)) return false
+    if (!requireEqual(match.isPopup, detail.isPopup)) return false
+    if (!requirePattern(match.errorTextRegex, detail.errorText)) return false
+    if (!requireEqual(match.hasSetTextAction, detail.hasSetTextAction)) return false
     return true
   }
 

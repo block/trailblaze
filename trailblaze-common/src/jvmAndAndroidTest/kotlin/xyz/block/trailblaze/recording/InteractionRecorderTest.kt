@@ -355,7 +355,7 @@ private class TestToolFactory : InteractionToolFactory {
     durationMs: Long?,
   ): Pair<TrailblazeTool, String> = TestTool("swipe") to "swipe"
 
-  override fun createInputTextTool(text: String): Pair<TrailblazeTool, String> =
+  override fun createInputTextTool(text: String, target: InputTarget?): Pair<TrailblazeTool, String> =
     TestTool("inputText($text)") to "inputText"
 
   override fun createPressKeyTool(key: String): Pair<TrailblazeTool, String> =

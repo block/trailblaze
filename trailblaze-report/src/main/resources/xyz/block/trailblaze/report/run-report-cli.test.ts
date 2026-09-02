@@ -6,21 +6,24 @@
 // Run: `bun test run-report-cli.test.ts` from this directory.
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { basename, join } from "path";
 import { gunzipSync } from "zlib";
 import { isSelectorAnalyzableTree } from "../trailrunner/web/app/run-report-selectors";
+import { MAX_ATTACHMENTS_PER_SESSION } from "./run-report-events";
 import {
   anyAnalyzableHierarchy,
   formatterContext,
   isRemoteScreenshot,
+  isSafeSessionRelativePath,
   localShotUrl,
   packDeviceLog,
   packHierarchies,
   packLlmMessages,
   packNetwork,
   packSelectorEngine,
+  readAttachments,
   readVideo,
   remoteShotValue,
   screenshotDataUri,
@@ -179,6 +182,197 @@ describe("linked image URLs", () => {
 
   test("a base URL missing its trailing slash is still a base, not a prefix", () => {
     expect(localShotUrl("/static", "sess", "shot.webp")).toBe("/static/sess/shot.webp");
+  });
+});
+
+// Attachment refs (AttachmentRef) embedded in event payloads, resolved into the payload's
+// attachments map. Detection is run-report-events' (parity-fixture-locked); these pin the driver's
+// resolution: linked vs embedded, the media-type and size gates, and the path-safety refusal.
+describe("attachments referenced by event streams", () => {
+  const attachDir = mkdtempSync(join(tmpdir(), "tb-report-attach-test-"));
+  afterAll(() => rmSync(attachDir, { recursive: true, force: true }));
+  require("fs").mkdirSync(join(attachDir, "attachments"));
+  writeFileSync(join(attachDir, "attachments", "tone.wav"), Buffer.from([1, 2, 3, 4]));
+  writeFileSync(join(attachDir, "attachments", "report.pdf"), Buffer.from([9]));
+  writeFileSync(join(attachDir, "attachments", "huge.wav"), Buffer.alloc(64));
+
+  const ref = (path: string, over: Record<string, unknown> = {}) =>
+    ({ $attachment: true, path, mimeType: "audio/wav", sizeBytes: 4, ...over });
+  const streamsOf = (...refs: unknown[]): EventStream[] => [{
+    name: "s",
+    total: refs.length,
+    truncated: false,
+    events: refs.map((r, i) => ({ t: i, d: JSON.stringify({ ref: r }) })),
+  }];
+
+  test("embed mode inlines a referenced media file as a data URI of its declared type", () => {
+    const map = readAttachments(attachDir, streamsOf(ref("attachments/tone.wav", { mimeType: "audio/WAV" })), "sess", null);
+    expect(map).toEqual({
+      "attachments/tone.wav": `data:audio/wav;base64,${Buffer.from([1, 2, 3, 4]).toString("base64")}`,
+    });
+  });
+
+  test("embedding stops at the aggregate budget, leaving the rest as bundle-only notes", () => {
+    // The per-file cap and the count ceiling still permit ~137 MiB of base64 in a file that has to
+    // stay openable and that Share posts to a route refusing HTML over 64 MiB. Charged in ENCODED
+    // bytes, so the budget is directly comparable with the HTML it produces.
+    const uri = `data:audio/wav;base64,${Buffer.from([1, 2, 3, 4]).toString("base64")}`;
+    const streams = streamsOf(ref("attachments/tone.wav"), ref("attachments/huge.wav", { sizeBytes: 64 }));
+    // Room for exactly one: the second keeps its in-bundle note rather than pushing the file over.
+    expect(readAttachments(attachDir, streams, "sess", null, 1024, { remaining: uri.length })).toEqual({ "attachments/tone.wav": uri });
+    // With room for both, both embed — so the omission above is the budget, not the second file.
+    expect(Object.keys(readAttachments(attachDir, streams, "sess", null, 1024, { remaining: uri.length * 10 })!).sort())
+      .toEqual(["attachments/huge.wav", "attachments/tone.wav"]);
+  });
+
+  test("the budget is spent ACROSS the sessions of one report, not granted to each", () => {
+    // A standalone report holds every session, and the ceiling exists to keep that FILE shareable.
+    // Re-seeding per session is the bug this pins: ten sessions would each embed up to the ceiling
+    // and the file would blow through it tenfold while every individual session looked compliant.
+    const uri = `data:audio/wav;base64,${Buffer.from([1, 2, 3, 4]).toString("base64")}`;
+    const streams = streamsOf(ref("attachments/tone.wav"));
+    const shared = { remaining: uri.length };
+
+    // First session spends the whole budget.
+    expect(readAttachments(attachDir, streams, "sess-1", null, 1024, shared)).toEqual({ "attachments/tone.wav": uri });
+    expect(shared.remaining).toBe(0);
+    // Second session finds nothing left, and its attachment keeps the in-bundle note.
+    expect(readAttachments(attachDir, streams, "sess-2", null, 1024, shared)).toBeNull();
+  });
+
+  test("main() hands every session the SAME budget object", () => {
+    // The tests above prove readAttachments spends a budget it is GIVEN across calls; this pins the
+    // wiring that gives it one. main() isn't reachable from here — it loads the transpiled renderer
+    // artifact, which this suite deliberately does not stage — so the call site is asserted in the
+    // source instead. Passing a fresh `{ remaining: ATTACHMENT_EMBED_MAX_TOTAL_BYTES }` per session
+    // typechecks, passes every other test, and silently restores the per-session budget.
+    const src = readFileSync(join(import.meta.dir, "run-report-cli.ts"), "utf8");
+    expect(src).toContain("input.attachmentInlineMaxBytes ?? ATTACHMENT_INLINE_MAX_BYTES, embedBudget)");
+    // Declared once, above the per-session map that consumes it.
+    expect(src.split("const embedBudget = { remaining: ATTACHMENT_EMBED_MAX_TOTAL_BYTES }").length - 1).toBe(1);
+  });
+
+  test("an attachment that stats but cannot be read spends none of the shared budget", () => {
+    // statSync succeeds on a directory; readFileSync throws EISDIR into the catch. Charging before
+    // the read would spend shared capacity on bytes that never reach the HTML — and because the
+    // budget now spans the whole report, that capacity is taken from readable attachments in LATER
+    // sessions, which would then show the in-bundle note while the file sat under the cap.
+    mkdirSync(join(attachDir, "attachments", "adirectory.wav"), { recursive: true });
+    const uri = `data:audio/wav;base64,${Buffer.from([1, 2, 3, 4]).toString("base64")}`;
+    // Headroom, deliberately: a budget tight enough to reject the directory on its ESTIMATE would
+    // never reach the read, and would pass whether the charge happens before or after it.
+    const budget = { remaining: 10_000 };
+
+    // The unreadable one is attempted first and must leave the budget untouched...
+    expect(readAttachments(attachDir, streamsOf(ref("attachments/adirectory.wav")), "sess-1", null, 1024, budget)).toBeNull();
+    expect(budget.remaining).toBe(10_000);
+    // ...so the readable attachment behind it still fits.
+    expect(readAttachments(attachDir, streamsOf(ref("attachments/tone.wav")), "sess-2", null, 1024, budget))
+      .toEqual({ "attachments/tone.wav": uri });
+    expect(budget.remaining).toBe(10_000 - uri.length);
+  });
+
+  test("the budget is charged the exact length of the URI that lands in the HTML", () => {
+    // The charge is computed from the file size before the read, so it has to agree with what the
+    // read actually produces — a charge that drifted from the emitted length would make the whole
+    // budget an approximation of the thing it exists to bound.
+    const uri = `data:audio/wav;base64,${Buffer.from([1, 2, 3, 4]).toString("base64")}`;
+    const budget = { remaining: 10_000 };
+    const map = readAttachments(attachDir, streamsOf(ref("attachments/tone.wav")), "sess", null, 1024, budget)!;
+    expect(map["attachments/tone.wav"]).toBe(uri);
+    expect(10_000 - budget.remaining).toBe(uri.length);
+  });
+
+  test("an attachment named like an Object.prototype member still resolves", () => {
+    // A single segment is a legal path under the shared rule, so `__proto__` is a legal attachment
+    // name — and on a plain object `attachments['__proto__'] = uri` goes through the prototype
+    // setter and records nothing.
+    writeFileSync(join(attachDir, "__proto__"), Buffer.from([7, 7]));
+    const map = readAttachments(attachDir, streamsOf(ref("__proto__", { sizeBytes: 2 })), "sess", null)!;
+    expect(Object.keys(map)).toEqual(["__proto__"]);
+    expect(map["__proto__"]).toBe(`data:audio/wav;base64,${Buffer.from([7, 7]).toString("base64")}`);
+  });
+
+  test("linked mode points at the static tree with separators intact, media or not", () => {
+    const map = readAttachments(
+      attachDir,
+      streamsOf(ref("attachments/tone.wav"), ref("attachments/report.pdf", { mimeType: "application/pdf" })),
+      "sess",
+      "/static/",
+    );
+    // A linked report downloads nothing, so nothing forces the media-type gate: the browser can
+    // navigate to any linked file.
+    expect(map).toEqual({
+      "attachments/tone.wav": "/static/sess/attachments/tone.wav",
+      "attachments/report.pdf": "/static/sess/attachments/report.pdf",
+    });
+  });
+
+  test("embed mode leaves out non-media types and files past the inline cap", () => {
+    const map = readAttachments(
+      attachDir,
+      streamsOf(
+        ref("attachments/report.pdf", { mimeType: "application/pdf" }),
+        ref("attachments/huge.wav", { sizeBytes: 64 }),
+        ref("attachments/tone.wav"),
+      ),
+      "sess",
+      null,
+      16, // inline cap below huge.wav's 64 bytes
+    );
+    expect(Object.keys(map!)).toEqual(["attachments/tone.wav"]);
+  });
+
+  test("a traversal-shaped path and a missing file are refused; no refs at all yields null", () => {
+    const escape = join(attachDir, "..", basename(attachDir), "attachments", "tone.wav");
+    expect(readAttachments(attachDir, streamsOf(
+      ref("../elsewhere.wav"),
+      ref("/etc/passwd"),
+      ref("attachments/../../" + basename(attachDir) + "/attachments/tone.wav"),
+      ref(escape),
+      ref("attachments/never-written.wav"),
+    ), "sess", null)).toBeNull();
+    expect(readAttachments(attachDir, streamsOf(), "sess", null)).toBeNull();
+    expect(readAttachments(attachDir, null, "sess", null)).toBeNull();
+  });
+
+  test("a symlink pointing out of the session is refused in both modes", () => {
+    // The lexical path rule passes `attachments/escape.wav` — it cannot see where the entry
+    // points. Without the realpath check, readFileSync follows it and embeds host bytes under
+    // the ref's own declared audio MIME.
+    const outside = join(attachDir, "..", `outside-${basename(attachDir)}.wav`);
+    writeFileSync(outside, Buffer.from([7, 7, 7, 7]));
+    try {
+      require("fs").symlinkSync(outside, join(attachDir, "attachments", "escape.wav"));
+    } catch { return; } // a filesystem without symlinks has nothing to test here
+    const streams = streamsOf(ref("attachments/escape.wav"));
+    expect(readAttachments(attachDir, streams, "sess", null)).toBeNull();
+    expect(readAttachments(attachDir, streams, "sess", "/static/")).toBeNull();
+    rmSync(outside, { force: true });
+    rmSync(join(attachDir, "attachments", "escape.wav"), { force: true });
+  });
+
+  test("unsafe paths do not consume per-session cap slots", () => {
+    // The cap applies to paths that could resolve at all — run-payload.js and zip-report-core.js
+    // filter then slice, and this driver has to pick the same 200 or the three surfaces carry
+    // different files for the same session. Here MAX_ATTACHMENTS_PER_SESSION traversal refs come
+    // first; slicing before the safety filter would spend the whole cap on them.
+    const decoys = Array.from({ length: MAX_ATTACHMENTS_PER_SESSION }, (_, i) => ref(`../decoy-${i}.wav`));
+    const map = readAttachments(attachDir, streamsOf(...decoys, ref("attachments/tone.wav")), "sess", "/static/");
+    expect(map).toEqual({ "attachments/tone.wav": "/static/sess/attachments/tone.wav" });
+  });
+
+  test("isSafeSessionRelativePath admits exactly the paths that stay inside the session dir", () => {
+    expect(isSafeSessionRelativePath("attachments/tone.wav")).toBe(true);
+    expect(isSafeSessionRelativePath("a/b/c.png")).toBe(true);
+    expect(isSafeSessionRelativePath("")).toBe(false);
+    expect(isSafeSessionRelativePath("/abs.wav")).toBe(false);
+    expect(isSafeSessionRelativePath("..")).toBe(false);
+    expect(isSafeSessionRelativePath("a/../b.wav")).toBe(false);
+    expect(isSafeSessionRelativePath("a//b.wav")).toBe(false);
+    expect(isSafeSessionRelativePath("a/./b.wav")).toBe(false);
+    expect(isSafeSessionRelativePath("a\\b.wav")).toBe(false);
+    expect(isSafeSessionRelativePath("a/\0.wav")).toBe(false);
   });
 });
 

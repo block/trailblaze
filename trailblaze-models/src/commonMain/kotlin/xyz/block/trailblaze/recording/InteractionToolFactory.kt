@@ -20,6 +20,13 @@ import xyz.block.trailblaze.toolcalls.TrailblazeTool
  * be JVM-only if they pull in JVM-specific drivers, but the contract is portable. This is
  * the first piece of the recording surface to move toward a wasmJs-compatible commonMain.
  */
+/**
+ * Opaque per-platform handle to the field a typing burst started in. The recording buffer
+ * treats it as a token: captured via [InteractionToolFactory.captureInputTarget] when the
+ * buffer opens, handed back to [InteractionToolFactory.createInputTextTool] at flush.
+ */
+interface InputTarget
+
 interface InteractionToolFactory {
   /** Returns (TrailblazeTool, toolName) for a tap on the given node or coordinates. */
   fun createTapTool(
@@ -54,8 +61,25 @@ interface InteractionToolFactory {
     durationMs: Long? = null,
   ): Pair<TrailblazeTool, String>
 
-  /** Returns (TrailblazeTool, toolName) for text input. */
-  fun createInputTextTool(text: String): Pair<TrailblazeTool, String>
+  /**
+   * Snapshots whatever identifies the field that is about to receive text, called when a
+   * typing burst opens. Typed characters are buffered and debounced before a tool is built,
+   * and typing itself can move focus — an OTP box that auto-advances on input hands focus to
+   * the next box before the burst flushes. Resolving the target at build time therefore names
+   * the wrong field; this snapshot pins the right one.
+   *
+   * Default null for platforms that don't track a focused field — they resolve whatever they
+   * need inside [createInputTextTool].
+   */
+  fun captureInputTarget(): InputTarget? = null
+
+  /**
+   * Returns (TrailblazeTool, toolName) for text input.
+   *
+   * @param target the [captureInputTarget] snapshot from the start of this typing burst, or
+   *   null when the text arrived as one complete string with no burst to snapshot.
+   */
+  fun createInputTextTool(text: String, target: InputTarget? = null): Pair<TrailblazeTool, String>
 
   /** Returns (TrailblazeTool, toolName) for a special key press, or null if unsupported. */
   fun createPressKeyTool(key: String): Pair<TrailblazeTool, String>?

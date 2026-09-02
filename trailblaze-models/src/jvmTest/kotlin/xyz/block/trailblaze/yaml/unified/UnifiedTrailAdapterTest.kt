@@ -940,6 +940,142 @@ class UnifiedTrailAdapterTest {
     assertTrue("register" in failure.message.orEmpty() && "kiosk" in failure.message.orEmpty())
   }
 
+  @Test
+  fun `selecting a configuration makes its legs count as a recording for the start device`() {
+    val unified = UnifiedTrail(
+      config = UnifiedTrailConfig(
+        id = "x",
+        target = "y",
+        devices = linkedMapOf("kiosk" to kioskConfiguration()),
+      ),
+      trail = listOf(
+        UnifiedTrailStep(step = "Tap", recordings = mapOf("kiosk" to listOf(toolNamed("t")))),
+      ),
+    )
+    // Without the selection the trail reads as unrecorded however complete it is — the leg key is
+    // the configuration NAME, and no classifier chain reaches it. A `requireRecordings` gate acting
+    // on that answer drops a trail the executor would replay end to end.
+    assertFalse(
+      UnifiedTrailAdapter.hasRecordingForDevice(unified, listOf(classifier("lab"), classifier("a"))),
+    )
+    assertTrue(
+      UnifiedTrailAdapter.hasRecordingForDevice(
+        unified,
+        listOf(classifier("lab"), classifier("a")),
+        selectedDeviceConfiguration = "kiosk",
+      ),
+    )
+  }
+
+  @Test
+  fun `a selected configuration's trailhead leg counts on its own`() {
+    val unified = UnifiedTrail(
+      config = UnifiedTrailConfig(
+        id = "x",
+        target = "y",
+        devices = linkedMapOf("kiosk" to kioskConfiguration()),
+      ),
+      trailhead = UnifiedTrailStep(
+        step = "Launch",
+        recordings = mapOf("kiosk" to listOf(toolNamed("launch"))),
+      ),
+      trail = listOf(UnifiedTrailStep(step = "Tap")),
+    )
+    assertTrue(
+      UnifiedTrailAdapter.hasRecordingForDevice(
+        unified,
+        listOf(classifier("lab"), classifier("a")),
+        selectedDeviceConfiguration = "kiosk",
+      ),
+      "the deterministic step 0 is a recording like any other step's leg",
+    )
+  }
+
+  @Test
+  fun `hasRecordingForDevice rejects an undeclared selection instead of answering false`() {
+    val unified = UnifiedTrail(
+      config = UnifiedTrailConfig(
+        id = "x",
+        target = "y",
+        devices = linkedMapOf("kiosk" to kioskConfiguration()),
+      ),
+      trail = listOf(
+        UnifiedTrailStep(step = "Tap", recordings = mapOf("kiosk" to listOf(toolNamed("t")))),
+      ),
+    )
+    val failure = runCatching {
+      UnifiedTrailAdapter.hasRecordingForDevice(
+        unified,
+        listOf(classifier("lab"), classifier("a")),
+        selectedDeviceConfiguration = "register",
+      )
+    }.exceptionOrNull()
+    assertNotNull(failure, "a typo'd selection must fail loud, not read as an unrecorded trail")
+    assertTrue("register" in failure.message.orEmpty() && "kiosk" in failure.message.orEmpty())
+  }
+
+  @Test
+  fun `an unselected configuration's legs stay invisible to another configuration's selection`() {
+    val unified = UnifiedTrail(
+      config = UnifiedTrailConfig(
+        id = "x",
+        target = "y",
+        devices = linkedMapOf(
+          "kiosk" to kioskConfiguration(),
+          "register" to kioskConfiguration(),
+        ),
+      ),
+      trail = listOf(
+        UnifiedTrailStep(step = "Tap", recordings = mapOf("register" to listOf(toolNamed("t")))),
+      ),
+    )
+    assertFalse(
+      UnifiedTrailAdapter.hasRecordingForDevice(
+        unified,
+        listOf(classifier("lab"), classifier("a")),
+        selectedDeviceConfiguration = "kiosk",
+      ),
+      "selecting one configuration must not make another one's legs count",
+    )
+  }
+
+  @Test
+  fun `soleMultiDeviceConfigurationName names the one declared configuration and nothing else`() {
+    val none = UnifiedTrailConfig(id = "x", target = "y", devices = linkedMapOf("android" to devicePin("ANDROID_ONDEVICE_ACCESSIBILITY")))
+    assertNull(none.soleMultiDeviceConfigurationName, "a single-device trail selects nothing")
+
+    val one = UnifiedTrailConfig(
+      id = "x",
+      target = "y",
+      devices = linkedMapOf("kiosk" to kioskConfiguration()),
+    )
+    assertEquals("kiosk", one.soleMultiDeviceConfigurationName)
+
+    // One configuration alongside a plain device pin. The ordinary entry does NOT withhold the
+    // selection: MultiDeviceConfigurationResolver.resolve filters ordinary entries out and binds
+    // the sole surviving configuration, so this trail really does run as `kiosk`. Abstaining here
+    // would leave mixed trails reading as unrecorded and unskipped — the misreading this property
+    // exists to prevent — for a shape the runtime resolves without hesitation.
+    val mixed = UnifiedTrailConfig(
+      id = "x",
+      target = "y",
+      devices = linkedMapOf(
+        "android" to devicePin("ANDROID_ONDEVICE_ACCESSIBILITY"),
+        "kiosk" to kioskConfiguration(),
+      ),
+    )
+    assertEquals("kiosk", mixed.soleMultiDeviceConfigurationName)
+
+    // Two configurations: a pre-flight surface has nothing to pick between, and the runtime refuses
+    // the trail anyway — so it abstains rather than guessing.
+    val two = UnifiedTrailConfig(
+      id = "x",
+      target = "y",
+      devices = linkedMapOf("kiosk" to kioskConfiguration(), "register" to kioskConfiguration()),
+    )
+    assertNull(two.soleMultiDeviceConfigurationName)
+  }
+
   private fun classifier(value: String) = TrailblazeDeviceClassifier(value)
 
   private fun toolNamed(name: String) = TrailblazeToolYamlWrapper(

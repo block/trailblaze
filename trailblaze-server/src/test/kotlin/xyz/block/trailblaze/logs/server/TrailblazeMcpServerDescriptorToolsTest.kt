@@ -23,6 +23,7 @@ import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.mcp.McpDeviceContext
+import xyz.block.trailblaze.mcp.TRAILBLAZE_CLI_CLIENT_NAME
 import xyz.block.trailblaze.mcp.TrailblazeMcpBridge
 import xyz.block.trailblaze.mcp.TrailblazeMcpSessionContext
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetScreenStateResponse
@@ -34,6 +35,7 @@ import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.toolcalls.DynamicTrailblazeToolRegistration
 import xyz.block.trailblaze.toolcalls.HostLocalExecutableTrailblazeTool
+import xyz.block.trailblaze.toolcalls.SessionDeviceBindings
 import xyz.block.trailblaze.toolcalls.ToolName
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool
@@ -43,6 +45,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
+import xyz.block.trailblaze.toolcalls.commands.SwitchDeviceTrailblazeTool
 import kotlin.reflect.KClass
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -727,6 +730,82 @@ class TrailblazeMcpServerDescriptorToolsTest {
     assertTrue(
       mcpServer.tools.containsKey("eraseText"),
       "The refresh's re-registration must complete even when the notification send fails",
+    )
+  }
+
+  @Test
+  fun `a CLI session's refresh re-registers tools without emitting list_changed`() {
+    // The CLI's MCP client is one-shot per command, so a tools/list_changed notification has no
+    // listener — but the re-registration is the routing table for the CLI's NEXT one-shot
+    // tools/call. Both halves of that contract, on one refresh: the surface updates, the
+    // notification channel stays silent.
+    val bridge = RecordingBridge(targets = setOf(eraseTarget), currentTargetId = eraseTarget.id)
+    val server = newServer(bridge)
+    val sessionContext = ctx("cli-session").also { it.mcpClientName = TRAILBLAZE_CLI_CLIENT_NAME }
+    val sentNotifications = mutableListOf<String>()
+    sessionContext.customSseNotificationSender = { sentNotifications += it }
+    server.installSessionContextForTest("cli-session", sessionContext)
+    val mcpServer = server.configureMcpServer()
+    server.installSessionMcpServerForTest("cli-session", mcpServer)
+
+    server.refreshToolsForSession("cli-session")
+
+    assertTrue(
+      mcpServer.tools.containsKey("eraseText"),
+      "A CLI session's refresh must re-register the tool surface — the Server's tool table " +
+        "routes the CLI's next one-shot tools/call. Registered: ${mcpServer.tools.keys.sorted()}",
+    )
+    assertTrue(
+      sentNotifications.none { it.contains("notifications/tools/list_changed") },
+      "A CLI session's refresh must not emit tools/list_changed — the one-shot client has no " +
+        "listener. Sent: $sentNotifications",
+    )
+  }
+
+  @Test
+  fun `a CLI session that bound its second device gets switchDevice on refresh`() {
+    // The live defect this pins: every device(action=BIND) chains a refreshToolsForSession, and
+    // the roster gate (boundDeviceNames().size >= 2) is only re-evaluated inside registerTools.
+    // When the refresh skipped CLI sessions wholesale, a CLI session's roster could reach two
+    // devices — with `device INFO` advertising "Hand the session over with switchDevice" — while
+    // switchDevice itself was never registered, so the handover was unreachable.
+    val bridge = RecordingBridge(targets = setOf(eraseTarget), currentTargetId = eraseTarget.id)
+    val server = newServer(bridge)
+    val sessionContext = ctx("cli-roster-session").also { it.mcpClientName = TRAILBLAZE_CLI_CLIENT_NAME }
+    server.installSessionContextForTest("cli-roster-session", sessionContext)
+    val mcpServer = server.configureMcpServer()
+    server.installSessionMcpServerForTest("cli-roster-session", mcpServer)
+
+    sessionContext.bindNamedDevice(
+      "primary",
+      SessionDeviceBindings.BoundDevice(
+        trailblazeDeviceId = androidDevice,
+        trailblazeDeviceInfo = null,
+        description = null,
+        targetId = null,
+      ),
+    )
+    server.refreshToolsForSession("cli-roster-session")
+    assertFalse(
+      mcpServer.tools.containsKey(SwitchDeviceTrailblazeTool.ADVERTISED_TOOL_NAME),
+      "One bound device has nothing to switch between — the roster gate must hold at one",
+    )
+
+    sessionContext.bindNamedDevice(
+      "companion",
+      SessionDeviceBindings.BoundDevice(
+        trailblazeDeviceId = androidDeviceB,
+        trailblazeDeviceInfo = null,
+        description = null,
+        targetId = null,
+      ),
+    )
+    server.refreshToolsForSession("cli-roster-session")
+
+    assertTrue(
+      mcpServer.tools.containsKey(SwitchDeviceTrailblazeTool.ADVERTISED_TOOL_NAME),
+      "The second bind's refresh must register switchDevice for a CLI session — without it the " +
+        "advertised handover is unreachable. Registered: ${mcpServer.tools.keys.sorted()}",
     )
   }
 

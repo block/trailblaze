@@ -1,0 +1,71 @@
+config:
+  id: trailblaze/android-test/mixed-view-and-compose
+  title: In-process replay across Views and Compose
+  description: >-
+    The ANDROID_TEST driver's report-producing contract: a trail file is the whole test. Every
+    step is recorded, so replay is deterministic; the steps deliberately alternate between the
+    fixture's View half and its Compose half so a passing run proves cross-backend dispatch and
+    not two isolated silos.
+  devices:
+    android:
+      driver: ANDROID_TEST
+
+trail:
+  - verify: "The View half of the fixture is on screen in its initial state"
+    recording:
+      android:
+        - androidTest_assertVisible:
+            nodeSelector:
+              androidView:
+                textRegex: "View status: ready"
+
+  - step: "Tap the classic View button"
+    recording:
+      android:
+        - androidTest_tap:
+            nodeSelector:
+              androidView:
+                textRegex: "View Button"
+
+  - verify: "The View half reports the tap"
+    recording:
+      android:
+        - androidTest_assertVisible:
+            nodeSelector:
+              androidView:
+                textRegex: "View status: clicked"
+
+  - step: "Type into the Compose text field"
+    recording:
+      android:
+        - androidTest_type:
+            value: trailblaze
+            nodeSelector:
+              compose:
+                testTag: compose_input
+
+  - verify: "The Compose text field holds what was typed"
+    recording:
+      android:
+        - androidTest_assertVisible:
+            nodeSelector:
+              compose:
+                testTag: compose_input
+                editableTextRegex: trailblaze
+
+  - step: "Tap the Compose button"
+    recording:
+      android:
+        - androidTest_tap:
+            nodeSelector:
+              compose:
+                testTag: compose_button
+
+  - verify: "The Compose half reports the tap"
+    recording:
+      android:
+        - androidTest_assertVisible:
+            nodeSelector:
+              compose:
+                testTag: compose_status
+                textRegex: "Compose status: clicked"

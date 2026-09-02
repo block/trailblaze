@@ -141,6 +141,37 @@ class SessionToolRepoEquivalenceTest {
   }
 
   @Test
+  fun `the unconfigured whole-catalog fallback skips session-bound toolsets`() {
+    // "Unconfigured means the whole driver catalog" must not extend to a toolset the SESSION binds.
+    // `multi_device` declares no `drivers:`, so it is compatible with everything and would ride the
+    // fallback into every unconfigured target on every driver — advertising a `switchDevice` whose
+    // every call returns "this session has no device bindings".
+    //
+    // Asserted directly rather than left to the equivalence test above: that one pins the two
+    // implicit-scope paths EQUAL, which a bug present in both would satisfy.
+    val scope = AppTargetYamlLoader.loadFromYaml(
+      """
+      id: bare3
+      display_name: Bare Three
+      platforms:
+        android:
+          app_ids:
+            - com.example.bare3
+      """.trimIndent(),
+      toolNameResolver = ToolNameResolver.fromBuiltInAndCustomTools(),
+    ).resolveToolScopeForDriver(TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION)
+    assertFalse(
+      scope.isScoped,
+      "fixture must be unconfigured for this driver, or the fallback isn't under test",
+    )
+    assertFalse(
+      ToolName("switchDevice") in scope.allToolNames,
+      "session-bound toolsets must stay out of the implicit scope: " +
+        "${scope.allToolNames.map { it.toolName }.sorted()}",
+    )
+  }
+
+  @Test
   fun `runtime-contributed tools reach the repo on all three backings`() {
     // The `additional:` seam carries the daemon's OTHER bound targets and the host's driver-specific
     // web classes. Only its negative case (exclusion wins) was pinned, so the seam could have been

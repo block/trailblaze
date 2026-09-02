@@ -12,18 +12,16 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 
 /**
- * Renders [ActionYamlCard] in both of its modes — desktop's reflection-backed descriptor
- * resolver (non-null) and wasm's no-op stub (null) — and pins the contract that gates the
+ * Renders [ActionYamlCard] in both of its modes — a reflection-backed descriptor resolver
+ * (non-null) and a resolver that finds nothing (null) — and pins the contract that gates the
  * rich-form editor on the resolver returning a non-null descriptor for the tool.
  *
- * **Why this test exists.** `ActionYamlCard` is the shared composable between the desktop
- * recording tab and the wasm `/devices` viewer. The desktop passes
- * `RichEditorSupport.resolveDescriptorAndValues` (JVM-only, reads tool params via
- * `kotlinx.serialization` reflection). The web passes `{ _ -> null }` — wasmJs doesn't have
- * the JVM reflection pipeline so it gracefully degrades to YAML-only editing. A regression
- * that breaks the null path (e.g. an inner code path forgetting to handle null `richEditState`
- * and crashing during composition) would silently break the web recording panel. This is the
- * fence around that.
+ * **Why this test exists.** Desktop passes `RichEditorSupport.resolveDescriptorAndValues`
+ * (JVM-only, reads tool params via `kotlinx.serialization` reflection). The resolver is
+ * nullable and returns null per-tool for anything it can't introspect, so the null path is
+ * live on every caller, not a platform quirk. A regression that breaks it (e.g. an inner code
+ * path forgetting to handle a null `richEditState` and crashing during composition) would take
+ * the whole card down for those tools. This is the fence around that.
  *
  * The form↔YAML toggle button — which exists ONLY when a descriptor resolves — is the visible
  * proxy for the null/non-null branch. When it's absent, the user is on YAML-only; when it's
@@ -47,7 +45,7 @@ class ActionYamlCardTest {
   private val toggleToFormDesc = "Switch to form editor"
 
   @Test
-  fun `null descriptorResolver hides form-YAML toggle - the wasm code path`() =
+  fun `null descriptorResolver hides form-YAML toggle`() =
     runComposeUiTest {
       setContent {
         ActionYamlCard(
@@ -85,7 +83,7 @@ class ActionYamlCardTest {
       // Resolve to ANY non-null descriptor — the contents don't matter for this test, only
       // that the lambda returns non-null. Building a real descriptor requires JVM reflection
       // we deliberately avoid wiring in here (would re-couple this test to the very thing
-      // wasm can't do). A stub descriptor with no params is sufficient — the card just needs
+      // a null resolver can't do). A stub descriptor with no params is sufficient — the card just needs
       // to see a non-null value to render the toggle.
       val stubDescriptor =
         xyz.block.trailblaze.toolcalls.TrailblazeToolDescriptor(
@@ -121,13 +119,13 @@ class ActionYamlCardTest {
    * present on both resolver paths — they don't depend on the descriptor at all. If a future
    * change accidentally gates one of them on `richEditState != null`, this catches it.
    *
-   * Run twice — once with the null resolver (wasm path), once with a non-null stub (desktop
+   * Run twice — once with the null resolver, once with a non-null stub (desktop
    * path) — because a gating regression could land on either side. The original single-
    * variant test claimed to cover "both resolver paths" in its name but only rendered the
    * null path (Copilot caught this on PR #3038).
    */
   @Test
-  fun `non-edit-mode controls render under null descriptorResolver - wasm path`() {
+  fun `non-edit-mode controls render under null descriptorResolver`() {
     assertNonEditControlsRender(resolver = { _ -> null })
   }
 

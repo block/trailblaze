@@ -533,7 +533,13 @@ class TrailblazeMcpServerSessionPinningTest {
   }
 
   @Test
-  fun `refreshToolsForSession is a no-op for TrailblazeCLI sessions`() {
+  fun `refreshToolsForSession re-registers TrailblazeCLI sessions`() {
+    // CLI sessions used to be skipped entirely, on the theory that the refresh's only effect
+    // was a tools/list_changed notification the one-shot CLI client can't observe. But the
+    // re-registration is itself the routing table for the CLI's next tools/call — skipping it
+    // left roster-gated tools (switchDevice after a second BIND) permanently unregistered.
+    // Only the notification is CLI-specific now, asserted in
+    // TrailblazeMcpServerDescriptorToolsTest.
     val server = newServer()
     val cli = ctx(clientName = TRAILBLAZE_CLI_CLIENT_NAME)
     server.installSessionContextForTest("cli-session", cli)
@@ -541,14 +547,12 @@ class TrailblazeMcpServerSessionPinningTest {
     var refreshCount = 0
     server.onToolsRefreshedForTest = { refreshCount++ }
 
-    // Call directly — even if a future caller forgets to filter, the helper
-    // itself should refuse to act on TrailblazeCLI sessions.
     server.refreshToolsForSession("cli-session")
 
     assertEquals(
-      0,
+      1,
       refreshCount,
-      "TrailblazeCLI sessions must not get a list_changed refresh — McpProxy never sees the notification",
+      "A TrailblazeCLI session must re-register on refresh — its Server's tool table routes the next one-shot tools/call",
     )
   }
 

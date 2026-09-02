@@ -55,6 +55,16 @@ function nativeTree(text: string): object {
   };
 }
 
+// The other native-dialect shape, so the compiled `matchesAndroidView` is swept too rather
+// than only compiled.
+function androidViewTree(text: string): object {
+  return {
+    nodeId: 1,
+    bounds: { left: 0, top: 0, right: 100, bottom: 50 },
+    driverDetail: { class: "androidView", text, className: "com.example.PriceKeypadView" },
+  };
+}
+
 function maestroTree(text: string): object {
   return {
     nodeId: 1,
@@ -77,6 +87,13 @@ describe("matcher-parity fixture through the compiled resolver", () => {
       });
       // A thrown error is surfaced as {error, matchCount: 0} — assert it's absent so a
       // matchCount of 0 provably means "the resolver declined", not "the engine blew up".
+      expect(result.error ?? null).toBeNull();
+      expect(result.matchCount).toBe(c.nativeMatches ? 1 : 0);
+    });
+    test(`native androidView: ${c.name}`, () => {
+      const result = engine.resolveSelector(androidViewTree(c.text), {
+        androidView: { textRegex: c.pattern },
+      });
       expect(result.error ?? null).toBeNull();
       expect(result.matchCount).toBe(c.nativeMatches ? 1 : 0);
     });

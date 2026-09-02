@@ -1,6 +1,7 @@
 config:
   devices:
-    web: PLAYWRIGHT_NATIVE
+    web:
+      driver: PLAYWRIGHT_NATIVE
   title: 'Test: Click specific items in a list with duplicate text'
 
 trail:

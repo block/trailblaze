@@ -108,7 +108,12 @@ data class TapTrailblazeTool(
     // Maestro/instrumentation recordings carry a Maestro-shaped `nodeSelector` (see the
     // legacy branch below, which lowers it to a Maestro selector at replay time) — that
     // path is unchanged.
-    if (tree.driverDetail is DriverNodeDetail.AndroidAccessibility) {
+    // [DriverNodeDetail.AndroidView] takes the same route for the same reasons, plus a harder
+    // one: an in-process View tree has no Maestro [ViewHierarchyTreeNode] counterpart at all, so
+    // the legacy path below can only degrade to a coordinate tap.
+    if (tree.driverDetail is DriverNodeDetail.AndroidAccessibility ||
+      tree.driverDetail is DriverNodeDetail.AndroidView
+    ) {
       // Use hitTest as the selector source so replay's OS-routing target matches the recorded
       // selector — same round-trip invariant we rely on for the legacy path. For the
       // overlapping-bounds case (clickable wrapper + non-clickable text child sharing a

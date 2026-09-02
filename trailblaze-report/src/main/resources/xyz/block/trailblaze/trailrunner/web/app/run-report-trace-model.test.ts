@@ -1,7 +1,7 @@
 // Behavioral contracts for the report's canonical trace model. These tests cover the authored
 // step/retry structure and exact LLM-call correlation consumed by every report surface.
 import { describe, expect, test } from "bun:test";
-import { buildReportTraceModel, createReportTraceModelResolver } from "./run-report-trace-model";
+import { buildReportTraceModel, createReportTraceModelResolver, failureAnchorIndex } from "./run-report-trace-model";
 
 const row = (i: number, patch: Partial<TraceStep> = {}): TraceStep => ({
   i,
@@ -198,6 +198,48 @@ describe("buildReportTraceModel", () => {
     const model = buildReportTraceModel([batch], 0);
 
     expect(model.entries.map((e) => [e.kid, e.ts])).toEqual([[null, 900], [0, 920], [1, 950]]);
+  });
+});
+
+describe("failureAnchorIndex", () => {
+  // Which row a failed run's failure belongs to. The detail timeline selects and marks this row,
+  // the scrubber tones its step, and the trail matrix reddens the cell holding it — one rule, so a
+  // run's failure is attributed to the same place on every surface.
+  test("inside the first failed objective, the first failed tool row owns the failure", () => {
+    const trace = [
+      row(1, { objective: true, label: "Wait for sync" }),
+      row(2, { ok: false, err: "not ready yet" }), // tolerated: this step passed
+      row(3, { objective: true, label: "Check out", ok: false }),
+      row(4),
+      row(5, { ok: false, err: "no such element" }),
+      row(6, { ok: false, err: "and the next one too" }),
+    ];
+    // Not row 2 (its step passed), not row 3 (the objective has an actionable row inside it), and
+    // not row 6 — the first failed row inside the failed step is the one to look at.
+    expect(failureAnchorIndex(trace)).toBe(4);
+  });
+
+  test("a failed objective with no failed row inside it anchors on itself", () => {
+    const trace = [
+      row(1, { objective: true, label: "Check out", ok: false }),
+      row(2),
+    ];
+    expect(failureAnchorIndex(trace)).toBe(0);
+  });
+
+  test("a crash that logged no failed objective anchors on the first failed row", () => {
+    // No Complete bookend ever arrived, so every objective reads ok and only the row that died is
+    // failed. Anchoring on nothing would leave the failure unattributed on every surface.
+    const trace = [
+      row(1, { objective: true, trailhead: true, label: "Prepare" }),
+      row(2, { objective: true, label: "Sign in" }),
+      row(3, { ok: false, err: "process died" }),
+    ];
+    expect(failureAnchorIndex(trace)).toBe(2);
+  });
+
+  test("with nothing failed there is no anchor to name", () => {
+    expect(failureAnchorIndex([row(1, { objective: true }), row(2)])).toBe(-1);
   });
 });
 

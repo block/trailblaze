@@ -9,6 +9,8 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -308,6 +310,7 @@ private fun TrailblazeNodeTreeItem(
       Spacer(modifier = Modifier.width(8.dp))
       val driverBadge = when (node.driverDetail) {
         is DriverNodeDetail.AndroidAccessibility -> "android"
+        is DriverNodeDetail.AndroidView -> "android-view"
         is DriverNodeDetail.AndroidMaestro -> "android"
         is DriverNodeDetail.IosMaestro -> "ios"
         is DriverNodeDetail.IosAxe -> "ios-axe"
@@ -348,6 +351,16 @@ private fun resolveDisplayText(node: TrailblazeNode): String {
         !detail.text.isNullOrBlank() -> "\"${detail.text}\""
         !detail.contentDescription.isNullOrBlank() -> "[${detail.contentDescription}]"
         !detail.resourceId.isNullOrBlank() -> "#${detail.resourceId}"
+        !detail.className.isNullOrBlank() -> "<${detail.className?.substringAfterLast(".")}>"
+        else -> "(empty)"
+      }
+    }
+    is DriverNodeDetail.AndroidView -> {
+      when {
+        !detail.text.isNullOrBlank() -> "\"${detail.text}\""
+        !detail.contentDescription.isNullOrBlank() -> "[${detail.contentDescription}]"
+        !detail.resourceId.isNullOrBlank() -> "#${detail.resourceId}"
+        !detail.tag.isNullOrBlank() -> "@${detail.tag}"
         !detail.className.isNullOrBlank() -> "<${detail.className?.substringAfterLast(".")}>"
         else -> "(empty)"
       }
@@ -493,6 +506,7 @@ internal fun TrailblazeNodeDetailsPanel(
         // Driver-specific properties
         val driverLabel = when (displayNode.driverDetail) {
           is DriverNodeDetail.AndroidAccessibility -> "Android Properties"
+          is DriverNodeDetail.AndroidView -> "Android View Properties"
           is DriverNodeDetail.AndroidMaestro -> "Android Properties"
           is DriverNodeDetail.IosMaestro -> "iOS Properties"
           is DriverNodeDetail.IosAxe -> "iOS AXe Properties"
@@ -751,6 +765,7 @@ private fun DriverNodeDetailProperties(
 ) {
   when (detail) {
     is DriverNodeDetail.AndroidAccessibility -> AndroidAccessibilityProperties(detail, fontScale)
+    is DriverNodeDetail.AndroidView -> AndroidViewProperties(detail, fontScale)
     is DriverNodeDetail.AndroidMaestro -> AndroidMaestroProperties(detail, fontScale)
     is DriverNodeDetail.Web -> WebProperties(detail, fontScale)
     is DriverNodeDetail.Compose -> ComposeProperties(detail, fontScale)
@@ -837,17 +852,8 @@ private fun AndroidAccessibilityProperties(
     TrailblazeDetailRow(label = "Actions", value = detail.actions.joinToString(", "), fontScale = fontScale)
   }
 
-  Spacer(modifier = Modifier.height(8.dp))
-  Text(
-    text = "State",
-    style = MaterialTheme.typography.titleSmall.copy(
-      fontSize = MaterialTheme.typography.titleSmall.fontSize * fontScale
-    ),
-    fontWeight = FontWeight.SemiBold
-  )
-  Spacer(modifier = Modifier.height(4.dp))
+  TrailblazeStateHeader(fontScale = fontScale)
 
-  // State properties - show all with their values
   TrailblazePropertiesGrid(
     properties = listOf(
       "Enabled" to detail.isEnabled,
@@ -874,6 +880,52 @@ private fun AndroidAccessibilityProperties(
 }
 
 @Composable
+private fun AndroidViewProperties(
+  detail: DriverNodeDetail.AndroidView,
+  fontScale: Float,
+) {
+  // Identity
+  detail.className?.let { TrailblazeDetailRow(label = "Class", value = it, fontScale = fontScale) }
+  detail.resourceId?.let { TrailblazeDetailRow(label = "Resource ID", value = it, fontScale = fontScale) }
+  detail.tag?.let { TrailblazeDetailRow(label = "Tag", value = it, fontScale = fontScale) }
+
+  // Text content
+  detail.text?.let { TrailblazeDetailRow(label = "Text", value = it, fontScale = fontScale) }
+  detail.contentDescription?.let { TrailblazeDetailRow(label = "Content Description", value = it, fontScale = fontScale) }
+  detail.hintText?.let { TrailblazeDetailRow(label = "Hint", value = it, fontScale = fontScale) }
+  detail.stateDescription?.let { TrailblazeDetailRow(label = "State Description", value = it, fontScale = fontScale) }
+  detail.errorText?.let { TrailblazeDetailRow(label = "Error", value = it, fontScale = fontScale) }
+
+  // Input type
+  if (detail.inputType != 0) {
+    TrailblazeDetailRow(label = "Input Type", value = detail.inputType.toString(), fontScale = fontScale)
+  }
+  if (detail.alpha != 1f) {
+    TrailblazeDetailRow(label = "Alpha", value = detail.alpha.toString(), fontScale = fontScale)
+  }
+
+  TrailblazeStateHeader(fontScale = fontScale)
+
+  // Checkability has no flag of its own here: a null isChecked is how "not Checkable" is expressed.
+  TrailblazePropertiesGrid(
+    properties = listOf(
+      "Enabled" to detail.isEnabled,
+      "Clickable" to detail.isClickable,
+      "Checkable" to (detail.isChecked != null),
+      "Checked" to (detail.isChecked == true),
+      "Selected" to detail.isSelected,
+      "Focused" to detail.isFocused,
+      "Editable" to detail.isEditable,
+      "Password" to detail.isPassword,
+      "Focusable" to detail.isFocusable,
+      "Scrollable" to detail.isScrollable,
+      "Shown" to detail.isShown,
+    ),
+    fontScale = fontScale
+  )
+}
+
+@Composable
 private fun AndroidMaestroProperties(
   detail: DriverNodeDetail.AndroidMaestro,
   fontScale: Float,
@@ -884,15 +936,7 @@ private fun AndroidMaestroProperties(
   detail.className?.let { TrailblazeDetailRow(label = "Class", value = it, fontScale = fontScale) }
   detail.hintText?.let { TrailblazeDetailRow(label = "Hint", value = it, fontScale = fontScale) }
 
-  Spacer(modifier = Modifier.height(8.dp))
-  Text(
-    text = "State",
-    style = MaterialTheme.typography.titleSmall.copy(
-      fontSize = MaterialTheme.typography.titleSmall.fontSize * fontScale
-    ),
-    fontWeight = FontWeight.SemiBold
-  )
-  Spacer(modifier = Modifier.height(4.dp))
+  TrailblazeStateHeader(fontScale = fontScale)
 
   TrailblazePropertiesGrid(
     properties = listOf(
@@ -924,7 +968,8 @@ private fun WebProperties(
     TrailblazeDetailRow(label = "Nth Index", value = detail.nthIndex.toString(), fontScale = fontScale)
   }
 
-  Spacer(modifier = Modifier.height(8.dp))
+  TrailblazeStateHeader(fontScale = fontScale)
+
   TrailblazePropertiesGrid(
     properties = listOf(
       "Interactive" to detail.isInteractive,
@@ -945,16 +990,47 @@ private fun ComposeProperties(
   detail.editableText?.let { TrailblazeDetailRow(label = "Editable Text", value = it, fontScale = fontScale) }
   detail.contentDescription?.let { TrailblazeDetailRow(label = "Content Description", value = it, fontScale = fontScale) }
   detail.toggleableState?.let { TrailblazeDetailRow(label = "Toggleable State", value = it, fontScale = fontScale) }
+  detail.stateDescription?.let { TrailblazeDetailRow(label = "State Description", value = it, fontScale = fontScale) }
+  detail.paneTitle?.let { TrailblazeDetailRow(label = "Pane Title", value = it, fontScale = fontScale) }
+  detail.errorText?.let { TrailblazeDetailRow(label = "Error", value = it, fontScale = fontScale) }
 
-  Spacer(modifier = Modifier.height(8.dp))
+  // Collection info
+  TrailblazePartsRow(
+    label = "Collection Item",
+    parts = listOf("row" to detail.collectionItemRowIndex, "col" to detail.collectionItemColumnIndex),
+    fontScale = fontScale,
+  )
+  TrailblazePartsRow(
+    label = "Progress",
+    parts = listOf("current" to detail.progressValue, "max" to detail.progressMax),
+    fontScale = fontScale,
+  )
+  TrailblazePartsRow(
+    label = "Vertical Scroll",
+    parts = listOf("current" to detail.verticalScrollValue, "max" to detail.verticalScrollMax),
+    fontScale = fontScale,
+  )
+  TrailblazePartsRow(
+    label = "Horizontal Scroll",
+    parts = listOf("current" to detail.horizontalScrollValue, "max" to detail.horizontalScrollMax),
+    fontScale = fontScale,
+  )
+
+  TrailblazeStateHeader(fontScale = fontScale)
+
   TrailblazePropertiesGrid(
     properties = listOf(
       "Enabled" to detail.isEnabled,
       "Focused" to detail.isFocused,
       "Selected" to detail.isSelected,
       "Password" to detail.isPassword,
+      "Heading" to detail.isHeading,
+      "Dialog" to detail.isDialog,
+      "Popup" to detail.isPopup,
       "Has Click Action" to detail.hasClickAction,
+      "Has Long Click Action" to detail.hasLongClickAction,
       "Has Scroll Action" to detail.hasScrollAction,
+      "Has Set Text Action" to detail.hasSetTextAction,
     ),
     fontScale = fontScale
   )
@@ -971,15 +1047,7 @@ private fun IosMaestroProperties(
   detail.className?.let { TrailblazeDetailRow(label = "Class", value = it, fontScale = fontScale) }
   detail.hintText?.let { TrailblazeDetailRow(label = "Hint", value = it, fontScale = fontScale) }
 
-  Spacer(modifier = Modifier.height(8.dp))
-  Text(
-    text = "State",
-    style = MaterialTheme.typography.titleSmall.copy(
-      fontSize = MaterialTheme.typography.titleSmall.fontSize * fontScale
-    ),
-    fontWeight = FontWeight.SemiBold
-  )
-  Spacer(modifier = Modifier.height(4.dp))
+  TrailblazeStateHeader(fontScale = fontScale)
 
   TrailblazePropertiesGrid(
     properties = listOf(
@@ -1057,43 +1125,101 @@ private fun TrailblazeDetailRow(
   }
 }
 
+/**
+ * Renders a multi-part value ("current=3, max=10") from only the parts that were captured, and
+ * renders nothing when none were.
+ *
+ * The halves of these pairs are separately nullable, so printing both whenever either is present
+ * puts a literal `max=null` on screen. Read against a grid that now shows captured `false`
+ * values, that reads as "the driver captured null" rather than "the driver captured nothing".
+ */
+@Composable
+private fun TrailblazePartsRow(
+  label: String,
+  parts: List<Pair<String, Any?>>,
+  fontScale: Float,
+) {
+  val present = parts.filter { it.second != null }
+  if (present.isEmpty()) return
+  TrailblazeDetailRow(
+    label = label,
+    value = present.joinToString(", ") { "${it.first}=${it.second}" },
+    fontScale = fontScale,
+  )
+}
+
+/** Section header above a driver branch's [TrailblazePropertiesGrid]. */
+@Composable
+private fun TrailblazeStateHeader(fontScale: Float) {
+  Spacer(modifier = Modifier.height(8.dp))
+  Text(
+    text = "State",
+    style = MaterialTheme.typography.titleSmall.copy(
+      fontSize = MaterialTheme.typography.titleSmall.fontSize * fontScale
+    ),
+    fontWeight = FontWeight.SemiBold
+  )
+  Spacer(modifier = Modifier.height(4.dp))
+}
+
+/**
+ * Renders every boolean property with its value, `false` included.
+ *
+ * A captured `false` — a view that is present but disabled, a node with no click action —
+ * is a real signal when working out why a selector didn't match. Dropping it would make it
+ * indistinguishable from the driver never capturing the property at all.
+ *
+ * Chips wrap rather than stacking, because the widest caller (Android accessibility) now
+ * always renders 18 of them.
+ */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun TrailblazePropertiesGrid(
   properties: List<Pair<String, Boolean>>,
   fontScale: Float,
 ) {
-  val activeProperties = properties.filter { it.second }
-
-  if (activeProperties.isNotEmpty()) {
-    Column {
-      activeProperties.forEach { (property, _) ->
-        Card(
-          modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 2.dp),
-          colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
-          )
-        ) {
-          Text(
-            text = property,
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-            style = MaterialTheme.typography.labelSmall.copy(
-              fontSize = MaterialTheme.typography.labelSmall.fontSize * fontScale
-            ),
-            color = MaterialTheme.colorScheme.primary
-          )
-        }
-      }
-    }
-  } else {
+  if (properties.isEmpty()) {
     SelectableText(
-      text = "No active properties",
+      text = "No properties",
       style = MaterialTheme.typography.bodySmall.copy(
         fontSize = MaterialTheme.typography.bodySmall.fontSize * fontScale
       ),
       color = MaterialTheme.colorScheme.onSurfaceVariant
     )
+    return
+  }
+
+  FlowRow(
+    modifier = Modifier.fillMaxWidth(),
+    horizontalArrangement = Arrangement.spacedBy(4.dp),
+    verticalArrangement = Arrangement.spacedBy(4.dp),
+  ) {
+    properties.forEach { (property, value) ->
+      Card(
+        colors = CardDefaults.cardColors(
+          containerColor = if (value) {
+            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
+          } else {
+            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
+          }
+        )
+      ) {
+        Text(
+          text = "$property: $value",
+          modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+          style = MaterialTheme.typography.labelSmall.copy(
+            fontSize = MaterialTheme.typography.labelSmall.fontSize * fontScale,
+            fontFamily = FontFamily.Monospace
+          ),
+          fontWeight = if (value) FontWeight.Medium else FontWeight.Normal,
+          color = if (value) {
+            MaterialTheme.colorScheme.primary
+          } else {
+            MaterialTheme.colorScheme.onSurfaceVariant
+          }
+        )
+      }
+    }
   }
 }
 

@@ -70,6 +70,20 @@ function pendingRunLive(token) {
   return !!(_pendingRun && isPendingRun(token) && !_pendingRun.error && Date.now() - _pendingRun.at < PENDING_TTL_MS);
 }
 
+// Whether a step that has already waited a long time should still go on to start this run.
+//
+// Deliberately NOT `pendingRunLive`, and the difference is the whole point: that one expires with
+// the CARD, after 90s. A device slow enough to reach this question is routinely slower than that -
+// a cold emulator, a fresh install - so asking it here would abandon exactly the runs the long wait
+// was added to save, and abandon them silently. A card ageing out is the UI tidying itself, not the
+// user saying no. Only an explicit Stop, or another launch taking this one's place, is that.
+//
+// The run still has somewhere to land when the card is gone: it appears on the Runs screen like any
+// other session, and `setPendingRunSession` patches the marker if it does happen to still be there.
+function pendingRunWanted(token) {
+  return !!(_pendingRun && isPendingRun(token) && !_pendingRun.error && !_stoppedRuns.has(token));
+}
+
 // Mirrors TrailblazeRunner.DEFAULT_MAX_STEPS. Sending this value explicitly is equivalent to
 // sending nothing, so the UI omits it and lets the framework own the default.
 const DEFAULT_MAX_LLM_CALLS = 25;
@@ -264,7 +278,9 @@ async function prepareRetry(session) {
   const dev = (session.device || '').toLowerCase();
   const platform = (session.platform || '').toLowerCase()
     || (dev.includes('android') ? 'android' : dev.includes('ios') ? 'ios' : dev.includes('web') ? 'web' : '');
-  return { ok: true, yaml, platform };
+  // Carried so the retry can go back to the device the run actually used. `session.device` is a
+  // list of classifiers that several connected devices can share, so it cannot pick one out.
+  return { ok: true, yaml, platform, deviceInstanceId: session.deviceInstanceId || null };
 }
 
 // The half that takes real time - resolve, connect, dispatch - reported entirely onto `marker`.
@@ -276,7 +292,9 @@ async function prepareRetry(session) {
 async function launchRetry(prepared, marker) {
   const fail = (error) => failPendingRun(error, marker);
   if (!prepared.ok) return fail(prepared.error);
-  const resolved = await resolveRunDevice({ platform: prepared.platform }, null);
+  // Prefer the device the original run used. `resolveRunDevice` falls back to any device on the
+  // right platform when that one is no longer connected, so a retry still runs rather than refusing.
+  const resolved = await resolveRunDevice({ platform: prepared.platform }, prepared.deviceInstanceId);
   if (resolved.error) return fail(resolved.error);
   // Bounded, because the daemon probes the device's forwarded port with no timeout of its own: an
   // unbounded connect can outlive the card it is meant to report to, and then the retry has nowhere
@@ -729,6 +747,24 @@ async function recordTrailFolder(folderId, deviceIds, options) {
     const r = await fetch('/trailrunner/api/folder/record', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id: folderId, deviceIds, ...(options || {}) }),
+    });
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) return { ok: false, error: body.error || `HTTP ${r.status}` };
+    return { ok: true, sessionIds: body.sessionIds || [], error: body.error || null };
+  } catch (e) { return { ok: false, error: String(e) }; }
+}
+
+// Record a contiguous span of a saved unified trail's steps, one run per device, merging each
+// recording back into that trail's own file. `from`/`to` are 0-based inclusive step indices.
+//
+// Only the trail id and the range cross the wire: the daemon re-reads the file, slices it, and is
+// the only side that knows which file the merge writes (see RunRequest.recordTrailFile). That is
+// why this can't be a client-side dispatchRun with a save-back flag.
+async function recordTrailRange(trailId, from, to, deviceIds, options) {
+  try {
+    const r = await fetch('/trailrunner/api/trail/record-range', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: trailId, from, to, deviceIds, ...(options || {}) }),
     });
     const body = await r.json().catch(() => ({}));
     if (!r.ok) return { ok: false, error: body.error || `HTTP ${r.status}` };
@@ -1292,7 +1328,7 @@ Object.assign(window, {
   deleteSession, clearSessions, cancelSession, revealSession, revealLogsRoot, revealToolSource, openTrailInEditor, revealTrail, exportSessionUrl, sessionArchiveUrl, importSessionArchive,
   fetchComponentSource, createTrailmapComponent, saveTargetConfig,
   proposeSteps, createBundle, fetchBundleDetail, deleteTrailFolder, revealTrailFolder,
-  fetchTrailFolderFile, saveTrailFolderFile, deleteTrailFolderFile, recordTrailFolder,
+  fetchTrailFolderFile, saveTrailFolderFile, deleteTrailFolderFile, recordTrailFolder, recordTrailRange,
   fetchExternalAgents, startExternalAgent, fetchExternalAgentEvents, cancelExternalAgent, streamExternalAgentEvents, fetchAgentSkills,
   replyExternalAgent, applyTrailRunnerUiCommand, mergeExternalAgentEvents,
   startDemo, demoMarkStart, demoFinish, demoGenerate, demoAddPlatform, demoDeleteStep, demoRevealBundle,

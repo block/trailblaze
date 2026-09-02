@@ -214,6 +214,12 @@ object QuickJsToolBundleLauncher {
     val startedFilenames = mutableListOf<String>()
     val pendingRegistrations = mutableListOf<QuickJsToolRegistration>()
     val suppressedAsUndeclared = mutableListOf<String>()
+    // Which bundle(s) registered each export name, for the cross-bundle collision report below.
+    // Keyed by [BundleSource.bundleId] rather than the display filename, so `foo.js` and
+    // `./foo.js` count as one bundle and two unrelated sources that happen to share a label
+    // count as two. Tracks only names that reach [pendingRegistrations] — an export dropped by
+    // `shouldRegister` never lands in the repo, so it can't collide.
+    val exportOwners = mutableMapOf<String, MutableList<BundleIdentity>>()
     // An empty declaration list would suppress the caller's ENTIRE surface. No caller means that by
     // passing zero names — it means it resolved nothing and should fall back to bundle-sourced
     // advertisement — so treat it as "no list" rather than "declare nothing".
@@ -278,6 +284,8 @@ object QuickJsToolBundleLauncher {
             // future host runner) can opt into host-only tool registration.
             continue
           }
+          exportOwners.getOrPut(spec.name) { mutableListOf() } +=
+            BundleIdentity(id = source.bundleId, filename = source.filename)
           pendingRegistrations += QuickJsToolRegistration(
             host = host,
             spec = spec,
@@ -289,9 +297,15 @@ object QuickJsToolBundleLauncher {
           )
         }
       }
+      // Fatal before anything registers: two bundles can't share an export name. Thrown from
+      // inside the try so the fail-fast catch shuts down every host already started.
+      bundleCollisionReport(exportOwners)?.let { throw IllegalArgumentException(it) }
       // Atomic batch: addDynamicTools validates collisions across the whole batch before
       // inserting anything. A collision (same name advertised twice) surfaces as a single
       // startup failure instead of a partial registration. Same shape as the legacy launcher.
+      // Intra-batch duplicates were already reported above with bundle filenames; this call
+      // still guards the classes the launcher can't see (clashes with Kotlin-backed, YAML, or
+      // previously-registered dynamic tools).
       toolRepo.addDynamicTools(pendingRegistrations)
       // Per-launch registration log: tagged with sessionId so a tester grep-ing the device-farm
       // log by session can see exactly which QuickJS-runtime tools landed in the repo. The
@@ -341,5 +355,96 @@ object QuickJsToolBundleLauncher {
         "bundleable and must be filtered out before reaching the launcher."
     }
     return BundleSource.FromFile(scriptPath)
+  }
+
+  /**
+   * One loaded bundle, as the collision report sees it: [id] decides what counts as the same
+   * bundle, [filename] is what a human reads. Kept apart because [BundleSource.filename] is a
+   * display label — two spellings of one path, or two sources sharing a label, would otherwise
+   * pick the wrong half of the report.
+   */
+  private data class BundleIdentity(val id: String, val filename: String)
+
+  /**
+   * The startup failure to raise for [exportOwners], or null when the bundles can load together.
+   *
+   * Every bundle export — declared tool or helper — registers into one flat per-session
+   * namespace, so two bundles exporting the same name is fatal either way. Without this,
+   * `addDynamicTools` rejects the batch on the FIRST duplicate with a message that names neither
+   * bundle, which is what made the real production hit (three generically-named helper exports
+   * shared by tool modules from two repos, only observable once both were staged together) slow
+   * to diagnose. Report every collision at once, each with its owning bundles, so one failure is
+   * one fix.
+   *
+   * Two shapes, two opposite fixes:
+   *  - A bundle owning the SAME export more than once is loaded more than once (a repeated
+   *    `mcp_servers` entry). Every one of its exports "collides" with itself, and advising a
+   *    rename is unactionable when it's one file — say the entry is declared twice.
+   *  - Different bundles owning one export is a real name clash — say to rename it.
+   *
+   * "Same bundle" is [BundleSource.bundleId], never the display filename: `foo.js` and `./foo.js`
+   * are one file staged twice, while two unrelated sources that happen to share a label are two
+   * bundles. A stack-trace hint can't be what decides between opposite fixes.
+   */
+  private fun bundleCollisionReport(exportOwners: Map<String, List<BundleIdentity>>): String? {
+    val redeclaredBundles = mutableMapOf<String, Int>()
+    exportOwners.values.forEach { owners ->
+      owners.groupingBy { it.id }.eachCount().filterValues { it > 1 }.forEach { (id, count) ->
+        redeclaredBundles.merge(id, count, ::maxOf)
+      }
+    }
+    val collisions = exportOwners
+      .mapValues { (_, owners) -> owners.map { it.id }.distinct() }
+      .filterValues { it.size > 1 }
+    if (redeclaredBundles.isEmpty() && collisions.isEmpty()) return null
+
+    val labelsById: Map<String, List<String>> = exportOwners.values.flatten()
+      .groupBy({ it.id }, { it.filename })
+      .mapValues { (_, labels) -> labels.distinct() }
+    // Number the labels when two DIFFERENT bundles carry the same one, so `exported by:
+    // bundle.js, bundle.js` can't read as a single file colliding with itself — the exact shape
+    // the re-declaration branch exists to keep out of the report.
+    val displayById: Map<String, String> = labelsById.entries
+      .groupBy { (_, labels) -> labels.first() }
+      .flatMap { (label, sharing) ->
+        sharing.mapIndexed { index, (id, _) ->
+          id to if (sharing.size == 1) label else "$label #${index + 1}"
+        }
+      }
+      .toMap()
+
+    return buildString {
+      if (redeclaredBundles.isNotEmpty()) {
+        appendLine(
+          "QuickJS tool bundle(s) loaded more than once in this session — every export of " +
+            "a re-declared bundle collides with itself. Remove the repeated mcp_servers " +
+            "entry (or the duplicate toolset declaration that stages it twice):",
+        )
+        redeclaredBundles.entries
+          .sortedBy { displayById.getValue(it.key) }
+          .forEach { (id, count) ->
+            val alias = labelsById.getValue(id).drop(1).takeIf { it.isNotEmpty() }
+              ?.joinToString(", ") { "'$it'" }
+              ?.let { " (also declared as $it)" }
+              .orEmpty()
+            appendLine("  - '${displayById.getValue(id)}'$alias is loaded $count times")
+          }
+      }
+      if (collisions.isNotEmpty()) {
+        appendLine(
+          "QuickJS tool bundle collision: ${collisions.size} export name(s) are registered " +
+            "by more than one bundle in this session. Every bundle export (declared tool or " +
+            "helper) registers into one flat namespace, so these bundles cannot load together:",
+        )
+        collisions.toSortedMap().forEach { (name, ownerIds) ->
+          appendLine("  - '$name' exported by: ${ownerIds.joinToString(", ") { displayById.getValue(it) }}")
+        }
+        append(
+          "Rename the colliding export(s) in one of the bundles — namespace helper exports " +
+            "to their tool (e.g. `resolveTimeoutMs` -> `resolveMyToolTimeoutMs`), or stop " +
+            "exporting helpers that only exist for the module's own tests.",
+        )
+      }
+    }.trimEnd()
   }
 }

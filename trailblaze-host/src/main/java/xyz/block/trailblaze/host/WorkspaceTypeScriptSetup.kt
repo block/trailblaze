@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.host
 
+import java.io.File
 import java.nio.file.Files
 import java.nio.file.Path
 import xyz.block.trailblaze.llm.config.ClasspathResourceDiscovery
@@ -101,7 +102,15 @@ object WorkspaceTypeScriptSetup {
    *
    * Returns the absolute path of the extracted SDK dir.
    */
-  internal fun extractSdk(workspaceRoot: Path): Path {
+  internal fun extractSdk(workspaceRoot: Path): Path = extractSdkInto(
+    workspaceRoot.resolve(GENERATED_DIR_NAME).resolve(SDK_DIR_NAME).toAbsolutePath(),
+  )
+
+  /**
+   * [extractSdk]'s body, parameterized on the destination so a caller that is NOT setting up a
+   * workspace can still materialize the framework's SDK — see [frameworkSdkRuntimeEntry].
+   */
+  internal fun extractSdkInto(sdkRoot: Path): Path {
     val sdkResources = ClasspathResourceDiscovery.discoverAndLoadRecursive(
       directoryPath = SDK_RESOURCE_PREFIX,
       suffix = "", // any file under the prefix
@@ -120,17 +129,13 @@ object WorkspaceTypeScriptSetup {
           ":trailblaze-models:bundleTrailblazeSdkDts` (manual after SDK source edits).",
       )
     }
-    val sdkRoot = workspaceRoot
-      .resolve(GENERATED_DIR_NAME)
-      .resolve(SDK_DIR_NAME)
-      .toAbsolutePath()
     Files.createDirectories(sdkRoot)
     // Build the expected file set first so we can prune stale files from a previous SDK
     // version before writing the current one. Without this, on framework upgrade where the
     // SDK shape shrinks (e.g. a former `dist/extras.d.ts` removed), the stale file would
     // linger in `.trailblaze/sdk/` and could confuse module resolution or IDE indexing.
     // Mtime-stable for unchanged content (skip-write-if-content-matches preserved below).
-    val expectedRelativePaths = sdkResources.keys.map { it.replace('/', java.io.File.separatorChar) }.toSet()
+    val expectedRelativePaths = sdkResources.keys.map { it.replace('/', File.separatorChar) }.toSet()
     if (Files.isDirectory(sdkRoot)) {
       Files.walk(sdkRoot).use { stream ->
         stream
@@ -281,6 +286,52 @@ object WorkspaceTypeScriptSetup {
    * tsconfig consumer is TypeScript, which is platform-neutral.
    */
   internal const val SDK_DTS_BUNDLE_RELATIVE_PATH: String = "dist/index.d.ts"
+
+  /**
+   * Path of the extracted RUNTIME entry relative to [SDK_DIR_NAME] — the executable half of the
+   * pair whose declaration half is [SDK_DTS_BUNDLE_RELATIVE_PATH]. This is the module a trailmap's
+   * `import { trailblaze } from "@trailblaze/scripting"` actually resolves to, via the `paths`
+   * mapping [PerTrailmapTsconfigEmitter] inlines.
+   */
+  internal const val SDK_RUNTIME_BUNDLE_RELATIVE_PATH: String = "dist/index.js"
+
+  /**
+   * The extracted SDK's runtime entry for [workspaceRoot], or null when the workspace has none
+   * (no `trailblaze check` / compile / daemon bootstrap has run there yet).
+   *
+   * Exists so a caller that has to bundle a trailmap's scripted tools OUTSIDE the workspace — such
+   * as `usages --changed-since`, which bundles a git ref's tree in a temp worktree — can alias
+   * `@trailblaze/scripting` to the same module the workspace's own tsconfig `paths` name. Without
+   * it that caller is at the mercy of the ref checkout, and `.trailblaze/` is gitignored by
+   * construction, so no ref checkout ever carries the SDK.
+   */
+  internal fun extractedSdkRuntimeEntry(workspaceRoot: File): File? =
+    File(workspaceRoot, "$GENERATED_DIR_NAME/$SDK_DIR_NAME/$SDK_RUNTIME_BUNDLE_RELATIVE_PATH")
+      .takeIf { it.isFile }
+
+  /**
+   * The framework's OWN copy of the SDK runtime entry, extracted from this JAR into [cacheRoot]
+   * on first use and reused after (the extraction is idempotent and skip-write-if-unchanged).
+   * Null when this JAR ships no SDK, or the cache can't be written.
+   *
+   * The last-resort answer to "what does `@trailblaze/scripting` resolve to", for a caller that has
+   * no reachable SDK source tree AND no workspace extract to borrow — which is the state of a FRESH
+   * worktree, since `.trailblaze/` is gitignored and no `trailblaze check` has run there. That is
+   * not an exotic case: `scripts/validate-trailmap-tool-change.sh` materializes exactly such a
+   * worktree and runs `usages --changed-since` inside it.
+   *
+   * Extracting rather than failing is safe because the SDK is pinned by the FRAMEWORK, not by repo
+   * content — this JAR's SDK is the one its own bundler should be resolving against.
+   */
+  internal fun frameworkSdkRuntimeEntry(cacheRoot: File): File? = runCatching {
+    extractSdkInto(cacheRoot.toPath().toAbsolutePath())
+      .resolve(SDK_RUNTIME_BUNDLE_RELATIVE_PATH)
+      .toFile()
+      .takeIf { it.isFile }
+  }.getOrElse {
+    Console.info("[WorkspaceTypeScriptSetup] Could not materialize the framework SDK at $cacheRoot: ${it.message}")
+    null
+  }
 
   /**
    * Filename of the pre-Phase-D workspace base tsconfig that per-trailmap tsconfigs used

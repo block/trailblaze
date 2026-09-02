@@ -5,6 +5,7 @@ import xyz.block.trailblaze.config.ToolNameResolver
 import xyz.block.trailblaze.config.ToolSetYamlLoader
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.llm.config.bundledConfigResourceSource
+import xyz.block.trailblaze.toolcalls.commands.SwitchDeviceTrailblazeTool
 
 /**
  * A single entry in the toolset catalog that the LLM can browse and enable.
@@ -60,6 +61,37 @@ data class ResolvedToolSet(
  * `verify:` step to its driver-appropriate verification tools.
  */
 object TrailblazeToolSetCatalog {
+
+  /**
+   * Toolsets a SESSION binds rather than a target declares, so the IMPLICIT whole-catalog scope
+   * must skip them — see [implicitScopeEntries].
+   *
+   * Their tools are executable only because of runtime state the catalog can't see. `multi_device`'s
+   * `switchDevice` needs a bound device roster, and with no roster every call returns an error; being
+   * driver-agnostic, it would otherwise land in every unconfigured session on every driver. The
+   * runner turns the surface on explicitly instead, via `MultiDeviceTargetBinding.handoverToolSurface`.
+   *
+   * An EXPLICIT request still wins: a caller that names one of these in `requestedIds` gets it.
+   */
+  val SESSION_BOUND_TOOLSET_IDS: Set<String> = setOf(
+    SwitchDeviceTrailblazeTool.MULTI_DEVICE_TOOLSET_ID,
+  )
+
+  /**
+   * The entries the "no scope was declared" fallback resolves to: driver-compatible, minus the
+   * session-bound ones.
+   *
+   * There are two implicit-scope callers — the nullable-target path in
+   * `TrailblazeToolRepo.withDynamicToolSets` and the unconfigured-target path in
+   * `resolveToolScopeForDriver` — and they are pinned equivalent by
+   * `SessionToolRepoEquivalenceTest`. Defining "the implicit scope" once is what keeps them from
+   * drifting; carving the exclusion into one of them and not the other breaks that test.
+   */
+  private fun implicitScopeEntries(
+    driverType: TrailblazeDriverType,
+    catalog: List<ToolSetCatalogEntry>,
+  ): List<ToolSetCatalogEntry> = compatibleEntries(driverType, catalog)
+    .filterNot { it.id in SESSION_BOUND_TOOLSET_IDS }
 
   /**
    * Returns the catalog entries — classpath-discovered + workspace overlay merged. The classpath
@@ -306,7 +338,7 @@ object TrailblazeToolSetCatalog {
     driverType: TrailblazeDriverType,
     catalog: List<ToolSetCatalogEntry> = defaultEntries(),
   ): Set<KClass<out TrailblazeTool>> =
-    compatibleEntries(driverType, catalog).flatMap { it.toolClasses }.toSet()
+    implicitScopeEntries(driverType, catalog).flatMap { it.toolClasses }.toSet()
 
   /**
    * Returns every YAML-defined tool name from the catalog compatible with [driverType].
@@ -321,7 +353,7 @@ object TrailblazeToolSetCatalog {
     driverType: TrailblazeDriverType,
     catalog: List<ToolSetCatalogEntry> = defaultEntries(),
   ): Set<ToolName> =
-    compatibleEntries(driverType, catalog).flatMap { it.yamlToolNames }.toSet()
+    implicitScopeEntries(driverType, catalog).flatMap { it.yamlToolNames }.toSet()
 
   /**
    * Returns every scripted (`.ts` / `.js`) tool name from the catalog compatible with
@@ -334,5 +366,5 @@ object TrailblazeToolSetCatalog {
     driverType: TrailblazeDriverType,
     catalog: List<ToolSetCatalogEntry> = defaultEntries(),
   ): Set<ToolName> =
-    compatibleEntries(driverType, catalog).flatMap { it.scriptedToolNames }.toSet()
+    implicitScopeEntries(driverType, catalog).flatMap { it.scriptedToolNames }.toSet()
 }

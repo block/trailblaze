@@ -4,6 +4,7 @@ import java.io.File
 import java.io.IOException
 import java.nio.file.Files
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
 /**
@@ -40,6 +41,9 @@ object GitRefTree {
     // not a failure — and the paths travel over stdin (NUL-separated) to dodge arg-length limits.
     val process = ProcessBuilder("git", "check-ignore", "--stdin", "-z")
       .directory(gitRoot)
+      // Discarded rather than left as an unread pipe: this reads stdout only, so a warning on
+      // stderr would sit in a buffer nobody drains and a chatty git could block on the write.
+      .redirectError(ProcessBuilder.Redirect.DISCARD)
       .start()
     // The reader starts before stdin is written so a large ignored set can't deadlock the pipe,
     // and so waitFor's timeout stays enforceable (destroyForcibly closes the pipe, unblocking it).
@@ -80,25 +84,65 @@ object GitRefTree {
     }
   }
 
+  /**
+   * What the WORKING-TREE side of a comparison was, as a fact a reader can reproduce from: the
+   * commit `HEAD` points at, and whether tracked content differs from it.
+   *
+   * A `--changed-since` report records only the ref it compared against, which pins half the
+   * comparison. Two reports naming the same ref can disagree entirely, and without this there is no
+   * way to tell a stale report from a real change. Returns null when [dir] is not inside a git
+   * repository (or git cannot answer), because a comparison that could not read its own side must
+   * say nothing rather than claim a clean tree.
+   *
+   * `dirty` covers tracked modifications only — `git status --porcelain` with untracked files
+   * excluded. An untracked file is ordinary work in progress that the comparison itself already
+   * reports as `added`, so counting it here would flag every report a developer runs mid-edit.
+   */
+  fun workingTreeStateOf(dir: File): WorkingTreeState? {
+    val gitRoot = gitRootOf(dir) ?: return null
+    val headSha = resolveCommit(gitRoot, "HEAD") ?: return null
+    val status = runGit(gitRoot, "status", "--porcelain", "--untracked-files=no").getOrNull() ?: return null
+    return WorkingTreeState(headSha = headSha, dirty = status.isNotBlank())
+  }
+
+  /**
+   * Drains subprocess pipes. A dedicated pool rather than the common ForkJoinPool because these
+   * tasks BLOCK on I/O: the common pool sizes itself to the CPU count and does not compensate for a
+   * blocked worker, so two blocking drains there can queue behind each other (and behind unrelated
+   * pool work) instead of running concurrently. Draining both streams concurrently is what keeps a
+   * full pipe buffer from stalling git until the timeout.
+   */
+  private val streamDrainPool = Executors.newCachedThreadPool { runnable ->
+    Thread(runnable, "git-stream-drain").apply { isDaemon = true }
+  }
+
   private fun runGit(workingDir: File, vararg args: String): Result<String> = runCatching {
     val process = ProcessBuilder("git", *args)
       .directory(workingDir)
-      .redirectErrorStream(true)
       .start()
-    // Read on a separate thread so waitFor's timeout stays enforceable: a synchronous readText()
-    // would block right past the deadline on a hung git, and reading only after waitFor would
-    // deadlock a git that fills the pipe buffer. destroyForcibly() closes the pipe, which
-    // unblocks the reader.
-    val output = CompletableFuture.supplyAsync { process.inputStream.bufferedReader().readText() }
+    // stderr stays OUT of the returned value: git writes warnings there while still exiting 0 (a
+    // wedged core.fsmonitor daemon emits "could not read IPC response" on every call), and folding
+    // those into stdout makes a clean `status --porcelain` read as dirty and a resolved sha as junk.
+    // Both drain concurrently so waitFor's timeout stays enforceable and neither pipe can fill;
+    // destroyForcibly() closes both, which unblocks the readers.
+    val stdout = CompletableFuture.supplyAsync({ process.inputStream.bufferedReader().readText() }, streamDrainPool)
+    val stderr = CompletableFuture.supplyAsync({ process.errorStream.bufferedReader().readText() }, streamDrainPool)
     if (!process.waitFor(120, TimeUnit.SECONDS)) {
       process.destroyForcibly()
       throw IOException("git ${args.joinToString(" ")} timed out after 120s")
     }
     if (process.exitValue() != 0) {
+      // The exit code is the load-bearing part of this message, so reading stderr must not be able
+      // to replace it: a grandchild holding the pipe open (the fsmonitor daemon itself, ssh, a
+      // credential helper) delays EOF past the wait, and letting that throw here would surface a
+      // TimeoutException naming neither the command nor its exit code.
+      val detail = runCatching { stderr.get(10, TimeUnit.SECONDS).trim() }.getOrDefault("")
       throw IOException(
-        "git ${args.joinToString(" ")} failed (exit ${process.exitValue()}): ${output.get(10, TimeUnit.SECONDS).trim()}",
+        "git ${args.joinToString(" ")} failed (exit ${process.exitValue()})${detail.prefixedOrEmpty()}",
       )
     }
-    output.get(10, TimeUnit.SECONDS)
+    stdout.get(10, TimeUnit.SECONDS)
   }
+
+  private fun String.prefixedOrEmpty(): String = if (isEmpty()) "" else ": $this"
 }

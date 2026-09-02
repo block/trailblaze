@@ -5,7 +5,8 @@ config:
     that the model keeps track of accumulated state across nav clicks
     instead of resetting its mental model on every section switch.
   devices:
-    web: PLAYWRIGHT_NATIVE
+    web:
+      driver: PLAYWRIGHT_NATIVE
   title: 'LLM Benchmark: Multi-section navigation + state preservation'
 
 trail:

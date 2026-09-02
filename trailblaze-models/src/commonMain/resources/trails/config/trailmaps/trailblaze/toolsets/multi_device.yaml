@@ -1,13 +1,11 @@
 # Multi-device session control — hand the active session over to another bound device and
 # back (e.g. a dual-display point-of-sale device's buyer and seller displays).
 #
-# Not always_enabled and not declared in any target's `tool_sets:`: the tool is only
-# meaningful when the session bound a multi-device configuration (a `config.devices:` entry
-# declaring named devices). Nothing enables this toolset yet — multi-device sessions are
-# currently mechanical-replay-only, and recorded `switchDevice` steps dispatch without toolset
-# enablement. The LLM-facing wiring (auto-enable on multi-device sessions plus prompt context)
-# is follow-up work; until it lands, this toolset exists so `switchDevice` recordings parse and
-# so the future auto-enable has a catalog entry to reference.
+# Not always_enabled and not declared in any target's `tool_sets:`: the tool is only meaningful
+# when the session bound a multi-device configuration (a `config.devices:` entry declaring named
+# devices), and no app's trailmap can know whether it was cast into one. The host runner adds this
+# toolset to exactly those sessions instead, so `switchDevice` is advertised to the LLM there and
+# nowhere else. Recorded handovers dispatch without it either way.
 id: multi_device
 description: "Switch the active device in a multi-device session (e.g. buyer/seller displays)."
 tools:

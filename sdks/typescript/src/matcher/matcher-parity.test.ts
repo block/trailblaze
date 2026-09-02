@@ -38,6 +38,14 @@ const FIELDS = [
       selectors.androidAccessibility({ contentDescriptionRegex: pattern }),
     expected: (c: ParityCase) => c.nativeMatches,
   },
+  // androidView is the other native-dialect shape — swept here so its strictness cannot
+  // silently relax to the Maestro dialect while the androidAccessibility rows stay green.
+  {
+    name: "native/androidView.textRegex",
+    detail: (text: string) => ({ class: "androidView", text }) as const,
+    selector: (pattern: string) => selectors.androidView({ textRegex: pattern }),
+    expected: (c: ParityCase) => c.nativeMatches,
+  },
   {
     name: "maestro/textRegex",
     detail: (text: string) => ({ class: "androidMaestro", text }) as const,
@@ -86,6 +94,36 @@ for (const c of fixtures.cases) {
       ).toBe(expectedMatch);
     });
   }
+}
+
+// Node-shaped contract for the androidView shape: which node shapes an androidView match may
+// cross into, and the three-state isChecked encoding (null = the view is not Checkable at all).
+// Same source of truth and drift guarantee as `cases` above — the Kotlin mirror is
+// MatcherParityFixturesTest.
+for (const c of fixtures.androidViewCases) {
+  test(`parity (androidView): ${c.name}`, () => {
+    const target: TrailblazeNode = {
+      nodeId: 2,
+      children: [],
+      bounds: { left: 0, top: 0, right: 100, bottom: 50 },
+      driverDetail: c.detail as TrailblazeNode["driverDetail"],
+    };
+    // A root of a different shape, so only the case's own node can ever match: an androidView
+    // root would itself satisfy a widened predicate (its isChecked is null too) and turn a
+    // false-expecting row green for the wrong reason.
+    const root: TrailblazeNode = {
+      nodeId: 1,
+      children: [target],
+      bounds: { left: 0, top: 0, right: 200, bottom: 100 },
+      driverDetail: { class: "androidAccessibility" },
+    };
+    const result = resolve(root, selectors.androidView(c.match));
+    const matched = result.kind === "singleMatch";
+    expect(
+      matched,
+      `match=[${JSON.stringify(c.match)}] detail=[${JSON.stringify(c.detail)}] expected matches=${c.matches}, got ${matched}`,
+    ).toBe(c.matches);
+  });
 }
 
 // Node-shaped contract for the iosMaestro→iosAxe bridge's hintTextRegex leg (help on any

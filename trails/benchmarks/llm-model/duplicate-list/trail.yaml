@@ -4,7 +4,8 @@ config:
     among multiple rows with the same visible text. Exercises the model's
     ability to use positional/contextual cues.
   devices:
-    web: PLAYWRIGHT_NATIVE
+    web:
+      driver: PLAYWRIGHT_NATIVE
   title: 'LLM Benchmark: Disambiguate duplicate items in a list'
 
 trail:

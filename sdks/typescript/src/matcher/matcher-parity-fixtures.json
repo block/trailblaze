@@ -1,5 +1,5 @@
 {
-  "_comment": "Shared behavioral contract for text-pattern matching in the node-selector resolvers. ONE source of truth for expected behavior, consumed by ALL THREE implementations' test suites: Kotlin/JVM `TrailblazeNodeSelectorResolver.matchesPattern` (via MatcherParityFixturesTest in trailblaze-models jvmTest), the TS mirror `resolver.ts` (via matcher-parity.test.ts), and the Kotlin/JS compile of the same resolver in trailblaze-selector-engine-js (via engine-parity.test.ts, exercising the ECMAScript regex-translation actual). Every case runs through the REAL resolver in BOTH dialects: `nativeMatches` is asserted via native selector shapes (androidAccessibility), `maestroMatches` via Maestro shapes (androidMaestro), which carry Maestro's Orchestra semantics (IGNORE_CASE | DOT_MATCHES_ALL | MULTILINE + toRegexSafe invalid-regex escape). If either implementation drifts, that side's suite fails. Add a case here whenever matching semantics change - never encode new semantics in only one language's tests.",
+  "_comment": "Shared behavioral contract for text-pattern matching in the node-selector resolvers. ONE source of truth for expected behavior, consumed by ALL THREE implementations' test suites: Kotlin/JVM `TrailblazeNodeSelectorResolver.matchesPattern` (via MatcherParityFixturesTest in trailblaze-models jvmTest), the TS mirror `resolver.ts` (via matcher-parity.test.ts), and the Kotlin/JS compile of the same resolver in trailblaze-selector-engine-js (via engine-parity.test.ts, exercising the ECMAScript regex-translation actual). Every case runs through the REAL resolver in BOTH dialects: `nativeMatches` is asserted via native selector shapes (androidAccessibility, androidView), `maestroMatches` via Maestro shapes (androidMaestro), which carry Maestro's Orchestra semantics (IGNORE_CASE | DOT_MATCHES_ALL | MULTILINE + toRegexSafe invalid-regex escape). If either implementation drifts, that side's suite fails. Add a case here whenever matching semantics change - never encode new semantics in only one language's tests.",
   "cases": [
     {
       "name": "exact literal text matches",
@@ -343,6 +343,63 @@
       "text": "foo\\E",
       "nativeMatches": true,
       "maestroMatches": true
+    }
+  ],
+  "_androidViewComment": "Node-shaped contract for the `androidView` shape - the in-process live-View dialect. Two things the pattern-only `cases` above cannot express: (a) which node shape a match may cross into (an androidView match never matches a projected accessibility node, and vice versa), and (b) `isChecked` is THREE-state on this shape - null means the view is not android.widget.Checkable at all - so `isChecked: false` matches only checkable-and-unchecked views rather than every view on screen. The strictness of the dialect itself is swept field-by-field over every `cases` row, via the androidView entry in each suite's field table. Consumed by the same two suites as `cases`.",
+  "androidViewCases": [
+    {
+      "name": "native dialect: a lowercase pattern does not match mixed-case text",
+      "match": { "textRegex": "cancel" },
+      "detail": { "class": "androidView", "text": "Cancel" },
+      "matches": false
+    },
+    {
+      "name": "native dialect: a leading (?i) opts into case-insensitivity",
+      "match": { "textRegex": "(?i)cancel" },
+      "detail": { "class": "androidView", "text": "Cancel" },
+      "matches": true
+    },
+    {
+      "name": "native dialect: dot does not cross a newline",
+      "match": { "textRegex": ".+" },
+      "detail": { "class": "androidView", "text": "line1\nline2" },
+      "matches": false
+    },
+    {
+      "name": "textRegex resolves text > hintText > contentDescription, so a hint-only field matches by its hint",
+      "match": { "textRegex": "Enter your email" },
+      "detail": { "class": "androidView", "hintText": "Enter your email", "isEditable": true },
+      "matches": true
+    },
+    {
+      "name": "isChecked=false matches a Checkable view that is currently unchecked",
+      "match": { "isChecked": false },
+      "detail": { "class": "androidView", "text": "Notifications", "isChecked": false },
+      "matches": true
+    },
+    {
+      "name": "isChecked=false does NOT match a view that is not Checkable at all (isChecked null)",
+      "match": { "isChecked": false },
+      "detail": { "class": "androidView", "text": "About" },
+      "matches": false
+    },
+    {
+      "name": "isChecked=true does not match a Checkable view that is unchecked",
+      "match": { "isChecked": true },
+      "detail": { "class": "androidView", "text": "Notifications", "isChecked": false },
+      "matches": false
+    },
+    {
+      "name": "an androidView match never matches an androidAccessibility node",
+      "match": { "textRegex": "Submit" },
+      "detail": { "class": "androidAccessibility", "text": "Submit" },
+      "matches": false
+    },
+    {
+      "name": "an androidView match never matches an androidMaestro node",
+      "match": { "textRegex": "Submit" },
+      "detail": { "class": "androidMaestro", "text": "Submit" },
+      "matches": false
     }
   ],
   "_iosMaestroHintBridgeComment": "Node-shaped contract for the iosMaestro→iosAxe bridge's hintTextRegex leg: help matches on any type; label/value match ONLY on text-input types (placeholder surfaces as AXLabel on newer iOS runtimes, as the empty field's AXValue on older ones). Consumed by the same two suites as `cases`. If either implementation's type gate or property set drifts, that side's suite fails.",

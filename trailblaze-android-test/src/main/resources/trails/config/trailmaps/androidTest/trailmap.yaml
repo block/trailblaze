@@ -1,0 +1,7 @@
+# Library trailmap for native Android instrumentation tests. One toolset, backend-agnostic: the
+# View and Compose primitives are implementation detail and are intentionally not exposed here.
+id: androidTest
+platforms:
+  android-test:
+    tool_sets:
+      - android_test

@@ -139,3 +139,22 @@ Unknown custom command, ensure there is a mapping between the custom command and
     ) : Error
   }
 }
+
+/**
+ * Whether this [TrailblazeToolResult.Success] actually carries data, and so should become a
+ * trail's `lastToolSuccess` — the value each driver mirrors onto
+ * [xyz.block.trailblaze.llm.RunYamlResponse.toolMessage] /
+ * [xyz.block.trailblaze.llm.RunYamlResponse.toolStructuredContent].
+ *
+ * Empty `Success()` values — produced by `handleConfig(...)`, by prompt-steps whose recorded path
+ * resolves without a narrative, and by action-style tools (tap/swipe) whose return value is just a
+ * verdict — are NOT payload-bearing and must not overwrite a previous data-returning Success. A
+ * trail of `[adbShell→stdout, tapOn]` has to surface the adbShell stdout, not `toolMessage=null`.
+ *
+ * Lives here, next to the type, because every driver's trail-item fold needs the SAME answer:
+ * `AndroidTrailblazeRule.runSuspend` (accessibility) and `AndroidTestTrailblazeRule.runDecoded`
+ * (in-process) both call it, and the two diverging is exactly the regression `SuccessCarriesPayloadTest`
+ * was written for (PR #3507).
+ */
+fun TrailblazeToolResult.Success.carriesPayload(): Boolean =
+  message != null || structuredContent != null

@@ -79,7 +79,7 @@ export interface TrailblazeDeviceId {
 
 export type TrailblazeDevicePlatform = "ANDROID" | "IOS" | "WEB" | "DESKTOP";
 
-export type TrailblazeDriverType = "ANDROID_ONDEVICE_ACCESSIBILITY" | "ANDROID_ONDEVICE_INSTRUMENTATION" | "IOS_HOST" | "IOS_AXE" | "PLAYWRIGHT_NATIVE" | "PLAYWRIGHT_ELECTRON" | "REVYL_ANDROID" | "REVYL_IOS" | "COMPOSE";
+export type TrailblazeDriverType = "ANDROID_ONDEVICE_ACCESSIBILITY" | "ANDROID_ONDEVICE_INSTRUMENTATION" | "ANDROID_TEST" | "IOS_HOST" | "IOS_AXE" | "PLAYWRIGHT_NATIVE" | "PLAYWRIGHT_ELECTRON" | "REVYL_ANDROID" | "REVYL_IOS" | "COMPOSE";
 
 /**
  * Typed client for the daemon's /rpc/<Name> endpoints — one method per RpcRequest<T>.

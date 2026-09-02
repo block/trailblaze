@@ -69,6 +69,7 @@ kotlin {
         "xyz/block/trailblaze/api/TrailblazeNodeSelectorGenerator.kt",
         "xyz/block/trailblaze/api/TrailblazeNodeSelectorGeneratorAndroidAccessibility.kt",
         "xyz/block/trailblaze/api/TrailblazeNodeSelectorGeneratorAndroidMaestro.kt",
+        "xyz/block/trailblaze/api/TrailblazeNodeSelectorGeneratorAndroidView.kt",
         "xyz/block/trailblaze/api/TrailblazeNodeSelectorGeneratorCompose.kt",
         "xyz/block/trailblaze/api/TrailblazeNodeSelectorGeneratorEnumeration.kt",
         "xyz/block/trailblaze/api/TrailblazeNodeSelectorGeneratorHelpers.kt",

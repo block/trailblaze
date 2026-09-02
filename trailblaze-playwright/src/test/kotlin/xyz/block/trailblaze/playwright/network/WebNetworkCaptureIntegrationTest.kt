@@ -263,6 +263,63 @@ class WebNetworkCaptureIntegrationTest {
   }
 
   @Test
+  fun `events become durable mid-session without stop`() {
+    // web_assertNetworkEvent polls network.ndjson while the session is live — the
+    // background drainer (not detach's tail flush) must be what lands events on disk.
+    val ctx = PlaywrightTestProxies.FakeBrowserContext()
+    val dir = tmp.newFolder()
+    WebNetworkCapture.start(ctx.proxy, "s", dir)
+    try {
+      val req = PlaywrightTestProxies.fakeRequest(url = "https://api.example.com/track")
+      ctx.fireRequest(req)
+      ctx.fireResponse(PlaywrightTestProxies.fakeResponse(req, status = 200, body = ByteArray(0)))
+
+      val ndjson = File(dir, "network.ndjson")
+      val deadline = System.currentTimeMillis() + 5_000
+      var lines: List<String> = emptyList()
+      while (System.currentTimeMillis() < deadline) {
+        lines = ndjson.readText().split('\n').filter { it.isNotBlank() }
+        if (lines.size == 2) break
+        Thread.sleep(50)
+      }
+      assertEquals(2, lines.size, "both events must land on disk while the session is still live")
+    } finally {
+      WebNetworkCapture.stop(ctx.proxy)
+    }
+  }
+
+  @Test
+  fun `a listener firing after stop writes nothing and leaves no drain thread`() {
+    // Playwright holds the Consumer across a dispatch, so a listener can fire after stop()
+    // — from a page that is still closing, or a queued CDP event. Nothing may reach disk
+    // after the writer closes, and the drain thread must be gone rather than parked.
+    val ctx = PlaywrightTestProxies.FakeBrowserContext()
+    val dir = tmp.newFolder()
+    WebNetworkCapture.start(ctx.proxy, "s", dir)
+    // Hold the registered Consumer the way Playwright holds it across a dispatch.
+    val inFlightListener = ctx.requestListeners.single()
+    ctx.fireRequest(PlaywrightTestProxies.fakeRequest(url = "https://example.com/before"))
+    WebNetworkCapture.stop(ctx.proxy)
+
+    inFlightListener.accept(PlaywrightTestProxies.fakeRequest(url = "https://example.com/after"))
+
+    val lines = File(dir, "network.ndjson").readText().split('\n').filter { it.isNotBlank() }
+    assertEquals(1, lines.size, "only the pre-stop event should be on disk: $lines")
+    assertTrue(lines[0].contains("/before"))
+    // The drainer must be gone rather than spinning on an entry it can never write.
+    val deadline = System.currentTimeMillis() + 5_000
+    while (System.currentTimeMillis() < deadline &&
+      Thread.getAllStackTraces().keys.any { it.name == "web-network-capture" && it.isAlive }
+    ) {
+      Thread.sleep(50)
+    }
+    assertFalse(
+      Thread.getAllStackTraces().keys.any { it.name == "web-network-capture" && it.isAlive },
+      "the drain thread must exit after stop, not spin on an undrainable queue",
+    )
+  }
+
+  @Test
   fun `tracker is reset on session rollover so stale ids do not pin idle false`() {
     val ctx = PlaywrightTestProxies.FakeBrowserContext()
     val dirA = tmp.newFolder("a")

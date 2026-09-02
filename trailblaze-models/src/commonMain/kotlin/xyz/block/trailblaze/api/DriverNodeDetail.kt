@@ -444,6 +444,208 @@ sealed interface DriverNodeDetail {
   }
 
   // ---------------------------------------------------------------------------
+  // Android via live android.view.View objects (in-process test driver)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Classic Android View properties read straight off the live `android.view.View` objects.
+   *
+   * Only an in-process driver can produce this: it holds the real view instances rather than a
+   * projection of them. [AndroidAccessibility] is built from each view's
+   * `onInitializeAccessibilityNodeInfo()`, which is lossy by construction —
+   * `importantForAccessibility=no` nodes disappear, container groups collapse into one node, and
+   * child text is merged into the parent's label. This shape is the source that projection is made
+   * from, so it is a superset: the same a11y vocabulary plus View-only fields ([tag], the real
+   * [className], [errorText], [alpha]).
+   *
+   * Not Espresso-specific despite Espresso being today's only executor — the data is
+   * `android.view.View`, so a Robolectric collector or an in-app recorder emits the same shape.
+   *
+   * Matched with strict (case-sensitive) regex semantics, unlike the Maestro-shaped variants.
+   *
+   * ## Matchable properties (stable, use in selectors)
+   * [className], [resourceId], [tag], [text], [contentDescription], [hintText],
+   * [stateDescription], [errorText], [isEnabled], [isClickable], [isChecked], [isSelected],
+   * [isFocused], [isEditable], [isPassword], [inputType], [collectionItemRowIndex],
+   * [collectionItemColumnIndex]
+   *
+   * ## Display-only properties (not for selectors)
+   * [isFocusable], [isScrollable], [alpha], [isShown]
+   */
+  @Serializable
+  @SerialName("androidView")
+  data class AndroidView(
+    // --- Matchable: Identity ---
+
+    /**
+     * The view's real runtime class (e.g. `com.example.ui.PriceKeypadView`).
+     *
+     * **Matchable.** Unlike [AndroidAccessibility.className], this is not sanitized to a
+     * framework superclass — a custom view reports itself, which is what makes custom views
+     * findable without any opt-in from the app.
+     */
+    val className: String? = null,
+
+    /**
+     * Resource name of `view.id`, formatted `"pkg:id/entry"`.
+     *
+     * **Matchable.** Null when the id came from `View.generateViewId()` (there is no resource
+     * entry to name), which is normal for programmatically built screens.
+     */
+    val resourceId: String? = null,
+
+    /**
+     * `view.tag` rendered as a string.
+     *
+     * **Matchable.** View-only — the a11y projection drops it entirely. Developers use it as an
+     * ad-hoc test identifier, so treat it as second only to [resourceId] for stability.
+     */
+    val tag: String? = null,
+
+    // --- Matchable: Text content ---
+
+    /** **Matchable.** `TextView.text`. Null on non-text views. */
+    val text: String? = null,
+
+    /** **Matchable.** `view.contentDescription` — often the only label on an icon button. */
+    val contentDescription: String? = null,
+
+    /** **Matchable.** `TextView.hint`. Frequently the only handle on an empty input field. */
+    val hintText: String? = null,
+
+    /**
+     * State the view describes about itself for accessibility (e.g. "On", "50%", "Expanded"),
+     * read from the view's own `createAccessibilityNodeInfo()`.
+     *
+     * **Matchable.** This is the one field sourced through the a11y contract rather than a View
+     * getter, because it is the only place a custom view publishes its own state without an
+     * app-side opt-in.
+     */
+    val stateDescription: String? = null,
+
+    /**
+     * **Matchable.** `TextView.error` — the inline validation message. Unlike
+     * [AndroidAccessibility.error] this is matchable here: asserting "the field shows this
+     * validation error" is a normal gate assertion, and in-process the value is read
+     * synchronously with the rest of the tree rather than from a stale a11y event.
+     */
+    val errorText: String? = null,
+
+    // --- Matchable: State ---
+
+    /** **Matchable.** `view.isEnabled`. */
+    val isEnabled: Boolean = true,
+
+    /** **Matchable.** `view.isClickable`. */
+    val isClickable: Boolean = false,
+
+    /**
+     * **Matchable.** `Checkable.isChecked`. Null means the view is not [android.widget.Checkable]
+     * at all — which is how checkability is expressed here, rather than a separate
+     * `isCheckable` flag.
+     */
+    val isChecked: Boolean? = null,
+
+    /** **Matchable.** `view.isSelected`. */
+    val isSelected: Boolean = false,
+
+    /** **Matchable.** `view.isFocused` — currently holds input focus. */
+    val isFocused: Boolean = false,
+
+    /**
+     * **Matchable.** The view accepts text input (an `EditText`, or a `TextView` with a
+     * non-null input type). The `androidTest_type` tool needs this to fail loudly on a
+     * non-editable target instead of silently doing nothing.
+     */
+    val isEditable: Boolean = false,
+
+    /** **Matchable.** Text is obscured by a `PasswordTransformationMethod`. */
+    val isPassword: Boolean = false,
+
+    /**
+     * `TextView.inputType`, matching Android's `InputType` constants. 0 for non-input views.
+     *
+     * **Matchable.** Separates an email field from a phone field from plain text.
+     */
+    val inputType: Int = 0,
+
+    // --- Display-only ---
+
+    /** **Display-only.** Too common to disambiguate anything. */
+    val isFocusable: Boolean = false,
+
+    /** **Display-only.** Whether the view can scroll in either axis right now. */
+    val isScrollable: Boolean = false,
+
+    /** **Display-only.** `view.alpha`. Transient — animates. */
+    val alpha: Float = 1f,
+
+    /** **Display-only.** `view.isShown` — visible and every ancestor visible. */
+    val isShown: Boolean = true,
+
+    /**
+     * **Matchable.** What `View.getAccessibilityClassName()` reports — the framework class the
+     * accessibility tree would publish for this view (`android.view.View` for a plain custom view,
+     * `android.widget.TextView` for a TextView subclass, and so on), as opposed to [className],
+     * which is the real runtime class.
+     *
+     * A canonical [AndroidAccessibility] selector names THIS one, because that is the only class
+     * name the tree it was recorded against ever showed. Case 5380717 taps a Settings row selected
+     * as `classNameRegex: android.view.View` plus `index: 6` — no text, no id, no description —
+     * and against runtime class names that matches nothing at all.
+     */
+    val accessibilityClassName: String? = null,
+
+    // --- Matchable: Collection position ---
+
+    /**
+     * **Matchable.** The row this view occupies in the collection holding it, read from the same
+     * `AccessibilityNodeInfo.CollectionItemInfo` the a11y tree publishes. Null when the view is
+     * not an item of a collection, which is most views.
+     *
+     * Here so a canonical [AndroidAccessibility] selector recorded against a grid resolves on this
+     * backend as well. Grid position is often the ONLY thing that distinguishes a tile — an empty
+     * placeholder has no text, no id of its own and no content description — so without it case
+     * 5921801's "the favorites grid is two columns wide" is a question this tree cannot answer,
+     * and the bridge fails the constraint rather than guess.
+     */
+    val collectionItemRowIndex: Int? = null,
+
+    /** **Matchable.** The column half of [collectionItemRowIndex]. */
+    val collectionItemColumnIndex: Int? = null,
+  ) : DriverNodeDetail {
+
+    override val matchablePropertyNames: Set<String>
+      get() = MATCHABLE_PROPERTIES
+
+    override val hasIdentifiableProperties: Boolean
+      get() =
+        !text.isNullOrBlank() ||
+          !resourceId.isNullOrBlank() ||
+          !tag.isNullOrBlank() ||
+          !contentDescription.isNullOrBlank() ||
+          !hintText.isNullOrBlank() ||
+          !className.isNullOrBlank()
+
+    override val isInteractive: Boolean
+      get() = isClickable || isEditable || isChecked != null || isFocusable || isScrollable
+
+    /** Resolves text priority: text > hintText > contentDescription (same as the a11y shape). */
+    fun resolveText(): String? = text ?: hintText ?: contentDescription
+
+    companion object {
+      /** Properties safe to use in recorded selectors. */
+      val MATCHABLE_PROPERTIES: Set<String> = setOf(
+        "className", "resourceId", "tag",
+        "text", "contentDescription", "hintText", "stateDescription", "errorText",
+        "isEnabled", "isClickable", "isChecked", "isSelected", "isFocused",
+        "isEditable", "isPassword", "inputType",
+        "accessibilityClassName", "collectionItemRowIndex", "collectionItemColumnIndex",
+      )
+    }
+  }
+
+  // ---------------------------------------------------------------------------
   // Android via Maestro's TreeNode (existing Maestro-based path)
   // ---------------------------------------------------------------------------
 
@@ -762,6 +964,10 @@ sealed interface DriverNodeDetail {
    * Compose uses a semantic property system rather than traditional view attributes.
    * [testTag] is the primary developer-assigned identifier, and [role] provides
    * the semantic element type.
+   *
+   * Emitted by more than one driver (the desktop Compose driver's `ComposeSemanticTreeMapper` and
+   * the in-process Android test driver), so every field must be optional or defaulted: a producer
+   * that cannot see a property leaves it at its default rather than forcing a fork of the shape.
    */
   @Serializable
   @SerialName("compose")
@@ -786,10 +992,91 @@ sealed interface DriverNodeDetail {
     val isSelected: Boolean = false,
     /** **Matchable.** Whether this is a password input. */
     val isPassword: Boolean = false,
+
+    // --- Matchable: semantics beyond the original 10 ---
+
+    /**
+     * Row index of this item within its `LazyColumn`/`LazyRow`/grid, from
+     * `SemanticsProperties.CollectionItemInfo`. Null when the node is not a collection item.
+     *
+     * **Matchable.** The list disambiguator: "the 3rd row" survives layout changes that break a
+     * positional [TrailblazeNodeSelector.index].
+     */
+    val collectionItemRowIndex: Int? = null,
+
+    /** **Matchable.** Column index within a collection. See [collectionItemRowIndex]. */
+    val collectionItemColumnIndex: Int? = null,
+
+    /**
+     * `SemanticsProperties.StateDescription` — app-authored state text ("Expanded", "3 of 10").
+     *
+     * **Matchable.** Often the only semantic handle on a custom control.
+     */
+    val stateDescription: String? = null,
+
+    /** **Matchable.** `SemanticsProperties.Heading` — a structural heading. */
+    val isHeading: Boolean = false,
+
+    /** **Matchable.** `SemanticsProperties.PaneTitle` — title of a dialog or sheet. */
+    val paneTitle: String? = null,
+
+    /**
+     * **Matchable.** `SemanticsProperties.IsDialog`. Makes "inside the dialog" expressible as a
+     * `childOf` anchor rather than a guess about layout.
+     */
+    val isDialog: Boolean = false,
+
+    /** **Matchable.** `SemanticsProperties.IsPopup` — dropdowns, tooltips, menus. */
+    val isPopup: Boolean = false,
+
+    /** **Matchable.** `SemanticsProperties.Error` — the inline validation message. */
+    val errorText: String? = null,
+
+    /**
+     * **Matchable.** Whether the node has `SemanticsActions.SetText`, i.e. it accepts typed text.
+     * The Compose analogue of [AndroidAccessibility.isEditable], and what `androidTest_type` uses
+     * to decide whether a resolved node can take the text or whether it must ascend to an
+     * ancestor that can.
+     */
+    val hasSetTextAction: Boolean = false,
+
+    /**
+     * **Matchable.** The class name Compose's own accessibility delegate publishes for this node —
+     * `android.view.View` for a plain semantics node, upgraded to `android.widget.Button`,
+     * `android.widget.TextView`, `android.widget.EditText` and friends by role and content.
+     *
+     * A semantics node has no runtime class, so this is a PROJECTION rather than a fact about the
+     * node, and it exists for one reason: a canonical selector recorded against the accessibility
+     * tree names the projected class, never a Compose concept. Without it every `classNameRegex`
+     * recorded on a Compose surface is unanswerable here — and since Compose publishes
+     * `android.view.View` for anything unremarkable, that is a very common recorded shape (cases
+     * 5380716 and 5380717 select a Settings row as `android.view.View` plus an index).
+     *
+     * Null on a tree whose collector projects nothing; the bridge declines `classNameRegex` there
+     * rather than matching everything.
+     */
+    val accessibilityClassName: String? = null,
+
+    // --- Display-only ---
+
     /** **Display-only.** Whether the element has a click action (implementation detail). */
     val hasClickAction: Boolean = false,
     /** **Display-only.** Whether the element has a scroll action (implementation detail). */
     val hasScrollAction: Boolean = false,
+    /** **Display-only.** Whether the element has a long-click action. */
+    val hasLongClickAction: Boolean = false,
+    /** **Display-only.** Current value from `ProgressBarRangeInfo`. Mutable by definition. */
+    val progressValue: Float? = null,
+    /** **Display-only.** Upper bound of `ProgressBarRangeInfo`. */
+    val progressMax: Float? = null,
+    /** **Display-only.** Current vertical scroll offset. */
+    val verticalScrollValue: Float? = null,
+    /** **Display-only.** Maximum vertical scroll offset. */
+    val verticalScrollMax: Float? = null,
+    /** **Display-only.** Current horizontal scroll offset. */
+    val horizontalScrollValue: Float? = null,
+    /** **Display-only.** Maximum horizontal scroll offset. */
+    val horizontalScrollMax: Float? = null,
   ) : DriverNodeDetail {
 
     override val matchablePropertyNames: Set<String>
@@ -804,7 +1091,7 @@ sealed interface DriverNodeDetail {
           !contentDescription.isNullOrBlank()
 
     override val isInteractive: Boolean
-      get() = hasClickAction || hasScrollAction
+      get() = hasClickAction || hasScrollAction || hasLongClickAction || hasSetTextAction
 
     /** Resolves text priority: editableText > text > contentDescription. */
     fun resolveText(): String? = editableText ?: text ?: contentDescription
@@ -813,6 +1100,9 @@ sealed interface DriverNodeDetail {
       val MATCHABLE_PROPERTIES: Set<String> = setOf(
         "testTag", "role", "text", "editableText", "contentDescription",
         "toggleableState", "isEnabled", "isFocused", "isSelected", "isPassword",
+        "collectionItemRowIndex", "collectionItemColumnIndex", "stateDescription",
+        "isHeading", "paneTitle", "isDialog", "isPopup", "errorText", "hasSetTextAction",
+        "accessibilityClassName",
       )
     }
   }

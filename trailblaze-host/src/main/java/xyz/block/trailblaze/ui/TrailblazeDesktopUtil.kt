@@ -115,6 +115,14 @@ object TrailblazeDesktopUtil {
   const val SCRIPTED_BUNDLES_CACHE_SUBDIR: String = "cache/scripted-bundles"
 
   /**
+   * App-data-relative directory holding the framework's own extract of the TypeScript SDK, for
+   * callers that must resolve `@trailblaze/scripting` with no workspace extract to borrow (see
+   * `WorkspaceTypeScriptSetup.frameworkSdkRuntimeEntry`). A couple of MB, rewritten only when the
+   * framework's SDK changes; `rm -rf $HOME/.trailblaze/cache/sdk` is safe, the next run re-extracts.
+   */
+  const val SDK_CACHE_SUBDIR: String = "cache/sdk"
+
+  /**
    * Gets the default app data directory path.
    * @return The default app data directory: ~/.trailblaze
    */
@@ -190,10 +198,52 @@ object TrailblazeDesktopUtil {
   /**
    * Gets the effective logs directory based on the app config.
    * @param appConfig The current app configuration
-   * @return The effective logs directory (configured or default relative to app data directory)
+   * @return The effective logs directory (configured, or [defaultLogsDirectory])
    */
   fun getEffectiveLogsDirectory(appConfig: TrailblazeServerState.SavedTrailblazeAppConfig): String {
-    return appConfig.logsDirectory ?: "${getEffectiveAppDataDirectory(appConfig)}/logs"
+    return appConfig.logsDirectory ?: defaultLogsDirectory(appConfig)
+  }
+
+  /**
+   * Where session logs live when nobody has said otherwise:
+   *
+   *  - **Machine-global state dir** (`~/.trailblaze`, or `$TRAILBLAZE_HOME`): inside it, at
+   *    `~/.trailblaze/logs`. That is the location the getting-started docs publish, and an
+   *    installed binary has no repo to put a `logs/` directory next to — the sibling would be a
+   *    bare `~/logs`.
+   *  - **Anything else**, i.e. a repo-local `<git root>/.trailblaze`: beside it, at
+   *    `<git root>/logs`. This is the layout the rest of the system already assumes — a workspace
+   *    switch lays down `<workspace>/logs` next to `<workspace>/.trailblaze`, and
+   *    `HostTrailblazeLoggingRule.resolveLogsDir` defaults to `<git root>/logs`.
+   *
+   * This is the single definition every config-driven caller now shares. Three had grown up
+   * independently and no two agreed: this object's fallback was always the child (so a checkout
+   * resolved `<git root>/.trailblaze/logs`, which no recording generator would ever look in),
+   * `CliConfigHelper` always wrote the sibling (so an installed binary resolved `~/logs`, which
+   * the docs never mention), and `HostTrailblazeLoggingRule.resolveLogsDir` branched on the git
+   * root to get the pair above. That rule stays separate because it deliberately answers without
+   * an app config, but it is the behavior this reproduces.
+   *
+   * Only *derivations* change, never a persisted value: a settings file that already carries a
+   * materialized `logsDirectory` keeps it (see `CliConfigHelper.hydrateDefaults`).
+   */
+  fun defaultLogsDirectory(appConfig: TrailblazeServerState.SavedTrailblazeAppConfig): String =
+    defaultLogsDirectory(File(getEffectiveAppDataDirectory(appConfig)))
+
+  /**
+   * @param globalStateDir the machine-global state dir to compare against. Injectable because the
+   *   real one comes from `$TRAILBLAZE_HOME` / `user.home`, which a test cannot move.
+   */
+  fun defaultLogsDirectory(
+    appDataDir: File,
+    globalStateDir: File = getDefaultAppDataDirectory(),
+  ): String {
+    val canonical = appDataDir.canonicalFile
+    if (canonical == globalStateDir.canonicalFile) {
+      return File(canonical, "logs").canonicalPath
+    }
+    val root = canonical.parentFile ?: canonical
+    return File(root, "logs").canonicalPath
   }
 
   /**

@@ -182,6 +182,25 @@ class CliRunDeviceResolverTest {
   }
 
   @Test
+  fun `the device id an electron session reports resolves back to the electron device`() {
+    // What a "retry on the same device" replays is the recorded session's `deviceInstanceId`. It
+    // must be the id discovery advertises, not the per-session `playwright-electron-<hex>` the
+    // Electron runner mints for capture-registry keys — that one matches nothing, and the run
+    // silently lands on the native browser instead.
+    assertEquals(
+      CliRunDeviceResolution.Selected(webElectron),
+      resolve(listOf(web, webElectron), deviceId = "playwright-electron", trailPlatforms = WEB_ONLY),
+    )
+    assertIs<CliRunDeviceResolution.NoMatch>(
+      resolve(
+        listOf(web, webElectron),
+        deviceId = "playwright-electron-94372894",
+        trailPlatforms = WEB_ONLY,
+      ),
+    )
+  }
+
+  @Test
   fun `an explicit device id that matches nothing is an error`() {
     assertIs<CliRunDeviceResolution.NoMatch>(
       resolve(listOf(androidA), deviceId = "android/emulator-9999"),

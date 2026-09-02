@@ -5,11 +5,27 @@
     "(1) fileNames — how a file name maps to a stream name (including the legacy `.json` style-segment",
     "strip), implemented by Kotlin `SessionEvents.parseFileName` and TS `parseStreamFileName`;",
     "(2) lines — how one NDJSON line decodes to an ordering timestamp + payload (the `{timeMs, data}`",
-    "envelope rule), implemented by the Kotlin `SessionEventsReader` and TS `decodeEventLine`.",
-    "Consumed by SessionEventsParityFixturesTest (Kotlin) and run-report-events.test.ts (TS).",
+    "envelope rule), implemented by the Kotlin `SessionEventsReader` and TS `decodeEventLine`;",
+    "(3) attachments — which embedded objects a decoded payload's sweep reports as attachment refs",
+    "(the `\"$attachment\": true` exact-dispatch contract), implemented by Kotlin",
+    "`AttachmentRef.findAll` and TS `findAttachmentRefs`;",
+    "(4) safePaths — which attachment paths stay inside the session directory, implemented by TS",
+    "`isSafeSessionRelativePath` and the CI uploader's `_is_safe_session_relative`. Those two must",
+    "accept the SAME set: the report links every path it accepts, so a path the uploader alone",
+    "rejects ships a green build whose link 404s.",
+    "Consumed by SessionEventsParityFixturesTest (Kotlin), run-report-events.test.ts (TS) and",
+    "test_session_attachment_artifacts.py (the CI uploader). Kotlin reads only the sections it",
+    "implements.",
     "In `lines`, `payload: null` means the line is skipped entirely; `t: null` means the line carries",
-    "no ordering timestamp (the JVM reader represents that as 0). To change either rule: update both",
-    "implementations AND this fixture in the same change — never one language's tests alone."
+    "no ordering timestamp (the JVM reader represents that as 0). In `attachments`, `refs` is the",
+    "exact expected sweep result in document order, `label: null` meaning absent. ACCEPTED `sizeBytes`",
+    "values here stay inside the range BOTH languages represent exactly (|n| < 2^53): above it JS has",
+    "already rounded in `JSON.parse` before either rule runs, which is a property of the wire in JS",
+    "and not a difference in the contract, so it is not something a shared fixture can pin. A size at",
+    "or past 2^63 IS pinned, as a rejection: both languages refuse it rather than clamp, because it",
+    "cannot be the contract's Long. To change",
+    "any rule: update both implementations AND this fixture in the same change — never one",
+    "language's tests alone."
   ],
   "fileNames": [
     { "file": "com.example.plugin.network.ndjson", "name": "com.example.plugin.network" },
@@ -28,5 +44,101 @@
     { "line": "{\"data\":{\"x\":1}}", "t": null, "payload": { "data": { "x": 1 } } },
     { "line": "not json", "t": null, "payload": null },
     { "line": "\"just a string\"", "t": null, "payload": null }
+  ],
+  "attachments": [
+    {
+      "value": { "$attachment": true, "path": "attachments/utterance_1.wav", "mimeType": "audio/wav", "sizeBytes": 16044, "label": "hello", "producer": "speech" },
+      "refs": [{ "path": "attachments/utterance_1.wav", "mimeType": "audio/wav", "sizeBytes": 16044, "label": "hello" }]
+    },
+    {
+      "value": { "$attachment": true, "path": "attachments/frame.png", "mimeType": "image/png", "sizeBytes": 10 },
+      "refs": [{ "path": "attachments/frame.png", "mimeType": "image/png", "sizeBytes": 10, "label": null }]
+    },
+    {
+      "value": { "$attachment": true, "path": "attachments/frame.png", "mimeType": "image/png", "sizeBytes": 10, "label": 7 },
+      "refs": [{ "path": "attachments/frame.png", "mimeType": "image/png", "sizeBytes": 10, "label": null }]
+    },
+    {
+      "value": { "$attachment": true, "path": "a.wav", "mimeType": "audio/wav", "sizeBytes": 5.9 },
+      "refs": [{ "path": "a.wav", "mimeType": "audio/wav", "sizeBytes": 5, "label": null }]
+    },
+    {
+      "value": { "$attachment": true, "path": "a.wav", "mimeType": "audio/wav", "sizeBytes": -1 },
+      "refs": []
+    },
+    {
+      "value": { "$attachment": true, "path": "a.wav", "mimeType": "audio/wav", "sizeBytes": -0.5 },
+      "refs": []
+    },
+    {
+      "value": { "$attachment": true, "path": "a.wav", "mimeType": "audio/wav", "sizeBytes": 1e19 },
+      "refs": []
+    },
+    {
+      "value": { "path": "a.wav", "mimeType": "audio/wav", "sizeBytes": 3 },
+      "refs": []
+    },
+    {
+      "value": { "$attachment": "true", "path": "a.wav", "mimeType": "audio/wav", "sizeBytes": 3 },
+      "refs": []
+    },
+    {
+      "value": { "$attachment": false, "path": "a.wav", "mimeType": "audio/wav", "sizeBytes": 3 },
+      "refs": []
+    },
+    {
+      "value": { "$attachment": 1, "path": "a.wav", "mimeType": "audio/wav", "sizeBytes": 3 },
+      "refs": []
+    },
+    {
+      "value": { "$attachment": true, "path": "a.wav", "mimeType": "audio/wav", "sizeBytes": "3" },
+      "refs": []
+    },
+    {
+      "value": { "$attachment": true, "path": 5, "mimeType": "audio/wav", "sizeBytes": 3 },
+      "refs": []
+    },
+    {
+      "value": { "$attachment": true, "path": "a.wav", "sizeBytes": 3 },
+      "refs": []
+    },
+    {
+      "value": {
+        "text": "two refs, nested at different depths, reported in document order",
+        "a": [{ "$attachment": true, "path": "attachments/1.wav", "mimeType": "audio/wav", "sizeBytes": 1 }],
+        "b": { "c": { "$attachment": true, "path": "attachments/2.png", "mimeType": "image/png", "sizeBytes": 2 } }
+      },
+      "refs": [
+        { "path": "attachments/1.wav", "mimeType": "audio/wav", "sizeBytes": 1, "label": null },
+        { "path": "attachments/2.png", "mimeType": "image/png", "sizeBytes": 2, "label": null }
+      ]
+    },
+    {
+      "value": { "$attachment": true, "path": "outer.wav", "mimeType": "audio/wav", "sizeBytes": 1, "inner": { "$attachment": true, "path": "inner.wav", "mimeType": "audio/wav", "sizeBytes": 2 } },
+      "refs": [{ "path": "outer.wav", "mimeType": "audio/wav", "sizeBytes": 1, "label": null }]
+    },
+    {
+      "value": { "$attachment": true, "path": "malformed-so-descend.wav", "inner": { "$attachment": true, "path": "inner.wav", "mimeType": "audio/wav", "sizeBytes": 2 } },
+      "refs": [{ "path": "inner.wav", "mimeType": "audio/wav", "sizeBytes": 2, "label": null }]
+    }
+  ],
+  "safePaths": [
+    { "path": "attachments/utterance_1.wav", "safe": true },
+    { "path": "media/take-1.wav", "safe": true },
+    { "path": "take.wav", "safe": true },
+    { "path": "a b/c(1)!'.wav", "safe": true },
+    { "path": "~take.wav", "safe": true, "why": "a leading tilde is an ordinary file-name character; nothing on either path expands it" },
+    { "path": "a/~/b.wav", "safe": true },
+    { "path": "...wav", "safe": true, "why": "dots only matter as a WHOLE segment" },
+    { "path": "", "safe": false },
+    { "path": "/abs/take.wav", "safe": false },
+    { "path": "../escape.wav", "safe": false },
+    { "path": "a/../b.wav", "safe": false },
+    { "path": "./a.wav", "safe": false },
+    { "path": "a/./b.wav", "safe": false },
+    { "path": "a//b.wav", "safe": false },
+    { "path": "attachments/", "safe": false },
+    { "path": "a\\b.wav", "safe": false },
+    { "path": "a\u0000b.wav", "safe": false }
   ]
 }

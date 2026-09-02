@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.docs
 
 import java.io.File
+import xyz.block.trailblaze.config.DriverTypeKey
 import xyz.block.trailblaze.config.ToolNameResolver
 import xyz.block.trailblaze.config.ToolSetYamlLoader
 import xyz.block.trailblaze.config.project.TrailblazeProjectConfigLoader
@@ -446,14 +447,23 @@ class ExternalConfigDocsGenerator(
   }
 
   private fun platformAndDriverRows(): List<Pair<String, String>> {
+    // Derive every expansion from DriverTypeKey — the same resolver toolset YAML
+    // uses at runtime — so this table can never drift from actual behavior (it
+    // did once: a hand-rolled filter here advertised shorthand members the
+    // resolver deliberately excludes, like `android-test`).
     val rows = mutableListOf<Pair<String, String>>()
     TrailblazeDevicePlatform.entries.forEach { platform ->
-      val drivers = TrailblazeDriverType.entries
-        .filter { it.platform == platform && !it.yamlKey.startsWith("revyl-") }
-        .joinToString(", ") { "`${it.yamlKey}`" }
-      rows += platform.name.lowercase() to drivers
+      val key = platform.name.lowercase()
+      if (DriverTypeKey.isKnown(key)) {
+        val drivers = TrailblazeDriverType.entries
+          .filter { it in DriverTypeKey.resolve(key) }
+          .joinToString(", ") { "`${it.yamlKey}`" }
+        rows += key to drivers
+      }
     }
-    rows += "all" to TrailblazeDriverType.entries.joinToString(", ") { "`${it.yamlKey}`" }
+    rows += "all" to TrailblazeDriverType.entries
+      .filter { it in DriverTypeKey.resolve("all") }
+      .joinToString(", ") { "`${it.yamlKey}`" }
     TrailblazeDriverType.entries.forEach { driver ->
       rows += driver.yamlKey to "specific `${driver.platform.displayName}` driver"
     }

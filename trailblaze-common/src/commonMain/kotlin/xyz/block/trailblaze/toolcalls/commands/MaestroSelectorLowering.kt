@@ -21,10 +21,17 @@ import xyz.block.trailblaze.util.Console
  * would silently match an arbitrary element rather than failing — surface that loudly here so
  * authoring mistakes are caught at execution time with a clear diagnostic instead of a
  * mis-targeted test.
+ *
+ * Also throws for an `androidView` selector, which the blank guard alone would not catch: its
+ * `textRegex`/`resourceIdRegex` DO map, so it lowers non-blank and then matches leniently against
+ * a tree it was never authored for. See [ANDROID_VIEW_LOWERING_REFUSAL].
  */
 internal fun lowerToMaestroSelector(
   nodeSelector: TrailblazeNodeSelector?,
 ): TrailblazeElementSelector? {
+  nodeSelector?.androidView?.let { androidView ->
+    error("$ANDROID_VIEW_LOWERING_REFUSAL\n\nnodeSelector=${androidView.description()}")
+  }
   val lowered = nodeSelector?.toTrailblazeElementSelector() ?: return null
   if (lowered.isBlank()) {
     error(
@@ -44,6 +51,24 @@ internal fun lowerToMaestroSelector(
   }
   return lowered
 }
+
+/**
+ * Why an `androidView` selector never lowers to Maestro.
+ *
+ * It is authored against a live `android.view.View` tree with strict case-sensitive matching and
+ * View-only fields (`tag`, the un-sanitized `className`). Lowering drops those and re-matches
+ * what survives leniently against UiAutomator's accessibility projection — a different tree — so
+ * the result is a miss or a different element. For an assertion that is worse than a tap: a
+ * lenient re-match on the wrong tree reads as a pass.
+ *
+ * Reaching a lowering call at all means no in-process agent resolved the selector, and there is no
+ * correct fallback to offer.
+ */
+internal const val ANDROID_VIEW_LOWERING_REFUSAL: String =
+  "androidView recording cannot replay: this selector resolves only against a live " +
+    "android.view.View tree and no in-process Android test driver resolved it. Refusing Maestro " +
+    "fallback — it would re-match a different tree. Check that the run is using the in-process " +
+    "Android test driver."
 
 /**
  * Picks the [TrailblazeNodeSelector] to record for a tool whose replay may dispatch through

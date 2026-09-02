@@ -154,11 +154,7 @@ if [ ! -f "${REPO_ROOT}/local.properties" ]; then
 fi
 
 # `TRAILBLAZE_GRADLE_EXTRA_ARGS` lets the caller layer in extra Gradle flags without
-# editing this script. The CI prebuild step in `.github/workflows/pr-checks.yml`
-# (and siblings) uses it to pass `-Ptrailblaze.wasm=true`, so the downstream test
-# jobs consume an uber JAR with the WASM report template already embedded —
-# matching the internal repo's build-uber-jar pattern. Unset by default, so local
-# dev builds keep the gradle.properties default of `trailblaze.wasm=false`.
+# editing this script. Unset by default.
 # Word-splitting is intentional so callers can pass multiple flags.
 # shellcheck disable=SC2086
 ./gradlew "${TRAILBLAZE_MODULE}:releaseArtifacts" --stacktrace \

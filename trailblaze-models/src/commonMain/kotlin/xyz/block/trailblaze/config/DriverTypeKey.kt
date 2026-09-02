@@ -17,10 +17,18 @@ import xyz.block.trailblaze.devices.TrailblazeDriverType
  */
 object DriverTypeKey {
 
-  /** Revyl drivers are cloud-hosted and excluded from platform-level shorthands. */
-  private val REVYL_DRIVERS = setOf(
+  /**
+   * Drivers excluded from platform-level shorthands:
+   * - Revyl drivers are cloud-hosted and must be referenced explicitly via
+   *   "revyl-android" / "revyl-ios".
+   * - ANDROID_TEST runs in-process inside the instrumentation runner; toolsets
+   *   authored for host-driven Android drivers (Maestro/accessibility tools)
+   *   cannot execute there, so it must be referenced explicitly via "android-test".
+   */
+  private val SHORTHAND_EXCLUDED_DRIVERS = setOf(
     TrailblazeDriverType.REVYL_ANDROID,
     TrailblazeDriverType.REVYL_IOS,
+    TrailblazeDriverType.ANDROID_TEST,
   )
 
   private val KEY_MAP: Map<String, Set<TrailblazeDriverType>> = buildMap {
@@ -33,7 +41,7 @@ object DriverTypeKey {
     // excluding Revyl (cloud-hosted) drivers.
     for (platform in TrailblazeDevicePlatform.entries) {
       val drivers = TrailblazeDriverType.entries
-        .filter { it.platform == platform && it !in REVYL_DRIVERS }
+        .filter { it.platform == platform && it !in SHORTHAND_EXCLUDED_DRIVERS }
         .toSet()
       if (drivers.isNotEmpty()) {
         put(platform.name.lowercase(), drivers)

@@ -13,6 +13,7 @@ import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
 import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetScreenStateRequest
+import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetScreenStateResponse
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.OnDeviceRpcClient
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcResult
 import xyz.block.trailblaze.mcp.utils.RpcScreenStateAdapter
@@ -72,6 +73,13 @@ class HostAccessibilityRpcClient(
    * change one, audit the other.
    */
   private val reWarmPollIntervalMs: Long = 500L,
+  /**
+   * Called with every screen state this device reports, so a caller holding a start-of-session
+   * snapshot of the device's size can keep it current. Same contract as the knob of the same name
+   * on [HostOnDeviceRpcTrailblazeAgent] — see [xyz.block.trailblaze.host.devices.HostDeviceProfile]
+   * for why a snapshot goes stale.
+   */
+  private val onScreenStateObserved: (GetScreenStateResponse) -> Unit = {},
 ) : UiActionExecutor, AutoCloseable {
 
   private val trailblazeYaml = createTrailblazeYaml()
@@ -400,11 +408,17 @@ class HostAccessibilityRpcClient(
    * from warm to cold mid-session (app/service restart, transient network blip). In that case
    * we re-run the readiness probe once and retry the capture — no blanket retry loop.
    */
+  /** [RpcScreenStateAdapter.from], plus the size report every response carries. */
+  private fun adaptScreenState(data: GetScreenStateResponse): ScreenState {
+    onScreenStateObserved(data)
+    return RpcScreenStateAdapter.from(data)
+  }
+
   override suspend fun captureScreenState(): ScreenState? {
     val request = GetScreenStateRequest()
       .withScreenshotScalingConfig(EffectiveScreenshotScalingConfig.effective)
     when (val first = rpcClient.rpcCall(request)) {
-      is RpcResult.Success -> return RpcScreenStateAdapter.from(first.data)
+      is RpcResult.Success -> return adaptScreenState(first.data)
       is RpcResult.Failure -> {
         Console.log(
           "[HostAccessibilityRpcClient] GetScreenState ${first.errorType}: ${first.message}" +
@@ -427,7 +441,7 @@ class HostAccessibilityRpcClient(
       return null
     }
     return when (val retry = rpcClient.rpcCall(request)) {
-      is RpcResult.Success -> RpcScreenStateAdapter.from(retry.data)
+      is RpcResult.Success -> adaptScreenState(retry.data)
       is RpcResult.Failure -> {
         Console.log(
           "[HostAccessibilityRpcClient] GetScreenState retry after re-warm still failed " +

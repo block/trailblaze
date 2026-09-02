@@ -11,6 +11,13 @@ import kotlin.test.assertEquals
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import xyz.block.trailblaze.tracing.TraceLevel
+import xyz.block.trailblaze.tracing.TrailblazeTracer
 
 /**
  * Pins the deadlock-prevention logic in [PlaywrightThreadBridge]. The fix matters
@@ -117,6 +124,37 @@ class PlaywrightThreadBridgeTest {
     }.get(2, TimeUnit.SECONDS)
     assertSame(playwrightThread, onThread.first)
     assertEquals("captured", onThread.second)
+  }
+
+  @Test
+  fun `a span opened across the bridge is a child of the caller's span`() {
+    // The bridge is a thread change, and synchronous trace parentage is per-thread. Without the
+    // span riding along, everything the Playwright driver records lands as a root and the profiler
+    // draws its work beside the tool call that caused it instead of inside it.
+    val incomingLevel = TrailblazeTracer.level
+    TrailblazeTracer.clear()
+    TrailblazeTracer.level = TraceLevel.NORMAL
+    try {
+      TrailblazeTracer.trace("dispatchTool") {
+        PlaywrightThreadBridge.runOnPlaywrightThread(
+          currentThread = Thread.currentThread(),
+          playwrightThread = playwrightThread,
+          dispatcher = dispatcher,
+        ) {
+          runBlocking { TrailblazeTracer.traceSuspend("executePlaywrightTool") { } }
+        }
+      }
+
+      val events = Json.parseToJsonElement(TrailblazeTracer.exportJson()).jsonArray.map { it.jsonObject }
+      fun span(name: String) = events.single { it["name"]?.jsonPrimitive?.content == name }
+      assertEquals(
+        span("dispatchTool")["sid"]?.jsonPrimitive?.content,
+        span("executePlaywrightTool")["psid"]?.jsonPrimitive?.content,
+      )
+    } finally {
+      TrailblazeTracer.level = incomingLevel
+      TrailblazeTracer.clear()
+    }
   }
 
   @Test

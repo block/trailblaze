@@ -154,6 +154,12 @@ data class TapOnByElementSelector(
    * [nodeSelector] through [TrailblazeNodeSelector.toTrailblazeElementSelector] so the Maestro
    * orchestra resolves it. Fails loudly when [nodeSelector] isn't set — that's a malformed
    * recording.
+   *
+   * An `androidView` selector fails loudly rather than lowering, for the reason recorded on
+   * [ANDROID_VIEW_LOWERING_REFUSAL]. [lowerToMaestroSelector] refuses it too, so every
+   * selector-based tool is covered; catching it here first turns what would be a thrown
+   * [IllegalStateException] into a tool result, and covers FORCE_LEGACY, which would otherwise
+   * lower without ever consulting an agent.
    */
   private suspend fun runMaestroFallbackOrFail(
     toolExecutionContext: TrailblazeToolExecutionContext,
@@ -162,6 +168,13 @@ data class TapOnByElementSelector(
       val message = "tapOnElementBySelector: `nodeSelector` is not set on this recording. " +
         "Cannot resolve a tap target."
       Console.log("### tap (no fallback): $message")
+      return TrailblazeToolResult.Error.ExceptionThrown(errorMessage = message)
+    }
+    if (nodeSelector.androidView != null) {
+      val message = ANDROID_VIEW_LOWERING_REFUSAL
+      Console.log(
+        "### tap (androidView): $message — selector=${nodeSelector.driverMatch?.description() ?: "?"}",
+      )
       return TrailblazeToolResult.Error.ExceptionThrown(errorMessage = message)
     }
     return super.execute(toolExecutionContext)

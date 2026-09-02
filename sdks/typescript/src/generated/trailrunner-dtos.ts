@@ -322,7 +322,7 @@ export interface Document {
   class: "ai.koog.prompt.llm.LLMCapability.Document";
 }
 
-export type DriverNodeDetail = androidAccessibility | androidMaestro | compose | iosAxe | iosMaestro | web;
+export type DriverNodeDetail = androidAccessibility | androidMaestro | androidView | compose | iosAxe | iosMaestro | web;
 
 export interface EditedTrailsResponse {
   paths: string[];
@@ -1167,6 +1167,7 @@ export interface SessionSummary {
   timestampMs: number;
   platform?: string | null;
   device?: string | null;
+  deviceInstanceId?: string | null;
   target?: string | null;
   appId?: string | null;
   appVersionName?: string | null;
@@ -1536,6 +1537,7 @@ export interface TrailblazeDeviceInfo {
   locale?: string | null;
   classifiers?: string[];
   orientation?: TrailblazeDeviceOrientation;
+  advertisedInstanceId?: string | null;
   platform?: TrailblazeDevicePlatform;
 }
 
@@ -1543,7 +1545,7 @@ export type TrailblazeDeviceOrientation = "PORTRAIT" | "LANDSCAPE";
 
 export type TrailblazeDevicePlatform = "ANDROID" | "IOS" | "WEB" | "DESKTOP";
 
-export type TrailblazeDriverType = "ANDROID_ONDEVICE_ACCESSIBILITY" | "ANDROID_ONDEVICE_INSTRUMENTATION" | "IOS_HOST" | "IOS_AXE" | "PLAYWRIGHT_NATIVE" | "PLAYWRIGHT_ELECTRON" | "REVYL_ANDROID" | "REVYL_IOS" | "COMPOSE";
+export type TrailblazeDriverType = "ANDROID_ONDEVICE_ACCESSIBILITY" | "ANDROID_ONDEVICE_INSTRUMENTATION" | "ANDROID_TEST" | "IOS_HOST" | "IOS_AXE" | "PLAYWRIGHT_NATIVE" | "PLAYWRIGHT_ELECTRON" | "REVYL_ANDROID" | "REVYL_IOS" | "COMPOSE";
 
 export type TrailblazeImageFormat = "PNG" | "JPEG" | "WEBP";
 
@@ -1681,6 +1683,7 @@ export interface TrailblazeToolLog {
   isVerification?: boolean;
   dispatchedHostSide?: boolean;
   rawTrailblazeTool?: OtherTrailblazeTool | null;
+  deviceName?: string | null;
 }
 
 export interface TrailblazeToolParameterDescriptor {
@@ -1879,6 +1882,33 @@ export interface androidMaestro {
   password?: boolean;
 }
 
+export interface androidView {
+  class: "androidView";
+  className?: string | null;
+  resourceId?: string | null;
+  tag?: string | null;
+  text?: string | null;
+  contentDescription?: string | null;
+  hintText?: string | null;
+  stateDescription?: string | null;
+  errorText?: string | null;
+  isEnabled?: boolean;
+  isClickable?: boolean;
+  isChecked?: boolean | null;
+  isSelected?: boolean;
+  isFocused?: boolean;
+  isEditable?: boolean;
+  isPassword?: boolean;
+  inputType?: number;
+  isFocusable?: boolean;
+  isScrollable?: boolean;
+  alpha?: number;
+  isShown?: boolean;
+  accessibilityClassName?: string | null;
+  collectionItemRowIndex?: number | null;
+  collectionItemColumnIndex?: number | null;
+}
+
 export interface compose {
   class: "compose";
   testTag?: string | null;
@@ -1891,8 +1921,25 @@ export interface compose {
   isFocused?: boolean;
   isSelected?: boolean;
   isPassword?: boolean;
+  collectionItemRowIndex?: number | null;
+  collectionItemColumnIndex?: number | null;
+  stateDescription?: string | null;
+  isHeading?: boolean;
+  paneTitle?: string | null;
+  isDialog?: boolean;
+  isPopup?: boolean;
+  errorText?: string | null;
+  hasSetTextAction?: boolean;
+  accessibilityClassName?: string | null;
   hasClickAction?: boolean;
   hasScrollAction?: boolean;
+  hasLongClickAction?: boolean;
+  progressValue?: number | null;
+  progressMax?: number | null;
+  verticalScrollValue?: number | null;
+  verticalScrollMax?: number | null;
+  horizontalScrollValue?: number | null;
+  horizontalScrollMax?: number | null;
 }
 
 export interface iosAxe {

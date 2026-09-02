@@ -5,7 +5,8 @@ config:
     scrolling. Exercises the model's ability to scroll inside a specific
     container (not the page) until a target item comes into view.
   devices:
-    web: PLAYWRIGHT_NATIVE
+    web:
+      driver: PLAYWRIGHT_NATIVE
   title: 'LLM Benchmark: Scroll-within-container to find an offscreen item'
 
 trail:

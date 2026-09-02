@@ -19,6 +19,7 @@ import xyz.block.trailblaze.capture.video.WebScreencastFeedRegistry
 import xyz.block.trailblaze.playwright.recording.PlaywrightScreencastFeed
 import xyz.block.trailblaze.tracing.CompleteEvent
 import xyz.block.trailblaze.tracing.PlatformIds
+import xyz.block.trailblaze.tracing.SpanKind
 import xyz.block.trailblaze.tracing.TrailblazeTracer
 import xyz.block.trailblaze.util.Console
 import java.io.File
@@ -177,8 +178,10 @@ class PlaywrightBrowserManager(
    * coroutines resume on different threads after suspend points (e.g., LLM calls on
    * [kotlinx.coroutines.Dispatchers.IO]).
    *
-   * Use [playwrightDispatcher] with `withContext` to ensure agent loop code runs on
-   * the correct thread after suspending for LLM calls.
+   * Bridge individual Playwright touches through [onPlaywrightThread]. Do NOT run agent-loop
+   * or trail-loop code under this dispatcher: tool dispatch blocks its thread for a tool's
+   * full runtime, and a host-local tool that composes a nested Playwright tool then deadlocks
+   * against the very thread its nested call needs.
    */
   private lateinit var playwrightThread: Thread
   private val playwrightExecutor: ExecutorService = Executors.newSingleThreadExecutor { runnable ->
@@ -676,10 +679,21 @@ class PlaywrightBrowserManager(
         pid = PlatformIds.pid(),
         tid = PlatformIds.tid(),
         args = buildMap {
+          // Async observation marker: this event is stamped from Playwright's completion
+          // callback, so its tid is the event-dispatcher thread every request shares — profile
+          // consumers must not nest these among other trace spans (see perf-extract.ts).
+          put("async", "true")
           put("resourceType", resourceType)
           put("status", status)
           if (isAnalytics) put("analytics", "true")
         },
+        // Addressable, but a root: this runs in Playwright's completion callback, which has no
+        // enclosing trace frame to read, and page-initiated network is not a child of whatever tool
+        // happened to be running.
+        sid = TrailblazeTracer.traceRecorder.newSpanId(),
+        // The caller's view of an outgoing request. Its SERVER counterpart is what the callee
+        // would record; nothing on the receiving side is instrumented yet.
+        kind = SpanKind.CLIENT,
       ).toJsonObject(),
     )
   }
@@ -691,8 +705,11 @@ class PlaywrightBrowserManager(
    * reserved for the next LLM-facing snapshot. This keeps logging independent from the
    * agent's detail request lifecycle.
    */
-  override fun captureScreenStateForLogging(): ScreenState {
-    return TrailblazeTracer.trace("captureScreenStateForLogging", "browser") {
+  // Self-bridged: capture callers arrive from arbitrary threads (the trail-loop thread,
+  // a multi-device routing thread, a `/scripting/callback` handler) and everything in here
+  // touches Page objects. On-thread callers run inline at no dispatch cost.
+  override fun captureScreenStateForLogging(): ScreenState = onPlaywrightThread {
+    TrailblazeTracer.trace("captureScreenStateForLogging", "browser") {
       PlaywrightScreenState(
         currentPage,
         resolvedViewport.width,
@@ -702,8 +719,12 @@ class PlaywrightBrowserManager(
     }
   }
 
-  /** Captures the current screen state from the active page. */
-  override fun getScreenState(): ScreenState = TrailblazeTracer.trace("getScreenState", "browser") {
+  /** Captures the current screen state from the active page. Self-bridged — see above. */
+  override fun getScreenState(): ScreenState = onPlaywrightThread {
+    getScreenStateOnThread()
+  }
+
+  private fun getScreenStateOnThread(): ScreenState = TrailblazeTracer.trace("getScreenState", "browser") {
     // Ensure the page is settled before capturing the snapshot.
     // This is critical for recorded playback where there's no AI recovery.
     waitForPageReady()

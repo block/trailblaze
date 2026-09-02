@@ -3,7 +3,8 @@
 config:
   target: wikipedia
   devices:
-    web: PLAYWRIGHT_NATIVE
+    web:
+      driver: PLAYWRIGHT_NATIVE
   title: 'Wikipedia (scripted): trailhead + search the header search box'
 
 trail:

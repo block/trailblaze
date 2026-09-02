@@ -15,6 +15,7 @@ import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionInfo
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.logs.model.isInProgress
+import xyz.block.trailblaze.report.SkippedTrails
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.reflect.KClass
@@ -223,7 +224,10 @@ class LogsRepo(
   private var sessionListWatcher: FileWatchService? = null
 
   fun getSessionDirs(): List<File> =
-    logsDir.listFiles()?.filter { it.isDirectory }?.sortedByDescending { it.name } ?: emptyList()
+    logsDir.listFiles()
+      ?.filter { it.isDirectory && it.name !in NON_SESSION_DIR_NAMES }
+      ?.sortedByDescending { it.name }
+      ?: emptyList()
 
   fun getSessionIds(): List<SessionId> = getSessionDirs().map { SessionId(it.name) }
 
@@ -934,6 +938,19 @@ class LogsRepo(
   }
 
   companion object {
+
+    /**
+     * Directories the logs dir holds that are not sessions: `RunReportGenerator`'s output and
+     * `SkippedTrails`' records. Both are written INTO the logs dir on purpose — a report belongs
+     * beside the sessions it describes, and a skip has no session directory of its own to live in —
+     * but a caller enumerating sessions must not be handed either.
+     *
+     * Without this, `LogsSummary.count` (the unfiltered map size) reports one more session than the
+     * summary lists rows for, and every report generator is asked for the logs of a directory that
+     * has none. Static because [getSessionDirs] runs during construction, before an instance
+     * property would be initialized.
+     */
+    private val NON_SESSION_DIR_NAMES = setOf("reports", SkippedTrails.DIR_NAME)
 
     /**
      * The typed-log file filter (the same one [readLogFilesFromDisk] applies), as a predicate

@@ -117,6 +117,47 @@ data class AppTargetYamlConfig(
    * binary-compatibility baselines for earlier fields stay stable.
    */
   val electron: xyz.block.trailblaze.yaml.ElectronAppConfig? = null,
+  /**
+   * The target's in-process instrumentation test APK for the
+   * [TrailblazeDriverType.ANDROID_TEST] driver — the same target-level per-driver launch shape
+   * as [electron]. Declares which installed test APK the host instruments to reach the
+   * in-process RPC server (`InProcessStandaloneServerTest` and kin). Null means this target has
+   * no in-process harness, and an ANDROID_TEST run against it fails with a clear message
+   * instead of instrumenting a runner that doesn't exist.
+   */
+  @SerialName("android_test") val androidTest: AndroidTestInstrumentationConfig? = null,
+  /**
+   * Lets an on-device session load its scripted-tool bundles from the runtime tool-bundle
+   * directory a host pushes to — `RuntimeToolSource.DEVICE_DIRECTORY` in `:trailblaze-quickjs-tools`,
+   * which this module cannot reference — instead of this APK's assets, so a host that drives the
+   * run can deliver tools matching the trails it is replaying rather than the ones baked in when
+   * the APK was built.
+   *
+   * Off by default, and deliberately a *config* field rather than a runtime flag: an in-process
+   * test APK is signed with the app under test's key, so this value ships inside the signature.
+   * What the signing team signed is what runs, and an APK handed back from a key ceremony cannot
+   * be turned into a way to execute unsigned code inside that app's process by whoever later holds
+   * the device. `trailblaze inprocess make-test-apk --allow-runtime-tool-source` is what writes it,
+   * before signing.
+   *
+   * Appended at the end so existing positional component accessors and binary-compatibility
+   * baselines for earlier fields stay stable.
+   */
+  @SerialName("allow_runtime_tool_source") val allowRuntimeToolSource: Boolean = false,
+)
+
+/**
+ * The in-process instrumentation harness for a [TrailblazeDriverType.ANDROID_TEST] target —
+ * see [AppTargetYamlConfig.androidTest]. Unlike the bundled accessibility runner, this APK is
+ * built and installed by the app's own build (farm step or local Gradle), never shipped inside
+ * the CLI binary, so the host instruments what's installed rather than installing anything.
+ */
+@Serializable
+data class AndroidTestInstrumentationConfig(
+  /** The test APK's application id, e.g. `xyz.block.trailblaze.uitests.myapp`. */
+  @SerialName("test_app_id") val testAppId: String,
+  /** Fully-qualified class name of the standalone RPC server test inside that APK. */
+  @SerialName("fq_test_name") val fqTestName: String,
 )
 
 /**

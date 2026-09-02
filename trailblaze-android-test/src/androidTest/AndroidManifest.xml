@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+          xmlns:tools="http://schemas.android.com/tools">
+
+  <!-- Koog 1.0.0 raised minSdkVersion to 35 on its Android variants. This androidTest APK only
+       exercises JVM-portable Koog surface reached through trailblaze-common; override so the
+       test APK can still target API 26 like the library. Mirrors trailblaze-android's manifest. -->
+  <uses-sdk tools:overrideLibrary="
+      ai.koog.agents.core,
+      ai.koog.koog.agents,
+      ai.koog.agents.features.memory,
+      ai.koog.agents.features.opentelemetry,
+      ai.koog.agents.features.snapshot,
+      ai.koog.agents.features.tokenizer,
+      ai.koog.agents.mcp.metadata,
+      ai.koog.embeddings.llm,
+      ai.koog.prompt.cache.files,
+      ai.koog.prompt.cache.model,
+      ai.koog.prompt.executor.cached,
+      ai.koog.prompt.xml,
+      ai.koog.agents.ext,
+      ai.koog.agents.features.event.handler,
+      ai.koog.agents.features.trace,
+      ai.koog.agents.tools,
+      ai.koog.agents.utils,
+      ai.koog.embeddings.base,
+      ai.koog.http.client.core,
+      ai.koog.http.client.ktor,
+      ai.koog.prompt.executor.anthropic.client,
+      ai.koog.prompt.executor.clients,
+      ai.koog.prompt.executor.google.client,
+      ai.koog.prompt.executor.model,
+      ai.koog.prompt.executor.ollama.client,
+      ai.koog.prompt.executor.openai.client,
+      ai.koog.prompt.executor.openai.client.base,
+      ai.koog.prompt.executor.openrouter.client,
+      ai.koog.prompt.llm,
+      ai.koog.prompt.markdown,
+      ai.koog.prompt.model,
+      ai.koog.prompt.processor,
+      ai.koog.prompt.structure,
+      ai.koog.prompt.tokenizer,
+      ai.koog.rag.base,
+      ai.koog.serialization.core,
+      ai.koog.utils
+  " />
+
+  <!-- Test-only mixed View + Compose fixture Activity; ships only in the test APK. Not exported:
+       only this APK's own instrumentation launches it, and an exported test Activity is reachable
+       by anything else on a shared emulator. -->
+  <application>
+    <activity
+        android:name="xyz.block.trailblaze.android.test.MixedUiFixtureActivity"
+        android:exported="false"
+        android:theme="@android:style/Theme.Material.Light.NoActionBar" />
+
+    <!-- Stands in for the receiver a real app publishes for its harness to drive, such as one that
+         signs a user in. Declared rather than registered at runtime so the proof exercises the
+         COMPONENT-addressed path a harness actually uses: a runtime receiver has no class name to
+         address, so it would only ever prove the implicit-broadcast branch. Not exported — the
+         sender is this same APK, and an exported test receiver is reachable by anything else
+         sharing the emulator. -->
+    <receiver
+        android:name="xyz.block.trailblaze.android.test.BroadcastProofReceiver"
+        android:exported="false" />
+  </application>
+</manifest>

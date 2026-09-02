@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.android.accessibility
 
+import android.graphics.Bitmap
 import kotlin.concurrent.thread
 import xyz.block.trailblaze.AdbCommandUtil
 import xyz.block.trailblaze.android.MaestroUiAutomatorXmlParser
@@ -16,8 +17,17 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.setofmark.android.AndroidBitmapUtils
 import xyz.block.trailblaze.setofmark.android.AndroidBitmapUtils.scaleAndEncode
+import xyz.block.trailblaze.tracing.TraceSpanFrame
+import xyz.block.trailblaze.tracing.TraceSpanLocal
+import xyz.block.trailblaze.tracing.TrailblazeTracer
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.utils.Ext.toViewHierarchyTreeNode
+
+/**
+ * Category for every span this file records. Matches the host side's screen-state category so a
+ * profile can compare the two halves of the same capture by category rather than by span name.
+ */
+private const val SCREEN_STATE_TRACE_CAT = "screenState"
 
 /**
  * [ScreenState] using the [TrailblazeAccessibilityService].
@@ -105,12 +115,20 @@ class AccessibilityServiceScreenState(
     private set
 
   init {
-    val (displayWidth, displayHeight) = TrailblazeAccessibilityService.getScreenDimensions()
+    val (displayWidth, displayHeight) =
+      TrailblazeTracer.traceDetail("getScreenDimensions", SCREEN_STATE_TRACE_CAT) {
+        TrailblazeAccessibilityService.getScreenDimensions()
+      }
     deviceWidth = displayWidth
     deviceHeight = displayHeight
 
-    currentActivity = TrailblazeAccessibilityService.getCurrentActivity()
-      ?: AdbCommandUtil.getForegroundActivity()
+    // The fallback gets its own span because it is a different order of cost: the service answers
+    // from a field it maintains off the event stream, while the fallback shells out to adb.
+    currentActivity = TrailblazeTracer.traceDetail("getCurrentActivity", SCREEN_STATE_TRACE_CAT) {
+      TrailblazeAccessibilityService.getCurrentActivity()
+    } ?: TrailblazeTracer.traceDetail("getForegroundActivity.adb", SCREEN_STATE_TRACE_CAT) {
+      AdbCommandUtil.getForegroundActivity()
+    }
 
     // Mirror-only fast path: when the caller doesn't need the tree (live `/devices` viewer
     // frame loop), skip the accessibility-tree walk entirely. We still capture the screenshot
@@ -123,7 +141,7 @@ class AccessibilityServiceScreenState(
       if (includeScreenshot) {
         try {
           _screenshotBytes = TrailblazeAccessibilityService.captureScreenshot()
-            ?.scaleAndEncode(screenshotScalingConfig)
+            ?.let { bitmap -> encodeScreenshot(bitmap) }
             ?: ByteArray(0)
         } catch (e: Exception) {
           Console.log("⚠️ Mirror-fast-path screenshot capture failed: ${e.message}")
@@ -142,18 +160,27 @@ class AccessibilityServiceScreenState(
     // Merge all contributing windows (active app window plus any dialog/popup/sub-panel
     // windows) into a single capture so secondary-window content is visible in both tree shapes.
     // Node recycling and per-window refresh happen inside captureMergedScreenTrees().
-    val mergedTrees = TrailblazeAccessibilityService.captureMergedScreenTrees(awaitStable = awaitStableTree)
+    val mergedTrees =
+      TrailblazeAccessibilityService.captureMergedScreenTrees(awaitStable = awaitStableTree)
     captureCoverage = mergedTrees.captureCoverage
 
     // Capture screenshot in parallel with hierarchy building. UiAutomation.takeScreenshot()
     // is independent of AccessibilityNodeInfo traversal, and starting both concurrently also
     // improves temporal consistency between the visual and structural snapshots.
     // Thread.join() provides a happens-before guarantee for the write to _screenshotBytes.
+    //
+    // A span's parent is per-thread, and this thread has never seen the capture's span, so the
+    // spans recorded over there would come out roots beside the capture rather than inside it.
+    // Read the innermost open span here and adopt it there. The screenshot's spans then still
+    // OVERLAP the tree-building spans below on the timeline, which is the point: that overlap is
+    // what makes the parallelism visible instead of implied.
+    val captureSpanId = TraceSpanLocal.get()?.spanId
     val screenshotThread = if (includeScreenshot) {
       thread(name = "tb-screenshot-capture") {
+        if (captureSpanId != null) TraceSpanLocal.set(TraceSpanFrame(captureSpanId))
         try {
           _screenshotBytes = TrailblazeAccessibilityService.captureScreenshot()
-            ?.scaleAndEncode(screenshotScalingConfig)
+            ?.let { bitmap -> encodeScreenshot(bitmap) }
             ?: ByteArray(0)
         } catch (e: Exception) {
           Console.log("⚠️ Parallel screenshot capture failed: ${e.message}")
@@ -163,16 +190,27 @@ class AccessibilityServiceScreenState(
 
     foregroundAppId = mergedTrees.foregroundAppId
 
-    viewHierarchy =
-      (mergedTrees.treeNode?.toViewHierarchyTreeNode()
-          ?: ViewHierarchyTreeNode())
-        .relabelWithFreshIds()
+    // The join is in a `finally` because the screenshot thread outliving this constructor is worse
+    // than a slow capture: it writes `_screenshotBytes` with no happens-before edge to whoever
+    // reads them, and it records spans naming a parent span that has already closed.
+    try {
+      viewHierarchy = TrailblazeTracer.traceDetail("buildViewHierarchy", SCREEN_STATE_TRACE_CAT) {
+        (mergedTrees.treeNode?.toViewHierarchyTreeNode()
+            ?: ViewHierarchyTreeNode())
+          .relabelWithFreshIds()
+      }
 
-    val rawTree = mergedTrees.accessibilityNode?.toTrailblazeNode()
-    trailblazeNodeTree =
-      if (includeAllElements) rawTree else rawTree?.filterImportantForAccessibility()
-
-    screenshotThread?.join()
+      trailblazeNodeTree = TrailblazeTracer.traceDetail("buildTrailblazeNodeTree", SCREEN_STATE_TRACE_CAT) {
+        val rawTree = mergedTrees.accessibilityNode?.toTrailblazeNode()
+        if (includeAllElements) rawTree else rawTree?.filterImportantForAccessibility()
+      }
+    } finally {
+      // Whatever is left of the screenshot the tree build did not manage to hide. On a fast capture
+      // this is near zero; a long one says the screenshot, not the hierarchy, set the floor.
+      TrailblazeTracer.traceDetail("awaitScreenshotThread", SCREEN_STATE_TRACE_CAT) {
+        screenshotThread?.join()
+      }
+    }
 
     // Optional dual-tree capture for Maestro→accessibility migration. Sequential rather
     // than parallel with the accessibility tree above because both query through the
@@ -181,7 +219,9 @@ class AccessibilityServiceScreenState(
     // `trailblaze.captureSecondaryTree=true` set, which is migration-only).
     if (captureSecondaryTree) {
       try {
-        val xmlDump = AndroidOnDeviceUiAutomatorScreenState.dumpViewHierarchy()
+        val xmlDump = TrailblazeTracer.traceDetail("dumpSecondaryUiAutomatorTree", SCREEN_STATE_TRACE_CAT) {
+          AndroidOnDeviceUiAutomatorScreenState.dumpViewHierarchy()
+        }
         val maestroTree =
           MaestroUiAutomatorXmlParser
             .getUiAutomatorViewHierarchyFromViewHierarchyAsMaestroTreeNodes(
@@ -214,6 +254,19 @@ class AccessibilityServiceScreenState(
     }
     } // end else (full tree path)
   }
+
+  /**
+   * Scales and PNG-encodes [bitmap], in its own span.
+   *
+   * Separate from the capture itself (spanned inside [TrailblazeAccessibilityService.captureScreenshot],
+   * so every caller of that gets it) because the two halves fail for unrelated reasons: the capture
+   * is an IPC round trip whose slow path is rate-limited, the encode is CPU on this thread and
+   * scales with the screen.
+   */
+  private fun encodeScreenshot(bitmap: Bitmap): ByteArray =
+    TrailblazeTracer.traceDetail("scaleAndEncodeScreenshot", SCREEN_STATE_TRACE_CAT) {
+      bitmap.scaleAndEncode(screenshotScalingConfig)
+    }
 
   override val trailblazeDevicePlatform: TrailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID
 

@@ -191,6 +191,90 @@ class DaemonScriptedToolBundlerTest {
   }
 
   @Test
+  fun `bundleOne resolves the matcher subpath beside the package alias`() = runBlocking {
+    // esbuild's `--alias` is a PACKAGE alias and rewrites subpaths with it, so the slim-entry alias
+    // alone turns `@trailblaze/scripting/matcher` into `<…>/src/in-process.ts/matcher` — not a
+    // directory — and the bundle fails to resolve before the tool is ever registered. A subpath
+    // the SDK advertises to tool authors has to be bundlable by the in-process path, so pin both
+    // aliases together: the tool below imports the package AND the subpath, exactly as a tool doing
+    // its own selector matching would.
+    assumeEsbuildPresent()
+    val src = File(tempFolder.newFolder("matcherImport"), "matcherTool.ts").apply {
+      writeText(
+        """
+        |import { trailblaze } from "@trailblaze/scripting";
+        |import { resolve, resolveText, type TrailblazeNode } from "@trailblaze/scripting/matcher";
+        |export const matcherTool = trailblaze.tool(async () => {
+        |  const root: TrailblazeNode = {
+        |    nodeId: 0,
+        |    bounds: { left: 0, top: 0, right: 10, bottom: 10 },
+        |    driverDetail: { class: "androidAccessibility", text: "Add item" },
+        |  };
+        |  const hit = resolve(root, { androidAccessibility: { textRegex: "Add item" } });
+        |  return hit.kind === "singleMatch" ? String(resolveText(hit.node.driverDetail)) : "noMatch";
+        |});
+        |""".trimMargin(),
+      )
+    }
+    val out = bundler.bundleOne(src, toolName = "matcherTool")
+    val bundleSource = out.readText()
+    // The matcher's own code is in the bundle — a bundle that merely built while dropping the
+    // subpath's exports would leave the tool throwing at evaluation instead of failing here.
+    assertTrue(
+      bundleSource.contains("resolveText") && bundleSource.contains("__trailblazeTools"),
+      "expected the matcher subpath's exports inlined and matcherTool registered on " +
+        "globalThis.__trailblazeTools (got ${out.length()} bytes)",
+    )
+    // Aliasing the subpath must not smuggle the full SDK in behind it: `matcher/index.ts` takes
+    // only TYPES from the generated selectors module, so the runtime closure is three files.
+    assertFalse(
+      bundleSource.contains("@modelcontextprotocol"),
+      "the matcher subpath must not pull the MCP SDK into an in-process bundle (got ${out.length()} bytes)",
+    )
+    assertTrue(out.length() < 200_000L, "expected a slim KB-scale bundle; got ${out.length()} bytes")
+  }
+
+  @Test
+  fun `bundleOne resolves the matcher subpath from a flat extracted SDK layout`() = runBlocking {
+    // The test above pins the SDK SOURCE layout, where the matcher sits at `matcher/index.ts`. The
+    // extracted runtime bundle names subpaths FLAT instead — `dist/matcher.js` beside
+    // `dist/index.js` — because those are per-subpath esbuild outputs, not a mirror of the source
+    // directories. `UsagesCommand.resolveSdkAliasTarget` hands the bundler exactly that layout
+    // whenever no SDK source tree is reachable: a fresh worktree (`.trailblaze/` is gitignored) or
+    // any workspace consuming the SDK as a framework artifact. Probing only the source layout left
+    // the subpath un-aliased there, the package alias rewrote the import to `<…>/index.js/matcher`,
+    // and the tool failed to bundle — a failure `usages --changed-since` absorbs into a bytes-only
+    // fingerprint, so edits to the files such a tool imports silently stop flagging it.
+    assumeEsbuildPresent()
+    val dist = tempFolder.newFolder("flatSdk", "dist")
+    val flatEntry = File(dist, "index.js").apply {
+      writeText("export const trailblaze = { tool: (fn) => fn };\n")
+    }
+    // Distinct marker: proves the bundle inlined THIS file rather than resolving the subpath
+    // elsewhere, or building while dropping its exports.
+    File(dist, "matcher.js").writeText("export const resolveText = () => \"flat-layout-matcher\";\n")
+    val flatBundler = DaemonScriptedToolBundler(
+      esbuildBinary = esbuild,
+      inProcessSdkEntryOverride = flatEntry,
+      cacheDir = tempFolder.newFolder("flat-layout-cache"),
+    )
+    val src = File(tempFolder.newFolder("flatMatcherImport"), "flatTool.ts").apply {
+      writeText(
+        """
+        |import { trailblaze } from "@trailblaze/scripting";
+        |import { resolveText } from "@trailblaze/scripting/matcher";
+        |export const flatTool = trailblaze.tool(async () => resolveText());
+        |""".trimMargin(),
+      )
+    }
+    val out = flatBundler.bundleOne(src, toolName = "flatTool")
+    assertTrue(
+      out.readText().contains("flat-layout-matcher"),
+      "expected the flat `dist/matcher.js` inlined into the bundle (got ${out.length()} bytes)",
+    )
+  }
+
+  @Test
   fun `bundleOne hits cache on second call with unchanged source`() = runBlocking {
     assumeEsbuildPresent()
     val src = writeTinyTs("cache-me.ts")
@@ -939,6 +1023,55 @@ class DaemonScriptedToolBundlerTest {
   }
 
   // --- helpers ---
+
+  @Test
+  fun `bundleEveryExport registers every export, not one named after the file`() = runBlocking {
+    assumeEsbuildPresent()
+    // The committed `quickjs-tools/typed.ts` shape: several tools in one file, none of them named
+    // after it. `bundleOne` would look up an export called "typed" and throw at load.
+    val src = tempFolder.newFile("typed.ts")
+    src.writeText(
+      """
+      |export function sampleApp_uppercase(): void {}
+      |export function sampleApp_jsonStringify(): void {}
+      |""".trimMargin(),
+    )
+
+    val bundleSource = bundler.bundleEveryExport(src).readText()
+    // Assert the registration LOOP, not the pre-bundle identifier: esbuild renames the namespace
+    // import (here to `typed_exports`), so anchoring on `__userModule` would pin nothing real.
+    assertTrue(
+      bundleSource.contains("for (const __exportName of Object.keys(") &&
+        bundleSource.contains("globalThis.__trailblazeTools[__exportName]"),
+      "expected the multi-export registration loop; got:\n$bundleSource",
+    )
+    assertTrue(
+      bundleSource.contains("sampleApp_uppercase") && bundleSource.contains("sampleApp_jsonStringify"),
+      "expected both exports to survive into the bundle; got:\n$bundleSource",
+    )
+    // The single-export prelude would have demanded an export named after the file.
+    assertFalse(
+      bundleSource.contains("must export a function with that exact name"),
+      "expected no single-export prelude in a multi-export bundle; got:\n$bundleSource",
+    )
+  }
+
+  @Test
+  fun `bundleEveryExport and bundleOne do not share a cache entry for the same source`() = runBlocking {
+    assumeEsbuildPresent()
+    // Same bytes, two different wrappers — the wrapper form has to be part of the cache key or
+    // whichever ran first would be served to the other.
+    // File stem == tool name on purpose: `bundleEveryExport` derives its cache-key stem from the
+    // file name, so anything else would make the two keys differ for a reason other than the
+    // wrapper form and the assertion would hold even without the form in the key.
+    val src = writeTinyTs("shared_source.ts", exportName = "shared_source")
+    val single = bundler.bundleOne(src, toolName = "shared_source")
+    val every = bundler.bundleEveryExport(src)
+    assertFalse(
+      single.canonicalFile == every.canonicalFile,
+      "expected distinct cache entries for the two wrapper forms; both were ${single.absolutePath}",
+    )
+  }
 
   private fun writeTinyTs(
     name: String,

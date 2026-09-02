@@ -13,12 +13,49 @@
 // The one exception is McpSamplingLog, stamped AFTER the call: its span is (ts - durationMs, ts].
 
 /** Which extraction family a span came from (drives track routing + color). */
-type PerfSpanKind = "tool" | "llm" | "maestro" | "driver";
+type PerfSpanKind = "tool" | "llm" | "maestro" | "driver" | "trace";
 
 /**
- * One extracted span. Spans with kind tool/llm/maestro live in the containment tree (host clock);
- * kind "driver" spans are timestamped on the DEVICE clock, which skews from the host clock by
- * whole seconds — they are never nested into the tree and render on their own track.
+ * One Chrome Trace "X" (Complete) event out of a session's `trace.json` — what `TrailblazeTracer`
+ * recorded in-process. `ts`/`dur` are MICROseconds (epoch / elapsed); `pid`/`tid` identify the
+ * emitting thread. `sid`/`psid` are Trailblaze's own additions to the Chrome Trace format: the
+ * span's id and the id of the `trace { }` frame it opened inside, so parentage is DECLARED rather
+ * than inferred. Events without them (older traces, and events pushed straight into the recorder)
+ * fall back to (pid, tid) + containment, which is also all Perfetto itself ever uses. Producers
+ * that record events asynchronously (the HTTP emitters — a callback thread's identity, not the
+ * work's) mark them `args.async = "true"`, and the extractor never infers nesting for those.
+ */
+interface TrailblazeTraceEvent {
+  name?: string;
+  cat?: string;
+  ph?: string;
+  ts?: number;
+  dur?: number;
+  pid?: number;
+  tid?: number;
+  args?: Record<string, string>;
+  /**
+   * OpenTelemetry span kind — "CLIENT" on an outgoing request, "SERVER" on handling one, and so
+   * on. Absent means INTERNAL (plain in-process work), which the producer leaves out.
+   */
+  kind?: string;
+  /** The trace this span belongs to; spans from different traces never nest into each other. */
+  trid?: string;
+  /**
+   * Which clock stamped `ts`. Absent means the host's, which is almost everything. `"device"` marks
+   * a batch a device recorded and uploaded: that clock drifts from the host's by whole seconds, so
+   * those events go on the Device lane and are kept out of the session window rather than stretching
+   * it by the drift. Stamped by `SessionTraceFile.merge` at the endpoint that received the upload.
+   */
+  clock?: string;
+  sid?: string;
+  psid?: string;
+}
+
+/**
+ * One extracted span. Spans with kind tool/llm/maestro/trace live in the containment tree (host
+ * clock); kind "driver" spans are timestamped on the DEVICE clock, which skews from the host
+ * clock by whole seconds — they are never nested into the tree and render on their own track.
  */
 interface PerfSpan {
   /** Index into PerfSessionData.spans — stable id for parent/kids/selection references. */
@@ -63,6 +100,18 @@ interface PerfSpan {
   tokens: string | null;
   /** Screenshot file reference (name only — the perf report does not inline image bytes). */
   shot: string | null;
+  /** Trace spans: the emitting process id. Null for log-derived spans. */
+  pid: number | null;
+  /** Trace spans: the emitting thread id (unique only within pid). Null for log-derived spans. */
+  tid: number | null;
+  /** Trace spans: the tracer category ("http", "MaestroDriver", ...). Null for log-derived spans. */
+  cat: string | null;
+  /**
+   * Trace spans: OpenTelemetry span kind, when the producer recorded one other than INTERNAL —
+   * "CLIENT" for the caller's half of a request, "SERVER" for the callee's. Null otherwise, which
+   * covers every log-derived span and every plain in-process `trace { }` block.
+   */
+  spanKind: string | null;
 }
 
 /** One trail step (objective): ObjectiveStartLog → matching ObjectiveCompleteLog. */

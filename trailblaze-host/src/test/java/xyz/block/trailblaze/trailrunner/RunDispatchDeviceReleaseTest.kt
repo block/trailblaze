@@ -26,7 +26,7 @@ import xyz.block.trailblaze.ui.models.TrailblazeServerState.SavedTrailblazeAppCo
 
 /**
  * A run dispatch registers the device as busy before the run starts, so the busy-device gate can
- * reject a click stampede. These lock the other half of that contract (CPLAT-1623): a dispatch that
+ * reject a click stampede. These lock the other half of that contract: a dispatch that
  * never becomes a run must hand the device back, or the device stays unusable until the daemon
  * restarts - which is what the desktop "Run recording" button did, since a recording file can carry
  * config (`skip:`, a driver pin) that short-circuits the run before it ever opens a session.

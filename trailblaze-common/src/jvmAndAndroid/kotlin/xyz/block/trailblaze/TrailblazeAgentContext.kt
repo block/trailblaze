@@ -38,6 +38,16 @@ interface TrailblazeAgentContext {
   val trailblazeDeviceInfoProvider: () -> TrailblazeDeviceInfo
   val sessionProvider: TrailblazeSessionProvider
   val memory: AgentMemory
+
+  /**
+   * The declared name of the device this agent is currently driving in a multi-device session,
+   * stamped onto every tool log so a reader knows which screen an action ran on.
+   *
+   * Null by default and for every single-device agent. [BaseTrailblazeAgent] overrides it to
+   * follow the session's shared [xyz.block.trailblaze.toolcalls.SessionDeviceBindings], so it
+   * tracks `switchDevice` rather than whichever device the agent was constructed for.
+   */
+  val activeDeviceName: String? get() = null
 }
 
 fun TrailblazeAgentContext.logToolExecution(
@@ -114,6 +124,10 @@ fun TrailblazeAgentContext.logToolExecution(
       isRecordable = isRecordable,
       isVerification = recordedTool.isVerificationToolInstance(),
       dispatchedHostSide = dispatchedHostSide,
+      // The context's bindings first: it is the instance `switchDevice` mutates, and a caller
+      // that threads bindings into the context but isn't a BaseTrailblazeAgent would otherwise
+      // log nothing. Falls back to the agent's own view for the rest.
+      deviceName = context.deviceBindings?.activeName ?: activeDeviceName,
     )
   // Clear the override after consuming it. The execution context is reused across every
   // tool in a single runTrailblazeTools(...) batch, so a stale override would bleed into
@@ -218,6 +232,9 @@ fun TrailblazeAgentContext.logToolExecution(
     isRecordable = tool.getIsRecordableFromAnnotation(),
     isVerification = tool.isVerificationToolInstance(),
     dispatchedHostSide = dispatchedHostSide,
+    // No execution context here, so the agent's own view of the shared bindings is the only
+    // source — which is enough, because that view follows `switchDevice` too.
+    deviceName = activeDeviceName,
   )
   trailblazeLogger.log(session, toolLog)
 }

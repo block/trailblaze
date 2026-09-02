@@ -128,6 +128,16 @@ trail:
      * to change the viewport box mid-session without rebuilding the context.
      */
     val webViewport: String? = null,
+    /**
+     * Record device screen video for each session. Off by default: recordings are large on disk,
+     * their timing signatures drift on some hosts, and sprite-sheet extraction is expensive — so
+     * video is opt-in rather than a cost every run pays. This is the persistent, discoverable
+     * opt-in (`trailblaze config capture-video true`) that reaches every entry point without a
+     * per-run flag, including interactive `trailblaze session start` and MCP sessions, which have
+     * no positive video flag of their own. Per-run `--capture-video` / `--no-capture-video` and
+     * `TRAILBLAZE_CAPTURE_VIDEO` both override it.
+     */
+    val captureVideo: Boolean = false,
     // Capture settings. Logcat on by default (filtered to the app under test, written to device.log).
     val captureLogcat: Boolean = true,
     // Capture the iOS Simulator system log. On by default: IosLogCapture scopes the stream to

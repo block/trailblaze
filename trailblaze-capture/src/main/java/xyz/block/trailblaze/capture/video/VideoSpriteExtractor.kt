@@ -609,11 +609,11 @@ object VideoSpriteExtractor {
             appendLine("frameMap=$frameMapStr")
             // Whether maybeRestamp injected a synthetic constant-rate `setpts` (i.e. the input
             // mp4's timing was untrustworthy and the frame distribution below is a uniform guess).
-            // Downstream (WasmReport) uses this to fall back to per-step screenshots when a guessed
-            // timeline collapses onto a single dominant frame. A tail-pad (`tpad`, healthy
-            // timestamps with a static tail) is deliberately NOT a re-stamp: its frame
-            // distribution is real, and a long static tail legitimately repeats one frame —
-            // flagging it would let WasmReport discard a correct sheet.
+            // Consumers use this to fall back to per-step screenshots when a guessed timeline
+            // collapses onto a single dominant frame. A tail-pad (`tpad`, healthy timestamps with
+            // a static tail) is deliberately NOT a re-stamp: its frame distribution is real, and a
+            // long static tail legitimately repeats one frame — flagging it would discard a
+            // correct sheet.
             appendLine("restamped=${vf.startsWith("setpts=")}")
           }
         )

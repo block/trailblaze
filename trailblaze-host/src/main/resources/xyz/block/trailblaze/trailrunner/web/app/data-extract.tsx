@@ -3,13 +3,10 @@
 // The build-time transpile strips types regardless, so the browser runtime is unaffected.
 // Remove this pragma once the file's real errors are fixed; run `bun run typecheck` to see them.
 
-function derivePlatformFromTrail(trail) {
-  const name = ((trail.path || trail.id || '').toLowerCase().replace(/\.trail\.yaml$/, '').split('/').pop()) || '';
-  if (name === 'web' || name.includes('web')) return 'web';
-  if (name.startsWith('ios') || name.includes('iphone') || name.includes('ipad')) return 'ios';
-  if (name.startsWith('android') || name.includes('phone') || name.includes('tablet')) return 'android';
-  return null;
-}
+// Platform matching lives in app/trail-platform.js (the single source of truth, shared with bun
+// tests); these thin wrappers keep the file-local names their call sites already use.
+function derivePlatformFromTrail(trail) { return window.TrailPlatform.derivePlatformFromTrail(trail); }
+function trailMatchesPlatform(t, platform) { return window.TrailPlatform.trailMatchesPlatform(t, platform); }
 
 // Unified trail/blaze YAML producers live in app/trail-yaml.js (the single source of truth, shared
 // with bun tests); these thin wrappers keep the file-local names their call sites (here + the TB
@@ -341,7 +338,7 @@ function flattenObject(obj, { joinArray = (a) => a.join(', '), skip, prefix } = 
 
 Object.assign(window, {
   flattenObject,
-  derivePlatformFromTrail, buildPromptTrailYaml,
+  derivePlatformFromTrail, trailMatchesPlatform, buildPromptTrailYaml,
   formatDuration, formatAgo, buildTrailTree, buildTrailBundleRows, countTrailBundles, trailFormatMap, humanizeTarget, targetLabel, scopeTrailmaps,
 });
 
@@ -354,11 +351,11 @@ window.TB = {
   // TbNamespaceCoverageTest enforces this.
   resolveRunDevice, connectDevice, connectDeviceDetailed, disconnectDevice, fetchTrailYaml, dispatchRun, prepareRetry, launchRetry, withTimeout, setPendingRunSession, createTrailDir, extractTrace,
   getTargetApps, setTargetApp, useDeviceApps, buildPromptTrailYaml, updateTrail, createTrail, fetchEditedTrails, fetchTrailGitBaseline, runToolQuick, updateToolSource, fetchDeviceApps, fetchInstalledApps, fetchInstalledAppBadge, installedAppIconUrl, validateTrail, rebuildDaemon, openSessionFile, revealTrailsRoot,
-  buildTrailTree, buildTrailBundleRows, countTrailBundles, trailFormatMap, fileUrl, humanizeTarget, targetLabel, scopeTrailmaps, useTargetAppMap, trailheadsForPlatform,
-  recordPendingRun, getPendingRun, clearPendingRun, failPendingRun, requestPendingRunStop, PENDING_TTL_MS,
+  buildTrailTree, buildTrailBundleRows, countTrailBundles, trailMatchesPlatform, trailFormatMap, fileUrl, humanizeTarget, targetLabel, scopeTrailmaps, useTargetAppMap, trailheadsForPlatform,
+  recordPendingRun, getPendingRun, clearPendingRun, failPendingRun, requestPendingRunStop, pendingRunLive, pendingRunWanted, PENDING_TTL_MS,
   useGlobalTarget, getGlobalTarget, setGlobalTarget,
   buildBlazeYaml, mergeBlazeYaml, proposeSteps, createBundle, fetchBundleDetail, deleteTrailFolder, revealTrailFolder,
-  fetchTrailFolderFile, saveTrailFolderFile, deleteTrailFolderFile, recordTrailFolder,
+  fetchTrailFolderFile, saveTrailFolderFile, deleteTrailFolderFile, recordTrailFolder, recordTrailRange,
   recordConnect, recordScreen, recordFrameStream, recordGesture, recordTree, recordDisconnect, recordSelectorAdvice, recordToolParams, scriptedToolParams,
   useExternalAgents, useExternalAgentEvents, startExternalAgent, cancelExternalAgent, replyExternalAgent, applyTrailRunnerUiCommand, fetchAgentSkills,
   startDemo, demoMarkStart, demoFinish, demoGenerate, demoAddPlatform, demoDeleteStep, demoRevealBundle,

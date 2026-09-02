@@ -6,7 +6,8 @@ config:
     trail only uses + and Reset; this one adds the - button and
     stresses arithmetic state tracking across opposing actions.
   devices:
-    web: PLAYWRIGHT_NATIVE
+    web:
+      driver: PLAYWRIGHT_NATIVE
   title: 'LLM Benchmark: Counter arithmetic with increment and decrement'
 
 trail:

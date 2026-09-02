@@ -5,13 +5,18 @@ import assertk.assertions.containsExactly
 import assertk.assertions.hasSize
 import assertk.assertions.isEqualTo
 import assertk.assertions.isInstanceOf
+import assertk.assertions.isNotEqualTo
 import assertk.assertions.isNotNull
 import assertk.assertions.isNull
 import assertk.assertions.isSameInstanceAs
 import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Clock
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import xyz.block.trailblaze.api.AnnotationElement
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TrailblazeNode
@@ -32,6 +37,7 @@ import xyz.block.trailblaze.logs.client.LogEmitter
 import xyz.block.trailblaze.logs.client.ScreenStateLogger
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.toolcalls.HostLocalExecutableTrailblazeTool
+import xyz.block.trailblaze.toolcalls.InstanceNamedTrailblazeTool
 import xyz.block.trailblaze.toolcalls.ToolExecutionContextThreadLocal
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
@@ -40,10 +46,34 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.commands.BooleanAssertionTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.StringEvaluationTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.memory.DumpMemoryTrailblazeTool
+import xyz.block.trailblaze.tracing.TraceLevel
+import xyz.block.trailblaze.tracing.TrailblazeTracer
 import xyz.block.trailblaze.utils.ElementComparator
+import kotlin.test.AfterTest
+import kotlin.test.BeforeTest
 import kotlin.test.Test
 
 class BaseTrailblazeAgentTest {
+
+  // `TrailblazeTracer` is a singleton shared by everything in this JVM. Capture what this test
+  // process was configured with and give it back, rather than resetting to NORMAL: a developer
+  // running with TRAILBLAZE_TRACE_LEVEL set would otherwise have it silently changed underneath
+  // whatever runs after this class. Clearing at both ends keeps recorded spans from leaking in
+  // either direction.
+  private var incomingTraceLevel: TraceLevel = TraceLevel.NORMAL
+
+  @BeforeTest
+  fun captureTracerState() {
+    incomingTraceLevel = TrailblazeTracer.level
+    TrailblazeTracer.clear()
+    TrailblazeTracer.level = TraceLevel.NORMAL
+  }
+
+  @AfterTest
+  fun restoreTracerState() {
+    TrailblazeTracer.level = incomingTraceLevel
+    TrailblazeTracer.clear()
+  }
 
   // ── Stub tool ──
 
@@ -55,6 +85,19 @@ class BaseTrailblazeAgentTest {
     override suspend fun execute(
       toolExecutionContext: TrailblazeToolExecutionContext,
     ): TrailblazeToolResult = result
+  }
+
+  // ── Stub tool shaped like a YAML-defined one: a per-instance name, and a class annotation that
+  // every instance shares (`YamlDefinedTrailblazeTool` uses the reserved `_yaml_defined`) ──
+
+  @Serializable
+  @TrailblazeToolClass("_yaml_defined")
+  private class InstanceNamedStubTool(
+    override val instanceToolName: String,
+  ) : ExecutableTrailblazeTool, InstanceNamedTrailblazeTool {
+    override suspend fun execute(
+      toolExecutionContext: TrailblazeToolExecutionContext,
+    ): TrailblazeToolResult = TrailblazeToolResult.Success()
   }
 
   // ── Stub tool that records the context it saw (for shared-tool-batch assertions) ──
@@ -171,6 +214,10 @@ class BaseTrailblazeAgentTest {
         is StubTool -> {
           toolsExecuted.add(tool)
           tool.result
+        }
+        is InstanceNamedStubTool -> {
+          toolsExecuted.add(tool)
+          runBlocking { tool.execute(context) }
         }
         else -> {
           toolsExecuted.add(tool)
@@ -299,6 +346,56 @@ class BaseTrailblazeAgentTest {
 
     assertThat((seenScreenStates[0] as LabeledScreenState).label).isEqualTo("first")
     assertThat((seenScreenStates[1] as LabeledScreenState).label).isEqualTo("fresh-capture")
+  }
+
+  @Test
+  fun `each dispatch into a shared tool batch logs its own traceId`() = runBlocking {
+    // A recorded step replays as one dispatch per recorded tool, all inside one shared batch.
+    // Each of those is its own trace: readers group logs by traceId, so reusing the first
+    // dispatch's id for the rest of the batch reports a whole authored step as a single tool
+    // call with the other N-1 buried under it.
+    val captured = mutableListOf<TrailblazeLog>()
+    val agent = capturingAgent(captured)
+
+    agent.runInSharedToolBatch {
+      agent.runTrailblazeTools(
+        tools = listOf(StubHostLocalTool(advertisedToolName = "first_tool")),
+        elementComparator = noOpComparator,
+      )
+      agent.runTrailblazeTools(
+        tools = listOf(StubHostLocalTool(advertisedToolName = "second_tool")),
+        elementComparator = noOpComparator,
+      )
+    }
+
+    val toolLogs = captured.filterIsInstance<TrailblazeLog.TrailblazeToolLog>()
+    assertThat(toolLogs.map { it.toolName }).containsExactly("first_tool", "second_tool")
+    assertThat(toolLogs[0].traceId).isNotNull()
+    assertThat(toolLogs[1].traceId).isNotNull()
+    assertThat(toolLogs[1].traceId).isNotEqualTo(toolLogs[0].traceId)
+  }
+
+  @Test
+  fun `tools dispatched in one call share the caller's traceId`() = runBlocking {
+    // The other half of the contract: a single dispatch carrying several tools (one agent turn's
+    // batch of tool calls) IS one trace, and stays one even inside a shared batch scope.
+    val captured = mutableListOf<TrailblazeLog>()
+    val agent = capturingAgent(captured)
+    val turnTraceId = TraceId.generate(TraceId.Companion.TraceOrigin.LLM)
+
+    agent.runInSharedToolBatch {
+      agent.runTrailblazeTools(
+        tools = listOf(
+          StubHostLocalTool(advertisedToolName = "first_tool"),
+          StubHostLocalTool(advertisedToolName = "second_tool"),
+        ),
+        traceId = turnTraceId,
+        elementComparator = noOpComparator,
+      )
+    }
+
+    val toolLogs = captured.filterIsInstance<TrailblazeLog.TrailblazeToolLog>()
+    assertThat(toolLogs.map { it.traceId }).containsExactly(turnTraceId, turnTraceId)
   }
 
   @Test
@@ -987,5 +1084,61 @@ class BaseTrailblazeAgentTest {
     assertThat(toolLogs).hasSize(1)
     assertThat(toolLogs[0].successful).isEqualTo(false)
     assertThat(toolLogs[0].exceptionMessage).isEqualTo("subprocess crashed")
+  }
+
+  // -- Tool dispatch spans --
+
+  private fun recordedSpans(): List<Pair<String, String>> =
+    Json.parseToJsonElement(TrailblazeTracer.exportJson()).jsonArray
+      .map { it.jsonObject }
+      .map { it.getValue("cat").jsonPrimitive.content to it.getValue("name").jsonPrimitive.content }
+
+  @Test
+  fun `each dispatched tool records a span named after the tool`() = runBlocking {
+    // The span every driver shares. Without it a whole agent phase reads as one opaque block of
+    // seconds, which is what an on-device Android run looked like: a 21-second
+    // `processToolMessages` with nothing inside it.
+    run(TestAgent(), StubTool(), StubTool())
+
+    assertThat(recordedSpans()).containsExactly(
+      "tool" to "stub_executable",
+      "tool" to "stub_executable",
+    )
+  }
+
+  @Test
+  fun `a tool that fails is still on the timeline`() = runBlocking {
+    // A timeline that drops the failures is worse than no timeline: the slow thing before a failure
+    // is exactly what you are looking for, and the dispatch loop returns early on a failed tool.
+    run(TestAgent(), StubTool(result = TrailblazeToolResult.Error.ExceptionThrown(errorMessage = "boom")))
+
+    assertThat(recordedSpans()).containsExactly("tool" to "stub_executable")
+  }
+
+  @Test
+  fun `dispatch records nothing when tracing is off`() = runBlocking {
+    // The level is restored by restoreTracerState, so this does not leak OFF into the next test.
+    TrailblazeTracer.level = TraceLevel.OFF
+
+    run(TestAgent(), StubTool())
+
+    assertThat(recordedSpans()).hasSize(0)
+  }
+
+  @Test
+  fun `a tool that names itself gets that name, not its class annotation`() = runBlocking {
+    // Every `tools:`-authored tool shares one class, whose annotation is the reserved
+    // `_yaml_defined`. Going by the annotation collapses them all into one span name, and the
+    // question the trace exists to answer — which of my tools was slow — stops having an answer.
+    run(
+      TestAgent(),
+      InstanceNamedStubTool("signInAsSeller"),
+      InstanceNamedStubTool("openOrders"),
+    )
+
+    assertThat(recordedSpans()).containsExactly(
+      "tool" to "signInAsSeller",
+      "tool" to "openOrders",
+    )
   }
 }

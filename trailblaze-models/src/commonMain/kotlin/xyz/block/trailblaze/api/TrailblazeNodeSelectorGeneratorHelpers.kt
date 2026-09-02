@@ -150,6 +150,28 @@ internal fun buildTargetMatch(detail: DriverNodeDetail): DriverNodeMatch? = when
       null
     }
   }
+  is DriverNodeDetail.AndroidView -> {
+    // Same precision rules as the accessibility branch: pick one text field rather than the
+    // lossy resolveText() fallback, and never use an editable field's current content.
+    val text = detail.text?.takeIf { it.isNotBlank() && !detail.isEditable }
+    val desc = detail.contentDescription?.takeIf { it.isNotBlank() && text == null }
+    val hint = detail.hintText?.takeIf { it.isNotBlank() && text == null && desc == null }
+    val className = detail.className
+    val rid = detail.resourceId
+    val tag = detail.tag?.takeIf { it.isNotBlank() }
+    if (text != null || desc != null || hint != null || className != null || rid != null || tag != null) {
+      DriverNodeMatch.AndroidView(
+        textRegex = text?.let { stableTextAnchorRegex(it) },
+        contentDescriptionRegex = desc?.let { stableTextAnchorRegex(it) },
+        hintTextRegex = hint?.let { stableTextAnchorRegex(it) },
+        classNameRegex = className?.let { escapeForIdentifier(it) },
+        resourceIdRegex = rid?.let { escapeForIdentifier(it) },
+        tagRegex = tag?.let { escapeForIdentifier(it) },
+      )
+    } else {
+      null
+    }
+  }
   is DriverNodeDetail.AndroidMaestro -> {
     val text = detail.resolveText()?.takeIf { it.isNotBlank() }
     val rid = detail.resourceId
@@ -237,6 +259,20 @@ internal fun buildStructuralMatch(detail: DriverNodeDetail): DriverNodeMatch? = 
         classNameRegex = className?.let { escapeForIdentifier(it) },
         resourceIdRegex = rid?.let { escapeForIdentifier(it) },
         uniqueId = uid,
+      )
+    } else {
+      null
+    }
+  }
+  is DriverNodeDetail.AndroidView -> {
+    val rid = detail.resourceId
+    val tag = detail.tag?.takeIf { it.isNotBlank() }
+    val className = detail.className
+    if (rid != null || tag != null || className != null) {
+      DriverNodeMatch.AndroidView(
+        resourceIdRegex = rid?.let { escapeForIdentifier(it) },
+        tagRegex = tag?.let { escapeForIdentifier(it) },
+        classNameRegex = className?.let { escapeForIdentifier(it) },
       )
     } else {
       null

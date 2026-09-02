@@ -84,6 +84,18 @@ function SessionsScreen({ initSel, followLive, go, target = 'all', active = true
   const [clearingRuns, setClearingRuns] = React.useState(false);
   const [actionsOpen, setActionsOpen] = React.useState(false);
   const actionsBtnRef = React.useRef(null);
+  // Explicit disclosure toggles only, keyed by run group. Absence means "use the default",
+  // which is why closing a group is a stored `false` rather than a deleted entry.
+  const [openGroups, setOpenGroups] = React.useState({});
+  const setGroupOpen = React.useCallback((key, next) => setOpenGroups((o) => ({ ...o, [key]: next })), []);
+  // Which axis heads a section: devices, or trails. Sticky because it is a reading preference, not
+  // a per-visit one - someone who thinks in trails thinks in trails tomorrow too.
+  const [storedGroupBy, setGroupBy] = useStickyState('tb-runs-group-by', 'device');
+  // Normalized here as well as inside the model, because the two consumers fail differently. The
+  // model falls back on its own, so the tree is always right; the toggle compares this value to
+  // each option, so a stored value naming neither axis leaves both radios unchecked AND untabbable -
+  // a control a keyboard user cannot reach at all, while the rail beside it renders by device.
+  const groupBy = window.SessionHistoryModel.axisOf(storedGroupBy);
   useLucide();
 
   const all = sessions.data || [];
@@ -98,8 +110,26 @@ function SessionsScreen({ initSel, followLive, go, target = 'all', active = true
   // Running runs head their own "Active" section, so the day groups only ever see finished runs.
   const activeRows = filtered.filter((s) => s.status === 'running');
   const completedRows = filtered.filter((s) => s.status !== 'running');
-  const historyGroups = React.useMemo(() => window.SessionHistoryModel.groupSessions(completedRows), [filtered]);
+  const historyGroups = React.useMemo(() => window.SessionHistoryModel.groupSessions(completedRows, { groupBy }), [filtered, groupBy]);
+  // Arrow-key targets, in render order: the Active section, then each group's latest run plus
+  // whatever its disclosure is currently showing. `listNavKeyDown` scrolls to the Nth `[data-navrow]`
+  // element, so this has to be the rendered rows and not `filtered`.
+  const navRows = React.useMemo(
+    () => activeRows.concat(window.SessionHistoryModel.visibleRuns(historyGroups, openGroups, sel)),
+    [filtered, historyGroups, openGroups, sel],
+  );
   const cur = all.find((s) => s.id === sel);
+  // Landing on a run a closed disclosure is hiding re-opens that group, so a deep link, a retry or
+  // the Home screen's recent list never leaves the selected run out of sight. See the model.
+  //
+  // Deliberately keyed on `sel` ALONE. Re-running this whenever the groups change would erase the
+  // reader's explicit close on the next poll - and this list polls constantly - so a group holding
+  // the selection could never be closed at all. A group with no explicit toggle already opens itself
+  // through `groupOpen`, so the only case this misses is a run sliding behind a disclosure the
+  // reader closed on purpose, which is the direction that should lose.
+  React.useEffect(() => {
+    setOpenGroups((o) => window.SessionHistoryModel.revealSelectedGroup(o, historyGroups, sel));
+  }, [sel]);
 
   const pending = TB.getPendingRun();
   // Errored markers are exempt from the TTL: a "couldn't start" card that silently evaporates
@@ -330,6 +360,7 @@ function SessionsScreen({ initSel, followLive, go, target = 'all', active = true
               <Ico n={importingArchive || clearingRuns ? 'loader-2' : 'ellipsis'} s={16} spin={importingArchive || clearingRuns} />
             </button>
           </div>
+          <GroupByToggle value={groupBy} onChange={setGroupBy} />
           <input
             ref={archiveInputRef}
             type="file"
@@ -359,7 +390,7 @@ function SessionsScreen({ initSel, followLive, go, target = 'all', active = true
           )}
         </div>
         <div data-testid="sessions-list" tabIndex={0} style={{ flex: 1, overflowY: 'auto', padding: '0 10px 12px', outline: 'none' }}
-          onKeyDown={(e) => listNavKeyDown(e, { index: filtered.findIndex((x) => x.id === sel), count: filtered.length, set: (i) => setSel(filtered[i].id) })}>
+          onKeyDown={(e) => listNavKeyDown(e, { index: navRows.findIndex((x) => x.id === sel), count: navRows.length, set: (i) => setSel(navRows[i].id) })}>
           {sessions.loading && !sessions.data && !showPending && <div style={{ padding: 12 }}><Skeleton rows={4} /></div>}
           {showPending && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '11px 12px', borderRadius: 9, marginBottom: 6, background: 'var(--bg-prominent)', border: '1px solid ' + (pending.error ? 'rgba(248,71,82,.35)' : 'var(--tb-hairline-strong)') }}>
@@ -389,8 +420,21 @@ function SessionsScreen({ initSel, followLive, go, target = 'all', active = true
                   <HistoryGroupHeader label={day.label} counts={day.counts} day />
                   {day.legs.map((leg) => (
                     <div key={leg.key} style={{ marginTop: 5 }}>
-                      <HistoryGroupHeader label={leg.label} counts={leg.counts} />
-                      {leg.rows.map((s) => <SessionRow key={s.id} s={s} sel={sel} setSel={setSel} onMenu={(e) => setMenu({ x: e.clientX, y: e.clientY, run: s })} onStop={onStop} stopping={stopping} />)}
+                      <HistoryGroupHeader label={groupBy === 'trail' ? cleanTitle(leg.label) : leg.label} counts={leg.counts} ico={groupBy === 'trail' ? 'route' : 'smartphone'} />
+                      {leg.groups.map((g) => (
+                        <RunGroup
+                          key={g.key}
+                          g={g}
+                          groupBy={groupBy}
+                          sel={sel}
+                          setSel={setSel}
+                          onMenu={(e, s) => setMenu({ x: e.clientX, y: e.clientY, run: s })}
+                          onStop={onStop}
+                          stopping={stopping}
+                          openGroups={openGroups}
+                          setGroupOpen={setGroupOpen}
+                        />
+                      ))}
                     </div>
                   ))}
                 </section>
@@ -545,32 +589,162 @@ function runKindOf(s) {
   if (/^OnDeviceRpc|^Run:|tool_/.test(t)) return { label: 'Tool', ico: 'wrench', color: 'var(--tb-amber)' };
   return { label: 'Run', ico: 'gallery-vertical-end', color: 'var(--text-subtle-variant)' };
 }
-function cleanRunTitle(s) {
-  return decodeEntities((s.title || s.id || '').replace(/^(Blaze|OnDeviceRpc|Run):\s*/, '') || s.id);
+function cleanTitle(t) {
+  return decodeEntities(String(t || '').replace(/^(Blaze|OnDeviceRpc|Run):\s*/, ''));
 }
 
-function HistoryGroupHeader({ label, counts, day = false }) {
-  const summary = [
-    counts.passed ? `${counts.passed} passed` : null,
-    counts.failed ? `${counts.failed} failed` : null,
-    counts.cancelled ? `${counts.cancelled} cancelled` : null,
-    counts.imported ? `${counts.imported} imported` : null,
-  ].filter(Boolean).join(', ');
+function cleanRunTitle(s) {
+  return cleanTitle(s.title || s.id) || s.id;
+}
+
+function HistoryGroupHeader({ label, counts, day = false, ico = 'smartphone' }) {
+  const summary = window.SessionHistoryModel.countsWords(counts);
+  const glyphs = window.SessionHistoryModel.countsGlyphs(counts);
   return (
     <div style={{ position: day ? 'sticky' : 'static', top: day ? 0 : undefined, zIndex: day ? 2 : undefined, display: 'flex', alignItems: 'center', gap: 7, padding: day ? '8px 4px 5px' : '5px 5px 4px 10px', background: day ? 'var(--bg-subtle)' : 'transparent' }}>
-      {!day && <Ico n="smartphone" s={11} c="var(--text-subtle)" />}
-      <span className={day ? 'tb-eyebrow' : 'tb-mono'} style={{ fontSize: day ? 11 : 10.5, fontWeight: day ? undefined : 650, color: day ? undefined : 'var(--text-subtle-variant)', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>
-      <span aria-label={`${counts.total} runs${summary ? `, ${summary}` : ''}`} title={summary || `${counts.total} runs`} className="tb-mono" style={{ marginLeft: 'auto', fontSize: 10, color: 'var(--text-subtle)', whiteSpace: 'nowrap' }}>{counts.total}{counts.passed ? ` · ${counts.passed}✓` : ''}{counts.failed ? ` · ${counts.failed}×` : ''}{counts.cancelled ? ` · ${counts.cancelled}■` : ''}{counts.imported ? ` · ${counts.imported}↥` : ''}</span>
+      {!day && <Ico n={ico} s={11} c="var(--text-subtle)" style={{ flex: '0 0 auto' }} />}
+      <span title={day ? undefined : label} className={day ? 'tb-eyebrow' : 'tb-mono'} style={{ fontSize: day ? 11 : 10.5, fontWeight: day ? undefined : 650, color: day ? undefined : 'var(--text-subtle-variant)', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>
+      <span aria-label={`${counts.total} runs${summary ? `, ${summary}` : ''}`} title={summary || `${counts.total} runs`} className="tb-mono" style={{ marginLeft: 'auto', fontSize: 10, color: 'var(--text-subtle)', whiteSpace: 'nowrap' }}>{counts.total}{glyphs ? ` · ${glyphs}` : ''}</span>
     </div>
   );
 }
 
-function SessionRow({ s, sel, setSel, onMenu, onStop, stopping }) {
+// One trail's runs on one device: the newest as an ordinary row, the attempts before it behind a
+// disclosure. Re-running a trail eight times is the normal way to work through a failure, and
+// without this the eight near-identical rows push every other device off the screen. Which of the
+// two the section header names depends on `groupBy`; the group is always the other one.
+function RunGroup({ g, groupBy, sel, setSel, onMenu, onStop, stopping, openGroups, setGroupOpen }) {
+  const latest = g.rows[0];
+  const older = g.rows.slice(1);
+  const open = window.SessionHistoryModel.groupOpen(g, sel, openGroups);
+  const row = (s) => <SessionRow key={s.id} s={s} context={groupBy} sel={sel} setSel={setSel} onMenu={(e) => onMenu(e, s)} onStop={onStop} stopping={stopping} />;
+  if (!older.length) return row(latest);
+  const c = window.SessionHistoryModel.countsOf(older);
+  const glyphs = window.SessionHistoryModel.countsGlyphs(c);
+  const words = window.SessionHistoryModel.countsWords(c);
+  const label = `${older.length} earlier ${older.length === 1 ? 'run' : 'runs'}`;
+  return (
+    <React.Fragment>
+      {row(latest)}
+      <button
+        type="button"
+        data-testid="group-older-runs"
+        aria-expanded={open}
+        aria-label={`${label}${words ? `, ${words}` : ''}`}
+        onClick={() => setGroupOpen(g.key, !open)}
+        title={open ? 'Hide the earlier runs' : 'Show the earlier runs'}
+        style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%', margin: '-2px 0 4px', padding: '3px 12px 3px 33px', border: 'none', background: 'transparent', color: 'var(--text-subtle)', font: 'inherit', fontSize: 11, cursor: 'pointer', textAlign: 'left' }}
+      >
+        <Ico n={open ? 'chevron-down' : 'chevron-right'} s={12} c="var(--text-subtle)" style={{ flex: '0 0 auto' }} />
+        <span>{label}</span>
+        <span className="tb-mono" style={{ marginLeft: 'auto', fontSize: 10, whiteSpace: 'nowrap' }}>{glyphs}</span>
+      </button>
+      {open && <div style={{ marginLeft: 12, paddingLeft: 9, borderLeft: '1px solid var(--tb-hairline)' }}>{older.map(row)}</div>}
+    </React.Fragment>
+  );
+}
+
+const GROUP_BY_AXES = ['device', 'trail'];
+const ARROW_STEP = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 };
+
+// The reading axis. Two options, so a segmented pair beats a dropdown: both choices stay visible
+// and switching is one click rather than open-then-pick.
+function GroupByToggle({ value, onChange }) {
+  useLucide();
+  const box = React.useRef(null);
+  // A radiogroup is one tab stop, not one per option, and the arrow keys move within it. So only
+  // the checked option is tabbable, and an arrow both selects its neighbour and takes focus along -
+  // without this, a keyboard user can reach the control but cannot change it.
+  const onKeyDown = (e) => {
+    const step = ARROW_STEP[e.key];
+    if (!step) return;
+    e.preventDefault();
+    const at = GROUP_BY_AXES.indexOf(value);
+    const next = GROUP_BY_AXES[(at + step + GROUP_BY_AXES.length) % GROUP_BY_AXES.length];
+    onChange(next);
+    const btn = box.current && box.current.querySelector(`[data-axis="${next}"]`);
+    if (btn) btn.focus();
+  };
+  const opt = (key, ico, label, hint) => {
+    const on = value === key;
+    return (
+      <button
+        type="button"
+        role="radio"
+        data-axis={key}
+        aria-checked={on}
+        tabIndex={on ? 0 : -1}
+        title={hint}
+        onClick={() => onChange(key)}
+        style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '3px 9px', borderRadius: 6, border: 'none', cursor: 'pointer', font: 'inherit', fontSize: 11, fontWeight: 600, background: on ? 'var(--bg-elevated)' : 'transparent', color: on ? 'var(--text)' : 'var(--text-subtle)', boxShadow: on ? '0 1px 2px rgba(0,0,0,.25)' : 'none' }}
+      >
+        <Ico n={ico} s={12} c={on ? 'var(--text)' : 'var(--text-subtle)'} />
+        {label}
+      </button>
+    );
+  };
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 7 }}>
+      <span className="tb-eyebrow" style={{ fontSize: 10, flex: '0 0 auto' }}>Group by</span>
+      <div
+        ref={box}
+        role="radiogroup"
+        aria-label="Group runs by"
+        onKeyDown={onKeyDown}
+        style={{ display: 'inline-flex', gap: 2, padding: 2, borderRadius: 8, background: 'var(--bg-subtle-variant, rgba(127,127,127,.12))' }}
+      >
+        {opt('device', 'smartphone', 'Device', 'One section per device, with each trail\u2019s latest run inside it')}
+        {opt('trail', 'route', 'Trail', 'One section per trail, with each device\u2019s latest run inside it')}
+      </div>
+    </div>
+  );
+}
+
+// A metadata chip whose text is a name someone else chose - a device, a target, a trail stem - can
+// be longer than the 240px the rail is allowed to shrink to. `flex: 0 0 auto` pins such a chip at
+// max-content, so it overflows the row however the text is allowed to break; and `minWidth: 0` is
+// what lets the break actually happen, since a flex item's automatic minimum is its min-content
+// width. Together they are the difference between wrapping inside the rail and spilling out of it.
+const SHRINKS = { flex: '0 1 auto', minWidth: 0 };
+const BREAKS = { minWidth: 0, wordBreak: 'break-all' };
+
+// `context` is what the section above this row already names: the device, the trail, or - in the
+// Active section - nothing. A row that repeats its own header spends the rail's narrowest asset,
+// horizontal space, saying something the reader just read, and it was what pushed every remaining
+// chip into an ellipsis. So the row drops that fact and leads with whatever actually tells two
+// sibling rows apart: inside a trail section that is the device, everywhere else it is the title.
+function SessionRow({ s, context = 'active', sel, setSel, onMenu, onStop, stopping }) {
   useLucide();
   const active = sel === s.id;
   const isStopping = stopping === s.id;
   const kind = runKindOf(s);
-  const trailName = s.trailId ? (s.trailId.split('/').pop().replace(/\.trail\.yaml$/, '') || s.trailId) : null;
+  const device = s.device || s.platform;
+  const inTrail = context === 'trail';
+  // Through the model, so a device reads identically here and in the section header above it - and
+  // unconditionally, because `deviceOf` has its own "Unknown device" fallback for the legacy runs
+  // that carry neither field. Guarding on `device` here would throw that away and print the title,
+  // which is the one string the section header above has already said.
+  const headline = inTrail ? window.SessionHistoryModel.deviceOf(s) : cleanRunTitle(s);
+  const showDevice = context === 'active' && device;
+  // The target is dropped for the same reason the device and the stem are: under a trail section
+  // the header names it, because `trailKeyOf` separates on it.
+  const showTarget = !inTrail && s.target;
+  const stem = s.trailId ? (s.trailId.split('/').pop().replace(/\.trail\.yaml$/, '') || s.trailId) : null;
+  // ...and drop the file stem when it is only the trail's own title again in slug form, which is the
+  // usual case. Compared against the TITLE rather than the headline, so the rule holds under a trail
+  // section too: two trails can share a title, and then their differing stems are the only thing
+  // telling their sections apart - dropping those would leave two identical-looking sections.
+  const trailName = stem && !window.SessionHistoryModel.isSlugOfTitle(cleanRunTitle(s), stem) ? stem : null;
+  // Whatever the row drops has to stay reachable on hover, because each of these is the only copy
+  // of something. Under a trail section the header carries the NEWEST title, so a run whose trail
+  // was renamed since would otherwise have its own captured title nowhere. And the stem chip is
+  // where the full path lives, so dropping the chip as redundant takes the path with it - which is
+  // wrong for two trails that share a title and a stem and differ only by directory.
+  const headlineTip = [
+    headline,
+    inTrail ? cleanRunTitle(s) : null,
+    trailName ? null : s.trailId,
+  ].filter(Boolean).join(' \u00b7 ');
   return (
     <div data-navrow
       data-testid="session-row"
@@ -587,7 +761,7 @@ function SessionRow({ s, sel, setSel, onMenu, onStop, stopping }) {
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         <Ico n={kind.ico} s={13} c={kind.color} style={{ flex: '0 0 auto' }} />
-        <span style={{ fontSize: 13, fontWeight: 600, flex: 1, minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{cleanRunTitle(s)}</span>
+        <span title={headlineTip} style={{ fontSize: 13, fontWeight: 600, flex: 1, minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{headline}</span>
         {s.status === 'running' && onStop && (
           <button
             data-testid="stop-run"
@@ -602,12 +776,12 @@ function SessionRow({ s, sel, setSel, onMenu, onStop, stopping }) {
         {/* End-state token, top-right corner */}
         <span style={{ flex: '0 0 auto' }}><StatusChip s={s.status} /></span>
       </div>
-      <div className="tb-sub" style={{ fontSize: 11, marginTop: 4, marginLeft: 21, display: 'flex', alignItems: 'center', gap: 7 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 7, flex: 1, minWidth: 0, overflow: 'hidden' }}>
+      <div className="tb-sub" style={{ fontSize: 11, marginTop: 4, marginLeft: 21, display: 'flex', alignItems: 'baseline', gap: 7 }}>
+        <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '3px 7px', flex: 1, minWidth: 0 }}>
           <span style={{ color: kind.color, fontWeight: 600, flex: '0 0 auto' }}>{kind.label}</span>
-          {(s.device || s.platform) ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, minWidth: 0, flex: '0 1 auto', overflow: 'hidden' }}>{s.platform ? <PlatformGlyph platform={s.platform} s={12} c="var(--text-subtle)" style={{ flex: '0 0 auto' }} /> : <Ico n="smartphone" s={11} c="var(--text-subtle)" style={{ flex: '0 0 auto' }} />}<span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.device || s.platform}</span></span> : null}
-          {s.target ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: 'var(--tb-running)', fontWeight: 600, flex: '0 0 auto' }}><Ico n="package" s={11} c="var(--tb-running)" />{s.target}</span> : null}
-          {trailName ? <span title={s.trailId} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, minWidth: 0, flex: '0 1 auto', overflow: 'hidden' }}><Ico n="route" s={11} c="var(--text-subtle)" style={{ flex: '0 0 auto' }} /><span className="tb-mono" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{trailName}</span></span> : null}
+          {showDevice ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, ...SHRINKS }}>{s.platform ? <PlatformGlyph platform={s.platform} s={12} c="var(--text-subtle)" style={{ flex: '0 0 auto' }} /> : <Ico n="smartphone" s={11} c="var(--text-subtle)" style={{ flex: '0 0 auto' }} />}<span style={BREAKS}>{device}</span></span> : null}
+          {showTarget ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: 'var(--tb-running)', fontWeight: 600, ...SHRINKS }}><Ico n="package" s={11} c="var(--tb-running)" style={{ flex: '0 0 auto' }} /><span style={BREAKS}>{s.target}</span></span> : null}
+          {trailName ? <span title={s.trailId} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, ...SHRINKS }}><Ico n="route" s={11} c="var(--text-subtle)" style={{ flex: '0 0 auto' }} /><span className="tb-mono" style={BREAKS}>{trailName}</span></span> : null}
           {s.imported ? <span title="Imported session archive" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: 'var(--tb-amber)', fontWeight: 600, flex: '0 0 auto' }}><Ico n="archive-restore" s={11} c="var(--tb-amber)" />Imported</span> : null}
         </div>
         {/* Times, directly under the token */}

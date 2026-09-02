@@ -126,7 +126,8 @@ object PerTrailmapClientDtsEmitter {
       Console.info(
         "[PerTrailmapClientDtsEmitter] analyzer disabled — emitting per-trailmap trailblaze-client.d.ts " +
           "with YAML-derived flat shapes. To enable typed args/result upgrades, install " +
-          "`bun` and run `bun install` under sdks/typescript.",
+          "`bun`; a dev build without the bundled analyzer shim also needs `bun install` " +
+          "under sdks/typescript.",
       )
     }
 
@@ -324,7 +325,7 @@ object PerTrailmapClientDtsEmitter {
    */
   private fun resolveAnalyzerOrNull(): ScriptedToolDefinitionAnalyzer? {
     val bun = BunBinaryResolver.resolveBunBinary() ?: return null
-    val sdkDir = ScriptedToolDefinitionAnalyzer.resolveSdkDir() ?: return null
+    val sdkDir = ScriptedToolDefinitionAnalyzer.resolveAnalyzerSdkDir() ?: return null
     val shim = ScriptedToolDefinitionAnalyzer.resolveExtractorShim(sdkDir) ?: return null
     // Preflight: the shim's deps must be resolvable — either a real SDK tree with
     // `ts-json-schema-generator` under `node_modules/`, OR the framework-bundled

@@ -12,11 +12,14 @@ Usage: trailblaze run [-hvV] [--all-devices] [--capture-all] [--[no-]
                       [--no-daemon] [--no-logging] [--no-report] [--[no-]
                       save-recording] [--self-heal] [--[no-]use-recorded-steps]
                       [-a=<agent>] [--args-file=<file>]
-                      [--compose-port=<composePort>] [--driver=<driverType>]
-                      [--llm=<llm>] [--llm-model=<llmModel>]
-                      [--llm-provider=<llmProvider>]
+                      [--compose-port=<composePort>] [--configuration=<name>]
+                      [--driver=<driverType>] [--llm=<llm>]
+                      [--llm-model=<llmModel>] [--llm-provider=<llmProvider>]
                       [--max-llm-calls=<maxLlmCalls>]
+                      [--snapshot-baseline=<ref>]
+                      [--snapshot-baseline-threshold=<percent>]
                       [--test-name=<testNameOverride>] [--arg=KEY=VAL]...
+                      [--bind=<name=deviceId>[,<name=deviceId>...]]...
                       [-d=<device>[,<device>...]]... [--memory=KEY=VAL]...
                       [--secret=KEY=VAL]... [--tags=<name>[,<name>...]]...
                       [<trailFile>...]
@@ -87,6 +90,19 @@ removed in a future release.
                                are non-sensitive by design. Route passwords,
                                tokens, or other sensitive data through --secret
                                memory instead.
+      --bind=<name=deviceId>[,<name=deviceId>...]
+                             Bind a multi-device trail's COMPANION devices for
+                               this run: `--bind buyer=emulator-5562`.
+                               Repeatable or comma-separated. The names come
+                               from the trail's `config.devices:`
+                               configuration; the START device is the one
+                               `--device` names and must NOT be bound here.
+                               Per-run, so two multi-device trails can run
+                               concurrently against different device sets on
+                               one daemon — which `TRAILBLAZE_DEVICE_BINDINGS`
+                               cannot express (it is daemon-wide, and changing
+                               it needs a daemon restart). Takes precedence
+                               over that env var when passed.
       --capture-all          Enable all capture streams: video, logcat, iOS
                                logs, network (local dev mode)
       --[no-]capture-ios-logs
@@ -108,11 +124,22 @@ removed in a future release.
                                --no-capture-network to disable. When neither
                                flag is passed, inherits the desktop app's saved
                                setting.
-      --[no-]capture-video   Record device screen video for the session (on by
-                               default, use --no-capture-video to disable)
+      --[no-]capture-video   Record device screen video for the session. Off by
+                               default — video writes large files and sprite
+                               extraction is expensive — pass --capture-video
+                               to enable it for a run. When neither flag is
+                               passed, inherits TRAILBLAZE_CAPTURE_VIDEO and
+                               the saved `trailblaze config capture-video`
+                               setting.
       --compose-port=<composePort>
                              RPC port for Compose driver connections (default:
                                52600)
+      --configuration=<name> Select which of a trail's `config.devices:`
+                               configurations to run when it declares more than
+                               one. Per-run, like --bind. Naming a
+                               configuration a single-device trail does not
+                               declare is an error rather than a silent
+                               single-device run.
   -d, --device=<device>[,<device>...]
                              Device(s) to run on: `<platform>` (e.g. android),
                                `<platform>/<instanceId>`, or a bare instanceId.
@@ -199,6 +226,24 @@ removed in a future release.
                                config self-heal' setting for this run. Omit to
                                inherit the saved setting (opt-in, off by
                                default).
+      --snapshot-baseline=<ref>
+                             Diff this run's `takeSnapshot` captures against a
+                               PREVIOUS run instead of checked-in golden files.
+                               <ref> is an http(s) URL to a session logs zip (e.
+                               g. the CI artifact store's latest_success.zip),
+                               a local zip, or an extracted session directory.
+                               Snapshots are matched by name; a snapshot
+                               missing from the baseline is skipped, a
+                               resolvable mismatch above the threshold fails
+                               the run, and an unresolvable <ref> fails it too.
+                               Alternatively set TRAILBLAZE_SNAPSHOT_BASELINE
+                               on the executing process (the daemon for
+                               delegated runs).
+      --snapshot-baseline-threshold=<percent>
+                             Pass threshold for --snapshot-baseline: a snapshot
+                               passes when its pixel diff percentage is <= this
+                               value. Default: 2.0 (or
+                               TRAILBLAZE_SNAPSHOT_BASELINE_THRESHOLD when set).
       --tags=<name>[,<name>...]
                              Only run trails whose `config.tags:` list contains
                                at least one of the given names. Repeatable

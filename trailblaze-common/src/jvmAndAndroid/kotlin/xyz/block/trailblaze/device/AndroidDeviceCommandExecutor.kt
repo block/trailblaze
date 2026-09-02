@@ -40,6 +40,38 @@ private val ANDROID_PERMISSION_NAME_REGEX =
   Regex("^[a-zA-Z][a-zA-Z0-9_]*(\\.[a-zA-Z][a-zA-Z0-9_]*)+$")
 
 /**
+ * Why a `run-as` target package is unusable, or `null` when it is fine.
+ *
+ * This is the canonical definition of the rule: restricting the package to the Android
+ * package-name grammar is what keeps it from smuggling shell metacharacters through the `run-as`
+ * invocation, so callers reuse this rather than hand-rolling a second escaping scheme.
+ *
+ * Stated as a nullable reason (not a throw) because callers need both shapes: the executor
+ * `actual`s want a hard precondition ([validateRunAsAppId] / [validateRunAsArgs]), while a tool
+ * validating its own `runAs:` argument wants the reason as text so it can report a targeted
+ * failure instead of a generic write/exec error.
+ */
+internal fun runAsAppIdViolation(appId: String): String? = when {
+  appId.isBlank() -> "appId must not be blank"
+  !ANDROID_PACKAGE_NAME_REGEX.matches(appId) ->
+    "appId must be a syntactically valid Android package name (got: '$appId'). " +
+      "Expected format: 'com.example.app' — letters/digits/underscores in dot-separated " +
+      "segments, each segment starting with a letter."
+  else -> null
+}
+
+/**
+ * The `require`-shaped form of [runAsAppIdViolation] — the half of [validateRunAsArgs] a caller
+ * can check before it has a command to run.
+ *
+ * @throws IllegalArgumentException if [appId] is blank or not a syntactically valid Android
+ *   package name.
+ */
+internal fun validateRunAsAppId(appId: String) {
+  runAsAppIdViolation(appId)?.let { throw IllegalArgumentException(it) }
+}
+
+/**
  * Shared validator used by both `actual` implementations of
  * [AndroidDeviceCommandExecutor.executeShellCommandAs]. The name reflects the underlying
  * `run-as` shell command being invoked, while the public API is named for what it does
@@ -54,12 +86,7 @@ private val ANDROID_PERMISSION_NAME_REGEX =
  *   like our `executeShellCommand` transport.
  */
 internal fun validateRunAsArgs(appId: String, command: String) {
-  require(appId.isNotBlank()) { "appId must not be blank" }
-  require(ANDROID_PACKAGE_NAME_REGEX.matches(appId)) {
-    "appId must be a syntactically valid Android package name (got: '$appId'). " +
-      "Expected format: 'com.example.app' — letters/digits/underscores in dot-separated " +
-      "segments, each segment starting with a letter."
-  }
+  validateRunAsAppId(appId)
   require(command.isNotBlank()) {
     "command must not be blank — `run-as <pkg>` without a command drops into an " +
       "interactive shell, which hangs non-interactive callers."
@@ -648,6 +675,76 @@ internal fun wrapShellPipelineForTransport(
     "sh -c printf\${IFS}%s\${IFS}$innerBase64|base64\${IFS}-d|sh"
   }
 }
+
+/**
+ * Longest base64 run left intact by [redactBulkPayloadsForLog]. A trampolined *command* encodes to
+ * a few hundred characters at most (`am force-stop com.example` is ~40), so anything past this is
+ * a file body rather than something a human reads out of a log line.
+ */
+private const val MAX_LOGGED_BASE64_RUN: Int = 512
+
+/**
+ * The `printf %s <base64>` head of [buildRunAsFileWriteCommand]. Space-separated on purpose: the
+ * `${IFS}` spelling belongs to [wrapShellPipelineForTransport]'s trampoline, which encodes *any*
+ * command, so matching it here would redact ordinary on-device shell calls too.
+ */
+private val BASE64_FILE_BODY_REGEX = Regex("""(printf %s )([A-Za-z0-9+/]+={0,2})""")
+
+private val LONG_BASE64_RUN_REGEX = Regex("""[A-Za-z0-9+/]{${MAX_LOGGED_BASE64_RUN + 1},}={0,2}""")
+
+/**
+ * [wrapShellPipelineForTransport]'s shell-less trampoline token, which holds a whole inner command
+ * — file body and all — re-encoded. Captured separately from [LONG_BASE64_RUN_REGEX] so the token
+ * can be decoded and judged on what it actually contains rather than on how long it is.
+ */
+private val SHELL_LESS_TRAMPOLINE_REGEX =
+  Regex("""(printf\$\{IFS\}%s\$\{IFS\})([A-Za-z0-9+/]+={0,2})""")
+
+/** Whether a trampoline token decodes to a [buildRunAsFileWriteCommand]-shaped write. */
+private fun carriesFileBody(trampolineToken: String): Boolean = try {
+  BASE64_FILE_BODY_REGEX.containsMatchIn(
+    Base64.getDecoder().decode(trampolineToken).toString(Charsets.UTF_8),
+  )
+} catch (_: IllegalArgumentException) {
+  false
+}
+
+/**
+ * Strips base64 file bodies out of a device shell command before it is logged or embedded in an
+ * error message.
+ *
+ * [writeFileAs] carries the file's bytes base64-encoded *inside the command line*, so any log of
+ * that command line is a log of the file. That matters because the bodies callers seed are exactly
+ * the sensitive ones — `AndroidWriteBytesToFileTrailblazeTool` masks its `base64Content` in session
+ * logs precisely because seeded auth/session files carry live tokens, and shell-command logs land
+ * in the same CI artifacts.
+ *
+ * Three rules, because the payload takes three shapes:
+ *  - the `printf %s <b64> | base64 -d > path` body itself, redacted at any length;
+ *  - a [wrapShellPipelineForTransport] trampoline token whose *decoded* inner command is one of
+ *    those writes. On the shell-less transport the whole inner command — body included — becomes
+ *    one opaque token, so the first rule can't see in. Decoding is what makes this size-independent:
+ *    a 30-byte secret produces a ~230-character token that no length threshold would catch;
+ *  - a base64 run longer than [MAX_LOGGED_BASE64_RUN], as a backstop for any bulk payload that
+ *    reaches a log by a shape the first two rules don't model.
+ *
+ * Ordinary trampolined commands stay readable — the point of decoding rather than blanket-redacting
+ * is that `am force-stop com.example.app` is still legible in an on-device shell log.
+ *
+ * This is a bulk-payload guard, not a general secret scrubber: it targets file bodies, not secrets
+ * a caller passes as ordinary command arguments.
+ */
+internal fun redactBulkPayloadsForLog(command: String): String = command
+  .replace(BASE64_FILE_BODY_REGEX) { "${it.groupValues[1]}<redacted ${it.groupValues[2].length}-char base64 payload>" }
+  .replace(SHELL_LESS_TRAMPOLINE_REGEX) { match ->
+    val token = match.groupValues[2]
+    if (carriesFileBody(token)) {
+      "${match.groupValues[1]}<redacted ${token.length}-char base64 file-write payload>"
+    } else {
+      match.value
+    }
+  }
+  .replace(LONG_BASE64_RUN_REGEX) { "<redacted ${it.value.length}-char base64 payload>" }
 
 /**
  * Executes [innerCommand] — a full shell expression (pipes, `&&`, redirection, multi-word

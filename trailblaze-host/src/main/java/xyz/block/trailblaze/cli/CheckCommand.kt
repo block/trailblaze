@@ -17,6 +17,7 @@ import picocli.CommandLine.Parameters
 import xyz.block.trailblaze.bundle.WorkspaceClientDtsGenerator
 import xyz.block.trailblaze.config.project.LoadedTrailblazeTrailmapManifest
 import xyz.block.trailblaze.config.project.TrailblazeTrailmapManifestLoader
+import xyz.block.trailblaze.host.DevicePinLint
 import xyz.block.trailblaze.host.SelectorDialectLint
 import xyz.block.trailblaze.host.TrailTscValidator
 import xyz.block.trailblaze.host.WorkspaceTypeScriptSetup
@@ -27,6 +28,7 @@ import xyz.block.trailblaze.scripting.ScriptedToolDefinitionCache
 import xyz.block.trailblaze.scripting.ScriptedToolDefinitionException
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.yaml.TrailArgTokens
+import xyz.block.trailblaze.yaml.TrailYamlValidator
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
 import xyz.block.trailblaze.yaml.unified.TrailDocument
 import java.io.File
@@ -279,21 +281,27 @@ class CheckCommand : Callable<Int> {
     // kill-switch. See [TrailArgTokens].
     val argTokenExit = runArgTokenValidationPhase(workspaceRoot = resolved.workspaceRoot)
 
-    // Selector-dialect gate: a device that resolves a recording leg whose dialect its driver cannot
-    // match (an androidMaestro: selector under ANDROID_ONDEVICE_ACCESSIBILITY never matches) fails
-    // the build. Now leg-aware, so it reports only genuine breakage — see [SelectorDialectLint] for
-    // why the previous trail+platform granularity had to stay a warning. Opt out with
-    // TRAILBLAZE_DISABLE_SELECTOR_DIALECT_GATE=1.
-    val dialectExit = if (isSelectorDialectGateDisabled()) {
-      EXIT_OK
-    } else {
-      runSelectorDialectLintPhase(workspaceRoot = resolved.workspaceRoot)
-    }
+    // One walk of the workspace's trails, two gates over it:
+    //  - Selector-dialect ([SelectorDialectLint]): a device that resolves a recording leg whose
+    //    dialect its driver cannot match (an androidMaestro: selector under
+    //    ANDROID_ONDEVICE_ACCESSIBILITY never matches) fails the build. Now leg-aware, so it
+    //    reports only genuine breakage — see that class for why the previous trail+platform
+    //    granularity had to stay a warning. Opt out with TRAILBLAZE_DISABLE_SELECTOR_DIALECT_GATE=1.
+    //  - Device-pin ([DevicePinLint]): `config.driver:` beside `config.devices:` fails the build (a
+    //    pin indented one level too shallow silently unpins the device); the deprecated bare-string
+    //    device form warns. Opt out with TRAILBLAZE_DISABLE_DEVICE_PIN_GATE=1.
+    // Separate kill-switches on purpose: disabling the dialect gate mid-migration must not also
+    // silently drop the device-pin ratchet.
+    val trailLintExit = runTrailLintPhase(
+      workspaceRoot = resolved.workspaceRoot,
+      selectorDialectGateEnabled = !isSelectorDialectGateDisabled(),
+      devicePinGateEnabled = !isDevicePinGateDisabled(),
+    )
 
     // Worst-of-all wins. Exit codes are ordered OK(0) < TYPE_ERROR(1) < USAGE(2) <
     // OPERATIONAL_ERROR(3), so max() surfaces the most-severe / most-operator-fixable outcome across
     // the phases over a plain success.
-    return maxOf(typecheckExit, testExit, validationExit, argTokenExit, dialectExit)
+    return maxOf(typecheckExit, testExit, validationExit, argTokenExit, trailLintExit)
   }
 
   /**
@@ -315,7 +323,7 @@ class CheckCommand : Callable<Int> {
    */
   private fun emitScriptedToolDefinitionsDebug(trailmaps: List<Path>, workspaceRoot: File) {
     val bun = BunBinaryResolver.resolveBunBinary()
-    val sdkDir = ScriptedToolDefinitionAnalyzer.resolveSdkDir()
+    val sdkDir = ScriptedToolDefinitionAnalyzer.resolveAnalyzerSdkDir()
     val shim = ScriptedToolDefinitionAnalyzer.resolveExtractorShim(sdkDir)
     if (bun == null || sdkDir == null || shim == null) {
       Console.info(
@@ -333,8 +341,9 @@ class CheckCommand : Callable<Int> {
     if (!ScriptedToolDefinitionAnalyzer.analyzerToolingAvailable(sdkDir)) {
       Console.info(
         "[ScriptedToolDefinitionAnalyzer] Skipping typed-scripted-tool extraction — " +
-          "ts-json-schema-generator not installed under ${sdkDir.absolutePath}/node_modules " +
-          "and no bundled analyzer shim present; run `bun install` in sdks/typescript to enable.",
+          "${sdkDir.absolutePath} has neither node_modules/ts-json-schema-generator nor the " +
+          "bundled-shim marker (usually a TRAILBLAZE_SDK_DIR override naming a tree that " +
+          "never ran `bun install`); run `bun install` there or unset the override.",
       )
       return
     }
@@ -888,34 +897,63 @@ class CheckCommand : Callable<Int> {
   }
 
   /**
-   * Selector-dialect gate (see [SelectorDialectLint]): walks every trail file under
-   * `<workspace>/trails/`, lints each parsed trail, and returns [EXIT_TYPE_ERROR] when any trail has
-   * a finding — a device resolving a recording leg whose dialect its driver cannot match, which
-   * fails on every run rather than intermittently.
+   * Per-trail static gates over ONE walk of every trail file under `<workspace>/trails/`:
    *
-   * Fatal because the lint is now leg-aware and reports zero findings across the internal corpus:
-   * a finding is real breakage, not a heuristic. Infrastructure problems inside the phase stay
-   * non-fatal (logged, [EXIT_OK]) — a trail that fails to parse yields no findings here, since the
-   * parse-level validators own that error.
+   *  - **Selector-dialect** ([SelectorDialectLint], needs the DECODED trail): a device resolving a
+   *    recording leg whose dialect its driver cannot match. Fatal because the lint is leg-aware and
+   *    reports zero findings across the internal corpus — a finding is real breakage, not a
+   *    heuristic.
+   *  - **Device pin** ([DevicePinLint], needs the RAW source): `config.driver:` beside
+   *    `config.devices:` is fatal — a pin indented one level too shallow silently unpins the
+   *    device. The deprecated bare-string device form warns only, because that decode branch is
+   *    still live and unmigrated consumer repos must not break on a CLI upgrade.
+   *
+   * Each gate has its own kill-switch, so disabling one never silently drops the other.
+   *
+   * A trail that fails to DECODE still gets the device-pin gate: that lint is a pure read of the
+   * source, and skipping it because some unrelated tool didn't resolve would let a mis-indented pin
+   * through on exactly the trails most likely to be mid-edit. Infrastructure problems inside the
+   * phase stay non-fatal (logged, [EXIT_OK]).
    *
    * Internal (not private) so the exit-code contract is directly testable — same visibility
    * rationale as [runArgTokenValidationPhase].
    */
-  internal fun runSelectorDialectLintPhase(workspaceRoot: File): Int {
+  internal fun runTrailLintPhase(
+    workspaceRoot: File,
+    selectorDialectGateEnabled: Boolean = true,
+    devicePinGateEnabled: Boolean = true,
+  ): Int {
+    if (!selectorDialectGateEnabled && !devicePinGateEnabled) return EXIT_OK
+    var exit = EXIT_OK
     try {
       val trailsRoot = CliPathUtils.workspaceGeneratedArtifactsRoot(workspaceRoot.toPath()).toFile()
       if (!trailsRoot.isDirectory) return EXIT_OK
       val yaml = createTrailblazeYaml()
-      val findings = mutableListOf<SelectorDialectLint.Finding>()
-      trailsRoot.walkTopDown()
-        .filter { it.isFile && TrailTscValidator.isTrailFile(it.name) }
+      val dialectFindings = mutableListOf<SelectorDialectLint.Finding>()
+      val devicePinFindings = mutableListOf<DevicePinLint.Finding>()
+      // Canonical discovery, NOT a local filename filter: a runnable trail may be written as
+      // `blaze.yaml` or a nested `trailblaze.yaml`, which `TrailIndexBuilder` and the runner both
+      // honor. A narrower predicate would let a mis-indented pin ship in a trail the CLI happily
+      // runs. This is the same helper the repo-wide corpus gates use, so the phase and
+      // DevicePinCorpusTest see one file set — it excludes workspace CONFIG `trailblaze.yaml`s
+      // (anchor and content-detected alike) plus `build/`, `.git/`, `node_modules/`, `.trailblaze/`.
+      TrailYamlValidator.findAllTrailYamlFiles(trailsRoot)
         .forEach { file ->
           val rel = trailsRoot.toPath().relativize(file.toPath()).toString()
+          val text = try {
+            file.readText()
+          } catch (_: Throwable) {
+            return@forEach
+          }
+          if (devicePinGateEnabled) {
+            DevicePinLint.lint(rel, text)?.let { devicePinFindings.add(it) }
+          }
+          if (!selectorDialectGateEnabled) return@forEach
           try {
-            val unified = when (val doc = yaml.decodeTrailDocument(file.readText())) {
+            val unified = when (val doc = yaml.decodeTrailDocument(text)) {
               is TrailDocument.Unified -> doc.trail
             }
-            SelectorDialectLint.lint(rel, unified)?.let { findings.add(it) }
+            SelectorDialectLint.lint(rel, unified)?.let { dialectFindings.add(it) }
           } catch (_: Throwable) {
             // Unparseable trail — the parse-level validators own that error; double-reporting is
             // noise. Throwable (not Exception): decodeTrailDocument surfaces unknown-tool failures
@@ -923,24 +961,37 @@ class CheckCommand : Callable<Int> {
             // bad trail must not crash the phase.
           }
         }
-      if (findings.isNotEmpty()) {
-        Console.error(SelectorDialectLint.renderFailures(findings))
-        return EXIT_TYPE_ERROR
+      // Warnings first, so the fatal blocks are what's left on screen at the end of the phase.
+      if (devicePinFindings.any { it.legacyDriverForms.isNotEmpty() }) {
+        Console.log(DevicePinLint.renderDeprecationWarnings(devicePinFindings))
+      }
+      if (devicePinFindings.any { it.isFatal }) {
+        Console.error(DevicePinLint.renderFatalFailures(devicePinFindings))
+        exit = EXIT_TYPE_ERROR
+      }
+      if (dialectFindings.isNotEmpty()) {
+        Console.error(SelectorDialectLint.renderFailures(dialectFindings))
+        exit = EXIT_TYPE_ERROR
       }
     } catch (e: Exception) {
       // An infrastructure failure inside the phase (I/O, an unexpected exception) must not fail the
       // build on its own — only a real finding does.
       Console.error(
-        "trailblaze check: selector-dialect gate failed (ignored): " +
+        "trailblaze check: trail-lint phase failed (ignored): " +
           (e.message ?: e::class.simpleName),
       )
     }
-    return EXIT_OK
+    return exit
   }
 
   /** Kill-switch for the selector-dialect gate — see [SelectorDialectLint.DISABLE_ENV_VAR]. */
-  private fun isSelectorDialectGateDisabled(): Boolean {
-    val v = System.getenv(SelectorDialectLint.DISABLE_ENV_VAR)?.trim()?.lowercase()
+  private fun isSelectorDialectGateDisabled(): Boolean = isEnvFlagSet(SelectorDialectLint.DISABLE_ENV_VAR)
+
+  /** Kill-switch for the device-pin gate — see [DevicePinLint.DISABLE_ENV_VAR]. */
+  private fun isDevicePinGateDisabled(): Boolean = isEnvFlagSet(DevicePinLint.DISABLE_ENV_VAR)
+
+  private fun isEnvFlagSet(name: String): Boolean {
+    val v = System.getenv(name)?.trim()?.lowercase()
     return v == "1" || v == "true"
   }
 

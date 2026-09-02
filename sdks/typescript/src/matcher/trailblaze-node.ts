@@ -312,6 +312,8 @@ function ownLabel(detail: DriverNodeDetail): string | null {
   switch (detail.class) {
     case "androidAccessibility":
       return firstNonBlank(detail.text, detail.contentDescription);
+    case "androidView":
+      return firstNonBlank(detail.text, detail.contentDescription);
     case "androidMaestro":
       return firstNonBlank(detail.text, detail.accessibilityText);
     case "iosMaestro":

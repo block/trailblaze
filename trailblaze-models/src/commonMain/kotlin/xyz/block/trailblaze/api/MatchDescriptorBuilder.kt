@@ -41,6 +41,11 @@ object MatchDescriptorBuilder {
       accessibilityId = detail.contentDescription,
       resourceId = detail.resourceId,
     )
+    is DriverNodeDetail.AndroidView -> Identity(
+      matchedText = detail.resolveText(),
+      accessibilityId = detail.contentDescription,
+      resourceId = detail.resourceId ?: detail.tag,
+    )
     is DriverNodeDetail.AndroidMaestro -> Identity(
       matchedText = detail.resolveText(),
       accessibilityId = detail.accessibilityText,

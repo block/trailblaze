@@ -13,6 +13,7 @@ import io.ktor.server.routing.put
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import xyz.block.trailblaze.api.TrailblazeImageFormat
+import xyz.block.trailblaze.devices.TrailblazeDevicePort
 import xyz.block.trailblaze.llm.TrailblazeLlmModels
 import xyz.block.trailblaze.llm.TrailblazeLlmProvider
 import xyz.block.trailblaze.mcp.AgentImplementation
@@ -118,10 +119,13 @@ internal suspend fun buildSettingsPatchResponse(
     request.captureNetworkTraffic?.let { updated = updated.copy(captureNetworkTraffic = it) }
     request.captureAnalytics?.let { updated = updated.copy(captureAnalytics = it) }
     request.showWebBrowser?.let { updated = updated.copy(showWebBrowser = it) }
-    request.serverPort?.takeIf(::isValidTcpPort)?.let { port ->
+    // Silently dropped rather than persisted: a saved port the daemon would refuse to start on
+    // leaves no working UI to undo it, since this route is served by that daemon.
+    request.serverPort?.takeIf(TrailblazeDevicePort::isSelectableDaemonPort)?.let { port ->
       updated = updated.copy(serverPort = port, serverUrl = "http://localhost:$port")
     }
-    request.serverHttpsPort?.takeIf(::isValidTcpPort)?.let { updated = updated.copy(serverHttpsPort = it) }
+    request.serverHttpsPort?.takeIf(TrailblazeDevicePort::isSelectableDaemonPort)
+      ?.let { updated = updated.copy(serverHttpsPort = it) }
     request.showTrailsTab?.let { updated = updated.copy(showTrailsTab = it) }
     request.showDevicesTab?.let { updated = updated.copy(showDevicesTab = it) }
     request.showWaypointsTab?.let { updated = updated.copy(showWaypointsTab = it) }
@@ -190,8 +194,6 @@ internal suspend fun buildSettingsPatchResponse(
   }
   return settingsDtoFromConfig(deps, config)
 }
-
-private fun isValidTcpPort(port: Int): Boolean = port in 1..65535
 
 /**
  * Runs an integration action, if wired — the shared source for both the REST

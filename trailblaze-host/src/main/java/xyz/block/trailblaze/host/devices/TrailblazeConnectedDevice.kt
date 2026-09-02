@@ -76,7 +76,7 @@ class MaestroConnectedDevice(
  * returns its [IosDeviceManager] from [createDeviceManager], and every wiring site
  * (host test rule, MCP bridge, screen-state capture) works polymorphically without
  * driver-specific branches. The driver's enum entry must be a member of
- * [TrailblazeDriverType.IOS_HOST_NATIVE_DRIVER_TYPES]; its connection factory lives in
+ * [TrailblazeDriverType.hostNativeSimulatorDriver]; its connection factory lives in
  * [TrailblazeDeviceService.getConnectedDevice].
  */
 abstract class IosNativeConnectedDevice(

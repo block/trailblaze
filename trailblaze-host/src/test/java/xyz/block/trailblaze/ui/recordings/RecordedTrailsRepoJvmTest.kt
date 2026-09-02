@@ -87,9 +87,10 @@ class RecordedTrailsRepoJvmTest {
   }
 
   @Test
-  fun `refuses a multi-tool-trailhead recording rather than writing a shadowing sibling`() {
-    // A recording whose trailhead has >1 tool can't be represented in the unified format, and a
-    // sibling dropped here would shadow the existing unified trail — refuse instead.
+  fun `merges a multi-tool-trailhead recording into the unified trail without a sibling`() {
+    // A trailhead slot holds one tool, so a recording with more is mapped onto that shape — the
+    // extras replay in the first step. It merges into the unified trail like any other recording,
+    // rather than being refused (which used to cost the whole recording).
     val trailDir = File(trailsRoot, "flows/login").apply { mkdirs() }
     File(trailDir, TrailRecordings.UNIFIED_TRAIL_FILENAME)
       .writeText("config:\n  id: flows/login\ntrail:\n  - step: Open the cart\n")
@@ -100,8 +101,15 @@ class RecordedTrailsRepoJvmTest {
       sessionInfo("flows/login", listOf("android")),
     )
 
-    assertTrue(result.isFailure, "a multi-tool trailhead must not drop a sibling next to a unified trail")
+    assertTrue(result.isSuccess, "merge save failed: ${result.exceptionOrNull()?.message}")
     assertFalse(File(trailDir, "android.trail.yaml").exists(), "no shadowing sibling")
+    val unified = createTrailblazeYaml()
+      .decodeUnifiedTrail(File(trailDir, TrailRecordings.UNIFIED_TRAIL_FILENAME).readText())
+    assertEquals(listOf("clearBootstrap"), unified.trailhead?.recordings?.get("android")?.map { it.name })
+    assertEquals(
+      listOf("openBootstrap", "tapCart"),
+      unified.trail.single().recordings["android"]?.map { it.name },
+    )
   }
 
   @Test
@@ -119,7 +127,122 @@ class RecordedTrailsRepoJvmTest {
     assertTrue(saved.absolutePath.contains("test-session"), "should land under the session-scoped directory")
   }
 
+  @Test
+  fun `a configuration session merges its leg under the configuration name`() {
+    val trailDir = File(trailsRoot, "flows/login").apply { mkdirs() }
+    File(trailDir, TrailRecordings.UNIFIED_TRAIL_FILENAME).writeText(multiDeviceTrailYaml)
+    val repo = RecordedTrailsRepoJvm(trailsDirectory = trailsRoot)
+
+    val result = repo.saveRecording(
+      recordingItems("tapCart"),
+      sessionInfo("flows/login", listOf("android"), selectedDeviceConfiguration = "pos-pair"),
+    )
+
+    assertTrue(result.isSuccess, "configuration save failed: ${result.exceptionOrNull()?.message}")
+    val unified = createTrailblazeYaml()
+      .decodeUnifiedTrail(File(trailDir, TrailRecordings.UNIFIED_TRAIL_FILENAME).readText())
+    assertEquals(
+      listOf("tapCart"),
+      unified.trail.single().recordings["pos-pair"]?.map { it.name },
+      "the leg must land under the configuration name, not the launch device's classifier",
+    )
+    assertEquals(null, unified.trail.single().recordings["android"], "no classifier-keyed duplicate leg")
+    // The authored cast survives, and the launch device's driver is not pinned onto it — a
+    // configuration entry can't carry one.
+    val configurationEntry = unified.config.devices?.get("pos-pair")
+    assertTrue(configurationEntry?.isConfiguration == true, "the authored cast must survive the merge")
+    assertEquals(null, configurationEntry?.driver, "a configuration entry must never carry a driver pin")
+  }
+
+  @Test
+  fun `a single-device session is still refused on a multi-device trail`() {
+    val trailDir = File(trailsRoot, "flows/login").apply { mkdirs() }
+    val existing = File(trailDir, TrailRecordings.UNIFIED_TRAIL_FILENAME).apply { writeText(multiDeviceTrailYaml) }
+    val repo = RecordedTrailsRepoJvm(trailsDirectory = trailsRoot)
+
+    val result = repo.saveRecording(recordingItems("tapCart"), sessionInfo("flows/login", listOf("android")))
+
+    assertTrue(result.isFailure, "a classifier leg would duplicate the configuration's steps")
+    assertEquals(multiDeviceTrailYaml, existing.readText(), "the refused save must leave the trail untouched")
+  }
+
+  @Test
+  fun `a configuration session is refused in a directory holding only per-classifier siblings`() {
+    // Merging is not the same as writing. `shouldMergeIntoSharedTrail` says no here (a sibling
+    // layout, no trail.yaml), and forking a fresh unified trail beside the sibling would leave both
+    // layouts on disk with the sibling permanently stale — the mirror image of the sibling-shadow
+    // refusal the single-device path already makes.
+    val trailDir = File(trailsRoot, "flows/login").apply { mkdirs() }
+    val sibling = File(trailDir, "android.trail.yaml").apply { writeText("config:\n  id: flows/login\ntrail: []\n") }
+    val repo = RecordedTrailsRepoJvm(trailsDirectory = trailsRoot)
+
+    val result = repo.saveRecording(
+      recordingItems("tapCart"),
+      sessionInfo("flows/login", listOf("android"), selectedDeviceConfiguration = "pos-pair"),
+    )
+
+    assertTrue(result.isFailure, "a configuration has no cast to key against in a sibling-only directory")
+    assertFalse(
+      File(trailDir, TrailRecordings.UNIFIED_TRAIL_FILENAME).exists(),
+      "no forked unified trail beside the sibling",
+    )
+    assertTrue(sibling.isFile, "the existing sibling must be left untouched")
+  }
+
+  @Test
+  fun `a configuration session is refused on a trail that declares a different cast`() {
+    // Saving back to the wrong destination: the legs would be keyed by a name this trail's replay
+    // resolves to nothing, so the file would be unreachable while the save reported success.
+    val trailDir = File(trailsRoot, "flows/login").apply { mkdirs() }
+    val existing = File(trailDir, TrailRecordings.UNIFIED_TRAIL_FILENAME).apply { writeText(multiDeviceTrailYaml) }
+    val repo = RecordedTrailsRepoJvm(trailsDirectory = trailsRoot)
+
+    val result = repo.saveRecording(
+      recordingItems("tapCart"),
+      sessionInfo("flows/login", listOf("android"), selectedDeviceConfiguration = "web-phone"),
+    )
+
+    assertTrue(result.isFailure, "`web-phone` is not declared by this trail")
+    assertEquals(multiDeviceTrailYaml, existing.readText(), "the refused save must leave the trail untouched")
+  }
+
+  @Test
+  fun `a configuration name that is not one path segment is refused`() {
+    // The name is BOTH the recording slot key and a filename component on the session-scoped
+    // fallback, and unlike a classifier chain it is author-written. Without this it escapes the
+    // session directory.
+    val repo = RecordedTrailsRepoJvm(trailsDirectory = trailsRoot)
+
+    val result = repo.saveRecording(
+      recordingItems("tapCart"),
+      sessionInfo(trailId = null, classifiers = listOf("android"), selectedDeviceConfiguration = "../../victim"),
+    )
+
+    assertTrue(result.isFailure, "a configuration name with path separators must not reach the filesystem")
+    assertFalse(File(trailsRoot.parentFile, "victim.trail.yaml").exists(), "nothing written outside the trails root")
+  }
+
   // --- fixtures ---
+
+  /** A trail whose only recording legs are keyed by the `pos-pair` configuration it declares. */
+  private val multiDeviceTrailYaml =
+    """
+    config:
+      id: flows/login
+      devices:
+        pos-pair:
+          devices:
+            seller:
+              classifier: lab-a
+            buyer:
+              classifier: lab-b
+    trail:
+      - step: Open the cart
+        recording:
+          pos-pair:
+            - tapTip: {}
+    """.trimIndent() + "\n"
+
 
   private fun recordingItems(toolName: String): List<TrailYamlItem> =
     listOf(
@@ -129,7 +252,7 @@ class RecordedTrailsRepoJvmTest {
       ),
     )
 
-  /** A recording whose trailhead carries [toolNames] (>1 has no unified representation). */
+  /** A recording whose trailhead carries [toolNames] (>1 spills into the first step on merge). */
   private fun recordingItemsWithMultiToolTrailhead(toolNames: List<String>): List<TrailYamlItem> =
     listOf(
       TrailYamlItem.ConfigTrailItem(TrailConfig(id = "flows/login", target = "app", driver = "ANDROID_ONDEVICE_INSTRUMENTATION")),
@@ -144,7 +267,11 @@ class RecordedTrailsRepoJvmTest {
     trailblazeTool = OtherTrailblazeTool(toolName = name, raw = JsonObject(mapOf("marker" to JsonPrimitive(name)))),
   )
 
-  private fun sessionInfo(trailId: String?, classifiers: List<String>): SessionInfo = SessionInfo(
+  private fun sessionInfo(
+    trailId: String?,
+    classifiers: List<String>,
+    selectedDeviceConfiguration: String? = null,
+  ): SessionInfo = SessionInfo(
     sessionId = SessionId("test-session"),
     latestStatus = SessionStatus.Unknown,
     timestamp = Instant.fromEpochMilliseconds(0),
@@ -162,5 +289,6 @@ class RecordedTrailsRepoJvmTest {
       classifiers = classifiers.map { TrailblazeDeviceClassifier(it) },
     ),
     trailConfig = trailId?.let { TrailConfig(id = it) },
+    selectedDeviceConfiguration = selectedDeviceConfiguration,
   )
 }

@@ -6,6 +6,7 @@ import assertk.assertions.isFalse
 import assertk.assertions.isTrue
 import io.ktor.http.HttpStatusCode
 import java.io.IOException
+import java.net.BindException
 import java.net.HttpURLConnection
 import java.net.InetAddress
 import java.net.ServerSocket
@@ -166,10 +167,41 @@ class MockRpcServerTest {
    * fixture's own probe is what fills it: measured, a passive squatter stopped accepting connections
    * after roughly 50 probes, so the port read as quiet ~1.2s in and the unguarded `stop` returned
    * successfully. This test passed with the guard reverted until the squatter started accepting.
+   *
+   * The squatter's own bind takes [MockRpcServer.start]'s gate directly — the only bind here on the
+   * fixture's device-derived port that no `start()` precedes, because the whole point is that this
+   * server never starts. Without it, build 17500 failed in this test's *setup* with a raw
+   * `BindException` from an unrelated ephemeral socket, on a line whose subject is not this fixture
+   * at all; it passed on the immediate rebuild. That is the class doc's second hazard landing on the
+   * one bind nothing had gated.
+   *
+   * The gate is a precondition, not a guarantee, and the difference is the point. [awaitBindable]
+   * probes by binding and closing, so a socket arriving inside that window still takes the bind
+   * below — which is why that bind says so when it loses, rather than retrying. Closing the window
+   * would mean manufacturing exactly the machine-state-dependent complexity the class doc says has
+   * three times failed to earn its keep here. `stop returns only once the port is free to rebind`
+   * keeps the same residual on its own rebind for a stronger reason: that bind *is* its assertion,
+   * so gating it would make the test wait for the very condition it exists to prove.
    */
   @Test fun `stop on a never-started server leaves a squatted port alone instead of failing`() {
     val server = MockRpcServer(deviceId("mock-rpc-stop-unstarted"))
-    val squatter = ServerSocket(server.port, SQUATTER_BACKLOG, InetAddress.getByName("127.0.0.1"))
+    // Setup, not assertion: this test has to own the port before it can squat it. See the KDoc.
+    check(MockRpcServer.awaitBindable(server.port)) {
+      "Test setup: port ${server.port} never became bindable within start()'s bind wait, so" +
+        " this test could not squat it — an unrelated socket holding it is the usual cause"
+    }
+    val squatter =
+      try {
+        ServerSocket(server.port, SQUATTER_BACKLOG, InetAddress.getByName("127.0.0.1"))
+      } catch (e: BindException) {
+        // The probe above binds and closes, so this is the window it cannot cover, named rather
+        // than retried. Left bare it reads as a broken gate instead of a late-arriving socket.
+        throw IllegalStateException(
+          "Test setup: port ${server.port} was bindable when checked and taken before this test" +
+            " could bind it, so something else claimed it in between",
+          e,
+        )
+      }
     val accepting =
       thread(isDaemon = true, name = "mock-rpc-squatter-accept") {
         while (true) {

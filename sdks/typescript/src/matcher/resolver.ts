@@ -5,7 +5,7 @@
 //
 // The Kotlin object is `TrailblazeNodeSelectorResolver`. We mirror it as a module-level
 // `resolve` function (TypeScript prefers free functions over class-with-static-only-members).
-// The private helpers (`matchesSelector`, `matchesDriverDetail`, six per-driver matchers,
+// The private helpers (`matchesSelector`, `matchesDriverDetail`, seven per-driver matchers,
 // `requirePattern`, `matchesPattern`, and the regex-translation helpers) are all
 // file-local — only `resolve` is exported.
 //
@@ -19,6 +19,7 @@
 import type {
   DriverNodeMatchAndroidAccessibility,
   DriverNodeMatchAndroidMaestro,
+  DriverNodeMatchAndroidView,
   DriverNodeMatchCompose,
   DriverNodeMatchIosAxe,
   DriverNodeMatchIosMaestro,
@@ -30,6 +31,7 @@ import {
   type DriverNodeDetail,
   type DriverNodeDetailAndroidAccessibility,
   type DriverNodeDetailAndroidMaestro,
+  type DriverNodeDetailAndroidView,
   type DriverNodeDetailCompose,
   type DriverNodeDetailIosAxe,
   type DriverNodeDetailIosMaestro,
@@ -169,8 +171,8 @@ function matchesSelector(
   if (isExcludedAsContainerChrome(node, selector)) return false;
 
   // Driver-specific property matching. The selector's discriminator is a non-null
-  // field among the six driver keys (androidAccessibility, androidMaestro, web,
-  // compose, iosMaestro, iosAxe); at most one is set in well-formed selectors.
+  // field among the seven driver keys (androidAccessibility, androidView, androidMaestro,
+  // web, compose, iosMaestro, iosAxe); at most one is set in well-formed selectors.
   const driverMatchActive = activeDriverMatch(selector);
   if (driverMatchActive != null) {
     if (!matchesDriverDetail(node.driverDetail, driverMatchActive)) return false;
@@ -246,6 +248,7 @@ function matchesSelector(
  */
 type ActiveDriverMatch =
   | { readonly kind: "androidAccessibility"; readonly match: DriverNodeMatchAndroidAccessibility }
+  | { readonly kind: "androidView"; readonly match: DriverNodeMatchAndroidView }
   | { readonly kind: "androidMaestro"; readonly match: DriverNodeMatchAndroidMaestro }
   | { readonly kind: "web"; readonly match: DriverNodeMatchWeb }
   | { readonly kind: "compose"; readonly match: DriverNodeMatchCompose }
@@ -255,6 +258,9 @@ type ActiveDriverMatch =
 function activeDriverMatch(selector: TrailblazeNodeSelector): ActiveDriverMatch | null {
   if (selector.androidAccessibility != null) {
     return { kind: "androidAccessibility", match: selector.androidAccessibility };
+  }
+  if (selector.androidView != null) {
+    return { kind: "androidView", match: selector.androidView };
   }
   if (selector.androidMaestro != null) {
     return { kind: "androidMaestro", match: selector.androidMaestro };
@@ -302,6 +308,8 @@ function matchesDriverDetail(
         detail.class === "androidAccessibility" &&
         matchesAndroidAccessibility(detail, match.match)
       );
+    case "androidView":
+      return detail.class === "androidView" && matchesAndroidView(detail, match.match);
     case "androidMaestro":
       return (
         detail.class === "androidMaestro" && matchesAndroidMaestro(detail, match.match)
@@ -376,6 +384,43 @@ function matchesAndroidAccessibility(
   return true;
 }
 
+/**
+ * Matches a native View-tree selector. Deliberately uses the default `"native"` dialect:
+ * `androidView` selectors are authored against a tree captured in-process from the real view
+ * objects, never round-tripped through Maestro, so they get strict case-sensitive semantics
+ * rather than the lenient dialect `matchesAndroidMaestro` must preserve. Mirrors Kotlin
+ * `matchesAndroidView`.
+ */
+function matchesAndroidView(
+  detail: DriverNodeDetailAndroidView,
+  match: DriverNodeMatchAndroidView,
+): boolean {
+  if (!requirePattern(match.classNameRegex, detail.className ?? null)) return false;
+  if (!requirePattern(match.resourceIdRegex, detail.resourceId ?? null)) return false;
+  if (!requirePattern(match.tagRegex, detail.tag ?? null)) return false;
+  // textRegex matches resolveText() (text > hintText > contentDescription).
+  if (!requirePattern(match.textRegex, resolveText(detail))) return false;
+  if (!requirePattern(match.contentDescriptionRegex, detail.contentDescription ?? null)) {
+    return false;
+  }
+  if (!requirePattern(match.hintTextRegex, detail.hintText ?? null)) return false;
+  if (!requirePattern(match.stateDescriptionRegex, detail.stateDescription ?? null)) {
+    return false;
+  }
+  if (!requirePattern(match.errorTextRegex, detail.errorText ?? null)) return false;
+  if (!requireEqual(match.isEnabled, detail.isEnabled ?? true)) return false;
+  if (!requireEqual(match.isClickable, detail.isClickable ?? false)) return false;
+  // A non-Checkable view has isChecked == null, so `isChecked: false` matches only views that
+  // are checkable and currently unchecked — not every view on the screen.
+  if (!requireEqual(match.isChecked, detail.isChecked ?? null)) return false;
+  if (!requireEqual(match.isSelected, detail.isSelected ?? false)) return false;
+  if (!requireEqual(match.isFocused, detail.isFocused ?? false)) return false;
+  if (!requireEqual(match.isEditable, detail.isEditable ?? false)) return false;
+  if (!requireEqual(match.isPassword, detail.isPassword ?? false)) return false;
+  if (!requireEqual(match.inputType, detail.inputType ?? 0)) return false;
+  return true;
+}
+
 function matchesAndroidMaestro(
   detail: DriverNodeDetailAndroidMaestro,
   match: DriverNodeMatchAndroidMaestro,
@@ -426,6 +471,21 @@ function matchesCompose(
   if (!requireEqual(match.isFocused, detail.isFocused ?? false)) return false;
   if (!requireEqual(match.isSelected, detail.isSelected ?? false)) return false;
   if (!requireEqual(match.isPassword, detail.isPassword ?? false)) return false;
+  if (!requireEqual(match.collectionItemRowIndex, detail.collectionItemRowIndex ?? null)) {
+    return false;
+  }
+  if (!requireEqual(match.collectionItemColumnIndex, detail.collectionItemColumnIndex ?? null)) {
+    return false;
+  }
+  if (!requirePattern(match.stateDescriptionRegex, detail.stateDescription ?? null)) {
+    return false;
+  }
+  if (!requireEqual(match.isHeading, detail.isHeading ?? false)) return false;
+  if (!requirePattern(match.paneTitleRegex, detail.paneTitle ?? null)) return false;
+  if (!requireEqual(match.isDialog, detail.isDialog ?? false)) return false;
+  if (!requireEqual(match.isPopup, detail.isPopup ?? false)) return false;
+  if (!requirePattern(match.errorTextRegex, detail.errorText ?? null)) return false;
+  if (!requireEqual(match.hasSetTextAction, detail.hasSetTextAction ?? false)) return false;
   return true;
 }
 

@@ -1,7 +1,9 @@
 package xyz.block.trailblaze.playwright.tools
 
 import ai.koog.agents.core.tools.annotations.LLMDescription
+import com.microsoft.playwright.Locator
 import com.microsoft.playwright.Page
+import com.microsoft.playwright.assertions.LocatorAssertions
 import com.microsoft.playwright.assertions.PlaywrightAssertions.assertThat
 import kotlinx.serialization.Serializable
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
@@ -35,6 +37,15 @@ data class PlaywrightNativeVerifyListVisibleTool(
   override fun withNodeSelector(selector: TrailblazeNodeSelector): PlaywrightExecutableTool =
     PlaywrightNativeVerifyListVisibleTool(ref = null, items = items, reasoning = reasoning, nodeSelector = selector)
 
+  companion object {
+    /**
+     * Per-item auto-wait budget. Long enough to absorb rows hydrating after the
+     * container renders; short enough that a list missing N items reports in ~2N
+     * seconds rather than N default assertion timeouts.
+     */
+    internal const val ITEM_VISIBILITY_TIMEOUT_MS: Double = 2_000.0
+  }
+
   override suspend fun executeWithPlaywright(
     page: Page,
     context: TrailblazeToolExecutionContext,
@@ -51,12 +62,28 @@ data class PlaywrightNativeVerifyListVisibleTool(
       val (container, error) =
         PlaywrightExecutableTool.validateAndResolveRef(page, ref, description, context, nodeSelector)
       if (error != null) return error
-      assertThat(container!!.first()).isVisible()
+      assertThat(container!!).isVisible()
 
+      // Auto-wait per item instead of a fail-fast count() probe: rows in server-backed
+      // lists routinely hydrate after the container renders, and a snapshot check at
+      // call time flags them missing. Each item gets a bounded wait so a genuinely
+      // missing list doesn't pay the full default assertion timeout per entry.
       val missingItems = mutableListOf<String>()
       for (item in items) {
-        val itemLocator = container.getByText(item)
-        if (itemLocator.count() == 0) {
+        try {
+          // Filter to VISIBLE matches before narrowing. Taking `.first()` of the raw text
+          // match pins the assertion to the first node in DOM order, so a hidden duplicate
+          // ahead of the real row (`<li hidden>Latte</li><li>Latte</li>`) reports the item
+          // missing. The contract is "some visible row shows this text", not "the first
+          // node carrying it is visible".
+          assertThat(
+            container.getByText(item)
+              .filter(Locator.FilterOptions().setVisible(true))
+              .first(),
+          ).isVisible(
+            LocatorAssertions.IsVisibleOptions().setTimeout(ITEM_VISIBILITY_TIMEOUT_MS),
+          )
+        } catch (_: AssertionError) {
           missingItems.add(item)
         }
       }

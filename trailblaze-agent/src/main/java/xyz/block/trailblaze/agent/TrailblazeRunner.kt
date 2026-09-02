@@ -40,6 +40,7 @@ import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.logs.model.TraceId.Companion.TraceOrigin
 import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.mcp.LlmCallStrategy
+import xyz.block.trailblaze.prompt.withPerStepSystemPromptContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.tracing.TrailblazeTracer
 import xyz.block.trailblaze.util.Console
@@ -82,6 +83,9 @@ class TrailblazeRunner(
 ) : TestAgentRunner {
 
   private val tracingLlmClient: LLMClient = TracingLlmClient(llmClient)
+
+  /** Dynamic session state re-read immediately before every AI-driven step. */
+  var perStepSystemPromptContextProvider: (() -> String?)? = null
 
   private var currentSystemPrompt: String = composeSystemPrompt(
     platformPrompt = systemPromptTemplate,
@@ -130,6 +134,11 @@ class TrailblazeRunner(
     prompt: PromptStep,
     stepStatus: PromptStepStatus,
   ): AgentTaskStatus {
+    // Re-read dynamic context at the step boundary. A recorded switchDevice between two AI steps
+    // changes the active device, so retaining the constructor-time prompt would lie to the model.
+    llmClientHelper.systemPromptTemplate = currentSystemPrompt.withPerStepSystemPromptContext(
+      perStepSystemPromptContextProvider?.invoke(),
+    )
     logObjectiveStart(prompt)
     val stepToolStrategy = prompt.getToolStrategy()
     // Attach the verify-step ledger before the LLM loop starts. The helper checks for it on

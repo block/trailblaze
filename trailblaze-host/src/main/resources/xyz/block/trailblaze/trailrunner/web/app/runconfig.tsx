@@ -7,29 +7,11 @@ function RunConfigDialog({ trail: initialTrail, seed, pinnedId, go, close, closi
   const [trail, setTrail] = React.useState(initialTrail || null);
   const [trailQuery, setTrailQuery] = React.useState('');
   const [rightTab, setRightTab] = React.useState('steps');
-  // Single-page config: the left rail jumps to a section and the body's scroll
-  // position drives which one is highlighted (scroll-spy).
-  const [activeSection, setActiveSection] = React.useState('target');
-  const scrollRef = React.useRef(null);
-  const sectionEls = React.useRef({});
-  const registerSection = (id, el) => { if (el) sectionEls.current[id] = el; };
-  const onBodyScroll = () => {
-    const c = scrollRef.current;
-    if (!c) return;
-    const cTop = c.getBoundingClientRect().top;
-    let cur = SECTIONS[0][0];
-    for (const [id] of SECTIONS) {
-      const el = sectionEls.current[id];
-      if (el && el.getBoundingClientRect().top - cTop <= 90) cur = id;
-    }
-    setActiveSection(cur);
-  };
-  const jumpToSection = (id) => {
-    const c = scrollRef.current;
-    const el = sectionEls.current[id];
-    if (!c || !el) return;
-    c.scrollBy({ top: el.getBoundingClientRect().top - c.getBoundingClientRect().top - 10, behavior: 'smooth' });
-  };
+  // Two panes and nothing else by default: WHICH DEVICES on the left, WHICH STEPS on the right, Play
+  // and Record at the bottom. Model, agent, AI call limit, capture toggles and the CLI command are
+  // all real but rarely touched, so they live behind one disclosure. Sticky, so anyone who does tune
+  // them isn't reopening it every run. Visibility only: every default VALUE is unchanged.
+  const [advanced, setAdvanced] = useStickyState('tb-run-advanced', false);
   const [phase, setPhase] = React.useState('config');
   const [runError, setRunError] = React.useState(null);
   // One entry per device a multi-device launch was asked to run on, so a device that failed to
@@ -37,8 +19,9 @@ function RunConfigDialog({ trail: initialTrail, seed, pinnedId, go, close, closi
   const [runOutcomes, setRunOutcomes] = React.useState(null);
   const [copied, setCopied] = React.useState(false);
   // In-flight guard: run() awaits several round trips (connect, YAML fetch, target switch) with
-  // the dialog still up, so without this a click stampede dispatches one run per click.
-  const [launching, setLaunching] = React.useState(false);
+  // the dialog still up, so without this a click stampede dispatches one run per click. Holds WHICH
+  // verb is in flight ('play' | 'record'), so only that button says what it is doing.
+  const [launching, setLaunching] = React.useState(null);
   const launchingRef = React.useRef(false);
 
   const trailsResult = TB.useTrails();
@@ -58,6 +41,14 @@ function RunConfigDialog({ trail: initialTrail, seed, pinnedId, go, close, closi
   }, []);
 
   const seedDeviceId = seed && seed.deviceId;
+  // Which steps this run covers: 0-based inclusive indices into the trail's `trail:` list, always a
+  // contiguous span (see RunStepsPane), and the whole trail until someone narrows it. `null` while
+  // the trail's steps are still loading, or for a trail with no addressable steps at all.
+  const [range, setRange] = React.useState(null);
+  // A caller can seed the span - the steps board's and the YAML gutter's "from here to the end" - and
+  // whether it means to Play or Record, which only decides which of the two buttons is emphasized.
+  const seedRange = (seed && seed.stepRange) || null;
+  const emphasis = seed && seed.mode === 'record' ? 'record' : 'play';
   // A run can go out to several devices at once (one run each), so the selection is a set. The
   // defaulting order for a freshly opened dialog lives in TbRunFanout.defaultDeviceIds.
   const [deviceIds, setDeviceIds] = React.useState(() => [seedDeviceId || gtFirstDevice || pinnedId].filter(Boolean));
@@ -80,6 +71,29 @@ function RunConfigDialog({ trail: initialTrail, seed, pinnedId, go, close, closi
   const toggleDevice = (id) => { deviceTouched.current = true; setDeviceIds((cur) => TbRunFanout.toggleDeviceId(cur, id)); };
 
   const detail = TB.useTrailDetail(trail ? trail.id : null);
+  // The trail's own steps, read from the file the same way the steps board reads them, so a step's
+  // position here is the position the server slices and merges by. A trail this can't model - a
+  // legacy list-root file - yields no steps and can only be run whole.
+  const stepModel = React.useMemo(() => parseUnifiedModel(detail.data?.yaml || ''), [detail.data?.yaml]);
+  const stepList = (stepModel && stepModel.steps) || [];
+  const total = stepList.length;
+  const detailSteps = detail.data?.steps || [];
+  // Seed the span once the step count is known. Keyed on the count and the trail, not on the polled
+  // YAML: re-running this on every poll would throw away a selection the user just made.
+  React.useEffect(() => {
+    if (!total) { setRange(null); return; }
+    const clamp = (n) => Math.max(0, Math.min(n, total - 1));
+    setRange(seedRange
+      ? { start: clamp(seedRange.from), end: clamp(seedRange.to) }
+      : { start: 0, end: total - 1 });
+  }, [total, trail && trail.id]);
+  const whole = !!(range && range.start === 0 && range.end === total - 1);
+  // Click a step: run from there to the end. That is the case this exists for - the device is
+  // already in the state the earlier steps would put it in. Shift-click moves the other end instead,
+  // anchored on the current start, so the span stays contiguous however it is built.
+  const pickStep = (i, extend) => setRange((r) => (extend && r
+    ? { start: Math.min(r.start, i), end: Math.max(r.start, i) }
+    : { start: i, end: total - 1 }));
 
   // If no caller/user selection anchors the run, prefer the device shape declared by the trail
   // instead of blindly taking the first connected device. Unified trails commonly declare this as
@@ -182,15 +196,27 @@ function RunConfigDialog({ trail: initialTrail, seed, pinnedId, go, close, closi
     // only to re-arm this after a failed run releases it.
     if (launchingRef.current) return;
     const plan = TbRunFanout.connectPlan({ devices: selectedDevices, connected: connectedTargetsRef.current, inFlight: connecting.current, targetApp, targetReady });
+    // Each in-flight entry says what it is, so a launch can tell apart the two things this map
+    // holds: a release (or a dial for some other target), whose answer changes what the launch must
+    // release, versus a dial already binding the target the launch itself wants. Only the first kind
+    // has to settle before a launch can plan - see the wait in `run()`. A release is flagged rather
+    // than being spelled `target: null`, because `targetApp` is itself nullable and the two would
+    // then be indistinguishable exactly when no target is resolved.
     plan.drop.forEach((device) => {
-      connecting.current[device.id] = TB.disconnectDevice(TbRunFanout.deviceRunId(device))
-        .then(() => { bindConnected((m) => { delete m[device.id]; }); })
-        .finally(() => { delete connecting.current[device.id]; });
+      connecting.current[device.id] = {
+        release: true,
+        p: TB.disconnectDevice(TbRunFanout.deviceRunId(device))
+          .then(() => { bindConnected((m) => { delete m[device.id]; }); })
+          .finally(() => { delete connecting.current[device.id]; }),
+      };
     });
     plan.dial.forEach((device) => {
-      connecting.current[device.id] = TB.connectDevice(TbRunFanout.deviceRunId(device), targetApp).then((ok) => {
-        if (ok) bindConnected((m) => { m[device.id] = targetApp; });
-      }).finally(() => { delete connecting.current[device.id]; });
+      connecting.current[device.id] = {
+        target: targetApp,
+        p: TB.connectDevice(TbRunFanout.deviceRunId(device), targetApp).then((ok) => {
+          if (ok) bindConnected((m) => { m[device.id] = targetApp; });
+        }).finally(() => { delete connecting.current[device.id]; }),
+      };
     });
   }, [deviceIds.join(','), targetApp, targetReady, connectedIds.join(','), launching]);
 
@@ -202,7 +228,7 @@ function RunConfigDialog({ trail: initialTrail, seed, pinnedId, go, close, closi
   const [verbose, setVerbose] = React.useState(false);
   const [headless, setHeadless] = React.useState(true);
 
-  const [captureVideo, setCaptureVideo] = React.useState(true);
+  const [captureVideo, setCaptureVideo] = React.useState(false);
   const [captureLogcat, setCaptureLogcat] = React.useState(false);
   const [captureNetwork, setCaptureNetwork] = React.useState(false);
   const [captureIosLogs, setCaptureIosLogs] = React.useState(false);
@@ -234,6 +260,14 @@ function RunConfigDialog({ trail: initialTrail, seed, pinnedId, go, close, closi
     platform: selectedDevice ? selectedDevice.platform : null,
     driver: selectedDevice ? selectedDevice.driver : null,
   });
+  // The YAML tab previews the trail the run actually dispatches, so a narrowed span shows the slice
+  // - trailhead dropped, `Partial:` title - rather than the whole file the run wouldn't send. Falls
+  // back to the whole document if the slice can't be built; run() reports that failure for real.
+  const previewYaml = React.useMemo(() => {
+    if (!range || whole) return liveYaml;
+    const sliced = TM.sliceSteps(parseUnifiedModel(liveYaml), range.start, range.end);
+    return sliced ? serializeUnifiedModel(sliced) : liveYaml;
+  }, [liveYaml, range && range.start, range && range.end, whole]);
   // Keyed on the device the apps were read FROM, so a mixed-platform run is judged against the
   // device that can actually host the declared target rather than a web primary that can't.
   const declaredTargetUnavailable = !!(appsDevice
@@ -247,19 +281,24 @@ function RunConfigDialog({ trail: initialTrail, seed, pinnedId, go, close, closi
     navigator.clipboard.writeText(command).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); });
   }
 
-  async function run() {
+  async function run(mode) {
     if (!trail || launching) return;
     setRunError(null);
     setRunOutcomes(null);
     // Every awaited call below is raced against a deadline: the RPC layer has no timeout, so a
     // wedged daemon/device otherwise leaves this dialog on a disabled "Starting…" forever with
     // no error and no way to retry (observed live: three Run clicks, 3+ minutes each, silent).
-    const fail = (msg) => { setRunError(msg); setPhase('failed'); launchingRef.current = false; setLaunching(false); };
+    const fail = (msg) => { setRunError(msg); setPhase('failed'); launchingRef.current = false; setLaunching(null); };
     const refusal = TbRunFanout.selectionError(selectedDevices);
     if (refusal) { fail(refusal); return; }
+    // Recording writes into per-step recording slots, which only a unified single-file trail has.
+    if (mode === 'record' && !range) {
+      fail("Recording writes each step's tool calls back into the trail file, and this trail has no steps to write into. Only a unified single-file trail can be recorded step by step.");
+      return;
+    }
     launchingRef.current = true;
     const seq = (launchSeq.current += 1);
-    setLaunching(true);
+    setLaunching(mode);
     try {
       setPhase('connecting');
       // Release any device this dialog bound to a different target app before dialing: the daemon
@@ -269,12 +308,18 @@ function RunConfigDialog({ trail: initialTrail, seed, pinnedId, go, close, closi
       // in-flight dial has recorded nothing yet, so it reads as an unconnected device and nothing
       // gets released. Only the checked devices, since a dial for an unchecked one could time this
       // out over a device the run never touches.
-      const pending = selectedDevices.map((d) => connecting.current[d.id]).filter(Boolean);
+      //
+      // And only the dials that could bind something else (see `blockingDials`). This wait is the
+      // second way a cold device lost its run: the dialog starts dialing the moment a device is
+      // checked, so a device slow enough to matter is usually already dialing when Run is clicked,
+      // and the launch died here at 45s without ever reaching the connect that knows how to wait.
+      // The daemon serializes per device, so that connect joins this dial rather than racing it.
+      const pending = TbRunFanout.blockingDials(selectedDevices, connecting.current, targetApp);
       if (pending.length > 0) {
         // allSettled: `all` rejects on the first failure and leaves the rest unsettled.
         const settled = await TB.withTimeout(Promise.allSettled(pending), TbRunFanout.RUN_TIMEOUT_MS);
         if (settled === '__timeout__') {
-          // Failing beats planning against a map those dials are still about to change.
+          // Failing beats planning against a map those releases are still about to change.
           fail(`A device connect this dialog started is still running after ${Math.round(TbRunFanout.RUN_TIMEOUT_MS / 1000)}s. Wait for it to finish, or reopen the dialog.`);
           return;
         }
@@ -291,10 +336,17 @@ function RunConfigDialog({ trail: initialTrail, seed, pinnedId, go, close, closi
         // Only a connection bound to the target app THIS run is for counts as already connected:
         // a device the dialog bound to another app has to be re-dialed, not reused.
         isConnected: (device) => connectedTargetsRef.current[device.id] === targetApp,
-        connect: (tbId) => TB.withTimeout(TB.connectDeviceDetailed(tbId, targetApp), TbRunFanout.RUN_TIMEOUT_MS),
+        // Undeadlined on purpose: connectDevices owns the connect deadline, because a device that
+        // blows it has not failed - it is usually still starting up - and only the unwrapped promise
+        // can be waited out. Deadlining here threw it away and cancelled runs that would have run.
+        connect: (tbId) => TB.connectDeviceDetailed(tbId, targetApp),
       });
-      const reachable = connects.filter((c) => c.ok).map((c) => c.device.id);
-      bindConnected((m) => { reachable.forEach((id) => { m[id] = targetApp; }); });
+      // Only a device that actually answered is recorded as connected: this map is what tells the
+      // NEXT launch it can skip the dial, and a device still connecting has not bound anything yet.
+      bindConnected((m) => { connects.filter((c) => c.ok).forEach((c) => { m[c.device.id] = targetApp; }); });
+      // A slow device still counts as reachable though: its run is on its way, so the launch must
+      // not report "could not start on any device" over a device that is merely still connecting.
+      const reachable = connects.filter((c) => c.ok || c.slow).map((c) => c.device.id);
       if (reachable.length === 0) {
         // Nothing to run on. One device keeps its bare reason in the banner; several devices get a
         // row each, so the user can see which device gave which reason.
@@ -318,6 +370,13 @@ function RunConfigDialog({ trail: initialTrail, seed, pinnedId, go, close, closi
         captureAnalytics: cfg.captureAnalytics,
         captureEvents: cfg.captureEvents,
       };
+      // Every await since the click is now allowed to take real time rather than failing - the
+      // connect can run 45s, the YAML load 30s - and the dialog is closable throughout. So each
+      // step that changes something OUTSIDE this dialog re-checks that its launch is still the
+      // current one first. This one rebinds the daemon's persisted target app, which outlives the
+      // dialog entirely; the one below mints a card and navigates. Checked immediately before the
+      // mutation rather than once up front, because another long await sits between the two.
+      if (launchSeq.current !== seq) return;
       // Only rebind the daemon's global target on an explicit resolvable selection (targetApp).
       // targetId can still carry an unresolvable declared target - rebinding to it would fail, and
       // the run itself gets the honest server-side error ("target ... is not registered").
@@ -326,11 +385,75 @@ function RunConfigDialog({ trail: initialTrail, seed, pinnedId, go, close, closi
         if (ok === '__timeout__') { fail('The daemon did not respond after 30s while switching the target app. It may be wedged - try again.'); return; }
         if (!ok) { fail('Could not switch to the selected target app.'); return; }
       }
+      // Record hands the whole thing to the daemon: the server slices the same window it later
+      // merges the recordings back into, so the two can't drift apart, and no client gets to name a
+      // file the daemon will write. Play stays on the client - it writes nothing, so it needs no
+      // write authority.
+      const label = !range || whole
+        ? 'this trail'
+        : (range.start === range.end ? `step ${range.start + 1}` : `steps ${range.start + 1}-${range.end + 1}`);
+      let runYaml = yaml;
+      if (mode === 'record') {
+        const reachable = connects.filter((c) => c.ok);
+        const started = await TB.withTimeout(TB.recordTrailRange(trail.id, range.start, range.end, reachable.map((c) => TbRunFanout.deviceRunId(c.device)), {
+          maxLlmCalls: opts.maxLlmCalls,
+          agent: opts.agent,
+          selfHeal: opts.selfHeal,
+          captureVideo: opts.captureVideo,
+          captureLogcat: opts.captureLogcat,
+          captureNetworkTraffic: opts.captureNetworkTraffic,
+          captureIosLogs: opts.captureIosLogs,
+          captureAnalytics: opts.captureAnalytics,
+          captureEvents: opts.captureEvents,
+        }), TbRunFanout.RUN_TIMEOUT_MS);
+        if (started === '__timeout__') {
+          fail(`The daemon did not answer after ${Math.round(TbRunFanout.RUN_TIMEOUT_MS / 1000)}s while starting the recording of ${label}. Check the Runs screen before starting it again.`);
+          return;
+        }
+        if (!started.ok || started.sessionIds.length === 0) { fail(started.error || `Could not start recording ${label}.`); return; }
+        // A partial launch is not a success: some devices are recording and some never started, and
+        // closing on that would leave the reader to notice the missing runs themselves. The reasons
+        // are reported as text rather than as per-device rows, because the response says how many
+        // runs started but not which device each one belongs to.
+        const problems = connects
+          .filter((c) => !c.ok)
+          .map((c) => `${TbRunFanout.deviceRunId(c.device)}: ${c.error || 'could not connect'}`)
+          .concat(started.error ? [started.error] : []);
+        if (problems.length > 0) {
+          // Reported without re-arming the buttons, unlike every other refusal on this path: some
+          // devices ARE recording into this step window already, and `fail` would re-enable Record
+          // so the obvious retry starts a second recording that merges into the same slots. The
+          // launch is spent either way, so it stays spent - read the reasons, then close.
+          setRunError(`Recording ${label} started on ${started.sessionIds.length} of ${connects.length} devices. ${problems.join('; ')}`);
+          setPhase('failed');
+          return;
+        }
+        // Same marker the Play path installs, for the same reason: the Active screen locks onto the
+        // session the daemon named instead of guessing which row is "the new run". No `awaitsDispatch`
+        // here - the recording route answers with its session ids, so the id is already in hand and
+        // there is no later patch to wait for. Only for a single run, matching Play: the marker holds
+        // one session, and a fan-out has no one run to follow.
+        if (started.sessionIds.length === 1) {
+          TB.recordPendingRun({ title: trail.title || trail.id, target: targetId, device: reachable[0].device.name, sessionId: started.sessionIds[0] });
+        }
+        go('runs', { followLive: Date.now() });
+        close();
+        return;
+      }
+      // A Play of every step is a run of the file as authored, trailhead included. Only a narrowed
+      // span gets sliced, which is also what drops the trailhead.
+      if (range && !whole) {
+        const sliced = TM.sliceSteps(parseUnifiedModel(yaml), range.start, range.end);
+        if (!sliced) { fail(`Could not read ${label} out of this trail. Run the whole trail instead, or fix the trail file first.`); return; }
+        runYaml = serializeUnifiedModel(sliced);
+      }
       // Handed over undeadlined: dispatchRuns owns the run deadline, so a dispatch that blows it is
       // still awaited and can report the session it started instead of being written off.
-      const dispatch = (tbId) => TB.dispatchRun(tbId, yaml, { ...opts, trailId: trail ? trail.id : null });
-      // No setLaunching(false) on the success path: the dialog is closing, and re-enabling the
+      const dispatch = (tbId) => TB.dispatchRun(tbId, runYaml, { ...opts, trailId: trail ? trail.id : null });
+      // No setLaunching(null) on the success path: the dialog is closing, and re-enabling the
       // button during the close animation would reopen the double-dispatch window.
+      // Re-checked, because the target rebind above is allowed 30s of its own.
+      if (launchSeq.current !== seq) return;
       if (connects.length === 1) {
         // Record the pending marker BEFORE navigating, then patch in the authoritative sessionId as
         // soon as dispatch answers - the Active screen locks onto that id instead of guessing which
@@ -342,10 +465,14 @@ function RunConfigDialog({ trail: initialTrail, seed, pinnedId, go, close, closi
         // the deadline claimed the run never started seconds before its session appeared. Both
         // patches name THIS marker, so an answer that arrives after the user started another run
         // no longer lands on that run's card.
-        TbRunFanout.dispatchRuns(connects, { dispatch }).then(function reconcile([outcome]) {
+        // `isLive` asks whether this run is still WANTED, not whether its card is still on screen:
+        // the card expires after 90s and the device this exists for can take longer than that.
+        TbRunFanout.dispatchRuns(connects, { dispatch, isLive: () => TB.pendingRunWanted(marker) }).then(function reconcile([outcome]) {
           if (outcome.ok) TB.setPendingRunSession(outcome.sessionId, marker);
           else if (outcome.settled) outcome.settled.then((late) => reconcile([late]));
-          else TB.failPendingRun(outcome.error, marker);
+          // An abandoned device is left alone on purpose: its card is already stopped or expired,
+          // and failing it would bring that card back to report a run nobody is waiting for.
+          else if (!outcome.abandoned) TB.failPendingRun(outcome.error, marker);
         });
         go('runs', { followLive: Date.now() });
         close();
@@ -353,7 +480,10 @@ function RunConfigDialog({ trail: initialTrail, seed, pinnedId, go, close, closi
       }
       // Several devices: one run each, awaited, so every device's outcome is known before the
       // dialog goes anywhere. A device that failed to connect is reported, never dispatched to.
-      const outcomes = await TbRunFanout.dispatchRuns(connects, { dispatch });
+      // Here `isLive` is this launch rather than a card: the dialog bumps `launchSeq` when it closes
+      // or relaunches, and a slow device that comes up after that belongs to a launch nobody is
+      // reading outcomes for any more - `show()` below already discards them on the same test.
+      const outcomes = await TbRunFanout.dispatchRuns(connects, { dispatch, isLive: () => launchSeq.current === seq });
       // A slow dispatch is still in flight, so the rows, the summary and what stays checked are all
       // re-derived when it answers - and a launch whose last slow device turns out to have started
       // IS a finished launch, late answer or not. One subscription per device, replacing that
@@ -395,7 +525,7 @@ function RunConfigDialog({ trail: initialTrail, seed, pinnedId, go, close, closi
   return (
     <div className={'tb-overlay' + (closing ? ' closing' : '')} style={{ alignItems: 'stretch', justifyContent: 'center', padding: 14, paddingTop: 14 + (document.documentElement.classList.contains('tb-native') ? 28 : 0) }} onClick={close}>
       <div className="tb-run-dialog" onClick={(e) => e.stopPropagation()}
-        style={{ width: '100%', maxWidth: 1380, margin: 'auto', height: 'min(900px, 94vh)', background: 'var(--bg-subtle)', border: '1px solid var(--tb-hairline)', borderRadius: 16, boxShadow: '0 30px 90px rgba(0,0,0,.55)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        style={{ width: '100%', maxWidth: advanced ? 1240 : 1000, margin: 'auto', height: 'min(720px, 94vh)', maxHeight: '94vh', background: 'var(--bg-subtle)', border: '1px solid var(--tb-hairline)', borderRadius: 16, boxShadow: '0 30px 90px rgba(0,0,0,.55)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
 
         <div className="tb-run-head" style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '16px 22px', borderBottom: '1px solid var(--tb-hairline)', flex: '0 0 auto' }}>
           <div className="tb-run-mark" style={{ width: 40, height: 40, borderRadius: 12, background: 'rgba(0,224,19,.12)', border: '1px solid rgba(0,224,19,.32)', display: 'grid', placeItems: 'center', flex: '0 0 auto' }}>
@@ -408,6 +538,18 @@ function RunConfigDialog({ trail: initialTrail, seed, pinnedId, go, close, closi
           <button onClick={close} title="Close" style={{ display: 'inline-flex', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-subtle)', padding: 4, marginLeft: 4 }}><Ico n="x" s={20} /></button>
         </div>
 
+        {trail && range && !whole && (
+          // The one thing a partial run surprises people with: it does not start the trail over.
+          <div data-testid="run-step-range" style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 22px', borderBottom: '1px solid var(--tb-hairline)', background: 'rgba(0,224,19,.06)', flex: '0 0 auto' }}>
+            <Ico n="play" s={15} c="var(--tb-pass)" />
+            <div style={{ fontSize: 12.5, lineHeight: 1.45 }}>
+              <b>{range.start === range.end ? `Step ${range.start + 1}` : `Steps ${range.start + 1}-${range.end + 1}`} of {total}.</b>
+              {' '}
+              <span className="tb-sub">The trail doesn't start over: the run begins from whatever is on the device's screen right now.</span>
+            </div>
+          </div>
+        )}
+
         {!trail ? (
           <div style={{ flex: '1 1 auto', minHeight: 0, overflowY: 'auto', padding: '20px 24px' }}>
             <div className="tb-eyebrow" style={{ marginBottom: 10 }}>Choose a trail</div>
@@ -415,7 +557,7 @@ function RunConfigDialog({ trail: initialTrail, seed, pinnedId, go, close, closi
             <div style={{ border: '1px solid var(--tb-hairline)', borderRadius: 9 }}>
               {filteredTrails.length === 0 && <div className="tb-sub" style={{ padding: 12, fontSize: 12.5 }}>No matching trails.</div>}
               {filteredTrails.slice(0, 300).map((t) => (
-                <div key={t.id} className="tb-pal-row" onClick={() => { setTrail(t); setActiveSection('target'); }} style={{ cursor: 'pointer' }}>
+                <div key={t.id} className="tb-pal-row" onClick={() => setTrail(t)} style={{ cursor: 'pointer' }}>
                   <Ico n="file-text" s={16} c="var(--text-subtle)" />
                   <span style={{ fontSize: 13.5, flex: 1, minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{t.title || t.id}</span>
                   <span className="tb-sub" style={{ fontSize: 10.5 }}>{t.platform || ''}</span>
@@ -424,38 +566,70 @@ function RunConfigDialog({ trail: initialTrail, seed, pinnedId, go, close, closi
             </div>
           </div>
         ) : (
-          <div className="tb-run-grid" style={{ flex: '1 1 auto', minHeight: 0, display: 'grid', gridTemplateColumns: '190px 1fr 440px' }}>
-            <div className="tb-run-nav" style={{ borderRight: '1px solid var(--tb-hairline)', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-              <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
-                <SectionNav active={activeSection} onJump={jumpToSection} />
-              </div>
-            </div>
-            {/* One scrolling page: every section stacked top-to-bottom. The left rail
-                jumps here; this scroll position drives which rail item is active. */}
-            <div className="tb-run-form" ref={scrollRef} onScroll={onBodyScroll} style={{ overflowY: 'auto', padding: '22px 30px', display: 'flex', flexDirection: 'column', gap: 26 }}>
-              <Section id="target" title="Target" ico={SECTIONS[0][2]} registerRef={registerSection}>
+          // Two panes: which devices on the left, which steps on the right. Advanced expands the
+          // left pane in place rather than opening a third rail - a run only ever needs the two
+          // questions above it answered.
+          <div className="tb-run-grid" style={{ flex: '1 1 auto', minHeight: 0, display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 400px' }}>
+            <div className="tb-run-form" style={{ overflowY: 'auto', padding: '20px 26px 24px', display: 'flex', flexDirection: 'column', gap: 22 }}>
+              <Section id="target" title={deviceIds.length > 1 ? 'Targets' : 'Target'} ico="crosshair">
                 <TargetSection devices={deviceList} deviceIds={deviceIds} toggleDevice={toggleDevice} connectedIds={connectedIds}
                   appsDevice={appsDevice} installedTargets={installedTargets} targetApp={targetApp} setTargetApp={setTargetApp} appsLoading={deviceApps.loading} declaredTarget={declaredTarget}
-                  launching={launching} />
+                  launching={!!launching} />
+                {/* Self-heal is the one behavior knob that changes what a run means to the person
+                    starting it, so it stays out here with the devices. */}
+                {!advanced && <div style={{ marginTop: 6 }}><ToggleRow label="Self-heal failures" flag="--self-heal" on={selfHeal} set={setSelfHeal} /></div>}
               </Section>
-              <Section id="behavior" title="Behavior" ico={SECTIONS[1][2]} registerRef={registerSection}>
-                <BehaviorSection selfHeal={selfHeal} setSelfHeal={setSelfHeal} useRecordedSteps={useRecordedSteps} setUseRecordedSteps={setUseRecordedSteps}
-                  agent={agent} setAgent={setAgent} maxLlmCalls={maxLlmCalls} setMaxLlmCalls={setMaxLlmCalls} llm={llm} setLlm={setLlm}
-                  verbose={verbose} setVerbose={setVerbose} headless={headless} setHeadless={setHeadless} web={selectedDevice && selectedDevice.platform === 'web'} />
-              </Section>
-              <Section id="capture" title="Capture" ico={SECTIONS[2][2]} registerRef={registerSection}>
-                <CaptureSection captureVideo={captureVideo} setCaptureVideo={setCaptureVideo} captureLogcat={captureLogcat} setCaptureLogcat={setCaptureLogcat}
-                  captureNetwork={captureNetwork} setCaptureNetwork={setCaptureNetwork} captureIosLogs={captureIosLogs} setCaptureIosLogs={setCaptureIosLogs}
-                  captureAnalytics={captureAnalytics} setCaptureAnalytics={setCaptureAnalytics} captureEvents={captureEvents} setCaptureEvents={setCaptureEvents} saveRecording={saveRecording} setSaveRecording={setSaveRecording}
-                  noReport={noReport} setNoReport={setNoReport} markdown={markdown} setMarkdown={setMarkdown} noLogging={noLogging} setNoLogging={setNoLogging}
-                  tags={tags} setTags={setTags} />
-              </Section>
+              {advanced && (
+                <Section id="behavior" title="Behavior" ico="bot">
+                  <BehaviorSection selfHeal={selfHeal} setSelfHeal={setSelfHeal} useRecordedSteps={useRecordedSteps} setUseRecordedSteps={setUseRecordedSteps}
+                    agent={agent} setAgent={setAgent} maxLlmCalls={maxLlmCalls} setMaxLlmCalls={setMaxLlmCalls} llm={llm} setLlm={setLlm}
+                    verbose={verbose} setVerbose={setVerbose} headless={headless} setHeadless={setHeadless} web={selectedDevice && selectedDevice.platform === 'web'} />
+                </Section>
+              )}
+              {advanced && (
+                <Section id="capture" title="Capture" ico="clapperboard">
+                  <CaptureSection captureVideo={captureVideo} setCaptureVideo={setCaptureVideo} captureLogcat={captureLogcat} setCaptureLogcat={setCaptureLogcat}
+                    captureNetwork={captureNetwork} setCaptureNetwork={setCaptureNetwork} captureIosLogs={captureIosLogs} setCaptureIosLogs={setCaptureIosLogs}
+                    captureAnalytics={captureAnalytics} setCaptureAnalytics={setCaptureAnalytics} captureEvents={captureEvents} setCaptureEvents={setCaptureEvents} saveRecording={saveRecording} setSaveRecording={setSaveRecording}
+                    noReport={noReport} setNoReport={setNoReport} markdown={markdown} setMarkdown={setMarkdown} noLogging={noLogging} setNoLogging={setNoLogging}
+                    tags={tags} setTags={setTags} />
+                </Section>
+              )}
+              {advanced && (
+                <div className="tb-mono tb-run-command" style={{ position: 'relative', background: 'var(--bg-standard)', border: '1px solid var(--tb-hairline)', borderRadius: 9, padding: '10px 42px 10px 13px', fontSize: 12, lineHeight: 1.6, color: 'var(--text-standard)', whiteSpace: 'pre-wrap', wordBreak: 'break-all', maxHeight: 110, overflowY: 'auto' }}>
+                  {command}
+                  <button data-testid="run-cmd-copy" onClick={copyCommand} title={copied ? 'Copied!' : 'Copy command'}
+                    className="tb-btn ghost sm"
+                    style={{ position: 'absolute', top: 6, right: 6, width: 28, height: 28, padding: 0, justifyContent: 'center' }}>
+                    <Ico n={copied ? 'check' : 'copy'} s={14} c={copied ? 'var(--tb-primary-green)' : undefined} />
+                  </button>
+                  {/* The CLI has no partial-run verb: `trailblaze run` takes a file and runs all of
+                      it, so a narrowed span makes this command something other than the buttons
+                      below. Say so rather than hand out a command that does something else. */}
+                  {range && !whole && (
+                    <div className="tb-sub" style={{ marginTop: 6, fontSize: 11.5, whiteSpace: 'normal' }}>
+                      Runs the WHOLE trail: running part of one is a Trail Runner action.
+                    </div>
+                  )}
+                </div>
+              )}
+              {/* Aligned with the section content column (the 42px inset Section uses), so it reads as
+                  the last row of the form rather than as something hanging off its left edge. */}
+              <div style={{ display: 'flex', justifyContent: 'flex-start', paddingLeft: 42 }}>
+                <button data-testid="run-advanced-toggle" onClick={() => setAdvanced(!advanced)} className="tb-btn ghost sm">
+                  <Ico n={advanced ? 'chevron-up' : 'chevron-down'} s={14} />
+                  {advanced ? 'Hide advanced options' : 'Advanced options'}
+                </button>
+              </div>
             </div>
             <div className="tb-run-preview" style={{ borderLeft: '1px solid var(--tb-hairline)', background: 'var(--bg-app)', minHeight: 0 }}>
               {/* The dialog isn't under the shell's screen Boundary, so a render throw in
-                  the right rail (e.g. the Tools panel) would unmount the whole app. Contain it. */}
+                  the right pane (e.g. the Tools panel) would unmount the whole app. Contain it. */}
               <Boundary>
-                <RightRail trail={trail} detail={detail} liveYaml={liveYaml} tab={rightTab} setTab={setRightTab}
+                <RunStepsPane steps={stepList} trailhead={stepModel && stepModel.trailhead} range={range} total={total}
+                  onPick={pickStep} onAll={() => setRange({ start: 0, end: total - 1 })}
+                  detailSteps={detailSteps} loading={detail.loading}
+                  showTabs={advanced} tab={rightTab} setTab={setRightTab} liveYaml={previewYaml}
                   targetId={targetId} driver={selectedDevice ? selectedDevice.driver : null} platform={selectedDevice ? selectedDevice.platform : null} />
               </Boundary>
             </div>
@@ -489,21 +663,28 @@ function RunConfigDialog({ trail: initialTrail, seed, pinnedId, go, close, closi
         )}
 
         {trail && (
-          // Footer is a single integrated bar: the live `trailblaze run …` command
-          // (always visible, updates as you configure, wraps) with a small copy button,
-          // and one green Run. Wizard nav (Back/Next) lives in the left step rail.
-          <div className="tb-run-footer" style={{ display: 'flex', alignItems: 'stretch', gap: 12, padding: '12px 16px', borderTop: '1px solid var(--tb-hairline)', background: 'var(--bg-app)', flex: '0 0 auto' }}>
-            <div className="tb-mono tb-run-command" style={{ position: 'relative', flex: 1, minWidth: 0, background: 'var(--bg-standard)', border: '1px solid var(--tb-hairline)', borderRadius: 9, padding: '10px 42px 10px 13px', fontSize: 12, lineHeight: 1.6, color: 'var(--text-standard)', whiteSpace: 'pre-wrap', wordBreak: 'break-all', maxHeight: 92, overflowY: 'auto' }}>
-              {command}
-              <button data-testid="run-cmd-copy" onClick={copyCommand} title={copied ? 'Copied!' : 'Copy command'}
-                className="tb-btn ghost sm"
-                style={{ position: 'absolute', top: 6, right: 6, width: 28, height: 28, padding: 0, justifyContent: 'center' }}>
-                <Ico n={copied ? 'check' : 'copy'} s={14} c={copied ? 'var(--tb-primary-green)' : undefined} />
-              </button>
+          // Two verbs, because a trail run is one of two different things and the difference is what
+          // happens to the FILE afterwards. Both act on the steps selected on the right.
+          <div className="tb-run-footer" style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '12px 16px 12px 22px', borderTop: '1px solid var(--tb-hairline)', background: 'var(--bg-app)', flex: '0 0 auto' }}>
+            {/* One line, not a paragraph: the difference between the two verbs is what happens to the
+                file, and each button's tooltip carries the rest. */}
+            <div className="tb-sub" style={{ flex: 1, minWidth: 0, fontSize: 11.5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              Record updates this file's tool calls when the run finishes.
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', flex: '0 0 auto' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: '0 0 auto' }}>
               <span data-testid="run-config-run">
-                <Btn kind="primary" ico="play" onClick={run} disabled={!canRun}>{phase === 'connecting' || launching ? 'Starting…' : 'Run'}</Btn>
+                <Btn kind={emphasis === 'play' ? 'primary' : 'ghost'} ico="play" onClick={() => run('play')} disabled={!canRun}
+                  title="Replay the tool calls the selected steps already hold">
+                  {launching === 'play' ? 'Starting…' : 'Play'}
+                </Btn>
+              </span>
+              <span data-testid="run-config-record">
+                <Btn kind={emphasis === 'record' ? 'primary' : 'ghost'} ico="circle-dot" onClick={() => run('record')} disabled={!canRun || !range}
+                  title={range
+                    ? 'Let the agent drive the selected steps, then rewrite their tool calls in this trail file to match'
+                    : 'Only a unified single-file trail has per-step recordings to write back into.'}>
+                  {launching === 'record' ? 'Recording…' : 'Record'}
+                </Btn>
               </span>
             </div>
           </div>

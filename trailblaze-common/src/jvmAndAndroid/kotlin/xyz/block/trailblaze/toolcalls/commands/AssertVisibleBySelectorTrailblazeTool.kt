@@ -137,24 +137,7 @@ data class AssertVisibleBySelectorTrailblazeTool(
       }
     }
     if (result.isSuccess()) {
-      // Prefer the nodeSelector's driver-specific text for a friendly message. Ordered by
-      // property tier (most → least human-readable), with drivers alphabetized within each
-      // tier:
-      //   1. Driver-block textRegex (best for log readability)
-      //   2. Accessibility / content-description text (still human-readable)
-      //   3. Resource ID (last resort — typically opaque)
-      val desc = nodeSelector.androidAccessibility?.textRegex
-        ?: nodeSelector.androidMaestro?.textRegex
-        ?: nodeSelector.iosMaestro?.textRegex
-        // Tier: accessibility / content-description text
-        ?: nodeSelector.androidAccessibility?.contentDescriptionRegex
-        ?: nodeSelector.androidMaestro?.accessibilityTextRegex
-        ?: nodeSelector.iosMaestro?.accessibilityTextRegex
-        // Tier: resource ID
-        ?: nodeSelector.androidAccessibility?.resourceIdRegex
-        ?: nodeSelector.androidMaestro?.resourceIdRegex
-        ?: nodeSelector.iosMaestro?.resourceIdRegex
-        ?: "element"
+      val desc = selectorDescription()
       // When expectedText is set, the visibility check above only confirmed the element is
       // present. Now re-resolve against a fresh tree to read the matched element's text
       // and assert equality with the expected value. Soft-fall back to the visibility result
@@ -167,6 +150,46 @@ data class AssertVisibleBySelectorTrailblazeTool(
     }
     return result
   }
+
+  /**
+   * The [expectedText] post-pass for a driver that ran the VISIBILITY check on its own backend
+   * instead of through [execute] — the in-process ANDROID_TEST adapter dispatches visibility to
+   * its native assert and then must apply the same text verdict every other driver applies. One
+   * implementation, so a trail cannot pass EXACT on one driver and PREFIX on another.
+   *
+   * Returns [visibilityResult] unchanged when [expectedText] is unset or the visibility check
+   * failed; otherwise the text-equality verdict.
+   */
+  suspend fun applyExpectedTextPostPass(
+    toolExecutionContext: TrailblazeToolExecutionContext,
+    visibilityResult: TrailblazeToolResult,
+  ): TrailblazeToolResult {
+    if (expectedText == null || !visibilityResult.isSuccess()) return visibilityResult
+    return verifyTextEquality(toolExecutionContext, selectorDescription(), visibilityResult)
+  }
+
+  /**
+   * The nodeSelector's most human-readable handle, for result messages. Ordered by property
+   * tier (most → least human-readable), with drivers alphabetized within each tier:
+   *   1. Driver-block textRegex (best for log readability)
+   *   2. Accessibility / content-description text (still human-readable)
+   *   3. Resource ID (last resort — typically opaque)
+   */
+  private fun selectorDescription(): String = nodeSelector?.androidAccessibility?.textRegex
+    ?: nodeSelector?.androidMaestro?.textRegex
+    ?: nodeSelector?.androidView?.textRegex
+    ?: nodeSelector?.iosMaestro?.textRegex
+    // Tier: accessibility / content-description text
+    ?: nodeSelector?.androidAccessibility?.contentDescriptionRegex
+    ?: nodeSelector?.androidMaestro?.accessibilityTextRegex
+    ?: nodeSelector?.androidView?.contentDescriptionRegex
+    ?: nodeSelector?.iosMaestro?.accessibilityTextRegex
+    // Tier: resource ID
+    ?: nodeSelector?.androidAccessibility?.resourceIdRegex
+    ?: nodeSelector?.androidMaestro?.resourceIdRegex
+    ?: nodeSelector?.androidView?.resourceIdRegex
+    ?: nodeSelector?.iosMaestro?.resourceIdRegex
+    ?: "element"
 
   /**
    * Post-pass text-equality check, invoked only when [expectedText] is set. The
@@ -378,13 +401,34 @@ data class AssertVisibleBySelectorTrailblazeTool(
     return if (out.isEmpty()) listOf(matched) else out.toList()
   }
 
+  /**
+   * Exhaustive on purpose — no `else`. A dialect this doesn't name reads as "the element has no
+   * readable text", which turns [expectedText] into an assertion that always fails, so the
+   * compiler is the right place to catch the next one. `compose` was exactly that hole: a
+   * composable's text sat one branch away and the assertion reported a mismatch that wasn't real.
+   *
+   * Compose reads `editableText` first, matching [DriverNodeDetail.Compose.resolveText]. A text
+   * field publishes both its current value and its label, and an assertion about a field is about
+   * what the user typed — checking the label first would fail every assertion on a filled-in value
+   * and pass an assertion on the label without ever reading the input.
+   *
+   * `hintText` sits behind `text` on every dialect that HAS one, matching each dialect's own
+   * `resolveText()` — which is the same fold the resolver applies to `textRegex`. Reading it here
+   * is what keeps `expectedText` answerable on an EMPTY text field: an unfilled `EditText`
+   * publishes its placeholder as the hint and nothing as its text, so a selector that matched the
+   * field on `textRegex` would then fail the post-pass with "no readable text" — one tool
+   * disagreeing with itself about what the element says (case 5380822 asserts the item-search
+   * field shows "Search all items", which the field only ever carries as a hint).
+   */
   private fun TrailblazeNode.extractText(): String? = when (val d = driverDetail) {
-    is DriverNodeDetail.AndroidAccessibility -> d.text ?: d.contentDescription ?: d.labeledByText
-    is DriverNodeDetail.AndroidMaestro -> d.text ?: d.accessibilityText
-    is DriverNodeDetail.IosMaestro -> d.text ?: d.accessibilityText
+    is DriverNodeDetail.AndroidAccessibility ->
+      d.text ?: d.hintText ?: d.contentDescription ?: d.labeledByText
+    is DriverNodeDetail.AndroidView -> d.text ?: d.hintText ?: d.contentDescription
+    is DriverNodeDetail.AndroidMaestro -> d.text ?: d.hintText ?: d.accessibilityText
+    is DriverNodeDetail.Compose -> d.editableText ?: d.text ?: d.contentDescription
+    is DriverNodeDetail.IosMaestro -> d.text ?: d.hintText ?: d.accessibilityText
     is DriverNodeDetail.IosAxe -> d.label
     is DriverNodeDetail.Web -> d.ariaName
-    else -> null
   }
 
   companion object {

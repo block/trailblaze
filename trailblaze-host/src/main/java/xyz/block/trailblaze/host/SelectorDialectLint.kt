@@ -17,7 +17,8 @@ import xyz.block.trailblaze.yaml.unified.UnifiedTrailTargets
 
 /**
  * `trailblaze check` gate: fails a trail whose **resolved** recording leg for a device carries
- * selectors in a dialect that device's **resolved** driver cannot match.
+ * selectors in a dialect that device's **resolved** driver cannot match, or whose recorded
+ * `switchDevice` names a device the trail cannot bind (see [lintHandovers]).
  *
  * ## The failure this catches
  *
@@ -141,6 +142,7 @@ object SelectorDialectLint {
    */
   private val DIALECT_KEY_PLATFORM: Map<String, TrailblazeDevicePlatform> = mapOf(
     "androidAccessibility" to TrailblazeDevicePlatform.ANDROID,
+    "androidView" to TrailblazeDevicePlatform.ANDROID,
     "androidMaestro" to TrailblazeDevicePlatform.ANDROID,
     "iosMaestro" to TrailblazeDevicePlatform.IOS,
     "iosAxe" to TrailblazeDevicePlatform.IOS,
@@ -186,20 +188,28 @@ object SelectorDialectLint {
   )
 
   /**
-   * One recorded `switchDevice` naming a device its own configuration doesn't declare.
+   * One recorded `switchDevice` naming a device no configuration in the trail declares.
    *
    * Reported rather than logged because it is breakage in its own right — the run fails on that
-   * step at the session-start guard — AND because it blinds the rest of this pass: the static
-   * replay can no longer say which device is active, so every selector after it goes unlinted.
-   * Silently dropping that coverage while the gate reports green is the worse of the two failures.
+   * step at the session-start guard — AND, when it sits in a configuration leg, because it blinds
+   * the rest of the dialect pass: the static replay can no longer say which device is active, so
+   * every selector after it goes unlinted. Silently dropping that coverage while the gate reports
+   * green is the worse of the two failures.
    */
   data class UndeclaredHandover(
-    val configurationName: String,
+    /** The configuration this leg IS, or null when the leg is keyed by anything else. */
+    val configurationName: String?,
+    /** The recording leg key the `switchDevice` was recorded under. */
+    val legKey: String,
     /** 0-based index into `trail:`, or `null` for the trailhead. */
     val stepIndex: Int?,
     /** The name the recorded `switchDevice` targets. */
     val target: String,
-    /** The member names the configuration actually declares. */
+    /**
+     * The member names available to this handover: the configuration's own members for a
+     * configuration leg, else every member declared by any configuration in the trail. Empty when
+     * the trail declares no configuration at all, in which case no `switchDevice` can ever resolve.
+     */
     val declaredMembers: List<String>,
   )
 
@@ -220,8 +230,8 @@ object SelectorDialectLint {
 
   /**
    * PURE. Lint one parsed unified trail. Returns a [Finding] when some device resolves a recording
-   * leg carrying a dialect its resolved driver cannot match, or when a configuration leg hands off
-   * to a device that configuration doesn't declare; null otherwise.
+   * leg carrying a dialect its resolved driver cannot match, or when a recorded `switchDevice`
+   * names a device the trail cannot bind; null otherwise.
    */
   fun lint(trailRelPath: String, trail: UnifiedTrail): Finding? {
     val occurrences = mutableListOf<Occurrence>()
@@ -254,7 +264,8 @@ object SelectorDialectLint {
         }
       }
     }
-    lintConfigurationLegs(trailRelPath, trail, occurrences, undeclaredHandovers)
+    lintConfigurationLegs(trailRelPath, trail, occurrences)
+    lintHandovers(trail, undeclaredHandovers)
     return if (occurrences.isEmpty() && undeclaredHandovers.isEmpty()) {
       null
     } else {
@@ -277,7 +288,6 @@ object SelectorDialectLint {
     trailRelPath: String,
     trail: UnifiedTrail,
     occurrences: MutableList<Occurrence>,
-    undeclaredHandovers: MutableList<UndeclaredHandover>,
   ) {
     val configurations = trail.config.devices.orEmpty().filterValues { it.devices != null }
     for ((configurationName, configuration) in configurations) {
@@ -304,6 +314,41 @@ object SelectorDialectLint {
           step.recordings[configurationName]?.let { add(index to it) }
         }
       }
+      // Judge one selector-bearing scope against whichever member is active at this point in the
+      // replay. Takes a scope rather than the whole tool so a wrapper that hands off inside a
+      // branch can still have its CONDITION judged — see the call before `break@legLoop`.
+      fun judgeScope(scope: JsonObject, toolName: String, stepIndex: Int?) {
+        val driverName = driverByMember[activeMember]
+        val driver = driverName?.let { TrailblazeDriverType.fromString(it) }
+        val platform = driver?.platform ?: platformByMember[activeMember]
+        // Two disjoint unmatchable pairings: any dialect belonging to another platform entirely
+        // (the one a misplaced `switchDevice` produces in a heterogeneous cast), and a Maestro
+        // dialect the member's own-platform driver can't read.
+        val unmatchable =
+          platform?.let { collectForeignPlatformSelectors(scope, it).map { hit -> hit to true } }
+            .orEmpty() +
+            if (driver != null && driver in NATIVE_DIALECT_DRIVERS) {
+              collectMaestroDialectSelectors(scope, driver.platform).map { it to false }
+            } else {
+              emptyList()
+            }
+        unmatchable.forEach { (hit, crossPlatform) ->
+          val (key, selector) = hit
+          occurrences.add(
+            Occurrence(
+              deviceClassifier = "$configurationName/$activeMember",
+              driverName = driverName ?: "$platform (no driver pin)",
+              stepIndex = stepIndex,
+              resolvedClassifier = configurationName,
+              toolName = toolName,
+              dialectKey = key,
+              selectorSummary = summarize(selector),
+              crossPlatform = crossPlatform,
+            ),
+          )
+        }
+      }
+
       legLoop@ for ((stepIndex, tools) in legs) {
         for (tool in tools) {
           if (tool.name == SwitchDeviceTrailblazeTool.ADVERTISED_TOOL_NAME) {
@@ -313,19 +358,10 @@ object SelectorDialectLint {
               continue
             }
             // Either way the static replay no longer knows which device is active, so linting on
-            // past this point would report the stale member's findings or miss real ones.
-            if (target != null) {
-              // A literal name the configuration doesn't declare: real breakage, reported as a
-              // finding so the gate fails rather than quietly dropping the rest of the leg.
-              undeclaredHandovers.add(
-                UndeclaredHandover(
-                  configurationName = configurationName,
-                  stepIndex = stepIndex,
-                  target = target,
-                  declaredMembers = members.keys.toList(),
-                ),
-              )
-            } else {
+            // past this point would report the stale member's findings or miss real ones. A
+            // literal undeclared name is real breakage, but [lintHandovers] reports it — that pass
+            // sees every leg and every offending switch, where this one stops at the first.
+            if (target == null) {
               // Unreadable or memory-interpolated: not statically knowable, so not a finding.
               Console.log(
                 "[selector-dialect-lint] $trailRelPath: configuration `$configurationName` hands " +
@@ -335,37 +371,99 @@ object SelectorDialectLint {
             }
             break@legLoop
           }
-          if (tool.name in SAFE_FALLBACK_TOOL_NAMES) continue
-          val driverName = driverByMember[activeMember]
-          val driver = driverName?.let { TrailblazeDriverType.fromString(it) }
-          val platform = driver?.platform ?: platformByMember[activeMember]
-          val args = tool.toJsonArgs()
-          // Two disjoint unmatchable pairings: any dialect belonging to another platform entirely
-          // (the one a misplaced `switchDevice` produces in a heterogeneous cast), and a Maestro
-          // dialect the member's own-platform driver can't read.
-          val unmatchable =
-            platform?.let { collectForeignPlatformSelectors(args, it).map { hit -> hit to true } }
-              .orEmpty() +
-              if (driver != null && driver in NATIVE_DIALECT_DRIVERS) {
-                collectMaestroDialectSelectors(args, driver.platform).map { it to false }
-              } else {
-                emptyList()
-              }
-          unmatchable.forEach { (hit, crossPlatform) ->
-            val (key, selector) = hit
-            occurrences.add(
-              Occurrence(
-                deviceClassifier = "$configurationName/$activeMember",
-                driverName = driverName ?: "$platform (no driver pin)",
-                stepIndex = stepIndex,
-                resolvedClassifier = configurationName,
-                toolName = tool.name,
-                dialectKey = key,
-                selectorSummary = summarize(selector),
-                crossPlatform = crossPlatform,
-              ),
+          // A handover nested in a wrapper's branch dispatches for real, but whether the branch
+          // runs is a runtime question — so past one, the active device is genuinely undecidable
+          // and every later finding would be attributed to a guess. Stop, same as above.
+          // `lintHandovers` still judges the nested name itself.
+          //
+          // Asked structurally, NOT off the target list: an interpolated nested name yields no
+          // target by design, and continuing there would attribute the rest of the leg to a member
+          // the branch may already have switched away from. What it IS asked against is the set of
+          // bindable names, so a predicate switch that can only throw — caught, false verdict, same
+          // device — does not cost the rest of the leg its coverage.
+          if (MultiDeviceHandoverGuard.canMoveSession(tool, members.keys)) {
+            // The wrapper's `condition:` — its predicate selector and any tool that predicate
+            // invokes — is evaluated BEFORE either branch, on the device that is active right now.
+            // That much stays decidable even though the rest of the leg does not, so judge it
+            // rather than losing it to the stop below.
+            // ...but only when the predicate cannot itself move the session. A conditional nested
+            // in the predicate can switch devices and then select on the NEW member, and judging
+            // that selector against the pre-predicate member would be a fatal false positive.
+            (tool.toJsonArgs()["condition"] as? JsonObject)
+              ?.takeUnless { MultiDeviceHandoverGuard.canMoveSession(it, members.keys) }
+              ?.let { judgeScope(it, tool.name, stepIndex) }
+            Console.log(
+              "[selector-dialect-lint] $trailRelPath: configuration `$configurationName` hands off " +
+                "inside a conditional at ${stepLabel(stepIndex)} — abandoning the rest of this leg, " +
+                "the active device depends on which branch runs.",
             )
+            break@legLoop
           }
+          if (tool.name in SAFE_FALLBACK_TOOL_NAMES) continue
+          judgeScope(tool.toJsonArgs(), tool.name, stepIndex)
+        }
+      }
+    }
+  }
+
+  /**
+   * The authoring-time half of [MultiDeviceHandoverGuard]: every recorded `switchDevice` whose
+   * target names no device the trail could ever bind.
+   *
+   * The runtime guard answers the same question at session start, but only for the legs that one
+   * session resolves and only once a session exists at all. This pass runs over the whole file, so
+   * it covers the two shapes the guard structurally cannot reach:
+   *
+   * - A `switchDevice` in a leg NOT keyed by a configuration name — a classifier-keyed leg on a
+   *   trail that also declares a configuration. The lowering resolves that leg for real, so the
+   *   switch dispatches; a member name declared by a DIFFERENT configuration is the mistake this
+   *   catches, which is why a non-configuration leg is checked against the union of every declared
+   *   member rather than against nothing.
+   * - A `switchDevice` in a trail declaring no configuration at all. No session binds a cast, so
+   *   the guard never runs — but the switch can never resolve either, which makes it statically
+   *   decidable with no false positives.
+   *
+   * Unlike the dialect replay in [lintConfigurationLegs], this reports EVERY offending switch
+   * rather than stopping at the first. That pass has to stop — past an unresolvable handover it no
+   * longer knows the active device — but a handover check needs no active device, and reporting one
+   * defect per run would make fixing a mis-recorded cast a repeated check→fix cycle.
+   *
+   * A handover nested in a recorded conditional's branch counts — see
+   * [MultiDeviceHandoverGuard.handoverTargets]. Whether the branch runs is a runtime question, but
+   * whether the name can bind is not.
+   *
+   * A target [MultiDeviceHandoverGuard.readTargetName] can't read (absent, non-string, blank, or
+   * memory-interpolated) is not a finding, matching the runtime guard exactly: its value isn't
+   * knowable until the run produces it.
+   */
+  private fun lintHandovers(trail: UnifiedTrail, undeclaredHandovers: MutableList<UndeclaredHandover>) {
+    val configurations = trail.config.devices.orEmpty().filterValues { it.devices != null }
+    val everyDeclaredMember = configurations.values.flatMap { it.devices.orEmpty().keys }.distinct()
+    val legs: List<Triple<Int?, String, List<TrailblazeToolYamlWrapper>>> = buildList {
+      trail.trailhead?.recordings?.forEach { (legKey, tools) -> add(Triple(null, legKey, tools)) }
+      trail.trail.forEachIndexed { index, step ->
+        step.recordings.forEach { (legKey, tools) -> add(Triple(index, legKey, tools)) }
+      }
+    }
+    legs.forEach { (stepIndex, legKey, tools) ->
+      val configuration = configurations[legKey]
+      val declaredMembers = if (configuration != null) {
+        configuration.devices.orEmpty().keys.toList()
+      } else {
+        everyDeclaredMember
+      }
+      tools.forEach { tool ->
+        MultiDeviceHandoverGuard.handoverTargets(tool).forEach { target ->
+          if (target in declaredMembers) return@forEach
+          undeclaredHandovers.add(
+            UndeclaredHandover(
+              configurationName = legKey.takeIf { configuration != null },
+              legKey = legKey,
+              stepIndex = stepIndex,
+              target = target,
+              declaredMembers = declaredMembers,
+            ),
+          )
         }
       }
     }
@@ -435,10 +533,11 @@ object SelectorDialectLint {
     val handoverTrails = findings.count { it.undeclaredHandovers.isNotEmpty() }
     if (handoverTrails > 0) {
       appendLine(
-        "$handoverTrails trail(s) hand a multi-device configuration off to a device it does not " +
-          "declare. That step fails the run at the session-start guard, and it also stops this " +
-          "gate from tracking which device is active — so every selector after it goes unchecked. " +
-          "Fix: use a member name the configuration declares, or re-record the step.",
+        "$handoverTrails trail(s) record a `switchDevice` naming a device the trail cannot bind. " +
+          "That step fails the run at the session-start guard, and in a configuration leg it also " +
+          "stops this gate from tracking which device is active — so every selector after it goes " +
+          "unchecked. Fix: name a device the leg's own configuration declares, re-record the step, " +
+          "or drop the switchDevice if the trail drives a single device.",
       )
     }
     findings.sortedBy { it.trailRelPath }.forEach { f ->
@@ -462,10 +561,18 @@ object SelectorDialectLint {
           "  FAIL ${f.trailRelPath}: ${f.undeclaredHandovers.size} undeclared handover(s)",
         )
         f.undeclaredHandovers.forEach {
-          appendLine(
-            "        ${stepLabel(it.stepIndex)} in configuration '${it.configurationName}' switches to " +
-              "'${it.target}' (declared members: ${it.declaredMembers.joinToString()})",
-          )
+          val where = it.configurationName
+            ?.let { name -> "in configuration '$name'" }
+            ?: "in leg '${it.legKey}'"
+          // Empty members means two different files: a configuration leg whose own `devices:` map
+          // is empty, or a trail with no configuration at all. Keyed on the leg, not on emptiness,
+          // so the line can't tell a reader the opposite of what their trail says.
+          val known = when {
+            it.declaredMembers.isNotEmpty() -> " (declared members: ${it.declaredMembers.joinToString()})"
+            it.configurationName != null -> " — that configuration declares no devices"
+            else -> " — this trail declares no multi-device configuration"
+          }
+          appendLine("        ${stepLabel(it.stepIndex)} $where switches to '${it.target}'$known")
         }
       }
     }

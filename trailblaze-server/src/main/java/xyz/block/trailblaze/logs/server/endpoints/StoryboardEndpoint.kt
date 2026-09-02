@@ -109,7 +109,7 @@ object StoryboardEndpoint {
    * Map a resolved on-disk screenshot to the `/static` URL the server serves it under.
    * Screenshots live at `<logsDir>/<session>/<file>` and `/static` is rooted at
    * `logsDir`, so the URL is `/static/<session>/<file>` — the same `screenshotRef`
-   * convention WasmReport's on-demand image path uses. Returns null for any file that
+   * convention the on-demand image path uses. Returns null for any file that
    * doesn't sit under [logsDir] (so the builder falls back to inlining it rather than
    * emitting a `/static` URL that wouldn't resolve).
    */

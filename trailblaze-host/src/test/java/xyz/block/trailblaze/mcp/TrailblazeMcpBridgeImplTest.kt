@@ -39,6 +39,8 @@ import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.toolcalls.DelegatingTrailblazeTool
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
+import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
+import xyz.block.trailblaze.toolcalls.TrailblazeToolMetadata
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.commands.AssertWaypointTrailblazeTool
@@ -273,15 +275,28 @@ class TrailblazeMcpBridgeImplTest {
   }
 
   @Test
-  fun `an executable tool annotated requiresHost routes to the host`() {
-    // `assertWaypoint` carries no HostLocal marker — the class-level `requiresHost = true` is
-    // the only signal, and it has to be honored on its own (the waypoint registry it reads is
-    // host-side).
+  fun `assertWaypoint routes to the host`() {
+    // The waypoint registry it reads is host-side, so this must never take the device path —
+    // pinned on the production tool because the marker it carries is the whole reason.
     assertEquals(
       TrailblazeMcpBridgeImpl.ToolDispatchRoute.HOST_LOCAL,
       TrailblazeMcpBridgeImpl.resolveToolDispatchRoute(
         AssertWaypointTrailblazeTool(waypoint = "example/android/home"),
       ),
+    )
+  }
+
+  @Test
+  fun `an executable tool whose metadata requires the host routes to the host`() {
+    // The `requiresHostInstance()` arm of the route, which is what carries SCRIPTED and
+    // YAML-defined tools (`trailblaze/requiresHost` in a `*.tool.yaml` or a TS `_meta` block) —
+    // they have no class to hang the marker interface on. No class-backed production tool
+    // reaches this arm any more (they all declare `HostLocalExecutableTrailblazeTool`), so the
+    // fixture is deliberately a test-local class: the arm still has to hold for the population
+    // that needs it.
+    assertEquals(
+      TrailblazeMcpBridgeImpl.ToolDispatchRoute.HOST_LOCAL,
+      TrailblazeMcpBridgeImpl.resolveToolDispatchRoute(MetadataHostOnlyTool()),
     )
   }
 
@@ -681,4 +696,18 @@ class TrailblazeMcpBridgeImplTest {
   private fun parse(yaml: String): ToolYamlConfig =
     TrailblazeConfigYaml.instance.decodeFromString(ToolYamlConfig.serializer(), yaml)
       .also { it.validate() }
+
+  /**
+   * An executable tool that requires the host through per-instance [TrailblazeToolMetadata] and
+   * NOT through the [xyz.block.trailblaze.toolcalls.HostLocalExecutableTrailblazeTool] marker —
+   * the shape a scripted (`_meta`) or YAML-defined (`requires_host: true`) tool presents to
+   * `resolveToolDispatchRoute`.
+   */
+  private class MetadataHostOnlyTool : ExecutableTrailblazeTool {
+    override val toolMetadata = TrailblazeToolMetadata(requiresHost = true)
+
+    override suspend fun execute(
+      toolExecutionContext: TrailblazeToolExecutionContext,
+    ): TrailblazeToolResult = TrailblazeToolResult.Success()
+  }
 }

@@ -94,146 +94,167 @@ object HostScriptedToolLauncher {
     additionalDriverTypes: Set<TrailblazeDriverType> = emptySet(),
     onProgressMessage: (String) -> Unit,
   ): LaunchedScriptingRuntime? {
-    val sessionDir = logsRepo.getSessionDir(sessionId)
-
-    // Host daemon opts in to a real `fetch` for in-process scripted tools (replaces shelling curl
-    // via `ctx.tools.exec`). Unrestricted by default — same reach as the `curl` it replaces; a
-    // deployment that wants to constrain it passes a FetchHostAllowlist. One shared instance per
-    // launch (OkHttp pools connections). The on-device launchers install the same extension; it's
-    // the lean engine module itself that never sees OkHttp.
-    val fetchExtension = OkHttpFetchExtension()
-
-    // Idempotent launch: skip target-declared tools already registered on this repo by an earlier
-    // pass in the same session. The daemon can reach this launcher twice against one repo (e.g. an
-    // iOS-host trail run whose session setup already registered the target's `target.tools:` tools),
-    // and `addDynamicTools` throws on a duplicate name ("Dynamic tool 'someScriptedTool' is
-    // already registered by another dynamic source"), crashing the whole launch over tools that are
-    // already present and working. (#3912 made the shared catalog launcher idempotent the same way;
-    // this covers the target-declared esbuild path it doesn't reach.) Empty on the JUnit host path
-    // (fresh per-test repo), so that path is unaffected.
-    val preRegistered: Set<ToolName> = toolRepo.getRegisteredDynamicTools().keys
-
-    // 1. Inline scripted tools (target.tools: in trailmap manifests) — the #2749 path. Each tool
-    // routes to one of two runtimes: subprocess (full Node API surface) or QuickJS in-process
-    // (composes via client.callTool(...), no subprocess fork). A tool runs in-process unless its
-    // descriptor explicitly sets `runtime: subprocess` — there is no extension heuristic.
-    val targetToolConfigs = targetTestApp?.getInlineScriptTools().orEmpty()
-    val (nodeApiInlineTools, quickJsInlineTools) = targetToolConfigs.partition { tool ->
-      ScriptedToolRuntime.resolve(tool.runtime) == ScriptedToolRuntime.SUBPROCESS
-    }
-    val targetInlineRegistrations = if (quickJsInlineTools.isNotEmpty()) {
-      // Filter out tools an earlier pass already registered (idempotency) up front, so neither the
-      // precompiled-bundle lookup nor the esbuild resolution runs for a tool already present.
-      val notPreRegistered = quickJsInlineTools.filter { ToolName(it.name) !in preRegistered }
-      // Resolve the (tool -> bundle) work and create the registrations under ONE rollback guard:
-      // the bundle resolution ([resolveInlineToolBundlesToRegister]) runs esbuild / classpath
-      // extraction (disk I/O), so keeping it inside the guard means a full/read-only tmpdir or a
-      // bundler failure disposes the QuickJS engines already created and degrades to a clean
-      // launch-abort, instead of escaping unguarded. A collision at [TrailblazeToolRepo.addDynamicTools]
-      // (the commit) rolls back the same way.
-      registerWithRollback<Pair<InlineScriptToolConfig, File>, LazyYamlScriptedToolRegistration>(
-        produce = { resolveInlineToolBundlesToRegister(notPreRegistered, onProgressMessage) },
-        create = { (config, bundleFile) ->
-          LazyYamlScriptedToolRegistration.create(
-            toolConfig = config,
-            bundlePath = bundleFile,
-            toolRepo = toolRepo,
-            sessionId = sessionId,
-            engineExtension = fetchExtension,
-          )
-        },
-        commit = { toolRepo.addDynamicTools(it) },
-        dispose = { it.dispose() },
-        onRollback = { accumulated, e ->
-          Console.log(
-            "$logPrefix Rolling back ${accumulated.size} inline " +
-              "scripted-tool registration(s) due to startup failure: ${e.message}",
-          )
-        },
-      )
-    } else {
-      emptyList()
-    }
-
-    // 1b. Toolset-delivered scripted tools — pre-compiled QuickJS bundles loaded from classpath via
-    // the shared in-process launcher (also used by the MCP daemon). Target-declared scripted tools
-    // (handled above) win on name collision, so they're passed as skipNames.
-    val toolsetRegistrations = InProcessScriptedToolLauncher.launch(
-      toolRepo = toolRepo,
-      sessionId = sessionId,
-      sessionDir = sessionDir,
-      toolNames = toolRepo.allCatalogScriptedToolNames,
-      skipNames = targetToolConfigs.map { ToolName(it.name) }.toSet(),
-      classLoader = classLoader,
-      logPrefix = logPrefix,
-      engineExtension = fetchExtension,
-    )
-    val inlineRegistrations = targetInlineRegistrations + toolsetRegistrations
-
-    // 2. MCP subprocesses: synthesized wrappers for inline scripted tools whose effective runtime is
-    // SUBPROCESS (explicit `runtime: subprocess`). If subprocess launch throws after the QuickJS-path
-    // inline registrations succeeded, the inline regs are stranded in the toolRepo with no cleanup
-    // handle — catch + dispose them before rethrowing.
+    // A `--no-logging` run's repo hands back a session path it deliberately never created, and the
+    // launchers below would create it and write QuickJS bundles and `inline-script-tools/` wrappers
+    // there — so "no session files" would hold for everything except a trail that uses scripted
+    // tools. Materialize into a temp directory instead of skipping the launch: these tools still
+    // need real files on disk to load and exec, they just don't belong beside the session.
     //
-    // Gated on the session's driver/platform FIRST: a tool this session would discard at
-    // `tools/list` must not cost a fork and a `script:` resolution to discover that. See
-    // [SubprocessToolRegistrar.applicableInlineTools].
-    val spawnableInlineTools = if (includeSubprocess) {
-      SubprocessToolRegistrar.applicableInlineTools(
-        tools = nodeApiInlineTools,
-        drivers = listOf(deviceInfo.trailblazeDriverType) + additionalDriverTypes,
-        preferHostAgent = config.preferHostAgent,
-        logPrefix = logPrefix,
-      )
-    } else {
-      emptyList()
-    }
-    val mcpServers = if (spawnableInlineTools.isNotEmpty()) {
-      InlineScriptToolServerSynthesizer.synthesize(
-        tools = spawnableInlineTools,
-        outputDir = File(sessionDir, "inline-script-tools"),
-      )
-    } else {
-      emptyList()
-    }
-    val launchableCount = mcpServers.count { it.script != null }
-    val subprocessRuntime = if (launchableCount > 0) {
-      onProgressMessage("Launching $launchableCount subprocess MCP server(s)...")
-      try {
-        McpSubprocessRuntimeLauncher.launchAll(
-          mcpServers = mcpServers,
-          deviceInfo = deviceInfo,
-          config = config,
-          sessionId = sessionId,
-          sessionLogDir = sessionDir,
-          toolRepo = toolRepo,
-          // Null when no HTTP server was registered for this process (unit-tested runner paths).
-          baseUrl = JsScriptingCallbackBaseUrl.get(),
-          additionalDriverTypes = additionalDriverTypes,
-        )
-      } catch (e: Throwable) {
-        Console.log(
-          "$logPrefix Rolling back ${inlineRegistrations.size} inline " +
-            "scripted-tool registration(s) due to MCP server launch failure: ${e.message}",
-        )
-        for (reg in inlineRegistrations) {
-          runCatching { toolRepo.removeDynamicTool(reg.name) }
-          runCatching { reg.dispose() }
-        }
-        throw e
-      }
+    // This launcher owns that directory until it hands it to the returned runtime, which deletes it
+    // at session teardown. The `finally` below covers the paths that never get there: a launch that
+    // registers nothing, and a launch that throws.
+    val tempWorkDir: File? = if (logsRepo.readOnly) {
+      Files.createTempDirectory("trailblaze-no-logging-${sessionId.value}").toFile()
     } else {
       null
     }
+    var tempWorkDirHandedOff = false
+    try {
+      val sessionDir = tempWorkDir ?: logsRepo.getSessionDir(sessionId)
 
-    // If neither path produced anything actionable, no cleanup needed.
-    if (inlineRegistrations.isEmpty() && subprocessRuntime == null) return null
+      // Host daemon opts in to a real `fetch` for in-process scripted tools (replaces shelling curl
+      // via `ctx.tools.exec`). Unrestricted by default — same reach as the `curl` it replaces; a
+      // deployment that wants to constrain it passes a FetchHostAllowlist. One shared instance per
+      // launch (OkHttp pools connections). The on-device launchers install the same extension; it's
+      // the lean engine module itself that never sees OkHttp.
+      val fetchExtension = OkHttpFetchExtension()
 
-    return LaunchedScriptingRuntime(
-      subprocessRuntime = subprocessRuntime,
-      inlineRegistrations = inlineRegistrations,
-      toolRepo = toolRepo,
-    )
+      // Idempotent launch: skip target-declared tools already registered on this repo by an earlier
+      // pass in the same session. The daemon can reach this launcher twice against one repo (e.g. an
+      // iOS-host trail run whose session setup already registered the target's `target.tools:` tools),
+      // and `addDynamicTools` throws on a duplicate name ("Dynamic tool 'someScriptedTool' is
+      // already registered by another dynamic source"), crashing the whole launch over tools that are
+      // already present and working. (#3912 made the shared catalog launcher idempotent the same way;
+      // this covers the target-declared esbuild path it doesn't reach.) Empty on the JUnit host path
+      // (fresh per-test repo), so that path is unaffected.
+      val preRegistered: Set<ToolName> = toolRepo.getRegisteredDynamicTools().keys
+
+      // 1. Inline scripted tools (target.tools: in trailmap manifests) — the #2749 path. Each tool
+      // routes to one of two runtimes: subprocess (full Node API surface) or QuickJS in-process
+      // (composes via client.callTool(...), no subprocess fork). A tool runs in-process unless its
+      // descriptor explicitly sets `runtime: subprocess` — there is no extension heuristic.
+      val targetToolConfigs = targetTestApp?.getInlineScriptTools().orEmpty()
+      val (nodeApiInlineTools, quickJsInlineTools) = targetToolConfigs.partition { tool ->
+        ScriptedToolRuntime.resolve(tool.runtime) == ScriptedToolRuntime.SUBPROCESS
+      }
+      val targetInlineRegistrations = if (quickJsInlineTools.isNotEmpty()) {
+        // Filter out tools an earlier pass already registered (idempotency) up front, so neither the
+        // precompiled-bundle lookup nor the esbuild resolution runs for a tool already present.
+        val notPreRegistered = quickJsInlineTools.filter { ToolName(it.name) !in preRegistered }
+        // Resolve the (tool -> bundle) work and create the registrations under ONE rollback guard:
+        // the bundle resolution ([resolveInlineToolBundlesToRegister]) runs esbuild / classpath
+        // extraction (disk I/O), so keeping it inside the guard means a full/read-only tmpdir or a
+        // bundler failure disposes the QuickJS engines already created and degrades to a clean
+        // launch-abort, instead of escaping unguarded. A collision at [TrailblazeToolRepo.addDynamicTools]
+        // (the commit) rolls back the same way.
+        registerWithRollback<Pair<InlineScriptToolConfig, File>, LazyYamlScriptedToolRegistration>(
+          produce = { resolveInlineToolBundlesToRegister(notPreRegistered, onProgressMessage) },
+          create = { (config, bundleFile) ->
+            LazyYamlScriptedToolRegistration.create(
+              toolConfig = config,
+              bundlePath = bundleFile,
+              toolRepo = toolRepo,
+              sessionId = sessionId,
+              engineExtension = fetchExtension,
+            )
+          },
+          commit = { toolRepo.addDynamicTools(it) },
+          dispose = { it.dispose() },
+          onRollback = { accumulated, e ->
+            Console.log(
+              "$logPrefix Rolling back ${accumulated.size} inline " +
+                "scripted-tool registration(s) due to startup failure: ${e.message}",
+            )
+          },
+        )
+      } else {
+        emptyList()
+      }
+
+      // 1b. Toolset-delivered scripted tools — pre-compiled QuickJS bundles loaded from classpath via
+      // the shared in-process launcher (also used by the MCP daemon). Target-declared scripted tools
+      // (handled above) win on name collision, so they're passed as skipNames.
+      val toolsetRegistrations = InProcessScriptedToolLauncher.launch(
+        toolRepo = toolRepo,
+        sessionId = sessionId,
+        sessionDir = sessionDir,
+        toolNames = toolRepo.allCatalogScriptedToolNames,
+        skipNames = targetToolConfigs.map { ToolName(it.name) }.toSet(),
+        classLoader = classLoader,
+        logPrefix = logPrefix,
+        engineExtension = fetchExtension,
+      )
+      val inlineRegistrations = targetInlineRegistrations + toolsetRegistrations
+
+      // 2. MCP subprocesses: synthesized wrappers for inline scripted tools whose effective runtime is
+      // SUBPROCESS (explicit `runtime: subprocess`). If subprocess launch throws after the QuickJS-path
+      // inline registrations succeeded, the inline regs are stranded in the toolRepo with no cleanup
+      // handle — catch + dispose them before rethrowing.
+      //
+      // Gated on the session's driver/platform FIRST: a tool this session would discard at
+      // `tools/list` must not cost a fork and a `script:` resolution to discover that. See
+      // [SubprocessToolRegistrar.applicableInlineTools].
+      val spawnableInlineTools = if (includeSubprocess) {
+        SubprocessToolRegistrar.applicableInlineTools(
+          tools = nodeApiInlineTools,
+          drivers = listOf(deviceInfo.trailblazeDriverType) + additionalDriverTypes,
+          preferHostAgent = config.preferHostAgent,
+          logPrefix = logPrefix,
+        )
+      } else {
+        emptyList()
+      }
+      val mcpServers = if (spawnableInlineTools.isNotEmpty()) {
+        InlineScriptToolServerSynthesizer.synthesize(
+          tools = spawnableInlineTools,
+          outputDir = File(sessionDir, "inline-script-tools"),
+        )
+      } else {
+        emptyList()
+      }
+      val launchableCount = mcpServers.count { it.script != null }
+      val subprocessRuntime = if (launchableCount > 0) {
+        onProgressMessage("Launching $launchableCount subprocess MCP server(s)...")
+        try {
+          McpSubprocessRuntimeLauncher.launchAll(
+            mcpServers = mcpServers,
+            deviceInfo = deviceInfo,
+            config = config,
+            sessionId = sessionId,
+            sessionLogDir = sessionDir,
+            toolRepo = toolRepo,
+            // Null when no HTTP server was registered for this process (unit-tested runner paths).
+            baseUrl = JsScriptingCallbackBaseUrl.get(),
+            additionalDriverTypes = additionalDriverTypes,
+          )
+        } catch (e: Throwable) {
+          Console.log(
+            "$logPrefix Rolling back ${inlineRegistrations.size} inline " +
+              "scripted-tool registration(s) due to MCP server launch failure: ${e.message}",
+          )
+          for (reg in inlineRegistrations) {
+            runCatching { toolRepo.removeDynamicTool(reg.name) }
+            runCatching { reg.dispose() }
+          }
+          throw e
+        }
+      } else {
+        null
+      }
+
+      // If neither path produced anything actionable, no cleanup needed.
+      if (inlineRegistrations.isEmpty() && subprocessRuntime == null) return null
+
+      tempWorkDirHandedOff = true
+      return LaunchedScriptingRuntime(
+        subprocessRuntime = subprocessRuntime,
+        inlineRegistrations = inlineRegistrations,
+        toolRepo = toolRepo,
+        tempWorkDir = tempWorkDir,
+      )
+    } finally {
+      if (!tempWorkDirHandedOff) tempWorkDir?.deleteRecursively()
+    }
   }
 
   /**

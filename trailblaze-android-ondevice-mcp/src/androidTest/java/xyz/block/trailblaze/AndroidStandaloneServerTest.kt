@@ -16,6 +16,8 @@ import xyz.block.trailblaze.android.InstrumentationArgUtil
 import xyz.block.trailblaze.android.OnDeviceOpenAICompatibleLlmClientFactory
 import xyz.block.trailblaze.android.accessibility.OnDeviceAccessibilityServiceSetup
 import xyz.block.trailblaze.android.devices.TrailblazeAndroidOnDeviceClassifier
+import xyz.block.trailblaze.android.rpc.AccessibilityScreenStateCaptor
+import xyz.block.trailblaze.android.rpc.AccessibilitySettleGate
 import xyz.block.trailblaze.android.runner.rpc.OnDeviceRpcServer
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.llm.TrailblazeLlmProvider
@@ -151,6 +153,10 @@ class AndroidStandaloneServerTest : BaseAndroidStandaloneServerTest() {
         this.trailblazeDeviceId = deviceId
         trailblazeLoggingRule.trailblazeDeviceInfoProvider()
       },
+      // This runner IS the accessibility harness, so it wires the accessibility driver's
+      // implementations into the server's driver seams.
+      screenStateCaptor = AccessibilityScreenStateCaptor,
+      waitForSettled = AccessibilitySettleGate::waitForSettled,
       deviceClassifiers = getDeviceClassifiers(),
     )
     onDeviceRpcServer.startServer(port = onDeviceRpcPort, wait = true)

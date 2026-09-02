@@ -14,6 +14,8 @@ import xyz.block.trailblaze.cli.DaemonSettingsBridge
 import xyz.block.trailblaze.cli.TrailblazeCli
 import xyz.block.trailblaze.desktop.TrailblazeDesktopAppConfig
 import xyz.block.trailblaze.devices.TrailDeviceSelector
+import xyz.block.trailblaze.devices.TrailblazeDevicePort
+import xyz.block.trailblaze.devices.TrailblazePortRangeConflictException
 import xyz.block.trailblaze.host.yaml.DesktopYamlRunner
 import xyz.block.trailblaze.llm.RunYamlRequest
 import xyz.block.trailblaze.llm.TrailblazeReferrer
@@ -28,12 +30,15 @@ import xyz.block.trailblaze.model.DeviceConnectionStatus
 import xyz.block.trailblaze.model.TrailExecutionResult
 import xyz.block.trailblaze.model.TrailblazeConfig
 import xyz.block.trailblaze.model.findById
+import xyz.block.trailblaze.tracing.TraceLevel
+import xyz.block.trailblaze.tracing.TrailblazeTracer
 import xyz.block.trailblaze.ui.images.NetworkImageLoader
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.yaml.TrailblazeYaml
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
 import java.io.File
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * Central Interface for The Trailblaze Desktop App
@@ -100,6 +105,9 @@ abstract class TrailblazeDesktopApp(
   open fun ensureServerRunning(): Boolean {
     val serverPort = portManager.httpPort
     val serverHttpsPort = portManager.httpsPort
+    // Before the probe, not after: a device's `adb forward` on the configured port answers /ping,
+    // and this would report "already running" for a port no daemon can ever bind.
+    TrailblazeDevicePort.requireDaemonPortsOutsideDeviceAllocationRange(serverPort, serverHttpsPort)
     val daemon = DaemonClient(port = serverPort)
     if (daemon.isRunningBlocking()) {
       return false // Server already running — we don't own it
@@ -107,6 +115,9 @@ abstract class TrailblazeDesktopApp(
 
     Console.log("Starting Trailblaze server...")
     installRunHandler()
+    // Pin the ports this process is about to bind, so live device routing (`adb reverse`, the
+    // on-device log endpoint) can never follow a settings patch to a port nothing listens on.
+    portManager.pinBoundPorts(httpPort = serverPort, httpsPort = serverHttpsPort)
     try {
       runBlocking {
         trailblazeMcpServer.startStreamableHttpMcpServer(
@@ -119,6 +130,10 @@ abstract class TrailblazeDesktopApp(
         )
       }
     } catch (e: Exception) {
+      // A port inside the device-allocation range is a configuration error, not a lost bind race.
+      // Probing for a rival would let a device's `adb forward` answer and turn this into a bogus
+      // "attaching to it".
+      if (e is TrailblazePortRangeConflictException) throw e
       // Lost the bind race with another process between the isRunning check and the bind.
       // If a rival daemon answers, this is the documented "another process owns it" outcome.
       if (daemon.waitForDaemon(maxWaitMs = RIVAL_DAEMON_WAIT_MS)) {
@@ -326,13 +341,23 @@ abstract class TrailblazeDesktopApp(
       initialMemorySeeds = request.initialMemorySeeds,
       initialMemorySensitiveSeeds = request.initialMemorySensitiveSeeds,
       initialArgs = request.initialArgs,
+      // Per-run multi-device selection from `run --configuration` / `run --bind`. Carried on the
+      // request instead of read from the daemon's environment so two multi-device runs can bind
+      // different device sets on one daemon.
+      deviceConfiguration = request.deviceConfiguration,
+      deviceBindings = request.deviceBindings,
     )
 
     // Execute and wait for completion
     val completionLatch = CountDownLatch(1)
     var success = false
     var errorMessage: String? = null
-    var completionResult: TrailExecutionResult? = null
+    // An AtomicReference, not a captured `var`: the session poll below reads this from the
+    // handler's coroutine while the runner writes it from its own thread, and the read is no
+    // longer fenced by `completionLatch.await()`. `onConnectionStatus` can release that latch
+    // before `onComplete` fires, so a plain field write could stay invisible to the poll for
+    // its whole window — the hang this guard exists to end.
+    val completionResult = AtomicReference<TrailExecutionResult?>(null)
 
     val logsRepo = deviceManager.logsRepo
 
@@ -375,6 +400,8 @@ abstract class TrailblazeDesktopApp(
       captureVideo = request.captureVideo,
       captureLogcat = request.captureLogcat,
       captureIosLogs = request.captureIosLogs,
+      snapshotBaselineRef = request.snapshotBaseline,
+      snapshotBaselineThresholdPercent = request.snapshotBaselineThresholdPercent,
       onProgressMessage = { message ->
         Console.info(message)
         onProgress(message)
@@ -387,7 +414,7 @@ abstract class TrailblazeDesktopApp(
       },
         additionalInstrumentationArgs = desktopAppConfig.additionalInstrumentationArgs(),
       onComplete = { result ->
-        completionResult = result
+        completionResult.set(result)
         when (result) {
           is TrailExecutionResult.Success -> success = true
           is TrailExecutionResult.Failed -> errorMessage = result.errorMessage
@@ -397,15 +424,19 @@ abstract class TrailblazeDesktopApp(
       },
     )
 
-    desktopYamlRunner.runYaml(params)
-    completionLatch.await()
+    // Record this run at the level its caller asked for, then hand the daemon its own level back.
+    // Null (an older CLI, or an MCP/HTTP submission) leaves the daemon's level untouched.
+    TrailblazeTracer.withLevel(TraceLevel.parse(request.traceLevel)) {
+      desktopYamlRunner.runYaml(params)
+      completionLatch.await()
+    }
 
     // A run the runner rejected as invalid before attempting it (e.g. an unrecognized
     // unified-trail driver pin, which is only concrete against the connected device and so is
     // validated runner-side — see [DesktopYamlRunner.trailPinnedDriverResolution]). Return the
     // misuse rejection immediately so the delegated CLI exits MISUSE: no session was created,
     // so the session-log poll below would stall its full window on a session that never existed.
-    completionResult?.let { cliRunRunnerRejectionResponse(it) }?.let { return@withContext it }
+    completionResult.get()?.let { cliRunRunnerRejectionResponse(it) }?.let { return@withContext it }
 
     // When --no-logging is active, no session files are written so there is nothing to poll.
     // Return the success/failure result from the latch directly.
@@ -427,13 +458,44 @@ abstract class TrailblazeDesktopApp(
     val maxWaitMs = 600_000L
     val pollIntervalMs = 500L
     val waitStart = System.currentTimeMillis()
+    var sessionSeen = false
+    val sessionWaitGuard = PinnedSessionWaitGuard()
+    var abandonedWithoutSession = false
     while (System.currentTimeMillis() - waitStart < maxWaitMs) {
       val sessionInfo = logsRepo.getSessionInfoDirect(pinnedSessionId)
-      if (sessionInfo != null && sessionInfo.latestStatus is SessionStatus.Ended) break
+      if (sessionInfo != null) {
+        sessionSeen = true
+        if (sessionInfo.latestStatus is SessionStatus.Ended) break
+      }
+      val runnerResult = completionResult.get()
+      // A failed run that never opened a session has nothing to poll for, and waiting out the
+      // full window turns an error the runner already reported into ten minutes of silence.
+      // See [PinnedSessionWaitGuard] for why `misuse` alone doesn't cover this.
+      if (
+        sessionWaitGuard.shouldAbandon(
+          runnerResult = runnerResult,
+          sessionSeen = sessionSeen,
+          nowMs = System.currentTimeMillis(),
+        )
+      ) {
+        val outcome = when (runnerResult) {
+          is TrailExecutionResult.Cancelled -> "was cancelled"
+          is TrailExecutionResult.Failed -> "failed: ${runnerResult.errorMessage ?: "no message"}"
+          else -> "is over"
+        }
+        Console.log(
+          "[cli-run] $pinnedSessionId never opened a session and the run already $outcome; " +
+            "returning that instead of waiting out the ${maxWaitMs / 1000}s session poll",
+        )
+        abandonedWithoutSession = true
+        break
+      }
       delay(pollIntervalMs)
     }
-    // Short buffer after Ended for trailing files (screenshots, etc.)
-    delay(3000)
+    // Short buffer after Ended for trailing files (screenshots, etc.). Skipped when the wait was
+    // abandoned: that path is defined by no session ever existing, so there are no trailing files
+    // to wait on and the buffer is three more seconds of the silence this guard is removing.
+    if (!abandonedWithoutSession) delay(3000)
 
     // Reconcile against the pinned session's on-disk status (source of truth for pass/fail).
     // Inspect ONLY the pinned session — sibling sessions belong to parallel trail runs and have
@@ -464,6 +526,9 @@ abstract class TrailblazeDesktopApp(
       error = errorMessage,
       deviceClassifiers = classifiers,
       selectedDeviceConfiguration = pinnedSessionInfo?.selectedDeviceConfiguration,
+      // Where this session actually landed. The CLI generates and saves the recording from it,
+      // rather than re-resolving a logs dir that may not be the one this daemon pinned at boot.
+      logsDir = logsRepo.logsDir.absolutePath,
     )
   }
 

@@ -3,11 +3,20 @@ package xyz.block.trailblaze.playwright.network
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
+import xyz.block.trailblaze.network.NetworkEvent
+import xyz.block.trailblaze.network.Phase
 import xyz.block.trailblaze.network.REDACTED_VALUE
+import xyz.block.trailblaze.network.Source
+import java.io.BufferedWriter
 import java.io.File
+import java.io.IOException
+import java.io.Writer
 import java.lang.reflect.Constructor
+import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -31,6 +40,47 @@ class WebNetworkCaptureUnitTest {
       .single { it.parameterCount == 3 } as Constructor<WebNetworkCapture>
     ctor.isAccessible = true
     return ctor.newInstance("session-test", sessionDir, null)
+  }
+
+  // The drainer's failure modes live behind `private` and only reachable through a real
+  // BrowserContext, so the tests below drive them directly.
+
+  private fun setPrivate(cap: WebNetworkCapture, field: String, value: Any?) {
+    WebNetworkCapture::class.java.getDeclaredField(field).apply { isAccessible = true }.set(cap, value)
+  }
+
+  private fun invokePrivate(cap: WebNetworkCapture, method: String): Any? =
+    WebNetworkCapture::class.java.getDeclaredMethod(method).apply { isAccessible = true }.invoke(cap)
+
+  private fun invokePrivateWithArg(cap: WebNetworkCapture, method: String, arg: Any): Any? =
+    WebNetworkCapture::class.java.declaredMethods
+      .single { it.name == method && it.parameterCount == 1 }
+      .apply { isAccessible = true }
+      .invoke(cap, arg)
+
+  @Suppress("UNCHECKED_CAST")
+  private fun queueOf(cap: WebNetworkCapture): java.util.Queue<Any> =
+    WebNetworkCapture::class.java.getDeclaredField("queue")
+      .apply { isAccessible = true }
+      .get(cap) as java.util.Queue<Any>
+
+  private fun newPendingWrite(id: String): Any {
+    val ctor = Class.forName("xyz.block.trailblaze.playwright.network.WebNetworkCapture\$PendingWrite")
+      // Not `.first()`: default parameter values give the class a synthetic constructor with
+      // extra mask arguments alongside the real 4-arg one.
+      .declaredConstructors.single { it.parameterCount == 4 }
+      .apply { isAccessible = true }
+    val event = NetworkEvent(
+      id = id,
+      sessionId = "session-test",
+      phase = Phase.REQUEST_START,
+      timestampMs = 0L,
+      method = "GET",
+      url = "https://example.com/$id",
+      urlPath = "/$id",
+      source = Source.PLAYWRIGHT_WEB,
+    )
+    return ctor.newInstance(event, null, null, 0L)
   }
 
   // -------- redactRequestHeaders --------
@@ -183,6 +233,113 @@ class WebNetworkCaptureUnitTest {
     val written = File(sessionDir, "bodies/res_big.bin").readBytes()
     // The on-disk blob is capped at MAX_BLOB_BYTES regardless of payload size.
     assertEquals(WebNetworkCapture.MAX_BLOB_BYTES, written.size)
+  }
+
+  @Test
+  fun `a body clamped before queueing still reports its true size and truncation`() {
+    // The listener thread trims oversized bodies to MAX_BLOB_BYTES before they enter the
+    // queue, so persistBody sees bytes that are already exactly at the cap. Without the
+    // pre-clamp size riding along, that looks indistinguishable from a body that happened
+    // to be exactly MAX_BLOB_BYTES: no truncation badge, and sizeBytes understating a
+    // multi-MB upload by however much was trimmed.
+    val sessionDir = tmp.newFolder()
+    val cap = newCapture(sessionDir)
+    val trueSize = WebNetworkCapture.MAX_BLOB_BYTES + 3_000_000L
+    val clamped = ByteArray(WebNetworkCapture.MAX_BLOB_BYTES) { (it % 256).toByte() }
+
+    val ref = cap.persistBody(
+      eventId = "clamped",
+      bytes = clamped,
+      contentType = "application/octet-stream",
+      prefix = "req",
+      originalSizeBytes = trueSize,
+    )
+
+    assertEquals(trueSize, ref.sizeBytes)
+    assertTrue(ref.truncated, "A clamped body must still be badged as truncated.")
+    assertEquals(
+      WebNetworkCapture.MAX_BLOB_BYTES,
+      File(sessionDir, "bodies/req_clamped.bin").readBytes().size,
+    )
+  }
+
+  /**
+   * The drain thread's exit condition is `stopped AND queue empty` — but an entry can be
+   * queued by a listener already in flight when stop() closed the writer, and that entry
+   * can never be written. Without a writer-gone exit the loop makes no progress and never
+   * satisfies its condition either: a daemon thread waking every 250ms for the life of the
+   * process, holding the queued bodies. Driven directly here because the window is a race
+   * between Playwright's dispatch thread and stop() that a test can't schedule.
+   */
+  @Test
+  fun `the drain loop exits instead of spinning on a queue it can never write`() {
+    val cap = newCapture()
+    // Post-stop state: not active, writer closed, one entry still queued.
+    val queue = queueOf(cap)
+    queue.add(newPendingWrite("stranded"))
+
+    val thread = Thread { invokePrivate(cap, "runDrainLoop") }.apply { isDaemon = true; start() }
+    // Generous ceiling: this is hang containment, not a speed assertion. The loop either
+    // returns straight away or never does.
+    thread.join(10_000)
+
+    assertFalse(thread.isAlive, "the drain loop must return when the writer is gone")
+    assertTrue(queue.isEmpty(), "the unwritable entry must be discarded, not left queued")
+  }
+
+  /**
+   * A BufferedWriter accepts lines into memory and only touches the disk on flush, so a full
+   * or read-only filesystem raises at flush time — after the entries have already left the
+   * queue. Swallowing that loses the batch while the stop summary reports zero writes
+   * dropped, which is the one signal telling an operator the NDJSON is incomplete.
+   */
+  @Test
+  fun `a failing flush is charged to the dropped-write count`() {
+    val cap = newCapture()
+    val failing = BufferedWriter(
+      object : Writer() {
+        override fun write(cbuf: CharArray, off: Int, len: Int) = Unit
+        override fun flush(): Unit = throw IOException("no space left on device")
+        override fun close() = Unit
+      },
+    )
+    setPrivate(cap, "ndjsonWriter", failing)
+    queueOf(cap).add(newPendingWrite("stranded"))
+
+    invokePrivate(cap, "runDrainLoop")
+
+    val summary = invokePrivate(cap, "summarizeDrops") as String?
+    assertNotNull(summary, "A lost batch must be summarized, not reported as a clean stop.")
+    assertTrue(summary.contains("writes=1"), "expected one dropped write, got: $summary")
+  }
+
+  /**
+   * `enqueue`'s admission check is not atomic with its publication, and stop() can complete
+   * entirely in that window — closing the writer and retiring the drainer, so nothing is left
+   * to notice the entry. The queue is swapped for one that flips `active` inside `add`, which
+   * puts stop() exactly where the real race puts it rather than hoping a thread lands there.
+   */
+  @Test
+  fun `an event published while stop is winning the race is reclaimed, not stranded`() {
+    val cap = newCapture()
+    val active = WebNetworkCapture::class.java.getDeclaredField("active")
+      .apply { isAccessible = true }
+      .get(cap) as AtomicBoolean
+    active.set(true)
+    val racingQueue = object : ConcurrentLinkedQueue<Any>() {
+      override fun add(element: Any): Boolean {
+        active.set(false)
+        return super.add(element)
+      }
+    }
+    setPrivate(cap, "queue", racingQueue)
+
+    invokePrivateWithArg(cap, "enqueue", newPendingWrite("late"))
+
+    assertTrue(racingQueue.isEmpty(), "A post-stop entry must not be left queued forever.")
+    val summary = invokePrivate(cap, "summarizeDrops") as String?
+    assertNotNull(summary, "Reclaiming an event is a drop and must be summarized.")
+    assertTrue(summary.contains("queueOverflow=1"), "expected one dropped enqueue, got: $summary")
   }
 
   @Test

@@ -109,12 +109,10 @@ data class ScrollUntilTextIsVisibleTrailblazeTool(
       centerElement = centerElement,
     )
 
-    // Drivers that bypass Maestro's Driver instance entirely (the Android accessibility driver
-    // and the iOS AXe driver) always use the manual scroll loop — Maestro's
-    // ScrollUntilVisibleCommand can't run without one. Non-center start positions also require
-    // the manual loop since Maestro's built-in command doesn't support custom scroll regions.
+    // Non-center start positions also require the manual loop since Maestro's built-in command
+    // doesn't support custom scroll regions.
     val useManualScrollLoop = scrollStartPosition != TrailblazeScrollStartPosition.CENTER ||
-      trailblazeDriverType in DRIVERS_WITHOUT_MAESTRO_DRIVER
+      trailblazeDriverType.usesManualScrollLoop
 
     return if (!useManualScrollLoop) {
       // For default scrolling with Maestro-compatible drivers, delegate to Maestro's
@@ -363,26 +361,18 @@ data class ScrollUntilTextIsVisibleTrailblazeTool(
     }
 
     /**
-     * Drivers with no Maestro Driver instance underneath — their scroll-until-visible must run
-     * through the manual loop instead of delegating to Maestro's ScrollUntilVisibleCommand
-     * (which host-native iOS converters would otherwise drop as unsupported).
-     */
-    private val DRIVERS_WITHOUT_MAESTRO_DRIVER =
-      setOf(TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY) +
-        TrailblazeDriverType.IOS_HOST_NATIVE_DRIVER_TYPES
-
-    /**
      * 400ms matches Maestro's Swipe Implementation duration and is working well on-device Android.
      * https://github.com/mobile-dev-inc/Maestro/blob/0a38a9468cb769ecbc1edc76974fd2f8a8b0b64e/maestro-client/src/main/java/maestro/drivers/AndroidDriver.kt#L404
      *
-     * The default (40ms) causes a "fling" that overshoots elements. Drivers on the manual
-     * scroll loop (accessibility, host-native iOS) need the same 400ms duration.
+     * The default (40ms) causes a "fling" that overshoots elements. Every on-device Android driver
+     * and every host-native iOS driver needs the same 400ms duration — a wider set than the drivers
+     * on the manual loop, since on-device Maestro still overshoots at 40ms.
      */
     fun scrollDurationFor(trailblazeDriverType: TrailblazeDriverType): String =
-      when {
-        trailblazeDriverType in TrailblazeDriverType.ANDROID_ON_DEVICE_DRIVER_TYPES ||
-          trailblazeDriverType in TrailblazeDriverType.IOS_HOST_NATIVE_DRIVER_TYPES -> "400"
-        else -> ScrollUntilVisibleCommand.DEFAULT_SCROLL_DURATION
+      if (trailblazeDriverType.executesToolsOnDevice || trailblazeDriverType.hostNativeSimulatorDriver) {
+        "400"
+      } else {
+        ScrollUntilVisibleCommand.DEFAULT_SCROLL_DURATION
       }
 
     private fun relativeScrollStartPoints(

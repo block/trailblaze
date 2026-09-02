@@ -337,14 +337,14 @@ html[data-theme="light"] .tb-run-dialog {
 }
 html[data-theme="light"] .tb-run-head,
 html[data-theme="light"] .tb-run-footer { background: #ffffff !important; }
-html[data-theme="light"] .tb-run-nav { background: #f2f1eb; }
 html[data-theme="light"] .tb-run-form { background: #f7f6f2; }
 html[data-theme="light"] .tb-run-command { background: #f7f6f2 !important; }
 html[data-theme="light"] .tb-run-mark {
   background: rgba(0,168,107,.10) !important;
   border-color: rgba(0,168,107,.28) !important;
 }
-.tb-run-footer [data-testid="run-config-run"] .tb-btn {
+.tb-run-footer [data-testid="run-config-run"] .tb-btn,
+.tb-run-footer [data-testid="run-config-record"] .tb-btn {
   min-width: 72px;
   height: 34px;
   justify-content: center;
@@ -356,8 +356,10 @@ html[data-theme="light"] .tb-run-mark {
   letter-spacing: 0;
 }
 
+/* Narrow windows: the steps pane keeps its place (it is half the dialog's point) but gives up width
+   before the form does. Below 880px it folds away entirely - see that breakpoint. */
 @media (max-width: 1100px) {
-  .tb-run-grid { grid-template-columns: 188px minmax(0, 1fr) 330px !important; }
+  .tb-run-grid { grid-template-columns: minmax(0, 1fr) 330px !important; }
   .tb-run-form { padding: 20px 22px !important; }
   .tb-run-field { align-items: flex-start !important; }
 }
@@ -407,7 +409,7 @@ html[data-theme="light"] .tb-run-mark {
 }
 @media (max-width: 880px) {
   .tb-test-yaml-workspace { padding: 18px 20px 22px; }
-  .tb-run-grid { grid-template-columns: 176px minmax(0, 1fr) !important; }
+  .tb-run-grid { grid-template-columns: minmax(0, 1fr) !important; }
   .tb-run-preview { display: none; }
   .tb-trail-detail-head { padding-left: 20px !important; padding-right: 20px !important; }
   .tb-trail-detail-body { padding-left: 20px !important; padding-right: 20px !important; }
@@ -541,24 +543,50 @@ html[data-theme="light"] .tb-run-mark {
 .cm-s-tb.CodeMirror { height: 100%; background: var(--bg-standard); color: var(--text-standard); font-family: var(--font-mono), ui-monospace, monospace; font-size: 12.5px; line-height: 1.55; }
 .cm-s-tb .CodeMirror-gutters { background: var(--bg-standard); border-right: 1px solid var(--tb-hairline); }
 .cm-s-tb .CodeMirror-linenumber { color: var(--text-subtle); }
-.tb-tool-run-gutter { width: 22px; }
-.tb-tool-run-button {
+/* One row shape for every multi-select list in the Run dialog - the devices and the steps - so the
+   two read as one control instead of a native checkbox next to a drawn one. Columns are fixed width
+   so the prose in both lists starts on the same vertical line however long the numbers get. */
+.tb-pick {
+  position: relative; appearance: none; font: inherit; text-align: start; width: 100%;
+  display: flex; align-items: flex-start; gap: 9px; padding: 6px 8px; border: 0; border-radius: 8px;
+  background: transparent; color: var(--text-subtle); cursor: pointer;
+}
+.tb-pick.is-on { background: var(--bg-standard); color: var(--text-standard); }
+.tb-pick:hover:not(.is-on):not(.is-static):not(:disabled) { box-shadow: inset 0 0 0 1px var(--tb-hairline-strong); }
+.tb-pick.is-static { cursor: default; }
+.tb-pick:disabled { cursor: default; opacity: .6; }
+.tb-pick-box {
+  flex: 0 0 auto; width: 16px; height: 16px; margin-top: 1px; border-radius: 5px;
+  display: grid; place-items: center; color: transparent;
+  border: 1px solid var(--tb-hairline-strong); background: transparent;
+}
+.tb-pick.is-on .tb-pick-box, .tb-pick-input:checked ~ .tb-pick-box {
+  border-color: var(--tb-selection); background: var(--tb-selection); color: var(--tb-on-selection);
+}
+/* The native input stays in the DOM for keyboard and screen readers; the label's box is what shows.
+   Its focus ring has to move to that box, since the input itself is invisible. */
+.tb-pick-input { position: absolute; opacity: 0; width: 16px; height: 16px; margin: 0; pointer-events: none; }
+.tb-pick:focus-visible, .tb-pick-input:focus-visible ~ .tb-pick-box { outline: none; box-shadow: 0 0 0 1.5px var(--tb-selection); }
+.tb-pick-num {
+  flex: 0 0 auto; width: 18px; text-align: right; font-size: 11.5px; line-height: 18px;
+  color: var(--text-subtle-variant); font-variant-numeric: tabular-nums;
+}
+/* Renamed with the markers themselves: what the gutter runs is now a step, and the running and
+   disabled states go with the per-tool dispatch this replaced - a marker that only opens a dialog
+   is never mid-run. */
+.tb-step-run-gutter { width: 22px; }
+.tb-step-run-button {
   appearance: none; width: 20px; height: 20px; margin: 0; padding: 0; border: 0; border-radius: 6px;
   display: grid; place-items: center; color: var(--text-subtle); background: transparent; cursor: pointer;
 }
-.tb-tool-run-button::before { content: '▶'; font-size: 10px; line-height: 1; transform: translateX(1px); }
-.tb-tool-run-button:hover, .tb-tool-run-button:focus-visible { color: var(--tb-running); background: rgba(94,155,255,.14); outline: none; }
-.tb-tool-run-button:focus-visible { box-shadow: inset 0 0 0 1.5px var(--tb-selection); }
-.tb-tool-run-button.is-running { cursor: wait; color: var(--tb-running); }
-.tb-tool-run-button.is-running::before { content: '◌'; animation: tbSpin .8s linear infinite; transform: none; }
-.tb-tool-run-button:disabled:not(.is-running), .tb-tool-run-glyph.is-disabled { cursor: not-allowed; color: var(--text-subtle); opacity: .35; background: transparent; }
+.tb-step-run-button::before { content: '▶'; font-size: 10px; line-height: 1; transform: translateX(1px); }
+.tb-step-run-button:hover, .tb-step-run-button:focus-visible { color: var(--tb-running); background: rgba(94,155,255,.14); outline: none; }
+.tb-step-run-button:focus-visible { box-shadow: inset 0 0 0 1.5px var(--tb-selection); }
 /* Monaco renders glyph-margin decorations as aligned divs rather than buttons. Keep the control
    visually identical to the keyboard-focusable CodeMirror fallback and make the hit target obvious. */
-.tb-tool-run-glyph { cursor: pointer; color: var(--text-subtle); border-radius: 6px; }
-.tb-tool-run-glyph::before { content: '▶'; display: grid; place-items: center; width: 100%; height: 100%; font-size: 10px; transform: translateX(1px); }
-.tb-tool-run-glyph:hover { color: var(--tb-running); background: rgba(94,155,255,.14); }
-.tb-tool-run-glyph.is-running { cursor: wait; color: var(--tb-running); }
-.tb-tool-run-glyph.is-running::before { content: '◌'; animation: tbSpin .8s linear infinite; transform: none; }
+.tb-step-run-glyph { cursor: pointer; color: var(--text-subtle); border-radius: 6px; }
+.tb-step-run-glyph::before { content: '▶'; display: grid; place-items: center; width: 100%; height: 100%; font-size: 10px; transform: translateX(1px); }
+.tb-step-run-glyph:hover { color: var(--tb-running); background: rgba(94,155,255,.14); }
 .cm-s-tb .CodeMirror-cursor { border-left: 1.5px solid var(--text-standard); }
 .cm-s-tb .CodeMirror-selected { background: rgba(110, 168, 254, .22); }
 .cm-s-tb .CodeMirror-activeline-background { background: transparent; }

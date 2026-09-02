@@ -15,6 +15,7 @@ import xyz.block.trailblaze.capture.video.WebScreencastFeedRegistry
 import xyz.block.trailblaze.playwright.recording.PlaywrightScreencastFeed
 import xyz.block.trailblaze.tracing.CompleteEvent
 import xyz.block.trailblaze.tracing.PlatformIds
+import xyz.block.trailblaze.tracing.SpanKind
 import xyz.block.trailblaze.tracing.TrailblazeTracer
 import xyz.block.trailblaze.util.Console
 import java.util.concurrent.ExecutorService
@@ -300,16 +301,29 @@ class PlaywrightElectronBrowserManager(
         pid = PlatformIds.pid(),
         tid = PlatformIds.tid(),
         args = buildMap {
+          // Async observation marker: this event is stamped from Playwright's completion
+          // callback, so its tid is the event-dispatcher thread every request shares — profile
+          // consumers must not nest these among other trace spans (see perf-extract.ts).
+          put("async", "true")
           put("resourceType", resourceType)
           put("status", status)
           if (isAnalytics) put("analytics", "true")
         },
+        // Addressable, but a root: this runs in Playwright's completion callback, which has no
+        // enclosing trace frame to read, and page-initiated network is not a child of whatever tool
+        // happened to be running.
+        sid = TrailblazeTracer.traceRecorder.newSpanId(),
+        // The caller's view of an outgoing request. Its SERVER counterpart is what the callee
+        // would record; nothing on the receiving side is instrumented yet.
+        kind = SpanKind.CLIENT,
       ).toJsonObject(),
     )
   }
 
-  override fun captureScreenStateForLogging(): ScreenState {
-    return TrailblazeTracer.trace("captureScreenStateForLogging", "browser") {
+  // Self-bridged like [PlaywrightBrowserManager.captureScreenStateForLogging]: capture
+  // callers arrive from arbitrary threads and everything in here touches Page objects.
+  override fun captureScreenStateForLogging(): ScreenState = onPlaywrightThread {
+    TrailblazeTracer.trace("captureScreenStateForLogging", "browser") {
       PlaywrightScreenState(
         currentPage,
         viewportWidth,
@@ -319,7 +333,11 @@ class PlaywrightElectronBrowserManager(
     }
   }
 
-  override fun getScreenState(): ScreenState = TrailblazeTracer.trace("getScreenState", "browser") {
+  override fun getScreenState(): ScreenState = onPlaywrightThread {
+    getScreenStateOnThread()
+  }
+
+  private fun getScreenStateOnThread(): ScreenState = TrailblazeTracer.trace("getScreenState", "browser") {
     waitForPageReady()
 
     val details = pendingDetailRequests

@@ -51,6 +51,52 @@ class AssertVisibleTextMatchModeTest {
     assertTrue(result is TrailblazeToolResult.Success)
   }
 
+  /**
+   * A composable's text was unreadable to this tool, so `expectedText` on a `compose` selector
+   * always failed with "Matched element has no readable text" no matter what the screen said.
+   * Both slots matter: a label publishes `text`, a field publishes `editableText`.
+   */
+  @Test
+  fun `expectedText reads a composable's own text`() = runBlocking {
+    val label = runComposeReplay(text = "Review sale", expectedText = "Review sale")
+    val field = runComposeReplay(editableText = "4242", expectedText = "4242")
+    val icon = runComposeReplay(contentDescription = "Close", expectedText = "Close")
+    assertTrue(label is TrailblazeToolResult.Success, "label text should be readable")
+    assertTrue(field is TrailblazeToolResult.Success, "editable field value should be readable")
+    assertTrue(icon is TrailblazeToolResult.Success, "content description should be readable")
+  }
+
+  @Test
+  fun `expectedText still fails on a composable whose text differs`() = runBlocking {
+    val result = runComposeReplay(text = "Review sale", expectedText = "Add items")
+    assertTrue(result is TrailblazeToolResult.Error, "a real mismatch must still fail")
+  }
+
+  /**
+   * A Compose text field publishes both slots at once: `editableText` is what the user typed and
+   * `text` is the label rendered beside it. An assertion about a field is about its value, so the
+   * value has to win. Reading the label first would fail every assertion on a typed-in value and
+   * pass an assertion on the label without ever looking at the input.
+   */
+  @Test
+  fun `expectedText reads the value of a composable that also has a label`() = runBlocking {
+    val value = runComposeReplay(
+      text = "Card number",
+      editableText = "4242 4242 4242 4242",
+      expectedText = "4242 4242 4242 4242",
+    )
+    val label = runComposeReplay(
+      text = "Card number",
+      editableText = "4242 4242 4242 4242",
+      expectedText = "Card number",
+    )
+    assertTrue(value is TrailblazeToolResult.Success, "the field's value should be readable")
+    assertTrue(
+      label is TrailblazeToolResult.Error,
+      "asserting the label against a filled-in field must fail, not silently pass",
+    )
+  }
+
   @Test
   fun `EXACT fails when live text differs from expected`() = runBlocking {
     val result = runReplay(
@@ -142,6 +188,39 @@ class AssertVisibleTextMatchModeTest {
       expectedText = "Active on 12 devices",
     )
     assertTrue(result is TrailblazeToolResult.Error, "absent text must still fail — the subtree fallback must not auto-pass")
+  }
+
+  /**
+   * An unfilled field publishes its placeholder as `hintText` and nothing as `text`, so without the
+   * hint in the fold this tool disagrees with itself: the selector matches the field on `textRegex`
+   * — which folds to the hint — and the post-pass then reports "no readable text". Case 5380822
+   * asserts the item-search field shows "Search all items", which the field only ever carries as a
+   * hint.
+   */
+  @Test
+  fun `expectedText reads an empty field's hint`() = runBlocking {
+    val result = runHintReplay(hintText = "Search all items", expectedText = "Search all items")
+    assertTrue(result is TrailblazeToolResult.Success, "a placeholder must be readable")
+  }
+
+  /** Behind `text`, not in front of it — a filled field is asserted on its value, not its label. */
+  @Test
+  fun `a filled field is read by its text, not its hint`() = runBlocking {
+    val value = runHintReplay(
+      text = "coffee",
+      hintText = "Search all items",
+      expectedText = "coffee",
+    )
+    val hint = runHintReplay(
+      text = "coffee",
+      hintText = "Search all items",
+      expectedText = "Search all items",
+    )
+    assertTrue(value is TrailblazeToolResult.Success, "the typed value should be readable")
+    assertTrue(
+      hint is TrailblazeToolResult.Error,
+      "asserting the placeholder against a filled field must fail, not silently pass",
+    )
   }
 
   // endregion
@@ -679,6 +758,74 @@ class AssertVisibleTextMatchModeTest {
   // endregion
 
   // region helpers
+
+  /**
+   * Same replay path, but the matched node carries a `compose` detail. Text lives in one of two
+   * places on a composable: `text` for a label, `editableText` for the current value of a field.
+   */
+  private suspend fun runComposeReplay(
+    text: String? = null,
+    editableText: String? = null,
+    contentDescription: String? = null,
+    expectedText: String,
+  ): TrailblazeToolResult {
+    val matchedNode = TrailblazeNode(
+      nodeId = 2,
+      bounds = TrailblazeNode.Bounds(100, 200, 300, 260),
+      driverDetail = DriverNodeDetail.Compose(
+        testTag = "review_sale_row",
+        text = text,
+        editableText = editableText,
+        contentDescription = contentDescription,
+      ),
+    )
+    val tree = TrailblazeNode(
+      nodeId = 1,
+      bounds = TrailblazeNode.Bounds(0, 0, 1000, 1000),
+      driverDetail = DriverNodeDetail.Compose(),
+      children = listOf(matchedNode),
+    )
+    val tool = AssertVisibleBySelectorTrailblazeTool(
+      nodeSelector = TrailblazeNodeSelector.withMatch(
+        DriverNodeMatch.Compose(testTag = "review_sale_row"),
+      ),
+      expectedText = expectedText,
+      textMatchMode = TextMatchMode.EXACT,
+    )
+    return tool.execute(replayContext(tree))
+  }
+
+  /** A text field carrying a placeholder, and optionally a typed-in value over it. */
+  private suspend fun runHintReplay(
+    hintText: String,
+    text: String? = null,
+    expectedText: String,
+  ): TrailblazeToolResult {
+    val field = TrailblazeNode(
+      nodeId = 2,
+      ref = "y901",
+      bounds = TrailblazeNode.Bounds(100, 200, 300, 260),
+      driverDetail = DriverNodeDetail.AndroidAccessibility(
+        text = text,
+        hintText = hintText,
+        resourceId = "item_search_field",
+      ),
+    )
+    val tree = TrailblazeNode(
+      nodeId = 1,
+      bounds = TrailblazeNode.Bounds(0, 0, 1000, 1000),
+      driverDetail = DriverNodeDetail.AndroidAccessibility(),
+      children = listOf(field),
+    )
+    val tool = AssertVisibleBySelectorTrailblazeTool(
+      nodeSelector = TrailblazeNodeSelector.withMatch(
+        DriverNodeMatch.AndroidAccessibility(resourceIdRegex = "item_search_field"),
+      ),
+      expectedText = expectedText,
+      textMatchMode = TextMatchMode.EXACT,
+    )
+    return tool.execute(replayContext(tree))
+  }
 
   private suspend fun runReplay(
     liveText: String,

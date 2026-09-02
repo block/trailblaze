@@ -15,6 +15,7 @@ import xyz.block.trailblaze.api.ScreenshotScalingConfig
 import xyz.block.trailblaze.api.TrailblazeImageFormat
 import xyz.block.trailblaze.cli.SCREENSHOT_QUALITY_MIN
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
+import xyz.block.trailblaze.devices.TrailblazeDevicePort
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.llm.LlmProviderEnvVarUtil
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
@@ -1223,8 +1224,17 @@ object SettingsTabComposables {
 
           val draftHttpPortInt = draftHttpPort.toIntOrNull()
           val draftHttpsPortInt = draftHttpsPort.toIntOrNull()
-          val isHttpPortValid = draftHttpPortInt != null && draftHttpPortInt in 1024..65535
-          val isHttpsPortValid = draftHttpsPortInt != null && draftHttpsPortInt in 1024..65535
+          // isSelectableDaemonPort excludes the device-allocation range: the daemon refuses to
+          // start on such a port, and a saved one outranks every source but `--port`, so accepting
+          // it here would kill the next launch with this UI gone along with it.
+          val isHttpPortValid = draftHttpPortInt != null &&
+            draftHttpPortInt >= 1024 &&
+            TrailblazeDevicePort.isSelectableDaemonPort(draftHttpPortInt)
+          val isHttpsPortValid = draftHttpsPortInt != null &&
+            draftHttpsPortInt >= 1024 &&
+            TrailblazeDevicePort.isSelectableDaemonPort(draftHttpsPortInt)
+          val portInDeviceRange = listOfNotNull(draftHttpPortInt, draftHttpsPortInt)
+            .any { it in TrailblazeDevicePort.DEVICE_ALLOCATION_PORT_RANGE }
 
           val hasUnsavedChanges = (draftHttpPort != serverState.appConfig.serverPort.toString()) ||
             (draftHttpsPort != serverState.appConfig.serverHttpsPort.toString())
@@ -1251,6 +1261,19 @@ object SettingsTabComposables {
               label = { Text("HTTPS Port") },
               isError = draftHttpsPort.isNotEmpty() && !isHttpsPortValid,
               singleLine = true,
+            )
+          }
+
+          if (portInDeviceRange) {
+            SelectableText(
+              text = "${TrailblazeDevicePort.DEVICE_ALLOCATION_PORT_RANGE.first}-" +
+                "${TrailblazeDevicePort.DEVICE_ALLOCATION_PORT_RANGE.last} is reserved for " +
+                "per-device ports. A connected device can be assigned this port and `adb forward` " +
+                "would take it from the daemon without an error, so the daemon refuses to start " +
+                "on one. Pick a port below " +
+                "${TrailblazeDevicePort.DEVICE_ALLOCATION_PORT_RANGE.first - 1}.",
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.error,
             )
           }
 

@@ -17,6 +17,8 @@ import xyz.block.trailblaze.recordings.TrailRecordings
 import xyz.block.trailblaze.ui.TrailblazeDesktopUtil
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
+import xyz.block.trailblaze.yaml.unified.UnifiedTrail
+import xyz.block.trailblaze.yaml.unified.UnifiedTrailAdapter
 import java.io.File
 
 /**
@@ -241,6 +243,13 @@ internal fun validateTrailYaml(deps: TrailRunnerDeps, yaml: String?): ValidateTr
 internal data class SaveTrailOutcome(val status: HttpStatusCode, val body: SaveTrailResponse)
 
 /**
+ * The outcome of a record-a-step-range request, carrying the status the REST route answers with for
+ * the same reason [SaveTrailOutcome] does: only the shared builder knows whether it turned the
+ * request down (400) or tried to dispatch it and got nothing back (502).
+ */
+internal data class RecordTrailRangeOutcome(val status: HttpStatusCode, val body: RecordTrailRangeResponse)
+
+/**
  * The outcome of an add/remove trail-root mutation: the refreshed roots on success, or a validation
  * message (e.g. "not a directory: X") that the REST route renders as a 400 `{error}` and the RPC
  * handler maps to `RpcResult.Failure` (its message reaches the UI via daemon.ts's `dataOrError`).
@@ -391,6 +400,133 @@ internal suspend fun buildOpenTrailResponse(deps: TrailRunnerDeps, id: String): 
   val ok = withContext(Dispatchers.IO) { openInEditor(resolved.second) }
   return OkResponse(ok = ok)
 }
+
+/**
+ * What a recording of steps `[from, to]` runs, and the window its result is merged under.
+ *
+ * [mergeWindow] is null when [runnable] is the trail whole - the two travel together because they
+ * are the same decision, and splitting them is how a full-range recording ends up dispatched as a
+ * whole trail but merged as a partial one.
+ */
+internal data class StepWindowRun(val runnable: UnifiedTrail, val mergeWindow: IntRange?)
+
+/**
+ * The trail a recording of steps `[from, to]` actually runs, or null when the window names steps
+ * [unified] doesn't have.
+ */
+internal fun runnableForStepWindow(unified: UnifiedTrail, from: Int, to: Int): StepWindowRun? = when {
+  from < 0 || to < from || to >= unified.trail.size -> null
+  // A window covering every step is a recording of the trail as authored: it runs whole, trailhead
+  // included, so the device is launched into the state step 1 expects - and it merges back as an
+  // ordinary whole-trail save-back, with no window at all. Naming a window here instead would
+  // exempt the trailhead from the merge's drift check (a window sits outside it by definition)
+  // while the recording still replaced it, which is how a trailhead edited mid-run ends up carrying
+  // tool calls that never ran under it.
+  from == 0 && to == unified.trail.size - 1 -> StepWindowRun(unified, null)
+  // Only a NARROWED window is sliced, which is also what drops the trailhead - a partial run picks
+  // up from whatever is on the device's screen. Its merge is scoped by the same window, so a run
+  // that recorded a different number of steps than it covered is refused rather than shifting every
+  // later recording.
+  else -> UnifiedTrailAdapter.sliceTrail(unified, from, to)?.let { StepWindowRun(it, from..to) }
+}
+
+/**
+ * Run a contiguous span of an existing unified trail's steps on each selected device and merge each
+ * recording back into that trail's own file under the recording device's classifier. A span covering
+ * every step is the whole trail, trailhead included; a narrower one starts from whatever is on the
+ * device's screen.
+ *
+ * The slice happens HERE, not on the client, and the file the merge writes is the file this route
+ * resolved - the client only ever names a trail id and a step range. That is what keeps the
+ * `RunRequest.recordTrailFile` write authority server-side (see its `@Transient` declaration): a
+ * client that could hand over a path, or a pre-sliced fragment paired with an arbitrary offset,
+ * could write anywhere or write the wrong steps.
+ *
+ * Returns one session id per device that started. A device that failed to start is reported in
+ * `error` alongside the ones that did, so a partial launch is visible rather than averaged away.
+ *
+ * The outcome carries its own status because the two kinds of failure here are not the same kind of
+ * failure: a request naming a trail, a range or a device that can't be honoured is the caller's
+ * error (400), while a well-formed request whose devices all refused to start is the daemon
+ * reporting that dispatch failed (502). Only the outcome knows which it returned.
+ */
+internal suspend fun buildRecordTrailRangeResponse(
+  deps: TrailRunnerDeps,
+  body: RecordTrailRangeRequest,
+): RecordTrailRangeOutcome {
+  val id = body.id.trim()
+  if (id.isEmpty() || body.deviceIds.isEmpty()) {
+    return badRequest("a trail id and at least one device are required")
+  }
+  val (primary, extras) = withContext(Dispatchers.IO) { resolveRoots(deps.trailsRootProvider) }
+  // resolveTrailFile applies the canonical-path containment check against the resolved root, so a
+  // traversal id can't name a file outside the trails roots.
+  val trailFile = withContext(Dispatchers.IO) { resolveTrailFile(id.split("/"), primary, extras) }?.second
+    ?: return badRequest("trail `$id` not found")
+
+  val yaml = createTrailblazeYaml()
+  val unified = withContext(Dispatchers.IO) {
+    runCatching { yaml.decodeUnifiedTrail(trailFile.readText()) }
+  }.getOrElse {
+    // Only a unified single-file trail has per-classifier slots to merge a partial recording into.
+    return badRequest(
+      "Can't record a step range in ${trailFile.name}: it isn't a unified trail file " +
+        "(${it.message ?: "unreadable"}).",
+    )
+  }
+  val runnable = runnableForStepWindow(unified, body.from, body.to)
+    ?: return badRequest(
+      "Steps ${body.from + 1}-${body.to + 1} are outside this trail's ${unified.trail.size} step(s).",
+    )
+  val sliceYaml = runCatching { yaml.encodeUnifiedTrailToString(runnable.runnable) }.getOrElse {
+    return badRequest("Could not build a runnable trail for those steps: ${it.message}")
+  }
+
+  val sessionIds = mutableListOf<String>()
+  val errors = mutableListOf<String>()
+  for (device in body.deviceIds) {
+    val response = when (
+      val r = buildRunDispatchResult(
+        deps,
+        RunRequest(
+          trailblazeDeviceId = device,
+          yaml = sliceYaml,
+          // Recording, so the agent fills each step rather than replaying what is already there.
+          useRecordedSteps = false,
+          maxLlmCalls = body.maxLlmCalls,
+          agent = body.agent,
+          selfHeal = body.selfHeal,
+          captureVideo = body.captureVideo,
+          captureLogcat = body.captureLogcat,
+          captureNetworkTraffic = body.captureNetworkTraffic,
+          captureIosLogs = body.captureIosLogs,
+          captureAnalytics = body.captureAnalytics,
+          captureEvents = body.captureEvents,
+          // Navigating from this run's card lands on the trail it was recorded against.
+          trailId = id,
+          recordTrailFile = trailFile,
+          recordStepRange = runnable.mergeWindow,
+        ),
+      )
+    ) {
+      is RunDispatchResult.Invalid -> RunResponse(success = false, error = r.message)
+      is RunDispatchResult.Ok -> r.response
+    }
+    if (response.sessionId != null) sessionIds += response.sessionId
+    else errors += "${device.toFullyQualifiedDeviceId()}: ${response.error ?: "failed to start"}"
+  }
+  val body = RecordTrailRangeResponse(
+    sessionIds = sessionIds,
+    error = errors.takeIf { it.isNotEmpty() }?.joinToString("; "),
+  )
+  // A partial launch is still OK with the per-device errors attached (matching /api/folder/record);
+  // nothing at all started is a dispatch failure, not a bad request.
+  val status = if (sessionIds.isEmpty()) HttpStatusCode.BadGateway else HttpStatusCode.OK
+  return RecordTrailRangeOutcome(status, body)
+}
+
+private fun badRequest(error: String) =
+  RecordTrailRangeOutcome(HttpStatusCode.BadRequest, RecordTrailRangeResponse(error = error))
 
 /**
  * Reveals a trail file in the OS file browser, or `null` if the id doesn't resolve — the shared
@@ -559,6 +695,20 @@ internal fun Route.trailRoutes(deps: TrailRunnerDeps) {
   post("$PATH_BASE/api/trail/validate") {
     val yaml = runCatching { call.receive<SaveTrailRequest>() }.getOrNull()?.yaml
     call.respond(validateTrailYaml(deps, yaml))
+  }
+
+  // Record a step range of a unified trail back into its own file.
+  post("$PATH_BASE/api/trail/record-range") {
+    val body = runCatching { call.receive<RecordTrailRangeRequest>() }.getOrNull()
+    if (body == null) {
+      call.respond(
+        HttpStatusCode.BadRequest,
+        RecordTrailRangeResponse(error = "a trail id, a step range and at least one device are required"),
+      )
+      return@post
+    }
+    val outcome = buildRecordTrailRangeResponse(deps, body)
+    call.respond(outcome.status, outcome.body)
   }
 
   put("$PATH_BASE/api/trail/{id...}") {

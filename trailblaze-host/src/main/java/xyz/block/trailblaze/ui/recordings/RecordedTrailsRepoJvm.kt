@@ -48,8 +48,30 @@ class RecordedTrailsRepoJvm(
     val trailConfig = sessionInfo.trailConfig ?: TrailConfig()
     val classifiers = sessionInfo.trailblazeDeviceInfo?.classifiers ?: listOf()
 
-    // Classifier key (e.g. "android", "ios-iphone") — the unified slot key AND the sibling filename base.
-    val suffix = classifiers.joinToString("-") { it.classifier }
+    // A multi-device session's legs are keyed by the NAME of the configuration it bound (matched
+    // exactly), never by the launch device's classifier chain — keying them by the launch device
+    // would duplicate every leg under a slot no replay resolves. Blank counts as absent.
+    val selectedDeviceConfiguration = sessionInfo.selectedDeviceConfiguration?.takeIf { it.isNotBlank() }
+
+    // The unified slot key AND the sibling filename base: the selected configuration's name, or
+    // this device's classifier chain (e.g. "android", "ios-iphone").
+    val suffix = selectedDeviceConfiguration ?: classifiers.joinToString("-") { it.classifier }
+
+    // A classifier chain is machine-generated, but a configuration name is an author-written
+    // `config.devices` key — and `suffix` becomes a filename component on both fallback paths
+    // below. A name carrying a path separator (or a bare `..`) would escape the session directory
+    // and overwrite an unrelated trail. Refuse rather than sanitize: a name that isn't one path
+    // segment is a broken trail, and silently rewriting it would key the leg differently than the
+    // trail declares.
+    if (suffix.contains('/') || suffix.contains('\\') || suffix == "." || suffix == "..") {
+      return Result.failure(
+        IllegalArgumentException(
+          "Can't save this recording: `$suffix` names the recording slot AND its file, and it " +
+            "isn't a single path segment. Rename the multi-device configuration in " +
+            "`config.devices` to a plain name.",
+        ),
+      )
+    }
 
     // Everything below is inside the try so a render failure (e.g. a recording shape the unified
     // format can't hold) becomes a Result.failure the desktop save surfaces as "Save Failed",
@@ -63,7 +85,7 @@ class RecordedTrailsRepoJvm(
           trailsDirectory,
           "${sessionInfo.sessionId}/$suffix${TrailRecordings.DOT_TRAIL_DOT_YAML_FILE_SUFFIX}",
         )
-        val rendered = UnifiedRecordingWriter.renderStandalone(items, suffix)
+        val rendered = UnifiedRecordingWriter.renderStandalone(items, suffix, selectedDeviceConfiguration)
           .getOrElse { return Result.failure(it) }
         recordingFile.parentFile?.mkdirs()
         recordingFile.writeText(rendered)
@@ -83,9 +105,16 @@ class RecordedTrailsRepoJvm(
         TrailRecordings.DEFAULT_NL_DEFINITION_FILENAME
       }
 
-      // Route through the shared writer (same routing the CLI uses).
-      if (UnifiedRecordingWriter.shouldMergeIntoSharedTrail(trailDir, suffix)) {
-        return saveRecordingAsUnified(trailDir, items, suffix)
+      // Route through the shared writer (same routing the CLI uses). A configuration session always
+      // merges: the sibling layout names its file after the device and can't declare a cast, so
+      // routing a configuration's legs there would write the very classifier-keyed file the
+      // configuration keying exists to prevent. Merging is not the same as writing — the writer
+      // refuses a target that doesn't declare this configuration rather than forking a second
+      // layout beside existing siblings (MergeOutcome.ConfigurationNotDeclared).
+      if (selectedDeviceConfiguration != null ||
+        UnifiedRecordingWriter.shouldMergeIntoSharedTrail(trailDir, suffix)
+      ) {
+        return saveRecordingAsUnified(trailDir, items, suffix, selectedDeviceConfiguration)
       }
 
       // Per-classifier sibling. Refuse to drop one into a directory that already has a shared
@@ -96,6 +125,7 @@ class RecordedTrailsRepoJvm(
         )
       }
 
+      // Reached only for a single-device session — a configuration always merged above.
       val rendered = UnifiedRecordingWriter.renderStandalone(items, suffix)
         .getOrElse { return Result.failure(it) }
       val recordingFile = File(trailDir, siblingFileName)
@@ -113,21 +143,28 @@ class RecordedTrailsRepoJvm(
    * Merge the recorded [items] into the directory's unified `trail.yaml` under [classifier]'s slot,
    * preserving every other classifier already on disk. Refuses rather than clobbering a corrupt
    * existing trail, or writing a recording shape the unified format can't hold.
+   *
+   * [selectedDeviceConfiguration] is the multi-device configuration this session bound (equal to
+   * [classifier] when present) — the merge primitive needs the caller's own record of it, because a
+   * first write has no on-disk document to read the configuration names from.
    */
   private fun saveRecordingAsUnified(
     trailDir: File,
     items: List<TrailYamlItem>,
     classifier: String,
+    selectedDeviceConfiguration: String?,
   ): Result<String> {
-    return when (val outcome = UnifiedRecordingWriter.mergeIntoUnified(trailDir, items, classifier)) {
+    val outcome = UnifiedRecordingWriter.mergeIntoUnified(
+      trailFileOrDir = trailDir,
+      recordedItems = items,
+      classifier = classifier,
+      selectedDeviceConfiguration = selectedDeviceConfiguration,
+    )
+    return when (outcome) {
       is UnifiedRecordingWriter.MergeOutcome.Merged -> {
         Console.log("Recording merged into ${outcome.target.absolutePath} (classifier `$classifier`)")
         Result.success(outcome.target.absolutePath)
       }
-
-      is UnifiedRecordingWriter.MergeOutcome.MultiToolTrailheadUnsupported -> Result.failure(
-        IllegalStateException(UnifiedRecordingWriter.multiToolTrailheadMessage(outcome.toolCount)),
-      )
 
       is UnifiedRecordingWriter.MergeOutcome.NoTarget -> Result.failure(
         IllegalStateException(
@@ -151,6 +188,46 @@ class RecordedTrailsRepoJvm(
         IllegalStateException(
           UnifiedRecordingWriter.multiDeviceMergeSkippedMessage(outcome.target, outcome.configurationNames),
         ),
+      )
+
+      is UnifiedRecordingWriter.MergeOutcome.ConfigurationNotDeclared -> Result.failure(
+        IllegalStateException(
+          UnifiedRecordingWriter.configurationNotDeclaredMessage(
+            outcome.target,
+            outcome.configurationName,
+            outcome.declaredConfigurationNames,
+          ),
+        ),
+      )
+
+      is UnifiedRecordingWriter.MergeOutcome.SynthesizedCastWouldBeShadowed -> Result.failure(
+        IllegalStateException(
+          UnifiedRecordingWriter.synthesizedCastShadowedMessage(outcome.target, outcome.siblingFileNames),
+        ),
+      )
+
+      // This surface saves whole recordings, so it never passes a step window and neither of the
+      // partial-recording refusals can fire. Reported rather than ignored so a future caller that
+      // does pass one gets the real message instead of a silent success.
+      is UnifiedRecordingWriter.MergeOutcome.StepWindowOutOfRange -> Result.failure(
+        IllegalStateException(
+          UnifiedRecordingWriter.stepWindowOutOfRangeMessage(outcome.target, outcome.window, outcome.existingStepCount),
+        ),
+      )
+
+      is UnifiedRecordingWriter.MergeOutcome.StepWindowMismatch -> Result.failure(
+        IllegalStateException(
+          UnifiedRecordingWriter.stepWindowMismatchMessage(
+            outcome.target,
+            outcome.window,
+            outcome.expectedStepCount,
+            outcome.recordedStepCount,
+          ),
+        ),
+      )
+
+      is UnifiedRecordingWriter.MergeOutcome.TrailChangedUnderRun -> Result.failure(
+        IllegalStateException(UnifiedRecordingWriter.trailChangedUnderRunMessage(outcome.target, outcome.changed)),
       )
     }
   }

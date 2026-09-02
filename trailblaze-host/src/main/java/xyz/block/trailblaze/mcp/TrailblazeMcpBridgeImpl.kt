@@ -2,7 +2,6 @@ package xyz.block.trailblaze.mcp
 
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -20,6 +19,7 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
+import xyz.block.trailblaze.exception.TrailblazeException
 import xyz.block.trailblaze.host.ios.IosDriverTrailblazeAgent
 import xyz.block.trailblaze.host.ios.IosDeviceManager
 import xyz.block.trailblaze.host.ios.MobileDeviceUtils
@@ -45,6 +45,7 @@ import xyz.block.trailblaze.logs.model.MCP_TEST_CLASS_NAME
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.logs.model.TraceId
+import xyz.block.trailblaze.model.DeviceConnectionStatus
 import xyz.block.trailblaze.model.ResolvedTarget
 import xyz.block.trailblaze.model.TrailExecutionResult
 import xyz.block.trailblaze.model.TrailblazeConfig
@@ -55,6 +56,7 @@ import xyz.block.trailblaze.toolcalls.HostLocalExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.requiresHostInstance
 import xyz.block.trailblaze.toolcalls.toLogPayload
+import xyz.block.trailblaze.transport.AndroidWireTransport
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.DrainSessionRequest
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetScreenStateRequest
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetScreenStateResponse
@@ -252,6 +254,14 @@ class TrailblazeMcpBridgeImpl(
         Console.log("[MCP Bridge] [rpc ${deviceId.instanceId}] $it")
       },
       onNonRecoverableWedge = { onDeviceRunnerRecovery.arm(deviceId) },
+      // Driver-aware for the same reason every other client construction is: protobuf cannot
+      // encode an ANDROID_TEST tree at all, so a pooled client left on the process-wide default
+      // fails every tree-bearing call — including `waitForReady`, whose probe asks for the tree.
+      // The symptom is a full readiness timeout against a server that is up and answering.
+      // Cached per device, so the driver-switch path evicts this client; see [selectDevice].
+      wireTransportMode = AndroidWireTransport.modeFor(
+        getConfiguredDriverType(deviceId.trailblazeDevicePlatform),
+      ),
     )
   }
 
@@ -394,6 +404,12 @@ class TrailblazeMcpBridgeImpl(
                 existingBrowserManager = browserManager,
                 trailblazeLlmModel = configuredLlmModel,
                 dynamicLlmClient = dynamicLlmClientProvider.invoke(configuredLlmModel),
+                // Build this long-lived test against the configured logs directory. Its own
+                // rule would otherwise default to `<git root>/logs`, and because MCP sessions
+                // set `sendSessionEndLog = false`, this instance is the one every subsequent
+                // interactive step reuses — one un-configured rule here would misfile a whole
+                // authoring session.
+                logsDir = logsRepo?.logsDir,
               )
               trailblazeDeviceManager.setActivePlaywrightNativeTest(trailblazeDeviceId, test)
               registeredTest = true
@@ -457,7 +473,10 @@ class TrailblazeMcpBridgeImpl(
       if (trailblazeDeviceId.trailblazeDevicePlatform == TrailblazeDevicePlatform.ANDROID) {
         HostAndroidDeviceConnectUtils.forceStopAllAndroidInstrumentationProcesses(
           trailblazeOnDeviceInstrumentationTargetTestApps = trailblazeDeviceManager.availableAppTargets
-            .map { it.getTrailblazeOnDeviceInstrumentationTarget() }.toSet(),
+            // A declared in-process harness is an instrumentation process like the bundled
+            // runner — a stale one holds the instrumentation slot just the same.
+            .flatMap { it.allInstrumentationTargets() }
+            .toSet(),
           deviceId = trailblazeDeviceId,
         )
       }
@@ -468,6 +487,10 @@ class TrailblazeMcpBridgeImpl(
         // Clear on-device agent ready flag
         Console.log("[MCP Bridge] Clearing on-device agent ready flag for $key (switching to $configuredDriverType)")
         onDeviceAgentReady.remove(key)
+        // The pooled RPC client pinned its wire transport from the driver it was created for, so
+        // a client cached under the previous driver would keep talking protobuf to (or JSON to)
+        // the wrong one. Evicting reconstructs it against $configuredDriverType.
+        onDeviceRpcClients.evict(trailblazeDeviceId)
       }
     }
 
@@ -1185,21 +1208,52 @@ class TrailblazeMcpBridgeImpl(
     val agentThread = Thread {
       try {
         val appTarget = trailblazeDeviceManager.getCurrentSelectedTargetApp()
-        val target = appTarget?.getTrailblazeOnDeviceInstrumentationTarget()
-          ?: TrailblazeOnDeviceInstrumentationTarget.DEFAULT_ANDROID_ON_DEVICE
+        // Through the shared resolver rather than a local ANDROID_TEST branch, so a driver added
+        // to the RPC set later cannot silently land on the bundled runner here.
+        val resolved =
+          driverType?.let { appTarget?.getTrailblazeOnDeviceInstrumentationTargetForDriver(it) }
+        val target = when {
+          resolved != null -> resolved
+          // Only ANDROID_TEST resolves to null, and its runner is the app's own build — so there
+          // is nothing to fall back to. The outer catch logs this and the bridge continues
+          // without an on-device agent.
+          driverType == TrailblazeDriverType.ANDROID_TEST -> error(
+            appTarget?.missingInProcessHarnessMessage()
+              ?: "No target app is selected, so the ANDROID_TEST driver has no in-process test " +
+              "harness to start.",
+          )
+          else -> TrailblazeOnDeviceInstrumentationTarget.DEFAULT_ANDROID_ON_DEVICE
+        }
 
         Console.log("[MCP Bridge] Starting on-device agent for $key (driver=${driverType?.name})")
 
         // Connect + enable a11y. An IOException here is infra (ADB/install/instrumentation) that a
         // restart would just repeat — let it propagate to the outer catch instead of retrying.
         fun doConnectAndEnable(forceRestart: Boolean) {
-          runBlocking {
+          val connectStatus = runBlocking {
             HostAndroidDeviceConnectUtils.connectToInstrumentationAndInstallAppIfNotAvailable(
               sendProgressMessage = { Console.log("[MCP Bridge] [$key] $it") },
               deviceId = trailblazeDeviceId,
               trailblazeOnDeviceInstrumentationTarget = target,
+              // The daemon's resolved HTTPS port — on a non-default port (TRAILBLAZE_PORT et al.)
+              // the old defaulted value reversed tcp:52526 to a host port nothing listens on.
+              httpsPort = trailblazeDeviceManager.settingsRepo.portManager.httpsPort,
               additionalInstrumentationArgs = trailblazeDeviceManager.onDeviceInstrumentationArgsProvider(),
               forceRestart = forceRestart,
+              // The same `appTarget` this bridge resolved `target` from — an MCP session has no
+              // trail config, so the selection IS this session's target. See
+              // HostAndroidDeviceConnectUtils.planConnectForceStop.
+              additionalForceStopTargets = appTarget?.allInstrumentationTargets().orEmpty().toSet(),
+            )
+          }
+          // A connect that reports its own failure launched nothing, so the readiness probe below
+          // can only time out and the restart retry would repeat the same failing step — turning
+          // an error that names the fix (e.g. an uninstalled external test APK) into a generic
+          // readiness timeout. Throw so the outer catch reports the actionable message.
+          if (connectStatus is DeviceConnectionStatus.DeviceConnectionError) {
+            throw TrailblazeException(
+              (connectStatus as? DeviceConnectionStatus.DeviceConnectionError.ConnectionFailure)
+                ?.errorMessage ?: connectStatus.statusText,
             )
           }
           if (driverType == TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY) {
@@ -1443,19 +1497,16 @@ class TrailblazeMcpBridgeImpl(
    * Returns a screen state provider backed by the cached [BasePlaywrightNativeTest] for the
    * given WEB device, or null if no test is cached yet (e.g. before the first blaze call).
    *
-   * Playwright API calls require thread affinity — all calls must happen on the dedicated
-   * `playwright-browser` dispatcher thread. [runBlocking] with that dispatcher schedules
-   * the capture on the correct thread and blocks the calling thread until it completes.
+   * No dispatch wrapper here: `getScreenState()` self-bridges onto the Playwright thread via
+   * `onPlaywrightThread`, which runs inline when already on-thread. A plain
+   * `runBlocking(playwrightDispatcher)` at this call site would deadlock if the provider were
+   * ever invoked from the Playwright thread itself — the exact case the bridge exists for.
    */
   private fun getPlaywrightScreenStateProvider(
     deviceId: TrailblazeDeviceId,
   ): ((ScreenshotScalingConfig) -> ScreenState)? {
     val test = trailblazeDeviceManager.getActivePlaywrightNativeTest(deviceId) ?: return null
-    return { _ ->
-      runBlocking(test.browserManager.playwrightDispatcher) {
-        test.browserManager.getScreenState()
-      }
-    }
+    return { _ -> test.browserManager.getScreenState() }
   }
 
   /**
@@ -1756,7 +1807,7 @@ class TrailblazeMcpBridgeImpl(
     // class is also wired into the host-test-rule path (BaseHostTrailblazeTest / `trailblaze
     // run --driver IOS_AXE`), which gets real session logging that this one-shot MCP path
     // still doesn't (see warnIosNativeSessionLoggingGapOnce below).
-    if (trailblazeDeviceManager.getDeviceState(trailblazeDeviceId)?.device?.trailblazeDriverType in TrailblazeDriverType.IOS_HOST_NATIVE_DRIVER_TYPES) {
+    if (trailblazeDeviceManager.getDeviceState(trailblazeDeviceId)?.device?.trailblazeDriverType?.hostNativeSimulatorDriver == true) {
       val result = executeToolViaIosNativeDriver(tool, trailblazeDeviceId)
       cachedScreenStates.remove(trailblazeDeviceId.instanceId)
       return result
@@ -2170,16 +2221,21 @@ class TrailblazeMcpBridgeImpl(
         Console.log("MCP: Auto-start of web network capture failed: ${it.message}")
       }
     }
-    val result = withContext(test.browserManager.playwrightDispatcher) {
-      val screenState = test.browserManager.getScreenState()
-      agent.runTrailblazeTools(
-        tools = listOf(tool),
-        traceId = traceId,
-        screenState = screenState,
-        elementComparator = NoOpElementComparator,
-        screenStateProvider = test.browserManager::getScreenState,
-      ).result
-    }
+    // Deliberately NOT dispatched on the Playwright thread: this is a HOST-LOCAL tool, so
+    // its body runs right here (blocking this caller thread), and a `runtime: subprocess`
+    // tool composes Playwright tools via `/scripting/callback`, which bridges onto the
+    // Playwright thread through [PlaywrightPageManager.onPlaywrightThread]. Running THIS
+    // dispatch on the Playwright thread would park the very thread those nested calls
+    // need — each one would hang for the full callback timeout. getScreenState and the
+    // per-tool Playwright execution self-bridge.
+    val screenState = test.browserManager.getScreenState()
+    val result = agent.runTrailblazeTools(
+      tools = listOf(tool),
+      traceId = traceId,
+      screenState = screenState,
+      elementComparator = NoOpElementComparator,
+      screenStateProvider = test.browserManager::getScreenState,
+    ).result
     return when (result) {
       is TrailblazeToolResult.Success ->
         renderToolResultOutput(
@@ -2619,9 +2675,36 @@ class TrailblazeMcpBridgeImpl(
           releasePersistentDeviceConnection(deviceId)
         }
       }
+      releaseAndroidTestConnectionOnTargetChange(previousTarget?.id, appTargetId)
     }
 
     return matchingTarget.displayName
+  }
+
+  /**
+   * Drops a ready ANDROID_TEST connection when the selected target changes.
+   *
+   * Every other Android driver reaches the same bundled runner whatever the target is, so a warm
+   * connection stays correct across a target switch. ANDROID_TEST does not: its RPC server is the
+   * target's OWN in-process harness, a different test APK per target. Readiness is cached by
+   * device alone, so without this the bridge keeps routing RPC into the previous target's app —
+   * answering, plausible, and about the wrong app entirely.
+   *
+   * Clearing readiness is what forces the next request back through `ensureOnDeviceAgentRunning`,
+   * which re-resolves the harness from the now-current target; the pooled client goes with it
+   * because it is bound to that server's port forward.
+   */
+  private fun releaseAndroidTestConnectionOnTargetChange(previousTargetId: String?, newTargetId: String) {
+    val deviceId = getEffectiveDeviceId() ?: return
+    if (deviceId.trailblazeDevicePlatform != TrailblazeDevicePlatform.ANDROID) return
+    if (getConfiguredDriverType(deviceId.trailblazeDevicePlatform) != TrailblazeDriverType.ANDROID_TEST) return
+    Console.log(
+      "[MCP Bridge] App target changed from $previousTargetId to $newTargetId on the ANDROID_TEST " +
+        "driver — dropping the in-process connection for ${deviceId.instanceId} so the next " +
+        "request instruments the new target's harness.",
+    )
+    onDeviceAgentReady.remove(deviceId.instanceId)
+    onDeviceRpcClients.evict(deviceId)
   }
 
   /**

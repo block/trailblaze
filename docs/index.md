@@ -277,6 +277,9 @@ and project context to the loop, which the built-in agent can't.
   [Scripted Tools (TypeScript) reference](scripted-tools-typed-authoring.md),
   the [Trailmaps](trailmaps.md) manifest schema, and the [Trailblaze Tools](tools.md)
   catalog of scripted / pure-YAML / Kotlin flavors.
+- **Gating CI on which trails a tool change affects?** See the
+  [`usages --json` report contract](usages-json.md) — field semantics, the diagnostic-kind
+  registry, exit codes, and the versioning policy.
 - **Customizing the LLM?** See [LLM Configuration](llm_configuration.md) and
   [Built-in Models](generated/LLM_MODELS.md). Using a model that isn't built in — no
   Trailblaze upgrade required — is [Adding a Model](adding_a_model.md).
@@ -284,4 +287,4 @@ and project context to the loop, which the built-in agent can't.
 
 ## License
 
-Trailblaze is licensed under the [Apache License 2.0](../LICENSE).
+Trailblaze is licensed under the [Apache License 2.0](https://github.com/block/trailblaze/blob/main/LICENSE).

@@ -37,7 +37,9 @@ import xyz.block.trailblaze.yaml.generateRecordedTrailItems
  * That is the chain `TrailCommand.saveRecordingAsUnified` runs after a unified-trail run. Before
  * the healed-trailhead merge fix in the recording generator, the lowering produced two trailhead
  * items ("Only one trailhead item is allowed in a trail."), so a healed run could never save back
- * to a unified trail and left an unparseable `recording.trail.yaml` behind.
+ * to a unified trail and left an unparseable `recording.trail.yaml` behind. The merged trailhead
+ * then holds more tools than a trailhead slot can, which the unified merge maps onto the format
+ * (first tool stays, the rest replay at the start of step 1) rather than refusing the save.
  */
 class HealedRunUnifiedSaveBackTest {
 
@@ -48,13 +50,12 @@ class HealedRunUnifiedSaveBackTest {
   private val now = Clock.System.now()
 
   @Test
-  fun `healed multi-tool trailhead reaches the designed unsupported outcome with the unified trail untouched`() {
+  fun `healed multi-tool trailhead saves back with the recovery tools replaying in the first step`() {
     // A unified trail already on disk with this classifier's trailhead + step slots recorded.
     val dir = tempFolder.newFolder()
     val seeded = UnifiedRecordingWriter.mergeIntoUnified(dir, seedItems(), "android")
     assertTrue(seeded is UnifiedRecordingWriter.MergeOutcome.Merged, "seed merge must succeed")
     val unifiedFile = File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME)
-    val before = unifiedFile.readText()
 
     // The heal recovered with two tool calls, so the recorded trailhead arrives as
     // failed attempt (1 tool) + recovery (2 tools) = 3 tools.
@@ -64,10 +65,19 @@ class HealedRunUnifiedSaveBackTest {
 
     val outcome = UnifiedRecordingWriter.mergeIntoUnified(dir, recordedItems, "android")
 
-    // The unified trailhead is one tool per classifier, so a healed multi-tool trailhead is
-    // deliberately NOT auto-adopted — and the refusal is all-or-nothing, before any file I/O.
-    assertEquals(UnifiedRecordingWriter.MergeOutcome.MultiToolTrailheadUnsupported(3), outcome)
-    assertEquals(before, unifiedFile.readText(), "the on-disk unified trail must be byte-identical")
+    // A trailhead slot holds one tool, so the run's step 0 is mapped onto the format rather than
+    // costing the whole recording: the first tool stays, the heal's replay at the front of step 1.
+    assertTrue(outcome is UnifiedRecordingWriter.MergeOutcome.Merged, "got $outcome")
+    val unified = yaml.decodeUnifiedTrail(unifiedFile.readText())
+    assertEquals(
+      listOf("myapp_launchSignedIn"),
+      unified.trailhead?.recordings?.get("android")?.map { it.name },
+    )
+    assertEquals(
+      listOf("tapSignIn", "enterEmail", "tapCart"),
+      unified.trail.single().recordings["android"]?.map { it.name },
+      "the heal's tools replay before the step's own, in execution order",
+    )
   }
 
   @Test

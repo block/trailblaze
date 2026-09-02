@@ -177,6 +177,30 @@ object TrailblazeClassifierLineage {
   }
 
   /**
+   * The **winning key** of a closest-wins lookup: the first entry of [resolutionChain] that
+   * [declaredKeys] declares. Null when the chain reaches its end without a match — the
+   * "nothing authored for this device" outcome, which callers report rather than substitute for.
+   *
+   * This is the second half of the primitive [chainFor] / [resolutionChain] begin: those say what a
+   * device falls back to, this says which of a classifier-keyed map's entries that walk lands on.
+   * Every consumer of closest-wins resolution goes through here so "did it match" and "what
+   * matched" can never come from two different traversals —
+   * [xyz.block.trailblaze.yaml.unified.UnifiedTrailAdapter] for a trail's recordings, driver pins
+   * and skip reasons, and [xyz.block.trailblaze.usages.TrailToolUsageScanner] for which declared
+   * devices actually reach a tool.
+   *
+   * [excludedKeys] carries keys that are not classifiers and so must never be matched by a chain
+   * walk — in practice a trail's multi-device configuration names, which are reachable only by
+   * exact configuration selection. Lineage re-probes bare segments and string-derived parents, so a
+   * configuration named `pair` sits on a `pair-a` device's chain and would otherwise resolve.
+   */
+  fun closestDeclaredKey(
+    declaredKeys: Set<String>,
+    resolutionChain: List<String>,
+    excludedKeys: Set<String> = emptySet(),
+  ): String? = resolutionChain.firstOrNull { it !in excludedKeys && it in declaredKeys }
+
+  /**
    * Append [UNIVERSAL_ROOT] as the final, lowest-priority entry of a non-empty chain. An empty
    * chain stays empty (no device identity to resolve → nothing to fall back from). A chain that
    * already reaches `all` mid-chain (an explicit override routed through it before lower-priority
@@ -211,3 +235,15 @@ object TrailblazeClassifierLineage {
     return classifier.substring(0, lastDash)
   }
 }
+
+/**
+ * The single compound classifier these segments identify a device by — non-blank segments joined
+ * with `-` (e.g. `[ios, iphone-sim]` → `ios-iphone-sim`), blank when nothing is left to join.
+ *
+ * This is the key a recording's per-classifier slot is written and read under, so every producer
+ * must fold identically: a stray blank segment joined in would produce a compound key
+ * ([TrailblazeClassifierLineage.resolutionChain] drops it) that resolution never reconstructs,
+ * stranding a `recordings:` slot no device can match.
+ */
+fun List<TrailblazeDeviceClassifier>.compoundClassifier(): String =
+  filter { it.classifier.isNotBlank() }.joinToString("-") { it.classifier }

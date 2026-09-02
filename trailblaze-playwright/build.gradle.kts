@@ -20,6 +20,26 @@ dependencies {
 
   testImplementation(libs.kotlin.test.junit4)
   testImplementation(libs.assertk)
+
+  // `libs.skiko` above is only the JVM binding — the native library ships in a
+  // per-platform `skiko-awt-runtime-*` artifact. Without it on the test classpath,
+  // any test that touches WebP encoding (the default screenshot format) dies in
+  // static init with `LibraryLoadException: Cannot find libskiko-<os>.…sha256`.
+  // Same bug category as #2844; see the matching runtimeOnly block in
+  // trailblaze-host's build.gradle.kts. Test-only here, so nothing leaks into
+  // published artifacts or downstream runtime classpaths.
+  // Every host platform a CI agent or contributor might run on. Resolution is
+  // per-artifact, so an omitted target is a hard failure on that host, not a slower
+  // path — macos-x64 covers Intel Macs, which the arm64 artifact does not.
+  listOf(
+    "linux-x64",
+    "windows-x64",
+    "linux-arm64",
+    "macos-arm64",
+    "macos-x64",
+  ).forEach { target ->
+    testRuntimeOnly("org.jetbrains.skiko:skiko-awt-runtime-$target:${libs.versions.skiko.get()}")
+  }
 }
 
 tasks.test {

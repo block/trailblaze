@@ -161,6 +161,10 @@ internal fun toSessionSummary(info: SessionInfo): SessionSummary {
     platform = device?.platform?.name?.lowercase(),
     device = device?.classifiers?.joinToString(" · ") { it.toString() }
       ?: device?.trailblazeDriverType?.name,
+    // The advertised id first: the web runner paths mint a per-session instance id that device
+    // discovery never lists, so a "run this on the same device" retry keyed on it would resolve
+    // to nothing (and silently fall back to another device).
+    deviceInstanceId = device?.advertisedInstanceId ?: device?.trailblazeDeviceId?.instanceId,
     target = info.trailConfig?.target,
     appId = info.targetAppInfo?.appId,
     appVersionName = info.targetAppInfo?.versionName,

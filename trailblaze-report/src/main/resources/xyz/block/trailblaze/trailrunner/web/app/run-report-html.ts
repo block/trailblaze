@@ -18,10 +18,11 @@ const RUN_REPORT_VIEWER_SCRIPT: string = embeddedViewerScript();
 // contract. Optional generic event streams, the authored/recorded YAML, and pre-packed hierarchies
 // (packSessionInputsHierarchies — the Share path compresses before serializing) ride alongside the
 // trace, LLM calls, and screenshots. Pure: no fetch, no DOM — usable identically in browser and bun.
-function buildRunReportHtml({ meta, trace, llmLogs, shots, events = null, hierarchies = null, hierarchiesGz = null }: { meta: RunMeta; trace: RawTraceRow[]; llmLogs: RawLlmRow[]; shots: Record<string, string>; events?: EventStream[] | null; hierarchies?: Record<string, unknown> | null; hierarchiesGz?: string | null }): string {
+function buildRunReportHtml({ meta, trace, llmLogs, shots, events = null, attachments = null, hierarchies = null, hierarchiesGz = null, keepAttachmentObjectUrls = false }: { meta: RunMeta; trace: RawTraceRow[]; llmLogs: RawLlmRow[]; shots: Record<string, string>; events?: EventStream[] | null; attachments?: Record<string, string> | null; hierarchies?: Record<string, unknown> | null; hierarchiesGz?: string | null; keepAttachmentObjectUrls?: boolean }): string {
   return buildMultiReportHtml({
     generatedAt: (meta || {}).generatedAt || '',
-    sessions: [{ meta, trace, llmLogs, shots, events, hierarchies, hierarchiesGz }],
+    sessions: [{ meta, trace, llmLogs, shots, events, attachments, hierarchies, hierarchiesGz }],
+    keepAttachmentObjectUrls,
   });
 }
 
@@ -34,12 +35,34 @@ function buildRunReportHtml({ meta, trace, llmLogs, shots, events = null, hierar
 // suggestions, embedded ONCE per document — index-level, not per-session — as an inert JSON chunk
 // the viewer inflates + evaluates on first inspector use. Callers gate it on hierarchies being
 // present (see run-report-cli.ts): no hierarchies means no inspector, means dead weight.
-function buildMultiReportHtml({ generatedAt, shareUrl, sessions, selectorEngine }: { generatedAt?: string; shareUrl?: string; sessions: SessionInput[]; selectorEngine?: SelectorEnginePayload | null }): string {
+// `keepAttachmentObjectUrls` opts ONE caller out of the blob: strip below: the zip viewer renders
+// this HTML as the srcDoc of a same-origin iframe, where the object URLs the loading page minted
+// over the archive's own bytes still resolve. Every other caller writes a document that outlives
+// this page — a downloaded file, a POST to the daemon — so the default stays "strip".
+function buildMultiReportHtml({ generatedAt, shareUrl, sessions, selectorEngine, keepAttachmentObjectUrls = false }: { generatedAt?: string; shareUrl?: string; sessions: SessionInput[]; selectorEngine?: SelectorEnginePayload | null; keepAttachmentObjectUrls?: boolean }): string {
   // Slimming, the llmLogs → llm rename, and lifting recording/original YAML off meta are shared with
   // the viewer shell's in-place hydration (toSessionPayloads in run-report-extract), so an embedded
   // payload and a shell-loaded one are the same shape. The sprite hoist below is this path's alone:
   // it depends on the #tb-sprites-<i> chunks only a document carries.
   const list: SessionPayload[] = toSessionPayloads({ generatedAt, sessions });
+  // A clip is an object URL over bytes only the LOADING page holds, so it cannot survive into a
+  // standalone document: carrying it would embed a `blob:` reference that resolves to nothing when
+  // the file is reopened elsewhere, and Replay would badge the lane REC and then fail to play it.
+  // Stripped at the serialization boundary rather than in toSessionPayloads, because the in-place
+  // viewer payload it also builds is exactly where the clip belongs.
+  list.forEach((s) => { s.videoClip = null; });
+  // Same rule for attachment object URLs (the zip pipeline's resolution): a `blob:` value is bytes
+  // only the loading page holds, so it must not serialize into a standalone document. Embedded
+  // data:/linked values stay — those are exactly what makes the attachment portable. The one
+  // exception is a document rendered straight back into this same page (see the parameter's note):
+  // there the minting page is still alive and the URLs are the whole point.
+  if (!keepAttachmentObjectUrls) {
+    list.forEach((s) => {
+      if (!s.attachments) return;
+      const kept = Object.fromEntries(Object.entries(s.attachments).filter(([, uri]) => !/^blob:/i.test(String(uri))));
+      s.attachments = Object.keys(kept).length ? kept : null;
+    });
+  }
   // Hoist each session's sprite-sheet data URIs out of the main payload: they're the largest
   // blobs in the document and are only needed once a video frame actually renders. Keeping them
   // out of the payload the viewer JSON.parses at boot means first paint never waits on sprite

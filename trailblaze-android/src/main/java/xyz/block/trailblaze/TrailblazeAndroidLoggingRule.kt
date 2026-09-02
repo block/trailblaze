@@ -71,6 +71,9 @@ class TrailblazeAndroidLoggingRule(
 
   protected override val useBinaryLogTransport: Boolean = true
 
+  /** These spans are stamped by the device's own clock, which drifts from the host's by seconds. */
+  protected override val tracesUseDeviceClock: Boolean = true
+
   /**
    * Override the driver type reported in session logs. Set this before calling
    * [AndroidTrailblazeRule.runSuspend] so that the [SessionStatus.Started] log

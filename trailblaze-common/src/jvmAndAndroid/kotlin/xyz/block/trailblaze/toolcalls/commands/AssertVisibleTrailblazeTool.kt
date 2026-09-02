@@ -95,8 +95,13 @@ data class AssertVisibleTrailblazeTool(
     )
 
     // Accessibility-driver path: emit nodeSelector-only, mirroring [TapTrailblazeTool]'s
-    // forward-only recording shape (see that file for the full rationale).
-    if (tree.driverDetail is DriverNodeDetail.AndroidAccessibility) {
+    // forward-only recording shape (see that file for the full rationale, including why
+    // [DriverNodeDetail.AndroidView] joins it here). Without the AndroidView case, an
+    // in-process View tree falls to the view-hierarchy lookup below and throws — there is no
+    // Maestro [ViewHierarchyTreeNode] to map the ref onto.
+    if (tree.driverDetail is DriverNodeDetail.AndroidAccessibility ||
+      tree.driverDetail is DriverNodeDetail.AndroidView
+    ) {
       val accessibilityHitTestNode = tree.hitTest(center.first, center.second) ?: targetNode
       val accessibilityNodeSelector = TrailblazeNodeSelectorGenerator.findBestSelector(
         tree,

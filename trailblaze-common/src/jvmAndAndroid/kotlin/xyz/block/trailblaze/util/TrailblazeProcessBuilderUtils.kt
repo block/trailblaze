@@ -13,13 +13,30 @@ object TrailblazeProcessBuilderUtils {
 
   /**
    * Note: All System Environment Variables will be passed along to the target process
+   *
+   * [mergeErrorStream] folds stderr into stdout (the default — right for streaming a command's
+   * combined output back to a caller). Pass false when the caller PARSES stdout: some tools (git)
+   * write warnings to stderr while still exiting 0, and merging glues that text onto the value
+   * being parsed. With false, stderr is discarded rather than left as an unread pipe, so a chatty
+   * process can't block on a buffer nobody drains.
+   *
+   * `@JvmOverloads` keeps the pre-[mergeErrorStream] bytecode signature so binary-linked consumers
+   * of this published artifact (trailblaze-common) don't NoSuchMethodError when the slot is added.
    */
+  @JvmOverloads
   fun createProcessBuilder(
     args: List<String>,
     workingDir: File? = null,
+    mergeErrorStream: Boolean = true,
   ): ProcessBuilder = try {
     val processBuilder = ProcessBuilder(args)
-      .redirectErrorStream(true)
+    if (mergeErrorStream) {
+      processBuilder.redirectErrorStream(true)
+    } else {
+      // The OS null device rather than Redirect.DISCARD: DISCARD needs Android API 33+ and this
+      // source set compiles for minSdk 26.
+      processBuilder.redirectError(ProcessBuilder.Redirect.to(File(if (isWindows()) "NUL" else "/dev/null")))
+    }
 
     if (workingDir != null) {
       processBuilder.directory(workingDir)

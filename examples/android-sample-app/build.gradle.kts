@@ -38,20 +38,44 @@ android {
 }
 
 dependencies {
-  val composeBom = platform("androidx.compose:compose-bom:2024.12.01")
+  // Maps to Compose 1.9.0, level with the `ui-test` that `default-android-inprocess` ships. In-process
+  // tests load Compose from THIS app, so a version behind the harness fails on device with a
+  // NoClassDefFoundError raised inside Compose's own test rule.
+  val composeBom = platform("androidx.compose:compose-bom:2025.08.00")
   implementation(composeBom)
   implementation("androidx.compose.material3:material3")
   implementation("androidx.compose.ui:ui")
   implementation("androidx.compose.ui:ui-tooling-preview")
   implementation("androidx.compose.foundation:foundation")
-  implementation("androidx.compose.material:material-icons-extended")
+  // Pinned off the BOM: it maps this to 1.7.8, which the internal artifact mirror does not carry.
+  implementation("androidx.compose.material:material-icons-extended:1.7.6")
   implementation("androidx.activity:activity-compose:1.9.3")
-  implementation("androidx.navigation:navigation-compose:2.8.5")
+  implementation("androidx.navigation:navigation-compose:2.9.7")
   implementation("androidx.viewpager2:viewpager2:1.1.0")
   implementation("androidx.recyclerview:recyclerview:1.3.2")
   implementation("com.google.android.material:material:1.12.0")
   implementation("androidx.appcompat:appcompat:1.7.0")
   implementation("androidx.fragment:fragment-ktx:1.8.5")
 
-  debugImplementation("androidx.compose.ui:ui-tooling")
+  // This app declares androidx.startup initializers (see SampleAppInitializers) so the in-process
+  // lane has something to prove: that an instrumented process still installs the app under test's
+  // ContentProviders and runs its startup init. Declared HERE rather than in the test module on
+  // purpose — `default-android-inprocess` names this project as its `targetProjectPath`, so AGP
+  // dedupes startup-runtime out of the test APK and the app's single copy is the one that loads.
+  implementation("androidx.startup:startup-runtime:1.2.0")
+
+  // Declared, not left to transitive resolution. In-process tests run inside THIS app's process,
+  // and because `default-android-inprocess` names this project as its `targetProjectPath`, AGP
+  // dedupes anything this app declares out of the test APK — so `kotlinx.coroutines` loads from
+  // this APK and the test module's copy never ships. (Dedup is the mechanism, NOT classloader
+  // precedence: measured 2026-08-31, the instrumented process's DexPathList lists the test APK
+  // BEFORE the app APK, so an undeduped duplicate would resolve to the test copy. See
+  // docs/internal/devlog/2026-08-31-inprocess-startup-init-providers-verify.md.) Compose's test rule
+  // drives its clock through `kotlinx-coroutines-test`, which only calls into a runtime of its own
+  // era — against the 1.7.3 that Compose alone left here, it raised a NoSuchMethodError on device
+  // with nothing naming a version conflict. The catalog version is what the test APK resolves.
+  implementation(libs.coroutines.android)
+
+  // No `ui-tooling`: it is Layout Inspector support for a fixture app nobody inspects, and it drags
+  // in `ui-tooling-data`, which the internal artifact mirror does not carry at this version.
 }

@@ -42,13 +42,20 @@ class ToolNamingConventionTest {
    *   - first char is a lowercase letter
    *   - segments are camelCase identifiers (`[a-z][a-zA-Z0-9]*`)
    *   - segments are separated by single underscores (no `__`, no trailing `_`)
+   *   - at most three segments, plus an optional `_v2`-style version suffix
    *
    * Accepts every valid form from the convention table — bare verb (`tap`), platform
    * primitive (`android_adbShell`), org+platform (`org_ios_configureTestUser`),
    * app+platform (`myapp_ios_scroll`). Rejects malformed shapes (`Tap`, `adb-shell`,
    * `android__foo`, `_tap`, `2tap`, `foo_`).
+   *
+   * The three-segment cap is what forces the verbNoun to stay a single camelCase token:
+   * an unbounded `(_segment)*` accepts a fully snake_case name like
+   * `android_view_assert_visible`, which the convention does not permit. The cap cannot
+   * catch a snake_case verbNoun that happens to fit in three segments
+   * (`compose_request_details`) — that still needs a reader.
    */
-  private val conventionRegex = Regex("^[a-z][a-zA-Z0-9]*(_[a-z][a-zA-Z0-9]*)*$")
+  private val conventionRegex = Regex("^[a-z][a-zA-Z0-9]*(_[a-z][a-zA-Z0-9]*){0,2}(_v[0-9]+)?$")
 
   private fun productionToolNames(): Map<String, KClass<out TrailblazeTool>> {
     val classes = TrailblazeToolSet.NonLlmTrailblazeTools +
@@ -70,8 +77,9 @@ class ToolNamingConventionTest {
           appendLine()
           violations.forEach { appendLine("  - $it") }
           appendLine()
-          appendLine("Fix the name to match `^[a-z][a-zA-Z0-9]*(_[a-z][a-zA-Z0-9]*)*$` ")
-          appendLine("(snake-separated camelCase segments, lowercase start). Do NOT add to the")
+          appendLine("Use `{prefix}_{verbNoun}` with a camelCase verbNoun — `androidView_assertVisible`,")
+          appendLine("not `android_view_assert_visible`. At most three underscore-separated segments,")
+          appendLine("plus an optional `_v2` version suffix. Do NOT add to the")
           appendLine("grandfather allowlist without a 'rename to X' justification — the allowlist")
           appendLine("is for known pre-existing names only, not new violations.")
         },

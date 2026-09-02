@@ -1,0 +1,2 @@
+id: androidTest_scrollUntilVisible
+class: xyz.block.trailblaze.android.test.tools.AndroidTestScrollUntilVisibleTool

@@ -111,7 +111,13 @@
     var dataStart = p + 30 + nameLength + extraLength;
     var raw = bytes.subarray(dataStart, dataStart + entry.compressedSize);
     if (entry.method === 0) return Promise.resolve(raw);
-    if (entry.method === 8) return Promise.resolve((inflateRaw || inflateRawWithDecompressionStream)(raw));
+    // A REJECTION, never a synchronous throw: inflating a corrupt entry throws, and every caller
+    // handles a bad entry with `.catch` — a throw would escape that and fail the whole report
+    // build over one unreadable file.
+    if (entry.method === 8) {
+      try { return Promise.resolve((inflateRaw || inflateRawWithDecompressionStream)(raw)); }
+      catch (e) { return Promise.reject(e); }
+    }
     return Promise.reject(new Error('Unsupported ZIP compression method ' + entry.method + ' for "' + entry.name + '".'));
   }
 
@@ -136,26 +142,123 @@
     return IMAGE_EXTENSIONS[name.slice(dot + 1).toLowerCase()] || 'application/octet-stream';
   }
 
+  var CAPTURE_METADATA_NAME = 'capture_metadata.json';
+  var VIDEO_EXTENSIONS = { mp4: 'video/mp4', webm: 'video/webm', mov: 'video/quicktime' };
+
+  function videoMimeType(name) {
+    var dot = name.lastIndexOf('.');
+    return VIDEO_EXTENSIONS[name.slice(dot + 1).toLowerCase()] || null;
+  }
+
+  // The playable recording in a session directory, from capture_metadata.json's artifact list (the
+  // CaptureArtifact records the recorder wrote). Returns { fileName, startMs, endMs } or null.
+  //
+  // A VIDEO artifact names its own file. A VIDEO_FRAMES artifact names the sprite SHEET, which is
+  // not playable — but it was derived from the recording and carries the same recorder bookends, so
+  // its timestamps are paired with whatever video file the archive actually holds. Those bookends
+  // are the whole point of reading this file: without them the recording can't be put on the
+  // trace's clock, so an artifact missing them is no better than no artifact at all.
+  function videoArtifactFrom(metadataText, fileNames) {
+    var parsed;
+    try { parsed = JSON.parse(metadataText); } catch (e) { return null; }
+    var artifacts = (parsed && parsed.artifacts) || [];
+    if (!artifacts.length) return null;
+    var playable = fileNames.filter(function (name) { return videoMimeType(name); });
+    var pick = null;
+    for (var i = 0; i < artifacts.length; i++) {
+      var a = artifacts[i] || {};
+      var start = Number(a.startTimestampMs);
+      var end = Number(a.endTimestampMs);
+      if (!isFinite(start) || !isFinite(end) || end <= start) continue;
+      if (a.type === 'VIDEO' && playable.indexOf(a.filename) >= 0) {
+        return { fileName: a.filename, startMs: start, endMs: end };
+      }
+      // Held rather than returned: a VIDEO artifact later in the list is the better answer.
+      if (a.type === 'VIDEO_FRAMES' && !pick && playable.length) {
+        pick = { fileName: playable[0], startMs: start, endMs: end };
+      }
+    }
+    return pick;
+  }
+
+  // The recording as something an element can play: an object URL over the archive's own bytes. No
+  // transcode and no second download — the file is already in the zip this page fetched. Deliberately
+  // NOT a data URI: these run to tens of megabytes, and base64 of that is neither cheap to build nor
+  // safe to embed. Yields null where object URLs don't exist (a non-browser host), which just leaves
+  // the consumer on screenshots.
+  function sessionVideoClip(zipBytes, session, options) {
+    var metaEntry = session.byFileName[CAPTURE_METADATA_NAME];
+    var canObjectUrl = typeof URL !== 'undefined' && URL && typeof URL.createObjectURL === 'function'
+      && typeof Blob !== 'undefined';
+    if (!metaEntry || !canObjectUrl) return Promise.resolve(null);
+    var inflateRaw = (options && options.inflateRaw) || null;
+    return readZipEntry(zipBytes, metaEntry, inflateRaw).then(function (data) {
+      var artifact = videoArtifactFrom(utf8.decode(data), flatFileNames(session.byFileName));
+      var entry = artifact && session.byFileName[artifact.fileName];
+      if (!entry) return null;
+      return readZipEntry(zipBytes, entry, inflateRaw).then(function (bytes) {
+        var mime = videoMimeType(artifact.fileName) || 'video/mp4';
+        return {
+          url: URL.createObjectURL(new Blob([bytes], { type: mime })),
+          startMs: artifact.startMs,
+          endMs: artifact.endMs,
+          mime: mime,
+        };
+      });
+    }).catch(function () { return null; }); // a broken/renamed artifact costs the video, not the report
+  }
+
   // Group archive entries by top-level directory — one group per session, mirroring LogsRepo's
-  // one-directory-per-session layout. Only files directly inside the session directory count
-  // (subdirectories like in-process-scripted-tools/ are tool artifacts, not session files). A
-  // flat archive (files at the root, e.g. a zip made from inside the session dir) forms a single
-  // group with sessionId '' — the caller falls back to the logs' own `session` field.
+  // one-directory-per-session layout. Files in subdirectories are RETAINED under their
+  // session-relative subpath (that's where `events/<name>.ndjson` streams and the `attachments/`
+  // bytes those events reference live); the flat-file inventories built later (session logs,
+  // screenshot images, playable videos) consider only files directly inside the session directory,
+  // so tool artifacts like in-process-scripted-tools/ stay out of them. A flat archive (files at
+  // the root, e.g. a zip made from inside the session dir) forms a single group with sessionId ''
+  // — the caller falls back to the logs' own `session` field — and the session's own
+  // subdirectories, which such an archive presents as top-level dirs, are folded back into it.
+  //
+  // The fold is by ABSENCE OF SESSION LOGS, not by a list of known directory names: AttachmentRef's
+  // contract is that the path is authoritative and `attachments/` is only a convention, so a flat
+  // archive referencing `media/take.wav` has to keep those bytes reachable under the root session's
+  // own subpath. A folded group would otherwise be dropped outright (buildSessions skips a group
+  // with no log files), so folding costs nothing and a real sibling session — which by definition
+  // has its own logs — is never absorbed.
   function groupEntriesBySession(entries) {
-    var groups = {};
+    // Prototype-free on both levels: every key here is an archive-authored name, and on a plain
+    // object a top-level entry called `__proto__` sets the prototype instead of a member — the
+    // lookup that follows would then miss a file the archive really holds.
+    var groups = Object.create(null);
     var order = [];
     entries.forEach(function (entry) {
       var slash = entry.name.indexOf('/');
       var sessionId = slash < 0 ? '' : entry.name.slice(0, slash);
       var fileName = slash < 0 ? entry.name : entry.name.slice(slash + 1);
-      if (fileName === '' || fileName.indexOf('/') >= 0) return;
+      if (fileName === '') return;
       if (!groups[sessionId]) {
-        groups[sessionId] = { sessionId: sessionId, byFileName: {} };
+        groups[sessionId] = { sessionId: sessionId, byFileName: Object.create(null) };
         order.push(sessionId);
       }
       groups[sessionId].byFileName[fileName] = entry;
     });
+    // Flat-archive fold: root files alongside a logless top-level dir can only be a session zipped
+    // from inside its own directory, so that dir is one of the session's own subpaths.
+    if (groups['']) {
+      order = order.filter(function (id) {
+        if (id === '' || flatFileNames(groups[id].byFileName).some(isSessionLogFileName)) return true;
+        Object.keys(groups[id].byFileName).forEach(function (sub) {
+          groups[''].byFileName[id + '/' + sub] = groups[id].byFileName[sub];
+        });
+        delete groups[id];
+        return false;
+      });
+    }
     return order.map(function (id) { return groups[id]; });
+  }
+
+  // The flat-file inventory of a session group: only names directly inside the session directory.
+  function flatFileNames(byFileName) {
+    return Object.keys(byFileName).filter(function (name) { return name.indexOf('/') < 0; });
   }
 
   // Chronological log order (LogsRepo sorts parsed logs by timestamp — an Instant, so its
@@ -395,7 +498,7 @@
     var sessions = [];
     var chain = Promise.resolve();
     groups.forEach(function (group) {
-      var fileNames = Object.keys(group.byFileName);
+      var fileNames = flatFileNames(group.byFileName);
       var logFiles = fileNames.filter(isSessionLogFileName).sort();
       if (!logFiles.length) return;
       chain = chain.then(function () {
@@ -440,6 +543,154 @@
     });
   }
 
+  // ---- Session events + the attachments they reference ------------------------------------------
+
+  var EVENTS_STREAM_RE = /^events\/[^/]+\.ndjson$/;
+
+  // Generic session events (`events/<name>.ndjson`) → the same EventStream[] the bun driver embeds,
+  // through the renderer's own decode pipeline (buildEventStream) so the two paths cannot drift. No
+  // formatter modules exist on this path, so every stream keeps the generic full-payload shape (the
+  // ctx therefore never gates anything — passed as not-passed, the keep-everything arm). An older
+  // run-report-core bundle without buildEventStream leaves the report event-less, exactly as before.
+  function sessionEventStreams(zipBytes, session, render, inflateRaw) {
+    if (typeof render.buildEventStream !== 'function') return Promise.resolve(null);
+    // The same read budgets the CLI's filesystem walk applies, defined once in run-report-events.ts
+    // (see resolveRenderer). A stream is inflated in full before its first line is decoded, so a
+    // small archive holding one highly compressible ndjson would otherwise decompress into the tab.
+    if (!render.MAX_EVENT_STREAM_BYTES || !render.MAX_EVENT_STREAMS_TOTAL_CHARS) return Promise.resolve(null);
+    var eventFiles = Object.keys(session.byFileName)
+      .filter(function (name) { return EVENTS_STREAM_RE.test(name); })
+      .sort();
+    var streams = [];
+    var totalChars = 0;
+    var overTotal = false;
+    var chain = Promise.resolve();
+    eventFiles.forEach(function (name) {
+      chain = chain.then(function () {
+        if (overTotal) return;
+        var entry = session.byFileName[name];
+        // The archive's own declared size, checked before inflating rather than after.
+        if (entry.uncompressedSize > render.MAX_EVENT_STREAM_BYTES) {
+          console.error('events: skipping ' + name + ' — exceeds the ' + (render.MAX_EVENT_STREAM_BYTES / 1024 / 1024) + 'MB per-stream cap');
+          return;
+        }
+        return readZipEntry(zipBytes, entry, inflateRaw).then(function (data) {
+          var stream = render.buildEventStream(name.slice('events/'.length), utf8.decode(data).split('\n'), [], { sessionPassed: false });
+          if (!stream) return;
+          totalChars += JSON.stringify(stream).length;
+          if (totalChars > render.MAX_EVENT_STREAMS_TOTAL_CHARS) {
+            console.error('events: skipping ' + name + ' and later streams — session events exceed the ' + (render.MAX_EVENT_STREAMS_TOTAL_CHARS / 1024 / 1024) + 'MB total budget');
+            overTotal = true;
+            return;
+          }
+          streams.push(stream);
+        }).catch(function () { /* a broken stream costs itself, not the report */ });
+      });
+    });
+    return chain.then(function () { return streams.length ? streams : null; });
+  }
+
+  // Attachment refs embedded in event payloads (see AttachmentRef in trailblaze-models), resolved
+  // to object URLs over the archive's own bytes — the same choice as sessionVideoClip: no base64
+  // blow-up and no second download. A blob: value is bytes only this page holds, so it is stripped
+  // again at every standalone-document serialization boundary (buildMultiReportHtml, the viewer's
+  // export). Media types only: a hostile zip must not become a same-origin blob:text/html document.
+  function sessionAttachments(zipBytes, session, streams, render, inflateRaw) {
+    var canObjectUrl = typeof URL !== 'undefined' && URL && typeof URL.createObjectURL === 'function'
+      && typeof Blob !== 'undefined';
+    if (!streams || !canObjectUrl || typeof render.collectStreamAttachmentRefs !== 'function') {
+      return Promise.resolve(null);
+    }
+    // Shared attachment policy, over the same channel as the detector (see resolveRenderer): the
+    // MIME rule, the per-session ceiling, the materialization byte budget and the path rule are
+    // defined once in run-report-events.ts. A bundle too old to export them materializes nothing
+    // rather than applying a second copy of the limits.
+    if (!render.ATTACHMENT_MIME || !render.MAX_ATTACHMENTS_PER_SESSION
+      || !render.ATTACHMENT_MATERIALIZE_MAX_TOTAL_BYTES || typeof render.isSafeSessionRelativePath !== 'function') {
+      return Promise.resolve(null);
+    }
+    var maxPerSession = render.MAX_ATTACHMENTS_PER_SESSION;
+    // Prototype-free, because the keys are bundle-authored file names and the shared path rule
+    // accepts any single segment: on a plain `{}`, `seen['constructor']` is already truthy, so an
+    // attachment really named `constructor` would dedupe itself away before it was ever looked up.
+    var seen = Object.create(null);
+    var picked = render.collectStreamAttachmentRefs(streams).filter(function (ref) {
+      if (seen[ref.path]) return false;
+      seen[ref.path] = true;
+      // The shared path rule, not just the exact-match lookup below: an archive can legitimately
+      // hold an entry literally named `attachments/../outside.png`, and opening it would be the
+      // traversal the policy exists to refuse.
+      return render.isSafeSessionRelativePath(ref.path);
+    });
+    if (picked.length > maxPerSession) {
+      console.error('attachments: materializing only the first ' + maxPerSession + ' of ' + picked.length + ' referenced attachment files');
+      picked = picked.slice(0, maxPerSession);
+    }
+    // Prototype-free for the same reason, and one more: `attachments['__proto__'] = url` on a plain
+    // object sets nothing at all — the assignment goes through Object.prototype's setter and the
+    // entry silently never exists. The map is serialized as JSON, where a null prototype is invisible.
+    var attachments = Object.create(null);
+    var chain = Promise.resolve();
+    // Every selected entry is inflated here, before the report renders and before anyone opens an
+    // attachment, so the archive's own declared sizes have to bound it: 200 refs of a few hundred
+    // MB each would otherwise decompress into the tab on load. Entries that don't fit the remaining
+    // budget are left to their "in the session bundle, not embedded" note.
+    //
+    // Charged INSIDE the sequential chain, and refunded when the read fails: an entry that never
+    // inflated is holding no memory, so keeping its reservation would let one corrupt early entry
+    // claiming the whole budget silently drop every valid attachment after it. The refund cannot
+    // breach the ceiling for the same reason — there are no bytes to double-count.
+    var budget = render.ATTACHMENT_MATERIALIZE_MAX_TOTAL_BYTES;
+    var skippedForBudget = 0;
+    picked.forEach(function (ref) {
+      // Exact-match lookup against the archive's own entry names.
+      var entry = session.byFileName[ref.path];
+      if (!entry || !render.ATTACHMENT_MIME.test(ref.mimeType)) return;
+      chain = chain.then(function () {
+        if (entry.uncompressedSize > budget) { skippedForBudget++; return; }
+        budget -= entry.uncompressedSize;
+        return readZipEntry(zipBytes, entry, inflateRaw).then(function (bytes) {
+          attachments[ref.path] = URL.createObjectURL(new Blob([bytes], { type: ref.mimeType.toLowerCase() }));
+        }).catch(function () {
+          budget += entry.uncompressedSize; /* unreadable entry → in-bundle note, budget untouched */
+        });
+      });
+    });
+    return chain.then(function () {
+      if (skippedForBudget) {
+        console.error('attachments: ' + skippedForBudget + ' attachment file(s) left in the bundle — materializing them would exceed the '
+          + render.ATTACHMENT_MATERIALIZE_MAX_TOTAL_BYTES + '-byte per-session budget');
+      }
+      return Object.keys(attachments).length ? attachments : null;
+    });
+  }
+
+  // Every object URL a built session list owns, so a caller rendering archive after archive can hand
+  // the bytes back to the browser instead of pinning them for the life of the document. Both
+  // producers above have to be swept or the untouched one leaks exactly as before: the recording
+  // clip (`videoClip.url`) and the attachment map (one URL per materialized media file, so an
+  // archive full of audio pins far more here than the single clip does). Only `blob:` values are
+  // returned — a `/static` link or a `data:` embed was not minted here and is not ours to revoke.
+  function sessionObjectUrls(sessions) {
+    if (!sessions || !sessions.length) return [];
+    var urls = [];
+    var seen = {};
+    var add = function (value) {
+      var url = String(value == null ? '' : value);
+      if (url.slice(0, 5).toLowerCase() !== 'blob:' || seen[url]) return;
+      seen[url] = true;
+      urls.push(url);
+    };
+    Array.prototype.forEach.call(sessions, function (session) {
+      if (!session || typeof session !== 'object') return;
+      if (session.videoClip && typeof session.videoClip === 'object') add(session.videoClip.url);
+      if (session.attachments && typeof session.attachments === 'object') {
+        Object.keys(session.attachments).forEach(function (path) { add(session.attachments[path]); });
+      }
+    });
+    return urls;
+  }
+
   // ---- Full assembly: zip bytes → rendered report HTML -----------------------------------------
 
   // The run-report-core.js functions this module composes with. Injectable via options.render (bun
@@ -456,6 +707,14 @@
       buildMultiReportHtml: render.buildMultiReportHtml || g.buildMultiReportHtml,
       packSessionInputsHierarchies: render.packSessionInputsHierarchies || g.packSessionInputsHierarchies,
       traceScreenshotFiles: render.traceScreenshotFiles || g.traceScreenshotFiles,
+      buildEventStream: render.buildEventStream || g.buildEventStream,
+      collectStreamAttachmentRefs: render.collectStreamAttachmentRefs || g.collectStreamAttachmentRefs,
+      ATTACHMENT_MIME: render.ATTACHMENT_MIME || g.ATTACHMENT_MIME,
+      MAX_ATTACHMENTS_PER_SESSION: render.MAX_ATTACHMENTS_PER_SESSION || g.MAX_ATTACHMENTS_PER_SESSION,
+      ATTACHMENT_MATERIALIZE_MAX_TOTAL_BYTES: render.ATTACHMENT_MATERIALIZE_MAX_TOTAL_BYTES || g.ATTACHMENT_MATERIALIZE_MAX_TOTAL_BYTES,
+      MAX_EVENT_STREAM_BYTES: render.MAX_EVENT_STREAM_BYTES || g.MAX_EVENT_STREAM_BYTES,
+      MAX_EVENT_STREAMS_TOTAL_CHARS: render.MAX_EVENT_STREAMS_TOTAL_CHARS || g.MAX_EVENT_STREAMS_TOTAL_CHARS,
+      isSafeSessionRelativePath: render.isSafeSessionRelativePath || g.isSafeSessionRelativePath,
     };
   }
 
@@ -502,12 +761,20 @@
                 .then(function (uri) { if (uri) shots[file] = uri; });
             });
           });
-          return shotChain.then(function () {
-            inputs.push({
-              meta: meta, trace: trace, llmLogs: llmLogs, shots: shots,
-              recordingYaml: session.recordingYaml, originalYaml: originalYaml,
+          return shotChain
+            .then(function () { return sessionVideoClip(zipBytes, session, { inflateRaw: inflateRaw }); })
+            .then(function (videoClip) {
+              return sessionEventStreams(zipBytes, session, render, inflateRaw).then(function (events) {
+                return sessionAttachments(zipBytes, session, events, render, inflateRaw).then(function (attachments) {
+                  inputs.push({
+                    meta: meta, trace: trace, llmLogs: llmLogs, shots: shots,
+                    recordingYaml: session.recordingYaml, originalYaml: originalYaml,
+                    videoClip: videoClip,
+                    events: events, attachments: attachments,
+                  });
+                });
+              });
             });
-          });
         });
       });
       return chain.then(function () {
@@ -523,6 +790,10 @@
   function buildReportHtmlFromZipBytes(zipBytes, options) {
     options = options || {};
     var render = resolveRenderer(options.render);
+    // Opt-in, because whether the emitted document outlives this page is the CALLER's fact: the
+    // in-app ?zip= screen renders it as a same-origin iframe srcDoc (object URLs resolve), while
+    // anything that downloads or persists it must not carry blob: values that resolve nowhere.
+    var keepAttachmentObjectUrls = options.keepAttachmentObjectUrls === true;
     return buildSessionInputsFromZipBytes(zipBytes, options).then(function (built) {
       var inputs = built.sessions;
       // Compress the per-step view hierarchies before they're serialized into the document (same
@@ -533,9 +804,19 @@
         : Promise.resolve();
       return Promise.resolve(pack).then(function () {
         var s0 = inputs[0];
+        // Both branches must carry the SAME session data: the one-session path used to drop
+        // `events` and `attachments`, so a single-session archive rendered with no event streams
+        // and no attachment rows at all while a two-session one rendered both.
+        // `keepAttachmentObjectUrls` rides along because this HTML is rendered back into the
+        // loading page (iframe srcDoc), where the archive's object URLs still resolve.
         var html = inputs.length === 1
-          ? render.buildRunReportHtml({ meta: s0.meta, trace: s0.trace, llmLogs: s0.llmLogs, shots: s0.shots, hierarchies: s0.hierarchies || null, hierarchiesGz: s0.hierarchiesGz || null })
-          : render.buildMultiReportHtml({ generatedAt: built.generatedAt, sessions: inputs });
+          ? render.buildRunReportHtml({
+            meta: s0.meta, trace: s0.trace, llmLogs: s0.llmLogs, shots: s0.shots,
+            events: s0.events || null, attachments: s0.attachments || null,
+            hierarchies: s0.hierarchies || null, hierarchiesGz: s0.hierarchiesGz || null,
+            keepAttachmentObjectUrls: keepAttachmentObjectUrls,
+          })
+          : render.buildMultiReportHtml({ generatedAt: built.generatedAt, sessions: inputs, keepAttachmentObjectUrls: keepAttachmentObjectUrls });
         return { html: html, sessions: inputs, zipBytes: built.zipBytes };
       });
     });
@@ -549,6 +830,8 @@
     isSessionLogFileName: isSessionLogFileName,
     isImageFileName: isImageFileName,
     imageMimeType: imageMimeType,
+    videoMimeType: videoMimeType,
+    videoArtifactFrom: videoArtifactFrom,
     groupEntriesBySession: groupEntriesBySession,
     sortLogsByTimestamp: sortLogsByTimestamp,
     // session meta
@@ -563,6 +846,10 @@
     // assembly
     loadZipSessions: loadZipSessions,
     sessionImageDataUri: sessionImageDataUri,
+    sessionVideoClip: sessionVideoClip,
+    sessionEventStreams: sessionEventStreams,
+    sessionAttachments: sessionAttachments,
+    sessionObjectUrls: sessionObjectUrls,
     buildSessionInputsFromZipBytes: buildSessionInputsFromZipBytes,
     buildReportHtmlFromZipBytes: buildReportHtmlFromZipBytes,
   };

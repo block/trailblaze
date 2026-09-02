@@ -223,6 +223,56 @@ class InteractionEventBufferTest {
     assertEquals("customTool", emissions[0].toolName)
   }
 
+  /**
+   * The auto-advancing-field scenario: an OTP box moves focus to the next box while the
+   * burst is still buffering. The recorded tool must name the field the text went INTO, so
+   * the buffer has to snapshot the target when the burst opens rather than let the factory
+   * resolve one at flush.
+   */
+  @Test
+  fun `text is recorded against the field focused when the burst started`() {
+    val emissions = mutableListOf<RecordedInteraction>()
+    val factory = TestToolFactory()
+    factory.focusedField = "otp-box-1"
+    val buffer = InteractionEventBuffer(
+      scope = testScope,
+      textDebounceMs = 500L,
+      toolFactory = factory,
+      onInteraction = { emissions.add(it) },
+    )
+
+    buffer.onCharacterTyped('4', null, null)
+    // The field's own input handler advances focus before the debounce elapses.
+    factory.focusedField = "otp-box-2"
+    buffer.onCharacterTyped('2', null, null)
+    buffer.flush()
+
+    assertEquals(1, emissions.size)
+    assertEquals(
+      "inputText(42)@otp-box-1",
+      (emissions[0].tool as TestTool).description,
+      "The burst belongs to the field it started in, not the one focus moved to.",
+    )
+  }
+
+  /** Text arriving as one complete string has no burst to snapshot, so live focus wins. */
+  @Test
+  fun `submitted text resolves the target at emit time`() {
+    val emissions = mutableListOf<RecordedInteraction>()
+    val factory = TestToolFactory()
+    factory.focusedField = "search-box"
+    val buffer = InteractionEventBuffer(
+      scope = testScope,
+      textDebounceMs = 500L,
+      toolFactory = factory,
+      onInteraction = { emissions.add(it) },
+    )
+
+    buffer.onTextSubmitted("hello", null, null)
+
+    assertEquals("inputText(hello)@search-box", (emissions[0].tool as TestTool).description)
+  }
+
   private fun createBuffer(
     emissions: MutableList<RecordedInteraction>,
   ): InteractionEventBuffer {
@@ -235,7 +285,15 @@ class InteractionEventBufferTest {
   }
 }
 
+/** Stands in for a platform's focus snapshot; [TestToolFactory] moves it between calls. */
+private class TestInputTarget(val field: String?) : InputTarget
+
 private class TestToolFactory : InteractionToolFactory {
+  /** Mutable so a test can move focus mid-burst, the way an auto-advancing field does. */
+  var focusedField: String? = null
+
+  override fun captureInputTarget(): InputTarget = TestInputTarget(focusedField)
+
   override fun createTapTool(
     node: ViewHierarchyTreeNode?,
     x: Int,
@@ -258,8 +316,10 @@ private class TestToolFactory : InteractionToolFactory {
     durationMs: Long?,
   ): Pair<TrailblazeTool, String> = TestTool("swipe($startX,$startY,$endX,$endY)") to "swipe"
 
-  override fun createInputTextTool(text: String): Pair<TrailblazeTool, String> =
-    TestTool("inputText($text)") to "inputText"
+  override fun createInputTextTool(text: String, target: InputTarget?): Pair<TrailblazeTool, String> {
+    val field = (target as? TestInputTarget)?.field ?: focusedField
+    return TestTool("inputText($text)@$field") to "inputText"
+  }
 
   override fun createPressKeyTool(key: String): Pair<TrailblazeTool, String> =
     TestTool("pressKey($key)") to "pressKey"

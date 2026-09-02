@@ -26,6 +26,11 @@ import xyz.block.trailblaze.util.Console
  * timeline), which tools burned their whole timeout budget, where the session sat idle, and how
  * two runs of the same trail compare.
  *
+ * Two inputs per session: the log records (the semantic layer — tools, LLM calls, steps) and, when
+ * the session recorded one, `trace.json` — the in-process `TrailblazeTracer` spans. Only the
+ * tracer knows real parentage, so it is what resolves the INSIDE of a tool (the HTTP call, the
+ * Maestro driver ops, the selector matching) instead of leaving a tool as one opaque total.
+ *
  * Same machinery as [RunReportGenerator]: the extraction + renderer is the build-time bundle of
  * the perf-*.ts modules ([perf-core.js][CORE_RESOURCE]) run under a thin bun driver
  * ([perf-report-cli.ts][DRIVER_RESOURCE]). Requires `bun` on PATH; when bun can't be resolved or
@@ -88,6 +93,11 @@ class PerformanceAnalysisGenerator(
             // but the profiler reads only timestamps, durations, and tool/LLM metadata, so that
             // field would be dead payload here.
             put("logs", JsonArray(snapshot.rawLogsJson.map { RunReportGenerator.dropViewHierarchyFields(it) }))
+            // The in-process TrailblazeTracer spans (`trace.json`), when the session recorded any.
+            // These are the profiler's only source of REAL parentage — every other span is nested
+            // by timestamp containment — so they replace guesswork inside a tool with the
+            // instrumented calls (HTTP, Maestro driver ops, selector matching) that explain it.
+            put("trace", snapshot.traceEventsJson)
           },
         )
       }
@@ -95,6 +105,14 @@ class PerformanceAnalysisGenerator(
     if (sessionsJson.isEmpty()) {
       Console.log("[PerformanceAnalysisGenerator] no resolvable sessions among ${snapshots.size} requested.")
       return null
+    }
+    // Say it when no session carried a trace: the report still renders, but every tool is one
+    // opaque total, and the reader has no way to tell that apart from a tool with nothing inside it.
+    if (snapshots.none { it.traceEventsJson.isNotEmpty() }) {
+      Console.log(
+        "[PerformanceAnalysisGenerator] no trace.json in any profiled session — the timeline shows " +
+          "tool totals with no breakdown of what ran inside them.",
+      )
     }
 
     val workDir = Files.createTempDirectory("trailblaze-perf-report-").toFile()

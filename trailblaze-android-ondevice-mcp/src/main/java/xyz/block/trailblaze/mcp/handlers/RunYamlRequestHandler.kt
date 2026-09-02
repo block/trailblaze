@@ -9,8 +9,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.agent.TrailblazeProgressEvent
-import xyz.block.trailblaze.android.accessibility.InProcessIdleSettleClient
-import xyz.block.trailblaze.android.accessibility.TrailblazeAccessibilityService
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
@@ -27,34 +25,14 @@ import xyz.block.trailblaze.mcp.progress.ProgressSessionManager
 import xyz.block.trailblaze.rules.TrailblazeLoggingRule
 import xyz.block.trailblaze.InstrumentationUtil
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
+import xyz.block.trailblaze.tracing.TraceContext
+import xyz.block.trailblaze.tracing.TrailblazeTracer
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.util.UiAutomationHandleErrors
 import xyz.block.trailblaze.util.toSnakeCaseIdentifier
 import xyz.block.trailblaze.yaml.TrailArgBinder
 import xyz.block.trailblaze.yaml.TrailblazeYaml
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
-
-/**
- * Default implementation of the UI-settle seam — used on real Android where the
- * accessibility service singleton is bound. Top-level (not inside the handler class) so
- * JVM tests that construct the handler with a test lambda never touch this reference, and
- * so the Android-loading of [TrailblazeAccessibilityService] is deferred until the first
- * real invocation.
- */
-private suspend fun defaultWaitForSettled() {
-  if (TrailblazeAccessibilityService.isServiceRunning()) {
-    // EXPERIMENTAL inprocess-idle race (see [InProcessIdleSettleClient]): settle on whichever answers
-    // first — true main-thread idle or the standard event-quiet wait. Only ever faster.
-    if (InProcessIdleSettleClient.isEnabled()) {
-      val winner = InProcessIdleSettleClient.raceIdleAgainstHeuristic(5_000L) { earlyExit ->
-        TrailblazeAccessibilityService.waitForSettled(earlyExit = earlyExit)
-      }
-      Console.log("[settle] pre-tool via $winner")
-      return
-    }
-    TrailblazeAccessibilityService.waitForSettled()
-  }
-}
 
 /**
  * Whether [yaml] carries recorded steps for the device described by [deviceClassifiers], swallowing
@@ -93,8 +71,8 @@ internal fun computeHasRecordedSteps(
  * and (after its in-process retry fails) throws the non-recoverable signature, which we classify
  * and report. A healthy device returns immediately.
  *
- * Top-level (not a handler method) for the same reason as [defaultWaitForSettled]: JVM unit tests
- * construct the handler with a test lambda and never load the Android [InstrumentationUtil].
+ * Top-level (not a handler method) so JVM unit tests can construct the handler with a test
+ * lambda and never load the Android [InstrumentationUtil].
  *
  * NOTE: on-device-validation-pending — the behavior of this probe against a genuinely wedged
  * handle has not yet been exercised on a real device. It is a minimal, side-effect-free read.
@@ -161,12 +139,12 @@ class RunYamlRequestHandler(
    * `RunYamlRequest` pre-settles on entry, and `GetScreenStateRequest` settles on entry too.
    * See `RunYamlRequestHandler`'s body comment where the post-settle was dropped.)
    *
-   * Default calls into the Android
-   * [xyz.block.trailblaze.android.accessibility.TrailblazeAccessibilityService] singleton.
-   * JVM unit tests override this with a no-op (or a counter) because loading that Android
-   * class requires the Android framework.
+   * Driver-owned, deliberately without a default: the accessibility runner passes
+   * `AccessibilitySettleGate.waitForSettled` (trailblaze-android); a driver whose dispatch is
+   * already synchronized — the in-process ANDROID_TEST driver's Espresso/Compose sync — passes
+   * its own gate or a no-op. JVM unit tests pass a no-op (or a counter).
    */
-  private val waitForSettled: suspend () -> Unit = ::defaultWaitForSettled,
+  private val waitForSettled: suspend () -> Unit,
   /**
    * Seam for the timeout-time UiAutomation liveness probe (shape #5). Returns true when a
    * synchronous on-device touch reveals the non-recoverable stale-handle wedge. Default reads
@@ -203,6 +181,22 @@ class RunYamlRequestHandler(
 
 
   override suspend fun handle(request: RunYamlRequest): RpcResult<RunYamlResponse> {
+    // Hang this dispatch's spans under the host span that asked for it, so the run's two halves
+    // arrive as one trace instead of two. Called on every request including the ones carrying no
+    // readable traceparent, which is how this server stops inheriting a finished run's trace: it
+    // outlives the runs it serves, so a null left unsaid would file a run whose host is not
+    // recording into the previous run's trace. Those runs trace their own half, as before this
+    // field existed.
+    val dispatchTraceContext = TraceContext.parse(request.traceParent)
+    if (dispatchTraceContext == null && request.traceParent != null) {
+      // A host SENT a traceparent and this device could not place it — version or format skew, not
+      // the ordinary "host isn't tracing" null. Without this line that skew looks identical to an
+      // absent field, and its only symptom is the run's two halves arriving as unrelated traces
+      // with nothing pointing at why.
+      Console.log("Ignoring unreadable traceparent '${request.traceParent}': this run's device spans will form their own trace")
+    }
+    TrailblazeTracer.joinTrace(dispatchTraceContext)
+
     // Create a single YAML parser instance for consistent usage throughout the handler
     val trailblazeYaml = createTrailblazeYaml()
 

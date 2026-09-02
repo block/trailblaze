@@ -111,6 +111,189 @@ class ScriptedToolAnalyzerBundledShimTest {
   }
 
   // ---------------------------------------------------------------------------
+  // resolveSdkDir / resolveAnalyzerSdkDir precedence — explicit override, then the
+  // NEAREST shim-bearing walk-up tree, then the bundled shim. The load-bearing case
+  // is analyzer (gated) mode on an uninstalled tree: the walk-up shim `.mjs` is
+  // COMMITTED source, present in every checkout, but only runnable after
+  // `bun install` — accepting it on the file alone would shadow the bundled
+  // fallback with a tree that cannot run.
+  // ---------------------------------------------------------------------------
+
+  /** A repo-shaped tree: `<root>/<subPath>` with the shim committed. */
+  private fun sourceTreeWithShim(root: File, subPath: String = "sdks/typescript"): File {
+    val sdk = File(root, subPath)
+    File(sdk, "tools").mkdirs()
+    File(sdk, "tools/extract-tool-defs.mjs").writeText("// committed shim\n")
+    return sdk
+  }
+
+  private fun resolveGated(startDir: File, explicit: String? = null, bundled: () -> File?) =
+    ScriptedToolDefinitionAnalyzer.resolveSdkDir(
+      explicitSdkDir = explicit,
+      startDir = startDir,
+      requireAnalyzerTooling = true,
+      bundledFallback = bundled,
+    )
+
+  @Test
+  fun `a walk-up tree without node_modules is passed over for the bundled shim`() {
+    val repo = tempRoot()
+    sourceTreeWithShim(repo)
+    val cwd = File(repo, "some/nested/workdir").apply { mkdirs() }
+    val bundled = File(tempRoot(), "analyzer")
+
+    val resolved = resolveGated(cwd) { bundled }
+
+    assertEquals(
+      bundled,
+      resolved,
+      "a checkout that never ran `bun install` must not shadow the usable bundled shim",
+    )
+  }
+
+  @Test
+  fun `the opensource-nested SDK layout is gated the same way`() {
+    val repo = tempRoot()
+    sourceTreeWithShim(repo, subPath = "opensource/sdks/typescript")
+    val cwd = File(repo, "trails/config").apply { mkdirs() }
+    val bundled = File(tempRoot(), "analyzer")
+
+    val resolved = resolveGated(cwd) { bundled }
+
+    assertEquals(bundled, resolved, "both probed sub-paths must apply the availability gate")
+  }
+
+  @Test
+  fun `a walk-up tree WITH node_modules wins over the bundled shim`() {
+    val repo = tempRoot()
+    val sdk = sourceTreeWithShim(repo)
+    File(sdk, "node_modules/ts-json-schema-generator").mkdirs()
+    val cwd = File(repo, "some/nested/workdir").apply { mkdirs() }
+
+    val resolved = resolveGated(cwd) {
+      error("bundled fallback must not be consulted when the source tree is usable")
+    }
+
+    assertEquals(sdk, resolved, "a bun-install'd source tree is the dev path and must keep winning")
+  }
+
+  @Test
+  fun `the nearest shim-bearing tree decides — an uninstalled nested checkout goes to the bundle, not its parent`() {
+    // A worktree checked out INSIDE another checkout (this repo's .claude/worktrees/ layout).
+    // The parent ran `bun install`; the nested checkout didn't. The parent is a DIFFERENT
+    // copy of the SDK — possibly a different version — so the nested tree must resolve to
+    // the version-matched bundle, not walk past its own SDK into the parent's.
+    val parent = tempRoot()
+    val parentSdk = sourceTreeWithShim(parent)
+    File(parentSdk, "node_modules/ts-json-schema-generator").mkdirs()
+    val nested = File(parent, ".claude/worktrees/wt")
+    sourceTreeWithShim(nested)
+    val cwd = File(nested, "workdir").apply { mkdirs() }
+    val bundled = File(tempRoot(), "analyzer")
+
+    val resolved = resolveGated(cwd) { bundled }
+
+    assertEquals(bundled, resolved, "the walk-up must stop at the nearest shim-bearing tree")
+  }
+
+  @Test
+  fun `ungated resolution returns the nearest tree even without node_modules`() {
+    // The SDK-project-root contract (LspRoutes): `bun x` needs the tree's own package.json
+    // and must NOT be redirected to the bundled shim cache just because deps aren't installed.
+    val repo = tempRoot()
+    val sdk = sourceTreeWithShim(repo)
+    val cwd = File(repo, "workdir").apply { mkdirs() }
+
+    val resolved = ScriptedToolDefinitionAnalyzer.resolveSdkDir(
+      explicitSdkDir = null,
+      startDir = cwd,
+      requireAnalyzerTooling = false,
+      bundledFallback = { error("ungated mode must return the source tree, not consult the bundle") },
+    )
+
+    assertEquals(sdk, resolved, "project-root consumers get the tree regardless of installed deps")
+  }
+
+  @Test
+  fun `ungated resolution degrades to null rather than the bundled shim cache`() {
+    // The bundle's cache dir holds the shim, the TS libs and a marker — no `package.json`.
+    // Handing it to `bun x` would resolve an unpinned language-server download instead of
+    // the version the SDK pins, or fail offline; null (LSP unavailable) is the honest answer.
+    val resolved = ScriptedToolDefinitionAnalyzer.resolveSdkDir(
+      explicitSdkDir = null,
+      startDir = tempRoot(),
+      requireAnalyzerTooling = false,
+      bundledFallback = { File("/should/never/be/consulted") },
+    )
+
+    assertEquals(null, resolved, "project-root resolution must not tail into the analyzer bundle")
+  }
+
+  @Test
+  fun `no usable tree and no bundle resolves to null, not the broken checkout`() {
+    val repo = tempRoot()
+    sourceTreeWithShim(repo)
+    val cwd = File(repo, "workdir").apply { mkdirs() }
+
+    val resolved = resolveGated(cwd) { null }
+
+    assertEquals(null, resolved, "with no runnable analyzer anywhere, degrade to null (analyzer unavailable)")
+  }
+
+  @Test
+  fun `an explicit TRAILBLAZE_SDK_DIR is honored without the availability gate`() {
+    val explicit = tempRoot()
+    File(explicit, "tools").mkdirs()
+    File(explicit, "tools/extract-tool-defs.mjs").writeText("// explicit shim\n")
+
+    val resolved = resolveGated(tempRoot(), explicit = explicit.absolutePath) {
+      error("an explicit override must not be silently swapped for the bundle")
+    }
+
+    assertEquals(explicit, resolved, "an explicit override that names a broken tree should fail loudly AS that tree")
+  }
+
+  @Test
+  fun `an override with no shim at all is ignored in favor of the walk-up`() {
+    val repo = tempRoot()
+    val sdk = sourceTreeWithShim(repo)
+    File(sdk, "node_modules/ts-json-schema-generator").mkdirs()
+    val cwd = File(repo, "workdir").apply { mkdirs() }
+    val notAnSdk = tempRoot()
+
+    val resolved = resolveGated(cwd, explicit = notAnSdk.absolutePath) {
+      error("the usable walk-up tree should win before the bundle is consulted")
+    }
+
+    assertEquals(sdk, resolved, "an override that isn't an SDK root at all falls through to normal resolution")
+  }
+
+  @Test
+  fun `an override with stray surrounding whitespace still resolves`() {
+    // Env vars picked up from YAML or shell exports arrive with stray whitespace often
+    // enough that File("<path> ") failing the shim probe would silently demote a valid
+    // override to the fallback chain.
+    val explicit = tempRoot()
+    File(explicit, "tools").mkdirs()
+    File(explicit, "tools/extract-tool-defs.mjs").writeText("// explicit shim\n")
+
+    val resolved = resolveGated(tempRoot(), explicit = " ${explicit.absolutePath} ") {
+      error("a valid override must be honored, not fall through to the bundle")
+    }
+
+    assertEquals(explicit, resolved, "surrounding whitespace must be trimmed off the override")
+  }
+
+  @Test
+  fun `a whitespace-only override is treated as unset`() {
+    val bundled = File(tempRoot(), "analyzer")
+
+    val resolved = resolveGated(tempRoot(), explicit = "   ") { bundled }
+
+    assertEquals(bundled, resolved, "a blank TRAILBLAZE_SDK_DIR must not resolve to File(\"   \")")
+  }
+
+  // ---------------------------------------------------------------------------
   // TypeScript lib payload
   //
   // The bundle inlines TypeScript's code but not its `lib*.d.ts` standard library, and

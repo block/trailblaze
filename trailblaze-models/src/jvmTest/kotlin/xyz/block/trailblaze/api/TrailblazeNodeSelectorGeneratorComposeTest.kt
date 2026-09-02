@@ -48,6 +48,44 @@ class TrailblazeNodeSelectorGeneratorComposeTest : TrailblazeNodeSelectorGenerat
     assertNotNull(match.textRegex)
   }
 
+  // -- Compose Strategy 8: stateDescription (+ role) --
+
+  /**
+   * A custom control whose only identifying property is the state label it publishes. Without a
+   * strategy for it, the generator falls through to the hierarchy and index fallbacks, and a
+   * reorder of its peers then breaks the recorded selector.
+   */
+  @Test
+  fun `Compose - state description identifies a control with no text or tag`() {
+    nextId = 1L
+    val target = nodeOf(detail = DriverNodeDetail.Compose(role = "Switch", stateDescription = "Expanded"))
+    val other = nodeOf(detail = DriverNodeDetail.Compose(role = "Switch", stateDescription = "Collapsed"))
+    val root = nodeOf(detail = DriverNodeDetail.Compose(), children = listOf(target, other))
+
+    val selector = assertUniqueMatch(root, target)
+    val match = selector.driverMatch as DriverNodeMatch.Compose
+    assertNotNull(match.stateDescriptionRegex)
+  }
+
+  /**
+   * "3 of 10" / "50%" change between runs, so a selector built on one is a scheduled flake. The
+   * generator must skip them and reach for something else — here, the index fallback.
+   */
+  @Test
+  fun `Compose - a numeric state description is not used as an identity`() {
+    nextId = 1L
+    val target = nodeOf(detail = DriverNodeDetail.Compose(role = "Slider", stateDescription = "3 of 10"))
+    val other = nodeOf(detail = DriverNodeDetail.Compose(role = "Slider", stateDescription = "7 of 10"))
+    val root = nodeOf(detail = DriverNodeDetail.Compose(), children = listOf(target, other))
+
+    val selector = assertUniqueMatch(root, target)
+    val match = selector.driverMatch as DriverNodeMatch.Compose
+    assertTrue(
+      match.stateDescriptionRegex == null,
+      "a run-varying state description must not become the selector: $match",
+    )
+  }
+
   // -- Compose Strategy 3: childOf unique parent --
 
   @Test

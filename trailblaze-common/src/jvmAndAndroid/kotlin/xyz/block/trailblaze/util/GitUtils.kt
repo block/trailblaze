@@ -5,20 +5,34 @@ import java.io.File
 
 object GitUtils {
   /**
-   * Runs a git command and returns the trimmed output if successful, null otherwise.
-   * [workingDir] anchors the command in a specific checkout; null runs in the process cwd.
+   * Trimmed STDOUT of a successful git command; null when git failed or couldn't run at all.
+   *
+   * Every git call in this object goes through here, so the one thing that must hold for all of
+   * them is stated once: stderr stays OUT of the returned value. git writes warnings there while
+   * still exiting 0 (a wedged core.fsmonitor daemon emits "could not read IPC response" on every
+   * call), and folding those into stdout makes a clean `status --porcelain` read as dirty and a
+   * resolved sha as junk.
+   *
+   * An empty string means "succeeded, printed nothing" and is deliberately distinct from the null
+   * failure — [hasUncommittedChanges] keys a clean tree on exactly that difference.
    */
-  private fun runGitCommand(vararg args: String, workingDir: File? = null): String? = try {
+  private fun gitStdout(vararg args: String, workingDir: File? = null): String? = try {
     val processResult = TrailblazeProcessBuilderUtils.createProcessBuilder(
       args = listOf("git", *args),
       workingDir = workingDir,
+      mergeErrorStream = false,
     ).runProcess { }
-    if (processResult.exitCode == 0) {
-      processResult.fullOutput.trim().takeIf { it.isNotBlank() }
-    } else null
+    if (processResult.exitCode == 0) processResult.fullOutput.trim() else null
   } catch (e: Exception) {
     null
   }
+
+  /**
+   * Runs a git command and returns the trimmed output if successful and non-blank, null otherwise.
+   * [workingDir] anchors the command in a specific checkout; null runs in the process cwd.
+   */
+  private fun runGitCommand(vararg args: String, workingDir: File? = null): String? =
+    gitStdout(*args, workingDir = workingDir)?.takeIf { it.isNotBlank() }
 
   /**
    * Every configured remote URL of the repository enclosing [repoDir] (git resolves the enclosing
@@ -81,17 +95,17 @@ object GitUtils {
   /**
    * Checks if there are any uncommitted changes (staged, unstaged, or untracked files).
    * Returns true if there are changes, false if working directory is clean, null on error.
+   * [workingDir] anchors the command in a specific checkout; null runs in the process cwd.
+   *
+   * Only what git prints on STDOUT counts as a change — see [gitStdout] for why stderr must not.
+   * Not [runGitCommand]: a clean tree IS empty output, which that one reports as a failure.
+   *
+   * `@JvmOverloads` keeps the pre-[workingDir] bytecode signature so binary-linked consumers of
+   * this published artifact (trailblaze-common) don't NoSuchMethodError when the slot is added.
    */
-  fun hasUncommittedChanges(): Boolean? = try {
-    val processResult = TrailblazeProcessBuilderUtils.createProcessBuilder(
-      args = listOf("git", "status", "--porcelain"),
-    ).runProcess { }
-    if (processResult.exitCode == 0) {
-      processResult.fullOutput.trim().isNotEmpty()
-    } else null
-  } catch (e: Exception) {
-    null
-  }
+  @JvmOverloads
+  fun hasUncommittedChanges(workingDir: File? = null): Boolean? =
+    gitStdout("status", "--porcelain", workingDir = workingDir)?.isNotEmpty()
 
   /**
    * Gets the commit hash of the local HEAD.

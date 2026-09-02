@@ -33,7 +33,12 @@ function TrailsScreen({ go, openRun, initSel, initMode, initRequest }) {
     }
   }, [initRequest, initSel, initMode]);
   const [query, setQuery] = React.useState('');
-  const [filterPlatform, setFilterPlatform] = useStickyState('tb-trails-platform', 'all');
+  const [stickyPlatform, setFilterPlatform] = useStickyState('tb-trails-platform', 'all');
+  // Normalized on read, because a value an earlier build stored carries the author's freeform casing
+  // ("Android"): it filters correctly but matches no option in the picker, so the control shows
+  // blank while the list is visibly filtered. Both sentinels ('all', '__none__') are already
+  // lowercase, so this leaves them alone.
+  const filterPlatform = String(stickyPlatform).toLowerCase();
   const [filterTarget, setFilterTarget] = useStickyState('tb-trails-target', 'all');
   const [filterFormat, setFilterFormat] = useStickyState('tb-trails-format', 'all');
   const [sortBy, setSortBy] = useStickyState('tb-trails-sort', 'path');
@@ -52,10 +57,15 @@ function TrailsScreen({ go, openRun, initSel, initMode, initRequest }) {
     if (!trails.data) return; // wait for the list before deciding
     // Only scope to targets that actually exist in the loaded trails - a stale sticky target
     // (e.g. pointing at a deleted trailmap) would otherwise filter every trail out ("0 of N").
-    setFilterTarget(targets.includes(gt.target) ? gt.target : 'all');
-    // Reset to 'all' when the selection has no single platform (mixed devices or none),
-    // so a previously-forced platform doesn't keep hiding the other variants.
-    setFilterPlatform(gtPlatform || 'all');
+    const scopedTarget = targets.includes(gt.target) ? gt.target : 'all';
+    setFilterTarget(scopedTarget);
+    // Reset to 'all' when the selection has no single platform (mixed devices or none), so a
+    // previously-forced platform doesn't keep hiding the other variants - and equally when no trail
+    // in scope carries that platform, which is the same stale-filter trap the target guard above
+    // exists for. This platform comes from the devices picked elsewhere, so applying it blind
+    // emptied the tree over a choice the reader never made here, and the only way back was to
+    // notice the filter and set it to "All platforms" by hand.
+    setFilterPlatform(window.TrailPlatform.platformScopeFor(trails.data, scopedTarget, gtPlatform));
     // Keyed on WHETHER the list has loaded, not on its contents: the index re-polls itself now, and
     // keying on `trails.data` would re-scope the filters every time anything in the workspace changed
     // on disk, silently undoing the manual tweak this comment promises will stick.
@@ -120,7 +130,9 @@ function TrailsScreen({ go, openRun, initSel, initMode, initRequest }) {
   // `ios-iphone.trail.yaml` → ios, `android-phone.trail.yaml` → android). Many recordings carry the
   // platform only in the file name, not the blaze config, so the platform list + filter key on this
   // rather than `t.platform` alone — otherwise those files read as "Not specified" and drop out.
-  const platOf = (t) => (t && t.platform) || (t && derivePlatformFromTrail(t)) || null;
+  // Normalized, because `config.platform` is freeform YAML: without it a trail declaring "Android"
+  // adds a second, near-duplicate option to the dropdown that the android one can never match.
+  const platOf = (t) => window.TrailPlatform.trailPlatform(t);
 
   const platforms = React.useMemo(() => {
     const s = new Set(allTrails.map(platOf).filter(Boolean));
@@ -135,10 +147,11 @@ function TrailsScreen({ go, openRun, initSel, initMode, initRequest }) {
   const hasUnplatformed = React.useMemo(() => allTrails.some((t) => !platOf(t)), [allTrails]);
 
   const filteredTrails = React.useMemo(() => {
-    // A blaze is a cross-platform, prompt-only definition (no platform of its own), so it satisfies
-    // ANY platform filter — that keeps a bundle that's just a blaze.yaml (no recordings yet) from
-    // dropping out under a platform filter.
-    const platOk = (t) => filterPlatform === 'all' || t.kind === 'blaze' || (filterPlatform === '__none__' ? !platOf(t) : platOf(t) === filterPlatform);
+    // Uses the shared trailMatchesPlatform predicate (data-extract.tsx) for real platform values.
+    // The '__none__' sentinel is screen-specific ("Not specified" filter option) and means "show
+    // only trails with no derivable platform" — blazes/unified are excluded from that since they
+    // explicitly serve all platforms.
+    const platOk = (t) => filterPlatform === 'all' || (filterPlatform === '__none__' ? !platOf(t) : trailMatchesPlatform(t, filterPlatform));
     const targetOk = (t) => filterTarget === 'all' || (filterTarget === '__none__' ? !t.target : t.target === filterTarget);
     let arr = allTrails;
     // Platform/target filter at the BUNDLE level, not per file: keep a whole folder (all its files)

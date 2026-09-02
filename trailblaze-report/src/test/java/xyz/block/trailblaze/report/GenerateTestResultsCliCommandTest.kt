@@ -14,6 +14,10 @@ import kotlin.time.Duration.Companion.seconds
 import kotlinx.datetime.Instant
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Test
 import xyz.block.trailblaze.agent.model.AgentTaskStatus
 import xyz.block.trailblaze.agent.model.AgentTaskStatusData
@@ -36,16 +40,19 @@ import xyz.block.trailblaze.model.TrailblazeTargetAppInfo
 import xyz.block.trailblaze.report.models.CiSummaryReport
 import xyz.block.trailblaze.report.models.CATEGORY2_HEAL_DIFF_FILENAME
 import xyz.block.trailblaze.report.models.ExecutionMode
+import xyz.block.trailblaze.report.models.HealDiffArtifact
 import xyz.block.trailblaze.report.models.CombinedVerdict
 import xyz.block.trailblaze.report.models.Outcome
 import xyz.block.trailblaze.report.models.SessionResult
 import xyz.block.trailblaze.report.models.TriageReport
 import xyz.block.trailblaze.yaml.DirectionStep
+import xyz.block.trailblaze.yaml.ToolRecording
 import xyz.block.trailblaze.yaml.TrailConfig
 import xyz.block.trailblaze.yaml.TrailblazeToolYamlWrapper
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.commands.InputTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.toOtherTrailblazeToolPayload
+import xyz.block.trailblaze.util.Console
 
 /**
  * Exercises the orphan-MCP / MCP-helper session filtering in [GenerateTestResultsCliCommand].
@@ -149,6 +156,219 @@ class GenerateTestResultsCliCommandTest {
   }
 
   @Test
+  fun `config_id is read from the environment so every leg of a config reports the same value`() {
+    // CONFIG_ID and DEVICE_KEY are separate env vars, so every leg of a config reports the same
+    // config_id and one predicate gathers them all.
+    val logsDir = Files.createTempDirectory("trailblaze-report-test").toFile()
+    val outputFile = File(logsDir, "results.json")
+    try {
+      writePassedSession(logsDir, SessionId("2026_08_26_leg_session"), webDeviceInfo(), "trails/checkout/pay.trail.yaml")
+
+      captureStdout {
+        GenerateTestResultsCliCommand(
+          environment = mapOf("CONFIG_ID" to "my-config", "BUILDKITE_LABEL" to ":bar_chart: my-config (ios-ipad) - Report"),
+        ).main(arrayOf(logsDir.absolutePath, outputFile.absolutePath, "--output-format", "JSON"))
+      }
+
+      val report = json.decodeFromString<CiSummaryReport>(outputFile.readText())
+      assertEquals("my-config", report.metadata.config_id)
+      // The device stays in the label; folding it into config_id would give each leg its own value.
+      assertEquals(":bar_chart: my-config (ios-ipad) - Report", report.metadata.ci_build_label)
+    } finally {
+      logsDir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun `config_id is null off-CI rather than a config named unknown`() {
+    // The CI script defaults CONFIG_ID to "unknown" for logging but never exports it; a row
+    // claiming that config would show up in a dashboard's picker as though it were real.
+    val logsDir = Files.createTempDirectory("trailblaze-report-test").toFile()
+    val outputFile = File(logsDir, "results.json")
+    try {
+      writePassedSession(logsDir, SessionId("2026_08_26_local_session"), webDeviceInfo(), "trails/checkout/pay.trail.yaml")
+
+      captureStdout {
+        GenerateTestResultsCliCommand(environment = emptyMap())
+          .main(arrayOf(logsDir.absolutePath, outputFile.absolutePath, "--output-format", "JSON"))
+      }
+
+      assertNull(json.decodeFromString<CiSummaryReport>(outputFile.readText()).metadata.config_id)
+    } finally {
+      logsDir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun `the skipped bar is a share of every trail in scope, not of the ones that ran`() {
+    val logsDir = Files.createTempDirectory("trailblaze-report-test").toFile()
+    val outputFile = File(logsDir, "results.json")
+    try {
+      writePassedSession(logsDir, SessionId("2026_08_26_ran_session"), webDeviceInfo(), "trails/checkout/pay.trail.yaml")
+      listOf("checkout/refund", "checkout/ship", "checkout/void").forEach { testKey ->
+        SkippedTrails.record(
+          logsDir,
+          xyz.block.trailblaze.report.models.SkippedTrail(
+            trail_path = "/repo/trails/$testKey.trail.yaml",
+            title = testKey,
+            test_key = testKey,
+            reason = "backend outage, see #2194",
+            platform = "web",
+            device_classifier = "web",
+            recorded_at_epoch_ms = 1_756_000_000_000,
+          ),
+        )
+      }
+
+      val output = captureConsole {
+        InspectingGenerateTestResultsCliCommand().main(
+          arrayOf(logsDir.absolutePath, outputFile.absolutePath, "--output-format", "JSON"),
+        )
+      }
+
+      // `Total` counts what RAN, so a skip is not one of its parts. Drawn against it, 3 skips
+      // beside 1 pass would fill the whole 20-icon bar with only the clamp hiding the overflow -
+      // three quarters of the scope held back, rendered identically to all of it. The share this
+      // bar answers is "how much of the work was held back", so its whole is the work.
+      val skippedBar = output.lines().single { it.contains("├── Skipped:") }
+      assertEquals(15, skippedBar.count { it == '⚪' }, "unexpected skipped bar: $skippedBar")
+
+      // A skip has no duration to report. `duration_ms` is 0 because nothing ran, so a printed
+      // "0ms" would describe the skips as runs that finished instantly - here that is 3 of the 4
+      // rows, and the one real 5s duration would be the odd one out.
+      assertEquals(
+        1,
+        output.lines().count { it.trim().startsWith("Duration:") },
+        "only the trail that ran has a duration:\n$output",
+      )
+    } finally {
+      logsDir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun `a run in which every trail was skipped is not headlined as a pass`() {
+    val logsDir = Files.createTempDirectory("trailblaze-report-test").toFile()
+    val outputFile = File(logsDir, "results.json")
+    try {
+      listOf("checkout/refund", "checkout/ship").forEach { testKey ->
+        SkippedTrails.record(
+          logsDir,
+          xyz.block.trailblaze.report.models.SkippedTrail(
+            trail_path = "/repo/trails/$testKey.trail.yaml",
+            title = testKey,
+            test_key = testKey,
+            reason = "backend outage, see #2194",
+            platform = "web",
+            device_classifier = "web",
+            recorded_at_epoch_ms = 1_756_000_000_000,
+          ),
+        )
+      }
+
+      val output = captureConsole {
+        InspectingGenerateTestResultsCliCommand().main(
+          arrayOf(logsDir.absolutePath, outputFile.absolutePath, "--output-format", "JSON"),
+        )
+      }
+
+      // Nothing failed, but nothing ran either, and the headline icon is the first thing a reader
+      // takes from this summary. A green check over `Total: 0` and `Pass Rate: 0.0%` would have it
+      // vouching for work it never saw.
+      val headline = output.lines().single { it.trim().endsWith(" RESULTS") && !it.contains("DETAILED") }
+      assertEquals("⏭️ RESULTS", headline.trim(), "unexpected headline: $headline")
+    } finally {
+      logsDir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun `a skipped trail is reported beside the sessions that ran, without moving the pass rate`() {
+    val logsDir = Files.createTempDirectory("trailblaze-report-test").toFile()
+    val outputFile = File(logsDir, "results.json")
+    try {
+      val sessionId = SessionId("2026_08_26_ran_session")
+      val deviceInfo = webDeviceInfo()
+      writePassedSession(logsDir, sessionId, deviceInfo, "trails/checkout/pay.trail.yaml")
+
+      SkippedTrails.record(
+        logsDir,
+        xyz.block.trailblaze.report.models.SkippedTrail(
+          trail_path = "/repo/trails/checkout/refund.trail.yaml",
+          title = "Refund an order",
+          test_key = "checkout/refund",
+          reason = "backend outage, see #2194",
+          platform = "web",
+          device_classifier = "web",
+          recorded_at_epoch_ms = 1_756_000_000_000,
+        ),
+      )
+
+      val command = InspectingGenerateTestResultsCliCommand()
+      captureStdout {
+        command.main(
+          arrayOf(logsDir.absolutePath, outputFile.absolutePath, "--output-format", "JSON"),
+        )
+      }
+
+      val report = json.decodeFromString<CiSummaryReport>(outputFile.readText())
+      val skipped = report.results.single { it.outcome == Outcome.SKIPPED }
+
+      // The per-attempt projection is every attempt a run actually made, and it is what the Block
+      // subclass uploads to CDP. A skip made no attempt, so a row here would tell an external
+      // results sink about a test execution that never happened.
+      val attempts = command.attemptReport()!!.results
+      assertTrue(attempts.none { it.outcome == Outcome.SKIPPED }, "skips reached the attempt projection")
+      assertEquals(1, attempts.count { it.outcome == Outcome.PASSED })
+      assertEquals("checkout/refund", skipped.test_key)
+      assertEquals("backend outage, see #2194", skipped.failure_reason)
+      assertEquals(1, report.results.count { it.outcome == Outcome.PASSED })
+
+      // The whole point of a separate outcome: one of two trails ran, and it passed. Scoring the
+      // skip would report 50%, which reads as a regression caused by disabling a trail.
+      assertEquals(100.0, passRatePercent(report.results))
+
+      // A skipped trail has no session directory, and asking the report for one would CREATE it -
+      // an empty phantom session that every later run of this logs dir would carry.
+      assertFalse(File(logsDir, skipped.session_id.value).exists())
+    } finally {
+      logsDir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun `a run whose every trail was skipped still produces a report`() {
+    val logsDir = Files.createTempDirectory("trailblaze-report-test").toFile()
+    val outputFile = File(logsDir, "results.json")
+    try {
+      SkippedTrails.record(
+        logsDir,
+        xyz.block.trailblaze.report.models.SkippedTrail(
+          trail_path = "/repo/trails/checkout/refund.trail.yaml",
+          title = "Refund an order",
+          test_key = "checkout/refund",
+          reason = "backend outage, see #2194",
+          recorded_at_epoch_ms = 1_756_000_000_000,
+        ),
+      )
+
+      captureStdout {
+        GenerateTestResultsCliCommand().main(
+          arrayOf(logsDir.absolutePath, outputFile.absolutePath, "--output-format", "JSON"),
+        )
+      }
+
+      // "Everything here was held back, and here is why" is an answer. Bailing out on no sessions
+      // would leave the reader with no artifact at all and nothing to distinguish it from a run
+      // that was never configured.
+      val report = json.decodeFromString<CiSummaryReport>(outputFile.readText())
+      assertEquals(Outcome.SKIPPED, report.results.single().outcome)
+    } finally {
+      logsDir.deleteRecursively()
+    }
+  }
+
+  @Test
   fun `run includes sessions with self-heal succeeded status in report as passed`() {
     val logsDir = Files.createTempDirectory("trailblaze-report-test").toFile()
     val outputFile = File(logsDir, "results.json")
@@ -216,6 +436,7 @@ class GenerateTestResultsCliCommandTest {
           trailblazeTool = InputTextTrailblazeTool(text = "old selector"),
         )
       val newTool = InputTextTrailblazeTool(text = "new selector")
+      val recordedPrompt = prompt.copy(recording = ToolRecording(tools = listOf(oldTool)))
       val rawYaml =
         """
           config: {}
@@ -255,7 +476,7 @@ class GenerateTestResultsCliCommandTest {
         sessionId,
         "002_ObjectiveStartLog.json",
         TrailblazeLog.ObjectiveStartLog(
-          promptStep = prompt,
+          promptStep = recordedPrompt,
           session = sessionId,
           timestamp = Instant.parse("2026-08-24T18:10:01Z"),
         ),
@@ -263,11 +484,48 @@ class GenerateTestResultsCliCommandTest {
       writeLog(
         logsDir,
         sessionId,
-        "003_SelfHealInvokedLog.json",
-        TrailblazeLog.SelfHealInvokedLog(
-          promptStep = prompt,
+        "003_TrailblazeToolLog.json",
+        TrailblazeLog.TrailblazeToolLog(
+          trailblazeTool = oldTool.trailblazeTool.toOtherTrailblazeToolPayload(),
+          toolName = "inputText",
+          successful = false,
+          exceptionMessage = "recording missed",
+          traceId = TraceId.generate(TraceId.Companion.TraceOrigin.TOOL),
+          durationMs = 10,
           session = sessionId,
           timestamp = Instant.parse("2026-08-24T18:10:02Z"),
+        ),
+      )
+      writeLog(
+        logsDir,
+        sessionId,
+        "004_ObjectiveCompleteLog.json",
+        TrailblazeLog.ObjectiveCompleteLog(
+          promptStep = recordedPrompt,
+          objectiveResult =
+            AgentTaskStatus.Failure.ObjectiveFailed(
+              statusData =
+                AgentTaskStatusData(
+                  taskId = TaskId.generate(),
+                  prompt = prompt.step,
+                  callCount = 1,
+                  taskStartTime = Instant.parse("2026-08-24T18:10:01Z"),
+                  totalDurationMs = 1_000,
+                ),
+              llmExplanation = "recording missed",
+            ),
+          session = sessionId,
+          timestamp = Instant.parse("2026-08-24T18:10:03Z"),
+        ),
+      )
+      writeLog(
+        logsDir,
+        sessionId,
+        "005_SelfHealInvokedLog.json",
+        TrailblazeLog.SelfHealInvokedLog(
+          promptStep = recordedPrompt,
+          session = sessionId,
+          timestamp = Instant.parse("2026-08-24T18:10:04Z"),
           recordingResult =
             PromptRecordingResult.Failure(
               successfulTools = emptyList(),
@@ -280,7 +538,17 @@ class GenerateTestResultsCliCommandTest {
       writeLog(
         logsDir,
         sessionId,
-        "004_TrailblazeToolLog.json",
+        "006_ObjectiveStartLog.json",
+        TrailblazeLog.ObjectiveStartLog(
+          promptStep = recordedPrompt,
+          session = sessionId,
+          timestamp = Instant.parse("2026-08-24T18:10:05Z"),
+        ),
+      )
+      writeLog(
+        logsDir,
+        sessionId,
+        "007_TrailblazeToolLog.json",
         TrailblazeLog.TrailblazeToolLog(
           trailblazeTool = newTool.toOtherTrailblazeToolPayload(),
           toolName = "inputText",
@@ -288,15 +556,15 @@ class GenerateTestResultsCliCommandTest {
           traceId = TraceId.generate(TraceId.Companion.TraceOrigin.LLM),
           durationMs = 10,
           session = sessionId,
-          timestamp = Instant.parse("2026-08-24T18:10:03Z"),
+          timestamp = Instant.parse("2026-08-24T18:10:06Z"),
         ),
       )
       writeLog(
         logsDir,
         sessionId,
-        "005_ObjectiveCompleteLog.json",
+        "008_ObjectiveCompleteLog.json",
         TrailblazeLog.ObjectiveCompleteLog(
-          promptStep = prompt,
+          promptStep = recordedPrompt,
           objectiveResult =
             AgentTaskStatus.Success.ObjectiveComplete(
               statusData =
@@ -310,17 +578,17 @@ class GenerateTestResultsCliCommandTest {
               llmExplanation = "completed",
             ),
           session = sessionId,
-          timestamp = Instant.parse("2026-08-24T18:10:04Z"),
+          timestamp = Instant.parse("2026-08-24T18:10:07Z"),
         ),
       )
       writeLog(
         logsDir,
         sessionId,
-        "006_TrailblazeSessionStatusChangeLog.json",
+        "009_TrailblazeSessionStatusChangeLog.json",
         TrailblazeLog.TrailblazeSessionStatusChangeLog(
           sessionStatus = SessionStatus.Ended.SucceededWithSelfHeal(durationMs = 5_000),
           session = sessionId,
-          timestamp = Instant.parse("2026-08-24T18:10:05Z"),
+          timestamp = Instant.parse("2026-08-24T18:10:08Z"),
         ),
       )
 
@@ -338,7 +606,12 @@ class GenerateTestResultsCliCommandTest {
       val evidence = assertNotNull(result.category2_evidence)
       assertEquals("4837740", evidence.case_id)
       assertEquals(CATEGORY2_HEAL_DIFF_FILENAME, evidence.heal_diff_artifact)
-      assertTrue(File(logsDir, "${sessionId.value}/$CATEGORY2_HEAL_DIFF_FILENAME").isFile)
+      val healDiffFile = File(logsDir, "${sessionId.value}/$CATEGORY2_HEAL_DIFF_FILENAME")
+      assertTrue(healDiffFile.isFile)
+      val healDiff = json.decodeFromString<HealDiffArtifact>(healDiffFile.readText())
+      assertTrue(healDiff.before_yaml.contains("old selector"))
+      assertTrue(healDiff.after_yaml.contains("new selector"))
+      assertFalse(healDiff.after_yaml.contains("old selector"))
 
       val cliConfiguredOutput = File(logsDir, "cli-configured-results.json")
       captureStdout {
@@ -354,7 +627,7 @@ class GenerateTestResultsCliCommandTest {
       writeLog(
         logsDir,
         sessionId,
-        "003_SelfHealInvokedLog.json",
+        "005_SelfHealInvokedLog.json",
         TrailblazeLog.SelfHealInvokedLog(
           promptStep = prompt,
           session = sessionId,
@@ -491,6 +764,103 @@ class GenerateTestResultsCliCommandTest {
       assertEquals("Test app launch recording", result.title)
       assertEquals("com.example.smoke.LaunchSmokeTest", result.test_class)
       assertEquals("launchNoCrash", result.test_name)
+    } finally {
+      logsDir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun `a session that named no trail is distinguishable from a trail that replayed nothing`() {
+    // Both rows are PASSED with execution_mode UNKNOWN. A device farm runs every @Test in the APK,
+    // so a harness entry point that returns before calling the rule opens a session, never emits
+    // SessionStatus.Started, and lands in the same quadrant as a real trail whose recording
+    // replayed nothing. A CI summary that fails a step on the second must not fail it on the first,
+    // and the report row is all it has to go on.
+    //
+    // Two fields together say "no session ever started here": no trail file named AND no platform.
+    // Both are asserted, because a null path on its own is weaker than it looks - a real trail
+    // handed to a runner as inline YAML has no file to name either, and it DOES report a platform.
+    val logsDir = Files.createTempDirectory("trailblaze-report-test").toFile()
+    val outputFile = File(logsDir, "results.json")
+    try {
+      val harnessSessionId = SessionId("2026_09_01_harness_no_op_session")
+      // One Ended log and nothing else: what a @Test that returns before running a trail leaves.
+      writeLog(
+        logsDir = logsDir,
+        sessionId = harnessSessionId,
+        fileName = "001_TrailblazeSessionStatusChangeLog.json",
+        log = TrailblazeLog.TrailblazeSessionStatusChangeLog(
+          sessionStatus = SessionStatus.Ended.Succeeded(durationMs = 48),
+          session = harnessSessionId,
+          timestamp = Instant.parse("2026-09-01T10:00:00Z"),
+        ),
+      )
+
+      val trailSessionId = SessionId("2026_09_01_trail_session")
+      writePassedSession(
+        logsDir = logsDir,
+        sessionId = trailSessionId,
+        deviceInfo = androidDeviceInfo(),
+        trailFilePath = "trails/estate/C4242-checkout.trail.yaml",
+      )
+
+      captureStdout {
+        GenerateTestResultsCliCommand().main(
+          arrayOf(logsDir.absolutePath, outputFile.absolutePath, "--output-format", "JSON"),
+        )
+      }
+
+      val reportText = outputFile.readText()
+      val report = json.decodeFromString<CiSummaryReport>(reportText)
+      val harness = report.results.single { it.session_id == harnessSessionId }
+      val trail = report.results.single { it.session_id == trailSessionId }
+
+      assertEquals(Outcome.PASSED, harness.outcome)
+      assertEquals(ExecutionMode.UNKNOWN, harness.execution_mode)
+      assertNull(harness.trail_file_path)
+      assertEquals("unknown", harness.platform)
+      assertEquals("trails/estate/C4242-checkout.trail.yaml", trail.trail_file_path)
+      assertEquals("android", trail.platform)
+
+      // The KEY has to be written even when the value is null, because absent is what tells a
+      // consumer "this report predates the field and cannot answer". Suppressing it here would
+      // make the harness row indistinguishable from a legacy row, which is the one reading that
+      // must stay strict. Asserted on the encoded document, not the decoded object, since only the
+      // document can tell absent from null.
+      val encodedHarnessRow = Json.parseToJsonElement(reportText)
+        .jsonObject.getValue("results").jsonArray
+        .single { it.jsonObject.getValue("session_id").jsonPrimitive.content == harnessSessionId.value }
+        .jsonObject
+      assertEquals(JsonNull, encodedHarnessRow["trail_file_path"])
+    } finally {
+      logsDir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun `a blank trail file path is reported as none at all`() {
+    // A blank path answers "which trail did this row run?" with nothing, and a consumer reading the
+    // field for null would then disagree with one reading it for emptiness - on a field whose whole
+    // job is to be read one way. Normalized at the writer, as `test_class`/`test_name` are.
+    val logsDir = Files.createTempDirectory("trailblaze-report-test").toFile()
+    val outputFile = File(logsDir, "results.json")
+    try {
+      val sessionId = SessionId("2026_09_01_blank_trail_path_session")
+      writePassedSession(
+        logsDir = logsDir,
+        sessionId = sessionId,
+        deviceInfo = androidDeviceInfo(),
+        trailFilePath = "   ",
+      )
+
+      captureStdout {
+        GenerateTestResultsCliCommand().main(
+          arrayOf(logsDir.absolutePath, outputFile.absolutePath, "--output-format", "JSON"),
+        )
+      }
+
+      val report = json.decodeFromString<CiSummaryReport>(outputFile.readText())
+      assertNull(report.results.single().trail_file_path)
     } finally {
       logsDir.deleteRecursively()
     }
@@ -2349,6 +2719,44 @@ class GenerateTestResultsCliCommandTest {
     File(sessionDir, fileName).writeText(TrailblazeJsonInstance.encodeToString<TrailblazeLog>(log))
   }
 
+  /** A minimal session that started and succeeded, for tests whose subject is the report, not the run. */
+  private fun writePassedSession(
+    logsDir: File,
+    sessionId: SessionId,
+    deviceInfo: TrailblazeDeviceInfo,
+    trailFilePath: String,
+  ) {
+    writeLog(
+      logsDir = logsDir,
+      sessionId = sessionId,
+      fileName = "001_TrailblazeSessionStatusChangeLog.json",
+      log = TrailblazeLog.TrailblazeSessionStatusChangeLog(
+        sessionStatus = SessionStatus.Started(
+          trailConfig = null,
+          trailFilePath = trailFilePath,
+          hasRecordedSteps = true,
+          testMethodName = "run",
+          testClassName = "WebTest",
+          trailblazeDeviceInfo = deviceInfo,
+          trailblazeDeviceId = deviceInfo.trailblazeDeviceId,
+          rawYaml = null,
+        ),
+        session = sessionId,
+        timestamp = Instant.parse("2026-08-26T10:00:00Z"),
+      ),
+    )
+    writeLog(
+      logsDir = logsDir,
+      sessionId = sessionId,
+      fileName = "002_TrailblazeSessionStatusChangeLog.json",
+      log = TrailblazeLog.TrailblazeSessionStatusChangeLog(
+        sessionStatus = SessionStatus.Ended.Succeeded(durationMs = 5_000),
+        session = sessionId,
+        timestamp = Instant.parse("2026-08-26T10:00:05Z"),
+      ),
+    )
+  }
+
   private fun webDeviceInfo(): TrailblazeDeviceInfo {
     val deviceId = TrailblazeDeviceId(
       instanceId = "web",
@@ -2387,5 +2795,27 @@ class GenerateTestResultsCliCommandTest {
       System.setOut(original)
     }
     return buffer.toString()
+  }
+
+  /**
+   * [captureStdout], plus what the command prints through [Console].
+   *
+   * The JVM [Console] caches `System.out` into private fields at class-init, so `System.setOut`
+   * alone captures nothing it writes — an assertion on the summary text would silently find an
+   * empty buffer. Re-point the cached fields at the same buffer (the `UsagesCommandTest` pattern).
+   */
+  private inline fun captureConsole(block: () -> Unit): String {
+    val buffer = ByteArrayOutputStream()
+    val stream = PrintStream(buffer, /* autoFlush = */ true, Charsets.UTF_8)
+    val fields = listOf("out", "userOut").map { name ->
+      val field = Console::class.java.getDeclaredField(name).apply { isAccessible = true }
+      field to field.get(Console) as PrintStream
+    }
+    fields.forEach { (field, _) -> field.set(Console, stream) }
+    try {
+      return captureStdout(block) + buffer.toString(Charsets.UTF_8)
+    } finally {
+      fields.forEach { (field, original) -> field.set(Console, original) }
+    }
   }
 }

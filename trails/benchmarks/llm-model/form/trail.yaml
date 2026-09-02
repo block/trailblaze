@@ -4,7 +4,8 @@ config:
     submit, and verify the success message. Exercises typed input, select
     dropdowns, and submission feedback.
   devices:
-    web: PLAYWRIGHT_NATIVE
+    web:
+      driver: PLAYWRIGHT_NATIVE
   title: 'LLM Benchmark: Contact form submission'
 
 trail:

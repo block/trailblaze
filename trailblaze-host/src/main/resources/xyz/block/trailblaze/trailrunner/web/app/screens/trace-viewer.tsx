@@ -22,6 +22,53 @@ function EmbeddedReport({ sessionId }) {
   );
 }
 
+// What a Record run DID to the trail file it was recorded against. The daemon writes this verdict
+// into the run's own log when the merge finishes (RunRoutes.logSaveBackOutcome), so it belongs to the
+// run rather than to whichever console started the daemon - a save-back that was refused says so here
+// instead of leaving the reader to wonder whether the file changed.
+const SAVE_BACK_EVENT = 'RecordingSavedBack';
+// Written BEFORE the verdict, when the daemon starts waiting for the device's tool logs. It is the
+// only thing that tells this screen a verdict is coming at all, which is what lets it keep reading
+// for one instead of polling every finished run on the chance that it was recording.
+const SAVE_BACK_PENDING_EVENT = 'RecordingSaveBackPending';
+
+function saveBackVerdict(logs, eventType = SAVE_BACK_EVENT) {
+  // Last one wins: a retried save-back inside one session supersedes the earlier attempt.
+  for (let i = (logs || []).length - 1; i >= 0; i--) {
+    const l = logs[i];
+    if (l && l.eventType === eventType && typeof l.description === 'string') return l;
+  }
+  return null;
+}
+
+// `stalled` is a pending note whose verdict never arrived. It reads as a warning rather than as a
+// spinner: the daemon writes the verdict last, so a run that never produced one lost its daemon
+// somewhere in between, and a spinner would promise an answer that is not coming.
+function SaveBackBanner({ verdict, pending, stalled, trailId, go }) {
+  const ok = !pending && !stalled && verdict.success !== false;
+  const tint = pending ? '140,150,165' : (ok ? '0,224,19' : '224,168,0');
+  const color = pending ? 'var(--text-subtle)' : (ok ? 'var(--tb-primary-green)' : 'var(--tb-warn, #e0a800)');
+  const title = pending ? 'Saving the recording' : (stalled ? 'Trail update unknown' : (ok ? 'Trail updated' : 'Trail not updated'));
+  const description = stalled
+    ? 'This run started saving its recording but never reported what happened, so the trail may or may '
+      + 'not have been updated. Check the trail file, and the daemon log if it is missing.'
+    : verdict.description;
+  return (
+    <div data-testid="save-back-banner" style={{ marginTop: 12, background: `rgba(${tint},.1)`, border: `1px solid rgba(${tint},.28)`, borderRadius: 9 }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 9, padding: '11px 10px 11px 13px' }}>
+        <Ico n={pending ? 'loader-2' : (ok ? 'file-check-2' : 'triangle-alert')} s={15} c={color} spin={pending} style={{ flex: '0 0 auto', marginTop: 1 }} />
+        <span data-selectable style={{ fontSize: 12.5, flex: 1, minWidth: 0, lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+          <b style={{ color }}>{title}</b>
+          {'  '}{description}
+        </span>
+        {trailId && go && (
+          <Btn sm ico="pencil" style={{ flex: '0 0 auto' }} onClick={() => go('trails', { sel: trailId, mode: 'edit' })}>Open trail</Btn>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function TraceViewer({ s, onDeleted, go, listCollapsed, onToggleList, onBack, backLabel, onStop, stopping }) {
   const trailsIndex = TB.useTrails();
   const sourceTrail = s.trailId ? ((trailsIndex.data || []).find((t) => t.id === s.trailId) || null) : null;
@@ -38,6 +85,18 @@ function TraceViewer({ s, onDeleted, go, listCollapsed, onToggleList, onBack, ba
   const [deleting, setDeleting] = React.useState(false);
   useLucide();
 
+  // Only from THIS run's detail: the hook keeps the previous run's data while the next one loads, and
+  // a save-back banner from the run before would name a file this run never touched.
+  const saveBack = React.useMemo(
+    () => (detail.data && detail.data.id === s.id ? saveBackVerdict(detail.data.logs) : null),
+    [detail.data, s.id],
+  );
+  const saveBackPending = React.useMemo(
+    () => (!saveBack && detail.data && detail.data.id === s.id
+      ? saveBackVerdict(detail.data.logs, SAVE_BACK_PENDING_EVENT)
+      : null),
+    [detail.data, s.id, saveBack],
+  );
   const detailReady = !!detail.data && detail.data.id === s.id;
   const showSkeleton = detail.loading && !detailReady;
 
@@ -52,7 +111,52 @@ function TraceViewer({ s, onDeleted, go, listCollapsed, onToggleList, onBack, ba
     if (followedLive.current !== s.id) return;
     followedLive.current = null;
     detail.reload();
+    // Twice, because two things the reader is waiting for are written AFTER the terminal status: the
+    // last of the run's own logs, and the note that says a save-back has started. A single read
+    // racing the status flip can land in between and show neither.
+    const late = setTimeout(() => detail.reload(), 2500);
+    return () => clearTimeout(late);
   }, [s.status, s.id]);
+
+  // The run this screen stopped waiting for a verdict on. Holds the id rather than a flag for the
+  // same reason `followedLive` does: this screen is reused across runs with no `key`, so a plain flag
+  // would carry one run's given-up state onto the next run selected.
+  const [saveBackGaveUp, setSaveBackGaveUp] = React.useState(null);
+
+  // A save-back announces itself, then waits for the device to finish flushing this run's tool calls
+  // - up to two minutes on a slow one - before it can say what it did. Read until the verdict lands
+  // rather than once, but only while this run says one is coming, so an ordinary run still reads once.
+  React.useEffect(() => {
+    if (!saveBackPending || saveBack) return;
+    // Measured from the note the DAEMON wrote, not from when this screen happened to open it. A tab
+    // suspended past the deadline resumes with an already-expired budget rather than a fresh one, and
+    // reopening a session whose save-back stalled hours ago doesn't wait another 135s for a verdict
+    // that was already overdue.
+    const startedAt = Date.parse(saveBackPending.timestamp || '');
+    const deadline = (isNaN(startedAt) ? Date.now() : startedAt) + 135000;
+    let giveUp = null;
+    const stopWaiting = () => {
+      // One last read first: the verdict may well have landed while nothing was reading for it.
+      detail.reload();
+      // Then say so. A daemon that died between the pending note and the verdict would otherwise
+      // leave a spinner promising an answer that is never coming. Delayed past that read so a verdict
+      // it returns wins instead of flashing "unknown" on the way past.
+      giveUp = setTimeout(() => setSaveBackGaveUp(s.id), 5000);
+    };
+    if (Date.now() > deadline) {
+      stopWaiting();
+      return () => { if (giveUp) clearTimeout(giveUp); };
+    }
+    const poll = setInterval(() => {
+      if (Date.now() > deadline) { clearInterval(poll); stopWaiting(); return; }
+      // Skip the tick while a read is already out. A full log read can take longer than the interval,
+      // and every reload supersedes the one before it - so an unguarded poll would keep cancelling the
+      // response that carries the verdict and never render it.
+      if (detail.inFlight.current) return;
+      detail.reload();
+    }, 3000);
+    return () => { clearInterval(poll); if (giveUp) clearTimeout(giveUp); };
+  }, [!!saveBackPending, !!saveBack, s.id]);
 
   const [menuOpen, setMenuOpen] = React.useState(false);
   const [saveOpen, setSaveOpen] = React.useState(false);
@@ -211,6 +315,14 @@ function TraceViewer({ s, onDeleted, go, listCollapsed, onToggleList, onBack, ba
         </div>
         {s.err && <ErrorBanner text={s.err} />}
         {retryErr && <ErrorBanner text={retryErr} />}
+        {(saveBack || saveBackPending) && (
+          <SaveBackBanner
+            verdict={saveBack || saveBackPending}
+            pending={!saveBack && saveBackGaveUp !== s.id}
+            stalled={!saveBack && saveBackGaveUp === s.id}
+            trailId={s.trailId}
+            go={go} />
+        )}
         <div className="tb-tabs" style={{ marginTop: 16 }}>
           {tabs.map(([id, l]) => (
             <div key={id} className={'tb-tab ' + (mode === id ? 'active' : '')} onClick={() => setMode(id)} style={{ cursor: 'pointer' }}>{l}</div>
@@ -223,13 +335,18 @@ function TraceViewer({ s, onDeleted, go, listCollapsed, onToggleList, onBack, ba
           groups; unmounting it — or collapsing its box with `display: none` — would throw that away
           every time someone glanced at Raw logs. */}
       <div style={{ position: 'relative', flex: 1, minHeight: 0 }}>
-        {/* 8px of inset is what lines the report's own tab row up with the Report/Raw logs/Artifacts
-            row above it — the report supplies the rest of its page padding itself. */}
-        <div style={{ position: 'absolute', inset: 0, padding: '4px 8px 0', visibility: mode === 'report' ? 'visible' : 'hidden' }}>
-          {/* `s.id` rather than the shared `sessionId`, which prefers the fetched detail and so still
-              names the PREVIOUS run for as long as this one's detail is in flight. The frame keys on
-              the id it is given, so that lag would show the wrong run's report. */}
-          <EmbeddedReport sessionId={s.id} />
+        {/* The report is a panel on this page, not a full-bleed frame: same inset as the Raw logs and
+            Artifacts tabs beside it, and the same rounded hairline surface every other view uses. The
+            frame's own document is transparent when embedded, so this box IS the report's page - which
+            is why it carries the page background rather than a raised one, leaving the report's own
+            cards visibly raised inside it. */}
+        <div style={{ position: 'absolute', inset: 0, padding: '18px 26px', visibility: mode === 'report' ? 'visible' : 'hidden' }}>
+          <div style={{ height: '100%', border: '1px solid var(--tb-hairline)', borderRadius: 10, overflow: 'hidden', background: 'var(--bg-app)' }}>
+            {/* `s.id` rather than the shared `sessionId`, which prefers the fetched detail and so still
+                names the PREVIOUS run for as long as this one's detail is in flight. The frame keys on
+                the id it is given, so that lag would show the wrong run's report. */}
+            <EmbeddedReport sessionId={s.id} />
+          </div>
         </div>
         {mode !== 'report' && (
           <div style={{ position: 'absolute', inset: 0, padding: '18px 26px', ...(mode === 'logs' ? { display: 'flex', flexDirection: 'column', overflow: 'hidden' } : { overflowY: 'auto' }) }}>

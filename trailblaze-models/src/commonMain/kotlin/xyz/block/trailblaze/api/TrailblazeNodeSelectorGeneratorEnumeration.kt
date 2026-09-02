@@ -95,6 +95,19 @@ internal fun runVariableWildcardedTextCandidate(
     detail.hintText to { r: String -> nameFor("Hint text", r, detail.hintText) to DriverNodeMatch.IosMaestro(hintTextRegex = r) },
   )
 
+  is DriverNodeDetail.AndroidView -> firstStableLabel(
+    detail.text?.takeIf { !detail.isEditable } to { r: String ->
+      nameFor("Text", r, detail.text) to DriverNodeMatch.AndroidView(textRegex = r)
+    },
+    detail.contentDescription to { r: String ->
+      nameFor("Content description", r, detail.contentDescription) to
+        DriverNodeMatch.AndroidView(contentDescriptionRegex = r)
+    },
+    detail.hintText to { r: String ->
+      nameFor("Hint text", r, detail.hintText) to DriverNodeMatch.AndroidView(hintTextRegex = r)
+    },
+  )
+
   is DriverNodeDetail.AndroidMaestro -> firstStableLabel(
     detail.text to { r: String -> nameFor("Text", r, detail.text) to DriverNodeMatch.AndroidMaestro(textRegex = r) },
     detail.accessibilityText to { r: String ->
@@ -192,6 +205,13 @@ private fun matchTier(match: DriverNodeMatch): Int = when (match) {
       match.stateDescriptionRegex != null || match.roleDescriptionRegex != null -> 1
     else -> 2
   }
+  is DriverNodeMatch.AndroidView -> when {
+    match.resourceIdRegex != null || match.tagRegex != null -> 0
+    match.textRegex != null || match.contentDescriptionRegex != null ||
+      match.hintTextRegex != null || match.stateDescriptionRegex != null ||
+      match.errorTextRegex != null -> 1
+    else -> 2
+  }
   is DriverNodeMatch.AndroidMaestro -> when {
     match.resourceIdRegex != null -> 0
     match.textRegex != null || match.accessibilityTextRegex != null || match.hintTextRegex != null -> 1
@@ -214,7 +234,9 @@ private fun matchTier(match: DriverNodeMatch): Int = when (match) {
   }
   is DriverNodeMatch.Compose -> when {
     match.testTag != null -> 0
-    match.textRegex != null || match.contentDescriptionRegex != null || match.editableTextRegex != null -> 1
+    match.textRegex != null || match.contentDescriptionRegex != null ||
+      match.editableTextRegex != null || match.stateDescriptionRegex != null ||
+      match.paneTitleRegex != null || match.errorTextRegex != null -> 1
     else -> 2
   }
 }

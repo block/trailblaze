@@ -6,12 +6,15 @@ import java.nio.charset.StandardCharsets
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import org.junit.Rule
 import org.junit.rules.TemporaryFolder
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.recordings.TrailRecordings
+import xyz.block.trailblaze.report.SkippedTrails
+import xyz.block.trailblaze.report.models.SOURCE_TYPE_GENERATED
 
 /**
  * Pins the contract of [TrailCommand.planTrailExecution] and [TrailCommand.expandTrailFiles].
@@ -32,6 +35,7 @@ class TrailCommandPlanTrailExecutionTest {
     tags: List<String>? = null,
     skip: String? = null,
     id: String? = null,
+    target: String? = null,
   ): File {
     dir.mkdirs()
     val file = File(dir, name)
@@ -39,6 +43,7 @@ class TrailCommandPlanTrailExecutionTest {
       appendLine("config:")
       appendLine("  title: $title")
       if (id != null) appendLine("  id: $id")
+      if (target != null) appendLine("  target: $target")
       if (tags != null) appendLine("  tags: [${tags.joinToString(", ")}]")
       if (skip != null) {
         appendLine("  skip:")
@@ -1006,6 +1011,101 @@ class TrailCommandPlanTrailExecutionTest {
     assertEquals("see #2194", skipItem.reason)
     assertIs<TrailExecutionItem.Run>(byName["blank.trail.yaml"])
     assertIs<TrailExecutionItem.Run>(byName["normal.trail.yaml"])
+  }
+
+  @Test
+  fun `a Skip carries the report identity the trail would have run under`() {
+    // A skipped trail opens no session, so nothing downstream will ever parse its config again.
+    // The planner already has it in hand and is the last place these can be captured; without them
+    // the report can only show a path, and its row can't line up with the devices that DID run.
+    val titled = writeTrail(
+      "titled.trail.yaml",
+      title = "Refund an order",
+      id = "checkout/refund",
+      skip = "see #2194",
+      target = "square",
+    )
+    // Under `trails/`, so the fallback shows the identity a session for it would carry: the
+    // `trails/`-relative short name, not a machine-specific absolute path.
+    val trailsDir = File(tempFolder.root, "trails/checkout").apply { mkdirs() }
+    val untitled = File(trailsDir, "bare.trail.yaml")
+    untitled.writeText(
+      """
+      config:
+        skip:
+          android: "no coverage yet"
+      trail:
+        - step: Press back
+      """.trimIndent(),
+    )
+
+    val plan = TrailCommand.planTrailExecution(
+      files = listOf(titled, untitled),
+      includeTags = emptyList(),
+    )
+
+    val byName = plan.items.associateBy { it.file.name }
+    val withConfig = byName["titled.trail.yaml"]
+    assertIs<TrailExecutionItem.Skip>(withConfig)
+    assertEquals("Refund an order", withConfig.title)
+    assertEquals("checkout/refund", withConfig.testKey)
+    // The interactive report keys a matrix row on the DECLARED id plus the target, so both travel
+    // separately from the test key: a skip that carried neither would sit in a row of its own,
+    // beside the row holding the same trail's runs.
+    assertEquals("checkout/refund", withConfig.trailId)
+    assertEquals("square", withConfig.target)
+
+    // No `id:` and no `title:`: both fall back to the short trail name, the same rule
+    // `SessionInfo.stableTestKey` applies to the same absolute path the CLI stamps on a session
+    // it starts — which is what makes a skip and a sibling device's run share one report row.
+    val bare = byName["bare.trail.yaml"]
+    assertIs<TrailExecutionItem.Skip>(bare)
+    assertEquals("checkout/bare", bare.title)
+    assertEquals("checkout/bare", bare.testKey)
+    // No declared id and no target: both stay null rather than inheriting the short name, because
+    // a run of this trail carries neither either, and an invented id would split them apart.
+    assertNull(bare.trailId)
+    assertNull(bare.target)
+  }
+
+  @Test
+  fun `a skip is recorded into the logs dir, and not at all under --no-logging`() {
+    // `--no-logging` promises no files under logs/, and a skip record is one. Both run loops call
+    // the same recorder, so the flag is honored there rather than at either call site.
+    val logsDir = File(tempFolder.root, "logs").apply { mkdirs() }
+    val skip = TrailExecutionItem.Skip(
+      file = File(tempFolder.root, "checkout/refund.trail.yaml"),
+      reason = "backend outage, see #2194",
+      title = "Refund an order",
+      testKey = "checkout/refund",
+      trailId = "checkout/refund",
+      target = "square",
+      trailSource = SOURCE_TYPE_GENERATED,
+    )
+    val classifiers = listOf(
+      TrailblazeDeviceClassifier("android"),
+      TrailblazeDeviceClassifier("phone"),
+    )
+
+    assertNull(
+      TrailCommand.recordSkip(logsDir, skip, classifiers, noLogging = true),
+      "--no-logging still recorded a skip",
+    )
+    assertTrue(SkippedTrails.read(logsDir).isEmpty(), "--no-logging still wrote a skip record")
+
+    val returned = TrailCommand.recordSkip(logsDir, skip, classifiers, noLogging = false)
+    val recorded = SkippedTrails.read(logsDir).single()
+    // The run loop collects what came back rather than re-reading the directory, which outlives a
+    // run: the returned record and the written one have to be the same skip.
+    assertEquals(recorded, returned)
+    assertEquals("checkout/refund", recorded.test_key)
+    assertEquals("backend outage, see #2194", recorded.reason)
+    // The report joins a session's classifiers the same way, which is what lands this skip in the
+    // `android-phone` column beside the devices that ran the trail.
+    assertEquals("android-phone", recorded.device_classifier)
+    assertEquals("android", recorded.platform)
+    assertEquals("checkout/refund", recorded.trail_id)
+    assertEquals("square", recorded.target)
   }
 
   @Test

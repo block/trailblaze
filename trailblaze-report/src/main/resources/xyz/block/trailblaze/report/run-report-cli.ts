@@ -14,10 +14,14 @@
 // to the web app at /trailrunner/api/session/{id}/logs). `sessionDir` is where screenshots live.
 import { createRequire } from "module";
 import { spawnSync } from "child_process";
-import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "fs";
-import { basename, join } from "path";
+import { existsSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from "fs";
+import { basename, join, sep } from "path";
 import { gzipSync } from "zlib";
-import { buildEventStream, resolveFormatterModule } from "./run-report-events";
+import {
+  ATTACHMENT_EMBED_MAX_TOTAL_BYTES, ATTACHMENT_INLINE_MAX_BYTES, ATTACHMENT_MIME, MAX_ATTACHMENTS_PER_SESSION, MAX_EVENT_STREAM_BYTES,
+  MAX_EVENT_STREAMS_TOTAL_CHARS, buildEventStream, collectStreamAttachmentRefs,
+  isSafeSessionRelativePath, resolveFormatterModule,
+} from "./run-report-events";
 import { parseSpriteMetadata, resolvedFrameMap, spriteRejectionReason, spriteSheetRows } from "./run-report-sprites";
 
 /** The input JSON RunReportGenerator writes (one entry per session in the report). */
@@ -47,6 +51,12 @@ interface DriverInput {
    * through unchanged either way; this switch governs only the images that live on disk.
    */
   imageBaseUrl?: string | null;
+  /**
+   * Per-attachment embed ceiling for event-payload attachment refs (bytes). An attachment at or
+   * under it embeds as a `data:` URI; over it the record still renders but the lightbox shows the
+   * "in the session bundle, not embedded" note. Defaults to [ATTACHMENT_INLINE_MAX_BYTES].
+   */
+  attachmentInlineMaxBytes?: number;
   sessions?: Array<{
     meta?: RunMeta;
     recordingYaml?: string | null;
@@ -71,8 +81,8 @@ type ReportCore = {
 };
 
 const MIME = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", webp: "image/webp", gif: "image/gif" };
-const MAX_LOG_BYTES = 5 * 1024 * 1024; // mirror WasmReport: skip device/network logs over 5MB
-const MAX_LOG_LINES = 5000; // mirror WasmReport: keep only the tail
+const MAX_LOG_BYTES = 5 * 1024 * 1024; // skip device/network logs over 5MB
+const MAX_LOG_LINES = 5000; // keep only the tail
 
 function dataUri(path: string): string | null {
   try {
@@ -218,7 +228,7 @@ export function screenshotDataUri(sessionDir: string, file: string, ffmpeg: stri
   return dataUri(path);
 }
 
-// Device log (logcat). Matches WasmReport/LogcatParser: device.log, or any file whose name contains
+// Device log (logcat). Matches LogcatParser: device.log, or any file whose name contains
 // "logcat" or "system_log". Skip empty/oversized; keep the last MAX_LOG_LINES lines.
 function readDeviceLog(sessionDir: string): string | null {
   try {
@@ -263,15 +273,14 @@ function readNetworkLog(sessionDir: string): NetworkEvent[] | null {
 // raw-line tests); this wrapper only owns the filesystem walk.
 //
 // Event payloads embed in full by default (no last-N window, no preview truncation — see
-// run-report-events.ts), bounded here by a per-file read cap and a loud per-session total budget;
-// anything past a small inline threshold is embedded gzipped (the viewer inflates lazily via
-// DecompressionStream). Formatters additionally receive the session outcome and may size-budget
+// run-report-events.ts), bounded by the shared per-stream read cap and per-session total budget
+// (MAX_EVENT_STREAM_BYTES / MAX_EVENT_STREAMS_TOTAL_CHARS, which the zip viewer applies to archive
+// entries); anything past a small inline threshold is embedded gzipped (the viewer inflates lazily
+// via DecompressionStream). Formatters additionally receive the session outcome and may size-budget
 // raw payloads of PASSED sessions (grep REPORT_SIZE_BUDGET); sessions that didn't pass always
 // embed full payloads, and `--full-report-payloads` opts passed sessions out of the budgets too
 // (see formatterContext). A network stream that captures large response bodies is legitimately
 // tens of MB on disk and gzips ~10-20x.
-const MAX_EVENTS_FILE_BYTES = 64 * 1024 * 1024;
-const MAX_EVENTS_TOTAL_CHARS = 256 * 1024 * 1024;
 // Below this, embed plain JSON: a small events payload stays greppable in the HTML and skips the
 // async inflate; only genuinely heavy sessions pay for compression.
 const EVENTS_INLINE_MAX_CHARS = 1024 * 1024;
@@ -299,15 +308,15 @@ function readEvents(
     for (const file of readdirSync(dir).filter((n) => n.endsWith(".ndjson")).sort()) {
       try {
         const path = join(dir, file);
-        if (statSync(path).size > MAX_EVENTS_FILE_BYTES) {
-          console.error(`events: skipping ${file} — exceeds the ${MAX_EVENTS_FILE_BYTES / 1024 / 1024}MB per-stream cap`);
+        if (statSync(path).size > MAX_EVENT_STREAM_BYTES) {
+          console.error(`events: skipping ${file} — exceeds the ${MAX_EVENT_STREAM_BYTES / 1024 / 1024}MB per-stream cap`);
           continue;
         }
         const stream = buildEventStream(file, readFileSync(path, "utf8").split("\n"), formatters, ctx);
         if (!stream) continue;
         totalChars += JSON.stringify(stream).length;
-        if (totalChars > MAX_EVENTS_TOTAL_CHARS) {
-          console.error(`events: skipping ${file} and later streams — session events exceed the ${MAX_EVENTS_TOTAL_CHARS / 1024 / 1024}MB total budget`);
+        if (totalChars > MAX_EVENT_STREAMS_TOTAL_CHARS) {
+          console.error(`events: skipping ${file} and later streams — session events exceed the ${MAX_EVENT_STREAMS_TOTAL_CHARS / 1024 / 1024}MB total budget`);
           break;
         }
         streams.push(stream);
@@ -317,6 +326,103 @@ function readEvents(
   } catch {
     return null;
   }
+}
+
+// Attachment refs embedded in event payloads (see collectStreamAttachmentRefs). The bytes live at
+// `<sessionDir>/<ref.path>` — by convention under `attachments/` — and are resolved here into the
+// SessionPayload.attachments map the lightbox reads: linked (`imageBaseUrl` mode, like screenshots),
+// or embedded as a `data:` URI when the file is a browser-renderable media type at or under the
+// inline cap. Anything else is deliberately left out of the map — the viewer renders the record
+// with a "in the session bundle, not embedded" note, which `sizeBytes` on the ref makes honest.
+// The cap, the per-session ceiling, the renderable-MIME rule and the path rule are the SHARED
+// attachment policy (run-report-events.ts) — this driver, the daemon payload builder and the zip
+// viewer all resolve bytes and must agree. Re-exported here because they were this module's
+// public surface first.
+export { ATTACHMENT_EMBED_MAX_TOTAL_BYTES, ATTACHMENT_INLINE_MAX_BYTES, isSafeSessionRelativePath };
+
+/**
+ * True when `filePath` still lands inside `sessionDir` after symlinks are resolved. The lexical
+ * path rule cannot express this — it never touches the filesystem — so it is the two together that
+ * make "the bytes belong to this session" true rather than merely well-spelled. An unresolvable
+ * path is refused, not assumed safe.
+ */
+export function resolvesInsideSession(sessionDir: string, filePath: string): boolean {
+  try {
+    const root = realpathSync(sessionDir);
+    const target = realpathSync(filePath);
+    return target === root || target.startsWith(root + sep);
+  } catch { return false; }
+}
+
+export function readAttachments(
+  sessionDir: string,
+  streams: EventStream[] | null,
+  sessionId: string,
+  imageBaseUrl: string | null,
+  inlineMaxBytes: number = ATTACHMENT_INLINE_MAX_BYTES,
+  // Shared by reference across the sessions of ONE report, because the limit it defends is
+  // per-FILE: a standalone report holds every session, so a budget re-seeded per session would let
+  // ten sessions embed ten times the ceiling and fail Share exactly as before.
+  embedBudget: { remaining: number } = { remaining: ATTACHMENT_EMBED_MAX_TOTAL_BYTES },
+): Record<string, string> | null {
+  const refs = collectStreamAttachmentRefs(streams);
+  if (!refs.length) return null;
+  // Prototype-free: the keys are producer-authored file names and the shared path rule accepts any
+  // single segment, so `attachments['__proto__'] = uri` on a plain object would go through
+  // Object.prototype's setter and set nothing. Serialized as JSON, where the null prototype is
+  // invisible. `mimeByPath` is a Map for the same reason.
+  const attachments: Record<string, string> = Object.create(null);
+  // Unsafe paths are dropped BEFORE the cap, matching run-payload.js and zip-report-core.js: a
+  // session carrying traversal-shaped refs would otherwise spend cap slots on paths no surface
+  // resolves, and the three would disagree about which of the first 200 files they carry.
+  // One pass, first ref wins: a Map keeps document order like the Set it replaces, and carries each
+  // path's MIME with it instead of re-scanning the whole ref list per path below.
+  const mimeByPath = new Map<string, string>();
+  for (const ref of refs) if (!mimeByPath.has(ref.path)) mimeByPath.set(ref.path, ref.mimeType);
+  const paths = [...mimeByPath.keys()].filter(isSafeSessionRelativePath);
+  if (paths.length > MAX_ATTACHMENTS_PER_SESSION) {
+    console.error(`attachments: embedding only the first ${MAX_ATTACHMENTS_PER_SESSION} of ${paths.length} referenced attachment files`);
+  }
+  // Aggregate budget for the embedded path, charged in ENCODED bytes: the per-file cap and the
+  // count ceiling together still permit ~137 MiB of base64 in a file that has to stay openable and
+  // that Share posts back to a route refusing HTML over 64 MiB. Refs past it keep their in-bundle
+  // note. Link mode is unaffected — it embeds nothing.
+  let skippedForBudget = 0;
+  for (const path of paths.slice(0, MAX_ATTACHMENTS_PER_SESSION)) {
+    const filePath = join(sessionDir, path);
+    try {
+      if (!existsSync(filePath)) continue;
+      // `isSafeSessionRelativePath` is LEXICAL, so it cannot see that `attachments/take.wav` is a
+      // symlink to somewhere else on the host. statSync/readFileSync follow it and would embed
+      // those bytes in a standalone report under the ref's own declared MIME. Containment is
+      // therefore re-checked on the resolved target, the same boundary the CI enumerator applies.
+      if (!resolvesInsideSession(sessionDir, filePath)) continue;
+      if (imageBaseUrl != null) {
+        // Linked mode, same switch as screenshots: reference the daemon/CI static tree.
+        attachments[path] = localShotUrl(imageBaseUrl, sessionId, path);
+        continue;
+      }
+      const mime = mimeByPath.get(path) || "";
+      if (!ATTACHMENT_MIME.test(mime)) continue;
+      const size = statSync(filePath).size;
+      if (size > inlineMaxBytes) continue;
+      // TEST the budget before reading, but CHARGE it after. base64 is a fixed expansion, so the
+      // encoded length is exact from the file size — a file that cannot fit is skipped without
+      // spending a read and an encode on bytes that get thrown away. The subtraction still waits
+      // for the read to succeed: `statSync` passes on a directory or an unreadable file, and
+      // charging one of those would spend shared capacity on an attachment that contributes no
+      // bytes, pushing readable attachments in LATER sessions under the note for no reason.
+      const prefix = `data:${mime.toLowerCase()};base64,`;
+      if (prefix.length + 4 * Math.ceil(size / 3) > embedBudget.remaining) { skippedForBudget++; continue; }
+      const uri = prefix + readFileSync(filePath).toString("base64");
+      embedBudget.remaining -= uri.length;
+      attachments[path] = uri;
+    } catch { /* unreadable file → present-in-bundle note */ }
+  }
+  if (skippedForBudget) {
+    console.error(`attachments: ${skippedForBudget} attachment(s) left as bundle-only notes to keep the embedded total under ${ATTACHMENT_EMBED_MAX_TOTAL_BYTES} bytes`);
+  }
+  return Object.keys(attachments).length ? attachments : null;
 }
 
 // Device/network logs ride the same gzip+base64 transport as events (the viewer inflates lazily
@@ -440,15 +546,14 @@ function loadFormatters(names: string[]): EventStreamFormatter[] {
   return formatters;
 }
 
-// Video frames as a CSS sprite scrubber (parity with the old report's video tab, but pure-DOM — no
-// ffmpeg). Reads capture_metadata.json (prefers the VIDEO_FRAMES artifact), the sprite sheet image,
-// and video_sprites.txt layout, then trims the playable logical-frame range to the test window
-// [first log, last log] the same way WasmReport does. The viewer reads the sprite's natural width to
-// derive per-frame width and plays frames via background-position.
+// Video frames as a CSS sprite scrubber, pure-DOM — no ffmpeg. Reads capture_metadata.json
+// (prefers the VIDEO_FRAMES artifact), the sprite sheet image, and video_sprites.txt layout, then
+// trims the playable logical-frame range to the test window [first log, last log]. The viewer reads
+// the sprite's natural width to derive per-frame width and plays frames via background-position.
 //
 // Metadata parsing and the acceptance rules (degenerate sprite, restamped-and-dominated sprite,
-// multi-sheet) live in run-report-sprites.ts — the shared contract this driver and the legacy
-// WasmReport both apply, locked cross-language by sprite-metadata-parity-fixtures.json. A rejected
+// multi-sheet) live in run-report-sprites.ts — the contract this driver shares with the Kotlin
+// SpriteSheetMetadata, locked cross-language by sprite-metadata-parity-fixtures.json. A rejected
 // sprite hides the Video tab so the timeline falls back to per-step screenshots.
 /**
  * @param spriteValue what to put in each sheet's `uri` — the base64 data URI by default, or the
@@ -503,7 +608,7 @@ export function readVideo(
     const { fps, frames, columns, rows, height: frameHeight, frameWidth } = meta;
     const frameMap = resolvedFrameMap(meta);
 
-    // Trim playable range to the test window, mirroring WasmReport.extractFromSpriteSheet.
+    // Trim playable range to the test window.
     let startFrame = 0;
     let endFrame = frames - 1;
     const startMs = framesArt.startTimestampMs ?? null;
@@ -541,6 +646,10 @@ function main(): void {
   // Each session's lifted per-step hierarchies, kept for the selector-engine embed gate below.
   const liftedHierarchies: Array<Record<string, unknown> | null> = [];
   const imageBaseUrl = input.imageBaseUrl ?? null;
+  // ONE budget for the whole output file. This report holds every session in `input.sessions`, and
+  // the ceiling exists to keep that FILE shareable — so it is spent across the sessions, not
+  // granted to each of them.
+  const embedBudget = { remaining: ATTACHMENT_EMBED_MAX_TOTAL_BYTES };
   const sessions: SessionInput[] = (input.sessions || []).map((s) => {
     const logs = s.logs || [];
     const trace = core.extractTrace(logs);
@@ -567,7 +676,9 @@ function main(): void {
       if (uri) shots[f] = uri;
     }
     const ctx = formatterContext(s.meta?.status, input.fullEventPayloads === true);
-    const { events, eventsGz } = packEvents(readEvents(s.sessionDir, formatters, ctx));
+    const streams = readEvents(s.sessionDir, formatters, ctx);
+    const { events, eventsGz } = packEvents(streams);
+    const attachments = readAttachments(s.sessionDir, streams, sessionId, imageBaseUrl, input.attachmentInlineMaxBytes ?? ATTACHMENT_INLINE_MAX_BYTES, embedBudget);
     const { deviceLog, deviceLogGz } = packDeviceLog(readDeviceLog(s.sessionDir));
     const { network, networkGz } = packNetwork(readNetworkLog(s.sessionDir));
     const { llmMessages, llmMessagesGz } = packLlmMessages(core.extractLlmTranscripts(llmLogs));
@@ -590,6 +701,7 @@ function main(): void {
       networkGz,
       events,
       eventsGz,
+      attachments,
       llmMessages,
       llmMessagesGz,
       hierarchies,

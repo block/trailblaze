@@ -45,7 +45,7 @@ object ToolCallerEdgeScanner {
     val unscannable: Map<String, String> = emptyMap(),
   ) {
     /**
-     * One warning naming every tool that went unscanned WITH its failure reason, or none.
+     * One diagnostic naming every tool that went unscanned WITH its failure reason, or none.
      *
      * Named in FULL rather than counted: the whole point of the list is that a reader can check
      * whether the tool they care about is on it, and "3 tools were skipped" answers that for
@@ -53,18 +53,28 @@ object ToolCallerEdgeScanner {
      * because that is only the EXPECTED cause — a permissions error, a full disk, or a missing
      * esbuild produces the same empty edge set, and silently filing those under "expected" would
      * turn a broken scan into a clean-looking report.
+     *
+     * ONE diagnostic for all of them, rather than one per tool, because the consequence is a
+     * property of the report and not of any single tool: `impactedViaCallers` may under-report. That
+     * is why its subject is the affected FIELD. Splitting it per tool would also repeat the shared
+     * explanation once per entry, and multiply the entry count in consumers that cap how many
+     * warnings they display.
      */
-    fun unscannableWarnings(): List<String> = if (unscannable.isEmpty()) {
+    fun unscannableDiagnostics(): List<UsagesDiagnostic> = if (unscannable.isEmpty()) {
       emptyList()
     } else {
       listOf(
-        "not scanned for tool-to-tool dispatch because their bundle could not be produced " +
-          "(expected for `runtime: subprocess` tools, which the in-process bundler cannot build; " +
-          "any other reason below is a real failure worth investigating): " +
-          unscannable.entries.joinToString(", ") { (name, reason) -> "$name ($reason)" } +
-          ". They can still appear as a CALLEE; what is missing is any edge pointing OUT of them, " +
-          "so a tool reaching a changed tool only through one of these is absent from " +
-          "impactedViaCallers.",
+        UsagesDiagnostic(
+          kind = UsagesDiagnostic.CALLER_SCAN_UNAVAILABLE,
+          subject = "impactedViaCallers",
+          message = "not scanned for tool-to-tool dispatch because their bundle could not be produced " +
+            "(expected for `runtime: subprocess` tools, which the in-process bundler cannot build; " +
+            "any other reason below is a real failure worth investigating): " +
+            unscannable.entries.joinToString(", ") { (name, reason) -> "$name ($reason)" } +
+            ". They can still appear as a CALLEE; what is missing is any edge pointing OUT of them, " +
+            "so a tool reaching a changed tool only through one of these is absent from " +
+            "impactedViaCallers.",
+        ),
       )
     }
   }

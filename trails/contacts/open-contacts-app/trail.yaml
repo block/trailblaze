@@ -2,8 +2,10 @@ config:
   id: contacts/open-contacts-app
   description: Open the Contacts app and verify the main screen is visible.
   devices:
-    android-phone: ANDROID_ONDEVICE_INSTRUMENTATION
-    android: ANDROID_ONDEVICE_INSTRUMENTATION
+    android-phone:
+      driver: ANDROID_ONDEVICE_INSTRUMENTATION
+    android:
+      driver: ANDROID_ONDEVICE_INSTRUMENTATION
 
 trail:
   - step: "Launch the Google Contacts app (com.google.android.contacts) with a clean state."

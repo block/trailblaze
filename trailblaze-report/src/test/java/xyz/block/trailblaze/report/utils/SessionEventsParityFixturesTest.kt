@@ -8,15 +8,17 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import org.junit.Test
+import xyz.block.trailblaze.events.AttachmentRef
 import xyz.block.trailblaze.events.SessionEvents
 
 /**
  * Cross-language behavioral contract for the session-events artifact.
  *
  * `src/main/resources/xyz/block/trailblaze/report/session-events-parity-fixtures.json` is the
- * single source of truth for how event file names map to stream names and how NDJSON lines decode,
- * consumed by BOTH this test (driving the real [SessionEvents.parseFileName] +
- * [SessionEventsReader]) and the TS mirror's `run-report-events.test.ts` (driving the real
+ * single source of truth for how event file names map to stream names, how NDJSON lines decode,
+ * and which embedded objects a payload sweep reports as attachment refs, consumed by BOTH this
+ * test (driving the real [SessionEvents.parseFileName] + [SessionEventsReader] +
+ * [AttachmentRef.findAll]) and the TS mirror's `run-report-events.test.ts` (driving the real
  * `run-report-events.ts`). A semantic drift in either implementation fails that side's suite.
  *
  * To change either rule: update both implementations AND the fixture in the same change. Never
@@ -32,8 +34,19 @@ class SessionEventsParityFixturesTest {
   @Serializable
   private data class LineCase(val line: String, val t: Long? = null, val payload: JsonElement? = null)
 
+  /** `refs` is the exact expected sweep result in document order; `label == null` means absent. */
   @Serializable
-  private data class ParityFixtures(val fileNames: List<FileNameCase>, val lines: List<LineCase>)
+  private data class AttachmentCase(val value: JsonElement, val refs: List<RefCase>)
+
+  @Serializable
+  private data class RefCase(val path: String, val mimeType: String, val sizeBytes: Long, val label: String? = null)
+
+  @Serializable
+  private data class ParityFixtures(
+    val fileNames: List<FileNameCase>,
+    val lines: List<LineCase>,
+    val attachments: List<AttachmentCase>,
+  )
 
   private val fixtures: ParityFixtures by lazy {
     // Repo-root-relative so the walk-up is robust to the anchor sitting at a different depth
@@ -62,6 +75,18 @@ class SessionEventsParityFixturesTest {
     assertEquals(expected.map { it.payload }, stream.events.map { it.data }, "decoded payloads (skipped lines excluded)")
     // The JVM reader represents "no ordering timestamp" as 0.
     assertEquals(expected.map { it.t ?: 0L }, stream.events.map { it.timeMs }, "ordering timestamps")
+  }
+
+  @Test
+  fun `attachment detection agrees with the shared parity fixtures`() {
+    check(fixtures.attachments.isNotEmpty())
+    fixtures.attachments.forEach { case ->
+      assertEquals(
+        case.refs.map { AttachmentRef(path = it.path, mimeType = it.mimeType, sizeBytes = it.sizeBytes, label = it.label) },
+        AttachmentRef.findAll(case.value),
+        "value=${case.value}",
+      )
+    }
   }
 
   /**

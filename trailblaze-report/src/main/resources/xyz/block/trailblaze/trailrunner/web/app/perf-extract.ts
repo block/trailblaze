@@ -20,6 +20,27 @@
 //    ObjectiveStartLog/ObjectiveCompleteLog pairs instead; spans are attributed to the step
 //    whose window contains them.
 //
+// Trace spans (kind "trace") are the exception to all of the above, and the only spans with REAL
+// parentage: they come from the session's `trace.json` — the Chrome Trace "X" events
+// TrailblazeTracer recorded in-process from lexically nested `trace { }` blocks. They nest in TWO
+// LAYERS, so a trace can never rearrange the tool hierarchy:
+//  - Log spans nest only among log spans (the epsilon rule above), exactly as if no trace existed.
+//  - Trace spans nest only among trace spans, by the parentage the tracer DECLARED: an event's
+//    `psid` names the `trace { }` frame it opened inside, so no inference is involved and a span
+//    with no `psid` really is a root. Events with no `sid` at all — an older trace, or one pushed
+//    straight into the recorder — fall back to inferring it, and only where the nesting is
+//    provably lexical: same trace, same (pid, tid), EXACT containment (no epsilon — an enclosing block
+//    contains its inner block by construction, off one monotonic clock), and neither span marked
+//    `args.async` (async producers — the HTTP emitters — stamp their thread at observation time,
+//    so same-thread containment among them is coincidence, not calls).
+//  - Each resulting trace ROOT then attaches UNDER the innermost log span containing its midpoint.
+//    Midpoint, not containment: a dispatch-layer wrapper trace (e.g. Playwright's
+//    executePlaywrightTool) opens before the tool log's start stamp and closes after it, so it
+//    CONTAINS the tool it belongs inside — the clamp sweep trims its overhang to the parent. A
+//    trace root over no log span becomes a top-level root.
+// They also record what the log records cannot: HTTP calls, Maestro driver ops on the HOST clock,
+// and selector matching — the inside of a tool, where a log-only profile can only report a total.
+//
 // Self-time accounting: real sessions have partial sibling overlaps (a child's tail extending a
 // few ms past its parent, two siblings overlapping), so a naive sum of (dur - Σ child dur)
 // over-counts union coverage by 15-30%. The clamp sweep below assigns every span an EFFECTIVE
@@ -30,7 +51,14 @@
 
 import { logClass, stepText, summarizeToolArgs, truncate } from './run-report-extract';
 
-/** Containment tolerance, ms: a wrapper's child can overhang either edge by bookkeeping ms. */
+/**
+ * Containment tolerance, ms, for log-vs-log nesting: a wrapper's child can overhang either edge
+ * by bookkeeping ms, because both edges are separately-stamped clock reads. Trace-vs-trace
+ * nesting uses NO tolerance — TrailblazeTracer's Complete events come from lexically nested
+ * `trace { }` blocks measured off one monotonic clock, so an inner span is contained in its
+ * enclosing span by construction, and a tolerance would only let genuinely-overlapping siblings
+ * masquerade as parent and child.
+ */
 const NEST_EPSILON_MS = 12;
 /** Root-union gaps shorter than this are bookkeeping noise, not actionable idle time. */
 const GAP_MIN_MS = 250;
@@ -102,6 +130,27 @@ function driverActionName(log: TrailblazeLogRecord): string {
 interface MutableSpan extends PerfSpan {
   /** File-order index for deterministic tie-breaks in the nest sort. */
   order: number;
+  /**
+   * Trace spans: the producer declared this event an async observation (`args.async`), so its
+   * (pid, tid) is where it was RECORDED, not where the work ran — so it is neither parented nor
+   * parented BY INFERENCE. A declared `psid` still nests it: the producer read its parent from the
+   * coroutine context, which is knowledge, not a guess about threads.
+   * Extraction-internal, stripped from the emitted contract.
+   */
+  async: boolean;
+  /**
+   * Trace spans: the tracer's own span id and its declared parent's, when the producer recorded
+   * them. Present means parentage is DECLARED, not inferred — including "declared root" when sid
+   * is set and psid is not. Extraction-internal; the resolved answer ships as parent/kids.
+   */
+  sid: string | null;
+  psid: string | null;
+  /**
+   * Trace spans: which trace the producer recorded this span into. A session dir can hold spans
+   * merged from more than one process, and a span never nests into a span from another trace.
+   * Extraction-internal, stripped from the emitted contract.
+   */
+  trid: string | null;
 }
 
 /**
@@ -200,33 +249,166 @@ function buildRawSpans(logs: TrailblazeLogRecord[], t0: number, llmRequestTraceI
       cost,
       tokens,
       shot: typeof log.screenshotFile === 'string' && log.screenshotFile ? log.screenshotFile : null,
+      pid: null,
+      tid: null,
+      cat: null,
+      spanKind: null,
       order,
+      async: false,
+      sid: null,
+      psid: null,
+      trid: null,
     });
   });
   return spans;
 }
 
 /**
- * Nest tree spans by interval containment with an epsilon, then run the clamp sweep that assigns
- * effective intervals + exact self-time segments. Mutates the spans in place; returns root ids.
+ * Whether this event was stamped by a device's own wall clock rather than the host's.
  *
- * Nesting (validated against real sessions): process sorted by (s asc, e desc, file order asc)
- * with a stack, popping while the current span is not contained in the stack top (allowing
- * NEST_EPSILON_MS of overhang on both edges). A partially-overlapping span therefore pops its
- * would-be parent and becomes a sibling further up (or a root).
+ * That clock drifts from the host's by whole seconds, so these events get the same treatment
+ * MaestroDriverLog does: they render on the Device lane, they are never nested into the host tree,
+ * and they are excluded from the session window — folding their skew into t0/t1 would shift or
+ * stretch the entire profile by the drift. `SessionTraceFile.merge` stamps the flag at the endpoint
+ * that received the upload, because only that endpoint knows where the batch came from.
+ */
+function isDeviceClockEvent(event: TrailblazeTraceEvent): boolean {
+  return event?.clock === 'device';
+}
+
+/**
+ * The single accept predicate for trace events — used by BOTH the span builder and the session
+ * window bounds, so an event that produces no span can never move t0/t1 either. Accepts only "X"
+ * (Complete) events with a finite timestamp and a finite non-negative duration; returns their
+ * microsecond values, or null.
+ */
+function acceptTraceEvent(event: TrailblazeTraceEvent): { tsUs: number; durUs: number } | null {
+  if (!event || typeof event !== 'object') return null;
+  if (event.ph !== undefined && event.ph !== 'X') return null;
+  const tsUs = event.ts;
+  const durUs = event.dur;
+  if (typeof tsUs !== 'number' || !Number.isFinite(tsUs)) return null;
+  if (typeof durUs !== 'number' || !Number.isFinite(durUs) || durUs < 0) return null;
+  return { tsUs, durUs };
+}
+
+/**
+ * Build the spans for one session's `trace.json` — the TrailblazeTracer Complete events. Exported
+ * for tests.
+ *
+ * `ts`/`dur` are microseconds (epoch / elapsed), so both are divided down to the ms offsets the
+ * rest of the contract uses. Only events passing [acceptTraceEvent] become spans; anything else
+ * (metadata, instant, async pairs, missing duration) is skipped. The tracer folds a thrown
+ * exception into `args.error`, which becomes the span's failure.
+ *
+ * [order0] continues the file-order counter the log spans used, so the nest sort's final tie-break
+ * stays a total order across both sources.
+ */
+function buildTraceSpans(events: TrailblazeTraceEvent[], t0: number, order0: number): MutableSpan[] {
+  const spans: MutableSpan[] = [];
+  events.forEach((event, i) => {
+    const accepted = acceptTraceEvent(event);
+    if (!accepted) return;
+    const deviceClock = isDeviceClockEvent(event);
+    const s = accepted.tsUs / 1000 - t0;
+    const dur = accepted.durUs / 1000;
+    const cat = typeof event.cat === 'string' && event.cat ? event.cat : null;
+    const bare = typeof event.name === 'string' && event.name ? event.name : 'trace';
+    // Category-qualified, matching the `maestro.tap` / `driver.Tap` convention the log-derived
+    // names use — bare tracer names ("TapPoint", "contentDescriptor") collide across categories,
+    // and the bottom-up table aggregates by (kind, name).
+    const name = cat && cat !== 'app' ? `${cat}.${bare}` : bare;
+    const args = event.args && typeof event.args === 'object' ? event.args : {};
+    const err = typeof args.error === 'string' && args.error ? args.error : null;
+    const detail = Object.keys(args)
+      .filter((key) => key !== 'error' && key !== 'async')
+      .map((key) => `${key}=${args[key]}`)
+      .join(' ');
+    spans.push({
+      id: 0,
+      name,
+      // A device-clock event is a driver span: same lane, same exclusion from the host tree, same
+      // whole-duration self accounting as the MaestroDriverLog spans it sits beside.
+      kind: deviceClock ? 'driver' : 'trace',
+      s,
+      e: s + dur,
+      dur,
+      self: deviceClock ? dur : 0,
+      selfSegs: [],
+      effS: s,
+      effE: s + dur,
+      depth: 0,
+      parent: null,
+      kids: [],
+      step: null,
+      ok: err == null,
+      err,
+      detail: truncate(detail, 80),
+      args: compactArgs(args),
+      budget: null,
+      cost: null,
+      tokens: null,
+      shot: null,
+      pid: typeof event.pid === 'number' ? event.pid : null,
+      tid: typeof event.tid === 'number' ? event.tid : null,
+      cat,
+      spanKind: typeof event.kind === 'string' && event.kind ? event.kind : null,
+      order: order0 + i,
+      async: args.async === 'true',
+      sid: typeof event.sid === 'string' && event.sid ? event.sid : null,
+      psid: typeof event.psid === 'string' && event.psid ? event.psid : null,
+      trid: typeof event.trid === 'string' && event.trid ? event.trid : null,
+    });
+  });
+  return spans;
+}
+
+/** Log-vs-log containment: NEST_EPSILON_MS of overhang allowed on both edges. */
+function logContains(outer: MutableSpan, inner: MutableSpan): boolean {
+  return inner.s >= outer.s - NEST_EPSILON_MS && inner.e <= outer.e + NEST_EPSILON_MS;
+}
+
+/**
+ * Whether trace span [outer] may PARENT trace span [inner]: the nesting must be provably lexical.
+ * Exact containment (no epsilon — an enclosing `trace { }` block contains its inner block by
+ * construction), same process AND thread (a tid is only unique within its pid, and concurrent
+ * work overlapping in time is not nested work), and neither is an async observation (its (pid,
+ * tid) is where the event was recorded, not where the work ran, so same-thread containment among
+ * async events is coincidence).
+ */
+function traceCanParent(outer: MutableSpan, inner: MutableSpan): boolean {
+  if (inner.s < outer.s || inner.e > outer.e) return false;
+  if (outer.trid !== inner.trid) return false;
+  if (outer.pid !== inner.pid || outer.tid !== inner.tid) return false;
+  if (outer.async || inner.async) return false;
+  return true;
+}
+
+/**
+ * Nest tree spans by containment, then run the clamp sweep that assigns effective intervals +
+ * exact self-time segments. Mutates the spans in place; returns root ids.
+ *
+ * Two-layer nesting (see the header):
+ *
+ * 1. LOG spans nest among log spans (validated against real sessions): process sorted by
+ *    (s asc, e desc, file order asc) with a stack, popping while the current span is not contained
+ *    in the stack top (NEST_EPSILON_MS of overhang allowed on both edges). A partially-overlapping
+ *    span therefore pops its would-be parent and becomes a sibling further up (or a root). A trace
+ *    can never change this layer — the tool hierarchy is identical with or without a trace.json.
+ * 2. TRACE spans nest among trace spans. A span the tracer gave an id (`sid`) uses its DECLARED
+ *    parent (`psid`) — no inference, and no parent declared means it really is a root. Only spans
+ *    with no id fall back to [traceCanParent] inference over the same stack walk, where the parent
+ *    is the nearest enclosing stack entry the predicate accepts (an enclosing span from another
+ *    thread still occludes deeper candidates that could not have called the current span either).
+ * 3. Each trace ROOT attaches under the innermost log span containing its MIDPOINT. Midpoint, not
+ *    containment: a dispatch-layer wrapper trace opens before the tool log's start stamp and
+ *    closes after it, so it CONTAINS the tool it belongs inside — a containment rule would either
+ *    invert the hierarchy (trace parenting the tool) or orphan it into a root that the root
+ *    de-overlap would starve. As a child, the clamp sweep trims its overhang to the parent.
  */
 function nestAndAccount(spans: MutableSpan[]): number[] {
-  const tree = spans.filter((sp) => sp.kind !== 'driver');
-  tree.sort((a, b) => a.s - b.s || b.e - a.e || a.order - b.order);
-  const stack: MutableSpan[] = [];
   const roots: MutableSpan[] = [];
-  for (const sp of tree) {
-    while (stack.length) {
-      const top = stack[stack.length - 1];
-      if (sp.s >= top.s - NEST_EPSILON_MS && sp.e <= top.e + NEST_EPSILON_MS) break;
-      stack.pop();
-    }
-    const parent = stack.length ? stack[stack.length - 1] : null;
+  const attach = (sp: MutableSpan, parent: MutableSpan | null): void => {
     if (parent) {
       sp.parent = parent.id;
       sp.depth = parent.depth + 1;
@@ -235,10 +417,118 @@ function nestAndAccount(spans: MutableSpan[]): number[] {
       sp.depth = 0;
       roots.push(sp);
     }
-    stack.push(sp);
+  };
+
+  // Layer 1: the log tree.
+  const logTree = spans.filter((sp) => sp.kind !== 'driver' && sp.kind !== 'trace');
+  logTree.sort((a, b) => a.s - b.s || b.e - a.e || a.order - b.order);
+  const logStack: MutableSpan[] = [];
+  for (const sp of logTree) {
+    while (logStack.length && !logContains(logStack[logStack.length - 1], sp)) logStack.pop();
+    attach(sp, logStack.length ? logStack[logStack.length - 1] : null);
+    logStack.push(sp);
   }
 
+  // Layer 2: the trace forest. Resolve every parent first, then derive depth — a declared parent
+  // can sit anywhere in the sort order, so depth cannot be assigned during the walk.
+  const traceSpans = spans.filter((sp) => sp.kind === 'trace');
+  traceSpans.sort((a, b) => a.s - b.s || b.e - a.e || a.order - b.order);
+  // Keyed by trace as well as span: a span id is only unique within its trace, so a bare `sid`
+  // map would let a declared parent resolve to a same-id span from a different recording.
+  const spanKey = (trid: string | null, sid: string) => `${trid ?? ''}\u0000${sid}`;
+  const bySid = new Map<string, MutableSpan>();
+  for (const sp of traceSpans) if (sp.sid != null) bySid.set(spanKey(sp.trid, sp.sid), sp);
+  const traceParent = new Map<number, MutableSpan>();
+  // One containment stack PER TRACE. A single shared stack is popped by whichever trace's span
+  // comes next in time, so a span from a partially-overlapping second trace would evict the
+  // still-open ancestors of the first — and the id-less events that depend on inference are exactly
+  // the ones that then come out as roots.
+  const traceStacks = new Map<string, MutableSpan[]>();
+  for (const sp of traceSpans) {
+    const traceOf = sp.trid ?? '';
+    let traceStack = traceStacks.get(traceOf);
+    if (traceStack === undefined) traceStacks.set(traceOf, (traceStack = []));
+    while (traceStack.length) {
+      const top = traceStack[traceStack.length - 1];
+      if (sp.s >= top.s && sp.e <= top.e) break;
+      traceStack.pop();
+    }
+    // The stack is maintained for every span (an id-bearing span is still a valid enclosing
+    // candidate for an id-less one), but only consulted when this span declares nothing.
+    let parent: MutableSpan | null = null;
+    if (sp.sid != null) {
+      parent = (sp.psid != null ? bySid.get(spanKey(sp.trid, sp.psid)) : undefined) ?? null;
+    } else {
+      for (let i = traceStack.length - 1; i >= 0; i--) {
+        if (traceCanParent(traceStack[i], sp)) { parent = traceStack[i]; break; }
+      }
+    }
+    if (parent && parent !== sp) traceParent.set(sp.id, parent);
+    traceStack.push(sp);
+  }
+
+  // Wire the edges, dropping any that would close a cycle — a declared parent is producer data,
+  // and a cycle would make the depth walk and the clamp sweep recurse forever.
+  const traceRoots: MutableSpan[] = [];
+  const ancestorOf = (candidate: MutableSpan, sp: MutableSpan): boolean => {
+    const seen = new Set<number>();
+    let cursor: MutableSpan | undefined = candidate;
+    while (cursor && !seen.has(cursor.id)) {
+      if (cursor === sp) return true;
+      seen.add(cursor.id);
+      cursor = traceParent.get(cursor.id);
+    }
+    return false;
+  };
+  for (const sp of traceSpans) {
+    const parent = traceParent.get(sp.id);
+    if (parent && !ancestorOf(parent, sp)) {
+      sp.parent = parent.id;
+      parent.kids.push(sp.id);
+    } else {
+      traceParent.delete(sp.id);
+      traceRoots.push(sp);
+    }
+  }
+  // Depth within the forest, relative to its own root; rebased on attachment in layer 3. Walks
+  // each chain once and memoizes, so a long chain costs O(chain) total rather than per span.
+  const depthMemo = new Map<number, number>();
+  const traceDepth = (sp: MutableSpan): number => {
+    const cached = depthMemo.get(sp.id);
+    if (cached !== undefined) return cached;
+    const chain: MutableSpan[] = [];
+    let cursor: MutableSpan | undefined = sp;
+    while (cursor && !depthMemo.has(cursor.id)) {
+      chain.push(cursor);
+      cursor = traceParent.get(cursor.id);
+    }
+    let depth = cursor ? depthMemo.get(cursor.id)! : -1;
+    for (let i = chain.length - 1; i >= 0; i--) depthMemo.set(chain[i].id, ++depth);
+    return depthMemo.get(sp.id)!;
+  };
+  for (const sp of traceSpans) sp.depth = traceDepth(sp);
+
+  // Layer 3: attach each trace root under the innermost log span containing its midpoint.
   const byId = new Map(spans.map((sp) => [sp.id, sp]));
+  const rebase = (sp: MutableSpan, offset: number): void => {
+    sp.depth += offset;
+    for (const id of sp.kids) rebase(byId.get(id)!, offset);
+  };
+  for (const root of traceRoots) {
+    const mid = (root.s + root.e) / 2;
+    let host: MutableSpan | null = null;
+    for (const log of logTree) {
+      if (log.s <= mid && mid <= log.e && (!host || log.depth > host.depth)) host = log;
+    }
+    if (host) {
+      root.parent = host.id;
+      host.kids.push(root.id);
+      rebase(root, host.depth + 1); // forest depths are relative (root = 0); shift the subtree
+    } else {
+      roots.push(root);
+    }
+  }
+
   // Effective intervals: children clamped into the parent's effective interval and de-overlapped
   // against earlier siblings (deterministic: earlier-starting sibling keeps the contested time).
   // Self = the parts of the effective interval no child's effective interval covers.
@@ -381,8 +671,13 @@ function bottomUpAggregate(spans: PerfSpan[], rangeS: number, rangeE: number): P
  * that runs 77s). That stretch is real execution time and must be on the timeline, not clipped.
  * MaestroDriverLog device-clock timestamps must not stretch the window by their skew, so they're
  * excluded from both bounds.
+ *
+ * [traceEvents] is the session's `trace.json` (empty for sessions that recorded none). Tracer
+ * events recorded on the host share the logs' wall clock, so they bound the window like any other
+ * host-clock span. Ones a device recorded and uploaded carry `clock: "device"` and are excluded
+ * from both bounds, exactly as MaestroDriverLog is — see [isDeviceClockEvent].
  */
-function extractPerfSession(rawLogs: TrailblazeLogRecord[]): PerfSessionData | null {
+function extractPerfSession(rawLogs: TrailblazeLogRecord[], traceEvents: TrailblazeTraceEvent[] = []): PerfSessionData | null {
   // The caller's order is not trustworthy (the report input carries filename-sorted raw logs,
   // not the timestamp-sorted typed list) and step pairing is order-sensitive — sort by
   // timestamp up front (stable, so same-timestamp records keep their given order).
@@ -407,6 +702,17 @@ function extractPerfSession(rawLogs: TrailblazeLogRecord[]): PerfSessionData | n
       else if (cls === 'TrailblazeToolLog' || cls === 'TrailblazeLlmRequestLog' || cls === 'MaestroCommandLog') hostBounds.push(ts + dur);
     }
   }
+  // Same accept predicate as buildTraceSpans, so an event that produces no span cannot move the
+  // window either.
+  for (const event of traceEvents) {
+    // Device-clock events are excluded for the same reason MaestroDriverLog is, above: their skew
+    // is not elapsed time, and letting it bound the window shifts or stretches the whole profile.
+    if (isDeviceClockEvent(event)) continue;
+    const accepted = acceptTraceEvent(event);
+    if (!accepted) continue;
+    hostBounds.push(accepted.tsUs / 1000);
+    hostBounds.push((accepted.tsUs + accepted.durUs) / 1000);
+  }
   if (!hostBounds.length) return null;
   const t0 = Math.min(...hostBounds);
   const t1 = Math.max(...hostBounds) - t0;
@@ -416,6 +722,7 @@ function extractPerfSession(rawLogs: TrailblazeLogRecord[]): PerfSessionData | n
     logs.filter((l) => logClass(l) === 'TrailblazeLlmRequestLog' && l.traceId).map((l) => String(l.traceId)),
   );
   const spans = buildRawSpans(logs, t0, llmRequestTraceIds);
+  spans.push(...buildTraceSpans(traceEvents, t0, logs.length));
   // Deterministic id space: tree spans in nest order first (s asc, e desc, file order), then
   // driver spans by start — so ids are stable for equal inputs and roots reference tree ids.
   spans.sort((a, b) => {
@@ -445,7 +752,7 @@ function extractPerfSession(rawLogs: TrailblazeLogRecord[]): PerfSessionData | n
   const llmCosts = llmSpans.map((sp) => sp.cost).filter((c): c is number => c != null);
   const selfHealed = logs.some((log) => logClass(log) === 'SelfHealInvokedLog');
 
-  const clean = spans.map(({ order, ...rest }) => rest);
+  const clean = spans.map(({ order, async, sid, psid, trid, ...rest }) => rest);
   return {
     t0,
     t1,
@@ -470,6 +777,7 @@ export {
   NEST_EPSILON_MS,
   bottomUpAggregate,
   buildRawSpans,
+  buildTraceSpans,
   extractPerfSession,
   parsePerfTimestamp,
   timeoutBudgetMs,

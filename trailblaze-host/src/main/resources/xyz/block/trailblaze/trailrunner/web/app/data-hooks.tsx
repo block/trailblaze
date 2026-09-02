@@ -196,10 +196,16 @@ function useSessions() {
     if (!Array.isArray(rows) || rows.length === 0) {
       return { data: [], mock: false };
     }
+    // Spread FIRST, then rename and default. Everything below is one or the other, so nothing is
+    // lost by carrying the row over whole - and carrying it over whole is the point: this used to be
+    // a hand-written list of every field, so a field added to SessionSummary reached the browser and
+    // silently stopped here. `deviceInstanceId` did exactly that, and the retry that needed it went
+    // to whatever device was free instead of the one the run had used, with nothing to show for it.
     const sessions = rows.map((s) => ({
-      id: s.id,
+      ...s,
       title: s.title || s.id,
       target: s.target || '',
+      // A classifier list ("android-phone"), not a device: it falls back to the platform on purpose.
       device: s.device || s.platform || '',
       platform: s.platform || null,
       appId: s.appId || null,

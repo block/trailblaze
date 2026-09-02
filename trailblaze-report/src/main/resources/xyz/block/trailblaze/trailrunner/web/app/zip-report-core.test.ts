@@ -157,21 +157,63 @@ describe("session file selection (LogsRepo read slice)", () => {
     expect(Zip.imageMimeType("shot.jpg")).toBe("image/jpeg");
   });
 
-  test("groups entries by top-level session dir, ignoring nested tool artifacts", () => {
+  test("groups entries by top-level session dir, retaining nested files under their subpath", () => {
     const groups = Zip.groupEntriesBySession([
       { name: "sessionA/001_Log.json" },
       { name: "sessionA/shot.webp" },
+      { name: "sessionA/events/speech.ndjson" },
+      { name: "sessionA/attachments/utterance_1.wav" },
       { name: "sessionA/in-process-scripted-tools/tool.js" },
       { name: "sessionB/001_Log.json" },
     ]);
     expect(groups.map((g: { sessionId: string }) => g.sessionId)).toEqual(["sessionA", "sessionB"]);
-    expect(Object.keys(groups[0].byFileName).sort()).toEqual(["001_Log.json", "shot.webp"]);
+    // Nested files stay addressable by their session-relative subpath (that's how an event's
+    // attachment ref resolves); the flat inventories elsewhere ignore them.
+    expect(Object.keys(groups[0].byFileName).sort()).toEqual([
+      "001_Log.json", "attachments/utterance_1.wav", "events/speech.ndjson",
+      "in-process-scripted-tools/tool.js", "shot.webp",
+    ]);
   });
 
   test("treats a flat archive (no directories) as a single unnamed session", () => {
     const groups = Zip.groupEntriesBySession([{ name: "001_Log.json" }, { name: "shot.webp" }]);
     expect(groups.length).toBe(1);
     expect(groups[0].sessionId).toBe("");
+  });
+
+  test("folds a flat archive's logless subdirs back into the unnamed session, by any name", () => {
+    // A zip made from INSIDE the session dir presents the session's own subdirectories as top-level
+    // dirs; they belong to the root session, not to phantom sessions named "events"/"attachments".
+    // `media/` is the case a known-names list gets wrong: AttachmentRef's contract is that the path
+    // is authoritative and `attachments/` is only a convention, so a ref to `media/take.wav` has to
+    // stay reachable in the root session's map or its bytes cannot be found.
+    const groups = Zip.groupEntriesBySession([
+      { name: "001_Log.json" },
+      { name: "events/speech.ndjson" },
+      { name: "attachments/utterance_1.wav" },
+      { name: "media/take.wav" },
+    ]);
+    expect(groups.length).toBe(1);
+    expect(groups[0].sessionId).toBe("");
+    expect(Object.keys(groups[0].byFileName).sort())
+      .toEqual(["001_Log.json", "attachments/utterance_1.wav", "events/speech.ndjson", "media/take.wav"]);
+    // Without root files there is no unnamed session to fold into — dirs group as usual.
+    const dirsOnly = Zip.groupEntriesBySession([{ name: "events/speech.ndjson" }]);
+    expect(dirsOnly.map((g: { sessionId: string }) => g.sessionId)).toEqual(["events"]);
+  });
+
+  test("a real sibling session is never folded into a flat archive's root session", () => {
+    // The fold is on absence of session logs, so a directory that IS a session keeps its own group
+    // even when root-level files exist alongside it.
+    const groups = Zip.groupEntriesBySession([
+      { name: "001_Log.json" },
+      { name: "media/take.wav" },
+      { name: "sessionB/002_Log.json" },
+      { name: "sessionB/attachments/b.wav" },
+    ]);
+    expect(groups.map((g: { sessionId: string }) => g.sessionId)).toEqual(["", "sessionB"]);
+    expect(Object.keys(groups[0].byFileName).sort()).toEqual(["001_Log.json", "media/take.wav"]);
+    expect(Object.keys(groups[1].byFileName).sort()).toEqual(["002_Log.json", "attachments/b.wav"]);
   });
 
   test("orders logs chronologically, keeping feed order for identical timestamps", () => {
@@ -478,5 +520,321 @@ describe("buildReportHtmlFromZipBytes (shared zip → report-HTML assembly)", ()
     await expect(
       Zip.buildSessionInputsFromZipBytes(zip, { render: fakeRenderer({}), inflateRaw }),
     ).rejects.toThrow("No Trailblaze session logs");
+  });
+});
+
+describe("session events and the attachments they reference", () => {
+  // Detection and decode are the SHARED implementations (run-report-events via REPORT_DERIVE), so
+  // these tests pin the zip pipeline's wiring, not a re-specification of the contract.
+  const derivationOnly = {
+    ...REPORT_DERIVE,
+    extractTrace: () => [],
+    extractLlmLogs: () => [],
+    originalYamlFromLogs: () => null,
+  };
+
+  const wavRef = { $attachment: true, path: "attachments/utterance_1.wav", mimeType: "audio/wav", sizeBytes: 4, label: "hello" };
+  const binRef = { $attachment: true, path: "attachments/data.bin", mimeType: "application/octet-stream", sizeBytes: 2 };
+  const goneRef = { $attachment: true, path: "attachments/missing.wav", mimeType: "audio/wav", sizeBytes: 9 };
+
+  function eventsZip() {
+    const dir = SESSION_ID + "/";
+    return buildZip([
+      { name: dir + "001_Log.json", text: JSON.stringify(startedLog()) },
+      {
+        name: dir + "events/speech.ndjson",
+        text: [
+          JSON.stringify({ timeMs: 1_700_000_000_000, data: { text: "hello", audio: wavRef } }),
+          JSON.stringify({ timeMs: 1_700_000_001_000, data: { blob: binRef, gone: goneRef } }),
+        ].join("\n") + "\n",
+      },
+      { name: dir + "attachments/utterance_1.wav", data: new Uint8Array([1, 2, 3, 4]) },
+      { name: dir + "attachments/data.bin", data: new Uint8Array([5, 6]) },
+    ]);
+  }
+
+  test("decodes events/*.ndjson into the same EventStream shape the bun driver embeds", async () => {
+    const built = await Zip.buildSessionInputsFromZipBytes(eventsZip(), { render: derivationOnly, inflateRaw, generatedAt: "T" });
+    const [session] = built.sessions;
+    expect(session.events.length).toBe(1);
+    expect(session.events[0].name).toBe("speech");
+    expect(session.events[0].events.length).toBe(2);
+    expect(JSON.parse(session.events[0].events[0].d).audio.path).toBe("attachments/utterance_1.wav");
+  });
+
+  test("an event stream too big to inflate is skipped instead of decompressing into the tab", async () => {
+    // A stream is inflated whole before its first line is decoded, so the archive's declared size is
+    // the only thing standing between a highly compressible ndjson and the tab's memory. Squeezed to
+    // 10 bytes here so the fixture's own stream is the one that doesn't fit.
+    const render = { ...derivationOnly, MAX_EVENT_STREAM_BYTES: 10 };
+    const built = await Zip.buildSessionInputsFromZipBytes(eventsZip(), { render, inflateRaw, generatedAt: "T" });
+    expect(built.sessions[0].events).toBeNull();
+    // Skipping the stream also means nothing it referenced is materialized.
+    expect(built.sessions[0].attachments).toBeNull();
+
+    const roomy = { ...derivationOnly, MAX_EVENT_STREAM_BYTES: 1024 * 1024 };
+    const fits = await Zip.buildSessionInputsFromZipBytes(eventsZip(), { render: roomy, inflateRaw, generatedAt: "T" });
+    expect(fits.sessions[0].events.length).toBe(1);
+  });
+
+  test("a stream that blows the per-session total budget is dropped, and the ones under it are kept", async () => {
+    const dir = SESSION_ID + "/";
+    const line = (text: string) => JSON.stringify({ timeMs: 1, data: { text } }) + "\n";
+    const twoStreams = () => buildZip([
+      { name: dir + "001_Log.json", text: JSON.stringify(startedLog()) },
+      { name: dir + "events/a.ndjson", text: line("first") },
+      { name: dir + "events/b.ndjson", text: line("second") },
+    ]);
+    const all = await Zip.buildSessionInputsFromZipBytes(twoStreams(), { render: derivationOnly, inflateRaw, generatedAt: "T" });
+    expect(all.sessions[0].events.map((s: { name: string }) => s.name)).toEqual(["a", "b"]);
+
+    // Exactly enough room for the first decoded stream: the second pushes the session past it.
+    const tight = { ...derivationOnly, MAX_EVENT_STREAMS_TOTAL_CHARS: JSON.stringify(all.sessions[0].events[0]).length };
+    const built = await Zip.buildSessionInputsFromZipBytes(twoStreams(), { render: tight, inflateRaw, generatedAt: "T" });
+    expect(built.sessions[0].events.map((s: { name: string }) => s.name)).toEqual(["a"]);
+  });
+
+  test("resolves referenced media attachments to object URLs; non-media and missing files stay out", async () => {
+    const built = await Zip.buildSessionInputsFromZipBytes(eventsZip(), { render: derivationOnly, inflateRaw, generatedAt: "T" });
+    const [session] = built.sessions;
+    // Only the media-typed ref whose bytes are in the archive materializes; the octet-stream ref
+    // (never handed to a browser-native element) and the missing file render as in-bundle notes.
+    expect(Object.keys(session.attachments)).toEqual(["attachments/utterance_1.wav"]);
+    expect(session.attachments["attachments/utterance_1.wav"]).toStartWith("blob:");
+  });
+
+  test("an attachment named like an Object.prototype member still resolves", async () => {
+    // The shared path rule accepts any single segment, so `__proto__` and `constructor` are legal
+    // attachment names. On plain objects they are not: the dedupe set reports `constructor` as
+    // already seen before it has seen anything, the archive index stores `__proto__` as a prototype
+    // rather than an entry, and assigning the resulting URI back into the map sets nothing.
+    const dir = SESSION_ID + "/";
+    const protoRef = { $attachment: true, path: "__proto__", mimeType: "audio/wav", sizeBytes: 2 };
+    const ctorRef = { $attachment: true, path: "constructor", mimeType: "audio/wav", sizeBytes: 2 };
+    const zip = buildZip([
+      { name: dir + "001_Log.json", text: JSON.stringify(startedLog()) },
+      { name: dir + "events/speech.ndjson", text: JSON.stringify({ timeMs: 1, data: { a: protoRef, b: ctorRef } }) + "\n" },
+      { name: dir + "__proto__", data: new Uint8Array([1, 2]) },
+      { name: dir + "constructor", data: new Uint8Array([3, 4]) },
+    ]);
+    const built = await Zip.buildSessionInputsFromZipBytes(zip, { render: derivationOnly, inflateRaw, generatedAt: "T" });
+    const attachments = built.sessions[0].attachments;
+    expect(Object.keys(attachments).sort()).toEqual(["__proto__", "constructor"]);
+    expect(attachments["__proto__"]).toStartWith("blob:");
+    expect(attachments["constructor"]).toStartWith("blob:");
+  });
+
+  test("a failed attachment read hands its budget reservation back to the refs behind it", async () => {
+    // The budget is charged before the inflate, so a corrupt entry that claims what is left would
+    // otherwise drop every valid attachment after it while holding no bytes at all.
+    const dir = SESSION_ID + "/";
+    const badRef = { $attachment: true, path: "attachments/corrupt.wav", mimeType: "audio/wav", sizeBytes: 4 };
+    const zip = buildZip([
+      { name: dir + "001_Log.json", text: JSON.stringify(startedLog()) },
+      { name: dir + "events/speech.ndjson", text: JSON.stringify({ timeMs: 1, data: { first: badRef, second: wavRef } }) + "\n" },
+      { name: dir + "attachments/corrupt.wav", data: new Uint8Array([0xff, 0, 0, 0]) },
+      { name: dir + "attachments/utterance_1.wav", data: new Uint8Array([1, 2, 3, 4]) },
+    ]);
+    // Room for exactly one of the two 4-byte entries, and the corrupt one is selected first.
+    const render = { ...derivationOnly, ATTACHMENT_MATERIALIZE_MAX_TOTAL_BYTES: 4 };
+    const failsOnMarkedEntry = (data: Uint8Array) => {
+      const out = inflateRaw(data);
+      if (out[0] === 0xff) throw new Error("corrupt entry");
+      return out;
+    };
+    const built = await Zip.buildSessionInputsFromZipBytes(zip, { render, inflateRaw: failsOnMarkedEntry, generatedAt: "T" });
+    expect(Object.keys(built.sessions[0].attachments)).toEqual(["attachments/utterance_1.wav"]);
+  });
+
+  test("a traversal-shaped ref is refused even when the archive really holds that entry", async () => {
+    // An archive can name an entry whatever it likes, so the exact-match lookup alone is not the
+    // guard it looks like: with `attachments/../outside.png` present under BOTH names, the ref
+    // resolves and the policy that exists to refuse traversal never runs.
+    const dir = SESSION_ID + "/";
+    const escapeRef = { $attachment: true, path: "attachments/../outside.png", mimeType: "image/png", sizeBytes: 3 };
+    const zip = buildZip([
+      { name: dir + "001_Log.json", text: JSON.stringify(startedLog()) },
+      { name: dir + "events/speech.ndjson", text: JSON.stringify({ timeMs: 1, data: { shot: escapeRef, audio: wavRef } }) + "\n" },
+      { name: dir + "attachments/../outside.png", data: new Uint8Array([7, 8, 9]) },
+      { name: dir + "attachments/utterance_1.wav", data: new Uint8Array([1, 2, 3, 4]) },
+    ]);
+    const built = await Zip.buildSessionInputsFromZipBytes(zip, { render: derivationOnly, inflateRaw, generatedAt: "T" });
+    expect(Object.keys(built.sessions[0].attachments)).toEqual(["attachments/utterance_1.wav"]);
+  });
+
+  test("attachments too large to materialize stay in the bundle instead of decompressing into the tab", async () => {
+    // Every selected entry is inflated up front, before anything is opened, so the byte budget —
+    // not just the 200-ref count ceiling — is what keeps a huge archive from landing in memory on
+    // load. Squeezed to 3 bytes here so the fixture's own 4-byte wav is the one that doesn't fit.
+    const render = { ...derivationOnly, ATTACHMENT_MATERIALIZE_MAX_TOTAL_BYTES: 3 };
+    const built = await Zip.buildSessionInputsFromZipBytes(eventsZip(), { render, inflateRaw, generatedAt: "T" });
+    expect(built.sessions[0].attachments).toBeNull();
+
+    // Room for it again, and it materializes as before.
+    const roomy = { ...derivationOnly, ATTACHMENT_MATERIALIZE_MAX_TOTAL_BYTES: 4 };
+    const fits = await Zip.buildSessionInputsFromZipBytes(eventsZip(), { render: roomy, inflateRaw, generatedAt: "T" });
+    expect(Object.keys(fits.sessions[0].attachments)).toEqual(["attachments/utterance_1.wav"]);
+  });
+
+  test("the single-session HTML branch hands the renderer everything the multi-session one does", async () => {
+    // buildReportHtmlFromZipBytes picks buildRunReportHtml for a lone session and buildMultiReportHtml
+    // otherwise. The single-session wrapper takes each field by name, so anything the composition
+    // added and this call site did not list is dropped for one-session archives ONLY — which is
+    // every CI results zip, and invisible in a multi-session test.
+    const captured: { input?: any } = {};
+    const built = await Zip.buildReportHtmlFromZipBytes(eventsZip(), {
+      render: { ...derivationOnly, buildRunReportHtml: (input: unknown) => { captured.input = input; return "<html>SINGLE</html>"; } },
+      inflateRaw,
+      generatedAt: "T",
+    });
+    expect(built.html).toBe("<html>SINGLE</html>");
+    expect(captured.input.events?.length).toBe(1);
+    expect(Object.keys(captured.input.attachments)).toEqual(["attachments/utterance_1.wav"]);
+  });
+
+  test("only the zip viewer keeps attachment object URLs; every other document strips them", async () => {
+    // The HTML the zip viewer builds goes straight into a same-origin iframe on the page that minted
+    // these blob: URLs, so they resolve. A downloaded document outlives that page, so the default
+    // must stay "strip" — a preserved blob: there badges the attachment as embedded and then opens
+    // to nothing.
+    const captured: { input?: any } = {};
+    const render = { ...derivationOnly, buildRunReportHtml: (input: unknown) => { captured.input = input; return "<html>SINGLE</html>"; } };
+    await Zip.buildReportHtmlFromZipBytes(eventsZip(), { render, inflateRaw, generatedAt: "T" });
+    expect(captured.input.keepAttachmentObjectUrls).toBe(false);
+    await Zip.buildReportHtmlFromZipBytes(eventsZip(), { render, inflateRaw, generatedAt: "T", keepAttachmentObjectUrls: true });
+    expect(captured.input.keepAttachmentObjectUrls).toBe(true);
+  });
+
+  test("hands back every object URL it minted, so archive after archive is not pinned in memory", async () => {
+    // An object URL pins its Blob for the life of the DOCUMENT, and the zip screen replaces one
+    // report with another in place. Both producers have to be swept or the untouched one leaks
+    // exactly as before: the recording clip, and the attachment map (one URL per materialized media
+    // file, so an archive of audio pins far more here than the single clip does).
+    const built = await Zip.buildSessionInputsFromZipBytes(eventsZip(), { render: derivationOnly, inflateRaw, generatedAt: "T" });
+    expect(Zip.sessionObjectUrls(built.sessions)).toEqual(Object.values(built.sessions[0].attachments));
+
+    const swept = Zip.sessionObjectUrls([
+      { videoClip: { url: "blob:clip" }, attachments: { "a.wav": "blob:a", "b.wav": "blob:a" } },
+      // Not ours to revoke: a hosted mp4, a /static link and a data: embed were minted elsewhere.
+      { videoClip: { url: "https://cdn.test/run.mp4" }, attachments: { "c.wav": "/static/c.wav", "d.wav": "data:audio/wav;base64,AAAA" } },
+      // Shapes a malformed or clipless payload takes; none of them may throw.
+      { attachments: null }, { videoClip: null }, {}, null,
+    ]);
+    expect(swept).toEqual(["blob:clip", "blob:a"]);
+    expect(Zip.sessionObjectUrls(null)).toEqual([]);
+  });
+
+  test("a session without events carries neither events nor attachments", async () => {
+    const zip = buildZip([{ name: SESSION_ID + "/001_Log.json", text: JSON.stringify(startedLog()) }]);
+    const built = await Zip.buildSessionInputsFromZipBytes(zip, { render: derivationOnly, inflateRaw, generatedAt: "T" });
+    expect(built.sessions[0].events).toBeNull();
+    expect(built.sessions[0].attachments).toBeNull();
+  });
+
+  test("an older renderer without the events pipeline degrades to an event-less report", async () => {
+    const { buildEventStream: _b, collectStreamAttachmentRefs: _c, ...older } = derivationOnly;
+    const built = await Zip.buildSessionInputsFromZipBytes(eventsZip(), { render: older, inflateRaw, generatedAt: "T" });
+    expect(built.sessions[0].events).toBeNull();
+    expect(built.sessions[0].attachments).toBeNull();
+
+    // The read budgets are policy too: a bundle missing either one decodes no stream rather than
+    // inflating archive entries under a limit this pipeline made up for itself.
+    expect(REPORT_DERIVE.MAX_EVENT_STREAM_BYTES).toBeGreaterThan(0);
+    expect(REPORT_DERIVE.MAX_EVENT_STREAMS_TOTAL_CHARS).toBeGreaterThan(0);
+    for (const missing of ["MAX_EVENT_STREAM_BYTES", "MAX_EVENT_STREAMS_TOTAL_CHARS"]) {
+      const { [missing]: _dropped, ...noBudget } = derivationOnly as Record<string, unknown>;
+      const capless = await Zip.buildSessionInputsFromZipBytes(eventsZip(), { render: noBudget, inflateRaw, generatedAt: "T" });
+      expect(capless.sessions[0].events).toBeNull();
+    }
+  });
+
+  test("the attachment policy comes from the renderer, and a bundle missing it materializes nothing", async () => {
+    // The MIME rule, the ceilings and the path rule are defined once, in run-report-events.ts, and reach
+    // this pipeline over the same collaborator channel as the detector — REPORT_DERIVE carries them,
+    // which is what the passing test above already proves. A bundle too old to export them must
+    // decode its events and materialize NO bytes rather than fall back on a second copy of limits
+    // that could disagree with the one the other surfaces enforce.
+    expect(REPORT_DERIVE.ATTACHMENT_MIME).toBeInstanceOf(RegExp);
+    expect(REPORT_DERIVE.MAX_ATTACHMENTS_PER_SESSION).toBeGreaterThan(0);
+    expect(REPORT_DERIVE.ATTACHMENT_MATERIALIZE_MAX_TOTAL_BYTES).toBeGreaterThan(0);
+    expect(typeof REPORT_DERIVE.isSafeSessionRelativePath).toBe("function");
+    // Each policy piece on its own: dropping ANY one of them has to stop materialization, or a
+    // bundle missing just that piece silently runs without it.
+    for (const missing of ["ATTACHMENT_MIME", "MAX_ATTACHMENTS_PER_SESSION", "ATTACHMENT_MATERIALIZE_MAX_TOTAL_BYTES", "isSafeSessionRelativePath"]) {
+      const { [missing]: _dropped, ...noPolicy } = derivationOnly as Record<string, unknown>;
+      const built = await Zip.buildSessionInputsFromZipBytes(eventsZip(), { render: noPolicy, inflateRaw, generatedAt: "T" });
+      expect(built.sessions[0].events).not.toBeNull();
+      expect(built.sessions[0].attachments).toBeNull();
+    }
+  });
+});
+
+describe("finding the run's recording in the archive", () => {
+  const CAPTURE_META = (artifacts: unknown[]) => JSON.stringify({ artifacts });
+
+  test("a VIDEO artifact names its own file and carries the recorder's bookends", () => {
+    const meta = CAPTURE_META([
+      { filename: "device.log", type: "LOGCAT", startTimestampMs: 100, endTimestampMs: 900 },
+      { filename: "video.mp4", type: "VIDEO", startTimestampMs: 200, endTimestampMs: 800 },
+    ]);
+    expect(Zip.videoArtifactFrom(meta, ["device.log", "video.mp4"]))
+      .toEqual({ fileName: "video.mp4", startMs: 200, endMs: 800 });
+  });
+
+  test("a VIDEO_FRAMES artifact lends its bookends to the archive's playable file", () => {
+    // This is what a real iOS run writes: the artifact names the sprite SHEET, which no element can
+    // play, but it was cut from the recording and shares its window.
+    const meta = CAPTURE_META([
+      { filename: "video_sprites.webp", type: "VIDEO_FRAMES", startTimestampMs: 1_000, endTimestampMs: 2_000 },
+    ]);
+    expect(Zip.videoArtifactFrom(meta, ["video_sprites.webp", "video.mp4", "shot.webp"]))
+      .toEqual({ fileName: "video.mp4", startMs: 1_000, endMs: 2_000 });
+    // Sprites but no video file: nothing to play.
+    expect(Zip.videoArtifactFrom(meta, ["video_sprites.webp"])).toBeNull();
+  });
+
+  test("a VIDEO artifact wins over a VIDEO_FRAMES one listed before it", () => {
+    const meta = CAPTURE_META([
+      { filename: "video_sprites.webp", type: "VIDEO_FRAMES", startTimestampMs: 1_000, endTimestampMs: 2_000 },
+      { filename: "capture.webm", type: "VIDEO", startTimestampMs: 1_100, endTimestampMs: 2_100 },
+    ]);
+    expect(Zip.videoArtifactFrom(meta, ["video_sprites.webp", "capture.webm"]))
+      .toEqual({ fileName: "capture.webm", startMs: 1_100, endMs: 2_100 });
+  });
+
+  test("no bookends means no clip: a recording that can't be placed on the clock is unusable", () => {
+    // Without a window there is nothing to map an instant through, so this is not a video the
+    // replay can show beside other devices — it is a file.
+    expect(Zip.videoArtifactFrom(CAPTURE_META([{ filename: "video.mp4", type: "VIDEO" }]), ["video.mp4"])).toBeNull();
+    expect(Zip.videoArtifactFrom(CAPTURE_META([
+      { filename: "video.mp4", type: "VIDEO", startTimestampMs: 500, endTimestampMs: 500 },
+    ]), ["video.mp4"])).toBeNull();
+  });
+
+  test("no artifacts, unparseable metadata, and logcat-only runs all yield nothing", () => {
+    expect(Zip.videoArtifactFrom("{}", ["video.mp4"])).toBeNull();
+    expect(Zip.videoArtifactFrom("not json", ["video.mp4"])).toBeNull();
+    // The iPhone lane of a real 5-device run looks exactly like this — it recorded logs, not video.
+    expect(Zip.videoArtifactFrom(CAPTURE_META([
+      { filename: "device.log", type: "LOGCAT", startTimestampMs: 1, endTimestampMs: 2 },
+    ]), ["device.log"])).toBeNull();
+  });
+
+  test("only known container extensions count as playable", () => {
+    expect(Zip.videoMimeType("video.mp4")).toBe("video/mp4");
+    expect(Zip.videoMimeType("capture.webm")).toBe("video/webm");
+    expect(Zip.videoMimeType("video_sprites.webp")).toBeNull();
+    expect(Zip.videoMimeType("shot.png")).toBeNull();
+  });
+
+  test("a session with no capture metadata reports no clip", async () => {
+    const dir = SESSION_ID + "/";
+    const zip = buildZip([
+      { name: dir + "001_TrailblazeSessionStatusChangeLog.json", text: JSON.stringify(startedLog()) },
+      { name: dir + "video.mp4", data: new Uint8Array([9, 9]) },
+    ]);
+    const [session] = await Zip.loadZipSessions(zip, { inflateRaw });
+    // A video file alone is not enough — the bookends live in capture_metadata.json.
+    expect(await Zip.sessionVideoClip(zip, session, { inflateRaw })).toBeNull();
   });
 });

@@ -5,7 +5,9 @@ import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import xyz.block.trailblaze.util.Console
 
 /**
  * Manages async trail run lifecycle.
@@ -18,7 +20,13 @@ class CliRunManager(
   private val onRunRequest: suspend (CliRunRequest, onProgress: (String) -> Unit) -> CliRunResponse,
 ) : java.io.Closeable {
   private val runs = ConcurrentHashMap<String, MutableRunState>()
-  private val scope = CoroutineScope(Dispatchers.IO + Job())
+  // SupervisorJob, not Job: runs are independent, and this scope is shared by every one of them.
+  // Under a plain Job a single child that fails cancels the scope, and every later submitRun
+  // returns a runId whose body never executes — the run sits in PENDING and the CLI waits out its
+  // whole no-progress window for a trail with nothing wrong with it. The catch below stops the
+  // failures it can see; this stops the ones it can't, including anything thrown before the try
+  // is entered.
+  private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
   private class MutableRunState(
     var state: RunState = RunState.PENDING,
@@ -58,11 +66,39 @@ class CliRunManager(
           runState.result = CliRunResponse(success = false, error = "Cancelled")
           runState.completedAt = System.currentTimeMillis()
         }
-      } catch (e: Exception) {
+      } catch (t: Throwable) {
+        // Throwable, not Exception: the CLI has no other way to learn a run died. It polls
+        // /cli/run-status and gives up only after a full no-progress window, so an Error that
+        // escapes this catch (a NoClassDefFoundError from a half-built classpath, a
+        // StackOverflowError, an initializer failure) leaves the run stuck in RUNNING and the
+        // user staring at a silent prompt for ten minutes, ending in a watchdog message that
+        // names the timeout rather than what broke. Escaping also cancels `scope`, which every
+        // later run shares, so one Error wedges the daemon for runs that had nothing wrong.
+        //
+        // Terminal state FIRST, diagnostics after. Rendering a stack trace allocates, and this
+        // catch handles OutOfMemoryError: if the render throws under memory pressure before the
+        // state flips, the run stays RUNNING and the CLI waits out the whole no-progress window —
+        // the exact failure this catch exists to prevent, reintroduced by the logging meant to
+        // explain it. Everything below reads fields already on the throwable, so it allocates
+        // nothing worth failing on.
         synchronized(runState) {
           runState.state = RunState.FAILED
-          runState.result = CliRunResponse(success = false, error = e.message ?: "Unknown error")
+          runState.result = CliRunResponse(
+            success = false,
+            // StackOverflowError and friends carry a null message. javaClass.name rather than
+            // qualifiedName: the latter is null for a local or anonymous throwable class, which
+            // would land back on a useless "Unknown error" for a type the JVM can name fine.
+            error = t.message?.takeIf { it.isNotBlank() } ?: t.javaClass.name,
+          )
           runState.completedAt = System.currentTimeMillis()
+        }
+        // The response carries the message only, and for the classpath failures this catch exists
+        // for the frame that names the class-load site IS the diagnostic. Log the trace here so
+        // the daemon log has it even though the CLI's one-line error can't. Best-effort: the run
+        // is already terminal, so losing the trace costs a diagnostic, not the CLI's exit.
+        runCatching {
+          Console.log("[CliRunManager] run $runId failed: ${t::class.simpleName}: ${t.message}")
+          Console.log(t.stackTraceToString())
         }
       }
     }

@@ -57,8 +57,11 @@ object SelectorTsCodegen {
     val analysisClasses = selectorAnalysisKt?.let { KotlinSourceParser.parseAllDataClasses(it) }
 
     val trailblazeNodeSelector = requireOne(selectorClasses, "TrailblazeNodeSelector")
+    // Must list every DriverNodeMatch variant: a variant omitted here is silently absent from
+    // the generated TS, so the SDK simply cannot express that dialect.
     val driverNodeMatchBranches = listOf(
       "AndroidAccessibility",
+      "AndroidView",
       "AndroidMaestro",
       "Web",
       "Compose",
@@ -234,6 +237,7 @@ object SelectorTsCodegen {
       "TrailblazeSelectorTapResolution" -> "TrailblazeSelectorTapResolution"
       "TrailblazeSelectorResolution" -> "TrailblazeSelectorResolution"
       "DriverNodeMatch.AndroidAccessibility" -> "DriverNodeMatchAndroidAccessibility"
+      "DriverNodeMatch.AndroidView" -> "DriverNodeMatchAndroidView"
       "DriverNodeMatch.AndroidMaestro" -> "DriverNodeMatchAndroidMaestro"
       "DriverNodeMatch.Web" -> "DriverNodeMatchWeb"
       "DriverNodeMatch.Compose" -> "DriverNodeMatchCompose"

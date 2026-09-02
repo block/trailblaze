@@ -1775,7 +1775,9 @@
       if (!selector || typeof selector !== 'object') return null;
       // Pick the driver-specific sub-object that's populated. Listed in priority
       // so the most informative one wins on the rare entry that sets multiple.
-      const drivers = ['androidAccessibility', 'androidMaestro', 'compose', 'iosAxe', 'iosMaestro', 'web'];
+      // Every DriverNodeMatch key. A missing one makes the detail panel show no matcher summary
+      // at all for selectors of that dialect, which reads as "this selector matches nothing".
+      const drivers = ['androidAccessibility', 'androidView', 'androidMaestro', 'compose', 'iosAxe', 'iosMaestro', 'web'];
       for (const d of drivers) {
         if (selector[d] && typeof selector[d] === 'object') {
           const fields = Object.entries(selector[d])

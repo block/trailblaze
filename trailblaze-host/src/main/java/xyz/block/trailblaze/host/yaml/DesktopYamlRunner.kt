@@ -32,7 +32,6 @@ import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionInfo
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.logs.model.getSessionStatus
-import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.OnDeviceRpcClient
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcResult
 import xyz.block.trailblaze.model.DesktopAppRunYamlParams
@@ -41,6 +40,7 @@ import xyz.block.trailblaze.model.TrailExecutionResult
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.model.TrailblazeOnDeviceInstrumentationTarget
+import xyz.block.trailblaze.transport.AndroidWireTransport
 import xyz.block.trailblaze.ui.TrailblazeAnalytics
 import xyz.block.trailblaze.ui.TrailblazeDeviceManager
 import xyz.block.trailblaze.util.AccessibilityServiceSetupUtils
@@ -54,6 +54,7 @@ import xyz.block.trailblaze.recordings.TrailRecordings
 import xyz.block.trailblaze.yaml.TrailblazeYaml
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
 import xyz.block.trailblaze.yaml.unified.UnknownDriverException
+import java.io.File
 import java.io.IOException
 import java.util.concurrent.ConcurrentHashMap
 
@@ -62,6 +63,18 @@ class DesktopYamlRunner(
   private val trailblazeAnalytics: TrailblazeAnalytics,
   private val trailblazeHostAppTargetProvider: () -> TrailblazeHostAppTarget,
   private val dynamicLlmClientProvider: (TrailblazeLlmModel) -> DynamicLlmClient,
+  /**
+   * The app's effective logs directory (the persisted `logsDirectory` setting, else the default),
+   * handed to every [TrailblazeHostYamlRunner] path so the per-run logging rules it builds write
+   * — and read their recordings back from — where the setting points. Pass the same
+   * `appConfig.logsDir` the app's own [xyz.block.trailblaze.report.utils.LogsRepo] is pinned at, so
+   * a session's rule-side files and its daemon-persisted files land in one directory.
+   *
+   * A provider rather than a value only to defer evaluation, since a desktop app may construct its
+   * runner eagerly, ahead of the app config. Like the app's own repo, the value is fixed for the
+   * process — a `logsDirectory` change takes effect at daemon start.
+   */
+  private val logsDirProvider: () -> File,
 ) {
   companion object {
     /**
@@ -217,6 +230,53 @@ class DesktopYamlRunner(
   }
 
   /**
+   * Driver-aware instrumentation-target resolution for the RPC branches: the trail's own target
+   * first, the session's host app target as fallback — the same precedence the branches always
+   * used, now routed through [TrailblazeHostAppTarget.getTrailblazeOnDeviceInstrumentationTargetForDriver]
+   * so ANDROID_TEST resolves the target's in-process harness (or null when none is declared)
+   * instead of the bundled runner, which knows nothing about the app's process.
+   */
+  private fun resolveOnDeviceInstrumentationTarget(
+    driverType: TrailblazeDriverType,
+    targetTestApp: TrailblazeHostAppTarget?,
+    trailblazeHostAppTarget: TrailblazeHostAppTarget,
+  ): TrailblazeOnDeviceInstrumentationTarget? =
+    // Which target answers is decided before the call, not by whether the answer was null. Once
+    // ANDROID_TEST can legitimately resolve to null, an elvis here would silently instrument a
+    // DIFFERENT target's harness whenever the trail's own target declared none.
+    (targetTestApp ?: trailblazeHostAppTarget)
+      .getTrailblazeOnDeviceInstrumentationTargetForDriver(driverType)
+
+  /**
+   * The runner to warm on one multi-device companion. Same precedence rule as
+   * [resolveOnDeviceInstrumentationTarget]: the companion's own target answers when it has one,
+   * and only a companion with NO declared target falls back to the launch device's runner.
+   *
+   * The fallback deliberately does not extend to a null ANSWER. On ANDROID_TEST a declared target
+   * with no `android_test:` block resolves to null, and treating that as "use the launch device's
+   * harness" would instrument a different app's test APK on this device — a run that connects,
+   * serves, and reports against the wrong app. Failing names the target and the fix instead.
+   *
+   * An absent [driverType] means the platform default, which is not ANDROID_TEST, so it resolves
+   * the bundled runner — the answer this site gave before it became driver-aware.
+   */
+  private fun resolveCompanionInstrumentationTarget(
+    configurationName: String,
+    companionName: String,
+    companionTarget: TrailblazeHostAppTarget?,
+    driverType: TrailblazeDriverType?,
+    launchDeviceFallback: TrailblazeOnDeviceInstrumentationTarget,
+  ): TrailblazeOnDeviceInstrumentationTarget {
+    if (companionTarget == null) return launchDeviceFallback
+    return companionTarget.getTrailblazeOnDeviceInstrumentationTargetForDriver(
+      driverType ?: TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+    ) ?: throw TrailblazeException(
+      "Configuration '$configurationName' binds companion device '$companionName' to target " +
+        "'${companionTarget.id}'. ${companionTarget.missingInProcessHarnessMessage()}",
+    )
+  }
+
+  /**
    * Shortens device description by removing UUID identifiers.
    * Example: "iPhone 16 Pro - iOS 18.4 - 55B5483E-EE63-4605-91DE-B061F19B9D1E" -> "iPhone 16 Pro - iOS 18.4"
    */
@@ -293,6 +353,32 @@ class DesktopYamlRunner(
         onProgressMessage("$devicePrefix $message")
       }
 
+      // Ahead of the force-stop below, and ahead of dispatch routing, because both of those act on
+      // the device: force-stopping falls back to the session-default app whenever the selection
+      // resolves to nothing, so validating afterwards would kill an unrelated app on behalf of a
+      // run that then fails as misuse. Needs no driver type, so it can run this early — the
+      // dispatch-path refusal further down does need one and stays there.
+      val declaredConfigurations: Set<String>
+      val selectedConfigurationName: String?
+      try {
+        declaredConfigurations =
+          MultiDeviceConfigurationResolver.declaredConfigurationNames(runYamlRequest.yaml)
+        selectedConfigurationName = MultiDeviceConfigurationResolver.selectConfigurationName(
+          declaredNames = declaredConfigurations,
+          requestConfigurationName = runYamlRequest.deviceConfiguration,
+          environmentConfigurationName =
+            System.getenv(MultiDeviceConfigurationResolver.DEVICE_CONFIGURATION_ENV_VAR),
+          requestDeviceBindingNames = runYamlRequest.deviceBindings.keys,
+        )
+      } catch (e: TrailblazeException) {
+        val message = e.message ?: "This run's device configuration is not valid"
+        prefixedProgressMessage(message)
+        Console.log("❌ COROUTINE ENDING (invalid device configuration)")
+        executionResult = TrailExecutionResult.Failed(message, misuse = true)
+        onComplete?.invoke(executionResult)
+        return@launch
+      }
+
       if (forceStopTargetApp) {
         // The app to stop is the one this device will actually run. On a multi-device trail whose
         // START device overrides `target:`, that is the override, not the session default —
@@ -302,7 +388,10 @@ class DesktopYamlRunner(
         // Lookup failures are ignored here: `resolveMemberTargets` runs the same lookup a moment
         // later and fails the run loud with a message about the trail's `target:`.
         val startDeviceTarget = MultiDeviceConfigurationResolver
-          .startDeviceTargetId(runYamlRequest.yaml)
+          .startDeviceTargetId(
+            yaml = runYamlRequest.yaml,
+            selectedConfigurationName = selectedConfigurationName,
+          )
           ?.let { desktopAppRunYamlParams.findTargetById?.invoke(it) }
           ?: targetTestApp
         // Convert the YAML-ordered List to a Set for ensureAppsAreForceStopped, which takes
@@ -353,41 +442,42 @@ class DesktopYamlRunner(
       // platform-scoped), so instanceId / platform / deviceId are unchanged.
       val hostRunDevice = connectedTrailblazeDevice.copy(trailblazeDriverType = trailblazeDriverType)
 
-      // Multi-device configurations are wired into exactly one dispatch branch below: the host
-      // agent driving Android on-device drivers over RPC. Every other branch (V3, the on-device
-      // agent, iOS/web/Compose host runs) has no companion connect, no device bindings, and no
+      // Which path this run takes. Resolved once here so the multi-device gate below and the
+      // `when` that dispatches both read the same answer — the gate used to re-derive the
+      // host-agent predicate, which only stayed correct as long as someone kept the two copies
+      // in agreement by hand.
+      val dispatchPath = DesktopDispatchDecision.decide(
+        driverType = trailblazeDriverType,
+        agentImplementation = runYamlRequest.agentImplementation,
+        preferHostAgent = runYamlRequest.config.preferHostAgent,
+      )
+      // Log the inputs alongside the answer: "why did this run take that path" is otherwise only
+      // reconstructible by re-deriving the decision from three values none of which are logged.
+      Console.log(
+        "Dispatch path $dispatchPath (driver=$trailblazeDriverType, " +
+          "agent=${runYamlRequest.agentImplementation}, " +
+          "preferHostAgent=${runYamlRequest.config.preferHostAgent})",
+      )
+
+      // Multi-device configurations are wired into exactly one dispatch path: the host agent
+      // driving on-device drivers over RPC. Every other path (V3, the on-device agent,
+      // iOS/web/Compose host runs) has no companion connect, no device bindings, and no
       // per-device routing — it would run a multi-device trail against the launch device alone and
       // report success, with the configuration-keyed steps quietly falling through to the LLM.
-      // Reject up front, naming the toggle that would make this run dispatchable.
-      val multiDeviceDispatchSupported = trailblazeDriverType in TrailblazeDriverType.ANDROID_ON_DEVICE_DRIVER_TYPES &&
-        runYamlRequest.agentImplementation != AgentImplementation.MULTI_AGENT_V3 &&
-        runYamlRequest.config.preferHostAgent
-      if (!multiDeviceDispatchSupported) {
-        val declaredConfigurations = try {
-          MultiDeviceConfigurationResolver.declaredConfigurationNames(runYamlRequest.yaml)
-        } catch (e: TrailblazeException) {
-          prefixedProgressMessage(e.message ?: "Failed to read this trail's device configuration")
-          executionResult = TrailExecutionResult.Failed(
-            e.message ?: "Failed to read this trail's device configuration",
-            misuse = true,
-          )
-          onComplete?.invoke(executionResult)
-          return@launch
-        }
-        if (declaredConfigurations.isNotEmpty()) {
-          val message = "This trail declares the multi-device configuration(s) " +
-            "$declaredConfigurations, which only run on the host agent over the Android " +
-            "on-device RPC path. This run resolved driver $trailblazeDriverType, agent " +
-            "${runYamlRequest.agentImplementation}, preferHostAgent=" +
-            "${runYamlRequest.config.preferHostAgent} — running it here would silently use the " +
-            "launch device only. Run it on an Android device with an on-device driver and " +
-            "`preferHostAgent` enabled."
-          prefixedProgressMessage(message)
-          Console.log("❌ COROUTINE ENDING (multi-device trail on an unsupported dispatch path)")
-          executionResult = TrailExecutionResult.Failed(message, misuse = true)
-          onComplete?.invoke(executionResult)
-          return@launch
-        }
+      // Reject up front, naming the change that would make this run dispatchable.
+      if (!DesktopDispatchDecision.supportsMultiDevice(dispatchPath) && declaredConfigurations.isNotEmpty()) {
+        val remedy = DesktopDispatchDecision.multiDeviceRemedy(dispatchPath, trailblazeDriverType)
+        val message = "This trail declares the multi-device configuration(s) " +
+          "$declaredConfigurations, which only run on the host agent over the Android " +
+          "on-device RPC path. This run resolved driver $trailblazeDriverType, agent " +
+          "${runYamlRequest.agentImplementation}, preferHostAgent=" +
+          "${runYamlRequest.config.preferHostAgent} — running it here would silently use the " +
+          "launch device only. $remedy"
+        prefixedProgressMessage(message)
+        Console.log("❌ COROUTINE ENDING (multi-device trail on an unsupported dispatch path)")
+        executionResult = TrailExecutionResult.Failed(message, misuse = true)
+        onComplete?.invoke(executionResult)
+        return@launch
       }
 
       // Per-session video / sprite / logcat capture used to be started here against a
@@ -408,12 +498,14 @@ class DesktopYamlRunner(
         .orEmpty()
       val appIdForCapture = appIdsForCapture.firstOrNull()
       // Resolve per-run capture toggles in the same order the pre-coordinator flow did:
-      // request-level overrides (CLI `--no-capture-video` / `--capture-logcat`) > daemon
+      // request-level overrides (CLI `--capture-video` / `--capture-logcat`) > daemon
       // appConfig toggles > built-in defaults. Passed to `coordinator.startForSession`
-      // below so the user-visible CLI flag actually takes effect — without this, every
-      // CLI run would record video even when the user opted out.
+      // below so the user-visible CLI flag actually takes effect. Video's appConfig tier
+      // (`trailblaze config capture-video`) defaults OFF, unlike the log streams, and its
+      // null stays null so `hostCaptureOptions` can rank the env var between the two.
       val captureOptionsForRun = xyz.block.trailblaze.capture.CaptureOptions.hostCaptureOptions(
-        captureVideo = desktopAppRunYamlParams.captureVideo ?: true,
+        captureVideo = desktopAppRunYamlParams.captureVideo,
+        persistedCaptureVideo = appConfig.captureVideo,
         captureLogcat = desktopAppRunYamlParams.captureLogcat ?: appConfig.captureLogcat,
         captureIosLogs = desktopAppRunYamlParams.captureIosLogs ?: appConfig.captureIosLogs,
       )
@@ -455,35 +547,45 @@ class DesktopYamlRunner(
         // `maybeStartAndroidNetworkCapture` plumbing.
         val captureSessionStarted: (SessionId) -> Unit = { sid ->
           pendingAdvisories.logTo(sid)
-          // Idempotent — MCP path may have started this already via
-          // getOrCreateSessionResolution with appConfig-derived options. The
-          // coordinator's reserve-then-start makes the second call a no-op so we
-          // don't double-spawn screenrecord. For runs that originated from the CLI,
-          // `captureOptionsForRun` honors per-flag overrides (--no-capture-video,
-          // --capture-logcat, --capture-ios-logs).
-          trailblazeDeviceManager.sessionCaptureCoordinator.startForSession(
-            sessionId = sid,
-            deviceId = trailblazeDeviceId.instanceId,
-            platform = trailblazeDeviceId.trailblazeDevicePlatform,
-            options = captureOptionsForRun,
-            appId = appIdForCapture,
-          )
+          // Every capture writer below lands its artifacts in the session directory, and each
+          // creates that directory itself rather than going through the run's LogsRepo — so the
+          // read-only repo a `--no-logging` run installs cannot suppress them. Skip the wiring
+          // outright, or the flag's "no session files" contract holds for the session JSON while
+          // video / logcat / network capture keep writing beside it.
+          if (!desktopAppRunYamlParams.noLogging) {
+            // Idempotent — MCP path may have started this already via
+            // getOrCreateSessionResolution with appConfig-derived options. The
+            // coordinator's reserve-then-start makes the second call a no-op so we
+            // don't double-spawn screenrecord. For runs that originated from the CLI,
+            // `captureOptionsForRun` honors per-flag overrides (--no-capture-video,
+            // --capture-logcat, --capture-ios-logs).
+            trailblazeDeviceManager.sessionCaptureCoordinator.startForSession(
+              sessionId = sid,
+              deviceId = trailblazeDeviceId.instanceId,
+              platform = trailblazeDeviceId.trailblazeDevicePlatform,
+              options = captureOptionsForRun,
+              appId = appIdForCapture,
+            )
+            maybeStartAndroidNetworkCapture(
+              runYamlRequest = runYamlRequest,
+              deviceId = trailblazeDeviceId,
+              sessionIdOverride = sid,
+              targetAppIds = appIdsForCapture,
+              onProgressMessage = prefixedProgressMessage,
+              deviceBindings = captureDeviceBindings,
+            )
+          }
+          // Outside the logging guard on purpose: this writes no session artifacts, it changes
+          // an OS setting to steady trail timing. Gating it on --no-logging would silently
+          // ignore a separately requested optimization and make the same trail run differently.
           // Experimental opt-in (gated internally, idempotent — the MCP path may have already
           // fired it at session-resolution time).
           SessionAnimationDisabler.startForSession(sid, trailblazeDeviceId)
-          maybeStartAndroidNetworkCapture(
-            runYamlRequest = runYamlRequest,
-            deviceId = trailblazeDeviceId,
-            sessionIdOverride = sid,
-            targetAppIds = appIdsForCapture,
-            onProgressMessage = prefixedProgressMessage,
-            deviceBindings = captureDeviceBindings,
-          )
         }
 
-        sessionId = when {
-          // Opt-in Koog strategy-graph agent. Top priority so it short-circuits the driver-based
-          // routing below for every platform/driver when the run explicitly asks for it.
+        sessionId = when (dispatchPath) {
+          // Opt-in Koog strategy-graph agent, selected for every platform/driver whose tools do
+          // not run on the device.
           //
           // The agent now drives the device IN-PROCESS for the WEB (Playwright-native) path:
           // [TrailblazeHostYamlRunner.runHostYaml] → `runPlaywrightNativeYaml` →
@@ -504,11 +606,10 @@ class DesktopYamlRunner(
           // on-device branch below). `preferHostAgent` opts back into running the loop host-side and
           // dispatching each tool over RPC (`runHostTrailblazeRunnerWithOnDeviceRpc`).
           // Compose (the RPC driver) also rides this host seam now that ComposeRpcTrailblazeAgent is
-          // a BaseTrailblazeAgent — `runComposeYaml` builds a KoogTestAgentRunner when KOOG is
-          // selected. The earlier MCP-self-connection approach (and the deadlock it hit) is the
+          // a BaseTrailblazeAgent — ComposeHostDriverDescriptor's run path builds a
+          // KoogTestAgentRunner when KOOG is selected. The earlier MCP-self-connection approach (and the deadlock it hit) is the
           // reason the in-process executor route exists; see [KoogStrategyGraphAgent].
-          runYamlRequest.agentImplementation == AgentImplementation.KOOG_STRATEGY_GRAPH &&
-            trailblazeDriverType !in TrailblazeDriverType.ANDROID_ON_DEVICE_DRIVER_TYPES -> {
+          DispatchPath.HOST_IN_PROCESS_KOOG -> {
             prefixedProgressMessage(
               "KOOG_STRATEGY_GRAPH selected — running the in-process Koog strategy-graph agent " +
                 "(web, Revyl, Electron, and local Maestro iOS paths via runHostYaml).",
@@ -535,8 +636,11 @@ class DesktopYamlRunner(
                 // self-instrument capture (the coordinator skips WEB) and would otherwise
                 // ignore `--no-capture-video`.
                 captureVideo = captureOptionsForRun.captureVideo,
+                snapshotBaselineRef = desktopAppRunYamlParams.snapshotBaselineRef,
+                snapshotBaselineThresholdPercent = desktopAppRunYamlParams.snapshotBaselineThresholdPercent,
               ),
               deviceManager = trailblazeDeviceManager,
+              logsDir = logsDirProvider(),
             )
             lastToolResult = hostResult.lastToolResult
 
@@ -553,8 +657,7 @@ class DesktopYamlRunner(
 
           // V3 on host with accessibility driver: run planner/analyzer on the host JVM,
           // send individual tool calls to the on-device accessibility server via RPC.
-          trailblazeDriverType == TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY &&
-            runYamlRequest.agentImplementation == AgentImplementation.MULTI_AGENT_V3 -> {
+          DispatchPath.V3_ACCESSIBILITY_ON_HOST -> {
             val trailblazeOnDeviceInstrumentationTarget = targetTestApp?.getTrailblazeOnDeviceInstrumentationTarget()
               ?: trailblazeHostAppTarget.getTrailblazeOnDeviceInstrumentationTarget()
 
@@ -565,9 +668,11 @@ class DesktopYamlRunner(
               // wedge surfacing on ANY path (including the `launchApp` pre-action, which the
               // session-status detection can't see) force-restarts the shared server next trail.
               onNonRecoverableWedge = { armWedgedDevice(trailblazeDeviceId) },
+              wireTransportMode = AndroidWireTransport.modeFor(trailblazeDriverType),
             )
 
             runV3WithAccessibilityOnHost(
+              runTargetApp = targetTestApp ?: trailblazeHostAppTarget,
               onDeviceRpc = onDeviceRpc,
               dynamicLlmClient = dynamicLlmClientProvider(runYamlRequest.trailblazeLlmModel),
               runYamlRequest = runYamlRequest.copy(driverType = trailblazeDriverType),
@@ -578,6 +683,7 @@ class DesktopYamlRunner(
               additionalInstrumentationArgs = additionalInstrumentationArgs,
               targetTestApp = targetTestApp,
               onSessionStarted = captureSessionStarted,
+              noLogging = desktopAppRunYamlParams.noLogging,
             )
           }
 
@@ -591,35 +697,55 @@ class DesktopYamlRunner(
           // history) on the host instead of the device — useful when device memory pressure is a
           // concern; runHostTrailblazeRunnerWithOnDeviceRpc still runs the Koog graph host-side
           // when this path is taken.
-          trailblazeDriverType in TrailblazeDriverType.ANDROID_ON_DEVICE_DRIVER_TYPES &&
-            runYamlRequest.agentImplementation != AgentImplementation.MULTI_AGENT_V3 &&
-            runYamlRequest.config.preferHostAgent -> {
-            val trailblazeOnDeviceInstrumentationTarget = targetTestApp?.getTrailblazeOnDeviceInstrumentationTarget()
-              ?: trailblazeHostAppTarget.getTrailblazeOnDeviceInstrumentationTarget()
-
-            val onDeviceRpc = OnDeviceRpcClient(
-              trailblazeDeviceId = trailblazeDeviceId,
-              sendProgressMessage = prefixedProgressMessage,
-              // Arm at the single chokepoint every synchronous on-device RPC flows through, so a
-              // wedge surfacing on ANY path (including the `launchApp` pre-action, which the
-              // session-status detection can't see) force-restarts the shared server next trail.
-              onNonRecoverableWedge = { armWedgedDevice(trailblazeDeviceId) },
-            )
-
-            runHostAgentWithOnDeviceRpc(
-              onDeviceRpc = onDeviceRpc,
-              dynamicLlmClient = dynamicLlmClientProvider(runYamlRequest.trailblazeLlmModel),
-              runYamlRequest = runYamlRequest.copy(driverType = trailblazeDriverType),
-              connectedTrailblazeDevice = connectedTrailblazeDevice,
-              trailblazeOnDeviceInstrumentationTarget = trailblazeOnDeviceInstrumentationTarget,
-              onProgressMessage = prefixedProgressMessage,
-              onConnectionStatus = onConnectionStatus,
-              additionalInstrumentationArgs = additionalInstrumentationArgs,
+          //
+          // Drivers that declare `hostAgentDispatchable = false` (ANDROID_TEST) never land here:
+          // this branch builds a dynamic LLM client and delegates unrecorded and self-heal steps
+          // to it, and that driver exists to be a merge-blocking gate whose on-device runner fails
+          // an unrecorded step BY NAME rather than improvising. They fall through to the
+          // deterministic on-device envelope branch below, which is the only way they should ever
+          // execute.
+          //
+          // This is the only branch wired for multi-device companions — see the gate above, which
+          // reads the same resolved path.
+          DispatchPath.HOST_AGENT_OVER_ONDEVICE_RPC -> {
+            val trailblazeOnDeviceInstrumentationTarget = resolveOnDeviceInstrumentationTarget(
+              driverType = trailblazeDriverType,
               targetTestApp = targetTestApp,
-              onSessionStarted = captureSessionStarted,
-              findTargetById = desktopAppRunYamlParams.findTargetById,
-              onCaptureDeviceBindingsResolved = { captureDeviceBindings = it },
+              trailblazeHostAppTarget = trailblazeHostAppTarget,
             )
+            if (trailblazeOnDeviceInstrumentationTarget == null) {
+              val reason = (targetTestApp ?: trailblazeHostAppTarget).missingInProcessHarnessMessage()
+              prefixedProgressMessage(reason)
+              executionResult = TrailExecutionResult.Failed(reason)
+              null
+            } else {
+              val onDeviceRpc = OnDeviceRpcClient(
+                trailblazeDeviceId = trailblazeDeviceId,
+                sendProgressMessage = prefixedProgressMessage,
+                // Arm at the single chokepoint every synchronous on-device RPC flows through, so a
+                // wedge surfacing on ANY path (including the `launchApp` pre-action, which the
+                // session-status detection can't see) force-restarts the shared server next trail.
+                onNonRecoverableWedge = { armWedgedDevice(trailblazeDeviceId) },
+                wireTransportMode = AndroidWireTransport.modeFor(trailblazeDriverType),
+              )
+
+              runHostAgentWithOnDeviceRpc(
+                runTargetApp = targetTestApp ?: trailblazeHostAppTarget,
+                onDeviceRpc = onDeviceRpc,
+                dynamicLlmClient = dynamicLlmClientProvider(runYamlRequest.trailblazeLlmModel),
+                runYamlRequest = runYamlRequest.copy(driverType = trailblazeDriverType),
+                connectedTrailblazeDevice = connectedTrailblazeDevice,
+                trailblazeOnDeviceInstrumentationTarget = trailblazeOnDeviceInstrumentationTarget,
+                onProgressMessage = prefixedProgressMessage,
+                onConnectionStatus = onConnectionStatus,
+                additionalInstrumentationArgs = additionalInstrumentationArgs,
+                targetTestApp = targetTestApp,
+                onSessionStarted = captureSessionStarted,
+                findTargetById = desktopAppRunYamlParams.findTargetById,
+                onCaptureDeviceBindingsResolved = { captureDeviceBindings = it },
+                noLogging = desktopAppRunYamlParams.noLogging,
+              )
+            }
           }
 
           // On-device agent: send entire YAML to device, agent loop runs on-device.
@@ -627,35 +753,46 @@ class DesktopYamlRunner(
           // default for KOOG_STRATEGY_GRAPH on Android on-device drivers: the request (carrying
           // agentImplementation) goes to the device's RunYamlRequestHandler, which runs the Koog
           // strategy-graph agent in-process via AndroidTrailblazeRule.
-          trailblazeDriverType in TrailblazeDriverType.ANDROID_ON_DEVICE_DRIVER_TYPES -> {
-            val trailblazeOnDeviceInstrumentationTarget = targetTestApp?.getTrailblazeOnDeviceInstrumentationTarget()
-              ?: trailblazeHostAppTarget.getTrailblazeOnDeviceInstrumentationTarget()
-
-            val onDeviceRpc = OnDeviceRpcClient(
-              trailblazeDeviceId = trailblazeDeviceId,
-              sendProgressMessage = prefixedProgressMessage,
-              // Arm at the single chokepoint every synchronous on-device RPC flows through, so a
-              // wedge surfacing on ANY path (including the `launchApp` pre-action, which the
-              // session-status detection can't see) force-restarts the shared server next trail.
-              onNonRecoverableWedge = { armWedgedDevice(trailblazeDeviceId) },
+          DispatchPath.ON_DEVICE_AGENT -> {
+            val trailblazeOnDeviceInstrumentationTarget = resolveOnDeviceInstrumentationTarget(
+              driverType = trailblazeDriverType,
+              targetTestApp = targetTestApp,
+              trailblazeHostAppTarget = trailblazeHostAppTarget,
             )
+            if (trailblazeOnDeviceInstrumentationTarget == null) {
+              val reason = (targetTestApp ?: trailblazeHostAppTarget).missingInProcessHarnessMessage()
+              prefixedProgressMessage(reason)
+              executionResult = TrailExecutionResult.Failed(reason)
+              null
+            } else {
+              val onDeviceRpc = OnDeviceRpcClient(
+                trailblazeDeviceId = trailblazeDeviceId,
+                sendProgressMessage = prefixedProgressMessage,
+                // Arm at the single chokepoint every synchronous on-device RPC flows through, so a
+                // wedge surfacing on ANY path (including the `launchApp` pre-action, which the
+                // session-status detection can't see) force-restarts the shared server next trail.
+                onNonRecoverableWedge = { armWedgedDevice(trailblazeDeviceId) },
+                wireTransportMode = AndroidWireTransport.modeFor(trailblazeDriverType),
+              )
 
-            // Set driver type on request so the on-device server knows which driver to use
-            val requestWithDriverType = runYamlRequest.copy(driverType = trailblazeDriverType)
+              // Set driver type on request so the on-device server knows which driver to use
+              val requestWithDriverType = runYamlRequest.copy(driverType = trailblazeDriverType)
 
-            runYamlOnDevice(
-              onDeviceRpc = onDeviceRpc,
-              trailblazeConnectedDevice = connectedTrailblazeDevice,
-              trailblazeOnDeviceInstrumentationTarget = trailblazeOnDeviceInstrumentationTarget,
-              runYamlRequest = requestWithDriverType,
-              onProgressMessage = prefixedProgressMessage,
-              onConnectionStatus = onConnectionStatus,
-              additionalInstrumentationArgs = additionalInstrumentationArgs,
-              onSessionStarted = captureSessionStarted,
-            )
+              runYamlOnDevice(
+                runTargetApp = targetTestApp ?: trailblazeHostAppTarget,
+                onDeviceRpc = onDeviceRpc,
+                trailblazeConnectedDevice = connectedTrailblazeDevice,
+                trailblazeOnDeviceInstrumentationTarget = trailblazeOnDeviceInstrumentationTarget,
+                runYamlRequest = requestWithDriverType,
+                onProgressMessage = prefixedProgressMessage,
+                onConnectionStatus = onConnectionStatus,
+                additionalInstrumentationArgs = additionalInstrumentationArgs,
+                onSessionStarted = captureSessionStarted,
+              )
+            }
           }
 
-          else -> {
+          DispatchPath.HOST_DEFAULT -> {
             val hostResult = TrailblazeHostYamlRunner.runHostYaml(
               dynamicLlmClient = dynamicLlmClientProvider(desktopAppRunYamlParams.runYamlRequest.trailblazeLlmModel),
               runOnHostParams = RunOnHostParams(
@@ -681,8 +818,11 @@ class DesktopYamlRunner(
                 // self-instrument capture (the coordinator skips WEB) and would otherwise
                 // ignore `--no-capture-video`.
                 captureVideo = captureOptionsForRun.captureVideo,
+                snapshotBaselineRef = desktopAppRunYamlParams.snapshotBaselineRef,
+                snapshotBaselineThresholdPercent = desktopAppRunYamlParams.snapshotBaselineThresholdPercent,
               ),
               deviceManager = trailblazeDeviceManager,
+              logsDir = logsDirProvider(),
             )
             lastToolResult = hostResult.lastToolResult
 
@@ -853,6 +993,18 @@ class DesktopYamlRunner(
     onProgressMessage: (String) -> Unit,
     enableAccessibility: Boolean,
     requireAndroidAccessibilityService: Boolean,
+    /**
+     * The app target THIS connect is for — the run's resolved `config.target` on the launch device,
+     * the companion's own target on a companion device. Required and non-null so a new dispatch
+     * path can neither fall back to the daemon selection nor pass nothing at all.
+     *
+     * Must be the SAME target [resolveOnDeviceInstrumentationTarget] chose the runner from, i.e.
+     * `targetTestApp ?: trailblazeHostAppTarget`. Passing the bare nullable `targetTestApp` instead
+     * would, on a run that declares no `config.target`, instrument a harness resolved from the
+     * session target while unioning in nothing — the harness stopped and the harness launched
+     * coming from two different targets is exactly the bug this union is meant to close.
+     */
+    runTargetApp: TrailblazeHostAppTarget,
   ): DeviceConnectionStatus {
     // Step 1: connect (install/reuse) and enable accessibility if needed. Any IOException in
     // here is an infrastructure-level failure (ADB, instrumentation launch, APK install) that
@@ -863,8 +1015,16 @@ class DesktopYamlRunner(
         sendProgressMessage = onProgressMessage,
         deviceId = trailblazeDeviceId,
         trailblazeOnDeviceInstrumentationTarget = trailblazeOnDeviceInstrumentationTarget,
+        // The daemon's resolved HTTPS port, so the adb reverse and the device's log POSTs both
+        // target the port this process actually bound — under TRAILBLAZE_PORT=52521 the HTTPS
+        // server is on 52522, and the old defaulted 52526 reverse fed every log into a dead
+        // socket ("no progress for 600s" while the run executed fine on-device).
+        httpsPort = trailblazeDeviceManager.settingsRepo.portManager.httpsPort,
         additionalInstrumentationArgs = additionalInstrumentationArgs,
         forceRestart = forceRestart,
+        // Every harness THIS RUN's target can present, not just the one being launched — see
+        // HostAndroidDeviceConnectUtils.planConnectForceStop for why, and for what it costs.
+        additionalForceStopTargets = runTargetApp.allInstrumentationTargets().toSet(),
       )
       if (enableAccessibility) {
         // The on-device GetScreenState handler (triggered below by waitForReady) uses the
@@ -877,6 +1037,20 @@ class DesktopYamlRunner(
         )
       }
       return status
+    }
+
+    // A connect that reports its own failure is terminal: nothing was launched, so probing
+    // readiness can only burn the full budget and report a timeout, and the force-restart retry
+    // re-runs the identical failing step and burns a second one. Worse, it replaces an error that
+    // names the fix ("test APK X is not installed — build and install it") with a generic
+    // readiness timeout. Fail here with the message the connect step produced.
+    fun DeviceConnectionStatus.failFastIfTerminal() {
+      if (this is DeviceConnectionStatus.DeviceConnectionError) {
+        throw TrailblazeException(
+          (this as? DeviceConnectionStatus.DeviceConnectionError.ConnectionFailure)?.errorMessage
+            ?: statusText,
+        )
+      }
     }
 
     // Consume a wedge entry set by this device's prior trail (see [wedgedDeviceIds]): the shared
@@ -895,6 +1069,7 @@ class DesktopYamlRunner(
       )
     }
     val initialStatus = doConnectAndEnable(forceRestart = recoverFromPriorWedge)
+    initialStatus.failFastIfTerminal()
     if (recoverFromPriorWedge) {
       onDeviceRpc.waitForReady(
         requireAndroidAccessibilityService = requireAndroidAccessibilityService,
@@ -918,6 +1093,7 @@ class DesktopYamlRunner(
         "Device readiness probe failed (${e.message}); force-restarting instrumentation and retrying once.",
       )
       val restartedStatus = doConnectAndEnable(forceRestart = true)
+      restartedStatus.failFastIfTerminal()
       onDeviceRpc.waitForReady(
         requireAndroidAccessibilityService = requireAndroidAccessibilityService,
       )
@@ -943,7 +1119,14 @@ class DesktopYamlRunner(
     onConnectionStatus: (DeviceConnectionStatus) -> Unit,
     additionalInstrumentationArgs: Map<String, String>,
     targetTestApp: TrailblazeHostAppTarget?,
+    /**
+     * The run's effective target — `targetTestApp ?: trailblazeHostAppTarget`, the same expression
+     * [resolveOnDeviceInstrumentationTarget] picks the runner from. See [connectAndEnsureReady].
+     */
+    runTargetApp: TrailblazeHostAppTarget,
     onSessionStarted: (SessionId) -> Unit = {},
+    /** The run's `--no-logging` flag: no session files, no trace export. */
+    noLogging: Boolean = false,
   ): SessionId? {
     return withContext(Dispatchers.IO) {
       // V3 + on-host path always uses the accessibility driver on-device.
@@ -955,6 +1138,7 @@ class DesktopYamlRunner(
         onProgressMessage = onProgressMessage,
         enableAccessibility = true,
         requireAndroidAccessibilityService = true,
+        runTargetApp = runTargetApp,
       )
 
       withContext(Dispatchers.Default) {
@@ -977,6 +1161,8 @@ class DesktopYamlRunner(
               v3SessionId = sessionId
               onSessionStarted(sessionId)
             },
+            logsDir = logsDirProvider(),
+            noLogging = noLogging,
           )
         } finally {
           armIfWedged(v3SessionId, listOf(connectedTrailblazeDevice.trailblazeDeviceId), onProgressMessage)
@@ -999,6 +1185,11 @@ class DesktopYamlRunner(
     onConnectionStatus: (DeviceConnectionStatus) -> Unit,
     additionalInstrumentationArgs: Map<String, String>,
     targetTestApp: TrailblazeHostAppTarget?,
+    /**
+     * The run's effective target — `targetTestApp ?: trailblazeHostAppTarget`, the same expression
+     * [resolveOnDeviceInstrumentationTarget] picks the runner from. See [connectAndEnsureReady].
+     */
+    runTargetApp: TrailblazeHostAppTarget,
     onSessionStarted: (SessionId) -> Unit = {},
     /**
      * Resolves a per-device `target:` declared by a multi-device configuration member — see
@@ -1010,6 +1201,8 @@ class DesktopYamlRunner(
      * per-session capture can arm one bridge per device. Not called for a single-device run.
      */
     onCaptureDeviceBindingsResolved: (List<CaptureDeviceBinding>) -> Unit = {},
+    /** The run's `--no-logging` flag: no session files, no trace export. */
+    noLogging: Boolean = false,
   ): SessionId? {
     return withContext(Dispatchers.IO) {
       val needsAccessibility =
@@ -1022,6 +1215,7 @@ class DesktopYamlRunner(
         onProgressMessage = onProgressMessage,
         enableAccessibility = needsAccessibility,
         requireAndroidAccessibilityService = needsAccessibility,
+        runTargetApp = runTargetApp,
       )
 
       // Multi-device: a unified trail may declare a `config.devices:` configuration entry (an
@@ -1075,6 +1269,7 @@ class DesktopYamlRunner(
             configurationName = resolved.configurationName,
             startDeviceName = resolved.startDeviceName,
             startDeviceTarget = memberTargets[resolved.startDeviceName],
+            deviceDescriptions = resolved.memberDescriptions,
             companions = resolved.companionDeviceIds.mapValues { (name, companionDeviceId) ->
               val companionTarget = memberTargets[name]
               onProgressMessage(
@@ -1093,6 +1288,7 @@ class DesktopYamlRunner(
                   trailblazeDeviceId = companionDeviceId,
                   sendProgressMessage = onProgressMessage,
                   onNonRecoverableWedge = { armWedgedDevice(companionDeviceId) },
+                  wireTransportMode = AndroidWireTransport.modeFor(runYamlRequest.driverType),
                 )
                 companionRpcClients += companionRpc
                 connectAndEnsureReady(
@@ -1100,14 +1296,24 @@ class DesktopYamlRunner(
                   trailblazeDeviceId = companionDeviceId,
                   // This device's own target decides which instrumentation runner warms up on it —
                   // a companion running a different app than the launch device needs that app's
-                  // runner, not the launch device's.
-                  trailblazeOnDeviceInstrumentationTarget =
-                    companionTarget?.getTrailblazeOnDeviceInstrumentationTarget()
-                      ?: trailblazeOnDeviceInstrumentationTarget,
+                  // runner, not the launch device's. Driver-aware for the same reason the launch
+                  // device's resolution is: on ANDROID_TEST the runner is the app's own in-process
+                  // harness, never the bundled default.
+                  trailblazeOnDeviceInstrumentationTarget = resolveCompanionInstrumentationTarget(
+                    configurationName = resolved.configurationName,
+                    companionName = name,
+                    companionTarget = companionTarget,
+                    driverType = runYamlRequest.driverType,
+                    launchDeviceFallback = trailblazeOnDeviceInstrumentationTarget,
+                  ),
                   additionalInstrumentationArgs = additionalInstrumentationArgs,
                   onProgressMessage = onProgressMessage,
                   enableAccessibility = needsAccessibility,
                   requireAndroidAccessibilityService = needsAccessibility,
+                  // This companion's own target, for the same reason its instrumentation target is
+                  // resolved from it: the harnesses to clear are the ones belonging to the app
+                  // THIS device runs, not the launch device's.
+                  runTargetApp = companionTarget ?: runTargetApp,
                 )
                 TrailblazeHostYamlRunner.CompanionDeviceConnection.AndroidRpc(
                   trailblazeDeviceId = companionDeviceId,
@@ -1178,6 +1384,8 @@ class DesktopYamlRunner(
                 onSessionStarted(sessionId)
               },
               multiDeviceSession = multiDeviceSession,
+              logsDir = logsDirProvider(),
+              noLogging = noLogging,
             )
           } finally {
             armIfWedged(
@@ -1250,9 +1458,11 @@ class DesktopYamlRunner(
   }
 
   /**
-   * Resolves a unified trail's `config.devices:` CONFIGURATION entry against the
-   * `TRAILBLAZE_DEVICE_BINDINGS` env var. Thin env-reading wrapper over the pure
-   * [MultiDeviceConfigurationResolver.resolve] so the resolution rules stay unit-testable.
+   * Resolves a unified trail's `config.devices:` CONFIGURATION entry from the request's own
+   * selection and bindings, falling back to `TRAILBLAZE_DEVICE_CONFIGURATION` /
+   * `TRAILBLAZE_DEVICE_BINDINGS`. Thin env-reading wrapper over the pure
+   * [MultiDeviceConfigurationResolver.resolve], which owns the precedence ladder so it stays
+   * unit-testable without a process environment.
    */
   private fun resolveMultiDeviceConfiguration(
     runYamlRequest: RunYamlRequest,
@@ -1262,6 +1472,15 @@ class DesktopYamlRunner(
       yaml = runYamlRequest.yaml,
       primaryDeviceId = primaryDeviceId,
       rawDeviceBindings = System.getenv(MultiDeviceConfigurationResolver.DEVICE_BINDINGS_ENV_VAR),
+      requestDeviceBindings = runYamlRequest.deviceBindings,
+      requestConfigurationName = runYamlRequest.deviceConfiguration,
+      environmentConfigurationName =
+        System.getenv(MultiDeviceConfigurationResolver.DEVICE_CONFIGURATION_ENV_VAR),
+      // The driver this run resolved for the launch device — and therefore the one every device in
+      // the cast is dispatched over. The caller has already folded it into the request
+      // (`copy(driverType = trailblazeDriverType)`), so a member pinning anything else is rejected
+      // here rather than silently ignored.
+      sessionDriverType = runYamlRequest.driverType,
     )
 
   /**
@@ -1316,6 +1535,11 @@ class DesktopYamlRunner(
      * target's freshly-opened socket). Defaulted to a no-op so existing callers stay compatible.
      */
     onSessionStarted: (SessionId) -> Unit = {},
+    /**
+     * The run's effective target — `targetTestApp ?: trailblazeHostAppTarget`, the same expression
+     * [resolveOnDeviceInstrumentationTarget] picks the runner from. See [connectAndEnsureReady].
+     */
+    runTargetApp: TrailblazeHostAppTarget,
   ): SessionId? {
     return withContext(Dispatchers.IO) {
       val needsAccessibility =
@@ -1328,6 +1552,7 @@ class DesktopYamlRunner(
         onProgressMessage = onProgressMessage,
         enableAccessibility = needsAccessibility,
         requireAndroidAccessibilityService = needsAccessibility,
+        runTargetApp = runTargetApp,
       )
 
       withContext(Dispatchers.Default) {

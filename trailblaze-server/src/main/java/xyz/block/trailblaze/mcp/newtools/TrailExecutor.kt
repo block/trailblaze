@@ -91,11 +91,16 @@ interface TrailExecutor {
    * Executes a trail from a YAML file path.
    *
    * @param filePath Path to the .trail.yaml file
+   * @param deviceConfiguration Which of the trail's `config.devices:` CONFIGURATION entries to bind.
+   *   Null derives it: a trail declaring exactly one binds it, a trail declaring none runs
+   *   single-device, and a trail declaring several is refused rather than guessed. See
+   *   [selectDeviceConfiguration].
    * @param onProgress Optional callback for progress updates
    * @return Execution result with pass/fail status and details
    */
   suspend fun executeFromFile(
     filePath: String,
+    deviceConfiguration: String? = null,
     onProgress: ((String) -> Unit)? = null,
   ): TrailExecutionResult
 
@@ -166,6 +171,7 @@ class TrailExecutorImpl(
 
   override suspend fun executeFromFile(
     filePath: String,
+    deviceConfiguration: String?,
     onProgress: ((String) -> Unit)?,
   ): TrailExecutionResult {
     val startTime = Clock.System.now()
@@ -188,9 +194,46 @@ class TrailExecutorImpl(
     // [DeviceClassifiersProvider] for the empty-list (no bound device) semantics — that guard is
     // surfaced below as a clear "bind a device first" error.
     val deviceClassifiers = deviceClassifiersProvider(sessionContext?.associatedDeviceId)
+    val yamlContent = try {
+      file.readText()
+    } catch (e: Exception) {
+      return TrailExecutionResult(
+        passed = false,
+        stepsExecuted = 0,
+        durationMs = (Clock.System.now() - startTime).inWholeMilliseconds,
+        failureReason = "Failed to read trail file: ${e.message}",
+      )
+    }
+
+    // A configuration's recording legs resolve by exact name only, so a two-device trail decoded
+    // without one lowers every configuration-keyed step with no recording — and deterministic
+    // execution, having no LLM fallback, would report a fully recorded trail as unrecorded.
+    val selection = selectDeviceConfiguration(yamlContent, requested = deviceConfiguration, trailblazeYaml = trailblazeYaml)
+    selection.errorMessage()?.let { message ->
+      return TrailExecutionResult(
+        passed = false,
+        stepsExecuted = 0,
+        durationMs = (Clock.System.now() - startTime).inWholeMilliseconds,
+        failureReason = message,
+      )
+    }
+    val selectedConfiguration = (selection as DeviceConfigurationSelection.Selected).name
+    if (selectedConfiguration != null) {
+      onProgress?.invoke(
+        if (selection.implicit) {
+          "Binding the trail's only device configuration: $selectedConfiguration"
+        } else {
+          "Binding device configuration: $selectedConfiguration"
+        },
+      )
+    }
+
     val trailItems = try {
-      val yamlContent = file.readText()
-      trailblazeYaml.decodeTrail(yamlContent, deviceClassifiers = deviceClassifiers)
+      trailblazeYaml.decodeTrail(
+        yamlContent,
+        deviceClassifiers = deviceClassifiers,
+        selectedDeviceConfiguration = selectedConfiguration,
+      )
     } catch (e: IllegalStateException) {
       return TrailExecutionResult(
         passed = false,

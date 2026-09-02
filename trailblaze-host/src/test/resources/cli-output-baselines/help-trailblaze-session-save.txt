@@ -5,12 +5,31 @@
 # Reviewers: scrutinize diffs to baselines the same way you would scrutinize a UI screenshot —
 # small wording / spacing changes can be intentional or accidental.
 # ----------------------------------------------------------------------
-Usage: trailblaze session save [-hV] [--id=<id>] [-t=<title>]
+Usage: trailblaze session save [-hV] [--configuration=<name>] [-d=<device>]
+                               [--id=<id>] [-t=<title>]
 Write the recorded steps to a *.trail.yaml file you can replay later (does not
 end the session)
-  -h, --help            Show this help message and exit.
-      --id=<id>         Session ID to save (defaults to current session,
-                          supports prefix matching)
-  -t, --title=<title>   Title for the saved trail (uses session title if not
-                          specified)
-  -V, --version         Print version information and exit.
+      --configuration=<name>
+                          Name for the multi-device configuration saved from
+                            the session's named-device roster (from `session
+                            start --bind`). Defaults to the bound names joined
+                            with '-', e.g. a seller,buyer roster saves as
+                            `seller-buyer`. The name is a recommendation —
+                            rename it in the saved file freely. It becomes a
+                            YAML key, so it must start with a letter or digit
+                            and hold only letters, digits, '-', '_' and '.'.
+                            Only meaningful for a roster session; on a session
+                            that bound a trail-declared configuration it may
+                            only restate that configuration's name.
+  -d, --device=<device>   Save the CLI session pinned to this device — pass the
+                            same value given to `session start -d`. Required to
+                            save a multi-device session started with `session
+                            start --bind`: its named-device roster lives on
+                            that per-device session, and the save synthesizes
+                            the trail's `config.devices:` cast from it.
+  -h, --help              Show this help message and exit.
+      --id=<id>           Session ID to save (defaults to current session,
+                            supports prefix matching)
+  -t, --title=<title>     Title for the saved trail (uses session title if not
+                            specified)
+  -V, --version           Print version information and exit.

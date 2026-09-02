@@ -228,6 +228,35 @@ TRAILBLAZE_HTTPS_PORT="${TRAILBLAZE_HTTPS_PORT:-$((TRAILBLAZE_PORT + 1))}"
 export TRAILBLAZE_PORT
 export TRAILBLAZE_HTTPS_PORT
 
+# Ports Trailblaze allocates to devices. Mirrors PORT_RANGE_START and PORT_RANGE_SIZE in
+# TrailblazeDevicePort.kt; scripts/trailblaze_port_range_test.sh fails if they drift apart.
+TRAILBLAZE_DEVICE_PORT_RANGE_START=52530
+TRAILBLAZE_DEVICE_PORT_RANGE_END=59529
+
+# Refuse a daemon port a device could be allocated, before this script probes /ping.
+#
+# The JVM refuses one too, but it never gets the chance: the host bridges a device with
+# `adb forward tcp:<port> tcp:<port>`, so the device answers this script's probe, the daemon is
+# never spawned, and the script goes on to send workspace requests and open Trail Runner against
+# the device's RPC server. Callers that act on an already-running daemon (`stop`, `status`) skip
+# this — one started before the check existed still has to be stoppable.
+require_usable_daemon_port() {
+    local port
+    for port in "$TRAILBLAZE_PORT" "$TRAILBLAZE_HTTPS_PORT"; do
+        if [ "$port" -ge "$TRAILBLAZE_DEVICE_PORT_RANGE_START" ] 2>/dev/null &&
+            [ "$port" -le "$TRAILBLAZE_DEVICE_PORT_RANGE_END" ] 2>/dev/null; then
+            echo "ERROR: port $port is inside the range Trailblaze allocates device ports from" >&2
+            echo "       (${TRAILBLAZE_DEVICE_PORT_RANGE_START}-${TRAILBLAZE_DEVICE_PORT_RANGE_END})." \
+                "A connected device can be assigned it, and \`adb forward\`" >&2
+            echo "       would take it from the daemon without reporting an error." >&2
+            echo "       Set TRAILBLAZE_PORT below $((TRAILBLAZE_DEVICE_PORT_RANGE_START - 1))," \
+                "or change serverPort in trailblaze-settings.json" >&2
+            echo "       (a saved port outranks the env var). The HTTPS port derives as +1." >&2
+            exit 1
+        fi
+    done
+}
+
 # ---------------------------------------------------------------------------
 # Daemon management
 # ---------------------------------------------------------------------------
@@ -613,6 +642,12 @@ fi
 # ---------------------------------------------------------------------------
 # Main logic
 # ---------------------------------------------------------------------------
+
+# Every branch below either spawns a daemon or attaches to one, except `stop` and `status`, which
+# act on whatever is already running and must keep working on a port the guard rejects.
+if [ "${1:-}" != "stop" ] && [ "${1:-}" != "status" ]; then
+    require_usable_daemon_port
+fi
 
 if [ "$NATIVE_APP_MODE" = true ]; then
     launch_trailrunner_app

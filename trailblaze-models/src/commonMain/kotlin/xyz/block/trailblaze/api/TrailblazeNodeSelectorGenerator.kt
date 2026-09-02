@@ -237,6 +237,8 @@ object TrailblazeNodeSelectorGenerator {
     val namedStrategies = when (val detail = target.driverDetail) {
       is DriverNodeDetail.AndroidAccessibility ->
         namedStructuralAndroidAccessibilityStrategies(root, target, detail, parentMap)
+      is DriverNodeDetail.AndroidView ->
+        namedStructuralAndroidViewStrategies(root, target, detail, parentMap)
       is DriverNodeDetail.AndroidMaestro ->
         namedStructuralAndroidMaestroStrategies(root, target, detail, parentMap)
       is DriverNodeDetail.Web ->
@@ -368,6 +370,8 @@ object TrailblazeNodeSelectorGenerator {
   ): List<Pair<String, () -> TrailblazeNodeSelector?>> = when (detail) {
     is DriverNodeDetail.AndroidAccessibility ->
       androidAccessibilityStrategies(root, target, detail, parentMap)
+    is DriverNodeDetail.AndroidView ->
+      androidViewStrategies(root, target, detail, parentMap)
     is DriverNodeDetail.AndroidMaestro ->
       androidMaestroStrategies(root, target, detail, parentMap)
     is DriverNodeDetail.Web ->

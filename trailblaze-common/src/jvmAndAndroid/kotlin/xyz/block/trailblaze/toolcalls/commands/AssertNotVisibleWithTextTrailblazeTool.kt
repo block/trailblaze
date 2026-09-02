@@ -55,8 +55,12 @@ data class AssertNotVisibleWithTextTrailblazeTool(
      * honoring BOTH its regex reading and its escaped-literal reading, so screen text with regex
      * metacharacters ("$5.00") and deliberate regexes (".*debit 1582.*") both keep working.
      * A leading `(?-i)` in [text] restores case-sensitivity.
+     *
+     * Public because it IS this tool's matching semantics: a driver that dispatches the
+     * not-visible check on its own backend (the in-process ANDROID_TEST adapter) must build its
+     * selector from this same pattern, or the two drivers disagree about what "not visible" means.
      */
-    internal fun toLenientPattern(text: String): String {
+    fun toLenientPattern(text: String): String {
       val compilesAsRegex = try {
         Regex(text)
         true

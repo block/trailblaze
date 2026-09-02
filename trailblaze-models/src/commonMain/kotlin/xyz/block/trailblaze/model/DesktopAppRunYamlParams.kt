@@ -60,7 +60,7 @@ class DesktopAppRunYamlParams(
   val composeRpcPort: Int = TrailblazeDevicePort.COMPOSE_DEFAULT_RPC_PORT,
   /** When true, uses a no-op logger so no session files are written to disk. */
   val noLogging: Boolean = false,
-  /** Override capture video setting (null = use app config default). */
+  /** Override capture video setting (null = default: video off, opt-in per run). */
   val captureVideo: Boolean? = null,
   /** Override capture Android logcat setting (null = use app config default). */
   val captureLogcat: Boolean? = null,
@@ -84,4 +84,18 @@ class DesktopAppRunYamlParams(
    * silently ignoring the override would run the wrong app on that device.
    */
   val findTargetById: ((String) -> TrailblazeHostAppTarget?)? = null,
+  /**
+   * Reference to a PREVIOUS run to diff this run's `takeSnapshot` captures against — an http(s)
+   * URL to a session logs zip (e.g. the CI artifact store's `latest_success.zip`), a local zip,
+   * or an extracted session directory. Null (the default) falls back to the
+   * `TRAILBLAZE_SNAPSHOT_BASELINE` env var in the executing process; comparison is skipped when
+   * neither is set. See `SnapshotBaselineSource` in trailblaze-host.
+   */
+  val snapshotBaselineRef: String? = null,
+  /**
+   * Pass threshold for the baseline comparison: a snapshot passes when its pixel diff percentage
+   * is <= this value. Null inherits `TRAILBLAZE_SNAPSHOT_BASELINE_THRESHOLD`, else the built-in
+   * default (2.0).
+   */
+  val snapshotBaselineThresholdPercent: Double? = null,
 )

@@ -15,12 +15,17 @@ val wasmEnabled = providers.gradleProperty("trailblaze.wasm").map(String::toBool
 
 kotlin {
 
+  // Declared for its COMPILER coverage, not to ship anything: no web app is built from this module
+  // any more, so there is no `binaries.executable()` and no webpack bundle. Keeping the target is
+  // what re-enables commonMain metadata compilation for a non-JVM platform, which is what keeps
+  // commonMain free of JVM-only stdlib surface — and KGP silently DROPS compileKotlinWasmJs if the
+  // target is gone, so removing it would leave the cleanliness gate green while checking nothing.
+  // `nodejs()` rather than the sibling modules' `browser()`: browser() wires up the Karma/webpack
+  // toolchain for a bundle nobody consumes here.
   if (wasmEnabled) {
     @OptIn(ExperimentalWasmDsl::class)
     wasmJs {
-      outputModuleName.set("composeApp")
-      browser()
-      binaries.executable()
+      nodejs()
     }
   }
   jvm {
@@ -59,15 +64,8 @@ kotlin {
       implementation(libs.ktor.client.core)
       implementation(libs.ktor.client.content.negotiation)
       implementation(libs.ktor.serialization.kotlinx.json)
-      // WebSocket client (shared core; engine-specific WS support comes from the
-      // ktor-client-js wasmJs target below — the browser's native WebSocket is used).
       implementation(libs.ktor.client.websockets)
 
-    }
-    if (wasmEnabled) {
-      wasmJsMain.dependencies {
-        implementation(libs.ktor.client.js)
-      }
     }
     jvmMain.dependencies {
       implementation(project(":trailblaze-models"))
@@ -82,9 +80,8 @@ kotlin {
     jvmTest.dependencies {
       implementation(kotlin("test"))
       // Compose UI test rig. Used by ActionYamlCardTest to assert which controls render
-      // under different descriptorResolver inputs (the null path matters for wasm callers
-      // that don't have JVM reflection — `RecordingScreenComposable` passes the real
-      // resolver on desktop, `WebDevicesPage` would pass `{ _ -> null }` on web).
+      // under different descriptorResolver inputs — the null path matters for any caller without
+      // JVM reflection; `RecordingScreenComposable` passes the real resolver on desktop.
       //
       // `compose.desktop.currentOs` is required alongside the JUnit4 rig — it brings in the
       // platform-specific Skia native (libskiko-macos-arm64.dylib on Apple Silicon, …) that

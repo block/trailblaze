@@ -152,7 +152,15 @@ class ToolCallerEdgeScannerTest {
     }
 
     assertEquals(setOf("subprocess_tool"), result.unscannable.keys)
-    val warning = result.unscannableWarnings().single()
+    val diagnostic = result.unscannableDiagnostics().single()
+    val warning = diagnostic.message
+    assertEquals(UsagesDiagnostic.CALLER_SCAN_UNAVAILABLE, diagnostic.kind)
+    assertEquals(
+      "impactedViaCallers",
+      diagnostic.subject,
+      "the consequence belongs to the FIELD whose completeness is at stake, not to any one tool — " +
+        "which is why this is one diagnostic naming every unscanned tool rather than one per tool",
+    )
     assertTrue(warning.contains("subprocess_tool"), "names the unscanned tool: $warning")
     assertTrue(warning.contains("runtime: subprocess"), "explains the subprocess cause: $warning")
     // Still usable as a CALLEE, and the tools that COULD be scanned still produce their edges.
@@ -170,8 +178,8 @@ class ToolCallerEdgeScannerTest {
 
     assertEquals("Permission denied: /tmp/broken.ts", result.unscannable["broken"])
     assertTrue(
-      result.unscannableWarnings().single().contains("Permission denied: /tmp/broken.ts"),
-      "the warning carries the real reason: ${result.unscannableWarnings()}",
+      result.unscannableDiagnostics().single().message.contains("Permission denied: /tmp/broken.ts"),
+      "the diagnostic carries the real reason: ${result.unscannableDiagnostics()}",
     )
   }
 

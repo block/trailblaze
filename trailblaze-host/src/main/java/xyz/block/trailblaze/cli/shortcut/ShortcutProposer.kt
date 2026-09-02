@@ -315,6 +315,7 @@ object ShortcutProposer {
   internal fun isIndexOnlyFallback(selector: TrailblazeNodeSelector): Boolean =
     selector.index != null &&
       selector.androidAccessibility == null &&
+      selector.androidView == null &&
       selector.androidMaestro == null &&
       selector.iosMaestro == null &&
       selector.iosAxe == null &&
@@ -396,6 +397,7 @@ object ShortcutProposer {
     // selector with otherwise-identical structure still differentiates. v1 only
     // synthesizes android matchers in `synthesizeTap`, so these branches are
     // forward-compat insurance for when iOS / web synthesis lands.
+    selector.androidView?.let { parts += "av[" + it.toString() + "]" }
     selector.androidMaestro?.let { parts += "am[" + it.toString() + "]" }
     selector.iosMaestro?.let { parts += "im[" + it.toString() + "]" }
     selector.iosAxe?.let { parts += "iax[" + it.toString() + "]" }

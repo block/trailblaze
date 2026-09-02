@@ -1,7 +1,9 @@
 package xyz.block.trailblaze.yaml
 
+import xyz.block.trailblaze.devices.compoundClassifier
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeLog.ObjectiveCompleteLog
+import xyz.block.trailblaze.agent.model.AgentTaskStatus
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.logs.model.getSessionStartedInfo
 import xyz.block.trailblaze.util.Console
@@ -39,16 +41,9 @@ fun SessionStatus.Started.toRecordingTrailConfig(titleOverride: String? = null):
  * [SessionStatus.Started] log, matching how the save path keys the on-disk `recordings:` slot.
  * Blank when the session logged no device classifiers, in which case [generateUnifiedRecordedYaml]
  * has no slot to key the recording on and renders nothing.
- *
- * Blank segments are dropped before joining, mirroring
- * [xyz.block.trailblaze.devices.TrailblazeClassifierLineage.resolutionChain] — otherwise a stray
- * empty segment (`["ios", ""]`) would produce a compound key (`"ios-"`) that resolution never
- * reconstructs, stranding a `recordings:` slot that can't be matched at replay time.
  */
 private fun List<TrailblazeLog>.recordingClassifier(): String =
-  getSessionStartedInfo()?.trailblazeDeviceInfo?.classifiers.orEmpty()
-    .filter { it.classifier.isNotBlank() }
-    .joinToString("-") { it.classifier }
+  getSessionStartedInfo()?.trailblazeDeviceInfo?.classifiers.orEmpty().compoundClassifier()
 
 /**
  * Renders this session's recording as the unified `trail.yaml` document (`config:` / `trailhead:` /
@@ -81,18 +76,40 @@ private fun List<TrailblazeLog>.recordingClassifier(): String =
  * filesystem to read the live file.
  *
  * Returns an empty string when no unified document can be produced: the classifier is blank (no slot
- * to key the recording on) or the render throws — the latter being the same shape the save path
- * refuses, a self-healed/retried trailhead that recorded more than one tool
- * (`MultiToolTrailheadUnsupported`, since a trailhead allows at most one tool per classifier).
+ * to key the recording on) or the render threw. A render throw is a defect, not a shape the format
+ * declines — a run that recorded more tools than a slot holds (the trailhead's single tool) is
+ * mapped onto the format by [UnifiedTrailAdapter.mergeRecordedClassifier] rather than refused.
  */
 fun List<TrailblazeLog>.generateUnifiedRecordedYaml(
   trailblazeYaml: TrailblazeYaml,
   sessionTrailConfig: TrailConfig? = null,
   classifierOverride: String? = null,
   selectedDeviceConfiguration: String? = null,
+): String = generateUnifiedRecordedYaml(
+  trailblazeYaml = trailblazeYaml,
+  sessionTrailConfig = sessionTrailConfig,
+  classifierOverride = classifierOverride,
+  selectedDeviceConfiguration = selectedDeviceConfiguration,
+  successfulObjectivesOnly = false,
+)
+
+/**
+ * Variant used by Category 2 evidence generation to omit failed objective windows while preserving
+ * the original five-argument JVM entry point above for already-compiled consumers.
+ */
+fun List<TrailblazeLog>.generateUnifiedRecordedYaml(
+  trailblazeYaml: TrailblazeYaml,
+  sessionTrailConfig: TrailConfig? = null,
+  classifierOverride: String? = null,
+  selectedDeviceConfiguration: String? = null,
+  successfulObjectivesOnly: Boolean,
 ): String {
   val items = try {
-    generateRecordedTrailItems(trailblazeYaml, sessionTrailConfig)
+    generateRecordedTrailItems(
+      trailblazeYaml,
+      sessionTrailConfig,
+      successfulObjectivesOnly = successfulObjectivesOnly,
+    )
   } catch (e: Exception) {
     Console.error("Failed to build recording items: ${e.stackTraceToString()}")
     return ""
@@ -125,9 +142,13 @@ fun List<TrailblazeLog>.generateUnifiedRecordedYaml(
     // be represented (the emitter throws) and drops into the catch below.
     trailblazeYaml.encodeUnifiedTrailToString(merged)
   } catch (e: Exception) {
-    // The unified shape couldn't be produced (e.g. multi-tool trailhead) — the same shape the save
-    // path refuses.
-    Console.error("Failed to render unified recording: ${e.stackTraceToString()}")
+    // Every shape a run can record is one the merge maps onto the format, so reaching here means a
+    // defect rather than a declined recording — hence the stack trace, and hence saying out loud
+    // that the session's tools are being dropped.
+    Console.error(
+      "This session's tools could not be rendered as a trail, so no recording will be produced — " +
+        "this is a bug, please report it with the stack trace below.\n${e.stackTraceToString()}",
+    )
     ""
   }
 }
@@ -172,6 +193,20 @@ private fun List<TrailblazeLog>.existingUnifiedTrailFromRawYaml(
 fun List<TrailblazeLog>.generateRecordedTrailItems(
   trailblazeYaml: TrailblazeYaml,
   sessionTrailConfig: TrailConfig? = null,
+): List<TrailYamlItem> = generateRecordedTrailItems(
+  trailblazeYaml = trailblazeYaml,
+  sessionTrailConfig = sessionTrailConfig,
+  successfulObjectivesOnly = false,
+)
+
+/**
+ * Variant used by Category 2 evidence generation to omit failed objective windows while preserving
+ * the original three-argument JVM entry point above for already-compiled consumers.
+ */
+fun List<TrailblazeLog>.generateRecordedTrailItems(
+  trailblazeYaml: TrailblazeYaml,
+  sessionTrailConfig: TrailConfig? = null,
+  successfulObjectivesOnly: Boolean,
 ): List<TrailYamlItem> {
     val logs = this
     val items = mutableListOf<TrailYamlItem>()
@@ -204,7 +239,23 @@ fun List<TrailblazeLog>.generateRecordedTrailItems(
       )
     }
 
+    // Objective logs and tool logs can be stamped by two different clocks: the runner that emits
+    // ObjectiveStart/Complete may live on the host while the tool executes (and stamps its log) on
+    // the device, whose clock can lag by up to a few seconds. Under a timestamp sort, each window's
+    // first tool then lands positionally inside the PREVIOUS window — the trailhead swallows step
+    // 1's first tool (and then fails the one-tool-per-platform emit), and every later step's
+    // recording shifts by one window. Window membership is therefore decided by span overlap
+    // against the window's own bounds, not by sorted position; see [assignToolLogsToWindows].
+    val objectiveWindows = findObjectiveWindows()
+    val toolWindowAssignment = assignToolLogsToWindows(objectiveWindows)
+    // Grouped once so each window's collection is an O(1) lookup rather than a rescan of every
+    // assignment. Assignment walks the session in order, so each group is already index-sorted.
+    val toolIndicesByWindow: Map<Int, List<Int>> =
+      toolWindowAssignment.entries.groupBy({ it.value }, { it.key })
+
     var currentLogIndex = 0
+    var pendingFailedPrompt: PromptStep? = null
+    var pendingSuccessfulTools = emptyList<TrailblazeToolYamlWrapper>()
     while (currentLogIndex < size) {
       when (val currentLog = logs[currentLogIndex]) {
         is TrailblazeLog.DelegatingTrailblazeToolLog -> {
@@ -235,18 +286,39 @@ fun List<TrailblazeLog>.generateRecordedTrailItems(
             break
           }
 
-          // Collect recordable TrailblazeToolLog entries within the window
-          val logsInWindow = subList(currentLogIndex, completeIndex)
-          val toolLogsInWindow = logsInWindow
-            .filterIsInstance<TrailblazeLog.TrailblazeToolLog>()
+          val objectiveComplete = logs[completeIndex] as ObjectiveCompleteLog
+
+          // Collect the recordable TrailblazeToolLog entries assigned to this window (by span
+          // overlap, keyed on the window's start index — see [assignToolLogsToWindows]).
+          val toolLogsInWindow = toolIndicesByWindow[currentLogIndex].orEmpty()
+            .map { logs[it] as TrailblazeLog.TrailblazeToolLog }
             .filter { it.isRecordable }
+            .filter { !successfulObjectivesOnly || it.successful }
           val selectedToolLogs = toolLogsInWindow
             .filter { it.isTopLevelToolCall }
             .ifEmpty { dropNestedToolCalls(toolLogsInWindow) }
             .let { dedupeLayerDuplicates(it) }
           val rawWrappers: List<TrailblazeToolYamlWrapper> = selectedToolLogs
             .map { log -> wrapTrailblazeTool(log.authoredTrailblazeTool, log.toolName) }
-          val toolWrappers = dedupeVerificationRepeats(rawWrappers, selectedToolLogs, trailblazeYaml)
+          val windowTools = dedupeVerificationRepeats(rawWrappers, selectedToolLogs, trailblazeYaml)
+          val continuesFailedPrompt = pendingFailedPrompt?.let { samePrompt(it, promptStep) } == true
+          if (
+            successfulObjectivesOnly &&
+              objectiveComplete.objectiveResult !is AgentTaskStatus.Success
+          ) {
+            pendingSuccessfulTools =
+              (if (continuesFailedPrompt) pendingSuccessfulTools else emptyList()) + windowTools
+            pendingFailedPrompt = promptStep
+            currentLogIndex = completeIndex
+            continue
+          }
+          val toolWrappers = if (successfulObjectivesOnly && continuesFailedPrompt) {
+            pendingSuccessfulTools + windowTools
+          } else {
+            windowTools
+          }
+          pendingFailedPrompt = null
+          pendingSuccessfulTools = emptyList()
 
           // Zero recordable tools in this objective window → emit no recording at all (null).
           // At replay time the step will fall through to AI. A live session capturing zero tools
@@ -302,11 +374,12 @@ fun List<TrailblazeLog>.generateRecordedTrailItems(
         }
 
         is TrailblazeLog.TrailblazeToolLog -> {
-          // Orphaned tool logs (outside an ObjectiveStart/Complete window) are
-          // attached to the last prompt step's recording. This handles the MCP
-          // path where tool logs may be emitted asynchronously and land outside
-          // the objective window in the sorted log list.
-          if (currentLog.isRecordable) {
+          // Orphaned tool logs (assigned to no objective window) are attached to the last prompt
+          // step's recording. This handles the MCP path where tool logs may be emitted
+          // asynchronously and land outside the objective window in the sorted log list. A tool
+          // log that IS assigned to a window is consumed there and must not be re-emitted here.
+          val consumedByWindow = currentLogIndex in toolWindowAssignment
+          if (!consumedByWindow && currentLog.isRecordable && (!successfulObjectivesOnly || currentLog.successful)) {
             val wrapper = wrapTrailblazeTool(currentLog.authoredTrailblazeTool, currentLog.toolName)
             val candidateFingerprint = if (currentLog.isVerification) {
               fingerprintForDedup(wrapper, trailblazeYaml)
@@ -362,6 +435,91 @@ fun List<TrailblazeLog>.generateRecordedTrailItems(
     }
 
   return items
+}
+
+/** One matched ObjectiveStart/Complete pair, by list position and by its own emitter's clock. */
+private class ObjectiveWindow(
+  val startIndex: Int,
+  val completeIndex: Int,
+  val startMs: Long,
+  val endMs: Long,
+)
+
+/**
+ * The ObjectiveStart/Complete windows [generateRecordedTrailItems]'s main loop will walk, found
+ * with the SAME matching rule (first later complete with an equal prompt; an unmatched start ends
+ * discovery, mirroring the main loop's `break`; a matched window's interior is skipped). Keyed by
+ * start index so the main loop can address a window by the index it is standing on.
+ */
+private fun List<TrailblazeLog>.findObjectiveWindows(): List<ObjectiveWindow> {
+  val windows = mutableListOf<ObjectiveWindow>()
+  var index = 0
+  while (index < size) {
+    val log = this[index]
+    if (log !is TrailblazeLog.ObjectiveStartLog) {
+      index++
+      continue
+    }
+    var completeIndex = index + 1
+    while (completeIndex < size) {
+      val next = this[completeIndex]
+      if (next is ObjectiveCompleteLog && next.promptStep.prompt == log.promptStep.prompt) break
+      completeIndex++
+    }
+    if (completeIndex >= size) return windows
+    windows.add(
+      ObjectiveWindow(
+        startIndex = index,
+        completeIndex = completeIndex,
+        startMs = log.timestamp.toEpochMilliseconds(),
+        endMs = this[completeIndex].timestamp.toEpochMilliseconds(),
+      ),
+    )
+    index = completeIndex + 1
+  }
+  return windows
+}
+
+/**
+ * Assigns each [TrailblazeLog.TrailblazeToolLog] to the objective window whose `[start, complete]`
+ * span its own execution span `[timestamp, timestamp + durationMs]` overlaps the most, returning
+ * `tool log index -> window start index`. A tool overlapping no window falls back to the window it
+ * sits inside positionally (today's behavior for zero/unknown spans), and a tool with neither is
+ * left unassigned — the caller's orphan handling (MCP async logs, the interactive recorder's
+ * window-less captures) is unchanged.
+ *
+ * Overlap, not sorted position, is what survives a session whose objective logs and tool logs were
+ * stamped by different clocks (host runner vs on-device executor — skew of a second is normal on
+ * emulators). Sorted position breaks there: the device-stamped tool log of a window's first tool
+ * sorts before the host-stamped ObjectiveComplete that precedes it, landing in the wrong window.
+ * The overlap comparison is skew-tolerant because a misassignment needs the whole execution span
+ * to sit closer to a neighboring window than to its own, which requires skew larger than the
+ * tool's overlap with its true window rather than merely nonzero.
+ */
+private fun List<TrailblazeLog>.assignToolLogsToWindows(
+  windows: List<ObjectiveWindow>,
+): Map<Int, Int> {
+  if (windows.isEmpty()) return emptyMap()
+  val assignment = mutableMapOf<Int, Int>()
+  forEachIndexed { index, log ->
+    if (log !is TrailblazeLog.TrailblazeToolLog) return@forEachIndexed
+    val toolStartMs = log.timestamp.toEpochMilliseconds()
+    val toolEndMs = toolStartMs + log.durationMs
+    fun overlapMs(window: ObjectiveWindow): Long =
+      minOf(toolEndMs, window.endMs) - maxOf(toolStartMs, window.startMs)
+    val bySpan = windows.maxByOrNull { overlapMs(it) }?.takeIf { overlapMs(it) > 0 }
+    val positional = windows.firstOrNull { index > it.startIndex && index < it.completeIndex }
+    val window = bySpan ?: positional ?: return@forEachIndexed
+    assignment[index] = window.startIndex
+  }
+  return assignment
+}
+
+private fun samePrompt(left: PromptStep, right: PromptStep): Boolean = when {
+  left is DirectionStep && right is DirectionStep ->
+    left.prompt == right.prompt && left.isTrailhead == right.isTrailhead
+  left is VerificationStep && right is VerificationStep -> left.prompt == right.prompt
+  else -> false
 }
 
 /**

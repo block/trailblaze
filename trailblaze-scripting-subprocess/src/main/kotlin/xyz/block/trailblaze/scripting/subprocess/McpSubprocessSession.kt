@@ -18,6 +18,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.future.await
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -31,7 +32,7 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import xyz.block.trailblaze.util.Console
 
 /**
@@ -143,6 +144,49 @@ class McpSubprocessSession internal constructor(
         ?.trim()?.toLongOrNull()?.takeIf { it > 0 } ?: 60_000L
 
     /**
+     * How long [connect]'s process-exit lever waits, after the subprocess exits, before claiming the
+     * handshake outcome.
+     *
+     * A subprocess can write its whole `initialize` response and exit in the same breath: the bytes
+     * sit in the pipe buffer and the handshake completes off them a moment later, so exit alone does
+     * NOT prove the handshake is doomed. Claiming instantly would fail a connect that was about to
+     * succeed. This pause lets the buffered read land — after it, a still-pending handshake has
+     * nothing left to read and no process to answer it, which is the orphaned-await park that only a
+     * lever can unwedge.
+     *
+     * Deliberately small relative to [DEFAULT_HANDSHAKE_TIMEOUT_MS]: the whole point of the lever is
+     * to fail in milliseconds where the bound would have taken a minute, so this must stay orders of
+     * magnitude below it.
+     *
+     * This is a ceiling, not the value actually waited — see [deadSubprocessGraceMs], which scales it
+     * down for callers that pass a bound this coarse grace would outlast.
+     */
+    internal const val DEAD_SUBPROCESS_GRACE_MS: Long = 250L
+
+    /**
+     * The grace [connect] actually waits, for a handshake bounded at [handshakeTimeoutMillis].
+     *
+     * A fixed [DEAD_SUBPROCESS_GRACE_MS] silently disables the exit lever for short bounds: the
+     * timeout racer fires at the bound while the lever is still sitting in its grace, so a subprocess
+     * that exited instantly gets reported as having blown the bound — the exact misleading error this
+     * lever exists to remove. Both the env override and the `handshakeTimeoutMillis` parameter accept
+     * any positive value, and this module's own tests pass bounds of 250ms, so that is a reachable
+     * configuration and not a theoretical one.
+     *
+     * Halving keeps a margin on both sides: the lever gets to claim first for a process that has
+     * already exited, and there is still a real pause for the buffered-stdout case rather than a
+     * claim-instantly degenerate. Floored at 1ms because `delay(0)` would reintroduce exactly the
+     * steal this grace prevents.
+     *
+     * That margin is strict for every bound of 2ms or more. At a bound of exactly 1ms the floor makes
+     * grace and bound equal, so the two racers tie and scheduling picks the winner — accepted rather
+     * than special-cased, because a 1ms handshake bound cannot be met by any real subprocess, so both
+     * outcomes are honest reports of the same failure.
+     */
+    internal fun deadSubprocessGraceMs(handshakeTimeoutMillis: Long): Long =
+      minOf(DEAD_SUBPROCESS_GRACE_MS, maxOf(1L, handshakeTimeoutMillis / 2))
+
+    /**
      * Default stderr severity classifier. Lines mentioning "error" surface as WARNING so they
      * show up in session logs; everything else is DEBUG. Authors wanting richer classification
      * pass their own classifier to [connect].
@@ -247,13 +291,28 @@ class McpSubprocessSession internal constructor(
       //    CI step was cancelled. The await is a plain cancellable suspension, so cancelling
       //    the handshake coroutine unwedges it.
       //
+      // Both of those levers are armed by the SAME `delay(handshakeTimeoutMillis)`, so a subprocess
+      // that dies immediately still had to burn the full bound before either could fire — and then
+      // got reported as a *timeout*, which is the wrong story about a process that was gone in
+      // milliseconds. So arm a third lever on the one signal that distinguishes the two:
+      //
+      //  - **Watch for process exit.** A dead subprocess can never answer `initialize`, so once it
+      //    has exited there is nothing left to wait for: claim the outcome and unwedge the parked
+      //    await immediately instead of at the bound. `onExit()` is callback-driven, so this parks
+      //    no thread (a blocking `waitFor` would pin an IO thread for the whole session on the
+      //    success path), and it is already complete for a subprocess that was dead on arrival.
+      //    The [deadSubprocessGraceMs] pause before claiming is what keeps this from stealing a
+      //    handshake that is only microseconds from completing off buffered stdout — scaled to the
+      //    bound so a short bound can't make the timeout racer win this one by default.
+      //
       // `decided` is the single arbiter of the outcome, claimed via compare-and-set by exactly one
-      // of {watchdog fires, handshake settles}. It closes the boundary race where the handshake
-      // returns in the same instant the watchdog's `delay` elapses: cancelling the watchdog alone
-      // can't stop the coroutine once `delay` has returned (nothing suspends after it), so without
-      // the CAS the watchdog could still force-destroy a subprocess we'd already handed back as a
-      // live session. Whoever wins the CAS acts; the loser stands down.
-      val decided = AtomicBoolean(false)
+      // of {watchdog fires, subprocess exits, handshake settles}. It closes the boundary race where
+      // the handshake returns in the same instant the watchdog's `delay` elapses: cancelling the
+      // watchdog alone can't stop the coroutine once `delay` has returned (nothing suspends after
+      // it), so without the CAS the watchdog could still force-destroy a subprocess we'd already
+      // handed back as a live session. Whoever wins the CAS acts; the losers stand down — and the
+      // winner's identity is what the catch below turns into the right exception.
+      val decided = AtomicReference<HandshakeOutcome?>(null)
       // Own the scope (not just the launched job) so every exit path can cancel it — the scope's
       // root Job would otherwise dangle. Detached from the caller's coroutine on purpose: the
       // watchdog must be able to fire while the handshake is parked in the non-cancellable
@@ -264,7 +323,7 @@ class McpSubprocessSession internal constructor(
           val handshake = async { client.connect(transport) }
           watchdogScope.launch {
             delay(handshakeTimeoutMillis)
-            if (decided.compareAndSet(false, true)) {
+            if (decided.compareAndSet(null, HandshakeOutcome.TIMED_OUT)) {
               // A wedged subprocess writes nothing to stderr, so without this line the force-kill
               // is silent and a session-startup failure is indistinguishable from any other. Name
               // the culprit script + the bound it blew so on-call can attribute it.
@@ -274,6 +333,18 @@ class McpSubprocessSession internal constructor(
                   "force-destroying the subprocess",
               )
               runCatching { process.destroyForcibly() }
+              handshake.cancel()
+            }
+          }
+          watchdogScope.launch {
+            process.onExit().await()
+            delay(deadSubprocessGraceMs(handshakeTimeoutMillis))
+            if (decided.compareAndSet(null, HandshakeOutcome.PROCESS_EXITED)) {
+              Console.log(
+                "[McpSubprocessSession] subprocess '${spawnedProcess.scriptFile.name}' exited " +
+                  "during its initialize handshake (exit code ${process.exitValue()}) — " +
+                  "failing the connect instead of waiting out the ${handshakeTimeoutMillis}ms bound",
+              )
               handshake.cancel()
             }
           }
@@ -291,29 +362,46 @@ class McpSubprocessSession internal constructor(
           throw t
         }
         // If we can still claim the outcome, this was an organic handshake failure (server crashed
-        // during init, bad protocol version) — propagate it unchanged. If the CAS fails, the
-        // watchdog already claimed it and tore the subprocess down: surface an attributable
-        // timeout (with the underlying unwind — stream-closed read error or the watchdog's
-        // handshake cancellation — as cause) rather than an opaque error, so the launcher names
-        // the culprit script.
-        val timedOut = !decided.compareAndSet(false, true)
+        // during init, bad protocol version) — propagate it unchanged. If the CAS fails, a lever
+        // already claimed it and tore the subprocess down: surface the attributable error for
+        // WHICHEVER lever won (with the underlying unwind — stream-closed read error or the lever's
+        // handshake cancellation — as cause) rather than an opaque error, so the launcher names the
+        // culprit script and the message tells the true story of how the handshake died.
+        val claimedByUs = decided.compareAndSet(null, HandshakeOutcome.HANDSHAKE_SETTLED)
         teardownFailedHandshake()
-        if (timedOut) {
-          throw McpSubprocessHandshakeTimeoutException(spawnedProcess.scriptFile.name, handshakeTimeoutMillis, t)
+        if (!claimedByUs) {
+          throw when (decided.get()) {
+            HandshakeOutcome.PROCESS_EXITED -> McpSubprocessExitedDuringHandshakeException(
+              spawnedProcess.scriptFile.name,
+              runCatching { process.exitValue() }.getOrNull(),
+              t,
+            )
+            else -> McpSubprocessHandshakeTimeoutException(
+              spawnedProcess.scriptFile.name,
+              handshakeTimeoutMillis,
+              t,
+            )
+          }
         }
         throw t
       }
-      // Handshake returned. Race the watchdog for the outcome: if we win, the watchdog stands down
-      // (its CAS will fail) and we hand back the live session. If we lose, the watchdog is already
-      // force-destroying the subprocess — don't return a session whose process is being torn down
-      // under it; fail as a timeout, consistent with the catch above.
-      if (decided.compareAndSet(false, true)) {
+      // Handshake returned. Race the levers for the outcome: if we win, they stand down (their CAS
+      // will fail) and we hand back the live session. If we lose, a lever is already tearing the
+      // subprocess down — don't return a session whose process is going away under it; fail with
+      // that lever's error, consistent with the catch above.
+      if (decided.compareAndSet(null, HandshakeOutcome.HANDSHAKE_SETTLED)) {
         watchdogScope.cancel()
         return McpSubprocessSession(spawnedProcess, transport, client, stderrCapture, stderrPump)
       }
       watchdogScope.cancel()
       teardownFailedHandshake()
-      throw McpSubprocessHandshakeTimeoutException(spawnedProcess.scriptFile.name, handshakeTimeoutMillis)
+      throw when (decided.get()) {
+        HandshakeOutcome.PROCESS_EXITED -> McpSubprocessExitedDuringHandshakeException(
+          spawnedProcess.scriptFile.name,
+          runCatching { process.exitValue() }.getOrNull(),
+        )
+        else -> McpSubprocessHandshakeTimeoutException(spawnedProcess.scriptFile.name, handshakeTimeoutMillis)
+      }
     }
 
     /**
@@ -476,10 +564,58 @@ private fun destroyWithEscalation(process: Process, exitWait: McpSubprocessSessi
 }
 
 /**
+ * Which of [McpSubprocessSession.connect]'s racers claimed the handshake outcome. Exactly one wins
+ * the compare-and-set; the winner's identity is what selects the exception the caller sees, so a
+ * subprocess that died in milliseconds is never reported as having blown a 60-second bound.
+ */
+internal enum class HandshakeOutcome {
+  /** `client.connect` returned or threw on its own — an organic result, whatever it was. */
+  HANDSHAKE_SETTLED,
+
+  /** The watchdog's bound elapsed with the handshake still pending. */
+  TIMED_OUT,
+
+  /** The subprocess exited (and stayed exited past the grace pause) mid-handshake. */
+  PROCESS_EXITED,
+}
+
+/**
+ * Thrown when the subprocess exits during its MCP `initialize` handshake
+ * ([McpSubprocessSession.connect]). A dead subprocess can never answer, so this fails the connect as
+ * soon as the exit is observed rather than waiting out
+ * [McpSubprocessSession.DEFAULT_HANDSHAKE_TIMEOUT_MS].
+ *
+ * Distinct from [McpSubprocessHandshakeTimeoutException] on purpose: "your script exited immediately"
+ * and "your script never answered" are different bugs with different fixes, and reporting the former
+ * as a timeout sends the reader looking for a hang that never happened.
+ *
+ * [exitCode] is the subprocess's status when known, and it is the first thing to look at because it
+ * splits the two shapes this covers: non-zero means the script itself failed (a missing import, a
+ * throw at module scope) and its stderr tail holds the reason, while zero means it ran to completion
+ * without ever serving MCP — usually a script that forgot to start the server, where stderr is empty
+ * and the source is what to read. The message stays neutral between them rather than asserting a
+ * startup crash. Null only if the process could not be queried.
+ */
+class McpSubprocessExitedDuringHandshakeException(
+  val scriptName: String,
+  val exitCode: Int?,
+  cause: Throwable? = null,
+) : Exception(
+  "MCP subprocess '$scriptName' exited during its initialize handshake" +
+    (exitCode?.let { " (exit code $it)" } ?: "") +
+    " — a non-zero code means the script failed (see its stderr); zero means it exited without" +
+    " serving MCP",
+  cause,
+)
+
+/**
  * Thrown when a subprocess MCP `initialize` handshake ([McpSubprocessSession.connect]) does not
  * complete within its timeout. Carries the script name + timeout so the session-startup failure
  * (see [McpSubprocessRuntimeLauncher.launchAll]'s fail-fast) is attributable to the offending
  * script. The subprocess has already been torn down by the time this is thrown.
+ *
+ * A subprocess that *exited* mid-handshake raises [McpSubprocessExitedDuringHandshakeException]
+ * instead — this one means the process was still alive and simply never answered.
  *
  * [cause] preserves the stream-closed exception the watchdog's force-destroy produced (the parked
  * `client.connect` read unwinds with it) so the underlying failure isn't lost in the daemon log.

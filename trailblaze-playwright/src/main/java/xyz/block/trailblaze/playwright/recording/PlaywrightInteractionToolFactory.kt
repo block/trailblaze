@@ -10,6 +10,7 @@ import xyz.block.trailblaze.playwright.tools.PlaywrightNativeClickTool
 import xyz.block.trailblaze.playwright.tools.PlaywrightNativePressKeyTool
 import xyz.block.trailblaze.playwright.tools.PlaywrightNativeScrollTool
 import xyz.block.trailblaze.playwright.tools.PlaywrightNativeTypeTool
+import xyz.block.trailblaze.recording.InputTarget
 import xyz.block.trailblaze.recording.InteractionToolFactory
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import kotlin.math.abs
@@ -54,8 +55,10 @@ class PlaywrightInteractionToolFactory(
     // The remaining candidates flow through `findSelectorCandidates` as picker
     // alternatives, so the user can always swap to a different ancestor / strategy.
     val candidates = stream.resolveClickCandidatesAt(x, y)
+    // No candidate carried any identifier → record the click WITHOUT a selector. Replay
+    // then fails loudly at resolution instead of "passing" against a `cssSelector="html"`
+    // stand-in that clicks the document element regardless of what was recorded.
     val primary = pickBestSelector(candidates, x, y)
-      ?: TrailblazeNodeSelector(web = DriverNodeMatch.Web(cssSelector = "html"))
     val tool = PlaywrightNativeClickTool(ref = null, nodeSelector = primary)
     return tool to "web_click"
   }
@@ -120,8 +123,9 @@ class PlaywrightInteractionToolFactory(
    * verification call is cheap (~5–20ms per candidate) and saves the recording from
    * embedding a selector that would fail at replay. Falls back to the highest-scored
    * candidate (verified or not) when nothing passes verification, so the recorder
-   * always emits SOMETHING — better an imperfect selector the user can swap than an
-   * empty `cssSelector="html"` fallback.
+   * emits an imperfect-but-swappable selector whenever any identifier exists at all.
+   * Returns null only when NO candidate carries an identifier — the caller records no
+   * selector in that case, so replay fails loudly instead of clicking a stand-in.
    */
   private fun pickBestSelector(
     candidates: List<PlaywrightDeviceScreenStream.ClickCandidate>,
@@ -240,12 +244,51 @@ class PlaywrightInteractionToolFactory(
     return tool to "web_scroll"
   }
 
-  override fun createInputTextTool(text: String): Pair<TrailblazeTool, String> {
-    val tool = PlaywrightNativeTypeTool(
-      text = text,
-      ref = "css=:focus",
-      clearFirst = false,
-    )
+  /** The web recorder's [InputTarget]: the durable selector for the field, if it had one. */
+  private class FocusedFieldTarget(val selector: TrailblazeNodeSelector?) : InputTarget
+
+  /**
+   * Two page round trips, taken on the first character of a typing burst. Keep them there:
+   * per-character would put a blocking evaluate on every keystroke of the recorder's UI
+   * thread, and deferring to the flush is the bug this snapshot exists to fix.
+   */
+  override fun captureInputTarget(): InputTarget =
+    FocusedFieldTarget(resolveFocusedFieldSelector())
+
+  private fun resolveFocusedFieldSelector(): TrailblazeNodeSelector? {
+    val selector = stream.resolveFocusedElement()?.let { candidateToSelector(it)?.first } ?: return null
+    // Identifier signals alone can't tell duplicate controls apart, and replay narrows a
+    // multi-match locator with `.first()`. Carry the focused element's ordinal so the second
+    // OTP box replays as the second box rather than the first.
+    val ordinal = stream.focusedOrdinalIn(selector) ?: return selector
+    return selector.copy(web = selector.web?.copy(nthIndex = ordinal))
+  }
+
+  override fun createInputTextTool(text: String, target: InputTarget?): Pair<TrailblazeTool, String> {
+    // Pin the typed text to a durable selector for the field the burst STARTED in. Recording
+    // `css=:focus` instead replays against whatever happens to be focused after settles and
+    // autofocus dialogs — frequently not the recorded field. `css=:focus` stays only as the
+    // fallback when the focused element carries no identifier at all.
+    val selector = when (target) {
+      // A snapshot exists: honor it even when its selector is null, which means the field was
+      // there but unidentifiable. Re-resolving live would name whatever focus moved to.
+      is FocusedFieldTarget -> target.selector
+      else -> resolveFocusedFieldSelector()
+    }
+    val tool = if (selector != null) {
+      PlaywrightNativeTypeTool(
+        text = text,
+        ref = null,
+        clearFirst = false,
+        nodeSelector = selector,
+      )
+    } else {
+      PlaywrightNativeTypeTool(
+        text = text,
+        ref = "css=:focus",
+        clearFirst = false,
+      )
+    }
     return tool to "web_type"
   }
 

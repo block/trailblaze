@@ -74,6 +74,11 @@ object TargetTypeGuard {
       "hintText" to detail.hintText,
       "contentDescription" to detail.contentDescription,
     )
+    is DriverNodeDetail.AndroidView -> firstNonNull(
+      "text" to detail.text,
+      "hintText" to detail.hintText,
+      "contentDescription" to detail.contentDescription,
+    )
     is DriverNodeDetail.AndroidMaestro -> firstNonNull(
       "text" to detail.text,
       "hintText" to detail.hintText,
@@ -107,7 +112,10 @@ object TargetTypeGuard {
    */
   private fun isTextInput(detail: DriverNodeDetail): Boolean = when (detail) {
     is DriverNodeDetail.AndroidAccessibility -> detail.isEditable
-    is DriverNodeDetail.Compose -> detail.editableText != null
+    is DriverNodeDetail.AndroidView -> detail.isEditable
+    // hasSetTextAction is the real signal; editableText is only populated once the field
+    // has content, so it misses an empty input — exactly the case this guard is for.
+    is DriverNodeDetail.Compose -> detail.hasSetTextAction || detail.editableText != null
     else -> false
   }
 
@@ -119,9 +127,16 @@ object TargetTypeGuard {
         return true
       }
     }
+    selector.androidView?.let { m ->
+      if (m.isEditable != null || m.isPassword != null || m.classNameRegex != null ||
+        m.resourceIdRegex != null || m.tagRegex != null || m.inputType != null
+      ) {
+        return true
+      }
+    }
     selector.compose?.let { m ->
       if (m.editableTextRegex != null || m.isPassword != null || m.testTag != null ||
-        m.role != null
+        m.role != null || m.hasSetTextAction != null
       ) {
         return true
       }
@@ -131,6 +146,8 @@ object TargetTypeGuard {
 
   private fun describe(detail: DriverNodeDetail): String = when (detail) {
     is DriverNodeDetail.AndroidAccessibility ->
+      "className=${detail.className}, text=${detail.text}"
+    is DriverNodeDetail.AndroidView ->
       "className=${detail.className}, text=${detail.text}"
     is DriverNodeDetail.Compose ->
       "testTag=${detail.testTag}, editableText=${detail.editableText}"

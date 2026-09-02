@@ -284,6 +284,27 @@ sealed interface TrailblazeLog {
      * `TrailblazeRecordingGenerator` emits `rawTrailblazeTool ?: trailblazeTool`.
      */
     val rawTrailblazeTool: OtherTrailblazeTool? = null,
+    /**
+     * Which named device of a multi-device session ran this tool (`seller`, `buyer`, …) — the
+     * binding that was active at dispatch, as `switchDevice` left it.
+     *
+     * Read it as "not applicable / unknown", never as "the start device": a reader that
+     * defaults it would attribute a multi-device run's whole second half to the wrong screen.
+     *
+     * Three ways it is null, and only the first means single-device:
+     *  1. a single-device session — no bindings exist;
+     *  2. a log written before this field existed;
+     *  3. a tool the host RPC-dispatched to an Android device, where the DEVICE emits the log
+     *     and the host suppresses its own copy (`onDeviceToolLogCount > 0`, #3818). The
+     *     device-side agent holds no bindings, so it has no name to stamp. That covers most
+     *     tools on an `ANDROID_ONDEVICE_ACCESSIBILITY` pair — tracked separately; the fix is
+     *     to carry the name on the RPC request so the device stamps it.
+     *
+     * The name, not the device identity, because that is what the trail author wrote and what
+     * `switchDevice` addresses. Screen dimensions were the only prior signal, and they say
+     * nothing when two bound devices happen to share a resolution.
+     */
+    val deviceName: String? = null,
   ) : TrailblazeLog,
     HasTrailblazeTool,
     HasTraceId,

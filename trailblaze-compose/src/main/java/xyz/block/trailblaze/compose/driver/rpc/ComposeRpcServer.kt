@@ -43,6 +43,10 @@ class ComposeRpcServer(
   private var server: EmbeddedServer<*, *>? = null
 
   fun start(wait: Boolean = true) {
+    // The default (52600) sits inside the device-allocation range and is reserved, which is what
+    // keeps devices off it. An override elsewhere in that range has no such protection: a device
+    // would be allocated the port and `adb forward` would take it from us without an error.
+    TrailblazeDevicePort.requirePortNotAllocatableToDevices(port, "The Compose driver RPC port")
     server =
       embeddedServer(factory = CIO, port = port) {
           install(ContentNegotiation) { json(TrailblazeJsonInstance) }

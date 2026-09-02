@@ -18,7 +18,10 @@ import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.TrailblazeToolYamlWrapper
 import xyz.block.trailblaze.yaml.TrailheadDefinition
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
+import xyz.block.trailblaze.yaml.unified.UnifiedTrail
 import xyz.block.trailblaze.yaml.unified.UnifiedTrailAdapter
+import xyz.block.trailblaze.yaml.unified.UnifiedTrailConfig
+import xyz.block.trailblaze.yaml.unified.UnifiedTrailStep
 
 /**
  * Contract tests for the shared save-back writer used by the CLI, MCP, and desktop recording
@@ -356,17 +359,23 @@ class UnifiedRecordingWriterTest {
   }
 
   @Test
-  fun `mergeIntoUnified reports a multi-tool trailhead as unsupported and writes nothing`() {
+  fun `mergeIntoUnified saves a multi-tool trailhead by moving the extra tools into the first step`() {
     val dir = tempFolder.newFolder()
     val items = multiToolTrailheadItems(toolNames = listOf("clearBootstrap", "openBootstrap"))
 
     val outcome = UnifiedRecordingWriter.mergeIntoUnified(dir, items, "android")
 
-    assertTrue(outcome is UnifiedRecordingWriter.MergeOutcome.MultiToolTrailheadUnsupported)
-    assertEquals(2, (outcome as UnifiedRecordingWriter.MergeOutcome.MultiToolTrailheadUnsupported).toolCount)
-    assertFalse(
-      File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME).exists(),
-      "an un-representable trailhead must not produce a unified trail.yaml — the caller writes a per-classifier sibling",
+    assertTrue(outcome is UnifiedRecordingWriter.MergeOutcome.Merged, "got $outcome")
+    val unified = createTrailblazeYaml().decodeUnifiedTrail(File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME).readText())
+    assertEquals(
+      listOf("clearBootstrap"),
+      unified.trailhead?.recordings?.get("android")?.map { it.name },
+      "the trailhead keeps the first recorded tool",
+    )
+    assertEquals(
+      listOf("openBootstrap", "tapCart"),
+      unified.trail.single().recordings["android"]?.map { it.name },
+      "the extra trailhead tool replays ahead of the step's own tools",
     )
   }
 
@@ -428,6 +437,27 @@ class UnifiedRecordingWriterTest {
   }
 
   @Test
+  fun `mergeIntoUnified refuses a trailhead-only multi-tool session when the trail already has steps`() {
+    // A session that only ran the trailhead recorded no objective of its own, so its relocated tools
+    // become the one placeholder step — which would align against the existing step 1 and replace a
+    // real recording with a leftover bootstrap tool. The stepless refusal covers this shape (it
+    // reads the recorded prompt steps, not the relocation), and this pins that it still does now
+    // that such a recording renders at all instead of being refused upstream.
+    val dir = tempFolder.newFolder()
+    val target = File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME)
+    UnifiedRecordingWriter.mergeIntoUnified(dir, twoStepRecordingItems(), "android")
+    val before = target.readText()
+
+    val outcome = UnifiedRecordingWriter.mergeIntoUnified(dir, trailheadOnlyMultiToolItems(), "android")
+
+    assertTrue(outcome is UnifiedRecordingWriter.MergeOutcome.SteplessIntoExistingTrail, "got $outcome")
+    assertEquals(before, target.readText(), "the existing trail must be left byte-identical")
+    val unified = createTrailblazeYaml().decodeUnifiedTrail(target.readText())
+    assertEquals(listOf("tapCart"), unified.trail[0].recordings["android"]?.map { it.name })
+    assertEquals(listOf("tapPay"), unified.trail[1].recordings["android"]?.map { it.name })
+  }
+
+  @Test
   fun `mergeIntoUnified accepts an objective-less capture into a greenfield directory`() {
     // The interactive recorder's raw capture is still savable where there is nothing to align to.
     val dir = tempFolder.newFolder()
@@ -468,13 +498,16 @@ class UnifiedRecordingWriterTest {
   }
 
   @Test
-  fun `renderStandalone refuses a multi-tool trailhead`() {
-    // The unified trailhead holds one tool per classifier — the emitter would throw on encode.
-    val failure = UnifiedRecordingWriter
-      .renderStandalone(multiToolTrailheadItems(listOf("launchApp", "signIn")), "android")
-      .exceptionOrNull()
+  fun `renderStandalone renders a multi-tool trailhead the same way the merge does`() {
+    // Both file layouts must map the recording identically — a sibling that refused what the shared
+    // trail accepts would lose a recording purely because of where it was being written.
+    val yaml = UnifiedRecordingWriter
+      .renderStandalone(multiToolTrailheadItems(listOf("clearBootstrap", "openBootstrap")), "android")
+      .getOrThrow()
 
-    assertEquals(UnifiedRecordingWriter.multiToolTrailheadMessage(2), failure?.message)
+    val decoded = createTrailblazeYaml().decodeUnifiedTrail(yaml)
+    assertEquals(listOf("clearBootstrap"), decoded.trailhead?.recordings?.get("android")?.map { it.name })
+    assertEquals(listOf("openBootstrap", "tapCart"), decoded.trail.single().recordings["android"]?.map { it.name })
   }
 
   @Test
@@ -488,7 +521,256 @@ class UnifiedRecordingWriterTest {
     assertEquals(UnifiedRecordingWriter.EMPTY_MERGE_MESSAGE, failure?.message)
   }
 
+  // ---------------------------------------------------------------------------
+  // mergeIntoUnified with a step window - the partial-recording save-back
+  // ---------------------------------------------------------------------------
+
+  @Test
+  fun `a windowed merge replaces only the windowed step and preserves the rest on disk`() {
+    val dir = tempFolder.newFolder()
+    // Seed a full two-step android recording, then re-record only step 2.
+    UnifiedRecordingWriter.mergeIntoUnified(dir, twoStepRecordingItems(), "android")
+
+    val rerecordedStep2 = listOf(
+      TrailYamlItem.ConfigTrailItem(TrailConfig(id = "app/x", target = "app", driver = "ANDROID_ONDEVICE_INSTRUMENTATION")),
+      TrailYamlItem.PromptsTrailItem(
+        listOf(DirectionStep(step = "Pay", recording = ToolRecording(tools = listOf(tool("tapPayV2"))))),
+      ),
+    )
+    val outcome = UnifiedRecordingWriter.mergeIntoUnified(dir, rerecordedStep2, "android", stepWindow = 1..1)
+
+    assertTrue(outcome is UnifiedRecordingWriter.MergeOutcome.Merged, "got $outcome")
+    val unified = createTrailblazeYaml()
+      .decodeUnifiedTrail(File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME).readText())
+    assertEquals(listOf("Open the cart", "Pay"), unified.trail.map { it.step })
+    assertEquals(listOf("tapPayV2"), unified.trail[1].recordings["android"]?.map { it.name })
+    // Step 1 was outside the window, so its recording from the seed run survives the round trip.
+    assertEquals(listOf("tapCart"), unified.trail[0].recordings["android"]?.map { it.name })
+  }
+
+  @Test
+  fun `a windowed merge whose recording has a different step count is refused and writes nothing`() {
+    val dir = tempFolder.newFolder()
+    UnifiedRecordingWriter.mergeIntoUnified(dir, twoStepRecordingItems(), "android")
+    val before = File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME).readText()
+
+    // One recorded step against a two-step window: a run that self-healed a step into existence (or
+    // out of it) leaves no way to say which recorded step is which, so alignment would shift.
+    val outcome = UnifiedRecordingWriter.mergeIntoUnified(
+      dir,
+      recordingItems(driver = null, toolName = "tapSomething"),
+      "android",
+      stepWindow = 0..1,
+    )
+
+    assertTrue(outcome is UnifiedRecordingWriter.MergeOutcome.StepWindowMismatch, "got $outcome")
+    outcome as UnifiedRecordingWriter.MergeOutcome.StepWindowMismatch
+    assertEquals(2, outcome.expectedStepCount)
+    assertEquals(1, outcome.recordedStepCount)
+    assertEquals(before, File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME).readText())
+  }
+
+  @Test
+  fun `a window naming steps the target no longer has is refused and writes nothing`() {
+    val dir = tempFolder.newFolder()
+    UnifiedRecordingWriter.mergeIntoUnified(dir, twoStepRecordingItems(), "android")
+    val before = File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME).readText()
+
+    val outcome = UnifiedRecordingWriter.mergeIntoUnified(
+      dir,
+      recordingItems(driver = null, toolName = "tapSomething"),
+      "android",
+      stepWindow = 5..5,
+    )
+
+    assertTrue(outcome is UnifiedRecordingWriter.MergeOutcome.StepWindowOutOfRange, "got $outcome")
+    assertEquals(2, (outcome as UnifiedRecordingWriter.MergeOutcome.StepWindowOutOfRange).existingStepCount)
+    assertEquals(before, File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME).readText())
+  }
+
+  @Test
+  fun `a windowed merge into a trail that does not exist yet is refused`() {
+    val dir = tempFolder.newFolder()
+
+    // A window is a claim about steps already on disk. With no file there is nothing to window.
+    val outcome = UnifiedRecordingWriter.mergeIntoUnified(
+      dir,
+      recordingItems(driver = null, toolName = "tapSomething"),
+      "android",
+      stepWindow = 0..0,
+    )
+
+    assertTrue(outcome is UnifiedRecordingWriter.MergeOutcome.StepWindowOutOfRange, "got $outcome")
+    assertFalse(File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME).exists())
+  }
+
+  @Test
+  fun `a merge whose covered step was rewritten while the run ran is refused and writes nothing`() {
+    val dir = tempFolder.newFolder()
+    UnifiedRecordingWriter.mergeIntoUnified(dir, twoStepRecordingItems(), "android")
+    val before = File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME).readText()
+
+    // The run covered "Pay". Someone rewrote that step in place while it ran, so every count still
+    // lines up and only the prose says the recording no longer belongs there.
+    val outcome = UnifiedRecordingWriter.mergeIntoUnified(
+      dir,
+      recordingItems(driver = null, toolName = "tapPayV2"),
+      "android",
+      stepWindow = 1..1,
+      expectedDispatched = dispatched(UnifiedTrailStep(step = "Pay with a gift card")),
+    )
+
+    assertTrue(outcome is UnifiedRecordingWriter.MergeOutcome.TrailChangedUnderRun, "got $outcome")
+    assertEquals(before, File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME).readText())
+  }
+
+  @Test
+  fun `a merge whose covered steps are untouched still writes`() {
+    val dir = tempFolder.newFolder()
+    UnifiedRecordingWriter.mergeIntoUnified(dir, twoStepRecordingItems(), "android")
+
+    // A step edited OUTSIDE the window is none of this run's business, so only "Pay" is compared.
+    val outcome = UnifiedRecordingWriter.mergeIntoUnified(
+      dir,
+      recordingItems(driver = null, toolName = "tapPayV2"),
+      "android",
+      stepWindow = 1..1,
+      expectedDispatched = dispatched(UnifiedTrailStep(step = "Pay")),
+    )
+
+    assertTrue(outcome is UnifiedRecordingWriter.MergeOutcome.Merged, "got $outcome")
+  }
+
+  @Test
+  fun `a covered step turned into a verify while the run ran is refused`() {
+    val dir = tempFolder.newFolder()
+    UnifiedRecordingWriter.mergeIntoUnified(dir, twoStepRecordingItems(), "android")
+
+    // Same prose, different kind: `verify:` asserts, doesn't self-heal, and offers a different tool
+    // surface, so tools recorded against a direction step don't belong to it.
+    val outcome = UnifiedRecordingWriter.mergeIntoUnified(
+      dir,
+      recordingItems(driver = null, toolName = "tapPayV2"),
+      "android",
+      stepWindow = 1..1,
+      expectedDispatched = dispatched(UnifiedTrailStep(step = "Pay", verify = true)),
+    )
+
+    assertTrue(outcome is UnifiedRecordingWriter.MergeOutcome.TrailChangedUnderRun, "got $outcome")
+  }
+
+  @Test
+  fun `a merge into a trail retargeted at another app while the run ran is refused`() {
+    val dir = tempFolder.newFolder()
+    UnifiedRecordingWriter.mergeIntoUnified(dir, twoStepRecordingItems(), "android")
+    val before = File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME).readText()
+
+    // Same steps, word for word, but the trail now drives a different application - and selectors
+    // captured in one app describe nothing in another.
+    val outcome = UnifiedRecordingWriter.mergeIntoUnified(
+      dir,
+      recordingItems(driver = null, toolName = "tapPayV2"),
+      "android",
+      stepWindow = 1..1,
+      expectedDispatched = dispatched(UnifiedTrailStep(step = "Pay"), target = "some-other-app"),
+    )
+
+    assertTrue(outcome is UnifiedRecordingWriter.MergeOutcome.TrailChangedUnderRun, "got $outcome")
+    assertEquals(before, File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME).readText())
+  }
+
+  @Test
+  fun `a merge whose target app is unchanged still writes`() {
+    val dir = tempFolder.newFolder()
+    UnifiedRecordingWriter.mergeIntoUnified(dir, twoStepRecordingItems(), "android")
+
+    val outcome = UnifiedRecordingWriter.mergeIntoUnified(
+      dir,
+      recordingItems(driver = null, toolName = "tapPayV2"),
+      "android",
+      stepWindow = 1..1,
+      expectedDispatched = dispatched(UnifiedTrailStep(step = "Pay")),
+    )
+
+    assertTrue(outcome is UnifiedRecordingWriter.MergeOutcome.Merged, "got $outcome")
+  }
+
+  @Test
+  fun `a merge into a trail that gained a target while the run ran is refused`() {
+    val dir = tempFolder.newFolder()
+    UnifiedRecordingWriter.mergeIntoUnified(dir, twoStepRecordingItems(), "android")
+    val before = File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME).readText()
+
+    // Absent at dispatch, present now. The comparison is symmetric on purpose: a run that drove
+    // whatever target was selected can't have its selectors filed under a trail that now names one.
+    val outcome = UnifiedRecordingWriter.mergeIntoUnified(
+      dir,
+      recordingItems(driver = null, toolName = "tapPayV2"),
+      "android",
+      stepWindow = 1..1,
+      expectedDispatched = dispatched(UnifiedTrailStep(step = "Pay"), target = null),
+    )
+
+    assertTrue(outcome is UnifiedRecordingWriter.MergeOutcome.TrailChangedUnderRun, "got $outcome")
+    assertEquals(before, File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME).readText())
+  }
+
+  @Test
+  fun `a whole-trail merge compares the trailhead it ran too`() {
+    val dir = tempFolder.newFolder()
+    UnifiedRecordingWriter.mergeIntoUnified(dir, twoStepRecordingItems(), "android")
+
+    // No trailhead on disk, so a run claiming to have covered one ran against a different document.
+    val outcome = UnifiedRecordingWriter.mergeIntoUnified(
+      dir,
+      twoStepRecordingItems(),
+      "android",
+      expectedDispatched = dispatched(
+        UnifiedTrailStep(step = "Open the cart"),
+        UnifiedTrailStep(step = "Pay"),
+        trailhead = UnifiedTrailStep(step = "Launch the app"),
+      ),
+    )
+
+    assertTrue(outcome is UnifiedRecordingWriter.MergeOutcome.TrailChangedUnderRun, "got $outcome")
+  }
+
+  @Test
+  fun `a first write is not compared against the file it is about to create`() {
+    val dir = tempFolder.newFolder()
+
+    // Nothing on disk yet, so there is nothing this run could have drifted from. Comparing anyway
+    // would read the absent file's empty step list as "the steps it covered were edited" and refuse
+    // every greenfield save-back that carries an expectation.
+    val outcome = UnifiedRecordingWriter.mergeIntoUnified(
+      dir,
+      twoStepRecordingItems(),
+      "android",
+      expectedDispatched = dispatched(
+        UnifiedTrailStep(step = "Open the cart"),
+        UnifiedTrailStep(step = "Pay"),
+      ),
+    )
+
+    assertTrue(outcome is UnifiedRecordingWriter.MergeOutcome.Merged, "got $outcome")
+    assertTrue(File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME).exists())
+  }
+
   // --- fixtures ---
+
+  /**
+   * The document a run was dispatched with, as the save-back hands it to the merge: the steps it
+   * executed plus the config it ran under. [target] defaults to the fixtures' own app.
+   */
+  private fun dispatched(
+    vararg steps: UnifiedTrailStep,
+    trailhead: UnifiedTrailStep? = null,
+    target: String? = "app",
+  ): UnifiedTrail = UnifiedTrail(
+    config = UnifiedTrailConfig(id = "app/x", target = target),
+    trailhead = trailhead,
+    trail = steps.toList(),
+  )
 
   /** The lowered v1 items of a minimal one-config + one-recorded-step recording — the merge input. */
   private fun recordingItems(driver: String?, toolName: String): List<TrailYamlItem> = listOf(
@@ -527,7 +809,8 @@ class UnifiedRecordingWriterTest {
 
   /**
    * The lowered v1 items whose trailhead (step 0) carries [toolNames] as its `tools:` list, plus one
-   * ordinary recorded step. A trailhead with more than one tool has no unified representation.
+   * ordinary recorded step. A unified trailhead slot holds one tool, so more than one is mapped onto
+   * the format: the first stays, the rest move to the front of the step's recording.
    */
   private fun multiToolTrailheadItems(toolNames: List<String>): List<TrailYamlItem> = listOf(
     TrailYamlItem.ConfigTrailItem(TrailConfig(id = "app/x", target = "app", driver = "ANDROID_ONDEVICE_INSTRUMENTATION")),
@@ -536,6 +819,14 @@ class UnifiedRecordingWriterTest {
     ),
     TrailYamlItem.PromptsTrailItem(
       listOf(DirectionStep(step = "Open the cart", recording = ToolRecording(tools = listOf(tool("tapCart"))))),
+    ),
+  )
+
+  /** A run that satisfied only the trailhead: several tools on step 0 and no objective of its own. */
+  private fun trailheadOnlyMultiToolItems(): List<TrailYamlItem> = listOf(
+    TrailYamlItem.ConfigTrailItem(TrailConfig(id = "app/x", target = "app", driver = "ANDROID_ONDEVICE_INSTRUMENTATION")),
+    TrailYamlItem.TrailheadTrailItem(
+      TrailheadDefinition(step = "Bootstrap", tools = listOf(tool("clearBootstrap"), tool("openBootstrap"))),
     ),
   )
 

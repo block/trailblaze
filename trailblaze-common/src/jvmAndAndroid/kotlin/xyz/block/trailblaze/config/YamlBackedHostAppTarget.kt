@@ -5,6 +5,7 @@ import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.model.AppVersionInfo
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
+import xyz.block.trailblaze.model.TrailblazeOnDeviceInstrumentationTarget
 import xyz.block.trailblaze.toolcalls.ToolName
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.util.Console
@@ -228,6 +229,28 @@ class YamlBackedHostAppTarget(
   override fun getSystemPromptTemplate(): String? = config.systemPrompt
 
   override fun getElectronAppConfig(): xyz.block.trailblaze.yaml.ElectronAppConfig? = config.electron
+
+  override fun getAndroidTestInstrumentationTarget(): TrailblazeOnDeviceInstrumentationTarget? =
+    config.androidTest?.let {
+      TrailblazeOnDeviceInstrumentationTarget(
+        testAppId = it.testAppId,
+        fqTestName = it.fqTestName,
+        // The app's own build installs this APK; the host has no bundle to install or SHA-check.
+        installedExternally = true,
+        // The harness instruments the app under test, so the process that exists at runtime is
+        // the APP's, never the test APK's — see
+        // [TrailblazeOnDeviceInstrumentationTarget.hostProcessAppId]. A target that declares no
+        // Android app id leaves this null and keeps the self-instrumenting assumption rather than
+        // guessing at a package name.
+        hostProcessAppId = getPossibleAppIdsForPlatform(TrailblazeDevicePlatform.ANDROID)
+          ?.firstOrNull(),
+        // Reaching this harness at all means ANDROID_TEST was selected, so say so on device: the
+        // runtime's gate treats a trail's `config.driver:` as fatal unless a force overrides it,
+        // and the estate pins the accessibility driver per-device. See
+        // [TrailblazeOnDeviceInstrumentationTarget.forcedDriverType].
+        forcedDriverType = TrailblazeDriverType.ANDROID_TEST,
+      )
+    }
 
   // --- Version info ---
 

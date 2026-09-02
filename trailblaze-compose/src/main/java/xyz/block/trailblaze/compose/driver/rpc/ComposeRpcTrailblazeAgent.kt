@@ -78,7 +78,8 @@ class ComposeRpcTrailblazeAgent(
     screenStateProvider: (() -> ScreenState)?,
   ): TrailblazeToolExecutionContext {
     val effectiveScreenStateProvider = screenStateProvider ?: this.screenStateProvider
-    return TrailblazeToolExecutionContext(
+    lateinit var context: TrailblazeToolExecutionContext
+    context = TrailblazeToolExecutionContext(
       screenState = screenState,
       traceId = traceId,
       trailblazeDeviceInfo = trailblazeDeviceInfoProvider(),
@@ -108,8 +109,19 @@ class ComposeRpcTrailblazeAgent(
       nestedToolExecutor = { nestedTool ->
         runTrailblazeTools(
           tools = listOf(nestedTool),
-          traceId = traceId,
-          screenState = screenState,
+          // The context's CURRENT trace, not the one it was built with. Inside a shared tool
+          // batch this context is reused across dispatches and `runTrailblazeTools` re-stamps
+          // its traceId per dispatch, so the build-time id belongs to the FIRST tool of the
+          // recording. Re-entering with it would write that id back onto the shared context,
+          // filing the nested call AND its parent under the first tool's trace.
+          traceId = context.traceId,
+          // Null, not the build-time `screenState`, for the same staleness reason. Inside a shared
+          // batch that snapshot belongs to the recording's FIRST tool, and re-entering with it
+          // writes it back onto the shared context, so the nested tool (and everything after it)
+          // would act on pre-action UI. Assigning null is the documented way to re-arm
+          // [TrailblazeToolExecutionContext.screenState]'s lazy capture: a nested tool that reads
+          // the field sees CURRENT UI, and one that never reads it costs no capture RPC.
+          screenState = null,
           elementComparator = NoOpElementComparator,
           screenStateProvider = effectiveScreenStateProvider,
         ).result
@@ -119,6 +131,7 @@ class ComposeRpcTrailblazeAgent(
       // Compose / Playwright / Revyl agents. Without it the bridge throws "toolRepo not wired".
       toolRepo = trailblazeToolRepo,
     )
+    return context
   }
 
   override fun executeTool(

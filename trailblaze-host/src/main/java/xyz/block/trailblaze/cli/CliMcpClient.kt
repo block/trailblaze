@@ -13,6 +13,7 @@ import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.contentType
+import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
@@ -88,6 +89,18 @@ class CliMcpClient(
 
   /** Device binding verified by the reusable-session INFO probe. */
   private var existingDeviceId: TrailblazeDeviceId? = null
+
+  /**
+   * The `device(action=INFO, sessionOnly=true)` block [connectReusable] read to verify a REUSED
+   * session, or null when this client opened a fresh one.
+   *
+   * Published because that probe already carries everything the daemon reports about the session
+   * — including its named-device roster — so a caller that wants the roster would otherwise
+   * repeat the identical round trip. Null is meaningful rather than "unknown": a session this
+   * client just created has no bindings.
+   */
+  internal var reusedSessionProbeContent: String? = null
+    private set
 
   val isInitialized: Boolean get() = sessionId != null
 
@@ -532,6 +545,37 @@ class CliMcpClient(
         logSessionReuse(currentSpec)
         return reuseExistingDevice(currentDevice, webHeadless)
       }
+      // A multi-device session is addressed by its START device (the CLI derives the MCP
+      // session scope from the requested device, so only the start device's scope reattaches
+      // to the roster-owning session — a companion serial resolves to its own fresh scope).
+      // The start device stops being the session's current device the moment a
+      // `switchDevice` hands the session over, so within the attached session the spec is
+      // matched against the roster. Falling through to the replace below would tear the
+      // roster down mid-session: the daemon reads the new CONNECT as a fresh single-device
+      // association and drops every named binding. The active device is deliberately left
+      // where the handover put it — `-d` names the session here, and `switchDevice` is the
+      // one tool that moves the session between members.
+      //
+      // The roster is probed LIVE rather than read from the reattach probe's cached text: on a
+      // long-lived client the cast can mutate after connect (`session start --bind` releases
+      // names an earlier cast held), and a match against a since-released entry would silently
+      // land the command on the active device instead of reconnecting. The extra INFO
+      // round-trip is confined to this path — the spec already failed to match the current
+      // device, so this is the rare post-handover case, not the hot path.
+      val liveRosterInfo = callTool(
+        DEVICE_TOOL_NAME,
+        mapOf(ACTION_KEY to DEVICE_ACTION_INFO, SESSION_ONLY_KEY to true),
+      ).takeUnless { it.isError }?.content.orEmpty()
+      val rosterIds = rosterDeviceIds(extractNamedDeviceRoster(liveRosterInfo))
+      if (rosterIds.any { sameBoundDevice(it, deviceSpec) }) {
+        logSessionReuse(currentSpec)
+        // No platform rebind here, for ANY platform — not the Android-only shortcut
+        // reuseExistingDevice takes. A rebind is a device() platform action, which the daemon
+        // handles as a replacing connect and answers by clearing every named binding — the
+        // exact teardown this branch exists to prevent.
+        hasConnectedDevice = true
+        return null
+      }
       // The next connection targets a different device. Drop the probe cache before switching so
       // another ensureDevice call on this client cannot mistake the old association for the new
       // one if the switch fails or the caller retries.
@@ -616,8 +660,17 @@ class CliMcpClient(
    * — so callers that get a non-null id which doesn't match their `--device` should
    * fail loudly rather than acting on an unrelated session.
    */
-  suspend fun getBoundDeviceId(): TrailblazeDeviceId? {
-    val infoResult = callTool(DEVICE_TOOL_NAME, mapOf(ACTION_KEY to DEVICE_ACTION_INFO))
+  suspend fun getBoundDeviceId(sessionOnly: Boolean = false): TrailblazeDeviceId? {
+    val infoResult = callTool(
+      DEVICE_TOOL_NAME,
+      buildMap {
+        put(ACTION_KEY, DEVICE_ACTION_INFO)
+        // Default false keeps the process-wide view every existing lifecycle caller relies on.
+        // Pass true when the answer must be about THIS MCP session's device and not whatever
+        // another terminal selected last — see the note on DeviceManagerToolSet's INFO action.
+        if (sessionOnly) put(SESSION_ONLY_KEY, true)
+      },
+    )
     if (infoResult.isError) return null
     val platform = parseDevicePlatform(infoResult) ?: return null
     val instance = parseConnectedInstanceId(infoResult) ?: return null
@@ -903,6 +956,17 @@ class CliMcpClient(
     val isError: Boolean = false,
   ) {
     val isSuccess: Boolean get() = !isError
+
+    /**
+     * Whether the daemon refused the call, in EITHER of the two shapes it uses.
+     *
+     * A protocol-level failure sets [isError]; a validation failure (unknown device, name
+     * conflict) comes back as a plain `Error: …` text block with `isError = false`, so a caller
+     * checking only one shape reads the other as success. [content] is trimmed first because
+     * several `device` responses `appendLine()` before their message, and a leading newline would
+     * hide the prefix.
+     */
+    val isFailure: Boolean get() = isError || content.trimStart().startsWith("Error:")
   }
 
   data class McpToolInfo(
@@ -1052,6 +1116,29 @@ class CliMcpClient(
       return scopedStateFile(prefix = SESSION_FILE_PREFIX, port = port, sessionScope = sessionScope)
     }
 
+    /**
+     * Every scope with a session pointer on [port], sorted by name. The unscoped pointer is
+     * excluded — its filename carries no scope suffix.
+     *
+     * Sorted because callers stop at their first match and `listFiles` promises no order: two
+     * pointers that both satisfy a search would otherwise resolve to different sessions on
+     * different runs, which is not a difference a user could debug.
+     *
+     * Read off the pointer FILES because each CLI invocation is its own process, so the filesystem
+     * is the only shared record of which scopes exist. The values returned are the NORMALIZED
+     * suffixes ([normalizedSessionScopeSuffix]) rather than the scope strings that produced them;
+     * normalization is idempotent, so passing one back to [sessionFile] or [connectReusable]
+     * resolves to the same file. They are not device specs and must not be parsed as such.
+     */
+    internal fun scopesWithSessionFiles(port: Int): List<String> {
+      val prefix = "$SESSION_FILE_PREFIX-$port-"
+      return File(System.getProperty(TMP_DIR_PROPERTY)).listFiles()
+        .orEmpty()
+        .filter { it.isFile && it.name.startsWith(prefix) }
+        .map { it.name.removePrefix(prefix) }
+        .sorted()
+    }
+
     private fun normalizedSessionScopeSuffix(sessionScope: String?): String? {
       return sessionScope
         ?.trim()
@@ -1148,6 +1235,10 @@ class CliMcpClient(
      *   is how the CLI keeps one reusable MCP session per logical workflow
      *   (e.g. `cli-android/emulator-5554` vs `cli-ios/SIM-X`) instead of forcing all terminals
      *   on a daemon port to share a single session.
+     * @param createIfMissing When false, a scope with no live session is reported as
+     *   [CliMcpException] instead of being given a fresh one. Callers that INSPECT a scope pass
+     *   false: minting a session to look at it leaves an orphan on the daemon and rewrites the
+     *   scope's pointer with no target app, so a read would quietly destroy the state it read.
      * @return A connected client. Check [hasExistingDevice] to see if a device
      *   is already connected to the reused session.
      * @throws CliMcpException if connection fails
@@ -1156,6 +1247,7 @@ class CliMcpClient(
       port: Int = TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTP_PORT,
       targetAppId: String? = null,
       sessionScope: String? = null,
+      createIfMissing: Boolean = true,
     ): CliMcpClient {
       val client = CliMcpClient(
         serverUrl = "http://localhost:$port/mcp",
@@ -1204,10 +1296,18 @@ class CliMcpClient(
                 )
               } else null
               client.hasExistingDevice = client.existingDeviceId != null
+              client.reusedSessionProbeContent = result.content
               return client
             }
             // Daemon responded but doesn't recognize our session — it was restarted
             Console.error("Daemon doesn't recognize the saved session -- starting a new one.")
+          } catch (e: CancellationException) {
+            // A cancelled CLI is not a dead session. Swallowing this would report the saved
+            // session as unrecognized and, under createIfMissing, open a replacement nobody is
+            // waiting for — CancellationException is a RuntimeException on the JVM, so the
+            // catch below would otherwise take it.
+            client.close()
+            throw e
           } catch (_: Exception) {
             // Daemon probe failed mid-call — recreate below
             Console.error("Daemon probe failed -- starting a new session.")
@@ -1216,10 +1316,20 @@ class CliMcpClient(
         }
       }
 
+      if (!createIfMissing) {
+        client.close()
+        throw CliMcpException(
+          "No live MCP session for scope '${sessionScope ?: "(unscoped)"}' on port $port.",
+        )
+      }
+
       // Create fresh session
       client.sessionId = null
       try {
         client.initialize()
+      } catch (e: CancellationException) {
+        client.close()
+        throw e
       } catch (e: Exception) {
         client.close()
         throw CliMcpException(
@@ -1232,6 +1342,20 @@ class CliMcpClient(
       writeSessionFile(file, client.sessionId, effectiveTargetAppId)
 
       return client
+    }
+
+    /**
+     * Deletes [sessionScope]'s pointer only if it still names [sessionId].
+     *
+     * How the SECOND pointer of an alias pair (see [publishSessionFileAlias]) is reaped when the
+     * session it named ends. A blind delete is not safe here: the other spelling's file may have
+     * been rewritten by a different terminal opening its own session on that device, and dropping
+     * that pointer would strand a live session.
+     */
+    internal fun clearSessionIfPointsTo(port: Int, sessionScope: String?, sessionId: String?) {
+      if (sessionId == null) return
+      if (readSessionFile(sessionFile(port, sessionScope)).first != sessionId) return
+      clearSession(port, sessionScope)
     }
 
     /** Deletes the CLI session file, called on app stop or session end. */
@@ -1269,6 +1393,34 @@ class CliMcpClient(
         // Best effort. Both files pointing at the same session is safe; a later connect can
         // overwrite either scope normally.
       }
+    }
+
+    /**
+     * Points a SECOND scope at an existing reusable session, leaving the original pointer in place.
+     *
+     * The publish/migrate split is the difference between resolving a scope and covering two
+     * spellings of one device. `device connect android` learns its instance id and MIGRATES,
+     * because nothing should still reattach under the bare platform. A `session start --bind` keys
+     * its scope on the DEVICE_ID as typed, but a follow-up command resolving through this
+     * terminal's pin passes the fully-qualified id — both spellings name the same device, and both
+     * have to reach the session holding the roster. Two files naming one session is a state
+     * [migrateSessionFile] already tolerates on a failed delete: a later connect overwrites either
+     * scope normally, and a pointer to a session the daemon no longer knows is replaced on the
+     * next probe.
+     */
+    internal fun publishSessionFileAlias(
+      port: Int,
+      fromSessionScope: String,
+      toSessionScope: String,
+    ): Boolean {
+      if (fromSessionScope == toSessionScope) return true
+      val (savedSessionId, savedTargetAppId) = readSessionFile(sessionFile(port, fromSessionScope))
+      if (savedSessionId == null) return false
+      val target = sessionFile(port, toSessionScope)
+      writeSessionFile(target, savedSessionId, savedTargetAppId)
+      // [writeSessionFile] treats an IO failure as non-fatal, so the pointer is read back rather
+      // than assumed: a caller that tells the user which spelling reattaches has to be right.
+      return readSessionFile(target).first == savedSessionId
     }
 
     /**

@@ -2,7 +2,8 @@ config:
   id: clock/open-and-switch-to-timer
   description: Open the Clock app and navigate to the Timer tab.
   devices:
-    android: ANDROID_ONDEVICE_INSTRUMENTATION
+    android:
+      driver: ANDROID_ONDEVICE_INSTRUMENTATION
 
 trail:
   - step: "Launch the AOSP Desk Clock app (com.android.deskclock) with a clean state."

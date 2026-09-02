@@ -101,7 +101,7 @@ class AnalyzerScriptedToolEnrichment(
      */
     fun resolveFromEnvironment(): AnalyzerScriptedToolEnrichment? {
       val bun = BunBinaryResolver.resolveBunBinary() ?: return null
-      val sdkDir = ScriptedToolDefinitionAnalyzer.resolveSdkDir() ?: return null
+      val sdkDir = ScriptedToolDefinitionAnalyzer.resolveAnalyzerSdkDir() ?: return null
       val shim = ScriptedToolDefinitionAnalyzer.resolveExtractorShim(sdkDir) ?: return null
       // Deps must be resolvable: a real SDK tree with node_modules installed, OR the
       // framework-bundled self-contained shim (deps inlined). Rejects a shim with neither.

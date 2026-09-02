@@ -153,6 +153,7 @@ table.perf .bar.full i { background: var(--fail); }
 .kindchip.llm { background: var(--violet-surface); color: var(--ai); }
 .kindchip.maestro { background: var(--cyan-3); color: var(--event); }
 .kindchip.driver { background: var(--bg3); color: var(--sub); }
+.kindchip.trace { background: var(--forest-3); color: var(--forest-11); }
 .tree-name { display: inline-flex; align-items: center; gap: 6px; }
 .tree-caret { display: inline-flex; width: 14px; justify-content: center; color: var(--sub); font-size: 10px; }
 .fail-txt { color: var(--fail); font-weight: var(--font-weight-emphasis); }

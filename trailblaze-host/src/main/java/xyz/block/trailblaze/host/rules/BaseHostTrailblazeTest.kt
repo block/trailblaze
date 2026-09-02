@@ -96,6 +96,20 @@ abstract class BaseHostTrailblazeTest(
   maxRetries: Int = 0,
   private val appTarget: TrailblazeHostAppTarget? = null,
   explicitDeviceId: TrailblazeDeviceId? = null,
+  /**
+   * Directory session logs are written to. Null lets [HostTrailblazeLoggingRule] use its own
+   * default resolution (`<git root>/logs`, else `~/.trailblaze/logs`) — correct for the JUnit path,
+   * which has no app config to read. Host-runner callers pass the configured `logsDirectory` so
+   * this rule's own disk writes, and the recording generation that reads them back, land where the
+   * setting points.
+   */
+  logsDir: File? = null,
+  /**
+   * When true, this rule installs the no-op logger and a read-only [xyz.block.trailblaze.report.utils.LogsRepo],
+   * so the run writes no session files to disk. False lets the JUnit path log normally; host-runner
+   * callers pass the run's `--no-logging` flag.
+   */
+  noLogging: Boolean = false,
 ) {
 
   /**
@@ -137,7 +151,7 @@ abstract class BaseHostTrailblazeTest(
   }
 
   private val hostRunnerLazy: Lazy<MaestroHostRunnerImpl> = lazy {
-    check(trailblazeDriverType !in TrailblazeDriverType.IOS_HOST_NATIVE_DRIVER_TYPES) {
+    check(!trailblazeDriverType.hostNativeSimulatorDriver) {
       "hostRunner must never be constructed on $trailblazeDriverType — it opens the Maestro/XCUITest " +
         "connection host-native iOS drivers exist to avoid. Use screenStateProvider/trailblazeAgent instead."
     }
@@ -259,6 +273,8 @@ abstract class BaseHostTrailblazeTest(
     trailblazeDeviceInfoProvider = {
       trailblazeDeviceInfo
     },
+    logsDir = logsDir,
+    noLogging = noLogging,
   )
 
   val loggingRule: TrailblazeLoggingRule = hostLoggingRule
@@ -739,6 +755,13 @@ abstract class BaseHostTrailblazeTest(
       )
       return HostYamlRunResult(loggingRule.session?.sessionId ?: SessionId("unknown"))
     }
+
+    // Anchor trail-relative host paths (e.g. a WAV committed beside the trail) to THIS trail's
+    // directory. Assigned per run rather than at construction because `trailblazeAgent` is one
+    // lazy instance for the whole test class while `trailFilePath` arrives per run — the same
+    // reason `PlaywrightTrailblazeAgent.workingDirectory` is a var. Covers both branches of the
+    // agent (host-Maestro and iOS-native), since it is set on the built agent, not passed to one.
+    trailblazeAgent.workingDirectory = trailFilePath?.let { File(it).parentFile }
 
     // Seed the agent's memory before any tool runs — same [AgentMemory.seedFrom] composition
     // as every other host runner path. The agent threads this memory into every tool execution

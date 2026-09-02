@@ -7,6 +7,7 @@ import kotlinx.serialization.json.put
 import xyz.block.trailblaze.config.InlineScriptToolConfig
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
+import xyz.block.trailblaze.model.TrailblazeOnDeviceInstrumentationTarget
 import xyz.block.trailblaze.toolcalls.allToolNames
 import xyz.block.trailblaze.toolcalls.getAgentToolboxForDriver
 import xyz.block.trailblaze.toolcalls.getExcludedToolSurfaceForDriver
@@ -96,6 +97,121 @@ class YamlBackedHostAppTargetTest {
       toolNameResolver = resolver,
     )
     assertNull(target.getElectronAppConfig())
+  }
+
+  @Test
+  fun `android_test round-trips from YAML to an externally-installed instrumentation target`() {
+    val target = AppTargetYamlLoader.loadFromYaml(
+      """
+      id: example
+      display_name: Example App
+      android_test:
+        test_app_id: com.example.app.uitests
+        fq_test_name: com.example.app.uitests.InProcessStandaloneServerTest
+      """.trimIndent(),
+      toolNameResolver = resolver,
+    )
+    val harness = target.getAndroidTestInstrumentationTarget()
+    assertEquals("com.example.app.uitests", harness?.testAppId)
+    assertEquals("com.example.app.uitests.InProcessStandaloneServerTest", harness?.fqTestName)
+    // The host must instrument what's installed — a precompiled install/SHA check would clobber
+    // the app's own build.
+    assertTrue(harness?.installedExternally == true)
+    // Launching this harness IS an ANDROID_TEST selection, and the connect path forwards that to
+    // the device as `trailblaze.driverType`. Without it the on-device pin gate refuses every
+    // accessibility-pinned trail on a run that deliberately asked for this driver.
+    assertEquals(TrailblazeDriverType.ANDROID_TEST, harness?.forcedDriverType)
+    // Driver-aware resolution: ANDROID_TEST resolves the harness; other drivers keep the
+    // bundled runner.
+    assertEquals(
+      harness,
+      target.getTrailblazeOnDeviceInstrumentationTargetForDriver(TrailblazeDriverType.ANDROID_TEST),
+    )
+    assertEquals(
+      target.getTrailblazeOnDeviceInstrumentationTarget(),
+      target.getTrailblazeOnDeviceInstrumentationTargetForDriver(
+        TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
+      ),
+    )
+  }
+
+  @Test
+  fun `android_test resolves the app under test as the process to look for`() {
+    val target = AppTargetYamlLoader.loadFromYaml(
+      """
+      id: example
+      display_name: Example App
+      platforms:
+        android:
+          app_ids:
+            - com.example.app
+      android_test:
+        test_app_id: com.example.app.uitests
+        fq_test_name: com.example.app.uitests.InProcessStandaloneServerTest
+      """.trimIndent(),
+      toolNameResolver = resolver,
+    )
+    val harness = target.getAndroidTestInstrumentationTarget()
+    // The whole point of the distinction: the harness instruments the app under test, so at
+    // runtime there is a `com.example.app` process and never a `com.example.app.uitests` one.
+    // Asking about the test package reports a live server as not running, which the connect path
+    // turns into an infrastructure failure.
+    assertEquals("com.example.app", harness?.hostProcessAppId)
+    assertEquals("com.example.app", harness?.instrumentationProcessAppId)
+    // Still the test package for what it actually names: the APK to install, and the
+    // instrumentation to launch.
+    assertEquals("com.example.app.uitests", harness?.testAppId)
+    // ...and knowing the process is NOT the same as being able to reuse on it. `com.example.app`
+    // is running whenever anyone launched the app, so its liveness cannot stand in for "the
+    // in-process server is attached" — the connect path must do the full launch and let the
+    // readiness probe decide.
+    assertFalse(harness!!.processLivenessProvesInstrumentationAttached)
+  }
+
+  @Test
+  fun `android_test without a declared android app id keeps the self-instrumenting assumption`() {
+    val target = AppTargetYamlLoader.loadFromYaml(
+      """
+      id: example
+      display_name: Example App
+      android_test:
+        test_app_id: com.example.app.uitests
+        fq_test_name: com.example.app.uitests.InProcessStandaloneServerTest
+      """.trimIndent(),
+      toolNameResolver = resolver,
+    )
+    val harness = target.getAndroidTestInstrumentationTarget()
+    // Nothing to derive the app process from, so it stays null rather than guessing at a package
+    // name, and the process check falls back to the pre-existing behavior.
+    assertNull(harness?.hostProcessAppId)
+    assertEquals("com.example.app.uitests", harness?.instrumentationProcessAppId)
+    assertTrue(harness!!.processLivenessProvesInstrumentationAttached)
+  }
+
+  @Test
+  fun `the bundled runner self-instruments so its process is its own test package`() {
+    val bundled = TrailblazeOnDeviceInstrumentationTarget.DEFAULT_ANDROID_ON_DEVICE
+    assertNull(bundled.hostProcessAppId)
+    assertEquals(bundled.testAppId, bundled.instrumentationProcessAppId)
+    // The bundled runner is the one case where `pidof` IS proof: that process exists only
+    // because `am instrument` created it, so reuse on it is sound.
+    assertTrue(bundled.processLivenessProvesInstrumentationAttached)
+  }
+
+  @Test
+  fun `android_test absent returns null and fails ANDROID_TEST resolution`() {
+    val target = AppTargetYamlLoader.loadFromYaml(
+      """
+      id: test
+      display_name: Test
+      """.trimIndent(),
+      toolNameResolver = resolver,
+    )
+    assertNull(target.getAndroidTestInstrumentationTarget())
+    // Never the bundled default: its runner APK knows nothing about the app's process.
+    assertNull(
+      target.getTrailblazeOnDeviceInstrumentationTargetForDriver(TrailblazeDriverType.ANDROID_TEST),
+    )
   }
 
   @Test

@@ -1,0 +1,27 @@
+# This file is a CHECKED-IN baseline of CLI output rendered by trailblaze-host's CLI helpers.
+# It is NOT a contract — if a test fails here because output drifted, decide whether the
+# drift is intentional. The test always (re)writes this file from the current rendered output,
+# then asserts the working tree is clean. So `git diff` of this file IS the failure message.
+# Reviewers: scrutinize diffs to baselines the same way you would scrutinize a UI screenshot —
+# small wording / spacing changes can be intentional or accidental.
+# ----------------------------------------------------------------------
+Usage: trailblaze otel [-hV] [--post] [--endpoint=<url>]
+                       [--service-name=<serviceName>] [<dir>]
+Convert recorded spans to OpenTelemetry. Writes <session>/otel.json (OTLP/JSON)
+for every session that recorded a trace, and with --post also sends them to an
+OTLP endpoint. Defaults to the configured logs directory when <dir> is omitted.
+      [<dir>]            A logs directory (holding per-session subdirectories)
+                           or a single session directory. Defaults to the
+                           configured logs directory.
+      --endpoint=<url>   OTLP endpoint to send to. Implies --post. Port 4317 is
+                           treated as gRPC, anything else as OTLP/HTTP.
+  -h, --help             Show this help message and exit.
+      --post             Also send the spans to an OTLP endpoint. Uses
+                           --endpoint if given, otherwise
+                           OTEL_EXPORTER_OTLP_TRACES_ENDPOINT /
+                           OTEL_EXPORTER_OTLP_ENDPOINT, falling back to http:
+                           //localhost:4318.
+      --service-name=<serviceName>
+                         Service name recorded in the exported resource.
+                           Defaults to `trailblaze`.
+  -V, --version          Print version information and exit.

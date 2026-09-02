@@ -331,7 +331,7 @@ class SessionCaptureCoordinator(
      * silently records the wrong artifacts, so callers must resolve their own.
      */
     val DEFAULT_CAPTURE_OPTIONS = CaptureOptions.hostCaptureOptions(
-      captureVideo = true,
+      captureVideo = false,
       captureLogcat = true,
       captureIosLogs = true,
     )

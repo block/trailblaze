@@ -25,6 +25,7 @@ import xyz.block.trailblaze.playwright.PlaywrightElectronBrowserManager
 import xyz.block.trailblaze.playwright.recording.AttachedPlaywrightDeviceScreenStream
 import xyz.block.trailblaze.playwright.recording.PlaywrightDeviceScreenStream
 import xyz.block.trailblaze.playwright.recording.PlaywrightInteractionToolFactory
+import xyz.block.trailblaze.transport.AndroidWireTransport
 import xyz.block.trailblaze.ui.TrailblazeDeviceManager
 import xyz.block.trailblaze.ui.recording.ConnectionState
 import xyz.block.trailblaze.ui.recording.RecordingDeviceConnection
@@ -147,6 +148,11 @@ class DeviceConnectionService(private val deviceManager: TrailblazeDeviceManager
       appTarget = targetTestApp,
       trailblazeDeviceId = device.trailblazeDeviceId,
       existingBrowserManager = pageManager,
+      // This test is cached for reuse by later runs, so build its rule against the app's
+      // configured logs directory — the same one [deviceManager]'s own repo is pinned at.
+      // Left unset, the rule would default to `<git root>/logs` and file every reusing
+      // session there instead.
+      logsDir = deviceManager.logsRepo.logsDir,
     )
     deviceManager.setActivePlaywrightNativeTest(device.trailblazeDeviceId, playwrightTest)
 
@@ -222,13 +228,19 @@ class DeviceConnectionService(private val deviceManager: TrailblazeDeviceManager
         "No target app selected. Pick one in the Target dropdown before connecting.",
       )
     }
-    val instrumentationTarget = targetTestApp.getTrailblazeOnDeviceInstrumentationTarget()
+    // Driver-aware: ANDROID_TEST resolves the target's own in-process harness, which may be
+    // undeclared — the actionable error beats instrumenting the bundled runner, which knows
+    // nothing about the app's process.
+    val instrumentationTarget =
+      targetTestApp.getTrailblazeOnDeviceInstrumentationTargetForDriver(device.trailblazeDriverType)
+        ?: return ConnectionState.Error(targetTestApp.missingInProcessHarnessMessage())
     val needsAccessibility =
       device.trailblazeDriverType == TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY
 
     val rpcClient = OnDeviceRpcClient(
       trailblazeDeviceId = device.trailblazeDeviceId,
       sendProgressMessage = { Console.log("[DeviceConnectionService] $it") },
+      wireTransportMode = AndroidWireTransport.modeFor(device.trailblazeDriverType),
     )
     val screenStateProvider = OnDeviceRpcScreenStateProvider(
       rpc = rpcClient,
@@ -245,7 +257,16 @@ class DeviceConnectionService(private val deviceManager: TrailblazeDeviceManager
           sendProgressMessage = { Console.log("[DeviceConnectionService] $it") },
           deviceId = device.trailblazeDeviceId,
           trailblazeOnDeviceInstrumentationTarget = instrumentationTarget,
+          // The daemon's resolved HTTPS port — on a non-default port (TRAILBLAZE_PORT et al.)
+          // the old defaulted value reversed tcp:52526 to a host port nothing listens on.
+          httpsPort = deviceManager.settingsRepo.portManager.httpsPort,
           additionalInstrumentationArgs = deviceManager.onDeviceInstrumentationArgsProvider(),
+          // The same target this connect resolved its own instrumentation from, so the harness
+          // stopped and the harness launched cannot come from two different apps. Note for this
+          // path specifically: on a machine with the in-process harness installed, connecting to
+          // record will force-stop the app under test. See
+          // HostAndroidDeviceConnectUtils.planConnectForceStop.
+          additionalForceStopTargets = targetTestApp.allInstrumentationTargets().toSet(),
         )
         if (needsAccessibility) {
           AccessibilityServiceSetupUtils.enableAccessibilityService(
@@ -472,8 +493,8 @@ class DeviceConnectionService(private val deviceManager: TrailblazeDeviceManager
      * iOS binds through the Maestro driver: a target declaring `hasCustomIosDriver` wraps the base
      * `IOSDriver` in its own subclass, so which target a connect names decides which driver it gets
      * (`HostIosDriverFactory.driverWrapperKey`). The host-native iOS drivers are the exception - they
-     * talk to the simulator directly and never build a wrapper, so `IOS_HOST_NATIVE_DRIVER_TYPES` is
-     * the whole exemption and a new member of that set is automatically exempt here too.
+     * talk to the simulator directly and never build a wrapper, so `hostNativeSimulatorDriver` is
+     * the whole exemption and a new driver declaring it is automatically exempt here too.
      *
      * Deliberately coarse on one edge: this decides per platform + driver, so it can't see that two
      * targets which BOTH lack a custom iOS driver would have produced the identical connection.
@@ -486,7 +507,7 @@ class DeviceConnectionService(private val deviceManager: TrailblazeDeviceManager
       when (platform) {
         TrailblazeDevicePlatform.ANDROID -> true
         TrailblazeDevicePlatform.WEB -> webConnectStrategy(driverType) == WebConnectStrategy.LAUNCH_CHROMIUM
-        TrailblazeDevicePlatform.IOS -> driverType !in TrailblazeDriverType.IOS_HOST_NATIVE_DRIVER_TYPES
+        TrailblazeDevicePlatform.IOS -> !driverType.hostNativeSimulatorDriver
         TrailblazeDevicePlatform.DESKTOP -> false
       }
 
@@ -520,7 +541,7 @@ class DeviceConnectionService(private val deviceManager: TrailblazeDeviceManager
       target: TrailblazeHostAppTarget?,
     ): HostDeviceSessionManager.Binding {
       val buildsMaestroDriver = platform == TrailblazeDevicePlatform.IOS &&
-        driverType !in TrailblazeDriverType.IOS_HOST_NATIVE_DRIVER_TYPES
+        !driverType.hostNativeSimulatorDriver
       if (!bindsTargetApp(platform, driverType)) {
         return HostDeviceSessionManager.Binding(buildsMaestroDriver = buildsMaestroDriver)
       }

@@ -1111,6 +1111,7 @@ internal class TrailRunnerRecordingService(
   private fun labelAndType(node: TrailblazeNode): Pair<String?, String?> =
     when (val d = node.driverDetail) {
       is DriverNodeDetail.AndroidAccessibility -> d.resolveText() to d.className?.substringAfterLast('.')
+      is DriverNodeDetail.AndroidView -> d.resolveText() to d.className?.substringAfterLast('.')
       is DriverNodeDetail.AndroidMaestro -> d.resolveText() to d.className?.substringAfterLast('.')
       is DriverNodeDetail.IosMaestro -> d.resolveText() to d.className
       is DriverNodeDetail.IosAxe -> d.resolveText() to (d.type ?: d.role?.removePrefix("AX"))
@@ -1122,6 +1123,7 @@ internal class TrailRunnerRecordingService(
   private fun identifierOf(node: TrailblazeNode): String? =
     when (val d = node.driverDetail) {
       is DriverNodeDetail.AndroidAccessibility -> d.uniqueId ?: d.resourceId
+      is DriverNodeDetail.AndroidView -> d.resourceId ?: d.tag
       is DriverNodeDetail.AndroidMaestro -> d.resourceId
       is DriverNodeDetail.IosMaestro -> d.resourceId
       is DriverNodeDetail.IosAxe -> d.uniqueId

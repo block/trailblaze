@@ -36,6 +36,16 @@ interface RunMeta {
   error?: string;
   /** Machine-readable failure code lifted from the session's structured failure payload (`failureCodeOf`); rendered as a chip on the failure banner. */
   failureCode?: string;
+  /**
+   * Why the runner declined to run this trail — its resolved `config.skip:` reason. Present only on
+   * a `status: 'skipped'` stub, which has no run behind it.
+   *
+   * Carried separately from [error] on purpose: a skip is not a failure, and the viewer styles and
+   * sections the two differently. The results JSON does put the reason in `failure_reason` (the
+   * field every consumer already reads as "why this row is not a plain pass"), so the generators
+   * re-key it here when the outcome is SKIPPED.
+   */
+  skipReason?: string;
   /** True for *WithSelfHeal statuses — renders the separate self-heal marker badge. */
   selfHeal?: boolean;
   generatedAt?: string;
@@ -165,6 +175,17 @@ interface TraceStep {
   count: number | null;
   mark: ActionMark | null;
   /**
+   * The instant the folded driver action that supplied `screenshotFile` / `mark` actually ran.
+   *
+   * A tool log's own `ts` is timeBeforeExecution, so on a tool that resolved a selector before it
+   * acted these can be seconds later than the row's start. Present ONLY when a folded action
+   * supplied the cue and its instant differs from `ts`; consumers fall back to `ts`. Replay needs
+   * them because it draws these cues over a synchronized recording, where the row's start is the
+   * wrong moment.
+   */
+  shotTs?: number | null;
+  markTs?: number | null;
+  /**
    * Full call content as trail-file YAML — a tool row's complete arguments (`- toolName:` +
    * indented args, the WASM report's toolToYaml shape) or a raw device action's full fields (the
    * untruncated assert condition). Rendered expanded under the SELECTED row, so what a step
@@ -194,6 +215,15 @@ interface TraceStep {
   /** A composite call's full argument list as preformatted `key=value` lines — unabridged, unlike
    * the `tool` summary's three-key crop. Only present on rows that carry children. */
   params?: string[] | null;
+  /**
+   * Binding name of the device this row acted on (`buyer`, `seller`, …) in a session that drove
+   * several devices through `switchDevice` handovers. Stamped from a host-emitted log's
+   * deviceName where one exists; otherwise derived by walking the handovers, which is sound
+   * because execution is strictly sequential (see assignTraceDevices). Absent on single-device
+   * sessions AND on a leading prefix the walk could not attribute — so absence means "no device
+   * signal", never "the start device".
+   */
+  device?: string | null;
 }
 
 /** Rows as extractTrace produces them, before slimTraceForShare strips extraction bookkeeping. */
@@ -395,6 +425,20 @@ interface EventStreamFormatter {
   format(entries: FormatterEntry[], ctx?: FormatterContext): Array<FormatterRowInput | null | undefined>;
 }
 
+/**
+ * A media/file reference a producer embedded in an event payload — the decoded shape of the
+ * framework's attachment primitive (Kotlin `AttachmentRef` in trailblaze-models; detected in TS by
+ * `attachmentRefOf`/`findAttachmentRefs` in run-report-events.ts via its `"$attachment": true`
+ * discriminator). `path` is session-relative; bytes are resolved per surface through
+ * `SessionPayload.attachments`.
+ */
+interface AttachmentRef {
+  path: string;
+  mimeType: string;
+  sizeBytes: number;
+  label?: string | null;
+}
+
 /** One `events/<name>.ndjson` producer stream, embedded in full. */
 interface EventStream {
   name: string;
@@ -439,6 +483,26 @@ interface VideoInfo {
    * timestamps) the timeline preview falls back to per-step screenshots.
    */
   startMs?: number | null;
+}
+
+/**
+ * A playable recording of the run — the capture video itself, not the sprite sheet. Only the
+ * archive loader produces one: `url` is an object URL over bytes held for this page's lifetime, so
+ * it is deliberately absent from exported documents (a self-contained report cannot carry tens of
+ * megabytes of base64, and an object URL means nothing in another page).
+ *
+ * `startMs`/`endMs` are the recorder's own wall-clock bookends (capture_metadata.json), which is
+ * what puts the video on the same clock as the trace. They are NOT interchangeable with the
+ * container's duration: the recorder's window routinely runs a few seconds longer than the file it
+ * produced, so mapping an instant to a video position has to scale by duration/window rather than
+ * subtract (see videoClipTimeAt).
+ */
+interface VideoClip {
+  url: string;
+  startMs: number;
+  endMs: number;
+  /** Container MIME type for the <source> element (video/mp4, video/webm). */
+  mime: string;
 }
 
 /**
@@ -492,6 +556,16 @@ interface SessionPayload {
    * driver's inline threshold; the viewer inflates it lazily when an inspector is opened. */
   hierarchiesGz?: string | null;
   video?: VideoInfo | null;
+  videoClip?: VideoClip | null;
+  /**
+   * Attachment bytes resolution: session-relative attachment path (AttachmentRef.path) → a URI the
+   * lightbox can load. Producers fill it per surface: the bun driver embeds `data:` URIs under its
+   * inline cap, the live daemon document links `/static/<sessionId>/<path>`, and the zip pipeline
+   * creates object URLs over the archive's own bytes. A referenced path absent from this map
+   * renders as "in the session bundle, not embedded". `blob:` values are runtime-only and are
+   * stripped from exported documents, same as `videoClip`.
+   */
+  attachments?: Record<string, string> | null;
 }
 
 /** One run as callers hand it to buildMultiReportHtml, before the slim/normalize pass. */
@@ -523,6 +597,9 @@ interface SessionInput {
   /** See SessionPayload.hierarchiesGz. */
   hierarchiesGz?: string | null;
   video?: VideoInfo | null;
+  videoClip?: VideoClip | null;
+  /** See SessionPayload.attachments. */
+  attachments?: Record<string, string> | null;
 }
 
 /**

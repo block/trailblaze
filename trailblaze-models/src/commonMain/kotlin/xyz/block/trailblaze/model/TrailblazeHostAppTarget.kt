@@ -219,6 +219,23 @@ abstract class TrailblazeHostAppTarget(
    */
   open val allowsAppNotInstalled: Boolean = false
 
+  /**
+   * When `true`, an on-device session may load this target's scripted-tool bundles from the
+   * runtime tool-bundle directory a host pushes to — `RuntimeToolSource.DEVICE_DIRECTORY` in
+   * `:trailblaze-quickjs-tools`, which this module cannot reference — rather than only from the
+   * test APK's assets. Mirrors
+   * [AppTargetYamlConfig.allowRuntimeToolSource][xyz.block.trailblaze.config.AppTargetYamlConfig.allowRuntimeToolSource],
+   * which is where the value is authored and where the signature covers it.
+   *
+   * MUST stay `false` for any target that does not read its opt-in from a signed config: honoring
+   * a pushed bundle is honoring unsigned code inside the app's process, and the default is the
+   * thing that makes a key-ceremony artifact safe to hand back.
+   *
+   * **Extension point.** Consulted by the on-device scripted-tool launcher. Host-side targets have
+   * no runtime tool source and need not override.
+   */
+  open val allowsRuntimeToolSource: Boolean = false
+
   fun getAllCustomToolClassesForSerialization(): Set<KClass<out TrailblazeTool>> =
     TrailblazeDriverType.entries.flatMap { trailblazeDriverType ->
       getCustomToolsForDriver(trailblazeDriverType)
@@ -227,6 +244,18 @@ abstract class TrailblazeHostAppTarget(
   fun internalGetAndroidOnDeviceTarget(): TrailblazeOnDeviceInstrumentationTarget {
     return DEFAULT_ANDROID_ON_DEVICE
   }
+
+  /**
+   * The in-process test APK that hosts the RPC server for a [TrailblazeDriverType.ANDROID_TEST]
+   * run against this target — the app's own instrumentation harness (e.g.
+   * `InProcessStandaloneServerTest`), built and installed by the app's build, never bundled with
+   * the CLI. Default null: a target with no declared harness is unreachable on ANDROID_TEST, and
+   * [getTrailblazeOnDeviceInstrumentationTargetForDriver] callers surface that as an actionable
+   * dispatch failure rather than instrumenting a runner that doesn't exist.
+   *
+   * YAML-backed targets return [xyz.block.trailblaze.config.AppTargetYamlConfig.androidTest].
+   */
+  open fun getAndroidTestInstrumentationTarget(): TrailblazeOnDeviceInstrumentationTarget? = null
 
   /**
    * We're provided with the original iOS Driver from Maestro
@@ -248,6 +277,39 @@ abstract class TrailblazeHostAppTarget(
 
   fun getTrailblazeOnDeviceInstrumentationTarget(): TrailblazeOnDeviceInstrumentationTarget =
     internalGetAndroidOnDeviceTarget() ?: TrailblazeOnDeviceInstrumentationTarget.DEFAULT_ANDROID_ON_DEVICE
+
+  /**
+   * Driver-aware instrumentation-target resolution. [TrailblazeDriverType.ANDROID_TEST] resolves
+   * to this target's own in-process harness ([getAndroidTestInstrumentationTarget]) and returns
+   * null when none is declared — never the bundled default, whose runner APK knows nothing about
+   * this app's process. Every other driver resolves the bundled runner exactly as
+   * [getTrailblazeOnDeviceInstrumentationTarget] always has.
+   */
+  fun getTrailblazeOnDeviceInstrumentationTargetForDriver(
+    driverType: TrailblazeDriverType,
+  ): TrailblazeOnDeviceInstrumentationTarget? = when (driverType) {
+    TrailblazeDriverType.ANDROID_TEST -> getAndroidTestInstrumentationTarget()
+    else -> getTrailblazeOnDeviceInstrumentationTarget()
+  }
+
+  /**
+   * Why [getTrailblazeOnDeviceInstrumentationTargetForDriver] answered null, phrased for whoever
+   * has to fix it. Shared so the several host paths that resolve a harness cannot drift into
+   * telling the same user three different things about the same missing declaration.
+   */
+  fun missingInProcessHarnessMessage(): String =
+    "Target '$id' declares no in-process test harness, so the ANDROID_TEST driver has no RPC " +
+      "server to reach on this target. Declare one in the target YAML " +
+      "(`android_test: { test_app_id: ..., fq_test_name: ... }`), or pick a driver whose runner " +
+      "ships with Trailblaze (accessibility, instrumentation)."
+
+  /**
+   * Every instrumentation target this app target can present — the bundled runner plus the
+   * in-process harness when one is declared. For callers acting on all of them at once, such as
+   * force-stopping leftover instrumentation processes before a run.
+   */
+  fun allInstrumentationTargets(): List<TrailblazeOnDeviceInstrumentationTarget> =
+    listOfNotNull(getTrailblazeOnDeviceInstrumentationTarget(), getAndroidTestInstrumentationTarget())
 
   /**
    * Returns comprehensive information about this app target as formatted text including:

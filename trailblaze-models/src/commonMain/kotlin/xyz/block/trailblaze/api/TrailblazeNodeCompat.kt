@@ -63,6 +63,30 @@ fun TrailblazeNode.toViewHierarchyTreeNode(): ViewHierarchyTreeNode {
       focusable = detail.isFocusable,
       children = children.map { it.toViewHierarchyTreeNode() },
     )
+    is DriverNodeDetail.AndroidView -> ViewHierarchyTreeNode(
+      nodeId = nodeId,
+      x1 = b?.left ?: 0,
+      y1 = b?.top ?: 0,
+      x2 = b?.right ?: 0,
+      y2 = b?.bottom ?: 0,
+      centerPoint = centerPoint,
+      className = detail.className,
+      resourceId = detail.resourceId,
+      text = detail.text,
+      accessibilityText = detail.contentDescription,
+      hintText = detail.hintText,
+      enabled = detail.isEnabled,
+      clickable = detail.isClickable,
+      focused = detail.isFocused,
+      // The legacy node has no "not checkable" state, so a non-Checkable view reads as
+      // unchecked here — the distinction only survives on the androidView shape itself.
+      checked = detail.isChecked ?: false,
+      selected = detail.isSelected,
+      scrollable = detail.isScrollable,
+      password = detail.isPassword,
+      focusable = detail.isFocusable,
+      children = children.map { it.toViewHierarchyTreeNode() },
+    )
     is DriverNodeDetail.AndroidMaestro -> ViewHierarchyTreeNode(
       nodeId = nodeId,
       x1 = b?.left ?: 0,

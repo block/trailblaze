@@ -1,5 +1,7 @@
 package xyz.block.trailblaze.ui
 
+import xyz.block.trailblaze.devices.TrailblazePortRangeConflictException
+
 /**
  * How long a process that failed the daemon-port bind waits for the rival to answer `/ping`
  * before classifying the failure. A rival that bound the socket but hasn't brought its routes
@@ -30,6 +32,13 @@ sealed interface PortBindFailureAction {
 
   /** Nothing answers on the port — the bind failure is a genuine startup error. */
   data object ExitAsStartupFailure : PortBindFailureAction
+
+  /**
+   * The port itself is unusable by configuration, so no bind on it could ever have won. Reported
+   * as the configuration error it is, without consulting the port — see [classifyPortBindFailure]
+   * for why probing would actively mislead here.
+   */
+  data object ExitAsConfigError : PortBindFailureAction
 }
 
 /**
@@ -40,14 +49,22 @@ sealed interface PortBindFailureAction {
  * spawned instances can all reach the bind. Exactly one wins; every loser lands here and must
  * exit rather than linger as a server-less tray icon.
  *
- * @param rivalDaemonIsRunning whether a daemon responds on the contested port.
+ * A [TrailblazePortRangeConflictException] is decided *before* [probeForRivalDaemon] is called, and
+ * that ordering is the point: the configured port is one a device can be allocated, so a device's
+ * own `adb forward` can be what answers the probe. Probing would report "another daemon owns this
+ * port", exit 0, and hide a configuration error the user has to fix.
+ *
+ * @param cause the failure thrown out of the server start.
  * @param headless whether this instance was launched without a visible window.
+ * @param probeForRivalDaemon whether a daemon responds on the contested port. Called at most once,
+ *   and not at all for a configuration error.
  */
 internal fun classifyPortBindFailure(
-  rivalDaemonIsRunning: Boolean,
+  cause: Throwable,
   headless: Boolean,
-): PortBindFailureAction = if (rivalDaemonIsRunning) {
-  PortBindFailureAction.ExitAsDuplicate(requestShowWindow = !headless)
-} else {
-  PortBindFailureAction.ExitAsStartupFailure
+  probeForRivalDaemon: () -> Boolean,
+): PortBindFailureAction = when {
+  cause is TrailblazePortRangeConflictException -> PortBindFailureAction.ExitAsConfigError
+  probeForRivalDaemon() -> PortBindFailureAction.ExitAsDuplicate(requestShowWindow = !headless)
+  else -> PortBindFailureAction.ExitAsStartupFailure
 }

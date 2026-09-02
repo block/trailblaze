@@ -316,6 +316,19 @@ actual class AndroidDeviceCommandExecutor actual constructor(
   // foreground app's manual paste); this cache is just for our own paste path.
   @Volatile private var lastSetClipboard: String? = null
 
+  /**
+   * Reads the RESUMED ACTIVITY, matching the androidMain actual (`AdbCommandUtil.isAppInForeground`)
+   * so both platforms answer this question the same way.
+   *
+   * This used to grep `mCurrentFocus` out of `dumpsys window windows`, which
+   * [AndroidForegroundParser] documents as the unreliable signal: on some images it stays null for
+   * the entire life of a freshly-launched screen, so a cold start reads as "not foreground" until
+   * the timeout expires. While the answer was advisory that only cost time; it is the launch
+   * verdict now, so a false negative would fail a launch that actually worked.
+   *
+   * Every resumed component is matched, not just the first, so split-screen and multi-display can't
+   * hide the app. Errors read as "not in foreground".
+   */
   actual fun waitUntilAppInForeground(
     appId: String,
     maxWaitMs: Long,
@@ -327,10 +340,10 @@ actual class AndroidDeviceCommandExecutor actual constructor(
   ) {
     val output = AndroidHostAdbUtils.execAdbShellCommand(
       deviceId = deviceId,
-      args = listOf("dumpsys", "window", "windows"),
+      args = listOf("dumpsys", "activity", "activities"),
     )
-    output.lineSequence()
-      .any { it.contains("mCurrentFocus") && it.contains(appId) }
+    AndroidForegroundParser.parseResumedActivityComponents(output)
+      .any { AndroidForegroundParser.packageFromComponent(it) == appId }
   }
 
   actual fun copyTestResourceToDevice(resourcePath: String, devicePath: String) {

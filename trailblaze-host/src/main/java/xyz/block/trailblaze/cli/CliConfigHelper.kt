@@ -5,6 +5,7 @@ import xyz.block.trailblaze.api.EffectiveScreenshotScalingConfig
 import xyz.block.trailblaze.api.TrailblazeImageFormat
 import xyz.block.trailblaze.config.project.TrailblazeWorkspaceConfigResolver
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
+import xyz.block.trailblaze.devices.TrailblazeDevicePort
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.host.animations.EffectiveDisableAnimationsConfig
 import xyz.block.trailblaze.host.recording.EffectiveIosBaguetteVideoConfig
@@ -345,6 +346,18 @@ val CONFIG_KEYS: Map<String, ConfigKey> = listOf(
     },
   ),
   ConfigKey(
+    // Plain boolean like the sibling capture toggles (`captureLogcat` / `captureIosLogs`), just
+    // defaulting OFF: recordings are large, their timing drifts on some hosts, and sprite
+    // extraction is expensive. This is the persistent opt-in that reaches entry points with no
+    // positive per-run flag — interactive `session start` and MCP sessions. Per-run
+    // `--capture-video` / `--no-capture-video` and `TRAILBLAZE_CAPTURE_VIDEO` both override it.
+    name = "capture-video",
+    description = "Record device screen video for each session (default: off — video is opt-in)",
+    validValues = "true or false",
+    get = { config -> config.captureVideo.toString() },
+    set = { config, value -> value.toBooleanStrictOrNull()?.let { config.copy(captureVideo = it) } },
+  ),
+  ConfigKey(
     // Experimental. Tri-state like `stream-screenshots`: `null` (default) is off (iOS keeps the
     // simctl recorder); an explicit true/false is the user's persisted choice. The
     // `TRAILBLAZE_IOS_BAGUETTE_VIDEO` env var still wins (env = one-off / CI / on-device
@@ -525,16 +538,57 @@ object CliConfigHelper {
   
   /**
    * Resolves the effective HTTP port using CLI settings.
+   *
+   * Throws [xyz.block.trailblaze.devices.TrailblazePortRangeConflictException] on a port a device
+   * could be allocated — see [resolveValidatedDaemonPorts].
    */
-  fun resolveEffectiveHttpPort(): Int {
-    return TrailblazePortManager.resolveEffectiveHttpPort(::readConfig)
-  }
-  
+  fun resolveEffectiveHttpPort(): Int = resolveValidatedDaemonPorts().first
+
   /**
    * Resolves the effective HTTPS port using CLI settings.
+   *
+   * Throws [xyz.block.trailblaze.devices.TrailblazePortRangeConflictException] on a port a device
+   * could be allocated — see [resolveValidatedDaemonPorts].
    */
-  fun resolveEffectiveHttpsPort(): Int {
-    return TrailblazePortManager.resolveEffectiveHttpsPort(::readConfig)
+  fun resolveEffectiveHttpsPort(): Int = resolveValidatedDaemonPorts().second
+
+  /**
+   * The resolved daemon ports, refusing any that a device could be allocated.
+   *
+   * Every CLI path that talks to the daemon resolves its port here, so this is where the check
+   * belongs: a device's `adb forward` on that port answers `/ping`, so anything downstream —
+   * `connectOrStartDaemonOneShot`, `connectOrStartDaemonReusable`, `DaemonClient.waitForDaemon`,
+   * the MCP proxy — reads the device's 200 as a healthy daemon and then fails obscurely when MCP
+   * initialization goes to a device RPC server. Failing at resolution names the misconfigured
+   * setting instead.
+   *
+   * Both ports are checked even when the caller wants one: a daemon that would be spawned here
+   * dies at its own bind guard on either, and the spawning command would just report an
+   * unreachable daemon. `trailblaze config` does not resolve ports, so it stays available to fix
+   * a persisted value.
+   *
+   * One [readConfig] for both, not one each: it re-reads and re-parses the settings file and
+   * republishes the `Effective*` singletons as a side effect, and this runs on every CLI command.
+   * Reading once also means the pair cannot straddle a concurrent settings write.
+   */
+  /**
+   * The resolved HTTP port with no usability check, for stopping or reporting on a daemon that is
+   * **already running**.
+   *
+   * A daemon started before [resolveEffectiveHttpPort] began refusing device-allocatable ports is
+   * still listening on one, and `--stop` / `--status` are how a user gets rid of it. Validating
+   * here would strand that process: the shutdown request would never be sent, and no settings
+   * change terminates a daemon that is already up. Never use this to start or attach to one.
+   */
+  fun resolveRunningDaemonHttpPortUnchecked(): Int =
+    TrailblazePortManager.resolveEffectiveHttpPort(::readConfig)
+
+  private fun resolveValidatedDaemonPorts(): Pair<Int, Int> {
+    val savedConfig = readConfig()
+    val httpPort = TrailblazePortManager.resolveEffectiveHttpPort { savedConfig }
+    val httpsPort = TrailblazePortManager.resolveEffectiveHttpsPort { savedConfig }
+    TrailblazeDevicePort.requireDaemonPortsOutsideDeviceAllocationRange(httpPort, httpsPort)
+    return httpPort to httpsPort
   }
   
   /**
@@ -599,14 +653,13 @@ object CliConfigHelper {
       ?: getSettingsFile().parentFile
   }
 
-  private fun derivedLogsDirectory(appDataDir: File): String {
-    val root = appDataDir.canonicalFile.parentFile ?: appDataDir.canonicalFile
-    return File(root, "logs").canonicalPath
-  }
-
-  // The default trails directory now lives on `TrailblazeDesktopUtil.defaultTrailsDirectory`,
-  // resolved by readers rather than written into the config. It is a single definition there
-  // because this one and the desktop's inline fallback had silently diverged.
+  // Both the default logs directory and the default trails directory live on
+  // `TrailblazeDesktopUtil`, because each had a copy here and an inline fallback there that
+  // silently disagreed. Trails is resolved by readers rather than written into the config; logs is
+  // still materialized on write (see [hydrateDefaults]), which is exactly what hid the logs
+  // disagreement — the CLI's value landed in the file before the desktop fallback could run.
+  private fun derivedLogsDirectory(appDataDir: File): String =
+    TrailblazeDesktopUtil.defaultLogsDirectory(appDataDir)
   
   /**
    * Parse a per-platform driver override. Matches (case-insensitively) on either the enum

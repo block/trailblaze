@@ -3,8 +3,8 @@ package xyz.block.trailblaze.capture.video
 /**
  * Parsed `video_sprites.txt` sprite-sheet metadata plus the acceptance rules every consumer must
  * apply before playing the sprite as a video timeline. This is the single Kotlin home for the
- * format: [VideoSpriteExtractor] writes the file (see its kdoc for the key list) and report-side
- * consumers ([xyz.block.trailblaze.report] WasmReport) parse and gate through here.
+ * format: [VideoSpriteExtractor] writes the file (see its kdoc for the key list) and the Compose
+ * frame caches parse and gate through here.
  *
  * The parse + acceptance semantics are locked cross-language against the TypeScript twin
  * (`run-report-sprites.ts` in :trailblaze-report resources) by
@@ -196,8 +196,8 @@ data class SpriteSheetMetadata(
      * per-step screenshot timeline.
      *
      * [supportsMultiSheet] declares whether the consumer can render frames across multiple sheet
-     * files (the interactive report can; WasmReport and the Compose frame caches only ever load
-     * one image, so they keep the default). Even a capable consumer rejects a multi-sheet sprite
+     * files (the report can; the Compose frame caches only ever load one image, so they keep the
+     * default). Even a capable consumer rejects a multi-sheet sprite
      * without [uniqueFrames] — the last sheet's geometry ([sheetRows]) is underivable without it,
      * and the extractor always writes it alongside `sheets`.
      */

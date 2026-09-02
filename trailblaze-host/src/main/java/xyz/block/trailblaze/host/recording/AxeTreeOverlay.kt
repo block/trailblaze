@@ -154,6 +154,7 @@ object AxeTreeOverlay {
   /** Best display/match text for a node, dispatched per driver — blank treated as absent. */
   private fun TrailblazeNode.contentText(): String? = when (val detail = driverDetail) {
     is DriverNodeDetail.AndroidAccessibility -> detail.resolveText()
+    is DriverNodeDetail.AndroidView -> detail.resolveText()
     is DriverNodeDetail.AndroidMaestro -> detail.resolveText()
     is DriverNodeDetail.IosMaestro -> detail.resolveText()
     is DriverNodeDetail.IosAxe -> detail.resolveText()

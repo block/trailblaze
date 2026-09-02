@@ -61,6 +61,10 @@
      classifier). Single source of truth shared with the recorder screens (thin delegating wrappers)
      and bun tests in app/trail-yaml.test.ts. Plain JS; loaded before the screens. -->
 <script src="./app/trail-yaml.js"></script>
+<!-- Which platform a trail belongs to, and whether a platform filter keeps it. Shared by the
+     Trails filter and the sidebar count (via thin wrappers in data-extract), with a sibling bun
+     test. Plain JS; loaded before the screens. -->
+<script src="./app/trail-platform.js"></script>
 <!-- Pure target/device grouping model. Browser devices join declared web targets here rather than
      being flattened into an anonymous Web bucket by the React screen. -->
 <script src="./app/screens/target-picker-model.js"></script>

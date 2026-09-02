@@ -13,6 +13,8 @@ import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
@@ -29,6 +31,7 @@ import xyz.block.trailblaze.model.TrailblazeTargetAppInfo
 import xyz.block.trailblaze.report.models.ExecutionMode
 import xyz.block.trailblaze.report.models.RecordingSkipReason
 import xyz.block.trailblaze.report.models.SessionRecordingInfo
+import xyz.block.trailblaze.report.models.SkippedTrail
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.util.BunBinaryResolver
 import xyz.block.trailblaze.yaml.TrailConfig
@@ -84,6 +87,154 @@ class RunReportGeneratorTest {
     assertEquals("450ms", RunReportGenerator.formatDuration(450))
     assertEquals("12.3s", RunReportGenerator.formatDuration(12_345))
     assertEquals("2m 5s", RunReportGenerator.formatDuration(125_000))
+  }
+
+  private fun skipRecord(
+    trailId: String? = "checkout/refund",
+    target: String? = "shop",
+    metadata: Map<String, String>? = null,
+  ) = SkippedTrail(
+    trail_path = "trails/checkout/refund.trail.yaml",
+    title = "Refund an order",
+    test_key = "checkout/refund",
+    trail_id = trailId,
+    target = target,
+    reason = "backend outage, see #2194",
+    platform = "android",
+    device_classifier = "android-phone",
+    metadata = metadata,
+    recorded_at_epoch_ms = 1_700_000_000_000L,
+  )
+
+  @Test
+  fun skipSessionJson_sharesTheMatrixIdentityOfTheDevicesThatRan() {
+    // The viewer keys a matrix row on trailId + target. If a skip carried neither, or carried a
+    // short-name fallback the running sessions don't use, the held-back device would open a row of
+    // its own beside the row holding the same trail's runs - and the report would read as two
+    // different trails.
+    val meta = RunReportGenerator.skipSessionJson(skipRecord())["meta"]!!.jsonObject
+
+    assertEquals("checkout/refund", meta["trailId"]!!.jsonPrimitive.content)
+    assertEquals("shop", meta["target"]!!.jsonPrimitive.content)
+    assertEquals("android", meta["platform"]!!.jsonPrimitive.content)
+    assertEquals("android-phone", meta["deviceClassifier"]!!.jsonPrimitive.content)
+    assertEquals("skipped", meta["status"]!!.jsonPrimitive.content)
+    assertEquals("backend outage, see #2194", meta["skipReason"]!!.jsonPrimitive.content)
+    // A skip is never an error, whatever the viewer would do with one.
+    assertNull(meta["error"])
+  }
+
+  @Test
+  fun skipSessionJson_carriesTheSameConfigMetadataARunWouldCarry() {
+    // The report renders `config.metadata` as Info rows and folds it into the index search text,
+    // and `owner` gets first-class index treatment. Omitting it here would drop a skipped row out
+    // of a search for its own owner while the same trail's runs still matched it.
+    val meta = RunReportGenerator.skipSessionJson(
+      skipRecord(metadata = mapOf("owner" to "checkout-team", "testRailCaseId" to "4839323")),
+    )["meta"]!!.jsonObject
+
+    val emitted = meta["metadata"]!!.jsonObject
+    assertEquals("checkout-team", emitted["owner"]!!.jsonPrimitive.content)
+    assertEquals("4839323", emitted["testRailCaseId"]!!.jsonPrimitive.content)
+  }
+
+  @Test
+  fun skipSessionJson_omitsAnIdentityTheTrailNeverDeclared() {
+    // `sessionMetaJson` emits trailId only from `config.id`, so a trail without one gives every
+    // one of its runs a solo row. Inventing an id for the skip would put it in a row nothing else
+    // can ever join.
+    val meta = RunReportGenerator.skipSessionJson(skipRecord(trailId = null, target = null))["meta"]!!.jsonObject
+
+    assertNull(meta["trailId"])
+    assertNull(meta["target"])
+    assertEquals("Refund an order", meta["title"]!!.jsonPrimitive.content)
+  }
+
+  @Test
+  fun skipSessionJson_isAnInertStubWithNoRunBehindIt() {
+    // `linkOut` with no `reportUrl` is what makes the viewer render the row inert. Without it the
+    // cell offers a detail view built from an empty payload, which then reports 0 tools and 0 LLM
+    // calls as if they were measurements.
+    val session = RunReportGenerator.skipSessionJson(skipRecord())
+
+    assertEquals(true, session["meta"]!!.jsonObject["linkOut"]!!.jsonPrimitive.content.toBoolean())
+    assertNull(session["meta"]!!.jsonObject["reportUrl"])
+    assertEquals(0, session["logs"]!!.jsonArray.size)
+    // The driver probes sessionDir on disk; nothing may escape its temp working directory.
+    val sessionDir = session["sessionDir"]!!.jsonPrimitive.content
+    assertTrue(!sessionDir.contains("/"), "session dir must be a bare name; got $sessionDir")
+  }
+
+  /**
+   * A logs directory outlives any one run and keeps every skip record ever written into it, so the
+   * report has to be TOLD which skips belong to the run it describes. Without that, `trailblaze run
+   * one.trail.yaml` produces a report listing trails a batch from last week held back.
+   *
+   * Skipped (vacuous pass) when bun isn't resolvable, matching the other end-to-end tests here.
+   */
+  @Test
+  fun generateFromSnapshots_listsOnlyTheSkipsTheCallerScopedToThisReport() {
+    val bun = BunBinaryResolver.resolveBunBinary() ?: return
+    val tmp = Files.createTempDirectory("rrg-skipscope-").toFile()
+    try {
+      val logsRepo = LogsRepo(logsDir = tmp, watchFileSystem = false)
+      val sessionId = SessionId("skipscopesession")
+      writePassedSession(logsRepo, sessionId)
+      // Left behind by some earlier run against this same logs dir.
+      SkippedTrails.record(tmp, skipRecord())
+      val snapshots = SessionLogSnapshot.captureAll(logsRepo, listOf(sessionId))
+
+      val scoped = RunReportGenerator(bunBinary = bun).generateFromSnapshots(logsRepo, snapshots)
+      assertNotNull(scoped)
+      assertTrue(
+        !scoped.readText().contains("Refund an order"),
+        "a report scoped to one session must not adopt a skip it was never handed",
+      )
+
+      val wholeDir = RunReportGenerator(bunBinary = bun)
+        .generateFromSnapshots(logsRepo, snapshots, skips = SkippedTrails.read(tmp))
+      assertNotNull(wholeDir)
+      assertTrue(
+        wholeDir.readText().contains("Refund an order"),
+        "a caller reporting on the whole logs dir passes its skips and gets them rendered",
+      )
+    } finally {
+      tmp.deleteRecursively()
+    }
+  }
+
+  /** Minimal started-then-succeeded session: enough for a report to have one row to render. */
+  private fun writePassedSession(logsRepo: LogsRepo, sessionId: SessionId) {
+    val deviceId = TrailblazeDeviceId("web", TrailblazeDevicePlatform.WEB)
+    logsRepo.saveLogToDisk(
+      TrailblazeLog.TrailblazeSessionStatusChangeLog(
+        sessionStatus = SessionStatus.Started(
+          trailConfig = null,
+          trailFilePath = "trails/example.trail.yaml",
+          hasRecordedSteps = false,
+          testMethodName = "report",
+          testClassName = "RunReportGeneratorTest",
+          trailblazeDeviceInfo = TrailblazeDeviceInfo(
+            trailblazeDeviceId = deviceId,
+            trailblazeDriverType = TrailblazeDriverType.PLAYWRIGHT_NATIVE,
+            widthPixels = 1280,
+            heightPixels = 720,
+            classifiers = listOf(TrailblazeDevicePlatform.WEB.asTrailblazeDeviceClassifier()),
+          ),
+          trailblazeDeviceId = deviceId,
+          rawYaml = "trail:\n  - step: Open the app",
+        ),
+        session = sessionId,
+        timestamp = Instant.fromEpochMilliseconds(1_700_000_000_000L),
+      ),
+    )
+    logsRepo.saveLogToDisk(
+      TrailblazeLog.TrailblazeSessionStatusChangeLog(
+        sessionStatus = SessionStatus.Ended.Succeeded(durationMs = 5_000L),
+        session = sessionId,
+        timestamp = Instant.fromEpochMilliseconds(1_700_000_005_000L),
+      ),
+    )
   }
 
   @Test
@@ -306,36 +457,7 @@ class RunReportGeneratorTest {
     try {
       val logsRepo = LogsRepo(logsDir = tmp, watchFileSystem = false)
       val sessionId = SessionId("e2etestsession")
-      val deviceId = TrailblazeDeviceId("web", TrailblazeDevicePlatform.WEB)
-      logsRepo.saveLogToDisk(
-        TrailblazeLog.TrailblazeSessionStatusChangeLog(
-          sessionStatus = SessionStatus.Started(
-            trailConfig = null,
-            trailFilePath = "trails/example.trail.yaml",
-            hasRecordedSteps = false,
-            testMethodName = "report",
-            testClassName = "RunReportGeneratorTest",
-            trailblazeDeviceInfo = TrailblazeDeviceInfo(
-              trailblazeDeviceId = deviceId,
-              trailblazeDriverType = TrailblazeDriverType.PLAYWRIGHT_NATIVE,
-              widthPixels = 1280,
-              heightPixels = 720,
-              classifiers = listOf(TrailblazeDevicePlatform.WEB.asTrailblazeDeviceClassifier()),
-            ),
-            trailblazeDeviceId = deviceId,
-            rawYaml = "trail:\n  - step: Open the app",
-          ),
-          session = sessionId,
-          timestamp = Instant.fromEpochMilliseconds(1_700_000_000_000L),
-        ),
-      )
-      logsRepo.saveLogToDisk(
-        TrailblazeLog.TrailblazeSessionStatusChangeLog(
-          sessionStatus = SessionStatus.Ended.Succeeded(durationMs = 5_000L),
-          session = sessionId,
-          timestamp = Instant.fromEpochMilliseconds(1_700_000_005_000L),
-        ),
-      )
+      writePassedSession(logsRepo, sessionId)
 
       // A session dir with a stray log but no session-status log (e.g. a one-shot helper
       // session) must not surface as a GUID-titled "unknown" entry — the legacy report skips

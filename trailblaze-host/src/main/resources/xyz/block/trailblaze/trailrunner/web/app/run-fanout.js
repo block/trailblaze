@@ -75,6 +75,24 @@
     return { drop: drop, dial: dial };
   }
 
+  /**
+   * The in-flight connect promises a launch for `targetApp` must wait out before it can decide
+   * which devices to release, given the dialog's `inFlight` map of `{ release | target, p }` entries.
+   *
+   * Only a release (`release: true`) or a dial binding some OTHER target qualifies. A dial already
+   * binding this launch's own target cannot be the stale binding a release plan looks for, so
+   * waiting on it decides nothing and only spends the launch's deadline - which is what used to
+   * cancel the run of a device slow enough that the dialog was still dialing it when Run was
+   * clicked. Such a device is left to `connectDevices`, which waits without a deadline.
+   */
+  function blockingDials(devices, inFlight, targetApp) {
+    var map = inFlight || {};
+    return (devices || [])
+      .map(function (d) { return map[d.id]; })
+      .filter(function (e) { return e && (e.release || e.target !== targetApp); })
+      .map(function (e) { return e.p; });
+  }
+
   // Which devices a freshly opened dialog starts with, as a list of device ids.
   //
   // Preference order for the default, unchanged from when a run took a single device: the seeded
@@ -149,26 +167,53 @@
   //
   // `isConnected(device)` skips a device this dialog already connected; `connect(tbId)` resolves the
   // daemon's detailed { ok, error } answer, or TIMEOUT.
+  // Like dispatchRuns below, `connect(tbId)` is handed over WITHOUT a deadline, because the deadline
+  // belongs here: a connect that blows it has NOT failed. A device that is slow to answer is usually
+  // just slow - a fresh install has to finish installing, and the daemon goes on waiting for it -
+  // and the connect then succeeds seconds later. Deadlining at the call site threw that promise away
+  // and reported the device unreachable, which cancelled a run that would have started. Such a
+  // device comes back as `slow` instead, carrying the still-running promise as `settled`, so the
+  // launch can wait it out rather than refuse.
   async function connectDevices(devices, deps) {
     var d = deps || {};
+    var deadlineMs = d.timeoutMs || RUN_TIMEOUT_MS;
     return await Promise.all((devices || []).map(async function (device) {
       var ok = { device: device, ok: true, error: null };
-      try {
-        if (!needsConnect(device)) return ok;
-        if (d.isConnected && d.isConnected(device)) return ok;
-        var conn = await d.connect(deviceRunId(device));
-        if (conn === TIMEOUT) {
-          return {
-            device: device,
-            ok: false,
-            error: 'The daemon did not respond after 45s while connecting to the device. The device driver may be wedged - check the device and try again.',
-          };
+      if (!needsConnect(device)) return ok;
+      if (d.isConnected && d.isConnected(device)) return ok;
+      var settled = (async function () {
+        try {
+          var conn = await d.connect(deviceRunId(device));
+          // Kept for a caller that still deadlines its own connect: that promise is gone either way,
+          // so there is nothing to wait out and it stays a plain failure.
+          if (conn === TIMEOUT) {
+            return {
+              device: device,
+              ok: false,
+              error: 'The daemon did not respond after 45s while connecting to the device. The device driver may be wedged - check the device and try again.',
+            };
+          }
+          if (!conn || !conn.ok) return { device: device, ok: false, error: (conn && conn.error) || 'Could not connect to the device.' };
+          return ok;
+        } catch (e) {
+          return { device: device, ok: false, error: errorText(e) };
         }
-        if (!conn || !conn.ok) return { device: device, ok: false, error: (conn && conn.error) || 'Could not connect to the device.' };
-        return ok;
-      } catch (e) {
-        return { device: device, ok: false, error: errorText(e) };
-      }
+      })();
+      var timer;
+      var early = await Promise.race([
+        settled,
+        new Promise(function (res) { timer = setTimeout(function () { res(TIMEOUT); }, deadlineMs); }),
+      ]);
+      clearTimeout(timer);
+      if (early !== TIMEOUT) return early;
+      return {
+        device: device,
+        ok: false,
+        slow: true,
+        settled: settled,
+        error: 'The device has not finished connecting after ' + Math.round(deadlineMs / 1000) +
+          's. It may still be starting up - the run begins on its own once the device answers.',
+      };
     }));
   }
 
@@ -185,13 +230,42 @@
   // what let the obvious retry race the dispatch it had been told was dead. Such a device comes back
   // as `slow` instead, carrying the still-running promise as `settled` so the caller can replace the
   // row with the real answer when it lands.
+  //
+  // `deps.isLive()` says whether the launch this belongs to is still worth finishing. Required, not
+  // optional: the only thing it guards is a dispatch the caller can no longer see, so a caller that
+  // forgot to pass it should fail loudly here rather than quietly lose the guard.
   async function dispatchRuns(connects, deps) {
     var d = deps || {};
+    // Checked up front rather than where it is used, which is inside the slow-connect branch only.
+    // A caller that forgot it would otherwise work on every normal launch and throw on the rare slow
+    // one - and throw from inside `settled`, which the single-device caller chains with `.then` and
+    // no catch, so it would surface as an unhandled rejection and a card that never resolves.
+    if (typeof d.isLive !== 'function') throw new Error('dispatchRuns requires deps.isLive()');
     var deadlineMs = d.timeoutMs || RUN_TIMEOUT_MS;
     return await Promise.all((connects || []).map(async function (c) {
       var failed = function (error) { return { device: c.device, ok: false, sessionId: null, error: error }; };
-      if (!c.ok) return failed(c.error);
+      // A connect that merely ran long is not a connect that failed, so its run is not written off.
+      if (!c.ok && !(c.slow && c.settled)) return failed(c.error);
       var settled = (async function () {
+        // Wait the slow connect out, then dispatch if the device did come up. Inside `settled` so
+        // the caller is never held by it: that promise is handed back below and reconciled when it
+        // lands, exactly like a slow dispatch.
+        if (c.slow && c.settled) {
+          var late = await c.settled;
+          // That wait has no upper bound - a cold emulator can take minutes - and the launch it
+          // belongs to is stoppable the entire time. Dispatching a device that finally answered
+          // after the user gave up starts a run nobody is watching, which is the one thing the
+          // undeadlined wait must not buy. `launchRetry` re-checks between its own steps for
+          // exactly this reason; a wait this long needs it more, not less.
+          // `abandoned`, not `failed`: there is no longer anyone to report a failure TO. The card
+          // this belonged to has either been stopped or aged out, and both `failPendingRun` and the
+          // Active screen's error rendering ignore the TTL - so calling this a failure would put a
+          // card the user already dismissed back on screen, minutes later, to say the run they
+          // stopped was stopped. Checked before the connect's own outcome, because that reasoning
+          // does not depend on how the wait ended: an abandoned launch has nobody to tell either way.
+          if (!d.isLive()) return { device: c.device, ok: false, abandoned: true, sessionId: null, error: null };
+          if (!late.ok) return failed(late.error);
+        }
         try {
           var r = await d.dispatch(deviceRunId(c.device));
           // success:false is a dispatch failure too, not just ok:false (a non-2xx answer).
@@ -203,6 +277,11 @@
           return failed(errorText(e));
         }
       })();
+      // A device that already blew the connect deadline has had its wait; report it slow at once
+      // rather than holding the whole launch for a second deadline on top of the first.
+      if (c.slow) {
+        return { device: c.device, ok: false, slow: true, sessionId: null, settled: settled, error: c.error };
+      }
       var timer;
       var early = await Promise.race([
         settled,
@@ -228,6 +307,7 @@
     needsConnect: needsConnect,
     appsDevice: appsDevice,
     connectPlan: connectPlan,
+    blockingDials: blockingDials,
     defaultDeviceIds: defaultDeviceIds,
     toggleDeviceId: toggleDeviceId,
     selectionError: selectionError,

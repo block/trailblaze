@@ -57,7 +57,7 @@ object InstrumentationArgUtil {
 
   fun logsEndpoint(): String {
     val httpsPort = InstrumentationRegistry.getArguments().getString(
-      "trailblaze.httpsPort",
+      TrailblazeDevicePort.HTTPS_PORT_INSTRUMENTATION_ARG_KEY,
       TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTPS_PORT.toString(),
     )?.toIntOrNull() ?: TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTPS_PORT
 
@@ -155,14 +155,17 @@ object InstrumentationArgUtil {
    *
    * When this returns non-null, it acts as a **force** override: the on-device runtime uses this
    * driver and skips the per-trail `config.driver` YAML peek entirely. Source can be either the
-   * per-(config, device) pin from `TrailblazeCiConfig.deviceDriverTypes` or a build-level
-   * `TRAILBLAZE_DRIVER_TYPE` env override — both flow into the same `trailblaze.driverType`
-   * instrumentation arg, with build-env winning over code-config at pipeline-generation time.
+   * per-(config, device) pin from `TrailblazeCiConfig.deviceDriverTypes`, a build-level
+   * `TRAILBLAZE_DRIVER_TYPE` env override, or a host connect that resolved a driver-specific
+   * harness (`TrailblazeOnDeviceInstrumentationTarget.forcedDriverType`) — all flow into the same
+   * [TrailblazeDriverType.INSTRUMENTATION_ARG_KEY] arg, with build-env winning over code-config at
+   * pipeline-generation time.
    *
    * Pass via: `-e trailblaze.driverType ANDROID_ONDEVICE_ACCESSIBILITY`
    */
   fun driverType(): TrailblazeDriverType? {
-    val value = instrumentationArguments.getString("trailblaze.driverType") ?: return null
+    val value = instrumentationArguments
+      .getString(TrailblazeDriverType.INSTRUMENTATION_ARG_KEY) ?: return null
     return try {
       TrailblazeDriverType.valueOf(value)
     } catch (e: IllegalArgumentException) {

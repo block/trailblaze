@@ -1203,7 +1203,7 @@ function RecordConfigDialog({ devices, bundleTarget, busy, trailheads, defaultTr
   const trailheadList = trailheads || [];
   const TRAILHEAD_SENTINELS = ['none', 'fresh']; // not real trailhead ids
   const [trailhead, setTrailhead] = React.useState(defaultTrailhead || 'none'); // tool id | 'none' | 'fresh'
-  const [captureVideo, setCaptureVideo] = React.useState(true);
+  const [captureVideo, setCaptureVideo] = React.useState(false);
   const [selfHeal, setSelfHeal] = React.useState(false);
   const [maxLlmCalls, setMaxLlmCalls] = React.useState(String(DEFAULT_MAX_LLM_CALLS));
   const [starting, setStarting] = React.useState(false);

@@ -50,11 +50,24 @@ class JvmLiveSessionDataProvider(
         // For on-device tests, send cancel request to the device's RPC server
         withContext(Dispatchers.IO) {
           sessionInfo.trailblazeDeviceId?.let { trailblazeDeviceId ->
-            // Kill the in-process tests
+            // Kill the in-process tests. Every harness the selected target can present, not just
+            // the bundled runner: an ANDROID_TEST session runs inside the target app's OWN test
+            // APK, so force-stopping `xyz.block.trailblaze.runner` alone leaves that
+            // instrumentation attached and serving while the log below stamps Cancelled and this
+            // returns true — the UI reports a stopped run that is still driving the device.
+            // The union really does kill the app under test — an in-process harness's
+            // TrailblazeOnDeviceInstrumentationTarget.instrumentationProcessAppId IS the app, which
+            // is usually running — and on a cancel that is the point: stopping the app is what was
+            // asked for, and freeing UiAutomation requires killing the process the instrumentation
+            // lives in. So this union needs no install gate, unlike the same union on the connect
+            // path, where a connect is not supposed to destroy app state; see
+            // HostAndroidDeviceConnectUtils.planConnectForceStop for that trade-off. The default
+            // stays in unconditionally so a target that declares nothing cancels as it did before.
             HostAndroidDeviceConnectUtils.forceStopAllAndroidInstrumentationProcesses(
-              trailblazeOnDeviceInstrumentationTargetTestApps = setOf(
-                TrailblazeOnDeviceInstrumentationTarget.DEFAULT_ANDROID_ON_DEVICE
-              ),
+              trailblazeOnDeviceInstrumentationTargetTestApps = buildSet {
+                add(TrailblazeOnDeviceInstrumentationTarget.DEFAULT_ANDROID_ON_DEVICE)
+                addAll(deviceManager.getCurrentSelectedTargetApp()?.allInstrumentationTargets().orEmpty())
+              },
               deviceId = trailblazeDeviceId
             )
 

@@ -82,6 +82,7 @@ It does not reap device-scoped per-device sessions; use `app --stop` for those.
 | `report` | Generate an HTML report for session recordings, plus a best-effort JSON summary, and optionally MP4/GIF/WebP exports for a single session. JSON-only failures log a warning and still exit 0 — HTML is the primary artifact and is what gates the exit code. Animated exports collapse long idle gaps between steps so their length tracks the number of steps, not the session's real wall-clock. The capture window for all three (--gif/--webp/--video) is bounded by the MAX_PLAYBACK_WAIT_MS environment variable (milliseconds, default 600000); if playback overruns it, a best-effort truncated artifact is still written with a warning. |
 | `viewer` | Write out the standalone report viewer (one self-contained HTML page) bundled into this binary. Serve it anywhere, or just open it: drop a session archive on the page, or point it at one with ?zip=<archive-url>. Versioned with this CLI, so it always matches the reports this binary generates. |
 | `profile` | Generate the performance-analysis report (an Instruments-style time profiler over each session's tools, LLM calls, timeouts, and idle gaps) for a logs directory. Defaults to the configured logs directory when <logs-dir> is omitted. Writes <logs-dir>/trailblaze_performance_analysis.html. Requires `bun` on PATH. |
+| `otel` | Convert recorded spans to OpenTelemetry. Writes <session>/otel.json (OTLP/JSON) for every session that recorded a trace, and with --post also sends them to an OTLP endpoint. Defaults to the configured logs directory when <dir> is omitted. |
 | `waypoint` | Match named app locations (waypoints) against captured screen state. |
 | `results` | Query the persisted test-result index for a test case. Passing a positional `<case-id>` (e.g. `trailblaze results C12345 --device android-phone`) is equivalent to the explicit `trailblaze results show <case-id>` form — picocli routes the bare case-id straight to the `show` subcommand. |
 | `config` | View and set configuration (target app, device defaults, AI provider) |
@@ -90,6 +91,7 @@ It does not reap device-scoped per-device sessions; use `app --stop` for those.
 | `app` | Launch the legacy Trailblaze desktop app (use --v2 for Trail Runner or --headless for a daemon-only background service). |
 | `mcp` | Start a Model Context Protocol (MCP) server for AI agent integration |
 | `check` | Validate a trailmap: materialize manifests, type-check TypeScript/JavaScript sources, and run `*.test.ts` unit tests via `bun test`. On first run, scaffolds a minimal package.json at the workspace root if absent so `bun install` can be used as the canonical bootstrap (its `postinstall` hook re-runs `trailblaze check`). |
+| `inprocess` | Check an app APK for in-process driver compatibility, and build a test APK that drives it. |
 | `skill` | Print or install the bundled agent skill that teaches a coding agent this CLI |
 
 ---
@@ -300,9 +302,13 @@ trailblaze run [OPTIONS] [<<trailFile>>]
 | `--tags` | Only run trails whose `config.tags:` list contains at least one of the given names. Repeatable (`--tags smoke --tags login`) or comma-separated (`--tags smoke,login`). Match is OR across tags. Untagged trails are excluded when --tags is specified. | - |
 | `-d`, `--device` | Device(s) to run on: `<platform>` (e.g. android), `<platform>/<instanceId>`, or a bare instanceId. Comma-separated or repeatable to run each trail on SEVERAL devices (`--device android,ios` → one run per device). When omitted, resolves to a pinned (`trailblaze device connect` / `TRAILBLAZE_DEVICE`) or single connected device; when 2+ devices are connected and none is pinned, the run fails and asks you to pass this (or `--driver` / `--all-devices`). See also --all-devices. | - |
 | `--all-devices` | Run each trail on EVERY connected device whose platform the trail supports (its `platform:`/`driver:` for v1, or its `devices:`/recording classifiers for the unified format). The opt-in way to exercise a multi-target trail across platforms in one command. Mutually exclusive with `--device` (passing both is rejected). Connected devices that don't match any supported platform are skipped. | - |
+| `--bind` | Bind a multi-device trail's COMPANION devices for this run: `--bind buyer=emulator-5562`. Repeatable or comma-separated. The names come from the trail's `config.devices:` configuration; the START device is the one `--device` names and must NOT be bound here. Per-run, so two multi-device trails can run concurrently against different device sets on one daemon — which `TRAILBLAZE_DEVICE_BINDINGS` cannot express (it is daemon-wide, and changing it needs a daemon restart). Takes precedence over that env var when passed. | - |
+| `--configuration` | Select which of a trail's `config.devices:` configurations to run when it declares more than one. Per-run, like --bind. Naming a configuration a single-device trail does not declare is an error rather than a silent single-device run. | - |
 | `-a`, `--agent` | Agent implementation name for AI-driven steps: TRAILBLAZE_RUNNER, MULTI_AGENT_V3, or KOOG_STRATEGY_GRAPH. Set it persistently with 'trailblaze config agent'. Default: TRAILBLAZE_RUNNER | - |
 | `--use-recorded-steps` | Three-way switch for replay vs. AI-driven execution:   --use-recorded-steps      Force replay mode (use the trail's `recording:` tools verbatim).   --no-use-recorded-steps   Force AI mode (ignore any recordings; LLM drives each step from `step:` NL).   (unset, default)          Auto-detect: AI mode if no `recording:` blocks present, replay if they are. Use --no-use-recorded-steps to re-run a trail with stale selectors and let the agent re-pick selectors from current page state. | - |
 | `--self-heal` | When a recorded step fails, let AI take over and continue. Overrides the persisted 'trailblaze config self-heal' setting for this run. Omit to inherit the saved setting (opt-in, off by default). | - |
+| `--snapshot-baseline` | Diff this run's `takeSnapshot` captures against a PREVIOUS run instead of checked-in golden files. <ref> is an http(s) URL to a session logs zip (e.g. the CI artifact store's latest_success.zip), a local zip, or an extracted session directory. Snapshots are matched by name; a snapshot missing from the baseline is skipped, a resolvable mismatch above the threshold fails the run, and an unresolvable <ref> fails it too. Alternatively set TRAILBLAZE_SNAPSHOT_BASELINE on the executing process (the daemon for delegated runs). | - |
+| `--snapshot-baseline-threshold` | Pass threshold for --snapshot-baseline: a snapshot passes when its pixel diff percentage is <= this value. Default: 2.0 (or TRAILBLAZE_SNAPSHOT_BASELINE_THRESHOLD when set). | - |
 | `-v`, `--verbose` | Enable verbose output | - |
 | `--driver` | Driver type to use (e.g., PLAYWRIGHT_NATIVE, ANDROID_ONDEVICE_INSTRUMENTATION). Overrides driver from trail config. | - |
 | `--headless` | Launch the Playwright browser headless (default true). Pass --no-headless or --headless=false to surface a visible window. Equivalent to --show-browser when negated. | - |
@@ -321,7 +327,7 @@ trailblaze run [OPTIONS] [<<trailFile>>]
 | `--markdown` | Generate a markdown report after execution | - |
 | `--no-daemon` | Run in-process without delegating to or starting a persistent daemon. The server shuts down when the run completes. | - |
 | `--compose-port` | RPC port for Compose driver connections (default: 52600) | - |
-| `--capture-video` | Record device screen video for the session (on by default, use --no-capture-video to disable) | - |
+| `--capture-video` | Record device screen video for the session. Off by default — video writes large files and sprite extraction is expensive — pass --capture-video to enable it for a run. When neither flag is passed, inherits TRAILBLAZE_CAPTURE_VIDEO and the saved `trailblaze config capture-video` setting. | - |
 | `--capture-logcat` | Capture Android logcat (filtered to the app under test) to <session-dir>/device.log (only takes effect on Android). On by default; use --no-capture-logcat to disable. | - |
 | `--capture-ios-logs` | Capture the iOS Simulator system log via `xcrun simctl spawn log stream` to <session-dir>/device.log (only takes effect on iOS). On by default; the stream is scoped to the app under test (the logcat-equivalent app log, not the system firehose). Use --no-capture-ios-logs to disable. | - |
 | `--capture-network` | Auto-capture network requests/responses to <session-dir>/network.ndjson on supported devices (web today; mobile devices added as engines land). Mirrors the desktop-app "Capture Network Traffic" toggle. On by default; use --no-capture-network to disable. When neither flag is passed, inherits the desktop app's saved setting. | - |
@@ -405,6 +411,7 @@ trailblaze session start [OPTIONS]
 | `--target` | Target app ID for this session's bound device. Defaults to `$TRAILBLAZE_TARGET` if set, otherwise the target you passed to `trailblaze device connect --target X` for this terminal (persists in this terminal's pin; cleared by `device disconnect`, replaced by `device rebind --target Y`). Pass `--target=clear` to remove a previously-set override. To set a persistent default, use `trailblaze config target`. | - |
 | `--mode` | Working mode: trail or blaze. Saved to config for future commands. | - |
 | `-d`, `--device` | Device: platform (android, ios, web) or platform/id. Defaults to `$TRAILBLAZE_DEVICE` if set (manual override; rare), otherwise this terminal's pin (set by `trailblaze device connect`). In a fresh-shell harness (Claude Code, Cursor, Codex, CI), pass --device on every call. | - |
+| `--bind` | Start a MULTI-DEVICE session: bind each device under a NAME, e.g. `--bind seller=emulator-5554 --bind buyer=emulator-5556`. Repeatable or comma-separated; the session's cast is exactly the bound devices. The FIRST bind is the start device (same ordered semantics as a trail's `config.devices:`); pass --device naming one bind's DEVICE_ID to start on that entry instead. Each name must bind a DIFFERENT device — two names on one device is refused. `switchDevice(name=…)` hands the session between the names. Follow-up commands (`step`, `verify`, `session info`, `session stop`) reach the roster with the --device value the start prints. | - |
 | `--title` | Title for the session (used as trail name when saving) | - |
 | `--no-video` | Disable video capture | - |
 | `--no-logs` | Disable device log capture | - |
@@ -453,6 +460,8 @@ trailblaze session save [OPTIONS]
 |--------|-------------|---------|
 | `--title`, `-t` | Title for the saved trail (uses session title if not specified) | - |
 | `--id` | Session ID to save (defaults to current session, supports prefix matching) | - |
+| `-d`, `--device` | Save the CLI session pinned to this device — pass the same value given to `session start -d`. Required to save a multi-device session started with `session start --bind`: its named-device roster lives on that per-device session, and the save synthesizes the trail's `config.devices:` cast from it. | - |
+| `--configuration` | Name for the multi-device configuration saved from the session's named-device roster (from `session start --bind`). Defaults to the bound names joined with '-', e.g. a seller,buyer roster saves as `seller-buyer`. The name is a recommendation — rename it in the saved file freely. It becomes a YAML key, so it must start with a letter or digit and hold only letters, digits, '-', '_' and '.'. Only meaningful for a roster session; on a session that bound a trail-declared configuration it may only restate that configuration's name. | - |
 | `-h`, `--help` | Show this help message and exit. | - |
 | `-V`, `--version` | Print version information and exit. | - |
 
@@ -505,6 +514,7 @@ trailblaze session info [OPTIONS] [<<session-id>>]
 | Option | Description | Default |
 |--------|-------------|---------|
 | `--id` | Session ID (defaults to current session). Equivalent to the positional form. | - |
+| `-d`, `--device` | Inspect the CLI session pinned to this device — pass the same value given to `session start -d` / `step -d`. Adds the session's named-device roster (from `session start --bind`) and its ACTIVE device to the output. The roster describes the devices bound right now, so it is omitted when a session id is also given. | - |
 | `-h`, `--help` | Show this help message and exit. | - |
 | `-V`, `--version` | Print version information and exit. | - |
 
@@ -627,7 +637,7 @@ trailblaze report [OPTIONS] [<<session-id>>]
 | `--id` | Narrow to a single session (defaults to all sessions). Use `trailblaze session list` to find IDs. Prefix matching is supported. Equivalent to passing the session ID positionally. | - |
 | `--current` | Narrow to the currently active session (resolved via the running daemon). Mutually exclusive with --id. | - |
 | `--open` | Open the HTML report in the default browser after generation. | - |
-| `--output-dir` | Write all artifacts into this directory with canonical names (report.html, report-interactive.html, summary.json, timeline.mp4, timeline.gif, timeline.webp). Created if it doesn't exist. If omitted, artifacts land in the default `logs/reports/` location with timestamped names. | - |
+| `--output-dir` | Write all artifacts into this directory with canonical names (report-interactive.html, summary.json, timeline.mp4, timeline.gif, timeline.webp). Created if it doesn't exist. If omitted, artifacts land in the default `logs/reports/` location with timestamped names. | - |
 | `--video` | Export the HTML report's timeline autoplay (the scrubbing view with step labels and annotations) as an MP4. NOT the raw device recording — that's a separate artifact in the session's logs dir. Path defaults to <report-dir>/<session-id>.mp4 (or <output-dir>/timeline.mp4 when --output-dir is set). Single-session only — pass --id or --current. | - |
 | `--gif` | Export the HTML report's timeline autoplay (the scrubbing view with step labels and annotations) as an animated GIF. NOT the raw device recording. Path defaults to <report-dir>/<session-id>.gif (or <output-dir>/timeline.gif when --output-dir is set). Smaller and easier to paste into a PR than --video, at the cost of a lower frame rate and 256-color palette. Single-session only — pass --id or --current. Frame capture is shared with --webp: passing this bare (no path) auto-emits a companion .webp at the default path for free — pass --no-webp to suppress. An explicit path here limits output to just that file. | - |
 | `--webp` | Export the HTML report's timeline autoplay (the scrubbing view with step labels and annotations) as an animated WebP. NOT the raw device recording. Path defaults to <report-dir>/<session-id>.webp (or <output-dir>/timeline.webp when --output-dir is set). Typically 25–50% smaller than the equivalent --gif (24-bit color, inter-frame deltas) — useful when the GIF would push past GitHub's 10MB inline attachment limit. GitHub renders animated WebP inline the same as GIF. Single-session only — pass --id or --current. Frame capture is shared with --gif: passing this bare (no path) auto-emits a companion .gif at the default path for free — pass --no-gif to suppress. An explicit path here limits output to just that file. | - |
@@ -636,8 +646,6 @@ trailblaze report [OPTIONS] [<<session-id>>]
 | `--storyboard-yaml` | Annotate each --storyboard cell with the YAML form of the recordable tool that produced it (looked up by traceId against the session's TrailblazeToolLog entries). The YAML strip replaces the synthesized verb/sublabel line — strictly more informative for "what was invoked here" triage. Cells without a sibling tool log fall back to the verb line. CSS Grid aligns rows to their tallest YAML so a short YAML doesn't pay the cost of a long one elsewhere. Capped at 20 lines per cell as a sanity bound. Default: on. Pass --no-storyboard-yaml to suppress (reduces total rendered height by ~20% on a typical session, at the cost of less actionable per-cell labels). Has no effect without --storyboard. | - |
 | `--no-gif` | Suppress the auto-emitted .gif companion when --webp is requested with a bare flag. Use this on scripts and CI flows that only embed the .webp and want to skip the wasted GIF encode. Mutually exclusive with --gif. | - |
 | `--no-webp` | Suppress the auto-emitted .webp companion when --gif is requested with a bare flag. Mutually exclusive with --webp. | - |
-| `--no-wasm-report` | Skip the legacy WASM report; emit only the interactive report (plus the JSON summary). Saves the CPU-bound WASM build when only the interactive artifact is consumed. Combines with --video/--gif/--webp, which capture the interactive timeline by default. Same flag as the CI report generator's --no-wasm-report. | - |
-| `--export-from` | Which HTML report the animated exports (--video/--gif/--webp) record: `interactive` (default) or `wasm`. Both implement the autoplay-capture contract; the interactive report is the one that survives the legacy WASM report's removal, so pin `wasm` only to reproduce an older artifact's exact look. Requires one of --video/--gif/--webp — passing it on its own is a usage error (--storyboard builds its own HTML and is never affected). | - |
 | `--max-size` | Cap each exported artifact (--gif / --video / --webp / --storyboard) at the given byte size. Defaults to 10MB — GitHub's inline-attachment limit — so an export you paste into a PR fits without having to think about it. Accepts plain bytes (1024000) or human-readable suffixes (10MB, 5M, 1.5G); pass `none` (or `0`) for a genuinely uncapped export. After the initial encode, the exporter iteratively re-encodes at smaller viewport widths (1280→1024→720→640→480) until the artifact fits, then stops. If even the readability floor (480px) is still over the cap: an explicitly-passed --max-size fails the export with an actionable error, while the 10MB default keeps the oversized artifact and warns instead — a default you didn't ask for never turns a working export into a failure. Either way the remedies are the same: drop GIF for --webp or --video (both compress dramatically better), or shorten the recorded session (fewer trail steps, or split into multiple sessions). The cap is applied per artifact, so `--gif --webp --max-size=10MB` caps each one independently. | - |
 | `--full-report-payloads` | Embed full event payloads in the interactive report even for sessions that passed, instead of applying the report size budgets (which truncate large successful network bodies and elide repeated intermediate snapshots to keep the report small). Failed sessions always embed full payloads regardless. The on-disk events/ artifacts are never budgeted, so any session can be regenerated in full with this flag at any time. | - |
 | `--share-url` | Bake a canonical hosted URL (http/https) into the interactive report. Its Copy link button then produces deep links against that URL — with the current view, sort, run, and step grafted on as query parameters — no matter where the file is opened from (including file://). Use this when the report is published to a known location, e.g. a CI artifact URL or an internal report server. Without this flag, Copy link uses the browser's own address and only appears on http(s) pages. | - |
@@ -687,6 +695,34 @@ trailblaze profile [OPTIONS] [<<logs-dir>>]
 | Option | Description | Default |
 |--------|-------------|---------|
 | `--open` | Open the report in the default browser after generation. | - |
+| `-h`, `--help` | Show this help message and exit. | - |
+| `-V`, `--version` | Print version information and exit. | - |
+
+---
+
+### `trailblaze otel`
+
+Convert recorded spans to OpenTelemetry. Writes <session>/otel.json (OTLP/JSON) for every session that recorded a trace, and with --post also sends them to an OTLP endpoint. Defaults to the configured logs directory when <dir> is omitted.
+
+**Synopsis:**
+
+```
+trailblaze otel [OPTIONS] [<<dir>>]
+```
+
+**Arguments:**
+
+| Argument | Description | Required |
+|----------|-------------|----------|
+| `<<dir>>` | A logs directory (holding per-session subdirectories) or a single session directory. Defaults to the configured logs directory. | No |
+
+**Options:**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--post` | Also send the spans to an OTLP endpoint. Uses --endpoint if given, otherwise OTEL_EXPORTER_OTLP_TRACES_ENDPOINT / OTEL_EXPORTER_OTLP_ENDPOINT, falling back to http://localhost:4318. | - |
+| `--endpoint` | OTLP endpoint to send to. Implies --post. Port 4317 is treated as gRPC, anything else as OTLP/HTTP. | - |
+| `--service-name` | Service name recorded in the exported resource. Defaults to `trailblaze`. | - |
 | `-h`, `--help` | Show this help message and exit. | - |
 | `-V`, `--version` | Print version information and exit. | - |
 
@@ -1183,7 +1219,7 @@ trailblaze config reset
 | `llm-model` | LLM model ID | e.g., gpt-4-1, claude-sonnet-4-20250514, gemini-3-flash or 'none' to disable |
 | `target` | Target app for device connections and custom tools | App target ID. Run 'trailblaze config target' to see all. |
 | `agent` | Agent implementation | TRAILBLAZE_RUNNER, MULTI_AGENT_V3, KOOG_STRATEGY_GRAPH |
-| `android-driver` | Android driver type | accessibility, instrumentation |
+| `android-driver` | Android driver type | accessibility, instrumentation, in-process |
 | `ios-driver` | iOS driver type | host, axe |
 | `self-heal` | Enable/disable self-heal (AI takes over) when recorded steps fail | true, false |
 | `require-steps` | Require -s/--step on every tool / step / ask / verify call (default: false) | true, false |
@@ -1196,6 +1232,7 @@ trailblaze config reset
 | `screenshot-max-dimensions` | Max screenshot dimensions as <longer>x<shorter> (e.g. 1536x768, 2048x1024) | WIDTHxHEIGHT (positive ints), or 'unset' to use the framework default (1536x768) |
 | `screenshot-quality` | Compression quality 0.05..1.0 for lossy formats (jpeg, webp); ignored for png | 0.05..1.0, or 'unset' to use the framework default (0.80) |
 | `stream-screenshots` | Experimental: serve agent-loop screenshots from the live device stream on Android, iOS, and web (default: off) | true, false, or 'unset' to inherit the default (off) |
+| `capture-video` | Record device screen video for each session (default: off — video is opt-in) | true or false |
 | `ios-baguette-video` | Experimental: record iOS session video from the baguette H.264 stream instead of simctl (default: off) | true, false, or 'unset' to inherit the default (off) |
 | `disable-animations` | Experimental: disable OS animations on the device during each session, restored at session end (default: off) | true, false, or 'unset' to inherit the default (off) |
 
@@ -1543,6 +1580,89 @@ trailblaze check [OPTIONS] [<<trailmap-id>>]
 | `--workspace` | Pin the workspace root explicitly (the directory containing `trailblaze-config/trailmaps/` or the legacy `trails/config/trailmaps/`). Used by CI scripts that run with a fixed cwd; interactive users should rely on the cwd walk-up instead. | - |
 | `--no-typecheck` | Skip the bundled-tsc typecheck pass — materialize the workspace's SDK + per-trailmap typed bindings and still run `*.test.ts` unit tests via bun. Intended for CI scripts that run tsc with custom settings (e.g., excluding legacy embedded sub-projects); interactive users should leave this off. | - |
 | `--show-typed-tools` | Print the typed scripted tools (`trailblaze.tool<I, O>({...})`) discovered in each trailmap, with a compact one-line schema summary per tool. Useful as a diagnostic when authoring a new tool or chasing a missing-tool / wrong-schema bug; off by default because the per-trailmap subprocess spawn it requires adds noticeable latency to `check`. Has no effect when node, the SDK shim, or the SDK's `ts-json-schema-generator` install are missing — the analyzer skips cleanly with an explanatory log line. | - |
+| `-h`, `--help` | Show this help message and exit. | - |
+| `-V`, `--version` | Print version information and exit. | - |
+
+---
+
+### `trailblaze inprocess`
+
+Check an app APK for in-process driver compatibility, and build a test APK that drives it.
+
+**Synopsis:**
+
+```
+trailblaze inprocess [OPTIONS]
+trailblaze inprocess probe-apk
+trailblaze inprocess make-test-apk
+```
+
+**Options:**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `-h`, `--help` | Show this help message and exit. | - |
+| `-V`, `--version` | Print version information and exit. | - |
+
+---
+
+### `trailblaze inprocess probe-apk`
+
+Fingerprint an app APK and say whether the in-process driver can attach to it.  Reads the APK only — no device, no Android SDK, no signing key. Emits a few KB of YAML: the package, whether a launcher activity exists, every declared ContentProvider, the era of each library that would collide in the shared classloader, the signing certificate digest, and android:debuggable.  Pass --shell to compare against the exact test APK the app will be paired with. Without it the dex intersection cannot run, and the verdict is capped at INCOMPLETE — never GO.
+
+**Synopsis:**
+
+```
+trailblaze inprocess probe-apk [OPTIONS] <<app apk>>
+```
+
+**Arguments:**
+
+| Argument | Description | Required |
+|----------|-------------|----------|
+| `<<app apk>>` | The app APK to fingerprint. | Yes |
+
+**Options:**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--shell` | The processed shell (test) APK this app will be paired with. Adds the dex intersection — classes the shell contributes that the app also ships, which in one classloader is the duplicated-class crash. Required to reach a GO verdict, and it must be the exact APK about to be installed, not a same-shaped build. | - |
+| `--declared-deps` | Library versions the app's team states, for an APK that packages no META-INF version files and whose era dex markers cannot pin. Format: `libraries:` with `library:` / `version:` entries. | - |
+| `--shell-floor` | Replaces the built-in floor for libraries the shell does not package (so the shell's own bytes cannot state one). Format: `libraries:` with `library:` / `minVersion:` / `why:` entries. | - |
+| `--fail-on` | Exit non-zero only for these disqualifiers, instead of for any of them. The fingerprint and the printed verdict are unchanged — every reason is still named, and one that fired without being enforced is marked as such. Codes: ERA_BELOW_SHELL_FLOOR, DEX_OVERLAP_WITH_SHELL, NO_LAUNCHER_ACTIVITY, LAUNCHER_IN_OTHER_PROCESS, ERA_UNDETERMINABLE, DEX_OVERLAP_UNCHECKED | - |
+| `--out` | Write the fingerprint here instead of stdout. | - |
+| `-h`, `--help` | Show this help message and exit. | - |
+| `-V`, `--version` | Print version information and exit. | - |
+
+---
+
+### `trailblaze inprocess make-test-apk`
+
+Retarget a prebuilt in-process shell APK at one app and sign it with that app's key. Stamps the instrumentation's target package, injects trails / target config / scripted-tool bundles, then signs. Writes a build record beside the output APK.
+
+**Synopsis:**
+
+```
+trailblaze inprocess make-test-apk [OPTIONS]
+```
+
+**Options:**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--shell` | Prebuilt Trailblaze in-process shell test APK. Required, and no release publishes one yet: build it from a framework checkout with scripts/build-inprocess-shell.sh and hand the APK to whoever runs this command. | - |
+| `--target-package` | The app's applicationId — the package the instrumentation is stamped to attach to. Must match the target evidence, so a wrong value is refused rather than signed. | - |
+| `--out`, `-o` | Output APK. Defaults to <target-package>-trailblaze-test.apk in the CWD. | - |
+| `--keystore` | Keystore holding the app's signing key (JKS or PKCS12). | - |
+| `--alias` | Key alias inside --keystore. | - |
+| `--app-apk` | The app's APK, read for its certificate digest and debuggable flag. One of --app-apk or --fingerprint is required — signing blind is refused. | - |
+| `--fingerprint` | A `package:`/`certificate_sha256:`/`debuggable:` description of the app, for a host the app's APK never reaches. Carries the same two guard inputs --app-apk would be read for. | - |
+| `--release` | Allow a non-debuggable target. Off by default: an instrumentation cannot attach to a non-debuggable app on an ordinary device, and the usual cause of one is the wrong APK. | - |
+| `--allow-runtime-tool-source` | Bake `allow_runtime_tool_source: true` into the injected --target-config, letting this APK load scripted-tool bundles pushed to /data/local/tmp at run time instead of the ones packaged in it. Off by default, and written before signing either way, so the signature records the choice and a key-ceremony APK cannot be turned into one by omission. | - |
+| `--target-config` | Target config to inject (`id:`, `display_name:`, `platforms:`, `tools:`). Without one the APK runs framework primitives only — no scripted tools. | - |
+| `--trailmap` | Trailmap directory whose name is the trailmap id and which holds a tools/ subtree. Repeat for several. A tools/ of pre-built .bundle.js files needs no tooling; TypeScript sources are bundled here, which needs esbuild. | - |
+| `--trail` | A *.trail.yaml to inject. Repeat for several. The shell discovers them at run time and reports one test per trail. | - |
+| `--esbuild` | esbuild binary, when --trailmap carries TypeScript and esbuild is not on PATH. | - |
 | `-h`, `--help` | Show this help message and exit. | - |
 | `-V`, `--version` | Print version information and exit. | - |
 

@@ -41,6 +41,7 @@ class InteractionEventBuffer(
   private var textDebounceJob: Job? = null
   private var textFieldScreenshot: ByteArray? = null
   private var textFieldHierarchyText: String? = null
+  private var textFieldInputTarget: InputTarget? = null
 
   fun onTap(
     node: ViewHierarchyTreeNode?,
@@ -105,6 +106,10 @@ class InteractionEventBuffer(
       // Save the screenshot from the start of typing
       textFieldScreenshot = screenshot
       textFieldHierarchyText = hierarchyText
+      // Same reason as the screenshot: the burst's identity belongs to when it started. A
+      // field that moves focus on input (OTP boxes) would otherwise be recorded as the field
+      // focused at flush — the box AFTER the one the text went into.
+      textFieldInputTarget = toolFactory.captureInputTarget()
     }
     textBuffer.append(char)
     scheduleTextFlush()
@@ -159,11 +164,12 @@ class InteractionEventBuffer(
     textDebounceJob = null
     val text = textBuffer.toString()
     if (text.isNotEmpty()) {
-      val tool = toolFactory.createInputTextTool(text)
+      val tool = toolFactory.createInputTextTool(text, textFieldInputTarget)
       emit(tool.first, tool.second, textFieldScreenshot, textFieldHierarchyText)
       textBuffer.clear()
       textFieldScreenshot = null
       textFieldHierarchyText = null
+      textFieldInputTarget = null
     }
   }
 

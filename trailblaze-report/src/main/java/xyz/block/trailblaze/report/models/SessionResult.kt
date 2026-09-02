@@ -64,6 +64,37 @@ data class SessionResult(
    */
   val metadata: Map<String, String>? = null,
 
+  /**
+   * Path of the trail file this session ran, from `SessionInfo.trailFilePath`, or null when the
+   * session named no trail at all.
+   *
+   * This is the report's answer to "which trail file did this row run?", and it is one half of what
+   * separates a trail that replayed nothing from a test that was never a trail. A device farm
+   * enumerates every `@Test` in the APK, so a harness entry point that exists only for local
+   * driving — and passes as a deliberate no-op when the farm runs it — reports a PASSED row with
+   * [ExecutionMode.UNKNOWN], identical on nearly every other field to a real trail whose recording
+   * replayed nothing. A consumer must therefore not treat a null here as a lesser version of a
+   * path: a path plus [ExecutionMode.UNKNOWN] means a trail was expected and nothing ran.
+   *
+   * Null is the weaker half, and on its own it does NOT mean "was never a trail". Several producers
+   * start a session for a real trail supplied as inline YAML and have no file to name — the
+   * on-device RPC runner, the MCP `runYaml` bridge, and the recording connection service all pass
+   * null here. What those have in common is a session that DID start on a device, so [platform] and
+   * [device_classifier] are populated. A row that never ran a trail at all emitted no session-start
+   * log, so it has neither a path nor a platform; a consumer that means "no trail was expected of
+   * this row" has to require both.
+   *
+   * Blank normalizes to null at the writers, so a consumer never has to check for both.
+   *
+   * Deliberately NOT [EncodeDefault.Mode.NEVER], unlike [failure_code] and [failure_payload]: the
+   * report writers encode with `encodeDefaults = true`, so the key is written even when the value
+   * is null, and that is the whole point. Suppressing it would erase the field on exactly the rows
+   * it exists to identify, leaving them indistinguishable from a legacy report's — and a consumer
+   * that reads an ABSENT key as "no trail" would then reclassify every archived run's genuinely
+   * vacuous pass as a harmless no-op. Absent means "this report cannot answer".
+   */
+  val trail_file_path: String? = null,
+
   // === JUnit Identity ===
   // The JUnit class/method that ran this session, when it ran inside a JUnit harness
   // (`SessionInfo.testClass` / `testName`). Carried separately from [title] because the title

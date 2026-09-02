@@ -22,6 +22,10 @@
     "./testing": {
       "types": "./src/testing.ts",
       "default": "./src/testing.ts"
+    },
+    "./matcher": {
+      "types": "./src/matcher/index.ts",
+      "default": "./src/matcher/index.ts"
     }
   },
   "files": [

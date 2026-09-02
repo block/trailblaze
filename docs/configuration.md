@@ -31,7 +31,7 @@ Settings live in `trailblaze-settings.json`, but which copy applies depends on h
 - **Daemon:** `$TRAILBLAZE_HOME/trailblaze-settings.json`, default `~/.trailblaze/trailblaze-settings.json`. `~/.trailblaze` is also the daemon's state directory (logs, TLS keystore).
 - **Standalone `trailblaze config` inside a git repository** (no launcher pin): falls back to `<repo root>/.trailblaze/trailblaze-settings.json`, so a source checkout doesn't mutate your machine-global settings. Note this repo-local file does **not** drive an already-running daemon — daemon-backed runs read the daemon's own file above.
 
-Run `trailblaze config` with no arguments to print every key with its current value.
+Run `trailblaze config` with no arguments to print every key with its current value. A few persisted settings — the logs directory and the daemon ports — have no `trailblaze config` key at all; see [Settings keys with no `trailblaze config` key](#settings-keys-with-no-trailblaze-config-key).
 
 ### Precedence
 
@@ -45,7 +45,8 @@ Configuration does not have one total ordering because different settings use di
 Two more deliberate exceptions:
 
 - **Experimental toggles** (`stream-screenshots`, `ios-baguette-video`, `disable-animations`): the env var can only turn the feature **on**. An explicit falsey env value does *not* override a `true` persisted config — unset the config key to turn the feature off.
-- **Daemon port:** a `serverPort` persisted in `trailblaze-settings.json` outranks `TRAILBLAZE_PORT` unless the persisted value equals the default (`52525`, treated as "not set"). If an env override seems ignored, check for a persisted non-default port.
+- **Daemon port:** a `serverPort` persisted in `trailblaze-settings.json` outranks `TRAILBLAZE_PORT` unless the persisted value equals the default (`52525`, treated as "not set"). If an env override seems ignored, check for a persisted non-default port — see [`serverPort` / `serverHttpsPort`](#serverport-and-serverhttpsport).
+- **Daemon ports must stay outside `52530-59529`.** That range is where Trailblaze allocates per-device ports, and a device's port is also a host port: the host bridges to the device with `adb forward tcp:<port> tcp:<port>`, which takes an already-bound host port without reporting an error. A daemon listening in that range can therefore be silently disconnected the moment a device whose id hashes to its port connects. The daemon refuses to start on such a port rather than fail that way later, so set `TRAILBLAZE_PORT` **below** `52529` when running parallel daemons — `52529` itself fails, because the HTTPS port derives as `+1` and lands on `52530`. Above the range is worse, not better: it is further into the OS ephemeral range (`32768-60999` on Linux, `49152+` on macOS), where an unrelated outbound connection can be assigned the port as its source and the bind then fails outright. The Settings UI refuses an in-range port too, and `PUT /trailrunner/api/settings` returns 200 while silently dropping the field, so a saved value can't brick the next launch.
 
 ### When changes take effect
 
@@ -71,9 +72,41 @@ The full generated table (valid values, defaults) lives in the [CLI reference](C
 | Devices & drivers | `device`, `android-driver`, `ios-driver`, `web-headless`, `target` |
 | Agent & runs | `agent`, `mode`, `max-llm-calls`, `self-heal`, `require-steps` |
 | Screenshots | `screenshot-format`, `screenshot-max-dimensions`, `screenshot-quality`, `annotated-screenshots` |
+| Capture | `capture-video` (`true`/`false`, default off — the persistent opt-in for session video; env twin `TRAILBLAZE_CAPTURE_VIDEO`, per-run twin `--capture-video`) |
 | Experimental | `stream-screenshots`, `ios-baguette-video`, `disable-animations` |
 
 Experimental keys are tri-state (`true`, `false`, or `unset` to inherit the default) and each has an env-var twin documented below.
+
+## Settings keys with no `trailblaze config` key
+
+Some settings live only in `trailblaze-settings.json`. `trailblaze config` neither lists nor sets them — the desktop app's **Settings → Advanced Configuration** writes them, as does `PUT /trailrunner/api/settings` — but they are persisted, so they apply to every later CLI run that reads that settings file. Ask a running daemon what it has persisted:
+
+```bash
+curl -s "localhost:$(trailblaze app --status | awk '/^ *Port:/ {print $2}')/trailrunner/api/settings" | jq '{logsDirectory, serverPort, serverHttpsPort}'
+```
+
+That response echoes the settings file rather than the values in effect: `logsDirectory` is `null` whenever it is being derived, and `serverPort` still reads `52525` when an environment variable moved the daemon. `trailblaze app --status` prints the port actually in use.
+
+### `logsDirectory`: where session logs land
+
+Every session directory — tool logs, screenshots, `device.log`, `trace.json` — is written under this path, and it is the default search root for `trailblaze profile` and `trailblaze otel`.
+
+- **It is persisted, and it outlives the app that set it.** Settings → Advanced Configuration → Logs Directory → **Change Location** writes it; from then on both daemon-backed and standalone CLI runs use it. **Reset to Default** clears it back to unset.
+- **It can point outside the current checkout,** including at a different checkout entirely. Never assume a run's logs are under the directory you ran from — read the value and use it.
+- **Unset, it derives from the app data directory.** A repo-local app data directory puts logs beside it — `<git root>/logs`, since app data is `<git root>/.trailblaze` — while the machine-global state directory keeps them inside it, at `~/.trailblaze/logs` (or `$TRAILBLAZE_HOME/logs`). An installed binary therefore lands on `~/.trailblaze/logs` and a source checkout on `<git root>/logs`.
+- **A CLI settings write materializes the derived value.** Any `trailblaze config <key> <value>` rewrites the file with the currently derived path filled in, so the file usually carries an absolute `logsDirectory` even when nobody chose one. Move or rename the checkout afterwards and it keeps pointing at the old location.
+- **Changes apply at daemon start.** The daemon opens its logs repository once during boot, so run `trailblaze app --stop` (or restart the desktop app) after changing this.
+- **Every run writes and reads here.** Each host driver path builds its own logging rule against this directory, then reads the finished session back out of it to generate `recording.trail.yaml` (copied next to the trail source) and to compare snapshot goldens. That holds for `trailblaze run`, the desktop app's Run, and MCP alike.
+- **Read it at runtime** from `GET /trailrunner/api/settings` → `.logsDirectory`. The field echoes the persisted value, so `null` means the process is deriving it.
+
+### `serverPort` and `serverHttpsPort`
+
+The persisted daemon ports, written by Settings → Advanced Configuration → Server Ports (**Save**, then restart) or `PUT /trailrunner/api/settings`. Both are plain integers defaulting to `52525` / `52526`.
+
+- **A persisted non-default value outranks `TRAILBLAZE_PORT` / `TRAILBLAZE_HTTPS_PORT`.** Full order inside the JVM: an in-process override applied at launch → persisted non-default `serverPort`/`serverHttpsPort` → the env var → `52525` (HTTPS derives as HTTP + 1). A value *equal* to the default is treated as "not set", which is what lets the env var through.
+- **Set `TRAILBLAZE_PORT` to match a persisted port.** The `trailblaze` launcher script does *not* read the settings file: it defaults `TRAILBLAZE_PORT` to `52525` for its own daemon probe and readiness poll. So with `serverPort: 51234` persisted and no environment variable, the daemon binds `51234` while the script waits on `52525` and then reports that Trailblaze never became ready. Export the matching `TRAILBLAZE_PORT`, or move a non-default port to the environment variable and leave the persisted field at its default. `trailblaze app --status` reports the port the JVM resolved.
+- **A port inside the device-allocation range never takes effect.** The Settings UI refuses it, and `PUT /trailrunner/api/settings` returns 200 while silently dropping the field, because the daemon refuses to start there — and since that route is served by the daemon, a saved value would leave no UI to undo it. See [Precedence](#precedence).
+- **Changes apply at launch,** so restart the daemon.
 
 ## Workspace configuration (`trailblaze.yaml`)
 
@@ -159,7 +192,7 @@ install does the right thing the first time it opens the workspace, with no per-
 
 The trails directory resolves in this order:
 
-1. **A directory you picked** in Settings (or via `PATCH /api/settings`).
+1. **A directory you picked** in Settings (or via `PUT /trailrunner/api/settings`).
 2. **The workspace's `trails:`** declaration.
 3. `<app data dir>/../trails`.
 
@@ -216,8 +249,8 @@ Only set the variables in this section; variables the framework sets for its own
 
 | Variable | Default | Applied | Purpose |
 |---|---|---|---|
-| `TRAILBLAZE_PORT` | `52525` | launch | Daemon HTTP port. Override to run isolated/parallel daemons. Moves the HTTPS port with it (`+1`). |
-| `TRAILBLAZE_HTTPS_PORT` | HTTP port + 1 | launch | Daemon HTTPS port (the adb-reverse target for on-device logging). |
+| `TRAILBLAZE_PORT` | `52525` | launch | Daemon HTTP port. Override to run isolated/parallel daemons. Moves the HTTPS port with it (`+1`). Must be below `52529` — see [Precedence](#precedence) above. |
+| `TRAILBLAZE_HTTPS_PORT` | HTTP port + 1 | launch | Daemon HTTPS port (the adb-reverse target for on-device logging). Must be outside `52530-59529` — see [Precedence](#precedence) above. |
 | `TRAILBLAZE_HOME` | `~/.trailblaze` | launch | Relocates the state directory (logs, TLS keystore, settings) — lets concurrent daemons isolate state. |
 | `TRAILBLAZE_CONFIG_DIR` | cwd walk-up | command | Authoritative override for the workspace config dir (`trailblaze-config/` or the legacy `trails/config/`). Outranks the working-directory walk-up. |
 | `TRAILBLAZE_DISABLE_DAEMON_AUTOSTART` | unset | use | Kill-switch: "daemon not running" becomes an error instead of an implicit background daemon spawn. |
@@ -234,12 +267,13 @@ Development-checkout launcher knobs (the `./trailblaze` wrapper script; installe
 | `TRAILBLAZE_DEVICE` | unset | command | Manual device override for a shell or non-interactive harness. Interactively you rarely set it — `trailblaze device connect` records a terminal-scoped pin instead. A `--device` flag still wins. |
 | `TRAILBLAZE_TARGET` | unset | command | Per-shell target pin for forwarded subcommands (`clear` = unset). |
 | `TRAILBLAZE_MAX_LLM_CALLS` | `25` | command | Per-objective LLM call cap for the built-in Trailblaze Runner and strategy-graph agents (flag → env → workspace `defaults.max-llm-calls` → config key). |
-| `TRAILBLAZE_SELF_HEAL_ENABLED` | `false` | command | Enable self-heal on recorded replays (flag → env → config key). |
+| `TRAILBLAZE_SELF_HEAL_ENABLED` | `false` | command | Enable self-heal on recorded replays (flag → env → config key). A multi-device session refuses to open with self-heal on — see `TRAILBLAZE_DEVICE_BINDINGS` below. |
 | `TRAILBLAZE_DEFAULT_MODEL` | LLM config value | session | Overrides `defaults.model` from the loaded [LLM configuration](llm_configuration.md). |
 | `TRAILBLAZE_OLLAMA_NUM_CTX` | `65536` | session | Positive host-side Ollama `num_ctx` request override. Malformed or non-positive values fall back to 64K. See [Ollama (Local Models)](llm_configuration.md#ollama-local-models). |
 | `TRAILBLAZE_DEFERRED_VARIABLES` | empty | command | Comma-separated `{{var}}` names excluded from environment expansion in trail templates (left for runtime memory instead). |
 | `TRAILBLAZE_AUTO_TERMINATE_VERIFY_STEPS` | `false` | session | Auto-terminate verify steps once their assertion passes. |
-| `TRAILBLAZE_DEVICE_BINDINGS` | unset | session | Binds the non-start named devices of a multi-device trail's `config.devices:` configuration entry to connected devices, as comma-separated `name=deviceInstanceId` pairs (e.g. `buyer=emulator-5556`). The configuration's first declared device is the start device and binds to the launch device automatically; every other declared name needs an entry here — the declared classifier is the trail's portable contract, but classifier-based auto-binding is not implemented yet. Read by the daemon, so restart it (`trailblaze --stop`) if it was started without the variable. |
+| `TRAILBLAZE_DEVICE_BINDINGS` | unset | session | Binds the non-start named devices of a multi-device trail's `config.devices:` configuration entry to connected devices, as comma-separated `name=deviceInstanceId` pairs (e.g. `buyer=emulator-5556`). The configuration's first declared device is the start device and binds to the launch device automatically; every other declared name needs an entry here — the declared classifier is the trail's portable contract, but classifier-based auto-binding is not implemented yet. Prefer `trailblaze run --bind buyer=emulator-5556` (repeatable) — it is per-run, so it needs no daemon restart and two multi-device trails can run concurrently against different device sets, which one daemon-wide value cannot express. This variable remains the fallback for callers that cannot pass flags. Read by the daemon, so restart it (`trailblaze --stop`) if it was started without the variable. A run request carrying its own bindings — which `--bind` sets — replaces this value wholesale rather than merging with it. Three rules govern what such a session accepts, all reported at session start before the first step: it must run with self-heal off (`--self-heal=false` — healing writes a recovered leg back into your trail source and misaligns the steps around it, so legs end up replaying on the wrong display); every `switchDevice` in a leg the run will actually replay must name a device the configuration declares (a stale name in a leg the run re-blazes past doesn't stop it, so re-running with `--no-use-recorded-steps` is how you repair one — `trailblaze check` still flags it); and a name may not be bound to a device another name already holds. AI-driven steps are supported — the model is told the device roster and can hand over itself — unless the start target's `excluded_tools:` drops `switchDevice`, in which case the session accepts recorded steps only. |
+| `TRAILBLAZE_DEVICE_CONFIGURATION` | unset | session | Names which of a multi-device trail's `config.devices:` configuration entries a run binds. Only needed when a trail declares more than one — a trail declaring exactly one binds it implicitly, and a trail declaring several with no selection is rejected rather than defaulting to the first. A name the trail doesn't declare is an error; the variable is ignored on trails that declare no configuration at all, so one daemon can serve both. Prefer `trailblaze run --configuration <name>`, which is per-run and needs no daemon restart. Read by the daemon (restart it if it was started without the variable), and overridden by a selection on the run request itself — which `--configuration` sets. |
 | `TRAILBLAZE_TRAILS_DIR` | configured trails root | launch | Overrides the Trail Runner web UI's primary trails root. Unset, the UI uses the effective trails directory — the launch workspace's [`trails:`](#declaring-a-trails-directory) declaration if it has one, else the directory configured in the app (the app-data `trails/` dir unless you picked a workspace) — falling back to `<cwd>/trails` only when that path doesn't exist. |
 
 ### Android devices
@@ -288,12 +322,15 @@ The stream and proxy capture switches are experimental and off by default; each 
 
 | Variable | Default | Applied | Purpose |
 |---|---|---|---|
+| `TRAILBLAZE_CAPTURE_VIDEO` | unset | session | Record device screen video for every session in this process (config twin: `capture-video`; per-run flag twin: `--capture-video`). Video is **off by default** — recordings are large, their timing signatures drift on some hosts, and sprite extraction is expensive. Set this to get video and the sprite timeline back for a CI lane or a debugging session without a code change. Only a truthy value opts in — a falsey one reads the same as unset, so unset it to turn video off. Outranked by an explicit `--capture-video` / `--no-capture-video`, and outranks the saved `capture-video` config. |
 | `TRAILBLAZE_ANDROID_STREAM_SCREENSHOT` / `TRAILBLAZE_IOS_STREAM_SCREENSHOT` / `TRAILBLAZE_WEB_STREAM_SCREENSHOT` | unset | session | Serve agent-loop screenshots from the device's live video stream instead of per-turn direct captures (config twin: `stream-screenshots`, one toggle for all three platforms). Unmatched captures fall back to a direct screenshot. |
 | `…_STREAM_SCREENSHOT_AB` (same three prefixes) | unset | session | A/B validation: direct screenshot stays authoritative, stream matcher runs alongside and logs match/unmatch per capture. Run this before trusting the stream path. |
 | `TRAILBLAZE_DISABLE_ANIMATIONS` | unset | session | Disable OS animations for the duration of each session, restoring previous values at session end (config twin: `disable-animations`). Android: zeroes the three global animation scales; iOS simulators: near-zero `UIAnimationDragCoefficient` (deliberately *not* Reduce Motion, which apps branch on). |
 | `TRAILBLAZE_ANDROID_PROXY_CAPTURE` | unset | session | **Single switch** for Android network capture via a host-side mitmproxy (emulator-only, API 34+, needs mitmproxy installed): routes the emulator through `mitmdump`, installs the CA, writes `network.ndjson` into the session. |
 | `TRAILBLAZE_MITMDUMP` | `mitmdump` on `PATH` | session | Explicit path to the `mitmdump` binary. |
 | `TRAILBLAZE_NETWORK_CAPTURE_DEVICES` | unset (= every bound device) | session | Comma-separated `config.devices:` names to arm Android network capture on in a multi-device session. A multi-device session captures each device separately and suffixes its artifacts with the device name (`network.<device>.ndjson`, `events/<stream>.<device>.ndjson`), so both displays' evidence lands in one session. Narrow it when only some of a pair's displays run a capture-capable app: capture is load-bearing evidence, so a device whose app never dials in fails the session after the discovery timeout. A name no bound device matches is logged, not ignored. Read by the daemon, so restart it (`trailblaze --stop`) if it was started without the variable. |
+| `TRAILBLAZE_SNAPSHOT_BASELINE` | unset | session | Diff each run's `takeSnapshot` captures against a PREVIOUS run instead of checked-in golden files: an http(s) URL to a session logs zip, a local zip, or an extracted session directory. Snapshots match by name (and occurrence, for repeated names); a snapshot the baseline lacks is skipped, a mismatch above the threshold fails the run, and an unresolvable reference fails it too — an explicitly requested baseline never silently compares nothing. Read by the process that executes the comparison, so for a daemon-delegated run set it on the daemon (or prefer `trailblaze run --snapshot-baseline <ref>`, which is per-run and travels with the request). Failing snapshots get a 3-panel `Baseline | Diff | Actual` PNG written beside the screenshot. |
+| `TRAILBLAZE_SNAPSHOT_BASELINE_THRESHOLD` | `2.0` | session | Pass threshold for the baseline comparison: a snapshot passes when its pixel diff percentage is <= this value. Per-run flag twin: `--snapshot-baseline-threshold`. |
 | `TRAILBLAZE_SPRITE_FPS` | `2` | session | Host-session timeline sprite frame rate (`1..60`); invalid values fall back and log the chosen default. |
 | `TRAILBLAZE_SPRITE_FRAME_HEIGHT` | `720` | session | Host-session timeline sprite frame height in pixels (`16..16383`). |
 | `TRAILBLAZE_SPRITE_QUALITY` | `80` | session | Host-session timeline sprite WebP quality (`1..100`). |
@@ -317,8 +354,33 @@ The tool-definition analyzer extracts JSON Schemas from TypeScript scripted tool
 |---|---|---|---|
 | `TRAILBLAZE_DISABLE_TRAIL_RECORDING_VALIDATION` | unset | command | Skip the recorded-tool type-validation phase (per-trailmap `tsc` pass) entirely — shaves latency in a tight inner loop. |
 | `TRAILBLAZE_DISABLE_SELECTOR_DIALECT_GATE` | unset | command | Emergency opt-out from the selector/driver compatibility phase. It skips this `trailblaze check` phase, but not the unconditional Gradle corpus test. |
+| `TRAILBLAZE_DISABLE_DEVICE_PIN_GATE` | unset | command | Emergency opt-out from the device-pin gate, which fails a trail that declares a device driver outside the classifier it pins (`config.driver:` beside `config.devices:`, or a `devices:` entry keyed `driver`) and warns on the deprecated bare-string device form. Separate from the selector-dialect switch on purpose, so turning one off never silently drops the other. |
 | `TRAILBLAZE_TYPECHECK_TIMEOUT_MS` | `300000` | command | Timeout for the TypeScript typecheck phase (clamped to ≥ 1 min). |
 | `TRAILBLAZE_TEST_TIMEOUT_MS` | `300000` | command | Timeout for the trailmap unit-test runner. |
+
+### In-process test APK signing (`trailblaze inprocess make-test-apk`)
+
+`make-test-apk` signs its output with the target app's key, so it needs that keystore's passwords. They are read from the environment or, failing that, prompted for on the terminal — **never** from the command line, because argv is visible to `ps`, lands in shell history, and gets echoed by CI log tracing.
+
+| Variable | Default | Applied | Purpose |
+|---|---|---|---|
+| `TRAILBLAZE_INPROCESS_KEYSTORE_PASSWORD` | prompt | command | Password for the `--keystore` file. |
+| `TRAILBLAZE_INPROCESS_KEY_PASSWORD` | the keystore password | command | Password for the key named by `--alias`, when it differs from the store's. |
+
+#### Runtime scripted-tool bundles (`allow_runtime_tool_source`)
+
+An in-process test APK normally replays with the scripted-tool bundles that were packaged into it, which pins its tool vocabulary to whenever it was built. A host that drives the run itself can instead push bundles matching the trails it is about to replay:
+
+```
+/data/local/tmp/trailblaze/tool-bundles/trails/config/trailmaps/<id>/tools/<stem>.bundle.js
+```
+
+Two gates guard that path, both because the files there are unsigned code that executes inside the app's process:
+
+1. **The process is instrumented.** A production install of an app that ships these classes never reads tools off disk.
+2. **The target config opted in.** `--allow-runtime-tool-source` writes `allow_runtime_tool_source: true` into the `--target-config` **before** signing, so the choice is covered by the signature and is reported in the build record beside the output APK. It is off unless the flag is passed, so an APK produced at a signing ceremony replays from its own frozen assets even when a host drives it — the shell cannot tell one host holding the device from another.
+
+`/data/local/tmp` is `drwxrwx--x shell shell`, so only a host holding adb can plant a bundle there; the app process can read one by exact path but cannot write or list the directory. Push bundles world-readable (`chmod -R a+rX`) — the app process shares neither the uid nor the group of whatever wrote them.
 
 ### Built-in agent tuning (`--agent KOOG_STRATEGY_GRAPH` only)
 
@@ -332,6 +394,16 @@ These affect only the opt-in strategy-graph agent; the default agent ignores the
 | `TRAILBLAZE_KOOG_DISABLE_SCREENSHOT` | unset | Send view-hierarchy text only (drop the annotated screenshot) — for A/B or token cost. |
 | `TRAILBLAZE_KOOG_DISABLE_VERIFY_SCOPE` | unset | Keep the full tool surface on verify-only steps instead of scoping to assertion tools. |
 
+### Tracing detail
+
+| Variable | Default | Applied | Purpose |
+|---|---|---|---|
+| `TRAILBLAZE_TRACE_LEVEL` | `normal` | process | How much of a run is recorded into `trace.json`: `off`, `normal`, or `verbose`. `normal` records tools, agent phases, LLM calls and HTTP. `verbose` adds the fine-grained spans underneath — driver operations, screen-capture internals, per-node selector matching — as each of those layers gets instrumented; a layer that has none yet records the same at both levels. On Android runs driven by the accessibility driver this includes the on-device capture, whose spans land on the profiler's flat Device lane — though this variable reaches the host and its daemon, not the separate instrumentation process on the device, so those spans still record at `normal`; see [Performance Profiling](profiling.md#choosing-how-much-to-record) for how to read them. An instrumented test that drives the in-process `ANDROID_TEST` driver sets its own level with the `trailblaze.trace.level` instrumentation argument instead, since there the instrumentation is the run. An unrecognized value is reported and treated as `normal`. Read from the shell that starts the run and applied to that run alone, so a daemon started at one level does not pin every later run to it. |
+
+`verbose` is for a specific investigation, not a default. Its spans fire hundreds of times per step,
+and a span that costs more than the work it measures changes the shape of what you are profiling.
+See [Performance Profiling](profiling.md#choosing-how-much-to-record).
+
 ### Reports and results
 
 | Variable | Default | Applied | Purpose |
@@ -341,6 +413,23 @@ These affect only the opt-in strategy-graph agent; the default agent ignores the
 | `TRAILBLAZE_RESULTS_REPO` | unset | command | `owner/name` of the results-index repository when `--repo` isn't passed to `trailblaze results`. |
 
 CI systems additionally stamp report metadata via `TRAILBLAZE_TARGET_APP`, `TRAILBLAZE_DEVICES`, `TRAILBLAZE_BUILD_TYPE`, `TRAILBLAZE_TEST_RETRY_COUNT`, `TRAILBLAZE_AI_ENABLED`, and `TRAILBLAZE_PARALLEL_EXECUTION`. The report generator reads them all as labels, but CI pipelines commonly bridge `TRAILBLAZE_AI_ENABLED` (disables the LLM for the run) and `TRAILBLAZE_TEST_RETRY_COUNT` (drives retry loops) into real run behavior — don't treat those two as cosmetic.
+
+### OpenTelemetry export
+
+Off unless you set an endpoint. These are OpenTelemetry's own variable names, so a collector or
+local viewer that is already running needs no Trailblaze-specific configuration.
+
+| Variable | Default | Applied | Purpose |
+|---|---|---|---|
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | unset | run | Base endpoint every signal shares; `/v1/traces` is appended. Setting it makes a run send its recorded spans there as soon as it writes `trace.json`. |
+| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | unset | run | Full traces endpoint, path included. Takes precedence over the shared variable, and nothing is appended to it. |
+| `OTEL_EXPORTER_OTLP_PROTOCOL` | inferred | run | `grpc` or `http/protobuf`. When unset, port `4317` is treated as gRPC and anything else as OTLP/HTTP. |
+| `OTEL_EXPORTER_OTLP_TRACES_PROTOCOL` | inferred | run | Same, for traces only. Takes precedence. |
+| `OTEL_EXPORTER_OTLP_HEADERS` | unset | run | `key1=value1,key2=value2` headers on every export request — what an authenticating collector needs. A value may contain `=`; only the first one separates. |
+| `OTEL_EXPORTER_OTLP_TRACES_HEADERS` | unset | run | Same, for traces only. Merged over the shared variable per key, so a shared header with no override still applies. |
+
+A run with no endpoint configured sends nothing and still writes `trace.json`; `trailblaze otel`
+converts a recorded session on demand. See [Performance Profiling](profiling.md#opentelemetry-export).
 
 ### Stability kill-switches
 
@@ -370,6 +459,10 @@ Tuning knobs for the `/scripting/callback` endpoint that backs the TypeScript sc
 * `-Dtrailblaze.callback.maxDepth` (defaults to `16`) — Reentrance cap for recursive callback chains (a subprocess tool dispatching another subprocess tool counts as one level).
 * `-Dtrailblaze.callback.maxBodyBytes` (defaults to `1048576` / 1 MB) — Maximum accepted callback request body size; larger declared bodies are rejected with HTTP 413.
 
+Unrelated to callbacks:
+
+* `-Dtrailblaze.trace.level` (defaults to `normal`) — Same values as `TRAILBLAZE_TRACE_LEVEL`, and checked first, so a single run can override the environment it inherits.
+
 The Homebrew-installed launcher also sets `-Dtrailblaze.appdata.dir` to pin the settings directory — relevant only if you're building custom launch wrappers.
 
 ## On-device Android instrumentation arguments
@@ -381,11 +474,12 @@ The Homebrew-installed launcher also sets `-Dtrailblaze.appdata.dir` to pin the 
     * This means all Trailblaze SDK Traffic is re-routed through `adb` and then the logs server reverse proxies the traffic to the final host.
     * This is important because it allows the Trailblaze Agent to run on-device, but not require a network connection.
     * It is also helpful/important because in the future it will allow you to not send your API Keys to the device itself, but add the `Authorization` information via the reverse proxy.
-* `trailblaze.httpsPort` (defaults to `52526`, i.e. `trailblaze.port` + 1) - The HTTPS port for the Trailblaze server. Override this when running multiple Trailblaze instances.
+* `trailblaze.httpsPort` (defaults to `52526`, i.e. `trailblaze.port` + 1) - The HTTPS port the on-device runner sends logging traffic to. **Host-driven runs set this for you and ignore any value you pass**: the daemon injects the port its own HTTPS server bound, which is also the port it `adb reverse`s, so the two can never disagree. Setting it yourself only takes effect where no Trailblaze daemon launched the instrumentation — a Gradle-launched instrumented test being the case that matters — and there it should match the server you want logs to reach.
 * `trailblaze.logsEndpoint` - Defaults to the same values as the `reverseProxy` uses.  You can use this value if you want to use a remote logs server.  NOTE: Logging timeouts are set to 5 seconds as they are expected to be fast.
 * `trailblaze.selfHeal` (unset by default) - Strict `true`/`false`: enable self-heal for on-device runs. Unset (or an invalid value) defers to the host-side resolution, same parser as `TRAILBLAZE_SELF_HEAL_ENABLED`.
 * `trailblaze.agent` (defaults to the standard agent) - Agent implementation name for on-device runs; unknown values fall back to the default with a logged warning.
 * `trailblaze.driverType` (unset by default) - **Force** override for the on-device driver (e.g. `ANDROID_ONDEVICE_ACCESSIBILITY`); when set, the per-trail `config.driver` YAML value is skipped entirely.
+* `trailblaze.target` (unset by default) - Selects which injected target config an in-process test APK runs against, by its `id`. Unset, the APK uses the single injected config it carries; an APK carrying more than one refuses to guess and names the ids it has. An id the APK does not carry is an error rather than a silent fall-through to the built-in `default`.
 * `trailblaze.captureSecondaryTree` (defaults to `false`) - Strict `true`/`false`: also dump the legacy UiAutomator view hierarchy on every capture and use it as the captured `viewHierarchy` (selector-migration aid; roughly doubles per-step capture latency and session-log size). On-device counterpart of `TRAILBLAZE_CAPTURE_SECONDARY_TREE`.
 
 ## Diagnostic log prefixes

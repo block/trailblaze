@@ -42,6 +42,12 @@ data class TrailblazeNodeSelector(
    */
   val androidAccessibility: DriverNodeMatch.AndroidAccessibility? = null,
 
+  /**
+   * Classic Android View matcher, for [DriverNodeDetail.AndroidView] nodes captured in-process
+   * from the live view objects. Strict (case-sensitive) matching, unlike [androidMaestro].
+   */
+  val androidView: DriverNodeMatch.AndroidView? = null,
+
   /** Android Maestro driver matcher. */
   val androidMaestro: DriverNodeMatch.AndroidMaestro? = null,
 
@@ -96,7 +102,8 @@ data class TrailblazeNodeSelector(
    */
   @kotlinx.serialization.Transient
   val driverMatch: DriverNodeMatch?
-    get() = androidAccessibility ?: androidMaestro ?: web ?: compose ?: iosMaestro ?: iosAxe
+    get() =
+      androidAccessibility ?: androidView ?: androidMaestro ?: web ?: compose ?: iosMaestro ?: iosAxe
 
   companion object {
     /**
@@ -115,6 +122,7 @@ data class TrailblazeNodeSelector(
       index: Int? = null,
     ): TrailblazeNodeSelector = TrailblazeNodeSelector(
       androidAccessibility = match as? DriverNodeMatch.AndroidAccessibility,
+      androidView = match as? DriverNodeMatch.AndroidView,
       androidMaestro = match as? DriverNodeMatch.AndroidMaestro,
       web = match as? DriverNodeMatch.Web,
       compose = match as? DriverNodeMatch.Compose,
@@ -188,6 +196,17 @@ data class TrailblazeNodeSelector(
       is DriverNodeMatch.AndroidAccessibility -> {
         textRegex = match.textRegex ?: match.contentDescriptionRegex ?: match.hintTextRegex
         idRegex = match.resourceIdRegex
+      }
+      is DriverNodeMatch.AndroidView -> {
+        // tag/className/errorText/inputType have no legacy equivalent and are dropped, same as
+        // the other native shapes. The legacy selector is also evaluated with Maestro's lenient
+        // semantics, so this conversion widens the match — only use it on the legacy path.
+        textRegex = match.textRegex ?: match.contentDescriptionRegex ?: match.hintTextRegex
+        idRegex = match.resourceIdRegex
+        focused = match.isFocused
+        selected = match.isSelected
+        enabled = match.isEnabled
+        checked = match.isChecked
       }
       is DriverNodeMatch.Compose -> {
         textRegex = match.textRegex
@@ -319,12 +338,84 @@ sealed interface DriverNodeMatch {
       isFocused?.let { parts.add(if (it) "focused" else "not focused") }
       isEditable?.let { parts.add(if (it) "editable" else "not editable") }
       isScrollable?.let { parts.add(if (it) "scrollable" else "not scrollable") }
-      isPassword?.let { parts.add("password") }
-      isHeading?.let { parts.add("heading") }
+      isPassword?.let { parts.add(if (it) "password" else "not password") }
+      isHeading?.let { parts.add(if (it) "heading" else "not heading") }
       isMultiLine?.let { parts.add(if (it) "multiline" else "singleline") }
       inputType?.let { parts.add("inputType=$it") }
       collectionItemRowIndex?.let { parts.add("row=$it") }
       collectionItemColumnIndex?.let { parts.add("col=$it") }
+      append(parts.joinToString(", "))
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Android View matcher (live android.view.View objects, in-process)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Matches against [DriverNodeDetail.AndroidView] nodes.
+   *
+   * Only properties from [DriverNodeDetail.AndroidView.MATCHABLE_PROPERTIES] are exposed. All
+   * fields are optional — only non-null fields act as predicates.
+   *
+   * `*Regex` fields are matched with **strict, case-sensitive** semantics (regex-OR-exact-literal,
+   * see [DriverNodeMatch]), not the lenient Maestro dialect that [AndroidMaestro] carries. This is
+   * a native shape authored against a native tree, so `textRegex: "cancel"` does not match
+   * "Cancel"; opt into case-insensitivity with a leading `(?i)`.
+   */
+  @Serializable
+  @SerialName("androidView")
+  data class AndroidView(
+    // Identity
+    /** **Matchable.** The view's real runtime class, un-sanitized (custom classes included). */
+    val classNameRegex: String? = null,
+    /** **Matchable.** Resource name of `view.id`, e.g. `com.example:id/btn_continue`. */
+    val resourceIdRegex: String? = null,
+    /** **Matchable.** `view.tag` as a string — View-only, invisible to the a11y tree. */
+    val tagRegex: String? = null,
+
+    // Text
+    /** **Matchable.** Matched against `resolveText()`: text > hintText > contentDescription. */
+    val textRegex: String? = null,
+    val contentDescriptionRegex: String? = null,
+    val hintTextRegex: String? = null,
+    val stateDescriptionRegex: String? = null,
+    /** **Matchable.** `TextView.error` — assert that a field shows a specific validation error. */
+    val errorTextRegex: String? = null,
+
+    // State
+    val isEnabled: Boolean? = null,
+    val isClickable: Boolean? = null,
+    /** **Matchable.** Only matches views that are [android.widget.Checkable] at all. */
+    val isChecked: Boolean? = null,
+    val isSelected: Boolean? = null,
+    val isFocused: Boolean? = null,
+    val isEditable: Boolean? = null,
+    val isPassword: Boolean? = null,
+
+    // Input
+    /** **Matchable.** `TextView.inputType`, using Android's `InputType` constants. */
+    val inputType: Int? = null,
+  ) : DriverNodeMatch {
+
+    override fun description(): String = buildString {
+      val parts = mutableListOf<String>()
+      classNameRegex?.let { parts.add("class~\"$it\"") }
+      resourceIdRegex?.let { parts.add("id~\"$it\"") }
+      tagRegex?.let { parts.add("tag~\"$it\"") }
+      textRegex?.let { parts.add("\"$it\"") }
+      contentDescriptionRegex?.let { parts.add("desc~\"$it\"") }
+      hintTextRegex?.let { parts.add("hint~\"$it\"") }
+      stateDescriptionRegex?.let { parts.add("state~\"$it\"") }
+      errorTextRegex?.let { parts.add("error~\"$it\"") }
+      isEnabled?.let { parts.add(if (it) "enabled" else "disabled") }
+      isClickable?.let { parts.add(if (it) "clickable" else "not clickable") }
+      isChecked?.let { parts.add(if (it) "checked" else "unchecked") }
+      isSelected?.let { parts.add(if (it) "selected" else "not selected") }
+      isFocused?.let { parts.add(if (it) "focused" else "not focused") }
+      isEditable?.let { parts.add(if (it) "editable" else "not editable") }
+      isPassword?.let { parts.add(if (it) "password" else "not password") }
+      inputType?.let { parts.add("inputType=$it") }
       append(parts.joinToString(", "))
     }
   }
@@ -511,6 +602,20 @@ sealed interface DriverNodeMatch {
     val isFocused: Boolean? = null,
     val isSelected: Boolean? = null,
     val isPassword: Boolean? = null,
+
+    /** **Matchable.** Row index within a `LazyColumn`/grid — the stable list disambiguator. */
+    val collectionItemRowIndex: Int? = null,
+    /** **Matchable.** Column index within a collection. */
+    val collectionItemColumnIndex: Int? = null,
+    val stateDescriptionRegex: String? = null,
+    val isHeading: Boolean? = null,
+    val paneTitleRegex: String? = null,
+    /** **Matchable.** Anchor "inside the dialog" without guessing at layout. */
+    val isDialog: Boolean? = null,
+    val isPopup: Boolean? = null,
+    val errorTextRegex: String? = null,
+    /** **Matchable.** Whether the node accepts typed text (`SemanticsActions.SetText`). */
+    val hasSetTextAction: Boolean? = null,
   ) : DriverNodeMatch {
 
     override fun description(): String = buildString {
@@ -524,7 +629,16 @@ sealed interface DriverNodeMatch {
       isEnabled?.let { parts.add(if (it) "enabled" else "disabled") }
       isFocused?.let { parts.add(if (it) "focused" else "not focused") }
       isSelected?.let { parts.add(if (it) "selected" else "not selected") }
-      isPassword?.let { parts.add("password") }
+      isPassword?.let { parts.add(if (it) "password" else "not password") }
+      collectionItemRowIndex?.let { parts.add("row=$it") }
+      collectionItemColumnIndex?.let { parts.add("col=$it") }
+      stateDescriptionRegex?.let { parts.add("state~\"$it\"") }
+      isHeading?.let { parts.add(if (it) "heading" else "not heading") }
+      paneTitleRegex?.let { parts.add("pane~\"$it\"") }
+      isDialog?.let { parts.add(if (it) "dialog" else "not dialog") }
+      isPopup?.let { parts.add(if (it) "popup" else "not popup") }
+      errorTextRegex?.let { parts.add("error~\"$it\"") }
+      hasSetTextAction?.let { parts.add(if (it) "editable" else "not editable") }
       append(parts.joinToString(", "))
     }
   }

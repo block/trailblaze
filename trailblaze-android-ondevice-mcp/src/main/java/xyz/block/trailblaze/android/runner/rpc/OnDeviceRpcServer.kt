@@ -25,6 +25,7 @@ import xyz.block.trailblaze.llm.RunYamlCallbackResult
 import xyz.block.trailblaze.llm.RunYamlRequest
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeSession
+import xyz.block.trailblaze.mcp.android.ondevice.rpc.OnDeviceScreenStateCaptor
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcResult
 import xyz.block.trailblaze.mcp.handlers.DrainSessionRequestHandler
 import xyz.block.trailblaze.mcp.handlers.GetExecutionStatusRequestHandler
@@ -64,6 +65,20 @@ class OnDeviceRpcServer(
   private val loggingRule: TrailblazeLoggingRule,
   private val runTrailblazeYaml: suspend (RunYamlRequest, TrailblazeSession, AgentMemory) -> RunYamlCallbackResult,
   private val trailblazeDeviceInfoProvider: (TrailblazeDeviceId) -> TrailblazeDeviceInfo,
+  /**
+   * The driver's screen-state capture for `GetScreenStateRequest` — including the host's
+   * `waitForReady` readiness probe. The accessibility runner passes
+   * `AccessibilityScreenStateCaptor` (trailblaze-android); the in-process ANDROID_TEST driver
+   * captures through its own instrumentation-side hierarchy. Required, not defaulted: the server
+   * module deliberately depends on no driver.
+   */
+  private val screenStateCaptor: OnDeviceScreenStateCaptor,
+  /**
+   * The driver's pre-tool UI-settle gate for `RunYamlRequestHandler` — see that seam's KDoc.
+   * The accessibility runner passes `AccessibilitySettleGate.waitForSettled`; a driver whose
+   * dispatch is already synchronized passes a no-op.
+   */
+  private val waitForSettled: suspend () -> Unit,
   private val progressManager: ProgressSessionManager = ProgressSessionManager(),
   private val deviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList(),
 ) {
@@ -90,8 +105,9 @@ class OnDeviceRpcServer(
         runTrailblazeYaml = runTrailblazeYaml,
         trailblazeDeviceInfoProvider = trailblazeDeviceInfoProvider,
         progressManager = progressManager,
+        waitForSettled = waitForSettled,
       )
-      val screenStateHandler = GetScreenStateRequestHandler(deviceClassifiers)
+      val screenStateHandler = GetScreenStateRequestHandler(deviceClassifiers, screenStateCaptor)
       val drainSessionHandler = DrainSessionRequestHandler()
       val subscribeToProgressHandler = SubscribeToProgressRequestHandler(progressManager)
       val getExecutionStatusHandler = GetExecutionStatusRequestHandler(progressManager)

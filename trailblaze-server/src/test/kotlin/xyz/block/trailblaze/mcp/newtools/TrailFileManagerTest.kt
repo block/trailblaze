@@ -24,6 +24,7 @@ import xyz.block.trailblaze.yaml.TrailConfig
 import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.TrailblazeToolYamlWrapper
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
+import xyz.block.trailblaze.yaml.unified.TrailblazeDeviceDefinition
 
 /**
  * Tests for [TrailFileManager] — the callers route trail enumeration through
@@ -352,6 +353,91 @@ class TrailFileManagerTest {
   }
 
   // ---------------------------------------------------------------------------
+  // loadTrail — multi-device configurations
+  // ---------------------------------------------------------------------------
+
+  /**
+   * A trail with a single-device leg AND a configuration leg, recording different tools, so the
+   * loaded step's tool names which leg resolved.
+   */
+  private fun newPairedTrail(relativePath: String, vararg configurationNames: String): File {
+    val file = File(trailsDir, relativePath)
+    file.parentFile?.mkdirs()
+    file.writeText(
+      buildString {
+        appendLine("config:")
+        appendLine("  id: app/paired")
+        appendLine("  devices:")
+        appendLine("    android:")
+        appendLine("      driver: ANDROID_ONDEVICE_INSTRUMENTATION")
+        configurationNames.forEach { name ->
+          appendLine("    $name:")
+          appendLine("      devices:")
+          appendLine("        seller:")
+          appendLine("          classifier: lab-a")
+          appendLine("        buyer:")
+          appendLine("          classifier: lab-b")
+        }
+        appendLine("trail:")
+        appendLine("  - step: \"Tap the thing\"")
+        appendLine("    recording:")
+        appendLine("      android:")
+        appendLine("        - androidTool: {}")
+        configurationNames.forEach { name ->
+          appendLine("      $name:")
+          appendLine("        - ${name}Tool: {}")
+        }
+      },
+    )
+    return file
+  }
+
+  @Test
+  fun `loadTrail binds a trail's only configuration and lowers its leg`() {
+    val file = newPairedTrail("flows/paired/trail.yaml", "pos-pair")
+
+    val result = manager().loadTrail(file.absolutePath, listOf(TrailblazeDeviceClassifier("android")))
+
+    assertTrue(result.success, "load failed: ${result.error}")
+    assertEquals("pos-pair", result.selectedDeviceConfiguration)
+    val step = result.promptSteps?.single() as DirectionStep
+    assertEquals(
+      listOf("pos-pairTool"),
+      step.recording?.tools?.map { it.name },
+      "the configuration's leg must lower, not the single-device `android:` one",
+    )
+  }
+
+  @Test
+  fun `loadTrail refuses a trail with several configurations until one is named`() {
+    val file = newPairedTrail("flows/paired2/trail.yaml", "pos-pair", "kitchen-pair")
+
+    val ambiguous = manager().loadTrail(file.absolutePath, listOf(TrailblazeDeviceClassifier("android")))
+    assertFalse(ambiguous.success, "picking one of several configurations would replay the wrong device set")
+    assertTrue(ambiguous.error!!.contains("pos-pair") && ambiguous.error!!.contains("kitchen-pair"))
+
+    val named = manager().loadTrail(
+      file.absolutePath,
+      listOf(TrailblazeDeviceClassifier("android")),
+      requestedDeviceConfiguration = "kitchen-pair",
+    )
+    assertTrue(named.success, "load failed: ${named.error}")
+    assertEquals("kitchen-pair", named.selectedDeviceConfiguration)
+    val step = named.promptSteps?.single() as DirectionStep
+    assertEquals(listOf("kitchen-pairTool"), step.recording?.tools?.map { it.name })
+  }
+
+  @Test
+  fun `loadTrail leaves a single-device trail on its own leg`() {
+    val file = newUnifiedTrailWithAndroidRecording("flows/unified3/trail.yaml")
+
+    val result = manager().loadTrail(file.absolutePath, listOf(TrailblazeDeviceClassifier("android")))
+
+    assertTrue(result.success, "load failed: ${result.error}")
+    assertNull(result.selectedDeviceConfiguration, "a trail declaring no configuration binds none")
+  }
+
+  // ---------------------------------------------------------------------------
   // saveTrail — where a recording lands
   // ---------------------------------------------------------------------------
 
@@ -476,6 +562,263 @@ class TrailFileManagerTest {
     assertFalse(result.success, "a zero-step recording must not be planted as a no-op trail")
     assertFalse(File(trailDir, "android.trail.yaml").exists(), "nothing written")
   }
+
+  @Test
+  fun `saveTrailItems keys a configuration session's leg by the configuration name`() {
+    val trailDir = File(trailsDir, "flow").apply { mkdirs() }
+    File(trailDir, TrailRecordings.UNIFIED_TRAIL_FILENAME).writeText(multiDeviceTrailYaml)
+
+    val result = TrailFileManager(trailsDir.absolutePath).saveTrailItems(
+      name = "flow",
+      recordedItems = recordedTrailItems("androidTap"),
+      platform = TrailblazeDevicePlatform.ANDROID,
+      selectedDeviceConfiguration = "pos-pair",
+    )
+
+    assertTrue(result.success, "configuration save failed: ${result.error}")
+    val unified = createTrailblazeYaml()
+      .decodeUnifiedTrail(File(trailDir, TrailRecordings.UNIFIED_TRAIL_FILENAME).readText())
+    assertEquals(
+      listOf("androidTap"),
+      unified.trail.single().recordings["pos-pair"]?.map { it.name },
+      "the leg must land under the configuration name, not the launch device's platform",
+    )
+    assertNull(unified.trail.single().recordings["android"], "no platform-keyed duplicate leg")
+    assertTrue(
+      unified.config.devices?.get("pos-pair")?.isConfiguration == true,
+      "the authored cast must survive the merge",
+    )
+    assertNull(unified.config.devices?.get("pos-pair")?.driver, "a configuration entry must never carry a driver pin")
+    assertFalse(File(trailDir, "pos-pair.trail.yaml").exists(), "a configuration never routes to a sibling")
+  }
+
+  @Test
+  fun `saveTrailItems keys a configuration session even with no bound platform`() {
+    // The configuration's name IS the slot key, so a multi-device session needs no platform — the
+    // "bind a device first" refusal is for a save with nothing at all to key on.
+    val trailDir = File(trailsDir, "flow").apply { mkdirs() }
+    File(trailDir, TrailRecordings.UNIFIED_TRAIL_FILENAME).writeText(multiDeviceTrailYaml)
+
+    val result = TrailFileManager(trailsDir.absolutePath).saveTrailItems(
+      name = "flow",
+      recordedItems = recordedTrailItems("androidTap"),
+      platform = null,
+      selectedDeviceConfiguration = "pos-pair",
+    )
+
+    assertTrue(result.success, "configuration save failed: ${result.error}")
+  }
+
+  @Test
+  fun `saveTrailItems refuses a configuration session saved under a new name`() {
+    // The MCP save path takes a caller-supplied name, so a configuration session can be pointed at
+    // a destination that declares no cast. A recording lowers to v1 items and v1 TrailConfig has no
+    // `devices:`, so the cast cannot come along — seeding there would write configuration-keyed legs
+    // that replay resolves to nothing, and report success for a file no run can use.
+    val result = TrailFileManager(trailsDir.absolutePath).saveTrailItems(
+      name = "somewhere-new",
+      recordedItems = recordedTrailItems("androidTap"),
+      platform = TrailblazeDevicePlatform.ANDROID,
+      selectedDeviceConfiguration = "pos-pair",
+    )
+
+    assertFalse(result.success, "a configuration has no cast to key against in a fresh destination")
+    assertFalse(
+      File(File(trailsDir, "somewhere-new"), TrailRecordings.UNIFIED_TRAIL_FILENAME).exists(),
+      "nothing written",
+    )
+  }
+
+  @Test
+  fun `saveTrailItems declares a caller-supplied cast in a fresh destination`() {
+    // The converse of the fresh-destination refusal above: an interactive roster session CAN
+    // supply the cast (session save synthesizes it from the named-device roster), and with it a
+    // configuration-keyed save into a destination that declares nothing becomes a replayable
+    // multi-device trail instead of a refusal.
+    val cast = TrailblazeDeviceDefinition(
+      devices = linkedMapOf(
+        "seller" to TrailblazeDeviceDefinition(classifier = "android-phone"),
+        "buyer" to TrailblazeDeviceDefinition(classifier = "android"),
+      ),
+    )
+
+    val result = TrailFileManager(trailsDir.absolutePath).saveTrailItems(
+      name = "somewhere-new",
+      recordedItems = recordedTrailItems("androidTap"),
+      platform = TrailblazeDevicePlatform.ANDROID,
+      selectedDeviceConfiguration = "pos-pair",
+      castToDeclare = cast,
+    )
+
+    assertTrue(result.success, "a roster-supplied cast must open the fresh-destination save: ${result.error}")
+    val unified = createTrailblazeYaml().decodeUnifiedTrail(
+      File(File(trailsDir, "somewhere-new"), TrailRecordings.UNIFIED_TRAIL_FILENAME).readText(),
+    )
+    assertEquals(
+      listOf("seller", "buyer"),
+      unified.config.devices?.get("pos-pair")?.devices?.keys?.toList(),
+      "the supplied cast must be declared under the configuration name, members in order",
+    )
+    assertEquals(
+      listOf("androidTap"),
+      unified.trail.single().recordings["pos-pair"]?.map { it.name },
+      "the leg must be keyed by the configuration name the cast declares",
+    )
+  }
+
+  @Test
+  fun `a synthesized cast is refused when a per-classifier sibling would shadow it`() {
+    // The cast lands in trail.yaml, but a directory replay resolves `android.trail.yaml` FIRST
+    // (TrailRecordings.computePossibleFileNamesForDeviceClassifiers), so writing it would report a
+    // saved multi-device trail that every directory-addressed run then ignores. The declared-layout
+    // checks cannot catch this: they read the destination document, and the shadowing file is a
+    // different one.
+    val trailDir = File(trailsDir, "legacy-flow").apply { mkdirs() }
+    // Content is immaterial — what shadows the cast is the FILENAME's place in the resolution
+    // order — so this only has to be recognizable when asserting the file was left alone.
+    val siblingYaml = "# pre-existing per-classifier recording\n"
+    val sibling = File(trailDir, "android.trail.yaml").apply { writeText(siblingYaml) }
+
+    val result = TrailFileManager(trailsDir.absolutePath).saveTrailItems(
+      name = "legacy-flow",
+      recordedItems = recordedTrailItems("androidTap"),
+      platform = TrailblazeDevicePlatform.ANDROID,
+      selectedDeviceConfiguration = "pos-pair",
+      castToDeclare = TrailblazeDeviceDefinition(
+        devices = linkedMapOf(
+          "seller" to TrailblazeDeviceDefinition(classifier = "android"),
+          "buyer" to TrailblazeDeviceDefinition(classifier = "android"),
+        ),
+      ),
+    )
+
+    assertFalse(result.success, "a cast a sibling shadows must not be reported as saved")
+    assertTrue(
+      "android.trail.yaml" in (result.error ?: ""),
+      "the refusal must name the file that would shadow it: ${result.error}",
+    )
+    assertFalse(
+      File(trailDir, TrailRecordings.UNIFIED_TRAIL_FILENAME).exists(),
+      "nothing written",
+    )
+    assertEquals(siblingYaml, sibling.readText(), "the existing sibling must be untouched")
+  }
+
+  @Test
+  fun `a non-trail file in the destination does not block a synthesized cast`() {
+    // Control on the predicate: only per-classifier `*.trail.yaml` files participate in directory
+    // resolution, so nothing else in the directory can shadow the cast. Without this, the guard
+    // could refuse on any stray file and the test above would pass for the wrong reason.
+    val trailDir = File(trailsDir, "with-notes").apply { mkdirs() }
+    File(trailDir, "notes.md").writeText("scratch")
+
+    val result = TrailFileManager(trailsDir.absolutePath).saveTrailItems(
+      name = "with-notes",
+      recordedItems = recordedTrailItems("androidTap"),
+      platform = TrailblazeDevicePlatform.ANDROID,
+      selectedDeviceConfiguration = "pos-pair",
+      castToDeclare = TrailblazeDeviceDefinition(
+        devices = linkedMapOf("seller" to TrailblazeDeviceDefinition(classifier = "android")),
+      ),
+    )
+
+    assertTrue(result.success, "an unrelated file must not block synthesis: ${result.error}")
+  }
+
+  @Test
+  fun `saveTrailItems never writes a caller-supplied cast over a trail that declares its own`() {
+    // A destination whose author already declared a cast is canon: the roster-synthesized cast may
+    // only open the declares-NOTHING case. A different declared cast still refuses, unchanged.
+    val trailDir = File(trailsDir, "flow").apply { mkdirs() }
+    val authored = multiDeviceTrailYaml
+    File(trailDir, TrailRecordings.UNIFIED_TRAIL_FILENAME).writeText(authored)
+
+    val result = TrailFileManager(trailsDir.absolutePath).saveTrailItems(
+      name = "flow",
+      recordedItems = recordedTrailItems("androidTap"),
+      platform = TrailblazeDevicePlatform.ANDROID,
+      selectedDeviceConfiguration = "other-pair",
+      castToDeclare = TrailblazeDeviceDefinition(
+        devices = linkedMapOf("solo" to TrailblazeDeviceDefinition(classifier = "android")),
+      ),
+    )
+
+    assertFalse(result.success, "a supplied cast must not be planted beside an authored one")
+    assertEquals(
+      authored,
+      File(trailDir, TrailRecordings.UNIFIED_TRAIL_FILENAME).readText(),
+      "the authored trail must be untouched",
+    )
+  }
+
+  @Test
+  fun `a caller-supplied cast never replaces the authored cast under the same name`() {
+    // Same-name variant: the merge itself is legitimate (the trail declares `pos-pair` and the
+    // save is keyed by it), so no refusal fires — the supplied cast must simply be IGNORED, never
+    // swapped in over the authored members.
+    val trailDir = File(trailsDir, "flow").apply { mkdirs() }
+    File(trailDir, TrailRecordings.UNIFIED_TRAIL_FILENAME).writeText(multiDeviceTrailYaml)
+
+    val result = TrailFileManager(trailsDir.absolutePath).saveTrailItems(
+      name = "flow",
+      recordedItems = recordedTrailItems("androidTap"),
+      platform = TrailblazeDevicePlatform.ANDROID,
+      selectedDeviceConfiguration = "pos-pair",
+      castToDeclare = TrailblazeDeviceDefinition(
+        devices = linkedMapOf("intruder" to TrailblazeDeviceDefinition(classifier = "web")),
+      ),
+    )
+
+    assertTrue(result.success, "the same-name merge is an ordinary configuration save: ${result.error}")
+    val unified = createTrailblazeYaml().decodeUnifiedTrail(
+      File(trailDir, TrailRecordings.UNIFIED_TRAIL_FILENAME).readText(),
+    )
+    assertEquals(
+      listOf("seller", "buyer"),
+      unified.config.devices?.get("pos-pair")?.devices?.keys?.toList(),
+      "the authored members are canon — the supplied cast must be ignored, not merged in",
+    )
+    assertEquals(
+      "lab-a",
+      unified.config.devices?.get("pos-pair")?.devices?.get("seller")?.classifier,
+      "authored member classifiers must survive",
+    )
+  }
+
+  @Test
+  fun `saveTrailItems refuses a configuration session on a trail declaring a different cast`() {
+    val trailDir = File(trailsDir, "flow").apply { mkdirs() }
+    val existing = File(trailDir, TrailRecordings.UNIFIED_TRAIL_FILENAME).apply { writeText(multiDeviceTrailYaml) }
+
+    val result = TrailFileManager(trailsDir.absolutePath).saveTrailItems(
+      name = "flow",
+      recordedItems = recordedTrailItems("androidTap"),
+      platform = TrailblazeDevicePlatform.ANDROID,
+      selectedDeviceConfiguration = "web-phone",
+    )
+
+    assertFalse(result.success, "`web-phone` is not declared by this trail")
+    assertEquals(multiDeviceTrailYaml, existing.readText(), "the refused save must leave the trail untouched")
+  }
+
+  /** A trail whose only recording legs are keyed by the `pos-pair` configuration it declares. */
+  private val multiDeviceTrailYaml =
+    """
+    config:
+      id: flow
+      devices:
+        pos-pair:
+          devices:
+            seller:
+              classifier: lab-a
+            buyer:
+              classifier: lab-b
+    trail:
+      - step: Tap login
+        recording:
+          pos-pair:
+            - seedTap: {}
+    """.trimIndent() + "\n"
 
   @Test
   fun `saveTrail with no platform is refused rather than written to an unkeyed slot`() {
