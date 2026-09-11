@@ -590,7 +590,7 @@ sealed interface DriverNodeDetail {
      * which is the real runtime class.
      *
      * A canonical [AndroidAccessibility] selector names THIS one, because that is the only class
-     * name the tree it was recorded against ever showed. Case 5380717 taps a Settings row selected
+     * name the tree it was recorded against ever showed. A real trail taps a Settings row selected
      * as `classNameRegex: android.view.View` plus `index: 6` — no text, no id, no description —
      * and against runtime class names that matches nothing at all.
      */
@@ -605,9 +605,9 @@ sealed interface DriverNodeDetail {
      *
      * Here so a canonical [AndroidAccessibility] selector recorded against a grid resolves on this
      * backend as well. Grid position is often the ONLY thing that distinguishes a tile — an empty
-     * placeholder has no text, no id of its own and no content description — so without it case
-     * 5921801's "the favorites grid is two columns wide" is a question this tree cannot answer,
-     * and the bridge fails the constraint rather than guess.
+     * placeholder has no text, no id of its own and no content description — so without it a real
+     * trail's "the favorites grid is two columns wide" is a question this tree cannot answer, and
+     * the bridge fails the constraint rather than guess.
      */
     val collectionItemRowIndex: Int? = null,
 
@@ -1049,8 +1049,8 @@ sealed interface DriverNodeDetail {
      * node, and it exists for one reason: a canonical selector recorded against the accessibility
      * tree names the projected class, never a Compose concept. Without it every `classNameRegex`
      * recorded on a Compose surface is unanswerable here — and since Compose publishes
-     * `android.view.View` for anything unremarkable, that is a very common recorded shape (cases
-     * 5380716 and 5380717 select a Settings row as `android.view.View` plus an index).
+     * `android.view.View` for anything unremarkable, that is a very common recorded shape (two real
+     * trails select a Settings row as `android.view.View` plus an index).
      *
      * Null on a tree whose collector projects nothing; the bridge declines `classNameRegex` there
      * rather than matching everything.

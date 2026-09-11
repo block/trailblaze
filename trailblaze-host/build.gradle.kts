@@ -280,8 +280,10 @@ configurations.all {
   // for the current platform on first use and caches it at ~/.cache/trailblaze/playwright-driver/.
   exclude(group = "com.microsoft.playwright", module = "driver-bundle")
 
-  // Note: GraalVM JS/Rhino are NOT excluded — Maestro's Orchestra.initJsEngine() eagerly
-  // initializes GraalJsEngine which requires org.graalvm.polyglot at runtime.
+  // GraalVM's JS language and its shaded ICU data are excluded in the modules that assemble the
+  // uber JARs; `org.graalvm.polyglot` and `org.graalvm.sdk` stay, because Maestro's `Orchestra`
+  // constructs a `GraalJsEngine` before it dispatches a flow even though no Trailblaze path ever
+  // evaluates JavaScript.
 
   // Unused LLM provider clients (~6 MB total including AWS SDK tree) pulled transitively by
   // ai.koog:agents-mcp → prompt-executor-llms-all. Trailblaze only uses Anthropic, Google,
@@ -552,12 +554,12 @@ val generateVersionProperties by tasks.registering {
 // this Copy could run before anything had populated `node_modules/typescript/`, go NO-SOURCE,
 // and ship a JAR with no `_tsc.js` — silently, because the tolerance turns a packaging defect
 // into an empty resource instead of an error. Downstream, `trailblaze check --no-typecheck`
-// (what `pr_validate_ts_tooling.sh` runs) skips the phase that would have caught the missing
+// (what the CI TypeScript-tooling check runs) skips the phase that would have caught the missing
 // payload, so trail-recording validation skipped itself and the build still went green: 2 of 3
-// sampled mainline builds (12050, 12280) skipped it for every workspace with
-// `bundled tsc payload missing`, while 12362 ran it. Ordering the install first is what makes
-// the payload deterministic; `CheckCommand` treats a missing payload as fatal now that it can
-// only mean this task was bypassed.
+// sampled mainline builds skipped it for every workspace with `bundled tsc payload missing`, and
+// only the third ran it. Ordering the install first is what makes the payload deterministic;
+// `CheckCommand` treats a missing payload as fatal now that it can only mean this task was
+// bypassed.
 val copyTypescriptCompilerResources by tasks.registering(Copy::class) {
   group = "trailblaze"
   description = "Stages typescript@6.0.3's tsc + lib.*.d.ts files into build/ for inclusion in this module's JAR resources."
@@ -601,8 +603,8 @@ val verifyTypescriptCompilerPayload by tasks.registering {
   val tscJs = layout.buildDirectory.file(
     "generated-resources/typecheck/trails/config/typecheck/typescript/lib/_tsc.js",
   )
-  // Resolved paths, not repo-relative strings: this file is mirrored to the public repo, where the
-  // SDK sits at a different prefix.
+  // Resolved paths, not repo-relative strings: this module can be built under more than one
+  // root layout, and the SDK sits at a different prefix in each.
   val sdkDir = layout.projectDirectory.dir("../sdks/typescript").asFile
   inputs.files(copyTypescriptCompilerResources)
   outputs.upToDateWhen { false }
@@ -644,12 +646,11 @@ val copyScriptedToolWrapperTemplate by tasks.registering(Copy::class) {
 // how the runtime enumerates the files — JAR classpath "directories" can't be listed. Consumed by
 // `BundledAgentSkill`.
 //
-// Which skill ships is variant-gated: the Internal build bundles the *superset* skill maintained at
-// the repo root (extra internal-only references + scripts, with the shared references symlinked back
-// to the OSS copy — `Sync` dereferences those symlinks so their content lands in the jar). The OSS
-// build bundles the public skill that lives alongside this module. The Internal path resolves
-// against `rootDir`, which is the internal repo root only in the internal Gradle build; in the OSS
-// mirror `trailblaze.variant` is unset, so that branch is never taken.
+// Which skill ships is variant-gated. By default the build bundles the skill that lives alongside
+// this module. Setting `trailblaze.variant=Internal` instead bundles a skill from the build root,
+// which lets a downstream build layer its own references and scripts on top; `Sync` dereferences
+// symlinks so linked content lands in the jar either way. With the property unset — the normal case
+// — that branch is never taken.
 val agentSkillSourceDir: File =
   if (providers.gradleProperty("trailblaze.variant").orNull == "Internal") {
     rootDir.resolve(".claude/skills/trailblaze")

@@ -36,7 +36,7 @@ class ExistingTrailTest {
   fun `a named file with unified content is unified despite its legacy-looking filename`() {
     // A unified trail stored under a named `*.trail.yaml` (content-detected upstream). Its filename
     // looks legacy, but the content signal must suppress the bogus filename-derived platform chips.
-    val trail = existing("case_5735240.trail.yaml", isUnifiedContent = true)
+    val trail = existing("case_1002.trail.yaml", isUnifiedContent = true)
     assertFalse(trail.isUnifiedTrailFile, "the filename check alone does not recognize it")
     assertTrue(trail.isUnified, "the content signal recognizes it")
     assertNull(trail.platform, "no filename-derived platform for a unified trail")

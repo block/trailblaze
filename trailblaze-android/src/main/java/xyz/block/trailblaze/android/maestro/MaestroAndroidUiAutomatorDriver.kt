@@ -1,11 +1,7 @@
 package xyz.block.trailblaze.android.maestro
 
-import android.bluetooth.BluetoothManager
-import android.content.Context
 import android.content.Intent
 import android.net.Uri
-import android.net.wifi.WifiManager
-import android.telephony.TelephonyManager
 import android.util.Log
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
@@ -35,6 +31,7 @@ import xyz.block.trailblaze.android.accessibility.TrailblazeAccessibilityService
 import xyz.block.trailblaze.android.uiautomator.AndroidOnDeviceUiAutomatorScreenState
 import xyz.block.trailblaze.android.uiautomator.ComposeSemanticsCollapseDetector
 import xyz.block.trailblaze.setofmark.android.AndroidBitmapUtils.toByteArray
+import xyz.block.trailblaze.toolcalls.commands.NetworkConnectionTrailblazeTool
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.utils.Ext.toViewHierarchyTreeNode
 import java.io.File
@@ -189,21 +186,12 @@ object MaestroAndroidUiAutomatorDriver : Driver {
   }
 
   /**
-   * We need to simulate airplane mode on-device because we can't toggle it programmatically on non rooted devices.
+   * Real airplane mode, read through [AdbCommandUtil.isAirplaneModeEnabled] — the one Android
+   * definition of that read, shared with the accessibility driver. See it for why the flag is read
+   * directly rather than inferred from the radios, what an unreadable flag answers, and the
+   * asymmetry with [setAirplaneMode] that this leaves on `toggleAirplaneMode`.
    */
-  private fun isSimulatedAirplaneModeEnabled(): Boolean = withInstrumentation {
-    val wifiManager = context.getSystemService(Context.WIFI_SERVICE) as WifiManager
-    val telephonyManager = context.getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
-    val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
-
-    val isWifiOn = wifiManager.isWifiEnabled
-    val isDataOn = telephonyManager.isDataEnabled
-    val isBluetoothOn = bluetoothManager.adapter.isEnabled
-
-    !isWifiOn && !isDataOn && !isBluetoothOn
-  }
-
-  override fun isAirplaneModeEnabled(): Boolean = isSimulatedAirplaneModeEnabled()
+  override fun isAirplaneModeEnabled(): Boolean = AdbCommandUtil.isAirplaneModeEnabled()
 
   override fun isKeyboardVisible(): Boolean = withUiAutomation {
     windows.any { it.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD }
@@ -317,16 +305,23 @@ object MaestroAndroidUiAutomatorDriver : Driver {
     InstrumentationUtil.scrollVertical(deviceInfo())
   }
 
+  /**
+   * Maestro's one-knob `setAirplaneMode`, stood in for by switching the radios
+   * [NetworkConnectionTrailblazeTool.androidMaestroAirplaneModeRadioCommands] names — the same set
+   * every other Android driver switches.
+   *
+   * Real airplane mode IS settable from the shell (`cmd connectivity airplane-mode`), and the
+   * `networkConnection` tool now does exactly that. It is deliberately not done here: this
+   * override is what a raw `mobile_maestro: setAirplaneMode` lowers to, its existing meaning is
+   * "take the radios down", and real airplane mode leaves wifi up — so swapping it would leave
+   * those trails online.
+   *
+   * Whether a radio actually switched is not checked, for the reason given on
+   * `AccessibilityDeviceManager.executeSetAirplaneMode`.
+   */
   override fun setAirplaneMode(enabled: Boolean) {
-    val enableOrDisable = if (enabled) "disable" else "enable"
-    val command = listOf(
-      "svc wifi $enableOrDisable",
-      "svc data $enableOrDisable",
-      "svc bluetooth $enableOrDisable",
-    )
-
-    for (cmd in command) {
-      AdbCommandUtil.execShellCommand(cmd)
+    NetworkConnectionTrailblazeTool.androidMaestroAirplaneModeRadioCommands(enabled).forEach { (_, command) ->
+      AdbCommandUtil.execShellCommand(command)
     }
   }
 

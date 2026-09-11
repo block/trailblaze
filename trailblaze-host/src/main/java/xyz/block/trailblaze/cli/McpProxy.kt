@@ -2,6 +2,9 @@ package xyz.block.trailblaze.cli
 
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
+import io.ktor.client.network.sockets.ConnectTimeoutException
+import io.ktor.client.network.sockets.SocketTimeoutException
+import io.ktor.client.plugins.HttpRequestTimeoutException
 import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.plugins.timeout
 import io.ktor.client.request.get
@@ -48,6 +51,26 @@ import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDevicePort
 import xyz.block.trailblaze.devices.WebInstanceIds
 import xyz.block.trailblaze.ui.TrailblazeDesktopUtil
+
+/** What a `/ping` probe learned about the daemon port. */
+enum class DaemonProbe {
+  /** A daemon answered. */
+  REACHABLE,
+
+  /**
+   * Nothing usable answered, and the port may still be free — a refused connection, a name that
+   * did not resolve, or an owner that replied non-2xx. A daemon can still appear here, so waiting
+   * for one is not wasted.
+   */
+  NO_ANSWER,
+
+  /**
+   * The connection was accepted and then went quiet past the probe's own timeout. Something owns
+   * this port without serving `/ping`, most often a daemon that wedged after binding it, so no
+   * daemon can bind it until that process goes away.
+   */
+  HELD_UNRESPONSIVE,
+}
 
 /**
  * Lightweight STDIO-to-HTTP proxy for MCP.
@@ -114,7 +137,7 @@ class McpProxy(
    * on the daemon's port — which a test cannot produce with a real socket, and which is precisely
    * the case where checking the port after the probe would proxy the agent to a device RPC server.
    */
-  private val daemonReachableOverride: (() -> Boolean)? = null,
+  private val daemonProbeOverride: (() -> DaemonProbe)? = null,
 ) {
 
   /** Test/prod seam: whether this proxy runs in human-approvable permission mode. */
@@ -186,19 +209,33 @@ class McpProxy(
   // The daemon process we launched (if any) -- prevents double-launching
   private val daemonProcess = AtomicReference<Process?>(null)
 
-  // True iff [waitForDaemon] hit its [DAEMON_WAIT_TIMEOUT_SECONDS] deadline
-  // without ever seeing a reachable daemon. Read by [forwardRequest]: when set,
-  // the very first request after startup short-circuits to a JSON-RPC error
-  // envelope on ConnectException instead of spinning for another `maxRetryMs`
-  // (default 120s). Without this, the user-visible "daemon unavailable" surface
-  // would land at ~3 minutes total (60s startup wait + 120s forwardRequest
-  // retry) instead of the ~60s the startup wait advertises. Cleared by the
-  // first successful forwardRequest so a daemon that recovers mid-session
-  // doesn't keep getting the fast-fail behavior.
+  // True iff [waitForDaemon] gave up on ever seeing a reachable daemon -- either because it
+  // exhausted its [DAEMON_WAIT_TIMEOUT_SECONDS] deadline, or because it established up front that
+  // no daemon can appear on this port at all (nothing here will start one, or nothing could bind
+  // it). Read by [forwardRequest]: when set, the very first request short-circuits to a JSON-RPC
+  // error envelope instead of spinning for another `maxRetryMs` (default 120s), so a failure
+  // already established once is not re-established on the client's clock. Cleared by the first
+  // successful forwardRequest so a daemon that recovers mid-session doesn't keep getting the
+  // fast-fail behavior.
   // Internal rather than private so tests can assert the fast-fail state itself, not just the
   // branch that sets it — dropping the set() while keeping the branch would silently restore the
   // full maxRetryMs spin.
   internal val daemonStartupFailed = AtomicBoolean(false)
+
+  /**
+   * Set when the daemon port is held by something that accepts connections without answering
+   * `/ping` (see [DaemonProbe.HELD_UNRESPONSIVE]).
+   *
+   * Separate from [daemonStartupFailed] because the two need opposite handling in
+   * [forwardRequest]. That flag's fast-fail hangs off `ConnectException`, which a held port never
+   * raises: the POST is accepted and then goes quiet until `requestTimeoutMillis` (5 minutes),
+   * so the client waits five minutes for its first response. Every other startup failure leaves
+   * the port refusing connections, where `ConnectException` arrives immediately and the existing
+   * path is correct.
+   *
+   * Internal so a test can assert the state, not just the branch that sets it.
+   */
+  internal val daemonPortHeldUnresponsive = AtomicBoolean(false)
 
   fun run(): Int {
     System.setProperty("java.awt.headless", "true")
@@ -383,9 +420,31 @@ class McpProxy(
     // and proxy the agent to that device.
     if (refuseDeviceAllocatablePort(log)) return false
 
-    if (daemonReachable()) {
-      log("Daemon is reachable.")
-      return true
+    when (probeDaemon()) {
+      DaemonProbe.REACHABLE -> {
+        log("Daemon is reachable.")
+        return true
+      }
+
+      // Nothing we start can bind a port another process already holds, so starting a daemon and
+      // then polling for it is a full DAEMON_WAIT_TIMEOUT_SECONDS spent on an impossible outcome —
+      // and the MCP client sees none of it, just a minute of silence before its first response.
+      // Fail fast instead: the first forwarded request returns the "daemon unavailable" envelope,
+      // and because a later successful forward clears daemonStartupFailed, the session recovers on
+      // its own once the port is free.
+      DaemonProbe.HELD_UNRESPONSIVE -> {
+        log(
+          "Something on port $port accepted the connection but did not answer /ping — no daemon " +
+            "can bind that port, so this proxy is not starting one. It may be a wedged daemon, or " +
+            "one busy with another run; see who owns it with: " +
+            "lsof -nP -iTCP:$port -sTCP:LISTEN",
+        )
+        daemonStartupFailed.set(true)
+        daemonPortHeldUnresponsive.set(true)
+        return true
+      }
+
+      DaemonProbe.NO_ANSWER -> Unit
     }
 
     // With auto-start disabled, no daemon will ever appear on its own — polling the full
@@ -401,12 +460,23 @@ class McpProxy(
     }
 
     log("Daemon not running -- attempting to start...")
-    startDaemon(log)
+    if (!startDaemon(log)) {
+      // Nothing can arrive on this port, so the deadline below has nothing to wait out. Same
+      // fast-fail as the kill-switch exit above: the first forwarded request returns the "daemon
+      // unavailable" error envelope now, and a later request retries from scratch.
+      daemonStartupFailed.set(true)
+      return true
+    }
 
     val deadline = System.currentTimeMillis() + DAEMON_WAIT_TIMEOUT_SECONDS * 1000L
     var attempts = 0
     while (!shutdownRequested.get()) {
-      if (daemonReachable()) {
+      // Only REACHABLE ends the wait. A daemon we just started has its listening socket bound
+      // before it serves routes, so the kernel completes the connect and the probe reads exactly
+      // like a held port — treating that as unrecoverable here would abandon the daemon this loop
+      // is waiting for. The pre-start verdict above is the only one taken before we spawned
+      // anything, which is what makes it trustworthy.
+      if (probeDaemon() == DaemonProbe.REACHABLE) {
         log("Daemon is reachable.")
         return true
       }
@@ -423,55 +493,110 @@ class McpProxy(
       attempts++
       if (attempts % DAEMON_START_RETRY_SECONDS == 0) {
         log("Still waiting for daemon... ($attempts seconds) -- retrying start...")
-        startDaemon(log)
+        if (!startDaemon(log)) {
+          daemonStartupFailed.set(true)
+          return true
+        }
       }
       Thread.sleep(retryIntervalMs)
     }
     return true
   }
 
-  /** [isDaemonReachable], or the injected probe when a test supplied one. */
-  private fun daemonReachable(): Boolean = daemonReachableOverride?.invoke() ?: isDaemonReachable()
+  /** [probeDaemonOverHttp], or the injected probe when a test supplied one. */
+  internal fun probeDaemon(): DaemonProbe = daemonProbeOverride?.invoke() ?: probeDaemonOverHttp()
 
   /**
-   * Check if the daemon is reachable via /ping.
+   * Ask `/ping` who holds the daemon port.
+   *
+   * A refused connection and a connection that is accepted and then goes quiet are both "not
+   * reachable", but they call for opposite responses: the first port is free for a daemon to bind,
+   * the second is not. Collapsing them is what let a wedged daemon cost the CLI a full startup
+   * wait — see [DaemonProbe.HELD_UNRESPONSIVE]; the `trailblaze` launcher script draws the same
+   * distinction from curl's exit code before any JVM starts.
    */
-  private fun isDaemonReachable(): Boolean {
+  private fun probeDaemonOverHttp(): DaemonProbe {
     return try {
       runBlocking {
         val response = httpClient.get(pingUrl) {
           timeout {
-            connectTimeoutMillis = 2_000
-            requestTimeoutMillis = 2_000
-            socketTimeoutMillis = 2_000
+            connectTimeoutMillis = PING_PROBE_TIMEOUT_MS
+            requestTimeoutMillis = PING_PROBE_TIMEOUT_MS
+            socketTimeoutMillis = PING_PROBE_TIMEOUT_MS
           }
         }
-        response.status.isSuccess()
+        // A non-2xx answer is still an answer, so the port's owner is talking to us and may yet
+        // become a daemon (a server that is still installing routes 404s /ping). Keep waiting.
+        if (response.status.isSuccess()) DaemonProbe.REACHABLE else DaemonProbe.NO_ANSWER
       }
+    } catch (_: ConnectTimeoutException) {
+      // Never connected, so nothing is proven about the port being held.
+      DaemonProbe.NO_ANSWER
+    } catch (_: HttpRequestTimeoutException) {
+      DaemonProbe.HELD_UNRESPONSIVE
+    } catch (_: SocketTimeoutException) {
+      DaemonProbe.HELD_UNRESPONSIVE
     } catch (_: Exception) {
-      false
+      DaemonProbe.NO_ANSWER
     }
   }
 
   /**
    * Start the daemon in headless mode.
    * Skips if a previously launched daemon process is still alive.
+   *
+   * @return true if waiting for a daemon to appear on this port is still worthwhile — either one
+   *   was launched, or one is already there and coming up. False means nothing can arrive, and the
+   *   caller should stop polling and surface the failure now rather than at its deadline.
    */
-  private fun startDaemon(log: (String) -> Unit) {
-    if (isDaemonAutoStartDisabled()) {
-      log("Daemon auto-start disabled via TRAILBLAZE_DISABLE_DAEMON_AUTOSTART. Start it manually with: trailblaze app")
-      return
-    }
+  private fun startDaemon(log: (String) -> Unit): Boolean {
     val existing = daemonProcess.get()
     if (existing != null && existing.isAlive) {
       log("Daemon process still starting -- skipping duplicate launch.")
-      return
+      return true
+    }
+
+    // Never put a second daemon on a port that already has an owner. The guard above only knows
+    // about daemons THIS proxy launched — a daemon started by another process, or one that is alive
+    // but wedged, is invisible to it, and both hold the port's listener. Spawning past them is how
+    // daemons pile up against a single device.
+    //
+    // The same decision the CLI's auto-start makes, from the same function, because the two used to
+    // reach opposite conclusions on the same port: a held-but-silent port made the CLI refuse at
+    // once and made this proxy poll a `/ping` nothing was ever going to send.
+    when (
+      daemonAutoStartAction(
+        autoStartDisabled = isDaemonAutoStartDisabled(),
+        hold = daemonPortHoldForAutoStart(port),
+      )
+    ) {
+      // "a listener", not "a daemon": the probe proves the port is held, not what holds it. Worth
+      // waiting for either way — a daemon mid-boot binds well before it serves.
+      DaemonAutoStartAction.WAIT_FOR_INCUMBENT -> {
+        log("Port $port already has a listener -- skipping duplicate launch and waiting for it to answer.")
+        return true
+      }
+
+      DaemonAutoStartAction.REFUSE_PORT_HELD -> {
+        log(
+          "Port $port is held but nothing on it accepted a connection -- a daemon cannot bind " +
+            "it, so no daemon will appear here. Not waiting.",
+        )
+        return false
+      }
+
+      DaemonAutoStartAction.REFUSE_AUTOSTART_DISABLED -> {
+        log("Daemon auto-start disabled via TRAILBLAZE_DISABLE_DAEMON_AUTOSTART. Start it manually with: trailblaze app")
+        return false
+      }
+
+      DaemonAutoStartAction.SPAWN -> Unit // fall through and actually spawn
     }
 
     val launcher = findLauncher()
     if (launcher == null) {
       log("Cannot auto-start daemon: trailblaze launcher not found. Start it manually with: trailblaze app")
-      return
+      return false
     }
 
     // `--foreground` makes the spawned child BE the daemon rather than spawn one and exit.
@@ -480,6 +605,18 @@ class McpProxy(
     // "the daemon is still coming up" instead of "the process that launched it hasn't
     // returned yet", which was true for a few milliseconds and then never again.
     val command = daemonSpawnArgv(launcher, foreground = true, headless = true)
+    val claimFile = daemonStartupClaimFile(port)
+    val claimOwner = when (val claim = claimDaemonStartup(claimFile)) {
+      is DaemonStartupClaim.Owner -> claim
+      is DaemonStartupClaim.Existing -> {
+        log("Daemon process ${claim.pid} is already starting -- skipping duplicate launch.")
+        return true
+      }
+      DaemonStartupClaim.Unavailable -> {
+        log("Cannot claim the daemon startup lock at ${claimFile.absolutePath}.")
+        return false
+      }
+    }
 
     // Log the argv whole, launcher path included. Which launcher resolved is the field that
     // localizes a broken installed spawn — and the bare filename can't answer it, since a PATH
@@ -498,10 +635,25 @@ class McpProxy(
       pb.redirectOutput(ProcessBuilder.Redirect.appendTo(daemonLogFile))
       pb.redirectError(ProcessBuilder.Redirect.appendTo(daemonLogFile))
       val process = pb.start()
+      if (!replaceDaemonStartupPid(claimOwner.ownerFile, process.pid())) {
+        process.destroy()
+        releaseDaemonStartupClaim(claimOwner.ownerFile)
+        log("Cannot record daemon startup PID at ${claimFile.absolutePath}.")
+        return false
+      }
+      if (scheduleDaemonStartupClaimReaper(claimFile, claimOwner.ownerFile, process.pid()) == null) {
+        process.destroy()
+        releaseDaemonStartupClaim(claimOwner.ownerFile)
+        log("Cannot monitor daemon startup claim at ${claimFile.absolutePath}.")
+        return false
+      }
       daemonProcess.set(process)
       log("Daemon process launched. Log: ${daemonLogFile.absolutePath}")
+      return true
     } catch (e: Exception) {
+      releaseDaemonStartupClaim(claimOwner.ownerFile)
       log("Failed to start daemon: ${e.message}")
+      return false
     }
   }
 
@@ -512,15 +664,18 @@ class McpProxy(
    * Returns the response body, or a JSON-RPC error if retries are exhausted.
    *
    * Fast-fail interaction with [waitForDaemon]: when [daemonStartupFailed] is
-   * set (waitForDaemon already exhausted its [DAEMON_WAIT_TIMEOUT_SECONDS]
-   * deadline), a ConnectException on the first attempt short-circuits the
-   * retry loop and emits the error envelope immediately — so the client sees
-   * "daemon unavailable" at ~60s total instead of ~180s (60s startup +
-   * default 120s retry window). The flag is cleared on the first successful
-   * httpPost so a daemon that recovers mid-session reverts to the normal
-   * retry behavior.
+   * set (waitForDaemon already established that no daemon is going to answer
+   * on this port), a transport error on the first attempt short-circuits the
+   * retry loop and emits the error envelope immediately, instead of spending
+   * the default 120s retry window re-establishing the same conclusion on the
+   * client's clock. The flag is cleared on the first successful httpPost so a
+   * daemon that recovers mid-session reverts to the normal retry behavior.
+   *
+   * A held port takes a different exit entirely ([daemonPortHeldUnresponsive]): it is answered
+   * before any POST, because the POST would be accepted and then hang for the full request
+   * timeout.
    */
-  private fun forwardRequest(jsonRpcRequest: String, log: (String) -> Unit): String? {
+  internal fun forwardRequest(jsonRpcRequest: String, log: (String) -> Unit): String? {
     trackForReplay(jsonRpcRequest)
 
     // JSON-RPC notifications have no "id" field -- daemon won't send a response.
@@ -529,6 +684,30 @@ class McpProxy(
       !Json.parseToJsonElement(jsonRpcRequest).jsonObject.containsKey("id")
     } catch (_: Exception) {
       false // Malformed JSON — treat as request (will get an error response)
+    }
+
+    // Answer now rather than posting into a socket that will never answer. A held port accepts the
+    // POST, so `httpPost` would block for the full requestTimeoutMillis — five minutes for the
+    // client's first response — and the ConnectException fast-fail below cannot help, because
+    // nothing refused the connection.
+    if (daemonPortHeldUnresponsive.get()) {
+      // Re-probed rather than latched: the user may have cleared the port since startup, and the
+      // session has to be able to recover without being restarted. One bounded probe is the price,
+      // against five minutes of posting into a black hole.
+      if (probeDaemon() == DaemonProbe.HELD_UNRESPONSIVE) {
+        if (isNotification) return null
+        val id = extractId(jsonRpcRequest) ?: "null"
+        log("Port $port is still held by a process that does not answer /ping -- not posting to it.")
+        return """{"jsonrpc":"2.0","id":$id,"error":{"code":-32000,"message":"Trailblaze daemon unavailable: port $port is held by a process that accepted the connection but did not answer /ping. Find its owner with: lsof -nP -iTCP:$port -sTCP:LISTEN"}}"""
+      }
+      log("Port $port $LOG_PORT_NO_LONGER_HELD")
+      daemonPortHeldUnresponsive.set(false)
+      // Both flags were set by the same held-port verdict, so both have to go. Left set, the
+      // startup-failure flag is consumed by the ConnectException below — which is exactly what a
+      // freed port produces — and that path breaks out of the retry loop *before* trying to start
+      // a daemon. The request the operator makes right after freeing the port would then fail
+      // anyway, reporting a startup deadline that has just been shown not to apply.
+      daemonStartupFailed.set(false)
     }
 
     val startTime = System.currentTimeMillis()
@@ -559,21 +738,29 @@ class McpProxy(
         if (daemonSessionId.getAndSet(null) != null) {
           log("Daemon unreachable -- attempting restart...")
         }
-        // Fast-fail: waitForDaemon already exhausted its deadline. Don't burn
-        // another `maxRetryMs` retrying — surface the failure to the client
-        // immediately so the user sees what's wrong at ~60s instead of ~3min.
+        // Fast-fail: waitForDaemon has already established that no daemon can answer here. Don't
+        // burn another `maxRetryMs` re-establishing that on the client's clock — surface it now.
         // CAS the flag to false so subsequent calls (if the client retries
         // after the error) get the normal retry behavior; the failure has
         // been surfaced once already.
         if (daemonStartupFailed.compareAndSet(true, false)) {
-          log("Daemon startup deadline already exhausted -- failing fast on first ConnectException.")
+          log(LOG_FAST_FAIL_CONNECTION_REFUSED)
           lastError = e.message
           break
         }
-        // Periodically attempt to restart the daemon on connection failure
+        // Periodically attempt to restart the daemon on connection failure.
+        //
+        // The refusal is honoured here too. This is the only call site that reaches the refusals at
+        // all — `waitForDaemon` returns before it whenever the kill switch is set — and without
+        // this, the second and later requests spend the whole `maxRetryMs` retrying a port
+        // `startDaemon` has just said nothing can arrive on. The first one gets away with it
+        // because the fast-fail above consumes `daemonStartupFailed`.
         val now = System.currentTimeMillis()
         if (now - lastDaemonStartAttempt > DAEMON_START_RETRY_SECONDS * 1000L) {
-          startDaemon(log)
+          if (!startDaemon(log)) {
+            lastError = e.message
+            break
+          }
           lastDaemonStartAttempt = now
         }
         lastError = e.message
@@ -587,8 +774,20 @@ class McpProxy(
             continue
           }
         }
+        // The same fast-fail as the ConnectException branch, for the same reason: waitForDaemon
+        // has already given up, so another `maxRetryMs` of retrying is time the MCP client spends
+        // waiting on an outcome that is not coming. Keyed on the flag rather than on the exception
+        // type because a port that cannot be bound does not necessarily REFUSE the connection --
+        // a listener with a full accept backlog makes it time out instead, which lands here and
+        // not above. Checked after the 404 branch so a session that only needs re-initializing
+        // still gets it.
+        if (daemonStartupFailed.compareAndSet(true, false)) {
+          log(LOG_FAST_FAIL_TRANSPORT_ERROR)
+          lastError = e.message
+          break
+        }
         lastError = e.message
-        log("Request error: ${e.message}")
+        log("$LOG_REQUEST_ERROR ${e.message}")
         Thread.sleep(retryIntervalMs)
       }
     }
@@ -1484,6 +1683,25 @@ class McpProxy(
     private const val DAEMON_START_RETRY_SECONDS = 15
 
     /**
+     * Log lines the fast-fail and recovery tests match on. Named constants rather than literals
+     * duplicated into the tests, because which branch spoke is the whole assertion in several of
+     * them — matching a loose substring meant an innocuous reword could silently make them pass on
+     * the wrong branch, or on none.
+     */
+    internal const val LOG_NO_DAEMON_CAN_ANSWER = "No daemon can answer on this port"
+    internal const val LOG_FAST_FAIL_CONNECTION_REFUSED = "$LOG_NO_DAEMON_CAN_ANSWER -- failing fast on a refused connection."
+    internal const val LOG_FAST_FAIL_TRANSPORT_ERROR = "$LOG_NO_DAEMON_CAN_ANSWER -- failing fast on a transport error."
+    internal const val LOG_PORT_NO_LONGER_HELD = "is no longer held -- resuming normal forwarding."
+    internal const val LOG_REQUEST_ERROR = "Request error:"
+
+    /**
+     * How long a single `/ping` probe waits. A daemon that is up answers in milliseconds, so this
+     * only has to outlast a loaded machine — and every second of it is a second the MCP client
+     * spends waiting for its first response.
+     */
+    private const val PING_PROBE_TIMEOUT_MS = 2_000L
+
+    /**
      * Upper bound on how long the proxy will block waiting for the daemon to become
      * reachable on startup. Without a cap, a missing launcher / wedged install /
      * bad port would make the proxy spin forever while the MCP client hangs. With
@@ -1593,6 +1811,12 @@ internal fun approvalDecisionResultText(
 internal fun isDaemonAutoStartDisabled(
   flag: String? = System.getenv("TRAILBLAZE_DISABLE_DAEMON_AUTOSTART"),
 ): Boolean = flag != null && (flag == "1" || flag.equals("true", ignoreCase = true))
+
+/** Explicit app starts bypass the kill-switch that governs implicit daemon auto-starts. */
+internal fun daemonAutoStartIsBlocked(
+  respectAutoStartDisable: Boolean,
+  flag: String? = System.getenv("TRAILBLAZE_DISABLE_DAEMON_AUTOSTART"),
+): Boolean = respectAutoStartDisable && isDaemonAutoStartDisabled(flag)
 
 /**
  * Launcher script filenames probed next to the running JAR, in preference order.

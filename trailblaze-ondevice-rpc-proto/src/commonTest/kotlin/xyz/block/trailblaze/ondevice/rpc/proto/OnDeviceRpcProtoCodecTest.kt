@@ -88,6 +88,7 @@ class OnDeviceRpcProtoCodecTest {
       argsSnapshot = mapOf("enabled" to "true"),
       sensitiveArgNames = listOf("token"),
       traceParent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+      deviceClassifierOverride = listOf("android", "phone", "es"),
     )
     val response = RunYamlResponse(
       sessionId = SessionId("session"),
@@ -266,7 +267,9 @@ class OnDeviceRpcProtoCodecTest {
       driverMigrationTreeNode = node.copy(nodeId = 99),
       pageContextSummary = "example/.CheckoutActivity",
       deviceClassifiers = listOf("android", "phone"),
+      runnerCapabilities = listOf("device-classifier-override"),
       capturedAtDeviceMs = 1_753_000_000_123L,
+      droppedNodeFetches = 4,
     ).apply {
       screenshotBytes = byteArrayOf(1, 2, 3, 4)
       annotatedScreenshotBytes = byteArrayOf(9, 8, 7)
@@ -287,10 +290,45 @@ class OnDeviceRpcProtoCodecTest {
     assertEquals(original.deviceHeight, decoded.deviceHeight)
     assertEquals(original.pageContextSummary, decoded.pageContextSummary)
     assertEquals(original.deviceClassifiers, decoded.deviceClassifiers)
+    assertEquals(original.runnerCapabilities, decoded.runnerCapabilities)
     assertEquals(original.trailblazeNodeTree, decoded.trailblazeNodeTree)
     assertEquals(original.driverMigrationTreeNode, decoded.driverMigrationTreeNode)
     assertEquals(original.capturedAtDeviceMs, decoded.capturedAtDeviceMs)
+    assertEquals(original.droppedNodeFetches, decoded.droppedNodeFetches)
     assertIs<DriverNodeDetail.AndroidAccessibility>(decoded.trailblazeNodeTree!!.driverDetail)
+  }
+
+  /**
+   * The drop count carries three distinct meanings and the binary transport has to preserve all
+   * three: a positive count says a subtree is missing, `0` says the tree holds everything the app
+   * advertised, and `null` says nobody could measure it. A host consumer that sees `0` will
+   * conclude absence from this tree; one that sees `null` falls back to how it behaved before the
+   * count existed. Collapsing `0` into `null` on the wire would quietly reopen the hole this field
+   * exists to close, and would do it only on host-orchestrated runs.
+   */
+  @Test
+  fun `a complete capture's zero drop count survives the wire as zero, not unknown`() {
+    fun roundTrip(droppedNodeFetches: Int?): Int? {
+      val original = GetScreenStateResponse(
+        viewHierarchy = ViewHierarchyTreeNode(),
+        screenshotBase64 = null,
+        deviceWidth = 100,
+        deviceHeight = 200,
+        droppedNodeFetches = droppedNodeFetches,
+      )
+      val encoded = OnDeviceRpcProtoCodec.run {
+        OnDeviceRpcProtoCodec.encode(
+          RpcResponseEnvelope(request_id = 1, get_screen_state = original.toProto()),
+        )
+      }
+      return OnDeviceRpcProtoCodec.run {
+        OnDeviceRpcProtoCodec.decodeResponse(encoded).get_screen_state!!.toModel().droppedNodeFetches
+      }
+    }
+
+    assertEquals(0, roundTrip(0))
+    assertEquals(7, roundTrip(7))
+    assertNull(roundTrip(null))
   }
 
   @Test

@@ -3,6 +3,7 @@ package xyz.block.trailblaze.host.driver
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import org.junit.Test
+import java.util.concurrent.ConcurrentLinkedQueue
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
@@ -78,7 +79,7 @@ class DescriptorDeviceDiscoveryTest {
   /** A plug-in that throws costs its own devices, not everyone else's. */
   @Test
   fun `a throwing descriptor does not sink the others`() {
-    val logs = mutableListOf<String>()
+    val logs = ConcurrentLinkedQueue<String>()
 
     val discovered = runBlocking {
       DescriptorDeviceDiscovery.discoverAll(
@@ -105,7 +106,7 @@ class DescriptorDeviceDiscoveryTest {
    */
   @Test
   fun `a hanging descriptor is timed out and the others still answer`() {
-    val logs = mutableListOf<String>()
+    val logs = ConcurrentLinkedQueue<String>()
 
     val discovered = runBlocking {
       DescriptorDeviceDiscovery.discoverAll(
@@ -139,7 +140,7 @@ class DescriptorDeviceDiscoveryTest {
    */
   @Test
   fun `a descriptor stuck in a blocking call is abandoned, not waited for`() {
-    val logs = mutableListOf<String>()
+    val logs = ConcurrentLinkedQueue<String>()
 
     val discovered = runBlocking {
       DescriptorDeviceDiscovery.discoverAll(

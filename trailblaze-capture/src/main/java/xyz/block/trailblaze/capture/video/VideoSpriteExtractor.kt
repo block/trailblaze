@@ -83,7 +83,7 @@ object VideoSpriteExtractor {
    * decision plus the final `-vf` chain. Lives alongside [SPRITE_META_FILENAME] on success
    * and alongside [FAILURE_MARKER_FILENAME] on failure. The motivating use case: CI silences
    * host-side `Console.log`, so when a sprite sheet comes back unexpectedly small (e.g. the
-   * 4-frame-from-87s K1 case in build trailblaze-ios-pr/11092), there's no way to tell from
+   * 4-frame-from-87s case seen in CI), there's no way to tell from
    * artifacts alone whether re-stamp fired, what ffprobe returned, or what synthetic rate was
    * chosen. This file makes the next regression self-diagnosing — it's part of every session
    * dir so it rides along with whatever artifact upload the CI pipeline runs.
@@ -98,7 +98,7 @@ object VideoSpriteExtractor {
    * don't extract frames from it at report-gen time) and let the timeline fall back to the
    * per-step screenshot slideshow.
    *
-   * The motivating failure mode is the K1 CI build (trailblaze-ios-pr/11092) where a 2-second
+   * The motivating failure mode is a CI run where a 2-second
    * mp4 was the only thing left from an 87-second recording; processing it produced 4 sprite
    * frames misleadingly stretched across the full timeline. Better to surface the disconnect
    * via marker + screenshot fallback than to ship a "video" that's nothing of the kind.
@@ -118,7 +118,7 @@ object VideoSpriteExtractor {
    * test's 11-second single-frame fixture, in particular — out of the broken bucket
    * regardless of how few frames they produce. The fractional ratio (10%) is conservative
    * enough that a static-screen recording where ffmpeg-replicate yielded "only" ~18% of
-   * expected still passes; the K1-style pathology (4 frames vs 174 expected ≈ 2.3% over
+   * expected still passes; the pathology this guards (4 frames vs 174 expected ≈ 2.3% over
    * an 87-second test) is well below it. False positives on this gate are tolerable —
    * the timeline falls back to the per-step screenshot slideshow, which is a strict
    * improvement on a sparse sprite stretched across many seconds.
@@ -128,7 +128,7 @@ object VideoSpriteExtractor {
 
   /**
    * Filename used by [writeFailureMarker] when sprite extraction bails out. Exposed as
-   * a constant so the CI smoke test (`cli_smoke_tests_common.sh`) and any other
+   * a constant so the CLI smoke suite in CI and any other
    * consumer can reference the same string without hardcoding it.
    *
    * **Overwrites on each failure.** [writeFailureMarker] uses `File.writeText`, so a session
@@ -419,8 +419,8 @@ object VideoSpriteExtractor {
         // maybeRestamp couldn't get the `fps=<sprite>` resampler to spread frames across the
         // wall-clock window, ffmpeg returns a count far below what the expected duration calls
         // for. Producing a sprite from that wreckage gives the timeline a "video" that's
-        // really just a handful of frames misleadingly stretched across many seconds (K1 CI,
-        // build trailblaze-ios-pr/11092 — 4 frames over 87s). Better to skip emission and let
+        // really just a handful of frames misleadingly stretched across many seconds (seen in
+        // CI — 4 frames over 87s). Better to skip emission and let
         // consumers fall back to the per-step screenshot slideshow.
         //
         // The gate only fires when (a) we have a wall-clock expected duration to compare

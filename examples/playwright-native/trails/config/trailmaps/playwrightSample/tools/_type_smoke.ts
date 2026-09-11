@@ -6,7 +6,7 @@
 //
 // HOW THIS FILE WORKS:
 //
-//   - The file is checked in. The runway CI step (`pr_validate_ts_tooling.sh`) runs
+//   - The file is checked in. The TypeScript tooling validation CI step runs
 //     `tsc --noEmit` here on every PR. Any regression in the strict-typing contract
 //     produces a `tsc` error and fails the build.
 //

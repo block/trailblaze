@@ -13,6 +13,7 @@ import xyz.block.trailblaze.host.recording.EffectiveStreamScreenshotConfig
 import xyz.block.trailblaze.config.project.TrailblazeWorkspaceConfigResolver
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
+import xyz.block.trailblaze.host.turbo.EffectiveTurboConfig
 import xyz.block.trailblaze.logs.client.TrailblazeJson
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.ui.models.TrailblazeServerState
@@ -372,6 +373,7 @@ class TrailblazeSettingsRepo(
         EffectiveStreamScreenshotConfig.enabled = it.streamScreenshotsEnabled ?: false
         EffectiveIosBaguetteVideoConfig.enabled = it.iosBaguetteVideoEnabled ?: false
         EffectiveDisableAnimationsConfig.enabled = it.disableAnimationsEnabled ?: false
+        EffectiveTurboConfig.enabled = it.turboEnabled ?: false
       },
     ),
   ).also { serverStateFlow ->
@@ -412,6 +414,7 @@ class TrailblazeSettingsRepo(
             newState.appConfig.streamScreenshotsEnabled ?: false
           EffectiveDisableAnimationsConfig.enabled =
             newState.appConfig.disableAnimationsEnabled ?: false
+          EffectiveTurboConfig.enabled = newState.appConfig.turboEnabled ?: false
         }
     }
   }

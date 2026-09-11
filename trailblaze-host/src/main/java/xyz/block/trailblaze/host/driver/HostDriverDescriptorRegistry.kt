@@ -10,14 +10,13 @@ import xyz.block.trailblaze.devices.TrailblazeDriverType
  * happened to load. That also means two apps can differ: a distribution that doesn't ship a driver
  * simply doesn't register it, and the driver is absent rather than half-present.
  *
- * **Conversion state.** Drivers are moving onto descriptors one group at a time. Call sites ask
- * [forDriverOrNull] first and fall back to their pre-existing `when (driverType)` arms, so an
- * unconverted driver behaves exactly as before. As each group converts, its arms are deleted; the
- * last one to go turns the remaining `when` into a plain registry lookup.
+ * Every driver now resolves through here — the `when (driverType)` arms that host discovery,
+ * screen-state capture and host runs used to carry are gone.
  *
- * Deliberate trade: for a converted driver the compiler no longer proves every site handles it —
- * an exhaustive `when` did. [validateCovers] replaces that with a startup check, and [forDriver]
- * throws a remedy rather than falling through. That swap is the point of the registry: the cost of
+ * Deliberate trade: the compiler no longer proves every site handles every driver, which an
+ * exhaustive `when` did. [forDriver] replaces that with a throw that names the driver and the
+ * remedy rather than falling through, and construction rejects a descriptor that declines a host
+ * run body for a driver dispatch routes to one. That swap is the point of the registry: the cost of
  * adding a driver stops scaling with the number of call sites.
  */
 class HostDriverDescriptorRegistry(
@@ -37,16 +36,33 @@ class HostDriverDescriptorRegistry(
         }
       }
       .mapValues { (_, claimants) -> claimants.single() }
+      .also { byType ->
+        // The type-level "no host run body" declaration, checked against the enum that decides
+        // where the driver actually dispatches. A driver may skip a run body only when BOTH
+        // properties hold: `DesktopDispatchDecision` sends `!executesToolsOnDevice` to
+        // HOST_IN_PROCESS_KOOG and `!hostRpcReachable` to HOST_DEFAULT, and both of those call
+        // `runHostYaml`. The two coincide today; requiring the conjunction means a driver that
+        // splits them later fails here rather than at the first host run.
+        val cannotRun = byType.filterValues { it is HostDriverDescriptor.OnDeviceTools }
+          .filterKeys { !(it.executesToolsOnDevice && it.hostRpcReachable) }
+        require(cannotRun.isEmpty()) {
+          "These descriptors declare HostDriverDescriptor.OnDeviceTools for a driver that " +
+            "dispatch routes to runHostYaml, so a host run of it would throw instead of running: " +
+            cannotRun.entries.joinToString(", ") { (driverType, descriptor) ->
+              "$driverType via ${descriptor::class.simpleName}"
+            } +
+            ". Implement HostDriverDescriptor directly and give it a runYaml body."
+        }
+      }
 
-  /** The descriptor for [driverType], or null when that driver hasn't been converted yet. */
+  /** The descriptor for [driverType], or null when this app hasn't plugged that driver in. */
   fun forDriverOrNull(driverType: TrailblazeDriverType): HostDriverDescriptor? =
     byDriverType[driverType]
 
   /**
    * The descriptor for [driverType].
    *
-   * Throws when there is none — reaching this from a converted call site means the driver is
-   * enabled without being plugged in, which [validateCovers] is meant to catch at startup.
+   * Throws when there is none — the driver is enabled in this app without being plugged into it.
    */
   fun forDriver(driverType: TrailblazeDriverType): HostDriverDescriptor =
     byDriverType[driverType] ?: error(
@@ -55,41 +71,8 @@ class HostDriverDescriptorRegistry(
         "Registered: ${byDriverType.keys.map { it.name }.sorted()}",
     )
 
-  /**
-   * Fails when a driver the app says it supports has no descriptor, so the mismatch surfaces at
-   * startup instead of when someone finally runs on that driver.
-   *
-   * Only checks drivers that have finished converting ([convertedDriverTypes]) — an unconverted
-   * one still has its `when` arms and needs no descriptor. And only in the direction that can
-   * strand a user: registering a descriptor for a driver the app doesn't currently enable is fine,
-   * since that is how a driver stays plugged in while switched off in settings.
-   */
-  fun validateCovers(supportedDriverTypes: Set<TrailblazeDriverType>) {
-    val missing = supportedDriverTypes
-      .filter { it in convertedDriverTypes && it !in byDriverType }
-      .map { it.name }
-      .sorted()
-    check(missing.isEmpty()) {
-      "These drivers are supported but have no HostDriverDescriptor: $missing. " +
-        "Register one per driver in this app config's hostDriverDescriptors."
-    }
-  }
-
   companion object {
-    /** No descriptors — every driver takes its pre-existing `when` arm. */
+    /** No descriptors — no driver resolves, which is what tests of the failure path want. */
     val EMPTY = HostDriverDescriptorRegistry()
-
-    /**
-     * Drivers that have finished converting and must therefore have a descriptor wherever they're
-     * supported. Grows as each group in the conversion lands; when it holds every entry, the
-     * fallback `when` arms are gone and this can be replaced by `TrailblazeDriverType.entries`.
-     */
-    val convertedDriverTypes: Set<TrailblazeDriverType> = setOf(
-      TrailblazeDriverType.REVYL_ANDROID,
-      TrailblazeDriverType.REVYL_IOS,
-      TrailblazeDriverType.COMPOSE,
-      TrailblazeDriverType.PLAYWRIGHT_NATIVE,
-      TrailblazeDriverType.PLAYWRIGHT_ELECTRON,
-    )
   }
 }

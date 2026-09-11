@@ -252,6 +252,16 @@ class CliCommandValidationTest {
     assertEquals(true, cmd.selfHeal)
   }
 
+  @Test
+  fun `trail parses attached --self-heal=false as an explicit false override`() {
+    val cmd = TrailCommand()
+    val cmdLine = CommandLine(cmd)
+
+    cmdLine.parseArgs("--self-heal=false", "any.trail.yaml")
+
+    assertEquals(false, cmd.selfHeal)
+  }
+
   @Scenario(
     title = "Run a trail via the deprecated 'trail' alias",
     commands = ["trailblaze trail flows/login.trail.yaml"],
@@ -1592,7 +1602,7 @@ class CliCommandValidationTest {
     // connected (post-#3456 autodetect would resolve a unique device and the
     // command would proceed). The env-aware path is covered by `toolbox with
     // TRAILBLAZE_DEVICE set ...` below and by the smoke-test in
-    // cli_smoke_tests_common.sh.
+    // the CLI smoke suite in CI.
     if (!System.getenv("TRAILBLAZE_DEVICE").isNullOrBlank()) return
     if (canAutoresolveSingleDevice) return
     val cmd = ToolboxCommand()
@@ -1609,8 +1619,8 @@ class CliCommandValidationTest {
     // (which writes TRAILBLAZE_DEVICE into the shell) lets bare `trailblaze
     // toolbox` succeed past the early-validation block without re-passing
     // `--device` on every call. We can only exercise this when the env var IS
-    // set in the test JVM, so the test is conditional. The smoke script in
-    // cli_smoke_tests_common.sh exercises the same flow end-to-end on CI.
+    // set in the test JVM, so the test is conditional. The CLI smoke suite in
+    // CI exercises the same flow end-to-end.
     val pinned = System.getenv("TRAILBLAZE_DEVICE")
     if (pinned.isNullOrBlank()) return
     withIsolatedAppDataDir {
@@ -1900,7 +1910,7 @@ class CliCommandValidationTest {
     //
     // Same env-availability conditional as `resolveCliDevice falls back to
     // TRAILBLAZE_DEVICE env var ...` — we don't mutate process env in unit tests.
-    // The smoke suite under `cli_smoke_tests_common.sh` exercises the end-to-end
+    // The CLI smoke suite in CI exercises the end-to-end
     // path with a real `env TRAILBLAZE_TARGET=...` subprocess.
     // Route through the production-mirror helper so `TRAILBLAZE_TARGET=clear`
     // (treated as unset by the resolver) doesn't make this test assert

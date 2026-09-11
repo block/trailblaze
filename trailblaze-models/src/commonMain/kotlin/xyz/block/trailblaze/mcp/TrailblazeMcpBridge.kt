@@ -12,6 +12,7 @@ import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetScreenStateResponse
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
+import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import kotlin.reflect.KClass
 import kotlin.time.Duration
 
@@ -97,6 +98,32 @@ interface TrailblazeMcpBridge {
     blocking: Boolean = false,
     traceId: TraceId? = null,
   ): String
+
+  /**
+   * Same routing as [executeTrailblazeTool], but returns the tool's own [TrailblazeToolResult]
+   * instead of a rendered string.
+   *
+   * **Nested dispatch must use this.** A scripted tool's `ctx.tools.<name>(...)` call is handed
+   * whatever the nested dispatch returns, and [executeTrailblazeTool] renders
+   * [TrailblazeToolResult.Success.structuredContent] to JSON *text* on its way out. Wrapping that
+   * text back up as a `Success(message = ...)` leaves `structuredContent` null, so a composing
+   * tool destructuring a typed result (`const { appIds } = await ctx.tools.listInstalledApps({})`)
+   * gets `undefined` — the defect behind #6653.
+   *
+   * Errors are thrown, matching [executeTrailblazeTool]; a returned [TrailblazeToolResult.Error]
+   * is a tool-reported failure that the caller may surface without unwinding its own dispatch.
+   *
+   * The default implementation wraps [executeTrailblazeTool]'s rendered string so existing
+   * bridges and test fakes keep compiling. It is deliberately lossy: **any bridge that can
+   * produce a typed result must override this**, or nested typed payloads die here.
+   */
+  suspend fun executeTrailblazeToolForResult(
+    tool: TrailblazeTool,
+    blocking: Boolean = false,
+    traceId: TraceId? = null,
+  ): TrailblazeToolResult = TrailblazeToolResult.Success(
+    message = executeTrailblazeTool(tool, blocking, traceId),
+  )
 
   /**
    * Ends the current session on the selected device.

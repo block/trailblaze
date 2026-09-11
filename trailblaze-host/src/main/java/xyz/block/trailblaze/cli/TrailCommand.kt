@@ -1,15 +1,19 @@
 package xyz.block.trailblaze.cli
 
+import com.charleskorn.kaml.Yaml
+import com.charleskorn.kaml.YamlMap
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonPrimitive
 import picocli.CommandLine
 import picocli.CommandLine.Command
 import picocli.CommandLine.Option
 import picocli.CommandLine.Parameters
 import xyz.block.trailblaze.capture.CaptureOptions
 import xyz.block.trailblaze.compose.driver.rpc.ComposeRpcServer
-import xyz.block.trailblaze.compose.driver.tools.ComposeToolSetIds
 import xyz.block.trailblaze.config.project.TrailDiscovery
 import xyz.block.trailblaze.config.project.TrailblazeWorkspaceConfigResolver
+import xyz.block.trailblaze.desktop.LlmTokenStatus
 import xyz.block.trailblaze.desktop.TrailblazeDesktopAppConfig
 import xyz.block.trailblaze.devices.TrailDeviceSelection
 import xyz.block.trailblaze.devices.TrailDeviceSelector
@@ -17,38 +21,39 @@ import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
-import xyz.block.trailblaze.host.rules.BasePlaywrightElectronTest
+import xyz.block.trailblaze.host.driver.HostDriverDescriptorRegistry
+import xyz.block.trailblaze.host.driver.ReferenceHostDriverDescriptors
 import xyz.block.trailblaze.host.yaml.MultiDeviceConfigurationResolver.DEVICE_BINDINGS_ENV_VAR
 import xyz.block.trailblaze.llm.LlmProviderEnvVarUtil
 import xyz.block.trailblaze.llm.RunYamlRequest
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.llm.TrailblazeReferrer
-import xyz.block.trailblaze.desktop.LlmTokenStatus
+import xyz.block.trailblaze.logs.client.temp.YamlJsonBridge
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.logs.model.getSessionStatus
 import xyz.block.trailblaze.logs.server.endpoints.CliDaemonCapabilities
 import xyz.block.trailblaze.logs.server.endpoints.CliRunRequest
 import xyz.block.trailblaze.logs.server.endpoints.CliRunResponse
+import xyz.block.trailblaze.logs.server.endpoints.CliStatusResponse
 import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.model.DesktopAppRunYamlParams
 import xyz.block.trailblaze.model.DeviceConnectionStatus
 import xyz.block.trailblaze.model.TrailExecutionResult
 import xyz.block.trailblaze.model.TrailblazeConfig
 import xyz.block.trailblaze.model.findById
-import xyz.block.trailblaze.playwright.tools.WebToolSetIds
 import xyz.block.trailblaze.recordings.TrailRecordings
 import xyz.block.trailblaze.recordings.UnifiedRecordingWriter
 import xyz.block.trailblaze.report.SkippedTrails
 import xyz.block.trailblaze.report.models.SOURCE_TYPE_GENERATED
 import xyz.block.trailblaze.report.models.SkippedTrail
+import xyz.block.trailblaze.report.strings.VisibleStringsLog
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.report.utils.TrailblazeYamlSessionRecording.generateUnifiedRecordedYaml
-import xyz.block.trailblaze.yaml.toRecordingTrailConfig
-import xyz.block.trailblaze.revyl.tools.RevylToolSetIds
-import xyz.block.trailblaze.toolcalls.TrailblazeToolSetCatalog
 import xyz.block.trailblaze.ui.TrailblazeDesktopApp
 import xyz.block.trailblaze.ui.TrailblazeDeviceManager
+import xyz.block.trailblaze.ui.resolveRunTargetApp
+import xyz.block.trailblaze.ui.unresolvedDeclaredTargetWarning
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.util.TrailYamlTemplateResolver
 import xyz.block.trailblaze.yaml.TrailArgBinder
@@ -57,12 +62,8 @@ import xyz.block.trailblaze.yaml.TrailConfig
 import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.TrailblazeYaml
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
+import xyz.block.trailblaze.yaml.toRecordingTrailConfig
 import xyz.block.trailblaze.yaml.unified.UnifiedTrailAdapter
-import com.charleskorn.kaml.Yaml
-import com.charleskorn.kaml.YamlMap
-import kotlinx.serialization.json.JsonElement
-import kotlinx.serialization.json.JsonPrimitive
-import xyz.block.trailblaze.logs.client.temp.YamlJsonBridge
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.Paths
@@ -161,6 +162,17 @@ open class TrailCommand : Callable<Int> {
     ],
   )
   var devices: List<String> = emptyList()
+
+  @Option(
+    names = ["--device-classifier"],
+    paramLabel = "<catalog-key>",
+    description = [
+      "Select a locale/variant-qualified recording for this run (for example " +
+        "`ios-iphone-es`). The key must refine the connected device's detected classifiers. " +
+        "Only valid for a single-device run.",
+    ],
+  )
+  var deviceClassifier: String? = null
 
   @Option(
     names = ["--all-devices"],
@@ -391,9 +403,9 @@ open class TrailCommand : Callable<Int> {
   @Option(
     names = ["--max-llm-calls"],
     description = [
-      "Cap the number of LLM calls per objective for the legacy TRAILBLAZE_RUNNER agent. " +
+      "Cap the number of LLM calls per objective for the TRAILBLAZE_RUNNER and KOOG_STRATEGY_GRAPH agents. " +
         "Useful on metered or expensive providers to cut off a stuck self-heal loop. " +
-        "Must be a positive integer. Default: 25 (the runner's built-in cap). " +
+        "Must be a positive integer. Default: 25 (both agents' built-in cap). " +
         "Not compatible with --agent MULTI_AGENT_V3."
     ]
   )
@@ -443,7 +455,7 @@ open class TrailCommand : Callable<Int> {
   // Deprecated alias. Kept for one cycle so existing scripts that pass --no-record
   // keep working — but with a one-time stderr warning so users notice during the
   // deprecation window. Removal targets the next minor release after callers
-  // (cli_smoke_tests_common.sh, skill docs) migrate to --no-save-recording.
+  // (the CLI smoke suite, skill docs) migrate to --no-save-recording.
   @Option(
     names = ["--no-record"],
     description = ["[Deprecated] Alias for --no-save-recording."],
@@ -488,6 +500,21 @@ open class TrailCommand : Callable<Int> {
     description = ["RPC port for Compose driver connections (default: ${ComposeRpcServer.COMPOSE_DEFAULT_PORT})"]
   )
   var composePort: Int = ComposeRpcServer.COMPOSE_DEFAULT_PORT
+
+  @Option(
+    names = ["--turbo"],
+    description = [
+      "Turbo mode: let the Android app under test report when it is idle so the driver waits " +
+        "less after each action, instead of watching for its screen to go quiet. Each wait ends " +
+        "at whichever answer comes first, so this can only make a run faster, never slower. " +
+        "Needs an app signed with a key this build carries a helper for (debug and internal " +
+        "builds; not release or beta) — a run that can't use it says so and runs at normal " +
+        "speed. When neither flag is passed, inherits TRAILBLAZE_TURBO and the saved " +
+        "`trailblaze config turbo` setting.",
+    ],
+    negatable = true,
+  )
+  var turbo: Boolean? = null
 
   @Option(
     names = ["--capture-video"],
@@ -723,6 +750,23 @@ open class TrailCommand : Callable<Int> {
     // (as before); several = explicit fan-out (one run per device). Empty = resolve a default.
     val explicitDevices = devices.map { it.trim() }.filter { it.isNotBlank() }
 
+    val requestedDeviceClassifiers = try {
+      deviceClassifier?.let(DeviceClassifierResolver::parseClassifierKey).orEmpty()
+    } catch (e: IllegalArgumentException) {
+      Console.error("Error: ${e.message}")
+      return TrailblazeExitCode.MISUSE.code
+    }
+    resolvedDeviceClassifierOverride = requestedDeviceClassifiers
+
+    if (requestedDeviceClassifiers.isNotEmpty() && (allDevices || explicitDevices.size > 1)) {
+      reportCliError(
+        verb = "Trail run",
+        reason = "--device-classifier only supports a single-device run",
+        hint = "run one device at a time when selecting a locale/variant-qualified recording",
+      )
+      return TrailblazeExitCode.MISUSE.code
+    }
+
     // `--device` and `--all-devices` are conflicting ways to say which devices to run on — reject
     // the combination (an explicit list would otherwise silently win and no-op `--all-devices`).
     // Validated here, before any `parent` access, so it exits MISUSE up front like the other
@@ -895,15 +939,23 @@ open class TrailCommand : Callable<Int> {
     val daemon = DaemonClient(port = daemonPort)
     if (!noDaemon) {
       if (daemon.isRunningBlocking()) {
+        // The CLI and daemon can come from different JARs after an in-place version switch.
+        // Surface the server's identity before delegating so the version that will actually run
+        // the trail is visible even when the status endpoint is from an older daemon.
+        val daemonStatus = daemon.getStatusBlocking()
+        Console.info(daemonVersionLine(daemonStatus, daemonPort))
         // The invocation is correct here and the environment isn't, so this is INFRA_FAILED, not
         // MISUSE — a calling shell must be able to tell "restart your daemon" from "fix your flags".
-        val capabilities = { daemon.getStatusBlocking()?.capabilities }
+        val capabilities = { daemonStatus?.capabilities }
         val delegationRejection = perRunDeviceBindingsRejection(
           requestsPerRunDeviceBindings =
             parsedDeviceBinds.isNotEmpty() || deviceConfiguration != null,
           daemonCapabilities = capabilities,
         ) ?: snapshotBaselineRejection(
           requestsSnapshotBaseline = resolvedSnapshotBaseline() != null,
+          daemonCapabilities = capabilities,
+        ) ?: deviceClassifierRejection(
+          requestsDeviceClassifier = resolvedDeviceClassifierOverride.isNotEmpty(),
           daemonCapabilities = capabilities,
         )
         delegationRejection?.let { rejection ->
@@ -941,7 +993,15 @@ open class TrailCommand : Callable<Int> {
       explicitDevices.isEmpty() -> defaultDevice
       else -> null
     }
-    val deviceClassifiers = DeviceClassifierResolver.resolveFromSpec(planDevice)
+    val deviceClassifiers = try {
+      DeviceClassifierResolver.resolveOverride(
+        detected = DeviceClassifierResolver.resolveFromSpec(planDevice),
+        requested = resolvedDeviceClassifierOverride,
+      )
+    } catch (e: IllegalArgumentException) {
+      reportCliError(verb = "Trail run", reason = e.message.orEmpty())
+      return TrailblazeExitCode.MISUSE.code
+    }
     if (deviceClassifiers.isNotEmpty()) {
       Console.info("Device classifiers: ${deviceClassifiers.joinToString(", ") { it.classifier }}")
     }
@@ -1057,6 +1117,8 @@ open class TrailCommand : Callable<Int> {
     Console.info("\n" + SECTION_DIVIDER)
     Console.info("Results: $passed passed, $failed failed, $skipped skipped (${passed + failed} run(s) across ${plan.items.size} trail file(s))")
 
+    writeVisibleStrings(allNewSessionIds.map { it to app.deviceManager.logsRepo.logsDir })
+
     // Generate combined report
     if (!noReport && allNewSessionIds.isNotEmpty()) {
       try {
@@ -1122,7 +1184,15 @@ open class TrailCommand : Callable<Int> {
       explicitDevices.isEmpty() -> defaultDevice
       else -> null
     }
-    val deviceClassifiers = DeviceClassifierResolver.resolveFromSpec(planDevice)
+    val deviceClassifiers = try {
+      DeviceClassifierResolver.resolveOverride(
+        detected = DeviceClassifierResolver.resolveFromSpec(planDevice),
+        requested = resolvedDeviceClassifierOverride,
+      )
+    } catch (e: IllegalArgumentException) {
+      reportCliError(verb = "Trail run", reason = e.message.orEmpty())
+      return TrailblazeExitCode.MISUSE.code
+    }
     if (deviceClassifiers.isNotEmpty()) {
       Console.info("Device classifiers: ${deviceClassifiers.joinToString(", ") { it.classifier }}")
     }
@@ -1147,6 +1217,10 @@ open class TrailCommand : Callable<Int> {
     var passed = 0
     var failed = 0
     var skipped = 0
+    // Each delegated run and the directory the daemon wrote it into, so the visible-strings
+    // artifact lands on this path too. Collected rather than written inline because several runs
+    // can share one directory and each one costs a LogsRepo.
+    val delegatedSessions = mutableListOf<Pair<SessionId, File>>()
     // Same per-file worst-code tracking as the in-process path above. The daemon
     // RPC signals a partial failure class (`response.errorKind`): a daemon-side
     // MISUSE rejection maps to MISUSE via daemonRunFailureExitCode, but attempted
@@ -1239,6 +1313,7 @@ open class TrailCommand : Callable<Int> {
               testName = testName,
               driverType = driverType,
               deviceId = resolvedDeviceSpec,
+              deviceClassifierOverride = resolvedDeviceClassifierOverride.map { it.classifier },
               llmProvider = llmProvider,
               llmModel = llmModel,
               useRecordedSteps = effectiveUseRecordedSteps,
@@ -1249,6 +1324,7 @@ open class TrailCommand : Callable<Int> {
               agentImplementation = agent.takeIf { it != AgentImplementation.DEFAULT.name },
               selfHeal = selfHeal,
               captureVideo = resolvedCaptureVideo(),
+              turbo = turbo,
               captureLogcat = captureLogcat || captureAll,
               captureIosLogs = captureIosLogs || captureAll,
               // Tri-state: forward the explicit flag value when the user passed
@@ -1276,6 +1352,10 @@ open class TrailCommand : Callable<Int> {
               Console.info(progress)
               lastProgress = progress
             }
+
+            // Before the pass/fail split: a failed run still captured screens, and its strings are
+            // exactly what someone comparing against a green run wants to read.
+            response.sessionId?.let { delegatedSessions += SessionId(it) to sessionLogsDir(response, daemonLogsDir) }
 
             if (response.success) {
               Console.info("✅ PASSED")
@@ -1310,6 +1390,8 @@ open class TrailCommand : Callable<Int> {
         }
       }
     }
+
+    writeVisibleStrings(delegatedSessions)
 
     Console.info("\n" + SECTION_DIVIDER)
     Console.info("Results: $passed passed, $failed failed, $skipped skipped (${passed + failed} run(s) across ${plan.items.size} trail file(s))")
@@ -1817,6 +1899,7 @@ open class TrailCommand : Callable<Int> {
       initialArgs = initialArgs,
       deviceConfiguration = deviceConfiguration,
       deviceBindings = parsedDeviceBinds(),
+      deviceClassifierOverride = resolvedDeviceClassifierOverride.map { it.classifier },
     )
 
     return executeTrailAndCollectResults(app, runYamlRequest, trailConfig, config, file, pinnedSessionId)
@@ -1848,9 +1931,22 @@ open class TrailCommand : Callable<Int> {
     // produced a duplicate multi-line failure block.
     var lastProgress: String? = null
 
+    // Warnings raised while resolving this run fire before any session exists, so they are handed
+    // to the runner, which lands them in the session log once the session is created — see
+    // [DesktopAppRunYamlParams.sessionStartAdvisories].
+    val sessionStartAdvisories = mutableListOf<String>()
+    // Set by the resolver below when `config.target` named no loaded target, so turbo can decline
+    // rather than attach to the fallback's app — see [DesktopAppRunYamlParams.unresolvedDeclaredTarget].
+    var unresolvedDeclaredTarget: String? = null
+
     // Resolve target app: prefer trail config's `target` field, fall back to settings selection.
     // This ensures custom tools (e.g., myApp_launchSignedIn) are registered for the
     // correct app even when the desktop UI has a different app selected.
+    //
+    // The same resolver the daemon path uses, so `run` and `run --no-daemon` agree on both the
+    // precedence AND what happens when the declared target does not resolve. Sharing it is the
+    // point: this path used to fall back silently, which left turbo free to attach to the
+    // fallback's app and report the run as turbo — the transport should not change that.
     //
     // Deliberately does NOT consult the per-terminal target pin (`resolveCliTargetPin`).
     // Trails are reusable artifacts that travel between users and CI — if a trail needs
@@ -1858,8 +1954,21 @@ open class TrailCommand : Callable<Int> {
     // make the same trail behave differently between developers, which defeats the
     // determinism contract. The device pin IS consulted (above, in the resolver chain)
     // because the device a trail runs on is operator-scoped, not trail-scoped.
-    val targetTestApp = trailConfig?.target?.let { config.availableAppTargets.findById(it) }
-      ?: app.deviceManager.getCurrentSelectedTargetApp()
+    val targetTestApp = resolveRunTargetApp(
+      configTarget = trailConfig?.target,
+      // Nothing to forward: this process IS the run, so the caller's cwd is already this
+      // process's cwd — unlike the daemon path, which runs in a different directory than its
+      // caller and has to be told which one to anchor on.
+      callerWorkspaceDir = null,
+      findTargetById = { config.availableAppTargets.findById(it) },
+      resolveForCallerCwd = { app.deviceManager.getCurrentSelectedTargetApp() },
+      onDeclaredTargetUnresolved = { declared, fallback ->
+        val message = unresolvedDeclaredTargetWarning(declared, fallback)
+        Console.error(message)
+        sessionStartAdvisories += message
+        unresolvedDeclaredTarget = declared
+      },
+    )
     if (verbose) {
       Console.log("Target app: ${targetTestApp?.displayName ?: "None (using built-in tools only)"}")
     }
@@ -1868,6 +1977,8 @@ open class TrailCommand : Callable<Int> {
       forceStopTargetApp = false,
       runYamlRequest = runYamlRequest,
       targetTestApp = targetTestApp,
+      unresolvedDeclaredTarget = unresolvedDeclaredTarget,
+      sessionStartAdvisories = sessionStartAdvisories,
       // Same registry the session target resolves against above, so a multi-device
       // configuration's per-device `target:` override resolves here too.
       findTargetById = { id -> config.availableAppTargets.findById(id) },
@@ -1909,6 +2020,7 @@ open class TrailCommand : Callable<Int> {
       // video wants when neither video flag was passed — that's the tier the env var and
       // `config capture-video` live in. `--capture-all` folds in via `resolvedCaptureVideo`.
       captureVideo = resolvedCaptureVideo(),
+      turbo = turbo,
       captureLogcat = captureOptions.captureLogcat,
       captureIosLogs = captureOptions.captureIosLogs,
       // Same reason as the capture flags above: the daemon path carries this on `CliRunRequest`,
@@ -2053,6 +2165,53 @@ open class TrailCommand : Callable<Int> {
   internal fun sessionLogsDir(response: CliRunResponse, fallback: File): File =
     response.logsDir?.takeIf { it.isNotBlank() }?.let { File(it) } ?: fallback
 
+  /**
+   * Writes each session's visible strings from whichever logs directory produced it.
+   *
+   * Takes the directory per session rather than one repo, because the daemon-delegated path has no
+   * repo of its own and each response names the directory the daemon actually wrote into.
+   * Non-watching, so the one-shot CLI JVM is not held open by a FileWatcher thread, and unprimed,
+   * because priming parses and retains every historical session in the directory — which would put
+   * a heap cost proportional to the whole logs directory on the end of every single run.
+   *
+   * Not gated on `--no-report`: this is a data artifact a later locale or copy diff reads, not part
+   * of the HTML report, and it costs one file write.
+   */
+  private fun writeVisibleStrings(sessions: List<Pair<SessionId, File>>) {
+    sessions.groupBy({ it.second }, { it.first }).forEach { (logsDir, sessionIds) ->
+      val repo = LogsRepo(logsDir, watchFileSystem = false, primeSessionCache = false)
+      sessionIds.forEach { sessionId ->
+        try {
+          VisibleStringsLog.write(repo, sessionId)
+        } catch (e: Exception) {
+          Console.error(
+            "Failed to write ${VisibleStringsLog.FILE_NAME} for ${sessionId.value}: " +
+              "${e::class.simpleName}${e.message?.let { ": $it" }.orEmpty()}",
+          )
+        }
+      }
+    }
+  }
+
+  /**
+   * Every driver's tool classes, named explicitly for the YAML serializer that reads a session log
+   * back into a trail.
+   *
+   * Belt and braces, not load-bearing: `createTrailblazeYaml` unions this with the serializers it
+   * discovers from the `.tool.yaml` resources on the classpath, and today those already cover every
+   * class a descriptor names — `HostDriverDescriptorToolClassesTest` proves it and will say so if
+   * that stops being true. Passing the set anyway means a class-backed driver tool that ships
+   * without its `.tool.yaml` renders as itself rather than degrading to an unrecognized step.
+   *
+   * The reference set rather than `app.deviceManager.hostDriverDescriptors`, because the question
+   * is what CAN appear in a log for a driver, not what this distribution plugs in: a log can arrive
+   * from CI or another machine, a downstream distribution is entitled to omit a driver, and the
+   * daemon-delegated call site runs in a CLI JVM with no app at all.
+   */
+  internal val recordingToolDescriptors: HostDriverDescriptorRegistry by lazy {
+    HostDriverDescriptorRegistry(ReferenceHostDriverDescriptors.all())
+  }
+
   internal fun generateRecordingForSession(sessionId: SessionId, logsDir: File) {
     try {
       val sessionDir = File(logsDir, sessionId.value)
@@ -2115,26 +2274,9 @@ open class TrailCommand : Callable<Int> {
       // all tools that may appear in the session logs (e.g., Playwright tools are
       // not in AllBuiltInTrailblazeToolsForSerialization).
       val driverType = startedStatus?.trailblazeDeviceInfo?.trailblazeDriverType
-      val customToolClasses = when (driverType) {
-        TrailblazeDriverType.PLAYWRIGHT_NATIVE ->
-          TrailblazeToolSetCatalog.resolveForDriver(
-            driverType, WebToolSetIds.ALL,
-          ).toolClasses
-        TrailblazeDriverType.PLAYWRIGHT_ELECTRON ->
-          TrailblazeToolSetCatalog.resolveForDriver(
-            driverType, WebToolSetIds.ALL,
-          ).toolClasses + BasePlaywrightElectronTest.ELECTRON_BUILT_IN_TOOL_CLASSES
-        TrailblazeDriverType.COMPOSE ->
-          TrailblazeToolSetCatalog.resolveForDriver(
-            driverType, ComposeToolSetIds.ALL,
-          ).toolClasses
-        TrailblazeDriverType.REVYL_ANDROID,
-        TrailblazeDriverType.REVYL_IOS ->
-          TrailblazeToolSetCatalog.resolveForDriver(
-            driverType, RevylToolSetIds.ALL,
-          ).toolClasses
-        else -> emptySet()
-      }
+      val customToolClasses = driverType
+        ?.let { recordingToolDescriptors.forDriverOrNull(it)?.toolClasses(it) }
+        .orEmpty()
 
       // The on-disk intermediate is a unified trail document; the save-back step re-reads it and
       // merges this device's slot. A configuration session's legs are keyed by the configuration
@@ -2666,8 +2808,9 @@ open class TrailCommand : Callable<Int> {
    *      everyone in the workspace inherits the same cap without per-machine setup).
    *   4. Persisted per-machine `trailblaze config max-llm-calls` setting (individual
    *      developer's local fallback when the workspace file is silent).
-   *   5. `null` — the legacy [xyz.block.trailblaze.agent.TrailblazeRunner] falls back to its
-   *      own built-in [xyz.block.trailblaze.agent.TrailblazeRunner.DEFAULT_MAX_STEPS].
+   *   5. `null` — each agent falls back to its own built-in default of 25:
+   *      [xyz.block.trailblaze.agent.TrailblazeRunner.DEFAULT_MAX_STEPS] for the legacy runner,
+   *      `KoogStrategyGraphAgent.DEFAULT_MAX_LLM_CALLS` for the strategy-graph agent.
    *
    * Returns `null` (not a default integer) so the model-layer guard on `RunYamlRequest.init`
    * sees "unspecified" rather than a sentinel and only the runner constructor materializes
@@ -2769,6 +2912,9 @@ open class TrailCommand : Callable<Int> {
    * [resolvedMemorySeeds].
    */
   private var resolvedDeviceBinds: Map<String, String> = emptyMap()
+
+  /** Per-call validated value of `--device-classifier`, shared by both execution paths. */
+  private var resolvedDeviceClassifierOverride: List<TrailblazeDeviceClassifier> = emptyList()
 
   /**
    * Returns the resolved `--bind NAME=DEVICE_ID` map for the in-flight [call], falling back to a
@@ -2941,6 +3087,9 @@ open class TrailCommand : Callable<Int> {
   }
 
   companion object {
+    internal fun daemonVersionLine(status: CliStatusResponse?, port: Int): String =
+      "Daemon version: ${status?.version ?: if (status == null) "unknown (status unavailable)" else "unknown (not reported by daemon)"} (port $port)"
+
     /**
      * Parses `--memory KEY=VAL` (and `--secret KEY=VAL`) entries into a flat string
      * map. Split on the first `=` so values may contain `=` (e.g.
@@ -3052,6 +3201,18 @@ open class TrailCommand : Callable<Int> {
       if (CliDaemonCapabilities.SNAPSHOT_BASELINE in capabilities) return null
       return "the running daemon predates --snapshot-baseline, so it would ignore the flag and " +
         "run this trail without comparing its snapshots to any baseline"
+    }
+
+    /** Refuses silent delegation to a daemon that would discard `--device-classifier`. */
+    internal fun deviceClassifierRejection(
+      requestsDeviceClassifier: Boolean,
+      daemonCapabilities: () -> Set<String>?,
+    ): String? {
+      if (!requestsDeviceClassifier) return null
+      val capabilities = daemonCapabilities() ?: return null
+      if (CliDaemonCapabilities.DEVICE_CLASSIFIER in capabilities) return null
+      return "the running daemon predates --device-classifier, so it would ignore the flag and " +
+        "select recordings using only the connected device's physical classifiers"
     }
 
     /**
@@ -3579,4 +3740,3 @@ internal data class TrailExecutionPlan(
   val items: List<TrailExecutionItem>,
   val filteredOutByTag: Int,
 )
-

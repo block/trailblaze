@@ -8,6 +8,7 @@ import org.junit.Test
 import xyz.block.trailblaze.cli.CliRunDriverResolution
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDriverType
+import xyz.block.trailblaze.yaml.TrailConfig
 
 /**
  * Guards the runner-side read of a trail's driver pin
@@ -36,6 +37,22 @@ class DesktopYamlRunnerDriverPinTest {
       resolution is CliRunDriverResolution.Resolved,
     )
     return (resolution as CliRunDriverResolution.Resolved).driverType
+  }
+
+  @Test
+  fun `device locale is suppressed for skipped trails`() {
+    assertNull(
+      DesktopYamlRunner.requestedDeviceLocale(
+        TrailConfig(locale = "es", skip = "not supported on this device"),
+      ),
+    )
+    assertEquals("es", DesktopYamlRunner.requestedDeviceLocale(TrailConfig(locale = "es")))
+  }
+
+  @Test
+  fun `device locale forces a fresh target process`() {
+    assertTrue(DesktopYamlRunner.shouldForceStopTargetApp(requested = false, locale = "es"))
+    assertTrue(DesktopYamlRunner.shouldForceStopTargetApp(requested = true, locale = null))
   }
 
   @Test

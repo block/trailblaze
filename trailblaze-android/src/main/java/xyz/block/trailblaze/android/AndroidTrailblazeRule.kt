@@ -11,12 +11,18 @@ import maestro.orchestra.Command
 import org.junit.runner.Description
 import xyz.block.trailblaze.AdbCommandUtil
 import xyz.block.trailblaze.AgentMemory
+import xyz.block.trailblaze.AndroidDeviceLocale
 import xyz.block.trailblaze.AndroidAssetsUtil
 import xyz.block.trailblaze.AndroidMaestroTrailblazeAgent
 import xyz.block.trailblaze.MaestroTrailblazeAgent
 import xyz.block.trailblaze.android.accessibility.AccessibilityServiceScreenState
 import xyz.block.trailblaze.android.accessibility.AccessibilityTrailRunner
-import xyz.block.trailblaze.android.accessibility.InProcessIdleSettleClient
+import xyz.block.trailblaze.android.accessibility.ReplayCaptureOptions
+import xyz.block.trailblaze.android.accessibility.ScriptedToolBundleReuse
+import xyz.block.trailblaze.android.accessibility.InProcessIdleForegroundGate
+import xyz.block.trailblaze.android.accessibility.InProcessIdleAttacher
+import xyz.block.trailblaze.android.accessibility.OnDeviceTurbo
+import xyz.block.trailblaze.replay.ActionTrace
 import xyz.block.trailblaze.android.accessibility.AccessibilityTrailblazeAgent
 import xyz.block.trailblaze.android.accessibility.OnDeviceAccessibilityServiceSetup
 import xyz.block.trailblaze.android.accessibility.TrailblazeAccessibilityService
@@ -274,6 +280,21 @@ open class AndroidTrailblazeRule(
   protected open val agentAppId: String? get() = appIdForSession
 
   /**
+   * Which app turbo attaches the in-process idle detector to, when a run opts in with
+   * `trailblaze.turbo=true` (see [OnDeviceTurbo]).
+   *
+   * Defaults to the app this run already resolved for itself, so a lane that names a target gets
+   * turbo with no extra configuration. A bundle that knows its app without a target — the
+   * single-app farm bundles do — overrides this rather than declaring a target it has no other use
+   * for. Null means "this run could not say", and turbo then reports itself off instead of guessing.
+   *
+   * `trailblaze.inProcessIdle.targetApp` still overrides whatever this resolves to; that arg is how
+   * one bundle covers several applicationIds of the same app.
+   */
+  protected open val turboTargetAppId: String?
+    get() = InProcessIdleAttacher.resolveTargetAppId(defaultAppId = agentAppId ?: "").takeIf { it.isNotBlank() }
+
+  /**
    * Identity + version of the app under test for the session-start log — [agentAppId]
    * paired with the versions PackageManager reports for that package (the instrumentation APK
    * holds `QUERY_ALL_PACKAGES`, so any installed target is visible). Lazy for the same reason
@@ -415,14 +436,12 @@ open class AndroidTrailblazeRule(
       )
     ) {
       ScreenStateKind.ACCESSIBILITY -> {
-        // EXPERIMENTAL inprocess-idle race (see [InProcessIdleSettleClient]) — same routing as
+        // EXPERIMENTAL inprocess-idle race (see [InProcessIdleForegroundGate]) — same routing as
         // [AccessibilityDeviceManager.waitForReady]; only ever faster than the standard wait.
-        if (InProcessIdleSettleClient.isEnabled()) {
-          val winner = InProcessIdleSettleClient.raceIdleAgainstHeuristic(5_000L) { earlyExit ->
-            TrailblazeAccessibilityService.waitForSettled(earlyExit = earlyExit)
-          }
-          Console.log("[settle] screen-state provider via $winner")
-        } else {
+        val handled = InProcessIdleForegroundGate.settleUnderTurbo("screen-state provider", 5_000L) { earlyExit ->
+          TrailblazeAccessibilityService.waitForSettled(earlyExit = earlyExit)
+        }
+        if (!handled) {
           TrailblazeAccessibilityService.waitForSettled()
         }
         AccessibilityServiceScreenState(
@@ -510,6 +529,23 @@ open class AndroidTrailblazeRule(
     // Bind unconditionally — needed for both the accessibility driver (taps/swipes) and the
     // instrumentation driver (Compose semantic-tree exposure under UiAutomator2). See kdoc above.
     OnDeviceAccessibilityServiceSetup.ensureAccessibilityServiceReady()
+    // Turbo, when the run asked for it: attach the in-process idle detector so this run's settle
+    // gates race a true-idle signal. AFTER the accessibility bind, matching the ordering the farm
+    // bundles have always used (bind, attach, replay) — the attach restarts the TARGET app's
+    // process, which the service running in this instrumentation process is unaffected by, but the
+    // order is proven and there is no reason to try a new one. Never throws; a run that cannot
+    // attach says so and replays at heuristic speed.
+    //
+    // Only for the accessibility driver, which owns the settle gates that read the detector. Any
+    // other driver would pay the full cost of turbo — install, `am instrument`, and a restart of
+    // the TARGET APP'S PROCESS — for a signal nothing reads. That matters most when turbo is
+    // being measured: a turbo run compared against a non-turbo one must differ from it only in
+    // speed, and a pointless target-app restart on a non-accessibility cell is a behaviour
+    // difference, not a speed one. [applyPerTrailDriverOverrides] has already run, so the driver
+    // resolved here is final.
+    if (trailblazeLoggingRule.driverTypeOverride == TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY) {
+      OnDeviceTurbo.start(scope = description.displayName, targetAppId = turboTargetAppId)
+    }
     // Bind for migration-mode capture (delegated to the shared helper). Subclasses that
     // insert their own UiDevice operations between this call and the test body
     // (e.g. a downstream subclass's `onBeforeTest`) MUST call the helper again *after*
@@ -663,6 +699,12 @@ open class AndroidTrailblazeRule(
     // recorded tool runs and writes a TrailblazeSnapshotLog with both view-hierarchy trees,
     // so `migrate-trail` has a per-tool pre-fire snapshot to resolve against — closing the
     // gap where multi-tool recordings only get one captured screen state per LLM round.
+    //
+    // Names the driver rather than asking `AndroidAccessibilityServiceDrivers`, and stays that way:
+    // the real precondition is that `trailblazeAgent` is an `AccessibilityTrailblazeAgent`, which
+    // the hook below casts to and which only this driver builds. A second accessibility-service
+    // driver would satisfy the capability while failing that cast, wiring the hook up to snapshot
+    // nothing.
     val migrationCaptureEnabled =
       InstrumentationArgUtil.shouldCaptureSecondaryTree() &&
         trailblazeLoggingRule.driverTypeOverride == TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY
@@ -720,6 +762,12 @@ open class AndroidTrailblazeRule(
     trailFilePath: String?,
     useRecordedSteps: Boolean,
     sendSessionStartLog: Boolean,
+    /**
+     * True when THIS dispatch emits the session's `SessionEnded` log once this call returns — the
+     * signal that it owns the end of the session, and therefore that the driver's log lane has to
+     * be joined here rather than deferred into a next action that may never come.
+     */
+    sendSessionEndLog: Boolean,
   ): TrailblazeToolResult.Success? {
     // Resolve device classifiers BEFORE decoding so a v3 trail lowers with the
     // right closest-wins recording for this on-device runner. v1 inputs ignore
@@ -733,6 +781,7 @@ open class AndroidTrailblazeRule(
     val trailItems =
       trailblazeYaml.decodeTrailOrToolEnvelope(testYaml, deviceClassifiers = classifiers)
     val trailConfig = trailblazeYaml.extractTrailConfig(trailItems)
+    ActionTrace.mark(ActionTrace.Boundary.TRAIL_DECODED)
 
     // Honor `config.skip:` before sending SessionStarted — matches the CLI's pre-flight
     // `planTrailExecution` planner, which short-circuits Skip items without dispatching them
@@ -745,6 +794,10 @@ open class AndroidTrailblazeRule(
       )
       return null
     }
+
+    // A locale is a device setting, not an app launch argument. Apply it before the session starts
+    // so the session snapshot and every subsequently launched target process observe it.
+    trailConfig?.locale?.let { AndroidDeviceLocale.apply(it) }
 
     // Per-trail overrides (e.g. a `config.driver` flip) must land before the session-start
     // log below reads the device info, and before any lazy agent field is first touched.
@@ -812,9 +865,13 @@ open class AndroidTrailblazeRule(
     // `BaseTrailblazeAgent.runTrailblazeTools`'s own `lastSuccessResult` semantics — the trail's
     // terminal Success is what the host's `client.callTool(...)` consumer expects.
     var lastToolSuccess: TrailblazeToolResult.Success? = null
+    // Hoisted out of the `try` so the `finally` can release a retained bundle launch by session
+    // rather than releasing whatever happens to be retained — see [ScriptedToolBundleReuse.release].
+    var thisDispatchSessionId: xyz.block.trailblaze.logs.model.SessionId? = null
     try {
       val sessionId = (trailblazeLoggingRule.session
         ?: error("Session not available for QuickJS bundle launch")).sessionId
+      thisDispatchSessionId = sessionId
       if (quickjsToolBundles.isNotEmpty()) {
         // No `advertisementOverrides` here on purpose: these are caller-supplied target-declared
         // bundles (no YAML descriptor to source from at this site), so each advertises from its
@@ -832,10 +889,30 @@ open class AndroidTrailblazeRule(
         )
       }
 
-      toolsetQuickjsRuntime = launchToolsetScriptedToolBundles(
-        toolRepo = trailblazeToolRepo,
-        sessionId = sessionId,
-      )
+      // On the host-drives-the-loop path this method runs once per ACTION, so without the reuse
+      // gate every replayed action stands up the catalog's QuickJS bundles, registers their tools
+      // and tears the whole lot down again a few hundred milliseconds later — for a recorded tool
+      // that calls none of them. Reuse keys on the tool repo instance: the launch registers INTO a
+      // repo, so a launch can only be reused by a dispatch that resolves against the same one.
+      if (ReplayCaptureOptions.reuseToolBundlesEnabled()) {
+        // Claim-or-launch in one step, and the cache keeps the launch instead of this run's
+        // `finally`. Deciding and launching separately would let two overlapping dispatches of one
+        // session both launch into the repo they now share, and the second would die on the tool
+        // names the first registered — see [ScriptedToolBundleReuse.claimOrLaunch].
+        val reused = ScriptedToolBundleReuse.claimOrLaunch(sessionId, trailblazeToolRepo) {
+          launchToolsetScriptedToolBundles(toolRepo = trailblazeToolRepo, sessionId = sessionId)
+        }
+        if (reused) {
+          Console.log("[reused-tool-bundles] session=${sessionId.value} skipped launch and shutdown")
+        }
+      } else {
+        toolsetQuickjsRuntime = launchToolsetScriptedToolBundles(
+          toolRepo = trailblazeToolRepo,
+          sessionId = sessionId,
+        )
+      }
+
+      ActionTrace.mark(ActionTrace.Boundary.BUNDLES_LAUNCHED)
 
       trailItems.forEach { item ->
         val itemResult = when (item) {
@@ -873,16 +950,45 @@ open class AndroidTrailblazeRule(
         }
       }
     } finally {
+      ActionTrace.mark(ActionTrace.Boundary.ITEMS_DONE)
       withContext(NonCancellable) {
         launchedQuickjsRuntime?.let { runCatching { it.shutdownAll() } }
         toolsetQuickjsRuntime?.let { runCatching { it.shutdownAll() } }
+        if (sendSessionStartLog || sendSessionEndLog) {
+          // A retained launch belongs to a SESSION, not to a dispatch, so the dispatch that owns
+          // an end of the session is what closes it. Without this the last session's QuickJS
+          // context stays alive until some unrelated later dispatch happens to displace it.
+          // By session, because this teardown is NonCancellable and an interrupted session can
+          // reach it after its replacement has already retained a launch of its own.
+          thisDispatchSessionId?.let { ScriptedToolBundleReuse.release(it) }
+        }
+        ActionTrace.mark(ActionTrace.Boundary.BUNDLES_SHUTDOWN)
         // Join the accessibility driver's async log uploads before this run returns.
         // `runActions` no longer flushes per action (https://github.com/block/trailblaze/issues/210) — the upload of
         // action N's screenshot + hierarchy overlaps action N+1 — so this boundary is what
         // keeps the guarantee that a completed run (an RPC response on the per-tool dispatch
         // path, or a finished JUnit trail) has all of its driver logs landed before the host
         // acts on the completion (session end → report generation).
-        runCatching { AccessibilityTrailRunner.flushLogsSuspend() }
+        //
+        // On the host-drives-the-loop path that "completed run" is ONE action, so the join sits in
+        // front of every reply and the host waits for an upload nothing is going to read yet. The
+        // deferred-flush gate moves it into the next action (see
+        // [AccessibilityTrailRunner.joinPreviousActionLogs]) — but only for dispatches that own
+        // neither end of the session. A dispatch that starts the session (the JUnit and
+        // desktop-dispatch paths) or ends it (the last host-driven dispatch, which emits
+        // SessionEnded as soon as this returns) still joins here, because for it this boundary
+        // really is the run's completion and the host acts on it.
+        val deferFlush = ReplayCaptureOptions.shouldDeferDispatchLogJoin(
+          gateOn = ReplayCaptureOptions.deferLogFlushEnabled(),
+          sendSessionStartLog = sendSessionStartLog,
+          sendSessionEndLog = sendSessionEndLog,
+        )
+        if (deferFlush) {
+          Console.log("[deferred-log-flush] skipped end-of-dispatch join")
+        } else {
+          runCatching { AccessibilityTrailRunner.flushLogsSuspend() }
+        }
+        ActionTrace.mark(ActionTrace.Boundary.DRIVER_LOGS_FLUSHED)
       }
     }
     return lastToolSuccess
@@ -922,6 +1028,9 @@ open class AndroidTrailblazeRule(
         trailFilePath = trailFilePath,
         useRecordedSteps = useRecordedSteps,
         sendSessionStartLog = true,
+        // The JUnit run IS the session: its teardown emits SessionEnded, so this dispatch owns
+        // both ends and never defers the driver-log join.
+        sendSessionEndLog = true,
       )
     }
   }
@@ -1072,11 +1181,20 @@ open class AndroidTrailblazeRule(
       doesResourceExist = AndroidAssetsUtil::assetExists,
     ) ?: throw TrailblazeException("Asset not found: $yamlAssetPath")
     Console.log("Running from asset: $computedAssetPath")
+    val yamlContent = AndroidAssetsUtil.readAssetAsString(computedAssetPath)
     val appIdToForceStop = targetAppId ?: defaultForceStopAppId
-    if (forceStopApp && appIdToForceStop != null) {
+    val localeForFreshProcess = if (forceStopApp) {
+      null
+    } else {
+      val classifiers = trailblazeLoggingRule.trailblazeDeviceInfoProvider().classifiers
+      val trailItems = trailblazeYaml.decodeTrail(yamlContent, deviceClassifiers = classifiers)
+      trailblazeYaml.extractTrailConfig(trailItems)
+        ?.locale
+        ?.takeIf { trailblazeYaml.firstSkipReason(trailItems) == null }
+    }
+    if (shouldForceStopTargetApp(forceStopApp, localeForFreshProcess) && appIdToForceStop != null) {
       AdbCommandUtil.forceStopApp(appIdToForceStop)
     }
-    val yamlContent = AndroidAssetsUtil.readAssetAsString(computedAssetPath)
     run(
       testYaml = yamlContent,
       useRecordedSteps = useRecordedSteps,
@@ -1088,6 +1206,10 @@ open class AndroidTrailblazeRule(
   }
 
   companion object {
+    /** A locale-bearing trail needs a fresh process even when ordinary clean-start is disabled. */
+    internal fun shouldForceStopTargetApp(requested: Boolean, locale: String?): Boolean =
+      requested || locale != null
+
     /**
      * Only use this on-device when no deviceId is available (like in a connectedDebugAndroidTest)
      *

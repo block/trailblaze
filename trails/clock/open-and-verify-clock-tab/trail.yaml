@@ -3,7 +3,7 @@ config:
   description: Open the Clock app and verify the Clock tab is visible.
   devices:
     android:
-      driver: ANDROID_ONDEVICE_INSTRUMENTATION
+      driver: ANDROID_ONDEVICE_ACCESSIBILITY
 
 trail:
   - step: "Launch the AOSP Desk Clock app (com.android.deskclock) with a clean state."

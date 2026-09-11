@@ -1,0 +1,20 @@
+# This file is a CHECKED-IN baseline of CLI output rendered by trailblaze-host's CLI helpers.
+# It is NOT a contract — if a test fails here because output drifted, decide whether the
+# drift is intentional. The test always (re)writes this file from the current rendered output,
+# then asserts the working tree is clean. So `git diff` of this file IS the failure message.
+# Reviewers: scrutinize diffs to baselines the same way you would scrutinize a UI screenshot —
+# small wording / spacing changes can be intentional or accidental.
+# ----------------------------------------------------------------------
+Usage: trailblaze companion [-hV] [--agent-help] [COMMAND]
+Attach a coding agent to Trail Runner while it authors a trail.
+      --agent-help   Print the complete coding-agent workflow and wire contract.
+  -h, --help         Show this help message and exit.
+  -V, --version      Print version information and exit.
+Commands:
+  start       Start a companion authoring session.
+  event       Append narration to a companion session.
+  send        Send or retract Trail Runner UI guidance.
+  listen      Stream human and lifecycle events as JSON Lines.
+  disconnect  End a companion session.
+  respond     Settle a request delegated by Trail Runner.
+  agent-help  Print the complete coding-agent workflow and wire contract.

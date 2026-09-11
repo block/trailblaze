@@ -8,9 +8,11 @@
  *   2. Restore them verbatim afterward         (using restoreArchiveEntries)
  *
  * Resources preserved:
- *   - maestro-app.apk, maestro-server.apk        (Maestro Android instrumentation)
  *   - apks/trailblaze-ondevice-runner.apk         (Trailblaze on-device runner)
  *   - driver-&#42;/maestro-driver-ios*.zip            (Maestro iOS XCTest bundles)
+ *
+ * Restoration is driven by what the packaged JAR contains, so an entry excluded at packaging
+ * time (Maestro's own maestro-app.apk / maestro-server.apk) cannot come back through here.
  *
  * Usage in a build.gradle.kts:
  *   apply(from = rootProject.file("gradle/proguard-utils.gradle.kts"))

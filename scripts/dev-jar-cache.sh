@@ -259,11 +259,14 @@ dev_update_jar_cache() {
   local jar_dir="$1"
   (cd "$DEV_JAR_REPO_ROOT" && ./gradlew -q --console=plain "${TRAILBLAZE_MODULE}:packageUberJarForCurrentOS")
   if [ $? -eq 0 ]; then
-    local hash=$(dev_source_hash)
-    [ -n "$hash" ] && echo "$hash" > "$jar_dir/.blaze-source-hash"
     local jar_path
-    jar_path=$(dev_find_jar "$jar_dir")
-    [ -n "$jar_path" ] && dev_prune_stale_siblings "$jar_dir" "$jar_path"
+    jar_path=$(dev_find_jar "$jar_dir") || true
+    if [ -n "$jar_path" ]; then
+      local hash
+      hash=$(dev_source_hash)
+      [ -n "$hash" ] && echo "$hash" > "$jar_dir/.blaze-source-hash"
+      dev_prune_stale_siblings "$jar_dir" "$jar_path"
+    fi
   fi
 }
 

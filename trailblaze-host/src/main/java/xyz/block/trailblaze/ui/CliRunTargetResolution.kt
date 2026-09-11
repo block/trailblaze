@@ -4,8 +4,14 @@ import xyz.block.trailblaze.config.KnownTargetMessages
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 
 /**
- * Chooses the effective target app for a daemon-dispatched `run`, given the trail's declared
- * `config.target` and the run caller's forwarded workspace dir.
+ * Chooses the effective target app for a `run`, given the trail's declared `config.target` and the
+ * run caller's forwarded workspace dir.
+ *
+ * Shared by BOTH CLI transports — the daemon-dispatched path and `--no-daemon` — so the two agree
+ * on the precedence below AND on what an unresolved declared target does. They did not: the
+ * in-process path had its own inline fallback that warned about nothing, which left turbo free to
+ * attach to the fallback app and report the run as turbo. `callerWorkspaceDir` is the only
+ * difference between them, and it is null for the in-process path because that process IS the run.
  *
  * Precedence (matches what a CLI-local run resolves, so a delegated run agrees with
  * `trailblaze config get target`):
@@ -23,7 +29,7 @@ import xyz.block.trailblaze.model.TrailblazeHostAppTarget
  * threading (that `callerWorkspaceDir` actually reaches the resolver, not the daemon-anchored
  * no-arg one) are unit-testable without a live daemon — side effects are injected as lambdas.
  */
-internal fun resolveDaemonRunTargetApp(
+internal fun resolveRunTargetApp(
   configTarget: String?,
   callerWorkspaceDir: String?,
   findTargetById: (String) -> TrailblazeHostAppTarget?,

@@ -13,7 +13,6 @@ import xyz.block.trailblaze.android.test.tools.CanonicalToolAdapters
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.device.AndroidDeviceCommandExecutor
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
-import xyz.block.trailblaze.exception.TrailblazeException
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
 import xyz.block.trailblaze.logs.model.TraceId
@@ -154,9 +153,16 @@ class AndroidTestTrailblazeAgent(
           }
         }
       else ->
-        throw TrailblazeException(
-          "Unhandled Android test tool ${tool::class.simpleName}. " +
-            "Register an AndroidTestExecutableTool or a generic ExecutableTrailblazeTool."
+        throw unsupportedToolShapeException(
+          tool = tool,
+          agentName = "AndroidTestTrailblazeAgent",
+          supportedShapes = listOf(
+            AndroidTestExecutableTool::class.java.simpleName,
+            ExecutableTrailblazeTool::class.java.simpleName,
+            DelegatingTrailblazeTool::class.java.simpleName,
+          ),
+          remediation = "Register an ${AndroidTestExecutableTool::class.java.simpleName} or a " +
+            "generic ${ExecutableTrailblazeTool::class.java.simpleName}.",
         )
     }
 

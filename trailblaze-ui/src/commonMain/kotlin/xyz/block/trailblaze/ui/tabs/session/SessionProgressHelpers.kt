@@ -17,6 +17,13 @@ import xyz.block.trailblaze.yaml.TrailblazeYaml
 import xyz.block.trailblaze.yaml.unified.TrailDocument
 import xyz.block.trailblaze.yaml.unified.UnifiedTrailAdapter
 
+/**
+ * Every helper in this file compares `TrailblazeLog.timestamp` values against each other — sorting
+ * objective bookends, counting the tools inside a window, picking the screenshot for a moment. That
+ * only holds if the caller has already put the logs on one timeline (`SessionDetail.logs`, which
+ * `normalizedToHostClock` re-stamped); raw logs from a session with an on-device runtime carry two
+ * clocks that disagree by whole seconds, which lands tools in the neighboring step.
+ */
 internal fun buildObjectiveProgress(logs: List<TrailblazeLog>): List<ObjectiveProgress> {
   val objectives = mutableListOf<ObjectiveProgress>()
   val objectiveLogs =

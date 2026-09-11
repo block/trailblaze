@@ -10,9 +10,10 @@ Usage: trailblaze run [-hvV] [--all-devices] [--capture-all] [--[no-]
                       capture-network] [--[no-]capture-video]
                       [--full-report-payloads] [--[no-]headless] [--markdown]
                       [--no-daemon] [--no-logging] [--no-report] [--[no-]
-                      save-recording] [--self-heal] [--[no-]use-recorded-steps]
-                      [-a=<agent>] [--args-file=<file>]
+                      save-recording] [--self-heal] [--[no-]turbo] [--[no-]
+                      use-recorded-steps] [-a=<agent>] [--args-file=<file>]
                       [--compose-port=<composePort>] [--configuration=<name>]
+                      [--device-classifier=<catalog-key>]
                       [--driver=<driverType>] [--llm=<llm>]
                       [--llm-model=<llmModel>] [--llm-provider=<llmProvider>]
                       [--max-llm-calls=<maxLlmCalls>]
@@ -152,6 +153,11 @@ removed in a future release.
                                pinned, the run fails and asks you to pass this
                                (or `--driver` / `--all-devices`). See also
                                --all-devices.
+      --device-classifier=<catalog-key>
+                             Select a locale/variant-qualified recording for
+                               this run (for example `ios-iphone-es`). The key
+                               must refine the connected device's detected
+                               classifiers. Only valid for a single-device run.
       --driver=<driverType>  Driver type to use (e.g., PLAYWRIGHT_NATIVE,
                                ANDROID_ONDEVICE_INSTRUMENTATION). Overrides
                                driver from trail config.
@@ -184,11 +190,12 @@ removed in a future release.
       --markdown             Generate a markdown report after execution
       --max-llm-calls=<maxLlmCalls>
                              Cap the number of LLM calls per objective for the
-                               legacy TRAILBLAZE_RUNNER agent. Useful on
-                               metered or expensive providers to cut off a
-                               stuck self-heal loop. Must be a positive
-                               integer. Default: 25 (the runner's built-in
-                               cap). Not compatible with --agent MULTI_AGENT_V3.
+                               TRAILBLAZE_RUNNER and KOOG_STRATEGY_GRAPH
+                               agents. Useful on metered or expensive providers
+                               to cut off a stuck self-heal loop. Must be a
+                               positive integer. Default: 25 (both agents'
+                               built-in cap). Not compatible with --agent
+                               MULTI_AGENT_V3.
       --memory=KEY=VAL       Pre-populate trail memory with KEY=VAL before any
                                step runs. Repeatable (`--memory user=sam
                                --memory accountTier=PRO`). Overrides any value
@@ -258,6 +265,18 @@ removed in a future release.
                                environments where the caller can supply a
                                richer identifier (e.g. including
                                suite/section/case context).
+      --[no-]turbo           Turbo mode: let the Android app under test report
+                               when it is idle so the driver waits less after
+                               each action, instead of watching for its screen
+                               to go quiet. Each wait ends at whichever answer
+                               comes first, so this can only make a run faster,
+                               never slower. Needs an app signed with a key
+                               this build carries a helper for (debug and
+                               internal builds; not release or beta) — a run
+                               that can't use it says so and runs at normal
+                               speed. When neither flag is passed, inherits
+                               TRAILBLAZE_TURBO and the saved `trailblaze
+                               config turbo` setting.
       --[no-]use-recorded-steps
                              Three-way switch for replay vs. AI-driven
                                execution:

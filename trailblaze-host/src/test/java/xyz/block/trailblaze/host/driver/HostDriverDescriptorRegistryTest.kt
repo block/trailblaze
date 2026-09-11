@@ -2,7 +2,6 @@ package xyz.block.trailblaze.host.driver
 
 import org.junit.Test
 import xyz.block.trailblaze.devices.TrailblazeDriverType
-import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 import kotlin.test.assertSame
@@ -23,7 +22,7 @@ class HostDriverDescriptorRegistryTest {
   }
 
   @Test
-  fun `an unconverted driver has no descriptor so its caller can fall back`() {
+  fun `a driver this app did not plug in has no descriptor`() {
     val registry = HostDriverDescriptorRegistry(
       setOf(FakeHostDriverDescriptor(TrailblazeDriverType.REVYL_ANDROID)),
     )
@@ -52,8 +51,9 @@ class HostDriverDescriptorRegistryTest {
   }
 
   /**
-   * The lookup that converted call sites use has no fallback left, so its failure has to say what
-   * to do about it — this is the message someone sees when a driver is enabled but unplugged.
+   * The lookup every call site uses has no fallback, so its failure has to say what to do about
+   * it — this is the message someone sees when a driver is enabled but unplugged, and since
+   * `validateCovers` is gone it is the only place that says so.
    */
   @Test
   fun `the strict lookup names the driver and the fix`() {
@@ -71,69 +71,36 @@ class HostDriverDescriptorRegistryTest {
   }
 
   /**
-   * The startup check that replaces the compile-time exhaustiveness a `when` used to give
-   * converted drivers.
+   * The obligation the compiler cannot state: `runYaml` being abstract forces a new driver to
+   * answer whether it runs on the host, but nothing stops it from answering with
+   * [HostDriverDescriptor.OnDeviceTools] when dispatch does route it to `runHostYaml`. That
+   * combination is invisible until the first host run, which is why the registry rejects it at
+   * construction.
    */
   @Test
-  fun `supporting a converted driver without registering it fails the startup check`() {
-    val registry = HostDriverDescriptorRegistry(
-      setOf(FakeHostDriverDescriptor(TrailblazeDriverType.REVYL_ANDROID)),
-    )
-
-    val message = assertFailsWith<IllegalStateException> {
-      registry.validateCovers(
-        setOf(TrailblazeDriverType.REVYL_ANDROID, TrailblazeDriverType.REVYL_IOS),
+  fun `declining a host run body fails for a driver that reaches the host run path`() {
+    val exception = assertFailsWith<IllegalArgumentException> {
+      HostDriverDescriptorRegistry(
+        setOf(FakeOnDeviceHostDriverDescriptor(TrailblazeDriverType.COMPOSE)),
       )
-    }.message!!
+    }
 
-    assertTrue(message.contains("REVYL_IOS"), "must name the unplugged driver: $message")
-  }
-
-  /**
-   * The check must stay silent about drivers that still have their `when` arms, or every app would
-   * have to register a descriptor for all ten before any one of them converted.
-   */
-  @Test
-  fun `an unconverted driver needs no descriptor`() {
-    val unconverted = TrailblazeDriverType.entries
-      .filterNot { it in HostDriverDescriptorRegistry.convertedDriverTypes }
-      .toSet()
-    assertTrue(unconverted.isNotEmpty(), "this test is vacuous once every driver has converted")
-
-    HostDriverDescriptorRegistry.EMPTY.validateCovers(unconverted)
-  }
-
-  /**
-   * A descriptor for a driver the app has switched off in settings is how a driver stays plugged
-   * in while disabled — checking that direction too would break the settings toggle.
-   */
-  @Test
-  fun `registering more than the app supports is allowed`() {
-    val registry = HostDriverDescriptorRegistry(
-      setOf(
-        FakeHostDriverDescriptor(TrailblazeDriverType.REVYL_ANDROID, TrailblazeDriverType.REVYL_IOS),
-      ),
+    val message = exception.message!!
+    assertTrue(message.contains("COMPOSE"), "must name the driver: $message")
+    assertTrue(
+      message.contains("FakeOnDeviceHostDriverDescriptor"),
+      "must name the descriptor to fix: $message",
     )
-
-    registry.validateCovers(setOf(TrailblazeDriverType.REVYL_ANDROID))
+    assertTrue(message.contains("runYaml"), "must name the remedy: $message")
   }
 
-  /**
-   * `convertedDriverTypes` drives [HostDriverDescriptorRegistry.validateCovers], so a driver listed
-   * there without its call sites actually converted would demand a descriptor that does nothing,
-   * and one converted without being listed would skip the startup check entirely.
-   */
+  /** The converse, so the check above cannot be satisfied by rejecting every on-device driver. */
   @Test
-  fun `the converted set is exactly the drivers with descriptor-backed call sites`() {
-    assertEquals(
-      setOf(
-        TrailblazeDriverType.REVYL_ANDROID,
-        TrailblazeDriverType.REVYL_IOS,
-        TrailblazeDriverType.COMPOSE,
-        TrailblazeDriverType.PLAYWRIGHT_NATIVE,
-        TrailblazeDriverType.PLAYWRIGHT_ELECTRON,
-      ),
-      HostDriverDescriptorRegistry.convertedDriverTypes,
-    )
+  fun `declining a host run body is allowed for a driver whose tools run on the device`() {
+    val descriptor = FakeOnDeviceHostDriverDescriptor(TrailblazeDriverType.ANDROID_TEST)
+
+    val registry = HostDriverDescriptorRegistry(setOf(descriptor))
+
+    assertSame(descriptor, registry.forDriver(TrailblazeDriverType.ANDROID_TEST))
   }
 }

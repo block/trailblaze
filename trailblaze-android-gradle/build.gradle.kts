@@ -46,9 +46,9 @@ dependencies {
   // integration (auto-wiring the JUnit-shell codegen output and the trailmap scripted-tool
   // bundles into AGP's `androidTest` source set), but it reaches AGP's `sourceSets` by reflection
   // (see `wireAgpSourceSets` in `TrailblazeAndroidGradlePlugin.kt`) rather than a typed
-  // `com.android.build.gradle.BaseExtension` reference — the same pattern `gradle/merged-trails
-  // .gradle.kts` already uses for the identical reason: stay version-agnostic across whatever AGP
-  // a consumer happens to be on, and side-step the Gradle TestKit classloader isolation a
+  // `com.android.build.gradle.BaseExtension` reference — the same pattern the trail-merging
+  // Gradle script already uses for the identical reason: stay version-agnostic across whatever
+  // AGP a consumer happens to be on, and side-step the Gradle TestKit classloader isolation a
   // `compileOnly` AGP dependency runs into when a fixture ALSO resolves a real AGP separately.
 
   testImplementation(kotlin("test"))

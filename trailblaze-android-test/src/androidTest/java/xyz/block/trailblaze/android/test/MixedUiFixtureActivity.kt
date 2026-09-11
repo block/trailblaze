@@ -264,7 +264,10 @@ class MixedUiFixtureActivity : ComponentActivity() {
     }
 
   companion object {
-    val VIEW_STATUS_ID = android.view.View.generateViewId()
+    // A declared resource id, not a generated one: `AccessibilityHierarchyParityOnDeviceTest`
+    // needs one element whose exact resource NAME both hierarchies can be asked for, and
+    // `generateViewId()` produces ids that `Resources.getResourceName` cannot name at all.
+    val VIEW_STATUS_ID = xyz.block.trailblaze.android.test.test.R.id.view_status
     val VIEW_INPUT_ID = android.view.View.generateViewId()
     val VIEW_BUTTON_ID = android.view.View.generateViewId()
 

@@ -4,13 +4,22 @@ import android.app.UiAutomation
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.os.ParcelFileDescriptor
+import android.os.SystemClock
 import maestro.KeyCode
 import maestro.Point
 import xyz.block.trailblaze.InstrumentationUtil.withInstrumentation
 import xyz.block.trailblaze.InstrumentationUtil.withUiAutomation
 import xyz.block.trailblaze.device.AndroidForegroundParser
+import xyz.block.trailblaze.device.AndroidShellBounds
+import xyz.block.trailblaze.device.BoundedReadTimeoutException
 import xyz.block.trailblaze.device.InstalledApp
 import xyz.block.trailblaze.device.redactBulkPayloadsForLog
+import xyz.block.trailblaze.device.PM_LIST_PACKAGES_ARGV
+import xyz.block.trailblaze.device.PmClearOutcome
+import xyz.block.trailblaze.device.readWithDeadline
+import xyz.block.trailblaze.device.validateClearAppDataAppId
+import xyz.block.trailblaze.device.verifyPmClearSucceeded
+import xyz.block.trailblaze.toolcalls.commands.NetworkConnectionTrailblazeTool
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.util.PollingUtils
 import xyz.block.trailblaze.util.UiAutomationHandleErrors
@@ -23,18 +32,51 @@ object AdbCommandUtil {
 
   private const val SHELL_LIVENESS_TOKEN = "trailblaze-shell-liveness"
 
+  /**
+   * Hang detection for a single shell command: the point at which the command is treated as never
+   * coming back. Shared with the tool-level dispatch bound that has to stay above it — see
+   * [AndroidShellBounds].
+   */
+  private const val SHELL_COMMAND_TIMEOUT_MS = AndroidShellBounds.SHELL_READ_TIMEOUT_MS
+
+  /**
+   * The point at which a command is *reported* as slow, without failing it.
+   *
+   * Almost nothing issued through here should come close: these are `settings` / `input` / `pm` /
+   * `dumpsys` one-liners that finish in well under a second on a healthy device. The one known
+   * exception is `pm clear` on an Android tablet running turbo, which crosses this routinely — and
+   * that is the point. A slow shell call is otherwise charged to whichever Trailblaze tool
+   * happened to make it: the tool's duration absorbs the wait, nothing names the command, and the
+   * run just looks inexplicably slow. That is exactly how that ~150s `pm clear` stayed unexplained
+   * across several builds.
+   *
+   * Reported, never thrown, so it cannot turn a slow pass into a red build — the only failing
+   * bound here is [SHELL_COMMAND_TIMEOUT_MS].
+   *
+   * Where this line lands depends on the lane. It is a plain logcat write, so a local or
+   * Gradle-driven run sees it; the on-device CI path does not collect logcat at all, and the
+   * host-driven path filters logcat to the app under test, which this instrumentation process is
+   * not. So treat it as a local debugging aid, not as the CI signal. (The nearby note on
+   * [runShellCommand] about logcat being captured into session artifacts is about that
+   * host-driven, app-filtered capture — the two are not in conflict.)
+   */
+  private const val SHELL_COMMAND_SLOW_MS = 10_000L
+
   fun execShellCommand(shellCommand: String): String {
-    // Redact before logging, and again before the wedge message: `writeFileAs` carries a file's
-    // bytes base64-encoded inside the command line, and logcat is a captured CI artifact — so an
-    // unredacted log of that command line is a log of a seeded auth/session file.
+    // Redact once, then pass the redacted copy everywhere it is needed: `writeFileAs` carries a
+    // file's bytes base64-encoded inside the command line, and logcat is a captured CI artifact —
+    // so an unredacted log of that command line is a log of a seeded auth/session file. Redacting
+    // is also not free (three regex passes plus a base64 decode of the whole payload), and this
+    // runs on every device action, so it happens once per command rather than once per use.
     val loggableCommand = redactBulkPayloadsForLog(shellCommand)
     Console.log("adb shell $loggableCommand")
-    val output = runShellCommand(shellCommand)
+    val output = runShellCommand(shellCommand, loggableCommand)
     // A dead UiAutomation connection makes the shell call return "" instead of throwing, so every
     // command looks successful while doing nothing. Empty output is also normal for many commands
     // (`cp`, `input keyevent`), so double-check with a probe that always prints: if even that comes
     // back empty, the connection is wedged — throw so the standard reconnect-and-retry runs.
-    if (output.isEmpty() && !runShellCommand("echo $SHELL_LIVENESS_TOKEN").contains(SHELL_LIVENESS_TOKEN)) {
+    val livenessProbe = "echo $SHELL_LIVENESS_TOKEN"
+    if (output.isEmpty() && !runShellCommand(livenessProbe, livenessProbe).contains(SHELL_LIVENESS_TOKEN)) {
       throw IllegalStateException(UiAutomationHandleErrors.silentShellWedgeMessage(loggableCommand))
     }
     return output
@@ -53,11 +95,59 @@ object AdbCommandUtil {
    * Reading the whole stream before decoding also fixes a latent UiDevice bug: it decodes each
    * 512-byte chunk separately, so a multi-byte UTF-8 character straddling a chunk boundary comes
    * back mangled.
+   *
+   * The read is bounded by [SHELL_COMMAND_TIMEOUT_MS]. It has to be bounded here rather than by
+   * the caller: this read runs inside `withUiAutomation`, which holds the process-wide UiAutomation
+   * monitor, so a caller that gave up on a wedged command would leave that monitor held and every
+   * later device action queued behind it. [readWithDeadline] closes the stream instead, which ends
+   * the read in place and releases the monitor on the way out.
+   *
+   * Note that one caller bounds it from outside as well:
+   * [xyz.block.trailblaze.mobile.tools.AdbShellTrailblazeTool] wraps the `android_adbShell` tool's
+   * dispatch in a `withTimeoutOrNull`. That outer bound abandons the reader rather than ending it,
+   * so it is deliberately set ABOVE this one — see
+   * [xyz.block.trailblaze.device.AndroidShellBounds.ON_DEVICE_DISPATCH_TIMEOUT_MS] — and this bound
+   * is the one that actually lands.
+   *
+   * A timeout drops the cached UiAutomation handle and rethrows
+   * [UiAutomationHandleErrors.wedgedShellReadMessage], which nothing retries. Leaving the dead
+   * connection cached would make every later command pay the whole bound again; retrying instead
+   * would replay a command that may already have taken effect.
+   *
+   * @param loggableCommand [shellCommand] already redacted for logging — see [execShellCommand].
    */
-  private fun runShellCommand(shellCommand: String): String = withUiAutomation {
-    ParcelFileDescriptor.AutoCloseInputStream(executeShellCommand(shellCommand)).use { stream ->
-      stream.readBytes().toString(Charsets.UTF_8)
+  private fun runShellCommand(shellCommand: String, loggableCommand: String): String = withUiAutomation {
+    val description = "adb shell $loggableCommand"
+    val startedAt = SystemClock.elapsedRealtime()
+    val output = try {
+      ParcelFileDescriptor.AutoCloseInputStream(executeShellCommand(shellCommand)).use { stream ->
+        readWithDeadline(
+          description = description,
+          timeoutMs = SHELL_COMMAND_TIMEOUT_MS,
+          cancel = { stream.close() },
+          read = { stream.readBytes().toString(Charsets.UTF_8) },
+        )
+      }
+    } catch (timeout: BoundedReadTimeoutException) {
+      // Drop the wedged connection here rather than by raising a stale-handle signature: that
+      // signature's recovery replays the command, and this command may already have taken effect.
+      // See `UiAutomationHandleErrors.wedgedShellReadMessage`. Safe to do from inside
+      // `withUiAutomation` — this thread holds the monitor, so no one else is mid-command.
+      val discarded = InstrumentationUtil.clearInstrumentationUiAutomationCache()
+      throw IllegalStateException(
+        UiAutomationHandleErrors.wedgedShellReadMessage(
+          command = description,
+          timeoutMs = SHELL_COMMAND_TIMEOUT_MS,
+          handleDiscarded = discarded,
+        ),
+        timeout,
+      )
     }
+    val elapsedMs = SystemClock.elapsedRealtime() - startedAt
+    if (elapsedMs >= SHELL_COMMAND_SLOW_MS) {
+      Console.log("slow shell command: ${elapsedMs}ms for $description")
+    }
+    output
   }
 
   fun grantPermission(targetAppPackageName: String, permission: String) {
@@ -74,6 +164,50 @@ object AdbCommandUtil {
     return execShellCommand("getprop ro.boot.serialno")
   }
 
+  /**
+   * Whether real airplane mode is on. The one Android definition of this read, so a trail cannot
+   * get a different answer depending on which driver replays it.
+   *
+   * Deliberately NOT inferred from the radios. `TelephonyManager.isDataEnabled` and the
+   * `mobile_data` setting behind it are the USER'S PREFERENCE for mobile data, which Android never
+   * rewrites when airplane mode goes on, and wifi routinely stays up through airplane mode — so a
+   * radios-based read answers "off" on a device genuinely in airplane mode, which is the failure
+   * this replaces.
+   *
+   * An unreadable VALUE answers `false`, per
+   * [NetworkConnectionTrailblazeTool.androidAirplaneModeSettingMeansOnOrOff]; the raw value is
+   * logged so a broken read stays diagnosable. A failed READ is different and still throws:
+   * [execShellCommand] raises on a wedged UiAutomation connection, which is the signal that drives
+   * the standard reconnect-and-retry, and swallowing it here would report a device as not in
+   * airplane mode on the strength of a shell that answered nothing at all.
+   *
+   * Note the asymmetry this creates with the drivers' Maestro `setAirplaneMode`, which switches the
+   * radios as a stand-in rather than setting the flag. A `toggleAirplaneMode` therefore reads this
+   * flag and writes the radios: from a flag-off device it takes the radios down and leaves the flag
+   * off, so a second toggle takes them down again rather than restoring them. Reading the radios
+   * back instead would make the toggle reversible by answering the wrong question, and would report
+   * a device genuinely in airplane mode as not being in it. A trail that needs the radios back
+   * should say so with `networkConnection`, which names each radio and the flag separately.
+   */
+  fun isAirplaneModeEnabled(): Boolean {
+    val raw = execShellCommand(
+      NetworkConnectionTrailblazeTool.androidSettingReadCommand(
+        NetworkConnectionTrailblazeTool.ANDROID_AIRPLANE_MODE_SETTING,
+      ),
+    )
+    val answer = NetworkConnectionTrailblazeTool.androidAirplaneModeSettingMeansOnOrOff(raw)
+    // Logged on every read, not just the unreadable one. `execShellCommand` logs the command but
+    // never its output, so without this a wrong-but-readable answer — "0" on a device a trail
+    // believes is offline — leaves nothing behind to explain what the driver decided.
+    val unreadable = NetworkConnectionTrailblazeTool.androidAirplaneModeSettingMeansOn(raw) == null
+    Console.log(
+      "[airplaneMode] ${NetworkConnectionTrailblazeTool.ANDROID_AIRPLANE_MODE_SETTING} read " +
+        "'${raw.trim()}' -> $answer" +
+        if (unreadable) " (says nothing readable — reporting airplane mode off)" else "",
+    )
+    return answer
+  }
+
   fun grantPermissions(targetAppPackageName: String, permissions: List<String>) {
     permissions.forEach { permission ->
       grantPermission(targetAppPackageName, permission)
@@ -88,8 +222,22 @@ object AdbCommandUtil {
     return isGranted
   }
 
-  fun clearPackageData(targetAppPackageName: String) {
-    execShellCommand("pm clear $targetAppPackageName")
+  fun clearPackageData(targetAppPackageName: String): PmClearOutcome {
+    // Before the id is interpolated into a shell command, not after — see
+    // `validateClearAppDataAppId`.
+    validateClearAppDataAppId(targetAppPackageName)
+    // `pm clear`'s stdout token is the only outcome signal this transport has — UiAutomation's
+    // executeShellCommand carries no exit status. See `verifyPmClearSucceeded`.
+    return verifyPmClearSucceeded(
+      appId = targetAppPackageName,
+      output = execShellCommand("pm clear $targetAppPackageName"),
+      // Through the shell, NOT [listInstalledApps]: that reads `PackageManager` from our own
+      // process, where package visibility is filtered on API 30+. In a consuming APK without
+      // QUERY_ALL_PACKAGES an installed package would read as absent, and the failed clear this
+      // check exists to report would be tolerated instead. The shell runs as uid 2000, which
+      // filtering does not apply to.
+      pmListPackagesOutput = { execShellCommand(PM_LIST_PACKAGES_ARGV.joinToString(" ")) },
+    )
   }
 
   fun listInstalledApps(): List<String> = withInstrumentation {
@@ -375,7 +523,13 @@ object AdbCommandUtil {
     AndroidForegroundParser.parseResumedActivityComponents(
       execShellCommand("dumpsys activity activities"),
     )
-  } catch (_: Exception) {
+  } catch (e: Exception) {
+    // "Not in foreground" is the right answer for a read that failed — every caller here polls, so
+    // throwing would turn a single bad dump into a failed trail. But it must not be a SILENT
+    // answer: a wedged `dumpsys` costs the full shell bound and then reads as an app that simply
+    // is not up, which is the most confusing possible way for this to fail. The message is what
+    // distinguishes the two, so log it.
+    Console.log("[foreground] could not read resumed activities, reporting none: $e")
     emptyList()
   }
 

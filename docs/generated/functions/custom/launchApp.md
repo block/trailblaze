@@ -26,9 +26,7 @@ Open an app on the device as if a user tapped on its icon in the launcher.
 
 ### Optional parameters
 
-- `launchMode` — `ToolParameterType.Enum(
-  entries = [REINSTALL, RESUME, FORCE_RESTART]
-)`
+- `launchMode` — `enum(REINSTALL | RESUME | FORCE_RESTART)`
   Available App Launch Modes:
 - "REINSTALL" (Default if unspecified) will launch the app as if it was just installed and never run on the device before.
 - "RESUME" will launch the app like you would from the apps launcher.  If the app was in memory, it'll pick up where it left off.

@@ -90,7 +90,7 @@ class OnDeviceRpcClient(
    * deserializes on a Success). Every call site that inspects an inline [RunYamlResponse]
    * failure must route through this single reader rather than hand-inlining the field check:
    * a hand-rolled site that forgets to arm is exactly how the host-agent path missed the wedge
-   * the first time (trailblaze-android-pr/2712).
+   * the first time, observed in CI.
    */
   fun noteIfNonRecoverableWedge(response: RunYamlResponse): Boolean {
     val nonRecoverableWedge = response.nonRecoverableWedge ||

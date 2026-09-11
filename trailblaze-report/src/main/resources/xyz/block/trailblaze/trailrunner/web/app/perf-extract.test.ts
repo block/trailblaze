@@ -15,7 +15,9 @@ import {
   NEST_EPSILON_MS,
   bottomUpAggregate,
   buildTraceSpans,
+  deviceClockOffsets,
   extractPerfSession,
+  logHostMs,
   parsePerfTimestamp,
   timeoutBudgetMs,
 } from './perf-extract';
@@ -49,13 +51,34 @@ function llmLog(startMs: number, durMs: number, extra: Record<string, unknown> =
   };
 }
 
-function driverLog(startMs: number, durMs: number): TrailblazeLogRecord {
+function driverLog(startMs: number, durMs: number, extra: Record<string, unknown> = {}): TrailblazeLogRecord {
   return {
     class: 'xyz.block.trailblaze.logs.client.TrailblazeLog.MaestroDriverLog',
     action: { class: 'maestro.orchestra.Action.Tap' },
     timestamp: iso(startMs),
     durationMs: durMs,
+    ...extra,
   };
+}
+
+/**
+ * A device-stamped tool log carrying the ingestion anchor readers derive the offset from: the host
+ * received it `latencyMs` after the tool finished ON THE DEVICE, whose clock runs `skewMs` behind
+ * the host's. `startMs` is where the tool really ran on the host timeline.
+ */
+function anchoredDeviceToolLog(
+  name: string,
+  startMs: number,
+  durMs: number,
+  skewMs: number,
+  latencyMs = 0,
+  extra: Record<string, unknown> = {},
+): TrailblazeLogRecord {
+  return toolLog(name, startMs - skewMs, durMs, {
+    clock: 'device',
+    hostReceivedAt: iso(startMs + durMs + latencyMs),
+    ...extra,
+  });
 }
 
 function objectiveStart(atMs: number, step: string): TrailblazeLogRecord {
@@ -142,13 +165,35 @@ describe('span anchoring', () => {
     expect(data.covered).toBe(77_000 + 400);
   });
 
-  test('t0/t1 come from host-clock logs only (device-clock driver logs cannot stretch the window)', () => {
+  test('an unshiftable device-clock log cannot stretch the window', () => {
     const data = extractPerfSession([
       sessionAnchor(0),
       toolLog('tapOn', 600, 400),
-      driverLog(9_000_000, 100), // seconds of device-clock skew
+      driverLog(9_000_000, 100, { clock: 'device' }), // seconds of device-clock skew, no anchor
     ])!;
     expect(data.t1).toBe(1_000);
+  });
+
+  test('an unmarked driver log is still read as device-clock (pre-field logs)', () => {
+    // Before the marker existed, a MaestroDriverLog was an on-device driver op by construction.
+    const data = extractPerfSession([
+      sessionAnchor(0),
+      toolLog('tapOn', 600, 400),
+      driverLog(9_000_000, 100),
+    ])!;
+    expect(data.t1).toBe(1_000);
+  });
+
+  test('a HOST-marked driver log bounds the window like any other host span', () => {
+    // A host driver (Playwright, the host Maestro/iOS drivers) writes AgentDriverLog, which
+    // serializes under the SAME name an on-device driver log does — so the class says nothing and
+    // holding it out of the window clipped real host execution time off the profile.
+    const data = extractPerfSession([
+      sessionAnchor(0),
+      toolLog('tapOn', 600, 400),
+      driverLog(1_200, 300, { clock: 'host' }),
+    ])!;
+    expect(data.t1).toBe(1_500);
   });
 });
 
@@ -336,6 +381,60 @@ describe('clock domains', () => {
     expect(data.t1).toBe(1_000);
   });
 
+  test('an anchored device-clock tool log is shifted onto the host timeline before it nests', () => {
+    // The device's clock runs 1s behind the host's, so the raw stamp of a tool that really ran at
+    // +3000 reads +2000 — outside the host tool that contained it, which read it as a sibling.
+    const data = extractPerfSession([
+      sessionAnchor(0),
+      toolLog('outer', 2_500, 4_000), // host-clock wrapper: [2500, 6500)
+      anchoredDeviceToolLog('inner', 3_000, 500, 1_000),
+    ])!;
+    const outer = data.spans.find((sp) => sp.name === 'outer')!;
+    const inner = data.spans.find((sp) => sp.name === 'inner')!;
+    expect(inner.s).toBe(3_000);
+    expect(inner.parent).toBe(outer.id);
+    expect(data.roots).toEqual([outer.id]);
+  });
+
+  test('the offset is the MINIMUM sample, so a slow upload cannot shift spans late', () => {
+    // Two uploads of the same device: one prompt, one delayed 4s by batching. A central estimate
+    // would split the difference and push every device span 2s late.
+    const data = extractPerfSession([
+      sessionAnchor(0),
+      anchoredDeviceToolLog('prompt', 1_000, 100, 1_000, 0),
+      anchoredDeviceToolLog('batched', 2_000, 100, 1_000, 4_000),
+    ])!;
+    expect(data.spans.find((sp) => sp.name === 'prompt')!.s).toBe(1_000);
+    expect(data.spans.find((sp) => sp.name === 'batched')!.s).toBe(2_000);
+  });
+
+  test('a device-stamped objective window moves with the tools it encloses', () => {
+    // Both are device-stamped (the runner itself ran on the device). Shifting only the tool would
+    // slide it out of its own step.
+    const data = extractPerfSession([
+      sessionAnchor(0),
+      { ...objectiveStart(1_000 - 1_000, 'tap it'), clock: 'device' },
+      anchoredDeviceToolLog('tapOn', 1_500, 200, 1_000),
+      { ...objectiveComplete(3_000 - 1_000, 'tap it'), clock: 'device' },
+    ])!;
+    const step = data.steps[0];
+    expect([step.s, step.e]).toEqual([1_000, 3_000]);
+    expect(data.spans.find((sp) => sp.name === 'tapOn')!.step).toBe(0);
+  });
+
+  test('an anchored session shifts its device trace events too', () => {
+    // Same device, so the same offset: without it the event lands a second early on the Device
+    // lane, which is the lane a reader uses to line device work up against host work.
+    const data = extractPerfSession(
+      [sessionAnchor(0), anchoredDeviceToolLog('tapOn', 1_000, 100, 1_000)],
+      [traceEvent('a11y-capture', 3_000 - 1_000, 500, { clock: 'device' })],
+    )!;
+    const device = data.spans.find((sp) => sp.name === 'a11y-capture')!;
+    expect(device.s).toBe(3_000);
+    expect(device.kind).toBe('driver');
+    expect(data.t1).toBe(3_500);
+  });
+
   test('a host-clock trace event still bounds the window', () => {
     // The other side of the same gate: excluding device events must not start excluding the host
     // spans that are the whole reason trace.json bounds the window at all.
@@ -468,9 +567,9 @@ describe('llm + session facts', () => {
     expect(first.name).toBe('LLM · Planner');
   });
 
-  test('a session with no host-clock timestamps yields null', () => {
+  test('a session with no host-timeline timestamps yields null', () => {
     expect(extractPerfSession([])).toBeNull();
-    expect(extractPerfSession([driverLog(1_000, 100)])).toBeNull();
+    expect(extractPerfSession([driverLog(1_000, 100, { clock: 'device' })])).toBeNull();
   });
 });
 
@@ -992,5 +1091,67 @@ describe('bottom-up aggregation', () => {
       { name: 'outer', kind: 'tool', self: 1_000, count: 1, maxSelf: 1_000 },
       { name: 'inner', kind: 'tool', self: 1_000, count: 1, maxSelf: 1_000 },
     ]);
+  });
+});
+
+// The Kotlin readers derive the same offsets from the same logs (TrailblazeLogClockNormalization.kt);
+// this profiler re-implements the derivation because it runs in a browser over raw JSON. The shared
+// fixture is the contract between them — see its `comment` block for the encoding.
+describe('clock-normalization parity fixtures', () => {
+  interface LogCase {
+    id: string;
+    type: 'tool' | 'status';
+    clock: string;
+    timestampMs: number;
+    durationMs?: number;
+    deviceName?: string;
+    hostReceivedAtMs?: number;
+    expectedHostMs: number;
+  }
+  const fixtures = require('../../../report/clock-normalization-parity-fixtures.json') as {
+    cases: {
+      name: string;
+      logs: LogCase[];
+      expectedOffsets: { byDeviceName: Record<string, number>; sessionWideMs: number } | null;
+    }[];
+  };
+
+  function fixtureLog(spec: LogCase): TrailblazeLogRecord {
+    const cls = spec.type === 'tool' ? 'TrailblazeToolLog' : 'TrailblazeSessionStatusChangeLog';
+    const log: TrailblazeLogRecord = {
+      class: `xyz.block.trailblaze.logs.client.TrailblazeLog.${cls}`,
+      timestamp: new Date(spec.timestampMs).toISOString(),
+      clock: spec.clock,
+    };
+    if (spec.durationMs != null) log.durationMs = spec.durationMs;
+    if (spec.deviceName != null) log.deviceName = spec.deviceName;
+    if (spec.hostReceivedAtMs != null) log.hostReceivedAt = new Date(spec.hostReceivedAtMs).toISOString();
+    return log;
+  }
+
+  test('every fixture session derives the offsets the contract pins', () => {
+    expect(fixtures.cases.length).toBeGreaterThan(0);
+    for (const c of fixtures.cases) {
+      const offsets = deviceClockOffsets(c.logs.map(fixtureLog));
+      if (!c.expectedOffsets) {
+        expect(offsets, c.name).toBeNull();
+        continue;
+      }
+      // "" is the fixture's spelling of a log that carries no device name.
+      const expected = new Map(
+        Object.entries(c.expectedOffsets.byDeviceName).map(([k, v]) => [k === '' ? null : k, v]),
+      );
+      expect(offsets!.byDeviceName, c.name).toEqual(expected);
+      expect(offsets!.sessionWideMs, c.name).toBe(c.expectedOffsets.sessionWideMs);
+    }
+  });
+
+  test('every fixture log lands where the contract pins it on the host timeline', () => {
+    for (const c of fixtures.cases) {
+      const logs = c.logs.map(fixtureLog);
+      const offsets = deviceClockOffsets(logs);
+      const placed = Object.fromEntries(c.logs.map((spec, i) => [spec.id, logHostMs(logs[i], offsets)]));
+      expect(placed, c.name).toEqual(Object.fromEntries(c.logs.map((spec) => [spec.id, spec.expectedHostMs])));
+    }
   });
 });

@@ -21,16 +21,17 @@ class TrailblazeDriverTypeTest {
   }
 
   /**
-   * Exact-membership tripwire. `when` branches over [TrailblazeDriverType] spell these drivers
-   * out individually (e.g. the screen-state capture arm in
-   * `TrailblazeDeviceManager.getCurrentScreenState`), and flipping an EXISTING entry's property
-   * silently routes it through whichever arm already handles it. If this test fails because you
-   * flipped one, update every branch that spells the drivers out, then this expectation.
+   * Exact-membership tripwire. Code paths over [TrailblazeDriverType] spell these drivers out
+   * individually (e.g. the connect-time probe in `TrailblazeDeviceService`, and the availability
+   * gate each host-native iOS driver's own `HostDriverDescriptor` applies during discovery), and
+   * flipping an EXISTING entry's property silently routes it through whichever path already
+   * handles it. If this test fails because you flipped one, update every path that spells the
+   * drivers out, then this expectation.
    *
    * This tripwire matters more than it used to. Those `when`s were compile-time exhaustive until
-   * drivers began moving onto `HostDriverDescriptor`; a converted driver returns before the `when`
-   * and it ends in a throwing `else`, so a new enum entry now surfaces at startup via
-   * `HostDriverDescriptorRegistry.validateCovers` or at runtime, not from the compiler.
+   * drivers moved onto `HostDriverDescriptor`; every driver now resolves through a descriptor, so
+   * a new enum entry surfaces as a failing descriptor-coverage test or a runtime throw, not from
+   * the compiler.
    */
   @Test
   fun `host-native simulator driver membership is pinned`() {
@@ -121,6 +122,21 @@ class TrailblazeDriverTypeTest {
         TrailblazeDriverType.IOS_AXE,
       ),
       TrailblazeDriverType.entries.filter { it.usesManualScrollLoop }.toSet(),
+    )
+  }
+
+  /**
+   * Only the accessibility driver defaults `scrollUntilTextIsVisible` to centering its target,
+   * because only its swipes have been measured to travel materially less (no fling through
+   * `dispatchGesture`). Adding a driver here changes where every un-parameterized scroll on it
+   * comes to rest — and therefore whether the steps recorded after that scroll still find their
+   * target — so the set is pinned rather than derived from a broader trait like "runs on device".
+   */
+  @Test
+  fun `scroll-centering default membership is pinned`() {
+    assertEquals(
+      setOf(TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY),
+      TrailblazeDriverType.entries.filter { it.centersScrollTargetByDefault }.toSet(),
     )
   }
 

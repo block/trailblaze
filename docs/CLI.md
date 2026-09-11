@@ -80,6 +80,7 @@ It does not reap device-scoped per-device sessions; use `app --stop` for those.
 | `usages` | Find every trail that directly invokes a tool (IDE "Find Usages" for tools). |
 | `session` | Manage the current device session — save it as a replayable trail, inspect steps, end it |
 | `report` | Generate an HTML report for session recordings, plus a best-effort JSON summary, and optionally MP4/GIF/WebP exports for a single session. JSON-only failures log a warning and still exit 0 — HTML is the primary artifact and is what gates the exit code. Animated exports collapse long idle gaps between steps so their length tracks the number of steps, not the session's real wall-clock. The capture window for all three (--gif/--webp/--video) is bounded by the MAX_PLAYBACK_WAIT_MS environment variable (milliseconds, default 600000); if playback overruns it, a best-effort truncated artifact is still written with a warning. |
+| `strings` | Extract the human-visible text a recorded session showed, for localization and copy diffs |
 | `viewer` | Write out the standalone report viewer (one self-contained HTML page) bundled into this binary. Serve it anywhere, or just open it: drop a session archive on the page, or point it at one with ?zip=<archive-url>. Versioned with this CLI, so it always matches the reports this binary generates. |
 | `profile` | Generate the performance-analysis report (an Instruments-style time profiler over each session's tools, LLM calls, timeouts, and idle gaps) for a logs directory. Defaults to the configured logs directory when <logs-dir> is omitted. Writes <logs-dir>/trailblaze_performance_analysis.html. Requires `bun` on PATH. |
 | `otel` | Convert recorded spans to OpenTelemetry. Writes <session>/otel.json (OTLP/JSON) for every session that recorded a trace, and with --post also sends them to an OTLP endpoint. Defaults to the configured logs directory when <dir> is omitted. |
@@ -93,6 +94,7 @@ It does not reap device-scoped per-device sessions; use `app --stop` for those.
 | `check` | Validate a trailmap: materialize manifests, type-check TypeScript/JavaScript sources, and run `*.test.ts` unit tests via `bun test`. On first run, scaffolds a minimal package.json at the workspace root if absent so `bun install` can be used as the canonical bootstrap (its `postinstall` hook re-runs `trailblaze check`). |
 | `inprocess` | Check an app APK for in-process driver compatibility, and build a test APK that drives it. |
 | `skill` | Print or install the bundled agent skill that teaches a coding agent this CLI |
+| `companion` | Attach a coding agent to Trail Runner while it authors a trail. |
 
 ---
 
@@ -301,6 +303,7 @@ trailblaze run [OPTIONS] [<<trailFile>>]
 |--------|-------------|---------|
 | `--tags` | Only run trails whose `config.tags:` list contains at least one of the given names. Repeatable (`--tags smoke --tags login`) or comma-separated (`--tags smoke,login`). Match is OR across tags. Untagged trails are excluded when --tags is specified. | - |
 | `-d`, `--device` | Device(s) to run on: `<platform>` (e.g. android), `<platform>/<instanceId>`, or a bare instanceId. Comma-separated or repeatable to run each trail on SEVERAL devices (`--device android,ios` → one run per device). When omitted, resolves to a pinned (`trailblaze device connect` / `TRAILBLAZE_DEVICE`) or single connected device; when 2+ devices are connected and none is pinned, the run fails and asks you to pass this (or `--driver` / `--all-devices`). See also --all-devices. | - |
+| `--device-classifier` | Select a locale/variant-qualified recording for this run (for example `ios-iphone-es`). The key must refine the connected device's detected classifiers. Only valid for a single-device run. | - |
 | `--all-devices` | Run each trail on EVERY connected device whose platform the trail supports (its `platform:`/`driver:` for v1, or its `devices:`/recording classifiers for the unified format). The opt-in way to exercise a multi-target trail across platforms in one command. Mutually exclusive with `--device` (passing both is rejected). Connected devices that don't match any supported platform are skipped. | - |
 | `--bind` | Bind a multi-device trail's COMPANION devices for this run: `--bind buyer=emulator-5562`. Repeatable or comma-separated. The names come from the trail's `config.devices:` configuration; the START device is the one `--device` names and must NOT be bound here. Per-run, so two multi-device trails can run concurrently against different device sets on one daemon — which `TRAILBLAZE_DEVICE_BINDINGS` cannot express (it is daemon-wide, and changing it needs a daemon restart). Takes precedence over that env var when passed. | - |
 | `--configuration` | Select which of a trail's `config.devices:` configurations to run when it declares more than one. Per-run, like --bind. Naming a configuration a single-device trail does not declare is an error rather than a silent single-device run. | - |
@@ -319,7 +322,7 @@ trailblaze run [OPTIONS] [<<trailFile>>]
 | `--secret` | Pre-populate trail memory with a SENSITIVE KEY=VAL before any step runs. Same shape as --memory; the value is redacted in logs (via `rememberSensitive`), excluded from the scripting envelope, and omitted from the session-start snapshot. Only the KEY appears in `Started.sensitiveMemoryKeys` so replay knows it must re-supply the value. Repeatable. Use for passwords, tokens, API keys, PII. | - |
 | `--arg` | Supply a value for a parameter the trail DECLARES under `config.args:`. Repeatable (`--arg recipient=sam@example.com --arg retries=3`). Unlike --memory, args are declared and typed: the value is coerced to the arg's declared type, a missing required arg fails before the run starts, and an undeclared arg is rejected. Referenced as `{{args.name}}` in prompts and tool params. Overrides an --args-file entry with the same key. The value is always a string here; declaration-driven coercion turns `retries=3` into a number for an `integer` arg. Use --args-file for structured (array/object) values. Arg values are logged in cleartext, persisted into logs/recordings, and surfaced to the LLM — args are non-sensitive by design. Route passwords, tokens, or other sensitive data through --secret memory instead. | - |
 | `--args-file` | Read parameter values from a YAML or JSON file (a map of arg-name to value). Applied BEFORE --arg, so a --arg KEY=VAL overrides the file entry with the same key. A YAML-null value is rejected (args have no null) — use '' for an empty string. Arg values are logged in cleartext, persisted into logs/recordings, and surfaced to the LLM — args are non-sensitive by design. Route passwords, tokens, or other sensitive data through --secret memory instead. | - |
-| `--max-llm-calls` | Cap the number of LLM calls per objective for the legacy TRAILBLAZE_RUNNER agent. Useful on metered or expensive providers to cut off a stuck self-heal loop. Must be a positive integer. Default: 25 (the runner's built-in cap). Not compatible with --agent MULTI_AGENT_V3. | - |
+| `--max-llm-calls` | Cap the number of LLM calls per objective for the TRAILBLAZE_RUNNER and KOOG_STRATEGY_GRAPH agents. Useful on metered or expensive providers to cut off a stuck self-heal loop. Must be a positive integer. Default: 25 (both agents' built-in cap). Not compatible with --agent MULTI_AGENT_V3. | - |
 | `--no-report` | Skip HTML report generation after execution | - |
 | `--full-report-payloads` | Embed full event payloads in the after-run HTML report even for sessions that passed, instead of applying the report size budgets (which truncate large successful network bodies and elide repeated intermediate snapshots to keep the report small). Failed sessions always embed full payloads regardless. The on-disk events/ artifacts are never budgeted, so an existing session can also be regenerated in full later via `trailblaze report --full-report-payloads`. Applies to in-process runs; a run delegated to an already-running daemon doesn't generate a report from this process. | - |
 | `--save-recording` | Save the recording back to the trail source directory after a successful run. Default: on. Use --no-save-recording to skip. Even when on, the recording is only saved when --self-heal was enabled OR this device isn't recorded yet — deterministic re-runs no-op the write so they can't clobber a hand-edited source. | - |
@@ -327,6 +330,7 @@ trailblaze run [OPTIONS] [<<trailFile>>]
 | `--markdown` | Generate a markdown report after execution | - |
 | `--no-daemon` | Run in-process without delegating to or starting a persistent daemon. The server shuts down when the run completes. | - |
 | `--compose-port` | RPC port for Compose driver connections (default: 52600) | - |
+| `--turbo` | Turbo mode: let the Android app under test report when it is idle so the driver waits less after each action, instead of watching for its screen to go quiet. Each wait ends at whichever answer comes first, so this can only make a run faster, never slower. Needs an app signed with a key this build carries a helper for (debug and internal builds; not release or beta) — a run that can't use it says so and runs at normal speed. When neither flag is passed, inherits TRAILBLAZE_TURBO and the saved `trailblaze config turbo` setting. | - |
 | `--capture-video` | Record device screen video for the session. Off by default — video writes large files and sprite extraction is expensive — pass --capture-video to enable it for a run. When neither flag is passed, inherits TRAILBLAZE_CAPTURE_VIDEO and the saved `trailblaze config capture-video` setting. | - |
 | `--capture-logcat` | Capture Android logcat (filtered to the app under test) to <session-dir>/device.log (only takes effect on Android). On by default; use --no-capture-logcat to disable. | - |
 | `--capture-ios-logs` | Capture the iOS Simulator system log via `xcrun simctl spawn log stream` to <session-dir>/device.log (only takes effect on iOS). On by default; the stream is scoped to the app under test (the logcat-equivalent app log, not the system firehose). Use --no-capture-ios-logs to disable. | - |
@@ -649,6 +653,81 @@ trailblaze report [OPTIONS] [<<session-id>>]
 | `--max-size` | Cap each exported artifact (--gif / --video / --webp / --storyboard) at the given byte size. Defaults to 10MB — GitHub's inline-attachment limit — so an export you paste into a PR fits without having to think about it. Accepts plain bytes (1024000) or human-readable suffixes (10MB, 5M, 1.5G); pass `none` (or `0`) for a genuinely uncapped export. After the initial encode, the exporter iteratively re-encodes at smaller viewport widths (1280→1024→720→640→480) until the artifact fits, then stops. If even the readability floor (480px) is still over the cap: an explicitly-passed --max-size fails the export with an actionable error, while the 10MB default keeps the oversized artifact and warns instead — a default you didn't ask for never turns a working export into a failure. Either way the remedies are the same: drop GIF for --webp or --video (both compress dramatically better), or shorten the recorded session (fewer trail steps, or split into multiple sessions). The cap is applied per artifact, so `--gif --webp --max-size=10MB` caps each one independently. | - |
 | `--full-report-payloads` | Embed full event payloads in the interactive report even for sessions that passed, instead of applying the report size budgets (which truncate large successful network bodies and elide repeated intermediate snapshots to keep the report small). Failed sessions always embed full payloads regardless. The on-disk events/ artifacts are never budgeted, so any session can be regenerated in full with this flag at any time. | - |
 | `--share-url` | Bake a canonical hosted URL (http/https) into the interactive report. Its Copy link button then produces deep links against that URL — with the current view, sort, run, and step grafted on as query parameters — no matter where the file is opened from (including file://). Use this when the report is published to a known location, e.g. a CI artifact URL or an internal report server. Without this flag, Copy link uses the browser's own address and only appears on http(s) pages. | - |
+| `-h`, `--help` | Show this help message and exit. | - |
+| `-V`, `--version` | Print version information and exit. | - |
+
+---
+
+### `trailblaze strings`
+
+Extract the human-visible text a recorded session showed, for localization and copy diffs
+
+**Synopsis:**
+
+```
+trailblaze strings [OPTIONS]
+trailblaze strings extract
+trailblaze strings diff
+```
+
+**Options:**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `-h`, `--help` | Show this help message and exit. | - |
+| `-V`, `--version` | Print version information and exit. | - |
+
+---
+
+### `trailblaze strings extract`
+
+Write visible-strings.ndjson into each session's directory. One line per screen capture, keyed by the screenshot filename so every string traces back to its image.
+
+**Synopsis:**
+
+```
+trailblaze strings extract [OPTIONS] [<<session-id>>]
+```
+
+**Arguments:**
+
+| Argument | Description | Required |
+|----------|-------------|----------|
+| `<<session-id>>` | Session ID or unambiguous prefix. Defaults to every session in the logs directory. | No |
+
+**Options:**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--all` | Keep the strings on every capture. By default a capture that repeats the previous screen's text is recorded as a repeat with its strings omitted. | - |
+| `--logs-dir` | Directory to read sessions from. Defaults to the configured logs directory. | - |
+| `-h`, `--help` | Show this help message and exit. | - |
+| `-V`, `--version` | Print version information and exit. | - |
+
+---
+
+### `trailblaze strings diff`
+
+Compare two visible-strings.ndjson files step by step. Meaningful only for a mechanical trail: an LLM-driven objective takes a different path each run, so its step numbers do not line up across runs.
+
+**Synopsis:**
+
+```
+trailblaze strings diff [OPTIONS] <<baseline.ndjson>> <<candidate.ndjson>>
+```
+
+**Arguments:**
+
+| Argument | Description | Required |
+|----------|-------------|----------|
+| `<<baseline.ndjson>>` | The run to compare against. | Yes |
+| `<<candidate.ndjson>>` | The run to check. | Yes |
+
+**Options:**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--untranslated` | Report the strings both runs show verbatim instead of the ones that changed. Run the same trail at two locales and this is the list of screens nobody translated. | - |
 | `-h`, `--help` | Show this help message and exit. | - |
 | `-V`, `--version` | Print version information and exit. | - |
 
@@ -1223,7 +1302,7 @@ trailblaze config reset
 | `ios-driver` | iOS driver type | host, axe |
 | `self-heal` | Enable/disable self-heal (AI takes over) when recorded steps fail | true, false |
 | `require-steps` | Require -s/--step on every tool / step / ask / verify call (default: false) | true, false |
-| `max-llm-calls` | Per-objective LLM call cap for the legacy TRAILBLAZE_RUNNER agent | positive integer, or 'unset' to clear |
+| `max-llm-calls` | Per-objective LLM call cap for the TRAILBLAZE_RUNNER and KOOG_STRATEGY_GRAPH agents | positive integer, or 'unset' to clear |
 | `annotated-screenshots` | Save set-of-mark annotated screenshots to logs (LLM always receives annotated) | true, false |
 | `mode` | CLI working mode: trail (author reproducible trails) or blaze (explore device) | trail, blaze |
 | `web-headless` | Default for `--headless` on web devices (CLI flag still wins when explicitly passed) | true, false |
@@ -1235,6 +1314,7 @@ trailblaze config reset
 | `capture-video` | Record device screen video for each session (default: off — video is opt-in) | true or false |
 | `ios-baguette-video` | Experimental: record iOS session video from the baguette H.264 stream instead of simctl (default: off) | true, false, or 'unset' to inherit the default (off) |
 | `disable-animations` | Experimental: disable OS animations on the device during each session, restored at session end (default: off) | true, false, or 'unset' to inherit the default (off) |
+| `turbo` | Experimental: let the Android app under test report when it is idle so the driver waits less (default: off) | true, false, or 'unset' to inherit the default (off) |
 
 **Examples:**
 
@@ -1638,7 +1718,7 @@ trailblaze inprocess probe-apk [OPTIONS] <<app apk>>
 
 ### `trailblaze inprocess make-test-apk`
 
-Retarget a prebuilt in-process shell APK at one app and sign it with that app's key. Stamps the instrumentation's target package, injects trails / target config / scripted-tool bundles, then signs. Writes a build record beside the output APK.
+Retarget a prebuilt in-process shell APK at one app and sign it with that app's key. Stamps the instrumentation's target package, injects trails / target config / scripted-tool bundles, then signs. Writes a build record beside the output APK. KNOWN LIMITATION: an app that uses androidx.startup cannot be attached to by a generic shell yet. AppInitializer is a process-wide singleton and the shell's duplicate copy latches first, so the app's own initializers never run and the process crashes before the first session starts. Given --app-apk, this command warns when the app's manifest declares that provider, and produces the APK anyway - the packaging is fine, the run is not. On the --fingerprint path it cannot warn at all: a fingerprint states the signing facts, not the manifest's components, so no warning there is not evidence of no androidx.startup. Until the shell stops packaging the duplicate runtime, use the Gradle in-process module for such an app - naming the app as targetProjectPath makes AGP dedupe startup-runtime out of the test APK.
 
 **Synopsis:**
 
@@ -1657,7 +1737,7 @@ trailblaze inprocess make-test-apk [OPTIONS]
 | `--alias` | Key alias inside --keystore. | - |
 | `--app-apk` | The app's APK, read for its certificate digest and debuggable flag. One of --app-apk or --fingerprint is required — signing blind is refused. | - |
 | `--fingerprint` | A `package:`/`certificate_sha256:`/`debuggable:` description of the app, for a host the app's APK never reaches. Carries the same two guard inputs --app-apk would be read for. | - |
-| `--release` | Allow a non-debuggable target. Off by default: an instrumentation cannot attach to a non-debuggable app on an ordinary device, and the usual cause of one is the wrong APK. | - |
+| `--release` | Allow a non-debuggable target. Off by default because the usual cause of one is the wrong APK, not a deliberate release target. Signature equality is what actually gates attach, so a release build signed with the SAME key this command signs with is attachable and --release is the explicit override for it. A release build signed with a production key you do not hold stays unattachable no matter what you pass here. | - |
 | `--allow-runtime-tool-source` | Bake `allow_runtime_tool_source: true` into the injected --target-config, letting this APK load scripted-tool bundles pushed to /data/local/tmp at run time instead of the ones packaged in it. Off by default, and written before signing either way, so the signature records the choice and a key-ceremony APK cannot be turned into one by omission. | - |
 | `--target-config` | Target config to inject (`id:`, `display_name:`, `platforms:`, `tools:`). Without one the APK runs framework primitives only — no scripted tools. | - |
 | `--trailmap` | Trailmap directory whose name is the trailmap id and which holds a tools/ subtree. Repeat for several. A tools/ of pre-built .bundle.js files needs no tooling; TypeScript sources are bundled here, which needs esbuild. | - |
@@ -1754,6 +1834,211 @@ trailblaze skill status [OPTIONS]
 |--------|-------------|---------|
 | `-h`, `--help` | Show this help message and exit. | - |
 | `-V`, `--version` | Print version information and exit. | - |
+
+---
+
+### `trailblaze companion`
+
+Attach a coding agent to Trail Runner while it authors a trail.
+
+**Synopsis:**
+
+```
+trailblaze companion [OPTIONS]
+trailblaze companion start
+trailblaze companion event
+trailblaze companion send
+trailblaze companion listen
+trailblaze companion disconnect
+trailblaze companion respond
+trailblaze companion agent-help
+```
+
+**Options:**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--agent-help` | Print the complete coding-agent workflow and wire contract. | - |
+| `-h`, `--help` | Show this help message and exit. | - |
+| `-V`, `--version` | Print version information and exit. | - |
+
+---
+
+### `trailblaze companion start`
+
+Start a companion authoring session.
+
+**Synopsis:**
+
+```
+trailblaze companion start [OPTIONS]
+```
+
+**Options:**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--folder` | Trail folder relative to the workspace root. | - |
+| `--title` | Human-readable title shown in Trail Runner. | - |
+| `--agent` | Agent type: claude or codex. | `claude` |
+| `--label` | Agent label shown in Trail Runner. | - |
+| `--trails-dir` | Workspace root (default: current directory). | `.` |
+| `-h`, `--help` | Show this help message and exit. | - |
+| `-V`, `--version` | Print version information and exit. | - |
+
+---
+
+### `trailblaze companion event`
+
+Append narration to a companion session.
+
+**Synopsis:**
+
+```
+trailblaze companion event [OPTIONS] <<runId>>
+```
+
+**Arguments:**
+
+| Argument | Description | Required |
+|----------|-------------|----------|
+| `<<runId>>` | Companion run id. | Yes |
+
+**Options:**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--kind` | assistant_message, lifecycle, or error. | - |
+| `--title` | Optional event heading. | - |
+| `--text` | Event body. | - |
+| `-h`, `--help` | Show this help message and exit. | - |
+| `-V`, `--version` | Print version information and exit. | - |
+
+---
+
+### `trailblaze companion send`
+
+Send or retract Trail Runner UI guidance.
+
+**Synopsis:**
+
+```
+trailblaze companion send [OPTIONS] <<runId>> <<directive>>
+```
+
+**Arguments:**
+
+| Argument | Description | Required |
+|----------|-------------|----------|
+| `<<runId>>` | Companion run id. | Yes |
+| `<<directive>>` | Directive name. | Yes |
+
+**Options:**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--text` |  | - |
+| `--route` |  | - |
+| `--variant` |  | - |
+| `--platform` |  | - |
+| `--app` |  | - |
+| `--title` |  | - |
+| `--item` | List item; repeat for multiple items. | - |
+| `--payload` | Additional directive fields as a JSON object. | - |
+| `-h`, `--help` | Show this help message and exit. | - |
+| `-V`, `--version` | Print version information and exit. | - |
+
+---
+
+### `trailblaze companion listen`
+
+Stream human and lifecycle events as JSON Lines.
+
+**Synopsis:**
+
+```
+trailblaze companion listen [OPTIONS] <<runId>>
+```
+
+**Arguments:**
+
+| Argument | Description | Required |
+|----------|-------------|----------|
+| `<<runId>>` | Companion run id. | Yes |
+
+**Options:**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--after` | Resume after this event sequence number. | - |
+| `-h`, `--help` | Show this help message and exit. | - |
+| `-V`, `--version` | Print version information and exit. | - |
+
+---
+
+### `trailblaze companion disconnect`
+
+End a companion session.
+
+**Synopsis:**
+
+```
+trailblaze companion disconnect [OPTIONS] <<runId>>
+```
+
+**Arguments:**
+
+| Argument | Description | Required |
+|----------|-------------|----------|
+| `<<runId>>` | Companion run id. | Yes |
+
+**Options:**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--note` | Optional closing summary. | - |
+| `-h`, `--help` | Show this help message and exit. | - |
+| `-V`, `--version` | Print version information and exit. | - |
+
+---
+
+### `trailblaze companion respond`
+
+Settle a request delegated by Trail Runner.
+
+**Synopsis:**
+
+```
+trailblaze companion respond [OPTIONS] <<runId>>
+```
+
+**Arguments:**
+
+| Argument | Description | Required |
+|----------|-------------|----------|
+| `<<runId>>` | Companion run id. | Yes |
+
+**Options:**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--request` | Request id from the listen stream. | - |
+| `--status` | done or error. | - |
+| `--note` | Optional result note. | - |
+| `-h`, `--help` | Show this help message and exit. | - |
+| `-V`, `--version` | Print version information and exit. | - |
+
+---
+
+### `trailblaze companion agent-help`
+
+Print the complete coding-agent workflow and wire contract.
+
+**Synopsis:**
+
+```
+trailblaze companion agent-help
+```
 
 <hr/>
 

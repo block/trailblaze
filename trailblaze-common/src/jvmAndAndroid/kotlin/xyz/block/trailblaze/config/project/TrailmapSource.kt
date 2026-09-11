@@ -87,8 +87,8 @@ sealed class TrailmapSource {
    * — at any depth — whose name matches one of [suffixes].
    *
    * Used by the trailmap loader to auto-discover waypoint YAMLs from `<trailmap>/waypoints/`
-   * without requiring the manifest to enumerate them. The Square trailmap organizes its
-   * ~120 waypoints under `waypoints/{android,ios,web}/...` subdirs (web/dashboard/items/
+   * without requiring the manifest to enumerate them. A large trailmap organizes its
+   * waypoints under `waypoints/{android,ios,web}/...` subdirs (web/dashboard/items/
    * categories.waypoint.yaml is four levels deep), so the discovery path has to walk the
    * whole tree — same shape `ToolYamlLoader.discoverTrailmapBundledToolContents` already uses
    * for tools.

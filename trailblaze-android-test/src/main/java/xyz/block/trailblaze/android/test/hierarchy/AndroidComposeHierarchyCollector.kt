@@ -186,13 +186,13 @@ object AndroidComposeHierarchyCollector {
    * own — counts every published node, and three things beyond importance still move that count:
    * each Compose host contributes a semantics root that the a11y tree represents as the host View
    * instead, the delegate's role branch keys off MERGED children where this keys off unmerged, and
-   * the message bar's own contents differ between two devices anyway. On the Settings list of cases
-   * 5380716 and 5380717 that leaves index 6 on the mode-selector row rather than Checkout, two
-   * places short.
+   * the message bar's own contents differ between two devices anyway. On the Settings list two
+   * trails were recorded against, that leaves index 6 on the mode-selector row rather than
+   * Checkout, two places short.
    *
    * Those two were the only trails here whose recording carried such a step, and they no longer do:
    * the row is qualified by its label and the Compose host it hangs under, which is something both
-   * trees state. `CrossDriverSelectorPortabilityTest` holds a capture from each driver and pins
+   * trees state. A separate selector-portability suite holds a capture from each driver and pins
    * that. An `index` was never going to survive this move — it is unstable on the recording driver
    * too, since the row it lands on depends on what the status bar is showing — so what this filter
    * buys is a `classNameRegex` that means the same thing on both trees, not a count that agrees.

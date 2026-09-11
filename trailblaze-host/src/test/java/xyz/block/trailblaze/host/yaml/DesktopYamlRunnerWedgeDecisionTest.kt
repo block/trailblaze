@@ -139,7 +139,7 @@ class DesktopYamlRunnerWedgeDecisionTest {
   // The terminal status alone is unreliable: a mid-trail wedge is absorbed by the agent loop
   // (tool errors feed the LLM / self-heal), so the session keeps running and ends with whatever
   // the LAST step failed with — or as MaxCallsLimitReached with no message at all. Both shapes
-  // slipped past the status gate in trailblaze-android-pr/2712 and poisoned the rest of the
+  // slipped past the status gate in one CI run and poisoned the rest of the
   // build. The logs overload also scans per-tool failures, which carry the signature verbatim.
 
   private val testSessionId = SessionId("wedge-decision-test")

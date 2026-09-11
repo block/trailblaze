@@ -1,19 +1,12 @@
 package xyz.block.trailblaze.toolcalls.commands
 
-import kotlin.time.Duration
-import kotlin.time.Duration.Companion.milliseconds
-import kotlin.time.TimeSource
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.delay
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.JsonElement
 import xyz.block.trailblaze.api.MatchDescriptor
-import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TrailblazeNode
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
-import xyz.block.trailblaze.api.TrailblazeNodeSelectorResolver
-import xyz.block.trailblaze.api.toMatchDescriptor
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
@@ -23,11 +16,21 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.tracing.TrailblazeTracer
-import xyz.block.trailblaze.util.Console
 
 /**
  * Query tool: resolves a [TrailblazeNodeSelector] against the current view
  * hierarchy and returns every match as a [MatchDescriptor] list.
+ *
+ * ## DEPRECATED — use [FindSelectorMatchesTrailblazeTool]
+ *
+ * `findSelectorMatches` does everything this does and answers N selectors from ONE capture, which
+ * this tool structurally cannot: each `client.tools.*` callback enters its own cache frame, so
+ * asking three questions of one screen through this tool pays three multi-second captures and gets
+ * three different screens. Passing a single-element `selectors` list to the replacement behaves
+ * identically to this tool — the extra trust semantics there (a "mixed" frame) are unreachable with
+ * one selector — so migration is mechanical rather than behavioural.
+ *
+ * Kept only until its callers move, then deleted — do not add new callers.
  *
  * Surface-only — not advertised to the LLM agent (`surfaceToLlm = false`) so the
  * model can't pick `findMatches` spontaneously; only scripted-tool authors who
@@ -48,11 +51,31 @@ import xyz.block.trailblaze.util.Console
  *
  * ## Snapshot reuse
  *
- * Routes the capture through [SnapshotCache] so a tool body that calls
- * `findMatches` multiple times within one invocation pays the multi-second
- * view-hierarchy fetch once. Falls back to a direct
- * [TrailblazeToolExecutionContext.screenStateProvider] call when no cache frame
- * is active (unit tests, direct invocations).
+ * Routes the capture through [SnapshotCache], which shares one captured tree
+ * between `findMatches` calls dispatched as SIBLINGS in the same batch. Falls
+ * back to a direct [TrailblazeToolExecutionContext.screenStateProvider] call
+ * when no cache frame is active (unit tests, direct invocations).
+ *
+ * It does NOT deduplicate across scripted calls: each `client.tools.*` callback
+ * enters its own nested frame, so N `client.tools.findMatches(...)` from one
+ * scripted tool body pay N captures whatever the cache holds. Asking several
+ * questions of one screen is [FindSelectorMatchesTrailblazeTool]'s job.
+ *
+ * ## Captures that lost nodes
+ *
+ * An empty match list is how a scripted caller decides an element is absent, so
+ * this tool will not produce one out of a capture it knows is missing nodes
+ * (see [xyz.block.trailblaze.api.ScreenState.droppedNodeFetches] — on Android
+ * every node is a live fetch, and a blocked app answers with null). It
+ * re-captures instead, and fails rather than answering "no matches" if it never
+ * gets a capture the device could complete. A non-empty result is returned
+ * straight away either way: a node that IS in a tree really was on screen.
+ * Drivers that cannot measure completeness report unknown and are unaffected.
+ *
+ * That rule, the capture timing and the retry budget all live in
+ * [SelectorQueryEngine], shared with [FindSelectorMatchesTrailblazeTool] —
+ * this tool contributes only what one selector's verdict is
+ * ([resolveOne]) and how to word its errors.
  */
 @Serializable
 @TrailblazeToolClass(
@@ -61,15 +84,21 @@ import xyz.block.trailblaze.util.Console
   isRecordable = false,
   isVerification = false,
 )
+@Deprecated(
+  "Use [FindSelectorMatchesTrailblazeTool] — it answers N selectors from one capture. " +
+    "A single-element `selectors` list behaves identically, so migrating is mechanical.",
+)
 data class FindMatchesTrailblazeTool(
   /** Selector to match against the current view hierarchy. */
   val selector: TrailblazeNodeSelector,
   /**
    * Optional wait budget in milliseconds. `null` (the default) keeps the historical behavior: a
    * single point-in-time snapshot, reusing the per-invocation [SnapshotCache] frame. When set, the
-   * tool polls the LIVE hierarchy — re-capturing every [pollIntervalMs], bypassing the cache so
+   * tool polls the LIVE hierarchy — re-capturing every [SelectorQueryEngine.pollIntervalMs],
+   * bypassing the cache so
    * each poll sees the current screen — until at least one match appears or the budget elapses,
-   * then returns whatever matched (an empty list if nothing did).
+   * then returns whatever matched (an empty list if nothing did, provided at least one poll got a
+   * capture that held every node the device advertised — see the class kdoc).
    *
    * This is the non-throwing "wait until this selector is visible" probe that scripted tools use
    * for conditional flows. It's the framework-side equivalent of the Kotlin agent's
@@ -79,7 +108,9 @@ data class FindMatchesTrailblazeTool(
    * authors from hand-rolling a poll loop on top of point-in-time `findMatches`.
    *
    * A value `<= 0` performs a single immediate live capture (no wait) and returns its matches —
-   * effectively the point-in-time result routed through the polling path rather than an error.
+   * effectively the point-in-time result routed through the polling path rather than an error. It
+   * gets a single look, so a capture that lost nodes and matched nothing has no later poll to
+   * redeem it and the call fails rather than reporting absence.
    */
   val timeoutMs: Long? = null,
 ) : ExecutableTrailblazeTool, ReadOnlyTrailblazeTool {
@@ -107,28 +138,47 @@ data class FindMatchesTrailblazeTool(
     // is emitted here, once.
     val traceArgs = mapOf("selector" to selectorDesc)
     val descriptors: List<MatchDescriptor> = try {
-      if (timeoutMs == null) {
-        // Point-in-time: route through SnapshotCache so repeated findMatches in one tool body
-        // share the multi-second capture.
-        val screenState = SnapshotCache.snapshot(provider, traceTag)
-        val tree = screenState.trailblazeNodeTree
-          ?: return missingTreeError(screenState.trailblazeDevicePlatform)
-        TrailblazeTracer.trace(name = "findMatches", cat = TRACE_CAT, args = traceArgs) {
-          resolveMatches(tree, selectorDesc)
+      val outcome = TrailblazeTracer.traceSuspend(name = "findMatches", cat = TRACE_CAT, args = traceArgs) {
+        if (timeoutMs == null) {
+          // Point-in-time: routed through SnapshotCache so repeated findMatches in one tool body
+          // share the multi-second capture.
+          SelectorQueryEngine.resolvePointInTime(
+            provider = provider,
+            traceTag = traceTag,
+            logTag = LOG_TAG,
+            describeAbsence = { "selector=$selectorDesc" },
+            resolve = { tree -> resolveOne(tree, selectorDesc) },
+          )
+        } else {
+          SelectorQueryEngine.poll(
+            provider = provider,
+            timeoutMs = timeoutMs,
+            traceTag = traceTag,
+            logTag = LOG_TAG,
+            describeAbsence = { "selector=$selectorDesc" },
+            resolve = { tree -> resolveOne(tree, selectorDesc) },
+          )
         }
-      } else {
-        val outcome = TrailblazeTracer.traceSuspend(name = "findMatches", cat = TRACE_CAT, args = traceArgs) {
-          pollForMatches(provider, selectorDesc, timeoutMs)
-        }
-        when (outcome) {
-          // A driver that NEVER produced a node tree across the whole poll (e.g. a Maestro-only
-          // driver whose ScreenState has no `trailblazeNodeTree`) is a driver/platform mismatch —
-          // surface the SAME error as the point-in-time path rather than a misleading empty result
-          // that would send a scripted caller down its "absent element" branch. A merely TRANSIENT
-          // null (a tree was seen on some other poll) does NOT trigger this.
-          is PollOutcome.NoTreeEverSeen -> return missingTreeError(outcome.platform)
-          is PollOutcome.Resolved -> outcome.descriptors
-        }
+      }
+      when (outcome) {
+        // A driver that never produced a node tree is a driver/platform mismatch — the same error
+        // from either path, rather than a misleading empty result that would send a scripted caller
+        // down its "absent element" branch. On the polling path a merely TRANSIENT null (a tree was
+        // seen on some other poll) does NOT trigger this.
+        is SelectorQueryEngine.Outcome.NoTreeEverSeen -> return missingTreeError(outcome.platform)
+        // Every capture we could get lost nodes and none of them held the selector. Refusing to
+        // answer is the point: the empty list is a scripted caller's "element is absent" branch,
+        // and here we do not know that.
+        // `timeoutMs` is exactly "did this call already wait", so one call site gives each path
+        // the advice it used to get from its own.
+        is SelectorQueryEngine.Outcome.UntrustworthyAbsence ->
+          return partialCaptureError(
+            selectorDesc = selectorDesc,
+            captures = outcome.captures,
+            waitedMs = timeoutMs,
+            sawCompleteCapture = outcome.sawCompleteCapture,
+          )
+        is SelectorQueryEngine.Outcome.Resolved -> outcome.result
       }
     } catch (e: CancellationException) {
       throw e
@@ -149,93 +199,32 @@ data class FindMatchesTrailblazeTool(
   }
 
   /**
-   * Polls the LIVE hierarchy until ≥1 match or [timeoutMs] elapses. Re-captures via [provider]
-   * directly (NOT [SnapshotCache]) each [pollIntervalMs] so every iteration sees the current
-   * screen — the whole point is to catch UI that renders after the call begins.
+   * Resolves [selector] against one captured [tree] and states the verdict in the two terms
+   * [SelectorQueryEngine] reasons about. For a single selector they collapse into each other — a
+   * match means the wait is over and nothing is being claimed absent; an empty list means the
+   * opposite — which is why the engine's trust rule reduces here to exactly the historical
+   * behavior: return a match immediately, but never return "empty" out of a capture that lost nodes.
    *
-   * Tree handling mirrors the point-in-time path's contract:
-   *  - A null tree on SOME polls but a real tree on others (mid-transition) is fine — those polls
-   *    are just "no match yet".
-   *  - A tree that is NEVER seen across the whole poll (a driver whose `ScreenState` has no
-   *    `trailblazeNodeTree`, e.g. Maestro-only) returns [PollOutcome.NoTreeEverSeen] so the caller
-   *    surfaces the same missing-tree error the point-in-time path returns, instead of a misleading
-   *    empty result.
-   *
-   * The per-iteration sleep is capped to the remaining budget so a small [timeoutMs] returns at
-   * ~[timeoutMs] rather than rounding up to a full poll interval.
-   *
-   * The re-capture loop is intentionally simple; a future optimization could route through a
-   * driver-native wait (the accessibility / Maestro side already has an event-driven
-   * `executeNodeSelectorAssertVisible` wait) to avoid a full-tree capture on every poll.
+   * Delegates the actual matching to [SelectorMatchResolution] so `findSelectorMatches` answers
+   * each of its N selectors exactly as an equivalent `findMatches` call would. Intentionally
+   * UNTRACED: the single enclosing [TrailblazeTracer] span is emitted once per call by [execute],
+   * so the polling path doesn't emit one span per re-capture.
    */
-  private suspend fun pollForMatches(
-    provider: () -> ScreenState,
+  private fun resolveOne(
+    tree: TrailblazeNode,
     selectorDesc: String,
-    timeoutMs: Long,
-  ): PollOutcome {
-    val start = TimeSource.Monotonic.markNow()
-    val budget = timeoutMs.milliseconds
-    var sawTree = false
-    var lastPlatform = TrailblazeDevicePlatform.ANDROID
-    var descriptors: List<MatchDescriptor> = emptyList()
-    var pollCount = 0
-    while (true) {
-      pollCount++
-      val screenState = provider()
-      lastPlatform = screenState.trailblazeDevicePlatform
-      val tree = screenState.trailblazeNodeTree
-      if (tree != null) {
-        sawTree = true
-        descriptors = resolveMatches(tree, selectorDesc)
-        if (descriptors.isNotEmpty()) return PollOutcome.Resolved(descriptors)
-      }
-      val remaining = budget - start.elapsedNow()
-      if (remaining <= Duration.ZERO) break
-      delay(minOf(pollIntervalMs.milliseconds, remaining))
-    }
-    return if (sawTree) {
-      // Polled the whole budget against a resolvable tree but the selector never matched — a
-      // normal "not visible within timeout" outcome (empty Resolved, NOT an error). Logged so a
-      // scripted author debugging a flaky wait can see the poll actually ran rather than
-      // short-circuiting. `descriptors` is empty here: a non-empty match returns inside the loop.
-      Console.log(
-        "[FindMatches] timeoutMs=$timeoutMs elapsed after $pollCount poll(s); selector never " +
-          "matched, returning empty — selector=$selectorDesc",
-      )
-      PollOutcome.Resolved(descriptors)
-    } else {
-      PollOutcome.NoTreeEverSeen(lastPlatform)
-    }
-  }
-
-  /**
-   * Resolves [selector] against a captured [tree] into [MatchDescriptor]s — shared by the
-   * point-in-time and polling paths. Intentionally UNTRACED: the single enclosing
-   * [TrailblazeTracer] span is emitted once per `findMatches` call by [execute] (so the polling
-   * path doesn't emit one span per re-capture). Drops any resolved node the descriptor builder
-   * can't path-resolve against the same tree (observable via [Console.log]) so one bad node never
-   * sinks the whole result.
-   */
-  private fun resolveMatches(tree: TrailblazeNode, selectorDesc: String): List<MatchDescriptor> {
-    val matchedNodes: List<TrailblazeNode> = when (
-      val result = TrailblazeNodeSelectorResolver.resolve(tree, selector)
-    ) {
-      is TrailblazeNodeSelectorResolver.ResolveResult.NoMatch -> emptyList()
-      is TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch -> listOf(result.node)
-      is TrailblazeNodeSelectorResolver.ResolveResult.MultipleMatches -> result.nodes
-    }
-    return matchedNodes.mapNotNull { node ->
-      node.toMatchDescriptor(tree) ?: run {
-        // Observable signal for a resolver-vs-captured-tree mismatch — the resolver handed back
-        // a node the builder couldn't path-resolve against the same tree. Production-path bug if
-        // it fires, but the tool degrades to "skip that match" so the rest still flows.
-        Console.log(
-          "[FindMatches] dropping match — node not in captured tree, nodeId=${node.nodeId}, " +
-            "selector=$selectorDesc",
-        )
-        null
-      }
-    }
+  ): SelectorQueryEngine.Resolution<List<MatchDescriptor>> {
+    val descriptors = SelectorMatchResolution.resolve(
+      tree = tree,
+      selector = selector,
+      selectorDesc = selectorDesc,
+      logTag = LOG_TAG,
+    )
+    return SelectorQueryEngine.Resolution(
+      result = descriptors,
+      matched = descriptors.isNotEmpty(),
+      claimsAbsence = descriptors.isEmpty(),
+    )
   }
 
   /**
@@ -249,12 +238,53 @@ data class FindMatchesTrailblazeTool(
         "(platform=${platform.name}). The selector cannot be resolved.",
     )
 
-  /** Outcome of [pollForMatches]. [NoTreeEverSeen] is the persistent-no-tree driver mismatch. */
-  private sealed interface PollOutcome {
-    data class Resolved(val descriptors: List<MatchDescriptor>) : PollOutcome
-
-    data class NoTreeEverSeen(val platform: TrailblazeDevicePlatform) : PollOutcome
-  }
+  /**
+   * The refusal both resolve paths share: this call never got a capture it could read "no
+   * matches" out of, so it reports that instead of an empty list a caller would read as absence.
+   *
+   * The paths need different advice, so [waitedMs] decides which is given. A point-in-time call
+   * has a wait to reach for; a call that already waited does not, and telling it to pass a
+   * `timeoutMs` it just passed is the least useful thing this message could say. `timeoutMs = 0`
+   * is a third case, not the second one: it is the polling path with no budget — exactly one live
+   * capture, no retry — so one holey capture there says nothing about the app, and blaming the
+   * main thread would be a guess.
+   *
+   * [sawCompleteCapture] is always `false` here, because a single selector's result cannot be
+   * "mixed" — the one case that reaches the refusal with a complete capture behind it. It is
+   * threaded and branched anyway so this message cannot start lying if that ever stops being true,
+   * and so the two tools read identically in a log.
+   */
+  private fun partialCaptureError(
+    selectorDesc: String,
+    captures: Int,
+    waitedMs: Long?,
+    sawCompleteCapture: Boolean,
+  ): TrailblazeToolResult.Error.ExceptionThrown =
+    TrailblazeToolResult.Error.ExceptionThrown(
+      errorMessage = "findMatches: " +
+        (
+          if (sawCompleteCapture) {
+            "the capture this wait ended on dropped node fetches"
+          } else {
+            "$captures capture(s) each dropped node fetches"
+          }
+          ) + " and none " +
+        "matched $selectorDesc, so whether the element is on screen is unknown — the app was " +
+        "not answering accessibility node fetches (typically a blocked main thread) and the " +
+        "captured tree is missing subtrees. Reporting no matches here would read as 'absent'. " +
+        when {
+          waitedMs == null -> "Pass a `timeoutMs` to wait for a capture the device can complete."
+          waitedMs <= 0L ->
+            "A `timeoutMs` of ${waitedMs}ms takes exactly one live capture and never retries, so " +
+              "nothing here says the app is wedged — pass a real budget so a later poll can land " +
+              "on a complete capture, or omit `timeoutMs` for a point-in-time read."
+          else ->
+            "This call already waited ${waitedMs}ms and the app did not answer a complete capture " +
+              "in that window, so a longer `timeoutMs` only helps if the block clears on its own. " +
+              "Fix what is holding the app's main thread."
+        },
+      command = this,
+    )
 
   companion object {
     /**
@@ -263,22 +293,7 @@ data class FindMatchesTrailblazeTool(
      */
     private val TRACE_CAT: String = FindMatchesTrailblazeTool::class.simpleName!!
 
-    /**
-     * Production delay between live re-captures on the [timeoutMs] polling path.
-     *
-     * Deliberately a fixed constant with no `TRAILBLAZE_*` env override: this client-side poll is
-     * a stopgap (see [pollForMatches] — the real fix is a driver-native event-driven wait), so it
-     * isn't worth a tunable knob plus the CLAUDE.md doc surface that would outlive the mechanism.
-     * Tests adjust the sibling [pollIntervalMs] seam directly.
-     */
-    internal const val DEFAULT_POLL_INTERVAL_MS = 300L
-
-    /**
-     * Delay between live re-captures on the [timeoutMs] polling path. A mutable `internal` seam
-     * (not a `const`) so tests can shrink it to avoid real-time sleeps; production uses
-     * [DEFAULT_POLL_INTERVAL_MS]. The per-iteration sleep is additionally capped to the remaining
-     * budget in [pollForMatches] so it never overshoots `timeoutMs`.
-     */
-    internal var pollIntervalMs: Long = DEFAULT_POLL_INTERVAL_MS
+    /** Prefix on this tool's [SelectorQueryEngine] log lines, so a log names the tool, not the engine. */
+    private const val LOG_TAG = "FindMatches"
   }
 }

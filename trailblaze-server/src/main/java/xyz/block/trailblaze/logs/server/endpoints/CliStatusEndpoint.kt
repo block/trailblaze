@@ -50,11 +50,9 @@ data class CliStatusResponse(
    */
   val workspaceContentHash: String? = null,
   /**
-   * Number of trail runs currently pending or executing on this daemon (submitted via
-   * `/cli/run-async`). Filled in server-side from [CliRunManager] — the desktop app's
-   * status provider doesn't set it. External tooling (e.g. the dev launcher's stale-JAR
-   * restart in `scripts/dev-jar-cache.sh`) checks this before stopping the daemon so a
-   * rebuild in one checkout can't silently kill a run in flight from another.
+   * Number of active workloads owned by this daemon: trail runs plus attached Companion sessions.
+   * Filled in server-side — the desktop app's status provider doesn't set it. External tooling
+   * checks this before stopping the daemon so a rebuild or version swap cannot silently kill work.
    */
   val activeRuns: Int = 0,
   /**
@@ -112,8 +110,20 @@ object CliDaemonCapabilities {
    */
   const val SNAPSHOT_BASELINE = "run.snapshot-baseline"
 
+  /** The daemon honors the run-scoped locale/variant device classifier override. */
+  const val DEVICE_CLASSIFIER = "run.device-classifier"
+
+  /** The daemon exposes Trail Runner's Companion authoring routes. */
+  const val COMPANION = "companion"
+
   /** Every capability this build honors. */
-  val ALL: Set<String> = setOf(PER_RUN_DEVICE_BINDINGS, SESSION_SAVE_CONFIGURATION, SNAPSHOT_BASELINE)
+  val ALL: Set<String> = setOf(
+    PER_RUN_DEVICE_BINDINGS,
+    SESSION_SAVE_CONFIGURATION,
+    SNAPSHOT_BASELINE,
+    DEVICE_CLASSIFIER,
+    COMPANION,
+  )
 }
 
 /**

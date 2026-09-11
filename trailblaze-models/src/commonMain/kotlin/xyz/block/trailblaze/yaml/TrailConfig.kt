@@ -12,9 +12,12 @@ data class TrailConfig(
   val source: TrailSource? = null,
   val metadata: Map<String, String>? = null,
   /**
-   * Optional target identifier. This can be an alias if custom tools provided by your organization
-   * use a short name for the target, a package ID (e.g., "com.example.app"), or a URL for web
-   * targets. Not required.
+   * Optional id of a registered target — a trailmap id, or a target surfaced by the host app.
+   *
+   * Resolution matches **ids only**, so an Android applicationId or bare package name never
+   * resolves: the run warns, falls back to the workspace default target, and turbo declines rather
+   * than attaching to the fallback's app. A package name belongs on the trailmap under
+   * `platforms.<platform>.app_ids`, not here. Not required.
    */
   val target: String? = null,
   /**
@@ -81,6 +84,15 @@ data class TrailConfig(
    */
   @Serializable(with = TrailArgMapSerializer::class)
   val args: Map<String, TrailArgConfig>? = null,
+  /**
+   * Resolved BCP-47 language tag (for example, `es` or `fr-CA`) to apply before this trail starts.
+   * Unified trails author this on their matching `config.devices` entry; lowering carries the
+   * selected device's value here for existing executors. This is a device-level setting, rather
+   * than an app-specific launch argument, so system UI and the target app observe the same language.
+   *
+   * Appended after [args] to keep positional component accessors for earlier fields stable.
+   */
+  val locale: String? = null,
 )
 
 @Serializable

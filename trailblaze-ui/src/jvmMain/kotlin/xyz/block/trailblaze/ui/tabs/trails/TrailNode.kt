@@ -13,7 +13,7 @@ sealed class TrailNode {
   /**
    * A directory in the trail tree that can contain other directories or files.
    *
-   * @param name The directory name (e.g., "suite_84031")
+   * @param name The directory name (e.g., "suite_102")
    * @param path The full path to this directory
    * @param children The child nodes (directories and files)
    * @param isExpanded Whether this directory is expanded in the UI

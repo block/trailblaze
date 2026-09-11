@@ -6,7 +6,12 @@ import dadb.adbserver.AdbServer
 import xyz.block.trailblaze.android.tools.shellEscape
 import xyz.block.trailblaze.device.InstalledApp
 import xyz.block.trailblaze.device.parseInstalledAppsFromDumpsys
+import xyz.block.trailblaze.device.parsePmListPackages
 import xyz.block.trailblaze.device.redactBulkPayloadsForLog
+import xyz.block.trailblaze.device.PM_LIST_PACKAGES_ARGV
+import xyz.block.trailblaze.device.PmClearOutcome
+import xyz.block.trailblaze.device.validateClearAppDataAppId
+import xyz.block.trailblaze.device.verifyPmClearSucceeded
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.model.AppVersionInfo
@@ -930,10 +935,29 @@ object AndroidHostAdbUtils {
     )
   }
 
-  fun clearAppData(deviceId: TrailblazeDeviceId, appId: String) {
-    execAdbShellCommand(
-      deviceId = deviceId,
-      args = listOf("pm", "clear", appId),
+  fun clearAppData(deviceId: TrailblazeDeviceId, appId: String): PmClearOutcome {
+    // First, before the id reaches the single string execAdbShellCommand hands to the device's
+    // `sh` — see `validateClearAppDataAppId`.
+    validateClearAppDataAppId(appId)
+    // `pm clear` writes 'Failed' to stdout, never stderr, so execAdbShellCommand's stderr check
+    // reads a failed clear as ordinary output. See `verifyPmClearSucceeded`.
+    return verifyPmClearSucceeded(
+      appId = appId,
+      output = execAdbShellCommand(
+        deviceId = deviceId,
+        args = listOf("pm", "clear", appId),
+      ),
+      // Unfiltered, and parsed by the shared helper — see `installedAccordingToPmList` for why a
+      // `pm list packages <filter>` cannot distinguish "absent" from "probe failed".
+      // (Non-suspend on purpose: `isAppInstalled` is suspend and `clearAppData` is not.)
+      //
+      // Bounded: this probe runs precisely when the transport is most suspect, and the unbounded
+      // variant would hang the launch instead of reporting. A timeout returns null, which reads as
+      // "could not establish" — an empty listing, which the shared helper refuses to call absence.
+      pmListPackagesOutput = {
+        execAdbShellCommandWithTimeout(deviceId = deviceId, args = PM_LIST_PACKAGES_ARGV)
+          ?: error("`pm list packages` timed out on $deviceId")
+      },
     )
   }
 
@@ -978,10 +1002,7 @@ object AndroidHostAdbUtils {
   }
 
   fun listInstalledPackages(deviceId: TrailblazeDeviceId): List<String> = try {
-    execAdbShellCommand(deviceId, listOf("pm", "list", "packages"))
-      .lines()
-      .filter { it.isNotBlank() && it.startsWith("package:") }
-      .map { it.substringAfter("package:") }
+    parsePmListPackages(execAdbShellCommand(deviceId, PM_LIST_PACKAGES_ARGV))
   } catch (e: Exception) {
     emptyList()
   }

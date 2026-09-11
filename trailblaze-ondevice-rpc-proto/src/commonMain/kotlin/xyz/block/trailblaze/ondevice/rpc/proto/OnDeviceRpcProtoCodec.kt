@@ -103,6 +103,8 @@ object OnDeviceRpcProtoCodec {
       page_context_summary = pageContextSummary,
       device_classifiers = deviceClassifiers.orEmpty(),
       captured_at_device_ms = capturedAtDeviceMs,
+      dropped_node_fetches = droppedNodeFetches,
+      runner_capabilities = runnerCapabilities.orEmpty(),
     )
 
   fun GetScreenStateResponse.toModel(): ModelGetScreenStateResponse =
@@ -118,6 +120,8 @@ object OnDeviceRpcProtoCodec {
       pageContextSummary = page_context_summary,
       deviceClassifiers = device_classifiers.takeIf { it.isNotEmpty() },
       capturedAtDeviceMs = captured_at_device_ms,
+      droppedNodeFetches = dropped_node_fetches,
+      runnerCapabilities = runner_capabilities.takeIf { it.isNotEmpty() },
     ).apply {
       screenshotBytes = screenshot.toByteArrayOrNull()
       annotatedScreenshotBytes = annotated_screenshot.toByteArrayOrNull()
@@ -147,6 +151,7 @@ object OnDeviceRpcProtoCodec {
       args_snapshot = argsSnapshot,
       sensitive_arg_names = sensitiveArgNames,
       traceparent = traceParent,
+      device_classifier_override = deviceClassifierOverride,
     )
 
   fun RunYamlRequest.toModel(): ModelRunYamlRequest =
@@ -175,6 +180,7 @@ object OnDeviceRpcProtoCodec {
       argsSnapshot = args_snapshot,
       sensitiveArgNames = sensitive_arg_names,
       traceParent = traceparent,
+      deviceClassifierOverride = device_classifier_override,
     )
 
   fun ModelRunYamlResponse.toProto(): RunYamlResponse =

@@ -400,6 +400,27 @@ class InProcessShellPackagerTest {
   }
 
   @Test
+  fun `only a trailmap carrying TypeScript reports that bundling can be needed`() {
+    // What the CLI gates its SDK-entry resolution on. That resolution probes the SDK tree by forking
+    // esbuild, so a request that will never bundle must not pay for it — and a request that WILL
+    // bundle must, or the bundle loses the slim @trailblaze/scripting alias.
+    val prebuiltOnly = File(temp.newFolder(), "prebuilt").apply { File(this, "tools").mkdirs() }
+    File(prebuiltOnly, "tools/sample_doThing.bundle.js").writeText("globalThis.x = 1;\n")
+    val typeScript = File(temp.newFolder(), "source").apply { File(this, "tools").mkdirs() }
+    File(typeScript, "tools/sample_doThing.ts").writeText(
+      "export const sample_doThing = trailblaze.tool({ name: 'sample_doThing' }, async () => {});\n",
+    )
+
+    assertThat(InProcessShellPackager.carriesTypeScriptToolSource(emptyList())).isFalse()
+    assertThat(InProcessShellPackager.carriesTypeScriptToolSource(listOf(prebuiltOnly))).isFalse()
+    assertThat(InProcessShellPackager.carriesTypeScriptToolSource(listOf(typeScript))).isTrue()
+    // One TypeScript trailmap among prebuilt ones is enough — the loop will bundle it.
+    assertThat(
+      InProcessShellPackager.carriesTypeScriptToolSource(listOf(prebuiltOnly, typeScript)),
+    ).isTrue()
+  }
+
+  @Test
   fun `names esbuild as the prerequisite when a trailmap is TypeScript source`() {
     val trailmap = File(temp.newFolder(), "sample").apply { File(this, "tools").mkdirs() }
     File(trailmap, "tools/sample_doThing.ts").writeText(
@@ -525,8 +546,36 @@ class InProcessShellPackagerTest {
     )
     val result = InProcessShellPackager.make(request(shell = unmarked))
 
-    assertThat(result.warnings.single()).contains("no compile-floor marker")
+    assertThat(result.warnings.single { it.contains("compile-floor") }).contains("no compile-floor marker")
     assertThat(result.buildRecord.shellVersion).isEqualTo("20260831.000000.abc1234")
+  }
+
+  // --- androidx.startup ------------------------------------------------------------------------
+
+  @Test
+  fun `warns when the app APK declares an androidx startup provider`() {
+    // The sample app's real manifest declares one, which is what makes this the common case rather
+    // than an exotic one: a generic shell cannot attach to such an app yet.
+    val result = InProcessShellPackager.make(request())
+
+    val warning = result.warnings.single { it.contains("androidx.startup") }
+    assertThat(warning).contains("androidx.startup.InitializationProvider")
+    assertThat(warning).contains("targetProjectPath")
+    // Warned, not refused. The packaging is fine, and a caller re-stamping against a shell that has
+    // since stopped packaging startup-runtime is entitled to the APK.
+    assertThat(result.outputApk.isFile).isTrue()
+  }
+
+  @Test
+  fun `says nothing about androidx startup when only a fingerprint describes the target`() {
+    // A fingerprint states the signing facts, not the manifest's components, so this path cannot
+    // see the provider. Silence here is "unchecked" — which is why the check is a warning and the
+    // help text says absence of the warning is not evidence.
+    val result = InProcessShellPackager.make(
+      request(appApk = null, fingerprintFile = writeFingerprint(AppFingerprint.ofApk(appApk))),
+    )
+
+    assertThat(result.warnings.filter { it.contains("androidx.startup") }).isEmpty()
   }
 
   // --- injected paths --------------------------------------------------------------------------

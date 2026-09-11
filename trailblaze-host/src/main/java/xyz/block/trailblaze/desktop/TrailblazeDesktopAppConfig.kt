@@ -162,9 +162,8 @@ abstract class TrailblazeDesktopAppConfig(
    * The drivers this app plugs in — see [HostDriverDescriptor].
    *
    * Declaring one here is what makes its devices discoverable, listable, runnable and
-   * capturable; an app that omits a driver doesn't get it at all. Drivers that haven't been
-   * converted to descriptors yet need no entry, and are reached through the `when` arms that
-   * still handle them.
+   * capturable; an app that omits a driver doesn't get it at all, and there is no fallback path
+   * that would quietly pick it up.
    *
    * Empty by default so a distribution opts in to each driver rather than inheriting whatever
    * happens to be on the classpath.
@@ -172,14 +171,15 @@ abstract class TrailblazeDesktopAppConfig(
   open val hostDriverDescriptors: Set<HostDriverDescriptor> = emptySet()
 
   /**
-   * [hostDriverDescriptors] as the registry every host call site reads, checked against the
-   * drivers this app claims to support so a driver that's enabled-but-unplugged fails here at
-   * startup rather than when someone runs on it.
+   * [hostDriverDescriptors] as the registry every host call site reads.
+   *
+   * No separate "does this cover what we support?" check, because each app config derives the
+   * supported set it hands `TrailblazeSettingsRepo` from these same descriptors — the two cannot
+   * disagree, so such a check could never fail. What a driver being unplugged costs is instead
+   * reported where it bites: `forDriver` throws naming the driver and the remedy.
    */
   val hostDriverDescriptorRegistry: HostDriverDescriptorRegistry by lazy {
-    HostDriverDescriptorRegistry(hostDriverDescriptors).apply {
-      validateCovers(trailblazeSettingsRepo.getAllSupportedDriverTypes())
-    }
+    HostDriverDescriptorRegistry(hostDriverDescriptors)
   }
 
   /**

@@ -168,8 +168,15 @@ class ScreenshotAttachingLlmClient(
 /**
  * Returns a copy of [prompt] with [screenshotBytes] attached, as a [MessagePart.Attachment] image, to
  * the **last** [Message.User] — the freshest screen the model is about to reason over. Any image
- * attachment already present on an earlier user message is stripped first, so exactly one screenshot
- * is ever in the prompt (defensive idempotence — the live caller's incoming prompts are image-free).
+ * attachment already carried directly by a user message is stripped first, so this client
+ * contributes exactly one screenshot (defensive idempotence — the live caller's incoming prompts are
+ * image-free).
+ *
+ * Scoped to top-level parts: an image nested inside a [MessagePart.Tool.Result] is left alone, since
+ * a tool result's content is that tool's answer, not this client's screenshot, and rewriting it
+ * would desync the result from its call. Bounding *those* is
+ * [KoogStrategyGraphAgent.pruneScreenStateHistory]'s job — it strips every attachment-bearing result
+ * older than the latest turn.
  *
  * Pure (no Koog session / device / IO) so it's unit-testable without standing up the graph. Returns
  * [prompt] unchanged when there is no user message to anchor to.
@@ -190,8 +197,9 @@ internal fun attachScreenshotToLatestUserMessage(
 
   val rebuilt = prompt.messages.mapIndexed { index, message ->
     if (message !is Message.User) return@mapIndexed message
-    // Drop any carried-over image attachment so only the current screenshot (added to the latest
-    // user message below) survives.
+    // Drop any carried-over image attached directly to a user message, so only the current
+    // screenshot (added to the latest user message below) survives. Images inside a tool result
+    // are that tool's own output and are left to the prune pass — see the kdoc.
     val withoutStaleImages = message.parts.filterNot {
       it is MessagePart.Attachment && it.source is AttachmentSource.Image
     }

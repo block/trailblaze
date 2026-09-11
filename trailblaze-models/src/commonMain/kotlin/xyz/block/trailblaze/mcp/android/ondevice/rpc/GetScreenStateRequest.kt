@@ -150,6 +150,24 @@ data class GetScreenStateResponse(
    * capture instant). Null when the on-device server predates this field.
    */
   val capturedAtDeviceMs: Long? = null,
+
+  /**
+   * Nodes the on-device capture asked the app for and did not get back — the device-side
+   * [xyz.block.trailblaze.api.ScreenState.droppedNodeFetches] carried across the wire so a
+   * host-side consumer can tell a genuinely empty screen from one whose subtrees the app never
+   * handed over. `0` means complete; greater means a subtree is missing.
+   *
+   * Null means unknown: the request asked for no tree, the driver cannot measure it, or the
+   * on-device server predates this field. Host consumers treat unknown exactly as they behaved
+   * before this field existed.
+   */
+  val droppedNodeFetches: Int? = null,
+
+  /**
+   * Features this on-device runner can honor. Null means the runner predates capability
+   * advertisement; callers must fail closed before sending requests that depend on a capability.
+   */
+  val runnerCapabilities: List<String>? = null,
 ) {
   /**
    * Raw clean screenshot bytes received over the binary WebSocket transport. Transient so the

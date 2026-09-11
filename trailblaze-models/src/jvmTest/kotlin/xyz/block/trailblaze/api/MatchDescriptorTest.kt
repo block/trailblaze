@@ -103,6 +103,79 @@ class MatchDescriptorTest {
     assertNull(MatchDescriptorBuilder.indexPathOf(root, target))
   }
 
+  // -- MatchDescriptorBuilder.indexPaths --
+  //
+  // `indexPaths` exists only to give the same answer as `indexPathOf` in one walk instead of one
+  // per node, so agreement with it IS the specification. A faster function that disagreed would
+  // shift every match's `indexPath`, which is how a scripted caller re-identifies an element.
+
+  @Test
+  fun `indexPaths agrees with indexPathOf for every node`() {
+    var next = 1L
+    fun node(vararg children: TrailblazeNode) = TrailblazeNode(
+      nodeId = next++,
+      children = children.toList(),
+      driverDetail = DriverNodeDetail.AndroidAccessibility(),
+    )
+    // Ragged on purpose: differing child counts and depths, so a walk that mismanaged its path
+    // stack (failing to pop, or popping twice) cannot coincidentally agree.
+    val root = node(
+      node(node(), node(node(), node())),
+      node(),
+      node(node(node(node()))),
+    )
+
+    val paths = MatchDescriptorBuilder.indexPaths(root)
+    val allNodes = root.aggregate()
+
+    assertEquals(allNodes.size, paths.size, "every node must get a path")
+    allNodes.forEach { n ->
+      assertEquals(
+        MatchDescriptorBuilder.indexPathOf(root, n),
+        paths[n.nodeId],
+        "path for nodeId=${n.nodeId} must match indexPathOf",
+      )
+    }
+    assertEquals(emptyList(), paths[root.nodeId], "root's path is empty")
+  }
+
+  @Test
+  fun `indexPaths keeps the first DFS occurrence when nodeIds collide`() {
+    // Both functions compare by nodeId, so on a colliding tree both must name the
+    // shallowest-leftmost node. Divergence here would make the batch form and the single form
+    // answer differently for the same tree, which is the one thing it may not do.
+    val dupe = { TrailblazeNode(nodeId = 7, driverDetail = DriverNodeDetail.AndroidAccessibility()) }
+    val root = TrailblazeNode(
+      nodeId = 1,
+      children = listOf(
+        TrailblazeNode(
+          nodeId = 2,
+          children = listOf(dupe()),
+          driverDetail = DriverNodeDetail.AndroidAccessibility(),
+        ),
+        dupe(),
+      ),
+      driverDetail = DriverNodeDetail.AndroidAccessibility(),
+    )
+
+    val paths = MatchDescriptorBuilder.indexPaths(root)
+    assertEquals(listOf(0, 0), paths[7L])
+    assertEquals(MatchDescriptorBuilder.indexPathOf(root, dupe()), paths[7L])
+  }
+
+  @Test
+  fun `toMatchDescriptor returns null for a node absent from the path map`() {
+    // The null contract the query tools' assertion rests on: a node the map cannot place is
+    // undescribable. Nothing may paper over it with a fabricated path — an indexPath pointing at
+    // a different element is worse than no descriptor at all.
+    val orphan = TrailblazeNode(nodeId = 99, driverDetail = DriverNodeDetail.AndroidAccessibility())
+    assertNull(orphan.toMatchDescriptor(emptyMap()))
+    assertEquals(
+      emptyList(),
+      orphan.toMatchDescriptor(mapOf(99L to emptyList<Int>()))?.indexPath,
+    )
+  }
+
   // -- toMatchDescriptor identity extraction (one test per driver variant) --
   //
   // MatchDescriptorBuilder.extractIdentity has a 6-arm `when` on DriverNodeDetail;

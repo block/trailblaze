@@ -43,12 +43,7 @@ Available detail types:
 
 ### Required parameters
 
-- `include` — `ToolParameterType.List(
-  itemsType =
-    ToolParameterType.Enum(
-      entries = [BOUNDS, CSS_SELECTORS, OFFSCREEN_ELEMENTS, OCCLUDED_ELEMENTS]
-    )
-)`
+- `include` — `array<enum(BOUNDS | CSS_SELECTORS | OFFSCREEN_ELEMENTS | OCCLUDED_ELEMENTS)>`
   List of detail types to include in the next view hierarchy. Supported: BOUNDS, CSS_SELECTORS, OFFSCREEN_ELEMENTS, OCCLUDED_ELEMENTS (or any combination). Example: ["OFFSCREEN_ELEMENTS"] to see all elements including those outside the viewport.
 
 ### Optional parameters

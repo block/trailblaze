@@ -184,7 +184,7 @@ class CanonicalSelectorBridgeTest {
   /**
    * A recorded `classNameRegex` names what the accessibility tree published, which for a custom
    * view is the framework class it reports through `getAccessibilityClassName()` — never the
-   * runtime class. Case 5380717 selects a Settings row as `android.view.View` + `index: 6`, with
+   * runtime class. A real trail selects a Settings row as `android.view.View` + `index: 6`, with
    * no text, id or description to fall back on, so matching the runtime class finds nothing.
    */
   @Test
@@ -211,7 +211,7 @@ class CanonicalSelectorBridgeTest {
   /**
    * Grid position is answered on the View backend, and answered strictly: a view that is not a
    * collection item reports null and so fails a constraint naming a position rather than matching
-   * it loosely. Case 5921801's grid tiles carry no other distinguishing property.
+   * it loosely. A real trail's grid tiles carry no other distinguishing property.
    */
   @Test
   fun `collection row and column match a View node and a non-item never does`() {

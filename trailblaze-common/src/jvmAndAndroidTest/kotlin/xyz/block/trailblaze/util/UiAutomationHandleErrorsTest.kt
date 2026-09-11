@@ -93,6 +93,41 @@ class UiAutomationHandleErrorsTest {
   }
 
   @Test
+  fun `a wedged-shell read is not retried, so the command cannot run twice`() {
+    // Matching a stale-handle signature is what makes `withUiAutomation` replay the work, and a
+    // wedged read must NOT be replayed: the command may have run already and only its output
+    // wedged, so a second `pm clear` / `input tap` / `am force-stop` really happens.
+    val message = UiAutomationHandleErrors.wedgedShellReadMessage(
+      command = "adb shell pm clear com.example.app",
+      timeoutMs = 300_000,
+      handleDiscarded = true,
+    )
+    assertFalse("a wedged read must not reach the replaying recovery path", UiAutomationHandleErrors.isStaleHandleSignature(message))
+    // Nor is it an escalation: the handle was dropped, so the next command reconnects on its own.
+    assertFalse(UiAutomationHandleErrors.isNonRecoverableStaleHandleSignature(message))
+    // The command is the whole point of bounding it here rather than in the caller — a timeout that
+    // does not say which command hung is the "inexplicably slow run" this replaces.
+    assertTrue("expected the command, was: $message", message.contains("pm clear com.example.app"))
+    assertTrue("expected the bound, was: $message", message.contains("300000"))
+  }
+
+  @Test
+  fun `a wedged read whose handle could not be dropped escalates to a runner restart`() {
+    // The one case in-process recovery cannot fix: the connection is wedged AND still cached, so
+    // every later command pays the same bound. Only restarting the on-device server clears it, and
+    // the host decides that from this signature.
+    val message = UiAutomationHandleErrors.wedgedShellReadMessage(
+      command = "adb shell pm clear com.example.app",
+      timeoutMs = 300_000,
+      handleDiscarded = false,
+    )
+    assertTrue(
+      "an undroppable wedged handle must reach the host's runner-restart path, was: $message",
+      UiAutomationHandleErrors.isNonRecoverableStaleHandleSignature(message),
+    )
+  }
+
+  @Test
   fun `does not match unrelated runtime errors`() {
     listOf(
       "java.lang.NullPointerException",

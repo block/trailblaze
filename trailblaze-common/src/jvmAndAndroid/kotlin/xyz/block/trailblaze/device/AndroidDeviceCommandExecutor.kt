@@ -51,7 +51,18 @@ private val ANDROID_PERMISSION_NAME_REGEX =
  * validating its own `runAs:` argument wants the reason as text so it can report a targeted
  * failure instead of a generic write/exec error.
  */
-internal fun runAsAppIdViolation(appId: String): String? = when {
+internal fun runAsAppIdViolation(appId: String): String? = androidPackageNameViolation(appId)
+
+/**
+ * Why [appId] is not a usable Android package name, or `null` when it is fine — the grammar rule
+ * itself, independent of what any one caller does with the id.
+ *
+ * Public because the rule has to be applied wherever an app id reaches a shell, and those places
+ * are not all in this module: the on-device turbo attach interpolates a target id, resolved from an
+ * instrumentation argument, into `pm compile` and `am start`. A second hand-rolled grammar there
+ * would be a second thing to get wrong.
+ */
+fun androidPackageNameViolation(appId: String): String? = when {
   appId.isBlank() -> "appId must not be blank"
   !ANDROID_PACKAGE_NAME_REGEX.matches(appId) ->
     "appId must be a syntactically valid Android package name (got: '$appId'). " +
@@ -147,6 +158,173 @@ internal fun handleGrantRuntimePermissionOutcome(
     Console.log("[AndroidDeviceCommandExecutor] pm grant $appId $permission failed: ${e.message}")
   }
 }
+
+/**
+ * Precondition both `pm clear` transports must apply **before** they build a shell command from
+ * [appId], restricting it to the Android package-name grammar via [runAsAppIdViolation].
+ *
+ * Has to run at the call site, not inside [verifyPmClearSucceeded]: Kotlin evaluates the verifier's
+ * `output` argument first, so by the time any check inside it runs, `pm clear` has already gone to
+ * the device. And the host transport joins its argv into a single string that the device's `sh`
+ * interprets — `execAdbShellCommand` says as much — so an id carrying `;` runs a second command of
+ * the caller's choosing. `mobile_clearAppData` forwards an unconstrained `appId` straight from a
+ * trail or an LLM, which is exactly the input that must not reach a shell unchecked.
+ *
+ * @throws IllegalArgumentException if [appId] is blank or not a valid Android package name.
+ */
+internal fun validateClearAppDataAppId(appId: String) {
+  runAsAppIdViolation(appId)?.let { throw IllegalArgumentException("clearAppData: $it") }
+}
+
+/**
+ * Argv of the install probe behind [verifyPmClearSucceeded], shared by both transports.
+ *
+ * Deliberately carries **no filter argument**, and is a constant so that invariant is assertable
+ * rather than a promise made twice in prose — see [installedAccordingToPmList] for why a filtered
+ * listing cannot answer this question safely.
+ */
+internal val PM_LIST_PACKAGES_ARGV = listOf("pm", "list", "packages")
+
+/**
+ * What a `pm clear` turned out to have done, once [verifyPmClearSucceeded] has vetted it.
+ *
+ * Public because [AndroidDeviceCommandExecutor.clearAppData] returns it: a caller that reports its
+ * own result — `mobile_clearAppData` reporting to an LLM, say — must be able to distinguish "wiped
+ * the data directory" from "there was no such package", rather than calling both a clear.
+ */
+enum class PmClearOutcome {
+  /** `pm clear` reported `Success`: the data directory was wiped. */
+  CLEARED,
+
+  /** The clear did not succeed, but the package is positively absent, so there was nothing to do. */
+  PACKAGE_NOT_INSTALLED,
+}
+
+/**
+ * Shared outcome check used by both `actual` implementations of
+ * [AndroidDeviceCommandExecutor.clearAppData].
+ *
+ * `pm clear` reports itself on **stdout** — `Success` when the data directory was wiped, `Failed`
+ * otherwise — and that token is the only signal our two transports carry. The on-device
+ * `UiAutomation.executeShellCommand` path has no exit-code channel at all. The host `dadb` path
+ * does have one (`AdbShellResponse.exitCode`), but `execAdbShellCommand` returns only text and
+ * inspects nothing but stderr, which `pm clear` never writes. Reading the exit code there would
+ * not remove the probe below in any case: `pm clear` exits 1 both for a real failure and for a
+ * package that does not exist, which are exactly the two cases that must be told apart.
+ *
+ * That distinction is load-bearing rather than cosmetic. `clearAppData` is the state-reset
+ * primitive every launch step builds on, so a silently-failed clear leaves the previous trail's
+ * session installed and the failure resurfaces much later as an unrelated-looking symptom — an
+ * app that is already signed in when the trail expected a sign-in screen, and an error that
+ * blames whatever screen failed to render instead of the reset that never happened.
+ *
+ * **A positively-absent package is tolerated; everything else throws.** `pm clear` prints the same
+ * bare `Failed` for "no such package" as for a real failure, so on a non-`Success` result this
+ * asks [pmListPackagesOutput] to tell them apart. A launch step often clears a companion package
+ * that exists only on some hardware — an external credential store alongside the app under test,
+ * say — and documents that call as a no-op elsewhere; honoring that here keeps the intent true in
+ * one place instead of requiring every such caller to pre-check.
+ *
+ * The probe costs one extra device round-trip, and only on the non-`Success` path — but that is
+ * *not* a rare path. A launch step that clears such a companion package pays it on every run on
+ * every device where the package is absent, which for hardware-specific companions is most of
+ * them. One listing per launch is worth the certainty; just don't read the cost as exceptional.
+ *
+ * Tolerance requires POSITIVE evidence of absence, never merely the lack of evidence of presence —
+ * see [installedAccordingToPmList]. Anything the probe can't establish throws, because "we could
+ * not confirm the clear" is the very condition this check exists to stop from passing silently.
+ * That includes the probe itself failing: its exception is wrapped, not propagated, so the report
+ * still names the package and quotes what `pm clear` actually said.
+ *
+ * Accepts a `Success` on any line so incidental transport noise ahead of it doesn't read as a
+ * failure. Empty output throws (when installed): the clear cannot be confirmed.
+ *
+ * @param pmListPackagesOutput runs [PM_LIST_PACKAGES_ARGV] and returns its stdout; invoked at most
+ *   once, and only when the clear did not report success.
+ * @return how the clear resolved, so a caller can report a tolerated no-op honestly instead of
+ *   claiming it cleared something.
+ * @throws IllegalStateException if the clear did not report success for an installed package, or
+ *   if install status could not be established.
+ */
+internal fun verifyPmClearSucceeded(
+  appId: String,
+  output: String,
+  pmListPackagesOutput: () -> String,
+): PmClearOutcome {
+  // Same rule the transports apply before executing (see [validateClearAppDataAppId]), repeated
+  // here for a direct caller: a malformed id matches no `package:` line and would otherwise read as
+  // "not installed", silently passing as a tolerated no-op — the outcome this check exists to stop.
+  validateClearAppDataAppId(appId)
+  if (output.lineSequence().any { it.trim() == "Success" }) return PmClearOutcome.CLEARED
+
+  val installed = runCatching { installedAccordingToPmList(appId, pmListPackagesOutput()) }
+    .getOrElse { probeFailure ->
+      throw IllegalStateException(
+        "pm clear $appId did not report success (output: '${output.trim()}'), and whether the " +
+          "package is installed could not be established, so the clear cannot be confirmed " +
+          "either way. App data may still carry the previous session's state.",
+        probeFailure,
+      )
+    }
+  if (!installed) {
+    // Console.info, not log: log is suppressed under quiet mode, which every non-verbose CLI path
+    // enables. A tolerated clear that says nothing anywhere is the same silent no-op this check
+    // exists to remove. Transport-neutral tag — on-device the caller is a driver, not the executor.
+    Console.info(
+      "[pm clear] $appId not cleared: `pm clear` reported '${output.trim()}' and the package is " +
+        "absent from `pm list packages`, so there was no data to clear.",
+    )
+    return PmClearOutcome.PACKAGE_NOT_INSTALLED
+  }
+
+  throw IllegalStateException(
+    "pm clear $appId did not report success (output: '${output.trim()}'), and the package IS " +
+      "installed. App data was NOT cleared, so this app still carries the previous session's " +
+      "state — expect a later step to fail against stale state rather than here.",
+  )
+}
+
+/**
+ * Whether [appId] appears in the stdout of an unfiltered [PM_LIST_PACKAGES_ARGV], which prints one
+ * `package:<id>` line per installed package.
+ *
+ * Unfiltered on purpose. `pm list packages <filter>` matches on substring and prints NOTHING for an
+ * absent package — the same empty output a wedged shell or a failed `pm` invocation produces. That
+ * makes "no match" and "no answer" indistinguishable, and tolerating the pair would silently accept
+ * exactly the failed clear [verifyPmClearSucceeded] exists to report. Every Android device has
+ * packages, so at least one `package:` line is the probe's own proof-of-life: none at all means the
+ * probe failed, which throws rather than reading as absence.
+ *
+ * Exact id comparison, not `contains`, so a longer id carrying [appId] as a prefix or substring
+ * does not read as installed.
+ *
+ * @throws IllegalStateException if [pmListOutput] carries no `package:` line at all.
+ */
+internal fun installedAccordingToPmList(appId: String, pmListOutput: String): Boolean {
+  val installedIds = parsePmListPackages(pmListOutput)
+  if (installedIds.isEmpty()) {
+    throw IllegalStateException(
+      "Could not establish whether $appId is installed: `pm list packages` returned no package " +
+        "lines (output: '${pmListOutput.trim()}'). Every device has packages, so this is a failed " +
+        "probe, not an empty device — refusing to treat it as 'not installed' and tolerate a " +
+        "clear that may have failed.",
+    )
+  }
+  return installedIds.any { it == appId }
+}
+
+/**
+ * Package ids in the stdout of [PM_LIST_PACKAGES_ARGV], one per `package:<id>` line.
+ *
+ * Tolerates the `\r` adb leaves on line ends, and ignores any line that isn't a `package:` record
+ * (headers, warnings, a `pm` error message) so the caller decides what an id-less listing means.
+ */
+internal fun parsePmListPackages(pmListOutput: String): List<String> = pmListOutput.lineSequence()
+  .map { it.trim() }
+  .filter { it.startsWith("package:") }
+  .map { it.removePrefix("package:") }
+  .filter { it.isNotBlank() }
+  .toList()
 
 /**
  * Pure parser behind the host-JVM `listInstalledAppsDetailed`: turns the output of a single
@@ -385,9 +563,17 @@ expect class AndroidDeviceCommandExecutor(
   fun forceStopApp(appId: String)
 
   /**
-   * Clears app data for the specified package.
+   * Clears app data for the specified package, and verifies it actually happened.
+   *
+   * Clearing a package that is **not installed** succeeds as a no-op, reported as
+   * [PmClearOutcome.PACKAGE_NOT_INSTALLED] so a caller need not call that a clear; any other
+   * unsuccessful clear throws. See [verifyPmClearSucceeded] for that contract and why it is
+   * shaped this way.
+   *
+   * @throws IllegalStateException if the clear did not succeed for an installed package, or if
+   *   install status could not be established.
    */
-  fun clearAppData(appId: String)
+  fun clearAppData(appId: String): PmClearOutcome
 
   /**
    * Checks if the specified app is running.

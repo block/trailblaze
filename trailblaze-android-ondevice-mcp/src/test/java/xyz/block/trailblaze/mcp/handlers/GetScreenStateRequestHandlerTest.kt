@@ -16,6 +16,7 @@ import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetScreenStateRequest
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.OnDeviceCapturedScreenState
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.OnDeviceScreenStateNotReadyException
+import xyz.block.trailblaze.mcp.android.ondevice.rpc.OnDeviceRunnerCapabilities
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcResult
 import xyz.block.trailblaze.mcp.handlers.GetScreenStateRequestHandler.Companion.buildResponse
 import xyz.block.trailblaze.mcp.handlers.GetScreenStateRequestHandler.Companion.buildBinaryResponse
@@ -50,6 +51,7 @@ class GetScreenStateRequestHandlerTest {
     val response = (result as RpcResult.Success).data
     assertEquals(77L, response.capturedAtDeviceMs)
     assertEquals(listOf("test-classifier"), response.deviceClassifiers)
+    assertEquals(OnDeviceRunnerCapabilities.ALL, response.runnerCapabilities)
   }
 
   @Test
@@ -194,6 +196,67 @@ class GetScreenStateRequestHandlerTest {
     val response = buildResponse(request, screenState)
 
     assertEquals(capturedTree.nodeId, response.trailblazeNodeTree?.nodeId)
+  }
+
+  @Test
+  fun `buildResponse carries the capture completeness the device measured`() {
+    // The count is the whole point of the wire field: a host-side consumer cannot tell a screen
+    // that genuinely lacks an element from one whose subtrees the app never handed over, and the
+    // device is the only place that knows.
+    val response = buildResponse(
+      GetScreenStateRequest(includeScreenshot = false, includeAnnotatedScreenshot = false),
+      screenStateWithDroppedFetches(4),
+    )
+
+    assertEquals(4, response.droppedNodeFetches)
+  }
+
+  @Test
+  fun `buildResponse reports a complete capture as zero, not as unknown`() {
+    // Zero and null mean different things downstream — zero settles absence, null leaves every
+    // consumer on its pre-existing behaviour — so the builder must not collapse one into the other.
+    val response = buildResponse(
+      GetScreenStateRequest(includeScreenshot = false, includeAnnotatedScreenshot = false),
+      screenStateWithDroppedFetches(0),
+    )
+
+    assertEquals(0, response.droppedNodeFetches)
+  }
+
+  @Test
+  fun `buildResponse reports unknown completeness when the caller asked for no tree`() {
+    // No tree on the wire means there is nothing for a completeness verdict to describe.
+    val response = buildResponse(
+      GetScreenStateRequest(includeScreenshot = false, includeAnnotatedScreenshot = false, includeTree = false),
+      screenStateWithDroppedFetches(4),
+    )
+
+    assertNull(response.droppedNodeFetches)
+  }
+
+  @Test
+  fun `buildBinaryResponse carries the capture completeness too`() {
+    // The binary transport is a separate builder; a signal that only rides the JSON path would
+    // silently vanish on whichever transport a given driver negotiates.
+    val response = buildBinaryResponse(
+      GetScreenStateRequest(includeScreenshot = false, includeAnnotatedScreenshot = false),
+      screenStateWithDroppedFetches(4),
+    )
+
+    assertEquals(4, response.droppedNodeFetches)
+  }
+
+  private fun screenStateWithDroppedFetches(dropped: Int): ScreenState = object : ScreenState {
+    override val screenshotBytes: ByteArray? = null
+    override val annotatedScreenshotBytes: ByteArray? = null
+    override val deviceWidth: Int = 1080
+    override val deviceHeight: Int = 1920
+    override val viewHierarchy: ViewHierarchyTreeNode = ViewHierarchyTreeNode()
+    override val trailblazeNodeTree: TrailblazeNode =
+      TrailblazeNode(nodeId = 1, driverDetail = DriverNodeDetail.AndroidAccessibility())
+    override val trailblazeDevicePlatform: TrailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID
+    override val deviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList()
+    override val droppedNodeFetches: Int = dropped
   }
 
   @Test

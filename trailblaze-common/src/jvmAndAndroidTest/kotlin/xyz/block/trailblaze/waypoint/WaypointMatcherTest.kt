@@ -7,14 +7,17 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import xyz.block.trailblaze.api.DriverNodeDetail
 import xyz.block.trailblaze.api.DriverNodeMatch
+import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TargetTemplateContext
 import xyz.block.trailblaze.api.TrailblazeNode
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
+import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.api.waypoint.WaypointCondition
 import xyz.block.trailblaze.api.waypoint.WaypointDefinition
 import xyz.block.trailblaze.api.waypoint.WaypointMatchResult
 import xyz.block.trailblaze.api.waypoint.WaypointVariant
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
+import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 
 /**
  * Pins the fail-closed behavior for templated waypoints when the matcher is invoked
@@ -211,7 +214,130 @@ class WaypointMatcherTest {
     assertNull(result.skipped)
   }
 
+  // --- captures that lost nodes ---
+
+  @Test
+  fun `a capture that lost nodes cannot satisfy a forbidden condition by not finding it`() {
+    // The motivating bug, arriving by a different road than UNRESOLVED_TARGET_TEMPLATE above:
+    // the screen still shows the loading sheet, but the app was too busy to hand over the
+    // subtree that holds it, so the forbidden selector resolves to nothing and the waypoint
+    // reports "loading is done". Everything the waypoint asks for IS in this tree.
+    val def = waypoint(
+      id = "loaded",
+      required = listOf(literalText("Home")),
+      forbidden = listOf(literalText("Loading")),
+    )
+    val screen = screenWithTexts(listOf("Home"), droppedNodeFetches = 3)
+
+    val result = WaypointMatcher.match(def, screen)
+
+    assertFalse(result.matched)
+    assertEquals(WaypointMatchResult.SkipReason.PARTIAL_CAPTURE, result.skipped)
+  }
+
+  @Test
+  fun `the same screen matches once the capture holds every node the device advertised`() {
+    val def = waypoint(
+      id = "loaded",
+      required = listOf(literalText("Home")),
+      forbidden = listOf(literalText("Loading")),
+    )
+    val screen = screenWithTexts(listOf("Home"), droppedNodeFetches = 0)
+
+    val result = WaypointMatcher.match(def, screen)
+
+    assertTrue(result.matched)
+    assertNull(result.skipped)
+  }
+
+  @Test
+  fun `a driver that cannot measure completeness matches exactly as before`() {
+    // iOS, Playwright and Compose report null. Null is unknown, NOT partial — folding it into
+    // partial would make every forbidden-bearing waypoint on those drivers unassertable.
+    val def = waypoint(
+      id = "loaded",
+      required = listOf(literalText("Home")),
+      forbidden = listOf(literalText("Loading")),
+    )
+    val screen = screenWithTexts(listOf("Home"), droppedNodeFetches = null)
+
+    val result = WaypointMatcher.match(def, screen)
+
+    assertTrue(result.matched)
+    assertNull(result.skipped)
+  }
+
+  @Test
+  fun `a forbidden element found in a partial capture is reported, not skipped`() {
+    // Presence in a tree with holes is still presence — the node was really there. This verdict
+    // is true whatever the capture lost, so the author gets the actionable diff rather than a
+    // skip that says nothing.
+    val def = waypoint(
+      id = "loaded",
+      required = listOf(literalText("Home")),
+      forbidden = listOf(literalText("Loading")),
+    )
+    val screen = screenWithTexts(listOf("Home", "Loading"), droppedNodeFetches = 3)
+
+    val result = WaypointMatcher.match(def, screen)
+
+    assertFalse(result.matched)
+    assertNull(result.skipped)
+    assertEquals(1, result.presentForbidden.size)
+  }
+
+  @Test
+  fun `a required element missing from a partial capture is reported, not skipped`() {
+    val def = waypoint(
+      id = "loaded",
+      required = listOf(literalText("Home"), literalText("Items")),
+      forbidden = listOf(literalText("Loading")),
+    )
+    val screen = screenWithTexts(listOf("Home"), droppedNodeFetches = 3)
+
+    val result = WaypointMatcher.match(def, screen)
+
+    assertFalse(result.matched)
+    assertNull(result.skipped)
+    assertEquals(1, result.missingRequired.size)
+  }
+
+  @Test
+  fun `a waypoint with nothing forbidden still matches on a partial capture`() {
+    // Nothing here depends on a selector failing to resolve, so a capture with holes cannot
+    // produce a wrong answer — and refusing it would cost a poll for no reason.
+    val def = waypoint(id = "home", required = listOf(literalText("Home")))
+    val screen = screenWithTexts(listOf("Home"), droppedNodeFetches = 3)
+
+    val result = WaypointMatcher.match(def, screen)
+
+    assertTrue(result.matched)
+    assertNull(result.skipped)
+  }
+
   // --- fixtures ---
+
+  private fun screenWithTexts(texts: List<String>, droppedNodeFetches: Int?): ScreenState =
+    object : ScreenState {
+      override val screenshotBytes: ByteArray? = null
+      override val deviceWidth: Int = 1080
+      override val deviceHeight: Int = 1920
+      override val viewHierarchy: ViewHierarchyTreeNode = ViewHierarchyTreeNode()
+      override val trailblazeDevicePlatform: TrailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID
+      override val deviceClassifiers: List<TrailblazeDeviceClassifier> =
+        listOf(TrailblazeDeviceClassifier("android"))
+      override val droppedNodeFetches: Int? = droppedNodeFetches
+      override val trailblazeNodeTree: TrailblazeNode = TrailblazeNode(
+        nodeId = 1,
+        children = texts.mapIndexed { i, text ->
+          TrailblazeNode(
+            nodeId = (i + 2).toLong(),
+            driverDetail = DriverNodeDetail.AndroidAccessibility(text = text),
+          )
+        },
+        driverDetail = DriverNodeDetail.AndroidAccessibility(),
+      )
+    }
 
   private fun waypoint(
     id: String,

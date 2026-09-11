@@ -15,12 +15,16 @@ import picocli.CommandLine.Command
 import picocli.CommandLine.Option
 import picocli.CommandLine.Parameters
 import xyz.block.trailblaze.bundle.WorkspaceClientDtsGenerator
+import xyz.block.trailblaze.config.AppTargetYamlLoader
 import xyz.block.trailblaze.config.project.LoadedTrailblazeTrailmapManifest
 import xyz.block.trailblaze.config.project.TrailblazeTrailmapManifestLoader
 import xyz.block.trailblaze.host.DevicePinLint
 import xyz.block.trailblaze.host.SelectorDialectLint
+import xyz.block.trailblaze.host.TrailTargetLint
 import xyz.block.trailblaze.host.TrailTscValidator
 import xyz.block.trailblaze.host.WorkspaceTypeScriptSetup
+import xyz.block.trailblaze.llm.config.CompositeConfigResourceSource
+import xyz.block.trailblaze.llm.config.FilesystemConfigResourceSource
 import xyz.block.trailblaze.llm.config.TrailblazeConfigPaths
 import xyz.block.trailblaze.scripting.ScriptedToolDefinitionAnalyzer
 import xyz.block.trailblaze.util.BunBinaryResolver
@@ -56,7 +60,7 @@ import java.util.concurrent.TimeUnit
  *  3. From outside any workspace, no `<trailmap-id>`: emit an actionable error.
  *
  * `--workspace <dir>` pins the workspace root explicitly — used by CI scripts
- * (e.g. `pr_validate_ts_tooling.sh` under `scripts/`) that run from a fixed
+ * (e.g. the TypeScript tooling validation step) that run from a fixed
  * working directory and can't rely on the walk-up.
  *
  * Materialization (the compile half) is delegated to [CompileCommand], which
@@ -222,7 +226,7 @@ class CheckCommand : Callable<Int> {
     // Step 2: typecheck (skippable via `--no-typecheck`).
     //
     // `--no-typecheck` skips ONLY this phase, NOT the unit-test phase below. The CI
-    // script (`pr_validate_ts_tooling.sh`) uses `--no-typecheck` because it runs its
+    // script uses `--no-typecheck` because it runs its
     // own legacy-filtered tsc pass — but it still wants bun unit tests to run as part
     // of `check`. Tests are an independent validation axis from tsc.
     val typecheckExit = if (noTypecheck) {
@@ -290,12 +294,18 @@ class CheckCommand : Callable<Int> {
     //  - Device-pin ([DevicePinLint]): `config.driver:` beside `config.devices:` fails the build (a
     //    pin indented one level too shallow silently unpins the device); the deprecated bare-string
     //    device form warns. Opt out with TRAILBLAZE_DISABLE_DEVICE_PIN_GATE=1.
+    //  - Trail-target ([TrailTargetLint]): `config.target:` naming an id this workspace can't
+    //    resolve WARNS — at run time it degrades to the workspace default and still reports PASSED.
+    //    Advisory rather than fatal because no CLI command writes a trailmap, so a hard failure
+    //    would strand a first-time user; this repo's own trails get the fatal version from
+    //    TrailTargetCorpusTest. Silence it with TRAILBLAZE_DISABLE_TRAIL_TARGET_GATE=1.
     // Separate kill-switches on purpose: disabling the dialect gate mid-migration must not also
     // silently drop the device-pin ratchet.
     val trailLintExit = runTrailLintPhase(
       workspaceRoot = resolved.workspaceRoot,
       selectorDialectGateEnabled = !isSelectorDialectGateDisabled(),
       devicePinGateEnabled = !isDevicePinGateDisabled(),
+      trailTargetGateEnabled = !isTrailTargetGateDisabled(),
     )
 
     // Worst-of-all wins. Exit codes are ordered OK(0) < TYPE_ERROR(1) < USAGE(2) <
@@ -907,6 +917,13 @@ class CheckCommand : Callable<Int> {
    *    `config.devices:` is fatal — a pin indented one level too shallow silently unpins the
    *    device. The deprecated bare-string device form warns only, because that decode branch is
    *    still live and unmigrated consumer repos must not break on a CLI upgrade.
+   *  - **Trail target** ([TrailTargetLint], needs the DECODED trail): `config.target:` naming an id
+   *    this workspace cannot resolve WARNS. The runtime behaviour it catches is the worst kind of
+   *    silent — the target degrades to the workspace default and the trail passes against a
+   *    different app than it names — but no CLI command writes a trailmap, so a fatal finding
+   *    would hand a first-time user a broken build and no command to run. Targets are the
+   *    recommended path, not a precondition for using the framework. This repo's own trails are
+   *    held to the fatal version by `TrailTargetCorpusTest`, which is where the ratchet lives.
    *
    * Each gate has its own kill-switch, so disabling one never silently drops the other.
    *
@@ -922,8 +939,9 @@ class CheckCommand : Callable<Int> {
     workspaceRoot: File,
     selectorDialectGateEnabled: Boolean = true,
     devicePinGateEnabled: Boolean = true,
+    trailTargetGateEnabled: Boolean = true,
   ): Int {
-    if (!selectorDialectGateEnabled && !devicePinGateEnabled) return EXIT_OK
+    if (!selectorDialectGateEnabled && !devicePinGateEnabled && !trailTargetGateEnabled) return EXIT_OK
     var exit = EXIT_OK
     try {
       val trailsRoot = CliPathUtils.workspaceGeneratedArtifactsRoot(workspaceRoot.toPath()).toFile()
@@ -931,6 +949,17 @@ class CheckCommand : Callable<Int> {
       val yaml = createTrailblazeYaml()
       val dialectFindings = mutableListOf<SelectorDialectLint.Finding>()
       val devicePinFindings = mutableListOf<DevicePinLint.Finding>()
+      val targetFindings = mutableListOf<TrailTargetLint.Finding>()
+      // Resolvable ids mirror what the runtime actually registers for a workspace
+      // ([listAllWorkspaceTargetIds] — trailmaps plus hand-authored and compiled `targets/<name>.yaml`,
+      // scope-independent so an out-of-scope trailmap still counts) plus classpath manifests. Null
+      // when the gate is off: the resolver owns the scan and the classpath discovery, so not building
+      // one is what makes the kill-switch skip the work.
+      val targetIdResolver = if (trailTargetGateEnabled) {
+        TrailTargetLint.TargetIdResolver(workspaceTargetIds = ::listAllWorkspaceTargetIds)
+      } else {
+        null
+      }
       // Canonical discovery, NOT a local filename filter: a runnable trail may be written as
       // `blaze.yaml` or a nested `trailblaze.yaml`, which `TrailIndexBuilder` and the runner both
       // honor. A narrower predicate would let a mis-indented pin ship in a trail the CLI happily
@@ -948,12 +977,31 @@ class CheckCommand : Callable<Int> {
           if (devicePinGateEnabled) {
             DevicePinLint.lint(rel, text)?.let { devicePinFindings.add(it) }
           }
-          if (!selectorDialectGateEnabled) return@forEach
+          if (!selectorDialectGateEnabled && !trailTargetGateEnabled) return@forEach
           try {
             val unified = when (val doc = yaml.decodeTrailDocument(text)) {
               is TrailDocument.Unified -> doc.trail
             }
-            SelectorDialectLint.lint(rel, unified)?.let { dialectFindings.add(it) }
+            if (selectorDialectGateEnabled) {
+              SelectorDialectLint.lint(rel, unified)?.let { dialectFindings.add(it) }
+            }
+            if (targetIdResolver != null) {
+              // Per trail, not per phase: in the standalone layout the scan root IS the workspace
+              // root, so this walk can descend into a NESTED workspace, whose trails must be judged
+              // against the trailmaps THEY see. One parent id set applied to everything would fail
+              // a nested workspace's perfectly good trail. Same walk-up the runner does, and the
+              // same rule the repo-wide corpus gate applies; a trail under no workspace at all falls
+              // back to the one being checked.
+              val owningWorkspaceRoot =
+                CliPathUtils.findWorkspaceRoot(file.toPath())?.toFile() ?: workspaceRoot
+              TrailTargetLint.lint(
+                trailRelPath = rel,
+                workspaceLabel = owningWorkspaceRoot.path,
+                trail = unified,
+                registeredTargetIds = targetIdResolver.forWorkspace(owningWorkspaceRoot),
+                trailmapsDir = CliPathUtils.workspaceTrailmapsDir(owningWorkspaceRoot.toPath()).toString(),
+              )?.let { targetFindings.add(it) }
+            }
           } catch (_: Throwable) {
             // Unparseable trail — the parse-level validators own that error; double-reporting is
             // noise. Throwable (not Exception): decodeTrailDocument surfaces unknown-tool failures
@@ -973,6 +1021,16 @@ class CheckCommand : Callable<Int> {
         Console.error(SelectorDialectLint.renderFailures(dialectFindings))
         exit = EXIT_TYPE_ERROR
       }
+      // Advisory, NOT fatal — deliberately the odd one out among the three lints here. There is no
+      // `trailblaze init` and no trailmap generator, so the only remedy is hand-writing a
+      // `trailmap.yaml`; failing a first-time user's build with no command to run costs more than
+      // the mis-targeted trail, which still runs. Registering targets is recommended, not a
+      // precondition for using the framework. The repo's own trails are held to the fatal version
+      // by TrailTargetCorpusTest. Console.error, not log: a warning suppressed by quiet mode is a
+      // warning nobody reads.
+      if (targetFindings.isNotEmpty()) {
+        Console.error(TrailTargetLint.renderWarnings(targetFindings))
+      }
     } catch (e: Exception) {
       // An infrastructure failure inside the phase (I/O, an unexpected exception) must not fail the
       // build on its own — only a real finding does.
@@ -989,6 +1047,9 @@ class CheckCommand : Callable<Int> {
 
   /** Kill-switch for the device-pin gate — see [DevicePinLint.DISABLE_ENV_VAR]. */
   private fun isDevicePinGateDisabled(): Boolean = isEnvFlagSet(DevicePinLint.DISABLE_ENV_VAR)
+
+  /** Kill-switch for the trail-target gate — see [TrailTargetLint.DISABLE_ENV_VAR]. */
+  private fun isTrailTargetGateDisabled(): Boolean = isEnvFlagSet(TrailTargetLint.DISABLE_ENV_VAR)
 
   private fun isEnvFlagSet(name: String): Boolean {
     val v = System.getenv(name)?.trim()?.lowercase()
@@ -1143,6 +1204,61 @@ class CheckCommand : Callable<Int> {
       f.isDirectory && File(f, TrailblazeConfigPaths.TRAILMAP_MANIFEST_FILENAME).isFile
     } ?: return emptySet()
     return dirs.map { it.name }.toSet()
+  }
+
+  /**
+   * Every target id a trail in this workspace can resolve locally — the whole set the runtime
+   * registers from the workspace, which is strictly wider than [listAllWorkspaceTrailmapIds]:
+   *
+   *  - the target id each `<configDir>/trailmaps/<id>/trailmap.yaml` registers — see
+   *    [TrailTargetLint.manifestTargetNames], which is at most one name and is NOT always the
+   *    directory name,
+   *  - hand-authored `<configDir>/targets/<name>.yaml` and compiled `<configDir>/dist/targets/<name>.yaml`,
+   *    which `AppTargetDiscovery` loads through the same workspace-layered resource source. Those
+   *    are a documented way to declare a target WITHOUT a trailmap, so a set built from trailmaps
+   *    alone would warn on a target that resolves perfectly at run time.
+   *
+   * Deliberately separate from [listAllWorkspaceTrailmapIds] rather than widening it: that one
+   * answers "which trailmaps exist" for the recording validator's known-manifest set, and folding
+   * non-trailmap ids into it would change that answer.
+   *
+   * Any failure degrades to what was collected so far — a smaller set can only produce an advisory
+   * finding, never a wrong pass.
+   */
+  internal fun listAllWorkspaceTargetIds(workspaceRoot: File): Set<String> = buildSet {
+    val trailmapsDir = CliPathUtils.workspaceTrailmapsDir(workspaceRoot.toPath()).toFile()
+    trailmapsDir
+      .listFiles { f -> f.isDirectory }
+      .orEmpty()
+      .forEach { dir ->
+        val manifestFile = File(dir, TrailblazeConfigPaths.TRAILMAP_MANIFEST_FILENAME)
+        if (!manifestFile.isFile) return@forEach
+        val manifest = runCatching { TrailblazeTrailmapManifestLoader.load(manifestFile).manifest }
+          .getOrNull()
+        if (manifest == null) {
+          // Unreadable manifest: the trailmap validators own that error. Count the directory name so
+          // this gate doesn't stack a misleading "no trailmap registers this target" on top of it.
+          add(dir.name)
+        } else {
+          addAll(TrailTargetLint.manifestTargetNames(manifest))
+        }
+      }
+
+    val configDir = CliPathUtils.workspaceTrailmapsDir(workspaceRoot.toPath()).parent?.toFile()
+    if (configDir != null && configDir.isDirectory) {
+      runCatching {
+        AppTargetYamlLoader.discoverConfigs(
+          resourceSource = CompositeConfigResourceSource(
+            sources = listOf(
+              FilesystemConfigResourceSource(rootDir = configDir),
+              FilesystemConfigResourceSource(
+                rootDir = File(configDir, TrailblazeConfigPaths.WORKSPACE_DIST_SUBDIR),
+              ),
+            ),
+          ),
+        )
+      }.getOrDefault(emptyList()).forEach { add(it.id) }
+    }
   }
 
   /**

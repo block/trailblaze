@@ -25,9 +25,7 @@ directory first, and only falls back to the process working directory when nothi
 
 ### Optional parameters
 
-- `action` — `ToolParameterType.Enum(
-  entries = [GOTO, BACK, FORWARD]
-)`
+- `action` — `enum(GOTO | BACK | FORWARD)`
   GOTO navigates to a URL, BACK/FORWARD moves through browser history.
 - `url` — `String`
   The URL to navigate to. Required when action is GOTO. Supports full URLs (https://..., file://...) or a relative file path, which is resolved against the trail file's own directory before the process working directory.

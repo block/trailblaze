@@ -7,31 +7,31 @@
 // import directly from here without dragging the ConditionalAction logic into its module
 // graph when it lands.
 //
-// ## Phase 2 acquisition path
-//
-// The host has no whole-tree snapshot tool today (#3455 Phase 3+). For Phase 2:
+// ## Acquisition path
 //
 //  - [captureViewHierarchy] builds a [ViewHierarchy] by pre-resolving a declared
-//    list of selectors in parallel via the existing `findMatches` framework tool.
-//  - **Each `findMatches` callback enters its own nested `runTrailblazeTools`
-//    frame on the daemon** (see `MaestroTrailblazeAgent.kt:214` for the wiring)
-//    and captures its own view-hierarchy via the SnapshotCache fallback path.
-//    The kdoc claim in `built-in-tools.ts:206-209` about cache sharing applies
-//    to the Kotlin in-batch dispatch loop only — it does NOT apply to the
-//    scripting-callback path. So for N selectors, Phase 2 pays N callbacks
-//    AND N view-hierarchy captures.
-//  - Parallel dispatch minimizes the wall-clock window between captures, but
-//    the resulting snapshot is **not atomic** — under heavy UI animation, two
-//    selectors in the same `captureViewHierarchy` call could reflect different
-//    point-in-time states. Authoring predicates against the returned snapshot
-//    should tolerate small inter-frame drift; for strictly atomic single-frame
-//    semantics, wait for the host-side bulk-snapshot tool that the Phase 3+
-//    auto-acquire path will use.
+//    list of selectors via ONE `findSelectorMatches` framework call, which
+//    takes a single view-hierarchy capture on the host and resolves every
+//    selector against that one tree.
+//  - **The snapshot is atomic**: one capture, so every selector's answer
+//    describes the same instant of the same screen. Predicates can compare two
+//    selectors' results without worrying about inter-frame UI drift.
+//  - **One capture, not N.** The earlier shape dispatched N parallel
+//    `findMatches` calls, and each callback enters its own nested
+//    `runTrailblazeTools` frame on the daemon (see `MaestroTrailblazeAgent.kt:214`)
+//    and captures its own hierarchy via the SnapshotCache fallback path — so
+//    parallelism narrowed the drift window but still paid N multi-second
+//    captures. The kdoc claim in `built-in-tools.ts` about in-batch cache
+//    sharing applies to the Kotlin dispatch loop only, never to the
+//    scripting-callback path; batching had to become explicit in the tool.
 //  - Queries for selectors NOT in the pre-resolved list throw a clear error.
 //
-// When the host-side full-tree snapshot tool ships (Phase 3+), the [ViewHierarchy]
-// interface stays the same — only the implementation changes (the captured tree
-// resolves arbitrary selectors without pre-declaration, in one frame, atomically).
+// Pre-declaration is what remains of the Phase 2 shape. The host still has no
+// tool that ships the whole tree to the script (#3455 Phase 3+), so selectors
+// are resolved host-side and only their matches cross the boundary. When that
+// tool lands the [ViewHierarchy] interface stays the same — arbitrary selectors
+// would resolve without pre-declaration, and the atomicity this already has
+// would come from holding the tree locally instead.
 
 import type { TrailblazeClient } from "./client.js";
 import type {
@@ -53,12 +53,12 @@ import type {
  * and waypoint authors, add it; if it's specific to one, prefer a subsystem-local
  * utility that takes a [ViewHierarchy] argument.
  *
- * **Backed by pre-resolved selectors in Phase 2.** [captureViewHierarchy] builds
- * an instance from a declared list of selectors; queries for selectors not in
- * that list throw. When the host-side full-tree snapshot tool ships (Phase 3+),
- * the snapshot can be backed by the captured tree directly and arbitrary
- * selectors will resolve without pre-declaration — the interface won't change,
- * just the implementation.
+ * **Backed by pre-resolved selectors.** [captureViewHierarchy] builds an
+ * instance from a declared list of selectors, resolved host-side against one
+ * capture; queries for selectors not in that list throw. When the host-side
+ * full-tree snapshot tool ships (#3455 Phase 3+), the snapshot can be backed by
+ * the captured tree directly and arbitrary selectors will resolve without
+ * pre-declaration — the interface won't change, just the implementation.
  *
  * Naming note: TypeScript-side `ViewHierarchy` is a sync data carrier with
  * predicate helpers. The Kotlin side's `ViewHierarchyTreeNode` is the actual
@@ -95,13 +95,12 @@ interface SnapshotWithRegistry extends ViewHierarchy {
  * sync [ViewHierarchy] whose `visible` / `find` / `findAll` queries serve from
  * in-memory results.
  *
- * Each selector is dispatched via `client.tools.findMatches({ selector })` in
- * parallel. **Each callback re-captures the view hierarchy** (see this file's
- * header) — Phase 2 has no single-frame multi-selector capture path. Parallel
- * dispatch keeps the wall-clock window small, but the result is not strictly
- * atomic; predicates should tolerate small inter-frame drift. Calling
+ * Every selector is resolved by ONE `client.tools.findSelectorMatches(...)`
+ * call, which takes a single host-side view-hierarchy capture — so the snapshot
+ * costs one capture regardless of how many selectors it carries, and it is
+ * atomic: all answers describe the same instant of the same screen. Calling
  * `snap.visible(selectorNotInList)` throws — the snapshot only knows about
- * selectors it pre-resolved.
+ * selectors it pre-resolved. An empty selector list makes no device call.
  *
  * **Selector identity.** The lookup key is the JSON serialization of the
  * selector object — `{ androidAccessibility: { textRegex: "Submit" } }` and a
@@ -123,8 +122,13 @@ interface SnapshotWithRegistry extends ViewHierarchy {
  * attached so consumers can refresh against the same selector set via
  * [reCaptureViewHierarchy].
  *
- * @throws `Error` if any underlying `findMatches` call fails. Surfaces the
- *   daemon's error message verbatim with the failing selector for diagnosis.
+ * @throws `Error` if the single `findSelectorMatches` call fails, surfacing the
+ *   daemon's message verbatim. There is no "failing selector" to name — one call
+ *   answers all of them, and it fails only when the question could not be asked at
+ *   all (no tree captured, or an empty answer that came out of a known-partial
+ *   capture and so cannot be trusted as absence). A selector that simply matches
+ *   nothing is NOT an error: it resolves to an empty array, and `visible` returns
+ *   `false`.
  */
 export async function captureViewHierarchy(
   client: TrailblazeClient,
@@ -177,23 +181,32 @@ async function resolveSelectors(
   client: TrailblazeClient,
   selectors: readonly TrailblazeNodeSelector[],
 ): Promise<Map<string, MatchDescriptor[]>> {
-  // Parallel dispatch — each `findMatches` callback re-captures the view
-  // hierarchy in its own `runTrailblazeTools` frame (see file header), so we
-  // can't avoid N captures. What parallelism DOES buy is a shorter wall-clock
-  // window between the first and last capture, which minimizes the chance of
-  // inter-frame UI drift across the resulting snapshot. Sequential dispatch
-  // would widen that window without reducing cost.
-  const entries = await Promise.all(
-    selectors.map(async (selector) => {
-      const key = selectorKey(selector);
-      const matches = await client.tools.findMatches({ selector });
-      return [key, matches] as const;
-    }),
-  );
   const map = new Map<string, MatchDescriptor[]>();
-  for (const [key, matches] of entries) {
-    map.set(key, matches);
+  // No selectors declared means no device round trip at all. `findSelectorMatches` rejects an
+  // empty list (a capture with nothing to ask of it is a caller bug there), but an empty snapshot
+  // is legitimate here — a catalog whose entries carry no selectors — and it answers every query
+  // with the "not pre-resolved" error either way.
+  if (selectors.length === 0) return map;
+
+  // ONE call, one host-side capture, every selector resolved against that same tree. This is
+  // what makes the snapshot atomic as well as cheap: see the file header for why N parallel
+  // `findMatches` calls could not be deduplicated by the host's snapshot cache.
+  const matchesPerSelector = await client.tools.findSelectorMatches({
+    selectors: [...selectors],
+  });
+  if (matchesPerSelector.length !== selectors.length) {
+    // The tool's contract is index alignment. A mismatch means the wire shape changed without
+    // this caller being updated — fail loudly rather than silently mis-attributing one
+    // selector's matches to another, which would surface as an inexplicably wrong predicate.
+    throw new Error(
+      `captureViewHierarchy: findSelectorMatches returned ${matchesPerSelector.length} ` +
+        `result(s) for ${selectors.length} selector(s); results are index-aligned to the ` +
+        "selectors, so this is a framework/SDK version mismatch.",
+    );
   }
+  selectors.forEach((selector, index) => {
+    map.set(selectorKey(selector), matchesPerSelector[index]!);
+  });
   return map;
 }
 

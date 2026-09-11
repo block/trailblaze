@@ -1,0 +1,129 @@
+config:
+  id: sample-app/benchmarks/turbo-off
+  target: sampleapp
+  description: |-
+    The "turbo mode off" arm of the in-process driver speed benchmark. Eight interactions on the Taps screen — three taps and five assertions — chosen because each one is a single tool call whose cost is dominated by one tree read plus one action, so a per-tool comparison against the in-process arm is a comparison of the transport rather than of the trail. The mix is assertion-heavy, so the aggregate leans toward the read-dominated category; the per-interaction medians, not the total, are the portable numbers.
+    Kept step-for-step matched with `benchmarks/turbo-on`: same elements, same order, same counts. Two kinds of difference remain. The dialects force one — this arm names the accessibility projection's text, the other names Compose semantics. The other is an authoring choice: the Compose arm anchors several steps on `testTag` where this arm anchors on text alone. Both resolve the same single element per step, so it does not change what is measured.
+  devices:
+    android:
+      driver: ANDROID_ONDEVICE_ACCESSIBILITY
+    android-phone:
+      driver: ANDROID_ONDEVICE_ACCESSIBILITY
+  title: Tap counter, one interaction per tool, on the accessibility driver
+
+trailhead:
+  step: "Launch the sample app on its Taps screen"
+  recording:
+    android:
+      launchApp:
+        appId: xyz.block.trailblaze.examples.sampleapp
+        launchMode: FORCE_RESTART
+    android-phone:
+      launchApp:
+        appId: xyz.block.trailblaze.examples.sampleapp
+        launchMode: FORCE_RESTART
+
+trail:
+  - step: "The Taps screen opens with the counter at zero"
+    recording:
+      android:
+        - assertVisibleBySelector:
+            nodeSelector:
+              androidAccessibility:
+                textRegex: 'Tap Count: 0'
+      android-phone:
+        - assertVisibleBySelector:
+            nodeSelector:
+              androidAccessibility:
+                textRegex: 'Tap Count: 0'
+
+  - step: "Tap the \"Tap Me\" button"
+    recording:
+      android:
+        - tapOnElementBySelector:
+            nodeSelector:
+              androidAccessibility:
+                textRegex: Tap Me
+      android-phone:
+        - tapOnElementBySelector:
+            nodeSelector:
+              androidAccessibility:
+                textRegex: Tap Me
+
+  - step: "The counter reaches one"
+    recording:
+      android:
+        - assertVisibleBySelector:
+            nodeSelector:
+              androidAccessibility:
+                textRegex: 'Tap Count: 1'
+      android-phone:
+        - assertVisibleBySelector:
+            nodeSelector:
+              androidAccessibility:
+                textRegex: 'Tap Count: 1'
+
+  - step: "Tap the button that only exposes a content description"
+    recording:
+      android:
+        - tapOnElementBySelector:
+            nodeSelector:
+              androidAccessibility:
+                contentDescriptionRegex: accessibility_tap_button
+      android-phone:
+        - tapOnElementBySelector:
+            nodeSelector:
+              androidAccessibility:
+                contentDescriptionRegex: accessibility_tap_button
+
+  - step: "The counter reaches two"
+    recording:
+      android:
+        - assertVisibleBySelector:
+            nodeSelector:
+              androidAccessibility:
+                textRegex: 'Tap Count: 2'
+      android-phone:
+        - assertVisibleBySelector:
+            nodeSelector:
+              androidAccessibility:
+                textRegex: 'Tap Count: 2'
+
+  - step: "Tap the button nested inside the parent container"
+    recording:
+      android:
+        - tapOnElementBySelector:
+            nodeSelector:
+              androidAccessibility:
+                textRegex: Nested Button
+      android-phone:
+        - tapOnElementBySelector:
+            nodeSelector:
+              androidAccessibility:
+                textRegex: Nested Button
+
+  - step: "The counter reaches three"
+    recording:
+      android:
+        - assertVisibleBySelector:
+            nodeSelector:
+              androidAccessibility:
+                textRegex: 'Tap Count: 3'
+      android-phone:
+        - assertVisibleBySelector:
+            nodeSelector:
+              androidAccessibility:
+                textRegex: 'Tap Count: 3'
+
+  - step: "The three-tap gate has unlocked its button"
+    recording:
+      android:
+        - assertVisibleBySelector:
+            nodeSelector:
+              androidAccessibility:
+                textRegex: Now Enabled!
+      android-phone:
+        - assertVisibleBySelector:
+            nodeSelector:
+              androidAccessibility:
+                textRegex: Now Enabled!

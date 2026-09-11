@@ -1258,8 +1258,8 @@ class TrailblazeProjectConfigLoaderTest {
 
   @Test
   fun `trailmap-bundled waypoints under nested subdirectories are auto-discovered`() {
-    // Pin: discovery walks the whole `waypoints/` tree, not just direct children. The
-    // Square trailmap organizes ~120 waypoints under `waypoints/{android,ios,web}/...` (web
+    // Pin: discovery walks the whole `waypoints/` tree, not just direct children. A large
+    // trailmap organizes its waypoints under `waypoints/{android,ios,web}/...` (web
     // dashboard waypoints sit four levels deep), so the discovery path has to recurse.
     val trailmapDir = File(tempFolder.root, "trailmaps/multitarget").apply { mkdirs() }
     File(trailmapDir, "trailmap.yaml").writeText(

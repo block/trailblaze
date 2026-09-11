@@ -84,6 +84,27 @@ enum class TrailblazeDriverType(
    * behavioral test, not a rename.
    */
   val usesManualScrollLoop: Boolean,
+  /**
+   * Whether `scrollUntilTextIsVisible` keeps scrolling until the target is near the screen center
+   * instead of stopping the moment it becomes visible. An explicit `centerElement` on the tool
+   * still wins; this is only the default when the caller omits it, and the tool applies it only to
+   * vertical scrolls — a horizontal correction moves content twice as far as a vertical one and
+   * can carry the target off the opposite edge (see `resolveCenterElement`).
+   *
+   * Named for the gate it feeds rather than "this driver's swipes don't fling", because only the
+   * accessibility driver has been measured. There, both Android drivers synthesize identical swipe
+   * geometry (screen center to 10% of height over 400ms), but instrumentation dispatches it via
+   * `input swipe` — a MotionEvent stream whose lift-off velocity triggers a fling — while
+   * `dispatchGesture` produces no meaningful fling, so content travels ~1.4x less per swipe (from
+   * byte-identical pre-swipe accessibility trees in CI: 708px vs 1029px on one tablet, 916px vs
+   * 1273px on another). Stopping at first visibility then leaves the target as a clipped sliver at
+   * the trailing edge — which reads as 100% visible, since accessibility bounds are pre-clipped to
+   * the screen — and steps recorded against instrumentation's longer travel find it below the
+   * fold. Centering aligns the loop's OUTCOME across drivers; the gesture itself can't be aligned,
+   * because a fling isn't reproducible through `dispatchGesture` and lengthening the stroke would
+   * change every raw recorded swipe already validated on this driver.
+   */
+  val centersScrollTargetByDefault: Boolean,
 ) {
   ANDROID_ONDEVICE_ACCESSIBILITY(
     platform = TrailblazeDevicePlatform.ANDROID,
@@ -96,6 +117,7 @@ enum class TrailblazeDriverType(
     hostNativeSimulatorDriver = false,
     hostAgentDispatchable = true,
     usesManualScrollLoop = true,
+    centersScrollTargetByDefault = true,
   ),
   ANDROID_ONDEVICE_INSTRUMENTATION(
     platform = TrailblazeDevicePlatform.ANDROID,
@@ -108,6 +130,7 @@ enum class TrailblazeDriverType(
     hostNativeSimulatorDriver = false,
     hostAgentDispatchable = true,
     usesManualScrollLoop = false,
+    centersScrollTargetByDefault = false,
   ),
   ANDROID_TEST(
     platform = TrailblazeDevicePlatform.ANDROID,
@@ -123,6 +146,7 @@ enum class TrailblazeDriverType(
     hostNativeSimulatorDriver = false,
     hostAgentDispatchable = false,
     usesManualScrollLoop = false,
+    centersScrollTargetByDefault = false,
   ),
   IOS_HOST(
     platform = TrailblazeDevicePlatform.IOS,
@@ -135,6 +159,7 @@ enum class TrailblazeDriverType(
     hostNativeSimulatorDriver = false,
     hostAgentDispatchable = false,
     usesManualScrollLoop = false,
+    centersScrollTargetByDefault = false,
   ),
   IOS_AXE(
     platform = TrailblazeDevicePlatform.IOS,
@@ -147,6 +172,7 @@ enum class TrailblazeDriverType(
     hostNativeSimulatorDriver = true,
     hostAgentDispatchable = false,
     usesManualScrollLoop = true,
+    centersScrollTargetByDefault = false,
   ),
   PLAYWRIGHT_NATIVE(
     platform = TrailblazeDevicePlatform.WEB,
@@ -159,6 +185,7 @@ enum class TrailblazeDriverType(
     hostNativeSimulatorDriver = false,
     hostAgentDispatchable = false,
     usesManualScrollLoop = false,
+    centersScrollTargetByDefault = false,
   ),
   PLAYWRIGHT_ELECTRON(
     platform = TrailblazeDevicePlatform.WEB,
@@ -171,6 +198,7 @@ enum class TrailblazeDriverType(
     hostNativeSimulatorDriver = false,
     hostAgentDispatchable = false,
     usesManualScrollLoop = false,
+    centersScrollTargetByDefault = false,
   ),
   REVYL_ANDROID(
     platform = TrailblazeDevicePlatform.ANDROID,
@@ -183,6 +211,7 @@ enum class TrailblazeDriverType(
     hostNativeSimulatorDriver = false,
     hostAgentDispatchable = false,
     usesManualScrollLoop = false,
+    centersScrollTargetByDefault = false,
   ),
   REVYL_IOS(
     platform = TrailblazeDevicePlatform.IOS,
@@ -195,6 +224,7 @@ enum class TrailblazeDriverType(
     hostNativeSimulatorDriver = false,
     hostAgentDispatchable = false,
     usesManualScrollLoop = false,
+    centersScrollTargetByDefault = false,
   ),
   // The Compose desktop driver. Bound to TrailblazeDevicePlatform.DESKTOP. Previously
   // bound to WEB as a workaround because adding DESKTOP would have required touching
@@ -211,6 +241,7 @@ enum class TrailblazeDriverType(
     hostNativeSimulatorDriver = false,
     hostAgentDispatchable = false,
     usesManualScrollLoop = false,
+    centersScrollTargetByDefault = false,
   ),
   ;
 

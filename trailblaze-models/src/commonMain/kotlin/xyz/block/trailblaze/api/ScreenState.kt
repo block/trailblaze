@@ -148,6 +148,36 @@ interface ScreenState {
     get() = null
 
   /**
+   * How many nodes this capture asked the device for and did not get back while building
+   * [trailblazeNodeTree], or `null` when the driver cannot measure it. Scoped to that tree on
+   * purpose — a driver that builds several projections of one screen can lose a node in one and
+   * not another, so this describes the tree the consumers of this signal actually resolve
+   * against.
+   *
+   * On Android every node in an accessibility capture is a live fetch from the app, and an app
+   * whose main thread is blocked answers those fetches with null — so a tree can be missing whole
+   * subtrees while looking perfectly well-formed. `0` means the capture holds every node the
+   * device advertised; anything greater means a subtree is missing and a consumer MUST NOT read
+   * "not in this tree" as "not on screen".
+   *
+   * `null` means unknown, not complete: iOS, Playwright and Compose captures have no equivalent
+   * count and must not be made to claim one. Every consumer treats unknown exactly as it treated
+   * the world before this signal existed, so a driver that cannot measure completeness keeps its
+   * current behaviour. Read it through [isCaptureKnownPartial] rather than comparing by hand, so
+   * the unknown case can't be accidentally folded into "partial".
+   */
+  val droppedNodeFetches: Int?
+    get() = null
+
+  /**
+   * True only when this capture is KNOWN to have lost nodes ([droppedNodeFetches] greater than
+   * zero). Unknown completeness (`null`) is false: an absence verdict drawn from a driver that
+   * cannot measure completeness is exactly as trustworthy as it was before.
+   */
+  val isCaptureKnownPartial: Boolean
+    get() = (droppedNodeFetches ?: 0) > 0
+
+  /**
    * Current-state context for the outer agent, prepended to [screenSummaryAfter] in
    * [ExecutionResult.Success] so it knows where it landed after each action.
    *

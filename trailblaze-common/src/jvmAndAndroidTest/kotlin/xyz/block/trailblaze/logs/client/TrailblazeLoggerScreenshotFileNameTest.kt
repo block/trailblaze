@@ -17,7 +17,7 @@ class TrailblazeLoggerScreenshotFileNameTest {
 
   @Test
   fun overflowFallsBackToSha8Prefix() {
-    // 261-byte filename mirrors the real case_4844290 incident — anything that pushes the
+    // 261-byte filename mirrors a real incident — anything that pushes the
     // natural <sessionId>_<epochMs>.<ext> past 255 bytes must use the hash fallback.
     val sessionId = "a".repeat(243)
     val epochMs = 1_715_000_000_000L

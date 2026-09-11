@@ -367,6 +367,10 @@ kotlin {
         api(libs.junit)
         implementation(libs.exp4j)
         implementation(libs.gson)
+        // ZXing core: the barcode/QR decoder behind `readBarcodeFromScreen`. Pure Java with no
+        // transitive dependencies, so the same decode path runs on the JVM host and on-device.
+        // Only the pixel-loading step is platform-split (see PngLuminanceSource).
+        implementation(libs.zxing.core)
         implementation(libs.ktor.client.okhttp)
         implementation(libs.kotlin.reflect)
         runtimeOnly(libs.jackson.dataformat.yaml)
@@ -391,6 +395,16 @@ kotlin {
         // live under src/jvmMain, so on-device Android consumers do not need (and must not
         // pay for) this dep.
         implementation(libs.dadb)
+        // ZXing's AWT glue, for the single class BufferedImageLuminanceSource. JVM-only by
+        // construction: Android has no java.awt and loads screenshot pixels via BitmapFactory
+        // instead. Its own transitives are excluded further down.
+        implementation(libs.zxing.javase)
+        // WebP decoding for ImageIO. Not optional: `ScreenshotScalingConfig.DEFAULT` encodes
+        // screenshots as WebP, the JDK ships no WebP reader, and this is the source the barcode
+        // tool decodes — without this plugin on the classpath `ImageIO.read` returns null for
+        // every screenshot a driver hands it. Registers itself through the ImageIO SPI, so the
+        // read path stays plain `ImageIO.read` (see ScreenshotLuminanceSource.jvm.kt).
+        implementation(libs.imageio.webp)
         // ktor-server (JVM only): RpcRouteExt's `registerRpcHandler` is a Ktor server route
         // extension shared by the host-side modules that run the daemon's embedded server. Scoped
         // to jvmMain so the on-device Android build does not inherit a server framework.
@@ -403,6 +417,12 @@ kotlin {
       dependencies {
         implementation(libs.kotlin.test.junit4)
         implementation(libs.assertk)
+        // A real WebSocket server, so the device-to-host log upload client can be tested against
+        // one instead of a stub: its contract is about frames and acks overlapping in flight, which
+        // a fake transport cannot reproduce. JVM-test only — the Android unit test classpath (and
+        // every consumer) must not inherit a server framework.
+        implementation(libs.ktor.server.cio)
+        implementation(libs.ktor.server.websockets)
       }
     }
 
@@ -445,6 +465,14 @@ configurations.named("jvmAndAndroidImplementation") {
   exclude(group = "ai.koog", module = "prompt-cache-redis")
 }
 
+// Strip ZXing's command-line runner (jcommander) and its optional extra ImageIO codecs
+// (jai-imageio-core) from `zxing:javase`. Neither is reachable from the one class we use from it,
+// and both would otherwise land on the runtime classpath of every host module.
+configurations.named("jvmMainImplementation") {
+  exclude(group = "com.beust", module = "jcommander")
+  exclude(group = "com.github.jai-imageio", module = "jai-imageio-core")
+}
+
 dependencyGuard {
   configuration("jvmRuntimeClasspath") {
     modules = true
@@ -459,6 +487,14 @@ tasks.withType<Test>().configureEach {
     events("failed")
     exceptionFormat = TestExceptionFormat.FULL
   }
+}
+
+// ImageIoProguardKeepRegressionTest reads the desktop ProGuard ruleset off disk. Declare it as an
+// input so changing only the rules cannot leave jvmTest incorrectly UP-TO-DATE.
+tasks.named<Test>("jvmTest") {
+  inputs.file(layout.projectDirectory.file("../trailblaze-desktop/proguard-rules.pro"))
+    .withPropertyName("desktopProguardRules")
+    .withPathSensitivity(PathSensitivity.RELATIVE)
 }
 
 // --- Framework scripted-tool QuickJS bundles ---

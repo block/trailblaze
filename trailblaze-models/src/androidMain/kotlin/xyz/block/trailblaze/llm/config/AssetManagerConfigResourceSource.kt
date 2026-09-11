@@ -24,7 +24,10 @@ object AssetManagerConfigResourceSource : ConfigResourceSource {
     return filenames
       .mapNotNull { filename ->
         try {
-          val content = assets.open("$directoryPath/$filename").bufferedReader().readText()
+          // `.use` matters: readText() does NOT close, and every AssetInputStream holds a native
+          // asset handle until finalization. The recursive variant below opens one per candidate
+          // entry across the whole trailmap tree.
+          val content = assets.open("$directoryPath/$filename").use { it.bufferedReader().readText() }
           filename.removeSuffix(suffix) to content
         } catch (_: Exception) {
           null
@@ -40,7 +43,7 @@ object AssetManagerConfigResourceSource : ConfigResourceSource {
       if (!entryFullPath.endsWith(suffix)) return@walkAssets
       val relativePath = entryFullPath.removePrefix("$directoryPath/")
       try {
-        val content = assets.open(entryFullPath).bufferedReader().readText()
+        val content = assets.open(entryFullPath).use { it.bufferedReader().readText() }
         results[relativePath] = content
       } catch (_: Exception) {
         // Skip unreadable entries — same lenient contract as the flat path.

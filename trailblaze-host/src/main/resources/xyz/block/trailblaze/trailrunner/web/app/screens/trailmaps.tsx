@@ -123,7 +123,7 @@ function ComponentTypeScreen({ kind, initSel }) {
     return out;
   }, [tms, kind, scoped, scopeSet]);
   // The full count across every trailmap (denominator of "N of M") — so the footer shows the
-  // scope reduction against the absolute total, matching the Trails footer ("23 of 1016").
+  // scope reduction against the absolute total, matching the Trails footer ("N of M").
   const fullCount = React.useMemo(() => tms.reduce((n, t) => n + ((t[kind] || []).length), 0), [tms, kind]);
 
   const filtered = React.useMemo(() => {

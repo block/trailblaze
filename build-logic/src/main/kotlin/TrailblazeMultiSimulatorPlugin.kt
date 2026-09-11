@@ -5,7 +5,7 @@ import org.gradle.api.tasks.testing.Test
 /**
  * Gradle plugin that configures multi-simulator parallel test execution for iOS tests.
  *
- * When SIMULATOR_COUNT > 1 (set by ios_simulator_boot.sh), this plugin sets maxParallelForks
+ * When SIMULATOR_COUNT > 1 (set by the simulator boot script), this plugin sets maxParallelForks
  * so Gradle forks multiple test workers. Each worker gets a unique `org.gradle.test.worker` ID.
  *
  * Multi-simulator mode is only enabled when there are enough tests to benefit from parallelism.

@@ -1,0 +1,83 @@
+config:
+  id: sample-app/benchmarks/turbo-on
+  target: sampleapp
+  title: Tap counter, one interaction per tool, on the in-process driver
+  description: >-
+    The "turbo mode on" arm of the in-process driver speed benchmark — the same eight interactions
+    as `benchmarks/turbo-off` (three taps, five assertions), replayed inside the app's own process.
+
+    No trailhead: this driver runs inside the app process, so the harness has already launched the
+    app by the time the first step runs. That is a real difference between the arms rather than a
+    measurement artifact, and it is why the totals are reported both with and without the launch.
+  devices:
+    android:
+      driver: ANDROID_TEST
+
+trail:
+  - step: The Taps screen opens with the counter at zero
+    recording:
+      android:
+        - androidTest_assertVisible:
+            nodeSelector:
+              compose:
+                testTag: tv_tap_count
+                textRegex: "Tap Count: 0"
+
+  - step: Tap the "Tap Me" button
+    recording:
+      android:
+        - androidTest_tap:
+            nodeSelector:
+              compose:
+                textRegex: Tap Me
+
+  - step: The counter reaches one
+    recording:
+      android:
+        - androidTest_assertVisible:
+            nodeSelector:
+              compose:
+                testTag: tv_tap_count
+                textRegex: "Tap Count: 1"
+
+  - step: Tap the button that only exposes a content description
+    recording:
+      android:
+        - androidTest_tap:
+            nodeSelector:
+              compose:
+                contentDescriptionRegex: accessibility_tap_button
+
+  - step: The counter reaches two
+    recording:
+      android:
+        - androidTest_assertVisible:
+            nodeSelector:
+              compose:
+                testTag: tv_tap_count
+                textRegex: "Tap Count: 2"
+
+  - step: Tap the button nested inside the parent container
+    recording:
+      android:
+        - androidTest_tap:
+            nodeSelector:
+              compose:
+                testTag: child_button
+
+  - step: The counter reaches three
+    recording:
+      android:
+        - androidTest_assertVisible:
+            nodeSelector:
+              compose:
+                testTag: tv_tap_count
+                textRegex: "Tap Count: 3"
+
+  - step: The three-tap gate has unlocked its button
+    recording:
+      android:
+        - androidTest_assertVisible:
+            nodeSelector:
+              compose:
+                textRegex: Now Enabled!

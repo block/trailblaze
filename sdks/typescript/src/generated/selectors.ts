@@ -278,7 +278,7 @@ export interface Bounds {
 
 /**
  * Lightweight identity + position record describing one match returned by the
- * `findMatches` tool.
+ * `findSelectorMatches` tool.
  *
  * Designed for scripted-tool authors who want to ask "is this element visible?",
  * "is the selector unambiguous?", and "where is the match on screen?" without
@@ -326,7 +326,7 @@ export interface MatchDescriptor {
    * the same physical pixels are now reached by a different index sequence.
    *
    * Treat descriptors as "immediate hand-offs to act on in this tool body"
-   * rather than long-lived references. Re-querying via [findMatches] is the
+   * rather than long-lived references. Re-querying via `findSelectorMatches` is the
    * right pattern after any device-mutating action, even if the matched
    * element is logically the same. For longer-lived identity, prefer
    * [accessibilityId] / [resourceId] when the driver populates them.

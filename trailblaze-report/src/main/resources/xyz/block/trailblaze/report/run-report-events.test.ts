@@ -28,6 +28,10 @@ const ev = require("./run-report-events.ts") as {
 const pairingFormatter: EventStreamFormatter = {
   id: "sample-network",
   streams: ["com.example.plugin.network"],
+  comparisonNames: { "com.example.plugin.network": "network" },
+  comparisonValues(entries) {
+    return entries.map((entry) => ({ kind: entry.data.request ? "request" : "response" }));
+  },
   format(entries) {
     const rows: FormatterRowInput[] = [];
     const byId = new Map<string, { row: FormatterRowInput; t: number | null }>();
@@ -246,6 +250,8 @@ describe("buildEventStream with a formatter", () => {
       [pairingFormatter],
     )!;
     expect(stream.name).toBe("com.example.plugin.network");
+    expect(stream.comparisonName).toBe("network");
+    expect(stream.comparisonValues).toEqual([{ kind: "request" }, { kind: "response" }]);
     expect(stream.rows).toHaveLength(1);
     const row = stream.rows![0];
     expect(row.label).toBe("POST /2.0/pay");
@@ -369,6 +375,19 @@ describe("buildEventStream with a formatter", () => {
     const stream = ev.buildEventStream("s.ndjson", ['{"timeMs":1,"data":{"a":1}}'], [throwing])!;
     expect(stream.rows).toBeUndefined();
     expect(stream.events).toEqual([{ t: 1, d: '{"a":1}' }]);
+  });
+
+  test("a failed comparison projection keeps the producer identity", () => {
+    const formatter: EventStreamFormatter = {
+      id: "unsafe-alias",
+      streams: ["producer"],
+      comparisonNames: { producer: "canonical" },
+      comparisonValues: () => null,
+      format: () => [{ label: "row" }],
+    };
+    const stream = ev.buildEventStream("producer.ndjson", ['{"timeMs":1,"data":{}}'], [formatter])!;
+    expect(stream.comparisonName).toBeUndefined();
+    expect(stream.comparisonValues).toBeUndefined();
   });
 
   test("the formatter sees EVERY line, and every produced row is kept", () => {

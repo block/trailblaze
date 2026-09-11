@@ -17,7 +17,9 @@ import kotlinx.serialization.Serializable
  *  3. **deterministic no-op** — matched, with [toolCount] `0` (an explicit `android: []`). Replays
  *     zero tools and succeeds, deterministically and without AI. Reported today exactly like a
  *     23-tool replay.
- *  4. **no match** — [resolvedClassifier] is `null`. The step silently runs in LLM mode.
+ *  4. **no match** — [resolvedClassifier] is `null`. The step silently runs in LLM mode. Also
+ *     covers a legacy leg that matched but held only non-replayable control markers: the lowering
+ *     drops those, leaving no device action, so the step runs in LLM mode just the same.
  *
  * See [ToolRecording][xyz.block.trailblaze.yaml.ToolRecording] for why 3 and 4 must never collapse
  * into each other.
@@ -32,11 +34,17 @@ data class RecordingResolution(
   /** Classifier keys the step actually declares, in authored order. Empty means the step was never
    *  recorded for any device, which is authored intent rather than a resolution failure. */
   val declaredClassifiers: List<String>,
-  /** The chain entry that won, or `null` when nothing in the device's chain matched. */
+  /**
+   * The chain entry that won, or `null` when the step runs on the LLM — nothing in the device's
+   * chain matched, or the entry that matched held nothing but non-replayable control markers, which
+   * the lowering drops. Both are outcome 4.
+   */
   val resolvedClassifier: String?,
   /**
-   * Tool names the winning entry replays, in order. Empty for a matched-empty no-op; `null` iff
-   * nothing matched. Keeping null and empty distinct is the whole point — see the class doc.
+   * Tool names the winning entry replays, in order, with non-replayable control markers already
+   * removed so this is what the executor will actually run. Empty for a matched-empty no-op; `null`
+   * iff the step runs on the LLM. Keeping null and empty distinct is the whole point — see the
+   * class doc.
    */
   val toolNames: List<String>?,
 ) {
@@ -68,12 +76,12 @@ data class RecordingResolution(
      * limiting this to wrappers would report a device that used the self-guarding form as having
      * lost a guard it never lost.
      *
-     * **A floor, not a complete set.** Membership is by name, and this module is published
-     * open-source, where `scripts/scan_opensource_sensitive_terms.sh` bars target-specific prefixes —
-     * so a target's own self-guarding tools cannot be enumerated here even when they meet the
-     * criterion above. Read a `false` [isConditionallyGuarded] as "no *enumerated* guard", and any
-     * conditional count derived from it as a lower bound. Making this complete needs the property to
-     * travel as tool metadata rather than a name list; see #5269.
+     * **A floor, not a complete set.** Membership is by name, and this module is target-agnostic —
+     * it cannot name the tools any particular target defines, so a target's own self-guarding tools
+     * are absent here even when they meet the criterion above. Read a `false`
+     * [isConditionallyGuarded] as "no *enumerated* guard", and any conditional count derived from it
+     * as a lower bound. Making this complete needs the property to travel as tool metadata rather
+     * than a name list.
      */
     val CONDITIONAL_TOOL_NAMES = setOf("block_runIf", "runIf", "block_dismissIfPresent")
   }

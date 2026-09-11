@@ -29,7 +29,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
  * `context.nestedToolExecutor` from a server thread, and the nested Playwright dispatch
  * bridges onto the Playwright thread via `PlaywrightPageManager.onPlaywrightThread`.
  *
- * The regression this guards (the dark `trailblaze-web-pr` lane): `runTrailblazeYamlSuspend`
+ * The regression this guards, from a web CI run: `runTrailblazeYamlSuspend`
  * used to run the whole trail loop ON the Playwright thread, so the blocked host-local
  * dispatch parked the very thread the nested bridge needed — every such composition hung
  * for the subprocess's full 122s callback timeout. If the loop is ever moved back onto

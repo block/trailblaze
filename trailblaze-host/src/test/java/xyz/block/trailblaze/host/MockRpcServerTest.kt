@@ -22,7 +22,7 @@ import kotlin.test.Test
 /**
  * Lifecycle guards for the [MockRpcServer] test fixture itself.
  *
- * Mainline build 12247 failed every [HostAccessibilityRpcClientTest] case at once with
+ * One mainline run failed every [HostAccessibilityRpcClientTest] case at once with
  * `BindException: Address already in use` on the fixture's device-derived port, and dragged
  * `DevicesPageEndpointTest` down as collateral (the uncaught bind failure was charged to the next
  * `runTest`). The commit under test touched only shell scripts, so nothing in the product was
@@ -58,7 +58,7 @@ import kotlin.test.Test
  * blackholes. And a *loopback* squatter does make the bind fail deterministically — but Ktor reports
  * that failure on its own coroutine as well as to the caller, and the uncaught half lands on whatever
  * `runTest`-based test happens to run next: reproduced twice, taking down `DevicesPageEndpointTest`
- * once and `AppIconRouteTest` once. That is build 12247's collateral shape exactly, so pinning the
+ * once and `AppIconRouteTest` once. That is that run's collateral shape exactly, so pinning the
  * contract that way would manufacture the flake class this fixture exists to remove.
  *
  * JUnit constructs a fresh instance per test method, so every test in a class re-binds the same
@@ -85,7 +85,7 @@ class MockRpcServerTest {
   /**
    * The bound is real, not decorative: a state that never arrives has to return false so the caller
    * can attribute it, rather than parking until the suite is cancelled — the failure shape that
-   * wedged Gradle `check` at 99% on three mainline builds in a different module.
+   * wedged Gradle `check` at 99% on repeated mainline builds in a different module.
    *
    * [NEVER_LISTENING_PORT] rather than a just-closed ephemeral port, here and in the not-listening
    * case above: the OS can hand a released ephemeral port to another process mid-test, which would
@@ -131,7 +131,7 @@ class MockRpcServerTest {
   }
 
   /**
-   * The half that took out build 12247: [MockRpcServer.stop] must be a barrier, so a caller that
+   * The half that took out that run: [MockRpcServer.stop] must be a barrier, so a caller that
    * returns from it can bind the port again. Previously it returned on Ktor's shutdown bound with the
    * listener's actual state unchecked, which is what let the next test's bind land on a live socket.
    *
@@ -147,7 +147,7 @@ class MockRpcServerTest {
   }
 
   /**
-   * The half that took out build 15969: a [MockRpcServer.stop] on a server that never started must
+   * The half that took out a later one: a [MockRpcServer.stop] on a server that never started must
    * not report the squatting socket as its own teardown failure.
    *
    * An `@After` runs whether or not `@Before` succeeded, so a failed [MockRpcServer.start] is
@@ -170,7 +170,7 @@ class MockRpcServerTest {
    *
    * The squatter's own bind takes [MockRpcServer.start]'s gate directly — the only bind here on the
    * fixture's device-derived port that no `start()` precedes, because the whole point is that this
-   * server never starts. Without it, build 17500 failed in this test's *setup* with a raw
+   * server never starts. Without it, a CI run failed in this test's *setup* with a raw
    * `BindException` from an unrelated ephemeral socket, on a line whose subject is not this fixture
    * at all; it passed on the immediate rebuild. That is the class doc's second hazard landing on the
    * one bind nothing had gated.

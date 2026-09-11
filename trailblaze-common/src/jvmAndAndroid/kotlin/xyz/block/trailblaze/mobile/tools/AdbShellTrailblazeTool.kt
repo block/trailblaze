@@ -8,6 +8,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.Serializable
 import xyz.block.trailblaze.android.tools.shellEscape
 import xyz.block.trailblaze.device.AndroidDeviceCommandExecutor
+import xyz.block.trailblaze.device.AndroidShellBounds
 import xyz.block.trailblaze.device.wrapShellPipelineForTransport
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
@@ -292,8 +293,12 @@ data class AdbShellTrailblazeTool(
    * The exec runs in the separate UiAutomation process, where a failure "cannot cross the Binder"
    * back to us — a wedged command leaves the result-pipe read blocked indefinitely; without a bound
    * the agent hangs until the session's ~13-minute inactivity watchdog kills it. So the call runs
-   * on an interruptible IO dispatcher bounded by [ON_DEVICE_SHELL_TIMEOUT_MS] — a timeout fails
-   * fast with a clear error.
+   * on an interruptible IO dispatcher bounded by [ON_DEVICE_SHELL_TIMEOUT_MS].
+   *
+   * That bound is the backstop, not the expected failure path. Interrupting the reader does not
+   * stop it — a pipe read ignores interruption — so this bound reports while the read stays parked
+   * holding the process-wide UiAutomation monitor. The device-side read bound is what ends the read
+   * and frees the monitor, and it is set lower so it lands first; see [AndroidShellBounds].
    */
   private suspend fun executeViaShellTrampoline(
     executor: AndroidDeviceCommandExecutor,
@@ -395,11 +400,15 @@ data class AdbShellTrailblazeTool(
      * Upper bound for a single on-device (shell-less) `android_adbShell` dispatch. A failed
      * `Runtime.exec` raises an exception in the separate UiAutomation process that cannot cross the
      * Binder, leaving the result-pipe read blocked; without this bound the agent would hang until
-     * the session's ~13-minute inactivity watchdog. 60s is generous for a real shell-out (`pm`,
-     * `am`, `dumpsys`) on a slow CI emulator while still failing fast on a wedged exec. Does not
-     * apply to the host transport, which has its own `TRAILBLAZE_ADB_TIMEOUT_MS` bound.
+     * the session's ~13-minute inactivity watchdog. Does not apply to the host transport, which
+     * has its own `TRAILBLAZE_ADB_TIMEOUT_MS` bound.
+     *
+     * Sits deliberately ABOVE the read bound the device side puts on the same command, and is
+     * derived from it so the two cannot drift out of order — see [AndroidShellBounds]. This bound
+     * abandons the reader; only that one ends it and frees the UiAutomation monitor.
      */
-    internal const val ON_DEVICE_SHELL_TIMEOUT_MS: Long = 60_000L
+    internal const val ON_DEVICE_SHELL_TIMEOUT_MS: Long =
+      AndroidShellBounds.ON_DEVICE_DISPATCH_TIMEOUT_MS
 
     /**
      * Splits [rawOutput] into the user-facing command output and the captured exit code.

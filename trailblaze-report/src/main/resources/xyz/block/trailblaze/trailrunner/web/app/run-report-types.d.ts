@@ -422,6 +422,13 @@ interface EventStreamFormatter {
   id: string;
   /** Stream names this formatter owns: exact names, or `prefix.*` wildcards. */
   streams: string[];
+  /** Exact producer stream names that comparisons should present under one canonical name. */
+  comparisonNames?: Record<string, string>;
+  /**
+   * Optional canonical payload projection used only by Compare. Return null when the formatter
+   * cannot safely translate every entry; Timeline continues to render `format` rows unchanged.
+   */
+  comparisonValues?(entries: FormatterEntry[], ctx?: FormatterContext): unknown[] | null;
   format(entries: FormatterEntry[], ctx?: FormatterContext): Array<FormatterRowInput | null | undefined>;
 }
 
@@ -442,6 +449,10 @@ interface AttachmentRef {
 /** One `events/<name>.ndjson` producer stream, embedded in full. */
 interface EventStream {
   name: string;
+  /** Canonical comparison identity; ordinary Timeline rendering continues to use `name`. */
+  comparisonName?: string;
+  /** Formatter-owned values in the canonical comparison schema; never used by Timeline. */
+  comparisonValues?: unknown[];
   total: number;
   truncated: boolean;
   events: SessionEvent[];

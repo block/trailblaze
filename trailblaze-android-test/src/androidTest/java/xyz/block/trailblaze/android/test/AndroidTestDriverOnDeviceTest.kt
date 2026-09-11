@@ -201,8 +201,8 @@ class AndroidTestDriverOnDeviceTest {
    * An ambiguous selector acts on the first PLACED match, which is what the Android accessibility
    * driver does (`AccessibilityDeviceManager.pickPreferredMatch`) and therefore the semantics every
    * recording in the estate was made against. Failing instead — which this driver used to do — is a
-   * stricter contract than a recording can satisfy: case 5380720's `checkout_button_title` named
-   * one element on the recording device and names two here the moment the merchant has open tickets
+   * stricter contract than a recording can satisfy: one trail's `checkout_button_title` named one
+   * element on the recording device and names two here the moment the merchant has open tickets
    * on, and a corpus that replays unmodified by design has no edit available to it.
    *
    * The first match is first down the screen, so this lands on the same button `index = 0` names

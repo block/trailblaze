@@ -69,6 +69,7 @@ import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import androidx.compose.foundation.text.selection.SelectionContainer
 import xyz.block.trailblaze.ui.composables.SelectableText
 import xyz.block.trailblaze.ui.images.ImageLoader
+import xyz.block.trailblaze.ui.images.ScreenshotDiagnostics
 import xyz.block.trailblaze.ui.models.TrailblazeServerState
 import xyz.block.trailblaze.viewhierarchy.ViewHierarchyFilter
 import xyz.block.trailblaze.util.Console
@@ -591,11 +592,27 @@ private fun ViewHierarchyInspector(
     imageLoader.getImageModel(sessionId, screenshotFile)
   }
 
+  // Which loader answered is the field that localizes this: the same hierarchy renders through a
+  // file-system loader in the desktop app and a network one in a published report, and only one of
+  // them can return null for a screenshot that exists. In an effect keyed on the screenshot so it
+  // is said once per screenshot — callers construct their loader inline, so the `remember` above
+  // re-runs whenever an ancestor recomposes.
+  LaunchedEffect(sessionId, screenshotFile) {
+    if (imageModel == null) {
+      Console.log(
+        "❌ Inspector has nothing to load for ${ScreenshotDiagnostics.ref(screenshotFile)}: " +
+          "${imageLoader::class.simpleName} produced no image model",
+      )
+    }
+  }
+
   // The model resolving is not the same as the image loading. When the loader itself fails, the
   // pane would otherwise stay empty and draw overlays over nothing, with no message anywhere —
   // that's what made the ProGuard/Coil ServiceLoader breakage (block/trailblaze#194) so hard to
-  // place. Recording the failure here routes it to the visible branch below.
-  var loadError by remember(sessionId, screenshotFile, imageModel) { mutableStateOf<String?>(null) }
+  // place. Recording the failure here routes it to the visible branch below. Keyed on the
+  // screenshot rather than the model, because a new model identity for the same screenshot is an
+  // ancestor recomposing, not a new thing to try.
+  var loadError by remember(sessionId, screenshotFile) { mutableStateOf<String?>(null) }
 
   Box(
     modifier = Modifier.fillMaxSize(),
@@ -613,9 +630,15 @@ private fun ViewHierarchyInspector(
           .clip(MaterialTheme.shapes.medium),
         contentScale = ContentScale.Fit,
         onError = { state ->
-          val throwable = state.result.throwable
-          Console.log("❌ Inspector screenshot failed to load: $screenshotFile: $throwable")
-          loadError = throwable.message ?: throwable::class.simpleName ?: "unknown error"
+          // The cause goes through the same bounding as the reference: an image pipeline failure
+          // quotes back the model the loader built, which is the reference with a base path or a
+          // server URL in front of it.
+          val cause = ScreenshotDiagnostics.cause(state.result.throwable)
+          Console.log(
+            "❌ Inspector screenshot failed to load: " +
+              "${ScreenshotDiagnostics.ref(screenshotFile)}: $cause",
+          )
+          loadError = cause
         },
       )
 
@@ -677,7 +700,7 @@ private fun ViewHierarchyInspector(
       }
     } else {
       SelectableText(
-        text = loadError?.let { "Failed to load screenshot: $it" } ?: "Failed to load screenshot",
+        text = ScreenshotDiagnostics.message(loadError, screenshotFile),
         style = MaterialTheme.typography.bodyLarge,
         color = MaterialTheme.colorScheme.onSurfaceVariant
       )

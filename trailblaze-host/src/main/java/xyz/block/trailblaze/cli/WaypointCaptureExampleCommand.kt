@@ -365,7 +365,7 @@ class WaypointCaptureExampleCommand : Callable<Int> {
    * loads the screenshot bytes into memory) only runs on screenshot-bearing logs. The matcher
    * itself does not look at the bytes; this is purely a cheap shortcut.
    *
-   * "Most recent" is decided by the JSON `timestamp` field on each log, NOT by filename: ATF
+   * "Most recent" is decided by the JSON `timestamp` field on each log, NOT by filename: farm
    * / CI accessibility-driver runs use hex-hash filenames that don't sort chronologically by
    * name. Local CLI numeric-prefix filenames (`008_…`) sort correctly under either key, so
    * timestamp-sort is uniformly correct.

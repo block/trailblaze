@@ -3,7 +3,8 @@ package xyz.block.trailblaze.toolcalls
 /**
  * Marker interface for tools that are guaranteed not to mutate device state.
  *
- * Implemented by query-shaped tools (today: `FindMatchesTrailblazeTool`) so the
+ * Implemented by query-shaped tools (today: `FindMatchesTrailblazeTool` and
+ * `FindSelectorMatchesTrailblazeTool`) so the
  * dispatch loop in `BaseTrailblazeAgent.runTrailblazeTools` can skip the
  * post-tool snapshot-cache invalidation step — the captured view hierarchy is
  * still valid for a follow-up query in the same batch.
@@ -12,7 +13,7 @@ package xyz.block.trailblaze.toolcalls
  *
  * `isVerification = true` is the existing "read-only" signal, but it implies
  * "successful execution IS the assertion verdict" — a semantic that doesn't fit
- * a query like `findMatches` (the assertion is in the caller's `matches.length`
+ * a query like `findSelectorMatches` (the assertion is in the caller's `matches.length`
  * branch, not in the tool's success/failure return). `isRecordable = false`
  * doesn't reliably partition mutating from non-mutating either — `TapTrailblazeTool`
  * has `isRecordable = false` because it delegates to a more precise recorded

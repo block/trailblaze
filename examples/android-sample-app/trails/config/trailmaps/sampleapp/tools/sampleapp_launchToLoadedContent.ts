@@ -9,8 +9,8 @@
 // How a trailhead like this runs: it goes in a trail's top-level `- tools:` block, and once the
 // trail binds this trailmap (`target: sampleapp`) the daemon compiles this workspace tool to a
 // bundle, ships it to the on-device runner, and dispatches each `ctx.tools.*` call against the live
-// driver. The wait below uses `findMatches({ selector, timeoutMs })` — the capability PR #3853
-// ("Let TypeScript tools wait for an element to appear") added for exactly this.
+// driver. The wait below uses `findSelectorMatches({ selectors, timeoutMs })`, whose `timeoutMs` is
+// the capability PR #3853 ("Let TypeScript tools wait for an element to appear") added for this.
 //
 // This file is an AUTHORING REFERENCE — it shows how to write a TypeScript trailhead and is
 // validated by its unit test (`sampleapp_launchToLoadedContent.test.ts`). It is intentionally NOT
@@ -19,7 +19,7 @@
 // `trailblaze run …` snippet. The example's runnable, works-everywhere wait demo is the pure-YAML
 // `loading/wait-for-content` trail, which composes only built-in tools.
 //
-// Scoped to the on-device accessibility driver (selector-native taps + findMatches wait).
+// Scoped to the on-device accessibility driver (selector-native taps + findSelectorMatches wait).
 
 import { trailblaze, type ToolContext, type TrailblazeNodeSelector } from "@trailblaze/scripting";
 
@@ -69,15 +69,15 @@ async function tapByText(ctx: ToolContext, text: string): Promise<void> {
 }
 
 /**
- * Wait (up to `timeoutMs`) for `text` to appear, failing if it never does. `findMatches`'s
- * `timeoutMs` polls the live hierarchy until a match appears or the budget elapses, returning
- * whatever matched (empty == never appeared → we throw). This is the event-driven "wait until
- * visible" pattern, and the `findMatches({ selector, timeoutMs })` shape is the capability PR #3853
+ * Wait (up to `timeoutMs`) for `text` to appear, failing if it never does.
+ * `findSelectorMatches`'s `timeoutMs` polls the live hierarchy until a match appears or the budget
+ * elapses, returning whatever matched (empty == never appeared → we throw). This is the
+ * event-driven "wait until visible" pattern, and the `timeoutMs` shape is the capability PR #3853
  * ("Let TypeScript tools wait for an element to appear") added for exactly this.
  */
 async function waitForText(ctx: ToolContext, text: string, timeoutMs: number): Promise<void> {
-  const matches = await ctx.tools.findMatches({
-    selector: exactTextSelector(text),
+  const [matches] = await ctx.tools.findSelectorMatches({
+    selectors: [exactTextSelector(text)],
     timeoutMs,
   });
   if (matches.length === 0) {

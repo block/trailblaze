@@ -6,6 +6,8 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.host.HostYamlRunResult
 import xyz.block.trailblaze.host.yaml.RunOnHostParams
+import xyz.block.trailblaze.toolcalls.TrailblazeTool
+import kotlin.reflect.KClass
 
 /**
  * Everything the host does *with* one driver, in one place: find its devices, decide whether to
@@ -16,9 +18,9 @@ import xyz.block.trailblaze.host.yaml.RunOnHostParams
  * `when (driverType)` arm in a different file, so a driver's personality was spread across the
  * host and no single place told you what it could do.
  *
- * Not every driver has one yet. [HostDriverDescriptorRegistry] is consulted first and the
- * pre-existing `when` arms still handle the rest — see the registry's KDoc for how the two
- * coexist during the conversion.
+ * Every driver in [TrailblazeDriverType] has one. There are no `when (driverType)` arms left to
+ * fall back to, so an unregistered driver is absent rather than half-present — see
+ * [HostDriverDescriptorRegistry].
  */
 interface HostDriverDescriptor {
 
@@ -64,8 +66,40 @@ interface HostDriverDescriptor {
    */
   suspend fun discoverDevices(inventory: HostDeviceInventory): List<TrailblazeConnectedDeviceSummary>
 
-  /** Runs a trail on one of this driver's devices. */
+  /**
+   * Runs a trail on one of this driver's devices.
+   *
+   * Abstract, with no default, so a driver added to the enum cannot compile without answering the
+   * question. A driver whose tools run on the device answers it by implementing [OnDeviceTools]
+   * instead of this interface directly — an explicit declaration rather than a silently inherited
+   * refusal. The only caller is `TrailblazeHostYamlRunner.runHostYaml`.
+   */
   suspend fun runYaml(deps: HostRunDeps, params: RunOnHostParams): HostYamlRunResult
+
+  /**
+   * The tool classes this driver contributes on top of the built-in set, or empty when it drives
+   * the device with the standard tools.
+   *
+   * Empty is the answer for every Maestro-backed and on-device driver: they act through the
+   * built-in tools, so there is nothing driver-specific to add. A driver answers non-empty when it
+   * reaches its device some other way — Compose over its RPC server, Playwright over CDP, Revyl
+   * over its cloud API — and therefore ships tools of its own.
+   *
+   * [driverType] is passed because a descriptor covering several entries can contribute different
+   * tools per entry: the two Playwright drivers share the web tool sets, but only Electron adds
+   * the ones for driving an Electron shell.
+   *
+   * This is the *superset* — every tool class that can appear in a session on this driver. Callers
+   * that need a narrower answer say so themselves; see `TrailblazeMcpBridgeImpl`, whose two
+   * inner-agent hooks deliberately advertise less than this.
+   *
+   * Recording callers pass this to the YAML serializer as belt and braces rather than out of
+   * necessity: `createTrailblazeYaml` unions it with the serializers discovered from the
+   * `.tool.yaml` resources on the classpath, which today already cover every class named here.
+   * `HostDriverDescriptorToolClassesTest` pins that, so if a driver ever ships a class-backed tool
+   * without its `.tool.yaml`, the test says so and this stops being redundant.
+   */
+  fun toolClasses(driverType: TrailblazeDriverType): Set<KClass<out TrailblazeTool>> = emptySet()
 
   /**
    * Captures the current screen, or null when this driver has no live session for [deviceId] and
@@ -81,6 +115,35 @@ interface HostDriverDescriptor {
     deviceId: TrailblazeDeviceId,
     deps: HostScreenStateDeps,
   ): ScreenState?
+
+  /**
+   * A descriptor for a driver that executes its tools on the device, and so has no host run body.
+   *
+   * `DesktopDispatchDecision` never routes such a driver to `runHostYaml`: it runs the agent on the
+   * device, or host-side one tool call at a time over RPC. Implementing this says so once, in the
+   * type, instead of repeating the same throwing [runYaml] in every on-device descriptor.
+   *
+   * Deliberately opt-in rather than a default on [HostDriverDescriptor]: a default would let a new
+   * HOST-resident driver compile with no run body and fail at dispatch instead of at compile time.
+   * [HostDriverDescriptorRegistry] rejects a registry that pairs this with a driver whose tools do
+   * not in fact run on the device, so the declaration cannot quietly disagree with the enum.
+   */
+  interface OnDeviceTools : HostDriverDescriptor {
+
+    /**
+     * A throw rather than a null return, so the mistake surfaces where it happened: reaching this
+     * means dispatch and the descriptor disagree about where the driver runs, and there is no
+     * sensible run to hand back.
+     */
+    override suspend fun runYaml(deps: HostRunDeps, params: RunOnHostParams): HostYamlRunResult = error(
+      // `simpleName` is null for an anonymous or local implementation — a test fake, typically —
+      // and "null has no host run body" names nothing. The qualified name always identifies a class.
+      "${this::class.simpleName ?: this::class.java.name} has no host run body: " +
+        "${driverTypes.map { it.name }.sorted()} execute their tools on the device, so " +
+        "DesktopDispatchDecision routes them over the on-device RPC server instead of through " +
+        "runHostYaml. Reaching this means a dispatch arm sent one here anyway.",
+    )
+  }
 }
 
 /**

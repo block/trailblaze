@@ -4,6 +4,7 @@ import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.net.InetSocketAddress
 import java.net.Socket
+import xyz.block.trailblaze.inprocessidle.InProcessIdle
 import xyz.block.trailblaze.util.Console
 
 /**
@@ -26,7 +27,6 @@ import xyz.block.trailblaze.util.Console
  */
 object InProcessIdleSettleClient {
 
-  private const val IN_PROCESS_IDLE_PORT = 7777
   private const val CONNECT_TIMEOUT_MS = 250
 
   private val getSysprop: java.lang.reflect.Method? by lazy {
@@ -45,8 +45,8 @@ object InProcessIdleSettleClient {
       ""
     }
 
-  /** True when `debug.trailblaze.settle.inProcessIdle` is `1`/`true`. Read per call, never cached. */
-  fun isEnabled(): Boolean = parseEnabled(sysprop("debug.trailblaze.settle.inProcessIdle"))
+  /** True when [InProcessIdle.SETTLE_SYSPROP] is `1`/`true`. Read per call, never cached. */
+  fun isEnabled(): Boolean = parseEnabled(sysprop(InProcessIdle.SETTLE_SYSPROP))
 
   /** Pure parse of the sysprop value — extracted so the accepted values are unit-testable. */
   internal fun parseEnabled(raw: String): Boolean = raw.lowercase() in setOf("1", "true")
@@ -142,7 +142,7 @@ object InProcessIdleSettleClient {
    */
   fun awaitIdle(timeoutMs: Long): String? = try {
     Socket().use { socket ->
-      socket.connect(InetSocketAddress("127.0.0.1", IN_PROCESS_IDLE_PORT), CONNECT_TIMEOUT_MS)
+      socket.connect(InetSocketAddress("127.0.0.1", InProcessIdle.PORT), CONNECT_TIMEOUT_MS)
       // Reply arrives when the app goes idle; pad the read bound past the idle detector's own deadline.
       socket.soTimeout = (timeoutMs + 1_000).toInt()
       socket.getOutputStream().write("AWAIT_IDLE $timeoutMs\n".toByteArray())

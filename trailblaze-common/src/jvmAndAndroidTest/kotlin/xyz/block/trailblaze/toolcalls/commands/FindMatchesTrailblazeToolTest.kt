@@ -33,6 +33,7 @@ import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
@@ -43,13 +44,13 @@ class FindMatchesTrailblazeToolTest {
   fun shrinkPollInterval() {
     // Keep the polling tests off real wall-clock sleeps — the production 300ms interval would add
     // ~hundreds of ms per poll. The wait-budget (timeoutMs) is still honored via the real clock.
-    FindMatchesTrailblazeTool.pollIntervalMs = 1L
+    SelectorQueryEngine.pollIntervalMs = 1L
   }
 
   @AfterTest
   fun cleanup() {
     repeat(SnapshotCache.frameDepth()) { SnapshotCache.popFrame() }
-    FindMatchesTrailblazeTool.pollIntervalMs = FindMatchesTrailblazeTool.DEFAULT_POLL_INTERVAL_MS
+    SelectorQueryEngine.pollIntervalMs = SelectorQueryEngine.DEFAULT_POLL_INTERVAL_MS
   }
 
   // -- Fixtures --
@@ -83,6 +84,12 @@ class FindMatchesTrailblazeToolTest {
   private class FakeScreenState(
     val root: TrailblazeNode?,
     platform: TrailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID,
+    /**
+     * Nodes the device did not hand over. Default null is "unknown", which every driver but
+     * Android accessibility reports and which must keep the pre-existing behaviour — so every
+     * test above this line is also the regression guard for that.
+     */
+    override val droppedNodeFetches: Int? = null,
   ) : ScreenState {
     override val screenshotBytes: ByteArray? = null
     override val deviceWidth: Int = 1080
@@ -508,6 +515,242 @@ class FindMatchesTrailblazeToolTest {
     assertEquals(1, decodeMatches(negResult).size, "negative timeoutMs should still return the current match")
     assertEquals(1, negCaptures[0], "negative timeoutMs must capture exactly once (no polling)")
   }
+
+  // -- captures that lost nodes --
+
+  /**
+   * Point-in-time context whose provider yields a FRESH screen state per call from [screens],
+   * so a test can model a capture that lost nodes healing on the next one. Counts captures in
+   * [captureCount] — the re-capture is only meaningful if it is actually a new capture.
+   */
+  private fun sequenceCtx(
+    screens: List<FakeScreenState>,
+    captureCount: IntArray,
+  ): TrailblazeToolExecutionContext = TrailblazeToolExecutionContext(
+    screenState = screens.first(),
+    traceId = null,
+    trailblazeDeviceInfo = TrailblazeDeviceInfo(
+      trailblazeDeviceId = TrailblazeDeviceId(
+        instanceId = "test",
+        trailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID,
+      ),
+      trailblazeDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+      widthPixels = 1080,
+      heightPixels = 1920,
+    ),
+    sessionProvider = TrailblazeSessionProvider {
+      TrailblazeSession(sessionId = SessionId("test"), startTime = Clock.System.now())
+    },
+    screenStateProvider = {
+      val index = captureCount[0].coerceAtMost(screens.lastIndex)
+      captureCount[0]++
+      screens[index]
+    },
+    trailblazeLogger = TrailblazeLogger.createNoOp(),
+    memory = AgentMemory(),
+  )
+
+  private fun treeWithout(vararg texts: String): TrailblazeNode =
+    androidNode(nodeId = 1, children = texts.mapIndexed { i, t -> androidNode(nodeId = (i + 2).toLong(), text = t) })
+
+  @Test
+  fun `point-in-time re-captures rather than calling an element absent from a capture that lost nodes`() =
+    runBlocking {
+      // First capture dropped node fetches and holds no "Submit". That is exactly the state a
+      // scripted `if (matches.length === 0)` reads as "not on screen" — and it is wrong here:
+      // the second, complete capture has it.
+      val captures = intArrayOf(0)
+      val context = sequenceCtx(
+        screens = listOf(
+          FakeScreenState(treeWithout("Loading"), droppedNodeFetches = 2),
+          FakeScreenState(
+            androidNode(nodeId = 1, children = listOf(androidNode(nodeId = 2, text = "Submit"))),
+            droppedNodeFetches = 0,
+          ),
+        ),
+        captureCount = captures,
+      )
+
+      val result = SnapshotCache.withFrame {
+        runBlocking { FindMatchesTrailblazeTool(selector = submitSelector()).execute(context) }
+      }
+
+      assertEquals(1, decodeMatches(result).size, "the element was on screen; the first capture just lost it")
+      assertEquals(2, captures[0], "should have re-captured after the capture that lost nodes")
+    }
+
+  @Test
+  fun `point-in-time answers empty as soon as a capture holds every node`() = runBlocking {
+    val captures = intArrayOf(0)
+    val context = sequenceCtx(
+      screens = listOf(
+        FakeScreenState(treeWithout("Loading"), droppedNodeFetches = 2),
+        FakeScreenState(treeWithout("Home"), droppedNodeFetches = 0),
+      ),
+      captureCount = captures,
+    )
+
+    val result = SnapshotCache.withFrame {
+      runBlocking { FindMatchesTrailblazeTool(selector = submitSelector()).execute(context) }
+    }
+
+    assertIs<TrailblazeToolResult.Success>(result)
+    assertEquals(emptyList(), decodeMatches(result), "a complete capture without it IS absence")
+    assertEquals(2, captures[0])
+  }
+
+  @Test
+  fun `point-in-time refuses to report absence when every capture lost nodes`() = runBlocking {
+    val captures = intArrayOf(0)
+    val context = sequenceCtx(
+      screens = listOf(FakeScreenState(treeWithout("Loading"), droppedNodeFetches = 2)),
+      captureCount = captures,
+    )
+
+    val result = SnapshotCache.withFrame {
+      runBlocking { FindMatchesTrailblazeTool(selector = submitSelector()).execute(context) }
+    }
+
+    // An empty Success here is the defect: the caller would branch on "absent" having never seen
+    // a tree that could prove it.
+    assertIs<TrailblazeToolResult.Error>(result)
+    assertTrue(captures[0] > 1, "should have re-captured before giving up; captured ${captures[0]} time(s)")
+  }
+
+  @Test
+  fun `point-in-time returns a match found in a capture that lost nodes without re-capturing`() = runBlocking {
+    // Presence in a tree with holes is still presence — the node was really there — so there is
+    // nothing to confirm and nothing to pay for.
+    val captures = intArrayOf(0)
+    val context = sequenceCtx(
+      screens = listOf(
+        FakeScreenState(
+          androidNode(nodeId = 1, children = listOf(androidNode(nodeId = 2, text = "Submit"))),
+          droppedNodeFetches = 7,
+        ),
+      ),
+      captureCount = captures,
+    )
+
+    val result = SnapshotCache.withFrame {
+      runBlocking { FindMatchesTrailblazeTool(selector = submitSelector()).execute(context) }
+    }
+
+    assertEquals(1, decodeMatches(result).size)
+    assertEquals(1, captures[0], "a match needs no second capture")
+  }
+
+  @Test
+  fun `timeoutMs refuses to report absence when every poll lost nodes`() = runBlocking<Unit> {
+    val result = FindMatchesTrailblazeTool(selector = submitSelector(), timeoutMs = 30).execute(
+      partialPollingCtx { treeWithout("Loading") },
+    )
+
+    assertIs<TrailblazeToolResult.Error>(result)
+  }
+
+  /**
+   * Both resolve paths refuse for the same reason, but the fix differs. A point-in-time call has a
+   * wait it has not used; a call that already waited does not, and telling it to pass a `timeoutMs`
+   * it just passed sends the reader to the one knob that cannot help. Pin the advice per path.
+   */
+  @Test
+  fun `the partial-capture refusal recommends a wait only to the path that has not waited`() = runBlocking<Unit> {
+    val pointInTime = SnapshotCache.withFrame {
+      runBlocking {
+        FindMatchesTrailblazeTool(selector = submitSelector()).execute(
+          sequenceCtx(
+            screens = listOf(FakeScreenState(treeWithout("Loading"), droppedNodeFetches = 2)),
+            captureCount = intArrayOf(0),
+          ),
+        )
+      }
+    }
+    val afterWaiting = FindMatchesTrailblazeTool(selector = submitSelector(), timeoutMs = 30).execute(
+      partialPollingCtx { treeWithout("Loading") },
+    )
+
+    val pointInTimeMsg = assertIs<TrailblazeToolResult.Error>(pointInTime).errorMessage
+    val afterWaitingMsg = assertIs<TrailblazeToolResult.Error>(afterWaiting).errorMessage
+
+    assertTrue(
+      pointInTimeMsg.contains("Pass a `timeoutMs`"),
+      "a call that never waited should be told to wait: $pointInTimeMsg",
+    )
+    assertFalse(
+      afterWaitingMsg.contains("Pass a `timeoutMs`"),
+      "a call that already waited must not be told to pass the argument it passed: $afterWaitingMsg",
+    )
+    assertTrue(
+      afterWaitingMsg.contains("already waited 30ms"),
+      "the message should name the wait that did not help: $afterWaitingMsg",
+    )
+    assertTrue(
+      afterWaitingMsg.contains("main thread"),
+      "and point at the actual cause instead of a knob: $afterWaitingMsg",
+    )
+  }
+
+  /**
+   * `timeoutMs = 0` is a third path, not the "already waited" one: it polls with no budget, so it
+   * takes exactly one live capture and never retries. One holey capture says nothing about the app,
+   * so sending the reader off to fix a main thread would be a guess about a device looked at once.
+   */
+  @Test
+  fun `a zero timeoutMs is told to pass a real budget rather than to go debug the app`() = runBlocking<Unit> {
+    val result = FindMatchesTrailblazeTool(selector = submitSelector(), timeoutMs = 0).execute(
+      partialPollingCtx { treeWithout("Loading") },
+    )
+
+    val msg = assertIs<TrailblazeToolResult.Error>(result).errorMessage
+    assertTrue(msg.contains("never retries"), "the message should say one capture was all it took: $msg")
+    assertFalse(
+      msg.contains("Fix what is holding"),
+      "a single capture is no evidence about the app's main thread: $msg",
+    )
+    assertFalse(msg.contains("already waited"), "0ms is not a wait that elapsed: $msg")
+  }
+
+  @Test
+  fun `timeoutMs reports absence once any poll held every node`() = runBlocking {
+    var polls = 0
+    val context = pollingCtxWithCompleteness {
+      polls++
+      // First poll lost nodes, every later one is complete — one trustworthy look is enough.
+      FakeScreenState(treeWithout("Loading"), droppedNodeFetches = if (polls == 1) 2 else 0)
+    }
+
+    val result = FindMatchesTrailblazeTool(selector = submitSelector(), timeoutMs = 30).execute(context)
+
+    assertIs<TrailblazeToolResult.Success>(result)
+    assertEquals(emptyList(), decodeMatches(result))
+  }
+
+  private fun partialPollingCtx(treeProvider: () -> TrailblazeNode?): TrailblazeToolExecutionContext =
+    pollingCtxWithCompleteness { FakeScreenState(treeProvider(), droppedNodeFetches = 2) }
+
+  /** [pollingCtx], but the test controls the completeness each capture reports. */
+  private fun pollingCtxWithCompleteness(
+    stateProvider: () -> FakeScreenState,
+  ): TrailblazeToolExecutionContext = TrailblazeToolExecutionContext(
+    screenState = FakeScreenState(androidNode(nodeId = 99)),
+    traceId = null,
+    trailblazeDeviceInfo = TrailblazeDeviceInfo(
+      trailblazeDeviceId = TrailblazeDeviceId(
+        instanceId = "test",
+        trailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID,
+      ),
+      trailblazeDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+      widthPixels = 1080,
+      heightPixels = 1920,
+    ),
+    sessionProvider = TrailblazeSessionProvider {
+      TrailblazeSession(sessionId = SessionId("test"), startTime = Clock.System.now())
+    },
+    screenStateProvider = { stateProvider() },
+    trailblazeLogger = TrailblazeLogger.createNoOp(),
+    memory = AgentMemory(),
+  )
 
   @Test
   fun `findMatches with selector having no driver match arm matches every node`() = runBlocking {

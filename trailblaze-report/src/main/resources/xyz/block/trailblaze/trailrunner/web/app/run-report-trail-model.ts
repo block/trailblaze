@@ -141,22 +141,44 @@ const collectFrames = (group: ReportTraceGroup, lane: number, t0: number | null,
     ];
   });
 
-// The Lightbox default-mode pick: the last ROW-OWN frame wins; only a group whose every capture
-// sits on folded dispatches falls back to the last dispatch frame. This is not simply the last
-// entry of collectFrames — a trailing dispatch frame must not displace the row frame the Lightbox
-// summarizes the step with.
+// The Lightbox default-mode pick: start with the historical last-ROW-frame preference (or the last
+// dispatch when every capture sits on children), then let a capture with a provably later clock
+// win. iOS batches can keep a pre-action frame on the row and put the post-action state on a later
+// folded child; unconditional row preference loses that final state. Equal/absent clocks keep the
+// stable legacy fallback instead of guessing about ambiguous old payloads.
 const pickLastFrame = (group: ReportTraceGroup, lane: number, t0: number | null, hasShot: HasShot): TrailFrame | null => {
   const rows = groupRows(group);
+  let picked: TrailFrame | null = null;
   for (let r = rows.length - 1; r >= 0; r--) {
-    if (shows(hasShot, lane, rows[r].screenshotFile)) return { rowId: rows[r].i, kid: null, file: rows[r].screenshotFile as string, label: rows[r].label, atMs: atMs(rows[r].shotTs, rows[r].ts, t0) };
-  }
-  for (let r = rows.length - 1; r >= 0; r--) {
-    const kids = rows[r].children || [];
-    for (let k = kids.length - 1; k >= 0; k--) {
-      if (shows(hasShot, lane, kids[k].screenshotFile)) return { rowId: rows[r].i, kid: k, file: kids[k].screenshotFile as string, label: `${rows[r].label} · ${kids[k].label}`, atMs: atMs(kids[k].ts, rows[r].ts, t0) };
+    if (shows(hasShot, lane, rows[r].screenshotFile)) {
+      picked = { rowId: rows[r].i, kid: null, file: rows[r].screenshotFile as string, label: rows[r].label, atMs: atMs(rows[r].shotTs, rows[r].ts, t0) };
+      break;
     }
   }
-  return null;
+  if (!picked) {
+    for (let r = rows.length - 1; r >= 0; r--) {
+      const kids = rows[r].children || [];
+      for (let k = kids.length - 1; k >= 0; k--) {
+        if (shows(hasShot, lane, kids[k].screenshotFile)) {
+          picked = { rowId: rows[r].i, kid: k, file: kids[k].screenshotFile as string, label: `${rows[r].label} · ${kids[k].label}`, atMs: atMs(kids[k].ts, rows[r].ts, t0) };
+          break;
+        }
+      }
+      if (picked) break;
+    }
+  }
+  if (picked?.atMs != null) {
+    const pickedAt = picked.atMs;
+    const laterFrames = collectFrames(group, lane, t0, hasShot)
+      .filter((frame): frame is TrailFrame & { atMs: number } => frame.atMs != null && frame.atMs > pickedAt);
+    if (laterFrames.length) {
+      const newestAt = Math.max(...laterFrames.map((frame) => frame.atMs));
+      const newestFrames = laterFrames.filter((frame) => frame.atMs === newestAt);
+      picked = [...newestFrames].reverse().find((frame) => frame.kid == null)
+        ?? newestFrames[newestFrames.length - 1];
+    }
+  }
+  return picked;
 };
 
 // Every positioned interaction the group performed, in clock order. Unlike collectFrames this does

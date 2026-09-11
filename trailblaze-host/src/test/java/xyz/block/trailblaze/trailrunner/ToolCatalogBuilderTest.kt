@@ -150,10 +150,10 @@ class ToolCatalogBuilderTest {
   @Test
   fun `one broken tool file does not blank out params for other tools in the same trailmap`() = runBlocking {
     assumeAnalyzerRunnable()
-    // Regression test for the real bug this fix uncovered: the live `myapp` trailmap has 53 `.ts`
-    // files, 2 of which the analyzer can't parse — and the ORIGINAL scriptedToolParams caught
-    // ScriptedToolDefinitionException generically and discarded it to emptyList(), so the other 51
-    // clean tools (including myapp_addItemToCart) silently lost their param completion too. Proves
+    // Regression test for the real bug this fix uncovered: a large `myapp` trailmap carries many
+    // `.ts` files, a couple of which the analyzer can't parse — and the ORIGINAL scriptedToolParams
+    // caught ScriptedToolDefinitionException generically and discarded it to emptyList(), so every
+    // clean tool (including myapp_addItemToCart) silently lost its param completion too. Proves
     // the fix: a directory with one broken + one clean tool still yields params for the clean one.
     val configDir = tempFolder.newFolder("config-partial")
     val toolsDir = File(configDir, "trailmaps/demo2/tools").apply { mkdirs() }

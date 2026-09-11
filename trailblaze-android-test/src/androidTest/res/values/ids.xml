@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <!--
+    A real, named resource id for the mixed-UI fixture's status TextView.
+
+    The fixture's other ids come from `View.generateViewId()`, which produces an id with no
+    resource entry at all — `Resources.getResourceName` fails on it, so both hierarchies report a
+    null resourceId for that node. A canonical `resourceIdRegex` case built on such a view cannot
+    establish resourceId parity: the only thing it can observe is what each tree does when nothing
+    can answer, and on the Compose side the canonical-to-native bridge evaluates `resourceIdRegex`
+    against `testTag`, so unrelated tagged nodes would decide the verdict.
+
+    Declaring the id here gives `AccessibilityHierarchyParityOnDeviceTest` one element whose exact
+    resource name both trees can be asked for.
+  -->
+  <item name="view_status" type="id" />
+</resources>

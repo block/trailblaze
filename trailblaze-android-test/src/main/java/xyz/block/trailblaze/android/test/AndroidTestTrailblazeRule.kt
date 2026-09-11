@@ -1,13 +1,19 @@
 package xyz.block.trailblaze.android.test
 
+import android.app.Activity
 import android.graphics.Bitmap
 import androidx.test.platform.app.InstrumentationRegistry
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.locks.ReentrantReadWriteLock
+import kotlin.concurrent.read
+import kotlin.concurrent.write
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.datetime.Clock
 import org.junit.runner.Description
 import xyz.block.trailblaze.AgentMemory
+import xyz.block.trailblaze.AndroidDeviceLocale
 import xyz.block.trailblaze.TrailblazeYamlUtil
 import xyz.block.trailblaze.agent.model.AgentTaskStatus
 import xyz.block.trailblaze.agent.model.PromptRecordingResult
@@ -26,6 +32,7 @@ import xyz.block.trailblaze.model.toSessionToolRepo
 import xyz.block.trailblaze.quickjs.tools.LaunchedQuickJsToolRuntime
 import xyz.block.trailblaze.recordings.TrailRecordings
 import xyz.block.trailblaze.rules.SimpleTestRuleChain
+import xyz.block.trailblaze.rules.TestStackTraceUtil
 import xyz.block.trailblaze.rules.TrailblazeRunnerUtil
 import xyz.block.trailblaze.scripting.fetch.OkHttpFetchExtension
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
@@ -104,6 +111,11 @@ class AndroidTestTrailblazeRule(
    * `AndroidTrailblazeRule`'s contract.
    */
   trailblazeToolRepoOverride: TrailblazeToolRepo? = null,
+  /**
+   * An explicit asset path known while JUnit rules are entering the test. Supplying it lets the
+   * rule apply device configuration before consumer `@Before` methods launch or cache the app.
+   */
+  private val preflightTrailAssetPathProvider: () -> String? = { null },
 ) : SimpleTestRuleChain(loggingRule) {
 
   /**
@@ -123,6 +135,22 @@ class AndroidTestTrailblazeRule(
    */
   private val target: AndroidTestTarget by lazy { targetProvider() }
 
+  private val activityLocaleGate =
+    ActivityLocaleGate<Activity>(AppUnderTestLauncher::awaitActivityWithLocale)
+  private val preToolSnapshotActivity = ThreadLocal<Activity?>()
+
+  /**
+   * Defers the locale propagation gate until an Activity is actually needed. This closes the
+   * recreation gap where an up-front provider can be temporarily unavailable without blocking a
+   * trail whose first step launches the app.
+   */
+  private val localeAwareTarget: AndroidTestTarget by lazy {
+    object : AndroidTestTarget by target {
+      override fun currentActivity(): Activity =
+        preToolSnapshotActivity.get() ?: activityLocaleGate.activity { target.currentActivity() }
+    }
+  }
+
   /**
    * The caller's target, with a whole-device screenshot filling in for a target that supplies
    * none. [RuleBackedAndroidTestTarget] defaults `screenshotProvider` to null because apps differ
@@ -130,7 +158,7 @@ class AndroidTestTrailblazeRule(
    * so a report-bound capture falls back rather than showing nothing.
    */
   private val screenshotCapableTarget: AndroidTestTarget by lazy {
-    object : AndroidTestTarget by target {
+    object : AndroidTestTarget by localeAwareTarget {
       override fun captureScreenshot(): Bitmap? =
         target.captureScreenshot() ?: AndroidTestInstrumentation.deviceScreenshot()
     }
@@ -138,7 +166,7 @@ class AndroidTestTrailblazeRule(
 
   val agent: AndroidTestTrailblazeAgent by lazy {
     AndroidTestTrailblazeAgent(
-      target = target,
+      target = localeAwareTarget,
       trailblazeLogger = loggingRule.logger,
       trailblazeDeviceInfoProvider = loggingRule.trailblazeDeviceInfoProvider,
       sessionProvider = { currentSession() },
@@ -159,7 +187,7 @@ class AndroidTestTrailblazeRule(
 
   private fun hierarchyOnlyState(includeTree: Boolean = true): ScreenState =
     AndroidTestScreenState(
-      target = target,
+      target = localeAwareTarget,
       deviceClassifiers = loggingRule.trailblazeDeviceInfoProvider().classifiers,
       includeScreenshot = false,
       includeTree = includeTree,
@@ -209,6 +237,55 @@ class AndroidTestTrailblazeRule(
     // provider closes over [target], which is only resolvable once the test is running.
     loggingRule.failureScreenStateProvider =
       if (captureStepSnapshots) snapshotProvider else screenStateProvider
+  }
+
+  override fun beforeTestExecution(description: Description) {
+    // Named asset runs can prepare the device before JUnit enters the consumer's @Before methods.
+    // That ordering matters because a language change recreates an already-launched Activity and
+    // some app harnesses capture their Activity while setting up the test.
+    val testMethod = TestStackTraceUtil.TestMethodInfo(description.testClass.kotlin, description.methodName)
+    val namedAssetPaths = with(TrailblazeYamlUtil) {
+      listOf(
+        testMethod.calculateTrailblazeYamlAssetWithPackagePathFromStackTrace(),
+        testMethod.calculateTrailblazeYamlAssetPathFromStackTrace(),
+        testMethod.calculateTrailblazeYamlAssetPathWithNestedStructure(),
+      )
+    }
+    val classifiers = loggingRule.trailblazeDeviceInfoProvider().classifiers
+    val explicitAssetPath = preflightTrailAssetPathProvider()
+    val resolvedAssetPath = if (explicitAssetPath != null) {
+      TrailRecordings.findBestTrailResourcePath(
+        path = explicitAssetPath,
+        deviceClassifiers = classifiers,
+        doesResourceExist = AndroidTestInstrumentation::assetExists,
+      )
+    } else {
+      TrailblazeYamlUtil.resolveTrailAsset(
+        namedFilePaths = namedAssetPaths,
+        resolveNamedFile = { path -> path.takeIf(AndroidTestInstrumentation::assetExists) },
+        resolveRecordingDir = { path ->
+          TrailRecordings.findBestTrailResourcePath(
+            path = path,
+            deviceClassifiers = classifiers,
+            doesResourceExist = AndroidTestInstrumentation::assetExists,
+          )
+        },
+      )
+    }
+    resolvedAssetPath?.let { assetPath ->
+      val yaml = AndroidTestInstrumentation.readAssetAsString(assetPath)
+      val trailItems = trailblazeYaml.decodeTrail(yaml, deviceClassifiers = classifiers)
+      if (trailblazeYaml.firstSkipReason(trailItems) == null) {
+        val config = trailblazeYaml.extractTrailConfig(trailItems)
+        config?.locale?.let { locale ->
+          validateExecutableTrail(trailItems, config, assetPath)
+          applyLocaleAndAwaitRunningApp(locale)
+        }
+      }
+    }
+
+    // The logging rule starts its session here, after the locale preflight and before test setup.
+    super.beforeTestExecution(description)
   }
 
   /**
@@ -301,12 +378,22 @@ class AndroidTestTrailblazeRule(
     includeScreenshot: Boolean,
     screenshotScalingConfig: ScreenshotScalingConfig? = null,
     includeTree: Boolean = true,
-  ): ScreenState =
+  ): ScreenState = activityLocaleGate.withStableConfiguration {
     if (includeScreenshot) {
       snapshot(screenshotScalingConfig, includeTree)
     } else {
       hierarchyOnlyState(includeTree)
     }
+  }
+
+  /**
+   * Runs capture setup only when locale mutation is not in progress. Callers that resolve an
+   * Activity before [captureScreenState] must include that resolution here so it cannot pin an
+   * Activity across a configuration change. Null asks a deadline-bound captor to report not-ready
+   * and retry instead of blocking behind the mutation.
+   */
+  fun <T : Any> tryCaptureWithStableDeviceConfiguration(capture: () -> T): T? =
+    activityLocaleGate.tryWithStableConfiguration(capture)
 
   private fun runDecoded(
     trailItems: List<TrailYamlItem>,
@@ -315,6 +402,9 @@ class AndroidTestTrailblazeRule(
     sendSessionStartLog: Boolean,
     externalMemory: AgentMemory?,
   ): TrailblazeToolResult.Success? {
+    // A previous trail can leave a failed locale requirement behind. Reset before the host's
+    // readiness mirror can observe this new trail, including when it declares another locale.
+    activityLocaleGate.clear()
     val trailConfig = trailblazeYaml.extractTrailConfig(trailItems)
 
     trailblazeYaml.firstSkipReason(trailItems)?.let { skipReason ->
@@ -326,14 +416,12 @@ class AndroidTestTrailblazeRule(
       return null
     }
 
-    requireCompatibleDriver(trailConfig, trailFilePath)
+    validateExecutableTrail(trailItems, trailConfig, trailFilePath)
 
-    if (!trailblazeYaml.hasActionableSteps(trailItems)) {
-      val trailName = trailConfig?.title ?: trailFilePath ?: "unknown"
-      throw TrailblazeException(
-        "Trail '$trailName' has no executable steps — this would be a false positive pass. " +
-          "Add prompts or tool steps to this trail file."
-      )
+    // Named and declared explicit assets already applied this at the rule boundary before app
+    // setup. The idempotent fallback covers direct YAML and undeclared arbitrary asset paths.
+    trailConfig?.locale?.let { locale ->
+      applyLocaleAndAwaitRunningApp(locale) { target.currentActivity() }
     }
 
     val session = currentSession()
@@ -508,15 +596,48 @@ class AndroidTestTrailblazeRule(
     ).result
 
   private fun logStepSnapshot(tool: TrailblazeTool) {
+    // A cold-start trail can launch its app in this very tool. The snapshot is observational, so
+    // don't make it wait for an Activity that cannot exist until the tool has run, or turn that
+    // expected absence into a failed locale requirement for the rest of the trail.
+    val activity = runCatching { activityLocaleGate.activityIfAvailable(::targetActivityIfAvailable) }
+      .getOrElse { e ->
+        Console.log("[Trailblaze] Could not resolve Activity for step snapshot: ${e.message}")
+        return
+      }
+      ?: run {
+        Console.log("[Trailblaze] Skipping pre-tool snapshot: no target Activity is RESUMED yet")
+        return
+      }
     runCatching {
-      loggingRule.logger.logSnapshot(
-        session = currentSession(),
-        screenState = snapshotProvider(),
-        displayName = tool.javaClass.simpleName,
-      )
+      withPreToolSnapshotActivity(activity) {
+        loggingRule.logger.logSnapshot(
+          session = currentSession(),
+          screenState = snapshotProvider(),
+          displayName = tool.javaClass.simpleName,
+        )
+      }
     }.onFailure { e ->
       // Observational only — a missing frame must not fail the step it was documenting.
       Console.log("[Trailblaze] Could not capture step snapshot: ${e.message}")
+    }
+  }
+
+  /**
+   * Avoids the target's potentially blocking lookup when the app has not started, then validates
+   * the target's own Activity rather than pinning the registry's arbitrary first Activity.
+   */
+  private fun targetActivityIfAvailable(): Activity? {
+    if (AppUnderTestLauncher.resumedActivityOrNull() == null) return null
+    return runCatching { target.currentActivity() }.getOrNull()
+  }
+
+  private fun <T> withPreToolSnapshotActivity(activity: Activity, block: () -> T): T {
+    val previous = preToolSnapshotActivity.get()
+    preToolSnapshotActivity.set(activity)
+    return try {
+      block()
+    } finally {
+      if (previous == null) preToolSnapshotActivity.remove() else preToolSnapshotActivity.set(previous)
     }
   }
 
@@ -525,6 +646,37 @@ class AndroidTestTrailblazeRule(
       "No Trailblaze session. AndroidTestTrailblazeRule must be applied as a JUnit @Rule — see " +
         "AndroidTestTrailblazeTest for the wiring."
     )
+
+  /**
+   * Applies [locale] before consumer setup and, when an outer rule already launched the app,
+   * waits until either that Activity or its replacement observes the new configuration.
+   */
+  private fun applyLocaleAndAwaitRunningApp(
+    locale: String,
+    activityProvider: () -> Activity? = AppUnderTestLauncher::resumedActivityOrNull,
+  ) {
+    activityLocaleGate.configure(
+      locale = locale,
+      activityProvider = activityProvider,
+      applyLocale = { AndroidDeviceLocale.apply(it) },
+    )
+  }
+
+  /** Every side-effect-free rejection that must happen before device configuration changes. */
+  private fun validateExecutableTrail(
+    trailItems: List<TrailYamlItem>,
+    trailConfig: TrailConfig?,
+    trailFilePath: String?,
+  ) {
+    requireCompatibleDriver(trailConfig, trailFilePath)
+    if (!trailblazeYaml.hasActionableSteps(trailItems)) {
+      val trailName = trailConfig?.title ?: trailFilePath ?: "unknown"
+      throw TrailblazeException(
+        "Trail '$trailName' has no executable steps — this would be a false positive pass. " +
+          "Add prompts or tool steps to this trail file."
+      )
+    }
+  }
 
   /** What [evaluateDriverPin] decided about a trail's `config.driver:` pin. */
   internal sealed interface DriverPinVerdict {
@@ -539,6 +691,37 @@ class AndroidTestTrailblazeRule(
   }
 
   internal companion object {
+    /**
+     * Returns an Activity only after it observes [locale]. A guarded provider lets the locale wait
+     * span the brief interval where Activity recreation makes a harness reference unavailable.
+     */
+    internal fun <A> activityWithRequestedLocale(
+      locale: String?,
+      activityProvider: () -> A,
+      awaitLocale: (String, () -> A?) -> A,
+    ): A {
+      if (locale == null) return activityProvider()
+      return awaitLocale(locale) { runCatching(activityProvider).getOrNull() }
+    }
+
+    /**
+     * Applies a device locale immediately, then waits for propagation only when an Activity was
+     * already running. [activityWithRequestedLocale] covers the complementary case where this
+     * initial probe lands inside an Activity recreation gap.
+     */
+    internal fun <A> applyLocaleAndAwaitIfActivityRunning(
+      locale: String,
+      activityProvider: () -> A?,
+      applyLocale: (String) -> Unit,
+      awaitLocale: (String, () -> A?) -> Unit,
+    ): Boolean {
+      val safeActivityProvider = { runCatching(activityProvider).getOrNull() }
+      val appWasRunning = safeActivityProvider() != null
+      applyLocale(locale)
+      if (appWasRunning) awaitLocale(locale, safeActivityProvider)
+      return appWasRunning
+    }
+
     /**
      * The two spellings of this driver a `config.driver:` pin may use, matched case-insensitively.
      * Derived from the enum so a rename cannot leave this gate matching a stale name.
@@ -603,6 +786,113 @@ class AndroidTestTrailblazeRule(
           "run this trail on the driver it names."
       )
     }
+  }
+}
+
+/**
+ * Serializes Activity capture with locale mutation and remembers the locale that every later
+ * Activity access must observe. A failed propagation wait marks the gate failed so failure
+ * reporting skips Activity access instead of repeating the same timeout.
+ */
+internal class ActivityLocaleGate<A>(
+  private val awaitLocale: (String, () -> A?) -> A,
+) {
+  private val configurationLock = ReentrantReadWriteLock()
+  private val pendingConfigurations = AtomicInteger()
+
+  @Volatile private var requirement: LocaleRequirement = LocaleRequirement.None
+
+  fun configure(
+    locale: String,
+    activityProvider: () -> A?,
+    applyLocale: (String) -> Unit,
+  ) {
+    pendingConfigurations.incrementAndGet()
+    try {
+      configurationLock.write {
+        disarmOnFailure {
+          val appWasRunning = AndroidTestTrailblazeRule.applyLocaleAndAwaitIfActivityRunning(
+            locale = locale,
+            activityProvider = activityProvider,
+            applyLocale = {
+              applyLocale(it)
+              requirement = LocaleRequirement.Required(it)
+            },
+            awaitLocale = { expectedLocale, provider -> awaitLocale(expectedLocale, provider) },
+          )
+          if (appWasRunning) requirement = LocaleRequirement.None
+        }
+      }
+    } finally {
+      pendingConfigurations.decrementAndGet()
+    }
+  }
+
+  fun activity(activityProvider: () -> A): A = configurationLock.read {
+    when (val current = requirement) {
+      LocaleRequirement.None -> activityProvider()
+      LocaleRequirement.Failed ->
+        throw IllegalStateException(
+          "Activity access skipped because device locale propagation already failed."
+        )
+      is LocaleRequirement.Required -> disarmOnFailure {
+        val activity = AndroidTestTrailblazeRule.activityWithRequestedLocale(
+          locale = current.locale,
+          activityProvider = activityProvider,
+          awaitLocale = awaitLocale,
+        )
+        requirement = LocaleRequirement.None
+        activity
+      }
+    }
+  }
+
+  /**
+   * Returns a localized Activity when one is already present, without turning a cold-start
+   * observational capture into a locale-propagation failure.
+   */
+  fun activityIfAvailable(activityProvider: () -> A?): A? = configurationLock.read {
+    val available = runCatching(activityProvider).getOrNull() ?: return@read null
+    when (val current = requirement) {
+      LocaleRequirement.None -> available
+      LocaleRequirement.Failed -> null
+      is LocaleRequirement.Required -> runCatching {
+        awaitLocale(current.locale) { runCatching(activityProvider).getOrNull() }.also {
+          requirement = LocaleRequirement.None
+        }
+      }.getOrNull()
+    }
+  }
+
+  fun clear() = configurationLock.write { requirement = LocaleRequirement.None }
+
+  fun <T> withStableConfiguration(block: () -> T): T = configurationLock.read(block)
+
+  fun <T : Any> tryWithStableConfiguration(block: () -> T): T? {
+    if (pendingConfigurations.get() > 0) return null
+    val readLock = configurationLock.readLock()
+    if (!readLock.tryLock()) return null
+    return try {
+      if (pendingConfigurations.get() > 0) null else block()
+    } finally {
+      readLock.unlock()
+    }
+  }
+
+  private fun <T> disarmOnFailure(block: () -> T): T =
+    try {
+      block()
+    } catch (e: Exception) {
+      requirement = LocaleRequirement.Failed
+      throw e
+    }
+
+  private sealed interface LocaleRequirement {
+    data object None : LocaleRequirement
+
+    data class Required(val locale: String) : LocaleRequirement
+
+    data object Failed : LocaleRequirement
   }
 }
 

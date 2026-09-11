@@ -132,8 +132,8 @@ class TrailCommandPlanTrailExecutionTest {
     // in `.trail.yaml`). It collapses into the directory's single-trail bucket —
     // `TrailRecordings.UNIFIED_TRAIL_FILENAME` is a resolver candidate — so a directory holding
     // only it expands to exactly that file rather than to nothing.
-    val trailDir = File(tempFolder.root, "case_5374124").apply { mkdirs() }
-    val bare = writeUnifiedTrail(TrailRecordings.UNIFIED_TRAIL_FILENAME, trailDir, id = "case_5374124")
+    val trailDir = File(tempFolder.root, "case_1001").apply { mkdirs() }
+    val bare = writeUnifiedTrail(TrailRecordings.UNIFIED_TRAIL_FILENAME, trailDir, id = "case_1001")
 
     val expanded = TrailCommand.expandTrailFiles(listOf(trailDir))
 

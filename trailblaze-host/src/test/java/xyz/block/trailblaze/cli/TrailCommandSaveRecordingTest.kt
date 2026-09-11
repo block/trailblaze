@@ -23,6 +23,7 @@ import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.logs.model.TaskId
+import xyz.block.trailblaze.logs.model.TrailblazeClockDomain
 import xyz.block.trailblaze.toolcalls.toLogPayload
 import xyz.block.trailblaze.recordings.TrailRecordings
 import xyz.block.trailblaze.yaml.DirectionStep
@@ -60,6 +61,29 @@ class TrailCommandSaveRecordingTest {
   // Flag parsing
   // ---------------------------------------------------------------------------
 
+  /**
+   * The CLI resolves its recording tool classes from the reference descriptor set, so a driver this
+   * distribution does not plug in is still readable from a log it did not produce.
+   *
+   * Deliberately not asserted as "or the Playwright steps are lost" — they are not, because the
+   * serializer also discovers those classes from the classpath's `.tool.yaml` resources. That
+   * redundancy is asserted where it belongs, in `HostDriverDescriptorToolClassesTest`. What this
+   * pins is narrower and still worth pinning: the CLI reaches for a populated registry rather than
+   * `HostDriverDescriptorRegistry.EMPTY` or the running app's, which is entitled to omit a driver.
+   */
+  @Test
+  fun `the CLI resolves recording tool classes from the reference descriptor set`() {
+    val descriptors = TrailCommand().recordingToolDescriptors
+
+    assertTrue(
+      descriptors.forDriverOrNull(TrailblazeDriverType.REVYL_ANDROID)
+        ?.toolClasses(TrailblazeDriverType.REVYL_ANDROID)
+        ?.isNotEmpty() == true,
+      "the CLI should resolve Revyl's tools even though a downstream distribution is entitled to " +
+        "omit the Revyl descriptor — a log can arrive from CI or another machine",
+    )
+  }
+
   @Test
   fun `saveRecording defaults to null and resolves to true when no flag is passed`() {
     // Tri-state: null (user didn't say) resolves to "save" so the default behaviour is
@@ -92,7 +116,7 @@ class TrailCommandSaveRecordingTest {
   @Test
   fun `trail parses deprecated --no-record alias as false`() {
     // Guard the deprecation window: if picocli ever fails to bind the setter-style @Option,
-    // this test catches it before any external caller (cli_smoke_tests_common.sh, skill
+    // this test catches it before any external caller (the CLI smoke suite, skill
     // docs) silently regresses to the destructive default.
     val cmd = TrailCommand()
     CommandLine(cmd).parseArgs("--no-record", "any.trail.yaml")
@@ -1038,6 +1062,108 @@ class TrailCommandSaveRecordingTest {
     )
   }
 
+  @Test
+  fun `a short first tool under skew larger than its span is normalized by its ingestion anchor`() {
+    // Span overlap alone (the test above) still misassigns when device lag exceeds a first tool's
+    // offset-into-window plus its duration: `tapBeta` below is a 100ms tool starting 10ms after
+    // its window under ~1s lag, so its device-stamped span overlaps ONLY the PREVIOUS window.
+    // What rescues it is the clock metadata the on-device emitter and host ingestion now carry —
+    // the marker saying these stamps are device-clock, and the receipt anchor the offset comes
+    // from.
+    //
+    // Deliberately a step→step boundary rather than trailhead→step: an over-full trailhead slot
+    // spills its extra tools into the first step, which happens to land them where they belong
+    // and would hide the misassignment from this level entirely.
+    val cmd = command()
+    val logsDir = tempFolder.newFolder("anchored-skew-logs-root")
+    val sessionId = SessionId("anchored-skew-session")
+    val sessionDir = File(logsDir, sessionId.value).apply { mkdirs() }
+    val authoredYaml = createTrailblazeYaml().encodeUnifiedTrailToString(
+      UnifiedTrail(
+        config = UnifiedTrailConfig(id = "app/anchored-skew", target = "app"),
+        trail = listOf(
+          UnifiedTrailStep(
+            step = "Open the menu",
+            recordings = mapOf("android" to listOf(tool("tapAlpha"))),
+          ),
+          UnifiedTrailStep(
+            step = "Pick an item",
+            recordings = mapOf("android" to listOf(tool("tapBeta"), tool("tapGamma"))),
+          ),
+        ),
+      ),
+    )
+    val menuStep = DirectionStep(step = "Open the menu")
+    val itemStep = DirectionStep(step = "Pick an item")
+    fun at(ms: Long): Instant = Instant.fromEpochMilliseconds(FIXED_NOW.toEpochMilliseconds() + ms)
+    writeLog(
+      sessionDir,
+      "000.json",
+      TrailblazeLog.TrailblazeSessionStatusChangeLog(
+        sessionStatus = SessionStatus.Started(
+          trailConfig = null,
+          trailFilePath = null,
+          hasRecordedSteps = true,
+          testMethodName = "test",
+          testClassName = "Test",
+          trailblazeDeviceInfo = TrailblazeDeviceInfo(
+            trailblazeDeviceId = TrailblazeDeviceId(
+              instanceId = "pixel-7",
+              trailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID,
+            ),
+            trailblazeDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
+            widthPixels = 1080,
+            heightPixels = 1920,
+            classifiers = listOf(TrailblazeDeviceClassifier("android-phone")),
+          ),
+          rawYaml = authoredYaml,
+        ),
+        session = sessionId,
+        timestamp = at(0),
+      ),
+    )
+    // Host clock: menu window [100, 3800], item window [3810, 10400]. Device clock 1s behind, so
+    // every tool's own stamp reads 1000ms early and each host receipt lands 1005ms after the
+    // tool's device-stamped end — putting the derived offset at 1005ms.
+    writeLog(sessionDir, "001.json", objectiveStartLog(sessionId, menuStep, timestamp = at(100)))
+    writeLog(
+      sessionDir,
+      "002.json",
+      anchoredToolLog("tapAlpha", sessionId, timestamp = at(200), durationMs = 500, hostReceivedAt = at(1_705)),
+    )
+    writeLog(sessionDir, "003.json", objectiveCompleteLog(menuStep, sessionId, timestamp = at(3_800)))
+    writeLog(sessionDir, "004.json", objectiveStartLog(sessionId, itemStep, timestamp = at(3_810)))
+    // Truly [3820, 3920] on the host timeline; stamped [2820, 2920], which lies WHOLLY inside the
+    // menu window. Only the derived offset puts it back in its own step.
+    writeLog(
+      sessionDir,
+      "005.json",
+      anchoredToolLog("tapBeta", sessionId, timestamp = at(2_820), durationMs = 100, hostReceivedAt = at(3_925)),
+    )
+    writeLog(
+      sessionDir,
+      "006.json",
+      anchoredToolLog("tapGamma", sessionId, timestamp = at(5_900), durationMs = 1_000, hostReceivedAt = at(7_905)),
+    )
+    writeLog(sessionDir, "007.json", objectiveCompleteLog(itemStep, sessionId, timestamp = at(10_400)))
+
+    cmd.generateRecordingForSession(sessionId, logsDir)
+
+    val recording = File(sessionDir, "recording.trail.yaml")
+    assertTrue(recording.exists(), "a passing skewed-clock run must still render its recording")
+    val unified = createTrailblazeYaml().decodeUnifiedTrail(recording.readText())
+    assertEquals(
+      listOf("tapAlpha"),
+      unified.trail[0].recordings["android-phone"]?.map { it.name },
+      "step 1 records exactly its own tool — not step 2's skew-shifted first tool",
+    )
+    assertEquals(
+      listOf("tapBeta", "tapGamma"),
+      unified.trail[1].recordings["android-phone"]?.map { it.name },
+      "step 2 keeps both of its own tools",
+    )
+  }
+
   /** A device-stamped recordable tool log, as the on-device runner path emits (no top-level mark). */
   private fun skewedToolLog(
     toolName: String,
@@ -1056,6 +1182,21 @@ class TrailCommandSaveRecordingTest {
     isRecordable = true,
     isTopLevelToolCall = false,
     isVerification = false,
+  )
+
+  /**
+   * The same device-stamped tool log as [skewedToolLog], carrying the clock metadata the on-device
+   * emitter stamps and host ingestion anchors — what a reader derives the clock offset from.
+   */
+  private fun anchoredToolLog(
+    toolName: String,
+    sessionId: SessionId,
+    timestamp: Instant,
+    durationMs: Long,
+    hostReceivedAt: Instant,
+  ) = skewedToolLog(toolName, sessionId, timestamp, durationMs).copy(
+    clock = TrailblazeClockDomain.DEVICE,
+    hostReceivedAt = hostReceivedAt,
   )
 
   private fun objectiveCompleteLog(step: DirectionStep, sessionId: SessionId, timestamp: Instant) =

@@ -2,6 +2,7 @@ package xyz.block.trailblaze
 
 import kotlinx.datetime.Clock
 import kotlinx.datetime.Instant
+import xyz.block.trailblaze.replay.ActionTrace
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeLog
@@ -134,11 +135,14 @@ fun TrailblazeAgentContext.logToolExecution(
   // the next tool's log and mis-record it.
   context.recordedToolOverride = null
 
+  ActionTrace.mark(ActionTrace.Boundary.TOOL_LOG_BUILT)
   val toolLogJson = TrailblazeJsonInstance.encodeToString(toolLog)
   Console.log("toolLogJson: $toolLogJson")
+  ActionTrace.markWith(ActionTrace.Boundary.TOOL_LOG_PRINTED, toolLogJson.length.toLong())
 
   val session = sessionProvider.invoke()
   trailblazeLogger.log(session, toolLog)
+  ActionTrace.mark(ActionTrace.Boundary.TOOL_LOG_UPLOADED)
 }
 
 /**
@@ -236,5 +240,7 @@ fun TrailblazeAgentContext.logToolExecution(
     // source — which is enough, because that view follows `switchDevice` too.
     deviceName = activeDeviceName,
   )
+  ActionTrace.mark(ActionTrace.Boundary.TOOL_LOG_BUILT)
   trailblazeLogger.log(session, toolLog)
+  ActionTrace.mark(ActionTrace.Boundary.TOOL_LOG_UPLOADED)
 }

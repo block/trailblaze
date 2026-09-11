@@ -464,8 +464,8 @@ requires agent-on-host mode. Authors choose deployment per trail
 based on what tools the trail uses — and the recorded artifact is
 the same shape either way.
 
-What teams have built on top of this surface in real production
-(both runtimes represented):
+Patterns teams have built on top of this surface (both runtimes
+represented):
 
 **Rate-limited login coordination.** One team's QA engineer hit a
 rate-limited login endpoint that broke parallel test runs. Their
@@ -778,12 +778,12 @@ testing maturity, agentic-workflow investment, and platform coverage.
 all four with the same primitives (typed scripted tools, full-fidelity
 logs, natural-language source). Pick the loop that fits your team.
 
-We've used the threat of *wholesale re-recording* internally — when
-framework underlying changes happen (driver migrations, selector
-format changes), every compiled YAML may need regeneration. This
-has happened a few times in practice and is genuinely slow because
-human verification is required (the 3-assertion-problem repeats:
-the agent might miss things on re-record).
+*Wholesale re-recording* is the risk that shapes this — when the
+underlying framework changes (driver migrations, selector format
+changes), every compiled YAML may need regeneration. That is
+genuinely slow, because human verification is required (the
+3-assertion-problem repeats: the agent might miss things on
+re-record).
 
 The fundamental gap: **LLMs cannot 100% guarantee they produce
 exactly what you wanted**. Verification loops in agentic workflows
@@ -864,37 +864,22 @@ To stay disciplined about positioning:
   recording time and replay deterministically — meaningfully cheaper
   per replay.
 
-## The strategic curated trailmap catalog
+## Curation is part of the design
 
-A public trailmap ecosystem requires curation. The strategic posture is
-**opinionated:**
+A public trailmap ecosystem requires curation, and the criteria matter as
+much as the mechanism.
 
-**Tier 1 — friendly commerce.** OpenAI Agentic Commerce Protocol
-partners: Walmart, Target, Etsy, eBay (and follow-ons: Sephora,
-Nordstrom, Lowe's, Best Buy, Home Depot, Wayfair). They want agent
-traffic; ChatGPT referrals now drive ~20% of Walmart's traffic.
-Shipping trailmaps here is welcome, not adversarial.
+The trailmaps worth shipping first are the ones whose targets are stable
+and whose owners want automated traffic: sites with published agent or
+API surfaces, well-known reference and documentation sites, and apps with
+low UI churn. Those are cheap to keep green and give benchmark
+credibility for free.
 
-**Tier 2 — stable reference cluster.** Wikipedia, GitHub, ArXiv,
-Hugging Face, Wolfram Alpha, Cambridge Dictionary, Allrecipes, BBC
-News, Coursera. WebVoyager-anchored, neutral-to-friendly owners, low
-UI churn. Easy to ship, gives benchmark credibility for free.
-
-**Tier 3 — partner-friendly travel.** Booking.com, OpenTable,
-Priceline, Uber, DoorDash, Instacart, StubHub, Hipcamp — all OpenAI
-Operator launch partners.
-
-**Explicitly avoided.** Amazon (actively suing automation companies
-2025-2026), LinkedIn (most litigious automation defendant in Big
-Tech), Reddit (sued Perplexity Oct 2025 under DMCA §1201), Twitter/X
-(hostile + UI-churning). **The negative space is part of the
-positioning.** Trailblaze ships trailmaps for apps whose owners want
-agent traffic.
-
-This isn't just brand positioning — it's the legal risk mitigation.
-Curated friendly targets have near-zero legal exposure. Hostile
-targets carry contributory-liability risk and ecosystem-positioning
-damage that outweighs the demand.
+Targets whose owners object to automation are a poor fit regardless of
+demand — a trailmap is only useful if it can be maintained in the open,
+and that requires the target's cooperation. Anyone standing up a
+trailmap catalog should get their own legal review of the targets they
+plan to include.
 
 ## Connection to the agent-authored / human-readable principle
 
@@ -989,7 +974,7 @@ the compiled artifact is editable, agent harnesses can fix tests from
 logs, and the trailmap is the unit of distribution across iOS, Android,
 and web.**
 
-The pitch worth committing to externally:
+The short description this all adds up to:
 
 > *"Trailblaze is developer-first AI testing. Natural-language test
 > specs that compile to editable cross-platform YAML. Full-fidelity
@@ -1001,7 +986,6 @@ The pitch worth committing to externally:
 > that want agentic flows without giving up code, IDE support, or
 > their exit strategy."*
 
-That's the framing. Every claim in it is defensible against the 2026
-landscape. Every line maps to a real differentiator. None of it
-overclaims novelty in a layer where prior art exists. The combination
-is the value.
+Every claim in it is checkable against what the framework actually
+does, and none of it claims novelty in a layer where prior art exists.
+The combination is the value.

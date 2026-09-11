@@ -78,9 +78,7 @@ actual class AndroidDeviceCommandExecutor actual constructor(
     AdbCommandUtil.forceStopApp(appId)
   }
 
-  actual fun clearAppData(appId: String) {
-    AdbCommandUtil.clearPackageData(appId)
-  }
+  actual fun clearAppData(appId: String): PmClearOutcome = AdbCommandUtil.clearPackageData(appId)
 
   actual fun isAppRunning(appId: String): Boolean {
     return AdbCommandUtil.isAppRunning(appId)

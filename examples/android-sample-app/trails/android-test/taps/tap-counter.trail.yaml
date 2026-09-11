@@ -1,5 +1,11 @@
 config:
   id: sample-app/android-test/taps/tap-counter
+  # Deliberately no `target:`. ANDROID_TEST resolves the declared target's OWN in-process harness and
+  # refuses to fall back when it finds none, and `sampleapp` declares no `android_test:` block — so
+  # `target: sampleapp` here fails the run outright. Omitting it is not clean either: a bare
+  # `trailblaze run` then resolves the workspace default's harness, which belongs to another app.
+  # The fix is an `android_test:` block on the sampleapp target. Until then the supported path is
+  # `trailblaze inprocess make-test-apk --trail <this file>`, where the built APK is the harness.
   title: Tap counter, replayed in-process
   description: >-
     The ANDROID_TEST driver on the device farm. Replay is deterministic — every step carries a

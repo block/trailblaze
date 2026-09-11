@@ -13,11 +13,13 @@ import xyz.block.trailblaze.config.project.WorkspaceContentHasher
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDevicePort
 import xyz.block.trailblaze.devices.WebInstanceIds
+import xyz.block.trailblaze.host.devices.HostDriverPortUtils
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.util.Console
 import java.io.File
 import java.nio.file.Path
 import java.nio.file.Paths
+import java.util.concurrent.TimeUnit
 
 // ---------------------------------------------------------------------------
 // Shared error envelopes
@@ -1686,16 +1688,21 @@ internal suspend fun connectOrStartDaemonOneShot(port: Int): CliMcpClient? {
   return try {
     CliMcpClient.connectOneShot(port)
   } catch (_: Exception) {
-    if (!cliTryStartDaemon(port)) {
-      reportDaemonUnreachable("Trailblaze daemon is not running and could not be auto-started")
-      return null
+    val outcome = cliTryStartDaemon(port)
+    when (outcome) {
+      // Already reported, and with the accurate reason — a daemon IS running, it just isn't
+      // answering, so the generic "not running" envelope below would send the user the wrong way.
+      DaemonAutoStartOutcome.REFUSED_PORT_ALREADY_OWNED -> return null
+      DaemonAutoStartOutcome.FAILED -> {
+        reportDaemonUnreachable("Trailblaze daemon is not running and could not be auto-started")
+        return null
+      }
+      DaemonAutoStartOutcome.STARTED, DaemonAutoStartOutcome.ALREADY_RUNNING -> Unit
     }
     try {
       CliMcpClient.connectOneShot(port = port)
     } catch (_: Exception) {
-      reportDaemonUnreachable(
-        "failed to connect to Trailblaze daemon after starting it",
-      )
+      reportDaemonUnreachable(daemonReconnectFailureReason(outcome, port))
       null
     }
   }
@@ -1728,9 +1735,15 @@ internal suspend fun connectOrStartDaemonReusable(
     )
   } catch (_: Exception) {
     CliMcpClient.clearSession(port, sessionScope = sessionScope)
-    if (!cliTryStartDaemon(port)) {
-      reportDaemonUnreachable("Trailblaze daemon is not running and could not be auto-started")
-      return null
+    val outcome = cliTryStartDaemon(port)
+    when (outcome) {
+      // See the one-shot path above: an owned-but-unresponsive port has already been reported.
+      DaemonAutoStartOutcome.REFUSED_PORT_ALREADY_OWNED -> return null
+      DaemonAutoStartOutcome.FAILED -> {
+        reportDaemonUnreachable("Trailblaze daemon is not running and could not be auto-started")
+        return null
+      }
+      DaemonAutoStartOutcome.STARTED, DaemonAutoStartOutcome.ALREADY_RUNNING -> Unit
     }
     try {
       CliMcpClient.connectReusable(
@@ -1739,9 +1752,7 @@ internal suspend fun connectOrStartDaemonReusable(
         sessionScope = sessionScope,
       )
     } catch (_: Exception) {
-      reportDaemonUnreachable(
-        "failed to connect to Trailblaze daemon after starting it",
-      )
+      reportDaemonUnreachable(daemonReconnectFailureReason(outcome, port))
       null
     }
   }
@@ -2009,25 +2020,384 @@ private fun checkAndRestartStaleDaemon(port: Int): Boolean {
   return true
 }
 
+/** What [cliTryStartDaemon] did, so the caller knows whether a (re)connect is worth attempting. */
+internal enum class DaemonAutoStartOutcome {
+  /** A daemon is up because we started it — the caller should try its connection again. */
+  STARTED,
+
+  /**
+   * A daemon already owned the port and answered its health check, so nothing was spawned. The
+   * caller should try its connection again exactly as for [STARTED], but must attribute a second
+   * failure to the incumbent rather than to a failed startup.
+   */
+  ALREADY_RUNNING,
+
+  /**
+   * A listener already owns the port and never answered as a daemon, so we deliberately did NOT
+   * start a second one. The specific failure is reported here (the caller's generic "not running"
+   * envelope would be wrong — the port is held), so the caller should just give up.
+   */
+  REFUSED_PORT_ALREADY_OWNED,
+
+  /** No daemon owns the port and we could not start one. The caller reports it. */
+  FAILED,
+}
+
+/**
+ * Why a reconnect failed after [cliTryStartDaemon] reported a daemon was available.
+ *
+ * Phrased for what actually happened: "after starting it" sends the user to look at daemon startup,
+ * which is the wrong place entirely when the daemon was already running and merely refused the
+ * command.
+ */
+private fun daemonReconnectFailureReason(outcome: DaemonAutoStartOutcome, port: Int): String =
+  when (outcome) {
+    DaemonAutoStartOutcome.ALREADY_RUNNING ->
+      "the daemon already running on port $port passes health checks but did not accept this " +
+        "command — restart it with `trailblaze app --stop` then re-run, or bypass it with `--no-daemon`"
+
+    else -> "failed to connect to Trailblaze daemon after starting it"
+  }
+
+/** Whether [cliTryStartDaemon] is allowed to spawn, and if not, why. */
+internal enum class DaemonAutoStartAction {
+  /** Nothing holds the port and spawning is allowed. */
+  SPAWN,
+
+  /** The port is free, but the kill switch forbids putting a daemon on it. */
+  REFUSE_AUTOSTART_DISABLED,
+
+  /**
+   * A listener holds the port and may be a daemon still finishing its boot, so wait for it to
+   * answer instead of spawning past it.
+   */
+  WAIT_FOR_INCUMBENT,
+
+  /**
+   * The port is held and nothing on it ever accepted a connection, so there is no listener here to
+   * wait for and no daemon can bind it either.
+   */
+  REFUSE_PORT_HELD,
+}
+
+/**
+ * Pure decision for [cliTryStartDaemon] — separated from the process spawning so the matrix is
+ * unit-testable without a live daemon, in the same shape as [staleDaemonAction]. See
+ * `DaemonAutoStartActionTest`.
+ *
+ * The rule that matters: **a failed connection is not evidence that no daemon is running.** A
+ * daemon that is alive but wedged (its event loop saturated, its MCP surface not answering) fails
+ * exactly the same connect that a missing daemon fails. Auto-starting on that signal alone is what
+ * let ten daemons accumulate against one emulator — each `trailblaze run` failed to connect, spawned
+ * another daemon, watched `waitForDaemon` go green off the *old* daemon's still-healthy `/ping`,
+ * failed to connect again, and left the new JVM behind to contend for the same device.
+ *
+ * So the port is probed for an owner before any spawn, and ownership vetoes the spawn.
+ *
+ * Ownership is checked **before** the auto-start kill switch, because the two answer different
+ * questions. The kill switch says "do not spawn"; ownership says "a daemon is already there".
+ * Refusing on ownership spawns nothing, so it honours the kill switch either way — but it reports
+ * the accurate reason. Order it the other way and the CI-default path (every Gradle `Test` task
+ * sets `TRAILBLAZE_DISABLE_DAEMON_AUTOSTART`) tells the user a wedged daemon "is not running" and
+ * hints at starting one, which is exactly the misdirection this change exists to remove.
+ *
+ * The kill switch does not decide whether a listener is worth *waiting* on, because waiting spawns
+ * nothing and so honours the switch either way. The switch being set is in fact when waiting
+ * matters most: it is how the user is told to run a daemon (`trailblaze app` by hand, which every
+ * Gradle `Test` task's environment expects), and a cold uber-jar binds the port 30s+ before it
+ * serves — so refusing a `LISTENING` port here would refuse the very daemon the error text asks
+ * for, and only during its boot, which reads as flaky.
+ *
+ * Switched on [hold] rather than tested with `hold ==` guards so a new [DaemonPortHold] is a
+ * compile error here instead of falling through to [DaemonAutoStartAction.SPAWN].
+ */
+internal fun daemonAutoStartAction(
+  autoStartDisabled: Boolean,
+  hold: DaemonPortHold,
+): DaemonAutoStartAction = when (hold) {
+  // Nothing accepted across the settle window, so there is no listener here to wait for a `/ping`
+  // from — a daemon still finishing its boot accepts the moment it binds, which reads as LISTENING.
+  DaemonPortHold.HELD_SILENT -> DaemonAutoStartAction.REFUSE_PORT_HELD
+  DaemonPortHold.LISTENING -> DaemonAutoStartAction.WAIT_FOR_INCUMBENT
+  DaemonPortHold.FREE ->
+    if (autoStartDisabled) {
+      DaemonAutoStartAction.REFUSE_AUTOSTART_DISABLED
+    } else {
+      DaemonAutoStartAction.SPAWN
+    }
+}
+
+/**
+ * What, if anything, holds a daemon port, and how the two probes tell those answers apart.
+ *
+ * The LISTEN socket is the only thing that reliably says which process owns a daemon port: a
+ * pidfile can be stale after a SIGKILL, and `/ping` answering (or not) describes the daemon's
+ * health, not its ownership of the port. A wedged daemon still holds its listener, which is
+ * precisely the case that must veto a second spawn.
+ *
+ * Two probes, because they fail asymmetrically:
+ *  - **A completed connect proves ownership.** Both loopback families are tried, since the daemon's
+ *    HTTP connector binds `::` and on an IPv6-only loopback host the IPv4 connect fails.
+ *  - **A failed connect proves nothing.** A listener that has stopped calling `accept()` fills its
+ *    backlog, after which the kernel drops further SYNs — the connect then times out exactly as it
+ *    does against an empty port. That is not a corner case here: it is the wedged daemon this veto
+ *    exists for, made worse by every hung CLI command queued behind it. So the fallback asks the
+ *    question that actually matters, by attempting the bind a new daemon would attempt.
+ *
+ * Neither probe proves the owner is a Trailblaze daemon — deliberately, since either way a second
+ * daemon cannot have that port. Messages built on this answer say "a listener", not "a daemon".
+ */
+internal enum class DaemonPortHold {
+  /** Nothing holds the port. A daemon can bind it. */
+  FREE,
+
+  /**
+   * Something completed a TCP handshake, so a LISTEN socket is definitely there. It may be a daemon
+   * still finishing its boot, a wedged one, or an unrelated listener; all three mean a second
+   * daemon cannot have the port.
+   */
+  LISTENING,
+
+  /**
+   * Nothing accepted, and the port cannot be bound either. Two states look like this from
+   * userspace and they want opposite handling, which is why [settleDaemonPortHold] gives it time
+   * rather than deciding at once:
+   *  - a listener whose accept backlog is full — the wedged daemon, which must veto a spawn and
+   *    never releases the port on its own;
+   *  - an unrelated socket holding the port as its *source* port, which listens for nothing and
+   *    goes away by itself. Whether this even reaches here is platform-dependent: BSD lets a
+   *    server bind past an established socket, so it reads FREE on macOS, while Linux wants
+   *    `SO_REUSEADDR` on both sockets before allowing that and reports the port in use.
+   */
+  HELD_SILENT,
+}
+
+/** One instantaneous reading of who holds [port]. */
+internal fun daemonPortHold(port: Int): DaemonPortHold = when {
+  DAEMON_LOOPBACK_PROBE_HOSTS.any {
+    HostDriverPortUtils.isPortReachable(it, port, timeoutMs = DAEMON_PORT_OWNERSHIP_PROBE_MS)
+  } -> DaemonPortHold.LISTENING
+
+  isDaemonPortBindable(port) -> DaemonPortHold.FREE
+  else -> DaemonPortHold.HELD_SILENT
+}
+
+/**
+ * [daemonPortHold], but a [DaemonPortHold.HELD_SILENT] reading is re-read for a short window
+ * before it is believed.
+ *
+ * Time is what separates the two states that read as held-and-silent. A listener never releases
+ * its port, so a wedged daemon still vetoes the spawn. An unrelated socket holding the port as its
+ * source port does release it — and this daemon port sits inside the OS ephemeral range, so any
+ * outbound connection on the machine can land on it (measured, and documented at length in
+ * `MockRpcServerTest`). Without the re-read, that transient collision would be reported as an
+ * owned port and refuse an auto-start that should have succeeded. This is what lets
+ * [isDaemonPortBindable] keep asking the questions a real server's bind asks rather than tuning
+ * its probe to dodge the collision.
+ *
+ * On macOS that collision no longer reaches here at all, since a server can bind past an
+ * established socket; the re-read is what keeps the behaviour the same on a platform where it
+ * can't.
+ *
+ * Only the ambiguous answer waits: FREE and LISTENING return on the first probe, so the common
+ * paths pay nothing.
+ *
+ * [budgetMs] bounds when the last re-read may *start*, not total elapsed time — a probe already in
+ * flight cannot be cut short. It is close to the same thing for the collision this window exists
+ * for, whose probes return immediately; it is not for a wedged listener, whose probes each spend a
+ * connect timeout, and that port is never going to clear anyway.
+ */
+internal fun settleDaemonPortHold(
+  budgetMs: Long = DAEMON_PORT_HOLD_SETTLE_MS,
+  pollMs: Long = DAEMON_PORT_HOLD_POLL_MS,
+  // Monotonic on purpose: a wall clock stepped backwards by NTP would extend this window, and
+  // stepped forwards would skip it, on the one path whose whole job is to spend a fixed 3s.
+  now: () -> Long = { TimeUnit.NANOSECONDS.toMillis(System.nanoTime()) },
+  sleep: (Long) -> Unit = { Thread.sleep(it) },
+  probe: () -> DaemonPortHold,
+): DaemonPortHold {
+  val startedAt = now()
+  var hold = probe()
+  if (hold != DaemonPortHold.HELD_SILENT) return hold
+  val deadline = startedAt + budgetMs
+  // The clock is read after each probe, not just after each sleep, because the probe is the
+  // expensive half: `daemonPortHold` spends up to DAEMON_PORT_OWNERSHIP_PROBE_MS per loopback family
+  // on a wedged listener, which is exactly the port that reaches here. Counting only the sleeps let
+  // a 3s budget run past 5s while managing two re-reads instead of eleven.
+  while (now() + pollMs <= deadline) {
+    sleep(pollMs)
+    hold = probe()
+    if (hold != DaemonPortHold.HELD_SILENT) return hold
+  }
+  return hold
+}
+
+/** Ownership as the auto-start veto sees it. */
+internal fun daemonPortHoldForAutoStart(port: Int): DaemonPortHold =
+  // A port number no socket could name reads as held-and-silent for the same reason a wedged
+  // listener does, but nothing about it is transient, so re-reading it just spends the settle
+  // window before reporting a misconfigured `TRAILBLAZE_PORT` the same way either way.
+  if (!HostDriverPortUtils.isValidTcpPort(port)) {
+    daemonPortHold(port)
+  } else {
+    settleDaemonPortHold { daemonPortHold(port) }
+  }
+
+/**
+ * True iff a daemon could bind [port] right now, and nothing is already there — the direct form of
+ * the only question the auto-start veto needs answered.
+ *
+ * The daemon's connector binds `::` (`SslConfig.configureForSelfSignedSsl`) with the usual server
+ * socket options, and [HostDriverPortUtils.isPortBindable] deliberately binds the same way it
+ * does; the mistakes available in either direction are documented there. It errs toward refusing:
+ * a port that already has a narrower listener on it is called unbindable even where the wildcard
+ * bind would win, because a daemon whose port is shadowed for every loopback client is not a daemon
+ * anyone can reach. Transient collisions on this port — it sits inside the OS ephemeral range — are
+ * handled by re-reading [DaemonPortHold.HELD_SILENT] rather than by narrowing the probe. See
+ * [settleDaemonPortHold].
+ */
+internal fun isDaemonPortBindable(port: Int): Boolean = HostDriverPortUtils.isPortBindable(port)
+
+/**
+ * The same addresses the bind probe covers, and deliberately the same list: the connect and the
+ * bind answer two halves of one question about one daemon, so a non-loopback bind address has to
+ * move both at once.
+ */
+private val DAEMON_LOOPBACK_PROBE_HOSTS = HostDriverPortUtils.LOOPBACK_BIND_PROBE_ADDRESSES
+
+/**
+ * Bound on the loopback connect that probes for a daemon already owning the port. A local listener
+ * accepts effectively instantly; this only stops a pathological stack from parking the CLI before
+ * it has printed anything.
+ */
+private const val DAEMON_PORT_OWNERSHIP_PROBE_MS = 1_000
+
+/**
+ * How long a held-but-silent port is re-read before it is believed. Short on purpose: it is paid
+ * only in an ambiguous state, and the alternative for a transient collision used to be the full
+ * [DaemonClient.MAX_WAIT_FOR_DAEMON_MS] budget spent polling for a `/ping` nothing would ever send.
+ */
+private const val DAEMON_PORT_HOLD_SETTLE_MS = 3_000L
+
+private const val DAEMON_PORT_HOLD_POLL_MS = 250L
+
 /**
  * Auto-start the Trailblaze daemon in headless mode.
  */
-private fun cliTryStartDaemon(port: Int): Boolean {
-  if (isDaemonAutoStartDisabled()) {
-    Console.error(
-      "Daemon auto-start is disabled (TRAILBLAZE_DISABLE_DAEMON_AUTOSTART). " +
-        "Start one manually with `trailblaze app` or unset the variable.",
-    )
-    return false
+private fun cliTryStartDaemon(
+  port: Int,
+  childEnvironment: Map<String, String> = emptyMap(),
+  claimRetryRemaining: Int = 1,
+  respectAutoStartDisable: Boolean = true,
+): DaemonAutoStartOutcome {
+  if (DaemonClient(port = port).use { it.isRunningBlocking() }) {
+    return DaemonAutoStartOutcome.ALREADY_RUNNING
   }
+  val autoStartDisabled = daemonAutoStartIsBlocked(respectAutoStartDisable)
+  val hold = daemonPortHoldForAutoStart(port)
+  when (daemonAutoStartAction(autoStartDisabled = autoStartDisabled, hold = hold)) {
+    DaemonAutoStartAction.REFUSE_AUTOSTART_DISABLED -> {
+      Console.error(
+        "Daemon auto-start is disabled (TRAILBLAZE_DISABLE_DAEMON_AUTOSTART). " +
+          "Start one manually with `trailblaze app` or unset the variable.",
+      )
+      return DaemonAutoStartOutcome.FAILED
+    }
+
+    DaemonAutoStartAction.REFUSE_PORT_HELD -> {
+      reportCliError(
+        verb = "Daemon connection",
+        target = "port $port",
+        reason = "port $port is held, but nothing on it accepted a connection. That is either a " +
+          "listener too wedged to accept, or an unrelated socket holding the port. Either way a " +
+          "daemon cannot bind it, so refusing to auto-start one",
+        hint = "see what holds the port with `lsof -nP -iTCP:$port` (no `-sTCP:LISTEN` — it may " +
+          "not be a listener), restart the daemon with `trailblaze app --stop` then re-run, or " +
+          "bypass it with `--no-daemon`",
+      )
+      return DaemonAutoStartOutcome.REFUSED_PORT_ALREADY_OWNED
+    }
+
+    DaemonAutoStartAction.WAIT_FOR_INCUMBENT -> {
+      // The incumbent is either a daemon still finishing its boot — a cold uber-jar start
+      // legitimately takes 30s+, and it binds the port well before it serves anything — or one
+      // that is up and wedged. Both hold the listener, and neither is a reason to add a second
+      // daemon, so wait for this one to answer rather than spawning past it. A daemon that is
+      // already healthy is detected on the first poll, so the wedged case pays nothing extra.
+      Console.appendInfo("Port $port already has a listener — waiting for it to answer as a daemon")
+      val incumbentAnswered = DaemonClient(port = port).use {
+        it.waitForDaemon { Console.appendInfo(".") }
+      }
+      Console.info("") // newline after dots
+      if (incumbentAnswered) return DaemonAutoStartOutcome.ALREADY_RUNNING
+
+      reportCliError(
+        verb = "Daemon connection",
+        target = "port $port",
+        reason = "another process is listening on port $port but never answered as a daemon — " +
+          "the port is held, not free, so this is an unresponsive listener rather than a missing " +
+          "daemon. Refusing to auto-start a second daemon on the same port and workspace",
+        hint = "check what holds the port with `lsof -nP -iTCP:$port -sTCP:LISTEN`, restart the " +
+          "daemon with `trailblaze app --stop` then re-run, or bypass it with `--no-daemon`",
+      )
+      return DaemonAutoStartOutcome.REFUSED_PORT_ALREADY_OWNED
+    }
+    DaemonAutoStartAction.SPAWN -> Unit // fall through and actually spawn
+  }
+
   val launcher = findTrailblazeLauncher() ?: run {
     Console.error("Cannot auto-start daemon: trailblaze launcher not found.")
-    return false
+    return DaemonAutoStartOutcome.FAILED
+  }
+
+  val pidFile = daemonStartupClaimFile(port)
+
+  val claimOwner = when (val claim = claimDaemonStartup(pidFile)) {
+    is DaemonStartupClaim.Existing -> {
+      Console.info("A Trailblaze daemon is already starting (PID ${claim.pid}); waiting for it.")
+      Console.appendInfo("Waiting for Trailblaze daemon to be ready")
+      val started = DaemonClient(port = port).use {
+        it.waitForDaemon(isSpawnAlive = { processIsAlive(claim.pid) }) { Console.appendInfo(".") }
+      }
+      Console.info("")
+      if (
+        !started &&
+        !processIsAlive(claim.pid) &&
+        claimRetryRemaining > 0 &&
+        waitForStartupClaimRelease(pidFile)
+      ) {
+        return cliTryStartDaemon(
+          port,
+          childEnvironment,
+          claimRetryRemaining - 1,
+          respectAutoStartDisable,
+        )
+      }
+      return if (started) {
+        DaemonAutoStartOutcome.ALREADY_RUNNING
+      } else {
+        DaemonAutoStartOutcome.FAILED
+      }
+    }
+    DaemonStartupClaim.Unavailable -> {
+      if (claimRetryRemaining > 0 && waitForStartupClaimPublication(pidFile, port)) {
+        return cliTryStartDaemon(
+          port,
+          childEnvironment,
+          claimRetryRemaining - 1,
+          respectAutoStartDisable,
+        )
+      }
+      Console.error("Cannot claim the daemon startup lock at ${pidFile.absolutePath}.")
+      return DaemonAutoStartOutcome.FAILED
+    }
+    is DaemonStartupClaim.Owner -> claim
   }
 
   Console.log("Starting Trailblaze daemon...")
   val child = try {
     val pb = ProcessBuilder(daemonSpawnArgv(launcher, foreground = true, headless = true))
+    pb.environment().putAll(childEnvironment)
     if (port != TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTP_PORT) {
       pb.environment()["TRAILBLAZE_PORT"] = port.toString()
     }
@@ -2038,12 +2408,25 @@ private fun cliTryStartDaemon(port: Int): Boolean {
     pb.redirectError(ProcessBuilder.Redirect.appendTo(daemonLogFile))
     pb.start()
   } catch (e: Exception) {
+    releaseDaemonStartupClaim(claimOwner.ownerFile)
     reportCliError(
       verb = "Daemon start",
       reason = describeThrowableForUser(e),
       hint = "try `trailblaze app start --foreground --headless` to see startup output directly",
     )
-    return false
+    return DaemonAutoStartOutcome.FAILED
+  }
+  if (!replaceDaemonStartupPid(claimOwner.ownerFile, child.pid())) {
+    child.destroy()
+    releaseDaemonStartupClaim(claimOwner.ownerFile)
+    Console.error("Cannot record the daemon startup PID at ${pidFile.absolutePath}.")
+    return DaemonAutoStartOutcome.FAILED
+  }
+  val claimReaper = scheduleDaemonStartupClaimReaper(pidFile, claimOwner.ownerFile, child.pid()) ?: run {
+    child.destroy()
+    releaseDaemonStartupClaim(claimOwner.ownerFile)
+    Console.error("Cannot monitor the daemon startup claim at ${pidFile.absolutePath}.")
+    return DaemonAutoStartOutcome.FAILED
   }
 
   Console.appendInfo("Waiting for Trailblaze daemon to be ready")
@@ -2052,8 +2435,12 @@ private fun cliTryStartDaemon(port: Int): Boolean {
   }
   Console.info("") // newline after dots
   if (started) {
+    // Keep the claim for this child's lifetime. The detached reaper removes it on exit; retaining
+    // it prevents a transiently failed health probe from electing a second daemon meanwhile.
     Console.log("Trailblaze daemon started.")
   } else if (!child.isAlive) {
+    claimReaper.destroy()
+    releaseDaemonStartupClaim(claimOwner.ownerFile)
     // A child that's already gone can't still be starting, so "needs more time" would send the
     // user to wait on a process that gave up. The exit code plus the daemon log is what actually
     // localizes a broken spawn.
@@ -2069,7 +2456,227 @@ private fun cliTryStartDaemon(port: Int): Boolean {
     )
     Console.error("Run `trailblaze app start --foreground --headless` to see startup output directly.")
   }
-  return started
+  return if (started) DaemonAutoStartOutcome.STARTED else DaemonAutoStartOutcome.FAILED
+}
+
+internal sealed interface DaemonStartupClaim {
+  data class Owner(val ownerFile: File) : DaemonStartupClaim
+  data class Existing(val pid: Long) : DaemonStartupClaim
+  data object Unavailable : DaemonStartupClaim
+}
+
+internal fun daemonStartupClaimFile(port: Int): File = File(
+  xyz.block.trailblaze.ui.TrailblazeDesktopUtil.getDefaultAppDataDirectory(),
+  "daemon-$port.pid.starting",
+)
+
+private fun waitForStartupClaimRelease(pidFile: File): Boolean {
+  repeat(60) {
+    if (!pidFile.exists()) return true
+    Thread.sleep(100)
+  }
+  return !pidFile.exists()
+}
+
+/**
+ * Wait for the winner of the directory-lock election to publish its owner, release its claim, or
+ * make its daemon ready. The claim normally remains for the daemon's lifetime, but a winner that
+ * cannot publish its owner releases the directory so another starter can retry the election.
+ */
+private fun waitForStartupClaimPublication(pidFile: File, port: Int): Boolean =
+  waitForStartupClaimPublication(pidFile, daemonIsReady = {
+    DaemonClient(port = port).use { it.isRunningBlocking() }
+  })
+
+internal fun waitForStartupClaimPublication(
+  pidFile: File,
+  daemonIsReady: () -> Boolean,
+  maxAttempts: Int = 60,
+  retryDelayMillis: Long = 100,
+): Boolean {
+  repeat(maxAttempts) {
+    if (daemonIsReady() || readDaemonStartupOwner(pidFile) != null || !pidFile.exists()) return true
+    Thread.sleep(retryDelayMillis)
+  }
+  return daemonIsReady() || readDaemonStartupOwner(pidFile) != null || !pidFile.exists()
+}
+
+/** Atomically elect one daemon starter across concurrent CLI processes. */
+internal fun claimDaemonStartup(
+  pidFile: File,
+  claimantPid: Long = ProcessHandle.current().pid(),
+): DaemonStartupClaim {
+  val parent = pidFile.parentFile ?: return DaemonStartupClaim.Unavailable
+  if (!parent.mkdirs() && !parent.isDirectory) return DaemonStartupClaim.Unavailable
+  repeat(4) { attempt ->
+    var createdOwnerFile: File? = null
+    try {
+      java.nio.file.Files.createDirectory(pidFile.toPath())
+      val identity = processStartIdentity(claimantPid)
+        ?: error("Cannot identify daemon startup claimant $claimantPid")
+      createdOwnerFile = pidFile.resolve("owner-${java.util.UUID.randomUUID()}")
+      createdOwnerFile.writeText("$claimantPid\n$identity\n")
+      return DaemonStartupClaim.Owner(createdOwnerFile)
+    } catch (_: java.nio.file.FileAlreadyExistsException) {
+      if (!pidFile.isDirectory) return DaemonStartupClaim.Unavailable
+      val existingOwner = readDaemonStartupOwner(pidFile)
+      if (existingOwner != null && processIsSame(existingOwner)) {
+        return DaemonStartupClaim.Existing(existingOwner.pid)
+      }
+      if (existingOwner != null) {
+        releaseDaemonStartupClaim(existingOwner.ownerFile)
+      } else {
+        // Directory creation is the atomic election. The winner publishes its owner record just
+        // afterwards; an observer must never reclaim that short handoff window, because doing so
+        // could elect a second starter. A crashed unpublished claimant is deliberately surfaced
+        // as unavailable rather than risking a duplicate daemon.
+        Thread.sleep(10)
+      }
+    } catch (_: Exception) {
+      createdOwnerFile?.let(::releaseDaemonStartupClaim)
+      runCatching { java.nio.file.Files.delete(pidFile.toPath()) }
+      return DaemonStartupClaim.Unavailable
+    }
+  }
+  return DaemonStartupClaim.Unavailable
+}
+
+private fun processIsAlive(pid: Long): Boolean =
+  ProcessHandle.of(pid).map { it.isAlive }.orElse(false)
+
+private data class DaemonStartupOwner(
+  val ownerFile: File,
+  val pid: Long,
+  val processIdentity: String,
+)
+
+private fun readDaemonStartupOwner(claimDirectory: File): DaemonStartupOwner? {
+  val ownerFile = claimDirectory.listFiles()?.singleOrNull {
+    it.isFile && it.name.startsWith("owner-") && !it.name.contains(".new")
+  }
+    ?: return null
+  val lines = runCatching { ownerFile.readLines() }.getOrNull() ?: return null
+  val pid = lines.getOrNull(0)?.toLongOrNull() ?: return null
+  val identity = lines.getOrNull(1)?.takeIf { it.isNotBlank() } ?: return null
+  return DaemonStartupOwner(ownerFile, pid, identity)
+}
+
+private fun processIsSame(owner: DaemonStartupOwner): Boolean =
+  processIsAlive(owner.pid) && processStartIdentity(owner.pid) == owner.processIdentity
+
+private fun processStartIdentity(pid: Long): String? = runCatching {
+  val process = ProcessBuilder("ps", "-o", "lstart=", "-p", pid.toString())
+    .redirectError(ProcessBuilder.Redirect.DISCARD)
+    .also { it.environment()["LC_ALL"] = "C" }
+    .start()
+  val identity = process.inputStream.bufferedReader().use { it.readText().trim() }
+  if (process.waitFor() == 0) identity.takeIf { it.isNotBlank() } else null
+}.getOrNull()
+
+/** Replace a live claimant PID without exposing an empty or partial startup lock to another CLI. */
+internal fun replaceDaemonStartupPid(ownerFile: File, childPid: Long): Boolean {
+  val claimDirectory = ownerFile.parentFile?.takeIf { it.isDirectory } ?: return false
+  val identity = processStartIdentity(childPid) ?: return false
+  val replacement = runCatching {
+    java.nio.file.Files.createTempFile(claimDirectory.toPath(), "owner-", ".new")
+  }.getOrNull() ?: return false
+  return try {
+    java.nio.file.Files.writeString(replacement, "$childPid\n$identity\n")
+    java.nio.file.Files.move(
+      replacement,
+      ownerFile.toPath(),
+      java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+      java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+    )
+    true
+  } catch (_: Exception) {
+    false
+  } finally {
+    java.nio.file.Files.deleteIfExists(replacement)
+  }
+}
+
+/** Release this exact owner without exposing a path that another process could have replaced. */
+internal fun releaseDaemonStartupClaim(ownerFile: File) {
+  val removedOwner = runCatching {
+    java.nio.file.Files.deleteIfExists(ownerFile.toPath())
+  }.getOrDefault(false)
+  if (removedOwner) {
+    val claimDirectory = ownerFile.parentFile
+    claimDirectory.listFiles()?.filter {
+      it.isFile && it.name.startsWith("owner-") && it.name.endsWith(".new")
+    }?.forEach { handoff -> runCatching { java.nio.file.Files.deleteIfExists(handoff.toPath()) } }
+    runCatching { java.nio.file.Files.delete(claimDirectory.toPath()) }
+  }
+}
+
+/** Reclaim a lifetime claim once its recorded owner is no longer alive. */
+internal fun reclaimDaemonStartupClaimIfOwnerExited(pidFile: File) {
+  val owner = readDaemonStartupOwner(pidFile) ?: return
+  if (!processIsSame(owner)) releaseDaemonStartupClaim(owner.ownerFile)
+}
+
+/**
+ * A source build can outlive the CLI's wait window. Leave one detached watcher to remove this
+ * exact child's startup claim when it exits, without letting the short-lived command JVM linger.
+ * HTTP readiness is insufficient: another daemon may have won the port while this child is alive.
+ * Positional shell arguments keep paths and values out of the script syntax.
+ */
+internal fun scheduleDaemonStartupClaimReaper(
+  pidFile: File,
+  ownerFile: File,
+  childPid: Long,
+): Process? =
+  runCatching {
+    val identity = processStartIdentity(childPid) ?: return@runCatching null
+    ProcessBuilder(
+      "sh",
+      "-c",
+      """
+        pid="${'$'}1"; owner="${'$'}2"; started="${'$'}3"; lock="${'$'}4"
+        process_identity() {
+          LC_ALL=C ps -o lstart= -p "${'$'}1" 2>/dev/null | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*${'$'}//'
+        }
+        while kill -0 "${'$'}pid" 2>/dev/null && [ "${'$'}(process_identity "${'$'}pid")" = "${'$'}started" ]; do
+          sleep 5
+        done
+        if [ -f "${'$'}owner" ] && rm -f "${'$'}owner"; then
+          rmdir "${'$'}lock" 2>/dev/null || true
+        fi
+      """.trimIndent(),
+      "_",
+      childPid.toString(),
+      ownerFile.absolutePath,
+      identity,
+      pidFile.absolutePath,
+    )
+      .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+      .redirectError(ProcessBuilder.Redirect.DISCARD)
+      .start()
+  }.getOrNull()
+
+/** Ensure the HTTP daemon exists without opening an MCP session. */
+internal fun ensureDaemonServerRunning(
+  port: Int,
+  childEnvironment: Map<String, String> = emptyMap(),
+  restartStaleDaemon: Boolean = true,
+  respectAutoStartDisable: Boolean = true,
+): Boolean {
+  requireConnectablePort(port)
+  if (restartStaleDaemon && !checkAndRestartStaleDaemon(port)) return false
+  DaemonClient(port = port).use { daemon ->
+    if (daemon.isRunningBlocking()) return true
+  }
+  return when (
+    cliTryStartDaemon(
+      port = port,
+      childEnvironment = childEnvironment,
+      respectAutoStartDisable = respectAutoStartDisable,
+    )
+  ) {
+    DaemonAutoStartOutcome.STARTED, DaemonAutoStartOutcome.ALREADY_RUNNING -> true
+    DaemonAutoStartOutcome.REFUSED_PORT_ALREADY_OWNED, DaemonAutoStartOutcome.FAILED -> false
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -2086,6 +2693,7 @@ fun shutdownDaemonAndWait(port: Int): Int {
   DaemonClient(port = port).use { daemon ->
     if (!daemon.isRunningBlocking()) {
       Console.log("Trailblaze daemon is not running.")
+      reclaimDaemonStartupClaimIfOwnerExited(daemonStartupClaimFile(port))
       return SUCCESS.code
     }
 
@@ -2104,6 +2712,7 @@ fun shutdownDaemonAndWait(port: Int): Int {
       if (!daemon.isRunningBlocking()) {
         Console.log("")
         Console.log("Trailblaze daemon stopped.")
+        reclaimDaemonStartupClaimIfOwnerExited(daemonStartupClaimFile(port))
         CliMcpClient.clearSession(port)
         return SUCCESS.code
       }

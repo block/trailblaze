@@ -164,6 +164,31 @@ class TrailblazeAccessibilityService : AccessibilityService() {
     fun getCurrentActivity(): String? =
       currentActivityClass?.substringAfterLast('.')?.takeIf { it.isNotBlank() }
 
+    /**
+     * Package of the foreground application window, or null when it cannot be established.
+     *
+     * The same fact [captureMergedScreenTrees] reports as `foregroundAppId`, read on its own: one
+     * window-root resolve and one `packageName`, no tree walk and no refresh. Cheap enough for
+     * [InProcessIdleForegroundGate] to consult on every settle gate.
+     *
+     * Null means "unknown", never "no app" — the service not being bound, an unreadable window
+     * list mid-transition and a blank package all collapse to it, and every caller must treat
+     * unknown as "do not change behaviour" rather than as evidence about which app is in front.
+     */
+    fun foregroundAppIdOrNull(): String? {
+      if (!isServiceRunning()) return null
+      return try {
+        val root = getApplicationWindowRoot() ?: return null
+        try {
+          root.packageName?.toString()?.takeIf { it.isNotBlank() }
+        } finally {
+          root.recycle()
+        }
+      } catch (t: Throwable) {
+        null
+      }
+    }
+
     @Volatile private var accessibilityServiceInstance: TrailblazeAccessibilityService? = null
 
     /** Returns true if the accessibility service is currently running and available. */
@@ -354,7 +379,40 @@ class TrailblazeAccessibilityService : AccessibilityService() {
        * log line reports, so downstream session-log emitters can surface it as structured data.
        */
       val captureCoverage: CaptureCoverage?,
-    )
+      /**
+       * How many nodes [accessibilityNode] asked the app for and did not get back — window roots
+       * that resolved to null plus children whose fetch returned null during the accessibility
+       * walk (see [TreeCaptureTally]). Zero means that tree holds every node the app advertised.
+       * Anything else means a subtree is missing, typically because the app's main thread was
+       * blocked and the fetch timed out, and a consumer must not read "not in this tree" as "not
+       * on screen".
+       */
+      val droppedFetchesForAccessibilityNode: Int = 0,
+      /**
+       * The same count for [treeNode]. Tracked SEPARATELY from
+       * [droppedFetchesForAccessibilityNode] rather than as one tally for the capture, because
+       * the two projections are built by independent walks of the same roots and every node is a
+       * live fetch — so one walk can lose a child the other gets. Sharing one number let a drop
+       * in the Maestro walk mark a genuinely complete accessibility tree as untrustworthy, which
+       * made `assertNotVisible` refuse to conclude absence from a tree that was in fact whole.
+       *
+       * Unresolvable window roots are counted in BOTH, since a window missing from the capture is
+       * missing from both shapes of it.
+       */
+      val droppedFetchesForTreeNode: Int = 0,
+    ) {
+      /** True when every node the app advertised is in [accessibilityNode]. */
+      val isAccessibilityNodeComplete: Boolean get() = droppedFetchesForAccessibilityNode == 0
+
+      /** True when every node the app advertised is in [treeNode]. */
+      val isTreeNodeComplete: Boolean get() = droppedFetchesForTreeNode == 0
+
+      /**
+       * True when NEITHER projection lost anything. For diagnostics that describe the capture as
+       * a whole — a consumer deciding whether to trust one tree must ask about that tree.
+       */
+      val isComplete: Boolean get() = isAccessibilityNodeComplete && isTreeNodeComplete
+    }
 
     /**
      * Captures the screen as merged trees that include secondary windows (dialogs, popups,
@@ -382,32 +440,89 @@ class TrailblazeAccessibilityService : AccessibilityService() {
      */
     private fun captureMergedScreenTreesUntraced(awaitStable: Boolean): MergedScreenTrees {
       val coverage = if (awaitStable) traceAwaitTreeStable() else null
+      // Freshness: every node must come from the app, not from the accessibility client's cache.
+      // Dropping the cache makes the root fetch below re-read the window in a handful of prefetching
+      // round trips; the per-node refresh it replaces is one round trip PER NODE and was the largest
+      // cost in every capture.
+      val cacheDropped = dropAccessibilityCache()
+      // A window whose root would not resolve is missing from BOTH projections, so its drops are
+      // tallied once here and added to each. The per-walk child drops are NOT shared — see
+      // MergedScreenTrees.droppedFetchesForTreeNode.
+      val rootTally = TreeCaptureTally()
       val roots = TrailblazeTracer.traceDetail("getCaptureWindowRoots", ACCESSIBILITY_TRACE_CAT) {
-        getCaptureWindowRoots()
+        getCaptureWindowRoots(rootTally)
       }
       // A verdict from awaitTreeStable() describes a tree it sampled; if no roots resolve here we
       // had nothing to merge and the verdict no longer corresponds to a captured tree. Drop it so
       // downstream consumers never see a non-null CaptureCoverage paired with a null treeNode.
-      if (roots.isEmpty()) return MergedScreenTrees(null, null, null, captureCoverage = null)
+      if (roots.isEmpty()) {
+        return MergedScreenTrees(
+          null,
+          null,
+          null,
+          captureCoverage = null,
+          droppedFetchesForAccessibilityNode = rootTally.total,
+          droppedFetchesForTreeNode = rootTally.total,
+        )
+      }
       return try {
-        traceRefreshTreesInPlace(roots)
-        MergedScreenTrees(
+        if (!cacheDropped) traceRefreshTreesInPlace(roots)
+        val treeNodeTally = TreeCaptureTally()
+        val accessibilityTally = TreeCaptureTally()
+        val trees = MergedScreenTrees(
           // Two spans, not one: the two shapes are built by separate walks of the same roots, and
           // a capture where only one of them is expensive is the thing worth being able to see.
           treeNode = TrailblazeTracer.traceDetail("buildMaestroTree", ACCESSIBILITY_TRACE_CAT) {
-            roots.toMergedTreeNode()
+            roots.toMergedTreeNode(treeNodeTally)
           },
           accessibilityNode = TrailblazeTracer.traceDetail("buildAccessibilityTree", ACCESSIBILITY_TRACE_CAT) {
-            roots.toMergedAccessibilityNode()
+            roots.toMergedAccessibilityNode(accessibilityTally)
           },
           // packageName must be read before recycle() invalidates the node.
           foregroundAppId = roots.first().packageName?.toString(),
           captureCoverage = coverage,
+          droppedFetchesForAccessibilityNode = rootTally.total + accessibilityTally.total,
+          droppedFetchesForTreeNode = rootTally.total + treeNodeTally.total,
         )
+        if (!trees.isComplete) {
+          // With the cache dropped every node is a live fetch, so a busy app answers with nulls
+          // instead of stale data. Say so where a session log reader will see it: a smaller tree
+          // is otherwise indistinguishable from a smaller screen. Per projection, because a walk
+          // that lost nothing is still trustworthy and its consumers are told so.
+          Console.log(
+            "[capture-fetch] PARTIAL capture: ${rootTally.droppedWindowRoots} window root(s), " +
+              "${accessibilityTally.droppedNodes} accessibility-tree child fetch(es) and " +
+              "${treeNodeTally.droppedNodes} Maestro-tree child fetch(es) returned null " +
+              "(app not answering — busy main thread or nodes removed mid-read); " +
+              "absence checks will not trust the projection that lost nodes",
+          )
+        }
+        trees
       } finally {
         roots.forEach { it.recycle() }
       }
     }
+
+    /**
+     * Drops the accessibility client's node cache so the next root fetch re-reads the window from
+     * the app. Returns false where that is not possible (API < 34, service not bound, cache
+     * disabled) and the caller must refresh node by node instead.
+     *
+     * Spanned even though it is normally a single cheap call: this is the phase that REPLACED
+     * [traceRefreshTreesInPlace] as the way a capture gets fresh nodes, and an unspanned
+     * replacement would leave the freshness step missing from a profile entirely. The span records
+     * on both paths, so a profile always names how the capture tried to get fresh.
+     */
+    private fun dropAccessibilityCache(): Boolean =
+      TrailblazeTracer.traceDetail("dropAccessibilityCache", ACCESSIBILITY_TRACE_CAT) {
+        if (!AndroidSdkVersion.isAtLeast(34)) return@traceDetail false
+        val service = accessibilityServiceInstance ?: return@traceDetail false
+        try {
+          service.clearCache()
+        } catch (t: Throwable) {
+          false
+        }
+      }
 
     /**
      * [refreshTreeInPlace] over every root, in ONE span covering the whole set.
@@ -550,8 +665,12 @@ class TrailblazeAccessibilityService : AccessibilityService() {
      * content window — preserving today's exact behavior in the common single-window case.
      *
      * The caller owns every returned [AccessibilityNodeInfo] and must recycle each one.
+     *
+     * An application window whose root does not resolve is skipped AND counted on [tally]: its
+     * content (a dialog, a popup) is on screen but absent from the capture, which is the same
+     * hole a dropped child leaves — see [TreeCaptureTally].
      */
-    fun getCaptureWindowRoots(): List<AccessibilityNodeInfo> {
+    fun getCaptureWindowRoots(tally: TreeCaptureTally = TreeCaptureTally()): List<AccessibilityNodeInfo> {
       val windows = getServiceWindows()
       if (windows.isNullOrEmpty()) {
         return listOfNotNull(getApplicationWindowRoot())
@@ -566,7 +685,11 @@ class TrailblazeAccessibilityService : AccessibilityService() {
 
       val roots = ArrayList<AccessibilityNodeInfo>(ordered.size)
       for (windowInfo in ordered) {
-        val root = byId[windowInfo.id]?.root ?: continue
+        val root = byId[windowInfo.id]?.root
+        if (root == null) {
+          tally.recordDroppedWindowRoot()
+          continue
+        }
         if (roots.any { it == root }) {
           root.recycle()
           continue
@@ -685,8 +808,14 @@ class TrailblazeAccessibilityService : AccessibilityService() {
       // The probe only ever SHORTENS the gate: while the idle detector is silent (app busy, idle detector
       // missing, TIMEOUT verdict) the standard stability loop below runs unchanged, and a
       // truncated detector-path tree also falls back to it (probe consumed, no retry).
+      //
+      // The probe is withheld — not merely ignored — when the foreground app is not the app the
+      // detector lives in ([InProcessIdleForegroundGate.treeProbeArmed]): a backgrounded app is idle
+      // instantly and truthfully, about the wrong screen, and would accept a tree of the app that
+      // just left. The standard loop below then judges the screen that is really there.
       val inProcessIdleIdle = java.util.concurrent.atomic.AtomicBoolean(false)
-      if (InProcessIdleSettleClient.isEnabled()) {
+      val probeArmed = InProcessIdleForegroundGate.treeProbeArmed()
+      if (probeArmed) {
         Thread {
           val reply = InProcessIdleSettleClient.awaitIdle(STABILITY_MAX_WAIT_MS)
           if (reply != null && reply.startsWith("IDLE")) inProcessIdleIdle.set(true)
@@ -698,7 +827,7 @@ class TrailblazeAccessibilityService : AccessibilityService() {
       }
       var inProcessIdleProbeConsumed = false
       val startUptimeMs = SystemClock.uptimeMillis()
-      if (InProcessIdleSettleClient.isEnabled()) {
+      if (probeArmed) {
         // Give the probe one round-trip's grace (~10-20ms typical) so an already-idle app takes
         // the fast path on the first loop iteration instead of paying a wasted sample + frame
         // sleep first. Bounded well below one STABILITY_FRAME_MS; a busy app loses nothing.
@@ -716,21 +845,37 @@ class TrailblazeAccessibilityService : AccessibilityService() {
         try {
           if (!inProcessIdleProbeConsumed && inProcessIdleIdle.get()) {
             inProcessIdleProbeConsumed = true
-            refreshTreeInPlace(root)
-            val inProcessIdleSample = sampleTree(root)
-            val assessment =
-              HierarchyCoverageAssessor.assess(inProcessIdleSample.bounds, screenWidth, screenHeight)
-            if (!assessment.looksTruncated) {
+            // The arm was decided before the probe started waiting, so re-check the identity now,
+            // against THIS tree's own root. A foreground change during the wait is what makes a
+            // backgrounded detector answer at all, and spending its verdict here would accept the
+            // incoming app's tree on the outgoing app's idle signal — see
+            // [InProcessIdleForegroundGate.idleVerdictAppliesTo].
+            val treeAppId = root.packageName?.toString()?.takeIf { it.isNotBlank() }
+            if (!InProcessIdleForegroundGate.idleVerdictAppliesToTree(treeAppId)) {
               Console.log(
-                "[settle] tree accepted via inprocess-idle after " +
-                  "${SystemClock.uptimeMillis() - startUptimeMs}ms",
+                "[turbo] discarding the inprocess-idle verdict — the tree is now $treeAppId, " +
+                  "not the turbo app; judging this screen with the stability loop",
               )
-              return assessment
+            } else {
+              // No refresh here: the capture this gate fronts re-reads every node from the app
+              // before it builds anything, so a refresh in the gate would be paid twice. The sample
+              // below only feeds the coverage check, and a stale cache that looks truncated just
+              // falls through to the stability gate — the same degradation the standard path takes.
+              val inProcessIdleSample = sampleTree(root)
+              val assessment =
+                HierarchyCoverageAssessor.assess(inProcessIdleSample.bounds, screenWidth, screenHeight)
+              if (!assessment.looksTruncated) {
+                Console.log(
+                  "[settle] tree accepted via inprocess-idle after " +
+                    "${SystemClock.uptimeMillis() - startUptimeMs}ms",
+                )
+                return assessment
+              }
+              Console.log(
+                "[capture-coverage] in-process-idle tree looks truncated (${assessment.reason}) — " +
+                  "falling back to the stability gate",
+              )
             }
-            Console.log(
-              "[capture-coverage] in-process-idle tree looks truncated (${assessment.reason}) — " +
-                "falling back to the stability gate",
-            )
           }
           var sample = sampleTree(root)
           val now = SystemClock.uptimeMillis()
@@ -953,13 +1098,40 @@ class TrailblazeAccessibilityService : AccessibilityService() {
      * keyboard instead of the intended target — the silent-mis-tap scenario that occurs
      * on screens where the IME refuses to dismiss (e.g. Compose modals that consume BACK).
      */
-    fun imeWindowBoundsInScreen(): android.graphics.Rect? {
-      val windows = getServiceWindows() ?: return null
+    fun imeWindowBoundsInScreen(): android.graphics.Rect? =
+      (lookupImeWindow() as? ImeWindowLookup.Found)?.bounds
+
+    /**
+     * One IME-window lookup that keeps "no keyboard window" apart from "cannot enumerate windows".
+     *
+     * [imeWindowBoundsInScreen] folds both into `null`, and a caller that treats `null` as
+     * "degraded, fall back to `dumpsys input_method`" then shells out on every tap where the
+     * keyboard simply is not up — the common case. Only [ImeWindowLookup.Unavailable] warrants the
+     * fallback: enumeration threw or returned nothing (a foreground app always has a window), or
+     * the IME window is present without laid-out bounds.
+     *
+     * ## Scope: the default display only
+     *
+     * `AccessibilityService.getWindows()` enumerates the DEFAULT display. An IME on a secondary
+     * display is therefore not in [windows], so this returns [ImeWindowLookup.Absent] — an
+     * authoritative "no keyboard" — and the caller skips the dumpsys gate. That is deliberate,
+     * and it is safe because of where taps go: this service dispatches gestures on the display it
+     * is bound to, and the captured tree only ever holds default-display content, so a resolved
+     * tap coordinate is always a default-display coordinate. A keyboard on another display cannot
+     * cover it.
+     *
+     * Widening to `getWindowsOnAllDisplays()` (API 30+) would make this WORSE, not better: another
+     * display's window bounds are in that display's coordinate space, so comparing them against a
+     * default-display tap point invents occlusions that aren't there.
+     */
+    internal fun lookupImeWindow(): ImeWindowLookup {
+      val windows = getServiceWindows()
+      if (windows.isNullOrEmpty()) return ImeWindowLookup.Unavailable
       val imeWindow = windows.firstOrNull { it.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD }
-        ?: return null
+        ?: return ImeWindowLookup.Absent
       val rect = android.graphics.Rect()
       imeWindow.getBoundsInScreen(rect)
-      return rect.takeIf { !it.isEmpty }
+      return if (rect.isEmpty) ImeWindowLookup.Unavailable else ImeWindowLookup.Found(rect)
     }
 
     /**
@@ -1753,34 +1925,30 @@ class TrailblazeAccessibilityService : AccessibilityService() {
       // Empty input is a no-op; verifying via focused-text-changed would never succeed.
       if (text.isEmpty()) return@traceDetail true
 
-      val initialFocusedText = readFocusedEditableText() ?: run {
-        Console.log("No editable, focused node found in hierarchy")
-        return@traceDetail false
-      }
-
-      // Try the fast ACTION_SET_TEXT path first; verify the field actually changed within the
-      // normal (short) window. This is the common case and pays no extra probing cost.
-      val setTextDispatched = tryDispatchActionSetText(text)
-      if (setTextDispatched && focusedTextChangedFrom(initialFocusedText, VERIFY_POLL_TIMEOUT_MS)) {
-        return@traceDetail true
-      }
-
-      // The quick verify failed. Only NOW probe whether the focused field is inside a WebView —
-      // the probe is a tree walk, so we keep it off the fast path and pay it only when recovery is
-      // actually needed. A WebView field accepts ACTION_SET_TEXT but its accessibility readback can
-      // lag the real field by seconds on a busy WebView; keep waiting for it (no re-dispatch)
-      // rather than synthesizing keystrokes, which can't clear a Chromium input and would enter a
-      // SECOND copy (the "typed twice" bug). See [focusedEditableIsInWebView].
-      if (setTextDispatched && focusedEditableIsInWebView()) {
-        if (focusedTextChangedFrom(initialFocusedText, WEBVIEW_SET_TEXT_VERIFY_TIMEOUT_MS)) {
-          return@traceDetail true
-        }
+      val initialFocusedText = awaitFocusedEditableText() ?: run {
         Console.log(
-          "inputText (length=${text.length}) ACTION_SET_TEXT did not take effect in WebView " +
-            "(waited ${WEBVIEW_SET_TEXT_VERIFY_TIMEOUT_MS}ms); not synthesizing keystrokes to " +
-            "avoid duplicate entry."
+          "No editable, focused node found in hierarchy " +
+            "(waited ${FOCUSED_EDITABLE_WAIT_TIMEOUT_MS}ms for one to take focus)"
         )
         return@traceDetail false
+      }
+
+      // Fast ACTION_SET_TEXT path first; its verify reads the dispatched node directly.
+      when (tryDispatchActionSetText(text)) {
+        SetTextOutcome.LANDED -> return@traceDetail true
+        SetTextOutcome.NOT_DISPATCHED -> Unit
+        SetTextOutcome.UNCONFIRMED -> {
+          // In a WebView this is the end: keystroke synthesis cannot clear a Chromium input, so it
+          // could only add a second copy. The probe is a tree walk, so it is paid only here.
+          if (focusedEditableIsInWebView()) {
+            Console.log(
+              "inputText (length=${text.length}) ACTION_SET_TEXT did not take effect in WebView " +
+                "(waited ${SET_TEXT_VERIFY_TIMEOUT_MS}ms); not synthesizing keystrokes to " +
+                "avoid duplicate entry."
+            )
+            return@traceDetail false
+          }
+        }
       }
 
       // Fall back to keystroke synthesis. Some masked EditTexts (e.g., payment-form
@@ -1815,23 +1983,78 @@ class TrailblazeAccessibilityService : AccessibilityService() {
      * + "1234"). [resolveExistingEditableText] gates the read on `isShowingHintText` so a
      * hint-showing field reads as empty — we append to real content only.
      */
-    private fun tryDispatchActionSetText(text: String): Boolean {
-      val root = getApplicationWindowRoot() ?: return false
+    private fun tryDispatchActionSetText(text: String): SetTextOutcome {
+      val root = getApplicationWindowRoot() ?: return SetTextOutcome.NOT_DISPATCHED
       return try {
-        val editableNode = findFocusedEditableNode(root) ?: return false
+        val editableNode = findFocusedEditableNode(root) ?: return SetTextOutcome.NOT_DISPATCHED
         try {
           val existing =
             resolveExistingEditableText(
               editableNode.text?.toString(),
               editableNode.isShowingHintText,
             )
-          dispatchSetTextValue(editableNode, existing + text)
+          val expected = existing + text
+          if (!dispatchSetTextValue(editableNode, expected)) return SetTextOutcome.NOT_DISPATCHED
+          if (awaitNodeTextChangedFrom(editableNode, existing, SET_TEXT_VERIFY_TIMEOUT_MS)) {
+            SetTextOutcome.LANDED
+          } else {
+            SetTextOutcome.UNCONFIRMED
+          }
         } finally {
           editableNode.recycle()
         }
       } finally {
         root.recycle()
       }
+    }
+
+    /** What [tryDispatchActionSetText] could prove about its `ACTION_SET_TEXT` dispatch. */
+    private enum class SetTextOutcome {
+      /** No focused editable, or the node refused the action outright. Nothing was entered. */
+      NOT_DISPATCHED,
+
+      /** The node read back as changed, so the write reached the field. */
+      LANDED,
+
+      /**
+       * Accepted, but the node's text never moved off its pre-dispatch value — silently rejected
+       * (masked payment fields do this), or the app is holding the write.
+       */
+      UNCONFIRMED,
+    }
+
+    /**
+     * Polls [node] until its own text differs from [before], calling
+     * [AccessibilityNodeInfo.refresh] before each read.
+     *
+     * **The refresh is the point** (and the reason [findFocusedEditableNode] refreshes too). A node
+     * from a tree walk is served from the accessibility client's cache, which is invalidated by
+     * accessibility events — and a Compose field frequently emits none for a programmatic
+     * `ACTION_SET_TEXT`. The read is then not slow but pinned: it reports the pre-dispatch text
+     * forever, so no wait length can ride it out. That is what sent fields whose set-text had
+     * visibly landed down the keystroke path, entering the input a second and third time.
+     *
+     * **Changed, not equal**, because fields normalize: an all-caps filter, a card number gaining
+     * spaces. Equality would read those as failed writes and type over them, leaving a state
+     * [resolveDoubledInputCorrection] cannot repair (the field no longer starts with the raw
+     * expected value). Moving off the pre-dispatch value is what proves the dispatch landed; a
+     * field that silently rejects it does not move and still falls through.
+     */
+    private fun awaitNodeTextChangedFrom(
+      node: AccessibilityNodeInfo,
+      before: String,
+      timeoutMs: Long,
+    ): Boolean = TrailblazeTracer.traceDetail("awaitNodeTextChanged", ACCESSIBILITY_TRACE_CAT) {
+      val deadline = Clock.System.now().toEpochMilliseconds() + timeoutMs
+      do {
+        if (node.refresh()) {
+          val current =
+            resolveExistingEditableText(node.text?.toString(), node.isShowingHintText)
+          if (current != before) return@traceDetail true
+        }
+        Thread.sleep(VERIFY_POLL_INTERVAL_MS)
+      } while (Clock.System.now().toEpochMilliseconds() < deadline)
+      false
     }
 
     /** Dispatches `ACTION_SET_TEXT` with [value] (the FULL field content — SET_TEXT replaces). */
@@ -1871,15 +2094,38 @@ class TrailblazeAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * Makes sure [text] lands in the focused field, preferring the cheapest path that can prove
-     * it: each attempt first re-reads the field and returns true WITHOUT typing when a previous
-     * dispatch (the `ACTION_SET_TEXT` fast path, or this loop's own prior attempt) has visibly
-     * landed late; otherwise it dispatches [text] via [InstrumentationUtil.inputTextByTyping] and
-     * verifies the focused field's text changed. Retries once if the first dispatch was swallowed
-     * by an IME-not-ready race (observed on some payment-form postal fields). Every true return —
-     * typed or not — first runs [correctDoubledInputIfVisible], since "the field changed" can
-     * mean two dispatches both landed. Returns false if both attempts fail to land or the
-     * keystroke loop throws.
+     * [readFocusedEditableText], but polls for up to [FOCUSED_EDITABLE_WAIT_TIMEOUT_MS] for a
+     * focused editable to appear before answering null.
+     *
+     * A tap returns once its click is dispatched and the tree settles, which is not the instant the
+     * field holds input focus with a live IME connection — a Compose field publishes that a
+     * readback later. An `inputText` firing into that window found no focused editable and typed
+     * nothing (observed 30ms after the tap), and the no-selector caller discards this result, so
+     * the trail passed and failed downstream on an unrelated selector. Waiting changes neither
+     * answer: a slow field now gets typed into, and one with no editable at all (`inputText` aimed
+     * at a PIN pad) still answers null, just later.
+     */
+    private fun awaitFocusedEditableText(): String? =
+      TrailblazeTracer.traceDetail("awaitFocusedEditable", ACCESSIBILITY_TRACE_CAT) {
+        val deadline =
+          Clock.System.now().toEpochMilliseconds() + FOCUSED_EDITABLE_WAIT_TIMEOUT_MS
+        do {
+          readFocusedEditableText()?.let { return@traceDetail it }
+          Thread.sleep(VERIFY_POLL_INTERVAL_MS)
+        } while (Clock.System.now().toEpochMilliseconds() < deadline)
+        null
+      }
+
+    /**
+     * Makes sure [text] lands in the focused field via [InstrumentationUtil.inputTextByTyping],
+     * preferring the cheapest path that can prove it: each attempt first re-reads the field and
+     * returns true WITHOUT typing when an earlier dispatch has visibly landed late. Retries once if
+     * the first was swallowed by an IME-not-ready race (seen on payment-form postal fields).
+     *
+     * Every true return runs [correctDoubledInputIfVisible], since "the field changed" can mean two
+     * dispatches both landed — as does falling out of the loop, where a readback slower than the
+     * whole loop hides that same duplication. Returns false only when nothing could be shown to
+     * have landed, or the keystroke loop threw.
      */
     private fun performInputTextWithVerifyAndRetry(text: String, baselineText: String): Boolean {
       val attempts = 2
@@ -1917,6 +2163,12 @@ class TrailblazeAccessibilityService : AccessibilityService() {
           )
         }
       }
+
+      // Every verify window missing is not the same as nothing landing: if the readback trails the
+      // whole loop, each dispatch did reach the field and the duplication is only now visible.
+      // Repair before answering, and report success when it fires — a field holding the input three
+      // times cannot honestly be called "not typed".
+      if (correctDoubledInputIfVisible(baselineText, text)) return true
       return false
     }
 
@@ -1930,20 +2182,23 @@ class TrailblazeAccessibilityService : AccessibilityService() {
      * the callers' change-verify returns on the FIRST non-baseline snapshot, which on the lagging
      * readback this path exists for can be a mid-keystroke partial ("BagelBag") or the
      * not-yet-doubled intermediate ("Bagel") — a single immediate read would miss the duplication
-     * that surfaces one readback later. The gate on the settled value is exact — only a field
-     * reading as the expected value plus whole extra copies of [text] is rewritten (see
-     * [resolveDoubledInputCorrection]) — so a masked field (readback is dots) or an
+     * that surfaces one readback later. The gate on the settled value still requires the expected
+     * value to be intact at the front, with everything after it explainable as re-entered copies
+     * of [text] (see [resolveDoubledInputCorrection]) — so a masked field (readback is dots) or an
      * app-transformed field never matches and is left untouched. The corrective dispatch re-reads
      * the node it is about to rewrite and refuses if the content moved after the settle. Best-
      * effort: a field that rejects the corrective `ACTION_SET_TEXT` keeps its current content,
      * which is no worse than before this correction existed.
+     *
+     * Returns whether the field was actually rewritten — which is also the caller's proof that the
+     * input landed, since a field can only read as duplicated if the dispatches reached it.
      */
-    private fun correctDoubledInputIfVisible(baselineText: String, text: String) {
-      val settled = awaitFocusedEditableTextSettled() ?: return
-      val corrected = resolveDoubledInputCorrection(baselineText, text, settled) ?: return
-      val root = getApplicationWindowRoot() ?: return
+    private fun correctDoubledInputIfVisible(baselineText: String, text: String): Boolean {
+      val settled = awaitFocusedEditableTextSettled() ?: return false
+      val corrected = resolveDoubledInputCorrection(baselineText, text, settled) ?: return false
+      val root = getApplicationWindowRoot() ?: return false
       try {
-        val editableNode = findFocusedEditableNode(root) ?: return
+        val editableNode = findFocusedEditableNode(root) ?: return false
         try {
           val current =
             resolveExistingEditableText(
@@ -1952,12 +2207,15 @@ class TrailblazeAccessibilityService : AccessibilityService() {
             )
           // The field moved between the settle and this dispatch — correcting now could clobber
           // newer content, so leave it alone.
-          if (current != settled) return
+          if (current != settled) return false
           Console.log(
             "inputText (length=${text.length}) detected duplicated input " +
               "(field length ${current.length}); correcting to the expected value."
           )
-          dispatchSetTextValue(editableNode, corrected)
+          // `performAction` answering true does not prove the field took the value, and a caller
+          // turns this Boolean into `inputText` success — so read back before claiming the repair.
+          if (!dispatchSetTextValue(editableNode, corrected)) return false
+          return awaitNodeTextChangedFrom(editableNode, settled, SET_TEXT_VERIFY_TIMEOUT_MS)
         } finally {
           editableNode.recycle()
         }
@@ -2026,6 +2284,25 @@ class TrailblazeAccessibilityService : AccessibilityService() {
     private const val VERIFY_POLL_INTERVAL_MS = 50L
 
     /**
+     * How long [awaitFocusedEditableText] waits for a field to take input focus before reporting
+     * that there is nothing to type into. 2s covers the focus-and-IME-connection lag a Compose
+     * field shows on a loaded farm emulator (the observed miss was a mere 30ms after the focusing
+     * tap) with room to spare. It is only ever paid in full by a call that had no editable to type
+     * into at all, which was already going to accomplish nothing.
+     */
+    private const val FOCUSED_EDITABLE_WAIT_TIMEOUT_MS = 2000L
+
+    /**
+     * How long [tryDispatchActionSetText] polls the refreshed dispatch node before reporting
+     * [SetTextOutcome.UNCONFIRMED]. One window covers every field, WebView included: the separate
+     * multi-second windows this replaced were sized to ride out the stale-cache read described on
+     * [awaitNodeTextChangedFrom], which waiting never resolves. What is left to wait for is the app
+     * applying the write. Kept short because it sits in front of the keystroke fallback a masked
+     * field needs.
+     */
+    private const val SET_TEXT_VERIFY_TIMEOUT_MS = 1000L
+
+    /**
      * Read spacing inside [awaitFocusedEditableTextSettled]. Wider than [VERIFY_POLL_INTERVAL_MS]
      * on purpose: the lagging readback this settle exists for updates on the order of hundreds of
      * milliseconds, so two reads 50ms apart would routinely agree on the SAME stale intermediate
@@ -2040,17 +2317,6 @@ class TrailblazeAccessibilityService : AccessibilityService() {
      * recovery path pays it.
      */
     private const val DOUBLED_INPUT_SETTLE_TIMEOUT_MS = 2000L
-
-    /**
-     * Verify window for the ACTION_SET_TEXT path when the focused field is inside a WebView.
-     * Chromium's accessibility readback can lag the real field by seconds on a busy WebView, so
-     * [VERIFY_POLL_TIMEOUT_MS]'s 500ms would spuriously judge a landed ACTION_SET_TEXT as failed
-     * and trigger the doubling keystroke fallback. A CI replay observed the readback catching up at
-     * ~4-4.6s; 8s gives comfortable headroom over that while still bounding a genuinely stuck
-     * field. The wait only affects this recovery path (a WebView field whose fast verify missed) —
-     * the common fast path is unchanged, and the poll early-exits as soon as the change appears.
-     */
-    private const val WEBVIEW_SET_TEXT_VERIFY_TIMEOUT_MS = 8000L
 
     /**
      * Upper bound on the focused editable's ancestor walk in [focusedEditableIsInWebView]. Any real
@@ -2068,6 +2334,14 @@ class TrailblazeAccessibilityService : AccessibilityService() {
      */
     private fun findFocusedEditableNode(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
       if (node.isEditable && node.isFocused) {
+        // Re-fetch here, at the one place every caller gets its node, so none of them can read a
+        // cached value by forgetting to. The cache behind a tree walk can stay un-invalidated
+        // indefinitely on a Compose field (see [awaitNodeTextChangedFrom]), and the reads taken
+        // from this node decide what gets written: a stale `existing` in [tryDispatchActionSetText]
+        // both corrupts the value it sets AND makes the changed-check pass against a baseline that
+        // was never current, reporting a write as landed when nothing was entered. Best-effort — a
+        // node that has gone away answers false and keeps its last known values.
+        node.refresh()
         return node
       }
 
@@ -2175,13 +2449,23 @@ internal fun resolveExistingEditableText(rawText: String?, isShowingHintText: Bo
 
 /**
  * Decides whether a post-`inputText` field reading [currentText] is the expected
- * `baselineText + text` followed by one or more whole EXTRA copies of [text] — the end state left
- * behind when a late-landing dispatch (the `ACTION_SET_TEXT` fast path, or a retried keystroke
- * burst) and the keystroke synthesis both enter [text]. Returns the corrected value
- * (`baselineText + text`) when that exact duplication is visible, and null for anything else —
- * already-correct content, masked readback, app-side transformations, or a non-whole remainder
- * all read as "not a duplication" and must not be rewritten. Side-effect-free so it is
- * unit-testable without an `AccessibilityNodeInfo` (see [ResolveDoubledInputCorrectionTest]).
+ * `baselineText + text` followed by EXTRA re-entered copies of [text] — the end state left behind
+ * when a late-landing dispatch (the `ACTION_SET_TEXT` fast path, or a retried keystroke burst) and
+ * the keystroke synthesis both enter [text]. Returns the corrected value (`baselineText + text`)
+ * when that is what the field holds, and null for anything else — already-correct content, masked
+ * readback and app-side transformations all read as "not a duplication" and must not be rewritten.
+ * Side-effect-free so it is unit-testable without an `AccessibilityNodeInfo` (see
+ * [ResolveDoubledInputCorrectionTest]).
+ *
+ * **An extra copy need not be intact**, so each is matched as a SUBSEQUENCE of [text] (via
+ * [extraIsReenteredCopiesOf]) rather than a whole copy: an email typed into a field already holding
+ * one comes back with the `@` of each extra copy stripped by the app's own filter, which whole-copy
+ * matching read as "no duplication" while a tripled address was stored. Characters the field
+ * rejected may be missing; anything that isn't re-entered input may not be present.
+ *
+ * Bounded on both sides: `startsWith(expected)` keeps a reformatted field (`4242 4242 4242 4242`
+ * from `4242424242424242`) away from the subsequence test, and the remainder must fit inside
+ * [MAX_REENTERED_INPUT_COPIES] copies so app-appended content isn't explained away.
  */
 internal fun resolveDoubledInputCorrection(
   baselineText: String,
@@ -2192,11 +2476,42 @@ internal fun resolveDoubledInputCorrection(
   val expected = baselineText + text
   if (currentText.length <= expected.length || !currentText.startsWith(expected)) return null
   val extra = currentText.substring(expected.length)
-  if (extra.length % text.length != 0) return null
-  val copies = extra.length / text.length
-  if (extra != text.repeat(copies)) return null
+  if (!extraIsReenteredCopiesOf(extra, text)) return null
   return expected
 }
+
+/**
+ * Whether [extra] is explainable purely as re-entered copies of [text] — that is, whether it is a
+ * subsequence of [text] repeated up to [MAX_REENTERED_INPUT_COPIES] times.
+ *
+ * Each dispatch that can pile onto the field re-enters the same input, so the concatenation of
+ * those copies is what [extra] should be; matching as a subsequence rather than an exact string
+ * tolerates the characters an app's input filter refused (see [resolveDoubledInputCorrection]).
+ */
+private fun extraIsReenteredCopiesOf(extra: String, text: String): Boolean {
+  if (extra.isEmpty()) return false
+  if (extra.length > text.length * MAX_REENTERED_INPUT_COPIES) return false
+  val reentered = text.repeat(MAX_REENTERED_INPUT_COPIES)
+  var searchFrom = 0
+  for (char in extra) {
+    val found = reentered.indexOf(char, searchFrom)
+    if (found < 0) return false
+    searchFrom = found + 1
+  }
+  return true
+}
+
+/**
+ * How many EXTRA copies of the input [resolveDoubledInputCorrection] is willing to explain as
+ * duplication, beyond the one copy that belongs there.
+ *
+ * Two, because only three dispatches can each enter the input once — the `ACTION_SET_TEXT` fast
+ * path plus both keystroke attempts of `performInputTextWithVerifyAndRetry` — so at most two are
+ * extra. This used to be three "with one to spare", which bought nothing: no path can produce a
+ * fourth copy, and every copy of slack widens the tail of app-appended content the subsequence
+ * match will absorb and overwrite.
+ */
+private const val MAX_REENTERED_INPUT_COPIES = 2
 
 private const val FNV_PRIME = 1099511628211L
 
@@ -2226,3 +2541,21 @@ internal fun mixNodeIntoSignature(
   return hash
 }
 
+
+/**
+ * Verdict of [TrailblazeAccessibilityService.lookupImeWindow].
+ *
+ * `internal`: this is plumbing for the pre-tap occlusion check in [AccessibilityDeviceManager], not
+ * part of the driver's published surface. [TrailblazeAccessibilityService.imeWindowBoundsInScreen]
+ * stays public for callers that only need the bounds.
+ */
+internal sealed interface ImeWindowLookup {
+  /** An IME window is up, with these screen bounds. */
+  data class Found(val bounds: android.graphics.Rect) : ImeWindowLookup
+
+  /** Windows enumerated fine and none of them is an IME window. */
+  object Absent : ImeWindowLookup
+
+  /** Windows could not be enumerated (or the IME window has no bounds); consult another signal. */
+  object Unavailable : ImeWindowLookup
+}

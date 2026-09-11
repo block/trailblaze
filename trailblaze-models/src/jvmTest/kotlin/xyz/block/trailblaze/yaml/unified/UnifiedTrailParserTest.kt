@@ -89,6 +89,9 @@ class UnifiedTrailParserTest {
         target: myapp
         devices:
           android-phone: ANDROID_ONDEVICE_INSTRUMENTATION
+          android-phone-jp:
+            driver: ANDROID_ONDEVICE_INSTRUMENTATION
+            locale: ja
           android-tablet: ANDROID_ONDEVICE_INSTRUMENTATION
           ios: IOS_HOST
         context: |-
@@ -128,6 +131,7 @@ class UnifiedTrailParserTest {
     assertEquals(
       mapOf(
         "android-phone" to devicePin("ANDROID_ONDEVICE_INSTRUMENTATION"),
+        "android-phone-jp" to devicePin("ANDROID_ONDEVICE_INSTRUMENTATION", locale = "ja"),
         "android-tablet" to devicePin("ANDROID_ONDEVICE_INSTRUMENTATION"),
         "ios" to devicePin("IOS_HOST"),
       ),
@@ -781,6 +785,28 @@ class UnifiedTrailParserTest {
   }
 
   @Test
+  fun `a named device inside a configuration cannot declare locale`() {
+    val failure = assertFailsWith<Exception> {
+      yaml.decodeUnifiedTrail(
+        """
+        config:
+          devices:
+            pos-pair:
+              devices:
+                seller: { classifier: lab-a, locale: es }
+        trail:
+          - step: Do the thing
+            recordable: false
+        """.trimIndent(),
+      )
+    }
+    assertTrue(
+      messageChain(failure).contains("per-member locale is not supported"),
+      "expected the named-device locale message, got: $failure",
+    )
+  }
+
+  @Test
   fun `a configuration with an empty devices map is rejected`() {
     val failure = assertFailsWith<Exception> {
       yaml.decodeUnifiedTrail(
@@ -939,5 +965,8 @@ class UnifiedTrailParserTest {
 }
 
 /** The canonical devices-map value for a driver pin, keeping test fixtures terse. */
-private fun devicePin(driverName: String): TrailblazeDeviceDefinition =
-  TrailblazeDeviceDefinition(driver = TrailblazeDriverType.fromString(driverName)!!)
+private fun devicePin(driverName: String, locale: String? = null): TrailblazeDeviceDefinition =
+  TrailblazeDeviceDefinition(
+    driver = TrailblazeDriverType.fromString(driverName)!!,
+    locale = locale,
+  )

@@ -213,7 +213,7 @@ class VerifyAssertionLedgerTest {
   }
 
   @Test
-  fun `build 4151 reproduction — rotating 4-selector loop auto-terminates after 4 calls`() {
+  fun `rotating 4-selector loop auto-terminates after 4 calls`() {
     // The exact scenario from the regression that motivated this fix: agent rotates through 4 selectors.
     // Without the ledger this loop ran 40+ times until MAX_CALLS_REACHED. With the ledger,
     // the 4th successful assertion (in any order) must satisfy the step.

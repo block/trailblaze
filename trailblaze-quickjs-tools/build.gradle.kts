@@ -150,3 +150,11 @@ kotlin {
 tasks.named("check") {
   dependsOn("jvmTest")
 }
+
+// QuickJsProguardKeepRegressionTest reads the desktop ProGuard ruleset off disk, so Gradle cannot
+// infer the dependency. Declare it as an input so a rules-only change reruns the guard.
+tasks.named<Test>("jvmTest") {
+  inputs.file(layout.projectDirectory.file("../trailblaze-desktop/proguard-rules.pro"))
+    .withPropertyName("desktopProguardRules")
+    .withPathSensitivity(PathSensitivity.RELATIVE)
+}

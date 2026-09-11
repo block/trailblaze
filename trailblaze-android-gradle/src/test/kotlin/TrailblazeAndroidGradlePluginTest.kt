@@ -4,6 +4,7 @@ import GenerateAndroidTrailJUnitShellsTask.TrailMethod
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
@@ -65,6 +66,104 @@ class TrailblazeAndroidGradlePluginTest {
       }
       """.trimIndent() + "\n"
     assertEquals(expected, rendered)
+  }
+
+  /**
+   * A module whose trails are staged in from elsewhere (a build script syncs a committed
+   * `trails/<subtree>/` into the assets tree) must not have its generated header point at
+   * `src/androidTest/assets/trails` — that directory holds nothing, and naming it re-teaches the
+   * layout the staging exists to retire. The header is where a reader lands when they open a
+   * generated file to change a test, so it has to name the directory the author actually edits.
+   */
+  @Test
+  fun `an overridden authoring dir is what the header names`() {
+    val rendered =
+      renderShell(
+        packageName = "xyz.example.app",
+        className = "ExampleLongTest",
+        mode = TestHostMode.BaseClass("xyz.block.trailblaze.rules.SquareTrailblazeTest"),
+        methods = listOf(recordingDirTrail("ExampleLongTest", "buyHotChocolate")),
+        authoringDir = "trails/example",
+      )
+    assertTrue(
+      rendered.contains("// Source: trails/example/ExampleLongTest/ — to change the test"),
+      "the header must name the overridden authoring dir, not the module's empty assets dir. " +
+        "Got:\n$rendered",
+    )
+    assertFalse(
+      rendered.contains("src/androidTest/assets/trails"),
+      "naming src/androidTest/assets/trails here sends an author to a directory with no trails " +
+        "in it. Got:\n$rendered",
+    )
+  }
+
+  /** A trailing slash on the override must not double up in the rendered path. */
+  @Test
+  fun `an authoring dir with a trailing slash renders one separator`() {
+    val rendered =
+      renderShell(
+        packageName = "xyz.example.app",
+        className = "ExampleLongTest",
+        mode = TestHostMode.BaseClass("xyz.block.trailblaze.rules.SquareTrailblazeTest"),
+        methods = listOf(recordingDirTrail("ExampleLongTest", "buyHotChocolate")),
+        authoringDir = "trails/example/",
+      )
+    assertTrue(
+      rendered.contains("// Source: trails/example/ExampleLongTest/ —"),
+      "expected exactly one separator before the class dir. Got:\n$rendered",
+    )
+  }
+
+  /**
+   * A lane whose trails are cloned from another repo and flattened into one class has no directory
+   * of the `<dir>/<ClassName>/` shape to name. The add/rename/remove guidance names a directory to
+   * act in, so emitting it here would send a reader to a path that exists in neither repo. The note
+   * has to replace that guidance, not fill it in.
+   */
+  @Test
+  fun `a source note replaces the directory guidance instead of naming a directory`() {
+    val rendered =
+      renderShell(
+        packageName = "xyz.block.trailblaze.uitests.gittrails",
+        className = "GitTrailsLongTest",
+        mode = TestHostMode.BaseClass("xyz.block.trailblaze.rules.SquareTrailblazeTest"),
+        methods = listOf(recordingDirTrail("GitTrailsLongTest", "someClonedTrail")),
+        sourceNote = "the GitTrailSource repo this lane clones",
+      )
+    assertTrue(
+      rendered.contains("// Source: the GitTrailSource repo this lane clones"),
+      "the header must say where the trails come from. Got:\n$rendered",
+    )
+    assertFalse(
+      rendered.contains("src/androidTest/assets/trails"),
+      "a note must suppress the default directory, which backs nothing for this lane. " +
+        "Got:\n$rendered",
+    )
+    assertFalse(
+      rendered.contains("recording directories under that directory"),
+      "the add/rename/remove guidance names a directory to act in, and this lane has none, so it " +
+        "must not be rendered alongside a note. Got:\n$rendered",
+    )
+  }
+
+  /** With no note, the directory guidance is still what a normal in-place module gets. */
+  @Test
+  fun `without a source note the directory guidance still renders`() {
+    val rendered =
+      renderShell(
+        packageName = "xyz.example.app",
+        className = "ExampleLongTest",
+        mode = TestHostMode.BaseClass("xyz.block.trailblaze.rules.SquareTrailblazeTest"),
+        methods = listOf(recordingDirTrail("ExampleLongTest", "buyHotChocolate")),
+      )
+    assertTrue(
+      rendered.contains("// Source: src/androidTest/assets/trails/ExampleLongTest/"),
+      "the in-place default must survive adding the note property. Got:\n$rendered",
+    )
+    assertTrue(
+      rendered.contains("recording directories under that directory"),
+      "the directory guidance must survive adding the note property. Got:\n$rendered",
+    )
   }
 
   @Test

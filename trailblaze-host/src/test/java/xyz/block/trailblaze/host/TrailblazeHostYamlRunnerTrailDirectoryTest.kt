@@ -28,10 +28,10 @@ class TrailblazeHostYamlRunnerTrailDirectoryTest {
 
   @Test
   fun `an absolute trail path anchors to the trail's own directory`() {
-    val request = runYamlRequest("/tmp/trailblaze-trail-source-1234/trails/k1/speech-8.trail.yaml")
+    val request = runYamlRequest("/tmp/trailblaze-trail-source-1234/trails/kiosk/demo-8.trail.yaml")
 
     assertThat(request.trailDirectory())
-      .isEqualTo(File("/tmp/trailblaze-trail-source-1234/trails/k1"))
+      .isEqualTo(File("/tmp/trailblaze-trail-source-1234/trails/kiosk"))
   }
 
   @Test

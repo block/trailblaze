@@ -1,6 +1,6 @@
 config:
   id: sample-app/catalog/overlay-tap
-  target: xyz.block.trailblaze.examples.sampleapp
+  target: sampleapp
 
 trailhead:
   step: Launch the sample app

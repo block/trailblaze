@@ -50,7 +50,7 @@ data class LibraryFloor(
  * records the era those call sites compiled against), and a library whose packaged `.version` file
  * is more precise than any dex evidence can answer — see the Compose entry below.
  *
- * Values come from `gradle/inprocess-compile-floor.gradle`, which is the repo's single statement of
+ * Values come from the compile-floor Gradle script, which is the repo's single statement of
  * "the oldest era we attach to" — see that file's header for why each version is there. Ktor
  * deliberately has no entry: that file is explicit that nothing about the app constrains its
  * version, and the shell packages its own copy.

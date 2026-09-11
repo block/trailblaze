@@ -189,9 +189,9 @@ class SkippedTrailsTest {
     // spells. Every consumer prefers that map over parsing the key, so dropping it here would give
     // a skipped row a null case id while the same trail's runs carry a real one - one trail's
     // history split in two at exactly the rows that explain the gap.
-    val row = skip(metadata = mapOf("testRailCaseId" to "4839323")).toSessionResult()
+    val row = skip(metadata = mapOf("testRailCaseId" to "1017")).toSessionResult()
 
-    assertEquals(mapOf("testRailCaseId" to "4839323"), row.metadata)
+    assertEquals(mapOf("testRailCaseId" to "1017"), row.metadata)
   }
 
   @Test

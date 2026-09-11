@@ -6,12 +6,17 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import kotlinx.datetime.Clock
+import kotlinx.datetime.Instant
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
 import xyz.block.trailblaze.api.DriverNodeDetail
 import xyz.block.trailblaze.api.TrailblazeNode
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
+import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
 import xyz.block.trailblaze.logs.model.SessionId
+import xyz.block.trailblaze.logs.model.TrailblazeClockDomain
 import xyz.block.trailblaze.ondevice.rpc.proto.LogUploadEnvelope
 import xyz.block.trailblaze.ondevice.rpc.proto.OnDeviceRpcProtoCodec
 
@@ -51,6 +56,60 @@ class TrailblazeLogProtoCodecTest {
     assertNotNull(proto.view_hierarchy)
     assertNotNull(proto.trailblaze_node_tree)
     assertEquals(original, decoded)
+  }
+
+  @Test
+  fun `the clock domain survives the protobuf transport`() {
+    // Agent logs travel two transports: JSON over POST /agentlog, and the Wire
+    // LogUploadEnvelope through this codec (HTTP fallback and the /logs-ws socket). The clock
+    // domain rides in `metadata_json` rather than a dedicated proto field — this pins that, so a
+    // future codec change that starts hand-picking metadata keys can't silently drop the marker
+    // and leave every device log on the binary path reading as host-stamped.
+    val original = TrailblazeLog.TrailblazeToolLog(
+      trailblazeTool = OtherTrailblazeTool(
+        toolName = "tapOnElementBySelector",
+        raw = JsonObject(mapOf("reason" to JsonPrimitive("Tap the menu"))),
+      ),
+      toolName = "tapOnElementBySelector",
+      successful = true,
+      traceId = null,
+      durationMs = 100,
+      session = SessionId("proto-clock"),
+      timestamp = Instant.fromEpochMilliseconds(1_700_000_000_000),
+      clock = TrailblazeClockDomain.DEVICE,
+      hostReceivedAt = Instant.fromEpochMilliseconds(1_700_000_001_105),
+    )
+
+    val decoded = TrailblazeLogProtoCodec.run { original.toProto().toModel() }
+
+    assertEquals(TrailblazeClockDomain.DEVICE, decoded.clock)
+    assertEquals(original.hostReceivedAt, decoded.hostReceivedAt)
+    assertEquals(original, decoded)
+  }
+
+  @Test
+  fun `a host-clock log encodes no clock metadata at all`() {
+    // Absent means host, so a host-stamped log must not gain either field on the wire — that is
+    // what keeps already-persisted session logs decoding unchanged.
+    val original = TrailblazeLog.TrailblazeToolLog(
+      trailblazeTool = OtherTrailblazeTool(
+        toolName = "launchApp",
+        raw = JsonObject(mapOf("appId" to JsonPrimitive("com.example.app"))),
+      ),
+      toolName = "launchApp",
+      successful = true,
+      traceId = null,
+      durationMs = 500,
+      session = SessionId("proto-clock-host"),
+      timestamp = Instant.fromEpochMilliseconds(1_700_000_000_000),
+    )
+
+    val proto = TrailblazeLogProtoCodec.run { original.toProto() }
+    val metadata = Json.parseToJsonElement(proto.metadata_json.utf8()).jsonObject
+
+    assertFalse("clock" in metadata)
+    assertFalse("hostReceivedAt" in metadata)
+    assertEquals(original, TrailblazeLogProtoCodec.run { proto.toModel() })
   }
 
   @Test

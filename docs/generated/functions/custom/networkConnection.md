@@ -4,8 +4,19 @@
 
 # `networkConnection`
 
-Toggles the device to be offline (airplane mode) or online (connected).
-Use this tool to control network connectivity for the device.
+Sets the device's network radios and airplane mode. Every field is optional and a field left unset
+is not touched, so this can change one radio without disturbing the others.
+
+To take the device OFFLINE, set wifi, cellular and bluetooth all to false. To bring it back online,
+set them all to true.
+
+airplaneMode sets the real airplane-mode signal that apps read, which is NOT the same request as
+taking the radios down. Setting the radios off does not set that signal, so an app that checks
+airplane mode will not see one. Name whichever the trail is actually testing, or both.
+
+Asking for airplaneMode true AND a radio true is allowed only for a radio this device lets a user
+re-enable during airplane mode (wifi and bluetooth, normally; mobile data, normally not) — that is
+a real state, and it is refused by name when the device would just undo it.
 
 ## Source
 
@@ -20,10 +31,16 @@ Use this tool to control network connectivity for the device.
 
 ## Input schema
 
-### Required parameters
+### Optional parameters
 
-- `connected` — `Boolean`
-  Whether the device should be connected or disconnected to the network.
+- `wifi` — `Boolean`
+  Whether wifi should be on. Android only. Omit to leave it alone.
+- `cellular` — `Boolean`
+  Whether mobile data should be on. Android only. Omit to leave it alone.
+- `bluetooth` — `Boolean`
+  Whether bluetooth should be on. Android only. Omit to leave it alone.
+- `airplaneMode` — `Boolean`
+  Whether airplane mode should be on. Does not by itself take the device offline. Omit to leave it alone.
 
 ## Output
 

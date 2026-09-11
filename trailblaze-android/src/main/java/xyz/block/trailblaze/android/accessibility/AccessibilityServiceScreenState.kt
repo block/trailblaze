@@ -1,6 +1,8 @@
 package xyz.block.trailblaze.android.accessibility
 
 import android.graphics.Bitmap
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
 import xyz.block.trailblaze.AdbCommandUtil
 import xyz.block.trailblaze.android.MaestroUiAutomatorXmlParser
@@ -28,6 +30,14 @@ import xyz.block.trailblaze.utils.Ext.toViewHierarchyTreeNode
  * profile can compare the two halves of the same capture by category rather than by span name.
  */
 private const val SCREEN_STATE_TRACE_CAT = "screenState"
+
+/**
+ * How long a deferred capture will wait for its screenshot thread to actually reach the frame grab
+ * before giving up on the ordering barrier. This is thread scheduling, not the grab itself, so a
+ * healthy device clears it in well under a millisecond; the bound exists so a pathological device
+ * degrades to a slightly skewed pair instead of hanging the capture.
+ */
+private const val SCREENSHOT_REQUEST_BARRIER_MS = 500L
 
 /**
  * [ScreenState] using the [TrailblazeAccessibilityService].
@@ -82,6 +92,13 @@ class AccessibilityServiceScreenState(
    * where the caller explicitly wants the un-settled UI, the gate only adds latency.
    */
   private val awaitStableTree: Boolean = true,
+  /**
+   * When true, the screenshot thread is NOT joined before this constructor returns — the first read
+   * of [screenshotBytes] joins it instead. Only the WAIT moves: the request is still issued at the
+   * same instant, immediately after the tree reads and before the caller dispatches its gesture, so
+   * the frame this capture pairs with its tree is the same frame it would have been.
+   */
+  private val asyncScreenshotJoin: Boolean = false,
 ) : ScreenState {
 
   override var deviceWidth: Int = -1
@@ -109,9 +126,68 @@ class AccessibilityServiceScreenState(
   }
 
   private var _screenshotBytes: ByteArray = ByteArray(0)
+
+  /** Raw capture awaiting its first [screenshotBytes] read; null once encoded or never captured. */
+  private var _screenshotBitmap: Bitmap? = null
+
+  /**
+   * The innermost span open on the thread that constructed this capture.
+   *
+   * A span's parent is per-thread, so any work this capture hands to another thread — the parallel
+   * screenshot, and the encode deferred behind [screenshotBytes] — would record as a root beside
+   * the capture rather than inside it. Both re-install this id before they trace, so their cost
+   * stays attributed to the capture that caused it no matter who runs it or when.
+   */
+  private val captureSpanId: String? = TraceSpanLocal.get()?.spanId
   private var foregroundAppId: String? = null
   private var currentActivity: String? = null
+
+  /**
+   * Pairing telemetry, on the device's wall clock. The screenshot and the hierarchy are handed to
+   * the model as one exhibit, so how far apart in time they were taken is the first thing any
+   * change to this path has to be judged on — ahead of how fast it is. [logPairSkew] is what makes
+   * that checkable per capture rather than argued from the code.
+   */
+  @Volatile
+  var treeReadEndMs: Long = 0L
+    private set
+
+  @Volatile
+  var shotRequestMs: Long = 0L
+    private set
+
+  @Volatile
+  var shotCompleteMs: Long = 0L
+    private set
+
+  /** Set while a screenshot thread is outstanding; joined by [awaitScreenshot]. */
+  @Volatile
+  private var pendingScreenshotThread: Thread? = null
+
+  /**
+   * Counted down by the screenshot thread immediately before it grabs the frame, so the capture can
+   * wait for the REQUEST to be issued without waiting for the frame to arrive.
+   */
+  @Volatile
+  private var screenshotRequested: CountDownLatch? = null
+
+  @Volatile
+  private var pairSkewLogged: Boolean = false
   override var captureCoverage: CaptureCoverage? = null
+    private set
+
+  /**
+   * Nodes this capture asked the app for and did not get back while building the tree exposed as
+   * [trailblazeNodeTree] — the accessibility projection, and the only tree any consumer of this
+   * signal reads. Deliberately NOT the capture's aggregate: the sibling Maestro walk fetches
+   * independently and can lose a node this one got, and a caller told "partial" about a tree that
+   * is whole refuses to conclude absence it is entitled to conclude. See
+   * [TrailblazeAccessibilityService.MergedScreenTrees.droppedFetchesForAccessibilityNode].
+   *
+   * Stays null on the mirror-only fast path below, which builds no tree at all — there is nothing
+   * for a completeness verdict to describe there, and "unknown" is the honest answer.
+   */
+  override var droppedNodeFetches: Int? = null
     private set
 
   init {
@@ -160,40 +236,54 @@ class AccessibilityServiceScreenState(
     // Merge all contributing windows (active app window plus any dialog/popup/sub-panel
     // windows) into a single capture so secondary-window content is visible in both tree shapes.
     // Node recycling and per-window refresh happen inside captureMergedScreenTrees().
-    val mergedTrees =
-      TrailblazeAccessibilityService.captureMergedScreenTrees(awaitStable = awaitStableTree)
-    captureCoverage = mergedTrees.captureCoverage
-
-    // Capture screenshot in parallel with hierarchy building. UiAutomation.takeScreenshot()
-    // is independent of AccessibilityNodeInfo traversal, and starting both concurrently also
-    // improves temporal consistency between the visual and structural snapshots.
-    // Thread.join() provides a happens-before guarantee for the write to _screenshotBytes.
+    // The screenshot is taken AFTER every accessibility read finishes, never alongside them. The
+    // two are handed to the model as one exhibit — the element comparator puts the hierarchy JSON
+    // and the annotated screenshot in the same prompt — so they have to describe the same moment.
+    // Starting the screenshot the instant the stability gate released (tried, and reverted here)
+    // put the image a few hundred milliseconds ahead of the tree, and a prompt whose picture and
+    // hierarchy disagree fails element lookups that otherwise never flake. It still overlaps the
+    // tree-to-node conversion below, which is pure CPU over already-captured nodes.
     //
-    // A span's parent is per-thread, and this thread has never seen the capture's span, so the
-    // spans recorded over there would come out roots beside the capture rather than inside it.
-    // Read the innermost open span here and adopt it there. The screenshot's spans then still
-    // OVERLAP the tree-building spans below on the timeline, which is the point: that overlap is
-    // what makes the parallelism visible instead of implied.
-    val captureSpanId = TraceSpanLocal.get()?.spanId
-    val screenshotThread = if (includeScreenshot) {
-      thread(name = "tb-screenshot-capture") {
-        if (captureSpanId != null) TraceSpanLocal.set(TraceSpanFrame(captureSpanId))
-        try {
-          _screenshotBytes = TrailblazeAccessibilityService.captureScreenshot()
-            ?.let { bitmap -> encodeScreenshot(bitmap) }
-            ?: ByteArray(0)
-        } catch (e: Exception) {
-          Console.log("⚠️ Parallel screenshot capture failed: ${e.message}")
-        }
-      }
-    } else null
-
-    foregroundAppId = mergedTrees.foregroundAppId
+    // Only the capture happens here; the scale + encode is deferred to the first read of
+    // [screenshotBytes], which for the action log is off the critical path. It was the single
+    // largest slice of a logging capture and nothing on the device needs the bytes before the
+    // next action starts.
+    //
+    // The screenshot thread adopts [captureSpanId] so its spans land under the capture rather than
+    // beside it. Thread.join() provides the happens-before edge for the write to
+    // _screenshotBitmap.
+    var screenshotThread: Thread? = null
 
     // The join is in a `finally` because the screenshot thread outliving this constructor is worse
-    // than a slow capture: it writes `_screenshotBytes` with no happens-before edge to whoever
-    // reads them, and it records spans naming a parent span that has already closed.
+    // than a slow capture: it writes `_screenshotBitmap` with no happens-before edge to whoever
+    // reads it, and it records spans naming a parent span that has already closed. Everything that
+    // starts that thread, or that can throw once it is running, is inside the try.
     try {
+      val mergedTrees =
+        TrailblazeAccessibilityService.captureMergedScreenTrees(awaitStable = awaitStableTree)
+      captureCoverage = mergedTrees.captureCoverage
+      droppedNodeFetches = mergedTrees.droppedFetchesForAccessibilityNode
+      foregroundAppId = mergedTrees.foregroundAppId
+
+      treeReadEndMs = System.currentTimeMillis()
+
+      if (includeScreenshot) {
+        val requested = CountDownLatch(1)
+        screenshotRequested = requested
+        screenshotThread = thread(name = "tb-screenshot-capture") {
+          if (captureSpanId != null) TraceSpanLocal.set(TraceSpanFrame(captureSpanId))
+          shotRequestMs = System.currentTimeMillis()
+          requested.countDown()
+          try {
+            _screenshotBitmap = TrailblazeAccessibilityService.captureScreenshot()
+          } catch (e: Exception) {
+            Console.log("⚠️ Parallel screenshot capture failed: ${e.message}")
+          }
+          shotCompleteMs = System.currentTimeMillis()
+        }
+        pendingScreenshotThread = screenshotThread
+      }
+
       viewHierarchy = TrailblazeTracer.traceDetail("buildViewHierarchy", SCREEN_STATE_TRACE_CAT) {
         (mergedTrees.treeNode?.toViewHierarchyTreeNode()
             ?: ViewHierarchyTreeNode())
@@ -205,10 +295,27 @@ class AccessibilityServiceScreenState(
         if (includeAllElements) rawTree else rawTree?.filterImportantForAccessibility()
       }
     } finally {
-      // Whatever is left of the screenshot the tree build did not manage to hide. On a fast capture
-      // this is near zero; a long one says the screenshot, not the hierarchy, set the floor.
+      // Whatever is left of the screenshot the tree-to-node conversion did not manage to hide. On a
+      // fast capture this is small; a long one says the screenshot, not the tree, set the floor.
+      //
+      // With [asyncScreenshotJoin] this wait is what moves: the thread is left running and the
+      // first read of [screenshotBytes] joins it (see [awaitScreenshot]). The request was already
+      // issued above, so the frame is unchanged — only who pays for waiting on it changes.
+      if (asyncScreenshotJoin) {
+        // Only the WAIT for the frame moves off this capture's path. The REQUEST still has to be
+        // issued before the constructor returns, because the caller dispatches its gesture the
+        // moment it does — a thread that had not yet been scheduled would grab a POST-action frame
+        // and pair it with this pre-action tree. Waiting for the thread to reach the grab is
+        // scheduling latency, not the grab.
+        awaitScreenshotRequested()
+        screenshotThread = null
+      }
       TrailblazeTracer.traceDetail("awaitScreenshotThread", SCREEN_STATE_TRACE_CAT) {
         screenshotThread?.join()
+      }
+      if (!asyncScreenshotJoin) {
+        pendingScreenshotThread = null
+        logPairSkew()
       }
     }
 
@@ -289,13 +396,84 @@ class AccessibilityServiceScreenState(
 
   override val deviceClassifiers: List<TrailblazeDeviceClassifier> = deviceClassifiers
 
+  /**
+   * Encoded on first read (thread-safe via `lazy`), so a capture whose bytes are only ever read by
+   * the asynchronous action logger pays for the encode there instead of before the next action.
+   *
+   * The encode runs on whichever thread reads first, which is not the one that opened the capture's
+   * span — so [captureSpanId] is re-installed around it and restored after. Without that the
+   * `scaleAndEncodeScreenshot` span would be parented to whatever unrelated work that thread
+   * happens to be tracing, and the encode's cost would be attributed to the wrong action in exactly
+   * the profiles this deferral is judged by.
+   */
+  private val encodedScreenshot: ByteArray by lazy {
+    awaitScreenshot()
+    val bitmap = _screenshotBitmap ?: return@lazy _screenshotBytes
+    _screenshotBitmap = null
+    val previousFrame = TraceSpanLocal.get()
+    TraceSpanLocal.set(TraceSpanFrame(captureSpanId))
+    try {
+      encodeScreenshot(bitmap)
+    } finally {
+      TraceSpanLocal.set(previousFrame)
+    }
+  }
+
+  /**
+   * Blocks until the screenshot thread has reached its frame grab, which is the ordering barrier
+   * the deferred join depends on. Bounded by [SCREENSHOT_REQUEST_BARRIER_MS] and logged when it
+   * expires, so a pair that could be skewed says so rather than being assumed sound.
+   */
+  private fun awaitScreenshotRequested() {
+    val requested = screenshotRequested ?: return
+    if (!requested.await(SCREENSHOT_REQUEST_BARRIER_MS, TimeUnit.MILLISECONDS)) {
+      Console.log(
+        "⚠️ [pair-skew] screenshot request not issued within ${SCREENSHOT_REQUEST_BARRIER_MS}ms; " +
+          "the deferred frame may lag this tree",
+      )
+    }
+  }
+
+  /**
+   * Joins an outstanding [asyncScreenshotJoin] screenshot thread. `Thread.join()` is what gives the
+   * happens-before edge for the thread's writes to `_screenshotBitmap` / `_screenshotBytes`, so
+   * every read of those goes through here first. Idempotent and cheap once joined.
+   *
+   * A capture whose bytes are never read never joins — the thread simply finishes on its own. That
+   * is bounded in practice because `AccessibilityTrailRunner.logAsync` eagerly touches
+   * [screenshotBytes] on a background dispatcher, which is the same thing that bounds the bitmap's
+   * lifetime today.
+   */
+  @Synchronized
+  private fun awaitScreenshot() {
+    val thread = pendingScreenshotThread ?: return
+    thread.join()
+    pendingScreenshotThread = null
+    logPairSkew()
+  }
+
+  /**
+   * The pair, in one line: when the tree reads finished and when the frame was actually grabbed.
+   * `doneSkewMs` is the number this path is judged on — how far the image is from the moment the
+   * hierarchy describes. Logged exactly once per capture, from whichever site joined the thread,
+   * so moving the join cannot quietly widen the pair without saying so.
+   */
+  private fun logPairSkew() {
+    if (pairSkewLogged || !includeScreenshot) return
+    pairSkewLogged = true
+    Console.log(
+      "[pair-skew] treeEndMs=$treeReadEndMs shotReqMs=$shotRequestMs shotDoneMs=$shotCompleteMs " +
+        "reqSkewMs=${shotRequestMs - treeReadEndMs} doneSkewMs=${shotCompleteMs - treeReadEndMs}",
+    )
+  }
+
   override val screenshotBytes: ByteArray
-    get() = _screenshotBytes
+    get() = encodedScreenshot
 
   override val annotatedScreenshotBytes: ByteArray
     get() {
       return AndroidBitmapUtils.annotateScreenshotBytes(
-        screenshotBytes = _screenshotBytes,
+        screenshotBytes = screenshotBytes,
         config = screenshotScalingConfig,
         viewHierarchy = viewHierarchy,
         deviceWidth = deviceWidth,

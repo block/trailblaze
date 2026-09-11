@@ -268,6 +268,10 @@ internal object ExternalAgentSupervisor {
 
   fun runs(): List<ExternalAgentRunDto> = runs.values.map { it.dto() }.sortedByDescending { it.startedAtMs }
 
+  fun activeCompanionSummaries(): List<String> = runs()
+    .filter { it.companion != null && it.status == ExternalAgentSessionStatus.RUNNING }
+    .map { "Companion ${it.id}: ${it.title}" }
+
   // The run map lives for the daemon's lifetime, so finished runs (and their event lists) must
   // not accumulate without bound. Oldest finished runs are dropped past the cap when a new run
   // starts; in-flight runs are never pruned.

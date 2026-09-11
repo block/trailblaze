@@ -60,6 +60,12 @@ abstract class AndroidTestTrailblazeTest {
    */
   protected open val hostAppTarget: TrailblazeHostAppTarget? = null
 
+  /**
+   * An explicit trail asset selected by this test instance, when it cannot be derived from the
+   * test class and method. Declaring it lets device setup happen before consumer `@Before` methods.
+   */
+  protected open val trailAssetPath: String? = null
+
   @get:Rule(order = LAST)
   val trailblazeRule: AndroidTestTrailblazeRule by lazy {
     AndroidTestTrailblazeRule(
@@ -68,11 +74,19 @@ abstract class AndroidTestTrailblazeTest {
       captureStepSnapshots = captureStepSnapshots,
       logToolCalls = logToolCalls,
       hostAppTarget = hostAppTarget,
+      preflightTrailAssetPathProvider = { trailAssetPath },
     )
   }
 
-  /** Runs the trail asset named by this test's class + method. */
-  fun runFromAsset() = trailblazeRule.runFromAsset()
+  /** Runs [trailAssetPath], or the trail asset named by this test's class + method when null. */
+  fun runFromAsset() {
+    val explicitPath = trailAssetPath
+    if (explicitPath == null) {
+      trailblazeRule.runFromAsset()
+    } else {
+      trailblazeRule.runFromAsset(explicitPath)
+    }
+  }
 
   protected companion object {
     /**

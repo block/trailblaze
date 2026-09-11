@@ -38,8 +38,12 @@ private fun discoverMerged(
   val fromAssets =
     try {
       fromAssetsSource()
-    } catch (_: IllegalStateException) {
-      // InstrumentationRegistry not registered — non-instrumentation test context.
+    } catch (t: Throwable) {
+      // Any failure to reach an AssetManager means "assets unavailable here", not a crash: this
+      // runs in published artifacts too, where `androidx.test` may be absent from the runtime
+      // classpath entirely (LinkageError) or instrumentation may be registered without a context
+      // (NPE), not just missing (IllegalStateException). The classpath half still answers.
+      Console.log("[platformConfigResourceSource/android] assets unavailable for $key: $t")
       null
     }
   // Merge: classpath first so instrumentation-asset keys can override.

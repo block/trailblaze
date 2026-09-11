@@ -53,6 +53,11 @@ object DesktopDispatchDecision {
     agentImplementation == AgentImplementation.KOOG_STRATEGY_GRAPH &&
       !driverType.executesToolsOnDevice -> DispatchPath.HOST_IN_PROCESS_KOOG
 
+    // Names the driver rather than asking `AndroidAccessibilityServiceDrivers`, and stays that way:
+    // this arm is not "the driver goes through the accessibility service", it is "the V3
+    // planner/analyzer was built against THIS driver". A second accessibility-service driver would
+    // need V3 checked out against it before routing there, so widening the arm by capability is
+    // exactly the wrong default.
     driverType == TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY &&
       agentImplementation == AgentImplementation.MULTI_AGENT_V3 -> DispatchPath.V3_ACCESSIBILITY_ON_HOST
 

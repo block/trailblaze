@@ -14,8 +14,10 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.logs.client.TrailblazeLog
+import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionStatus
+import xyz.block.trailblaze.logs.model.TrailblazeClockDomain
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.util.BunBinaryResolver
 
@@ -142,6 +144,118 @@ class SessionLogSnapshotTest {
       tmp.deleteRecursively()
     }
   }
+
+  /**
+   * A device whose clock lags the host's stamps its tools BEFORE the step that launched them. Both
+   * views are ordering-sensitive, and the typed view additionally seeds the report's own
+   * [LogsRepo] — so a snapshot that skipped normalization would make `trailblaze report` disagree
+   * with the daemon about a skewed session it read from the very same files.
+   */
+  @Test
+  fun capture_putsADeviceStampedSessionOnTheHostTimeline() {
+    val tmp = Files.createTempDirectory("snapshot-clock-test-").toFile()
+    try {
+      val writerRepo = LogsRepo(logsDir = tmp, watchFileSystem = false)
+      val sessionId = SessionId("skewedsession")
+      writerRepo.saveLogToDisk(statusLog(sessionId, startedStatus(), 10_000L))
+      // Ran at host 11_000 for 500ms on a device 3s behind: stamped 8_000, received at 11_500.
+      writerRepo.saveLogToDisk(
+        TrailblazeLog.TrailblazeToolLog(
+          trailblazeTool = OtherTrailblazeTool(toolName = "tapOn"),
+          toolName = "tapOn",
+          successful = true,
+          traceId = null,
+          durationMs = 500,
+          session = sessionId,
+          timestamp = Instant.fromEpochMilliseconds(8_000L),
+          clock = TrailblazeClockDomain.DEVICE,
+          hostReceivedAt = Instant.fromEpochMilliseconds(11_500L),
+        ),
+      )
+      writerRepo.saveLogToDisk(
+        statusLog(sessionId, SessionStatus.Ended.Succeeded(durationMs = 2_000L), 12_000L),
+      )
+      writerRepo.close()
+
+      val logsRepo = LogsRepo(logsDir = tmp, watchFileSystem = false)
+      val snapshot = SessionLogSnapshot.capture(logsRepo, sessionId)
+
+      assertEquals(
+        listOf(10_000L, 11_000L, 12_000L),
+        snapshot.logs.map { it.timestamp.toEpochMilliseconds() },
+        "the typed view must carry the tool at the host time it ran",
+      )
+      // The contract this view exists to hold: identical to the repo's own read of the same files.
+      assertEquals(logsRepo.getLogsForSession(sessionId), snapshot.logs)
+      // Raw records are passed through byte-for-byte — the device keeps its own stamp — but they
+      // are ORDERED on the host timeline, so the extractor's adjacent-record folding still holds.
+      assertEquals(
+        listOf(10_000L, 8_000L, 12_000L),
+        snapshot.rawLogsJson.map {
+          Instant.parse(it.jsonObject["timestamp"]!!.jsonPrimitive.content).toEpochMilliseconds()
+        },
+      )
+      logsRepo.close()
+    } finally {
+      tmp.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun capture_ordersEachDeviceByItsOwnSkew() {
+    // Two devices, opposite skews. The session-wide offset is the minimum across both, so applying
+    // it to every device-stamped record under-shifts the device that isn't the furthest behind —
+    // by enough to sort its tool ahead of the host log that preceded it.
+    val tmp = Files.createTempDirectory("snapshot-multidevice-clock-").toFile()
+    try {
+      val writerRepo = LogsRepo(logsDir = tmp, watchFileSystem = false)
+      val sessionId = SessionId("twoskeweddevices")
+      writerRepo.saveLogToDisk(statusLog(sessionId, startedStatus(), 10_000L))
+      // Buyer runs 2s AHEAD of the host: ran at host 11_000, so it stamped 13_000.
+      writerRepo.saveLogToDisk(deviceToolLog(sessionId, "buyer", stampedMs = 13_000L, receivedAtMs = 11_000L))
+      // Seller runs 3s BEHIND: ran at host 12_000, so it stamped 9_000.
+      writerRepo.saveLogToDisk(deviceToolLog(sessionId, "seller", stampedMs = 9_000L, receivedAtMs = 12_000L))
+      writerRepo.saveLogToDisk(
+        statusLog(sessionId, SessionStatus.Ended.Succeeded(durationMs = 3_000L), 13_500L),
+      )
+      writerRepo.close()
+
+      val logsRepo = LogsRepo(logsDir = tmp, watchFileSystem = false)
+      val snapshot = SessionLogSnapshot.capture(logsRepo, sessionId)
+
+      assertEquals(
+        listOf(10_000L, 11_000L, 12_000L, 13_500L),
+        snapshot.logs.map { it.timestamp.toEpochMilliseconds() },
+        "each device's tool must land at the host time it ran",
+      )
+      // Raw records keep their own stamps; only the ORDER is on the host timeline. Under the
+      // session-wide offset alone (-2000, the buyer's) the seller's record sorts to 7_000 — ahead
+      // of the 10_000 session-start log it followed.
+      assertEquals(
+        listOf(10_000L, 13_000L, 9_000L, 13_500L),
+        snapshot.rawLogsJson.map {
+          Instant.parse(it.jsonObject["timestamp"]!!.jsonPrimitive.content).toEpochMilliseconds()
+        },
+      )
+      logsRepo.close()
+    } finally {
+      tmp.deleteRecursively()
+    }
+  }
+
+  private fun deviceToolLog(sessionId: SessionId, deviceName: String, stampedMs: Long, receivedAtMs: Long) =
+    TrailblazeLog.TrailblazeToolLog(
+      trailblazeTool = OtherTrailblazeTool(toolName = "tapOn"),
+      toolName = "tapOn",
+      successful = true,
+      traceId = null,
+      durationMs = 0,
+      session = sessionId,
+      timestamp = Instant.fromEpochMilliseconds(stampedMs),
+      deviceName = deviceName,
+      clock = TrailblazeClockDomain.DEVICE,
+      hostReceivedAt = Instant.fromEpochMilliseconds(receivedAtMs),
+    )
 
   @Test
   fun capture_typedViewCarriesTheRepoCostEnrichment() {

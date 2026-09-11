@@ -38,16 +38,17 @@ jsoup = "1.21.2"
 junit = "4.13.2"
 junit5 = "5.11.4"
 kaml = "0.104.0"
-koog = "1.0.0"
-# Koog ships beta-stream modules on a parallel version with strict-compat deps on stable 1.0.0.
+koog = "1.2.0"
+# Koog ships beta-stream modules on a parallel version with strict-compat deps on stable 1.2.0.
 # Beta = modules wrapping something JetBrains doesn't control: Google Gemini SDK (`prompt-executor-google-client`),
 # the MCP protocol (`agents-mcp`), the experimental agents surface (`agents-ext`), and the umbrella aggregator
 # (`prompt-executor-llms-all`) which is transitively beta because it depends on `google-client`. See
 # https://github.com/JetBrains/koog/pull/2011 for the deliberate stable/beta split rationale.
 # When bumping `koog`, re-check by browsing https://repo1.maven.org/maven2/ai/koog/agents-mcp/ for stable
-# `1.0.x` (no `-beta` suffix) directory listings — the maven-metadata `<latest>` field is unreliable.
+# `1.x` (no `-beta` suffix) directory listings — the maven-metadata `<latest>` field is unreliable.
+# Still beta-only as of 1.2.0.
 # Expect API breakage between beta-minor bumps; non-beta-stream modules promise backwards-compat in 1.x.
-koog-beta = "1.0.0-beta"
+koog-beta = "1.2.0-beta"
 kotlin-csv = "1.10.0"
 kotlin = "2.4.0"
 kotlinpoet = "2.2.0"
@@ -82,6 +83,15 @@ vanniktech-maven-publish = "0.35.0"
 dependency-guard = "0.5.0"
 wire = "5.3.3"
 quickjs-kt = "1.0.5"
+# ZXing ("Zebra Crossing") — the barcode/QR decoder behind `readBarcodeFromScreen`. `core` is
+# pure Java with no transitive dependencies, so the same decoder resolves on the JVM host and in
+# the on-device Android runtime. `javase` is JVM-only and used for exactly one class,
+# BufferedImageLuminanceSource; see the exclude block in trailblaze-common/build.gradle.kts.
+zxing = "3.5.3"
+# TwelveMonkeys ImageIO plugins. Only the WebP reader is used, and only on the JVM host: the
+# default screenshot format is WebP and the JDK ships no WebP reader, so without this the barcode
+# tool cannot read the screenshots the drivers produce. Pure Java, no native bits.
+twelvemonkeys = "3.12.0"
 # JetBrains' Kotlin API-surface validator. Generates per-target `.api` baseline files
 # under `<module>/api/` from the public Kotlin declarations, and the `apiCheck` task
 # (automatically wired into `:check`) fails if the committed baseline drifts from the
@@ -218,6 +228,9 @@ slf4j-api = { module = "org.slf4j:slf4j-api", version.ref = "slf4j" }
 slf4j-simple = { module = "org.slf4j:slf4j-simple", version.ref = "slf4j" }
 test-parameter-injector = { module = "com.google.testparameterinjector:test-parameter-injector", version.ref = "testParameterInjector" }
 truth = { module = "com.google.truth:truth", version.ref = "truth" }
+imageio-webp = { module = "com.twelvemonkeys.imageio:imageio-webp", version.ref = "twelvemonkeys" }
+zxing-core = { module = "com.google.zxing:core", version.ref = "zxing" }
+zxing-javase = { module = "com.google.zxing:javase", version.ref = "zxing" }
 
 [plugins]
 android-library = { id = "com.android.library", version.ref = "agp" }

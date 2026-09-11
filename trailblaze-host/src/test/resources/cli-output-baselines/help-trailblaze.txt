@@ -37,6 +37,8 @@ Trailblaze - AI-powered device automation
                  MAX_PLAYBACK_WAIT_MS environment variable (milliseconds,
                  default 600000); if playback overruns it, a best-effort
                  truncated artifact is still written with a warning.
+  strings      Extract the human-visible text a recorded session showed, for
+                 localization and copy diffs
   viewer       Write out the standalone report viewer (one self-contained HTML
                  page) bundled into this binary. Serve it anywhere, or just
                  open it: drop a session archive on the page, or point it at
@@ -78,6 +80,7 @@ Trailblaze - AI-powered device automation
                  a test APK that drives it.
   skill        Print or install the bundled agent skill that teaches a coding
                  agent this CLI
+  companion    Attach a coding agent to Trail Runner while it authors a trail.
 Docs: https://block.github.io/trailblaze
 Driving Trailblaze from a coding agent? `trailblaze skill` prints or installs
 the bundled agent skill.

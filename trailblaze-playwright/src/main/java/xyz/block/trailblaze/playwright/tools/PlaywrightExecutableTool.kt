@@ -108,35 +108,39 @@ interface PlaywrightExecutableTool : ExecutableTrailblazeTool {
       nodeSelector: TrailblazeNodeSelector,
     ): Locator? {
       val web = nodeSelector.web ?: return null
+      fun applyConstraints(locator: Locator): Locator {
+        val headingConstrained = web.headingLevel?.let { level ->
+          if (level !in 1..6) return locator.and(page.locator("css=[data-trailblaze-invalid-heading-level]"))
+          locator.and(page.locator("css=h$level, [role=\"heading\"][aria-level=\"$level\"]"))
+        } ?: locator
+        return web.nthIndex?.let { headingConstrained.nth(it) } ?: headingConstrained
+      }
       web.dataTestId?.takeIf { it.isNotBlank() }?.let { testId ->
         // Candidate capture reads `data-testid || data-test-id` into this one field, so
         // matching only the hyphen-less spelling would resolve nothing on a page that
         // uses the other one. Match both.
         val escaped = testId.replace("\\", "\\\\").replace("\"", "\\\"")
         val byTestId = page.locator("[data-testid=\"$escaped\"], [data-test-id=\"$escaped\"]")
-        return web.nthIndex?.let { byTestId.nth(it) } ?: byTestId
+        return applyConstraints(byTestId)
       }
       val ariaName = web.ariaNameRegex?.takeIf { it.isNotBlank() }
       val ariaRole = web.ariaRole
       if (ariaRole != null && ariaName != null) {
         // Not a quoted string descriptor: that route forces an exact match and would read a
         // real pattern such as `Save.*` as a literal name.
-        val locator = PlaywrightAriaSnapshot.resolveRoleAndName(page, ariaRole, ariaName)
-        return web.nthIndex?.let { locator.nth(it) } ?: locator
+        return applyConstraints(PlaywrightAriaSnapshot.resolveRoleAndName(page, ariaRole, ariaName))
       }
       web.cssSelector?.let { css ->
         // nthIndex applies here as it does on the branches above: dropping it would resolve
         // element 0, and the single-element narrowing downstream would make that look
         // deliberate rather than like a lost disambiguator.
-        val byCss = page.locator("css=$css")
-        return web.nthIndex?.let { byCss.nth(it) } ?: byCss
+        return applyConstraints(page.locator("css=$css"))
       }
       // Role with no name, and no CSS to fall back on. Still worth resolving — a landmark
       // like `navigation` or `banner` is usually unique — but it ranks last for the reason
       // in the kdoc, so it must be tried AFTER the CSS branch, not instead of it.
       web.ariaRole?.let { role ->
-        val locator = PlaywrightAriaSnapshot.resolveRef(page, role)
-        return web.nthIndex?.let { locator.nth(it) } ?: locator
+        return applyConstraints(PlaywrightAriaSnapshot.resolveRef(page, role))
       }
       return null
     }

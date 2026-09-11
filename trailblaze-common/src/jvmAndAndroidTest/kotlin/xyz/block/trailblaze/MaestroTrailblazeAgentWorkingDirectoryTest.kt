@@ -69,7 +69,7 @@ class MaestroTrailblazeAgentWorkingDirectoryTest {
 
   @Test
   fun `buildExecutionContext threads the workingDirectory through to the tool context`() {
-    val trailDir = File("/tmp/trailblaze-trail-source-1234/trails/k1")
+    val trailDir = File("/tmp/trailblaze-trail-source-1234/trails/kiosk")
     val agent = TestAgent(workingDirectory = trailDir)
 
     val context = agent.buildContextForTest()

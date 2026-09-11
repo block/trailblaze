@@ -63,7 +63,11 @@ class AndroidVideoCapture : CaptureStream {
 
   /**
    * `deviceClock - hostClock`, sampled once at [start]. Added to the mux's host-epoch frame
-   * timestamps to express the video window on the device clock the session logs use.
+   * timestamps to express the video window on the device clock most of an Android session's logs
+   * use. (A session mixes clocks — host-emitted logs sit beside device-stamped ones; each log's
+   * `TrailblazeLog.clock` field says which. This adb-sampled offset stays the right tool HERE
+   * because capture runs adb anyway; the recording generator instead derives its offset from
+   * `hostReceivedAt` ingestion anchors, which also work offline, after the fact, and per device.)
    */
   private var deviceHostOffsetMs: Long = 0
   private var mux: WallClockMp4MuxConsumer? = null

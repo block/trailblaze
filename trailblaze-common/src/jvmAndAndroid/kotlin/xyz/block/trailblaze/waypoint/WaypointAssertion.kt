@@ -21,6 +21,11 @@ import xyz.block.trailblaze.api.waypoint.WaypointMatchResult
  *
  * Matching uses [WaypointMatcher] against the loaded waypoint registry — all `required` selectors
  * must be present and no `forbidden` selector may be present, for the device's classifier block.
+ *
+ * A capture that is KNOWN to have lost nodes cannot settle a `forbidden` condition, so the matcher
+ * declines to match on it ([WaypointMatchResult.SkipReason.PARTIAL_CAPTURE]) and the poll simply
+ * keeps going. That costs nothing when the next capture is complete, which is the common case, and
+ * it is why the guard lives in the matcher rather than here: the poll's job is to keep asking.
  */
 object WaypointAssertion {
 
@@ -68,11 +73,18 @@ object WaypointAssertion {
     val deadline = now() + timeoutMs
     var lastResult: WaypointMatchResult? = null
     var lastScreenWasNull = true
+    // Whether ANY capture in the window came back whole. Only the last result survives the loop,
+    // and a PARTIAL_CAPTURE skip on it says nothing about the ones before it — so the one extra
+    // fact worth carrying out is whether the app ever answered a complete capture at all. That is
+    // the difference between "wedged for the whole window" and "wedged just as it would have
+    // matched", and they point a reader at different things.
+    var sawCompleteCapture = false
 
     while (true) {
       val screen = screenStateProvider()
       if (screen != null) {
         lastScreenWasNull = false
+        if (!screen.isCaptureKnownPartial) sawCompleteCapture = true
         val result = WaypointMatcher.match(definition, screen, target)
         lastResult = result
         if (result.matched) {
@@ -94,6 +106,7 @@ object WaypointAssertion {
       definitionId = definition.id,
       lastResult = lastResult ?: error("lastResult must be set once a non-null screen was evaluated"),
       timeoutMs = timeoutMs,
+      sawCompleteCapture = sawCompleteCapture,
     )
   }
 
@@ -106,6 +119,13 @@ object WaypointAssertion {
       val definitionId: String,
       val lastResult: WaypointMatchResult,
       val timeoutMs: Long,
+      /**
+       * True when at least one capture in the wait window came back whole. [lastResult] describes
+       * only the final capture, so this is the only thing that distinguishes an app that never
+       * answered from one that answered and then stopped. Defaults to true — the pre-existing
+       * reading, and correct for every driver that cannot measure completeness.
+       */
+      val sawCompleteCapture: Boolean = true,
     ) : Result
 
     /** Trail referenced a waypoint id that the loaded registry could not resolve. */
@@ -143,6 +163,28 @@ object WaypointAssertion {
           " Skipped (NO_NODE_TREE_IN_SCREEN_STATE): the driver did not produce a " +
             "TrailblazeNode tree for this screen. This typically means the screen state " +
             "is empty or the driver path doesn't populate a node tree.",
+        )
+        return@buildString
+      }
+      WaypointMatchResult.SkipReason.PARTIAL_CAPTURE -> {
+        // Say only what the poll established. `lastResult` describes the FINAL capture, so a
+        // claim about every capture in the window has to come from `sawCompleteCapture` — not
+        // from the skip reason, which one lossy capture is enough to produce.
+        append(
+          " Skipped (PARTIAL_CAPTURE): the last capture was missing nodes the app advertised but " +
+            "never handed over, so the waypoint's `forbidden` conditions could not be evaluated " +
+            "and were not allowed to pass by default. This is a capture problem, not a screen " +
+            "one — the app was not answering accessibility node fetches (typically a blocked " +
+            "main thread). Look at what the app was doing, not at what the screen shows now.",
+        )
+        append(
+          if (result.sawCompleteCapture) {
+            " Earlier captures in this window did come back whole, so the block was intermittent" +
+              " and happened to land on the capture that would have matched."
+          } else {
+            " No capture in the whole ${result.timeoutMs}ms window came back whole, so the app was" +
+              " not answering for the entire wait."
+          },
         )
         return@buildString
       }

@@ -23,9 +23,7 @@ mouse to its center first. When ref is omitted, scrolls the full page.
 
 ### Optional parameters
 
-- `direction` — `ToolParameterType.Enum(
-  entries = [UP, DOWN, LEFT, RIGHT]
-)`
+- `direction` — `enum(UP | DOWN | LEFT | RIGHT)`
   Direction to scroll. UP/DOWN for vertical, LEFT/RIGHT for horizontal.
 - `amount` — `Integer`
   Number of pixels to scroll. Defaults to 500.

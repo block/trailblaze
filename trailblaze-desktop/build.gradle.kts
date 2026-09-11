@@ -158,6 +158,15 @@ val shrinkUberJar by tasks.registering(JavaExec::class) {
   mainClass.set("proguard.ProGuard")
 
   val outputJar = layout.buildDirectory.file("compose/jars-shrunk/trailblaze.jar")
+  inputs.file(layout.projectDirectory.file("proguard-rules.pro"))
+    .withPropertyName("proguardRules")
+    .withPathSensitivity(PathSensitivity.RELATIVE)
+  inputs.dir(layout.buildDirectory.dir("compose/jars"))
+    .withPropertyName("inputUberJars")
+    .withPathSensitivity(PathSensitivity.RELATIVE)
+  // The -injars resource filter decides which entries ProGuard skips (and restoreArchiveEntries
+  // puts back). Editing that list changes the shrunk JAR, so it must invalidate this task too.
+  inputs.property("injarsFilter", proguardInjarsResourceFilter)
   outputs.file(outputJar)
 
   val javaHome = System.getProperty("java.home")
@@ -245,6 +254,45 @@ afterEvaluate {
   // The uber JAR exceeds 65 535 entries; enable zip64 so packaging succeeds.
   tasks.named<org.gradle.jvm.tasks.Jar>("packageUberJarForCurrentOS") {
     isZip64 = true
+    // Maestro ships its own Android instrumentation APKs as classpath resources, for
+    // `maestro.drivers.AndroidDriver` to install onto a device. Trailblaze never builds that
+    // driver -- Android runs through our own on-device runner APK -- and `AndroidDriver` is the
+    // only class in maestro-client that reads either file, so they are 12.6 MB of dead weight
+    // in every JAR download and Homebrew install.
+    exclude("maestro-app.apk", "maestro-server.apk")
+    // Skiko's macos-arm64 runtime artifact bundles BOTH Mac dylibs, so the Intel binary
+    // arrives even though nothing declares it. `TrailblazeDesktopUtil.assertSupportedPlatform()`
+    // exits on Intel macOS before anything can load it, so this is ~9 MB that can never run.
+    exclude("libskiko-macos-x64.dylib", "libskiko-macos-x64.dylib.sha256")
+    // GraalVM's shaded ICU locale tables (~13 MB, ~4 200 files, no classes) — data for a
+    // JavaScript engine that cannot run in the SHRUNK JAR. Maestro drags GraalJS in for `${...}`
+    // interpolation and for `evalScript`/`runScript`; Trailblaze evaluates scripted tools on
+    // QuickJS instead, our YAML layer rejects both script commands, and the on-device Orchestra
+    // fork installs a `FakeJsEngine`. What settles it is the shipped artifact: ProGuard leaves
+    // ZERO `com/oracle/truffle/js/**` class files in it (4 886 in the dependency, 0 in the JAR,
+    // on `main` as well), so a `${...}` on the host already fails there today, with or without
+    // these tables.
+    //
+    // Gated on the shrinker for exactly that reason: it is only the ProGuard pass that makes this
+    // data unreachable. An UNSHRUNK JAR keeps the JS language, and `scripts/install-trailblaze-source.sh`
+    // — the source dev loop — builds this task with no `-Ptrailblaze.proguard`, so pruning
+    // unconditionally would leave a locally installed `./trailblaze` with a language that dies
+    // inside missing ICU on the first `${...}`, where `main` works. Gating keeps the full 13 MB
+    // win on the released JAR and every developer build byte-comparable to `main`.
+    //
+    // A PACKAGING exclude and not `configurations.all` for the same reason at one more remove: a
+    // dependency exclude reaches `run`, `JavaExec` and every test classpath as well, none of
+    // which are shrunk. And `org.graalvm.polyglot` stays in all shapes — `Orchestra.runFlow`
+    // constructs a `GraalJsEngine` before it dispatches anything, so removing polyglot breaks
+    // every host-side Maestro flow, the iOS driver among them, with
+    // `NoClassDefFoundError: org/graalvm/polyglot/PolyglotException`.
+    //
+    // The `inputs.property` is load-bearing, not decoration: a `Jar` task's exclude patterns are
+    // not part of its up-to-date check, so without it a shrunk build right after an unshrunk one
+    // reuses the unshrunk JAR verbatim and ships the ICU data it was supposed to drop. Verified
+    // by observing exactly that before the line was added.
+    inputs.property("trailblazeProguard", useProguard)
+    if (useProguard) exclude("org/graalvm/shadowed/**")
   }
 
   tasks.withType<JavaExec> {

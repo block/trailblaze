@@ -69,9 +69,9 @@ class BrowsableDeviceListingTest {
     assertTrue(result.any { it.trailblazeDriverType == cloudDriver }, "expected it listed: $result")
   }
 
-  /** A driver with no descriptor keeps its old behavior: listed. */
+  /** No descriptor means no visibility opinion, and the listing default is to show it. */
   @Test
-  fun `an unconverted driver is listed`() {
+  fun `a driver with no registered descriptor is listed`() {
     val result = filter(listOf(device(localDriver, "emulator-5554")), descriptors = HostDriverDescriptorRegistry.EMPTY)
 
     assertTrue(result.any { it.instanceId == "emulator-5554" }, "expected it listed: $result")

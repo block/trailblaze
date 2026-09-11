@@ -202,6 +202,10 @@ class ConfigCommand : Callable<Int> {
         "${CONFIG_KEYS["stream-screenshots"]!!.get(currentConfig)}",
     )
     Console.info(
+      "  Turbo: " +
+        "${CONFIG_KEYS["turbo"]!!.get(currentConfig)}",
+    )
+    Console.info(
       "  Disable animations: " +
         "${CONFIG_KEYS["disable-animations"]!!.get(currentConfig)}",
     )
@@ -220,6 +224,7 @@ class ConfigCommand : Callable<Int> {
     Console.info("  trailblaze config capture-video <true|false>  Record session video (default: off, opt-in)")
     Console.info("  trailblaze config stream-screenshots <true|false|unset>  (experimental) Serve agent screenshots from the live device stream (Android/iOS/web)")
     Console.info("  trailblaze config disable-animations <true|false|unset>  (experimental) Disable OS animations during each session, restored at session end")
+    Console.info("  trailblaze config turbo <true|false|unset>  (experimental) Let the Android app under test report when it is idle so the driver waits less")
     Console.info("  trailblaze config models                    List available models")
     Console.info("  trailblaze config reset                     Reset all settings to defaults")
     Console.info("")

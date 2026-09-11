@@ -4,11 +4,8 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.host.driver.HostDriverDescriptor
+import xyz.block.trailblaze.host.driver.ReferenceHostDriverDescriptors
 import xyz.block.trailblaze.host.ios.MobileDeviceUtils
-import xyz.block.trailblaze.host.compose.ComposeHostDriverDescriptor
-import xyz.block.trailblaze.host.playwright.PlaywrightElectronHostDriverDescriptor
-import xyz.block.trailblaze.host.playwright.PlaywrightNativeHostDriverDescriptor
-import xyz.block.trailblaze.host.revyl.RevylHostDriverDescriptor
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.llm.TrailblazeLlmModelList
 import xyz.block.trailblaze.llm.TrailblazeLlmProvider
@@ -54,27 +51,18 @@ class OpenSourceTrailblazeDesktopAppConfig : TrailblazeDesktopAppConfig(
   defaultProviderModelList = NoneTrailblazeLlmModelList,
 ) {
 
-  private val initialDriverTypes = setOf(
-    TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
-    TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
-    TrailblazeDriverType.IOS_HOST,
-    TrailblazeDriverType.IOS_AXE,
-    // Converted drivers (Revyl, Compose, Playwright ×2) are not listed here: their descriptors
-    // below supply them.
-  )
-
-  // Start with no platforms enabled by default - user must explicitly enable them
+  // Which driver each platform starts SELECTED on, first run only — not which drivers are
+  // supported, which comes from the descriptors below. Web is absent so it starts unselected;
+  // Android and iOS start on these two.
   private val initialDriverTypesMap: Map<TrailblazeDevicePlatform, TrailblazeDriverType> = mapOf(
     TrailblazeDevicePlatform.ANDROID to TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
     TrailblazeDevicePlatform.IOS to TrailblazeDriverType.IOS_HOST,
   )
 
-  override val hostDriverDescriptors: Set<HostDriverDescriptor> = setOf(
-    RevylHostDriverDescriptor(),
-    ComposeHostDriverDescriptor(),
-    PlaywrightNativeHostDriverDescriptor(),
-    PlaywrightElectronHostDriverDescriptor(),
-  )
+  // Revyl, Compose, Playwright native + electron, iOS Maestro + AXe, and the three Android
+  // drivers — every driver the framework ships. Named in one place so a test can assert this
+  // distribution leaves none of them out; see [ReferenceHostDriverDescriptors].
+  override val hostDriverDescriptors: Set<HostDriverDescriptor> = ReferenceHostDriverDescriptors.all()
 
   override val defaultAppDataDir: File = TrailblazeDesktopUtil.getDefaultAppDataDirectory().apply { mkdirs() }
 
@@ -82,9 +70,9 @@ class OpenSourceTrailblazeDesktopAppConfig : TrailblazeDesktopAppConfig(
   override val trailblazeSettingsRepo = TrailblazeSettingsRepo(
     settingsFile = File(defaultAppDataDir, TrailblazeDesktopUtil.SETTINGS_FILENAME),
     initialConfig = TrailblazeServerState.SavedTrailblazeAppConfig(initialDriverTypesMap),
-    // Registering a descriptor is what makes a driver supported, so plugging one in doesn't also
-    // require remembering to list it here. The set above is the drivers that haven't converted yet.
-    supportedDriverTypes = initialDriverTypes + hostDriverDescriptors.flatMap { it.driverTypes },
+    // Registering a descriptor is what makes a driver supported — there is no second list to keep
+    // in sync, and a driver this distribution doesn't plug in is absent rather than half-present.
+    supportedDriverTypes = hostDriverDescriptors.flatMap { it.driverTypes }.toSet(),
     defaultHostAppTarget = defaultAppTarget,
     allTargetApps = { availableAppTargets }
   )

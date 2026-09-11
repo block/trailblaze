@@ -52,6 +52,7 @@ import xyz.block.trailblaze.ui.TrailblazeDeviceManager
 import xyz.block.trailblaze.yaml.TrailArgBinder
 import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
+import kotlin.reflect.KClass
 
 /**
  * Plugs Revyl's cloud device farm into the host.
@@ -73,6 +74,13 @@ class RevylHostDriverDescriptor(
   )
 
   override val listingVisibility = DeviceListingVisibility.ADDRESSABLE_NOT_LISTED
+
+  /**
+   * Revyl reaches its devices through its cloud API, so it ships its own tools. The same set for
+   * both entries — one backend, one tool vocabulary, regardless of the device's platform.
+   */
+  override fun toolClasses(driverType: TrailblazeDriverType): Set<KClass<out TrailblazeTool>> =
+    TrailblazeToolSetCatalog.resolveForDriver(driverType, RevylToolSetIds.ALL).toolClasses
 
   /**
    * Per-device clients for the sessions currently running, so an MCP conversation's follow-up

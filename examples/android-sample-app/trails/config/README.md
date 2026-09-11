@@ -100,26 +100,28 @@ out to `bun test` against the mock client + mock context from
   against real `node:fs` writes under the OS tmpdir; demonstrates the per-session
   sandbox layout, sessionId sanitization, and the `..`/absolute-path validation errors.
 - `tools/sampleapp_waitForText.test.ts` — exercises the `sampleapp_waitForText` "wait until visible"
-  tool with the mock context + queued `findMatches` client; asserts the dual-driver split
-  (accessibility → `findMatches`, instrumentation → Maestro `extendedWaitUntil`), the throw-on-timeout,
+  tool with the mock context + queued match client; asserts the dual-driver split
+  (accessibility → `findSelectorMatches`, instrumentation → Maestro `extendedWaitUntil`), the
+  throw-on-timeout,
   and the anchored/regex-escaped selector — all without a daemon or device.
 - `tools/sampleapp_launchToLoadedContent.test.ts` — exercises the TypeScript trailhead's
-  launch → open Loading tab → start load → `findMatches`-wait orchestration, and that it refuses a
+  launch → open Loading tab → start load → `findSelectorMatches`-wait orchestration, and that it
+  refuses a
   non-accessibility driver up front.
 
 ### The "wait for a loading screen" example
 
 The app's **Loading** tab swaps a spinner for a "Content Loaded" result after a delay you pick (1s /
 3s / 6s). The point: a screen that loads with a *variable* delay has to be waited **for**, not slept
-**through**. Trailblaze's event-driven wait — `findMatches({ selector, timeoutMs })` — returns the
-instant the target appears, so the same step passes whether the screen is fast or slow, no flaky
-fixed `delay()`. (That `findMatches` wait budget is the capability PR #3853, "Let TypeScript tools
-wait for an element to appear", added.)
+**through**. Trailblaze's event-driven wait — `findSelectorMatches({ selectors, timeoutMs })` —
+returns the instant the target appears, so the same step passes whether the screen is fast or slow,
+no flaky fixed `delay()`. (That wait budget is the capability PR #3853, "Let TypeScript tools wait
+for an element to appear", added.)
 
 The runnable demo is **pure YAML**: the recorded per-driver variants at
 `trails/android-ondevice-accessibility/loading/wait-for-content.trail.yaml` and
 `trails/android-ondevice-instrumentation/loading/wait-for-content.trail.yaml` do the wait with no
-custom tool at all — `findMatches` with a `timeoutMs` budget on the accessibility driver, and
+custom tool at all — `findSelectorMatches` with a `timeoutMs` budget on the accessibility driver, and
 `maestro`'s `extendedWaitUntil` on the instrumentation driver. These run anywhere (built-in tools
 only) and are the versions wired into the sample-app CI suites.
 `trails/loading/wait-for-content.trail.yaml` is the natural-language authoring source.
@@ -137,7 +139,7 @@ a tool + test with no trail.)
 - `sampleapp_launchToLoadedContent` (`tools/sampleapp_launchToLoadedContent.ts`) — a TypeScript
   *trailhead* (the first tool a trail runs): launch → open Loading tab → start load → wait for
   "Content Loaded", composing `ctx.tools.launchApp` / `tapOnElementBySelector` /
-  `findMatches({ timeoutMs })`.
+  `findSelectorMatches({ timeoutMs })`.
 
 For the `client.tools.X(...)` dispatch and `client.stub(name, response)` patterns, see
 the playwright-native trailmap's `.test.ts` samples — `sampleapp` only ships one host-only

@@ -96,11 +96,11 @@ class TrailIndexBuilderTest {
     // NOT end in `.trail.yaml`. It must still be indexed, taking its identity from the enclosing
     // directory the way `blaze.yaml` does.
     val dir = tmp.newFolder("trails")
-    val caseDir = File(dir, "regression/suite_71172/section_946176/case_5374124").also { it.mkdirs() }
+    val caseDir = File(dir, "regression/suite_101/section_205/case_1001").also { it.mkdirs() }
     File(caseDir, "trail.yaml").writeText(
       """
       config:
-        id: regression/case_5374124
+        id: regression/case_1001
         title: Cold boot flow
         target: myapp
       trail:
@@ -111,13 +111,13 @@ class TrailIndexBuilderTest {
     val entry = TrailIndexBuilder.scan(dir).single()
 
     // The id strips only `.yaml` (like `blaze.yaml`), NOT the whole directory, so the browser's
-    // `resolveTrailFile` reconstructs `.../case_5374124/trail.yaml` via its `<id>.yaml` probe.
-    assertEquals("0/regression/suite_71172/section_946176/case_5374124/trail", entry.id)
-    assertEquals("regression/suite_71172/section_946176/case_5374124/trail.yaml", entry.path)
+    // `resolveTrailFile` reconstructs `.../case_1001/trail.yaml` via its `<id>.yaml` probe.
+    assertEquals("0/regression/suite_101/section_205/case_1001/trail", entry.id)
+    assertEquals("regression/suite_101/section_205/case_1001/trail.yaml", entry.path)
     assertEquals("Cold boot flow", entry.title)
     assertEquals("myapp", entry.target)
     assertEquals("unified", entry.format)
-    assertEquals("regression/case_5374124", entry.configId)
+    assertEquals("regression/case_1001", entry.configId)
     assertEquals("trail", entry.kind)
   }
 
@@ -127,12 +127,12 @@ class TrailIndexBuilderTest {
     // browser's detail / save / open / reveal / tool-usage routes all resolve `entry.id` through
     // `resolveTrailFile`. A directory-only id would 404 (the resolver never probes `.../trail.yaml`).
     val dir = tmp.newFolder("trails")
-    val caseDir = File(dir, "regression/case_5374124").also { it.mkdirs() }
+    val caseDir = File(dir, "regression/case_1001").also { it.mkdirs() }
     val bare = File(caseDir, "trail.yaml").apply {
       writeText(
         """
         config:
-          id: regression/case_5374124
+          id: regression/case_1001
         trail:
           - step: Open the app
         """.trimIndent(),

@@ -9,6 +9,8 @@ import {
   alignedScenes,
   comparableArgLines,
   compareEventStreams,
+  compareEventStreamsMany,
+  compareEventStreamsByStep,
   compareToolTimelines,
   defaultComparePair,
   diffPixels,
@@ -22,7 +24,9 @@ import {
   lineDiff,
   MAX_LINE_DIFF_CELLS,
   pickGroupPath,
+  pickGroupPathMany,
   toolTimelineOf,
+  timedEventObjectsOf,
   volatileScalarPaths,
 } from "./run-report-compare-model";
 
@@ -336,6 +340,27 @@ const genericStream = (name: string, payloads: unknown[]) => ({
 const analyticsEvent = (event: string, id: string) => ({ columnItems: { Event: event, Time: id, Properties: "{}" } });
 
 describe("event-streams lane (mirrors SessionEventDiffTest)", () => {
+  test("an equal-weight event matrix carries every selected run without inventing a pair", () => {
+    const result = compareEventStreamsMany([
+      { events: [genericStream("analytics", [analyticsEvent("Tap", "a1"), analyticsEvent("Tap", "a2"), analyticsEvent("View", "a3"), analyticsEvent("View", "a4")])] },
+      { events: [genericStream("analytics", [analyticsEvent("Tap", "b1"), analyticsEvent("Tap", "b2"), analyticsEvent("Tap", "b3"), analyticsEvent("View", "b4")])] },
+      { events: [genericStream("analytics", [analyticsEvent("Tap", "c1"), analyticsEvent("View", "c2"), analyticsEvent("View", "c3"), analyticsEvent("View", "c4")])] },
+    ]);
+    const stream = result.streams[0];
+    expect(stream.counts).toEqual([4, 4, 4]);
+    expect(stream.groupPath).toBe("columnItems.Event");
+    expect(stream.groups.map((group) => [group.key, group.counts])).toEqual([
+      ["Tap", [2, 3, 1]],
+      ["View", [2, 1, 3]],
+    ]);
+    expect(stream.changed).toBe(true);
+  });
+
+  test("an N-run grouping field cannot be a different id for every run", () => {
+    const run = (traceId: string) => Array.from({ length: 4 }, () => leafStrings({ traceId }));
+    expect(pickGroupPathMany([run("run-a"), run("run-b"), run("run-c")])).toBeNull();
+  });
+
   test("groups a stream by the enum-ish field, never a unique-per-event field", () => {
     const result = compareEventStreams(
       { events: [genericStream("analytics", [analyticsEvent("Tap", "t1"), analyticsEvent("Tap", "t2"), analyticsEvent("View", "t3"), analyticsEvent("View", "t4")])] },
@@ -417,6 +442,84 @@ describe("event-streams lane (mirrors SessionEventDiffTest)", () => {
     expect(stream.groupPath).toBe("urlPath");
   });
 
+  test("one canonical network stream represents aliases across any number of runs", () => {
+    const raw = (count: number) => ({
+      name: "com.example.plugin.network",
+      comparisonName: "network",
+      comparisonValues: Array.from({ length: count }, (_, i) => ({ urlPath: `/${i}` })),
+      total: count,
+      truncated: false,
+      events: Array.from({ length: count }, (_, i) => ({ t: i, d: JSON.stringify({ request: i }) })),
+    }) as any;
+    const canonical = (count: number) => ({
+      name: "network",
+      total: count,
+      truncated: false,
+      events: Array.from({ length: count }, (_, i) => ({ t: i, d: JSON.stringify({ urlPath: `/${i}` }) })),
+    }) as any;
+    const result = compareEventStreamsMany([
+      { events: [raw(1)] },
+      { events: [canonical(2)] },
+      { network: Array.from({ length: 3 }, (_, i) => ({ urlPath: `/${i}` } as any)) },
+    ]);
+    expect(result.streams.map((stream) => stream.stream)).toEqual(["network"]);
+    expect(result.streams[0].counts).toEqual([1, 2, 3]);
+  });
+
+  test("the canonical network side-channel wins without merging an aliased payload schema", () => {
+    const session = {
+      events: [{
+        name: "com.example.plugin.network",
+        comparisonName: "network",
+        total: 1,
+        truncated: false,
+        events: [{ t: 1, d: '{"request":"raw"}' }],
+      } as any],
+      network: [{ method: "GET", urlPath: "/canonical" } as any],
+    };
+    expect(timedEventObjectsOf(session).get("network")).toEqual([
+      { t: null, value: { method: "GET", urlPath: "/canonical" } },
+    ]);
+    expect(session.events[0].name).toBe("com.example.plugin.network");
+  });
+
+  test("an alias projection compares equal to the canonical network schema", () => {
+    const request = { method: "GET", statusCode: null, durationMs: null, urlPath: "/pay", phase: "REQUEST_START" };
+    const response = { method: "", statusCode: 200, durationMs: 42, urlPath: "", phase: "RESPONSE_END" };
+    const alias = {
+      name: "com.example.plugin.network",
+      comparisonName: "network",
+      comparisonValues: [request, response],
+      total: 1,
+      truncated: false,
+      events: [],
+      rows: [{ label: "GET /pay", raw: [{ request: "raw" }, { response: "raw" }] }],
+    } as any;
+
+    const result = compareEventStreams(
+      { events: [alias] },
+      { network: [request, response] as any[] },
+    );
+
+    expect(result.streams).toHaveLength(1);
+    expect(result.streams[0].stream).toBe("network");
+    expect(result.streams[0].baselineCount).toBe(2);
+    expect(result.streams[0].currentCount).toBe(2);
+    expect(result.streams[0].changed).toBe(false);
+  });
+
+  test("ambiguous aliases keep their producer names instead of dropping or merging data", () => {
+    const stream = (name: string) => ({
+      name,
+      comparisonName: "shared",
+      total: 1,
+      truncated: false,
+      events: [{ t: 1, d: JSON.stringify({ producer: name }) }],
+    }) as any;
+    const byStream = timedEventObjectsOf({ events: [stream("producer.a"), stream("producer.b")] });
+    expect([...byStream.keys()]).toEqual(["producer.a", "producer.b"]);
+  });
+
   // A formatter folds a request and its response into ONE row, so row count is not event count.
   // Counting rows called a completed exchange against a request-only run `1 → 1`.
   test("counts come from the producer's total, not the folded row count", () => {
@@ -464,6 +567,79 @@ describe("event-streams lane (mirrors SessionEventDiffTest)", () => {
     // The event contract permits any JsonElement, log strings included — only `not json` is a
     // parse failure. Dropping the scalar left a stream of string records reading as empty.
     expect(byStream.get("custom")).toEqual(["a string", { kind: "a" }]);
+  });
+
+  test("timed event objects retain producer clocks without inventing one for parsed network", () => {
+    const byStream = timedEventObjectsOf({
+      events: [{ name: "custom", total: 2, truncated: false, events: [{ t: 17, d: '{"kind":"a"}' }], rows: [{ t: 23, label: "formatted", raw: ["raw"] }] } as any],
+      network: [{ method: "GET", urlPath: "/pay" } as any],
+    });
+    expect(byStream.get("custom")).toEqual([{ t: 23, value: { label: "formatted", raw: ["raw"] } }]);
+    expect(byStream.get("network")).toEqual([{ t: null, value: { method: "GET", urlPath: "/pay" } }]);
+  });
+
+  test("step comparison buckets each side by its own authored-step clock", () => {
+    const streamAt = (entries: Array<[number | null, string]>) => ({
+      name: "analytics", total: entries.length, truncated: false,
+      events: entries.map(([t, kind]) => ({ t, d: JSON.stringify({ kind }) })),
+    }) as any;
+    const steps = compareEventStreamsByStep(
+      { events: [streamAt([[900, "before"], [1500, "open"], [2500, "paid"]])] },
+      { events: [streamAt([[1150, "open"], [2200, "declined"]])] },
+      [
+        { key: "1", label: "Open checkout", baselineT: 1000, currentT: 1100 },
+        { key: "2", label: "Submit payment", baselineT: 2000, currentT: 2100 },
+      ],
+    );
+    expect(steps.map((step) => [step.key, step.baselineCount, step.currentCount])).toEqual([
+      ["1", 1, 1],
+      ["2", 1, 1],
+      ["unattributed", 1, 0],
+    ]);
+    expect(steps[0].streams[0].changed).toBe(false);
+    expect(steps[1].streams[0].changed).toBe(true);
+    expect(steps[2].unattributed).toBe(true);
+  });
+
+  test("events after an unclocked authored step stay unattributed until the next known boundary", () => {
+    const streamAt = (entries: Array<[number, string]>) => ({
+      name: "analytics", total: entries.length, truncated: false,
+      events: entries.map(([t, kind]) => ({ t, d: JSON.stringify({ kind }) })),
+    }) as any;
+    const steps = compareEventStreamsByStep(
+      { events: [streamAt([[1500, "known"], [2500, "ambiguous"], [3500, "known-again"]])] },
+      { events: [] },
+      [
+        { key: "1", label: "Open", baselineT: 1000, currentT: 1000 },
+        { key: "2", label: "Submit", baselineT: null, currentT: null },
+        { key: "3", label: "Done", baselineT: 3000, currentT: 3000 },
+      ],
+    );
+    expect(steps.map((step) => [step.key, step.baselineCount])).toEqual([
+      ["1", 0],
+      ["2", 0],
+      ["3", 1],
+      ["unattributed", 2],
+    ]);
+  });
+
+  test("step windows keep the whole stream's volatile-field mask", () => {
+    const streamAt = (ids: string[]) => ({
+      name: "audit", total: ids.length, truncated: false,
+      events: ids.map((id, at) => ({ t: at < 1 ? 1100 : 2100, d: JSON.stringify({ kind: "Tap", id }) })),
+    }) as any;
+    const steps = compareEventStreamsByStep(
+      { events: [streamAt(["base-a", "base-b"])] },
+      { events: [streamAt(["current-a", "current-b"])] },
+      [
+        { key: "1", label: "Open", baselineT: 1000, currentT: 1000 },
+        { key: "2", label: "Pay", baselineT: 2000, currentT: 2000 },
+      ],
+    );
+    expect(steps[0].streams[0].maskedPaths).toEqual(["id"]);
+    expect(steps[0].streams[0].changed).toBe(false);
+    expect(steps[1].streams[0].maskedPaths).toEqual(["id"]);
+    expect(steps[1].streams[0].changed).toBe(false);
   });
 });
 

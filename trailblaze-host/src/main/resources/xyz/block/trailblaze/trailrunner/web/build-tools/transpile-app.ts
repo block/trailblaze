@@ -31,7 +31,7 @@
 // only). Type-checking it needs `@types/bun` for Bun.Transpiler/Bun.Glob/import.meta.main, and the
 // internal npm mirror does not carry it (`@types/bun` and `bun-types` both 404), so adding it would
 // break the gate's own `bun install --frozen-lockfile`. What covers this file instead: the pure
-// helpers below have bun tests (transpile-app.test.ts, run in CI by pr_typescript_unit_tests.sh),
+// helpers below have bun tests (transpile-app.test.ts, run by the TypeScript unit-test CI step),
 // and `main()` executes on every single build — a break here fails `processResources`, loudly and
 // immediately, rather than shipping.
 

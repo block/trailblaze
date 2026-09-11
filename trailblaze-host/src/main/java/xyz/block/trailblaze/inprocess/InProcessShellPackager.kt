@@ -2,6 +2,8 @@ package xyz.block.trailblaze.inprocess
 
 import kotlinx.coroutines.runBlocking
 import xyz.block.trailblaze.config.AppTargetYamlConfig
+import xyz.block.trailblaze.inprocess.apk.ApkReadException
+import xyz.block.trailblaze.inprocess.apk.AppManifestProviders
 import xyz.block.trailblaze.config.TrailblazeConfigYaml
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.scripting.DaemonScriptedToolBundler
@@ -117,6 +119,7 @@ object InProcessShellPackager {
     checkShellCompileFloor(shellProperties, warnings)
     val evidence = resolveTargetEvidence(request)
     runGuards(request, evidence)
+    warnAndroidxStartupTarget(request, warnings)
 
     val stampedManifest =
       AndroidBinaryXml.stampInstrumentationTargetPackage(shellManifest, request.targetPackage)
@@ -271,11 +274,45 @@ object InProcessShellPackager {
         "installed and would then fail to attach."
     }
     require(fingerprint.debuggable || request.release) {
-      "${fingerprint.packageName} is not debuggable, so an instrumentation cannot attach to it on " +
-        "an ordinary device. Pass --release if you know this target is instrumentable anyway (a " +
-        "release build on a userdebug image, for instance) — it has to be explicit, because the " +
-        "usual cause is pointing at the wrong APK."
+      "${fingerprint.packageName} is not debuggable. That is not itself a bar to attaching — the " +
+        "signature check above is the real gate, and this command signs with the target's own key " +
+        "— but it has to be explicit, because the usual cause is pointing at the wrong APK. Pass " +
+        "--release when a non-debuggable target is what you meant."
     }
+  }
+
+  /**
+   * Warns when the target declares `androidx.startup`'s `InitializationProvider`.
+   *
+   * A generic shell cannot attach to such an app today: `AppInitializer` is a process-wide
+   * singleton, and with no `targetProjectPath` for AGP to dedupe against, the shell packages its
+   * own `startup-runtime`, whose copy wins class loading and latches the "discovered" flag first.
+   * The app's own initializers then never run and the process dies in `AppUnderTestLauncher`,
+   * before any Trailblaze session starts
+   * (`docs/internal/devlog/2026-09-01-inprocess-runtime-tool-source.md`).
+   *
+   * Only the `--app-apk` path can see this. A fingerprint carries the signing facts a key-custody
+   * team can state about an app whose bytes never travel; it says nothing about the manifest's
+   * components. So this is a warning rather than a refusal — refusing would fail closed on every
+   * fingerprint-only caller, whose silence is "not recorded", not "no androidx.startup".
+   */
+  private fun warnAndroidxStartupTarget(request: Request, warnings: MutableList<String>) {
+    val appApk = request.appApk ?: return
+    val startupProviders = try {
+      AppManifestProviders.of(appApk).filter { it.androidxStartup }
+    } catch (e: ApkReadException) {
+      warnings += "Could not read $appApk's providers, so this APK is unchecked for the " +
+        "androidx.startup limitation described in --help: ${e.message}"
+      return
+    }
+    if (startupProviders.isEmpty()) return
+    warnings += "${request.targetPackage} declares androidx.startup " +
+      "(${startupProviders.joinToString { it.className }}), which a generic shell cannot attach " +
+      "to yet: the shell's duplicate AppInitializer latches first, the app's own initializers " +
+      "never run, and the process crashes before the first session starts. This APK is produced " +
+      "anyway — it is the packaging that is fine, not the run. Use the Gradle in-process module " +
+      "for this app, which names it as targetProjectPath so AGP dedupes startup-runtime out of " +
+      "the test APK."
   }
 
   /**
@@ -306,7 +343,7 @@ object InProcessShellPackager {
     when (shellProperties["floored"]) {
       "true" -> Unit
       null -> warnings += "This shell records no compile-floor marker, so it predates the check. " +
-        "If it was built without gradle/inprocess-compile-floor.init.gradle.kts, a version " +
+        "If it was built without the compile-floor init script, a version " +
         "mismatch with the app will surface on device as a NoSuchMethodError. " +
         "scripts/build-inprocess-shell.sh builds a marked one."
       else -> error(
@@ -520,6 +557,10 @@ object InProcessShellPackager {
       val bundler = DaemonScriptedToolBundler(
         esbuildBinary = esbuild,
         inProcessSdkEntryOverride = request.inProcessSdkEntry,
+        // The request's entry is already resolved two tiers deep (gated source tree, else the SDK
+        // extracted from this JAR), so a null is a verdict. A walk-up from esbuild would re-select
+        // the source tree that verdict rejected, since esbuild is normally its own devDependency.
+        allowLegacyEsbuildWalkup = false,
       )
       for (source in sources) {
         val relStem = source.relativeTo(toolsDir).invariantSeparatorsPath.removeSuffix(".ts")
@@ -587,6 +628,22 @@ object InProcessShellPackager {
       .sortedBy { it.relativeTo(toolsDir).invariantSeparatorsPath }
       .toList()
   }
+
+  /**
+   * Whether any of [trailmapDirs] carries an in-process TypeScript tool source — that is, whether
+   * this request can need esbuild and the SDK entry at all. A request of only `.bundle.js` tools (or
+   * of no trailmaps) is packaged without bundling, so a caller can skip resolving them.
+   *
+   * Answers from the packaging loop's own discovery ([inProcessToolSources]) so a caller can't drift
+   * from what the loop will actually try to bundle. It deliberately does NOT apply the loop's
+   * "a `.bundle.js` beside the source wins" filter, which needs the accumulated asset map: erring
+   * toward "yes" costs a caller a resolution it didn't need, while erring toward "no" would drop the
+   * slim SDK alias from a bundle that does get built.
+   */
+  internal fun carriesTypeScriptToolSource(trailmapDirs: List<File>): Boolean =
+    trailmapDirs.any { dir ->
+      File(dir, "tools").let { it.isDirectory && inProcessToolSources(it).isNotEmpty() }
+    }
 
   // --- record ---------------------------------------------------------------------------------
 

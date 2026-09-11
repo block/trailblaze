@@ -11,11 +11,14 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNotSame
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
+import kotlin.test.fail
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Clock
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.add
+import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
@@ -203,6 +206,90 @@ class TrailblazeMcpBridgeImplTest {
   // throw so the CLI reports a non-zero exit.
 
   private val fallback = "Executed FooTool on device test-emu"
+
+  @Test
+  fun `packing a result for typed dispatch renders to the same string it replaced`() {
+    // `executeTrailblazeTool` is now a rendering wrapper over the typed dispatch, so each branch
+    // packs its own acknowledgement into the result instead of rendering it directly. That is
+    // only safe if packing-then-rendering is indistinguishable from rendering — otherwise the
+    // CLI's output changes. Checked across every combination the branches produce.
+    val structured = buildJsonObject { put("count", JsonPrimitive(3)) }
+    val cases: List<Pair<String?, JsonElement?>> = listOf(
+      "human readable message" to structured,
+      "human readable message" to null,
+      null to structured,
+      null to null,
+      "" to structured,
+      "" to null,
+    )
+
+    for ((message, structuredContent) in cases) {
+      val packed = TrailblazeMcpBridgeImpl.toolResultWithFallbackMessage(
+        message = message,
+        structuredContent = structuredContent,
+        fallback = fallback,
+      )
+      assertEquals(
+        TrailblazeMcpBridgeImpl.renderToolResultOutput(message, structuredContent, fallback),
+        TrailblazeMcpBridgeImpl.renderToolResultOutput(
+          packed.message,
+          packed.structuredContent,
+          fallback,
+        ),
+        "Packing then rendering must equal rendering for (message=$message, structured=$structuredContent)",
+      )
+    }
+  }
+
+  @Test
+  fun `packing keeps the structured payload out of the message slot`() {
+    // The acknowledgement is a dispatch detail, so it must not displace or duplicate a real
+    // payload: a nested caller reading `textContent` should see what the tool said (nothing
+    // here), while the typed slot carries the payload.
+    val structured = buildJsonObject { put("count", JsonPrimitive(3)) }
+    val packed = TrailblazeMcpBridgeImpl.toolResultWithFallbackMessage(
+      message = null,
+      structuredContent = structured,
+      fallback = fallback,
+    )
+
+    assertEquals(structured, packed.structuredContent)
+    assertEquals(null, packed.message)
+  }
+
+  @Test
+  fun `packing substitutes the acknowledgement only for a payload-free tool`() {
+    val packed = TrailblazeMcpBridgeImpl.toolResultWithFallbackMessage(
+      message = null,
+      structuredContent = null,
+      fallback = fallback,
+    )
+
+    assertEquals(fallback, packed.message)
+    assertEquals(null, packed.structuredContent)
+  }
+
+  @Test
+  fun `executionResultToToolResult keeps structured content typed and still throws on failure`() {
+    val structured = buildJsonObject { put("count", JsonPrimitive(3)) }
+
+    val success = TrailblazeMcpBridgeImpl.executionResultToToolResult(
+      result = TrailExecutionResult.Success(
+        toolMessage = null,
+        toolStructuredContent = structured,
+      ),
+      fallback = fallback,
+    )
+    assertEquals(structured, success.structuredContent)
+
+    // Same error contract as the rendering twin — a failed run must not read as tool output.
+    assertFailsWith<IllegalStateException> {
+      TrailblazeMcpBridgeImpl.executionResultToToolResult(
+        result = TrailExecutionResult.Failed(errorMessage = "boom"),
+        fallback = fallback,
+      )
+    }
+  }
 
   @Test
   fun `renderExecutionResult prefers structured content over message and fallback`() {
@@ -503,13 +590,50 @@ class TrailblazeMcpBridgeImplTest {
     val forwarded = mutableListOf<TraceId?>()
     val executor = TrailblazeMcpBridgeImpl.hostLocalNestedToolExecutor(parentTraceId) { _, traceId ->
       forwarded += traceId
-      "ok"
+      TrailblazeToolResult.Success(message = "ok")
     }
 
     val result = runBlocking { executor(InputTextTrailblazeTool(text = "hello")) }
 
     assertEquals(listOf<TraceId?>(parentTraceId), forwarded)
     assertEquals("ok", (result as TrailblazeToolResult.Success).message)
+  }
+
+  @Test
+  fun `a nested tool's structured payload reaches the calling tool as a value, not as JSON text`() {
+    // The #6653 defect: this executor used to take a RENDERED string and re-wrap it as
+    // `Success(message = ...)`, so `structuredContent` arrived null and a composite doing
+    // `const { appIds } = await ctx.tools.listInstalledApps({})` destructured a string into
+    // `undefined`. The typed payload has to survive the nested hop untouched.
+    val payload = buildJsonObject {
+      put("appIds", buildJsonArray { add(JsonPrimitive("com.example.one")) })
+    }
+    val executor = TrailblazeMcpBridgeImpl.hostLocalNestedToolExecutor(
+      TraceId.generate(origin = TraceId.Companion.TraceOrigin.MCP),
+    ) { _, _ -> TrailblazeToolResult.Success(message = null, structuredContent = payload) }
+
+    val result = runBlocking { executor(InputTextTrailblazeTool(text = "hello")) }
+
+    val success = assertIs<TrailblazeToolResult.Success>(result)
+    assertEquals(payload, success.structuredContent)
+    // Not the JSON rendering smuggled through the message slot either — a caller reading
+    // `textContent` must not see a payload the typed slot already carries.
+    assertEquals(null, success.message)
+  }
+
+  @Test
+  fun `the assembled context's nested executor forwards a structured payload`() {
+    // Same guarantee as above, but through the context a host-local dispatch actually runs
+    // against — a correct helper wired into the wrong slot is just as broken.
+    val payload = buildJsonObject { put("count", JsonPrimitive(2)) }
+    val context = buildContext(
+      dispatchNested = { _, _ -> TrailblazeToolResult.Success(structuredContent = payload) },
+    )
+
+    val nested = context.nestedToolExecutor ?: fail("The context must wire a nested tool executor")
+    val result = runBlocking { nested(InputTextTrailblazeTool(text = "hello")) }
+
+    assertEquals(payload, assertIs<TrailblazeToolResult.Success>(result).structuredContent)
   }
 
   @Test
@@ -585,7 +709,8 @@ class TrailblazeMcpBridgeImplTest {
       driverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
     ),
     sessionDirProvider: ((SessionId) -> File)? = null,
-    dispatchNested: suspend (TrailblazeTool, TraceId?) -> String = { _, _ -> "ok" },
+    dispatchNested: suspend (TrailblazeTool, TraceId?) -> TrailblazeToolResult =
+      { _, _ -> TrailblazeToolResult.Success(message = "ok") },
   ) = TrailblazeMcpBridgeImpl.buildHostLocalToolContext(
     deviceInfo = deviceInfo,
     session = session,
@@ -644,6 +769,28 @@ class TrailblazeMcpBridgeImplTest {
   }
 
   @Test
+  fun `the dispatch context carries an android command executor bound to the dispatch device`() {
+    // Every dual-mode primitive behind `AdbJvmAndAndroidUtil.withAndroidDeviceCommandExecutor`
+    // reads this slot, so a null here fails `android_audioFileToDevice` and its siblings with
+    // "AndroidDeviceCommandExecutor is not provided" on the host-local path only — the same tools
+    // work under `trailblaze run`, where `MaestroTrailblazeAgent` builds one.
+    val deviceInfo = TrailblazeMcpBridgeImpl.hostLocalDeviceInfo(
+      deviceId = androidDevice,
+      driverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
+      driverDimensions = null,
+    )
+
+    val executor = assertNotNull(
+      buildContext(deviceInfo = deviceInfo).androidDeviceCommandExecutor,
+      "Host-local dispatch must wire an AndroidDeviceCommandExecutor",
+    )
+
+    // Bound to THIS dispatch's device: an executor built against some other id would send every
+    // adb command to the wrong device rather than failing outright.
+    assertEquals(androidDevice, executor.deviceId)
+  }
+
+  @Test
   fun `the dispatch context leaves screen state to be captured on read`() {
     // `screenState` starts null so a tool that never reads it never pays for a capture, and a
     // tool that does read it sees the CURRENT screen rather than a snapshot taken at build time.
@@ -672,7 +819,7 @@ class TrailblazeMcpBridgeImplTest {
     val forwarded = mutableListOf<TraceId?>()
     val ctx = buildContext(traceId = traceId) { _, nestedTraceId ->
       forwarded += nestedTraceId
-      "nested ok"
+      TrailblazeToolResult.Success(message = "nested ok")
     }
 
     val executor = assertNotNull(ctx.nestedToolExecutor, "Host-local tools dispatch nested calls through this")

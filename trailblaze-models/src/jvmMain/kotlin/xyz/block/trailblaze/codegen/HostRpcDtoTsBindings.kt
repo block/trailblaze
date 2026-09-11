@@ -29,12 +29,26 @@ internal object HostRpcDtoTsBindings {
    * one-line edit here.
    *
    * This list tracks the endpoints the TypeScript UI actually consumes today (device + target-app
-   * flows); it is deliberately not the full registered RPC surface. Other flat `@Serializable`
-   * endpoints (e.g. `GetToolCatalogRequest`, `RunTrailYamlRequest`) are added here when a consumer
-   * needs them — until then callers can still use the untyped `rpcCall`. Separately, endpoints that
-   * carry on-the-wire **sealed** types are blocked on codegen, not scope: `DeviceInteractionRequest`
-   * (sealed `DeviceInteraction`) and `GetScreenStateRequest` (sealed node-detail) — add them once
-   * discriminated-union support lands in the walker.
+   * flows); it is deliberately not the full registered RPC surface. Every other endpoint the daemon
+   * registers is absent for one reason — **scope**: no TypeScript consumer needs it yet, and callers
+   * can use the untyped `rpcCall` until one does. That covers the flat `GetToolCatalogRequest` /
+   * `RunTrailYamlRequest` and the sealed-carrying `DeviceInteractionRequest` alike.
+   *
+   * Sealed types are not a codegen limitation. [SerialDescriptorTsCodegen] renders a sealed
+   * hierarchy as a TypeScript discriminated union (`renderSealedUnion`, covered by
+   * `SerialDescriptorTsCodegenTest`), so a sealed-carrying endpoint needs no generator work first.
+   *
+   * Only an endpoint the daemon routes over **HTTP** belongs here. `rpcCall` always POSTs
+   * `/rpc/<Name>` and has no WebSocket path, so an entry `DeviceApiEndpoint` does not register on
+   * the HTTP transport compiles fine and 404s at runtime. Two ways to trip on that:
+   *  - `GetScreenStateRequest` is on the **on-device** RPC surface, which the daemon calls as a
+   *    client rather than serves, so exporting it needs a daemon-side route or proxy first.
+   *  - `SubscribeFramesRequest` / `UnsubscribeFramesRequest` are WS-only by design (they push
+   *    frames), so a generated POST binding for either would 404 even though the daemon "routes"
+   *    them.
+   *
+   * `DeviceInteractionRequest` is neither: `DeviceApiEndpoint` registers it on both transports, so
+   * it stays a genuine one-line add whenever a TypeScript consumer wants it.
    *
    * Typed as `KClass<out RpcRequest<*>>` so the allowlist is self-validating: a non-`RpcRequest`
    * entry fails to compile rather than throwing at reflection time.

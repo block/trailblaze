@@ -61,12 +61,10 @@ actual class AndroidDeviceCommandExecutor actual constructor(
     )
   }
 
-  actual fun clearAppData(appId: String) {
-    AndroidHostAdbUtils.clearAppData(
-      deviceId = deviceId,
-      appId = appId,
-    )
-  }
+  actual fun clearAppData(appId: String): PmClearOutcome = AndroidHostAdbUtils.clearAppData(
+    deviceId = deviceId,
+    appId = appId,
+  )
 
   actual fun isAppRunning(appId: String): Boolean {
     return AndroidHostAdbUtils.isAppRunning(

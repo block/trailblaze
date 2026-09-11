@@ -317,7 +317,7 @@ object WorkspaceTypeScriptSetup {
    * The last-resort answer to "what does `@trailblaze/scripting` resolve to", for a caller that has
    * no reachable SDK source tree AND no workspace extract to borrow — which is the state of a FRESH
    * worktree, since `.trailblaze/` is gitignored and no `trailblaze check` has run there. That is
-   * not an exotic case: `scripts/validate-trailmap-tool-change.sh` materializes exactly such a
+   * not an exotic case: trailmap tool-change validation materializes exactly such a
    * worktree and runs `usages --changed-since` inside it.
    *
    * Extracting rather than failing is safe because the SDK is pinned by the FRAMEWORK, not by repo

@@ -50,6 +50,7 @@ import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.yaml.TrailArgBinder
 import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
+import kotlin.reflect.KClass
 
 /**
  * Plugs the Compose desktop driver into the host: a Compose app that embeds a `ComposeRpcServer`
@@ -75,6 +76,17 @@ class ComposeHostDriverDescriptor(
   override val driverTypes: Set<TrailblazeDriverType> = setOf(TrailblazeDriverType.COMPOSE)
 
   override val listingVisibility = DeviceListingVisibility.LISTED
+
+  /**
+   * Compose drives its device over its own RPC server rather than the platform's UI automation, so
+   * clicking and typing need Compose's own tools rather than the mobile built-ins.
+   *
+   * Additive, like every implementation of this: the serializer unions what it gets here with the
+   * built-in set. The catalog is what keeps the mobile-only built-ins out of a Compose *session* —
+   * they declare incompatible `drivers:` — and that is a separate mechanism from this one.
+   */
+  override fun toolClasses(driverType: TrailblazeDriverType): Set<KClass<out TrailblazeTool>> =
+    TrailblazeToolSetCatalog.resolveForDriver(driverType, ComposeToolSetIds.ALL).toolClasses
 
   /**
    * One "self" entry when a Compose app's RPC server answers the ping, nothing otherwise. The

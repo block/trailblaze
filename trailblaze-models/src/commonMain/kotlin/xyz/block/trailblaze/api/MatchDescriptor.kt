@@ -4,7 +4,7 @@ import kotlinx.serialization.Serializable
 
 /**
  * Lightweight identity + position record describing one match returned by the
- * `findMatches` tool.
+ * `findSelectorMatches` tool.
  *
  * Designed for scripted-tool authors who want to ask "is this element visible?",
  * "is the selector unambiguous?", and "where is the match on screen?" without
@@ -53,7 +53,7 @@ data class MatchDescriptor(
    * the same physical pixels are now reached by a different index sequence.
    *
    * Treat descriptors as "immediate hand-offs to act on in this tool body"
-   * rather than long-lived references. Re-querying via [findMatches] is the
+   * rather than long-lived references. Re-querying via `findSelectorMatches` is the
    * right pattern after any device-mutating action, even if the matched
    * element is logically the same. For longer-lived identity, prefer
    * [accessibilityId] / [resourceId] when the driver populates them.
@@ -111,8 +111,20 @@ data class MatchDescriptor(
  * convention for [TrailblazeNode] helpers — see also [describe], [withRefs],
  * [findFirst].
  */
-fun TrailblazeNode.toMatchDescriptor(root: TrailblazeNode): MatchDescriptor? {
-  val path = MatchDescriptorBuilder.indexPathOf(root, this) ?: return null
+fun TrailblazeNode.toMatchDescriptor(root: TrailblazeNode): MatchDescriptor? =
+  describeAt(MatchDescriptorBuilder.indexPathOf(root, this))
+
+/**
+ * Same descriptor, with the index path read out of a prebuilt
+ * [MatchDescriptorBuilder.indexPaths] map instead of walked per call — so a caller describing
+ * many matches from ONE capture pays one tree walk for all of them rather than one each. Null has
+ * the identical meaning: this node is not in the tree the map was built from.
+ */
+fun TrailblazeNode.toMatchDescriptor(indexPaths: Map<Long, List<Int>>): MatchDescriptor? =
+  describeAt(indexPaths[this.nodeId])
+
+private fun TrailblazeNode.describeAt(path: List<Int>?): MatchDescriptor? {
+  if (path == null) return null
   val (matchedText, accessibilityId, resourceId) =
     MatchDescriptorBuilder.extractIdentity(this.driverDetail)
   // Preserve a null `bounds` rather than fabricating `(0, 0, 0, 0)` — some

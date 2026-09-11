@@ -111,9 +111,16 @@ private const val UNFINISHED_EVENT_FALLBACK_DURATION_MS = 1_000L
  */
 @Composable
 internal fun SessionCombinedView(
+  /**
+   * Logs already on ONE timeline — pass `SessionDetail.logs`, never the raw session logs. Every
+   * ordering, scrub position and screenshot association below compares `timestamp` directly, which
+   * a device-stamped log breaks by its clock's skew until `normalizedToHostClock` has re-stamped it.
+   */
   logs: List<TrailblazeLog>,
   overallStatus: SessionStatus?,
   sessionId: String,
+  /** See [xyz.block.trailblaze.ui.tabs.session.models.SessionDetail.deviceClockOffsetMs]. */
+  deviceClockOffsetMs: Long? = null,
   videoMetadata: VideoMetadata? = null,
   imageLoader: ImageLoader = NetworkImageLoader(),
   onShowScreenshotModal:
@@ -758,6 +765,7 @@ internal fun SessionCombinedView(
     sessionEndMs = sessionEndMs,
     activeEventStartMs = activeEventRange?.first,
     activeEventEndMs = activeEventRange?.second,
+    deviceClockOffsetMs = deviceClockOffsetMs,
   )
   } // end Column
 }

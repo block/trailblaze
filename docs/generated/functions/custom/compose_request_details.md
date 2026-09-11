@@ -29,12 +29,7 @@ Available detail types:
 
 ### Required parameters
 
-- `include` — `ToolParameterType.List(
-  itemsType =
-    ToolParameterType.Enum(
-      entries = [BOUNDS]
-    )
-)`
+- `include` — `array<enum(BOUNDS)>`
   List of detail types to include in the next view hierarchy. Supported: ["BOUNDS"]. Example: ["BOUNDS"] to see element positions.
 
 ## Output

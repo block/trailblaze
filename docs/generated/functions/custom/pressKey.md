@@ -27,9 +27,7 @@ Press a special key that isn't used for regular text input. Examples:
 
 ### Required parameters
 
-- `keyCode` — `ToolParameterType.Enum(
-  entries = [BACK, ENTER, HOME, BACKSPACE, TAB, ESCAPE]
-)`
+- `keyCode` — `enum(BACK | ENTER | HOME | BACKSPACE | TAB | ESCAPE)`
 
 ## Output
 

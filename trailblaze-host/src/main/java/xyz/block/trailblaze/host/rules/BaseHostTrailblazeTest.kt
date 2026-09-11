@@ -29,6 +29,7 @@ import xyz.block.trailblaze.exception.TrailblazeException
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
 import xyz.block.trailblaze.host.HostMaestroTrailblazeAgent
 import xyz.block.trailblaze.host.HostYamlRunResult
+import xyz.block.trailblaze.host.devices.DeviceLocaleConfigurator
 import xyz.block.trailblaze.host.MaestroHostRunnerImpl
 import xyz.block.trailblaze.MaestroTrailblazeAgent
 import xyz.block.trailblaze.agent.AgentUiActionExecutor
@@ -96,6 +97,7 @@ abstract class BaseHostTrailblazeTest(
   maxRetries: Int = 0,
   private val appTarget: TrailblazeHostAppTarget? = null,
   explicitDeviceId: TrailblazeDeviceId? = null,
+  private val deviceClassifierOverride: List<TrailblazeDeviceClassifier> = emptyList(),
   /**
    * Directory session logs are written to. Null lets [HostTrailblazeLoggingRule] use its own
    * default resolution (`<git root>/logs`, else `~/.trailblaze/logs`) — correct for the JUnit path,
@@ -215,28 +217,30 @@ abstract class BaseHostTrailblazeTest(
   }
 
   val trailblazeDeviceClassifiers: List<TrailblazeDeviceClassifier> by lazy {
-    TrailblazeHostDeviceClassifier(
-      trailblazeDriverType = trailblazeDriverType,
-      maestroDeviceInfoProvider = {
-        (connectedDevice as? MaestroConnectedDevice)?.initialMaestroDeviceInfo
-          ?: run {
-            // Non-Maestro-backed device (e.g. AxeConnectedDevice) — synthesize a DeviceInfo from
-            // its own width/height so the classifier still resolves iOS/Android + phone/tablet.
-            // Mirrors DeviceClassifierResolver's dimension-probe fallback construction.
-            DeviceInfo(
-              platform = trailblazeDeviceId.trailblazeDevicePlatform.toMaestroPlatform(),
-              widthPixels = connectedDevice.deviceWidth,
-              heightPixels = connectedDevice.deviceHeight,
-              widthGrid = connectedDevice.deviceWidth,
-              heightGrid = connectedDevice.deviceHeight,
-            )
-          }
-      },
-      // A non-Maestro device's dimensions are AXe root-frame bounds, which are points — the
-      // classifier's iPhone/iPad split needs to know so an iPad (e.g. 1024x1366pt) isn't read
-      // against the pixel threshold and misclassified as an iPhone.
-      iosDimensionsInPoints = connectedDevice !is MaestroConnectedDevice,
-    ).getDeviceClassifiers()
+    deviceClassifierOverride.ifEmpty {
+      TrailblazeHostDeviceClassifier(
+        trailblazeDriverType = trailblazeDriverType,
+        maestroDeviceInfoProvider = {
+          (connectedDevice as? MaestroConnectedDevice)?.initialMaestroDeviceInfo
+            ?: run {
+              // Non-Maestro-backed device (e.g. AxeConnectedDevice) — synthesize a DeviceInfo from
+              // its own width/height so the classifier still resolves iOS/Android + phone/tablet.
+              // Mirrors DeviceClassifierResolver's dimension-probe fallback construction.
+              DeviceInfo(
+                platform = trailblazeDeviceId.trailblazeDevicePlatform.toMaestroPlatform(),
+                widthPixels = connectedDevice.deviceWidth,
+                heightPixels = connectedDevice.deviceHeight,
+                widthGrid = connectedDevice.deviceWidth,
+                heightGrid = connectedDevice.deviceHeight,
+              )
+            }
+        },
+        // A non-Maestro device's dimensions are AXe root-frame bounds, which are points — the
+        // classifier's iPhone/iPad split needs to know so an iPad (e.g. 1024x1366pt) isn't read
+        // against the pixel threshold and misclassified as an iPhone.
+        iosDimensionsInPoints = connectedDevice !is MaestroConnectedDevice,
+      ).getDeviceClassifiers()
+    }
   }
 
   val trailblazeDeviceInfo: TrailblazeDeviceInfo by lazy {
@@ -731,10 +735,11 @@ abstract class BaseHostTrailblazeTest(
      */
     initialArgs: Map<String, String> = emptyMap(),
   ): HostYamlRunResult {
-    // Make sure the app is stopped before the test so the LLM doesn't get confused and think it's already running.
+    // Preserve the caller's cleanup contract even when decoding later resolves the trail to skip.
     if (forceStopApp) {
       ensureTargetAppIsStopped()
     }
+
     // Resolve device classifiers BEFORE decoding so a v3 trail lowers with the
     // right closest-wins recording for this device. v1 inputs ignore the list.
     val classifiers = loggingRule.trailblazeDeviceInfoProvider().classifiers
@@ -754,6 +759,17 @@ abstract class BaseHostTrailblazeTest(
         "[Trailblaze] Skipping trail" + (trailFilePath?.let { " ($it)" } ?: "") + ": $skipReason"
       )
       return HostYamlRunResult(loggingRule.session?.sessionId ?: SessionId("unknown"))
+    }
+
+    // A locale is a device setting, not an app launch argument. Apply it before the session so the
+    // target's next process starts with the configured language.
+    val deviceLocale = trailConfig?.locale
+    deviceLocale?.let { DeviceLocaleConfigurator.apply(trailblazeDeviceId, it) }
+
+    // A requested locale requires a fresh app process even when the caller opted out of the usual
+    // clean start; otherwise an already-running app can keep rendering in its previous language.
+    if (!forceStopApp && deviceLocale != null) {
+      ensureTargetAppIsStopped()
     }
 
     // Anchor trail-relative host paths (e.g. a WAV committed beside the trail) to THIS trail's

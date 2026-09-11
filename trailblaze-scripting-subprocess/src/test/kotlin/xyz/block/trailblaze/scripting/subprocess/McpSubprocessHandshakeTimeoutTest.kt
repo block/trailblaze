@@ -25,7 +25,7 @@ import kotlin.test.assertFailsWith
 
 /**
  * Faithful, `bun`-backed coverage of the MCP `initialize` handshake bound — the fix for the
- * daemon-wide wedge (build 3366). Complements [McpSubprocessSessionConnectCleanupTest], which
+ * daemon-wide wedge seen in CI. Complements [McpSubprocessSessionConnectCleanupTest], which
  * proves the same mechanism against a POSIX `sleep` and so runs even without `bun`; here the
  * hung server is a real `bun` process (`fixture-hangs.js`) that holds its stdio like a genuine
  * MCP server would but never answers `initialize`.

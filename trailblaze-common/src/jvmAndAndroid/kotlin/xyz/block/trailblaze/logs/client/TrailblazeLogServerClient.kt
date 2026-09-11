@@ -12,9 +12,11 @@ import io.ktor.http.contentType
 import kotlinx.datetime.Clock
 import okio.ByteString.Companion.toByteString
 import xyz.block.trailblaze.logs.model.SessionId
+import xyz.block.trailblaze.logs.model.TrailblazeClockDomain
 import xyz.block.trailblaze.ondevice.rpc.proto.LogUploadEnvelope
 import xyz.block.trailblaze.ondevice.rpc.proto.ScreenshotUpload
 import xyz.block.trailblaze.ondevice.rpc.proto.TraceUpload
+import xyz.block.trailblaze.replay.ActionTrace
 import xyz.block.trailblaze.transport.AndroidWireTransport
 import xyz.block.trailblaze.transport.AndroidWireTransportMode
 import xyz.block.trailblaze.util.Console
@@ -50,8 +52,13 @@ class TrailblazeLogServerClient(
     }
   }
 
-  suspend fun sendAgentLog(log: TrailblazeLog): Boolean =
-    sendWithPreferredTransport(
+  suspend fun sendAgentLog(log: TrailblazeLog): Boolean {
+    // Every log this device emits blocks its emitting thread until the host acks it, so the cost
+    // belongs to whatever the request was doing at the time — not to a background lane. Attributed
+    // per log CLASS because "which log is expensive" and "how many are there" are the two
+    // questions the per-action residual turns on.
+    val startNs = System.nanoTime()
+    val upload = sendWithPreferredTransport(
       protobuf = { id ->
         LogUploadEnvelope(
           upload_id = id,
@@ -60,6 +67,13 @@ class TrailblazeLogServerClient(
       },
       jsonHttp = { postAgentLog(log).status == HttpStatusCode.OK },
     )
+    ActionTrace.logPost(
+      kind = log::class.simpleName ?: "UnknownLog",
+      ms = (System.nanoTime() - startNs) / 1_000_000,
+      bytes = upload.wireBytes,
+    )
+    return upload.sent
+  }
 
   suspend fun postScreenshot(
     screenshotFilename: String,
@@ -76,21 +90,30 @@ class TrailblazeLogServerClient(
     screenshotFilename: String,
     sessionId: SessionId,
     screenshotBytes: ByteArray,
-  ): Boolean = sendWithPreferredTransport(
-    protobuf = { id ->
-      LogUploadEnvelope(
-        upload_id = id,
-        screenshot = ScreenshotUpload(
-          filename = screenshotFilename,
-          session_id = sessionId.value,
-          image = screenshotBytes.toByteString(),
-        ),
-      )
-    },
-    jsonHttp = {
-      postScreenshot(screenshotFilename, sessionId, screenshotBytes).status == HttpStatusCode.OK
-    },
-  )
+  ): Boolean {
+    val startNs = System.nanoTime()
+    val upload = sendWithPreferredTransport(
+      protobuf = { id ->
+        LogUploadEnvelope(
+          upload_id = id,
+          screenshot = ScreenshotUpload(
+            filename = screenshotFilename,
+            session_id = sessionId.value,
+            image = screenshotBytes.toByteString(),
+          ),
+        )
+      },
+      jsonHttp = {
+        postScreenshot(screenshotFilename, sessionId, screenshotBytes).status == HttpStatusCode.OK
+      },
+    )
+    ActionTrace.logPost(
+      kind = "Screenshot",
+      ms = (System.nanoTime() - startNs) / 1_000_000,
+      bytes = screenshotBytes.size.toLong(),
+    )
+    return upload.sent
+  }
 
   suspend fun postTrace(sessionId: SessionId, traceJson: String, onDeviceClock: Boolean = false): HttpResponse =
     httpClient.post("$baseUrl/log/trace") {
@@ -122,21 +145,36 @@ class TrailblazeLogServerClient(
         )
       },
       jsonHttp = { postTrace(sessionId, traceJson, onDeviceClock).status == HttpStatusCode.OK },
-    )
+    ).sent
+
+  /**
+   * One upload's outcome: whether it landed, and how many bytes went on the wire.
+   *
+   * [wireBytes] is this upload's own size, and it is 0 for anything that did not go out over the
+   * WebSocket — the JSON/HTTP path does not measure its body, and reporting a WebSocket size for
+   * an HTTP upload would attribute bytes to a transport that never sent them.
+   */
+  private data class Upload(val sent: Boolean, val wireBytes: Long)
 
   private suspend fun sendWithPreferredTransport(
     protobuf: (Long) -> LogUploadEnvelope,
     jsonHttp: suspend () -> Boolean,
-  ): Boolean {
-    if (!useBinaryTransport) return jsonHttp()
-    if (AndroidWireTransport.mode == AndroidWireTransportMode.JSON) return jsonHttp()
+  ): Upload {
+    if (!useBinaryTransport) return Upload(sent = jsonHttp(), wireBytes = 0L)
+    if (AndroidWireTransport.mode == AndroidWireTransportMode.JSON) {
+      return Upload(sent = jsonHttp(), wireBytes = 0L)
+    }
     return when (val attempt = webSocketClient.send(protobuf)) {
-      TrailblazeLogWebSocketClient.Attempt.Success -> true
+      is TrailblazeLogWebSocketClient.Attempt.Success -> Upload(true, attempt.wireBytes)
       TrailblazeLogWebSocketClient.Attempt.FallbackToHttp ->
-        if (AndroidWireTransport.mode == AndroidWireTransportMode.AUTO) jsonHttp() else false
+        if (AndroidWireTransport.mode == AndroidWireTransportMode.AUTO) {
+          Upload(sent = jsonHttp(), wireBytes = 0L)
+        } else {
+          Upload(sent = false, wireBytes = 0L)
+        }
       is TrailblazeLogWebSocketClient.Attempt.Failure -> {
         Console.log("[TrailblazeLogWebSocket] ${attempt.message}")
-        false
+        Upload(sent = false, wireBytes = 0L)
       }
     }
   }
@@ -153,9 +191,12 @@ class TrailblazeLogServerClient(
      * Both values are always sent, so that an ABSENT marker means exactly one thing: an uploader
      * older than this field. The two routes read that absence differently, because they carry
      * different traffic — see `LogTracePostEndpoint` and `LogWebSocketEndpoint`.
+     *
+     * Values derive from [TrailblazeClockDomain] so the trace vocabulary can't drift from the
+     * per-log `clock` field's.
      */
     const val CLOCK_PARAM: String = "clock"
-    const val DEVICE_CLOCK: String = "device"
-    const val HOST_CLOCK: String = "host"
+    val DEVICE_CLOCK: String = TrailblazeClockDomain.DEVICE.wireName
+    val HOST_CLOCK: String = TrailblazeClockDomain.HOST.wireName
   }
 }

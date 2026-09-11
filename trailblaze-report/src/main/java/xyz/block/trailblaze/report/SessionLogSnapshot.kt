@@ -7,9 +7,14 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
+import xyz.block.trailblaze.logs.client.TrailblazeDeviceClockOffsets
 import xyz.block.trailblaze.logs.client.TrailblazeLog
+import xyz.block.trailblaze.logs.client.deviceClockOffsets
+import xyz.block.trailblaze.logs.client.normalizedToHostClock
 import xyz.block.trailblaze.logs.model.SessionId
+import xyz.block.trailblaze.logs.model.TrailblazeClockDomain
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.util.Console
 
@@ -21,9 +26,12 @@ import xyz.block.trailblaze.util.Console
  *
  * Two views of the same files, because the report legs need both:
  *
- * - [logs] — the typed, cost-enriched [TrailblazeLog] list (timestamp-sorted), exactly what
- *   [LogsRepo.getLogsForSession] returns for the same on-disk state. Consumed by the report
- *   meta/summary builders and used to pre-seed the WASM report's session-scoped [LogsRepo].
+ * - [logs] — the typed, cost-enriched [TrailblazeLog] list, normalized onto the host clock and
+ *   sorted, exactly what [LogsRepo.getLogsForSession] returns for the same on-disk state (a
+ *   contract this shares with that method: seeding a repo with logs it would have ordered
+ *   differently is how the report and the daemon come to disagree about a skewed session).
+ *   Consumed by the report meta/summary builders and used to pre-seed the WASM report's
+ *   session-scoped [LogsRepo].
  * - [rawLogsJson] — the raw per-file records as a [JsonArray], byte-equivalent to what
  *   `RunReportGenerator` used to re-read from disk for the interactive report's `input.json`
  *   (timestamp-sorted like [logs], leniently parsed, redundant view-hierarchy fields deduped to
@@ -45,6 +53,13 @@ class SessionLogSnapshot(
   val logs: List<TrailblazeLog>,
   val rawLogsJson: JsonArray,
   val traceEventsJson: JsonArray = JsonArray(emptyList()),
+  /**
+   * The session-wide device→host offset [logs] were normalized by, or null when the session had no
+   * ingestion anchor. Carried out of the snapshot because normalizing spends the evidence it is
+   * derived from, and the report's session view still needs it to place device log streams (see
+   * [xyz.block.trailblaze.logs.model.SessionInfo.deviceClockOffsetMs]).
+   */
+  val deviceClockOffsetMs: Long? = null,
 ) {
   companion object {
 
@@ -69,6 +84,33 @@ class SessionLogSnapshot(
     private fun recordTimestamp(record: JsonElement): Instant? = runCatching {
       Instant.parse((record as JsonObject)["timestamp"]!!.jsonPrimitive.content)
     }.getOrNull()
+
+    /**
+     * [recordTimestamp] moved onto the host clock, for a record that says it was stamped by a
+     * device. Keyed by the record's own `deviceName` exactly where a decoded log would be — tool
+     * logs — because a multi-device session binds devices with independent skews, and the
+     * session-wide minimum under-shifts every device but the furthest-behind one, which is enough
+     * to sort its tool before the host objective that launched it. Records with no parseable
+     * timestamp sort first, as before.
+     */
+    private fun hostTimelineMs(record: JsonElement, offsets: TrailblazeDeviceClockOffsets?): Long? {
+      val timestamp = recordTimestamp(record) ?: return null
+      val obj = record as? JsonObject
+      val isDeviceStamped = obj?.get("clock")?.jsonPrimitive?.content == TrailblazeClockDomain.DEVICE.wireName
+      if (!isDeviceStamped || offsets == null) return timestamp.toEpochMilliseconds()
+      val offsetMs = if (obj.simpleClassName() == TOOL_LOG_CLASS_NAME) {
+        offsets.offsetMsForDeviceName(obj["deviceName"]?.jsonPrimitive?.contentOrNull)
+      } else {
+        offsets.sessionWideOffsetMs
+      }
+      return timestamp.toEpochMilliseconds() + offsetMs
+    }
+
+    /** The log class's simple name, from the polymorphic `class` discriminator the records carry. */
+    private fun JsonObject.simpleClassName(): String? =
+      get("class")?.jsonPrimitive?.contentOrNull?.substringAfterLast('.')
+
+    private const val TOOL_LOG_CLASS_NAME = "TrailblazeToolLog"
 
     /**
      * Captures a snapshot of [sessionId]'s current logs under [logsDir], reading each log file
@@ -105,11 +147,22 @@ class SessionLogSnapshot(
             ?.let { typedLogs.add(it) }
         }
       }
+      // One timeline before either view is ordered, matching what LogsRepo.getLogsForSession
+      // hands every other consumer. A device whose clock lags the host's stamps its tools before
+      // the step that launched them, and BOTH views are ordering-sensitive: the typed view feeds
+      // the report's summary and session info, and the raw view feeds an extractor that folds
+      // ADJACENT records into steps.
+      val offsets = typedLogs.deviceClockOffsets()
       return SessionLogSnapshot(
         sessionId = sessionId,
-        logs = typedLogs.sortedBy { it.timestamp },
-        rawLogsJson = buildJsonArray { rawRecords.sortedBy { recordTimestamp(it) }.forEach { add(it) } },
+        logs = typedLogs.normalizedToHostClock(offsets).sortedBy { it.timestamp },
+        // Records are passed through byte-for-byte — only their ORDER uses the host timeline, so
+        // the embedded payload still matches the on-disk records the profiler re-normalizes itself.
+        rawLogsJson = buildJsonArray {
+          rawRecords.sortedBy { hostTimelineMs(it, offsets) }.forEach { add(it) }
+        },
         traceEventsJson = readTraceEvents(sessionDir),
+        deviceClockOffsetMs = offsets?.sessionWideOffsetMs,
       )
     }
 

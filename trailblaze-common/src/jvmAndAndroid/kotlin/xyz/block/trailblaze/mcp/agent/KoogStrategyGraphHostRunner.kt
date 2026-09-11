@@ -16,10 +16,12 @@ import xyz.block.trailblaze.toolcalls.ConfigTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
+import xyz.block.trailblaze.toolcalls.resolveToolName
 import xyz.block.trailblaze.toolcalls.toKoogToolDescriptor
 import xyz.block.trailblaze.toolcalls.commands.ObjectiveStatusTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.Status
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
+import xyz.block.trailblaze.toolcalls.isVerificationToolInstance
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.util.TemplatingUtil
 import xyz.block.trailblaze.utils.ElementComparator
@@ -43,8 +45,9 @@ import xyz.block.trailblaze.yaml.VerificationStep
  * enrichment, session logging) the legacy runner uses — only the reasoning loop differs.
  *
  * Returns a [TrailblazeToolResult] so the caller treats Koog like any other item result. A thrown
- * exception (LLM error, max-iterations stall, tool failure) propagates to the caller's existing
- * try/catch, which maps it to a failed session.
+ * exception (LLM error, exhausted LLM-call budget, tool failure) propagates to the caller's existing
+ * try/catch, which maps it to a failed session — an exhausted budget arrives as the same
+ * [xyz.block.trailblaze.exception.MaxCallsLimitReachedException] the legacy runner throws.
  *
  * @param agent the driver agent (any [KoogRunnableAgent]) that executes tools against its device —
  *   in a multi-device session, the routing agent that resolves the active device per call.
@@ -52,7 +55,11 @@ import xyz.block.trailblaze.yaml.VerificationStep
  *   what the agent perceives; its device fields render the `{{device_description}}` placeholder).
  * @param systemPromptTemplate the platform's system prompt template (with `{{device_description}}`).
  * @param traceId optional step trace id; a fresh one is generated when null.
- * @param maxLlmCalls optional iteration cap; defaults to [KoogStrategyGraphAgent.DEFAULT_MAX_ITERATIONS].
+ * @param maxLlmCalls optional per-objective LLM-call budget; defaults to
+ *   [KoogStrategyGraphAgent.DEFAULT_MAX_LLM_CALLS]. Counted in model requests, not graph iterations.
+ * @param instrumentation optional per-objective recorder for Koog's lifecycle events. The caller
+ *   owns it because the interesting case is the one where this function THROWS: the record has to
+ *   outlive the call to be readable. See [KoogRunInstrumentation].
  */
 suspend fun runPromptsWithKoogStrategyGraph(
   promptSteps: List<PromptStep>,
@@ -68,10 +75,41 @@ suspend fun runPromptsWithKoogStrategyGraph(
   maxLlmCalls: Int?,
   systemPromptTemplate: String,
   onStepProgress: ((stepIndex: Int, totalSteps: Int, stepText: String) -> Unit)? = null,
+  instrumentation: KoogRunInstrumentation? = null,
 ): TrailblazeToolResult {
   val objective = promptSteps.joinToString(separator = "\n") { it.prompt }
   onStepProgress?.invoke(1, 1, objective)
 
+  // Scope a verification block to its assertion/observation tools (see [verifyScopedAdvertisedTools]),
+  // so the agent can't scroll/tap on a verify step and pollute state for a following step. The
+  // kill-switch ([VERIFY_SCOPE_DISABLED_ENV]) reverts to the full surface without a redeploy if the
+  // scope ever excludes a tool a verify step legitimately needs — consistent with the other KOOG env
+  // knobs (history compression, screenshot, loop detect). Compute the would-be scope first so the
+  // kill-switch path can log that it overrode a block that WOULD have been scoped.
+  val verifyBlock = resolveVerifyBlockSetup(
+    promptSteps = promptSteps,
+    toolRepo = toolRepo,
+    scopeDisabled = verifyScopeDisabledFromEnv(),
+    evidenceDisabled = verifyEvidenceDisabledFromEnv(),
+  )
+  val initialAdvertisedTools: List<ToolDescriptor>? = verifyBlock.advertisedTools
+  if (verifyBlock.evidenceGateOverridden) {
+    Console.log(
+      "[KOOG_VERIFY_SCOPE] disabled via $VERIFY_EVIDENCE_DISABLED_ENV — this verify block may report " +
+        "COMPLETED with no passing assertion",
+    )
+  }
+  when {
+    initialAdvertisedTools != null -> Console.log(
+      "[KOOG_VERIFY_SCOPE] advertising ${initialAdvertisedTools.size} assertion/observation tool(s) " +
+        "only (no scroll/tap/navigate), mirroring the legacy verify surface",
+    )
+    // Only log the disable when it actually overrode a would-be-scoped verify block — not on every
+    // direction step or non-mobile-driver run (those keep the full surface by design, silently).
+    verifyBlock.scopeOverridden -> Console.log(
+      "[KOOG_VERIFY_SCOPE] disabled via $VERIFY_SCOPE_DISABLED_ENV — keeping the full tool surface on this verify block",
+    )
+  }
   // The agent reports completion via objectiveStatus(COMPLETED/FAILED) — mirroring the legacy
   // DirectMcpAgent. Capture that outcome here so the run RESULT reflects it: a FAILED objective
   // fails the step rather than passing hollowly when the agent stops early.
@@ -80,6 +118,16 @@ suspend fun runPromptsWithKoogStrategyGraph(
   // is never more than one toolDispatcher invocation in flight at a time.
   var objectiveStatusOutcome: Status? = null
   var objectiveExplanation: String? = null
+  // Whether the objectiveStatus call that just ran ends the objective. The graph asks this after
+  // executing a lone objectiveStatus ([KoogStrategyGraphAgent.buildStrategy]'s isObjectiveFinished):
+  // IN_PROGRESS and a refused COMPLETED (below) answer false, so the loop continues.
+  val objectiveStatusGate = ObjectiveStatusGate()
+  // Verification tools that returned Success in this objective — the evidence a COMPLETED has to
+  // rest on. Counted by `isVerification`, not by "every tool on a verify block": a verify step also
+  // advertises `switchDevice`, and a successful device handover asserts nothing, so counting it
+  // would let a COMPLETED through with no claim checked. Never decremented: a later failure does
+  // not un-prove an earlier pass.
+  var passedAssertions = 0
   // Set by the dispatcher when a ConfigTrailblazeTool (e.g. setActiveToolSets) changes the active
   // toolsets, and cleared by [onToolSurfaceRefresh] once the live Koog tool surface has been
   // rebuilt. Like the objective-status vars above, this needs no synchronization: Koog's strategy
@@ -100,22 +148,39 @@ suspend fun runPromptsWithKoogStrategyGraph(
     when {
       tool is ObjectiveStatusTrailblazeTool -> {
         // objectiveStatus is a non-executable control-flow marker — running it through
-        // runTrailblazeTools throws "Unhandled Trailblaze tool". Instead capture the outcome (for the
-        // run result), log it as a TrailblazeToolLog via logToolExecution (so completion shows up in
-        // the session like the legacy path), and return a summary to the LLM.
-        objectiveStatusOutcome = tool.status
-        objectiveExplanation = tool.explanation
+        // runTrailblazeTools throws "Unhandled Trailblaze tool". Instead decide whether to record
+        // the outcome (for the run result), log it as a TrailblazeToolLog via logToolExecution (so
+        // completion shows up in the session like the legacy path), and tell the LLM what happened.
+        val disposition = objectiveStatusDisposition(
+          tool = tool,
+          verificationBlock = verifyBlock.evidenceGateApplies,
+          passedAssertions = passedAssertions,
+        )
+        when (disposition) {
+          is ObjectiveStatusDisposition.Recorded -> {
+            objectiveStatusOutcome = disposition.status
+            objectiveExplanation = tool.explanation
+          }
+          is ObjectiveStatusDisposition.Refused -> Console.log(
+            "[KOOG_VERIFY_SCOPE] refused objectiveStatus=COMPLETED on a verification block with no " +
+              "passing assertion: ${tool.explanation}",
+          )
+        }
+        objectiveStatusGate.record(disposition.endsObjective)
         try {
           agent.logToolExecution(
             tool = tool,
             timeBeforeExecution = Clock.System.now(),
             traceId = traceId ?: TraceId.generate(TraceId.Companion.TraceOrigin.TOOL),
-            result = TrailblazeToolResult.Success(message = tool.explanation),
+            result = when (disposition) {
+              is ObjectiveStatusDisposition.Recorded -> TrailblazeToolResult.Success(message = tool.explanation)
+              is ObjectiveStatusDisposition.Refused -> TrailblazeToolResult.Error.ExceptionThrown(errorMessage = disposition.messageToLlm)
+            },
           )
         } catch (e: Exception) {
           Console.log("[KOOG] failed to log objectiveStatus tool: ${e.message}")
         }
-        "Recorded objectiveStatus=${tool.status}: ${tool.explanation}"
+        disposition.messageToLlm
       }
 
       tool is ConfigTrailblazeTool -> {
@@ -143,30 +208,20 @@ suspend fun runPromptsWithKoogStrategyGraph(
       }
 
       else -> {
-        // A tool can FAIL by throwing (e.g. `tap` with a stale/hallucinated ref throws from
-        // toExecutableTrailblazeTools) rather than returning an Error result. Catch it here so the
-        // screen is STILL appended below: the failure message itself tells the agent to "re-read the
-        // view hierarchy appended to this request", which is only true if we actually append it.
-        // Without this, a failed tap returns the bare error with no screen, so the agent can't see the
-        // real [ref]s and just guesses again — burning turns until it stumbles onto a snapshot. With
-        // the screen appended, it picks a valid ref on the very next turn. CancellationException is
-        // re-thrown so structured-concurrency cancellation isn't swallowed.
-        val resultText = try {
-          val result = agent.runTrailblazeTools(
+        val resultText = describeToolDispatch(
+          // The name the tool ANSWERS to, not its class: every `tools:`-authored tool shares the
+          // one YamlDefinedTrailblazeTool class, so a class name records all of them identically
+          // and a report can't say which one failed.
+          toolName = tool.resolveToolName(),
+          instrumentation = instrumentation,
+        ) {
+          agent.runTrailblazeTools(
             tools = listOf(tool),
             traceId = traceId,
             screenState = screenStateProvider(),
             elementComparator = elementComparator,
             screenStateProvider = screenStateProvider,
-          ).result
-          "Executed ${tool::class.simpleName}: $result"
-        } catch (e: kotlinx.coroutines.CancellationException) {
-          throw e
-        } catch (e: Exception) {
-          // Some failures (e.g. a stale-ref tap) throw with a null message; lead with the exception
-          // type and fall back to a non-null string so the agent always gets actionable failure text
-          // rather than "failed: null".
-          "Tool ${tool::class.simpleName} failed: ${e::class.simpleName}: ${e.message ?: "(no message)"}"
+          ).result.also { if (countsAsAssertionEvidence(tool, it)) passedAssertions++ }
         }
         val screen = screenStateProvider().viewHierarchyTextRepresentation
         // Observe this dispatch for loop detection; a non-null nudge is prepended so it's the first
@@ -208,6 +263,10 @@ suspend fun runPromptsWithKoogStrategyGraph(
   // descriptor list so the LLM sees them. Returns null when nothing changed (the common case), so
   // the node leaves the advertised tools untouched.
   val onToolSurfaceRefresh: () -> List<ToolDescriptor>? = {
+    // Every loop-back to the LLM passes through here (the graph's prune nodes call it before each
+    // request), which makes it the one per-turn seam the host has — so this is where the objective
+    // gate is scoped back down to the turn being asked about. See [ObjectiveStatusGate].
+    objectiveStatusGate.clearForNextTurn()
     if (toolSurfaceDirty) {
       toolSurfaceDirty = false
       refreshKoogToolSurface(
@@ -299,39 +358,42 @@ suspend fun runPromptsWithKoogStrategyGraph(
       agent.memory.variables + agent.memory.argsForLlmContext(),
       agent.memory.sensitiveKeys,
     )
-  // Scope a verification block to its assertion/observation tools (see [verifyScopedAdvertisedTools]),
-  // so the agent can't scroll/tap on a verify step and pollute state for a following step. The
-  // kill-switch ([VERIFY_SCOPE_DISABLED_ENV]) reverts to the full surface without a redeploy if the
-  // scope ever excludes a tool a verify step legitimately needs — consistent with the other KOOG env
-  // knobs (history compression, screenshot, loop detect). Compute the would-be scope first so the
-  // kill-switch path can log that it overrode a block that WOULD have been scoped.
-  val wouldScopeTools: List<ToolDescriptor>? = verifyScopedAdvertisedTools(promptSteps, toolRepo)
-  val initialAdvertisedTools: List<ToolDescriptor>? = if (verifyScopeDisabledFromEnv()) null else wouldScopeTools
-  when {
-    initialAdvertisedTools != null -> Console.log(
-      "[KOOG_VERIFY_SCOPE] advertising ${initialAdvertisedTools.size} assertion/observation tool(s) " +
-        "only (no scroll/tap/navigate), mirroring the legacy verify surface",
+  // Give a direction block a second attempt when the model reports FAILED (see "Retry after FAILED"
+  // on KoogStrategyGraphAgent). The policy reads the outcome the dispatcher above captured — Koog's
+  // retry condition only sees the graph's final string, which carries no status. Verification
+  // blocks get no retry: their FAILED IS the assertion result, and asking again would only spend
+  // budget confirming it.
+  val retryPolicy = if (objectiveRetryApplies(promptSteps)) {
+    KoogObjectiveRetryPolicy(
+      feedbackForRetry = { retryFeedbackFor(objectiveStatusOutcome, objectiveExplanation) },
+      // Koog's rewind restores the LLM context, advertised tool list included, but not toolRepo: a
+      // setActiveToolSets the failed attempt made is still in force. Dirty the surface so the
+      // retry's first request re-advertises what the repo actually has (the graph's prunePreRequest
+      // node asks [onToolSurfaceRefresh]); otherwise the model sees the pre-switch menu and cannot
+      // call the tools it already activated.
+      onRetry = { _, _ -> toolSurfaceDirty = true },
     )
-    // Only log the disable when it actually overrode a would-be-scoped verify block — not on every
-    // direction step or non-mobile-driver run (those keep the full surface by design, silently).
-    wouldScopeTools != null -> Console.log(
-      "[KOOG_VERIFY_SCOPE] disabled via $VERIFY_SCOPE_DISABLED_ENV — keeping the full tool surface on this verify block",
-    )
+  } else {
+    null
   }
   val koogAgent = KoogStrategyGraphAgent.createInProcess(
     llmClient = screenshotAttachingLlmClient,
     llmModel = trailblazeLlmModel,
     toolRegistry = toolRegistry,
     systemPrompt = koogSystemPrompt,
-    maxAgentIterations = maxLlmCalls ?: KoogStrategyGraphAgent.DEFAULT_MAX_ITERATIONS,
+    maxLlmCalls = maxLlmCalls ?: KoogStrategyGraphAgent.DEFAULT_MAX_LLM_CALLS,
     onToolSurfaceRefresh = onToolSurfaceRefresh,
     initialAdvertisedTools = initialAdvertisedTools,
+    instrumentation = instrumentation,
+    retryPolicy = retryPolicy,
+    isObjectiveFinished = { objectiveStatusGate.endsObjective },
   )
   return try {
     val finalMessage = koogAgent.run(objective)
-    // The Koog graph forces a tool call every turn and can only finish via the `objectiveStatus`
-    // tool (no free-text termination), matching the legacy runner. So by the time run() returns,
-    // the dispatcher has already captured the COMPLETED/FAILED outcome and logged it.
+    // The Koog graph forces a tool call every turn and can only finish via a lone `objectiveStatus`
+    // the dispatcher above accepted as COMPLETED/FAILED (no free-text termination, no IN_PROGRESS
+    // exit), matching the legacy runner. So by the time run() returns, the dispatcher has already
+    // captured that outcome and logged it.
     resolveKoogObjectiveResult(
       outcome = objectiveStatusOutcome,
       explanation = objectiveExplanation,
@@ -410,6 +472,18 @@ internal fun verifyScopeDisabledFromEnv(): Boolean =
   System.getenv(VERIFY_SCOPE_DISABLED_ENV)?.lowercase() in setOf("1", "true")
 
 /**
+ * Kill-switch: when `1`/`true`, a verification block may report COMPLETED with no passing assertion
+ * behind it. Separate from [VERIFY_SCOPE_DISABLED_ENV] because the two answer different questions —
+ * which tools a verify step may call, versus what a COMPLETED on one has to rest on — and a run that
+ * needs the full tool surface still wants its verify steps graded on evidence.
+ */
+const val VERIFY_EVIDENCE_DISABLED_ENV = "TRAILBLAZE_KOOG_DISABLE_VERIFY_EVIDENCE"
+
+/** Resolves the verify-evidence kill-switch from the environment. `1`/`true` (case-insensitive) disables. */
+internal fun verifyEvidenceDisabledFromEnv(): Boolean =
+  System.getenv(VERIFY_EVIDENCE_DISABLED_ENV)?.lowercase() in setOf("1", "true")
+
+/**
  * Drivers for which a verify-only step is scoped to its verification tools (see
  * [verifyScopedAdvertisedTools]). [TrailblazeToolRepo.getToolDescriptorsForStep] is now driver-aware
  * — it returns each driver's compatible verification toolset(s), generic (`verification`) for Android
@@ -468,7 +542,7 @@ internal fun verifyScopedAdvertisedTools(
 ): List<ToolDescriptor>? {
   if (toolRepo.driverType !in VERIFY_SCOPE_DRIVERS) return null
   val scoped = promptSteps
-    .takeIf { it.isNotEmpty() && it.all { step -> step is VerificationStep } }
+    .takeIf { isVerificationBlock(it) }
     ?.let { toolRepo.getToolDescriptorsForStep(it.first()) }
     ?: return null
   // Scope only when a REAL verify surface resolved — at least one assertion/observation tool, not
@@ -477,6 +551,102 @@ internal fun verifyScopedAdvertisedTools(
   // advertising that under ToolChoice.Required would strand the agent (it could neither assert nor
   // observe), so fall back to the full surface (null) instead.
   return scoped.takeIf { list -> list.any { it.name != OBJECTIVE_STATUS_TOOL_NAME } }
+}
+
+/**
+ * Whether this block asserts rather than acts — every step is a [VerificationStep].
+ *
+ * Deliberately knows nothing about tools. [verifyScopedAdvertisedTools] declines to narrow the
+ * surface for three reasons that say nothing about the block: the kill switch, a driver outside
+ * [VERIFY_SCOPE_DRIVERS], and a verification toolset that doesn't resolve. Keying the COMPLETED
+ * evidence gate to "was the surface narrowed" turns any of those into a verify step that can pass
+ * with no assertion behind it.
+ */
+internal fun isVerificationBlock(promptSteps: List<PromptStep>): Boolean =
+  promptSteps.isNotEmpty() && promptSteps.all { it is VerificationStep }
+
+/**
+ * What one objective needs to know about being a verification block: the tool surface to advertise,
+ * and — independently — whether the COMPLETED evidence gate applies.
+ *
+ * @property advertisedTools tools to advertise, or null to keep the full surface.
+ * @property evidenceGateApplies the block is all assertions, so a COMPLETED needs a passing one.
+ * @property scopeOverridden scoping was available and the kill switch took it away (log-only).
+ * @property evidenceGateOverridden the gate would apply and the kill switch took it away (log-only).
+ */
+internal class VerifyBlockSetup(
+  val advertisedTools: List<ToolDescriptor>?,
+  val evidenceGateApplies: Boolean,
+  val scopeOverridden: Boolean,
+  val evidenceGateOverridden: Boolean,
+)
+
+/**
+ * Resolves both halves of the verify-block decision from the same inputs, so the gate cannot pick up
+ * a dependency on the surface — the two kill switches are independent for the same reason. Pure: both
+ * switches are passed in rather than read from the env.
+ */
+internal fun resolveVerifyBlockSetup(
+  promptSteps: List<PromptStep>,
+  toolRepo: TrailblazeToolRepo,
+  scopeDisabled: Boolean,
+  evidenceDisabled: Boolean,
+): VerifyBlockSetup {
+  val wouldScopeTools = verifyScopedAdvertisedTools(promptSteps, toolRepo)
+  val isVerifyBlock = isVerificationBlock(promptSteps)
+  return VerifyBlockSetup(
+    advertisedTools = if (scopeDisabled) null else wouldScopeTools,
+    evidenceGateApplies = isVerifyBlock && !evidenceDisabled,
+    scopeOverridden = scopeDisabled && wouldScopeTools != null,
+    evidenceGateOverridden = evidenceDisabled && isVerifyBlock,
+  )
+}
+
+/**
+ * The graph's "is this objective over?" answer, deliberately scoped to a single LLM turn.
+ *
+ * The graph asks after executing a lone `objectiveStatus`, through an edge guard — and an edge guard
+ * has to be a pure read, so it cannot expire the answer itself. Without an expiry the answer would
+ * outlive the turn that produced it: a status the model malformed badly enough that it never reaches
+ * the dispatcher leaves the previous turn's answer standing, and because a status batched with other
+ * tool calls records its outcome while deliberately continuing to loop, that stale `true` could end
+ * the objective on a report the graph had already declined to act on.
+ *
+ * [clearForNextTurn] is therefore called on every loop-back to the LLM, so the answer the guard reads
+ * is always about the turn it is asking about.
+ */
+internal class ObjectiveStatusGate {
+  var endsObjective: Boolean = false
+    private set
+
+  /** Records what the `objectiveStatus` just dispatched in this turn means for the objective. */
+  fun record(endsObjective: Boolean) {
+    this.endsObjective = endsObjective
+  }
+
+  /** Drops a recorded answer so it cannot be read on a later turn. */
+  fun clearForNextTurn() {
+    endsObjective = false
+  }
+}
+
+/**
+ * Whether a block may be retried after the model reports FAILED: only when it directs the agent to
+ * DO something. A block made entirely of [VerificationStep]s is an assertion — its FAILED is the
+ * answer, not a dead end to route around — and an empty block has nothing to retry.
+ *
+ * Pure so the rule is unit-testable without a graph.
+ */
+internal fun objectiveRetryApplies(promptSteps: List<PromptStep>): Boolean = promptSteps.any { it !is VerificationStep }
+
+/**
+ * The retry feedback for an attempt that ended with [outcome], or `null` to accept the attempt.
+ * Only a [Status.FAILED] report earns a retry: COMPLETED is success, and anything else (including no
+ * report at all, which means the run threw and never reaches this) is not the model giving up.
+ */
+internal fun retryFeedbackFor(outcome: Status?, explanation: String?): String? = when (outcome) {
+  Status.FAILED -> KoogObjectiveRetryPolicy.feedbackForFailedObjective(explanation)
+  else -> null
 }
 
 /**
@@ -496,7 +666,10 @@ private val OBJECTIVE_STATUS_TOOL_NAME: String? =
  *   since the forced-tool graph only ends via objectiveStatus or a max-iterations throw): treated
  *   as a failure rather than a hollow pass.
  * - [Status.FAILED]: fails the step.
- * - [Status.COMPLETED] / [Status.IN_PROGRESS] (and any other non-FAILED status): success.
+ * - [Status.IN_PROGRESS]: the agent stopped while still working — structurally unreachable too, since
+ *   the graph loops on IN_PROGRESS — and, like `null`, a failure rather than a pass. Before this,
+ *   verify steps that ended on IN_PROGRESS with zero assertions behind them scored as complete.
+ * - [Status.COMPLETED]: success.
  */
 internal fun resolveKoogObjectiveResult(
   outcome: Status?,
@@ -512,8 +685,117 @@ internal fun resolveKoogObjectiveResult(
     Status.FAILED -> TrailblazeToolResult.Error.ExceptionThrown(
       errorMessage = "Objective reported FAILED by the agent: $message",
     )
-    else -> TrailblazeToolResult.Success(message = message)
+    Status.IN_PROGRESS -> TrailblazeToolResult.Error.ExceptionThrown(
+      errorMessage = "Agent stopped while the objective was still IN_PROGRESS — treating as failed " +
+        "rather than a hollow pass: $message",
+    )
+    Status.COMPLETED -> TrailblazeToolResult.Success(message = message)
   }
+}
+
+/**
+ * What the dispatcher does with an `objectiveStatus` call: record its status as the objective's
+ * outcome, or refuse it. [endsObjective] is what the graph's completion gate reads afterwards.
+ */
+internal sealed interface ObjectiveStatusDisposition {
+  val messageToLlm: String
+  val endsObjective: Boolean
+
+  data class Recorded(val status: Status, override val messageToLlm: String) : ObjectiveStatusDisposition {
+    override val endsObjective: Boolean get() = status != Status.IN_PROGRESS
+  }
+
+  data class Refused(override val messageToLlm: String) : ObjectiveStatusDisposition {
+    override val endsObjective: Boolean get() = false
+  }
+}
+
+/**
+ * Pure decision behind the dispatcher's `objectiveStatus` branch.
+ *
+ * - IN_PROGRESS is recorded but does not end the objective; the message says so, because under
+ *   `ToolChoice.Required` the model's next turn is another tool call either way.
+ * - COMPLETED on a verification block ([isVerificationBlock]) is refused while no assertion has
+ *   passed. A verification step's whole output is its assertions; a COMPLETED with none behind it is
+ *   a claim, not a check — and two such claims were scored as passes before this gate existed.
+ *   FAILED is never refused — giving up IS a valid verification result.
+ * - Everything else is recorded and ends the objective.
+ */
+internal fun objectiveStatusDisposition(
+  tool: ObjectiveStatusTrailblazeTool,
+  verificationBlock: Boolean,
+  passedAssertions: Int,
+): ObjectiveStatusDisposition = when {
+  tool.status == Status.IN_PROGRESS -> ObjectiveStatusDisposition.Recorded(
+    status = Status.IN_PROGRESS,
+    messageToLlm = "Recorded objectiveStatus=IN_PROGRESS: ${tool.explanation}\n" +
+      "The objective is still open. Keep working, then call objectiveStatus with COMPLETED or FAILED " +
+      "on its own once you have seen the results.",
+  )
+  tool.status == Status.COMPLETED && verificationBlock && passedAssertions == 0 -> ObjectiveStatusDisposition.Refused(
+    messageToLlm = "objectiveStatus=COMPLETED was not accepted: this is a verification step and no " +
+      "assertion has passed yet. Check the claim with one of the assertion tools available to you, " +
+      "then report COMPLETED if it holds or FAILED if it does not.",
+  )
+  else -> ObjectiveStatusDisposition.Recorded(
+    status = tool.status,
+    messageToLlm = "Recorded objectiveStatus=${tool.status}: ${tool.explanation}\n" +
+      "If other tools were called in this same turn the objective is still open: review their " +
+      "results, then call objectiveStatus on its own.",
+  )
+}
+
+/**
+ * Whether a finished tool call is evidence that a verification claim was actually checked.
+ *
+ * Only a successful VERIFICATION tool counts. A `verify:` step's surface is not assertions alone —
+ * it also advertises `switchDevice` so a cross-device claim can be authored — and a successful
+ * device handover proves nothing about the claim. Counting it would let a COMPLETED through on a
+ * step where no assertion ever ran, which is the hollow pass the gate exists to stop.
+ */
+internal fun countsAsAssertionEvidence(
+  tool: TrailblazeTool,
+  result: TrailblazeToolResult,
+): Boolean = result is TrailblazeToolResult.Success && tool.isVerificationToolInstance()
+
+/**
+ * Runs one driver tool and turns whatever it did into the text the LLM reads, recording a failure
+ * on [instrumentation] when there was one.
+ *
+ * ## Why the recording has to happen HERE
+ *
+ * A tool can fail two ways: by returning [TrailblazeToolResult.Error], or by THROWING (e.g. `tap`
+ * with a stale/hallucinated ref throws out of `toExecutableTrailblazeTools`). Both are normalized
+ * into ordinary result text so the caller can append the fresh screen — the failure message tells
+ * the agent to "re-read the view hierarchy appended to this request", which is only true if it
+ * actually is. Without that, a failed tap returns a bare error with no screen, the agent can't see
+ * the real `[ref]`s, and it guesses again until it stumbles onto a snapshot.
+ *
+ * The cost of that normalization is that Koog only ever sees a successful `String` result, so
+ * `onToolCallFailed` never fires for a driver tool. This function is therefore the only place that
+ * can observe the failure at all — recording anywhere else leaves the recovered-failure count at
+ * zero for every real session.
+ *
+ * `CancellationException` is re-thrown so structured-concurrency cancellation isn't swallowed.
+ */
+internal suspend fun describeToolDispatch(
+  toolName: String,
+  instrumentation: KoogRunInstrumentation?,
+  execute: suspend () -> TrailblazeToolResult,
+): String = try {
+  val result = execute()
+  if (result is TrailblazeToolResult.Error) {
+    instrumentation?.recordRecoveredToolFailure(toolName, result.errorMessage)
+  }
+  "Executed $toolName: $result"
+} catch (e: kotlinx.coroutines.CancellationException) {
+  throw e
+} catch (e: Exception) {
+  // Some failures (e.g. a stale-ref tap) throw with a null message; lead with the exception type and
+  // fall back to a non-null string so the agent always gets actionable text rather than "failed: null".
+  val summary = "${e::class.simpleName}: ${e.message ?: "(no message)"}"
+  instrumentation?.recordRecoveredToolFailure(toolName, summary)
+  "Tool $toolName failed: $summary"
 }
 
 /**

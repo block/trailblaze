@@ -27,6 +27,7 @@ import xyz.block.trailblaze.viewmatcher.matching.ElementMatcherUsingMaestro
 import xyz.block.trailblaze.viewmatcher.matching.asTreeNode
 import xyz.block.trailblaze.viewmatcher.models.ElementMatches
 import xyz.block.trailblaze.util.Console
+import kotlin.math.abs
 
 @Serializable
 @TrailblazeToolClass("scrollUntilTextIsVisible")
@@ -62,8 +63,15 @@ data class ScrollUntilTextIsVisibleTrailblazeTool(
   val direction: ScrollDirection = ScrollDirection.DOWN,
   @param:LLMDescription("Percentage of element visible in viewport. Default is '100'.")
   val visibilityPercentage: Int = ScrollUntilVisibleCommand.DEFAULT_ELEMENT_VISIBILITY_PERCENTAGE,
-  @param:LLMDescription("If it will attempt to stop scrolling when the element is closer to the screen center. Default is 'false'.")
-  val centerElement: Boolean = ScrollUntilVisibleCommand.DEFAULT_CENTER_ELEMENT,
+  @param:LLMDescription(
+    "If true, keeps scrolling until the found element is near the screen center instead of " +
+      "stopping at first visibility — so a tab bar, sticky footer or promo banner cannot " +
+      "intercept a tap aimed at it. Omit to use the driver-tuned default (true for vertical " +
+      "scrolls on the Android accessibility driver, which needs the extra travel; false " +
+      "elsewhere, including horizontal scrolls, where a correction can carry the target off " +
+      "the opposite edge).",
+  )
+  val centerElement: Boolean? = null,
   @param:LLMDescription("Which part of the screen to scroll from. Default is 'CENTER'.")
   val scrollStartPosition: TrailblazeScrollStartPosition = TrailblazeScrollStartPosition.CENTER,
   @param:LLMDescription(
@@ -78,6 +86,7 @@ data class ScrollUntilTextIsVisibleTrailblazeTool(
   override suspend fun execute(toolExecutionContext: TrailblazeToolExecutionContext): TrailblazeToolResult {
     val trailblazeDriverType = toolExecutionContext.trailblazeDeviceInfo.trailblazeDriverType
     val scrollDuration = resolveScrollDuration(scrollDurationMs, trailblazeDriverType)
+    val resolvedCenterElement = resolveCenterElement(centerElement, trailblazeDriverType, direction)
 
     // Require an actual target. `text` defaults to "" (so `textRegex` can be used instead), but a
     // call that supplies none of text/textRegex/id would otherwise build `.*\Q\E.*` — a match-all
@@ -106,7 +115,7 @@ data class ScrollUntilTextIsVisibleTrailblazeTool(
       scrollDuration = scrollDuration,
       direction = direction,
       visibilityPercentage = visibilityPercentage,
-      centerElement = centerElement,
+      centerElement = resolvedCenterElement,
     )
 
     // Non-center start positions also require the manual loop since Maestro's built-in command
@@ -157,9 +166,33 @@ data class ScrollUntilTextIsVisibleTrailblazeTool(
     val direction = maestroCommand.direction.toSwipeDirection()
     var retryCenterCount = 0
     val maxRetryCenterCount = 4 // for when the list is no longer scrollable (last element) but the element is visible
+    var lastCorrectedPosition: Int? = null
+    var consecutiveStalls = 0
+
+    // Visibility from the most recent hierarchy read, or null when that read matched nothing.
+    //
+    // One corrective swipe can still land between that read and the deadline, so this is the last
+    // KNOWN position rather than a guaranteed current one. Re-reading after the swipe would cost a
+    // hierarchy read on every timeout and would leave a scroll that was visible the whole time
+    // failing for want of budget, which is the defect this exists to prevent — so whether the
+    // reading can still be trusted is decided from the direction instead, in
+    // [timedOutTargetIsAcceptable].
+    //
+    // Null and 0.0 must stay distinguishable: Maestro floors `visibilityPercentageNormalized` to
+    // 0.0 for every percentage below 100 (it divides ints), so "no match" would otherwise clear
+    // the bar.
+    var lastVisibility: Double? = null
+
+    // Whether a swipe has landed since the reading above was taken, which is what makes that
+    // reading potentially stale.
+    var swipedSinceLastRead = false
 
     do {
       try {
+        // Reset per iteration: a target that has scrolled out of view must not be reported as
+        // visible on timeout using a reading from an earlier pass.
+        lastVisibility = null
+        swipedSinceLastRead = false
         screenState = toolExecutionContext.screenStateProvider?.invoke() ?: screenState
         widthGrid = screenState.deviceWidth
         heightGrid = screenState.deviceHeight
@@ -194,6 +227,7 @@ data class ScrollUntilTextIsVisibleTrailblazeTool(
           val visibility: Double = maestroUiElement.getVisiblePercentage(
             widthGrid, heightGrid
           )
+          lastVisibility = visibility
           Console.log("Scrolling try count: $retryCenterCount, DeviceWidth: ${widthGrid}, DeviceHeight: ${heightGrid}")
           Console.log("Element bounds: ${bounds}")
           Console.log("Visibility Percent: $visibility")
@@ -201,11 +235,28 @@ data class ScrollUntilTextIsVisibleTrailblazeTool(
           Console.log("visibilityPercentageNormalized: ${maestroCommand.visibilityPercentageNormalized}")
 
           if (maestroCommand.centerElement && visibility > 0.1 && retryCenterCount <= maxRetryCenterCount) {
-            if (maestroUiElement.isElementNearScreenCenter(direction, widthGrid, heightGrid)) {
+            val axisPosition = scrollAxisCenter(direction, maestroBounds)
+            val centered = maestroUiElement.isElementNearScreenCenter(direction, widthGrid, heightGrid)
+            consecutiveStalls = stallStreak(
+              previousStreak = consecutiveStalls,
+              previousPosition = lastCorrectedPosition,
+              currentPosition = axisPosition,
+              direction = direction,
+              widthGrid = widthGrid,
+              heightGrid = heightGrid,
+            )
+            Console.log("Centered: $centered, consecutiveStalls: $consecutiveStalls, axisPosition: $axisPosition")
+            val stalledAtAnAcceptablePosition = stalledTargetIsAcceptable(
+              consecutiveStalls = consecutiveStalls,
+              visibility = visibility,
+              visibilityPercentageNormalized = maestroCommand.visibilityPercentageNormalized,
+            )
+            if (centered || stalledAtAnAcceptablePosition) {
               return TrailblazeToolResult.Success(
                 message = "Scrolled ${direction.name} until '$targetLabel' visible",
               )
             }
+            lastCorrectedPosition = axisPosition
             retryCenterCount++
           } else if (visibility >= maestroCommand.visibilityPercentageNormalized) {
             return TrailblazeToolResult.Success(
@@ -216,6 +267,11 @@ data class ScrollUntilTextIsVisibleTrailblazeTool(
       } catch (ignored: MaestroException.ElementNotFound) {
         Console.log("Error: $ignored")
       }
+
+      // Stop before dispatching a swipe whose result there is no time left to read. The loop would
+      // exit immediately after it, so that swipe could only move the target away from the position
+      // the timeout branch below reports on.
+      if (System.currentTimeMillis() >= endTime) break
 
       val durationMs = maestroCommand.scrollDuration.toLong()
       val waitToSettleTimeoutMs = maestroCommand.waitToSettleTimeoutMs
@@ -246,8 +302,25 @@ data class ScrollUntilTextIsVisibleTrailblazeTool(
       if (trailblazeToolResult !is TrailblazeToolResult.Success) {
         return trailblazeToolResult
       }
+      swipedSinceLastRead = true
 
     } while (System.currentTimeMillis() < endTime)
+
+    // Centering is best-effort; visibility is the contract. Running out of time before the target
+    // could be centered must not fail a scroll that would have succeeded without centering — that
+    // would let the driver-tuned default turn a working step into "element not found".
+    if (
+      timedOutTargetIsAcceptable(
+        lastVisibility = lastVisibility,
+        visibilityPercentageNormalized = maestroCommand.visibilityPercentageNormalized,
+        swipedSinceLastRead = swipedSinceLastRead,
+        isVerticalScroll = isVerticalScroll(maestroCommand.direction),
+      )
+    ) {
+      return TrailblazeToolResult.Success(
+        message = "Scrolled ${direction.name} until '$targetLabel' visible (timed out before centering)",
+      )
+    }
 
     val debugMessage = buildScrollFailureMessage(maestroCommand)
     throw MaestroException.ElementNotFound(
@@ -266,10 +339,16 @@ data class ScrollUntilTextIsVisibleTrailblazeTool(
      * - [textRegex] (non-blank): used verbatim, giving the same full (anchored) match that selector
      *   tools like `tapOnElementBySelector` get from Maestro — `Loyalty` matches only "Loyalty", not
      *   "Loyalty Enroll".
-     * - [text] otherwise: regex-escaped and wrapped in `.*…*.` for a substring (contains) match,
+     * - [text] otherwise: regex-escaped and wrapped in `.*….*` for a substring (contains) match,
      *   preserving the historical behavior for every existing caller.
+     *
+     * Public, together with [hasTextTarget] and [hasScrollTarget], because drivers that dispatch
+     * this tool onto their own backends instead of [execute] (the in-process ANDROID_TEST adapter)
+     * must read a recording's target exactly as this tool does. A blank `textRegex` in particular
+     * falls back to `text` here; a driver deciding that for itself once built a regex that matched
+     * only empty text.
      */
-    internal fun buildTargetTextRegex(text: String, textRegex: String?): String =
+    fun buildTargetTextRegex(text: String, textRegex: String?): String =
       if (!textRegex.isNullOrBlank()) {
         textRegex
       } else {
@@ -283,8 +362,16 @@ data class ScrollUntilTextIsVisibleTrailblazeTool(
      * [buildTargetTextRegex] / [pollForConsecutiveStable]). Memory tokens are resolved at the
      * dispatch boundary before execution, so a `{{var}}` that resolves to blank is also rejected.
      */
-    internal fun hasScrollTarget(text: String, textRegex: String?, id: String?): Boolean =
-      text.isNotBlank() || !textRegex.isNullOrBlank() || !id.isNullOrBlank()
+    fun hasScrollTarget(text: String, textRegex: String?, id: String?): Boolean =
+      hasTextTarget(text, textRegex) || !id.isNullOrBlank()
+
+    /**
+     * True when the call targets an element by its text — [text] (substring) or [textRegex]
+     * (anchored) is non-blank — so [buildTargetTextRegex] has something real to build from. False
+     * means the only possible target is `id`, or (see [hasScrollTarget]) there is none.
+     */
+    fun hasTextTarget(text: String, textRegex: String?): Boolean =
+      text.isNotBlank() || !textRegex.isNullOrBlank()
 
     /**
      * Builds the failure message for the scroll-until-visible loop. Extracted into a pure
@@ -359,6 +446,151 @@ data class ScrollUntilTextIsVisibleTrailblazeTool(
       }
       return scrollDurationMs?.toString() ?: scrollDurationFor(trailblazeDriverType)
     }
+
+    /**
+     * Resolves whether the scroll loop keeps scrolling until the found element is near the screen
+     * center. A caller-supplied value always wins; otherwise the driver declares its own default
+     * via [TrailblazeDriverType.centersScrollTargetByDefault] (mirrors [resolveScrollDuration]'s
+     * caller-override-else-driver-default contract) — and only for a vertical scroll.
+     *
+     * The default excludes horizontal scrolls because a corrective swipe there cannot be undone.
+     * Maestro's gate rejects a target past 70% of the screen along the scroll axis, and the
+     * driver's horizontal stroke moves content 80% of the screen WIDTH, so a target resting
+     * between those two lands off the opposite edge — out of the hierarchy entirely, where every
+     * further swipe pushes it further away and the loop can only time out as "element not found".
+     * Vertical corrections cannot overshoot: their stroke moves content 40% of the screen HEIGHT
+     * against the same 70% gate, so a corrected target always lands between 30% and 60%. The
+     * driver-tuned default is about vertical travel anyway — the per-swipe shortfall behind it was
+     * measured on vertical scrolls. An explicit `centerElement: true` is still honored in every
+     * direction.
+     */
+    internal fun resolveCenterElement(
+      centerElement: Boolean?,
+      trailblazeDriverType: TrailblazeDriverType,
+      direction: ScrollDirection,
+    ): Boolean = centerElement
+      ?: (trailblazeDriverType.centersScrollTargetByDefault && isVerticalScroll(direction))
+
+    /**
+     * Whether [direction] moves content along the vertical axis. A `when` rather than a set
+     * membership check so a new [ScrollDirection] has to be classified explicitly instead of
+     * silently inheriting the horizontal-overshoot risk described on [resolveCenterElement].
+     */
+    internal fun isVerticalScroll(direction: ScrollDirection): Boolean = when (direction) {
+      ScrollDirection.UP, ScrollDirection.DOWN -> true
+      ScrollDirection.LEFT, ScrollDirection.RIGHT -> false
+    }
+
+    /**
+     * How far the target must travel between two corrective swipes for a third to be worth trying,
+     * as a fraction of the screen along the scroll axis.
+     */
+    internal const val STALL_THRESHOLD_FRACTION = 0.01
+
+    /**
+     * How many no-movement readings in a row end the loop. A dropped swipe looks exactly like a
+     * list that has hit its end, and stopping early on one leaves the target un-centered — the
+     * defect centering exists to prevent. Two in a row costs one extra swipe on a genuinely stuck
+     * list and still ends it well short of [maxRetryCenterCount].
+     */
+    internal const val STALLS_BEFORE_GIVING_UP = 2
+
+    /** The target's center along the axis the scroll moves it on. */
+    internal fun scrollAxisCenter(
+      direction: SwipeDirection,
+      bounds: Bounds,
+    ): Int = when (direction) {
+      SwipeDirection.UP, SwipeDirection.DOWN -> bounds.y + bounds.height / 2
+      SwipeDirection.LEFT, SwipeDirection.RIGHT -> bounds.x + bounds.width / 2
+    }
+
+    /**
+     * Whether the last corrective swipe failed to move the target, meaning the list has hit its end
+     * and further swipes cannot improve the position. [maxRetryCenterCount] alone only bounds that
+     * case; detecting it ends the loop on the first wasted swipe instead of the fifth.
+     */
+    internal fun hasStalled(
+      previousPosition: Int?,
+      currentPosition: Int,
+      direction: SwipeDirection,
+      widthGrid: Int,
+      heightGrid: Int,
+    ): Boolean {
+      if (previousPosition == null) return false
+      val axisLength = when (direction) {
+        SwipeDirection.UP, SwipeDirection.DOWN -> heightGrid
+        SwipeDirection.LEFT, SwipeDirection.RIGHT -> widthGrid
+      }
+      return abs(currentPosition - previousPosition) <= axisLength * STALL_THRESHOLD_FRACTION
+    }
+
+    /**
+     * How many no-movement readings the loop has now seen in a row. Any real movement resets the
+     * count, so a single dropped swipe — which is indistinguishable from a list at its end — cannot
+     * end the loop on its own.
+     */
+    internal fun stallStreak(
+      previousStreak: Int,
+      previousPosition: Int?,
+      currentPosition: Int,
+      direction: SwipeDirection,
+      widthGrid: Int,
+      heightGrid: Int,
+    ): Int = if (hasStalled(previousPosition, currentPosition, direction, widthGrid, heightGrid)) {
+      previousStreak + 1
+    } else {
+      0
+    }
+
+    /**
+     * Whether a scroll whose list has stopped moving should be reported as a success.
+     *
+     * A stall ends the centering attempt early, which is the one exit that can happen while the
+     * target is still clipped — the end of a list holds it wherever it landed, often a sliver at
+     * the screen edge. So the shortcut has to clear
+     * [ScrollUntilVisibleCommand.visibilityPercentageNormalized] itself. Declining it is not a
+     * failure: the loop keeps retrying and falls to the same bar on the way out, which is what it
+     * did before this early exit existed. Unlike the centered exit, being stalled says nothing
+     * about where the target ended up.
+     */
+    internal fun stalledTargetIsAcceptable(
+      consecutiveStalls: Int,
+      visibility: Double,
+      visibilityPercentageNormalized: Double,
+    ): Boolean = consecutiveStalls >= STALLS_BEFORE_GIVING_UP &&
+      visibility >= visibilityPercentageNormalized
+
+    /**
+     * Whether a scroll that ran out of time should still be reported as a success.
+     *
+     * Centering is best-effort — it buys a tappable position, not a different definition of
+     * "found". The contract is [ScrollUntilVisibleCommand.visibilityPercentageNormalized], the
+     * same bar a non-centering scroll clears, so a target already meeting it must not be reported
+     * as missing just because the loop ran out of budget before centering it. Without this, turning
+     * centering on by default could fail a step that passed with it off.
+     *
+     * Null [lastVisibility] means that read matched nothing, which is never acceptable — Maestro
+     * floors [ScrollUntilVisibleCommand.visibilityPercentageNormalized] to 0.0 for every percentage
+     * below 100 (it divides two ints), so comparing a "not found" reading numerically would report
+     * success for a target that was never on screen.
+     *
+     * When a swipe landed after that read, whether the reading can still be trusted depends on the
+     * axis. A vertical correction is bounded — Maestro's gate rejects a target past 70% of the
+     * screen and the stroke moves content 40% of screen height, so the target lands between 30%
+     * and 60%, still on screen and no less visible. A horizontal one is not: the stroke moves 80%
+     * of screen WIDTH against the same gate, so it can carry the target off the opposite edge. The
+     * default already excludes horizontal centering for that reason, but an explicit
+     * `centerElement: true` still reaches here on a horizontal scroll, and that combination must
+     * not vouch for a position the target may have already left.
+     */
+    internal fun timedOutTargetIsAcceptable(
+      lastVisibility: Double?,
+      visibilityPercentageNormalized: Double,
+      swipedSinceLastRead: Boolean,
+      isVerticalScroll: Boolean,
+    ): Boolean = lastVisibility != null &&
+      lastVisibility >= visibilityPercentageNormalized &&
+      (!swipedSinceLastRead || isVerticalScroll)
 
     /**
      * 400ms matches Maestro's Swipe Implementation duration and is working well on-device Android.

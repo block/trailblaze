@@ -166,7 +166,7 @@ object AndroidViewHierarchyCollector {
    * still carries RecyclerView's item accessibility delegate, so a leaf-name test leaves its items
    * with no `collectionItemRowIndex` at all. The strict bridge then turns every recorded
    * grid-position selector into a failed match, and a grid of untitled tiles has no other handle
-   * (case 5921801's empty favourites tiles are exactly that). The false-positive direction the
+   * (a real trail's empty favourites tiles are exactly that). The false-positive direction the
    * paragraph above tolerates is cheap; this one silently loses the only selector that works.
    */
   private fun Any?.isRecyclerViewLike(): Boolean {

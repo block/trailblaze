@@ -2,12 +2,15 @@ package xyz.block.trailblaze.toolcalls.commands
 
 import ai.koog.agents.core.tools.annotations.LLMDescription
 import kotlinx.serialization.Serializable
+import xyz.block.trailblaze.toolcalls.CoreTools
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.yaml.serializers.CaseInsensitiveEnumSerializer
 
 @Serializable
-@TrailblazeToolClass("objectiveStatus")
+// Not recordable: this reports the AGENT's progress through an objective, it does not drive the
+// device. Persisting it into a recording gives a replay a tool that can only no-op.
+@TrailblazeToolClass(name = CoreTools.OBJECTIVE_STATUS, isRecordable = false)
 @LLMDescription(
   """
 Use this tool to report the status of the current objective.

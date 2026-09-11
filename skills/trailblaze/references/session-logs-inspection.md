@@ -116,7 +116,7 @@ Every JSON has at minimum: `session: SessionId`, `timestamp: Instant`, `type` di
 from pathlib import Path
 import json
 
-session_dir = Path('logs/2026_05_08_…_case_4837769_6258')
+session_dir = Path('logs/2026_05_08_…_case_1008_6258')
 completes = sorted(session_dir.glob('*_ObjectiveCompleteLog.json'),
                    key=lambda p: json.loads(p.read_text())['timestamp'])
 for c in completes:

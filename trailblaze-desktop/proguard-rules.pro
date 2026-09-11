@@ -112,6 +112,23 @@
 -dontwarn coil3.**
 
 # ===========================================================================
+# TwelveMonkeys ImageIO (ServiceLoader-discovered readers and streams)
+# ===========================================================================
+# ImageIO scans every provider named by META-INF/services when it initializes. The
+# TwelveMonkeys WebP plugin contributes both its reader and stream providers there, but those
+# classes are reached only through the service files. ProGuard otherwise deletes them while
+# `-adaptresourcefilecontents` leaves their names behind. The first `ImageIO.read` then throws a
+# ServiceConfigurationError before it can decode even a PNG screenshot, which strands host-driven
+# replay before its first tool is dispatched.
+#
+# Keep the package so each provider retains the implementation graph it instantiates, and keep all
+# IIO providers so a future codec contributed from another package cannot recreate the same
+# poisoned-registry failure.
+-keep class com.twelvemonkeys.imageio.** { *; }
+-keep class * extends javax.imageio.spi.IIOServiceProvider { *; }
+-dontwarn com.twelvemonkeys.imageio.**
+
+# ===========================================================================
 # Kotlin
 # ===========================================================================
 # ProGuard corrupts Kotlin metadata when processing stdlib classes, causing

@@ -41,6 +41,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
 import xyz.block.trailblaze.logs.client.TrailblazeLog
+import xyz.block.trailblaze.logs.client.deviceClockOffsets
+import xyz.block.trailblaze.logs.client.normalizedToHostClock
 import xyz.block.trailblaze.logs.model.SessionInfo
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.ui.InspectTrailblazeNodeSelectorHelper
@@ -125,9 +127,18 @@ fun LiveSessionDetailComposable(
   var cancellationError by remember { mutableStateOf<String?>(null) }
 
   // Collect logs reactively from the Flow - so much simpler!
-  val logs by sessionDataProvider.getSessionLogsFlow(session.sessionId).collectAsState()
+  val rawLogs by sessionDataProvider.getSessionLogsFlow(session.sessionId).collectAsState()
 
-  val sessionDetail = remember(logs, session) {
+  val sessionDetail = remember(rawLogs, session) {
+    // Put every log on the host timeline ONCE, here, rather than at each of the dozens of
+    // timestamp comparisons below it: an on-device runtime stamps its logs with the device's own
+    // clock, which drifts from the host's by whole seconds, and the views mix those logs with
+    // host-stamped ones when ordering events, placing the scrubber and picking the screenshot for
+    // a moment. The offset comes from the same derivation the recording generator uses, so a
+    // session's timeline and its recording agree about which step a tool belongs to.
+    val clockOffsets = rawLogs.deviceClockOffsets()
+    val logs = rawLogs.normalizedToHostClock(clockOffsets)
+
     // Use the session's latestStatus which already includes timeout detection from getSessionInfo()
     val overallStatus = session.latestStatus
 
@@ -159,7 +170,11 @@ fun LiveSessionDetailComposable(
       overallStatus = overallStatus,
       deviceName = deviceName,
       deviceType = deviceType,
-      totalDurationMs = totalDurationMs
+      totalDurationMs = totalDurationMs,
+      // The session's own offset first: a provider backed by LogsRepo hands over logs it ALREADY
+      // normalized, so nothing is left here to re-derive from — the offset survives on SessionInfo.
+      // The local derivation stays for a provider that hands over raw, device-stamped logs.
+      deviceClockOffsetMs = session.deviceClockOffsetMs ?: clockOffsets?.sessionWideOffsetMs,
     )
   }
 

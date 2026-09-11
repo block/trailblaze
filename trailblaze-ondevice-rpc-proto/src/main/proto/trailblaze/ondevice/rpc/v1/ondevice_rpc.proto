@@ -108,6 +108,9 @@ message RunYamlRequest {
   // Absent when the host has no span to hand over; the device then records its own trace, which is
   // also what a device predating this field does.
   optional string traceparent = 22;
+  // Host-validated classifier refinements such as [android, phone, es]. The device uses these for
+  // recording selection and session metadata instead of re-detecting only its physical shape.
+  repeated string device_classifier_override = 23;
 }
 
 message RunYamlResponse {
@@ -354,6 +357,14 @@ message GetScreenStateResponse {
   // Device-epoch stamp taken when the (screenshot, tree) pair was final; absent on older
   // on-device servers. Consumed by the host's stream-screenshot frame/tree matching gate.
   optional int64 captured_at_device_ms = 10;
+  // Nodes the capture asked the app for and did not get back. 0 means the tree holds everything
+  // the app advertised; greater means a subtree is missing. Absent means unknown — the request
+  // asked for no tree, or the on-device server predates this field — and host consumers treat
+  // unknown as they behaved before it existed. Without this on the wire, a host-orchestrated run
+  // over the binary transport cannot tell an empty screen from an unreadable one.
+  optional int32 dropped_node_fetches = 11;
+  // Features the on-device runner can honor. Empty on runners predating capability advertisement.
+  repeated string runner_capabilities = 12;
 }
 
 message ViewHierarchyNode {

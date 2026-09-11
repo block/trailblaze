@@ -23,6 +23,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.isSuccess
+import xyz.block.trailblaze.toolcalls.resolveToolName
 
 /**
  * RPC handler that executes a batch of Compose tools.
@@ -70,7 +71,10 @@ class ExecuteToolsHandler(
         } catch (e: CancellationException) {
           throw e
         } catch (e: Exception) {
-          val toolName = (tool as? OtherTrailblazeTool)?.toolName ?: tool::class.simpleName
+          // `resolveToolName()` is the canonical unwrapper — it already prefers an
+          // OtherTrailblazeTool's wire name, and it honors an instance's own name, which the
+          // hand-rolled cast this replaced did not.
+          val toolName = tool.resolveToolName()
           results.add(
             TrailblazeToolResult.Error.ExceptionThrown(
               errorMessage = "Failed to resolve '$toolName': ${e.message}",

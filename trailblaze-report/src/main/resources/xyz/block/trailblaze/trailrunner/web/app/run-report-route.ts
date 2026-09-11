@@ -11,11 +11,11 @@
 // other would embed a whole report viewer in the loader script, or the loader in every exported
 // report.
 //
-// 'stream' (the retired Events tab's selected-stream index) and 'filter' (the retired Self-healed
-// index filter) are still listed so legacy URLs carrying them are canonicalized away, but nothing
-// reads or writes them any more.
+// `stream`, `organize`, `eventstep`, `place`, `eventq`, and `eventall` preserve the focused event
+// navigator. `filter` is the retired Self-healed index filter and remains only so legacy URLs are
+// canonicalized away.
 export const VIEWER_ROUTE_KEYS = [
   'view', 'runs', 'run', 'tab', 'step', 'kid', 'streams', 'types', 'llm', 'inspect',
-  'stream', 'group', 'sort', 'search', 'filter', 'mode', 'dir', 'all', 'trail', 'pick', 'base', 'vs',
-  'lane',
+  'stream', 'organize', 'eventstep', 'place', 'eventq', 'eventall', 'group', 'sort', 'search',
+  'filter', 'mode', 'dir', 'all', 'trail', 'pick', 'base', 'vs', 'lane',
 ];

@@ -1,10 +1,14 @@
 package xyz.block.trailblaze.yaml
 
 import xyz.block.trailblaze.devices.compoundClassifier
+import xyz.block.trailblaze.logs.client.TrailblazeDeviceClockOffsets
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeLog.ObjectiveCompleteLog
+import xyz.block.trailblaze.logs.client.deviceClockOffsets
+import xyz.block.trailblaze.logs.client.normalizedMs
 import xyz.block.trailblaze.agent.model.AgentTaskStatus
 import xyz.block.trailblaze.logs.model.SessionStatus
+import xyz.block.trailblaze.logs.model.TrailblazeClockDomain
 import xyz.block.trailblaze.logs.model.getSessionStartedInfo
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.yaml.unified.TrailDocument
@@ -246,8 +250,18 @@ fun List<TrailblazeLog>.generateRecordedTrailItems(
     // 1's first tool (and then fails the one-tool-per-platform emit), and every later step's
     // recording shifts by one window. Window membership is therefore decided by span overlap
     // against the window's own bounds, not by sorted position; see [assignToolLogsToWindows].
-    val objectiveWindows = findObjectiveWindows()
-    val toolWindowAssignment = assignToolLogsToWindows(objectiveWindows)
+    // Both sides of that comparison are first put on one timeline via [deviceClockOffsets], which
+    // is what handles a skew larger than a window's first tool's own span.
+    val deviceOffsets = deviceClockOffsets()
+    // Once per generated recording: which step a tool landed in is the thing that goes wrong when
+    // this offset is absent or wrong, and the recording is the artifact that shows it.
+    deviceOffsets?.let {
+      Console.log(
+        "[log-clock] recording windows use ${it.describe()} (min over ${it.anchorCount} ingestion anchors)",
+      )
+    }
+    val objectiveWindows = findObjectiveWindows(deviceOffsets)
+    val toolWindowAssignment = assignToolLogsToWindows(objectiveWindows, deviceOffsets)
     // Grouped once so each window's collection is an O(1) lookup rather than a rescan of every
     // assignment. Assignment walks the session in order, so each group is already index-sorted.
     val toolIndicesByWindow: Map<Int, List<Int>> =
@@ -296,7 +310,7 @@ fun List<TrailblazeLog>.generateRecordedTrailItems(
             .filter { !successfulObjectivesOnly || it.successful }
           val selectedToolLogs = toolLogsInWindow
             .filter { it.isTopLevelToolCall }
-            .ifEmpty { dropNestedToolCalls(toolLogsInWindow) }
+            .ifEmpty { dropNestedToolCalls(toolLogsInWindow, deviceOffsets) }
             .let { dedupeLayerDuplicates(it) }
           val rawWrappers: List<TrailblazeToolYamlWrapper> = selectedToolLogs
             .map { log -> wrapTrailblazeTool(log.authoredTrailblazeTool, log.toolName) }
@@ -450,8 +464,12 @@ private class ObjectiveWindow(
  * with the SAME matching rule (first later complete with an equal prompt; an unmatched start ends
  * discovery, mirroring the main loop's `break`; a matched window's interior is skipped). Keyed by
  * start index so the main loop can address a window by the index it is standing on.
+ *
+ * Bounds are normalized onto the host timeline by [normalizedMs], the same way tool spans are —
+ * an objective log is device-stamped too when the runner itself ran on the device, and shifting
+ * only the tools would then skew every tool against its own window by the whole offset.
  */
-private fun List<TrailblazeLog>.findObjectiveWindows(): List<ObjectiveWindow> {
+private fun List<TrailblazeLog>.findObjectiveWindows(offsets: TrailblazeDeviceClockOffsets?): List<ObjectiveWindow> {
   val windows = mutableListOf<ObjectiveWindow>()
   var index = 0
   while (index < size) {
@@ -467,12 +485,29 @@ private fun List<TrailblazeLog>.findObjectiveWindows(): List<ObjectiveWindow> {
       completeIndex++
     }
     if (completeIndex >= size) return windows
+    val completeLog = this[completeIndex]
+    var startMs = log.normalizedMs(offsets)
+    var endMs = completeLog.normalizedMs(offsets)
+    if (endMs < startMs) {
+      // A window whose start and complete were stamped by DIFFERENT clocks (a device-stamped
+      // start beside a host-stamped complete — two emitters in one session) can invert once only
+      // one side is shifted. Inverted bounds make every overlap non-positive, silently dropping
+      // the whole window to the positional fallback — so keep the raw bounds instead, which are
+      // at worst what every pre-normalization session already got.
+      Console.error(
+        "[recording-clock] objective window '${log.promptStep.prompt.take(60)}' inverted after " +
+          "clock normalization (start/complete stamped by different clocks) — keeping its raw " +
+          "bounds for span-overlap assignment.",
+      )
+      startMs = log.timestamp.toEpochMilliseconds()
+      endMs = completeLog.timestamp.toEpochMilliseconds()
+    }
     windows.add(
       ObjectiveWindow(
         startIndex = index,
         completeIndex = completeIndex,
-        startMs = log.timestamp.toEpochMilliseconds(),
-        endMs = this[completeIndex].timestamp.toEpochMilliseconds(),
+        startMs = startMs,
+        endMs = endMs,
       ),
     )
     index = completeIndex + 1
@@ -495,15 +530,25 @@ private fun List<TrailblazeLog>.findObjectiveWindows(): List<ObjectiveWindow> {
  * The overlap comparison is skew-tolerant because a misassignment needs the whole execution span
  * to sit closer to a neighboring window than to its own, which requires skew larger than the
  * tool's overlap with its true window rather than merely nonzero.
+ *
+ * Overlap alone still misassigns when skew exceeds a first tool's offset-into-window plus its
+ * duration (a ~100ms tool at a window boundary under ~1s device lag stamps a span overlapping
+ * ONLY the prior window). Tool logs marked [TrailblazeClockDomain.DEVICE] are therefore first
+ * normalized onto the host timeline by [deviceClockOffsets] when the session carries ingestion
+ * anchors to derive them from; without anchors, or on unmarked logs, behavior is unchanged.
  */
 private fun List<TrailblazeLog>.assignToolLogsToWindows(
   windows: List<ObjectiveWindow>,
+  offsets: TrailblazeDeviceClockOffsets?,
 ): Map<Int, Int> {
   if (windows.isEmpty()) return emptyMap()
   val assignment = mutableMapOf<Int, Int>()
   forEachIndexed { index, log ->
     if (log !is TrailblazeLog.TrailblazeToolLog) return@forEachIndexed
-    val toolStartMs = log.timestamp.toEpochMilliseconds()
+    // Per-log, not per-session: one session legitimately mixes clocks (host-stamped MCP top-level
+    // tool logs beside device-stamped executor logs), and shifting a host span by the device
+    // offset would push it out of its own window.
+    val toolStartMs = log.normalizedMs(offsets)
     val toolEndMs = toolStartMs + log.durationMs
     fun overlapMs(window: ObjectiveWindow): Long =
       minOf(toolEndMs, window.endMs) - maxOf(toolStartMs, window.startMs)
@@ -628,13 +673,18 @@ private fun fingerprintForDedup(
  * before any emitter stamped the flag. The strictly-longer requirement means identical spans (layer
  * duplicates, collapsed separately by [dedupeLayerDuplicates]) never drop each other.
  *
+ * Spans are normalized by [normalizedMs] first: the containment this looks for is exactly a
+ * host-stamped composite dispatch wrapping device-stamped executor logs, and comparing those raw
+ * across a second of skew either hides real nesting (internals recorded twice) or manufactures it.
+ *
  * Order-preserving: returns the input list minus the contained entries, in input order.
  */
 private fun dropNestedToolCalls(
   logs: List<TrailblazeLog.TrailblazeToolLog>,
+  offsets: TrailblazeDeviceClockOffsets?,
 ): List<TrailblazeLog.TrailblazeToolLog> {
   if (logs.size < 2) return logs
-  fun startMs(log: TrailblazeLog.TrailblazeToolLog): Long = log.timestamp.toEpochMilliseconds()
+  fun startMs(log: TrailblazeLog.TrailblazeToolLog): Long = log.normalizedMs(offsets)
   fun endMs(log: TrailblazeLog.TrailblazeToolLog): Long = startMs(log) + log.durationMs
   return logs.filter { candidate ->
     logs.none { container ->

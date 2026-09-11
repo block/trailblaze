@@ -4,6 +4,7 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Clock
+import xyz.block.trailblaze.replay.ActionTrace
 import xyz.block.trailblaze.agent.model.AgentTaskStatus
 import xyz.block.trailblaze.agent.model.AgentTaskStatus.Success.ObjectiveComplete
 import xyz.block.trailblaze.agent.model.PromptRecordingResult
@@ -139,9 +140,12 @@ class TrailblazeRunnerUtil(
     val stepStartTime = Clock.System.now()
     val stepTaskId = TaskId.generate()
     emitObjectiveStart(prompt)
+    ActionTrace.mark(ActionTrace.Boundary.OBJECTIVE_STARTED)
     when (val recordingResult = runRecordedTools(prompt.recording!!.tools)) {
       is PromptRecordingResult.Success -> {
+        ActionTrace.mark(ActionTrace.Boundary.RECORDED_TOOLS_DONE)
         emitObjectiveComplete(prompt, stepTaskId, stepStartTime, success = true, failureReason = null)
+        ActionTrace.mark(ActionTrace.Boundary.OBJECTIVE_COMPLETED)
       }
       is PromptRecordingResult.Failure -> {
         val failureMessage = recordingResult.failureResult.errorMessageOrToString()

@@ -52,13 +52,13 @@ export const contacts_ios_openContact = trailblaze.tool<OpenContactArgs>(
     // destination check.) The detail
     // screen's top-right "Edit" button is the reliable detail-only anchor (the
     // list/search screens surface "Add"/"Cancel" there, never "Edit"). We resolve it
-    // via `findMatches` against the iOS accessibility tree — `assertVisibleWith-
+    // via `findSelectorMatches` against the iOS accessibility tree — `assertVisibleWith-
     // AccessibilityText` matches *visible* text only and can't see the accessibility-
     // labeled "Edit" control — and throw when it's absent, so callers wrapping this in
     // `tryOrFalse` (e.g. the delete teardown) correctly treat a missing contact as
     // "not found" instead of proceeding against the search screen.
-    const editAnchors = await ctx.tools.findMatches({
-      selector: { iosMaestro: { accessibilityTextRegex: LABELS.editButton } },
+    const [editAnchors] = await ctx.tools.findSelectorMatches({
+      selectors: [{ iosMaestro: { accessibilityTextRegex: LABELS.editButton } }],
       timeoutMs: 5000,
     });
     if (editAnchors.length === 0) {

@@ -74,6 +74,22 @@ data class TrailblazeServerState(
      * in is safe everywhere.
      */
     val disableAnimationsEnabled: Boolean? = null,
+    /**
+     * Experimental "turbo" mode for the Android accessibility driver: let the app under test say
+     * when it is idle, instead of waiting for its screen to go quiet from the outside. Each
+     * post-action wait then ends at whichever answer arrives first, so turbo can only move a
+     * deadline earlier — same driver, same selectors, same recordings.
+     *
+     * Tri-state like [disableAnimationsEnabled]: `null` (default) means off and no device is ever
+     * touched; an explicit `true`/`false` from `trailblaze config turbo <value>` is the user's
+     * choice and survives serialization. `TRAILBLAZE_TURBO=1` takes precedence (env is the
+     * one-off / CI override; this is the discoverable persistent toggle).
+     *
+     * Opting in is safe everywhere because a session where it cannot apply declines: the helper
+     * has to be signed with the same certificate as the app, so a release or beta build settles at
+     * normal speed and says why.
+     */
+    val turboEnabled: Boolean? = null,
     /** Agent implementation to use. Defaults to [AgentImplementation.DEFAULT]. */
     val agentImplementation: AgentImplementation = AgentImplementation.DEFAULT,
     val yamlContent: String = """

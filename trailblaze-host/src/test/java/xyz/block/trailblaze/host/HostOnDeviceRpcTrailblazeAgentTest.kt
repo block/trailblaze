@@ -116,8 +116,8 @@ class HostOnDeviceRpcTrailblazeAgentTest {
    * server's port is derived from [testDeviceId], so it is the same port for all 42 tests in this
    * class. Skipping [MockRpcServer.stop] once leaves that port bound for the rest of the JVM, and
    * every later test then pays the full 60s bindability wait in [MockRpcServer.start] before
-   * failing. On build 15969 that turned one failure into 27, spent 27 minutes doing it, and the
-   * build was killed at its time limit before it could report anything.
+   * failing. In one CI run that turned a single failure into a whole class of them, and the build
+   * was killed at its time limit before it could report anything.
    *
    * The `isInitialized` guard covers the other half: when [setUp] fails at [MockRpcServer.start],
    * `rpcClient` was never assigned, so touching it here threw
@@ -1162,7 +1162,7 @@ class HostOnDeviceRpcTrailblazeAgentTest {
     // through with the original `OtherTrailblazeTool`, the `when` lands in the `else` branch,
     // and the FatalError message includes the unresolved tool's `toolName` plus the
     // "not registered ... as a class-backed, YAML-defined, or dynamic scripted tool" hint.
-    // Drift on either the toolName surface or the prose would make CI K1-style failures
+    // Drift on either the toolName surface or the prose would make failures of this shape
     // harder to triage.
     val toolRepo = xyz.block.trailblaze.toolcalls.TrailblazeToolRepo(
       trailblazeToolSet = xyz.block.trailblaze.toolcalls.TrailblazeToolSet.DynamicTrailblazeToolSet(
@@ -1190,7 +1190,7 @@ class HostOnDeviceRpcTrailblazeAgentTest {
 
     assertThat(result).isInstanceOf(TrailblazeToolResult.Error.FatalError::class)
     val message = (result as TrailblazeToolResult.Error.FatalError).errorMessage
-    // toolName visible (the K1-style triage signal a triager needs).
+    // toolName visible (the triage signal a triager needs).
     assertThat(message).contains("toolName='totally_unknown_tool'")
     // Precise taxonomy (matches the parallel diagnostic in `MaestroTrailblazeAgent`).
     assertThat(message).contains("class-backed, YAML-defined, or dynamic scripted tool")

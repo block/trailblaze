@@ -37,10 +37,9 @@ data class AssertMathTrailblazeTool(
    * LIMITATION: a fresh capture is not a fresh fetch. This re-reads the rendered screen, not the
    * underlying data, so it can only observe values the app itself updates in place. For a view the
    * app populates once and refreshes only on navigation, every attempt re-reads the same stale
-   * number and no bound helps — polling cannot substitute for re-navigating. Verified on
-   * `case_4839582`'s House Accounts balance: 15 fresh captures across 58.7s all returned the
-   * pre-charge value, and shorter bounds fail identically; passing legs satisfied the assertion on
-   * their first attempt.
+   * number and no bound helps — polling cannot substitute for re-navigating. Verified on a stale
+   * account-balance view: 15 fresh captures across 58.7s all returned the pre-charge value, and
+   * shorter bounds fail identically; passing legs satisfied the assertion on their first attempt.
    */
   val timeoutMs: Long? = null,
   /**

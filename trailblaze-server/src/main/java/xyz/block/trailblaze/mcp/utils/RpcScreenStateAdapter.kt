@@ -112,6 +112,14 @@ class RpcScreenStateAdapter(
 
   override val deviceClassifiers: List<TrailblazeDeviceClassifier>
     get() = response.deviceClassifiers?.map { TrailblazeDeviceClassifier(it) } ?: emptyList()
+
+  /**
+   * Completeness of the capture the device made, forwarded verbatim. Null (unknown) when the
+   * device didn't report one — an older on-device server, or a request that asked for no tree —
+   * which keeps every host-side consumer on its pre-existing behaviour.
+   */
+  override val droppedNodeFetches: Int?
+    get() = response.droppedNodeFetches
 }
 
 /**

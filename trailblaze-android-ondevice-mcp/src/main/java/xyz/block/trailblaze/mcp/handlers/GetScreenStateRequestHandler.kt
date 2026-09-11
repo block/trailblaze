@@ -11,6 +11,7 @@ import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetScreenStateResponse
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.OnDeviceCapturedScreenState
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.OnDeviceScreenStateCaptor
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.OnDeviceScreenStateNotReadyException
+import xyz.block.trailblaze.mcp.android.ondevice.rpc.OnDeviceRunnerCapabilities
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcResult
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.util.Console
@@ -146,7 +147,9 @@ class GetScreenStateRequestHandler(
         driverMigrationTreeNode = driverMigrationTreeNode,
         pageContextSummary = if (request.includeTree) screenState.pageContextSummary else null,
         deviceClassifiers = classifierStrings,
+        runnerCapabilities = OnDeviceRunnerCapabilities.ALL,
         capturedAtDeviceMs = capturedAtDeviceMs,
+        droppedNodeFetches = if (request.includeTree) screenState.droppedNodeFetches else null,
       )
     }
 
@@ -175,7 +178,9 @@ class GetScreenStateRequestHandler(
         driverMigrationTreeNode = driverMigrationTreeNode,
         pageContextSummary = if (request.includeTree) screenState.pageContextSummary else null,
         deviceClassifiers = deviceClassifiers.map { it.classifier }.takeIf { it.isNotEmpty() },
+        runnerCapabilities = OnDeviceRunnerCapabilities.ALL,
         capturedAtDeviceMs = capturedAtDeviceMs,
+        droppedNodeFetches = if (request.includeTree) screenState.droppedNodeFetches else null,
       ).apply {
         this.screenshotBytes = screenshotBytes
         this.annotatedScreenshotBytes = annotatedScreenshotBytes

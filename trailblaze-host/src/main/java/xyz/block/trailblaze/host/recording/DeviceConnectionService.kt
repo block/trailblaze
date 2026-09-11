@@ -5,6 +5,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.datetime.Clock
+import xyz.block.trailblaze.devices.AndroidAccessibilityServiceDrivers
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
@@ -234,8 +235,7 @@ class DeviceConnectionService(private val deviceManager: TrailblazeDeviceManager
     val instrumentationTarget =
       targetTestApp.getTrailblazeOnDeviceInstrumentationTargetForDriver(device.trailblazeDriverType)
         ?: return ConnectionState.Error(targetTestApp.missingInProcessHarnessMessage())
-    val needsAccessibility =
-      device.trailblazeDriverType == TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY
+    val needsAccessibility = AndroidAccessibilityServiceDrivers.includes(device.trailblazeDriverType)
 
     val rpcClient = OnDeviceRpcClient(
       trailblazeDeviceId = device.trailblazeDeviceId,

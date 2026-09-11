@@ -130,7 +130,7 @@ class McpSubprocessSession internal constructor(
      * Hard bound on the subprocess MCP `initialize` handshake in [connect]. The handshake is
      * awaited from a `bun` subprocess that could hang before answering; without a bound the
      * connect parks indefinitely. That indefinite park is the root of the daemon-wide MCP wedge
-     * (build 3366): a `device` connect that triggered the subprocess cold-build never returned,
+     * observed in CI: a `device` connect that triggered the subprocess cold-build never returned,
      * and — because the build runs while holding session-scoped state the shared MCP dispatch
      * path needs — every later request, including a fresh session's `initialize`, timed out at
      * 300s while `/ping` stayed healthy. Bounding the handshake makes a wedged subprocess fail

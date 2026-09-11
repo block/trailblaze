@@ -598,6 +598,7 @@ fun SessionDetailComposable(
                     logs = sessionDetail.logs,
                     overallStatus = sessionDetail.overallStatus,
                     sessionId = sessionDetail.session.sessionId.value,
+                    deviceClockOffsetMs = sessionDetail.deviceClockOffsetMs,
                     videoMetadata = combinedVideoMetadata,
                     imageLoader = imageLoader,
                     onShowScreenshotModal = { imageModel, dw, dh, cx, cy, action ->

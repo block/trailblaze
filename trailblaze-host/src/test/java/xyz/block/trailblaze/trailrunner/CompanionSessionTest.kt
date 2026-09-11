@@ -71,6 +71,7 @@ class CompanionSessionTest {
     assertEquals(ExternalAgentSessionStatus.RUNNING, run.status)
     assertEquals("ToS trail", run.title)
     assertEquals("Claude Code · myapp", run.companion?.agentLabel)
+    assertTrue(ExternalAgentSupervisor.activeCompanionSummaries().any { run.id in it })
     // The folder is normalized to a clean relative path (trailing slash stripped).
     assertEquals("myapp/tos", run.companion?.folder)
     assertEquals(ExternalAgentType.CLAUDE, run.agentType)

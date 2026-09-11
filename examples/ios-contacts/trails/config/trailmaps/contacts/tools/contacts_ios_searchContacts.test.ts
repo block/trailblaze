@@ -16,16 +16,20 @@ import {
   type SearchContactsArgs,
 } from "./contacts_ios_searchContacts";
 
-/** One canned `findMatches` hit — the shape the daemon returns for a visible row. */
+/** One canned `findSelectorMatches` hit — the shape the daemon returns for a visible row. */
 const ROW_MATCH: MatchDescriptor = {
   indexPath: [0, 1],
   bounds: { left: 0, top: 200, right: 390, bottom: 260 },
   matchedText: "John Appleseed",
 };
 
-/** Stubs `findMatches` to report the result row as visible. */
+/**
+ * Stubs `findSelectorMatches` to report the result row as visible. The batched tool answers one
+ * match list PER SELECTOR, so the canned hit is nested one level deeper than the old
+ * single-selector tool's.
+ */
 function stubRowVisible(client: ReturnType<typeof createMockClient>): void {
-  client.stub("findMatches", { textContent: "", structuredContent: [ROW_MATCH] });
+  client.stub("findSelectorMatches", { textContent: "", structuredContent: [[ROW_MATCH]] });
 }
 
 /**
@@ -98,7 +102,7 @@ describe("contacts_ios_searchContacts", () => {
 
   test("waits for and taps the matching row via a label-scoped selector", async () => {
     // The default mock returns success for the negative no-results probe (no banner →
-    // results ARE present); `findMatches` is stubbed to report the row as visible. The
+    // results ARE present); `findSelectorMatches` is stubbed to report the row as visible. The
     // tool then taps the row matching `rowText` and returns.
     const client = createMockClient();
     stubRowVisible(client);
@@ -117,13 +121,13 @@ describe("contacts_ios_searchContacts", () => {
       "tapOnElementWithText", // focus the "Search" input
       "inputText", // type the query
       "assertNotVisibleWithText", // no-results probe — passes (no banner) → results present
-      "findMatches", // wait for the result row to render
+      "findSelectorMatches", // wait for the result row to render
       "tapOnElementBySelector", // tap the result row
     ]);
     // The row tap targets `rowText`, not the raw query — the partial-prefix flow — and the
     // wait probe uses the same selector the tap dispatches, so they can't drift apart.
     const tapSelector = client.calls[7]?.args.nodeSelector as TrailblazeNodeSelector;
-    expect(client.calls[6]?.args.selector).toEqual(tapSelector);
+    expect(client.calls[6]?.args.selectors).toEqual([tapSelector]);
     expect(tapSelector.iosMaestro?.accessibilityTextRegex).toContain("John Appleseed");
     expect(result).toContain('opened the row matching "John Appleseed"');
   });
@@ -214,8 +218,8 @@ describe("contacts_ios_searchContacts", () => {
     // `rowText` that is a substring of the search chrome's labels — "ear" for a "Teddy Bear"
     // row is a substring of the field's "Search" placeholder, of the "Search results" panel
     // label, and of the "Clear text" button — makes the label predicate alone ambiguous. Both
-    // `findMatches` and the tap use this selector with `index: 0`, so if the search field were
-    // still a candidate the topmost match could be the field: the wait would succeed, the tap
+    // `findSelectorMatches` and the tap use this selector with `index: 0`, so if the search field
+    // were still a candidate the topmost match could be the field: the wait would succeed, the tap
     // would only focus it, and the tool would report success without opening the row.
     const selector = await rowSelectorFor({ query: "ear" });
 
@@ -244,11 +248,11 @@ describe("contacts_ios_searchContacts", () => {
   });
 
   test("throws a descriptive error when results exist but the rowText row never appears", async () => {
-    // No banner (all the tool actually established) but `findMatches` reports no row labeled
+    // No banner (all the tool actually established) but `findSelectorMatches` reports no row labeled
     // `rowText` within the wait budget — the "wrong rowText" failure, distinct from "wrong
     // query". No tap may be dispatched against a row that never rendered.
     const client = createMockClient();
-    client.stub("findMatches", { textContent: "", structuredContent: [] });
+    client.stub("findSelectorMatches", { textContent: "", structuredContent: [[]] });
     const ctx = createMockContext({ platform: "ios" });
 
     await expect(

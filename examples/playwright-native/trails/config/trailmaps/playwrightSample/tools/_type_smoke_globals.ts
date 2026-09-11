@@ -37,7 +37,7 @@
 //
 // CI WIRING:
 //
-//   Per PR #3219 (post-Phase-B), `pr_validate_ts_tooling.sh` discovers per-trailmap
+//   Per PR #3219 (post-Phase-B), the TypeScript tooling validation step discovers per-trailmap
 //   tool dirs by the framework-emitted `tools/tsconfig.json` (not the pre-trailmap
 //   `tools/package.json` it used to look for), so this file IS now CI-backed —
 //   every PR runs `tsc --noEmit` against the trailmap's generated tsconfig and any

@@ -7,6 +7,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import xyz.block.trailblaze.devices.AndroidAccessibilityServiceDrivers
 import xyz.block.trailblaze.playwright.PlaywrightPageManager
 import xyz.block.trailblaze.cli.CliRunDriverResolution
 import xyz.block.trailblaze.cli.CliRunDriverResolver
@@ -18,6 +19,8 @@ import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.exception.TrailblazeSessionCancelledException
 import xyz.block.trailblaze.host.TrailblazeHostYamlRunner
 import xyz.block.trailblaze.host.animations.SessionAnimationDisabler
+import xyz.block.trailblaze.host.devices.DeviceLocaleConfigurator
+import xyz.block.trailblaze.host.turbo.SessionTurboAttacher
 import xyz.block.trailblaze.host.networkcapture.AndroidNetworkCaptureRegistry
 import xyz.block.trailblaze.host.capture.finalizeHostSessionResources
 import xyz.block.trailblaze.host.networkcapture.CompositeAndroidNetworkCaptureActivator
@@ -33,6 +36,9 @@ import xyz.block.trailblaze.logs.model.SessionInfo
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.logs.model.getSessionStatus
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.OnDeviceRpcClient
+import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetScreenStateRequest
+import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetScreenStateResponse
+import xyz.block.trailblaze.mcp.android.ondevice.rpc.OnDeviceRunnerCapabilities
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcResult
 import xyz.block.trailblaze.model.DesktopAppRunYamlParams
 import xyz.block.trailblaze.model.DeviceConnectionStatus
@@ -52,6 +58,7 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.exception.TrailblazeException
 import xyz.block.trailblaze.recordings.TrailRecordings
 import xyz.block.trailblaze.yaml.TrailblazeYaml
+import xyz.block.trailblaze.yaml.TrailConfig
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
 import xyz.block.trailblaze.yaml.unified.UnknownDriverException
 import java.io.File
@@ -91,6 +98,44 @@ class DesktopYamlRunner(
     private val startingConnectionClass = DeviceConnectionStatus.WithTargetDevice.StartingConnection::class
     @Suppress("unused")
     private val instrumentationRunningClass = DeviceConnectionStatus.WithTargetDevice.TrailblazeInstrumentationRunning::class
+
+    internal fun completeProcessFatalFailure(
+      fatalFailure: Throwable,
+      executionResult: TrailExecutionResult.Failed,
+      onComplete: ((TrailExecutionResult) -> Unit)?,
+    ): Nothing {
+      try {
+        onComplete?.invoke(executionResult)
+      } catch (callbackFailure: Throwable) {
+        fatalFailure.addSuppressed(callbackFailure)
+        Console.log(
+          "⚠️ Failed to report process-fatal completion: ${callbackFailure::class.java.simpleName} - ${callbackFailure.message}"
+        )
+      }
+      throw fatalFailure
+    }
+
+    /** A skipped trail must not mutate persistent device language state. */
+    internal fun requestedDeviceLocale(config: TrailConfig?): String? =
+      config?.locale?.takeIf { config.skip.isNullOrBlank() }
+
+    /** Applying a device language always requires a fresh target process. */
+    internal fun shouldForceStopTargetApp(requested: Boolean, locale: String?): Boolean =
+      requested || locale != null
+
+    /** Refuses a classifier-qualified run when the installed runner would discard its override. */
+    internal fun deviceClassifierOverrideCapabilityRejection(
+      requestsOverride: Boolean,
+      runnerCapabilities: Collection<String>?,
+    ): String? {
+      if (!requestsOverride) return null
+      if (OnDeviceRunnerCapabilities.DEVICE_CLASSIFIER_OVERRIDE in runnerCapabilities.orEmpty()) {
+        return null
+      }
+      return "the installed on-device runner predates device classifier overrides, so it would " +
+        "select recordings using only the device's physical classifiers; rebuild and reinstall " +
+        "the on-device runner before retrying"
+    }
 
     /**
      * Pure decision: did [status] end in the on-device UiAutomation wedge that only a server
@@ -325,6 +370,7 @@ class DesktopYamlRunner(
       
       // Track the execution result to report in finally block
       var executionResult: TrailExecutionResult = TrailExecutionResult.Success()
+      var processFatalFailure: Throwable? = null
 
       // The last successful tool's result from a host/Maestro run (null otherwise). Folded into
       // the terminal TrailExecutionResult.Success below so the `trailblaze tool <read-tool>` HOST
@@ -379,29 +425,33 @@ class DesktopYamlRunner(
         return@launch
       }
 
-      if (forceStopTargetApp) {
-        // The app to stop is the one this device will actually run. On a multi-device trail whose
-        // START device overrides `target:`, that is the override, not the session default —
-        // stopping the session default would leave the app under test running and kill an
-        // unrelated one, defeating the whole point of the clean-start option.
-        //
-        // Lookup failures are ignored here: `resolveMemberTargets` runs the same lookup a moment
-        // later and fails the run loud with a message about the trail's `target:`.
-        val startDeviceTarget = MultiDeviceConfigurationResolver
-          .startDeviceTargetId(
-            yaml = runYamlRequest.yaml,
-            selectedConfigurationName = selectedConfigurationName,
-          )
-          ?.let { desktopAppRunYamlParams.findTargetById?.invoke(it) }
-          ?: targetTestApp
-        // Convert the YAML-ordered List to a Set for ensureAppsAreForceStopped, which takes
-        // membership-style Set<String>.
-        val possibleAppIds = startDeviceTarget
-          ?.getPossibleAppIdsForPlatform(trailblazeDeviceId.trailblazeDevicePlatform)
-          ?.toSet()
-          ?: emptySet()
-        MobileDeviceUtils.ensureAppsAreForceStopped(possibleAppIds, trailblazeDeviceId)
+      val deviceClassifiers = try {
+        val classification = DeviceClassifierResolver.classificationFor(
+          platform = connectedTrailblazeDevice.platform,
+          instanceId = connectedTrailblazeDevice.instanceId,
+        )
+        DeviceClassifierResolver.resolveOverride(
+          detected = DeviceClassifierResolver.trustedForBehavior(classification),
+          requested = runYamlRequest.deviceClassifierOverride.map(::TrailblazeDeviceClassifier),
+        )
+      } catch (e: IllegalArgumentException) {
+        val message = e.message ?: "This run's device classifier is not valid"
+        prefixedProgressMessage(message)
+        executionResult = TrailExecutionResult.Failed(message, misuse = true)
+        onComplete?.invoke(executionResult)
+        return@launch
       }
+      // This preflight is deliberately tolerant: the runtime's normal decode still owns parse
+      // errors. Its only job is to avoid a persistent locale mutation for a skipped or invalid
+      // trail, before any driver/session setup starts.
+      val resolvedTrailConfig = runCatching {
+        createTrailblazeYaml().extractTrailConfig(
+          yaml = runYamlRequest.yaml,
+          deviceClassifiers = deviceClassifiers,
+          selectedDeviceConfiguration = selectedConfigurationName,
+        )
+      }.getOrNull()
+      val deviceLocale = requestedDeviceLocale(resolvedTrailConfig)
 
       // Resolve driver type: request (CLI --driver / trail config) > the trail's own driver pin
       // resolved against THIS device > app setting > connected device default. The trail-pin rung
@@ -415,10 +465,7 @@ class DesktopYamlRunner(
       val trailblazeDriverType = runYamlRequest.driverType ?: run {
         val pinResolution = trailPinnedDriverResolution(
           trailYaml = runYamlRequest.yaml,
-          deviceClassifiers = DeviceClassifierResolver.classifiersFor(
-            platform = connectedTrailblazeDevice.platform,
-            instanceId = connectedTrailblazeDevice.instanceId,
-          ),
+          deviceClassifiers = deviceClassifiers,
         )
         when (pinResolution) {
           is CliRunDriverResolution.Unrecognized -> {
@@ -533,6 +580,26 @@ class DesktopYamlRunner(
       )
 
       try {
+        deviceLocale?.let { DeviceLocaleConfigurator.apply(trailblazeDeviceId, it) }
+
+        if (shouldForceStopTargetApp(forceStopTargetApp, deviceLocale)) {
+          // Stop the app this device will actually run. A locale change forces a fresh process even
+          // when the caller did not request the usual clean start, or the app could keep rendering
+          // with the old language.
+          val startDeviceTarget = MultiDeviceConfigurationResolver
+            .startDeviceTargetId(
+              yaml = runYamlRequest.yaml,
+              selectedConfigurationName = selectedConfigurationName,
+            )
+            ?.let { desktopAppRunYamlParams.findTargetById?.invoke(it) }
+            ?: targetTestApp
+          val possibleAppIds = startDeviceTarget
+            ?.getPossibleAppIdsForPlatform(trailblazeDeviceId.trailblazeDevicePlatform)
+            ?.toSet()
+            ?: emptySet()
+          MobileDeviceUtils.ensureAppsAreForceStopped(possibleAppIds, trailblazeDeviceId)
+        }
+
         trailblazeAnalytics.runTest(trailblazeDriverType, desktopAppRunYamlParams)
         prefixedProgressMessage(
           "Starting ${trailblazeDeviceId.trailblazeDevicePlatform.displayName} test on device ${trailblazeDeviceId.instanceId} with driver type $trailblazeDriverType",
@@ -581,6 +648,20 @@ class DesktopYamlRunner(
           // Experimental opt-in (gated internally, idempotent — the MCP path may have already
           // fired it at session-resolution time).
           SessionAnimationDisabler.startForSession(sid, trailblazeDeviceId)
+          // Same placement rationale, and the same experimental opt-in shape: this is the first
+          // point that knows both the device AND which app the session will drive, which a device
+          // connect does not.
+          SessionTurboAttacher.startForSession(
+            sessionId = sid.toString(),
+            deviceId = trailblazeDeviceId,
+            candidateAppIds = appIdsForCapture,
+            runOverride = desktopAppRunYamlParams.turbo,
+            // `appIdsForCapture` came from the workspace fallback when the trail's declared target
+            // did not resolve; turbo must not attach to that app and call the run turbo. Session
+            // resolution may have already attached to that fallback — this is the only call site
+            // that knows better, so the attacher lets a decline overrule it.
+            unresolvedDeclaredTarget = desktopAppRunYamlParams.unresolvedDeclaredTarget,
+          )
         }
 
         sessionId = when (dispatchPath) {
@@ -870,23 +951,28 @@ class DesktopYamlRunner(
         Console.log("🚫 Session cancelled by user for device ${trailblazeDeviceId.instanceId}")
         prefixedProgressMessage("Test session cancelled")
         executionResult = TrailExecutionResult.Cancelled
-      } catch (e: Exception) {
-        Console.log("⚠️ EXCEPTION in coroutine for device ${trailblazeDeviceId.instanceId}: ${e::class.simpleName} - ${e.message}")
+      } catch (t: Throwable) {
+        val failureMessage = t.message ?: t::class.java.simpleName
+        Console.log("⚠️ EXCEPTION in coroutine for device ${trailblazeDeviceId.instanceId}: ${t::class.java.simpleName} - $failureMessage")
         // Full stack trace to the daemon log so the throw site is diagnosable — the one-line
         // message alone hid which internal call actually failed (e.g. a decodeTrail deep in the
         // dispatch path vs. a device-connect IOException).
-        Console.log(e.stackTraceToString())
-        prefixedProgressMessage("Error: ${e.message}")
-        executionResult = TrailExecutionResult.Failed(e.message)
-        try {
-          onConnectionStatus(
-            DeviceConnectionStatus.DeviceConnectionError.ConnectionFailure(
-              errorMessage = e.message ?: "Unknown error",
-            ),
-          )
-        } catch (classLoadError: Throwable) {
-          // Fallback if ConnectionFailure class fails to load (Kotlin multiplatform classloading issue)
-          Console.log("⚠️ Failed to create ConnectionFailure instance: ${classLoadError::class.simpleName} - ${classLoadError.message}")
+        Console.log(t.stackTraceToString())
+        if (t is VirtualMachineError || t is ThreadDeath) {
+          processFatalFailure = t
+        } else {
+          prefixedProgressMessage("Error: $failureMessage")
+          executionResult = TrailExecutionResult.Failed(failureMessage)
+          try {
+            onConnectionStatus(
+              DeviceConnectionStatus.DeviceConnectionError.ConnectionFailure(
+                errorMessage = t.message ?: "Unknown error",
+              ),
+            )
+          } catch (classLoadError: Throwable) {
+            // Fallback if ConnectionFailure class fails to load (Kotlin multiplatform classloading issue)
+            Console.log("⚠️ Failed to create ConnectionFailure instance: ${classLoadError::class.simpleName} - ${classLoadError.message}")
+          }
         }
       } finally {
         // Always stop capture and save artifacts — even on cancel/error, the video
@@ -959,7 +1045,17 @@ class DesktopYamlRunner(
           }
         }
         Console.log("🏁 COROUTINE FINISHED (finally block) for device: ${trailblazeDeviceId.instanceId}")
-        onComplete?.invoke(executionResult)
+        val fatalFailure = processFatalFailure
+        if (fatalFailure == null) {
+          onComplete?.invoke(executionResult)
+        } else {
+          val failureMessage = fatalFailure.message ?: fatalFailure::class.java.simpleName
+          val fatalExecutionResult = TrailExecutionResult.Failed(failureMessage)
+          executionResult = fatalExecutionResult
+          // Callback-only awaiters (the MCP bridge and RPC handler) need a terminal result. The
+          // rethrow then delivers the fatal error to the coroutine scope instead of normalizing it.
+          completeProcessFatalFailure(fatalFailure, fatalExecutionResult, onComplete)
+        }
         // Re-throw CancellationException to properly propagate cancellation
         if (executionResult is TrailExecutionResult.Cancelled) {
           throw CancellationException("Test cancelled for device ${trailblazeDeviceId.instanceId}")
@@ -1206,7 +1302,7 @@ class DesktopYamlRunner(
   ): SessionId? {
     return withContext(Dispatchers.IO) {
       val needsAccessibility =
-        runYamlRequest.driverType == TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY
+        AndroidAccessibilityServiceDrivers.includes(runYamlRequest.driverType)
       val status = connectAndEnsureReady(
         onDeviceRpc = onDeviceRpc,
         trailblazeDeviceId = connectedTrailblazeDevice.trailblazeDeviceId,
@@ -1543,7 +1639,7 @@ class DesktopYamlRunner(
   ): SessionId? {
     return withContext(Dispatchers.IO) {
       val needsAccessibility =
-        runYamlRequest.driverType == TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY
+        AndroidAccessibilityServiceDrivers.includes(runYamlRequest.driverType)
       val status = connectAndEnsureReady(
         onDeviceRpc = onDeviceRpc,
         trailblazeDeviceId = trailblazeConnectedDevice.trailblazeDeviceId,
@@ -1557,6 +1653,7 @@ class DesktopYamlRunner(
 
       withContext(Dispatchers.Default) {
         onConnectionStatus(status)
+        requireDeviceClassifierOverrideCapability(onDeviceRpc, runYamlRequest)
         when (val result: RpcResult<RunYamlResponse> = onDeviceRpc.rpcCall(runYamlRequest)) {
           is RpcResult.Failure -> {
             onProgressMessage("Failed to start YAML execution: ${result.message}${result.details?.let { " | $it" } ?: ""}")
@@ -1594,6 +1691,33 @@ class DesktopYamlRunner(
         }
       }
     }
+  }
+
+  /**
+   * Probes only runs that carry an override. An older runner still understands GetScreenState but
+   * omits runnerCapabilities, letting the host reject the run before field 23 can be discarded.
+   */
+  private suspend fun requireDeviceClassifierOverrideCapability(
+    onDeviceRpc: OnDeviceRpcClient,
+    runYamlRequest: RunYamlRequest,
+  ) {
+    if (runYamlRequest.deviceClassifierOverride.isEmpty()) return
+    val probe = GetScreenStateRequest(
+      includeScreenshot = false,
+      includeAnnotatedScreenshot = false,
+      includeTree = false,
+    )
+    val response: GetScreenStateResponse = when (val result = onDeviceRpc.rpcCall(probe)) {
+      is RpcResult.Success -> result.data
+      is RpcResult.Failure -> throw TrailblazeException(
+        "Could not verify on-device runner support for device classifier overrides: " +
+          result.message + (result.details?.let { " | $it" } ?: ""),
+      )
+    }
+    deviceClassifierOverrideCapabilityRejection(
+      requestsOverride = true,
+      runnerCapabilities = response.runnerCapabilities,
+    )?.let { throw TrailblazeException(it) }
   }
 
   /**

@@ -196,6 +196,8 @@ class TrailblazeAndroidGradlePlugin : Plugin<Project> {
       task.ruleClassFqn.set(extension.ruleClassFqn)
       task.onlyClassNames.set(extension.onlyClassNames)
       task.onlyMethodNames.set(extension.onlyMethodNames)
+      task.authoringDirDescription.set(extension.authoringDirDescription)
+      task.authoringSourceNote.set(extension.authoringSourceNote)
     }
 
     // Auto-wire AGP's `androidTest`-shaped Kotlin compile + lint tasks to depend on [generate], so
@@ -221,7 +223,7 @@ class TrailblazeAndroidGradlePlugin : Plugin<Project> {
 
     // AGP-aware auto-wiring, deferred to `afterEvaluate` so it runs after AGP's own `android { }`
     // configuration settles, regardless of `plugins { }` block ordering — the same timing
-    // `gradle/merged-trails.gradle.kts` uses for the identical reason.
+    // the repo's trail-merging Gradle script uses for the identical reason.
     project.afterEvaluate {
       val android = project.extensions.findByName("android")
       if (android == null) {
@@ -255,7 +257,7 @@ class TrailblazeAndroidGradlePlugin : Plugin<Project> {
  *    declaration for the measured diagnosis.
  *
  * [android] is accessed entirely by REFLECTION, not a typed `com.android.build.gradle.
- * BaseExtension` — matches `gradle/merged-trails.gradle.kts`'s pattern for the same problem: many
+ * BaseExtension` — matches the trail-merging Gradle script's pattern for the same problem: many
  * AGP versions across many consumers, no reason to pin one just for four stable methods.
  */
 private fun wireAgpSourceSets(
@@ -536,6 +538,44 @@ constructor(
   abstract val trailsAssetsDir: DirectoryProperty
 
   /**
+   * The committed directory an author should edit to change the test surface, named in the
+   * generated file's header as `<thisValue>/<ClassName>/`.
+   *
+   * Set this when [trailsAssetsDir] is a *staging* directory that a build task fills from a
+   * committed tree elsewhere in the repo.
+   * Otherwise the header names the staging path under `build/`, telling the reader to edit build
+   * output — and, for a module whose trails moved out to the committed tree, re-teaching the very
+   * layout the move retired.
+   *
+   * Only meaningful when the trails really do live in a directory of this shape. When they are
+   * assembled from somewhere else entirely — a cloned repo, a generator — set [authoringSourceNote]
+   * instead, which replaces the whole guidance block rather than filling in a directory it does not
+   * have.
+   *
+   * Default: unset, so the header names the plugin's own default layout,
+   * `src/androidTest/assets/trails`. That is right for the in-place case, which is the only case an
+   * external consumer has — but note it is a fixed string, not a rendering of [trailsAssetsDir], so
+   * a consumer who repoints [trailsAssetsDir] at a different committed directory should name that
+   * directory here too.
+   */
+  abstract val authoringDirDescription: Property<String>
+
+  /**
+   * Replaces the header's "where to author" guidance for trails that no directory in this repo
+   * backs — a build whose trails are cloned from another repo and flattened into one generated
+   * class.
+   *
+   * Takes precedence over [authoringDirDescription]. The header becomes a single `Source: <note>`
+   * line and drops the add/rename/remove-a-file-under-that-directory instructions, because for
+   * these lanes no such directory exists and following those instructions would change nothing.
+   * Say where the trails actually come from: a reader who opens a generated shell to change a test
+   * needs somewhere real to go.
+   *
+   * Default: unset, so the directory-shaped guidance is what gets rendered.
+   */
+  abstract val authoringSourceNote: Property<String>
+
+  /**
    * Where the generator writes its output. Point AGP's `sourceSets.androidTest.java.srcDir(...)` at
    * this directory.
    *
@@ -730,6 +770,12 @@ abstract class GenerateAndroidTrailJUnitShellsTask : DefaultTask() {
 
   @get:Input @get:Optional abstract val onlyMethodNames: MapProperty<String, Set<String>>
 
+  // Header text only — but still an @Input, because a stale header in an up-to-date generated file
+  // would keep pointing authors at the wrong directory.
+  @get:Input @get:Optional abstract val authoringDirDescription: Property<String>
+
+  @get:Input @get:Optional abstract val authoringSourceNote: Property<String>
+
   @get:OutputDirectory abstract val generatedSourceDir: DirectoryProperty
 
   @TaskAction
@@ -916,7 +962,15 @@ abstract class GenerateAndroidTrailJUnitShellsTask : DefaultTask() {
           "generated file — rename one of each colliding pair."
       }
 
-      val source = renderShell(pkg, className, mode, methods)
+      val source =
+        renderShell(
+          pkg,
+          className,
+          mode,
+          methods,
+          authoringDirDescription.getOrElse(DEFAULT_AUTHORING_DIR),
+          authoringSourceNote.orNull,
+        )
       pkgDir.resolve("$className.kt").writeText(source, Charsets.UTF_8)
       generatedClassNames += className
       generatedCount += 1
@@ -1222,13 +1276,21 @@ abstract class GenerateAndroidTrailJUnitShellsTask : DefaultTask() {
       className: String,
       mode: TestHostMode,
       methods: List<TrailMethod>,
+      authoringDir: String = DEFAULT_AUTHORING_DIR,
+      sourceNote: String? = null,
     ): String =
       when (mode) {
         is TestHostMode.BaseClass ->
-          renderBaseClassShell(packageName, className, mode.fqn, methods)
+          renderBaseClassShell(packageName, className, mode.fqn, methods, authoringDir, sourceNote)
         is TestHostMode.InlineRule ->
-          renderInlineRuleShell(packageName, className, mode.fqn, methods)
+          renderInlineRuleShell(packageName, className, mode.fqn, methods, authoringDir, sourceNote)
       }
+
+    /**
+     * The directory the generated header names when the consumer hasn't said otherwise — i.e. the
+     * in-place layout, where the trails really are under the module's own assets tree.
+     */
+    internal const val DEFAULT_AUTHORING_DIR = "src/androidTest/assets/trails"
 
     /**
      * Pattern A: `class X : <BaseClass>() { @Test fun y() = runFromAsset() }`. Same no-arg emit
@@ -1241,9 +1303,11 @@ abstract class GenerateAndroidTrailJUnitShellsTask : DefaultTask() {
       className: String,
       baseClassFqn: String,
       methods: List<TrailMethod>,
+      authoringDir: String = DEFAULT_AUTHORING_DIR,
+      sourceNote: String? = null,
     ): String = buildString {
       val baseSimpleName = baseClassFqn.substringAfterLast('.')
-      appendHeader(this, className)
+      appendHeader(this, className, authoringDir, sourceNote)
       appendLine("package $packageName")
       appendLine()
       appendLine("import org.junit.Test")
@@ -1270,9 +1334,11 @@ abstract class GenerateAndroidTrailJUnitShellsTask : DefaultTask() {
       className: String,
       ruleClassFqn: String,
       methods: List<TrailMethod>,
+      authoringDir: String = DEFAULT_AUTHORING_DIR,
+      sourceNote: String? = null,
     ): String = buildString {
       val ruleSimpleName = ruleClassFqn.substringAfterLast('.')
-      appendHeader(this, className)
+      appendHeader(this, className, authoringDir, sourceNote)
       appendLine("package $packageName")
       appendLine()
       appendLine("import org.junit.Rule")
@@ -1305,17 +1371,29 @@ abstract class GenerateAndroidTrailJUnitShellsTask : DefaultTask() {
       appendLine("}")
     }
 
-    private fun appendHeader(sb: StringBuilder, className: String) {
+    private fun appendHeader(
+      sb: StringBuilder,
+      className: String,
+      authoringDir: String,
+      sourceNote: String? = null,
+    ) {
       sb.appendLine(
         "// *** DO NOT EDIT — this file is generated by xyz.block.trailblaze.android-gradle. ***"
       )
-      sb.appendLine(
-        "// Source: src/androidTest/assets/trails/$className/ — to change the test surface, add /"
-      )
-      sb.appendLine(
-        "// rename / remove the matching <methodName>.trail.yaml files or <methodName>/trail.yaml"
-      )
-      sb.appendLine("// recording directories under that directory.")
+      // A consumer whose trails come from somewhere that isn't a directory in this repo gets the
+      // note verbatim and none of the add/rename/remove guidance — that guidance names a directory
+      // to act in, and inventing one would send the reader somewhere that doesn't exist.
+      if (sourceNote != null) {
+        sb.appendLine("// Source: $sourceNote")
+      } else {
+        sb.appendLine(
+          "// Source: ${authoringDir.trimEnd('/')}/$className/ — to change the test surface, add /"
+        )
+        sb.appendLine(
+          "// rename / remove the matching <methodName>.trail.yaml files or <methodName>/trail.yaml"
+        )
+        sb.appendLine("// recording directories under that directory.")
+      }
       sb.appendLine()
     }
   }

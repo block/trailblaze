@@ -66,6 +66,7 @@ import xyz.block.trailblaze.ui.tabs.devdebug.DevDebugWindow
 import xyz.block.trailblaze.ui.theme.TrailblazeTheme
 import xyz.block.trailblaze.cli.DaemonClient
 import xyz.block.trailblaze.cli.TrailblazeExitCode
+import xyz.block.trailblaze.trailrunner.ExternalAgentSupervisor
 import kotlin.system.exitProcess
 import xyz.block.trailblaze.compose.driver.rpc.ComposeRpcServer
 import xyz.block.trailblaze.compose.target.LiveWindowComposeTarget
@@ -157,6 +158,7 @@ class MainTrailblazeApp(
 
     // Get the MCP server instance (we'll set the callback after Compose state is ready)
     val trailblazeMcpServer = trailblazeMcpServerProvider()
+    trailblazeMcpServer.additionalActiveRunSummaries = ExternalAgentSupervisor::activeCompanionSummaries
 
     // Shared session state for the HTTP device API — tracks live DeviceScreenStream instances
     // established via ConnectToDeviceRequest (and published by Trail Runner's recorder) so

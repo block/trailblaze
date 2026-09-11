@@ -126,6 +126,12 @@ dependencies {
   // variant's `implementation` dependencies, so the tracing assertions cannot see the tracer
   // without this even though production code in this module can.
   androidTestImplementation(project(":trailblaze-tracing"))
+  // androidTest ONLY, and deliberately not `implementation`: the accessibility driver's module is
+  // heavy (UiAutomator, Maestro, Koog) and this library sits on a lean consumer floor. The
+  // accessibility-hierarchy parity test needs that module's real `AccessibilityNodeInfo` ->
+  // `TrailblazeNode` mapper, because the point of the comparison is that it is THE mapper the
+  // accessibility driver uses, not a second copy of it.
+  androidTestImplementation(project(":trailblaze-android"))
   androidTestImplementation("androidx.test.espresso:espresso-core:3.7.0")
   androidTestImplementation("androidx.compose.ui:ui-test-junit4:1.9.0")
   androidTestImplementation("androidx.compose.ui:ui-test-manifest:1.9.0")

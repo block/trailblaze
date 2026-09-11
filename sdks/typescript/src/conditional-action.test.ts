@@ -102,7 +102,7 @@ describe("runConditionalActions: snapshot acquisition", () => {
     };
     const result = await runConditionalActions(client, [conditional], snap);
     expect(result.handled).toEqual([]);
-    // Verify the snapshot was reused — no further findMatches dispatch happened.
+    // Verify the snapshot was reused — no further query dispatch happened.
     expect(client.calls.length).toBe(callsBefore);
   });
 });
@@ -540,7 +540,7 @@ describe("runConditionalActions: bulk evaluation", () => {
 });
 
 describe("captureViewHierarchy", () => {
-  test("pre-resolves selectors via findMatches in parallel", async () => {
+  test("pre-resolves every selector in ONE capture call", async () => {
     const client = createQueuedClient();
     client.queueFindMatches([
       [{ indexPath: [0] }],
@@ -551,6 +551,23 @@ describe("captureViewHierarchy", () => {
     expect(snap.visible(POPUP)).toBe(true);
     expect(snap.findAll(HOME)).toHaveLength(2);
     expect(snap.find(HOME)?.indexPath).toEqual([1]);
+
+    // The cost claim, pinned: two selectors, one dispatch. Answers alone can't catch a
+    // regression back to per-selector `findMatches` — that version returns the same snapshot
+    // while paying a multi-second hierarchy capture per selector.
+    expect(client.calls.map((c) => c.tool)).toEqual(["findSelectorMatches"]);
+    expect(client.calls[0]!.args["selectors"]).toEqual([POPUP, HOME]);
+  });
+
+  test("selectors are answered by index, so results can't be mis-attributed", async () => {
+    const client = createQueuedClient();
+    // Only HOME is on screen. If the SDK ever keyed results by anything other than position,
+    // this is where POPUP would inherit HOME's matches.
+    client.queueFindMatches([[], [{ indexPath: [7] }]]);
+    const snap = await captureViewHierarchy(client, [POPUP, HOME]);
+
+    expect(snap.visible(POPUP)).toBe(false);
+    expect(snap.find(HOME)?.indexPath).toEqual([7]);
   });
 
   test("querying a selector not in the pre-resolved list throws", async () => {
@@ -570,7 +587,7 @@ describe("captureViewHierarchy", () => {
   });
 
   test("empty selectors list builds a snapshot whose only operation is throwing on any query", async () => {
-    // An empty selectors list resolves zero findMatches calls and returns a
+    // An empty selectors list makes zero device calls and returns a
     // ViewHierarchy that throws on every visible/find/findAll. This is the
     // "no predicates use the snapshot" edge case — legal to build but useless
     // to query. Verified to confirm the builder doesn't crash on empty input.

@@ -6,14 +6,19 @@ import kotlinx.datetime.Clock
 import xyz.block.trailblaze.api.ImageFormatDetector
 import xyz.block.trailblaze.api.TrailblazeImageFormat
 import xyz.block.trailblaze.logs.TrailblazeLogsDataProvider
+import xyz.block.trailblaze.logs.client.TrailblazeDeviceClockOffsets
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.client.TrailblazeScreenStateLog
+import xyz.block.trailblaze.logs.client.deviceClockOffsets
+import xyz.block.trailblaze.logs.client.normalizedTimestamp
+import xyz.block.trailblaze.logs.client.normalizedToHostClock
 import xyz.block.trailblaze.logs.model.HasScreenshot
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionInfo
 import xyz.block.trailblaze.logs.model.SessionStatus
+import xyz.block.trailblaze.logs.model.TrailblazeClockDomain
 import xyz.block.trailblaze.logs.model.isInProgress
 import xyz.block.trailblaze.report.SkippedTrails
 import java.io.File
@@ -61,6 +66,25 @@ class LogsRepo(
    * every repo re-reading the same files. Sessions not in the map parse from disk as before.
    */
   private val preParsedLogs: Map<SessionId, List<TrailblazeLog>> = emptyMap(),
+  /**
+   * Session-wide device→host clock offsets to seed alongside [preParsedLogs], for the same reason
+   * the logs are seeded: those logs arrive already normalized, and normalizing spends the evidence
+   * an offset is derived from. Without this the report's session view loses the offset the
+   * snapshot already measured.
+   */
+  preDerivedClockOffsetsMs: Map<SessionId, Long> = emptyMap(),
+  /**
+   * When false, single-read mode skips the init-time parse of every session. The caller is then
+   * responsible for reading the sessions it wants ([getLogsForSession], [getSessionInfoDirect]),
+   * both of which read from disk on demand.
+   *
+   * A one-shot command that walks sessions one at a time should set this. Priming parses AND
+   * retains every session's full log set — view hierarchies plus the cumulative LLM transcript,
+   * which grows quadratically with step count — and doing that across a large logs directory is
+   * the heap exhaustion [getSessionInfoSummary] documents. It also happens before the command has
+   * resolved which session it was asked about, so naming one session still pays for all of them.
+   */
+  private val primeSessionCache: Boolean = true,
 ) : TrailblazeLogsDataProvider {
 
   // Create a dedicated coroutine scope for background file operations
@@ -74,6 +98,21 @@ class LogsRepo(
   // Accessed from the UI (collectAsState), the two init collectors, and external callers
   // (awaitLog, DeviceApiEndpoint), all on separate coroutines.
   private val _sessionLogsFlows = ConcurrentHashMap<SessionId, MutableStateFlow<List<TrailblazeLog>>>()
+
+  /**
+   * Last clock offset logged per session — see [logClockOffsetChange]. Declared above [init],
+   * which reads sessions during construction and would otherwise find this null.
+   */
+  private val lastLoggedClockOffset = ConcurrentHashMap<SessionId, String>()
+
+  /**
+   * The offsets [getLogsForSession] last derived, per session. Normalizing CONSUMES the evidence —
+   * a shifted log is marked `clock: host` — so a reader handed the normalized list can no longer
+   * derive them, and the device-log panel still needs them to place logcat lines stamped by the
+   * device. Kept here (seeded from [preDerivedClockOffsetsMs]) and republished on
+   * [SessionInfo.deviceClockOffsetMs].
+   */
+  private val sessionWideClockOffsetMs = ConcurrentHashMap<SessionId, Long>(preDerivedClockOffsetsMs)
 
   // Reactive StateFlow for SessionInfo objects (auto-updates when sessions or their logs change)
   private val _sessionInfoFlow = MutableStateFlow<List<SessionInfo>>(emptyList())
@@ -180,7 +219,7 @@ class LogsRepo(
           rebuildSessionInfo()
         }
       }
-    } else {
+    } else if (primeSessionCache) {
       // Single read mode: read all session logs once and cache them.
       // This avoids redundant disk I/O in the main loop and makes the report
       // resilient to transient I/O failures after initialization.
@@ -297,18 +336,61 @@ class LogsRepo(
   }
 
   /**
-   * Returns a list of logs for the given session ID.
+   * Returns a list of logs for the given session ID, on ONE timeline and in chronological order.
    * If the session ID is null or the session directory does not exist, an empty list is returned.
+   *
+   * Device-stamped logs are normalized onto the host clock before sorting, because every consumer
+   * of this method treats the result as chronological — the report's log list and storyboard, the
+   * CLI's terminal state, the desktop session view — and a device whose clock lags the host's by
+   * a second interleaves its logs a second early otherwise. Normalizing here rather than in each
+   * consumer is what keeps them agreeing with the recording generator about which step a tool
+   * belongs to. It is idempotent, so a consumer that normalizes again is unaffected.
    */
   fun getLogsForSession(sessionId: SessionId?): List<TrailblazeLog> {
     if (sessionId != null) {
       val jsonFiles = readLogFilesFromDisk(sessionId)
       val logs: List<TrailblazeLog> = jsonFiles.mapNotNull {
         parseTrailblazeLogFromFile(it)
-      }.sortedBy { it.timestamp }
-      return logs
+      }
+      val offsets = logs.deviceClockOffsets()
+      if (offsets != null) {
+        sessionWideClockOffsetMs[sessionId] = offsets.sessionWideOffsetMs
+      } else {
+        sessionWideClockOffsetMs.remove(sessionId)
+      }
+      logClockOffsetChange(sessionId, offsets, logs)
+      return logs.normalizedToHostClock(offsets).sortedBy { it.timestamp }
     }
     return emptyList()
+  }
+
+  /**
+   * Logs a session's derived clock offset the first time it is seen, and again only when it
+   * changes. A running session re-reads this list on every log file it writes, so logging
+   * unconditionally would bury the daemon log — but never logging leaves a misplaced span with no
+   * way to tell an absent offset from a wrong one.
+   *
+   * A session with device-stamped logs but NO ingestion anchor is reported too: that session reads
+   * raw, which looks identical to a session that never needed normalizing until you know the
+   * anchors are missing.
+   */
+  private fun logClockOffsetChange(
+    sessionId: SessionId,
+    offsets: TrailblazeDeviceClockOffsets?,
+    logs: List<TrailblazeLog>,
+  ) {
+    val described = when {
+      offsets != null -> "normalizing device-stamped logs by ${offsets.describe()}"
+      logs.any { it.clock == TrailblazeClockDomain.DEVICE } ->
+        "device-stamped logs with NO ingestion anchor — reading raw stamps"
+      else -> return
+    }
+    if (lastLoggedClockOffset.put(sessionId, described) != described) {
+      // The anchor count rides on the line but NOT on the dedup key: a live session anchors more
+      // tools as it runs, and re-announcing offsets that never moved is what buries the log.
+      val anchors = offsets?.let { " (min over ${it.anchorCount} ingestion anchors)" }.orEmpty()
+      Console.log("[log-clock] ${sessionId.value}: $described$anchors")
+    }
   }
 
   /** One log file decoded with this repo's cost enrichment — see the companion [parseTrailblazeLog]. */
@@ -473,6 +555,8 @@ class LogsRepo(
               // Clean up flows for removed sessions
               removedSessions.forEach { sessionId ->
                 _sessionLogsFlows.remove(sessionId)
+                lastLoggedClockOffset.remove(sessionId)
+                sessionWideClockOffsetMs.remove(sessionId)
               }
 
               // Update the flow with new session list
@@ -622,6 +706,14 @@ class LogsRepo(
   }
 
   /**
+   * [SessionInfo] from logs the caller has already read, so a reader that needs both the header
+   * and the logs themselves parses the session once instead of twice. A session's full log set is
+   * the largest thing this repo deserializes — view hierarchies plus the cumulative LLM
+   * transcript — so the second parse is not free.
+   */
+  fun sessionInfoFrom(logs: List<TrailblazeLog>): SessionInfo? = buildSessionInfo(logs)
+
+  /**
    * Summary-grade [SessionInfo]: parses ONLY the session-status-change logs (a handful of ~1KB
    * files) and derives last-activity from file mtimes instead of deserializing every log.
    *
@@ -663,6 +755,10 @@ class LogsRepo(
     if (allLogs.isEmpty()) {
       return null
     }
+
+    // Republished from the read that normalized these logs, because that read is the last place the
+    // offset was derivable — see [lastDeviceClockOffsets].
+    val deviceClockOffsetMs = sessionWideClockOffsetMs[allLogs.first().session]
 
     // Filter for session status logs from the cached logs
     val sessionStatusLogs = allLogs
@@ -724,6 +820,7 @@ class LogsRepo(
               trailFilePath = startedStatus?.trailFilePath,
               hasRecordedSteps = startedStatus?.hasRecordedSteps ?: false,
               selectedDeviceConfiguration = startedStatus?.selectedDeviceConfiguration,
+              deviceClockOffsetMs = deviceClockOffsetMs,
             )
           }
         }
@@ -755,6 +852,7 @@ class LogsRepo(
       trailFilePath = startedStatus?.trailFilePath,
       hasRecordedSteps = startedStatus?.hasRecordedSteps ?: false,
       selectedDeviceConfiguration = startedStatus?.selectedDeviceConfiguration,
+      deviceClockOffsetMs = deviceClockOffsetMs,
     )
   }
 
@@ -913,28 +1011,23 @@ class LogsRepo(
    * Finds the log file on disk for a specific TrailblazeLog.
    * Returns the file if found, or null if not found.
    *
-   * Parses each JSON file in the session directory and matches by timestamp and type.
+   * Parses each JSON file in the session directory and matches by timestamp and type. The
+   * timestamp is matched on EITHER clock: callers hand this whatever they are holding, and the
+   * session viewer holds logs already normalized onto the host clock ([getLogsForSession]) while
+   * the on-disk record keeps the device's own stamp. Comparing only the raw stamp silently found
+   * nothing for every device-stamped log — "Reveal in Finder" quietly did nothing.
    */
   fun findLogFile(log: TrailblazeLog): File? {
-    val logFiles = readLogFilesFromDisk(log.session)
-    if (logFiles.isEmpty()) return null
-
-    for (file in logFiles) {
-      try {
-        val parsedLog = parseTrailblazeLogFromFile(file)
-        if (parsedLog != null &&
-          parsedLog.timestamp == log.timestamp &&
-          parsedLog::class == log::class
-        ) {
-          return file
-        }
-      } catch (e: Exception) {
-        // Continue searching if this file can't be parsed
-        continue
-      }
+    val parsed: List<Pair<File, TrailblazeLog>> = readLogFilesFromDisk(log.session).mapNotNull { file ->
+      runCatching { parseTrailblazeLogFromFile(file) }.getOrNull()?.let { file to it }
     }
+    if (parsed.isEmpty()) return null
 
-    return null
+    val offsets = parsed.map { (_, parsedLog) -> parsedLog }.deviceClockOffsets()
+    return parsed.firstOrNull { (_, parsedLog) ->
+      parsedLog::class == log::class &&
+        (parsedLog.timestamp == log.timestamp || parsedLog.normalizedTimestamp(offsets) == log.timestamp)
+    }?.first
   }
 
   companion object {

@@ -938,7 +938,7 @@ class WaypointMigrateTrailCommand : Callable<Int> {
    *     [TrailblazeRunnerUtil]'s pre-tool hook, so AgentDriverLog is the only per-action
    *     capture available there.
    *
-   * Sort by JSON `timestamp` field rather than filename: ATF-produced logs use hex hashes
+   * Sort by JSON `timestamp` field rather than filename: device-farm logs use hex hashes
    * (e.g. `7d50895f_AgentDriverLog.json`), so alphabetical order doesn't match emit order.
    * The numeric-prefix convention (`008_…`) used by local CLI runs would still sort correctly
    * by timestamp too, so timestamp-sort is uniformly correct.

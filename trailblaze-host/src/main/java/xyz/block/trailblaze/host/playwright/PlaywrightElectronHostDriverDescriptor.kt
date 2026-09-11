@@ -22,6 +22,7 @@ import xyz.block.trailblaze.host.driver.HostDeviceInventory
 import xyz.block.trailblaze.host.driver.HostDriverDescriptor
 import xyz.block.trailblaze.host.driver.HostRunDeps
 import xyz.block.trailblaze.host.driver.HostScreenStateDeps
+import xyz.block.trailblaze.host.screenstate.MaestroDriverScreenStates
 import xyz.block.trailblaze.host.recording.DeviceConnectionService
 import xyz.block.trailblaze.host.rules.BasePlaywrightElectronTest
 import xyz.block.trailblaze.host.yaml.RunOnHostParams
@@ -29,9 +30,11 @@ import xyz.block.trailblaze.http.DynamicLlmClient
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.scripting.LaunchedScriptingRuntime
+import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.ui.TrailblazeDeviceManager
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.yaml.ElectronAppConfig
+import kotlin.reflect.KClass
 
 /**
  * Plugs the Playwright-electron web driver into the host: an already-running Electron app exposes
@@ -58,6 +61,13 @@ class PlaywrightElectronHostDriverDescriptor(
   override val driverTypes: Set<TrailblazeDriverType> = setOf(TrailblazeDriverType.PLAYWRIGHT_ELECTRON)
 
   override val listingVisibility = DeviceListingVisibility.LISTED
+
+  /**
+   * The web tool sets, plus the ones for driving an Electron shell — menus, windows, and the
+   * main-process bridge a browser tab has no equivalent of.
+   */
+  override fun toolClasses(driverType: TrailblazeDriverType): Set<KClass<out TrailblazeTool>> =
+    resolveWebToolClasses(driverType) + BasePlaywrightElectronTest.ELECTRON_BUILT_IN_TOOL_CLASSES
 
   /**
    * One CDP-endpoint device when the Electron app answers `/json/version`, nothing otherwise.
@@ -231,8 +241,7 @@ class PlaywrightElectronHostDriverDescriptor(
       TrailblazeHostYamlRunner.generateAndSaveRecording(
         sessionId = sessionId,
         logsDir = electronTest.loggingRule.logsRepo.logsDir,
-        customToolClasses = resolveWebToolClasses(TrailblazeDriverType.PLAYWRIGHT_ELECTRON) +
-          BasePlaywrightElectronTest.ELECTRON_BUILT_IN_TOOL_CLASSES + customToolClasses,
+        customToolClasses = toolClasses(TrailblazeDriverType.PLAYWRIGHT_ELECTRON) + customToolClasses,
       )
 
       sessionId

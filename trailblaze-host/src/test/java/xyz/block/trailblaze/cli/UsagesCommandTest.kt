@@ -879,7 +879,7 @@ class UsagesCommandTest {
   @Test
   fun `a workspace with no extracted SDK still gets an alias target from the framework JAR`() {
     // The fresh-worktree case: `.trailblaze/` is gitignored, so a `git worktree add` checkout has
-    // no SDK to borrow and no `trailblaze check` has run there. `validate-trailmap-tool-change.sh`
+    // no SDK to borrow and no `trailblaze check` has run there. Trailmap tool-change validation
     // runs `usages --changed-since` in exactly such a worktree, and without this tier both sides
     // fail to bundle — which reports an edit confined to an imported helper as no change at all.
     val cacheRoot = File(trailsDir, "framework-sdk-cache")

@@ -5,6 +5,7 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.doubleOrNull
+import xyz.block.trailblaze.logs.model.TrailblazeClockDomain
 import java.io.File
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
@@ -151,9 +152,11 @@ object SessionTraceFile {
   /**
    * The field that says which clock an event's `ts` came from, read by the profiler's extractor
    * (`perf-extract.ts`). Absent means the host clock, which is the overwhelming majority.
+   * The value derives from [TrailblazeClockDomain] so it can't drift from the per-log `clock`
+   * field's vocabulary.
    */
   internal const val CLOCK_FIELD: String = "clock"
-  internal const val DEVICE_CLOCK: String = "device"
+  internal val DEVICE_CLOCK: String = TrailblazeClockDomain.DEVICE.wireName
 
   /**
    * Deliberately not `TrailblazeJsonInstance`: reading that seals the polymorphic tool registry, and

@@ -83,6 +83,10 @@ if [ "$BLAZE_JAR" = "1" ]; then
   fi
 fi
 
+# Nested launcher re-entry (including Companion opening Trail Runner) must retain the caller's
+# explicit --jar/--gradle choice after those wrapper-only flags have been stripped from argv.
+export BLAZE_JAR
+
 # ---------------------------------------------------------------------------
 # Gradle mode — override tb_run* to use Gradle, pre-cache JAR after success
 # ---------------------------------------------------------------------------
@@ -93,9 +97,21 @@ if [ "$BLAZE_JAR" != "1" ]; then
   # arbitrary cwd where `./gradlew` doesn't exist. The forked app JVM's working
   # directory is set by Gradle, not by this cd, so argument resolution for the
   # launched CLI is unchanged.
+  tb_gradle_args() {
+    local result="" arg escaped
+    for arg in "$@"; do
+      escaped="${arg//\\/\\\\}"
+      escaped="${escaped//\"/\\\"}"
+      result="${result}${result:+ }\"${escaped}\""
+    done
+    printf '%s' "$result"
+  }
+
   tb_run() {
-    if [ -n "$1" ]; then
-      (cd "$DEV_JAR_REPO_ROOT" && ./gradlew ${TRAILBLAZE_MODULE}:run --args="$1")
+    local gradle_args
+    gradle_args="$(tb_gradle_args "$@")"
+    if [ -n "$gradle_args" ]; then
+      (cd "$DEV_JAR_REPO_ROOT" && ./gradlew ${TRAILBLAZE_MODULE}:run --args="$gradle_args")
     else
       (cd "$DEV_JAR_REPO_ROOT" && ./gradlew ${TRAILBLAZE_MODULE}:run)
     fi
@@ -104,31 +120,23 @@ if [ "$BLAZE_JAR" != "1" ]; then
   tb_run_background() {
     # Repo root is passed positionally (like the args) rather than interpolated into the
     # command string, so a path containing quotes can't break the spawned command.
-    if [ -n "$1" ]; then
-      nohup bash -c "cd \"\$1\" && ./gradlew ${TRAILBLAZE_MODULE}:run --args=\"\$2\"" _ "$DEV_JAR_REPO_ROOT" "$1" > /dev/null 2>&1 &
+    local gradle_args
+    gradle_args="$(tb_gradle_args "$@")"
+    if [ -n "$gradle_args" ]; then
+      nohup bash -c 'cd "$1" && ./gradlew "$2:run" --args="$3"' _ "$DEV_JAR_REPO_ROOT" "$TRAILBLAZE_MODULE" "$gradle_args" > /dev/null 2>&1 &
     else
-      nohup bash -c "cd \"\$1\" && ./gradlew ${TRAILBLAZE_MODULE}:run" _ "$DEV_JAR_REPO_ROOT" > /dev/null 2>&1 &
+      nohup bash -c 'cd "$1" && ./gradlew "$2:run"' _ "$DEV_JAR_REPO_ROOT" "$TRAILBLAZE_MODULE" > /dev/null 2>&1 &
     fi
   }
 
   tb_run_quiet() {
     local _exit
-    if [ ${#ARGS_ARRAY[@]} -gt 0 ]; then
-      # Quote args containing spaces so Gradle's --args preserves them
-      local quoted_args=""
-      for arg in "${ARGS_ARRAY[@]}"; do
-        if [[ "$arg" == *" "* ]] || [[ "$arg" == *":"* ]] || [[ "$arg" == *"{"* ]]; then
-          arg="\"$arg\""
-        fi
-        if [ -z "$quoted_args" ]; then
-          quoted_args="$arg"
-        else
-          quoted_args="$quoted_args $arg"
-        fi
-      done
-      (cd "$DEV_JAR_REPO_ROOT" && ./gradlew -q --console=plain ${TRAILBLAZE_MODULE}:run --args="$quoted_args")
+    local gradle_args
+    gradle_args="$(tb_gradle_args "$@")"
+    if [ -n "$gradle_args" ]; then
+      (cd "$DEV_JAR_REPO_ROOT" && ./gradlew -q --console=plain ${TRAILBLAZE_MODULE}:run --args="$gradle_args")
     else
-      (cd "$DEV_JAR_REPO_ROOT" && ./gradlew -q --console=plain ${TRAILBLAZE_MODULE}:run --args="$1")
+      (cd "$DEV_JAR_REPO_ROOT" && ./gradlew -q --console=plain ${TRAILBLAZE_MODULE}:run)
     fi
     _exit=$?
     # Rebuild the uber JAR so the next default run (JAR mode) starts instantly.
@@ -142,12 +150,16 @@ if [ "$BLAZE_JAR" != "1" ]; then
     # exec replaces this process, so a plain cd (no subshell) is safe here. Fail loudly if the
     # root is missing — otherwise the exec is silently skipped and the caller sees nothing.
     cd "$DEV_JAR_REPO_ROOT" || { echo "Error: cannot cd to repo root '$DEV_JAR_REPO_ROOT' — not starting Trailblaze." >&2; exit 1; }
-    exec ./gradlew -q --console=plain ${TRAILBLAZE_MODULE}:run --args="$1"
+    local gradle_args
+    gradle_args="$(tb_gradle_args "$@")"
+    exec ./gradlew -q --console=plain ${TRAILBLAZE_MODULE}:run --args="$gradle_args"
   }
 
   tb_run_background_quiet() {
     # Repo root passed positionally — see tb_run_background.
-    nohup bash -c "cd \"\$1\" && ./gradlew -q --console=plain ${TRAILBLAZE_MODULE}:run --args=\"\$2\"" _ "$DEV_JAR_REPO_ROOT" "$1" > /dev/null 2>&1 &
+    local gradle_args
+    gradle_args="$(tb_gradle_args "$@")"
+    nohup bash -c 'cd "$1" && ./gradlew -q --console=plain "$2:run" --args="$3"' _ "$DEV_JAR_REPO_ROOT" "$TRAILBLAZE_MODULE" "$gradle_args" > /dev/null 2>&1 &
   }
 fi
 

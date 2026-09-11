@@ -71,8 +71,8 @@ class TrailblazeAndroidLoggingRule(
 
   protected override val useBinaryLogTransport: Boolean = true
 
-  /** These spans are stamped by the device's own clock, which drifts from the host's by seconds. */
-  protected override val tracesUseDeviceClock: Boolean = true
+  /** These timestamps — trace spans and agent logs — are stamped by the device's own clock, which drifts from the host's by seconds. */
+  protected override val useDeviceClock: Boolean = true
 
   /**
    * Override the driver type reported in session logs. Set this before calling
@@ -86,6 +86,9 @@ class TrailblazeAndroidLoggingRule(
   var driverTypeOverride: TrailblazeDriverType =
     InstrumentationArgUtil.driverType() ?: TrailblazeDriverType.DEFAULT_ANDROID
 
+  /** Host-validated locale/variant classifiers for the current run. Reset on every request. */
+  var deviceClassifiersOverride: List<TrailblazeDeviceClassifier> = emptyList()
+
   override val trailblazeDeviceInfoProvider: () -> TrailblazeDeviceInfo = {
     val displayMetrics = getDisplayMetrics()
     TrailblazeDeviceInfo(
@@ -95,7 +98,7 @@ class TrailblazeAndroidLoggingRule(
       orientation = getDeviceOrientation(),
       widthPixels = displayMetrics.widthPixels,
       heightPixels = displayMetrics.heightPixels,
-      classifiers = trailblazeDeviceClassifiersProvider(),
+      classifiers = deviceClassifiersOverride.ifEmpty(trailblazeDeviceClassifiersProvider),
       metadata = getDeviceMetadata(),
     )
   }

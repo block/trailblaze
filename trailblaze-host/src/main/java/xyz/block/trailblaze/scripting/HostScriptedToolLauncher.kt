@@ -6,6 +6,9 @@ import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
 import kotlin.coroutines.cancellation.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runInterruptible
+import kotlinx.coroutines.withContext
 import xyz.block.trailblaze.config.InlineScriptToolConfig
 import xyz.block.trailblaze.config.ScriptedToolNameDiscoverer
 import xyz.block.trailblaze.llm.config.ClasspathResourceDiscovery
@@ -476,12 +479,31 @@ object HostScriptedToolLauncher {
     tools: List<InlineScriptToolConfig>,
     onProgressMessage: (String) -> Unit,
   ): List<Pair<InlineScriptToolConfig, File>> {
+    // Nothing to bundle (every target-declared tool was already registered by an earlier pass in this
+    // session): return before the resolution below, which forks esbuild to probe the SDK tree's deps
+    // and logs about it. Doing that work for zero tools is pure cost and a confusing second log line.
+    if (tools.isEmpty()) return emptyList()
     val esbuildBinary = LazyYamlScriptedToolRegistration.resolveEsbuildBinary()
     // The in-process SDK source the bundler aliases `@trailblaze/scripting` to. Resolved
     // independently of the esbuild binary's location; when absent the bundler omits the alias and
     // `@trailblaze/scripting` resolves from `node_modules` instead. Its presence also distinguishes a
     // real Trailblaze checkout from a binary user running their own tools (see [planInlineToolRoute]).
-    val inProcessSdkEntry = LazyYamlScriptedToolRegistration.resolveInProcessSdkEntry()
+    //
+    // The resolution forks esbuild and blocks on `waitFor`, so it runs on [Dispatchers.IO] inside
+    // [runInterruptible]: off the caller's dispatcher, and cancelling the launch actually interrupts
+    // the wait instead of leaving the thread parked until the probe's own deadline expires.
+    //
+    // Skipped when no esbuild resolved: [planInlineToolRoute] then routes to PrecompiledOnly and
+    // never reads this, and the resolver's deps gate would still fork — it falls back to the SDK
+    // tree's OWN node_modules/.bin/esbuild — spending the probe's deadline on an answer nothing
+    // consumes.
+    val inProcessSdkEntry = if (esbuildBinary == null) {
+      null
+    } else {
+      withContext(Dispatchers.IO) {
+        runInterruptible { LazyYamlScriptedToolRegistration.resolveInProcessSdkEntry() }
+      }
+    }
     return when (
       val route =
         planInlineToolRoute(
@@ -495,7 +517,14 @@ object HostScriptedToolLauncher {
         val binary = checkNotNull(esbuildBinary) { "LiveBundle route requires a resolved esbuild binary" }
         // Supplying the SDK entry (may be null) keeps the slim on-device profile when present and lets
         // the bundler fall back to `node_modules` resolution when absent.
-        val bundler = DaemonScriptedToolBundler(binary, inProcessSdkEntryOverride = inProcessSdkEntry)
+        // No walk-up: this caller resolved the entry itself, so a null is a decision — the tree was
+        // rejected for unusable deps — and the bundler's walk-up from esbuild would land right back
+        // on it (esbuild is normally that tree's own devDependency).
+        val bundler = DaemonScriptedToolBundler(
+          binary,
+          inProcessSdkEntryOverride = inProcessSdkEntry,
+          allowLegacyEsbuildWalkup = false,
+        )
         // Static-analysis pre-pass (#3190): a tool whose import closure reaches `node:*` builtins or
         // Node-only npm deps would fail the real bundle pass and tank session start for every sibling
         // tool. The analyzer skips such tools cleanly and registers the on-device-viable siblings.
@@ -541,12 +570,20 @@ object HostScriptedToolLauncher {
           // surface its original error as a breadcrumb (not an error — the tool works) so no live-bundle
           // failure is ever fully hidden. From a source checkout this flags an edit that didn't take
           // effect; on an installed JAR it's the expected SDK-absent fallback.
+          //
+          // Mirrored to onProgressMessage, not just Console.log, because a source checkout can now
+          // reach this branch: LazyYamlScriptedToolRegistration.resolveInProcessSdkEntry returns null
+          // for a checkout whose SDK deps aren't installed, which reads as "no SDK source" here. In
+          // that state the developer's live `.ts` edit is silently NOT what runs, and Console.log is
+          // suppressed under quiet mode — exactly where they'd be staring at stale tool behavior with
+          // no explanation.
           val unresolvedSet = plan.unresolved.toSet()
           liveBundleErrors.filterKeys { it !in unresolvedSet }.forEach { (tool, failure) ->
-            Console.log(
+            val breadcrumb =
               "[scripted-tools] '${tool.name}' fell back to its precompiled bundle after its live-bundle " +
-                "failed: ${failure.message ?: failure.toString()}",
-            )
+                "failed: ${failure.message ?: failure.toString()}"
+            Console.log(breadcrumb)
+            onProgressMessage(breadcrumb)
           }
           plan.resolved.map { it.config to it.bundleFile }
         }

@@ -14,7 +14,7 @@ class RealYamlFileTest {
   fun `can parse realistic unified trail`() {
     val yaml = """
       config:
-        id: "5056470"
+        id: "1016"
         title: "Appointment checkout flow"
         description: "Test loyalty points received for purchase workflow"
       trail:
@@ -37,7 +37,7 @@ class RealYamlFileTest {
 
     val trail = trailblazeYaml.decodeUnifiedTrail(yaml)
 
-    assertEquals("5056470", trail.config.id)
+    assertEquals("1016", trail.config.id)
     assertEquals("Appointment checkout flow", trail.config.title)
     assertEquals("Test loyalty points received for purchase workflow", trail.config.description)
 

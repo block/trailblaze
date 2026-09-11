@@ -104,6 +104,41 @@ private val excludedParameterTypes = setOf(
 )
 
 /**
+ * Which excluded selector type a parameter is built on, and whether it carries a COLLECTION of
+ * them — the two facts both exclusion call sites need. Null for every non-selector parameter.
+ */
+private data class ExcludedSelectorType(val typeName: String, val isCollection: Boolean)
+
+/**
+ * Matches a direct selector param (`nodeSelector: TrailblazeNodeSelector`) **and a collection of
+ * them** (`selectors: List<TrailblazeNodeSelector>`).
+ *
+ * The collection case is load-bearing, not a nicety. Keyed on the top-level classifier alone, a
+ * list-typed selector param reads as `kotlin.collections.List` and is not excluded — then
+ * [asToolType]'s `List` branch recurses into the element type and the self-referential selector
+ * grammar blows the stack. A [StackOverflowError] is an `Error`, so [toScriptedToolDescriptor]'s
+ * `catch (Exception)` does not absorb it and per-trailmap codegen dies outright rather than
+ * skipping the one tool. `findSelectorMatches` is the first tool to take a list of selectors,
+ * and it crashed codegen until this unwrapped one level.
+ *
+ * One level of unwrapping is deliberate: what is being guarded is the selector grammar's own
+ * recursion, and no tool takes a list of lists of selectors.
+ */
+private fun KType.excludedSelectorType(): ExcludedSelectorType? {
+  val classifierName = (classifier as? KClass<*>)?.qualifiedName
+  if (classifierName != null && classifierName in excludedParameterTypes) {
+    return ExcludedSelectorType(typeName = classifierName, isCollection = false)
+  }
+  if (classifier == List::class || classifier == Set::class) {
+    val itemName = (arguments.firstOrNull()?.type?.classifier as? KClass<*>)?.qualifiedName
+    if (itemName != null && itemName in excludedParameterTypes) {
+      return ExcludedSelectorType(typeName = itemName, isCollection = true)
+    }
+  }
+  return null
+}
+
+/**
  * A selector-typed constructor parameter that [buildToolDescriptorIgnoringSurface] STRIPS (via
  * [excludedParameterTypes]), re-surfaced with a hand-picked TypeScript type so the trail-recording
  * type-validation surface can model it. See [selectorParamsForTs].
@@ -144,8 +179,7 @@ fun KClass<out TrailblazeTool>.selectorParamsForTs(): List<SelectorParamTs> {
   val nodeSelectorType = TrailblazeNodeSelector::class.qualifiedName
   val elementSelectorType = TrailblazeElementSelector::class.qualifiedName
   return primaryConstructor?.parameters.orEmpty().mapNotNull { param ->
-    val typeName = (param.type.classifier as? KClass<*>)?.qualifiedName
-    if (typeName !in excludedParameterTypes) return@mapNotNull null
+    val excluded = param.type.excludedSelectorType() ?: return@mapNotNull null
     // Guard the empty string too (not just null): an empty name would render `"": …;` — a TS
     // syntax error in the generated surface. Reflection normally never yields one, but cheap to pin.
     val name = param.name?.trim()?.takeIf { it.isNotEmpty() } ?: return@mapNotNull null
@@ -153,13 +187,17 @@ fun KClass<out TrailblazeTool>.selectorParamsForTs(): List<SelectorParamTs> {
     // common-indent detection on multi-line descriptions. Matches the object-property path above.
     val llmDescription = param.findAnnotation<LLMDescription>()?.value?.trimIndent()?.trim()
     val optional = param.isOptional || param.type.isMarkedNullable
-    when (typeName) {
+    // A `List<Selector>` param is stripped for the same reason a bare one is, so it has to come
+    // back as an ARRAY of the same TS type — emitting the scalar type would make every recorded
+    // call to such a tool read as a type error in the generated surface.
+    val arraySuffix = if (excluded.isCollection) "[]" else ""
+    when (excluded.typeName) {
       nodeSelectorType -> SelectorParamTs(
         name = name,
         // Must match the `TrailblazeNodeSelector` export in the generated `selectors.ts` and
         // `WorkspaceClientDtsGenerator.NODE_SELECTOR_TS_TYPE` (which emits the matching `import type`).
         // Codegen-boundary coupling with no static check — keep the three in sync if the export renames.
-        tsType = "TrailblazeNodeSelector",
+        tsType = "TrailblazeNodeSelector$arraySuffix",
         optional = optional,
         description = llmDescription,
       )
@@ -167,7 +205,7 @@ fun KClass<out TrailblazeTool>.selectorParamsForTs(): List<SelectorParamTs> {
         name = name,
         // No generated TS type for the deprecated Maestro-shaped selector; `unknown` accepts a
         // legacy `selector:` block in an old recording without a false positive.
-        tsType = "unknown",
+        tsType = "unknown$arraySuffix",
         optional = true,
         description = llmDescription
           ?: "Deprecated legacy Maestro-shaped selector; prefer `nodeSelector`.",
@@ -193,10 +231,7 @@ fun KClass<out TrailblazeTool>.buildToolDescriptorIgnoringSurface(): ToolDescrip
   val kClass = this
   val trailblazeToolClassAnnotation = kClass.trailblazeToolClassAnnotation()
 
-  fun KParameter.isExcludedFromDescriptor(): Boolean {
-    val typeName = this.type.classifier?.let { (it as? KClass<*>)?.qualifiedName }
-    return typeName in excludedParameterTypes
-  }
+  fun KParameter.isExcludedFromDescriptor(): Boolean = this.type.excludedSelectorType() != null
 
   fun KParameter.toKoogToolParameterDescriptors(): ToolParameterDescriptor = ToolParameterDescriptor(
     name = this.name?.trim() ?: error("Parameter name cannot be null"),

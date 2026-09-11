@@ -199,8 +199,18 @@ class ComposeRpcTrailblazeAgent(
       }
 
       else -> {
-        val errorMessage =
-          "Unsupported tool type ${tool::class.simpleName} in ComposeRpcTrailblazeAgent."
+        // Reported rather than thrown so a batch keeps the results of the tools that already ran.
+        val errorMessage = unsupportedToolShapeMessage(
+          tool = tool,
+          agentName = "ComposeRpcTrailblazeAgent",
+          supportedShapes = listOf(
+            ComposeRequestDetailsTool::class.java.simpleName,
+            ComposeExecutableTool::class.java.simpleName,
+            ExecutableTrailblazeTool::class.java.simpleName,
+          ),
+          remediation = "Register a ${ComposeExecutableTool::class.java.simpleName} or a " +
+            "generic ${ExecutableTrailblazeTool::class.java.simpleName}.",
+        )
         Console.log("Error: $errorMessage")
         toolsExecuted.add(tool)
         TrailblazeToolResult.Error.ExceptionThrown(errorMessage)

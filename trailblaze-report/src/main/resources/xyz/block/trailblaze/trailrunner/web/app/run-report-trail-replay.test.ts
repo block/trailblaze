@@ -356,7 +356,7 @@ describe("interactions on the shared clock", () => {
 });
 
 describe("putting a recording on the shared clock", () => {
-  // The iPad lane of C5804013, rounded: the recorder declares a 182.1s window for a 178.0s file.
+  // A real iPad lane, rounded: the recorder declares a 182.1s window for a 178.0s file.
   const clip = { startMs: 1_000_000, endMs: 1_000_000 + 182_102 };
   const duration = 177.967;
   const laneT0 = 1_000_000;

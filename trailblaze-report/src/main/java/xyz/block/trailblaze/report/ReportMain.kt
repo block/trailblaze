@@ -127,7 +127,7 @@ open class GenerateReportCliCommand(
 
       // Inferred from the logs directory parent; [afterReportGenerated] overrides resolve
       // repo-relative paths against it. `absoluteFile` first because a single-segment relative
-      // logs dir (`generate-report logs`, which atf.sh can produce) has a null parent.
+      // logs dir (`generate-report logs`, which a farm run can produce) has a null parent.
       val rootWorkingDir = logsRepo.logsDir.absoluteFile.parentFile
 
       // The run produces the lightweight interactive report — the same artifact `trailblaze
@@ -151,7 +151,7 @@ open class GenerateReportCliCommand(
           skips = SkippedTrails.read(logsDir),
         )
       } catch (e: Exception) {
-        // Exception, not Throwable: an OOM here is the signal `generate_build_combined_report.sh`
+        // Exception, not Throwable: an OOM here is the signal the combined-report CI script
         // classifies on, and swallowing it would relabel a memory failure as a renderer bug.
         Console.error("Warning: report generation threw: ${e.message}")
         null
@@ -294,6 +294,9 @@ class SingleReadLogsRepoProvider {
         watchFileSystem = false,
         costEnricher = costEnricher::enrich,
         preParsedLogs = snapshots.associate { it.sessionId to it.logs },
+        preDerivedClockOffsetsMs = snapshots.mapNotNull { snapshot ->
+          snapshot.deviceClockOffsetMs?.let { snapshot.sessionId to it }
+        }.toMap(),
       ),
     )
   }

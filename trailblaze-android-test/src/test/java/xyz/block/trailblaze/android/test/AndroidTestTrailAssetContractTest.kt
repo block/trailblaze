@@ -33,9 +33,8 @@ class AndroidTestTrailAssetContractTest {
    * Every tree of ANDROID_TEST trails in the repo, whichever module ships them.
    *
    * The sample app's are here rather than in a test of their own because they are the same
-   * contract: they replay on this driver, and the farm lane that runs them (staged into a
-   * `<app>-android-inprocess` APK by `on_demand_android_trails_farm.sh`) has no other check
-   * standing between a typo and a device.
+   * contract: they replay on this driver, and the CI lane that runs them (which stages them into
+   * an `<app>-android-inprocess` APK) has no other check standing between a typo and a device.
    */
   private val trailRoots: List<File> =
     listOf(
@@ -113,11 +112,10 @@ class AndroidTestTrailAssetContractTest {
   /**
    * Every asset in THIS module has a test method behind it.
    *
-   * `build_on_demand_config.py` exempts this module from the on-demand trail planner
-   * (`ASSET_TRAIL_MODULES_COVERED_ELSEWHERE`) because its own instrumentation step already replays
-   * these trails. An asset with no method to run it makes that claim false in the one way nothing
-   * reports: the planner skips it by policy, the device run never names it, and the file reads as
-   * covered while never running once.
+   * A CI trail planner can be configured to exempt this module because its own instrumentation
+   * step already replays these trails. An asset with no method to run it makes that claim false in
+   * the one way nothing reports: the planner skips it by policy, the device run never names it, and
+   * the file reads as covered while never running once.
    *
    * Scoped to this module. The sample app's tree has no source files to find — the
    * `xyz.block.trailblaze.android-gradle` plugin generates a `@Test` shell per trail at build time,

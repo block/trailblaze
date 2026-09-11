@@ -378,7 +378,7 @@ class TrailblazeMcpServerSessionPinningTest {
   // between `initialize` and the first `tools/call`. The early-return paths
   // are unit-testable here; the "actually set the name" path requires a real
   // ServerSession (constructed by the SDK) and is exercised by the live MCP
-  // test in /tmp/mcp-live-test-v2.sh.
+  // live MCP test script.
   // ---------------------------------------------------------------------------
 
   @Test

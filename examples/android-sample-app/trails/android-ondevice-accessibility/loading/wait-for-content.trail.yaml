@@ -1,6 +1,6 @@
 config:
   id: sample-app/loading/wait-for-content
-  target: xyz.block.trailblaze.examples.sampleapp
+  target: sampleapp
   devices:
     android-phone:
       driver: ANDROID_ONDEVICE_ACCESSIBILITY
@@ -34,10 +34,10 @@ trail:
   - step: "Wait (event-driven) for the content to finish loading"
     recording:
       android-phone:
-        - findMatches:
-            selector:
-              androidAccessibility:
-                textRegex: Content Loaded
+        - findSelectorMatches:
+            selectors:
+              - androidAccessibility:
+                  textRegex: Content Loaded
             timeoutMs: 30000
 
   - verify: "\"Content Loaded\" is visible on the screen"

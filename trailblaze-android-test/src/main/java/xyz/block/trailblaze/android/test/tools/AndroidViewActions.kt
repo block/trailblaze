@@ -35,7 +35,7 @@ internal object AndroidViewActions {
    * to the node, which the view handles regardless of what is drawn on top of it, so a recording
    * made there can encode a tap the touch route cannot reproduce.
    *
-   * Case 5380680 is that divergence end to end. Its second-to-last step taps the Keypad tab while
+   * One real trail is that divergence end to end. Its second-to-last step taps the Keypad tab while
    * the Current sale sheet is open over the screen. `ACTION_CLICK` switches the tab underneath and
    * leaves the sheet up, which is why the trail's last step asserts a "Custom amount" line that
    * only exists on the sheet. The touch lands on the scrim instead, dismisses the sheet, and the

@@ -48,6 +48,7 @@ class DaemonClientStatusActiveRunsTest {
           port = port,
           connectedDevices = 1,
           uptimeSeconds = 42,
+          version = "2026.09.09.1",
           activeRuns = summaries.size,
           activeRunSummaries = summaries,
         )
@@ -77,6 +78,7 @@ class DaemonClientStatusActiveRunsTest {
   @Test
   fun `active run count and summaries survive the cli status round-trip`() {
     val status = client.getStatusBlocking() ?: error("daemon status was null")
+    assertThat(status.version).isEqualTo("2026.09.09.1")
     assertThat(status.activeRuns).isEqualTo(2)
     assertThat(status.activeRunSummaries).containsExactly(*summaries.toTypedArray())
   }

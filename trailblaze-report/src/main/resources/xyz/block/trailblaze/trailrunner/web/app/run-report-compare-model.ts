@@ -523,6 +523,21 @@ export type CompareStreamDiff = {
 
 export type CompareEventsResult = { streams: CompareStreamDiff[]; summary: string };
 
+export type CompareManyGroup = { key: string; counts: number[] };
+
+export type CompareManyStreamDiff = {
+  stream: string;
+  counts: number[];
+  incomplete: boolean[];
+  changed: boolean;
+  contentSame: boolean;
+  groupPath: string | null;
+  groups: CompareManyGroup[];
+  maskedPaths: string[];
+};
+
+export type CompareManyEventsResult = { streams: CompareManyStreamDiff[] };
+
 /** Flattens an event payload to its leaf string fields: dot path → first value. */
 export function leafStrings(value: unknown, prefix = '', out: Map<string, string> = new Map(), depth = 0): Map<string, string> {
   if (depth > MAX_DEPTH || out.size > MAX_LEAF_PATHS_PER_EVENT) return out;
@@ -590,6 +605,50 @@ export function pickGroupPath(baselineLeafs: Array<Map<string, string>>, current
 }
 
 /**
+ * N-run counterpart to [pickGroupPath]. A useful grouping field must describe events across the
+ * selected set, not partition each run into its own id-shaped bucket. When two or more runs carry
+ * records, at least one value therefore has to occur in more than one run.
+ */
+export function pickGroupPathMany(leafsByRun: Array<Array<Map<string, string>>>): string | null {
+  const allLeafs = leafsByRun.flat();
+  if (allLeafs.length < 2) return null;
+
+  const presence = new Map<string, number>();
+  const distinct = new Map<string, Set<string>>();
+  const valuesByRun = leafsByRun.map(() => new Map<string, Set<string>>());
+  leafsByRun.forEach((leafsList, runAt) => leafsList.forEach((leafs) => leafs.forEach((value, path) => {
+    presence.set(path, (presence.get(path) || 0) + 1);
+    let values = distinct.get(path);
+    if (!values) { values = new Set(); distinct.set(path, values); }
+    if (values.size <= MAX_GROUP_VALUES) values.add(value);
+    let runValues = valuesByRun[runAt].get(path);
+    if (!runValues) { runValues = new Set(); valuesByRun[runAt].set(path, runValues); }
+    if (runValues.size <= MAX_GROUP_VALUES) runValues.add(value);
+  })));
+
+  const populatedRuns = leafsByRun.filter((leafs) => leafs.length > 0).length;
+  let best: string | null = null;
+  presence.forEach((seen, path) => {
+    const values = distinct.get(path)!.size;
+    const sharedAcrossRuns = populatedRuns < 2 || Array.from(distinct.get(path) || []).some((value) => (
+      valuesByRun.filter((run) => (run.get(path) || new Set()).has(value)).length > 1
+    ));
+    const qualifies = seen * 2 >= allLeafs.length && values >= 2 && values <= MAX_GROUP_VALUES
+      && values * 2 <= seen && sharedAcrossRuns;
+    if (!qualifies) return;
+    if (best == null) { best = path; return; }
+    const bestSeen = presence.get(best)!;
+    const bestValues = distinct.get(best)!.size;
+    const beats = seen !== bestSeen ? seen > bestSeen
+      : values !== bestValues ? values > bestValues
+        : path.length !== best.length ? path.length < best.length
+          : path < best;
+    if (beats) best = path;
+  });
+  return best;
+}
+
+/**
  * A session's diffable event streams as payload objects per stream name: each EventStream's
  * parsed generic events (SessionEvent.d), or one object per formatter row; plus the parsed network
  * events as a `network` stream when the session captured one (skipped if an `events/network`
@@ -600,24 +659,75 @@ export function pickGroupPath(baselineLeafs: Array<Map<string, string>>, current
  * with different properties as unchanged. One object per row either way, so a stream's compared
  * count stays the count the viewer shows.
  */
-export function eventObjectsOf(session: { events?: EventStream[] | null; network?: NetworkEvent[] | null }): Map<string, unknown[]> {
-  const byStream = new Map<string, unknown[]>();
-  (session.events || []).forEach((stream) => {
-    if (!stream || !stream.name) return;
-    const objects: unknown[] = stream.rows && stream.rows.length
-      ? stream.rows.map((row) => (row.raw && row.raw.length ? { label: row.label, raw: row.raw } : { label: row.label }))
+export type TimedEventObject = { t: number | null; value: unknown };
+
+/**
+ * Comparison names are formatter-declared semantic identities, not display names. An actual stream
+ * with that name wins over its alias, and the parsed network side-channel wins over both. This
+ * prevents two representations of one capture from being combined as though their payload schemas
+ * were interchangeable.
+ */
+function comparisonEventStreamsOf(session: { events?: EventStream[] | null; network?: NetworkEvent[] | null }): Array<{ name: string; stream: EventStream }> {
+  const streams = (session.events || []).filter((stream): stream is EventStream => !!stream?.name);
+  const reservedNames = new Set(streams.map((stream) => stream.name));
+  if (session.network && session.network.length) reservedNames.add('network');
+  const aliasCounts = new Map<string, number>();
+  streams.forEach((stream) => {
+    if (!stream.comparisonName || stream.comparisonName === stream.name) return;
+    aliasCounts.set(stream.comparisonName, (aliasCounts.get(stream.comparisonName) || 0) + 1);
+  });
+  return streams.flatMap((stream) => {
+    const name = stream.comparisonName || stream.name;
+    if (name === stream.name) return [{ name, stream }];
+    if (reservedNames.has(name)) return [];
+    // Two aliases with no canonical owner are ambiguous. Keep both producer names visible rather
+    // than choosing one schema by input order or merging incompatible payloads.
+    return aliasCounts.get(name) === 1 ? [{ name, stream }] : [{ name: stream.name, stream }];
+  });
+}
+
+/**
+ * Diffable event objects with their capture clock retained. The ordinary stream comparison uses
+ * only `value`; the event navigator also uses `t` to place retained records inside authored-step
+ * windows. A missing timestamp remains null and can only enter the explicit Unattributed bucket.
+ */
+export function timedEventObjectsOf(session: { events?: EventStream[] | null; network?: NetworkEvent[] | null }): Map<string, TimedEventObject[]> {
+  const byStream = new Map<string, TimedEventObject[]>();
+  comparisonEventStreamsOf(session).forEach(({ name, stream }) => {
+    const objects: TimedEventObject[] = stream.comparisonValues && stream.comparisonValues.length
+      // Match the parsed network side-channel: its reduced records have no trustworthy event
+      // clock, so formatter projections must not invent step attribution either.
+      ? stream.comparisonValues.map((value) => ({ t: null, value }))
+      : stream.rows && stream.rows.length
+      ? stream.rows.map((row) => ({
+        t: typeof row.t === 'number' && Number.isFinite(row.t) ? row.t : null,
+        value: row.raw && row.raw.length ? { label: row.label, raw: row.raw } : { label: row.label },
+      }))
       // Any JsonElement is a legal payload, log strings included — so a scalar is an event, not a
       // parse failure. Only an unparseable record drops out; keeping the `typeof === 'object'`
       // test here made a stream of `{"timeMs":1,"d":"ready"}` records read as empty.
       : (stream.events || []).map((event) => {
-        try { return { ok: true, value: JSON.parse(event.d) as unknown }; } catch { return null; }
-      }).filter((o): o is { ok: true; value: unknown } => o != null).map((o) => o.value);
-    byStream.set(stream.name, objects);
+        try {
+          return {
+            t: typeof event.t === 'number' && Number.isFinite(event.t) ? event.t : null,
+            value: JSON.parse(event.d) as unknown,
+          };
+        } catch { return null; }
+      }).filter((o): o is TimedEventObject => o != null);
+    byStream.set(name, objects);
   });
-  if (session.network && session.network.length && !byStream.has('network')) {
-    byStream.set('network', session.network);
+  if (session.network && session.network.length) {
+    // Parsed network side-channel records do not carry the event-stream clock. They remain fully
+    // diffable by content, but assigning them to a trail step would invent a relationship.
+    byStream.set('network', session.network.map((value) => ({ t: null, value })));
   }
   return byStream;
+}
+
+export function eventObjectsOf(session: { events?: EventStream[] | null; network?: NetworkEvent[] | null }): Map<string, unknown[]> {
+  const objects = new Map<string, unknown[]>();
+  timedEventObjectsOf(session).forEach((records, stream) => objects.set(stream, records.map((record) => record.value)));
+  return objects;
 }
 
 /** What the producer said each stream holds, as distinct from what survived into the payload. */
@@ -633,15 +743,18 @@ export type StreamMeta = { total: number; truncated: boolean };
  */
 export function eventStreamMetaOf(session: { events?: EventStream[] | null; network?: NetworkEvent[] | null }): Map<string, StreamMeta> {
   const meta = new Map<string, StreamMeta>();
-  (session.events || []).forEach((stream) => {
-    if (!stream || !stream.name) return;
-    const rows = stream.rows && stream.rows.length ? stream.rows.length : (stream.events || []).length;
-    meta.set(stream.name, {
-      total: typeof stream.total === 'number' && stream.total >= 0 ? stream.total : rows,
+  comparisonEventStreamsOf(session).forEach(({ name, stream }) => {
+    const rows = stream.comparisonValues && stream.comparisonValues.length
+      ? stream.comparisonValues.length
+      : stream.rows && stream.rows.length ? stream.rows.length : (stream.events || []).length;
+    meta.set(name, {
+      total: stream.comparisonValues && stream.comparisonValues.length
+        ? stream.comparisonValues.length
+        : typeof stream.total === 'number' && stream.total >= 0 ? stream.total : rows,
       truncated: stream.truncated === true,
     });
   });
-  if (session.network && session.network.length && !meta.has('network')) {
+  if (session.network && session.network.length) {
     meta.set('network', { total: session.network.length, truncated: false });
   }
   return meta;
@@ -1122,6 +1235,7 @@ function diffStream(
   current: unknown[],
   baselineMeta?: StreamMeta,
   currentMeta?: StreamMeta,
+  volatileOverride?: Set<string>,
 ): CompareStreamDiff {
   const baselineLeafs = baseline.map((e) => leafStrings(e));
   const currentLeafs = current.map((e) => leafStrings(e));
@@ -1154,7 +1268,7 @@ function diffStream(
   // and groups match but whose payloads differ. Order is part of it: a stream is a sequence, so a
   // run that emitted A then B is not the run that emitted B then A, and comparing the two as
   // multisets would report that pair as unchanged and skip the diff that shows the swap.
-  const volatile = volatileScalarPaths(baseline.concat(current));
+  const volatile = volatileOverride || volatileScalarPaths(baseline.concat(current));
   const baselineTexts = baseline.map((e) => eventTextOf(e, volatile, groupPath));
   const currentTexts = current.map((e) => eventTextOf(e, volatile, groupPath));
   const contentSame = baselineTexts.length === currentTexts.length
@@ -1181,6 +1295,109 @@ function diffStream(
     content: contentSame ? null : contentDiffOf(baselineTexts, currentTexts, MAX_DIFF_CELLS),
     incomplete,
   };
+}
+
+export type CompareEventStepAnchor = {
+  /** Stable authored-step position shared by both sides. */
+  key: string;
+  label: string;
+  /** Each run's own wall-clock boundary; null when that run never recorded the step. */
+  baselineT: number | null;
+  currentT: number | null;
+};
+
+export type CompareEventStep = {
+  key: string;
+  label: string;
+  baselineCount: number;
+  currentCount: number;
+  streams: CompareStreamDiff[];
+  /** True for records whose producer supplied no usable step clock. */
+  unattributed: boolean;
+};
+
+/**
+ * Break a pair's retained event records into authored-step windows, then compare each window with
+ * the same masking/grouping/content semantics as the whole-stream result.
+ *
+ * Attribution is deliberately temporal, not causal: a record belongs to the most recent authored
+ * step boundary on its OWN run. A record before the first boundary, a record without a timestamp,
+ * or a side whose matching step never recorded a clock remains Unattributed. Callers decide
+ * whether the two authored-step sequences are alignable before invoking this function.
+ */
+export function compareEventStreamsByStep(
+  baseline: { events?: EventStream[] | null; network?: NetworkEvent[] | null },
+  current: { events?: EventStream[] | null; network?: NetworkEvent[] | null },
+  anchors: CompareEventStepAnchor[],
+  excludeStreams: Set<string> = new Set(),
+): CompareEventStep[] {
+  const baselineRecords = timedEventObjectsOf(baseline);
+  const currentRecords = timedEventObjectsOf(current);
+  // Masking is a whole-stream comparison policy. Recomputing it in a small step window can expose
+  // run-scoped ids that the full comparison correctly classified as volatile, making the same
+  // field count in one organization and disappear in the other.
+  const volatileByStream = new Map<string, Set<string>>();
+  new Set([...baselineRecords.keys(), ...currentRecords.keys()]).forEach((stream) => {
+    const all = [...(baselineRecords.get(stream) || []), ...(currentRecords.get(stream) || [])].map((record) => record.value);
+    volatileByStream.set(stream, volatileScalarPaths(all));
+  });
+  type Bucket = Map<string, unknown[]>;
+  const baselineBuckets: Bucket[] = anchors.map(() => new Map());
+  const currentBuckets: Bucket[] = anchors.map(() => new Map());
+  const baselineUnattributed: Bucket = new Map();
+  const currentUnattributed: Bucket = new Map();
+
+  const place = (records: Map<string, TimedEventObject[]>, side: 'baseline' | 'current', buckets: Bucket[], unattributed: Bucket) => {
+    const timeKey = side === 'baseline' ? 'baselineT' : 'currentT';
+    records.forEach((entries, stream) => {
+      if (excludeStreams.has(stream)) return;
+      entries.forEach((entry) => {
+        let at = -1;
+        let uncertain = false;
+        if (entry.t != null) {
+          for (let i = 0; i < anchors.length; i++) {
+            const boundary = anchors[i][timeKey];
+            // Once a step clock is missing, records cannot honestly remain attached to the last
+            // known step: the unclocked step may already have started. A later recorded boundary
+            // establishes a new trustworthy window and makes subsequent records attributable again.
+            if (boundary == null) {
+              if (at >= 0) uncertain = true;
+            } else if (boundary <= entry.t) {
+              at = i;
+              uncertain = false;
+            }
+          }
+        }
+        const bucket = at >= 0 && !uncertain ? buckets[at] : unattributed;
+        const streamBucket = bucket.get(stream);
+        if (streamBucket) streamBucket.push(entry.value);
+        else bucket.set(stream, [entry.value]);
+      });
+    });
+  };
+  place(baselineRecords, 'baseline', baselineBuckets, baselineUnattributed);
+  place(currentRecords, 'current', currentBuckets, currentUnattributed);
+
+  const compareBucket = (key: string, label: string, baselineBucket: Bucket, currentBucket: Bucket, unattributed: boolean): CompareEventStep => {
+    const names = Array.from(new Set([...baselineBucket.keys(), ...currentBucket.keys()])).sort();
+    const streams = names
+      .map((name) => diffStream(name, baselineBucket.get(name) || [], currentBucket.get(name) || [], undefined, undefined, volatileByStream.get(name)))
+      .sort((a, b) => Number(b.changed) - Number(a.changed) || Math.abs(b.delta) - Math.abs(a.delta) || (a.stream < b.stream ? -1 : a.stream > b.stream ? 1 : 0));
+    return {
+      key,
+      label,
+      baselineCount: Array.from(baselineBucket.values()).reduce((n, entries) => n + entries.length, 0),
+      currentCount: Array.from(currentBucket.values()).reduce((n, entries) => n + entries.length, 0),
+      streams,
+      unattributed,
+    };
+  };
+
+  const compared = anchors.map((anchor, at) => compareBucket(anchor.key, anchor.label, baselineBuckets[at], currentBuckets[at], false));
+  if (baselineUnattributed.size || currentUnattributed.size) {
+    compared.push(compareBucket('unattributed', 'Unattributed', baselineUnattributed, currentUnattributed, true));
+  }
+  return compared;
 }
 
 export function compareEventStreams(
@@ -1222,4 +1439,64 @@ export function compareEventStreams(
       : ', all identical in count';
   }
   return { streams, summary };
+}
+
+/**
+ * Equal-weight event inventory for three or more runs. Counts, group distributions, masking, and
+ * capture completeness all generalize cleanly to N columns. An ordered record diff does not: the
+ * `−/+` semantics require a deliberate pair, so this model reports whether content varies without
+ * fabricating a multi-sided sequence alignment.
+ */
+export function compareEventStreamsMany(
+  runs: Array<{ events?: EventStream[] | null; network?: NetworkEvent[] | null }>,
+  excludeStreams: Set<string> = new Set(),
+): CompareManyEventsResult {
+  const objectsByRun = runs.map(eventObjectsOf);
+  const metaByRun = runs.map(eventStreamMetaOf);
+  const names = Array.from(new Set<string>(objectsByRun.flatMap((streams) => Array.from(streams.keys()))))
+    .filter((name) => !excludeStreams.has(name))
+    .sort();
+
+  const streams = names.map((stream): CompareManyStreamDiff => {
+    const eventsByRun = objectsByRun.map((streams) => streams.get(stream) || []);
+    const leafsByRun = eventsByRun.map((events) => events.map((event) => leafStrings(event)));
+    const groupPath = pickGroupPathMany(leafsByRun);
+    const groupCountsByRun = leafsByRun.map((leafs) => {
+      const counts = new Map<string, number>();
+      if (groupPath != null) leafs.forEach((values) => {
+        const key = values.get(groupPath) ?? '(absent)';
+        counts.set(key, (counts.get(key) || 0) + 1);
+      });
+      return counts;
+    });
+    const groupKeys = new Set<string>(groupCountsByRun.flatMap((counts) => Array.from(counts.keys())));
+    const groups = Array.from(groupKeys).map((key) => ({
+      key,
+      counts: groupCountsByRun.map((counts) => counts.get(key) || 0),
+    })).sort((a, b) => {
+      const spread = (counts: number[]) => Math.max(...counts) - Math.min(...counts);
+      return spread(b.counts) - spread(a.counts) || a.key.localeCompare(b.key);
+    });
+    const counts = eventsByRun.map((events, at) => metaByRun[at].get(stream)?.total ?? events.length);
+    const incomplete = eventsByRun.map((_, at) => metaByRun[at].get(stream)?.truncated === true);
+    const volatile = volatileScalarPaths(eventsByRun.flat());
+    const comparableByRun = eventsByRun.map((events) => events.map((event) => eventLines(event, volatile).join('\n')));
+    const first = comparableByRun[0] || [];
+    const contentSame = comparableByRun.every((events) => events.length === first.length
+      && events.every((event, at) => event === first[at]));
+    const allEqual = (values: number[]) => values.every((value) => value === values[0]);
+    return {
+      stream,
+      counts,
+      incomplete,
+      changed: !allEqual(counts) || groups.some((group) => !allEqual(group.counts)) || !contentSame || incomplete.some(Boolean),
+      contentSame,
+      groupPath,
+      groups,
+      maskedPaths: Array.from(volatile).sort(),
+    };
+  }).sort((a, b) => Number(b.changed) - Number(a.changed)
+    || (Math.max(...b.counts) - Math.min(...b.counts)) - (Math.max(...a.counts) - Math.min(...a.counts))
+    || a.stream.localeCompare(b.stream));
+  return { streams };
 }

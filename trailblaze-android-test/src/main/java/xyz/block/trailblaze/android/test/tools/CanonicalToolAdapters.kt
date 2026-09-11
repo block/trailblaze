@@ -2,17 +2,19 @@ package xyz.block.trailblaze.android.test.tools
 
 import androidx.test.espresso.Espresso
 import androidx.test.platform.app.InstrumentationRegistry
-import maestro.ScrollDirection
+import kotlin.random.Random
 import maestro.SwipeDirection
 import xyz.block.trailblaze.android.test.AndroidTestTarget
 import xyz.block.trailblaze.api.DriverNodeMatch
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
+import xyz.block.trailblaze.maestro.TrailblazeScrollStartPosition
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.commands.AssertNotVisibleWithTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.AssertVisibleBySelectorTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.InputTextRandomTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.InputTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.MaestroTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.ScrollUntilTextIsVisibleTrailblazeTool
@@ -92,24 +94,58 @@ internal object CanonicalToolAdapters {
     }
 
     is ScrollUntilTextIsVisibleTrailblazeTool -> CanonicalDispatch { target, context ->
-      if (tool.direction != ScrollDirection.DOWN) {
-        return@CanonicalDispatch unsupported("direction=${tool.direction}", tool)
+      // Which options this driver's scroll loop can carry out is decided in one place, shared with
+      // the Maestro interpreter's `scrollUntilVisible`, so the two entry points onto the same loop
+      // cannot answer differently. A non-default value refuses rather than being quietly dropped.
+      val refusal = ScrollOptionSupport.unsupportedDirection(tool.direction)
+        ?: ScrollOptionSupport.unsupportedVisibilityPercentage(tool.visibilityPercentage)
+        ?: ScrollOptionSupport.unsupportedCenterElement(tool.centerElement)
+      if (refusal != null) {
+        return@CanonicalDispatch unsupported(refusal, tool)
       }
-      // The canonical tool's targets are Maestro-vocabulary, so the selector is built in the
-      // Maestro SHAPE and the resolver's estate bridge keeps its semantics: `text` is Maestro's
-      // case-insensitive substring (hence the wrapped escape), `textRegex` its anchored regex.
-      val match = when {
-        tool.textRegex != null -> DriverNodeMatch.AndroidMaestro(textRegex = tool.textRegex)
-        tool.text.isNotBlank() ->
-          DriverNodeMatch.AndroidMaestro(textRegex = ".*${Regex.escape(tool.text)}.*")
-        tool.id != null -> DriverNodeMatch.AndroidMaestro(resourceIdRegex = tool.id)
-        else -> return@CanonicalDispatch malformed(
-          "scrollUntilTextIsVisible has none of text/textRegex/id",
+      // Where the swipe STARTS from, which on the Maestro-backed drivers picks a different scroll
+      // region and so a different amount of list per scroll. In-process there is no swipe at all —
+      // the container is scrolled programmatically — so there is no region to start from, and a
+      // recording that asked for one would be told it got what it asked for.
+      // `scrollDurationMs` is the other half of that gesture (how slow the swipe is) and is
+      // accepted: it cannot change WHERE a programmatic scroll ends up, only how a fling looks.
+      if (tool.scrollStartPosition != TrailblazeScrollStartPosition.CENTER) {
+        return@CanonicalDispatch unsupported(
+          "scrollStartPosition=${tool.scrollStartPosition} (this driver scrolls the container " +
+            "programmatically and has no swipe region to start from)",
           tool,
         )
       }
+      // The canonical tool's targets are Maestro-vocabulary, so the selector is built in the
+      // Maestro SHAPE and the resolver's estate bridge keeps its semantics: `text` is Maestro's
+      // case-insensitive substring, `textRegex` its anchored regex. WHICH of text/textRegex/id is
+      // the target, and whether a blank one counts, is the canonical tool's own decision, made by
+      // its pure helpers so this driver reads a recording exactly as every other driver does: a
+      // blank `textRegex` falls back to `text` rather than becoming a regex for empty text, and
+      // a call whose every target is blank is refused rather than matched on nothing.
+      // One divergence is left in place on purpose: a recording carrying BOTH a text target and an
+      // `id` matches on the text alone here, while `execute` puts both into one selector
+      // (`textRegex` AND `idRegex`) and so can stop on a different row. Narrowing this branch is a
+      // selector-semantics change with its own blast radius (recorded trails in consumer repos do
+      // write both), not part of reading a blank target, so it is its own change.
+      val match = when {
+        !ScrollUntilTextIsVisibleTrailblazeTool.hasScrollTarget(tool.text, tool.textRegex, tool.id) ->
+          return@CanonicalDispatch malformed(
+            "scrollUntilTextIsVisible has none of text/textRegex/id",
+            tool,
+          )
+        ScrollUntilTextIsVisibleTrailblazeTool.hasTextTarget(tool.text, tool.textRegex) ->
+          DriverNodeMatch.AndroidMaestro(
+            textRegex = ScrollUntilTextIsVisibleTrailblazeTool.buildTargetTextRegex(tool.text, tool.textRegex),
+          )
+        else -> DriverNodeMatch.AndroidMaestro(resourceIdRegex = tool.id)
+      }
       AndroidTestScrollUntilVisibleTool(
         nodeSelector = TrailblazeNodeSelector.withMatch(match, index = tool.index.takeIf { it > 0 }),
+        // The canonical tool carries no timeout of its own, and on a Maestro-backed driver it
+        // builds a ScrollUntilVisibleCommand that takes Maestro's default. Taking the same default
+        // here is what makes an unwritten bound mean the same thing on both.
+        timeoutMs = ScrollOptionSupport.DEFAULT_TIMEOUT_MS,
       ).executeWithAndroidTest(target, context)
     }
 
@@ -158,7 +194,7 @@ internal object CanonicalToolAdapters {
       target.waitForIdle()
       // `hideKeyboardAfter` defaults TRUE and every recorded trail omits it, so this half runs on
       // essentially every recorded `inputText` — skipping it made this driver the only one that
-      // leaves the field focused afterwards, and that is a state the app can see. Case 5380713
+      // leaves the field focused afterwards, and that is a state the app can see. One trail
       // types an item note and taps Save: while the note field holds focus the app renders its
       // footer as Clear + "close keyboard" and the recorded `id~"item-details-done"` Save button
       // does not exist, so the next step failed on a screen the recording never encountered.
@@ -166,6 +202,35 @@ internal object CanonicalToolAdapters {
         hideKeyboard(target)
       }
       TrailblazeToolResult.Success(message = "Typed '${tool.text}'")
+    }
+
+    // Generate-then-type, in one step. The generator is the canonical tool's own — shared so the
+    // value's SHAPE (prefix, digit pool, suffix) cannot drift between drivers — and the typing is
+    // this driver's `inputText`, down to the hide-keyboard half. The remember happens here rather
+    // than host-side for the same reason the canonical body does it inline: this execution is the
+    // one that produced the value, and its memory write is what rides back in the RPC snapshot so
+    // a later `{{variable}}` resolves.
+    is InputTextRandomTrailblazeTool -> CanonicalDispatch { target, context ->
+      if (tool.digitCount <= 0) {
+        return@CanonicalDispatch malformed("inputTextRandom digitCount must be > 0 (was ${tool.digitCount})", tool)
+      }
+      val value = InputTextRandomTrailblazeTool.randomValue(
+        prefix = tool.prefix,
+        digitCount = tool.digitCount,
+        suffix = tool.suffix,
+        hex = tool.hex,
+        random = Random.Default,
+      )
+      if (tool.variable.isNotBlank()) {
+        context.memory.remember(tool.variable, value)
+      }
+      InstrumentationRegistry.getInstrumentation().sendStringSync(value)
+      target.waitForIdle()
+      if (tool.hideKeyboardAfter) {
+        hideKeyboard(target)
+      }
+      val remembered = if (tool.variable.isNotBlank()) " and remembered it as '${tool.variable}'" else ""
+      TrailblazeToolResult.Success(message = "Typed '$value'$remembered.")
     }
 
     else -> null
@@ -179,9 +244,9 @@ internal object CanonicalToolAdapters {
    * (`AccessibilityDeviceManager.hideKeyboard`), and BACK only means "hide the keyboard" while a
    * keyboard is on screen to consume it — the IME window takes the event first. With no IME up it
    * is ordinary back navigation. Sending it unconditionally therefore does not reproduce that
-   * driver; it reproduces one of that driver's two behaviours in both situations. Build 9911 lost
-   * case 4837703 to `No activities found` on the team-passcode screen, whose keypad is drawn by
-   * the app and raises no IME, so the BACK that followed `inputText` finished the Activity.
+   * driver; it reproduces one of that driver's two behaviours in both situations. One CI run lost
+   * a trail to `No activities found` on the team-passcode screen, whose keypad is drawn by the
+   * app and raises no IME, so the BACK that followed `inputText` finished the Activity.
    *
    * Espresso's close-keyboard action rather than a key event, because it is conditioned on the
    * thing that decides which of those two meanings applies: it asks the

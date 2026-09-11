@@ -32,7 +32,7 @@ import kotlin.system.measureTimeMillis
  * directory of session logs (the same shape the measurement pipeline unpacks) and writes
  * one sidecar JSON + mutated YAML per surviving proposal to `--out-dir`. The pipeline
  * shell script then iterates the sidecar set and opens one PR per proposal via
- * `scripts/waypoints_refresh_pr_create.sh` (or its inlined stub).
+ * a waypoint-refresh automation script (or its inlined stub).
  *
  * See `docs/internal/devlog/2026-05-19-waypoint-pack-refinement.md` for the design.
  */

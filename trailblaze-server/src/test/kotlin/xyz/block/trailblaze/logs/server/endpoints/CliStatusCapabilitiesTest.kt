@@ -52,5 +52,7 @@ class CliStatusCapabilitiesTest {
     // The set is what a caller matches against; a capability defined but left out of ALL would
     // make every capable daemon look incapable.
     assertTrue(CliDaemonCapabilities.PER_RUN_DEVICE_BINDINGS in CliDaemonCapabilities.ALL)
+    assertTrue(CliDaemonCapabilities.DEVICE_CLASSIFIER in CliDaemonCapabilities.ALL)
+    assertTrue(CliDaemonCapabilities.COMPANION in CliDaemonCapabilities.ALL)
   }
 }

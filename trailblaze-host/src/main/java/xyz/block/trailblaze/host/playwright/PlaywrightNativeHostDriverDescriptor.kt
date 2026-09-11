@@ -17,6 +17,7 @@ import xyz.block.trailblaze.host.driver.HostDeviceInventory
 import xyz.block.trailblaze.host.driver.HostDriverDescriptor
 import xyz.block.trailblaze.host.driver.HostRunDeps
 import xyz.block.trailblaze.host.driver.HostScreenStateDeps
+import xyz.block.trailblaze.host.screenstate.MaestroDriverScreenStates
 import xyz.block.trailblaze.host.rules.BasePlaywrightNativeTest
 import xyz.block.trailblaze.host.yaml.RunOnHostParams
 import xyz.block.trailblaze.http.DynamicLlmClient
@@ -24,8 +25,10 @@ import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.playwright.PlaywrightPageManager
 import xyz.block.trailblaze.scripting.LaunchedScriptingRuntime
+import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.ui.TrailblazeDeviceManager
 import xyz.block.trailblaze.util.Console
+import kotlin.reflect.KClass
 
 /**
  * Plugs the Playwright-native web driver into the host: Trailblaze launches (or adopts) its own
@@ -40,6 +43,10 @@ class PlaywrightNativeHostDriverDescriptor : HostDriverDescriptor {
   override val driverTypes: Set<TrailblazeDriverType> = setOf(TrailblazeDriverType.PLAYWRIGHT_NATIVE)
 
   override val listingVisibility = DeviceListingVisibility.LISTED
+
+  /** The web tool sets — a browser is driven through them, not through the mobile built-ins. */
+  override fun toolClasses(driverType: TrailblazeDriverType): Set<KClass<out TrailblazeTool>> =
+    resolveWebToolClasses(driverType)
 
   /**
    * Every running browser the host reports, plus the always-available singleton when the running
@@ -260,7 +267,7 @@ class PlaywrightNativeHostDriverDescriptor : HostDriverDescriptor {
       TrailblazeHostYamlRunner.generateAndSaveRecording(
         sessionId = sessionId,
         logsDir = playwrightTest.loggingRule.logsRepo.logsDir,
-        customToolClasses = resolveWebToolClasses(TrailblazeDriverType.PLAYWRIGHT_NATIVE) + customToolClasses,
+        customToolClasses = toolClasses(TrailblazeDriverType.PLAYWRIGHT_NATIVE) + customToolClasses,
       )
 
       sessionId

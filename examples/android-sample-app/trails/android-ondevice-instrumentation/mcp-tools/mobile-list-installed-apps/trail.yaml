@@ -16,7 +16,7 @@
 # is unambiguous.
 config:
   id: sample-app/mcp-tools/mobile-list-installed-apps
-  target: xyz.block.trailblaze.examples.sampleapp
+  target: sampleapp
   devices:
     android-phone:
       driver: ANDROID_ONDEVICE_INSTRUMENTATION

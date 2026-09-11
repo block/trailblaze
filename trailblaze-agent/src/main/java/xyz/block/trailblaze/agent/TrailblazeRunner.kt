@@ -281,7 +281,7 @@ class TrailblazeRunner(
       // live view hierarchy BEFORE dispatching, so a stale ref returns an error tool_result
       // with `callCount=0` (no underlying action ran). Chat-history truncation hides older
       // successful snapshot observations, so the LLM has no signal that its memorized refs
-      // are stale and burns the entire LLM-call budget retrying. Forensic source: case_5380770.
+      // are stale and burns the entire LLM-call budget retrying. Observed on a real failing run.
       //
       // We scan the tool_result outputs from THIS iteration's response (just appended to
       // chat history by `processToolMessages`) for the stale-ref error pattern, key on the

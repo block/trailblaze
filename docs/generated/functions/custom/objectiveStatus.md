@@ -18,7 +18,7 @@ Returning 'failed' should be a last resort once all options have been tested.
 ## Contract
 
 - Visible to LLM: yes (`surface_to_llm: true`)
-- Recordable: yes (`is_recordable: true`)
+- Recordable: no (`is_recordable: false`)
 - Host-only: no (`requires_host: false`)
 
 ## Input schema
@@ -27,9 +27,7 @@ Returning 'failed' should be a last resort once all options have been tested.
 
 - `explanation` — `String`
   A message explaining what was accomplished or the current progress for this objective
-- `status` — `ToolParameterType.Enum(
-  entries = [IN_PROGRESS, COMPLETED, FAILED]
-)`
+- `status` — `enum(IN_PROGRESS | COMPLETED | FAILED)`
   Status of this objective: 'IN_PROGRESS' (still working on it), 'COMPLETED' (fully done), or 'FAILED'
 
 ## Output

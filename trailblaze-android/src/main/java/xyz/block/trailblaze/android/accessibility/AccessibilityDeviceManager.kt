@@ -1,12 +1,8 @@
 package xyz.block.trailblaze.android.accessibility
 
-import android.bluetooth.BluetoothManager
-import android.content.Context
 import android.content.Intent
 import android.graphics.Rect
 import android.net.Uri
-import android.net.wifi.WifiManager
-import android.telephony.TelephonyManager
 import kotlinx.datetime.Clock
 import xyz.block.trailblaze.AdbCommandUtil
 import xyz.block.trailblaze.InstrumentationUtil.withInstrumentation
@@ -22,6 +18,7 @@ import xyz.block.trailblaze.api.TrailblazeNodeSelector
 import xyz.block.trailblaze.api.TrailblazeNodeSelectorResolver
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.model.TapRouteOverride
+import xyz.block.trailblaze.toolcalls.commands.NetworkConnectionTrailblazeTool
 import xyz.block.trailblaze.tracing.TrailblazeTracer
 import xyz.block.trailblaze.util.Console
 
@@ -132,13 +129,11 @@ class AccessibilityDeviceManager(
           )
         }
       }
-      // EXPERIMENTAL: in-process in-process idle (see [InProcessIdleSettleClient]) — opt-in via
+      // EXPERIMENTAL: in-process idle detector (see [InProcessIdleForegroundGate]) — opt-in via
       // `setprop debug.trailblaze.settle.inProcessIdle 1`. Raced against the standard settle so the
-      // idle detector can only ever make settling FASTER; a missing/hung idle detector never breaks a run.
-      if (InProcessIdleSettleClient.isEnabled()) {
-        val winner =
-          InProcessIdleSettleClient.raceIdleAgainstHeuristic(SETTLE_TIMEOUT_MS, heuristic = heuristic)
-        Console.log("[settle] post-action via $winner")
+      // idle detector can only ever make settling FASTER; a missing/hung idle detector never breaks
+      // a run, and a foreground that isn't the detector's app settles by heuristic alone.
+      if (InProcessIdleForegroundGate.settleUnderTurbo("post-action", SETTLE_TIMEOUT_MS, heuristic)) {
         return
       }
       heuristic { false }
@@ -186,6 +181,10 @@ class AccessibilityDeviceManager(
       // capture spot where a mid-transition tree is acceptable. Selector-resolving captures
       // (via [getScreenState]/[waitForReady]) keep the stability gate in both modes.
       awaitStableTree = !InProcessIdleSettleClient.isEnabled(),
+      // Only the WAIT for the screenshot moves off this capture's critical path; the shot is still
+      // requested at the same instant. Defaults to turbo's state, and every non-logging caller
+      // keeps today's behaviour because they do not pass this at all. See [ReplayCaptureOptions].
+      asyncScreenshotJoin = ReplayCaptureOptions.asyncLoggingScreenshot(),
     )
   }
 
@@ -197,15 +196,13 @@ class AccessibilityDeviceManager(
    */
   fun waitForReady(timeoutMs: Long = 5_000L) {
     TrailblazeTracer.traceDetail("waitForReady", DRIVER_TRACE_CAT) {
-      // EXPERIMENTAL inprocess-idle race (see [InProcessIdleSettleClient]): settle on whichever
-      // answers first — true main-thread idle or the standard event-quiet wait.
-      if (InProcessIdleSettleClient.isEnabled()) {
-        val winner = InProcessIdleSettleClient.raceIdleAgainstHeuristic(timeoutMs) { earlyExit ->
-          TrailblazeAccessibilityService.waitForSettled(timeoutMs = timeoutMs, earlyExit = earlyExit)
-        }
-        Console.log("[settle] waitForReady via $winner")
-        return@traceDetail
+      // EXPERIMENTAL inprocess-idle race (see [InProcessIdleForegroundGate]): settle on whichever
+      // answers first — true main-thread idle or the standard event-quiet wait — while the
+      // detector's own app is in front.
+      val handled = InProcessIdleForegroundGate.settleUnderTurbo("waitForReady", timeoutMs) { earlyExit ->
+        TrailblazeAccessibilityService.waitForSettled(timeoutMs = timeoutMs, earlyExit = earlyExit)
       }
+      if (handled) return@traceDetail
       TrailblazeAccessibilityService.waitForSettled(timeoutMs = timeoutMs)
     }
   }
@@ -375,7 +372,11 @@ class AccessibilityDeviceManager(
         ExecutionResult()
       }
       is AccessibilityAction.ToggleAirplaneMode -> {
-        executeSetAirplaneMode(!isAirplaneModeEnabled())
+        // Reads the real airplane-mode flag and writes the radios stand-in. That asymmetry, and
+        // why it is the better of the two wrong-in-some-way options, is on
+        // [AdbCommandUtil.isAirplaneModeEnabled]. It is documented rather than tested — no trail
+        // uses this action today.
+        executeSetAirplaneMode(!AdbCommandUtil.isAirplaneModeEnabled())
         ExecutionResult()
       }
       is AccessibilityAction.ScrollUntilVisible -> executeScrollUntilVisible(action)
@@ -502,6 +503,11 @@ class AccessibilityDeviceManager(
    * cannot be reported as success. The no-selector path keeps discarding the result — that is
    * long-standing replay behavior across every trail on this driver, and flipping it here would
    * turn a silent no-op into a failure for trails this change is supposed to leave alone.
+   *
+   * The focus race this discarded result used to hide is gone:
+   * `TrailblazeAccessibilityService.inputText` now waits for a field to take focus, so an
+   * `inputText` landing before a tapped Compose field is focused types instead of silently doing
+   * nothing. No trail needs an `assertVisibleBySelector` focus barrier to get its text entered.
    */
   private fun executeInputText(action: AccessibilityAction.InputText): ExecutionResult {
     val nodeSelector = action.nodeSelector ?: run {
@@ -670,24 +676,24 @@ class AccessibilityDeviceManager(
 
   // --- Airplane mode ---
 
-  /** Matches MaestroAndroidUiAutomatorDriver.setAirplaneMode(). */
+  /**
+   * Matches MaestroAndroidUiAutomatorDriver.setAirplaneMode(). The radios and the enable/disable
+   * polarity both come from
+   * [NetworkConnectionTrailblazeTool.androidMaestroAirplaneModeRadioCommands], so every Android
+   * driver switches the same set. That is the radios-off stand-in, not real airplane mode — see
+   * that driver's override for why this surface keeps the stand-in even though the
+   * `networkConnection` tool no longer does.
+   *
+   * Whether a radio actually switched is not checked, matching this driver's long-standing
+   * behavior. `svc` exits 0 either way and what it PRINTS does not answer the question — on API 36
+   * `svc bluetooth` prints "disable: Success" on the happy path — so the only real check is reading
+   * [NetworkConnectionTrailblazeTool.AndroidRadio.stateSetting] back, as the `networkConnection`
+   * tool does. Adding that poll here would make every toggle on the driver the fleet replays on wait out
+   * a radio that did not move, which is a fleet-wide behavior change and not this one.
+   */
   private fun executeSetAirplaneMode(enabled: Boolean) {
-    val enableOrDisable = if (enabled) "disable" else "enable"
-    AdbCommandUtil.execShellCommand("svc wifi $enableOrDisable")
-    AdbCommandUtil.execShellCommand("svc data $enableOrDisable")
-    AdbCommandUtil.execShellCommand("svc bluetooth $enableOrDisable")
-  }
-
-  /** Matches MaestroAndroidUiAutomatorDriver.isSimulatedAirplaneModeEnabled(). */
-  private fun isAirplaneModeEnabled(): Boolean {
-    return withInstrumentation {
-      val wifiManager = context.getSystemService(Context.WIFI_SERVICE) as WifiManager
-      val telephonyManager = context.getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
-      val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
-      val isWifiOff = !wifiManager.isWifiEnabled
-      val isDataOff = !telephonyManager.isDataEnabled
-      val isBluetoothOff = !bluetoothManager.adapter.isEnabled
-      isWifiOff && isDataOff && isBluetoothOff
+    NetworkConnectionTrailblazeTool.androidMaestroAirplaneModeRadioCommands(enabled).forEach { (_, command) ->
+      AdbCommandUtil.execShellCommand(command)
     }
   }
 
@@ -791,12 +797,20 @@ class AccessibilityDeviceManager(
    * Captures the current accessibility tree as a high-fidelity [AccessibilityNode] model.
    * This bypasses Maestro's `TreeNode` and captures the full richness of `AccessibilityNodeInfo`.
    */
-  fun getAccessibilityTree(): AccessibilityNode? =
+  fun getAccessibilityTree(): AccessibilityNode? = captureAccessibilityTree().accessibilityNode
+
+  /**
+   * [getAccessibilityTree] with the capture's completeness attached. Loops that look FOR an
+   * element only need the node; a loop that wants to prove an element is NOT there must also know
+   * whether the capture dropped any node fetches, because a tree missing a subtree cannot prove
+   * anything about what that subtree held — see [AbsenceConfirmation].
+   */
+  fun captureAccessibilityTree(): TrailblazeAccessibilityService.Companion.MergedScreenTrees =
     // Spanned because this is what a poll loop pays per iteration: every `executeTapOnElement` /
     // `executeAssertVisible` / `focusOnElement` pass re-captures the whole tree, so a step that
     // spends seconds waiting for a selector spends them here.
     TrailblazeTracer.traceDetail("getAccessibilityTree", DRIVER_TRACE_CAT) {
-      TrailblazeAccessibilityService.captureMergedScreenTrees().accessibilityNode
+      TrailblazeAccessibilityService.captureMergedScreenTrees()
     }
 
   /**
@@ -853,8 +867,11 @@ class AccessibilityDeviceManager(
    *    enumeration is healthy. We do a precise contains-point check.
    * 2. When `imeWindowBoundsInScreen()` returns null because window enumeration is
    *    degraded (some accessibility-service flag combinations leak null windows lists),
-   *    we fall back to `isImeShownAuthoritative()` (dumpsys) — if the IME is up but we
-   *    can't measure it, treat the tap as conservatively occluded.
+   *    we fall back to `isImeShownAuthoritative()` (dumpsys): the IME is up but unmeasurable.
+   *    That case is treated as occluded *unless* the screen is taller than it is wide and the
+   *    point sits above the tallest a bottom-docked keyboard could reach — see
+   *    `highestPossibleImeTop`. Clearing a tap that way is logged, because it is the one path
+   *    that dispatches a touch the previous behavior would have refused.
    *
    * On detection, try one more dismissal, then re-check. If still occluded (or still
    * indeterminate-but-shown), fail loudly with a message that names the target and the
@@ -901,14 +918,47 @@ class AccessibilityDeviceManager(
    * case codex correctly flagged).
    */
   private fun imeOcclusionSignal(x: Int, y: Int): String? {
-    val rect = TrailblazeAccessibilityService.imeWindowBoundsInScreen()
-    return imeOcclusionSignal(
-      imeBounds = rect?.let { TrailblazeNode.Bounds(it.left, it.top, it.right, it.bottom) },
-      // Only consulted when bounds are unavailable, so don't pay for dumpsys otherwise.
-      imeShownAuthoritative = rect == null && TrailblazeAccessibilityService.isImeShownAuthoritative(),
+    val lookup = TrailblazeAccessibilityService.lookupImeWindow()
+    val rect = (lookup as? ImeWindowLookup.Found)?.bounds
+    val imeBounds = rect?.let { TrailblazeNode.Bounds(it.left, it.top, it.right, it.bottom) }
+    // dumpsys is a ~300ms shell exec; pay it only when the windows list could not answer at
+    // all, not whenever the keyboard happens to be down.
+    val imeShownAuthoritative = lookup is ImeWindowLookup.Unavailable &&
+      TrailblazeAccessibilityService.isImeShownAuthoritative()
+    // Only the unmeasurable-but-shown branch consults the screen size, to rule out a tap the
+    // bottom-docked keyboard cannot reach — so only read the display in that case rather than on
+    // every tap. Null on failure rather than a guessed size, which keeps the conservative answer.
+    val screenSize = if (imeShownAuthoritative) {
+      runCatching { getScreenDimensions() }
+        .onFailure {
+          Console.log(
+            "[ime-occlusion] screen size unavailable (${it.message}) — keeping the conservative " +
+              "answer, so a reachable tap may be refused.",
+          )
+        }
+        .getOrNull()
+    } else {
+      null
+    }
+    val signal = imeOcclusionSignal(
+      imeBounds = imeBounds,
+      imeShownAuthoritative = imeShownAuthoritative,
       x = x,
       y = y,
+      screenWidth = screenSize?.first,
+      screenHeight = screenSize?.second,
     )
+    // The one path that newly dispatches a touch the previous behavior refused. Logged with the
+    // inputs the decision rested on, because nothing downstream records that the keyboard was up
+    // at all — without this, a mis-tap caused by too loose a bound is not diagnosable after the
+    // fact.
+    if (signal == null && imeShownAuthoritative && screenSize != null) {
+      Console.log(
+        "[ime-occlusion] IME reported up but unmeasurable; ($x, $y) cleared as out of reach of a " +
+          "bottom-docked keyboard on a ${screenSize.first}x${screenSize.second} screen.",
+      )
+    }
+    return signal
   }
 
   /**
@@ -1231,23 +1281,56 @@ class AccessibilityDeviceManager(
     error("Assert visible failed: ${action.nodeSelector.description()} not found within ${action.timeoutMs}ms")
   }
 
-  /** Asserts no element matching the selector is visible. */
+  /**
+   * Asserts no element matching the selector is visible.
+   *
+   * Absence is only concluded from an accessibility tree that is COMPLETE — every node the app
+   * advertised to THAT walk was fetched; a drop in the sibling Maestro walk, which this check
+   * never reads, does not count — and only once
+   * [AbsenceConfirmation.DEFAULT_CONFIRMATIONS_REQUIRED] consecutive
+   * such captures lack the element. A capture that dropped node fetches (the app's main thread
+   * was blocked, so fetches timed out and came back null) is missing part of the screen and says
+   * nothing about whether the element is on it; the old single-poll release accepted exactly such
+   * a tree as "gone" while a loading screen was still up. When the deadline lands mid-streak the
+   * loop takes the one confirming poll it is owed rather than failing on evidence that all says
+   * "gone".
+   */
   private fun executeAssertNotVisible(action: AccessibilityAction.AssertNotVisible): ExecutionResult {
     val (screenWidth, screenHeight) = getScreenDimensions()
+    val confirmation = AbsenceConfirmation()
     val startTime = Clock.System.now().toEpochMilliseconds()
-    while (Clock.System.now().toEpochMilliseconds() - startTime < action.timeoutMs) {
-      val tree = getAccessibilityTree()
-      if (tree != null) {
-        val result = resolveSelectorWithFallback(tree.toTrailblazeNode(), action.nodeSelector)
-        if (result is TrailblazeNodeSelectorResolver.ResolveResult.NoMatch) {
-          return ExecutionResult(resolvedX = screenWidth / 2, resolvedY = screenHeight / 2)
-        }
-        // If found, keep polling (it should disappear)
+    var partialCapturesLogged = 0
+    while (Clock.System.now().toEpochMilliseconds() - startTime < action.timeoutMs || confirmation.awaitingConfirmation) {
+      val capture = captureAccessibilityTree()
+      val tree = capture.accessibilityNode
+      val observation = when {
+        tree == null -> AbsenceConfirmation.Observation.NO_TREE
+        resolveSelectorWithFallback(tree.toTrailblazeNode(), action.nodeSelector)
+          !is TrailblazeNodeSelectorResolver.ResolveResult.NoMatch -> AbsenceConfirmation.Observation.PRESENT
+        // The projection this check actually read, not the capture as a whole: the Maestro walk
+        // can lose a child the accessibility walk got, and a tree that is whole says what it says
+        // regardless of what a sibling walk of the same roots managed to fetch.
+        capture.isAccessibilityNodeComplete -> AbsenceConfirmation.Observation.ABSENT_IN_COMPLETE_CAPTURE
+        else -> AbsenceConfirmation.Observation.ABSENT_IN_PARTIAL_CAPTURE
+      }
+      if (observation == AbsenceConfirmation.Observation.ABSENT_IN_PARTIAL_CAPTURE && partialCapturesLogged++ < 3) {
+        // Say why the check is holding, but not once per 100ms poll for the whole stall.
+        Console.log(
+          "[assert-not-visible] ${action.nodeSelector.description()} absent from a PARTIAL capture " +
+            "(${capture.droppedFetchesForAccessibilityNode} node fetch(es) dropped) — " +
+              "not trusting it, polling on",
+        )
+      }
+      if (confirmation.observe(observation)) {
+        return ExecutionResult(resolvedX = screenWidth / 2, resolvedY = screenHeight / 2)
       }
       // Brief pause to avoid busy-waiting while the UI updates.
       Thread.sleep(POLL_INTERVAL_MS)
     }
-    error("Assert not visible failed: ${action.nodeSelector.description()} is still visible after ${action.timeoutMs}ms")
+    error(
+      "Assert not visible failed: ${action.nodeSelector.description()} — ${confirmation.describeFailure()} " +
+        "after ${action.timeoutMs}ms",
+    )
   }
 
   /**
@@ -1255,6 +1338,13 @@ class AccessibilityDeviceManager(
    * Uses the same percentages as Maestro's accessibility driver for consistency:
    * UP/DOWN use center-to-edge (50% center to 10%/90%),
    * LEFT/RIGHT use edge-to-edge (90% to 10%) for full-width swipes.
+   *
+   * Even with identical geometry and duration, content travels ~1.4x LESS here than on the
+   * instrumentation driver: `input swipe` injects a MotionEvent stream whose lift-off velocity
+   * triggers a fling, while `dispatchGesture` strokes produce no meaningful fling. Don't
+   * compensate by lengthening the stroke — that would change the travel of every recorded raw
+   * swipe already validated on this driver. Scroll-until-visible compensates at the loop level
+   * instead (see `ScrollUntilTextIsVisibleTrailblazeTool.resolveCenterElement`).
    */
   private fun executeSwipeDirection(
     direction: AccessibilityAction.Direction,

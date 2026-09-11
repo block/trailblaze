@@ -19,6 +19,7 @@ import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TrailblazeAgent
 import xyz.block.trailblaze.BaseTrailblazeAgent
 import xyz.block.trailblaze.KoogRunnableAgent
+import xyz.block.trailblaze.devices.AndroidAccessibilityServiceDrivers
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
@@ -29,9 +30,7 @@ import xyz.block.trailblaze.exception.TrailblazeSessionCancelledException
 import xyz.block.trailblaze.host.golden.SnapshotBaselineSource
 import xyz.block.trailblaze.host.golden.SnapshotGoldenComparison
 import xyz.block.trailblaze.host.ios.MobileDeviceUtils
-import xyz.block.trailblaze.host.driver.HostDriverDescriptorRegistry
 import xyz.block.trailblaze.host.driver.HostRunDeps
-import xyz.block.trailblaze.host.rules.BaseHostTrailblazeTest
 import xyz.block.trailblaze.host.rules.HostTrailblazeLoggingRule
 import xyz.block.trailblaze.host.yaml.MultiDeviceTargetBinding
 import xyz.block.trailblaze.host.yaml.RunOnHostParams
@@ -83,7 +82,6 @@ import xyz.block.trailblaze.tracing.TrailblazeTraceExporter
 import xyz.block.trailblaze.ui.TrailblazeDeviceManager
 import xyz.block.trailblaze.recordings.TrailRecordings
 import xyz.block.trailblaze.util.Console
-import xyz.block.trailblaze.util.HostAndroidDeviceConnectUtils
 import xyz.block.trailblaze.yaml.TrailArgBinder
 import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
@@ -286,13 +284,30 @@ object TrailblazeHostYamlRunner {
       Console.log("🚫 Coroutine cancelled for $deviceLabel: ${e.message}")
       onProgressMessage("Test execution cancelled")
       throw e
-    } catch (e: Exception) {
-      executionFailure = e
-      Console.log("❌ ${e::class.simpleName} in $deviceLabel: ${e.message}")
-      onProgressMessage("Test execution failed: ${e.message}")
-      loggingRule.captureFailureScreenshot(session, screenshotProvider)
+    } catch (t: Throwable) {
+      executionFailure = t
+      val failureMessage = t.message ?: t::class.java.simpleName
+      Console.log("❌ ${t::class.java.simpleName} in $deviceLabel: $failureMessage")
+      onProgressMessage("Test execution failed: $failureMessage")
+      try {
+        loggingRule.captureFailureScreenshot(session, screenshotProvider)
+      } catch (screenshotFailure: Throwable) {
+        if (screenshotFailure !== t) t.addSuppressed(screenshotFailure)
+        Console.log(
+          "Failure screenshot also failed for $deviceLabel: ${screenshotFailure.message}; " +
+            "preserving the trail failure"
+        )
+      }
       if (sendSessionEndLog) {
-        loggingRule.endSession(session, isSuccess = false, exception = e)
+        try {
+          loggingRule.endSession(session, isSuccess = false, exception = t)
+        } catch (sessionEndFailure: Throwable) {
+          if (sessionEndFailure !== t) t.addSuppressed(sessionEndFailure)
+          Console.log(
+            "Ending the failed session also failed for $deviceLabel: ${sessionEndFailure.message}; " +
+              "preserving the trail failure"
+          )
+        }
       }
       // Re-throw so the failure propagates to DesktopYamlRunner.runYaml's outer catch,
       // which sets executionResult = Failed. Returning null here was the silent-failure
@@ -300,9 +315,6 @@ object TrailblazeHostYamlRunner {
       // IllegalStateException inside a Playwright run got swallowed here, the runner
       // saw null and reported Success up the stack, and MCP told the user "✓ Done"
       // while the page was actually blank.
-      throw e
-    } catch (t: Throwable) {
-      executionFailure = t
       throw t
     } finally {
       exportAndSaveTrace(session.sessionId, loggingRule, noLogging = noLogging)
@@ -327,12 +339,11 @@ object TrailblazeHostYamlRunner {
   /**
    * Runs a Trailblaze YAML test on a specific host-connected device with the given LLM client.
    *
-   * Returns a [HostYamlRunResult] so the local-device Maestro path (iOS_HOST / Android HOST) can
-   * thread the last successful tool's result up to `DesktopYamlRunner` — that's what lets
-   * `trailblaze tool <read-tool>` show the tool's real return value. The descriptor-backed
-   * drivers (web / Compose / Revyl) carry a null `lastToolResult`: they surface their payloads to
-   * the CLI through their own dispatch branches, not this one, so wrapping their session id is
-   * enough.
+   * Returns a [HostYamlRunResult] so the iOS simulator drivers can thread the last successful
+   * tool's result up to `DesktopYamlRunner` — that's what lets `trailblaze tool <read-tool>` show
+   * the tool's real return value. The other descriptors (web / Compose / Revyl) carry a null
+   * `lastToolResult`: they surface their payloads to the CLI through their own dispatch branches,
+   * not this one, so wrapping their session id is enough.
    *
    * [logsDir] is a JVM-side parameter rather than a [RunOnHostParams] field because that class is
    * `commonMain` and can't carry a [File]. Every host path needs it: each builds its own
@@ -348,227 +359,22 @@ object TrailblazeHostYamlRunner {
   ): HostYamlRunResult {
     val driverType = runOnHostParams.trailblazeDriverType
 
-    // Drivers that have been converted run through their descriptor; the Maestro path below
-    // carries the ones still waiting their turn. See HostDriverDescriptorRegistry.
-    deviceManager.hostDriverDescriptors.forDriverOrNull(driverType)?.let { descriptor ->
-      return descriptor.runYaml(
-        deps = HostRunDeps(
-          dynamicLlmClient = dynamicLlmClient,
-          deviceManager = deviceManager,
-          logsDir = logsDir,
-        ),
-        params = runOnHostParams,
-      )
-    }
-
-    // A converted driver has no path below, so the Maestro fallback would run it on the wrong
-    // driver rather than reporting that nothing is plugged in. `forDriver` names the driver and
-    // the remedy.
-    if (driverType in HostDriverDescriptorRegistry.convertedDriverTypes) {
-      deviceManager.hostDriverDescriptors.forDriver(driverType)
-    }
-
-    return runMaestroHostYaml(dynamicLlmClient, runOnHostParams, deviceManager, logsDir)
+    // Every driver that reaches this entry point runs through its descriptor. There is no
+    // fallback: `DesktopDispatchDecision` sends only drivers whose tools do NOT run on the device
+    // here, and each of those is descriptor-backed. `forDriver` throws naming the driver and the
+    // remedy, which beats a generic path silently driving something it was never written for.
+    // `HostDriverDescriptorRegistryTest` pins that coverage against the enum.
+    val descriptor = deviceManager.hostDriverDescriptors.forDriver(driverType)
+    return descriptor.runYaml(
+      deps = HostRunDeps(
+        dynamicLlmClient = dynamicLlmClient,
+        deviceManager = deviceManager,
+        logsDir = logsDir,
+      ),
+      params = runOnHostParams,
+    )
   }
 
-  /**
-   * Original Maestro-based path for Android/iOS/web-playwright-host devices.
-   *
-   * Returns a [HostYamlRunResult] carrying the last successful tool's result so the local-device
-   * Maestro path can surface a read tool's payload via `trailblaze tool` (iOS_HOST + Android HOST).
-   */
-  private suspend fun runMaestroHostYaml(
-    dynamicLlmClient: DynamicLlmClient,
-    runOnHostParams: RunOnHostParams,
-    deviceManager: TrailblazeDeviceManager,
-    logsDir: File?,
-  ): HostYamlRunResult {
-
-    val trailblazeDeviceId = runOnHostParams.runYamlRequest.trailblazeDeviceId
-    val onProgressMessage = runOnHostParams.onProgressMessage
-
-    // Skip force-stop for MCP requests - MCP maintains persistent connections
-    // between tool calls and we don't want to kill the driver each time.
-    val isMcpRequest = runOnHostParams.referrer == TrailblazeReferrer.MCP
-    
-    if (runOnHostParams.trailblazeDevicePlatform == TrailblazeDevicePlatform.ANDROID && !isMcpRequest) {
-      HostAndroidDeviceConnectUtils.forceStopAllAndroidInstrumentationProcesses(
-        trailblazeOnDeviceInstrumentationTargetTestApps = deviceManager.availableAppTargets
-          // A declared in-process harness is an instrumentation process like the bundled
-          // runner — a stale one blocks the host Maestro instrumentation just the same.
-          .flatMap { it.allInstrumentationTargets() }
-          .toSet(),
-        deviceId = trailblazeDeviceId,
-      )
-    }
-
-    onProgressMessage("Initializing $trailblazeDeviceId test runner...")
-
-    val runYamlRequest = runOnHostParams.runYamlRequest
-
-    val hostTbRunner = object : BaseHostTrailblazeTest(
-      trailblazeDriverType = runOnHostParams.trailblazeDriverType,
-      customToolClasses = runOnHostParams.targetTestApp
-        ?.getCustomToolsForDriver(
-          runOnHostParams.trailblazeDriverType,
-        ) ?: emptySet(),
-      excludedToolClasses = runOnHostParams.targetTestApp
-        ?.getExcludedToolsForDriver(
-          runOnHostParams.trailblazeDriverType,
-        ) ?: emptySet(),
-      dynamicLlmClient = dynamicLlmClient,
-      trailblazeLlmModel = runYamlRequest.trailblazeLlmModel,
-      config = runYamlRequest.config,
-      appTarget = runOnHostParams.targetTestApp,
-      explicitDeviceId = trailblazeDeviceId,
-      logsDir = logsDir,
-      noLogging = runOnHostParams.noLogging,
-    ) {
-      // Honor the agent implementation chosen for THIS run (CLI --agent / settings / request),
-      // overriding BaseHostTrailblazeTest's JUnit-eval system-property default so
-      // KOOG_STRATEGY_GRAPH takes effect on this local-device (Maestro) path — Android and iOS —
-      // exactly like the web / Revyl / on-device paths. Default (TRAILBLAZE_RUNNER) is unchanged.
-      override val agentImplementation: AgentImplementation = runYamlRequest.agentImplementation
-
-      override fun ensureTargetAppIsStopped() {
-        // Convert the YAML-ordered List to a Set for ensureAppsAreForceStopped, which takes
-        // membership-style Set<String>.
-        val possibleAppIds = runOnHostParams.targetTestApp
-          ?.getPossibleAppIdsForPlatform(runOnHostParams.trailblazeDevicePlatform)
-          ?.toSet()
-          ?: emptySet()
-        MobileDeviceUtils.ensureAppsAreForceStopped(
-          possibleAppIds = possibleAppIds,
-          trailblazeDeviceId = trailblazeDeviceId
-        )
-      }
-    }
-
-    // Store the test instance for forceful shutdown on cancellation. Host-native iOS drivers
-    // have no Maestro driver — and dereferencing hostTbRunner.hostRunner would construct one —
-    // so this is skipped for them.
-    if (!runOnHostParams.trailblazeDriverType.hostNativeSimulatorDriver) {
-      deviceManager.setActiveDriverForDevice(trailblazeDeviceId, hostTbRunner.hostRunner.loggingDriver)
-    }
-
-    onProgressMessage("Connecting to $trailblazeDeviceId device...")
-
-    val keepDriverAlive = runOnHostParams.referrer == TrailblazeReferrer.MCP
-
-    // Per-session subprocess MCP runtimes for inline scripted tools synthesized from the
-    // target's `tools:` YAML. The launcher spawns each entry, runs the MCP handshake,
-    // registers filtered tools into hostTbRunner.toolRepo, and hands back a teardown handle.
-    // Launch must happen inside the executeTrailSession lambda — we need the SessionId for
-    // the env-var contract and for the session-log directory; both are available there.
-    //
-    // Modeled as a mutable list of resources (empty when the target declares no `tools:`
-    // with subprocess routing, populated once launch succeeds) so the cleanup lambda can
-    // reference the collection directly without a forward-declared nullable var.
-    val subprocessRuntimes = mutableListOf<LaunchedScriptingRuntime>()
-
-    // Captured from inside the session lambda so it survives back out to the HostYamlRunResult
-    // this method returns — executeTrailSession itself only hands back the SessionId.
-    var lastToolResult: TrailblazeToolResult.Success? = null
-
-    val sessionId = executeTrailSession(
-      loggingRule = hostTbRunner.hostLoggingRule,
-      overrideSessionId = runYamlRequest.config.overrideSessionId,
-      testName = runYamlRequest.testName,
-      deviceLabel = "maestro:${trailblazeDeviceId.instanceId}",
-      sendSessionEndLog = runYamlRequest.config.sendSessionEndLog,
-      onProgressMessage = onProgressMessage,
-      screenshotProvider = hostTbRunner.screenStateProvider,
-      noLogging = runOnHostParams.noLogging,
-      cleanup = {
-        // Shut down subprocess MCP servers before the driver goes away — they're tied to
-        // this session's lifetime and every registration's sessionProvider closes over
-        // them. Empty list when nothing was launched; no branch needed.
-        //
-        // Wrapped in `NonCancellable` so teardown completes even when the surrounding
-        // coroutine is cancelled (trail timeout, user abort). Without this, cancellation
-        // would prevent `session.shutdown()` from running and leak the subprocess +
-        // stderr-capture file handle.
-        withContext(NonCancellable) {
-          subprocessRuntimes.forEach { it.shutdownAll() }
-          // Detach the iOS baguette stream (no-op unless TRAILBLAZE_IOS_STREAM_SCREENSHOT
-          // engaged) so the WebSocket + ffmpeg decoder don't outlive the session. The
-          // if-started guard keeps cleanup from constructing the lazy hostRunner — which
-          // deliberately throws on IOS_AXE and would otherwise fail every AXe run's cleanup.
-          hostTbRunner.closeStreamScreenshotSourceIfStarted()
-          // Let go of the device connection the classifiers fetched for themselves. Unconditional
-          // because it is this run's own hold on the shared iOS driver and nothing else can reach
-          // it — not even the MCP branch below, which deliberately keeps the driver alive by
-          // holding the OTHER one, registered as the device's active driver.
-          hostTbRunner.releaseConnectedDeviceIfOpened()
-        }
-        if (keepDriverAlive) {
-          Console.log("🔗 MCP referrer detected - keeping driver alive for device: ${trailblazeDeviceId.instanceId}")
-          deviceManager.clearCoroutineScopeForDevice(trailblazeDeviceId)
-        } else {
-          deviceManager.cancelSessionForDevice(trailblazeDeviceId)
-        }
-      },
-    ) { session ->
-      // Start session-scoped capture (e.g. the iOS Simulator log stream) the moment the
-      // session exists, BEFORE any trail steps run. This Maestro host runner executes the
-      // whole trail synchronously, so the daemon's post-run capture activation would otherwise
-      // start capture only after the trail finished and record nothing. Guarded so a
-      // capture-start failure never tears down the trail.
-      runCatching { runOnHostParams.onSessionStarted(session.sessionId) }
-        .onFailure {
-          Console.log("[runMaestroHostYaml] onSessionStarted callback threw — continuing: ${it.message}")
-        }
-      // Spawn target-declared subprocess MCP servers + register their tools into the
-      // session's repo. Runs before trail execution so the LLM's first tools/list reflects
-      // the full registry. Fail-fast: if any spawn fails, executeTrailSession's catch path
-      // reports it and the cleanup lambda tears down anything partial.
-      launchSubprocessMcpServersIfAny(
-        targetTestApp = runOnHostParams.targetTestApp,
-        config = runYamlRequest.config,
-        sessionId = session.sessionId,
-        deviceInfo = hostTbRunner.trailblazeDeviceInfo,
-        logsRepo = hostTbRunner.hostLoggingRule.logsRepo,
-        toolRepo = hostTbRunner.toolRepo,
-        onProgressMessage = onProgressMessage,
-      )?.let { subprocessRuntimes += it }
-
-      onProgressMessage("Executing YAML test...")
-      Console.log("▶️ Starting runTrailblazeYamlSuspend for device: ${trailblazeDeviceId.instanceId}")
-      val yamlRun = hostTbRunner.runTrailblazeYamlSuspend(
-        yaml = runYamlRequest.yaml,
-        forceStopApp = runOnHostParams.forceStopTargetApp,
-        trailFilePath = runYamlRequest.trailFilePath,
-        trailblazeDeviceId = trailblazeDeviceId,
-        traceId = runYamlRequest.traceId,
-        sendSessionStartLog = runYamlRequest.config.sendSessionStartLog,
-        initialMemorySeeds = runYamlRequest.initialMemorySeeds,
-        initialMemorySensitiveSeeds = runYamlRequest.initialMemorySensitiveSeeds,
-        initialArgs = runYamlRequest.initialArgs,
-      )
-      // Surface the last successful tool's payload back out through HostYamlRunResult.
-      lastToolResult = yamlRun.lastToolResult
-      val sessionId = yamlRun.sessionId
-      Console.log("✅ runTrailblazeYamlSuspend completed successfully for device: ${trailblazeDeviceId.instanceId}")
-      onProgressMessage("Test execution completed successfully")
-
-      if (runYamlRequest.config.sendSessionEndLog) {
-        hostTbRunner.loggingRule.captureFinalScreenshot(session, hostTbRunner.screenStateProvider)
-        hostTbRunner.loggingRule.endSession(session, isSuccess = true)
-      }
-
-      sessionId?.let {
-        generateAndSaveRecording(
-          sessionId = it,
-          logsDir = hostTbRunner.hostLoggingRule.logsRepo.logsDir,
-          customToolClasses = runOnHostParams.targetTestApp
-            ?.getCustomToolsForDriver(runOnHostParams.trailblazeDriverType) ?: emptySet(),
-        )
-      }
-
-      sessionId
-    }
-    return HostYamlRunResult(sessionId, lastToolResult)
-  }
 
   /**
    * Runs MULTI_AGENT_V3 on the host, driving the on-device accessibility agent via
@@ -632,7 +438,10 @@ object TrailblazeHostYamlRunner {
     // swaps the axes, and orientation is derived from them), so the executor below refreshes it
     // from every screen state this device reports.
     val deviceProfile = AtomicReference(queryDeviceProfile(onDeviceRpc))
-    val classifiers = deviceProfile.get().classifiers.ifEmpty {
+    val classifiers = runYamlRequest.deviceClassifierOverride
+      .map(::TrailblazeDeviceClassifier)
+      .ifEmpty { deviceProfile.get().classifiers }
+      .ifEmpty {
       HostProbedDeviceClassifiers.forDevice(trailblazeDeviceId)
     }
 
@@ -1056,7 +865,10 @@ object TrailblazeHostYamlRunner {
     // every screen state this device reports. One reference per device — a companion rotating must
     // not rewrite the launch device's size.
     val deviceProfile = AtomicReference(queryDeviceProfile(onDeviceRpc))
-    val classifiers = deviceProfile.get().classifiers.ifEmpty {
+    val classifiers = runYamlRequest.deviceClassifierOverride
+      .map(::TrailblazeDeviceClassifier)
+      .ifEmpty { deviceProfile.get().classifiers }
+      .ifEmpty {
       HostProbedDeviceClassifiers.forDevice(trailblazeDeviceId)
     }
 
@@ -1203,7 +1015,7 @@ object TrailblazeHostYamlRunner {
       sessionProvider = { loggingRule.session ?: error("Session not available") },
       customToolClasses = customToolClasses,
       requireAndroidAccessibilityServiceOnRewarm =
-        runYamlRequest.driverType == TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
+        AndroidAccessibilityServiceDrivers.includes(runYamlRequest.driverType),
       trailblazeToolRepo = toolRepo,
       resolvedTarget = resolvedTargetForSession,
       appId = appIdForSession,
@@ -1286,7 +1098,7 @@ object TrailblazeHostYamlRunner {
               // carried by `resolvedTarget`/`appId` below.
               customToolClasses = customToolClasses,
               requireAndroidAccessibilityServiceOnRewarm =
-                runYamlRequest.driverType == TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
+                AndroidAccessibilityServiceDrivers.includes(runYamlRequest.driverType),
               trailblazeToolRepo = toolRepo,
               resolvedTarget = companionResolvedTarget,
               appId = companionResolvedTarget?.let { resolveInstalledAppId(it) },

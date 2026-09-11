@@ -24,15 +24,28 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
  * The convenience overloads that take a [ScreenState] derive the classifier from the screen
  * itself (its [ScreenState.deviceClassifiers], falling back to its platform), so existing call
  * sites don't have to thread a classifier through — the screen already knows which device it came
- * from. The [ResolvedWaypoint] overload is the core every other overload funnels into.
+ * from. They also derive capture completeness from the screen
+ * ([ScreenState.isCaptureKnownPartial]), which is what stops a capture that lost nodes from
+ * satisfying a `forbidden` condition vacuously. The [ResolvedWaypoint] overload is the core
+ * every other overload funnels into.
  */
 object WaypointMatcher {
 
-  /** Core matcher: evaluate an already-resolved waypoint view against [root]. */
+  /**
+   * Core matcher: evaluate an already-resolved waypoint view against [root].
+   *
+   * [captureComplete] says whether [root] holds every node the device advertised. `false` — a
+   * capture that is KNOWN to have lost nodes — makes an otherwise-clean `forbidden` check
+   * untrustworthy, so a would-be match is downgraded to a
+   * [WaypointMatchResult.SkipReason.PARTIAL_CAPTURE] skip. It defaults to `true` so drivers that
+   * cannot measure completeness, and every caller that holds a bare tree rather than a screen
+   * state, behave exactly as they did before this parameter existed.
+   */
   fun match(
     resolved: ResolvedWaypoint,
     root: TrailblazeNode,
     target: TargetTemplateContext? = null,
+    captureComplete: Boolean = true,
   ): WaypointMatchResult {
     // Pre-expand once per condition so we can both (a) feed the resolver an already-substituted
     // selector and (b) detect any survived placeholder up front. A `forbidden` selector with an
@@ -75,9 +88,28 @@ object WaypointMatcher {
       }
     }
 
+    val matched = missingRequired.isEmpty() && presentForbidden.isEmpty()
+
+    // A capture that dropped node fetches can satisfy `forbidden` for the wrong reason: the
+    // subtree holding the forbidden element never arrived, so nothing resolved and the check
+    // passed vacuously — the waypoint reports "the sheet is gone" while the sheet is still up.
+    // Refuse that verdict. Narrow on purpose: only a would-be MATCH backed by at least one
+    // forbidden condition is downgraded. A forbidden that DID resolve, or a required that is
+    // missing, already says "not matched", and neither of those becomes wrong by losing nodes.
+    if (!captureComplete && matched && expandedForbidden.isNotEmpty()) {
+      return WaypointMatchResult(
+        definitionId = resolved.id,
+        matched = false,
+        matchedRequired = emptyList(),
+        missingRequired = emptyList(),
+        presentForbidden = emptyList(),
+        skipped = WaypointMatchResult.SkipReason.PARTIAL_CAPTURE,
+      )
+    }
+
     return WaypointMatchResult(
       definitionId = resolved.id,
-      matched = missingRequired.isEmpty() && presentForbidden.isEmpty(),
+      matched = matched,
       matchedRequired = matchedRequired,
       missingRequired = missingRequired,
       presentForbidden = presentForbidden,
@@ -90,7 +122,9 @@ object WaypointMatcher {
     classifier: TrailblazeDeviceClassifier,
     root: TrailblazeNode,
     target: TargetTemplateContext? = null,
-  ): WaypointMatchResult = match(definition, TrailblazeClassifierLineage.chainFor(classifier), root, target)
+    captureComplete: Boolean = true,
+  ): WaypointMatchResult =
+    match(definition, TrailblazeClassifierLineage.chainFor(classifier), root, target, captureComplete)
 
   /**
    * Match against a [ScreenState], resolving the classifier from the screen: its reported
@@ -113,7 +147,16 @@ object WaypointMatcher {
         presentForbidden = emptyList(),
         skipped = WaypointMatchResult.SkipReason.NO_NODE_TREE_IN_SCREEN_STATE,
       )
-    return match(definition, classifierFor(screenState), tree, target)
+    return match(
+      definition = definition,
+      classifierChain = classifierFor(screenState),
+      root = tree,
+      target = target,
+      // The screen is the only place that knows what its own capture lost, which is why the
+      // signal rides on ScreenState rather than being recomputed here. Unknown completeness
+      // (every non-Android driver) reads as complete — i.e. unchanged behaviour.
+      captureComplete = !screenState.isCaptureKnownPartial,
+    )
   }
 
   /**
@@ -142,6 +185,7 @@ object WaypointMatcher {
     classifierChain: List<TrailblazeDeviceClassifier>,
     root: TrailblazeNode,
     target: TargetTemplateContext? = null,
+    captureComplete: Boolean = true,
   ): WaypointMatchResult {
     val declaresBlock = classifierChain.any { definition.byClassifier.containsKey(it.classifier) }
     if (!declaresBlock) {
@@ -158,7 +202,7 @@ object WaypointMatcher {
       )
     }
     val primary = classifierChain.firstOrNull() ?: TrailblazeDeviceClassifier("")
-    return match(definition.resolveFor(primary, classifierChain), root, target)
+    return match(definition.resolveFor(primary, classifierChain), root, target, captureComplete)
   }
 
   private fun WaypointCondition.expandedWith(target: TargetTemplateContext?): WaypointCondition {

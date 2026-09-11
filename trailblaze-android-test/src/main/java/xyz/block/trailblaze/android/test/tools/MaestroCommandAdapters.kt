@@ -2,12 +2,14 @@ package xyz.block.trailblaze.android.test.tools
 
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import androidx.test.platform.app.InstrumentationRegistry
+import maestro.ScrollDirection
 import xyz.block.trailblaze.android.test.AndroidTestTarget
 import xyz.block.trailblaze.android.test.AppUnderTestLauncher
 import xyz.block.trailblaze.api.DriverNodeMatch
@@ -39,7 +41,11 @@ data class ParsedMaestroCommand(val name: String, val args: JsonElement)
 object MaestroCommandYaml {
   private val json = Json
 
-  /** @throws IllegalArgumentException when the YAML is not a well-formed Maestro commands list. */
+  /**
+   * @throws IllegalArgumentException when the payload is a well-formed document but not a Maestro
+   * commands list. Unreadable YAML raises the underlying reader's own exception type instead, so
+   * callers guard against [Exception] rather than this one alone.
+   */
   fun parse(tool: MaestroTrailblazeTool): List<ParsedMaestroCommand> {
     val encoded = json.encodeToJsonElement(MaestroTrailblazeTool.serializer(), tool).jsonObject
     val commands = encoded["commands"]?.jsonArray ?: return emptyList()
@@ -78,6 +84,10 @@ object MaestroCommandYaml {
  * the app under test is in the vocabulary — it relaunches the launcher entry point through
  * [AppUnderTestLauncher] — but launching any OTHER package refuses, as does any launch option
  * (clearState and friends) whose real meaning would kill the instrumented process.
+ *
+ * Maestro's `optional` is honored on every command: a step the screen refuses is skipped and the
+ * flow carries on, which is what Orchestra does with it. A step this interpreter refuses is NOT
+ * skipped — see [run].
  */
 internal object MaestroCommandAdapters {
 
@@ -88,16 +98,44 @@ internal object MaestroCommandAdapters {
   ): TrailblazeToolResult {
     val commands = try {
       MaestroCommandYaml.parse(tool)
-    } catch (e: IllegalArgumentException) {
+    } catch (e: Exception) {
+      // Whatever the parse throws, not only the malformed-shape `IllegalArgumentException`: the
+      // YAML reader underneath raises its own type on unreadable text, and letting that escape
+      // would trade this message for a stack trace naming a serializer.
       return TrailblazeToolResult.Error.ExceptionThrown(
         errorMessage = "mobile_maestro payload failed to parse: ${e.message}",
         command = tool,
       )
     }
     val messages = mutableListOf<String>()
-    for (command in commands) {
-      when (val result = dispatchOne(command, tool, target, context)) {
-        is TrailblazeToolResult.Success -> result.message?.let { messages.add(it) }
+    for ((index, command) in commands.withIndex()) {
+      // A flow may use the same command twice, so the command name alone does not say where a run
+      // stopped — which is the one fact a failed CI run needs from this message.
+      val step = "step ${index + 1} of ${commands.size}"
+      val optional: Boolean
+      val result: TrailblazeToolResult
+      try {
+        // Read inside the same guard as the dispatch: an unreadable `optional` is itself a
+        // refusal, and it has to be settled BEFORE the step runs rather than consulted after.
+        optional = command.isOptional(tool)
+        result = dispatchOne(command, tool, target, context)
+      } catch (refusal: RefusedCommand) {
+        // Outside the interpreted vocabulary, so nothing was attempted. `optional` says what to do
+        // with a step the SCREEN refused; it cannot speak for a step this driver never ran, and
+        // swallowing one here would be exactly the silent degradation this interpreter exists to
+        // prevent.
+        return TrailblazeToolResult.Error.ExceptionThrown(
+          errorMessage = "Maestro $step ('${command.name}'): ${refusal.reason}",
+          command = refusal.tool,
+        )
+      }
+      when {
+        result is TrailblazeToolResult.Success -> result.message?.let { messages.add(it) }
+        // Maestro's `optional`: the command ran and the screen said no. Orchestra turns that into
+        // a warning and carries on with the rest of the flow, so this interpreter does too.
+        result is TrailblazeToolResult.Error && optional -> messages.add(
+          "Optional '${command.name}' ($step) did not succeed and was skipped: ${result.errorMessage}",
+        )
         // Sequential like a Maestro flow: the first failed command fails the tool.
         else -> return result
       }
@@ -114,62 +152,88 @@ internal object MaestroCommandAdapters {
     context: TrailblazeToolExecutionContext,
   ): TrailblazeToolResult = when (command.name) {
     "tapOn" -> {
-      selectorFrom(command.args, allowedExtraKeys = emptySet(), tool = tool)
-        .fold(
-          onSelector = { AndroidTestTapTool(nodeSelector = it).executeWithAndroidTest(target, context) },
-          onError = { it },
-        )
+      val selector = selectorFrom(command.args, tool = tool)
+      AndroidTestTapTool(nodeSelector = selector).executeWithAndroidTest(target, context)
     }
 
     "assertVisible" -> {
-      val optional = (command.args as? JsonObject)?.get("optional").booleanContent() ?: false
-      val timeoutMs = (command.args as? JsonObject)?.get("timeout").longContent()
-      selectorFrom(command.args, allowedExtraKeys = setOf("optional", "timeout"), tool = tool)
-        .fold(
-          onSelector = { selector ->
-            val result = AndroidTestAssertVisibleTool(nodeSelector = selector, timeoutMs = timeoutMs)
-              .executeWithAndroidTest(target, context)
-            if (result !is TrailblazeToolResult.Success && optional) {
-              TrailblazeToolResult.Success(
-                message = "Optional assertVisible did not match (${selector.description()}) — skipped.",
-              )
-            } else {
-              result
-            }
-          },
-          onError = { it },
-        )
+      val timeoutMs = (command.args as? JsonObject)?.get("timeout").longOrRefuse("timeout", tool)
+      val selector = selectorFrom(command.args, allowedExtraKeys = setOf("timeout"), tool = tool)
+      AndroidTestAssertVisibleTool(nodeSelector = selector, timeoutMs = timeoutMs)
+        .executeWithAndroidTest(target, context)
+    }
+
+    // The negative of `assertVisible`, and the same shape: recorded trails reach for it to prove a
+    // state was LEFT (an add-on removed, a badge cleared), where the positive assert cannot say
+    // anything. Its `timeout` is how long the element has to leave, which is what the native
+    // not-visible tool already waits out.
+    "assertNotVisible" -> {
+      val timeoutMs = (command.args as? JsonObject)?.get("timeout").longOrRefuse("timeout", tool)
+      val selector = selectorFrom(command.args, allowedExtraKeys = setOf("timeout"), tool = tool)
+      AndroidTestAssertNotVisibleTool(nodeSelector = selector, timeoutMs = timeoutMs)
+        .executeWithAndroidTest(target, context)
     }
 
     "extendedWaitUntil" -> {
       val args = command.args as? JsonObject
-        ?: return unsupported("extendedWaitUntil without a map body", tool)
-      val unknownKeys = args.keys - setOf("visible", "notVisible", "timeout")
+        ?: unsupported("extendedWaitUntil without a map body", tool)
+      val unknownKeys = args.keys - setOf("visible", "notVisible", "timeout") - COSMETIC_KEYS
       if (unknownKeys.isNotEmpty()) {
-        return unsupported("extendedWaitUntil with $unknownKeys", tool)
+        unsupported("extendedWaitUntil with $unknownKeys", tool)
       }
-      val timeoutMs = args["timeout"].longContent()
+      val timeoutMs = args["timeout"].longOrRefuse("timeout", tool)
       val visible = args["visible"]
       val notVisible = args["notVisible"]
       when {
         visible != null && notVisible == null ->
-          selectorFrom(visible, allowedExtraKeys = emptySet(), tool = tool).fold(
-            onSelector = {
-              AndroidTestAssertVisibleTool(nodeSelector = it, timeoutMs = timeoutMs)
-                .executeWithAndroidTest(target, context)
-            },
-            onError = { it },
-          )
+          AndroidTestAssertVisibleTool(
+            nodeSelector = selectorFrom(visible, tool = tool),
+            timeoutMs = timeoutMs,
+          ).executeWithAndroidTest(target, context)
         notVisible != null && visible == null ->
-          selectorFrom(notVisible, allowedExtraKeys = emptySet(), tool = tool).fold(
-            onSelector = {
-              AndroidTestAssertNotVisibleTool(nodeSelector = it, timeoutMs = timeoutMs)
-                .executeWithAndroidTest(target, context)
-            },
-            onError = { it },
-          )
+          AndroidTestAssertNotVisibleTool(
+            nodeSelector = selectorFrom(notVisible, tool = tool),
+            timeoutMs = timeoutMs,
+          ).executeWithAndroidTest(target, context)
         else -> unsupported("extendedWaitUntil needs exactly one of visible/notVisible", tool)
       }
+    }
+
+    // Maestro's scroll-until-visible, onto the loop the driver's own scroll tool already runs.
+    // Every option is honored or refused BY MEANING, never ignored:
+    //  - `element` is an ordinary element selector, read through the same estate bridge as `tapOn`.
+    //  - `direction`, `visibilityPercentage` and `centerElement` are decided by
+    //    [ScrollOptionSupport], the same answer the canonical scroll tool gets.
+    //  - `timeout` bounds the loop, alongside the tool's own scroll cap.
+    //  - `speed` and `scrollDuration` describe the kinematics of a fling. This driver scrolls the
+    //    container programmatically, so there is no fling to slow down and nothing they could
+    //    change about where the list ends up — accepted, and nothing acts on them.
+    "scrollUntilVisible" -> {
+      val args = command.args as? JsonObject
+        ?: unsupported("scrollUntilVisible without a map body", tool)
+      val unknownKeys = args.keys - setOf(
+        "element", "direction", "timeout", "speed", "scrollDuration", "visibilityPercentage",
+        "centerElement",
+      ) - COSMETIC_KEYS
+      if (unknownKeys.isNotEmpty()) {
+        unsupported("scrollUntilVisible with $unknownKeys", tool)
+      }
+      val direction = args["direction"].scrollDirectionOrRefuse(tool)
+      ScrollOptionSupport.unsupportedDirection(direction)?.let { unsupported("scrollUntilVisible $it", tool) }
+      args["visibilityPercentage"].longOrRefuse("visibilityPercentage", tool)?.let { percentage ->
+        ScrollOptionSupport.unsupportedVisibilityPercentage(percentage.toInt())
+          ?.let { unsupported("scrollUntilVisible $it", tool) }
+      }
+      args["centerElement"].booleanOrRefuse("centerElement", tool)?.let { centerElement ->
+        ScrollOptionSupport.unsupportedCenterElement(centerElement)
+          ?.let { unsupported("scrollUntilVisible $it", tool) }
+      }
+      val element = args["element"] ?: unsupported("scrollUntilVisible without an element", tool)
+      AndroidTestScrollUntilVisibleTool(
+        nodeSelector = selectorFrom(element, tool = tool),
+        timeoutMs = args["timeout"].longOrRefuse("timeout", tool)
+          ?: ScrollOptionSupport.DEFAULT_TIMEOUT_MS,
+      ).executeWithAndroidTest(target, context)
     }
 
     // The in-process equivalent of "animations are done" is the synchronization every native tool
@@ -177,7 +241,7 @@ internal object MaestroCommandAdapters {
     // bound on waiting, not a sleep, so no explicit delay is added on top — it is threaded through
     // as the wait's ceiling so a short bound stops short on a never-idle screen.
     "waitForAnimationToEnd" -> {
-      target.waitForIdle(ceilingMs = (command.args as? JsonObject)?.get("timeout").longContent())
+      target.waitForIdle(ceilingMs = (command.args as? JsonObject)?.get("timeout").longOrRefuse("timeout", tool))
       TrailblazeToolResult.Success(message = "Waited for idle (waitForAnimationToEnd).")
     }
 
@@ -187,7 +251,7 @@ internal object MaestroCommandAdapters {
     // Maestro's own inputText types and leaves the IME as it stands.
     "inputText" -> {
       val text = (command.args as? JsonPrimitive)?.content
-        ?: return unsupported("inputText with a non-string body", tool)
+        ?: unsupported("inputText with a non-string body", tool)
       InstrumentationRegistry.getInstrumentation().sendStringSync(text)
       target.waitForIdle()
       TrailblazeToolResult.Success(message = "Typed '$text' (inputText).")
@@ -216,9 +280,10 @@ internal object MaestroCommandAdapters {
       val appId = when (args) {
         is JsonPrimitive -> args.content
         is JsonObject -> {
-          val unknownKeys = args.keys - setOf("appId", "clearState", "stopApp", "permissions")
+          val unknownKeys =
+            args.keys - setOf("appId", "clearState", "stopApp", "permissions") - COSMETIC_KEYS
           if (unknownKeys.isNotEmpty()) {
-            return unsupported("launchApp with $unknownKeys (an in-process relaunch cannot honor them)", tool)
+            unsupported("launchApp with $unknownKeys (an in-process relaunch cannot honor them)", tool)
           }
           args["appId"].stringContent()
         }
@@ -226,14 +291,14 @@ internal object MaestroCommandAdapters {
       }
       val self = InstrumentationRegistry.getInstrumentation().targetContext.packageName
       if (appId != null && appId != self) {
-        return TrailblazeToolResult.Error.ExceptionThrown(
-          errorMessage = "Maestro launchApp targets '$appId', but in-process this driver can only " +
-            "relaunch the app under test ('$self').",
-          command = tool,
+        refuse(
+          "Maestro launchApp targets '$appId', but in-process this driver can only relaunch the " +
+            "app under test ('$self').",
+          tool,
         )
       }
-      if (obj?.get("clearState").booleanContent() == true) {
-        return unsupported(
+      if (obj?.get("clearState").booleanOrRefuse("clearState", tool) == true) {
+        unsupported(
           "launchApp with clearState: true (`pm clear` would kill the instrumented process; fork " +
             "the scripted tool that authors it on ctx.device.driverType in its trailmap and " +
             "compose an app-specific in-process reset there instead)",
@@ -243,17 +308,17 @@ internal object MaestroCommandAdapters {
       val permissions = obj?.get("permissions") as? JsonObject
       if (!permissions.isNullOrEmpty()) {
         val executor = context.androidDeviceCommandExecutor
-          ?: return unsupported("launchApp permissions without an AndroidDeviceCommandExecutor", tool)
+          ?: unsupported("launchApp permissions without an AndroidDeviceCommandExecutor", tool)
         for ((permission, state) in permissions) {
           val stateValue = state.stringContent()
           if (stateValue != "allow") {
-            return unsupported(
+            unsupported(
               "launchApp permission '$permission: $stateValue' (only \"allow\" maps onto pm grant)",
               tool,
             )
           }
           if (!permission.contains('.')) {
-            return unsupported(
+            unsupported(
               "launchApp permission shorthand '$permission' (only fully-qualified permission " +
                 "names map onto pm grant)",
               tool,
@@ -264,7 +329,7 @@ internal object MaestroCommandAdapters {
       }
       // Maestro's stopIfRunning defaults true, so only an explicit `stopApp: false` is a warm
       // resume; absent or true is the restart-from-entry-point.
-      val clearTask = obj?.get("stopApp").booleanContent() != false
+      val clearTask = obj?.get("stopApp").booleanOrRefuse("stopApp", tool) != false
       AppUnderTestLauncher.launchAppUnderTest(clearTask = clearTask)
       TrailblazeToolResult.Success(
         message = (
@@ -282,18 +347,20 @@ internal object MaestroCommandAdapters {
     else -> unsupported("Maestro command '${command.name}'", tool)
   }
 
-  /** A parsed selector or the loud error explaining why the shape isn't interpretable. */
-  private sealed interface SelectorOrError {
-    data class Selector(val selector: TrailblazeNodeSelector) : SelectorOrError
-    data class Failure(val error: TrailblazeToolResult) : SelectorOrError
-  }
-
-  private suspend fun SelectorOrError.fold(
-    onSelector: suspend (TrailblazeNodeSelector) -> TrailblazeToolResult,
-    onError: (TrailblazeToolResult) -> TrailblazeToolResult,
-  ): TrailblazeToolResult = when (this) {
-    is SelectorOrError.Selector -> onSelector(selector)
-    is SelectorOrError.Failure -> onError(error)
+  /**
+   * Whether Maestro's `optional` is set on this command — on its own map, or on the element
+   * selector nested inside it.
+   *
+   * Orchestra reads both halves (`command.optional` and `elementSelector()?.optional`) before
+   * deciding whether a failure is fatal, so a recording that marks either one means the same thing
+   * on this driver as on a Maestro-backed one.
+   */
+  private fun ParsedMaestroCommand.isOptional(tool: MaestroTrailblazeTool): Boolean {
+    val obj = args as? JsonObject ?: return false
+    if (obj["optional"].booleanOrRefuse("optional", tool) == true) return true
+    return NESTED_SELECTOR_KEYS.any {
+      (obj[it] as? JsonObject)?.get("optional").booleanOrRefuse("optional", tool) == true
+    }
   }
 
   /**
@@ -301,53 +368,123 @@ internal object MaestroCommandAdapters {
    * (`tapOn: "Sign in"`) or the map form's `text`/`id`/`index` fields. Any OTHER selector field
    * (`point`, `containsChild`, …) refuses loudly — matching on fewer constraints than the
    * recording asked for could act on the wrong element.
+   *
+   * `optional` is always accepted here and never narrows the match: it says what happens when the
+   * element is NOT found, which [run] applies to the command as a whole. `label` is accepted for
+   * the same reason and is even less: it renames the step in a report and says nothing about which
+   * element to match, so refusing a labelled step would refuse the recording over its prose.
    */
   private fun selectorFrom(
     args: JsonElement,
-    allowedExtraKeys: Set<String>,
+    allowedExtraKeys: Set<String> = emptySet(),
     tool: MaestroTrailblazeTool,
-  ): SelectorOrError {
+  ): TrailblazeNodeSelector {
     if (args is JsonPrimitive) {
-      return SelectorOrError.Selector(
-        TrailblazeNodeSelector.withMatch(DriverNodeMatch.AndroidMaestro(textRegex = args.content)),
-      )
+      return TrailblazeNodeSelector.withMatch(DriverNodeMatch.AndroidMaestro(textRegex = args.content))
     }
-    val obj = args as? JsonObject
-      ?: return SelectorOrError.Failure(unsupported("selector node ${args::class.simpleName}", tool))
-    val unknownKeys = obj.keys - setOf("text", "id", "index") - allowedExtraKeys
+    val obj = args as? JsonObject ?: unsupported("selector node ${args::class.simpleName}", tool)
+    val unknownKeys = obj.keys - SELECTOR_KEYS - COSMETIC_KEYS - allowedExtraKeys
     if (unknownKeys.isNotEmpty()) {
-      return SelectorOrError.Failure(unsupported("selector field(s) $unknownKeys", tool))
+      unsupported("selector field(s) $unknownKeys", tool)
     }
     val text = obj["text"].stringContent()
     val id = obj["id"].stringContent()
     if (text == null && id == null) {
-      return SelectorOrError.Failure(unsupported("selector with neither text nor id", tool))
+      unsupported("selector with neither text nor id", tool)
     }
-    return SelectorOrError.Selector(
-      TrailblazeNodeSelector.withMatch(
-        DriverNodeMatch.AndroidMaestro(textRegex = text, resourceIdRegex = id),
-        // Both indices are 0-based, so an explicit `index: 0` is a real disambiguator — drop only
-        // a negative (malformed) value.
-        index = obj["index"].longContent()?.toInt()?.takeIf { it >= 0 },
-      ),
+    return TrailblazeNodeSelector.withMatch(
+      DriverNodeMatch.AndroidMaestro(textRegex = text, resourceIdRegex = id),
+      // Both indices are 0-based, so an explicit `index: 0` is a real disambiguator — drop only
+      // a negative (malformed) value.
+      index = obj["index"].longOrRefuse("index", tool)?.toInt()?.takeIf { it >= 0 },
     )
   }
 
-  private fun JsonElement?.stringContent(): String? = (this as? JsonPrimitive)?.content
+  /**
+   * The scalar's text, or null when the key is absent.
+   *
+   * `null` in the YAML is a WRITTEN value, not an absent one, and it arrives here as a primitive
+   * whose content is the literal "null" — which would otherwise sail past every "was this key
+   * given?" check below and, for a selector, match the four-letter string.
+   */
+  private fun JsonElement?.stringContent(): String? =
+    (this as? JsonPrimitive)?.content?.takeUnless { this is JsonNull }
 
-  private fun JsonElement?.longContent(): Long? = stringContent()?.toLongOrNull()
+  /**
+   * Maestro's scroll direction, defaulting to its own default when the key is absent. A spelling
+   * outside the enum refuses rather than reading as the default, which would scroll a recording
+   * that asked for something else.
+   */
+  private fun JsonElement?.scrollDirectionOrRefuse(tool: MaestroTrailblazeTool): ScrollDirection {
+    val raw = stringContent() ?: return ScrollOptionSupport.SUPPORTED_DIRECTION
+    return ScrollDirection.entries.firstOrNull { it.name == raw.uppercase() }
+      ?: unsupported("direction: '$raw' (not a Maestro scroll direction)", tool)
+  }
 
-  private fun JsonElement?.booleanContent(): Boolean? =
-    stringContent()?.lowercase()?.toBooleanStrictOrNull()
+  /**
+   * A whole number, or null when [key] is absent.
+   *
+   * A value that is present but unreadable (`timeout: 20s`) refuses rather than reading as absent:
+   * dropping a recorded timeout silently changes what the trail waits for, and so what it passes
+   * or fails on.
+   */
+  private fun JsonElement?.longOrRefuse(key: String, tool: MaestroTrailblazeTool): Long? {
+    val raw = stringContent() ?: return null
+    return raw.toLongOrNull() ?: unsupported("$key: '$raw' (not a whole number)", tool)
+  }
 
-  private fun unsupported(what: String, tool: MaestroTrailblazeTool): TrailblazeToolResult =
-    TrailblazeToolResult.Error.ExceptionThrown(
-      errorMessage = "$what is not supported by the in-process ANDROID_TEST driver's Maestro " +
-        "interpreter. The interpreted vocabulary is the estate's measured set (tapOn, " +
-        "assertVisible, extendedWaitUntil visible/notVisible, waitForAnimationToEnd, inputText, " +
-        "launchApp of the app under test) — failing loudly instead of degrading the recorded " +
-        "behavior. Replay this trail on a Maestro-backed driver, or grow the vocabulary in " +
-        "MaestroCommandAdapters.",
-      command = tool,
+  /**
+   * A boolean, or null when [key] is absent.
+   *
+   * Only Maestro's own `true`/`false` spellings read; anything else present refuses. Silently
+   * reading an unrecognised spelling as absent is the worst outcome available here — it would turn
+   * `optional` off, or drop a `clearState`, without saying anything.
+   */
+  private fun JsonElement?.booleanOrRefuse(key: String, tool: MaestroTrailblazeTool): Boolean? {
+    val raw = stringContent() ?: return null
+    return raw.lowercase().toBooleanStrictOrNull()
+      ?: unsupported("$key: '$raw' (expected true or false)", tool)
+  }
+
+  /**
+   * A command the interpreter declined to run, carrying the reason [run] reports for it.
+   *
+   * Thrown rather than returned so a refusal cannot be confused with a command that ran and
+   * failed — the two get opposite treatment under `optional`, and every arm below produces them
+   * from the same nested places.
+   */
+  private class RefusedCommand(
+    val reason: String,
+    val tool: MaestroTrailblazeTool,
+  ) : Exception(reason)
+
+  /** Refuses this command with [message] verbatim. */
+  private fun refuse(message: String, tool: MaestroTrailblazeTool): Nothing =
+    throw RefusedCommand(message, tool)
+
+  private fun unsupported(what: String, tool: MaestroTrailblazeTool): Nothing =
+    refuse(
+      "$what is not supported by the in-process ANDROID_TEST driver's Maestro interpreter. The " +
+        "interpreted vocabulary is the set measured across recorded trails (tapOn, assertVisible, " +
+        "assertNotVisible, extendedWaitUntil visible/notVisible, scrollUntilVisible, " +
+        "waitForAnimationToEnd, inputText, launchApp of the app under test) — failing loudly instead of degrading the " +
+        "recorded behavior. Replay this trail on a Maestro-backed driver, or grow the vocabulary " +
+        "in MaestroCommandAdapters.",
+      tool,
     )
+
+  /** Command keys whose value is itself an element selector, and so can carry `optional`. */
+  private val NESTED_SELECTOR_KEYS = setOf("visible", "notVisible", "element")
+
+  /** The element-selector fields this interpreter can match on. */
+  private val SELECTOR_KEYS = setOf("text", "id", "index")
+
+  /**
+   * Keys Maestro allows on any command that say nothing about what it does.
+   *
+   * `label` renames the step in a report; `optional` is answered by [run] for the whole command.
+   * Neither narrows a match, so both are accepted everywhere rather than refused as unknown —
+   * a recording is not unreplayable because its author named a step.
+   */
+  private val COSMETIC_KEYS = setOf("label", "optional")
 }

@@ -70,7 +70,7 @@ data class FailureSignatureGroup(
 data class AffectedFailure(
   /** Human-readable test title (may collide between unrelated tests — prefer [test_key]). */
   val title: String,
-  /** Stable test key, e.g. `<source>/suite_71172/section_838951/case_4837766`. */
+  /** Stable test key, e.g. `<source>/suite_101/section_204/case_1003`. */
   val test_key: String? = null,
   /** Case ID parsed out of [test_key]'s `case_<id>` segment, when it has one. */
   val case_id: String? = null,

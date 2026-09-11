@@ -19,24 +19,24 @@
 // `postcondition` if declared. Catalog size is irrelevant beyond the local
 // filter pass.
 //
-// ## Phase 2 acquisition path (and its limits)
-//
-// The host has no single-shot whole-tree snapshot tool today. For Phase 2:
+// ## Acquisition path (and its limits)
 //
 //  - Authors build the snapshot via `captureViewHierarchy(client, [...selectors])`
 //    (re-exported from `view-hierarchy.ts`).
-//  - That helper dispatches one `findMatches` per selector in parallel. **Each
-//    `findMatches` callback enters its own nested `runTrailblazeTools` frame on
-//    the daemon** (see `MaestroTrailblazeAgent.kt:214` for the wiring) and
-//    captures its own view-hierarchy — they do NOT share a single SnapshotCache
-//    frame. So for N declared selectors, Phase 2 pays N callbacks AND N view-
-//    hierarchy captures. (The cache-sharing claim in `built-in-tools.ts:206-209`
-//    applies to the Kotlin-side in-batch loop, NOT this scripting-callback path.)
-//  - Parallel dispatch minimizes the wall-clock window between captures (less
-//    time for the UI to drift between them), but the snapshot is still **not
-//    atomic**. Authors writing predicates against the returned snapshot should
-//    tolerate small inter-frame drift; for strictly atomic single-frame
-//    semantics, wait for the host-side bulk-snapshot tool in Phase 3+.
+//  - That helper makes ONE `findSelectorMatches` call, which takes a single
+//    host-side view-hierarchy capture and resolves every declared selector
+//    against that one tree. So a catalog's snapshot costs one capture, not one
+//    per selector, and it is **atomic** — every predicate sees the same instant
+//    of the same screen.
+//  - Batching had to be explicit in the tool. N parallel `findMatches` calls do
+//    NOT share a SnapshotCache frame: each scripting callback enters its own
+//    nested `runTrailblazeTools` frame on the daemon (see
+//    `MaestroTrailblazeAgent.kt:214`), so that shape paid N multi-second
+//    captures. The cache-sharing claim in `built-in-tools.ts` applies to the
+//    Kotlin-side in-batch loop, never to the scripting-callback path.
+//  - Selectors must still be DECLARED up front — the host has no tool that ships
+//    the whole tree to the script (#3455 Phase 3+), so selectors are resolved
+//    host-side and only their matches cross the boundary.
 //  - `runConditionalActions` requires a `presnapshot` argument. The auto-acquire
 //    fallback (`client.snapshot()`) the issue's pseudocode describes lands when
 //    the host-side full-tree snapshot tool ships; until then, omitting
@@ -160,17 +160,18 @@ export class ConditionalActionFailedError extends Error {
  * **Cost in the no-match case:** zero extra round-trips when `presnapshot` is
  * passed (the common case — the caller has already built one via
  * `captureViewHierarchy`). N predicate evaluations are pure local computation
- * regardless of catalog size. Phase 2 has no built-in auto-acquire path, so
+ * regardless of catalog size. There is no built-in auto-acquire path, so
  * "otherwise" the call throws — the cost of acquisition lives entirely in
- * `captureViewHierarchy`, which pays one `findMatches` callback per declared
- * selector (see this file's header for the acquisition-path caveat).
+ * `captureViewHierarchy`, which is ONE capture for the whole declared selector
+ * set (see this file's header).
  *
  * **Cost in the all-match case:** one round-trip per applicable entry's
- * `action`, plus M `findMatches` callbacks per declared `postcondition` for
- * the post-action verify (where M is the size of the original presnapshot's
- * selector set — the verify refreshes the full set via `reCaptureViewHierarchy`,
- * since the implementation can't introspect which selectors a given
- * `postcondition` will probe).
+ * `action`, plus one capture per declared `postcondition` for the post-action
+ * verify. That verify refreshes the presnapshot's FULL selector set via
+ * `reCaptureViewHierarchy` — the implementation can't introspect which
+ * selectors a given `postcondition` will probe — but the full set is still one
+ * capture, so the refresh costs the same whether the catalog declared two
+ * selectors or twenty.
  *
  * **Verification snapshot** — for entries with a `postcondition`, the verify
  * snapshot is captured against the same set of selectors as `presnapshot` (via

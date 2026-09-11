@@ -47,6 +47,37 @@ object UiAutomationHandleErrors {
       "no output after '$command' — every shell command is silently returning nothing."
 
   /**
+   * Error for a shell command whose output stream never finished: the read was bounded and gave up.
+   *
+   * Deliberately **not** one of the [isStaleHandleSignature] phrases, unlike the silent-shell
+   * wedge. Recovery from those is clear-the-handle-*and-replay*, and replaying is wrong here: the
+   * command may well have run and only its output wedged, so a replay repeats whatever it did —
+   * `pm clear`, `input tap`, `am force-stop` — and a persistently wedged command fails at twice
+   * the bound instead of at it. Nor is the replay's upside reachable: the caller bounding the
+   * dispatch has already been told the call failed by the time a second attempt could finish.
+   *
+   * So the caller drops the wedged handle itself and raises this, which nothing retries. The
+   * handle still has to go — leaving it cached is what made every later command pay the full bound
+   * again — which is what [handleDiscarded] reports. A discard that failed is escalated to
+   * [isNonRecoverableStaleHandleSignature], because a wedged connection that cannot be dropped
+   * in-process leaves the whole runner useless and only a restart recovers it.
+   *
+   * @param command must already be redacted — this text is logged.
+   * @param handleDiscarded whether the cached UiAutomation handle was successfully dropped.
+   */
+  fun wedgedShellReadMessage(command: String, timeoutMs: Long, handleDiscarded: Boolean): String =
+    "Wedged-shell read: '$command' produced no end of output within ${timeoutMs}ms — the shell " +
+      "result pipe is blocked. " +
+      if (handleDiscarded) {
+        "The cached UiAutomation handle was dropped, so the next command reconnects; this command " +
+          "is NOT retried, because it may already have taken effect."
+      } else {
+        "The UiAutomation $NON_RECOVERABLE_CACHE_CLEAR_FAILED_PHRASE, so every later command " +
+          "would pay the same ${timeoutMs}ms. Recover by restarting the Trailblaze on-device " +
+          "server (kill + re-launch the test APK process)."
+      }
+
+  /**
    * @return true if [message] indicates that in-process UiAutomation recovery is impossible:
    *   either Android blocked clearing the cached handle, or reconnecting after the cache reset
    *   also failed. Both errors require the host to restart the on-device instrumentation.

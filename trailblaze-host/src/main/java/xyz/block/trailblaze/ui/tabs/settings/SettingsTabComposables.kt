@@ -122,8 +122,9 @@ object SettingsTabComposables {
         }
       }
 
-      // Show host/on-device agent toggle for Android when a driver is selected
-      if (platform == TrailblazeDevicePlatform.ANDROID && enabledDriverTypesMap[platform] != null) {
+      // Show host/on-device agent toggle only when the selected driver can honor it — see
+      // HostAgentToggleVisibility.
+      if (HostAgentToggleVisibility.shouldShow(platform, enabledDriverTypesMap[platform])) {
         val appConfig = trailblazeSettingsRepo.serverStateFlow.collectAsState().value.appConfig
         Row(
           modifier = Modifier.fillMaxWidth(),
