@@ -14,6 +14,7 @@ import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.client.TrailblazeSession
 import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
 import xyz.block.trailblaze.logs.model.TraceId
+import xyz.block.trailblaze.replay.ActionTrace
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.util.Console
 
@@ -63,6 +64,29 @@ object AccessibilityTrailRunner {
   }
 
   /**
+   * Joins whatever the PREVIOUS action left in the log lane, from inside the current action.
+   *
+   * The deferred-flush gate ([ReplayCaptureOptions.DEFER_LOG_FLUSH_SYSPROP]) takes the join out of
+   * the reply and puts it here instead, where the lane has had a whole action — settle, capture,
+   * gesture, and the dispatch around them — to drain. The backlog therefore stays bounded at one
+   * action's logs, which is what [logAsync]'s bitmap-residency argument depends on, and log order
+   * is untouched. Logged with the time it actually blocked for, so "this join is free" is a
+   * measured claim per run rather than an assumption.
+   */
+  private fun joinPreviousActionLogs() {
+    val pending = loggingJob.children.count()
+    if (pending == 0) {
+      Console.log("[deferred-log-flush] join pending=0 joinedMs=0")
+      return
+    }
+    val startNs = System.nanoTime()
+    runBlocking { flushLogsSuspend() }
+    Console.log(
+      "[deferred-log-flush] join pending=$pending joinedMs=${(System.nanoTime() - startNs) / 1_000_000}",
+    )
+  }
+
+  /**
    * Runs a list of accessibility actions with standardized error handling and logging.
    *
    * For each action, the pre-action screen state is captured first (so tap coordinates
@@ -80,11 +104,14 @@ object AccessibilityTrailRunner {
       // Ensure the UI is settled before capturing. In the RPC flow, actions arrive from the
       // agent without a local settle guarantee — waitForReady() is event-based and returns
       // immediately if already stable, so this is free when the previous action already settled.
+      ActionTrace.mark(ActionTrace.Boundary.DRIVER_ENTERED)
       deviceManager.waitForReady()
+      ActionTrace.mark(ActionTrace.Boundary.SETTLE_RELEASED)
 
       // Capture the pre-action screen state so the screenshot shows the UI at the moment
       // the action was decided — tap coordinates overlay correctly on the target element.
       val preScreenState = deviceManager.captureScreenStateForLogging()
+      ActionTrace.mark(ActionTrace.Boundary.CAPTURE_DONE)
 
       val startTime = Clock.System.now()
 
@@ -103,11 +130,21 @@ object AccessibilityTrailRunner {
 
       val durationMs =
         Clock.System.now().toEpochMilliseconds() - startTime.toEpochMilliseconds()
+      ActionTrace.mark(ActionTrace.Boundary.ACTION_EXECUTED)
+
+      // With the join deferred, the previous action's uploads are joined HERE — after this
+      // action's gesture, where they have already had a full action to finish — instead of in
+      // front of this action's reply. Before this action queues its own logs, so the lane never
+      // holds more than one action's worth.
+      if (ReplayCaptureOptions.deferLogFlushEnabled()) {
+        joinPreviousActionLogs()
+      }
 
       // Map action to driver log format and log asynchronously
       val driverAction = mapToAgentDriverAction(action, executionResult, result)
       val session = sessionProvider.invoke()
       logAsync(trailblazeLogger, session, preScreenState, driverAction, durationMs, startTime, traceId)
+      ActionTrace.mark(ActionTrace.Boundary.DRIVER_LOG_QUEUED)
 
       if (result is TrailblazeToolResult.Error) {
         flushLogs()
@@ -132,6 +169,21 @@ object AccessibilityTrailRunner {
     timestamp: kotlinx.datetime.Instant,
     traceId: TraceId?,
   ) {
+    // Encode the screenshot NOW, on the shared pool, rather than letting the log body below be the
+    // first thing to touch `screenshotBytes`. The capture holds a full-resolution bitmap until that
+    // first read, and `loggingScope` is a single lane — so on a run whose uploads lag the actions,
+    // one bitmap per queued log would stay resident behind them. This launch is still a child of
+    // the logging job (so `flushLogs` joins it) but runs off the lane, which bounds the bitmap's
+    // life to the encode itself. `screenshotBytes` is `lazy`, so the encode still happens exactly
+    // once no matter which of the two coroutines reaches it first.
+    loggingScope.launch(Dispatchers.Default) {
+      try {
+        val encoded = screenState.screenshotBytes
+        ActionTrace.markWith(ActionTrace.Boundary.SHOT_ENCODED, (encoded?.size ?: 0).toLong())
+      } catch (e: Exception) {
+        Console.log("Eager screenshot encode failed: ${e.message}")
+      }
+    }
     loggingScope.launch {
       try {
         val screenshotFilename = if (screenState.screenshotBytes?.isNotEmpty() == true) {
@@ -139,6 +191,7 @@ object AccessibilityTrailRunner {
         } else {
           null
         }
+        ActionTrace.mark(ActionTrace.Boundary.SHOT_UPLOADED)
 
         val log =
           TrailblazeLog.AgentDriverLog(
@@ -161,6 +214,7 @@ object AccessibilityTrailRunner {
             traceId = traceId,
           )
         trailblazeLogger.log(session, log)
+        ActionTrace.mark(ActionTrace.Boundary.DRIVER_LOG_UPLOADED)
       } catch (e: Exception) {
         Console.log("Async logging failed: ${e.message}")
       }

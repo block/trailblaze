@@ -1,10 +1,14 @@
 package xyz.block.trailblaze.android.accessibility
 
 import android.content.Intent
+import android.os.SystemClock
 import androidx.test.core.app.ActivityScenario
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
+import kotlin.concurrent.thread
 import org.junit.Assume
 import org.junit.Before
 import org.junit.Test
@@ -72,21 +76,28 @@ class HierarchyCoverageOnDeviceTest {
   }
 
   /**
-   * Before/after proof of the fix on the exact failure mode it targets: a screen that is briefly
-   * *quiet but partial* (only a right-edge slice present) before the rest of its content lands —
-   * the [CoverageFixtureActivity.LAYOUT_LATE_FILL] fixture, where the late content arrives
-   * [CoverageFixtureActivity.LATE_FILL_DELAY_MS] after launch (standing in for Compose committing
-   * its semantics late).
+   * Before/after proof of the fix on the exact failure mode it targets: a screen that is *quiet but
+   * partial* (only a right-edge slice present) before the rest of its content lands — the
+   * [CoverageFixtureActivity.LAYOUT_LATE_FILL] fixture, standing in for Compose committing its
+   * semantics late.
    *
-   * - BEFORE — a raw capture that does NOT wait for completeness (`awaitStable = false`) freezes the
+   * - BEFORE — a raw capture that does NOT wait for completeness (`awaitStable = false`) sees the
    *   partial right-edge slice. (The pre-fix stability-only gate lands on the same partial tree
-   *   here: the right-edge content is already quiet and the late content isn't scheduled yet, so
-   *   stability has nothing to wait for.) Selectors/asserts run against this would miss the late
-   *   content — the reported bug.
-   * - AFTER — the production gated capture (`awaitStable = true`) detects the right-edge slice, holds
-   *   (within the 1s cap), and recovers the COMPLETE tree once the late content lands.
+   *   here: the right-edge content is already quiet and the rest hasn't been added, so stability has
+   *   nothing to wait for.) Selectors/asserts run against this would miss the late content — the
+   *   reported bug.
+   * - AFTER — the production gated capture (`awaitStable = true`) detects the right-edge slice,
+   *   holds (within the 1s cap), and recovers the COMPLETE tree once the late content lands.
    *
-   * Asserting both in one run makes the recovery the fix delivers concrete and deterministic.
+   * **The fixture, not the host, decides when the screen fills in.** It withholds the rest of its
+   * content until [CoverageFixtureActivity.releaseLateFill], which this test calls on a background
+   * thread [LATE_FILL_RELEASE_DELAY_MS] after starting the gated capture. That inverts what used to
+   * be a race: the fixture previously filled itself in on a 600ms timer, so on any host quick enough
+   * to have already rendered by the time the check ran, the BEFORE state was unobservable — and the
+   * case answered that by `Assume`-ing itself away. A silent skip on exactly the fast hosts this
+   * runs on is the worst of both worlds: it reports green while asserting nothing, so a regression
+   * in the gate it exists to protect lands unnoticed. Both states are now reachable on every host,
+   * and both are asserted.
    */
   @Test
   fun lateRenderingScreen_gatedCaptureRecoversWhatARawCaptureMisses() {
@@ -97,18 +108,58 @@ class HierarchyCoverageOnDeviceTest {
         .putExtra(CoverageFixtureActivity.EXTRA_LAYOUT, CoverageFixtureActivity.LAYOUT_LATE_FILL)
 
     ActivityScenario.launch<CoverageFixtureActivity>(intent).use {
-      // BEFORE: poll raw (no completeness wait) captures until the partial right-edge slice is up.
-      // Polling (rather than a single immediate capture) makes catching the pre-fill window robust
-      // to device load; if the screen fills before we ever see the slice (a very slow device), we
-      // can't demonstrate the before-state, so skip rather than fail.
-      val before = pollUntilTruncatedRaw(timeoutMs = 3_000)
-      Assume.assumeTrue(
-        "Could not capture the pre-fill partial window (device too slow) — skipping recovery check.",
-        before.looksTruncated,
-      )
-      // AFTER: the production gated capture — holds for completeness and recovers the full tree.
+      // BEFORE: the screen holds its partial state until we release it, so one raw capture (no
+      // completeness wait) is enough — no polling for a window that might already have closed.
+      TrailblazeAccessibilityService.waitForSettled(timeoutMs = 5_000)
+      val before =
+        assessTree(TrailblazeAccessibilityService.captureMergedScreenTrees(awaitStable = false).accessibilityNode)
+
+      // AFTER: release the withheld content a fixed interval after the gated capture STARTS, so the
+      // gate has to actually hold a quiet partial tree and re-fetch — the recovery under test.
+      // Released off this thread because the gated capture blocks it.
+      //
+      // The delay is measured from `gateStartedAtMs`, which the main thread publishes immediately
+      // before entering the capture, rather than from when this thread was spawned. Anchoring it to
+      // the capture is what guarantees the gate's FIRST sample lands on the partial screen: timed
+      // from any earlier point, a capture that took longer than the delay to get going would begin
+      // against an already-complete screen and never exercise the hold at all, while still
+      // satisfying the "returned after the release" assertion below.
+      //
+      // The delay also has to sit AFTER the gate's first completeness assessment, which the
+      // stability layer reaches once the tree has been quiet for its 100ms window — and this screen
+      // is quiet from the start, nothing is animating. That the hold is genuinely exercised is
+      // verified by mutation rather than assumed: removing only the completeness hold from
+      // `awaitTreeStable` (leaving the detector intact) fails the AFTER assertion below.
+      val gateStartedAtMs = AtomicLong(0)
+      val releasedAtMs = AtomicLong(0)
+      val releaseFailure = AtomicReference<Throwable?>(null)
+      // Daemon so a releaser left parked by an assertion failure above cannot hold the
+      // instrumentation process open for the fixture's 10s release timeout.
+      val releaser = thread(name = "late-fill-release", isDaemon = true) {
+        try {
+          while (gateStartedAtMs.get() == 0L) Thread.sleep(1)
+          val waitMs = gateStartedAtMs.get() + LATE_FILL_RELEASE_DELAY_MS - SystemClock.elapsedRealtime()
+          if (waitMs > 0) Thread.sleep(waitMs)
+          // The fixture reports the instant the content landed, read on its own main thread. This
+          // thread cannot time that itself: before the call names a moment the screen was still
+          // partial, and after it names whenever this thread happened to be rescheduled.
+          releasedAtMs.set(CoverageFixtureActivity.releaseLateFill())
+        } catch (t: Throwable) {
+          releaseFailure.set(t)
+        }
+      }
+      gateStartedAtMs.set(SystemClock.elapsedRealtime())
       val after =
         assessTree(TrailblazeAccessibilityService.captureMergedScreenTrees(awaitStable = true).accessibilityNode)
+      val gatedCaptureReturnedAtMs = SystemClock.elapsedRealtime()
+      releaser.join()
+      // Fail this case on a releaser-thread throwable — a missing withheld fill, or the fixture's
+      // release timeout. Left uncaught it reaches Android's default handler, which takes the whole
+      // instrumentation process down as a crash while `join()` returns normally and the assertions
+      // below decide the outcome without the release ever having happened.
+      releaseFailure.get()?.let {
+        throw AssertionError("Releasing the withheld late content failed: ${it.message}", it)
+      }
 
       Console.log(
         "[capture-coverage-test] late-fill BEFORE(raw): truncated=${before.looksTruncated} " +
@@ -119,6 +170,11 @@ class HierarchyCoverageOnDeviceTest {
           "content=${after.contentNodes} hCov=${after.horizontalCoverage} :: ${after.reason}",
       )
 
+      assertTrue(
+        "BEFORE (raw capture, content still withheld) must see the partial right-edge slice — " +
+          "this is the state the gate exists to detect: ${before.reason}",
+        before.looksTruncated,
+      )
       assertFalse(
         "AFTER (gated capture) should recover the complete tree: ${after.reason}",
         after.looksTruncated,
@@ -128,20 +184,20 @@ class HierarchyCoverageOnDeviceTest {
           "(${before.contentNodes} -> ${after.contentNodes})",
         after.contentNodes > before.contentNodes,
       )
+      // The gate cannot have seen the complete tree before the content was released, so returning
+      // no earlier than the release is proof it HELD rather than lucking into an already-full
+      // screen. Paired with anchoring the release to the capture's start, this brackets the hold on
+      // both sides: the gate began against a partial screen and did not return until it filled in.
+      // The instant compared against is the fixture's own — the ms the content went onto the view
+      // tree, not when this thread noticed — so the bracket has no scheduling slack in it. Both
+      // ends read `SystemClock.elapsedRealtime`, so a wall-clock adjustment during the capture
+      // cannot collapse or invert the interval being asserted.
+      assertTrue(
+        "The gated capture returned before the late content was released, so it cannot have held " +
+          "for completeness (returned ${gatedCaptureReturnedAtMs - releasedAtMs.get()}ms relative to release)",
+        gatedCaptureReturnedAtMs >= releasedAtMs.get(),
+      )
     }
-  }
-
-  /** Polls raw (no-settle) captures until the tree reads as truncated, or [timeoutMs] elapses. */
-  private fun pollUntilTruncatedRaw(timeoutMs: Long): CaptureCoverage {
-    val deadline = System.currentTimeMillis() + timeoutMs
-    var last =
-      assessTree(TrailblazeAccessibilityService.captureMergedScreenTrees(awaitStable = false).accessibilityNode)
-    while (!last.looksTruncated && System.currentTimeMillis() < deadline) {
-      Thread.sleep(40)
-      last =
-        assessTree(TrailblazeAccessibilityService.captureMergedScreenTrees(awaitStable = false).accessibilityNode)
-    }
-    return last
   }
 
   /**
@@ -243,10 +299,10 @@ class HierarchyCoverageOnDeviceTest {
         .putExtra("tb_accessibility_truncation_repro_filled", filled)
         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK),
     )
-    val deadline = System.currentTimeMillis() + 8_000
+    val deadline = SystemClock.elapsedRealtime() + 8_000
     var assessment =
       assessTree(TrailblazeAccessibilityService.captureMergedScreenTrees().accessibilityNode)
-    while (assessment.looksTruncated != expectTruncated && System.currentTimeMillis() < deadline) {
+    while (assessment.looksTruncated != expectTruncated && SystemClock.elapsedRealtime() < deadline) {
       Thread.sleep(100)
       assessment =
         assessTree(TrailblazeAccessibilityService.captureMergedScreenTrees().accessibilityNode)
@@ -287,5 +343,18 @@ class HierarchyCoverageOnDeviceTest {
       ),
     )
     node.children.forEach { collectBounds(it, out) }
+  }
+
+  companion object {
+    /**
+     * How long after the gated capture starts the withheld content is released.
+     *
+     * Sized against the capture gate's own 1s hard cap: late enough that the gate provably has to
+     * hold a quiet partial tree and re-fetch (rather than finding the screen already complete), and
+     * early enough to leave the gate most of its budget to notice and recover. Unlike the timer it
+     * replaces, this is not a race — the fixture stays partial until this fires, however fast or
+     * slow the host is.
+     */
+    private const val LATE_FILL_RELEASE_DELAY_MS = 200L
   }
 }

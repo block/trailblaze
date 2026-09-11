@@ -55,6 +55,19 @@ class ResolvedTargetToolDetailRendererTest {
   private class EmptyTool : TrailblazeTool
 
   @Serializable
+  private enum class Direction { UP, DOWN }
+
+  @Serializable
+  @LLMDescription("Tool with composite parameter types.")
+  @TrailblazeToolClass("compositeTool")
+  private data class CompositeTool(
+    @param:LLMDescription("Which way to go.")
+    val direction: Direction,
+    @param:LLMDescription("Labels to apply.")
+    val tags: List<String>,
+  ) : TrailblazeTool
+
+  @Serializable
   @LLMDescription("Sharp utility — not LLM-visible, not recordable, host-only.")
   @TrailblazeToolClass(
     name = "sharpUtility",
@@ -163,6 +176,21 @@ class ResolvedTargetToolDetailRendererTest {
     assertTrue("no-params message") { md.contains("_(no parameters)_") }
     assertFalse("no required header") { md.contains("### Required parameters") }
     assertFalse("no optional header") { md.contains("### Optional parameters") }
+  }
+
+  @Test
+  fun `class-backed renders composite types with the same labels as scripted tools`() {
+    // Koog's composite ToolParameterType.toString() is a multi-line data-class dump, which used
+    // to land verbatim in the doc — leaking `ToolParameterType.Enum(entries = [...])` across
+    // three lines and breaking the Markdown list item.
+    val detail = ResolvedTargetToolDetailRenderer.ToolDetail.ClassBacked(
+      name = "compositeTool",
+      kclass = CompositeTool::class,
+    )
+    val md = ResolvedTargetToolDetailRenderer.renderMarkdown(detail, targetId = "fixture")
+    assertTrue("enum type label") { md.contains("- `direction` — `enum(UP | DOWN)`") }
+    assertTrue("array type label") { md.contains("- `tags` — `array<String>`") }
+    assertFalse("no leaked Kotlin type model") { md.contains("ToolParameterType.") }
   }
 
   // ── YamlDefined ─────────────────────────────────────────────────────────────────────

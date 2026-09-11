@@ -16,7 +16,7 @@ import xyz.block.trailblaze.util.Console
  * on the host, which closes the host-side Maestro driver. Without a drain RPC, the on-device
  * server keeps running with a stale `Instrumentation.mUiAutomation` cache. When the next host
  * reconnects, every `UiAutomation.connectWithTimeout` throws `DeadObjectException` — observed
- * ~40 distinct handle hashes failing back-to-back in build 5463 before the emulator went
+ * ~40 distinct handle hashes failing back-to-back in one CI run before the emulator went
  * `device offline`.
  *
  * Cross-version compatibility: when the host is newer than the deployed APK, the request hits

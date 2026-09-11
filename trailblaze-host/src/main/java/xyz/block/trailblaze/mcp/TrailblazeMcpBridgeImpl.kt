@@ -14,6 +14,8 @@ import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.api.EffectiveScreenshotScalingConfig
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.ScreenshotScalingConfig
+import xyz.block.trailblaze.device.AndroidDeviceCommandExecutor
+import xyz.block.trailblaze.devices.AndroidAccessibilityServiceDrivers
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
@@ -73,7 +75,6 @@ import xyz.block.trailblaze.ui.TrailblazeDeviceManager.DeviceSessionResolution
 import xyz.block.trailblaze.util.AccessibilityServiceSetupUtils
 import xyz.block.trailblaze.compose.driver.rpc.ExecuteToolsRequest as ComposeExecuteToolsRequest
 import xyz.block.trailblaze.compose.driver.rpc.GetScreenStateResponse as ComposeGetScreenStateResponse
-import xyz.block.trailblaze.compose.driver.tools.ComposeToolSetIds
 import xyz.block.trailblaze.devices.TrailblazeDevicePort
 import xyz.block.trailblaze.host.OnDeviceRpcClientPool
 import xyz.block.trailblaze.host.networkcapture.AndroidNetworkCaptureRegistry
@@ -85,11 +86,8 @@ import xyz.block.trailblaze.mcp.utils.HttpRequestUtils
 import xyz.block.trailblaze.playwright.PlaywrightBrowserManager
 import xyz.block.trailblaze.playwright.PlaywrightTrailblazeAgent
 import xyz.block.trailblaze.playwright.network.WebNetworkCapture
-import xyz.block.trailblaze.playwright.tools.WebToolSetIds
-import xyz.block.trailblaze.revyl.tools.RevylToolSetIds
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
-import xyz.block.trailblaze.toolcalls.TrailblazeToolSetCatalog
 import xyz.block.trailblaze.utils.NoOpElementComparator
 import xyz.block.trailblaze.cli.DeviceClassifierResolver
 import xyz.block.trailblaze.util.AndroidHostAdbUtils
@@ -798,13 +796,21 @@ class TrailblazeMcpBridgeImpl(
      * Failures become a typed [TrailblazeToolResult.Error] so a nested failure surfaces to the
      * calling tool instead of unwinding the host dispatch; [CancellationException] still
      * propagates so session teardown isn't swallowed.
+     *
+     * [dispatch] returns the nested tool's own [TrailblazeToolResult], which is forwarded
+     * verbatim. Taking a rendered string here instead — and re-wrapping it as
+     * `Success(message = ...)` — is what dropped
+     * [TrailblazeToolResult.Success.structuredContent] on every nested `ctx.tools.<name>(...)`
+     * call, so a composite destructuring a typed result got `undefined` (#6653). This matches
+     * the trail-run path, where `BaseTrailblazeAgent.nestedToolExecutorFor` also forwards the
+     * agent's typed result untouched.
      */
     internal fun hostLocalNestedToolExecutor(
       traceId: TraceId,
-      dispatch: suspend (TrailblazeTool, TraceId?) -> String,
+      dispatch: suspend (TrailblazeTool, TraceId?) -> TrailblazeToolResult,
     ): suspend (TrailblazeTool) -> TrailblazeToolResult = { nested ->
       try {
-        TrailblazeToolResult.Success(message = dispatch(nested, traceId))
+        dispatch(nested, traceId)
       } catch (e: CancellationException) {
         throw e
       } catch (e: Exception) {
@@ -836,13 +842,21 @@ class TrailblazeMcpBridgeImpl(
       appId: String?,
       toolRepo: TrailblazeToolRepo,
       sessionDirProvider: ((SessionId) -> java.io.File)?,
-      dispatchNested: suspend (TrailblazeTool, TraceId?) -> String,
+      dispatchNested: suspend (TrailblazeTool, TraceId?) -> TrailblazeToolResult,
     ): TrailblazeToolExecutionContext = TrailblazeToolExecutionContext(
       screenState = null,
       traceId = traceId,
       trailblazeDeviceInfo = deviceInfo,
       sessionProvider = { session },
       screenStateProvider = screenStateProvider,
+      // Without this every dual-mode primitive routed through
+      // `AdbJvmAndAndroidUtil.withAndroidDeviceCommandExecutor` — `android_audioFileToDevice`,
+      // `android_sendBroadcast`, `mobile_clearAppData` and their siblings — fails with
+      // "AndroidDeviceCommandExecutor is not provided" the moment a host-local scripted tool
+      // reaches one, even though the same tool works under `trailblaze run`. Constructed
+      // unconditionally, as `MaestroTrailblazeAgent.buildExecutionContext` does: the host actual
+      // only records the device id, so there is nothing to gate on a non-Android platform.
+      androidDeviceCommandExecutor = AndroidDeviceCommandExecutor(deviceInfo.trailblazeDeviceId),
       trailblazeLogger = trailblazeLogger,
       memory = AgentMemory(),
       resolvedTarget = resolvedTarget,
@@ -910,8 +924,24 @@ class TrailblazeMcpBridgeImpl(
     internal fun renderExecutionResult(
       result: TrailExecutionResult,
       fallback: String,
-    ): String = when (result) {
-      is TrailExecutionResult.Success -> renderToolResultOutput(
+    ): String = executionResultToToolResult(result, fallback).let {
+      renderToolResultOutput(
+        message = it.message,
+        structuredContent = it.structuredContent,
+        fallback = fallback,
+      )
+    }
+
+    /**
+     * Typed sibling of [renderExecutionResult] for the typed dispatch path — same outcome
+     * mapping, without collapsing the payload to a string. `Failed` / `Cancelled` throw here too,
+     * so the caller's error contract is identical either way.
+     */
+    internal fun executionResultToToolResult(
+      result: TrailExecutionResult,
+      fallback: String,
+    ): TrailblazeToolResult.Success = when (result) {
+      is TrailExecutionResult.Success -> toolResultWithFallbackMessage(
         message = result.toolMessage,
         structuredContent = result.toolStructuredContent,
         fallback = fallback,
@@ -944,6 +974,31 @@ class TrailblazeMcpBridgeImpl(
       message?.takeUnless { it.isBlank() }?.let { return it }
       return fallback
     }
+
+    /**
+     * Packs a dispatch branch's outcome into a [TrailblazeToolResult.Success] that renders — via
+     * [renderToolResultOutput] — to exactly the string that branch used to return directly.
+     *
+     * Why the fallback is applied here rather than at the single rendering site: each branch's
+     * acknowledgement embeds values only that branch knows (the device instance id, the on-device
+     * session id), so it can't be reconstructed later. Substituting it into [message] for a
+     * payload-free action tool keeps `trailblaze tool tapOn …` printing
+     * "Executed TapTrailblazeTool on device …" while [executeTrailblazeToolForResult] hands
+     * nested callers the same acknowledgement they already received before typed dispatch existed.
+     *
+     * The fallback is NOT substituted when [structuredContent] is present: rendering prefers the
+     * structured payload anyway, and a nested caller reading `textContent` should see what the
+     * producing tool actually said, not a dispatch acknowledgement.
+     */
+    internal fun toolResultWithFallbackMessage(
+      message: String?,
+      structuredContent: JsonElement?,
+      fallback: String,
+    ): TrailblazeToolResult.Success = TrailblazeToolResult.Success(
+      message = message?.takeUnless { it.isBlank() }
+        ?: fallback.takeIf { structuredContent == null },
+      structuredContent = structuredContent,
+    )
 
     /**
      * How long to wait for the Maestro driver during device connect. Sized to cover the
@@ -1090,7 +1145,7 @@ class TrailblazeMcpBridgeImpl(
     driverCreationLatches.remove(key)?.countDown()
     // Drain on-device UiAutomation cache BEFORE we drop the Maestro driver and (later) the
     // adb forward — otherwise the on-device server keeps a stale Instrumentation.mUiAutomation
-    // handle that explodes with DeadObjectException on the next reconnect (build 5463 pattern).
+    // handle that explodes with DeadObjectException on the next reconnect (the system_server-wedge pattern).
     // Best-effort: any failure (404 on old APK, 2s timeout on already-wedged server, network
     // drop) is logged and swallowed; teardown must not block on a remote that's likely already
     // gone. Skipped on non-Android because the on-device server only ships in the test APK.
@@ -1256,7 +1311,7 @@ class TrailblazeMcpBridgeImpl(
                 ?.errorMessage ?: connectStatus.statusText,
             )
           }
-          if (driverType == TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY) {
+          if (AndroidAccessibilityServiceDrivers.includes(driverType)) {
             AccessibilityServiceSetupUtils.enableAccessibilityService(
               deviceId = trailblazeDeviceId,
               hostPackage = target.testAppId,
@@ -1272,7 +1327,7 @@ class TrailblazeMcpBridgeImpl(
             onDeviceRpcClients.get(trailblazeDeviceId).waitForReady(
               timeoutMs = timeoutMs,
               requireAndroidAccessibilityService =
-                driverType == TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
+                AndroidAccessibilityServiceDrivers.includes(driverType),
             )
           }
         }
@@ -1622,39 +1677,23 @@ class TrailblazeMcpBridgeImpl(
   }
 
   /**
-   * Returns Compose-specific tool classes when the Compose driver is active, null otherwise.
+   * The tool list to hand the inner agent instead of its own, or null to leave it alone.
    *
-   * The Compose driver uses a different tool set than native Android/iOS drivers — the inner
-   * agent must use Compose-specific tools (click, type, scroll) instead.
+   * Resolves the driver through [getDriverType] like every other hook here. It previously read the
+   * device state directly and so answered null where [getDriverType] would have fallen back to the
+   * platform's configured driver — the two hooks could disagree about the same session.
    */
-  override fun getInnerAgentToolClasses(): Set<KClass<out TrailblazeTool>>? {
-    val deviceId = getEffectiveDeviceId() ?: return null
-    val driverType = trailblazeDeviceManager.getDeviceState(deviceId)?.device?.trailblazeDriverType
-    return when (driverType) {
-      TrailblazeDriverType.COMPOSE -> TrailblazeToolSetCatalog.resolveForDriver(
-        driverType, ComposeToolSetIds.ALL,
-      ).toolClasses
-      else -> null
-    }
-  }
+  override fun getInnerAgentToolClasses(): Set<KClass<out TrailblazeTool>>? =
+    McpDriverToolSurfaces.innerAgentOverride(
+      driverType = getDriverType(),
+      descriptors = trailblazeDeviceManager.hostDriverDescriptors,
+    )
 
-  override fun getInnerAgentBuiltInToolClasses(): Set<kotlin.reflect.KClass<out xyz.block.trailblaze.toolcalls.TrailblazeTool>> {
-    val driverType = getDriverType() ?: return emptySet()
-    return when (driverType) {
-      // Both Playwright drivers share the web YAML toolsets — returning emptySet for ELECTRON
-      // would make the MCP server fall back to the Maestro tool set, which doesn't apply to a
-      // Playwright-based Electron session.
-      TrailblazeDriverType.PLAYWRIGHT_NATIVE,
-      TrailblazeDriverType.PLAYWRIGHT_ELECTRON -> TrailblazeToolSetCatalog.resolveForDriver(
-        driverType, WebToolSetIds.ALL,
-      ).toolClasses
-      TrailblazeDriverType.REVYL_ANDROID,
-      TrailblazeDriverType.REVYL_IOS -> TrailblazeToolSetCatalog.resolveForDriver(
-        driverType, RevylToolSetIds.ALL,
-      ).toolClasses
-      else -> emptySet()
-    }
-  }
+  override fun getInnerAgentBuiltInToolClasses(): Set<KClass<out TrailblazeTool>> =
+    McpDriverToolSurfaces.builtInToolClasses(
+      driverType = getDriverType(),
+      descriptors = trailblazeDeviceManager.hostDriverDescriptors,
+    )
 
   /**
    * Gets screen state via RPC for on-device instrumentation mode.
@@ -1731,11 +1770,35 @@ class TrailblazeMcpBridgeImpl(
       ?: throw DeviceAppProbeFailedException(trailblazeDeviceId)
   }
 
+  /**
+   * Rendering wrapper over [executeTrailblazeToolForResult] — the typed method owns the routing.
+   *
+   * Every branch bakes its own acknowledgement into the result's message (see
+   * [toolResultWithFallbackMessage]), so this renders to the same string each branch used to
+   * return directly. The generic fallback below is therefore unreachable in practice; it exists
+   * so a future branch that forgets its acknowledgement degrades to a sensible line rather than
+   * an empty one.
+   */
   override suspend fun executeTrailblazeTool(
     tool: TrailblazeTool,
     blocking: Boolean,
     traceId: TraceId?,
-  ): String {
+  ): String = when (val result = executeTrailblazeToolForResult(tool, blocking, traceId)) {
+    is TrailblazeToolResult.Success -> renderToolResultOutput(
+      message = result.message,
+      structuredContent = result.structuredContent,
+      fallback = "Executed ${tool::class.simpleName}",
+    )
+    // Unreachable today: every branch throws on failure rather than returning a typed Error.
+    // Kept so a branch that starts returning one surfaces it as a failure, not as tool output.
+    is TrailblazeToolResult.Error -> error(result.errorMessage)
+  }
+
+  override suspend fun executeTrailblazeToolForResult(
+    tool: TrailblazeTool,
+    blocking: Boolean,
+    traceId: TraceId?,
+  ): TrailblazeToolResult {
     val trailblazeDeviceId = assertDeviceIsSelected()
 
     // Host-only `DelegatingTrailblazeTool` (e.g. `YamlDefinedTrailblazeTool` — the
@@ -1782,7 +1845,10 @@ class TrailblazeMcpBridgeImpl(
     // Use custom executor if provided, otherwise convert to YAML and run
     if (trailblazeToolExecutor != null) {
       cachedScreenStates.remove(trailblazeDeviceId.instanceId)
-      return trailblazeToolExecutor.invoke(tool, trailblazeDeviceId)
+      // String-only seam (test fixtures, OSS desktop callers) — nothing typed to preserve.
+      return TrailblazeToolResult.Success(
+        message = trailblazeToolExecutor.invoke(tool, trailblazeDeviceId),
+      )
     }
 
     // Default implementation: convert tool to YAML and run via runYaml()
@@ -1797,9 +1863,10 @@ class TrailblazeMcpBridgeImpl(
 
     // For Compose driver, send the tool directly to the Compose RPC server.
     if (trailblazeDeviceManager.getDeviceState(trailblazeDeviceId)?.device?.trailblazeDriverType == TrailblazeDriverType.COMPOSE) {
+      // The Compose RPC server answers with a raw response body, not a TrailblazeToolResult.
       val result = executeComposeToolViaRpc(tool)
       cachedScreenStates.remove(trailblazeDeviceId.instanceId)
-      return result
+      return TrailblazeToolResult.Success(message = result)
     }
 
     // Host-native iOS drivers (e.g. IOS_AXE): dispatch through the driver's IosDeviceManager.
@@ -1845,21 +1912,47 @@ class TrailblazeMcpBridgeImpl(
       // run via `trailblaze tool` on a host/Maestro device shows its payload — matching the
       // on-device-RPC, host-local web, and iOS-AXE branches. Falls back to the generic
       // acknowledgement for action tools that emit no payload; Failed / Cancelled throw.
-      return renderExecutionResult(
+      return executionResultToToolResult(
         result = executionResult,
         fallback = "Executed ${tool::class.simpleName} on device ${trailblazeDeviceId.instanceId}",
       )
     }
 
     val sessionId = runYamlInternal(yaml, startNewSession = false, traceId = traceId)
-    return "Executed ${tool::class.simpleName} on device ${trailblazeDeviceId.instanceId} (session: $sessionId)"
+    // Fire-and-forget: the run outcome isn't known yet, so there is no payload to carry.
+    return TrailblazeToolResult.Success(
+      message = "Executed ${tool::class.simpleName} on device ${trailblazeDeviceId.instanceId} (session: $sessionId)",
+    )
   }
 
   override suspend fun executeHostLocalTool(
     tool: TrailblazeTool,
     toolRepo: TrailblazeToolRepo,
     traceId: TraceId?,
-  ): String? {
+  ): String? = executeHostLocalToolForResult(tool, toolRepo, traceId)?.let {
+    renderToolResultOutput(
+      message = it.message,
+      structuredContent = it.structuredContent,
+      fallback = "Executed ${tool::class.simpleName}",
+    )
+  }
+
+  /**
+   * Typed twin of [executeHostLocalTool], holding the driver routing so the seam's `String?`
+   * return doesn't flatten a payload on the way to a nested caller.
+   *
+   * [executeHostLocalTool] itself stays `String?` because its other call sites (the four in
+   * #4752) all surface a string; widening that seam is that issue's job. Nested dispatch inside
+   * this bridge calls this method instead, so a web composite composing another web composite
+   * keeps its typed result — the same guarantee the mobile branches now give.
+   *
+   * `null` keeps its existing meaning: this driver has no host-local replacement for the tool.
+   */
+  private suspend fun executeHostLocalToolForResult(
+    tool: TrailblazeTool,
+    toolRepo: TrailblazeToolRepo,
+    traceId: TraceId?,
+  ): TrailblazeToolResult.Success? {
     if (tool !is HostLocalExecutableTrailblazeTool) return null
     val deviceId = getEffectiveDeviceId() ?: return null
     return when (getDriverType()) {
@@ -1882,9 +1975,11 @@ class TrailblazeMcpBridgeImpl(
    * the tool directly against a context built here.
    *
    * Nested framework calls a scripted tool makes (`ctx.tools.<name>(...)`) go back through
-   * [executeTrailblazeTool], so they re-enter this router and land on the device or the host
-   * according to their own routing — which is what lets e.g. a staging-seeding tool compose a
-   * host-side session resolver while a tap in the same handler still reaches the device.
+   * [executeTrailblazeToolForResult], so they re-enter this router and land on the device or the
+   * host according to their own routing — which is what lets e.g. a staging-seeding tool compose
+   * a host-side session resolver while a tap in the same handler still reaches the device. The
+   * typed method, not [executeTrailblazeTool]: a nested tool's `structuredContent` has to reach
+   * the caller as a value, not as its JSON rendering (#6653).
    *
    * ### What the context carries, and why each piece is load-bearing
    *
@@ -1914,7 +2009,7 @@ class TrailblazeMcpBridgeImpl(
     tool: ExecutableTrailblazeTool,
     trailblazeDeviceId: TrailblazeDeviceId,
     traceId: TraceId?,
-  ): String {
+  ): TrailblazeToolResult.Success {
     val driverType = getDriverType()
       ?: getConfiguredDriverType(trailblazeDeviceId.trailblazeDevicePlatform)
       ?: TrailblazeDriverType.DEFAULT_ANDROID
@@ -1927,7 +2022,8 @@ class TrailblazeMcpBridgeImpl(
     // Driver-specific host-local dispatch (Playwright today) wins when it claims the tool;
     // it returns null for every driver that has no such path.
     if (tool is HostLocalExecutableTrailblazeTool) {
-      executeHostLocalTool(tool = tool, toolRepo = toolRepo, traceId = traceId)?.let { return it }
+      executeHostLocalToolForResult(tool = tool, toolRepo = toolRepo, traceId = traceId)
+        ?.let { return it }
     }
 
     val toolLabel = (tool as? HostLocalExecutableTrailblazeTool)?.advertisedToolName
@@ -1960,7 +2056,9 @@ class TrailblazeMcpBridgeImpl(
       toolRepo = toolRepo,
       sessionDirProvider = logsRepo?.let { repo -> repo::getSessionDir },
     ) { nested, nestedTraceId ->
-      executeTrailblazeTool(nested, blocking = true, traceId = nestedTraceId)
+      // The typed dispatch, deliberately: the string-rendering twin serializes a nested tool's
+      // `structuredContent` to JSON text, which then can't be handed back as a typed value (#6653).
+      executeTrailblazeToolForResult(nested, blocking = true, traceId = nestedTraceId)
     }
 
     // A host-local tool can still move the UI through its nested calls, so the cached state is
@@ -1969,7 +2067,7 @@ class TrailblazeMcpBridgeImpl(
     cachedScreenStates.remove(trailblazeDeviceId.instanceId)
     val result = tool.execute(context)
     return when (result) {
-      is TrailblazeToolResult.Success -> renderToolResultOutput(
+      is TrailblazeToolResult.Success -> toolResultWithFallbackMessage(
         message = result.message,
         structuredContent = result.structuredContent,
         fallback = "Executed $toolLabel on the host for device ${trailblazeDeviceId.instanceId}",
@@ -2093,7 +2191,10 @@ class TrailblazeMcpBridgeImpl(
    * currently-active session, so every option requires new session/logger plumbing; the
    * options and acceptance criteria are laid out in #2325.
    */
-  private suspend fun executeToolViaIosNativeDriver(tool: TrailblazeTool, trailblazeDeviceId: TrailblazeDeviceId): String {
+  private suspend fun executeToolViaIosNativeDriver(
+    tool: TrailblazeTool,
+    trailblazeDeviceId: TrailblazeDeviceId,
+  ): TrailblazeToolResult.Success {
     val persistentDevice = persistentDevices[trailblazeDeviceId.instanceId] as? IosNativeConnectedDevice
       ?: error("Host-native iOS execution requires an IosNativeConnectedDevice in the persistent registry; got ${persistentDevices[trailblazeDeviceId.instanceId]?.let { it::class.simpleName }}")
     val driverType = persistentDevice.trailblazeDriverType
@@ -2126,7 +2227,7 @@ class TrailblazeMcpBridgeImpl(
     val result = agent.runTool(tool, ctx)
     return when (result) {
       is TrailblazeToolResult.Success ->
-        renderToolResultOutput(
+        toolResultWithFallbackMessage(
           message = result.message,
           structuredContent = result.structuredContent,
           fallback = "Executed ${tool::class.simpleName} via $driverType on ${persistentDevice.udid}",
@@ -2180,7 +2281,7 @@ class TrailblazeMcpBridgeImpl(
     toolRepo: TrailblazeToolRepo,
     deviceId: TrailblazeDeviceId,
     traceId: TraceId?,
-  ): String {
+  ): TrailblazeToolResult.Success {
     val test = trailblazeDeviceManager.getActivePlaywrightNativeTest(deviceId)
       ?: error("Playwright browser is not ready. Connect WEB first and wait for the browser to finish initializing.")
     val driverType = getDriverType() ?: TrailblazeDriverType.PLAYWRIGHT_NATIVE
@@ -2238,7 +2339,7 @@ class TrailblazeMcpBridgeImpl(
     ).result
     return when (result) {
       is TrailblazeToolResult.Success ->
-        renderToolResultOutput(
+        toolResultWithFallbackMessage(
           message = result.message,
           structuredContent = result.structuredContent,
           fallback = "Executed ${tool.advertisedToolName} on device ${deviceId.instanceId}",
@@ -2282,7 +2383,7 @@ class TrailblazeMcpBridgeImpl(
     trailblazeDeviceId: TrailblazeDeviceId,
     blocking: Boolean,
     traceId: TraceId?,
-  ): String {
+  ): TrailblazeToolResult {
     val driverType = trailblazeDeviceManager.getDeviceState(trailblazeDeviceId)
       ?.device?.trailblazeDriverType
       ?: error(
@@ -2300,9 +2401,14 @@ class TrailblazeMcpBridgeImpl(
         "'${tool::class.simpleName}' (requires_host=true) into ${expanded.size} child(ren); " +
         "recursing per-child for routing.",
     )
-    var lastResult = "Host-expanded delegating tool produced 0 children"
+    // Last child wins, carrying its typed result: a composition whose final child returns a
+    // structured payload has to hand that payload — not its JSON rendering — to whoever composed
+    // the composition (#6653).
+    var lastResult: TrailblazeToolResult = TrailblazeToolResult.Success(
+      message = "Host-expanded delegating tool produced 0 children",
+    )
     for (child in expanded) {
-      lastResult = executeTrailblazeTool(child, blocking, traceId)
+      lastResult = executeTrailblazeToolForResult(child, blocking, traceId)
     }
     cachedScreenStates.remove(trailblazeDeviceId.instanceId)
     return lastResult
@@ -2316,7 +2422,7 @@ class TrailblazeMcpBridgeImpl(
     trailblazeDeviceId: TrailblazeDeviceId,
     yaml: String,
     traceId: TraceId? = null,
-  ): String {
+  ): TrailblazeToolResult.Success {
     val driverType = getConfiguredDriverType(trailblazeDeviceId.trailblazeDevicePlatform)
     if (onDeviceRunnerRecovery.requiresRestart(trailblazeDeviceId)) {
       ensureOnDeviceAgentRunning(trailblazeDeviceId, driverType)
@@ -2427,10 +2533,11 @@ class TrailblazeMcpBridgeImpl(
           when (response.success) {
             true -> {
               Console.log("[executeToolViaRpc] On-device execution complete: ${response.sessionId}")
-              // Surface the tool's own result (structured content, else message) so a
-              // read-oriented tool run via `trailblaze tool` shows its payload; fall back
-              // to the generic acknowledgement for action tools that emit no message.
-              renderToolResultOutput(
+              // Carry the tool's own result (structured content AND message) so a read-oriented
+              // tool run via `trailblaze tool` shows its payload and a scripted tool composing
+              // this one over `ctx.tools` receives the typed value rather than its rendering.
+              // Falls back to the generic acknowledgement for action tools that emit neither.
+              toolResultWithFallbackMessage(
                 message = response.toolMessage,
                 structuredContent = response.toolStructuredContent,
                 fallback = "Executed ${tool::class.simpleName} on device ${trailblazeDeviceId.instanceId} (session: ${response.sessionId})",

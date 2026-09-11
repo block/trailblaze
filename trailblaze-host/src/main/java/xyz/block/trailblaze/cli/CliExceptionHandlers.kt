@@ -29,6 +29,10 @@ import picocli.CommandLine
  */
 internal fun installTrailblazeExceptionHandlers(commandLine: CommandLine) {
   commandLine.parameterExceptionHandler = CommandLine.IParameterExceptionHandler { ex, _ ->
+    if (generateSequence(ex.commandLine) { it.parent }.any { it.commandName == "companion" }) {
+      if (printStackTraces()) ex.printStackTrace(System.err)
+      return@IParameterExceptionHandler companionFailure(ex.message ?: "invalid companion arguments")
+    }
     reportCliError(
       verb = "Command parse",
       reason = ex.message ?: "invalid arguments",
@@ -37,7 +41,14 @@ internal fun installTrailblazeExceptionHandlers(commandLine: CommandLine) {
     if (printStackTraces()) ex.printStackTrace(System.err)
     TrailblazeExitCode.MISUSE.code
   }
-  commandLine.executionExceptionHandler = CommandLine.IExecutionExceptionHandler { ex, _, _ ->
+  commandLine.executionExceptionHandler = CommandLine.IExecutionExceptionHandler { ex, failedCommandLine, _ ->
+    if (generateSequence(failedCommandLine) { it.parent }.any { it.commandName == "companion" }) {
+      if (printStackTraces()) ex.printStackTrace(System.err)
+      return@IExecutionExceptionHandler companionFailure(
+        describeThrowableForUser(ex),
+        TrailblazeExitCode.INFRA_FAILED,
+      )
+    }
     reportCliError(
       verb = "Command",
       reason = describeThrowableForUser(ex),

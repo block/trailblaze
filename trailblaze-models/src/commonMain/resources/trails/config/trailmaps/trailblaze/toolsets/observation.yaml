@@ -8,4 +8,11 @@ drivers:
   - ios-host
   - ios-axe
 tools:
+  # `readBarcodeFromScreen` is deliberately NOT here. It is a framework primitive a trail author
+  # calls by name, not a capability offered to the LLM: what to do with a decoded value depends
+  # entirely on the use case (open it, hand it to a second device, assert on it), and there is no
+  # ergonomic answer to that yet. Registering it without exposing it keeps the primitive available
+  # while leaving room to add purpose-built LLM-facing tools once the use cases are real. This is
+  # the common shape — 23 of 60 tools ship a `.tool.yaml` and no toolset, including its closest
+  # siblings `rememberTextBySelector` and `rememberNumberBySelector`.
   - takeSnapshot

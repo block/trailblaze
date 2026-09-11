@@ -112,7 +112,7 @@ object TrailYamlSchemaBuilder {
       stringField("priority", "Priority label (e.g. P0…P3).")
       stringField("target", "Target identifier: an org alias, a package id, or a web URL.")
       if (unified) {
-        putJsonObject("devices") { put("type", "object"); put("description", "Per-classifier driver pins (e.g. `android: ANDROID_ONDEVICE_ACCESSIBILITY`); the keys also declare which device classifiers this trail targets."); put("additionalProperties", true) }
+        putJsonObject("devices") { put("type", "object"); put("description", "Per-classifier device settings such as driver and locale (e.g. `android: { driver: ANDROID_ONDEVICE_ACCESSIBILITY, locale: es }`); the keys also declare which device classifiers this trail targets."); put("additionalProperties", true) }
         putJsonObject("skip") { put("type", "object"); put("description", "Per-classifier skip reasons (e.g. `android: \"blocked on #123\"`); a non-blank reason skips the trail on that device family."); put("additionalProperties", true) }
       } else {
         stringField("platform", "Platform hint for device selection — commonly `android`, `ios`, or `web`.")

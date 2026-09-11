@@ -13,7 +13,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeTool
 
 /**
  * Pins the target-selection decision a daemon-dispatched `run` makes in
- * `TrailblazeDesktopApp.handleCliRunRequest` (extracted to [resolveDaemonRunTargetApp]).
+ * `TrailblazeDesktopApp.handleCliRunRequest` (extracted to [resolveRunTargetApp]).
  *
  * The resolver correctness itself — how a given caller cwd anchors the workspace
  * `defaults.target` rung — is covered by [TrailblazeSettingsRepoTargetPrecedenceTest]. These
@@ -43,7 +43,7 @@ class CliRunTargetResolutionTest {
     val beta = target("beta")
     var fallbackInvoked = false
 
-    val resolved = resolveDaemonRunTargetApp(
+    val resolved = resolveRunTargetApp(
       configTarget = "alpha",
       callerWorkspaceDir = "/caller/workspace",
       findTargetById = { id -> alpha.takeIf { id == "alpha" } ?: beta.takeIf { id == "beta" } },
@@ -59,7 +59,7 @@ class CliRunTargetResolutionTest {
     val beta = target("beta")
     var seenCallerDir: String? = "unset"
 
-    val resolved = resolveDaemonRunTargetApp(
+    val resolved = resolveRunTargetApp(
       configTarget = "does-not-exist",
       callerWorkspaceDir = "/caller/workspace",
       findTargetById = { null }, // names no loaded target
@@ -75,7 +75,7 @@ class CliRunTargetResolutionTest {
     val beta = target("beta")
     var seenCallerDir: String? = "unset"
 
-    val resolved = resolveDaemonRunTargetApp(
+    val resolved = resolveRunTargetApp(
       configTarget = null,
       callerWorkspaceDir = "/caller/workspace",
       findTargetById = { error("must not be consulted when config.target is null") },
@@ -91,7 +91,7 @@ class CliRunTargetResolutionTest {
     val beta = target("beta")
     val announced = mutableListOf<Pair<String, String?>>()
 
-    resolveDaemonRunTargetApp(
+    resolveRunTargetApp(
       configTarget = "otherapp",
       callerWorkspaceDir = "/caller/workspace",
       findTargetById = { null },
@@ -111,7 +111,7 @@ class CliRunTargetResolutionTest {
     val alpha = target("alpha")
     var announcements = 0
 
-    resolveDaemonRunTargetApp(
+    resolveRunTargetApp(
       configTarget = "alpha",
       callerWorkspaceDir = null,
       findTargetById = { alpha },
@@ -127,7 +127,7 @@ class CliRunTargetResolutionTest {
     val beta = target("beta")
     var announcements = 0
 
-    val resolved = resolveDaemonRunTargetApp(
+    val resolved = resolveRunTargetApp(
       configTarget = "   ",
       callerWorkspaceDir = "/caller/workspace",
       findTargetById = { error("a blank config.target must not be looked up") },
@@ -145,7 +145,7 @@ class CliRunTargetResolutionTest {
     // handler forwards null verbatim rather than substituting its own value.
     var resolverSawNull = false
 
-    val resolved = resolveDaemonRunTargetApp(
+    val resolved = resolveRunTargetApp(
       configTarget = null,
       callerWorkspaceDir = null,
       findTargetById = { error("must not be consulted when config.target is null") },

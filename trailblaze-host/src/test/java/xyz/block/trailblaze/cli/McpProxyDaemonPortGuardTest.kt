@@ -23,7 +23,7 @@ class McpProxyDaemonPortGuardTest {
   private val inRangePort = TrailblazeDevicePort.DEVICE_ALLOCATION_PORT_RANGE.first + 137
 
   /** Fails the test if the proxy probes: an unusable port must be refused without asking. */
-  private fun refuseIfProbed(): () -> Boolean = { error("must not probe a device-allocatable port") }
+  private fun refuseIfProbed(): () -> DaemonProbe = { error("must not probe a device-allocatable port") }
 
   @Test
   fun `an in-range port is refused, and says so in terms the user can act on`() {
@@ -65,7 +65,7 @@ class McpProxyDaemonPortGuardTest {
    */
   @Test
   fun `waitForDaemon refuses even when something is already answering on the port`() {
-    val proxy = McpProxy(port = inRangePort, daemonReachableOverride = { true })
+    val proxy = McpProxy(port = inRangePort, daemonProbeOverride = { DaemonProbe.REACHABLE })
     val logs = mutableListOf<String>()
 
     assertFalse(proxy.waitForDaemon { logs += it }, "an unusable port must be fatal")
@@ -78,7 +78,7 @@ class McpProxyDaemonPortGuardTest {
 
   @Test
   fun `waitForDaemon stops at the port guard without probing or starting a daemon`() {
-    val proxy = McpProxy(port = inRangePort, daemonReachableOverride = refuseIfProbed())
+    val proxy = McpProxy(port = inRangePort, daemonProbeOverride = refuseIfProbed())
     val logs = mutableListOf<String>()
 
     assertFalse(proxy.waitForDaemon { logs += it })
@@ -91,7 +91,7 @@ class McpProxyDaemonPortGuardTest {
   fun `a usable port lets waitForDaemon proceed`() {
     val proxy = McpProxy(
       port = TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTP_PORT,
-      daemonReachableOverride = { true },
+      daemonProbeOverride = { DaemonProbe.REACHABLE },
     )
 
     assertTrue(proxy.waitForDaemon {}, "a reachable daemon on a usable port must proceed")
@@ -112,7 +112,7 @@ class McpProxyDaemonPortGuardTest {
     val priorUserHome = System.getProperty("user.home")
     System.setProperty("user.home", tempFolder.newFolder("home").absolutePath)
     try {
-      val exitCode = McpProxy(port = inRangePort, daemonReachableOverride = refuseIfProbed()).run()
+      val exitCode = McpProxy(port = inRangePort, daemonProbeOverride = refuseIfProbed()).run()
       assertEquals(TrailblazeExitCode.MISUSE.code, exitCode)
     } finally {
       System.setProperty("user.home", priorUserHome)

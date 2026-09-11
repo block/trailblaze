@@ -22,9 +22,7 @@ are calculated automatically from the direction and screen dimensions.
 
 ### Optional parameters
 
-- `direction` — `ToolParameterType.Enum(
-  entries = [UP, DOWN, RIGHT, LEFT]
-)`
+- `direction` — `enum(UP | DOWN | RIGHT | LEFT)`
   The direction of the finger swipe gesture (not the scroll direction).
 To see more content BELOW (scroll down), use 'UP' (finger swipes upward).
 To see more content ABOVE (scroll up), use 'DOWN' (finger swipes downward).

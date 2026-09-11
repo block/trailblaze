@@ -26,18 +26,16 @@ import java.util.concurrent.Future
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
 import maestro.Driver
-import xyz.block.trailblaze.api.EffectiveScreenshotScalingConfig
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.mcp.AgentImplementation
-import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
-import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.devices.WebInstanceIds
 import xyz.block.trailblaze.capture.CaptureOptions
 import xyz.block.trailblaze.host.animations.SessionAnimationDisabler
+import xyz.block.trailblaze.host.turbo.SessionTurboAttacher
 import xyz.block.trailblaze.host.capture.SessionCaptureCoordinator
 import xyz.block.trailblaze.host.capture.finalizeHostSessionResources
 import xyz.block.trailblaze.host.devices.HostProbe
@@ -51,7 +49,6 @@ import xyz.block.trailblaze.host.driver.HostScreenStateDeps
 import xyz.block.trailblaze.host.driver.HostDriverDescriptorRegistry
 import xyz.block.trailblaze.host.devices.WebBrowserState
 import xyz.block.trailblaze.host.recording.DeviceConnectionService
-import xyz.block.trailblaze.host.screenstate.HostMaestroDriverScreenState
 import xyz.block.trailblaze.llm.RunYamlRequest
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.llm.TrailblazeReferrer
@@ -60,9 +57,6 @@ import xyz.block.trailblaze.logs.client.TrailblazeSessionManager
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.logs.model.TraceId
-import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetScreenStateRequest
-import xyz.block.trailblaze.mcp.android.ondevice.rpc.OnDeviceRpcClient
-import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcResult
 import xyz.block.trailblaze.model.AppVersionInfo
 import xyz.block.trailblaze.model.DesktopAppRunYamlParams
 import xyz.block.trailblaze.model.TrailExecutionResult
@@ -70,7 +64,6 @@ import xyz.block.trailblaze.model.TrailblazeConfig
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
-import xyz.block.trailblaze.transport.AndroidWireTransport
 import xyz.block.trailblaze.ui.composables.DeviceClassifierIconProvider
 import xyz.block.trailblaze.ui.devices.DeviceManagerState
 import xyz.block.trailblaze.ui.devices.DeviceState
@@ -78,7 +71,6 @@ import xyz.block.trailblaze.ui.models.AppIconProvider
 import xyz.block.trailblaze.ui.models.TrailblazeServerState
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
 import xyz.block.trailblaze.yaml.fromTrailblazeTool
-import java.util.Base64
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
@@ -120,13 +112,11 @@ class TrailblazeDeviceManager(
   private val trailblazeAnalytics: TrailblazeAnalytics,
   /**
    * The drivers this app has plugged in. Discovery, listing, screen-state capture and host runs
-   * all consult it before falling back to their remaining `when (driverType)` arms.
+   * all resolve through it, with no `when (driverType)` arms left to fall back to.
    *
-   * Defaults to empty, which preserves the old behavior only for drivers that haven't converted —
-   * they still take their `when` arms. A converted driver is absent under the default: nothing
-   * discovers its devices and screen-state capture throws. Hand-built managers don't run
-   * [HostDriverDescriptorRegistry.validateCovers], so nothing warns; an app that wants a converted
-   * driver must pass its registry.
+   * Defaults to empty, so a hand-built manager — a test's, typically — drives no devices at all
+   * rather than half-driving whichever ones happened to have a fallback: nothing discovers a
+   * device and screen-state capture throws. An app that wants any driver passes its registry.
    */
   val hostDriverDescriptors: HostDriverDescriptorRegistry = HostDriverDescriptorRegistry.EMPTY,
 ) {
@@ -527,6 +517,12 @@ class TrailblazeDeviceManager(
     // A declared target that doesn't resolve is a hard error, never a silent substitution:
     // falling back to the globally-selected target ran (and bootstrapped) a completely unrelated
     // app while the session still reported the declared target's name.
+    //
+    // Deliberately STRICTER than both CLI transports, which warn and fall back via
+    // [resolveRunTargetApp] — a trail file travelling to another workspace should still run there,
+    // where this path serves an operator who can fix the target and re-run. The CLI's fallback is
+    // what makes `DesktopAppRunYamlParams.unresolvedDeclaredTarget` necessary; nothing here needs
+    // it, because nothing here reaches a run with a substituted target.
     val resolvedTargetTestApp = if (trailConfigTarget != null) {
       availableAppTargets.find { it.id == trailConfigTarget }
         ?: error(
@@ -551,7 +547,7 @@ class TrailblazeDeviceManager(
     )
     val runYamlRequest = RunYamlRequest(
       yaml = resolvedYamlToRun,
-      // Use title with ID appended for method name (e.g., for_your_business_page_5374142)
+      // Use title with ID appended for method name (e.g., for_your_business_page_1019)
       // The class name will be auto-derived from testSectionName metadata
       testName = "test",
       useRecordedSteps = useRecordedSteps,
@@ -673,6 +669,15 @@ class TrailblazeDeviceManager(
       // Experimental opt-in (gated internally, idempotent like the capture start above); restored
       // by the finalization barrier every session-end path runs.
       SessionAnimationDisabler.startForSession(startCaptureFor, trailblazeDeviceId)
+      // Turbo needs real applicationIds, not the target id `captureAppId` carries, so resolve the
+      // target back to the ids it may run under on this platform (declared priority order).
+      SessionTurboAttacher.startForSession(
+        sessionId = startCaptureFor.toString(),
+        deviceId = trailblazeDeviceId,
+        candidateAppIds = availableAppTargets.find { it.id == captureAppId }
+          ?.getPossibleAppIdsForPlatform(trailblazeDeviceId.trailblazeDevicePlatform)
+          .orEmpty(),
+      )
     }
     return resolution
   }
@@ -870,10 +875,7 @@ class TrailblazeDeviceManager(
   }
 
   /**
-   * Captures the current screen state for a device using the appropriate method:
-   * - For on-device Android instrumentation: Uses RPC to call GetScreenStateRequestHandler
-   * - For host drivers: Uses HostMaestroDriverScreenState with the active driver
-   * - For accessibility: Not currently supported
+   * Captures the current screen state for a device, through that device's driver descriptor.
    *
    * This method is used from the MCP server.
    */
@@ -882,7 +884,7 @@ class TrailblazeDeviceManager(
     val driverType = deviceState.device.trailblazeDriverType
 
     // Contained like descriptor discovery is: a plug-in that throws costs the caller this capture,
-    // not the whole MCP-facing screen-state call. The paths below already degrade this way.
+    // not the whole MCP-facing screen-state call.
     hostDriverDescriptors.forDriverOrNull(driverType)?.let { descriptor ->
       return try {
         descriptor.screenState(
@@ -901,106 +903,11 @@ class TrailblazeDeviceManager(
       }
     }
 
-    return when (driverType) {
-      TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
-      TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
-      // The in-process harness hosts the same RPC server (screen-state capture stays live even
-      // while a trail occupies its instrumentation test thread), so it captures the same way.
-      TrailblazeDriverType.ANDROID_TEST -> {
-        // Use RPC for on-device Android instrumentation
-        getCurrentScreenStateViaRpc(trailblazeDeviceId, driverType)
-      }
-      TrailblazeDriverType.IOS_HOST -> {
-        // Use direct Maestro driver access for host drivers
-        getCurrentScreenStateViaDriver(trailblazeDeviceId)
-      }
-      // The host-native simulator driver, spelled out so this `when` stays
-      // compile-time exhaustive — a new driver (or new set member) must add a branch here.
-      TrailblazeDriverType.IOS_AXE -> {
-        // This manager only holds device *summaries*; a host-native iOS driver's screen state
-        // lives on its live IosNativeConnectedDevice in the MCP bridge's persistent-device
-        // registry, and the bridge serves it before delegating here. Reaching this arm means
-        // no live connection exists for the device.
-        Console.log("⚠️ $driverType has no live connected device to capture screen state from")
-        null
-      }
-      // Converted drivers returned above. Reaching here means one lost its descriptor without
-      // regaining an arm, which HostDriverDescriptorRegistry.validateCovers exists to prevent.
-      else -> error(
-        "$driverType has no screen-state path: it is neither handled above nor backed by a " +
-          "registered HostDriverDescriptor.",
-      )
-    }
-  }
-  
-  /**
-   * Captures screen state via RPC for on-device Android instrumentation.
-   */
-  private suspend fun getCurrentScreenStateViaRpc(
-    trailblazeDeviceId: TrailblazeDeviceId,
-    driverType: TrailblazeDriverType,
-  ): ScreenState? {
-    return try {
-      // Closed on every exit: the client owns a WebSocket and an HTTP engine, and this helper runs
-      // on every host-side screen-state read, so one leaked client per capture accumulates
-      // connections for the life of the daemon.
-      OnDeviceRpcClient(
-        trailblazeDeviceId = trailblazeDeviceId,
-        sendProgressMessage = { },
-        wireTransportMode = AndroidWireTransport.modeFor(driverType),
-      ).use { rpcClient ->
-        val request = GetScreenStateRequest(includeScreenshot = true)
-          .withScreenshotScalingConfig(EffectiveScreenshotScalingConfig.effective)
-
-        when (val result = rpcClient.rpcCall(request)) {
-          is RpcResult.Success -> {
-            val response = result.data
-            val screenshotBytes = response.screenshotBytes ?: response.screenshotBase64?.let {
-              Base64.getDecoder().decode(it)
-            }
-
-            object : ScreenState {
-              override val screenshotBytes: ByteArray? = screenshotBytes
-              override val deviceWidth: Int = response.deviceWidth
-              override val deviceHeight: Int = response.deviceHeight
-              override val viewHierarchy: ViewHierarchyTreeNode = response.viewHierarchy
-              override val trailblazeDevicePlatform: TrailblazeDevicePlatform =
-                trailblazeDeviceId.trailblazeDevicePlatform
-              override val deviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList()
-            }
-          }
-          is RpcResult.Failure -> {
-            Console.log("❌ Failed to get screen state via RPC: ${result.message}")
-            null
-          }
-        }
-      }
-    } catch (e: CancellationException) {
-      // A capture is cancellable work; swallowing this leaves the caller's coroutine looking
-      // alive and makes daemon shutdown unresponsive.
-      throw e
-    } catch (e: Exception) {
-      Console.log("❌ Exception getting screen state via RPC: ${e.message}")
-      e.printStackTrace()
-      null
-    }
-  }
-  
-  /**
-   * Captures screen state via direct Maestro driver access for host drivers.
-   */
-  private fun getCurrentScreenStateViaDriver(trailblazeDeviceId: TrailblazeDeviceId): ScreenState? {
-    val driver = getActiveDriverForDevice(trailblazeDeviceId) ?: return null
-    
-    return try {
-      HostMaestroDriverScreenState(
-        maestroDriver = driver,
-      )
-    } catch (e: Exception) {
-      Console.log("❌ Exception getting screen state via driver: ${e.message}")
-      e.printStackTrace()
-      null
-    }
+    // Every driver captures through its descriptor, so reaching here means one isn't plugged in.
+    error(
+      "$driverType has no screen-state path: no HostDriverDescriptor is registered for it. Add " +
+        "one to this app config's hostDriverDescriptors.",
+    )
   }
 
   /**
@@ -1124,72 +1031,13 @@ class TrailblazeDeviceManager(
         ),
       )
 
-      val allDevices = buildList {
-        // Connected Android Devices
-        androidDevices.forEach { (instanceId, description) ->
-          add(
-            TrailblazeConnectedDeviceSummary(
-              trailblazeDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
-              instanceId = instanceId,
-              description = description,
-            )
-          )
-          add(
-            TrailblazeConnectedDeviceSummary(
-              trailblazeDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
-              instanceId = instanceId,
-              description = description,
-            )
-          )
-          // The in-process driver is offered on every Android device like the two above; whether
-          // the selected target declares an in-process harness (and whether its APK is installed)
-          // is checked at dispatch/connect time, where the error can name the fix.
-          add(
-            TrailblazeConnectedDeviceSummary(
-              trailblazeDriverType = TrailblazeDriverType.ANDROID_TEST,
-              instanceId = instanceId,
-              description = description,
-            )
-          )
-        }
-
-        // Connected iOS Simulators — always emit IOS_HOST; emit each host-native iOS
-        // driver only when its host dependency probe passes. Otherwise users would see
-        // an entry they can't actually use, which would fail at connect time with a
-        // confusing error. The probe is fail-closed by construction: a new driver declaring
-        // `hostNativeSimulatorDriver` with no branch here fails discovery loudly
-        // instead of silently listing (or hiding) the new driver.
-        val availableIosNativeDrivers = TrailblazeDriverType.entries.filter { driverType ->
-          driverType.hostNativeSimulatorDriver && when (driverType) {
-            TrailblazeDriverType.IOS_AXE -> xyz.block.trailblaze.host.axe.AxeCli.isAvailable()
-            else -> error("No availability probe for host-native iOS driver $driverType — add a branch here")
-          }
-        }
-        iosSimulators.forEach { (udid, name) ->
-          add(
-            TrailblazeConnectedDeviceSummary(
-              trailblazeDriverType = TrailblazeDriverType.IOS_HOST,
-              instanceId = udid,
-              description = name,
-            )
-          )
-          availableIosNativeDrivers.forEach { driverType ->
-            add(
-              TrailblazeConnectedDeviceSummary(
-                trailblazeDriverType = driverType,
-                instanceId = udid,
-                description = name,
-              )
-            )
-          }
-        }
-
-        // Each descriptor returns nothing when its driver isn't usable on this host, so an app
-        // that doesn't register one never sees its devices. Web devices (running browsers, the
-        // always-on Playwright-native default, an answering Electron CDP endpoint) arrive here
-        // too, via the Playwright descriptors.
-        addAll(descriptorDevices)
-      }
+      // Every device comes from a driver's descriptor, mapped out of the inventory enumerated
+      // above: each connected `adb` device under all three Android drivers, each booted simulator
+      // under the iOS drivers that are usable on this host, and the web devices (running browsers,
+      // the always-on Playwright-native default, an answering Electron CDP endpoint). A descriptor
+      // returns nothing when its driver isn't usable here, so an app that doesn't register one
+      // never sees its devices.
+      val allDevices = descriptorDevices
 
       Console.log("[loadDevices] Discovered ${allDevices.size} device(s): ${allDevices.map { "${it.trailblazeDriverType.name}/${it.instanceId}" }}")
 

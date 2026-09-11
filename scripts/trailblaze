@@ -78,6 +78,16 @@ else
   JAVA_BIN="java"
 fi
 
+# Compose touches AppKit before entering its server-only branch on macOS. Force AWT headless for
+# every headless entrypoint, including the launcher embedded in distribution JARs. JAVA_TOOL_OPTIONS
+# also reaches a Gradle-forked app JVM, unlike a JVM flag passed only to Gradle itself.
+for tb_arg in "$@"; do
+  if [ "$tb_arg" = "--headless" ]; then
+    export JAVA_TOOL_OPTIONS="${JAVA_TOOL_OPTIONS:+$JAVA_TOOL_OPTIONS }-Djava.awt.headless=true"
+    break
+  fi
+done
+
 # ---------------------------------------------------------------------------
 # JDK version check (lazy)
 # ---------------------------------------------------------------------------
@@ -229,7 +239,7 @@ export TRAILBLAZE_PORT
 export TRAILBLAZE_HTTPS_PORT
 
 # Ports Trailblaze allocates to devices. Mirrors PORT_RANGE_START and PORT_RANGE_SIZE in
-# TrailblazeDevicePort.kt; scripts/trailblaze_port_range_test.sh fails if they drift apart.
+# TrailblazeDevicePort.kt; a port-range test fails if they drift apart.
 TRAILBLAZE_DEVICE_PORT_RANGE_START=52530
 TRAILBLAZE_DEVICE_PORT_RANGE_END=59529
 
@@ -261,8 +271,58 @@ require_usable_daemon_port() {
 # Daemon management
 # ---------------------------------------------------------------------------
 
+# How long the /ping probe waits for an answer. A daemon that is up answers in
+# milliseconds, so anything near this bound means it cannot answer at all.
+TRAILBLAZE_PING_TIMEOUT_SECONDS=5
+
+# Bounding the whole request matters as much as bounding the connect: a daemon
+# wedged after it bound its port still ACCEPTS the connection, so a probe with
+# only --connect-timeout waits forever. Every command starts with this probe,
+# and it prints nothing while it waits, so the whole CLI went silent — `trailblaze
+# --version` and `trailblaze app start` produced no output at all against a stale
+# daemon left listening after an upgrade, and looked like a hung terminal.
+#
+# A daemon that cannot answer /ping is not a daemon this script can use, so time
+# out and report it as down. Say so once, because the alternative is a user who
+# sees every command fall back to a fresh JVM and never learns why.
+#
+# The verdict is remembered for the rest of the command. Whatever holds the port
+# still holds it, so no daemon started now can bind it either — and the auto-start
+# path polls this up to 60 times, which would turn one 5s stall into a five-minute
+# one. Remembering also means the message is printed once.
+#
+# Deliberately NOT a kill recipe: 5s of silence does not prove the daemon is
+# wedged. A daemon mid-trail can block its event loop for longer than that, and
+# killing it severs someone else's run — the same hazard the dev launcher's
+# /cli/status path fails closed to avoid. Point at the owner instead and let the
+# reader decide. Asking that daemon what it is doing is not an option here; a
+# daemon that cannot answer /ping cannot answer /cli/status either.
+tb_daemon_unresponsive=false
 is_daemon_running() {
-    curl -s --connect-timeout 1 "http://localhost:${TRAILBLAZE_PORT}/ping" > /dev/null 2>&1
+    [ "$tb_daemon_unresponsive" = true ] && return 1
+    local rc
+    curl -s --connect-timeout 1 --max-time "$TRAILBLAZE_PING_TIMEOUT_SECONDS" \
+        "http://localhost:${TRAILBLAZE_PORT}/ping" > /dev/null 2>&1
+    rc=$?
+    [ "$rc" -eq 0 ] && return 0
+    # 28 is curl's timeout: the port answered the connect and then went quiet.
+    # Anything else (refused, DNS, no route) just means no daemon is there.
+    if [ "$rc" -eq 28 ]; then
+        tb_daemon_unresponsive=true
+        echo "WARNING: whatever is on port ${TRAILBLAZE_PORT} did not answer /ping within" >&2
+        echo "         ${TRAILBLAZE_PING_TIMEOUT_SECONDS}s, so this command is running in its own JVM instead." >&2
+        echo "         It may be a wedged daemon, or one busy with another run — see who owns" >&2
+        echo "         the port before clearing it:  lsof -nP -iTCP:${TRAILBLAZE_PORT} -sTCP:LISTEN" >&2
+    fi
+    return 1
+}
+
+# True once a /ping probe has timed out. Nothing we start can bind a port that is
+# already held, so the auto-start paths must neither spawn a daemon for it nor
+# poll for one to appear: that poll is 60 one-second sleeps spent waiting for
+# something that cannot happen, on top of the probe each iteration used to pay.
+daemon_port_held_by_unresponsive() {
+    [ "$tb_daemon_unresponsive" = true ]
 }
 
 # Daemon auto-start kill-switch. Accepted values mirror the Kotlin side
@@ -283,53 +343,222 @@ daemon_autostart_disabled() {
 # tells us whether the port answers; it can't distinguish "no daemon" from
 # "daemon stuck pre-bind", so without this file the next invocation would
 # happily spawn another stuck JVM, and another, and another.
-TRAILBLAZE_PIDFILE_DIR="${HOME}/.trailblaze"
+TRAILBLAZE_PIDFILE_DIR="${TRAILBLAZE_HOME:-${HOME}/.trailblaze}"
 TRAILBLAZE_PIDFILE="${TRAILBLAZE_PIDFILE_DIR}/daemon-${TRAILBLAZE_PORT}.pid"
-
-# Returns 0 if the PID in the pidfile is still alive (a previous auto-start
-# is still running), 1 if no pidfile or the PID is dead. Cleans up stale
-# pidfiles as a side-effect.
-prior_daemon_pid_alive() {
-    [ -f "$TRAILBLAZE_PIDFILE" ] || return 1
-    local pid
-    pid=$(cat "$TRAILBLAZE_PIDFILE" 2>/dev/null)
-    [ -n "$pid" ] || { rm -f "$TRAILBLAZE_PIDFILE"; return 1; }
-    if kill -0 "$pid" 2>/dev/null; then
-        return 0
-    fi
-    rm -f "$TRAILBLAZE_PIDFILE"
-    return 1
-}
-
-# Refuses to spawn a new daemon if the previous JVM we spawned for this port
-# is still alive but not responding (i.e. stuck in init). Without this guard,
-# every retry adds another zombie JVM consuming ~4 GB of heap.
-abort_if_stuck_daemon() {
-    if prior_daemon_pid_alive && ! is_daemon_running; then
-        local pid
-        pid=$(cat "$TRAILBLAZE_PIDFILE" 2>/dev/null)
-        echo "" >&2
-        echo "ERROR: A Trailblaze daemon (PID $pid) is alive on port ${TRAILBLAZE_PORT}" >&2
-        echo "       but is not responding to HTTP. It is likely stuck in startup." >&2
-        echo "" >&2
-        echo "       Refusing to spawn another daemon — multiple stuck JVMs would" >&2
-        echo "       compound the problem." >&2
-        echo "" >&2
-        echo "       To recover:" >&2
-        echo "         kill -9 $pid && rm -f $TRAILBLAZE_PIDFILE" >&2
-        echo "" >&2
-        echo "       Or set TRAILBLAZE_PORT to an unused port to start a fresh daemon." >&2
-        exit 1
-    fi
-    # No stuck daemon — clear any stale pidfile so the new spawn can write.
-    rm -f "$TRAILBLAZE_PIDFILE"
-}
+TRAILBLAZE_START_LOCK="${TRAILBLAZE_PIDFILE}.starting"
 
 # Records the spawned JVM's PID so a subsequent invocation can detect a
 # stuck daemon. Called immediately after tb_run_background / tb_run_background_quiet.
 record_daemon_pid() {
     mkdir -p "$TRAILBLAZE_PIDFILE_DIR"
     echo "$1" > "$TRAILBLAZE_PIDFILE"
+}
+
+process_start_identity() {
+    LC_ALL=C ps -o lstart= -p "$1" 2>/dev/null | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
+}
+
+# The liveness test for every PID this script tracks. `kill -0` alone is not one:
+# it succeeds on a zombie — a process that has exited but whose parent has not
+# reaped it — and a zombie cannot be killed, so a daemon left defunct by a
+# still-running parent (the desktop app JVM, say) makes every later invocation
+# refuse to start a daemon with no remediation but deleting the pidfile by hand.
+# `ps -o stat=` is portable across macOS and Linux; its first character is the
+# process state, and Z means defunct. An empty status means the process is gone
+# or unreadable, which `kill -0` has already ruled on, so only Z overrides it.
+#
+# Nor is `kill -0` a liveness test for PID 0: it signals the CALLER'S OWN process
+# group, which always exists, so a pidfile corrupted to 0 would read as alive on
+# every later invocation forever — and `kill` cannot clear that either, for the
+# same reason. Only `$!` is ever recorded, and it never writes a zero or a
+# leading zero, so any of those means the file is unusable; answering "not alive"
+# lets the caller delete it, which is the recovery a user otherwise does by hand.
+process_is_alive() {
+    case "${1:-}" in '' | 0* | *[!0-9]*) return 1 ;; esac
+    kill -0 "$1" 2>/dev/null || return 1
+    case "$(LC_ALL=C ps -o stat= -p "$1" 2>/dev/null | sed -e 's/^[[:space:]]*//')" in
+        Z*) return 1 ;;
+        *) return 0 ;;
+    esac
+}
+
+read_daemon_startup_owner() {
+    local owner_file
+    TRAILBLAZE_START_OWNER_FILE=""
+    TRAILBLAZE_START_OWNER_PID=""
+    TRAILBLAZE_START_OWNER_IDENTITY=""
+    for owner_file in "$TRAILBLAZE_START_LOCK"/owner-*; do
+        [ -f "$owner_file" ] || continue
+        case "$owner_file" in *.new*) continue ;; esac
+        TRAILBLAZE_START_OWNER_FILE="$owner_file"
+        TRAILBLAZE_START_OWNER_PID=$(sed -n '1p' "$owner_file" 2>/dev/null)
+        TRAILBLAZE_START_OWNER_IDENTITY=$(sed -n '2p' "$owner_file" 2>/dev/null)
+        return 0
+    done
+    return 1
+}
+
+daemon_startup_owner_alive() {
+    [ -n "${TRAILBLAZE_START_OWNER_PID:-}" ] \
+        && [ -n "${TRAILBLAZE_START_OWNER_IDENTITY:-}" ] \
+        && process_is_alive "$TRAILBLAZE_START_OWNER_PID" \
+        && [ "$(process_start_identity "$TRAILBLAZE_START_OWNER_PID")" = "$TRAILBLAZE_START_OWNER_IDENTITY" ]
+}
+
+# Atomically elect one starter across Trail Runner and JVM-side Companion launches. The directory
+# is the lock. Each generation gets a unique owner filename, so a delayed stale-owner cleanup can
+# only delete its own generation, never a replacement created at the same path.
+claim_daemon_startup() {
+    local prior_pid removed_stale_owner
+    mkdir -p "$TRAILBLAZE_PIDFILE_DIR"
+    if mkdir "$TRAILBLAZE_START_LOCK" 2>/dev/null; then
+        TRAILBLAZE_START_OWNER_FILE="${TRAILBLAZE_START_LOCK}/owner-$$-$(date +%s)-${RANDOM}"
+        TRAILBLAZE_START_OWNER_PID="$$"
+        TRAILBLAZE_START_OWNER_IDENTITY=$(process_start_identity "$$")
+        if [ -z "$TRAILBLAZE_START_OWNER_IDENTITY" ] \
+            || ! printf '%s\n%s\n' "$$" "$TRAILBLAZE_START_OWNER_IDENTITY" > "$TRAILBLAZE_START_OWNER_FILE"; then
+            rmdir "$TRAILBLAZE_START_LOCK" 2>/dev/null || true
+            return 2
+        fi
+        prior_pid=$(cat "$TRAILBLAZE_PIDFILE" 2>/dev/null)
+        if [ -n "$prior_pid" ] && process_is_alive "$prior_pid"; then
+            rm -f "$TRAILBLAZE_START_OWNER_FILE"
+            rmdir "$TRAILBLAZE_START_LOCK" 2>/dev/null || true
+            printf 'ERROR: a Trailblaze daemon (PID %s) is alive but not responding on port %s.\n' \
+                "$prior_pid" "$TRAILBLAZE_PORT" >&2
+            printf '       Refusing to start another daemon; stop that process or use another port.\n' >&2
+            return 2
+        fi
+        rm -f "$TRAILBLAZE_PIDFILE"
+        return 0
+    fi
+    if read_daemon_startup_owner && daemon_startup_owner_alive; then
+        TRAILBLAZE_EXISTING_START_PID="$TRAILBLAZE_START_OWNER_PID"
+        return 1
+    fi
+    removed_stale_owner=false
+    if [ -n "${TRAILBLAZE_START_OWNER_FILE:-}" ] \
+        && [ -f "$TRAILBLAZE_START_OWNER_FILE" ] \
+        && rm -f "$TRAILBLAZE_START_OWNER_FILE"; then
+        removed_stale_owner=true
+    else
+        # mkdir is the atomic election. A claimant may be between that election and publishing
+        # its owner record; do not reclaim this handoff window, which could elect a second daemon.
+        # A crashed unpublished claimant is reported as unavailable rather than risking that.
+        sleep 1
+    fi
+    if [ "$removed_stale_owner" = true ] \
+        && rmdir "$TRAILBLAZE_START_LOCK" 2>/dev/null; then
+        claim_daemon_startup
+        return $?
+    fi
+    if read_daemon_startup_owner && daemon_startup_owner_alive; then
+        TRAILBLAZE_EXISTING_START_PID="$TRAILBLAZE_START_OWNER_PID"
+        return 1
+    fi
+    printf 'ERROR: could not reclaim daemon startup lock: %s\n' "$TRAILBLAZE_START_LOCK" >&2
+    return 2
+}
+
+# If a slow source build outlives the caller's wait window, keep one detached watcher responsible
+# for removing the claim after that exact process exits. A different daemon could win the port
+# while this child remains alive, so HTTP readiness alone must not release its ownership.
+reap_daemon_startup_claim() {
+    [ "${TRAILBLAZE_DAEMON_START_OWNER:-false}" = true ] || return 0
+    nohup bash -c '
+      pid="$1"; owner="$2"; started="$3"; lock="$4"
+      process_identity() {
+        LC_ALL=C ps -o lstart= -p "$1" 2>/dev/null | sed -e "s/^[[:space:]]*//" -e "s/[[:space:]]*$//"
+      }
+      # Same rules as process_is_alive in the parent script, and for the same reason:
+      # a defunct daemon still answers kill -0 and still reports its start time, and
+      # kill -0 0 signals the process group of the watcher itself, so without both the
+      # watcher spins forever and never releases the claim it exists to release.
+      process_alive() {
+        case "${1:-}" in "" | 0* | *[!0-9]*) return 1 ;; esac
+        kill -0 "$1" 2>/dev/null || return 1
+        case "$(LC_ALL=C ps -o stat= -p "$1" 2>/dev/null | sed -e "s/^[[:space:]]*//")" in
+          Z*) return 1 ;;
+          *) return 0 ;;
+        esac
+      }
+      while process_alive "$pid" && [ "$(process_identity "$pid")" = "$started" ]; do
+        sleep 5
+      done
+      if [ -f "$owner" ] && rm -f "$owner"; then
+        rmdir "$lock" 2>/dev/null || true
+      fi
+    ' _ "$TRAILBLAZE_DAEMON_START_PID" "$TRAILBLAZE_START_OWNER_FILE" \
+      "$TRAILBLAZE_START_OWNER_IDENTITY" "$TRAILBLAZE_START_LOCK" \
+      >/dev/null 2>&1 &
+    TRAILBLAZE_DAEMON_START_REAPER_PID="$!"
+}
+
+# Starts or joins the one daemon startup allowed for this port. Results are returned in globals so
+# callers can retain their existing progress messages and wait policies. The lock is replaced
+# atomically with the spawned JVM PID; another process may observe the launcher's PID before that
+# handoff, but both remain live throughout startup.
+start_daemon_background() {
+    local output_mode="${1:-normal}"
+    local claim_exit lock_tmp
+    TRAILBLAZE_DAEMON_START_OWNER=false
+    TRAILBLAZE_DAEMON_START_PID=""
+    TRAILBLAZE_DAEMON_START_REAPER_PID=""
+    TRAILBLAZE_EXISTING_START_PID=""
+    TRAILBLAZE_START_OWNER_FILE=""
+    TRAILBLAZE_START_OWNER_PID=""
+    TRAILBLAZE_START_OWNER_IDENTITY=""
+
+    if claim_daemon_startup; then
+        TRAILBLAZE_DAEMON_START_OWNER=true
+        if [ "$output_mode" = "quiet" ]; then
+            tb_run_background_quiet app --foreground --headless
+        else
+            tb_run_background app --foreground --headless
+        fi
+        TRAILBLAZE_DAEMON_START_PID="$!"
+        record_daemon_pid "$TRAILBLAZE_DAEMON_START_PID"
+        TRAILBLAZE_START_OWNER_PID="$TRAILBLAZE_DAEMON_START_PID"
+        TRAILBLAZE_START_OWNER_IDENTITY=$(process_start_identity "$TRAILBLAZE_DAEMON_START_PID")
+        lock_tmp="${TRAILBLAZE_START_OWNER_FILE}.new.$$"
+        if [ -z "$TRAILBLAZE_START_OWNER_IDENTITY" ] \
+            || ! printf '%s\n%s\n' "$TRAILBLAZE_DAEMON_START_PID" "$TRAILBLAZE_START_OWNER_IDENTITY" > "$lock_tmp" \
+            || ! mv "$lock_tmp" "$TRAILBLAZE_START_OWNER_FILE"; then
+            rm -f "$lock_tmp" "$TRAILBLAZE_START_OWNER_FILE"
+            rmdir "$TRAILBLAZE_START_LOCK" 2>/dev/null || true
+            kill "$TRAILBLAZE_DAEMON_START_PID" 2>/dev/null || true
+            printf 'ERROR: could not record the Trailblaze daemon startup owner.\n' >&2
+            return 1
+        fi
+        reap_daemon_startup_claim
+        return 0
+    else
+        claim_exit=$?
+    fi
+
+    [ "$claim_exit" -eq 1 ] || return 1
+    TRAILBLAZE_DAEMON_START_PID="$TRAILBLAZE_EXISTING_START_PID"
+    return 0
+}
+
+release_daemon_startup() {
+    if [ "${TRAILBLAZE_DAEMON_START_OWNER:-false}" = true ]; then
+        # Readiness ends this caller's wait, not the daemon child's ownership. Keep the reaper and
+        # claim while that exact child is alive so a transient /ping miss cannot elect a competitor.
+        if [ -n "${TRAILBLAZE_DAEMON_START_PID:-}" ] \
+            && process_is_alive "$TRAILBLAZE_DAEMON_START_PID"; then
+            return 0
+        fi
+        if [ -n "${TRAILBLAZE_DAEMON_START_REAPER_PID:-}" ]; then
+            kill "$TRAILBLAZE_DAEMON_START_REAPER_PID" 2>/dev/null || true
+            wait "$TRAILBLAZE_DAEMON_START_REAPER_PID" 2>/dev/null || true
+            TRAILBLAZE_DAEMON_START_REAPER_PID=""
+        fi
+        if [ -f "${TRAILBLAZE_START_OWNER_FILE:-}" ] \
+            && rm -f "$TRAILBLAZE_START_OWNER_FILE"; then
+            rmdir "$TRAILBLAZE_START_LOCK" 2>/dev/null || true
+        fi
+    fi
 }
 
 # ---------------------------------------------------------------------------
@@ -354,6 +583,11 @@ record_daemon_pid() {
 #
 # Disable explicitly with `--direct` or `--no-daemon` on the CLI, or by setting
 # TRAILBLAZE_IPC=0 in the environment.
+
+# How long a forwarded command may run before the wait is announced. Forwarding
+# exists because it beats a ~1s JVM start, so anything past this is unexpected
+# for every forwarded subcommand except `ask`.
+TRAILBLAZE_IPC_NOTICE_SECONDS=10
 
 # Attempt to run via the daemon's /cli/exec endpoint.
 # On success prints stdout/stderr and exits with the daemon's exit code.
@@ -407,11 +641,51 @@ ipc_try_forward() {
           }
         ' -- "$@") || return 1
 
-    local response
+    # The daemon can hold this request open for minutes on purpose — `ask` runs a
+    # whole agent in there — so the timeout stays generous. What isn't acceptable
+    # is doing it in silence: a caller watching a blank terminal cannot tell a
+    # daemon that is working from one that will never answer. Announce the wait
+    # once, from a watchdog that dies as soon as the response lands, so a healthy
+    # fast command still prints nothing extra.
+    # Why the fds here matter at all: everything this spawns inherits them, and a
+    # caller capturing output — `out=$(trailblaze config show)` — sees EOF only
+    # once EVERY holder of the pipe's write end closes it. A watchdog left holding
+    # that pipe makes even an instant forward take the full notice threshold. The
+    # group kill below is what guarantees nothing is left holding it; sending
+    # stdout to /dev/null is the narrower guarantee that survives even the
+    # fallback path, where there is no process group to kill.
+    #
+    # `set -m` for the spawn so the watchdog becomes a process-group leader and
+    # the whole group can be killed at once. Killing just the subshell leaves the
+    # `sleep` it forked alive — and that child is reparented to init the moment
+    # its parent dies, so `pkill -P` no longer finds it either.
+    local notice_pid
+    set -m
+    {
+        sleep "$TRAILBLAZE_IPC_NOTICE_SECONDS"
+        echo "Waiting for the Trailblaze daemon on port ${TRAILBLAZE_PORT} to respond..." >&2
+        echo "  Bypass the daemon for this command with --no-daemon." >&2
+    } > /dev/null &
+    notice_pid=$!
+    set +m
+    # Off the jobs table, or bash reports "Terminated" on this command's stderr
+    # when it reaps the watchdog we killed — noise on every forwarded command.
+    # The process group is unaffected, so the kill below still reaches it.
+    disown "$notice_pid" 2> /dev/null || true
+
+    local response rc
     response=$(curl -sS --connect-timeout 2 --max-time 600 \
         -X POST "http://localhost:${TRAILBLAZE_PORT}/cli/exec" \
         -H "Content-Type: application/json" \
-        -d "$payload" 2>/dev/null) || return 1
+        -d "$payload" 2>/dev/null)
+    rc=$?
+    # The group, not just the leader: a surviving `sleep` holds this command's
+    # stderr, and a caller capturing it waits for every holder of the write end
+    # to close — which would make even an instant forward take the full notice
+    # threshold. `kill "$notice_pid"` as well, for a shell that gave the job no
+    # group of its own.
+    kill -- "-$notice_pid" 2> /dev/null || kill "$notice_pid" 2> /dev/null
+    [ "$rc" -eq 0 ] || return 1
 
     # Validate and decode the response in ONE jq process. NUL delimiters let bash `read`
     # preserve trailing newlines exactly; the previous four command substitutions each
@@ -456,6 +730,7 @@ show_window() {
 }
 
 stop_daemon() {
+    local stopped_pid
     if ! is_daemon_running; then
         echo "Trailblaze is not running."
         return 0
@@ -476,6 +751,14 @@ stop_daemon() {
         echo "Daemon did not stop gracefully."
         return 1
     else
+        stopped_pid=$(cat "$TRAILBLAZE_PIDFILE" 2>/dev/null)
+        read_daemon_startup_owner || true
+        if [ -n "$stopped_pid" ] && [ "${TRAILBLAZE_START_OWNER_PID:-}" = "$stopped_pid" ]; then
+            if [ -f "$TRAILBLAZE_START_OWNER_FILE" ] \
+                && rm -f "$TRAILBLAZE_START_OWNER_FILE"; then
+                rmdir "$TRAILBLAZE_START_LOCK" 2>/dev/null || true
+            fi
+        fi
         rm -f "$TRAILBLAZE_PIDFILE"
         echo "Trailblaze stopped."
         return 0
@@ -496,7 +779,10 @@ get_status() {
 # continue to launch the legacy Compose desktop app; `--v2` is the explicit
 # opt-in while the replacement is still being validated.
 open_trailrunner_window() {
-    local url="http://localhost:${TRAILBLAZE_PORT}/trailrunner/"
+    # Companion re-enters this launcher after connecting so it gets the same native shell as
+    # `trailblaze trailrunner`, but opens directly on the newly attached run. This variable is
+    # launcher-to-launcher plumbing, not a user-facing configuration knob.
+    local url="${TRAILBLAZE_TRAILRUNNER_URL:-http://localhost:${TRAILBLAZE_PORT}/trailrunner/}"
     echo "Opening Trail Runner at $url" >&2
 
     if [[ "$(uname)" == "Darwin" ]]; then
@@ -554,15 +840,23 @@ activate_trailrunner_workspace() {
 
 launch_trailrunner_app() {
     if ! is_daemon_running; then
-        abort_if_stuck_daemon
-        echo "Starting Trailblaze daemon..." >&2
         tb_check_java_version || return 1
-        tb_run_background app --foreground --headless
-        record_daemon_pid "$!"
+        local daemon_pid
+        echo "Starting Trailblaze daemon..." >&2
+        start_daemon_background normal || return 1
+        daemon_pid="$TRAILBLAZE_DAEMON_START_PID"
+        if [ "$TRAILBLAZE_DAEMON_START_OWNER" != true ]; then
+            printf 'A Trailblaze daemon is already starting (PID %s) — waiting for it.\n' "$daemon_pid" >&2
+        fi
 
         echo -n "Waiting for Trailblaze daemon" >&2
         local attempts=0
         while [ "$attempts" -lt 120 ] && ! is_daemon_running; do
+            if ! process_is_alive "$daemon_pid"; then
+                release_daemon_startup
+                printf '\nERROR: the Trailblaze daemon exited during startup.\n' >&2
+                return 1
+            fi
             echo -n "." >&2
             sleep 1
             attempts=$((attempts + 1))
@@ -572,9 +866,14 @@ launch_trailrunner_app() {
             echo "ERROR: Trailblaze did not become ready on port ${TRAILBLAZE_PORT}." >&2
             return 1
         fi
+        release_daemon_startup
         echo "Trailblaze daemon ready." >&2
     fi
-    activate_trailrunner_workspace || true
+    # Companion already selected and validated its workspace before connecting. Activating cwd
+    # here could switch a long-lived daemon away from that root between connect and first render.
+    if [ -z "${TRAILBLAZE_TRAILRUNNER_URL:-}" ]; then
+        activate_trailrunner_workspace || true
+    fi
     open_trailrunner_window
 }
 
@@ -593,6 +892,18 @@ to_absolute_path() {
     fi
 }
 
+# Companion roots are interpreted relative to the caller even when they do not exist yet. Source
+# and Gradle launchers change cwd before the JVM starts, so preserve that origin in the argv.
+to_absolute_companion_root() {
+    local resolved
+    resolved=$(to_absolute_path "$1")
+    if [ -z "$resolved" ] || [[ "$resolved" = /* ]]; then
+        echo "$resolved"
+    else
+        echo "$PWD/$resolved"
+    fi
+}
+
 # ---------------------------------------------------------------------------
 # Argument parsing
 # ---------------------------------------------------------------------------
@@ -600,15 +911,12 @@ to_absolute_path() {
 # Process arguments: resolve file paths to absolute and detect STDIO mode.
 # Uses an array to preserve quoting for arguments with spaces (e.g., --yaml YAML).
 STDIO_MODE=false
-HAS_MCP=false
 HAS_HTTP=false
 HAS_DIRECT=false
 NATIVE_APP_MODE=false
 ARGS_ARRAY=()
+companion_expect_trails_dir=false
 for arg in "$@"; do
-    if [ "$arg" = "mcp" ]; then
-        HAS_MCP=true
-    fi
     if [ "$arg" = "--http" ]; then
         HAS_HTTP=true
     fi
@@ -618,13 +926,40 @@ for arg in "$@"; do
 
     # Only resolve paths that look like file/dir references (contain / or .)
     # Don't resolve bare words like "web", "android", "ios" — they're command arguments
-    if [[ "$arg" == */* ]] || [[ "$arg" == *.* ]]; then
+    # Companion owns its path semantics: --folder stays relative to --trails-dir,
+    # while the Kotlin command canonicalizes only --trails-dir itself.
+    if [ "${1:-}" = "companion" ]; then
+        if [ "$companion_expect_trails_dir" = true ]; then
+            resolved_arg=$(to_absolute_companion_root "$arg")
+            companion_expect_trails_dir=false
+        elif [[ "$arg" == --trails-dir=* ]]; then
+            resolved_arg="--trails-dir=$(to_absolute_companion_root "${arg#--trails-dir=}")"
+        else
+            resolved_arg="$arg"
+            [ "$arg" = "--trails-dir" ] && companion_expect_trails_dir=true
+        fi
+    elif [[ "$arg" == */* ]] || [[ "$arg" == *.* ]]; then
         resolved_arg=$(to_absolute_path "$arg")
     else
         resolved_arg="$arg"
     fi
     ARGS_ARRAY+=("$resolved_arg")
 done
+
+# Source/Gradle execution changes cwd before starting the JVM. Preserve the caller's workspace as
+# Companion's default explicitly; installed JAR mode gets the same argv for one consistent contract.
+if [ "${1:-}" = "companion" ] && [ "${2:-}" = "start" ]; then
+    companion_has_trails_dir=false
+    for arg in "$@"; do
+        if [ "$arg" = "--trails-dir" ] || [[ "$arg" == --trails-dir=* ]]; then
+            companion_has_trails_dir=true
+            break
+        fi
+    done
+    if [ "$companion_has_trails_dir" = false ]; then
+        ARGS_ARRAY+=("--trails-dir" "$PWD")
+    fi
+fi
 # Flat string for functions that need it (backward compat)
 ARGS="${ARGS_ARRAY[*]}"
 
@@ -635,7 +970,7 @@ elif [ "${#ARGS_ARRAY[@]}" -eq 2 ] && [ "${ARGS_ARRAY[0]}" = "app" ] && [ "${ARG
 fi
 
 # STDIO mode: `mcp` subcommand without `--http` flag (includes --bridge mode)
-if [ "$HAS_MCP" = true ] && [ "$HAS_HTTP" = false ]; then
+if [ "${1:-}" = "mcp" ] && [ "$HAS_HTTP" = false ]; then
     STDIO_MODE=true
 fi
 
@@ -675,19 +1010,25 @@ elif [ "$STDIO_MODE" = true ]; then
             # The proxy itself honors the same kill-switch (McpProxy.kt), so
             # requests will fail fast with a clear envelope instead of hanging.
             echo "[mcp] Daemon not running and TRAILBLAZE_DISABLE_DAEMON_AUTOSTART is set — not starting one." >&2
+        elif daemon_port_held_by_unresponsive; then
+            echo "[mcp] Port ${TRAILBLAZE_PORT} is held by something that does not answer /ping — not starting one." >&2
         else
-            abort_if_stuck_daemon
             echo "[mcp] Starting Trailblaze daemon..." >&2
             # Ports are passed via exported TRAILBLAZE_PORT/TRAILBLAZE_HTTPS_PORT env vars
             tb_check_java_version || exit 1
-            tb_run_background_quiet app --foreground --headless
-            record_daemon_pid "$!"
-            echo "[mcp] Daemon starting (PID $!)..." >&2
+            start_daemon_background quiet || exit 1
+            printf '[mcp] Daemon starting (PID %s)...\n' "$TRAILBLAZE_DAEMON_START_PID" >&2
 
             attempts=0
             while [ $attempts -lt 60 ]; do
                 if is_daemon_running; then
                     echo "[mcp] Daemon ready." >&2
+                    release_daemon_startup
+                    break
+                fi
+                if ! process_is_alive "$TRAILBLAZE_DAEMON_START_PID"; then
+                    release_daemon_startup
+                    printf '[mcp] Warning: daemon exited during startup.\n' >&2
                     break
                 fi
                 sleep 1
@@ -702,24 +1043,29 @@ elif [ "$STDIO_MODE" = true ]; then
 
     tb_check_java_version || exit 1
     tb_run_exec_quiet "${ARGS_ARRAY[@]}"
-elif ([ "$1" = "trail" ] || [ "$1" = "run" ] || [ "$1" = "blaze" ] || [ "$1" = "ask" ] || ([ "$1" = "session" ] && [ "$2" != "info" ]) || [ "$1" = "tools" ]) && ! is_daemon_running && ! daemon_autostart_disabled; then
-    abort_if_stuck_daemon
+elif ([ "$1" = "trail" ] || [ "$1" = "run" ] || [ "$1" = "blaze" ] || [ "$1" = "ask" ] || ([ "$1" = "session" ] && [ "$2" != "info" ]) || [ "$1" = "tools" ]) && ! is_daemon_running && ! daemon_port_held_by_unresponsive && ! daemon_autostart_disabled; then
     # Auto-start daemon for commands that need it so subsequent calls reuse it.
     # Use stderr so --json output on stdout stays clean.
     echo "Starting Trailblaze daemon..." >&2
     # Ports are passed via exported TRAILBLAZE_PORT/TRAILBLAZE_HTTPS_PORT env vars
     tb_check_java_version || exit 1
-    tb_run_background app --foreground --headless
-    record_daemon_pid "$!"
+    start_daemon_background normal || exit 1
 
     # Wait for daemon to be ready (all output to stderr for --json safety)
     echo -n "Waiting for Trailblaze daemon" >&2
     max_attempts=60
     attempts=0
+    daemon_exited_during_startup=false
     while [ $attempts -lt $max_attempts ]; do
         if is_daemon_running; then
             echo "" >&2
             echo "Trailblaze daemon ready." >&2
+            release_daemon_startup
+            break
+        fi
+        if ! process_is_alive "$TRAILBLAZE_DAEMON_START_PID"; then
+            release_daemon_startup
+            daemon_exited_during_startup=true
             break
         fi
         echo -n "." >&2
@@ -727,9 +1073,17 @@ elif ([ "$1" = "trail" ] || [ "$1" = "run" ] || [ "$1" = "blaze" ] || [ "$1" = "
         attempts=$((attempts + 1))
     done
 
+    # A daemon that died is not a daemon that was slow, and the two need
+    # different things from the reader — one is a crash to look up in
+    # daemon.log, the other is a machine to wait longer on. The other two
+    # readiness polls already separate them.
     if ! is_daemon_running; then
         echo "" >&2
-        echo "Warning: Daemon did not start in time. Falling back to direct execution." >&2
+        if [ "$daemon_exited_during_startup" = true ]; then
+            echo "Warning: the Trailblaze daemon exited during startup. Falling back to direct execution." >&2
+        else
+            echo "Warning: Daemon did not start in time. Falling back to direct execution." >&2
+        fi
     fi
 
     # Now run the CLI command — TrailCommand will detect the daemon and delegate.

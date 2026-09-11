@@ -40,9 +40,9 @@ internal object AndroidComposeActions {
    * A touch, not the `OnClick` semantics action, because on this app the action is not equivalent
    * to it. Square's Market rows publish `OnClick` and act only on real pointer input, so
    * dispatching the action to one succeeds, changes nothing, and leaves the trail believing it has
-   * navigated — cases 5380717 and 4837703 each spent their remaining steps on a More menu they
-   * thought they had left. It also matches what these recordings were made under: build 9900 gave
-   * that same Settings row a `GESTURE`, not an `ACTION_CLICK`.
+   * navigated — two trails each spent their remaining steps on a More menu they thought they had
+   * left. It also matches the app build these recordings were made under: it gave that same
+   * Settings row a `GESTURE`, not an `ACTION_CLICK`.
    *
    * The POINT is what moves instead. `performClick` taps the center, which goes wherever the hit
    * test sends it — through an overlay drawn later, onto that overlay — while this tool still
@@ -153,8 +153,8 @@ internal object AndroidComposeActions {
    * recordings were made under — a touch down at the element's center, held — and the node that
    * reacts to it is decided by Compose's own hit test, exactly as it would be for a finger. Moving
    * the gesture to an ancestor carrying `OnLongClick` would send it somewhere the recording never
-   * touched, and the case this exists for (case 5380692 long-pressing an EMPTY favorites tile)
-   * has no such ancestor to move to.
+   * touched, and the case this exists for (a trail long-pressing an EMPTY favorites tile) has no
+   * such ancestor to move to.
    */
   suspend fun longClick(target: AndroidTestTarget, semanticsId: Int) {
     val rule = target.requireComposeRule()

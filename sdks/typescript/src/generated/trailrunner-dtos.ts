@@ -19,6 +19,8 @@ export interface AccessibilityActionLog {
   session: string;
   timestamp: string;
   durationMs: number;
+  clock?: TrailblazeClockDomain | null;
+  hostReceivedAt?: string | null;
 }
 
 export interface Action {
@@ -169,6 +171,7 @@ export interface Call {
   id?: string | null;
   tool: string;
   args: string;
+  cacheControl?: PolymorphicCacheControl | null;
 }
 
 export interface CancelSessionRequest {
@@ -265,6 +268,8 @@ export interface DelegatingTrailblazeToolLog {
   timestamp: string;
   traceId?: string | null;
   executableTools: OtherTrailblazeTool[];
+  clock?: TrailblazeClockDomain | null;
+  hostReceivedAt?: string | null;
 }
 
 export interface DeleteSessionRequest {
@@ -744,6 +749,8 @@ export interface MaestroCommandLog {
   session: string;
   timestamp: string;
   durationMs: number;
+  clock?: TrailblazeClockDomain | null;
+  hostReceivedAt?: string | null;
 }
 
 export interface MaestroDriverLog {
@@ -760,6 +767,8 @@ export interface MaestroDriverLog {
   deviceHeight: number;
   deviceWidth: number;
   traceId?: string | null;
+  clock?: TrailblazeClockDomain | null;
+  hostReceivedAt?: string | null;
 }
 
 export interface MaestroValidationError {
@@ -781,6 +790,8 @@ export interface McpAgentIterationLog {
   session: string;
   timestamp: string;
   traceId: string;
+  clock?: TrailblazeClockDomain | null;
+  hostReceivedAt?: string | null;
 }
 
 export interface McpAgentRunLog {
@@ -797,6 +808,8 @@ export interface McpAgentRunLog {
   session: string;
   timestamp: string;
   traceId: string;
+  clock?: TrailblazeClockDomain | null;
+  hostReceivedAt?: string | null;
 }
 
 export interface McpAgentToolLog {
@@ -810,6 +823,8 @@ export interface McpAgentToolLog {
   session: string;
   timestamp: string;
   traceId?: string | null;
+  clock?: TrailblazeClockDomain | null;
+  hostReceivedAt?: string | null;
 }
 
 export interface McpAskLog {
@@ -822,6 +837,8 @@ export interface McpAskLog {
   durationMs: number;
   session: string;
   timestamp: string;
+  clock?: TrailblazeClockDomain | null;
+  hostReceivedAt?: string | null;
 }
 
 export interface McpSamplingLog {
@@ -843,6 +860,8 @@ export interface McpSamplingLog {
   session: string;
   timestamp: string;
   traceId: string;
+  clock?: TrailblazeClockDomain | null;
+  hostReceivedAt?: string | null;
   screenshotFile?: string | null;
 }
 
@@ -861,6 +880,8 @@ export interface McpToolCallRequestLog {
   traceId: string;
   session: string;
   timestamp: string;
+  clock?: TrailblazeClockDomain | null;
+  hostReceivedAt?: string | null;
 }
 
 export interface McpToolCallResponseLog {
@@ -874,6 +895,8 @@ export interface McpToolCallResponseLog {
   durationMs: number;
   session: string;
   timestamp: string;
+  clock?: TrailblazeClockDomain | null;
+  hostReceivedAt?: string | null;
 }
 
 export interface MissingRequiredArgs {
@@ -925,6 +948,8 @@ export interface ObjectiveCompleteLog {
   objectiveResult: AgentTaskStatus;
   session: string;
   timestamp: string;
+  clock?: TrailblazeClockDomain | null;
+  hostReceivedAt?: string | null;
 }
 
 export interface ObjectiveFailed {
@@ -938,6 +963,8 @@ export interface ObjectiveStartLog {
   promptStep: PromptStep;
   session: string;
   timestamp: string;
+  clock?: TrailblazeClockDomain | null;
+  hostReceivedAt?: string | null;
 }
 
 export interface OkResponse {
@@ -988,6 +1015,7 @@ export interface Reasoning {
   summary?: string[] | null;
   encrypted?: string | null;
   id?: string | null;
+  cacheControl?: PolymorphicCacheControl | null;
 }
 
 export interface RebuildDaemonRequest {
@@ -1122,6 +1150,8 @@ export interface SelfHealInvokedLog {
   timestamp: string;
   recordingResult: Failure;
   stepIndex?: number | null;
+  clock?: TrailblazeClockDomain | null;
+  hostReceivedAt?: string | null;
 }
 
 export interface SessionFileDto {
@@ -1148,6 +1178,7 @@ export interface SessionInfo {
   trailConfig?: TrailConfig | null;
   llmUsageSummary?: LlmSessionUsageAndCost | null;
   selectedDeviceConfiguration?: string | null;
+  deviceClockOffsetMs?: number | null;
 }
 
 export type SessionStatus = Cancelled | Failed | FailedWithSelfHeal | SessionStatusEndedMaxCallsLimitReached | Started | Succeeded | SucceededWithSelfHeal | TimeoutReached | Unknown;
@@ -1432,6 +1463,7 @@ export interface TrailConfig {
   skip?: string | null;
   memory?: Record<string, string> | null;
   args?: Record<string, TrailArgConfig> | null;
+  locale?: string | null;
 }
 
 export interface TrailDetailResponse {
@@ -1521,7 +1553,11 @@ export interface TrailblazeAgentTaskStatusChangeLog {
   durationMs?: number;
   session: string;
   timestamp: string;
+  clock?: TrailblazeClockDomain | null;
+  hostReceivedAt?: string | null;
 }
+
+export type TrailblazeClockDomain = "host" | "device";
 
 export interface TrailblazeDeviceId {
   instanceId: string;
@@ -1600,6 +1636,8 @@ export interface TrailblazeLlmRequestLog {
   requestContext?: LlmRequestContext | null;
   llmRequestLabel?: string | null;
   screenshotIsAnnotated?: boolean | null;
+  clock?: TrailblazeClockDomain | null;
+  hostReceivedAt?: string | null;
 }
 
 export type TrailblazeLog = AccessibilityActionLog | DelegatingTrailblazeToolLog | MaestroCommandLog | MaestroDriverLog | McpAgentIterationLog | McpAgentRunLog | McpAgentToolLog | McpAskLog | McpSamplingLog | McpToolCallRequestLog | McpToolCallResponseLog | ObjectiveCompleteLog | ObjectiveStartLog | SelfHealInvokedLog | TrailblazeAgentTaskStatusChangeLog | TrailblazeLlmRequestLog | TrailblazeProgressLog | TrailblazeSessionStatusChangeLog | TrailblazeSnapshotLog | TrailblazeToolLog;
@@ -1625,6 +1663,8 @@ export interface TrailblazeProgressLog {
   eventData?: Record<string, unknown> | null;
   session: string;
   timestamp: string;
+  clock?: TrailblazeClockDomain | null;
+  hostReceivedAt?: string | null;
 }
 
 export interface TrailblazeSessionStatusChangeLog {
@@ -1632,6 +1672,8 @@ export interface TrailblazeSessionStatusChangeLog {
   sessionStatus: SessionStatus;
   session: string;
   timestamp: string;
+  clock?: TrailblazeClockDomain | null;
+  hostReceivedAt?: string | null;
 }
 
 export interface TrailblazeSnapshotLog {
@@ -1648,6 +1690,8 @@ export interface TrailblazeSnapshotLog {
   session: string;
   timestamp: string;
   traceId?: string | null;
+  clock?: TrailblazeClockDomain | null;
+  hostReceivedAt?: string | null;
 }
 
 export interface TrailblazeTargetAppInfo {
@@ -1684,6 +1728,8 @@ export interface TrailblazeToolLog {
   dispatchedHostSide?: boolean;
   rawTrailblazeTool?: OtherTrailblazeTool | null;
   deviceName?: string | null;
+  clock?: TrailblazeClockDomain | null;
+  hostReceivedAt?: string | null;
 }
 
 export interface TrailblazeToolParameterDescriptor {

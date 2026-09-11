@@ -1,0 +1,20 @@
+# This file is a CHECKED-IN baseline of CLI output rendered by trailblaze-host's CLI helpers.
+# It is NOT a contract — if a test fails here because output drifted, decide whether the
+# drift is intentional. The test always (re)writes this file from the current rendered output,
+# then asserts the working tree is clean. So `git diff` of this file IS the failure message.
+# Reviewers: scrutinize diffs to baselines the same way you would scrutinize a UI screenshot —
+# small wording / spacing changes can be intentional or accidental.
+# ----------------------------------------------------------------------
+Usage: trailblaze strings [-hV] [COMMAND]
+Extract the human-visible text a recorded session showed, for localization and
+copy diffs
+  -h, --help      Show this help message and exit.
+  -V, --version   Print version information and exit.
+Commands:
+  extract  Write visible-strings.ndjson into each session's directory. One line
+             per screen capture, keyed by the screenshot filename so every
+             string traces back to its image.
+  diff     Compare two visible-strings.ndjson files step by step. Meaningful
+             only for a mechanical trail: an LLM-driven objective takes a
+             different path each run, so its step numbers do not line up across
+             runs.

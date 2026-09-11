@@ -35,7 +35,7 @@ data class PromptStepStatus(
   // Optional auto-termination ledger for verify steps. The runner attaches one via
   // [attachVerifyAssertionLedger] when its `autoTerminateVerifySteps` flag is on and the
   // current [PromptStep] is a [VerificationStep]; otherwise it stays null and the helper's
-  // wiring point is a no-op. See `fix/agent-verify-step-auto-terminate` for context.
+  // wiring point is a no-op. See [VerifyAssertionLedger] for what ends a step.
   var verifyAssertionLedger: VerifyAssertionLedger? = null
     private set
 

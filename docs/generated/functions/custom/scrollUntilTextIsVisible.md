@@ -39,17 +39,13 @@ additional disambiguation fields (e.g. 'index') when multiple elements match the
   The element id to scroll until. At least one of 'text', 'textRegex', or 'id' is required.
 - `index` — `Integer`
   A 0-based index to disambiguate multiple views with the same text. Default is '0'.
-- `direction` — `ToolParameterType.Enum(
-  entries = [UP, DOWN, RIGHT, LEFT]
-)`
+- `direction` — `enum(UP | DOWN | RIGHT | LEFT)`
   Direction to scroll. Default is 'DOWN'.
 - `visibilityPercentage` — `Integer`
   Percentage of element visible in viewport. Default is '100'.
 - `centerElement` — `Boolean`
-  If it will attempt to stop scrolling when the element is closer to the screen center. Default is 'false'.
-- `scrollStartPosition` — `ToolParameterType.Enum(
-  entries = [CENTER, TOP, BOTTOM]
-)`
+  If true, keeps scrolling until the found element is near the screen center instead of stopping at first visibility — so a tab bar, sticky footer or promo banner cannot intercept a tap aimed at it. Omit to use the driver-tuned default (true for vertical scrolls on the Android accessibility driver, which needs the extra travel; false elsewhere, including horizontal scrolls, where a correction can carry the target off the opposite edge).
+- `scrollStartPosition` — `enum(CENTER | TOP | BOTTOM)`
   Which part of the screen to scroll from. Default is 'CENTER'.
 - `scrollDurationMs` — `Integer`
   Duration in milliseconds of each scroll swipe gesture. Lower is a faster swipe. Omit to use the driver-tuned default (400ms on Android on-device). Set a lower value (e.g. '200') on screens where a slower swipe is misread as a tap.

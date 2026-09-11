@@ -9,6 +9,7 @@ import android.util.Log
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
 import androidx.test.runner.lifecycle.Stage
+import java.util.Locale
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
@@ -73,6 +74,29 @@ object AppUnderTestLauncher {
       resumedActivityOrNull()?.takeIf { it !== otherThan }?.let { return it }
       check(System.currentTimeMillis() < deadline) {
         "No Activity reached RESUMED within ${LAUNCH_TIMEOUT_MS}ms of launching the app under test."
+      }
+      Thread.sleep(POLL_MS)
+    }
+  }
+
+  /**
+   * Waits until a resumed Activity observes [locale]. The Activity may be either a replacement
+   * created for the configuration change or the same instance when the app handles `locale` in
+   * `android:configChanges`.
+   */
+  internal fun awaitActivityWithLocale(
+    locale: String,
+    activityProvider: () -> Activity? = ::resumedActivityOrNull,
+  ): Activity {
+    val expectedLocale = Locale.forLanguageTag(locale).toLanguageTag()
+    val deadline = System.currentTimeMillis() + LAUNCH_TIMEOUT_MS
+    while (true) {
+      activityProvider()?.let { activity ->
+        val actualLocale = activity.resources.configuration.locales[0].toLanguageTag()
+        if (actualLocale.equals(expectedLocale, ignoreCase = true)) return activity
+      }
+      check(System.currentTimeMillis() < deadline) {
+        "No resumed Activity observed device locale `$expectedLocale` within ${LAUNCH_TIMEOUT_MS}ms."
       }
       Thread.sleep(POLL_MS)
     }

@@ -12,7 +12,7 @@ import xyz.block.trailblaze.toolcalls.ResolvedTargetToolDetailRenderer
  * Focused tests for [TargetToolBaselineGenerator]. The full `generate()` walks the
  * framework classpath (`AppTargetYamlLoader.discoverConfigs()` + companions) which is
  * exercised end-to-end by `./gradlew :internal-docs-generator:run` + CI's
- * `pr_static_checks.sh` `git diff --exit-code` assertion. This file pins the part of the
+ * static-checks `git diff --exit-code` assertion. This file pins the part of the
  * generator that *can* be tested without that setup: the per-tool sidecar orphan-prune
  * behavior, which is the dogfood contract with the workspace `ResolvedTargetReportEmitter`
  * — stale emitter-owned sidecars must be removed, hand-authored siblings must survive.

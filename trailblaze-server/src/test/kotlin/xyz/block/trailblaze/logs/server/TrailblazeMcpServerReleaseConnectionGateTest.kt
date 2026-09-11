@@ -23,7 +23,7 @@ import kotlin.test.assertTrue
 
 /**
  * Pins the platform/claim gating that prevents `releasePersistentDeviceConnection`
- * from wedging `system_server` after Android session displacement (build 5463).
+ * from wedging `system_server` after Android session displacement.
  * Companion to host-side fast-fail (PR #2848) and CI retry-on-timeout (PR #2865).
  */
 class TrailblazeMcpServerReleaseConnectionGateTest {

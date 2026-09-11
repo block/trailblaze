@@ -44,7 +44,16 @@ object BuiltInLlmModelRegistry {
   }
 
   private fun loadSingleProvider(providerId: String): LoadedProvider? {
-    val content = readBuiltInProviderYaml(providerId) ?: return null
+    val content =
+      readBuiltInProviderYaml(providerId)
+        ?: run {
+          // Say so, because the consequence is invisible otherwise: callers substitute
+          // TrailblazeLlmModel.fallback(...) and the run continues with guessed pricing and
+          // capabilities. On Android this is the line that distinguishes "the config tree is not
+          // in this APK" from an ordinary unknown provider id.
+          Console.log("No built-in provider YAML found for '$providerId'")
+          return null
+        }
     return try {
       parseProviderYaml(content)
     } catch (e: Exception) {

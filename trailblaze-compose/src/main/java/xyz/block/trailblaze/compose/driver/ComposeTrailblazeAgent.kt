@@ -21,13 +21,13 @@ import xyz.block.trailblaze.compose.driver.tools.ComposeVerifyTextVisibleTool
 import xyz.block.trailblaze.compose.driver.tools.ComposeWaitTool
 import xyz.block.trailblaze.compose.target.ComposeTestTarget
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
-import xyz.block.trailblaze.exception.TrailblazeException
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
 import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.toolcalls.DelegatingTrailblazeTool
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
+import xyz.block.trailblaze.toolcalls.HostLocalExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
@@ -131,16 +131,20 @@ class ComposeTrailblazeAgent(
         }
       }
       else ->
-        throw TrailblazeException(
-          message =
-            buildString {
-              appendLine("Unhandled Trailblaze tool ${tool::class.java.simpleName} - $tool.")
-              appendLine("ComposeTrailblazeAgent supports:")
-              appendLine("- ${ComposeExecutableTool::class.java.simpleName}")
-              appendLine("- ${ExecutableTrailblazeTool::class.java.simpleName}")
-              appendLine("- ${DelegatingTrailblazeTool::class.java.simpleName}")
-              appendLine("- ${MemoryTrailblazeTool::class.java.simpleName}")
-            },
+        throw unsupportedToolShapeException(
+          tool = tool,
+          agentName = "ComposeTrailblazeAgent",
+          supportedShapes = listOf(
+            ComposeExecutableTool::class.java.simpleName,
+            ExecutableTrailblazeTool::class.java.simpleName,
+            DelegatingTrailblazeTool::class.java.simpleName,
+            // Both of these dispatch in BaseTrailblazeAgent before reaching this agent, so
+            // they're supported here even though this `when` has no branch for them.
+            MemoryTrailblazeTool::class.java.simpleName,
+            HostLocalExecutableTrailblazeTool::class.java.simpleName,
+          ),
+          remediation = "Register a ${ComposeExecutableTool::class.java.simpleName} or a " +
+            "generic ${ExecutableTrailblazeTool::class.java.simpleName}.",
         )
     }
   }

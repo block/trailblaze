@@ -26,14 +26,15 @@ import xyz.block.trailblaze.util.Console
  * shape from the multi-device trails design — every device a trail declares, whether a
  * standalone single-device entry (the map KEY is the device classifier), a named multi-device
  * CONFIGURATION (an entry carrying an inner [devices] map), or a named device inside such a
- * configuration, is this same class. Add new per-device capabilities HERE so they work at
- * every level.
+ * configuration, is this same class. Fields document which levels support them; a field must not
+ * silently parse at a level whose runtime cannot honor it.
  *
  * ```yaml
  * config:
  *   devices:
  *     android-tablet:
  *       driver: ANDROID_ONDEVICE_ACCESSIBILITY   # single-device entry: the KEY is the classifier
+ *       locale: es                                # optional device language for this entry
  *     ios: {}                                    # declare the classifier, pin nothing
  *     web:                                       # the same, written as an empty value
  *     pos-pair:                                  # multi-device configuration (inner devices:)
@@ -52,10 +53,12 @@ import xyz.block.trailblaze.util.Console
  * - A **single-device entry**'s key IS its classifier — a [classifier] field that contradicts
  *   the key is a validation error.
  * - A **configuration** entry ([devices] non-null) declares no device identity of its own:
- *   [driver], [classifier], and [target] on it are validation errors ([description] is fine).
+ *   [driver], [classifier], [target], and [locale] on it are validation errors
+ *   ([description] is fine).
  *   Its inner map must be non-empty, and configurations don't nest.
  * - A **named device** inside a configuration says what it is via [classifier]; steps address
- *   it by its NAME (`switchDevice`), never by classifier or serial.
+ *   it by its NAME (`switchDevice`), never by classifier or serial. [locale] is not accepted on
+ *   these members until multi-device setup can apply it to every bound device before the run.
  */
 @Serializable
 data class TrailblazeDeviceDefinition(
@@ -93,6 +96,12 @@ data class TrailblazeDeviceDefinition(
    * Insertion order is preserved by the YAML decoder (kaml decodes maps to LinkedHashMap).
    */
   val devices: Map<String, TrailblazeDeviceDefinition>? = null,
+  /**
+   * Optional BCP-47 language tag (for example, `es` or `fr-CA`) applied to a top-level single-device
+   * entry before the trail starts. Appended to preserve positional component accessors for earlier
+   * fields.
+   */
+  val locale: String? = null,
 ) {
   /** True when this entry is a multi-device configuration (it carries an inner [devices] map). */
   val isConfiguration: Boolean get() = devices != null
@@ -226,10 +235,15 @@ object TrailblazeDeviceDefinitionMapSerializer : KSerializer<Map<String, Trailbl
   private fun validateEntry(key: String, definition: TrailblazeDeviceDefinition) {
     val inner = definition.devices
     if (inner != null) {
-      require(definition.driver == null && definition.classifier == null && definition.target == null) {
+      require(
+        definition.driver == null &&
+          definition.classifier == null &&
+          definition.target == null &&
+          definition.locale == null,
+      ) {
         "config.devices entry '$key' is a multi-device configuration (it has an inner `devices:` " +
-          "map) and cannot also declare `driver:`/`classifier:`/`target:` — those belong on its " +
-          "named devices."
+          "map) and cannot also declare `driver:`/`classifier:`/`target:`/`locale:` — those " +
+          "belong on its named devices."
       }
       require(inner.isNotEmpty()) {
         "config.devices configuration '$key' declares an empty `devices:` map — " +
@@ -239,6 +253,11 @@ object TrailblazeDeviceDefinitionMapSerializer : KSerializer<Map<String, Trailbl
         require(member.devices == null) {
           "config.devices configuration '$key' nests another configuration under '$name' — " +
             "configurations don't nest."
+        }
+        require(member.locale == null) {
+          "config.devices configuration '$key' declares locale on named device '$name', but " +
+            "per-member locale is not supported yet — declare locale on a top-level " +
+            "single-device classifier instead."
         }
       }
     } else {

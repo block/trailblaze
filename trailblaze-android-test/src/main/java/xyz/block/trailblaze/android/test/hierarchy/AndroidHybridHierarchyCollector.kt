@@ -154,9 +154,9 @@ object AndroidHybridHierarchyCollector {
    * activity's decor, so a tree built from the decor alone cannot see it at all — and worse,
    * still sees everything the dialog covers. Recordings were made against trees with the
    * opposite semantics: UiAutomator dumps the active window, and an accessibility projection
-   * hides what a modal window occludes. Case 4837703's status filter is the concrete failure:
-   * with a sheet open, the decor-only tree offered the OCCLUDED filter chips and never the
-   * sheet's own rows. Windows are checked topmost-first, and the activity's decor is the
+   * hides what a modal window occludes. A transactions trail's status filter is the concrete
+   * failure: with a sheet open, the decor-only tree offered the OCCLUDED filter chips and never
+   * the sheet's own rows. Windows are checked topmost-first, and the activity's decor is the
    * fallback for the moments (transitions) where no window reports focus.
    */
   private fun focusedWindowRoot(activity: Activity): View = onMainThread {

@@ -10,7 +10,7 @@ import xyz.block.trailblaze.api.TrailblazeNode
 
 /**
  * Geometry throughout is the real captured hierarchy from the motivating failure: a "Loyalty
- * account deleted." snackbar overlaying an item row, from build 7602's `AgentDriverLog`.
+ * account deleted." snackbar overlaying an item row, from a recorded `AgentDriverLog`.
  */
 class TapOcclusionGuardTest {
 
@@ -219,6 +219,187 @@ class TapOcclusionGuardTest {
     val signal = imeOcclusionSignal(imeBounds = null, imeShownAuthoritative = true, x = 543, y = 1393)
     assertNotNull(signal)
     assertTrue(signal.contains("degraded"), signal)
+  }
+
+  /**
+   * The regression this guard shipped with: with no screen height to reason about, "the IME is up
+   * but unmeasurable" was reported as occlusion at every coordinate on screen — including points
+   * in the top tenth of a tall screen, which a bottom-docked keyboard cannot reach at any size.
+   */
+  @Test
+  fun `unmeasurable ime does not occlude a tap the keyboard cannot reach`() {
+    assertNull(
+      imeOcclusionSignal(
+        imeBounds = null,
+        imeShownAuthoritative = true,
+        x = 935,
+        y = 200,
+        screenWidth = 1080,
+        screenHeight = 2400,
+      ),
+      "y=200 on a 2400px screen is above any possible bottom-docked keyboard",
+    )
+    assertNull(
+      imeOcclusionSignal(
+        imeBounds = null,
+        imeShownAuthoritative = true,
+        x = 540,
+        y = 540,
+        screenWidth = 1080,
+        screenHeight = 2400,
+      ),
+      "y=540 on a 2400px screen is above any possible bottom-docked keyboard",
+    )
+  }
+
+  @Test
+  fun `unmeasurable ime still occludes a tap in keyboard territory`() {
+    val signal = imeOcclusionSignal(
+      imeBounds = null,
+      imeShownAuthoritative = true,
+      x = 540,
+      y = 2000,
+      screenWidth = 1080,
+      screenHeight = 2400,
+    )
+    assertNotNull(signal, "a tap in the bottom of the screen is still conservatively occluded")
+    assertTrue(signal.contains("degraded"), signal)
+  }
+
+  /**
+   * The 60% bound has to bite exactly at 40% of the screen, or the constant is decorative: a
+   * looser reading would clear taps the keyboard really can cover.
+   */
+  @Test
+  fun `the unmeasurable ime bound starts at 40 percent down the screen`() {
+    assertNull(
+      imeOcclusionSignal(null, true, x = 0, y = 959, screenWidth = 1080, screenHeight = 2400),
+      "one pixel above the bound is clear",
+    )
+    assertNotNull(
+      imeOcclusionSignal(null, true, x = 0, y = 960, screenWidth = 1080, screenHeight = 2400),
+      "the bound itself is occluded",
+    )
+  }
+
+  /**
+   * A height that does not divide evenly by the percentage, pinning the boundary where integer
+   * truncation is visible: 60% of 731 is 438.6, so the cutoff is 731 - 438 = 293 rather than the
+   * 292.4 a fractional computation would produce. Both round to the same verdict for every
+   * integer `y` — this is here so a future change to the arithmetic has to stay that way.
+   */
+  @Test
+  fun `the bound is exact at a screen height that does not divide evenly`() {
+    assertNull(
+      imeOcclusionSignal(null, true, x = 0, y = 292, screenWidth = 400, screenHeight = 731),
+      "one pixel above the cutoff is clear",
+    )
+    assertNotNull(
+      imeOcclusionSignal(null, true, x = 0, y = 293, screenWidth = 400, screenHeight = 731),
+      "the cutoff itself is occluded",
+    )
+  }
+
+  /**
+   * A wider-than-tall screen gets no relaxation at all, because an IME there can enter fullscreen
+   * extract mode and cover the whole screen — so the bottom-docked premise the bound rests on does
+   * not hold. This is the same coordinate the taller-than-wide test above clears.
+   */
+  @Test
+  fun `a wider than tall screen keeps the fully conservative answer`() {
+    assertNotNull(
+      imeOcclusionSignal(null, true, x = 935, y = 200, screenWidth = 1920, screenHeight = 1080),
+      "a fullscreen IME can occlude y=200 here, so the tap must not be cleared",
+    )
+    assertNotNull(
+      imeOcclusionSignal(null, true, x = 100, y = 10, screenWidth = 1920, screenHeight = 1080),
+      "not even the very top of a wider-than-tall screen is ruled out",
+    )
+  }
+
+  /** Equal width and height is not taller-than-wide, so it gets no relaxation either. */
+  @Test
+  fun `a square screen keeps the fully conservative answer`() {
+    assertNotNull(
+      imeOcclusionSignal(null, true, x = 100, y = 10, screenWidth = 1080, screenHeight = 1080),
+      "height must exceed width for the bottom-docked premise to be worth anything",
+    )
+  }
+
+  @Test
+  fun `an unknown screen size keeps the fully conservative answer`() {
+    assertNotNull(
+      imeOcclusionSignal(null, true, x = 935, y = 200, screenWidth = null, screenHeight = null),
+      "without a size there is no way to tell top from bottom, so do not clear the tap",
+    )
+    assertNotNull(
+      imeOcclusionSignal(null, true, x = 935, y = 200, screenWidth = 0, screenHeight = 2400),
+      "a zero width cannot establish that the screen is taller than it is wide",
+    )
+    assertNotNull(
+      imeOcclusionSignal(null, true, x = 935, y = 200, screenWidth = null, screenHeight = 2400),
+      "a height with no width cannot establish that the screen is taller than it is wide",
+    )
+    assertNotNull(
+      imeOcclusionSignal(null, true, x = 935, y = 200, screenWidth = 1080, screenHeight = null),
+      "a width with no height leaves nothing to measure the cutoff against",
+    )
+  }
+
+  /**
+   * A non-positive height is rejected on its own, not merely as a side effect of failing the
+   * taller-than-wide comparison — so the width here is smaller than the height would need to be
+   * for that comparison to do the rejecting.
+   */
+  @Test
+  fun `a non-positive screen height keeps the fully conservative answer`() {
+    assertNotNull(
+      imeOcclusionSignal(null, true, x = 935, y = 200, screenWidth = -100, screenHeight = 0),
+      "a zero height is not a usable measurement",
+    )
+    assertNotNull(
+      imeOcclusionSignal(null, true, x = 935, y = 200, screenWidth = -100, screenHeight = -50),
+      "a negative height is not a usable measurement",
+    )
+  }
+
+  /**
+   * An off-screen tap point cannot be reasoned about geometrically, so it keeps the conservative
+   * answer. Without the lower guard a negative `y` compares as "above the cutoff" and would be
+   * cleared, which is a silent loss of the pre-existing behavior.
+   */
+  @Test
+  fun `an off screen tap point is never cleared`() {
+    assertNotNull(
+      imeOcclusionSignal(null, true, x = 540, y = -1, screenWidth = 1080, screenHeight = 2400),
+      "a negative y is off screen, not above the keyboard",
+    )
+    assertNotNull(
+      imeOcclusionSignal(null, true, x = 540, y = -5000, screenWidth = 1080, screenHeight = 2400),
+      "an arbitrarily negative y is still not clear",
+    )
+    assertNotNull(
+      imeOcclusionSignal(null, true, x = 540, y = 3000, screenWidth = 1080, screenHeight = 2400),
+      "a y past the bottom of the screen is in keyboard territory, not above it",
+    )
+  }
+
+  /** Measured bounds stay authoritative — the height bound must not widen or narrow them. */
+  @Test
+  fun `a measured ime is unaffected by the screen height bound`() {
+    val bounds = TrailblazeNode.Bounds(0, 1200, 1080, 1920)
+    assertNull(
+      imeOcclusionSignal(bounds, true, x = 543, y = 1950, screenWidth = 1080, screenHeight = 2400),
+      "below the measured IME is clear even though it is in the bottom 60% of the screen",
+    )
+    assertNotNull(
+      imeOcclusionSignal(bounds, true, x = 543, y = 1393, screenWidth = 1080, screenHeight = 2400),
+      "inside the measured IME is occluded",
+    )
+    assertNotNull(
+      imeOcclusionSignal(bounds, true, x = 543, y = 1393, screenWidth = 1920, screenHeight = 1080),
+      "and a measured IME is still authoritative on a wider-than-tall screen",
+    )
   }
 
   @Test

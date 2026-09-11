@@ -24,6 +24,7 @@ import xyz.block.trailblaze.logs.model.HasTrailblazeTool
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.logs.model.TraceId
+import xyz.block.trailblaze.logs.model.TrailblazeClockDomain
 import xyz.block.trailblaze.logs.model.TrailblazeLlmMessage
 import xyz.block.trailblaze.agent.AgentTier
 import xyz.block.trailblaze.mcp.AgentImplementation
@@ -39,12 +40,48 @@ sealed interface TrailblazeLog {
   val session: SessionId
   val timestamp: Instant
 
+  /**
+   * Which clock stamped [timestamp]. Set at EMISSION by the runtime that owns the clock (an
+   * on-device logging rule stamps [TrailblazeClockDomain.DEVICE], a host runner
+   * [TrailblazeClockDomain.HOST]), because some device logs never pass through the host — the
+   * emitter falls back to writing to the device's own disk when the log server is unreachable, and
+   * those files are pulled back verbatim.
+   *
+   * `null` means a log written before this field existed. Inference from those is unsafe: one
+   * session legitimately mixes clocks (host-stamped MCP top-level tool logs beside device-stamped
+   * executor logs), so readers must treat `null` as "host, or unknown" and never guess. Mirrors
+   * the trace path's `SessionTraceFile.CLOCK_FIELD` (`"clock": "device"`, absent = host). Note the
+   * DELIBERATE asymmetry with trace uploads on the `/logs-ws` socket, where an absent clock param
+   * means DEVICE: that route only ever carries device traces, so absence is unambiguous there,
+   * while a log's absent marker must stay "host or unknown" because host and device logs share
+   * every log transport.
+   *
+   * Readers put a session's stamps on one timeline with `normalizedToHostClock` (or
+   * `normalizedMs`) rather than comparing them raw — see `TrailblazeLogClockNormalization.kt`.
+   */
+  val clock: TrailblazeClockDomain?
+
+  /**
+   * Host-clock instant at which host ingestion (`/agentlog` or the `/logs-ws` protobuf socket)
+   * received this log. Stamped only on device-clock logs — it is the anchor readers derive the
+   * device→host clock offset from: each anchored tool log gives a sample
+   * `hostReceivedAt - (timestamp + durationMs)` = skew + that upload's latency, and readers take
+   * the per-device MINIMUM because latency only ever adds (a batched upload inflates its own
+   * samples; a central estimate would keep typical latency in the offset and shift spans late).
+   * `null` on host-clock logs and on device logs that never reached the host — notably CI
+   * instrumentation runs, whose logs are written to the device's disk and pulled after the run,
+   * so they carry the [clock] marker but no anchor and are read unnormalized.
+   */
+  val hostReceivedAt: Instant?
+
   @Serializable
   data class TrailblazeAgentTaskStatusChangeLog(
     override val agentTaskStatus: AgentTaskStatus,
     override val durationMs: Long = agentTaskStatus.statusData.totalDurationMs,
     override val session: SessionId,
     override val timestamp: Instant,
+    override val clock: TrailblazeClockDomain? = null,
+    override val hostReceivedAt: Instant? = null,
   ) : TrailblazeLog,
     HasAgentTaskStatus,
     HasDuration
@@ -54,6 +91,8 @@ sealed interface TrailblazeLog {
     val sessionStatus: SessionStatus,
     override val session: SessionId,
     override val timestamp: Instant,
+    override val clock: TrailblazeClockDomain? = null,
+    override val hostReceivedAt: Instant? = null,
   ) : TrailblazeLog
 
   /**
@@ -125,8 +164,14 @@ sealed interface TrailblazeLog {
      * window. `null` on older logs predating the `annotated-screenshots`
      * config flag, in which case consumers should assume `true` (the historical
      * default — every persisted LLM log screenshot was the annotated variant).
+     *
+     * That 1-second window is also narrower than normal device clock skew, so a
+     * consumer still doing the twin-search should normalize by [clock] first —
+     * see [TrailblazeLog.clock] and [TrailblazeLog.hostReceivedAt].
      */
     val screenshotIsAnnotated: Boolean? = null,
+    override val clock: TrailblazeClockDomain? = null,
+    override val hostReceivedAt: Instant? = null,
   ) : TrailblazeLog,
     HasAgentTaskStatus,
     HasTraceId,
@@ -149,6 +194,8 @@ sealed interface TrailblazeLog {
     override val session: SessionId,
     override val timestamp: Instant,
     override val durationMs: Long,
+    override val clock: TrailblazeClockDomain? = null,
+    override val hostReceivedAt: Instant? = null,
   ) : TrailblazeLog,
     HasTraceId,
     HasDuration
@@ -176,6 +223,8 @@ sealed interface TrailblazeLog {
     override val session: SessionId,
     override val timestamp: Instant,
     override val durationMs: Long,
+    override val clock: TrailblazeClockDomain? = null,
+    override val hostReceivedAt: Instant? = null,
   ) : TrailblazeLog,
     HasTraceId,
     HasDuration
@@ -210,6 +259,8 @@ sealed interface TrailblazeLog {
     override val deviceHeight: Int,
     override val deviceWidth: Int,
     override val traceId: TraceId? = null,
+    override val clock: TrailblazeClockDomain? = null,
+    override val hostReceivedAt: Instant? = null,
   ) : TrailblazeLog,
     HasScreenshot,
     HasDuration,
@@ -223,6 +274,8 @@ sealed interface TrailblazeLog {
     override val timestamp: Instant,
     override val traceId: TraceId?,
     val executableTools: List<OtherTrailblazeTool>,
+    override val clock: TrailblazeClockDomain? = null,
+    override val hostReceivedAt: Instant? = null,
   ) : TrailblazeLog,
     HasTraceId,
     HasTrailblazeTool
@@ -305,6 +358,8 @@ sealed interface TrailblazeLog {
      * nothing when two bound devices happen to share a resolution.
      */
     val deviceName: String? = null,
+    override val clock: TrailblazeClockDomain? = null,
+    override val hostReceivedAt: Instant? = null,
   ) : TrailblazeLog,
     HasTrailblazeTool,
     HasTraceId,
@@ -315,6 +370,8 @@ sealed interface TrailblazeLog {
     override val promptStep: PromptStep,
     override val session: SessionId,
     override val timestamp: Instant,
+    override val clock: TrailblazeClockDomain? = null,
+    override val hostReceivedAt: Instant? = null,
   ) : TrailblazeLog,
     HasPromptStep
 
@@ -324,6 +381,8 @@ sealed interface TrailblazeLog {
     val objectiveResult: AgentTaskStatus,
     override val session: SessionId,
     override val timestamp: Instant,
+    override val clock: TrailblazeClockDomain? = null,
+    override val hostReceivedAt: Instant? = null,
   ) : TrailblazeLog,
     HasPromptStep
 
@@ -335,6 +394,8 @@ sealed interface TrailblazeLog {
     val recordingResult: PromptRecordingResult.Failure,
     /** Zero-based position in the executed prompt list. Null only for legacy logs. */
     val stepIndex: Int? = null,
+    override val clock: TrailblazeClockDomain? = null,
+    override val hostReceivedAt: Instant? = null,
   ) : TrailblazeLog,
     HasPromptStep
 
@@ -393,6 +454,8 @@ sealed interface TrailblazeLog {
     override val session: SessionId,
     override val timestamp: Instant,
     override val traceId: TraceId? = null,
+    override val clock: TrailblazeClockDomain? = null,
+    override val hostReceivedAt: Instant? = null,
   ) : TrailblazeLog,
     HasScreenshot,
     HasTraceId
@@ -435,6 +498,8 @@ sealed interface TrailblazeLog {
     override val session: SessionId,
     override val timestamp: Instant,
     override val traceId: TraceId,
+    override val clock: TrailblazeClockDomain? = null,
+    override val hostReceivedAt: Instant? = null,
   ) : TrailblazeLog,
     HasTraceId,
     HasDuration
@@ -469,6 +534,8 @@ sealed interface TrailblazeLog {
     override val session: SessionId,
     override val timestamp: Instant,
     override val traceId: TraceId,
+    override val clock: TrailblazeClockDomain? = null,
+    override val hostReceivedAt: Instant? = null,
   ) : TrailblazeLog,
     HasTraceId,
     HasDuration
@@ -525,6 +592,8 @@ sealed interface TrailblazeLog {
     override val session: SessionId,
     override val timestamp: Instant,
     override val traceId: TraceId,
+    override val clock: TrailblazeClockDomain? = null,
+    override val hostReceivedAt: Instant? = null,
   ) : TrailblazeLog,
     HasTraceId,
     HasDuration,
@@ -559,6 +628,8 @@ sealed interface TrailblazeLog {
     override val session: SessionId,
     override val timestamp: Instant,
     override val traceId: TraceId?,
+    override val clock: TrailblazeClockDomain? = null,
+    override val hostReceivedAt: Instant? = null,
   ) : TrailblazeLog,
     HasTraceId,
     HasDuration
@@ -601,6 +672,8 @@ sealed interface TrailblazeLog {
 
     override val session: SessionId,
     override val timestamp: Instant,
+    override val clock: TrailblazeClockDomain? = null,
+    override val hostReceivedAt: Instant? = null,
   ) : TrailblazeLog,
     HasTraceId
 
@@ -636,6 +709,8 @@ sealed interface TrailblazeLog {
 
     override val session: SessionId,
     override val timestamp: Instant,
+    override val clock: TrailblazeClockDomain? = null,
+    override val hostReceivedAt: Instant? = null,
   ) : TrailblazeLog,
     HasTraceId,
     HasDuration
@@ -665,6 +740,8 @@ sealed interface TrailblazeLog {
     override val durationMs: Long,
     override val session: SessionId,
     override val timestamp: Instant,
+    override val clock: TrailblazeClockDomain? = null,
+    override val hostReceivedAt: Instant? = null,
   ) : TrailblazeLog,
     HasTraceId,
     HasDuration
@@ -728,6 +805,8 @@ sealed interface TrailblazeLog {
 
     override val session: SessionId,
     override val timestamp: Instant,
+    override val clock: TrailblazeClockDomain? = null,
+    override val hostReceivedAt: Instant? = null,
   ) : TrailblazeLog,
     HasDuration
 

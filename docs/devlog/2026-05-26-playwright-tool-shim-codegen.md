@@ -146,7 +146,7 @@ itself.
   via standard Gradle wiring; the generated `.tool.yaml` descriptors
   get loaded by `TrailblazeSerializationInitializer` at test
   bootstrap; the TS bindings get type-checked by
-  `pr_validate_ts_tooling.sh` against the example packs. So a
+  the TypeScript tooling validation step against the example packs. So a
   malformed shim fails an existing CI step; no new test
   infrastructure required.
 - **Playwright-version-bump regression** — when the Playwright Java

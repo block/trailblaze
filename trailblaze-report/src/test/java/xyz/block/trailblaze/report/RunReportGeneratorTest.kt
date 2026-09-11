@@ -130,12 +130,12 @@ class RunReportGeneratorTest {
     // and `owner` gets first-class index treatment. Omitting it here would drop a skipped row out
     // of a search for its own owner while the same trail's runs still matched it.
     val meta = RunReportGenerator.skipSessionJson(
-      skipRecord(metadata = mapOf("owner" to "checkout-team", "testRailCaseId" to "4839323")),
+      skipRecord(metadata = mapOf("owner" to "checkout-team", "testRailCaseId" to "1017")),
     )["meta"]!!.jsonObject
 
     val emitted = meta["metadata"]!!.jsonObject
     assertEquals("checkout-team", emitted["owner"]!!.jsonPrimitive.content)
-    assertEquals("4839323", emitted["testRailCaseId"]!!.jsonPrimitive.content)
+    assertEquals("1017", emitted["testRailCaseId"]!!.jsonPrimitive.content)
   }
 
   @Test

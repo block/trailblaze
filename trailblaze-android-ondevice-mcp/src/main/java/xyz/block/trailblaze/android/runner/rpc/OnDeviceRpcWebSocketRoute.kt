@@ -26,6 +26,7 @@ import xyz.block.trailblaze.ondevice.rpc.proto.OnDeviceRpcProtoCodec
 import xyz.block.trailblaze.ondevice.rpc.proto.RpcFailure
 import xyz.block.trailblaze.ondevice.rpc.proto.RpcRequestEnvelope
 import xyz.block.trailblaze.ondevice.rpc.proto.RpcResponseEnvelope
+import xyz.block.trailblaze.replay.ActionTrace
 import xyz.block.trailblaze.util.Console
 
 internal data class OnDeviceProtoRpcHandlers(
@@ -48,15 +49,56 @@ internal fun Route.registerOnDeviceRpcWebSocket(
     val sendMutex = Mutex()
     for (frame in incoming) {
       if (frame !is Frame.Binary) continue
+      // t=0 for the boundary trace, stamped here rather than inside `begin()`. Everything between
+      // this line and `begin()` — reading the frame's bytes, dispatching the coroutine, decoding
+      // the envelope to name the op — is ingress the request really paid for, and the trace's job
+      // is to attribute the whole request.
+      val arrivedNs = System.nanoTime()
       val bytes = frame.readBytes()
       launch {
+        // The only place a whole request is bracketed. `run_yaml` is one replayed action, so its
+        // frame arrival is t=0 for the boundary trace and its reply frame is the last boundary;
+        // every other op just notes that it overlapped, so a polluted trace is visible.
+        //
+        // Naming the op means decoding the request envelope a second time, and a `run_yaml`
+        // envelope carries the whole trail YAML plus its config — so read the gate FIRST and only
+        // pay for the decode on a run that asked to be traced. With the trace off `op` stays null
+        // and every ActionTrace call below is a volatile read and a return.
+        val op = if (ActionTrace.gateEnabled()) opName(bytes) else null
+        if (op == "run_yaml") ActionTrace.begin(arrivedNs) else ActionTrace.otherRpc()
+        // With t=0 at frame arrival this is no longer ~0: it is what ingress cost — the coroutine
+        // dispatch and the envelope decode that named the op.
+        ActionTrace.mark(ActionTrace.Boundary.DISPATCH_START)
         val response = handleBinaryRequest(bytes, handlers)
+        ActionTrace.mark(ActionTrace.Boundary.HANDLER_RETURNED)
+        val encoded = OnDeviceRpcProtoCodec.encode(response)
+        // Encoding the reply is where a `get_screen_state` accessibility tree becomes wire bytes,
+        // and the only place that size is knowable, so the boundary carries it.
+        ActionTrace.markWith(ActionTrace.Boundary.REPLY_ENCODED, encoded.size.toLong())
         sendMutex.withLock {
-          send(Frame.Binary(fin = true, data = OnDeviceRpcProtoCodec.encode(response)))
+          send(Frame.Binary(fin = true, data = encoded))
         }
+        ActionTrace.mark(ActionTrace.Boundary.REPLY_WRITTEN)
+        if (op == "run_yaml") ActionTrace.emit()
       }
     }
   }
+}
+
+/** Which payload the request envelope carried, so the trace can bracket `run_yaml`. Never throws. */
+private fun opName(bytes: ByteArray): String = try {
+  val request = OnDeviceRpcProtoCodec.decodeRequest(bytes)
+  when {
+    request.get_screen_state != null -> "get_screen_state"
+    request.run_yaml != null -> "run_yaml"
+    request.drain_session != null -> "drain_session"
+    request.subscribe_to_progress != null -> "subscribe_to_progress"
+    request.get_execution_status != null -> "get_execution_status"
+    request.list_active_sessions != null -> "list_active_sessions"
+    else -> "unknown"
+  }
+} catch (e: Exception) {
+  "undecodable"
 }
 
 internal suspend fun handleBinaryRequest(

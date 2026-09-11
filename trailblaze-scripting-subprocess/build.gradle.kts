@@ -39,7 +39,7 @@ dependencies {
   // classpath resource and the safe extract-to-temp-file logic
   // (`SdkBundleResource.extractToFile`); we depend on it for both the API call and so the
   // resource ends up on the host daemon's classpath / inside the installed uber jar (see
-  // `scripts/install-trailblaze-from-source.sh`). Without this dep, any trail that triggers
+  // an install-from-source script). Without this dep, any trail that triggers
   // an inline-script-tool runtime fails with "classpath resource ... not found".
   implementation(project(":trailblaze-scripting-bundle"))
 

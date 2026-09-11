@@ -11,11 +11,16 @@
 //    confirm it: consecutive same-level tool logs satisfy next.ts ≈ this.ts + this.durationMs.
 //    ONE exception: McpSamplingLog is END-anchored (LocalLlmSamplingSource stamps it with
 //    Clock.System.now() after the call), so its span is [timestamp - durationMs, timestamp).
-//  - TrailblazeToolLog / TrailblazeLlmRequestLog / MaestroCommandLog share the HOST clock and
-//    nest by interval containment (a tool that delegates fully contains what it delegated to,
-//    give or take single-digit ms of bookkeeping — hence the epsilon).
-//  - MaestroDriverLog timestamps are on the DEVICE clock, which skews from the host clock by
-//    whole seconds. They are NEVER nested into the containment tree; they ride a separate track.
+//  - Which clock stamped a log is the log's OWN `clock` field ("device" / "host"), never its
+//    class: a host driver (Playwright, the host Maestro and iOS drivers) writes AgentDriverLog,
+//    which serializes under the same `MaestroDriverLog` name an on-device driver log does. A
+//    device clock skews from the host's by whole seconds, so a device-stamped log is first shifted
+//    onto the host timeline by the offset its own uploads measure — see [deviceClockOffsets].
+//    Only logs left device-stamped (a session with no anchor to measure the offset from) are held
+//    off the session window, because their skew is not elapsed time.
+//  - MaestroDriverLog spans ride a separate track: they are never nested into the containment
+//    tree, and they carry their whole duration as self time. That is about being a driver op, not
+//    about which clock stamped them.
 //  - `traceId` groups all logs of one objective/step — it is NOT parentage. Steps come from
 //    ObjectiveStartLog/ObjectiveCompleteLog pairs instead; spans are attributed to the step
 //    whose window contains them.
@@ -75,6 +80,87 @@ function parsePerfTimestamp(value: unknown): number | null {
   const trimmed = value.replace(/(\.\d{3})\d+/, '$1');
   const ms = Date.parse(trimmed);
   return Number.isFinite(ms) ? ms : null;
+}
+
+/**
+ * A session's device→host clock offsets in ms, keyed by the tool log's `deviceName`, plus the
+ * session-wide value for logs that carry no usable key.
+ */
+interface DeviceClockOffsets {
+  byDeviceName: Map<string | null, number>;
+  sessionWideMs: number;
+}
+
+/**
+ * This session's device→host clock offsets, derived from tool logs that both carry the
+ * device-clock marker and were anchored at host ingestion: each anchored log gives
+ * `hostReceivedAt - (timestamp + durationMs)` — the host receives a tool's log just after the tool
+ * finishes, so every sample is the true skew PLUS that upload's latency. The MINIMUM across a
+ * device's samples is used because latency only ever adds: the least-delayed upload is the closest
+ * measurement of pure skew, and a batched upload contributes nothing to a minimum. Per device, not
+ * per session, because a multi-device session binds devices with independent clocks.
+ *
+ * Null when the session has no anchored device-clock tool log — an all-host session, logs written
+ * before the marker existed, or device logs pulled off the device's own disk without ever reaching
+ * host ingestion. Those keep the old handling: raw timestamps, and device-stamped logs held out of
+ * the session window.
+ *
+ * This MIRRORS `deviceClockOffsets()` in `TrailblazeLogClockNormalization.kt`, which every Kotlin
+ * reader shares; the profiler runs in a browser over raw JSON and can't call it. A change to one
+ * derivation belongs in both, or a session's profile and its recording start disagreeing about
+ * where a device's spans sit.
+ */
+function deviceClockOffsets(logs: TrailblazeLogRecord[]): DeviceClockOffsets | null {
+  const samplesByDevice = new Map<string | null, number[]>();
+  for (const log of logs) {
+    if (logClass(log) !== 'TrailblazeToolLog' || log.clock !== 'device') continue;
+    const ts = parsePerfTimestamp(log.timestamp);
+    const receivedAt = parsePerfTimestamp(log.hostReceivedAt);
+    if (ts == null || receivedAt == null) continue;
+    const dur = typeof log.durationMs === 'number' && Number.isFinite(log.durationMs) ? log.durationMs : 0;
+    const key = typeof log.deviceName === 'string' && log.deviceName ? log.deviceName : null;
+    const samples = samplesByDevice.get(key);
+    if (samples) samples.push(receivedAt - (ts + dur));
+    else samplesByDevice.set(key, [receivedAt - (ts + dur)]);
+  }
+  if (!samplesByDevice.size) return null;
+  const byDeviceName = new Map<string | null, number>();
+  let sessionWideMs = Infinity;
+  for (const [key, samples] of samplesByDevice) {
+    const min = Math.min(...samples);
+    byDeviceName.set(key, min);
+    sessionWideMs = Math.min(sessionWideMs, min);
+  }
+  return { byDeviceName, sessionWideMs };
+}
+
+/**
+ * Whether this log's `timestamp` is on a device's clock rather than the host's.
+ *
+ * The log's own marker decides it. A log with no marker predates the field: those fall back to the
+ * class, which is the only signal such a log carries — and it is only right for the on-device
+ * runs that were the whole reason the exclusion existed, which is why new logs are stamped on both
+ * sides so this path ages out.
+ */
+function isDeviceClockLog(log: TrailblazeLogRecord): boolean {
+  if (log.clock === 'device') return true;
+  if (log.clock === 'host') return false;
+  return logClass(log) === 'MaestroDriverLog';
+}
+
+/**
+ * This log's start on the HOST timeline (epoch ms), or null when it carries no parseable
+ * timestamp: its own stamp plus its device's offset when it is device-stamped and the session
+ * gave an offset to shift it by. Everything else — host logs, and device logs in a session with
+ * no anchors — comes back with its raw stamp.
+ */
+function logHostMs(log: TrailblazeLogRecord, offsets: DeviceClockOffsets | null): number | null {
+  const ts = parsePerfTimestamp(log.timestamp);
+  if (ts == null) return null;
+  if (!offsets || !isDeviceClockLog(log)) return ts;
+  const key = typeof log.deviceName === 'string' && log.deviceName ? log.deviceName : null;
+  const offset = logClass(log) === 'TrailblazeToolLog' ? offsets.byDeviceName.get(key) : undefined;
+  return ts + (offset ?? offsets.sessionWideMs);
 }
 
 /** The requested timeout, ms: any top-level numeric raw-arg key matching /timeout/i. */
@@ -161,13 +247,22 @@ interface MutableSpan extends PerfSpan {
  * end-anchored McpSamplingLog, shared traceId), and the request log is the span. A sampling log
  * with no paired request (the producer had no screen context) is the only record of that call,
  * so it becomes the LLM span instead.
+ *
+ * [offsets] puts device-stamped logs on the host timeline before their spans are placed, so an
+ * on-device tool log nests against the host tools it really ran inside instead of against
+ * whatever happened to be running a second earlier.
  */
-function buildRawSpans(logs: TrailblazeLogRecord[], t0: number, llmRequestTraceIds: Set<string> = new Set()): MutableSpan[] {
+function buildRawSpans(
+  logs: TrailblazeLogRecord[],
+  t0: number,
+  llmRequestTraceIds: Set<string> = new Set(),
+  offsets: DeviceClockOffsets | null = null,
+): MutableSpan[] {
   const spans: MutableSpan[] = [];
   logs.forEach((log, order) => {
     const dur = log.durationMs;
     if (typeof dur !== 'number' || !Number.isFinite(dur) || dur < 0) return;
-    const ts = parsePerfTimestamp(log.timestamp);
+    const ts = logHostMs(log, offsets);
     if (ts == null) return;
     const cls = logClass(log);
     // McpSamplingLog is the one END-anchored duration carrier; see extractPerfSession's bounds.
@@ -267,10 +362,12 @@ function buildRawSpans(logs: TrailblazeLogRecord[], t0: number, llmRequestTraceI
  * Whether this event was stamped by a device's own wall clock rather than the host's.
  *
  * That clock drifts from the host's by whole seconds, so these events get the same treatment
- * MaestroDriverLog does: they render on the Device lane, they are never nested into the host tree,
- * and they are excluded from the session window — folding their skew into t0/t1 would shift or
- * stretch the entire profile by the drift. `SessionTraceFile.merge` stamps the flag at the endpoint
- * that received the upload, because only that endpoint knows where the batch came from.
+ * MaestroDriverLog spans do: they render on the Device lane and they are never nested into the
+ * host tree. Their stamps are shifted onto the host timeline by the session-wide offset the logs
+ * measured — and when the session measured none, they are excluded from the session window
+ * instead, because folding raw drift into t0/t1 would shift or stretch the entire profile.
+ * `SessionTraceFile.merge` stamps the flag at the endpoint that received the upload, because only
+ * that endpoint knows where the batch came from.
  */
 function isDeviceClockEvent(event: TrailblazeTraceEvent): boolean {
   return event?.clock === 'device';
@@ -303,14 +400,24 @@ function acceptTraceEvent(event: TrailblazeTraceEvent): { tsUs: number; durUs: n
  *
  * [order0] continues the file-order counter the log spans used, so the nest sort's final tie-break
  * stays a total order across both sources.
+ *
+ * [offsets] shifts device-recorded events onto the host timeline. A trace event names no device,
+ * so it takes the session-wide offset; without it the event keeps its raw device stamp, which is
+ * where it lands on the Device lane today.
  */
-function buildTraceSpans(events: TrailblazeTraceEvent[], t0: number, order0: number): MutableSpan[] {
+function buildTraceSpans(
+  events: TrailblazeTraceEvent[],
+  t0: number,
+  order0: number,
+  offsets: DeviceClockOffsets | null = null,
+): MutableSpan[] {
   const spans: MutableSpan[] = [];
   events.forEach((event, i) => {
     const accepted = acceptTraceEvent(event);
     if (!accepted) return;
     const deviceClock = isDeviceClockEvent(event);
-    const s = accepted.tsUs / 1000 - t0;
+    const shiftMs = deviceClock && offsets ? offsets.sessionWideMs : 0;
+    const s = accepted.tsUs / 1000 + shiftMs - t0;
     const dur = accepted.durUs / 1000;
     const cat = typeof event.cat === 'string' && event.cat ? event.cat : null;
     const bare = typeof event.name === 'string' && event.name ? event.name : 'trace';
@@ -556,14 +663,20 @@ function nestAndAccount(spans: MutableSpan[]): number[] {
   return roots.map((r) => r.id);
 }
 
-/** Steps: pair each ObjectiveStartLog with its matching ObjectiveCompleteLog (same promptStep). */
-function buildSteps(logs: TrailblazeLogRecord[], t0: number): PerfStep[] {
+/**
+ * Steps: pair each ObjectiveStartLog with its matching ObjectiveCompleteLog (same promptStep).
+ *
+ * Bounds go through [logHostMs] like the spans they enclose — an objective log is device-stamped
+ * too when the runner itself ran on the device, and shifting only the spans would put every one of
+ * them in the neighboring step.
+ */
+function buildSteps(logs: TrailblazeLogRecord[], t0: number, offsets: DeviceClockOffsets | null = null): PerfStep[] {
   const steps: PerfStep[] = [];
   const openByKey = new Map<string, PerfStep[]>();
   for (const log of logs) {
     const cls = logClass(log);
     if (cls !== 'ObjectiveStartLog' && cls !== 'ObjectiveCompleteLog') continue;
-    const ts = parsePerfTimestamp(log.timestamp);
+    const ts = logHostMs(log, offsets);
     if (ts == null) continue;
     let key = '';
     try { key = JSON.stringify(log.promptStep ?? null); } catch (_) { key = String(log.promptStep); }
@@ -665,29 +778,34 @@ function bottomUpAggregate(spans: PerfSpan[], rangeS: number, rangeE: number): P
  * Extract one session's full profile from its raw log records. Returns null when the logs carry
  * no host-clock timestamps at all (nothing to anchor a timeline on).
  *
- * The session window [t0, t1] comes from host-clock logs AND host-clock span ENDS — a span can
+ * The session window [t0, t1] comes from host-timeline logs AND their span ENDS — a span can
  * end after the session's last log timestamp (a long-running tool's log is written at its START;
  * its duration can extend past every later log, e.g. a trailhead tool logged at session start
  * that runs 77s). That stretch is real execution time and must be on the timeline, not clipped.
- * MaestroDriverLog device-clock timestamps must not stretch the window by their skew, so they're
- * excluded from both bounds.
+ * A log the session could put on the host timeline counts, whichever clock originally stamped it;
+ * a device-stamped log the session gave no offset to shift by does NOT, because its skew is not
+ * elapsed time and folding it in shifts or stretches the whole profile.
  *
  * [traceEvents] is the session's `trace.json` (empty for sessions that recorded none). Tracer
  * events recorded on the host share the logs' wall clock, so they bound the window like any other
- * host-clock span. Ones a device recorded and uploaded carry `clock: "device"` and are excluded
- * from both bounds, exactly as MaestroDriverLog is — see [isDeviceClockEvent].
+ * host-clock span. Ones a device recorded and uploaded carry `clock: "device"` and are shifted by
+ * the same session-wide offset — or, with no offset to shift by, excluded from both bounds. See
+ * [isDeviceClockEvent].
  */
 function extractPerfSession(rawLogs: TrailblazeLogRecord[], traceEvents: TrailblazeTraceEvent[] = []): PerfSessionData | null {
+  // One derivation for the whole extraction: every timestamp below is read through it, so the
+  // window, the spans, the steps and the step attribution all sit on the same timeline.
+  const offsets = deviceClockOffsets(rawLogs);
   // The caller's order is not trustworthy (the report input carries filename-sorted raw logs,
   // not the timestamp-sorted typed list) and step pairing is order-sensitive — sort by
   // timestamp up front (stable, so same-timestamp records keep their given order).
-  const sortKey = (log: TrailblazeLogRecord): number => parsePerfTimestamp(log.timestamp) ?? -8.64e15; // min date: timestampless records first
+  const sortKey = (log: TrailblazeLogRecord): number => logHostMs(log, offsets) ?? -8.64e15; // min date: timestampless records first
   const logs = [...rawLogs].sort((a, b) => sortKey(a) - sortKey(b));
   const hostBounds: number[] = [];
   for (const log of logs) {
     const cls = logClass(log);
-    if (cls === 'MaestroDriverLog') continue;
-    const ts = parsePerfTimestamp(log.timestamp);
+    if (!offsets && isDeviceClockLog(log)) continue;
+    const ts = logHostMs(log, offsets);
     if (ts == null) continue;
     hostBounds.push(ts);
     const dur = log.durationMs;
@@ -699,19 +817,26 @@ function extractPerfSession(rawLogs: TrailblazeLogRecord[], traceEvents: Trailbl
       // McpSamplingLog is the one END-anchored span source (LocalLlmSamplingSource stamps it
       // with Clock.System.now() AFTER the call); the other span sources are start-anchored.
       if (cls === 'McpSamplingLog') hostBounds.push(ts - dur);
-      else if (cls === 'TrailblazeToolLog' || cls === 'TrailblazeLlmRequestLog' || cls === 'MaestroCommandLog') hostBounds.push(ts + dur);
+      else if (
+        cls === 'TrailblazeToolLog' ||
+        cls === 'TrailblazeLlmRequestLog' ||
+        cls === 'MaestroCommandLog' ||
+        cls === 'MaestroDriverLog'
+      ) hostBounds.push(ts + dur);
     }
   }
   // Same accept predicate as buildTraceSpans, so an event that produces no span cannot move the
   // window either.
   for (const event of traceEvents) {
-    // Device-clock events are excluded for the same reason MaestroDriverLog is, above: their skew
-    // is not elapsed time, and letting it bound the window shifts or stretches the whole profile.
-    if (isDeviceClockEvent(event)) continue;
+    // A device-clock event with no offset to shift it by is excluded for the same reason an
+    // unshiftable device log is, above: its skew is not elapsed time, and letting it bound the
+    // window shifts or stretches the whole profile.
+    if (isDeviceClockEvent(event) && !offsets) continue;
     const accepted = acceptTraceEvent(event);
     if (!accepted) continue;
-    hostBounds.push(accepted.tsUs / 1000);
-    hostBounds.push((accepted.tsUs + accepted.durUs) / 1000);
+    const shiftMs = isDeviceClockEvent(event) ? offsets!.sessionWideMs : 0;
+    hostBounds.push(accepted.tsUs / 1000 + shiftMs);
+    hostBounds.push((accepted.tsUs + accepted.durUs) / 1000 + shiftMs);
   }
   if (!hostBounds.length) return null;
   const t0 = Math.min(...hostBounds);
@@ -721,8 +846,8 @@ function extractPerfSession(rawLogs: TrailblazeLogRecord[], traceEvents: Trailbl
   const llmRequestTraceIds = new Set<string>(
     logs.filter((l) => logClass(l) === 'TrailblazeLlmRequestLog' && l.traceId).map((l) => String(l.traceId)),
   );
-  const spans = buildRawSpans(logs, t0, llmRequestTraceIds);
-  spans.push(...buildTraceSpans(traceEvents, t0, logs.length));
+  const spans = buildRawSpans(logs, t0, llmRequestTraceIds, offsets);
+  spans.push(...buildTraceSpans(traceEvents, t0, logs.length, offsets));
   // Deterministic id space: tree spans in nest order first (s asc, e desc, file order), then
   // driver spans by start — so ids are stable for equal inputs and roots reference tree ids.
   spans.sort((a, b) => {
@@ -734,7 +859,7 @@ function extractPerfSession(rawLogs: TrailblazeLogRecord[], traceEvents: Trailbl
   spans.forEach((sp, i) => { sp.id = i; });
   const roots = nestAndAccount(spans);
 
-  const steps = buildSteps(logs, t0);
+  const steps = buildSteps(logs, t0, offsets);
   // Attribute each span to the step whose window contains its START (a tool is dispatched while
   // its step is active; the start is on the host clock for tree spans).
   for (const sp of spans) {
@@ -778,7 +903,9 @@ export {
   bottomUpAggregate,
   buildRawSpans,
   buildTraceSpans,
+  deviceClockOffsets,
   extractPerfSession,
+  logHostMs,
   parsePerfTimestamp,
   timeoutBudgetMs,
 };

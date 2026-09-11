@@ -144,7 +144,7 @@ class OnDeviceRpcServer(
         )
 
         // DrainSession lets the host proactively clear UiAutomation cache before tearing down
-        // its persistent driver — prevents the system_server-wedge pattern from build 5463
+        // its persistent driver — prevents the system_server-wedge pattern seen in CI
         // where stale Instrumentation.mUiAutomation kept yielding DeadObjectException across
         // session re-connects. Host-old/APK-new: handler unused. Host-new/APK-old: hits the
         // catch-all 404 below and the host treats it as a no-op.

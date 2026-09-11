@@ -42,7 +42,7 @@ class IsAlreadyRecordedTest {
   @Test
   fun `an existing named unified trail (content-detected) is already recorded`() {
     // A unified trail under a named `*.trail.yaml` is still a merge target — content signal wins.
-    val existing = listOf(existing("case_5735240.trail.yaml", isUnifiedContent = true))
+    val existing = listOf(existing("case_1002.trail.yaml", isUnifiedContent = true))
     assertTrue(isAlreadyRecorded(existing, expectedFileName = "android.trail.yaml"))
   }
 

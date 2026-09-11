@@ -1,0 +1,17 @@
+# This file is a CHECKED-IN baseline of CLI output rendered by trailblaze-host's CLI helpers.
+# It is NOT a contract — if a test fails here because output drifted, decide whether the
+# drift is intentional. The test always (re)writes this file from the current rendered output,
+# then asserts the working tree is clean. So `git diff` of this file IS the failure message.
+# Reviewers: scrutinize diffs to baselines the same way you would scrutinize a UI screenshot —
+# small wording / spacing changes can be intentional or accidental.
+# ----------------------------------------------------------------------
+Usage: trailblaze companion respond [-hV] [--note=<note>] --request=<requestId>
+                                    --status=<status> <runId>
+Settle a request delegated by Trail Runner.
+      <runId>             Companion run id.
+  -h, --help              Show this help message and exit.
+      --note=<note>       Optional result note.
+      --request=<requestId>
+                          Request id from the listen stream.
+      --status=<status>   done or error.
+  -V, --version           Print version information and exit.

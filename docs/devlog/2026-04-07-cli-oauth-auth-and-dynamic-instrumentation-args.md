@@ -73,8 +73,8 @@ fun getProviderType(): String? =
 2. ~~Keep writing legacy provider-specific args temporarily for backward compat~~ — Skipped; migrated all consumers directly
 3. ~~Update Android token provider to read dynamic args~~ — Done (uses `LlmAuthResolver.resolve()`)
 4. ~~Replace hardcoded `when(provider)` in Android test rule with generic client construction~~ — Done. Uses `AndroidLlmClientResolver.resolveModel()` for model resolution and generic `OpenAILLMClient` construction from instrumentation args (`base_url`, `chat_completions_path`).
-5. ~~Update `scripts/atf.sh`~~ — Done (uses `trailblaze.llm.auth.token.<id>` convention)
-6. ~~Audit other CI scripts for hardcoded arg references~~ — Done (scripts set env vars; `atf.sh` converts to new arg format)
+5. ~~Update the device-farm run script~~ — Done (uses `trailblaze.llm.auth.token.<id>` convention)
+6. ~~Audit other CI scripts for hardcoded arg references~~ — Done (scripts set env vars; the run script converts to new arg format)
 7. ~~Remove legacy arg writes~~ — Complete; no legacy arg writes remain in active code paths
 
 ### Part 2: CLI-Based OAuth/Auth for LLM Providers (Future Work)

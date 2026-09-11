@@ -262,10 +262,10 @@ type PlaybackDriveContext = {
   scrubHoverState: () => { tooltipVisible: boolean; rangeVisible: boolean; step: string; kind: string; ariaHidden: string | undefined };
 };
 
-type ViewerOptions = { session?: number; step?: number; clickGroup?: number; toggleKids?: number; clickKid?: string; routeStep?: number; query?: string; legacyHash?: string; protocol?: string; copyLink?: boolean; clipboardRejects?: boolean; tab?: string; toggleCell?: string; lightboxAll?: boolean; galZoom?: number[]; zoomShot?: string; zoomKey?: "ArrowLeft" | "ArrowRight"; timelineKey?: "ArrowLeft" | "ArrowRight" | "ArrowUp" | "ArrowDown"; timelineKeyTarget?: string; tlStream?: number; tlStreamBeforeTab?: number; spaceOnStep?: number; timelineScrollTop?: number; focusedStep?: number; focusedGroup?: number; focusedTlStream?: number; llmEnter?: number; llmClick?: number; openTx?: number; txEscape?: boolean; inspect?: number; inspectEscape?: boolean; popstate?: string; deferHistoryBack?: boolean; transport?: "prev" | "next"; stackedTimeline?: boolean; shotLayoutShift?: boolean; copyLocalPrompt?: boolean; exportLogs?: boolean; exportRun?: boolean; pointerDown?: "outside" | "insideTimelineMenu"; gotoTrail?: boolean | string; pick?: number[]; openRetries?: number[]; pickClear?: boolean; pickOpen?: boolean; pickDiff?: boolean; cmpGap?: number; cmpLane?: string; cmpStream?: string; cmpEvent?: string; cmpSide?: { side: "base" | "vs"; value: number }; cmpJump?: string | string[]; trailOpen?: string; toggleLanes?: number[]; back?: boolean; viewer?: () => void; drive?: (ctx: PlaybackDriveContext) => void; payloadViaGlobal?: boolean; sprites?: Record<string, string[]>; deferBoot?: boolean; rebootViewer?: boolean; shellDocument?: boolean; chunks?: { index: string; sessions: Record<string, string>; sprites: Record<string, string> }; holdChunks?: number[]; holdSpriteChunks?: number[]; streamingChunks?: number[]; loadingDocument?: boolean; baseURI?: string };
+type ViewerOptions = { session?: number; step?: number; clickGroup?: number; toggleKids?: number; clickKid?: string; routeStep?: number; query?: string; legacyHash?: string; protocol?: string; copyLink?: boolean; clipboardRejects?: boolean; tab?: string; toggleCell?: string; lightboxAll?: boolean; galZoom?: number[]; zoomShot?: string; zoomKey?: "ArrowLeft" | "ArrowRight"; timelineKey?: "ArrowLeft" | "ArrowRight" | "ArrowUp" | "ArrowDown"; timelineKeyTarget?: string; tlStream?: number; tlStreamBeforeTab?: number; spaceOnStep?: number; timelineScrollTop?: number; focusedStep?: number; focusedGroup?: number; focusedTlStream?: number; llmEnter?: number; llmClick?: number; openTx?: number; txEscape?: boolean; inspect?: number; inspectEscape?: boolean; popstate?: string; deferHistoryBack?: boolean; transport?: "prev" | "next"; stackedTimeline?: boolean; shotLayoutShift?: boolean; copyLocalPrompt?: boolean; exportLogs?: boolean; exportRun?: boolean; pointerDown?: "outside" | "insideTimelineMenu"; gotoTrail?: boolean | string; gotoCompareTrail?: boolean | string; gotoCompare?: boolean; toggleCompare?: boolean; toggleCompareAfterPick?: boolean; pick?: number[]; openRetries?: number[]; pickClear?: boolean; pickOpen?: boolean; pickDiff?: boolean; cmpGap?: number; cmpTab?: string; cmpStream?: string; cmpEvent?: string; cmpSide?: { side: "base" | "vs"; value: number }; cmpOrganize?: "stream" | "step"; cmpEventStep?: string; cmpPlace?: "prev" | "next" | Array<"prev" | "next">; cmpFull?: string; cmpEventAll?: boolean; cmpEventSearch?: string; cmpStepStream?: string; trailOpen?: string; toggleLanes?: number[]; back?: boolean; viewer?: () => void; drive?: (ctx: PlaybackDriveContext) => void; payloadViaGlobal?: boolean; sprites?: Record<string, string[]>; deferBoot?: boolean; rebootViewer?: boolean; shellDocument?: boolean; chunks?: { index: string; sessions: Record<string, string>; sprites: Record<string, string> }; holdChunks?: number[]; holdSpriteChunks?: number[]; streamingChunks?: number[]; loadingDocument?: boolean; baseURI?: string };
 
 function renderViewerState(payload: unknown, opts: ViewerOptions = {}): { html: string; htmlBeforeBoot: string; liveHtml: () => string; readHtml: () => string; timelineScrollTop: number; mainScrollTop: number; restoredFocus: string | null; route: string; readRoute: () => string; routeWrites: () => Array<{ method: string; next: string }>; historyBack: () => void; historyForward: () => void; flushHistoryBack: () => void; escapeOverlay: () => void; liveZoomRoot: () => any; zoomSrc: string | null; zoomRoot: any; copiedText: string | null; copyBtnText: () => string; timelineMenuOpen: boolean; spriteMeasures: Array<{ src: string; fireLoad: (naturalWidth: number) => void }>; tlvframeStyle: Record<string, string>; releaseChunks: () => void; partialChunkReads: () => number; loadingProgressWrites: () => number; settleDocument: () => void; documentKeyListeners: Array<(e: any) => void>; autoplayMarker: () => string | undefined; embeddedMarker: () => string | undefined; llmScrolledTo: string | null; cmpScrolledTo: () => string | null; llmRow: (i: number) => any; readRestoredFocus: () => string | null; pageClass: () => string; pageClassWrites: () => string[]; readActiveElement: () => any; live: () => { update: (i: number, payload: Record<string, unknown>) => void; destroy: () => void } | undefined; readTimelineScrollTop: () => number; readMainScrollTop: () => number; expandTimelineEvent: (key: string) => void; timelineEvent: (key: string) => { open: boolean; body: string } | undefined; openAttachment: (key: string) => void; pickClicksStopped: () => string[]; pickLabelClicksStopped: () => number; pickLabels: () => number; firePopstate: (next?: string) => void } {
-  const handlers: { session: Record<string, () => void>; tab: Record<string, () => void>; step: Map<string, () => void>; group: Record<string, () => void>; groupEnter: Record<string, (e: any) => void>; groupLeave: Record<string, (e: any) => void>; kids: Record<string, (e: any) => void>; kidsel: Record<string, (e: any) => void>; stepKey: Map<string, (e: any) => void>; shot: Record<string, () => void>; tlStream: Record<string, () => void>; cellToggle: Record<string, (e: any) => void>; retryToggle: Record<string, (open: boolean) => void>; galZoom: Record<string, () => void>; llmKey: Record<string, (e: any) => void>; llmClick: Record<string, () => void>; txOpen: Record<string, () => void>; inspect: Record<string, () => void>; trailOpen: Record<string, () => void>; trailLane: Record<string, () => void>; attach: Record<string, () => void>; gotoTrail: Record<string, () => void>; pick: Record<string, (e: any) => void>; pickClick: Record<string, (e: any) => void>; pickClear?: () => void; pickOpen?: () => void; pickDiff?: () => void; cmpGap: Record<string, () => void>; cmpLane: Record<string, () => void>; cmpStream: Record<string, () => void>; cmpEvent: Record<string, () => void>; cmpSide: Record<string, (value: string) => void>; cmpJump: Record<string, () => void>; back?: () => void; documentKey?: (e: any) => void; timelinePlay?: () => void; gridMode?: () => void; prev?: () => void; next?: () => void; shotLoad?: () => void; copyLocalPrompt?: () => void; copyLink?: () => void; exportLogs?: () => void; exportRun?: () => void } = { session: {}, tab: {}, step: new Map(), group: {}, groupEnter: {}, groupLeave: {}, kids: {}, kidsel: {}, stepKey: new Map(), shot: {}, tlStream: {}, cellToggle: {}, retryToggle: {}, galZoom: {}, llmKey: {}, llmClick: {}, txOpen: {}, inspect: {}, trailOpen: {}, trailLane: {}, attach: {}, gotoTrail: {}, pick: {}, pickClick: {}, cmpGap: {}, cmpLane: {}, cmpStream: {}, cmpEvent: {}, cmpSide: {}, cmpJump: {} };
+  const handlers: { session: Record<string, () => void>; tab: Record<string, () => void>; step: Map<string, () => void>; group: Record<string, () => void>; groupEnter: Record<string, (e: any) => void>; groupLeave: Record<string, (e: any) => void>; kids: Record<string, (e: any) => void>; kidsel: Record<string, (e: any) => void>; stepKey: Map<string, (e: any) => void>; shot: Record<string, () => void>; tlStream: Record<string, () => void>; cellToggle: Record<string, (e: any) => void>; retryToggle: Record<string, (open: boolean) => void>; galZoom: Record<string, () => void>; llmKey: Record<string, (e: any) => void>; llmClick: Record<string, () => void>; txOpen: Record<string, () => void>; inspect: Record<string, () => void>; trailOpen: Record<string, () => void>; trailLane: Record<string, () => void>; attach: Record<string, () => void>; gotoTrail: Record<string, () => void>; gotoCompareTrail: Record<string, () => void>; gotoCompare?: () => void; compareToggle?: () => void; pick: Record<string, (e: any) => void>; pickClick: Record<string, (e: any) => void>; pickClear?: () => void; pickOpen?: () => void; pickDiff?: () => void; cmpGap: Record<string, () => void>; cmpTab: Record<string, () => void>; cmpStream: Record<string, () => void>; cmpEvent: Record<string, () => void>; cmpSide: Record<string, () => void>; cmpOrganize: Record<string, () => void>; cmpEventStep: Record<string, () => void>; cmpPlace: Record<string, () => void>; cmpFull: Record<string, () => void>; cmpEventAll?: () => void; cmpEventSearch?: (value: string) => void; cmpStepStream?: (value: string) => void; back?: () => void; documentKey?: (e: any) => void; timelinePlay?: () => void; gridMode?: () => void; prev?: () => void; next?: () => void; shotLoad?: () => void; copyLocalPrompt?: () => void; copyLink?: () => void; exportLogs?: () => void; exportRun?: () => void } = { session: {}, tab: {}, step: new Map(), group: {}, groupEnter: {}, groupLeave: {}, kids: {}, kidsel: {}, stepKey: new Map(), shot: {}, tlStream: {}, cellToggle: {}, retryToggle: {}, galZoom: {}, llmKey: {}, llmClick: {}, txOpen: {}, inspect: {}, trailOpen: {}, trailLane: {}, attach: {}, gotoTrail: {}, gotoCompareTrail: {}, pick: {}, pickClick: {}, cmpGap: {}, cmpTab: {}, cmpStream: {}, cmpEvent: {}, cmpSide: {}, cmpOrganize: {}, cmpEventStep: {}, cmpPlace: {}, cmpFull: {} };
   let shotLoaded = !opts.shotLayoutShift;
   const mainScroller: any = { scrollTop: 0, clientHeight: 400, get scrollHeight() { return opts.shotLayoutShift && !shotLoaded ? 800 : 1200; }, parentElement: null, getBoundingClientRect: () => ({ top: 0 }), scrollTo({ top }: { top: number }) { this.scrollTop = top; } };
   const timelineList: any = { scrollTop: 0, clientHeight: 400, scrollHeight: opts.stackedTimeline ? 400 : 1200, parentElement: opts.stackedTimeline ? mainScroller : null, getBoundingClientRect: () => ({ top: 0 }), scrollTo({ top }: { top: number }) { this.scrollTop = top; } };
@@ -505,6 +505,9 @@ function renderViewerState(payload: unknown, opts: ViewerOptions = {}): { html: 
       // The attribute VALUE names which trail the entry point opens — the viewer reads it to scope
       // the view, so a stub with an empty dataset would exercise a click that can never happen.
       if (sel === "[data-goto-trail]") return [...this._h.matchAll(/data-goto-trail="([^"]*)"/g)].map((m: any) => ({ dataset: { gotoTrail: m[1] }, set onclick(fn: () => void) { handlers.gotoTrail[m[1]] = fn; } }));
+      if (sel === "[data-goto-compare-trail]") return [...this._h.matchAll(/data-goto-compare-trail="([^"]*)"/g)].map((m: any) => ({ dataset: { gotoCompareTrail: m[1] }, set onclick(fn: () => void) { handlers.gotoCompareTrail[m[1]] = fn; } }));
+      if (sel === "[data-goto-compare]") return [...this._h.matchAll(/data-goto-compare(?:="(\d+)")?/g)].map((m: any) => ({ dataset: { gotoCompare: m[1] || "" }, set onclick(fn: () => void) { handlers.gotoCompare = fn; } }));
+      if (sel === "[data-index-compare]") return [...this._h.matchAll(/data-index-compare/g)].map(() => ({ dataset: {}, focus() {}, set onclick(fn: () => void) { handlers.compareToggle = fn; } }));
       // The compare checkboxes and the selection bar's two buttons. Both listeners are kept: the
       // change toggles the selection, and the click is the one that must NOT reach the row.
       if (sel === "[data-pick]") return [...this._h.matchAll(/data-pick="(\d+)"/g)].map((m: any) => ({ dataset: { pick: m[1] }, set onclick(fn: (e: any) => void) { handlers.pickClick[m[1]] = fn; }, set onchange(fn: (e: any) => void) { handlers.pick[m[1]] = fn; } }));
@@ -516,19 +519,29 @@ function renderViewerState(payload: unknown, opts: ViewerOptions = {}): { html: 
       if (sel === "[data-pick-open]") return [...this._h.matchAll(/data-pick-open/g)].map(() => ({ dataset: {}, set onclick(fn: () => void) { handlers.pickOpen = fn; } }));
       if (sel === "[data-pick-diff]") return [...this._h.matchAll(/data-pick-diff/g)].map(() => ({ dataset: {}, set onclick(fn: () => void) { handlers.pickDiff = fn; } }));
       if (sel === "[data-cmp-gap]") return [...this._h.matchAll(/data-cmp-gap="(\d+)"/g)].map((m: any) => ({ dataset: { cmpGap: m[1] }, set onclick(fn: () => void) { handlers.cmpGap[m[1]] = fn; } }));
-      if (sel === "[data-cmp-lane]") return [...this._h.matchAll(/data-cmp-lane="([^"]+)"/g)].map((m: any) => ({ dataset: { cmpLane: m[1] }, set onclick(fn: () => void) { handlers.cmpLane[m[1]] = fn; } }));
-      // The All-streams chip carries an EMPTY value, so the match allows "" and keys the handler on it.
+      if (sel === "[data-cmp-tab]") return [...this._h.matchAll(/data-cmp-tab="([^"]+)"/g)].map((m: any) => ({ dataset: { cmpTab: m[1] }, set onclick(fn: () => void) { handlers.cmpTab[m[1]] = fn; } }));
       if (sel === "[data-cmp-stream]") return [...this._h.matchAll(/data-cmp-stream="([^"]*)"/g)].map((m: any) => ({ dataset: { cmpStream: m[1] }, set onclick(fn: () => void) { handlers.cmpStream[m[1]] = fn; } }));
       if (sel === "[data-cmp-event]") return [...this._h.matchAll(/data-cmp-event="([^"]+)"/g)].map((m: any) => ({ dataset: { cmpEvent: m[1] }, set onclick(fn: () => void) { handlers.cmpEvent[m[1]] = fn; } }));
-      // The run pickers are <select>s, so the viewer reads `value` off the element rather than a
-      // data attribute — the shim carries the value the driver assigned before firing onchange.
-      if (sel === "[data-cmp-side]") return [...this._h.matchAll(/data-cmp-side="(base|vs)"/g)].map((m: any) => {
-        const el: any = { dataset: { cmpSide: m[1] }, value: "" };
-        Object.defineProperty(el, "onchange", { configurable: true, set(fn: () => void) { handlers.cmpSide[m[1]] = (value: string) => { el.value = value; fn(); }; } });
-        return el;
+      if (sel === "[data-cmp-side][data-cmp-run]") return [...this._h.matchAll(/data-cmp-side="(base|vs)" data-cmp-run="(\d+)"/g)].map((m: any) => ({
+        dataset: { cmpSide: m[1], cmpRun: m[2] },
+        set onclick(fn: () => void) { handlers.cmpSide[`${m[1]}:${m[2]}`] = fn; },
+      }));
+      if (sel === "[data-cmp-organize]") return [...this._h.matchAll(/data-cmp-organize="([^"]+)"/g)].map((m: any) => ({ dataset: { cmpOrganize: m[1] }, set onclick(fn: () => void) { handlers.cmpOrganize[m[1]] = fn; } }));
+      if (sel === "[data-cmp-event-step]") return [...this._h.matchAll(/data-cmp-event-step="([^"]+)"/g)].map((m: any) => ({ dataset: { cmpEventStep: m[1] }, set onclick(fn: () => void) { handlers.cmpEventStep[m[1]] = fn; } }));
+      if (sel === "[data-cmp-place-action]") return [...this._h.matchAll(/data-cmp-place-action="([^"]+)" data-cmp-place-total="(\d+)"/g)].map((m: any) => ({ dataset: { cmpPlaceAction: m[1], cmpPlaceTotal: m[2] }, set onclick(fn: () => void) { handlers.cmpPlace[m[1]] = fn; } }));
+      if (sel === "[data-cmp-full]") return [...this._h.matchAll(/data-cmp-full="([^"]+)"/g)].map((m: any) => ({ dataset: { cmpFull: m[1] }, set onclick(fn: () => void) { handlers.cmpFull[m[1]] = fn; } }));
+      if (sel === "[data-cmp-event-all]") return [...this._h.matchAll(/data-cmp-event-all/g)].map(() => ({ dataset: {}, set onclick(fn: () => void) { handlers.cmpEventAll = fn; } }));
+      if (sel === "[data-cmp-event-search]") return [...this._h.matchAll(/data-cmp-event-search value="([^"]*)"/g)].map((m: any) => {
+        const input: any = { value: m[1], selectionStart: m[1].length, focus() {}, setSelectionRange() {} };
+        Object.defineProperty(input, "oninput", { set(fn: () => void) { handlers.cmpEventSearch = (value: string) => { input.value = value; input.selectionStart = value.length; fn(); }; } });
+        return input;
       });
-      if (sel === "[data-cmp-jump]") return [...this._h.matchAll(/data-cmp-jump="([^"]+)"/g)].map((m: any) => ({ dataset: { cmpJump: m[1] }, set onclick(fn: () => void) { handlers.cmpJump[m[1]] = fn; } }));
-      if (sel === "[data-cmp-anchor]") return [...this._h.matchAll(/data-cmp-anchor="([^"]+)"/g)].map((m: any) => cmpAnchorEl(m[1]));
+      if (sel === "[data-cmp-step-stream]") return [...this._h.matchAll(/<select data-cmp-step-stream[^>]*>([\s\S]*?)<\/select>/g)].map((m: any) => {
+        const selected = (m[1].match(/<option value="([^"]+)" selected>/) || m[1].match(/<option value="([^"]+)"/))?.[1] || "";
+        const select: any = { value: selected, focus() {} };
+        Object.defineProperty(select, "onchange", { set(fn: () => void) { handlers.cmpStepStream = (value: string) => { select.value = value; fn(); }; } });
+        return select;
+      });
       if (sel === "[data-back]") return [...this._h.matchAll(/data-back/g)].map(() => ({ dataset: {}, set onclick(fn: () => void) { handlers.back = fn; } }));
       // A flat row's attempt history is a native <details>, so the viewer only listens for the
       // toggle — the shim carries the element's own `open` the way the DOM does, because the
@@ -587,8 +600,12 @@ function renderViewerState(payload: unknown, opts: ViewerOptions = {}): { html: 
       if (tlStream && this._h.includes(`data-tlstream="${tlStream[1]}"`)) return { focus: () => { restoredFocus = sel; } };
       // The compare view's expandable rows are replaced wholesale by a re-render, so the viewer
       // looks the successor up by the same key to hand focus back to it.
-      const cmpRow = sel.match(/^\[data-cmp-(?:event|gap)="[^"]+"\]$/);
+      const cmpRow = sel.match(/^\[data-cmp-(?:event|gap|stream|organize|event-step|place-action|full)="[^"]+"\]$/);
       if (cmpRow && this._h.includes(sel.slice(1, -1))) return { focus: () => { restoredFocus = sel; } };
+      if (["[data-cmp-event-all]", "[data-cmp-event-search]", "[data-cmp-step-stream]"].includes(sel)
+        && this._h.includes(sel.slice(1, -1))) {
+        return { focus: () => { restoredFocus = sel; }, setSelectionRange() {} };
+      }
       const llmRow = sel.match(/^\[data-llm="(\d+)"\]$/);
       if (llmRow && this._h.includes(`data-llm="${llmRow[1]}"`)) return llmRowEl(llmRow[1]);
       // The live (currently-rendered) transcript trigger, re-resolved at dialog-close time.
@@ -1012,6 +1029,12 @@ function renderViewerState(payload: unknown, opts: ViewerOptions = {}): { html: 
     const gotoKey = typeof opts.gotoTrail === "string" ? opts.gotoTrail : Object.keys(handlers.gotoTrail)[0];
     if (gotoKey != null) handlers.gotoTrail[gotoKey]?.();
   }
+  if (opts.gotoCompareTrail) {
+    const gotoKey = typeof opts.gotoCompareTrail === "string" ? opts.gotoCompareTrail : Object.keys(handlers.gotoCompareTrail)[0];
+    if (gotoKey != null) handlers.gotoCompareTrail[gotoKey]?.();
+  }
+  if (opts.gotoCompare) handlers.gotoCompare?.();
+  if (opts.toggleCompare || opts.pick) handlers.compareToggle?.();
   // Expanding a retry group's attempt history, the way a reader does before ticking one of them.
   (opts.openRetries || []).forEach((run) => handlers.retryToggle[String(run)]?.(true));
   // Ticking runs on the index, then acting on the selection — the order a reader does it in. Each
@@ -1022,16 +1045,23 @@ function renderViewerState(payload: unknown, opts: ViewerOptions = {}): { html: 
     handlers.pickClick[String(run)]?.({ stopPropagation() { pickClicksStopped.push(String(run)); } });
     handlers.pick[String(run)]?.({ stopPropagation() {} });
   });
+  if (opts.toggleCompareAfterPick) handlers.compareToggle?.();
   if (opts.pick) pickLabelClicks.forEach((fn) => fn({ stopPropagation() { pickLabelClicksStopped++; } }));
   if (opts.pickClear && handlers.pickClear) handlers.pickClear();
   if (opts.pickOpen && handlers.pickOpen) handlers.pickOpen();
   if (opts.pickDiff && handlers.pickDiff) handlers.pickDiff();
   if (opts.cmpGap != null && handlers.cmpGap[String(opts.cmpGap)]) handlers.cmpGap[String(opts.cmpGap)]();
-  if (opts.cmpLane != null && handlers.cmpLane[opts.cmpLane]) handlers.cmpLane[opts.cmpLane]();
+  if (opts.cmpTab != null && handlers.cmpTab[opts.cmpTab]) handlers.cmpTab[opts.cmpTab]();
   if (opts.cmpStream != null && handlers.cmpStream[opts.cmpStream]) handlers.cmpStream[opts.cmpStream]();
   if (opts.cmpEvent != null && handlers.cmpEvent[opts.cmpEvent]) handlers.cmpEvent[opts.cmpEvent]();
-  if (opts.cmpSide && handlers.cmpSide[opts.cmpSide.side]) handlers.cmpSide[opts.cmpSide.side](String(opts.cmpSide.value));
-  if (opts.cmpJump != null) (Array.isArray(opts.cmpJump) ? opts.cmpJump : [opts.cmpJump]).forEach((k) => handlers.cmpJump[k]?.());
+  if (opts.cmpSide) handlers.cmpSide[`${opts.cmpSide.side}:${opts.cmpSide.value}`]?.();
+  if (opts.cmpOrganize) handlers.cmpOrganize[opts.cmpOrganize]?.();
+  if (opts.cmpEventStep) handlers.cmpEventStep[opts.cmpEventStep]?.();
+  if (opts.cmpStepStream) handlers.cmpStepStream?.(opts.cmpStepStream);
+  if (opts.cmpPlace) (Array.isArray(opts.cmpPlace) ? opts.cmpPlace : [opts.cmpPlace]).forEach((direction) => handlers.cmpPlace[direction]?.());
+  if (opts.cmpFull) handlers.cmpFull[opts.cmpFull]?.();
+  if (opts.cmpEventAll) handlers.cmpEventAll?.();
+  if (opts.cmpEventSearch != null) handlers.cmpEventSearch?.(opts.cmpEventSearch);
   (opts.toggleLanes || []).forEach((lane) => handlers.trailLane[String(lane)]?.());
   if (opts.trailOpen && handlers.trailOpen[opts.trailOpen]) handlers.trailOpen[opts.trailOpen]();
   if (opts.back && handlers.back) handlers.back();
@@ -2136,6 +2166,114 @@ describe("timeline hover screenshot preview", () => {
         ctx.leaveGroup(1);
         expect(ctx.shotImg.src).toBe(TWO);
         expect(ctx.renders()).toBe(renders);
+      },
+    });
+  });
+
+  test("the lightbox and step hover use a folded child's later post-action frame", () => {
+    const foldedPayload = payload({
+      trace: [
+        { i: 1, label: "Enter the account's email", tool: "agent step", objective: true, ok: true, ts: 1000, ms: 0, screenshotFile: null, children: [] },
+        {
+          i: 2,
+          label: "inputText",
+          tool: "type email",
+          objective: false,
+          ok: true,
+          ts: 1100,
+          ms: 200,
+          screenshotFile: "one.png",
+          children: [
+            { label: "tapOnElementBySelector", tool: "submit", ms: 20, ts: 1200, screenshotFile: "three.png" },
+          ],
+        },
+      ],
+    });
+    const lightbox = renderViewer(foldedPayload, { tab: "lightbox" });
+    expect(lightbox).not.toContain('data-shot="one.png"');
+    expect(lightbox).toContain('data-shot="three.png"');
+
+    renderViewerState(foldedPayload, {
+      step: 2,
+      drive: (ctx) => {
+        ctx.hoverGroup(1);
+        expect(ctx.shotImg.src).toBe(THREE);
+      },
+    });
+  });
+
+  test("the lightbox and step hover keep the structural fallback when a capture clock is missing", () => {
+    const untimedPayload = payload({
+      trace: [
+        { i: 1, label: "Enter the account's email", tool: "agent step", objective: true, ok: true, ts: 1000, ms: 0, screenshotFile: null, children: [] },
+        { i: 2, label: "inputText", tool: "type email", objective: false, ok: true, ts: 1100, ms: 200, screenshotFile: "one.png", children: [] },
+        { i: 3, label: "tapOnElementBySelector", tool: "submit", objective: false, ok: true, ts: null, ms: 20, screenshotFile: "three.png", children: [] },
+      ],
+    });
+    const lightbox = renderViewer(untimedPayload, { tab: "lightbox" });
+    expect(lightbox).not.toContain('data-shot="one.png"');
+    expect(lightbox).toContain('data-shot="three.png"');
+
+    renderViewerState(untimedPayload, {
+      step: 2,
+      drive: (ctx) => {
+        ctx.hoverGroup(1);
+        expect(ctx.shotImg.src).toBe(THREE);
+      },
+    });
+  });
+
+  test("the lightbox and step hover keep structural order among equal newest frames", () => {
+    const tiedPayload = payload({
+      trace: [
+        { i: 1, label: "Confirm the receipt", tool: "agent step", objective: true, ok: true, ts: 1000, ms: 0, screenshotFile: null, children: [] },
+        { i: 2, label: "first newest", tool: "assert", objective: false, ok: true, ts: 1200, ms: 20, screenshotFile: "one.png", children: [] },
+        { i: 3, label: "second newest", tool: "assert", objective: false, ok: true, ts: 1200, ms: 20, screenshotFile: "two.png", children: [] },
+        { i: 4, label: "older fallback", tool: "tap", objective: false, ok: true, ts: 1100, ms: 20, screenshotFile: "three.png", children: [] },
+      ],
+    });
+    const lightbox = renderViewer(tiedPayload, { tab: "lightbox" });
+    expect(lightbox).not.toContain('data-shot="one.png"');
+    expect(lightbox).toContain('data-shot="two.png"');
+    expect(lightbox).not.toContain('data-shot="three.png"');
+
+    renderViewerState(tiedPayload, {
+      step: 2,
+      drive: (ctx) => {
+        ctx.hoverGroup(1);
+        expect(ctx.shotImg.src).toBe(TWO);
+      },
+    });
+  });
+
+  test("step hover uses the newest device frame instead of filtered array order", () => {
+    const multiDevicePayload = payload({
+      trace: [
+        { i: 1, label: "Confirm both screens", tool: "agent step", objective: true, ok: true, ts: 1000, ms: 0, screenshotFile: null, children: [], device: "storefront" },
+        {
+          i: 2,
+          label: "update storefront",
+          tool: "batch",
+          objective: false,
+          ok: true,
+          ts: 1100,
+          ms: 200,
+          screenshotFile: "one.png",
+          device: "storefront",
+          children: [
+            { label: "show receipt", tool: "assert", ms: 20, ts: 3000, screenshotFile: "three.png" },
+          ],
+        },
+        { i: 3, label: "switchDevice", tool: "kitchen", objective: false, ok: true, ts: 1500, ms: 10, screenshotFile: null, children: [], device: "kitchen" },
+        { i: 4, label: "update kitchen", tool: "tap", objective: false, ok: true, ts: 2000, ms: 100, screenshotFile: "two.png", children: [], device: "kitchen" },
+      ],
+    });
+
+    renderViewerState(multiDevicePayload, {
+      step: 2,
+      drive: (ctx) => {
+        ctx.hoverGroup(1);
+        expect(ctx.shotImg.src).toBe(THREE);
       },
     });
   });
@@ -3570,6 +3708,8 @@ describe("RUN_REPORT_VIEWER (rendered output)", () => {
     expect(out).not.toContain('class="idxsortprefix"');
     expect(out).toContain('data-run-group="owner">Owner</button>');
     expect(out).toContain('data-run-sort="cost">Cost</button>');
+    expect(out).toContain('class="btn idxcompare" type="button" data-index-compare aria-pressed="false"');
+    expect(out).toContain('<span>Compare</span></button>');
     expect(out).not.toContain("data-run-filter");
     expect(out).toContain('data-index-section="failed"');
     expect(out).toContain('data-index-section="passed"');
@@ -3581,9 +3721,11 @@ describe("RUN_REPORT_VIEWER (rendered output)", () => {
     // And a retry group whose separator the filter would strand at the top of the list drops it,
     // the same way a plain row and a section entry each already do.
     expect(core.RUN_REPORT_CSS).toContain(".idxretry:first-child, .idxretry.firstmatch { border-top: 0; }");
-    // A column the trail never ran on is the one cell with no control in the gutter, so its own
-    // padding has to stand in for one — otherwise its label sits left of every cell beside it.
-    expect(core.RUN_REPORT_CSS).toContain(".idxcell.missing { display: flex; flex-direction: column; gap: 4px; padding: 9px 14px 9px 26px;");
+    // Missing cells use the same inset as every other cell until compare mode reveals the picker
+    // gutter. This keeps the ordinary list compact without moving labels under visible controls.
+    expect(core.RUN_REPORT_CSS).toContain(".idxcell.missing { display: flex; flex-direction: column; gap: 4px; padding: 9px 14px;");
+    expect(core.RUN_REPORT_CSS).toContain(".indexruns.comparemode .idxcell.missing { padding-left: 34px; }");
+    expect(core.RUN_REPORT_CSS).toContain(".idxcell > .idxpick { position: absolute; left: 0; top: 9px;");
   });
 
   test("owner metadata renders as a row subtitle, joins search, and supports Owner grouping", () => {
@@ -5747,9 +5889,8 @@ describe("RUN_REPORT_VIEWER (rendered output)", () => {
     expect(out).toContain('<main class="timelinemain">');
     expect(out).toContain('<footer class="detailfooter">');
     expect(out).toContain('<header class="detailheader">');
-    // A lone run still gets the Trail view (its Replay is the whole point of loading a recording),
-    // and with no index to host the button, the detail header carries it.
-    expect(out).toContain('<div class="detailactions"><button class="btn" type="button" data-goto-trail');
+    expect(out).not.toContain('data-goto-trail');
+    expect(out).not.toContain('data-goto-compare');
     expect(out).toContain('<details class="exportmenu"');
     expect(out).toContain('<span class="exportdots" aria-hidden="true"><span class="exportdot"></span><span class="exportdot"></span><span class="exportdot"></span></span>');
     expect(core.RUN_REPORT_CSS).toContain('.exportdot { width: 3px; height: 3px;');
@@ -6440,7 +6581,7 @@ describe("inline event streams (timeline, generic shape)", () => {
       meta: { title: "Events run", status: "passed" },
       trace, llm: [], shots: {}, recordingYaml: null, deviceLog: null, network: null, video: null,
       events: [
-        { name: "com.example.plugin.network", total: 3, truncated: false, events: [
+        { name: "com.example.plugin.network", comparisonName: "network", total: 3, truncated: false, events: [
           { t: 1000, d: '{"request":{"url":"https://api.test/foo"}}' },
           { t: 1500, d: '{"finalizedResponse":{"statusCode":200}}' },
           { t: 2000, d: '{"error":{"reason":"x"}}' },
@@ -9856,52 +9997,47 @@ describe("Trail view (the same trail across devices, one lane per run)", () => {
   });
   const payload = { generatedAt: "now", sessions: [run("android-phone", laneATrace), run("ios-ipad", laneBTrace, { platform: "ios" })] };
 
-  // A report holding several trails offers the view per TRAIL. Each row opens its own comparison;
-  // only the header button — which names no trail — needs the whole document to be one trail.
+  // A report holding several trails offers the view per TRAIL. Each row opens its own comparison.
   const mixed = { generatedAt: "now", sessions: [run("android-phone", laneATrace), { ...run("ios-ipad", laneBTrace), meta: { title: "Refunds", status: "failed", trailId: "refunds/full", platform: "ios", deviceClassifier: "ios-ipad" } }] };
 
-  test("the run index offers the Trail view per trail, and the header button only for a single-trail report", () => {
-    // One trail on two devices: the row opens it, and so does the header, which can only mean this.
+  test("the run index opens a multi-run trail directly in the comparison workspace", () => {
     const single = renderViewer(payload, { query: "?view=runs" });
-    expect(single).toContain('class="nm nmtrail" type="button" data-goto-trail="trail:checkout%2Fpay:"');
-    expect(single).toContain('class="btn" type="button" data-goto-trail="trail:checkout%2Fpay:"');
+    expect(single).toContain('class="nm nmtrail" type="button" data-goto-compare-trail="trail:checkout%2Fpay:"');
+    expect(single).not.toContain('data-goto-trail');
 
-    // Two trails: both rows are still entry points — each is a real comparison — but there is no
-    // one trail a document-wide button could mean, so it is absent rather than picking one.
+    // A one-run trail remains a plain label: it has nothing to compare yet.
     const many = renderViewer(mixed, { query: "?view=runs" });
-    expect(many).toContain('class="nm nmtrail" type="button" data-goto-trail="trail:checkout%2Fpay:"');
-    expect(many).toContain('class="nm nmtrail" type="button" data-goto-trail="trail:refunds%2Ffull:"');
-    expect(many).not.toContain('class="btn" type="button" data-goto-trail');
+    expect(many).not.toContain('data-goto-compare-trail');
+    expect(many).not.toContain('data-goto-trail');
   });
 
-  test("a row opens ITS trail, not whichever trail the document leads with", () => {
-    // Refunds is the second run. Scoping is the whole point of the per-trail entry point: without
-    // it the view would stage session 0's trail under the row the reader actually clicked.
-    const state = renderViewerState(mixed, { query: "?view=runs", gotoTrail: "trail:refunds%2Ffull:" });
-    const trail = state.readHtml();
-    expect(trail).toContain('class="trailcanvas"');
-    expect(trail).toContain("<h1>Refunds</h1>");
-    expect(trail).not.toContain("<h1>Checkout</h1>");
-    // The route carries the scope so a copied link opens the same comparison.
-    expect(state.readRoute()).toContain("trail=trail%3Arefunds%252Ffull%3A");
+  test("a row opens its runs in the shared comparison workspace", () => {
+    const state = renderViewerState(payload, { query: "?view=runs", gotoCompareTrail: "trail:checkout%2Fpay:" });
+    const comparison = state.readHtml();
+    expect(comparison).toContain("<h1>Compare runs</h1>");
+    expect(comparison).toContain('class="cmpscenes"');
+    expect(comparison).toContain('class="cmppairtag base" role="img" aria-label="Run A:');
+    expect(comparison).toContain('class="cmppairtag current" role="img" aria-label="Run B:');
+    expect(comparison).toContain('title="1. Checkout — android-phone"');
+    expect(state.readRoute()).toContain("view=compare");
   });
 
   test("the Map's start card names the scoped trail, not the document's first run", () => {
     // The card introduces the stage. Naming session 0's trail there would caption a comparison of
     // Refunds with the word Checkout, beside lanes and steps that are all Refunds.
-    const map = renderViewerState(mixed, { query: "?view=runs", gotoTrail: "trail:refunds%2Ffull:" }).readHtml();
+    const map = renderViewerState(mixed, { query: "?view=trail&trail=trail%3Arefunds%252Ffull%3A" }).readHtml();
     const startCard = map.slice(map.indexOf("wpstart"), map.indexOf("wpstart") + 700);
     expect(startCard).toContain("Refunds");
     expect(startCard).not.toContain("Checkout");
   });
 
-  test("the entry point promises a comparison only when the trail has more than one lane", () => {
+  test("the entry point is offered only when the trail has more than one comparable run", () => {
     // The common CI report is many trails on one device each, so a blanket "compare across
     // devices" would promise a comparison that cannot exist on every row in it.
     const many = renderViewer(mixed, { query: "?view=runs" });
-    expect(many).toContain('data-goto-trail="trail:refunds%2Ffull:" title="See this run as a trail');
+    expect(many).not.toContain('data-goto-compare-trail');
     // Two devices on one trail is the real comparison, and says so.
-    expect(renderViewer(payload, { query: "?view=runs" })).toContain('data-goto-trail="trail:checkout%2Fpay:" title="Compare this trail across devices');
+    expect(renderViewer(payload, { query: "?view=runs" })).toContain('data-goto-compare-trail="trail:checkout%2Fpay:" title="Compare this trail across its runs');
   });
 
   test("a trail link naming no trail falls back to the index on a many-trail report", () => {
@@ -9924,8 +10060,8 @@ describe("Trail view (the same trail across devices, one lane per run)", () => {
         { meta: { title: "Checkout", status: "skipped", trailId: "checkout/pay", platform: "ios", deviceClassifier: "ios-tablet", linkOut: true, skipReason: "no tablet fixture" }, trace: [], llm: [], shots: {}, recordingYaml: null },
       ],
     };
-    expect(renderViewer(withSkip, { query: "?view=runs" })).toContain("data-goto-trail");
-    expect(renderViewer(withSkip, { query: "?view=trail" })).toContain('class="trailcanvas"');
+    expect(renderViewer(withSkip, { query: "?view=runs" })).toContain("data-goto-compare-trail");
+    expect(renderViewer(withSkip, { query: "?view=compare" })).toContain('class="cmpscenes"');
   });
 
   // A stage the reader builds by hand, out of whichever runs they want to see together — the trail
@@ -9947,66 +10083,72 @@ describe("Trail view (the same trail across devices, one lane per run)", () => {
       ],
     };
 
-    test("every run this report can stage offers a checkbox; the ones it can't hold the gutter open instead", () => {
-      const out = renderViewer(withSkip, { query: "?view=runs" });
+    test("Compare toggles the run checkboxes and selection rail; runs that cannot stage hold the gutter open", () => {
+      const resting = renderViewer(withSkip, { query: "?view=runs" });
+      expect(resting).toContain('data-index-compare aria-pressed="false"');
+      expect(resting).not.toContain('data-pick="0"');
+      expect(resting).not.toContain('class="pickbar');
+
+      const out = renderViewerState(withSkip, { query: "?view=runs", toggleCompare: true }).readHtml();
+      expect(out).toContain('data-index-compare aria-pressed="true"');
       expect(out).toContain('data-pick="0"');
       expect(out).toContain('data-pick="1"');
       // The skipped link-out has no trace here to lane, so offering it would be offering a lane
       // that gets dropped the moment it is opened.
       expect(out).not.toContain('data-pick="2"');
       expect(out).toContain("idxpickempty");
-      // Nothing picked yet, so no bar over the index.
-      expect(out).not.toContain('class="pickbar"');
+      // The mode explains itself before the first pick, directly between header and list.
+      expect(out).toContain('class="pickbar compareenter"');
+      expect(out).toContain('<strong>0</strong> selected');
+      expect(out.indexOf('class="pickbar')).toBeGreaterThan(out.indexOf('</header>'));
+      expect(out.indexOf('class="pickbar')).toBeLessThan(out.indexOf('<main>'));
+      expect(out).toContain('data-pick-open disabled title="Select at least two runs"');
+
+      const exited = renderViewerState(withSkip, { query: "?view=runs", pick: [0, 1], toggleCompareAfterPick: true }).readHtml();
+      expect(exited).toContain('data-index-compare aria-pressed="false"');
+      expect(exited).not.toContain('class="pickbar');
+      expect(exited).not.toContain('data-pick="0"');
     });
 
-    test("picking runs of different trails stages them side by side, with no step join and no Map", () => {
+    test("picking two runs of different trails opens an explicit scene diff without claiming a step join", () => {
       const state = renderViewerState(mixed, { query: "?view=runs", pick: [0, 1] });
-      // The bar says what opening the selection will actually give them.
       const index = state.readHtml();
       expect(index).toContain('class="pickbar"');
       expect(index).toContain("<strong>2</strong> selected");
-      expect(index).toContain("different trails — shown side by side");
+      expect(index).not.toContain("different trails — shown side by side");
+      expect(index).toContain('class="btn pickopen ready"');
 
       const stage = renderViewerState(mixed, { query: "?view=runs", pick: [0, 1], pickOpen: true }).readHtml();
-      expect(stage).toContain('class="trailgrid"');
+      expect(stage).toContain('class="cmpscenes"');
       // Named by what it IS. Either trail's title would caption the other one's lane with it.
-      expect(stage).toContain("<h1>2 selected runs</h1>");
+      expect(stage).toContain("<h1>Compare runs</h1>");
       // Both runs are on stage, each still its own device.
       expect(stage).toContain("android-phone");
       expect(stage).toContain("ios-ipad");
-      // The Map draws lanes leaving one shared step. These lanes share none, so the projection that
-      // would claim they do is not offered at all.
-      expect(stage).not.toContain('data-trail-mode="map"');
-      expect(stage).toContain('data-trail-mode="steps" aria-pressed="true"');
-      // Positional neighbours: row 1 holds each lane's own first step, so the row carries no
-      // authored label — that would read as "both of these are step 1 of the same thing" — and
-      // every cell keeps its own wording instead.
-      expect(stage).toContain('<div class="trailsteplabel"></div>');
-      expect(stage).toContain('class="trailvariant"');
-      // And the stage says what it is, rather than claiming one trail across the lanes.
-      expect(stage).toContain("different trails, side by side");
-      expect(stage).not.toContain("same trail, one lane per run");
-      // A lane that simply had fewer steps ran out of them; it did not fail to reach a step the
-      // other lane defines, because there is no shared step for it to have missed.
-      expect(stage).toContain("no step here");
-      expect(stage).not.toContain("not reached");
+      // The pair keeps the scene/pixel evidence, but does not introduce an authored-step spine.
+      expect(stage).toContain('data-cmp-tab="screens" aria-current="page"');
+      expect(stage).not.toContain('class="trailgrid"');
+      // The warning says what the tool-name alignment can and cannot establish.
+      expect(stage).toContain("These are different trails");
+      expect(stage).toContain("not by intent");
     });
 
-    test("picking runs of one trail keeps the step join the trail scopes have", () => {
+    test("picking two runs of one trail opens the pair scene comparison", () => {
       const state = renderViewerState(payload, { query: "?view=runs", pick: [0, 1] });
-      expect(state.readHtml()).toContain("one trail — lanes line up step by step");
+      expect(state.readHtml()).not.toContain("one trail — lanes line up step by step");
       const stage = renderViewerState(payload, { query: "?view=runs", pick: [0, 1], pickOpen: true }).readHtml();
-      expect(stage).toContain("<h1>Checkout</h1>");
-      expect(stage).toContain('data-trail-mode="map"');
-      // The authored step spine both runs share, which is the thing a comparison is read across.
-      expect(stage).toContain("Sign in");
+      expect(stage).toContain("<h1>Compare runs</h1>");
+      expect(stage).toContain('data-cmp-tab="screens" aria-current="page"');
+      expect(stage).toContain('class="cmpscenes"');
     });
 
     test("the picked runs travel in the link, and an index this report doesn't have is dropped", () => {
       const state = renderViewerState(mixed, { query: "?view=runs", pick: [0, 1], pickOpen: true });
-      expect(state.readRoute()).toContain("pick=0%2C1");
+      expect(state.readRoute()).toContain("view=compare");
+      expect(state.readRoute()).toContain("base=0");
+      expect(state.readRoute()).toContain("vs=1");
       // The same link, opened cold.
-      expect(renderViewer(mixed, { query: "?view=trail&pick=0,1" })).toContain("<h1>2 selected runs</h1>");
+      expect(renderViewer(mixed, { query: "?view=compare&base=0&vs=1&pick=0,1" })).toContain("<h1>Compare runs</h1>");
       // A report regenerated with fewer runs still opens on the ones it kept…
       expect(renderViewer(mixed, { query: "?view=trail&pick=1,7" })).toContain("<h1>Refunds</h1>");
       // …and a link naming nothing this report has falls back to the index rather than an empty stage.
@@ -10047,11 +10189,13 @@ describe("Trail view (the same trail across devices, one lane per run)", () => {
         run("android-phone", laneATrace),
         { meta: { title: "Checkout elsewhere", status: "passed", trailId: "checkout/elsewhere", platform: "android", deviceClassifier: "android-phone", linkOut: true }, trace: [], llm: [], shots: {}, recordingYaml: null },
         { meta: { title: "Refunds", status: "skipped", trailId: "refunds/full", platform: "android", deviceClassifier: "android-phone", skipReason: "no fixture" }, trace: [], llm: [], shots: {}, recordingYaml: null },
+        run("android-tablet", laneBTrace),
       ] };
-      const out = renderViewer(spread, { query: "?view=runs" });
+      const out = renderViewerState(spread, { query: "?view=runs", toggleCompare: true }).readHtml();
       expect(out).toContain('data-pick="0"');
       expect(out).not.toContain('data-pick="1"');
       expect(out).not.toContain('data-pick="2"');
+      expect(out).toContain('data-pick="3"');
       // Both still hold the gutter open, so the rows beside them don't step sideways.
       expect(out.split("idxpickempty").length - 1).toBe(2);
     });
@@ -10059,7 +10203,7 @@ describe("Trail view (the same trail across devices, one lane per run)", () => {
     test("a run reached through a device cell carries its own checkbox, in its own cell", () => {
       // The matrix layout is where a multi-device trail is picked from, and a cell's checkbox has to
       // belong to THAT cell's run — the columns are what the reader is choosing between.
-      const out = renderViewer(payload, { query: "?view=runs" });
+      const out = renderViewerState(payload, { query: "?view=runs", toggleCompare: true }).readHtml();
       expect(cellPicks(out, "idxcell passed", 0)).toBe(true);
       expect(cellPicks(out, "idxcell failed", 1)).toBe(true);
       // Not the neighbour's: each cell offers the run that cell opens.
@@ -10157,20 +10301,18 @@ describe("Trail view (the same trail across devices, one lane per run)", () => {
       // reason — two runs named the same can be unrelated histories — so a pick of them must not
       // claim a step spine the index itself won't claim.
       const index = renderViewerState(sameTitle, { query: "?view=runs", pick: [0, 1] }).readHtml();
-      expect(index).toContain("different trails — shown side by side");
+      expect(index).not.toContain("different trails — shown side by side");
       const stage = renderViewerState(sameTitle, { query: "?view=runs", pick: [0, 1], pickOpen: true }).readHtml();
-      expect(stage).toContain("<h1>2 selected runs</h1>");
-      expect(stage).toContain('<div class="trailsteplabel"></div>');
-      expect(stage).not.toContain('data-trail-mode="map"');
+      expect(stage).toContain("<h1>Compare runs</h1>");
+      expect(stage).toContain('class="cmpscenes"');
+      expect(stage).not.toContain('class="trailgrid"');
     });
 
-    test("picking a single run still reads as that run's own trail", () => {
-      // One lane has only its own spine to line up against, so there is nothing to disclaim.
-      // Treating it as positional would blank the step labels of a run shown entirely on its own.
-      const stage = renderViewerState(sameTitle, { query: "?view=runs", pick: [0], pickOpen: true }).readHtml();
-      expect(stage).toContain("<h1>Checkout</h1>");
-      expect(stage).toContain('<div class="wpnodelabel">Sign in</div>');
-      expect(stage).toContain('data-trail-mode="map" aria-pressed="true"');
+    test("a single selected run cannot open the comparison workspace", () => {
+      const index = renderViewerState(sameTitle, { query: "?view=runs", pick: [0], pickOpen: true }).readHtml();
+      expect(index).toContain('<strong>1</strong> selected');
+      expect(index).toContain('data-pick-open disabled title="Select at least two runs"');
+      expect(index).not.toContain("<h1>Compare runs</h1>");
     });
 
     test("a stage spanning trails names each lane by its run; a trail's own stage by device alone", () => {
@@ -10178,8 +10320,8 @@ describe("Trail view (the same trail across devices, one lane per run)", () => {
       // can learn which run a column is. Device alone would show two unrelated runs as
       // "android-phone" and "android-phone (2)".
       const stage = renderViewerState(mixed, { query: "?view=runs", pick: [0, 1], pickOpen: true }).readHtml();
-      expect(stage).toContain("Checkout · android-phone");
-      expect(stage).toContain("Refunds · ios-ipad");
+      expect(stage).toContain('title="1. Checkout — android-phone"');
+      expect(stage).toContain('title="2. Refunds — ios-ipad"');
       // A trail's own stage is already headed by the trail name, so repeating it in every lane
       // would just push the device — the thing being compared — off the end of the chip.
       const scoped = renderViewer(payload, { query: "?view=trail" });
@@ -10191,8 +10333,9 @@ describe("Trail view (the same trail across devices, one lane per run)", () => {
       // Three picked runs can be the same device on three different trails, so "3 devices" would be
       // describing something else entirely.
       const stage = renderViewerState(mixed, { query: "?view=runs", pick: [0, 1], pickOpen: true }).readHtml();
-      expect(stage).toContain("2 runs · ");
-      expect(stage).toContain('aria-label="Runs shown"');
+      expect(stage).toContain('<div class="cmpviewfacts"><span>2 runs</span>');
+      expect(stage).toContain('class="cmpscenes"');
+      expect(stage).toContain('<span>Pixel comparison</span>');
       // A trail's own stage IS a comparison across devices, and still says so.
       const scoped = renderViewer(payload, { query: "?view=trail" });
       expect(scoped).toContain("2 devices · ");
@@ -10204,7 +10347,7 @@ describe("Trail view (the same trail across devices, one lane per run)", () => {
       // same — so a second control for that run would carry a second name for it and take the focus
       // restore that belongs to the first.
       const retried = { generatedAt: "now", sessions: [run("android-phone", laneATrace), run("android-phone", laneBTrace)] };
-      const out = renderViewer(retried, { query: "?view=runs" });
+      const out = renderViewerState(retried, { query: "?view=runs", toggleCompare: true }).readHtml();
       expect(out.match(/data-pick="1"/g)).toHaveLength(1);
       expect(out.match(/data-pick="0"/g)).toHaveLength(1);
       // The attempt it stands for keeps the gutter, so the rows below don't step sideways.
@@ -10231,53 +10374,82 @@ describe("Trail view (the same trail across devices, one lane per run)", () => {
       expect(state.readHtml()).toContain('data-trail-lane="1" aria-pressed="true"');
     });
 
-    test("leaving a picked stage for a trail stops the pick travelling in the link", () => {
-      // Back out of a picked stage leaves the runs ticked, so the next click can be a trail's own
-      // entry point. Two stages, one route: the indices have to be dropped, or a reload or a share
-      // reopens the set the reader just left instead of the trail they asked for.
-      const state = renderViewerState(mixed, { query: "?view=trail&pick=0,1", back: true });
-      expect(state.readHtml()).toContain('class="pickbar"');
-      state.clickGotoTrail("trail:refunds%2Ffull:");
-      expect(state.readHtml()).toContain("<h1>Refunds</h1>");
-      expect(state.readRoute()).toContain("trail=");
-      expect(state.readRoute()).not.toContain("pick=");
+    test("opening a trail comparison carries every run in that trail", () => {
+      const third = run("android-tablet", laneATrace);
+      const three = { generatedAt: "now", sessions: [...payload.sessions, third] };
+      const state = renderViewerState(three, { query: "?view=runs", gotoCompareTrail: "trail:checkout%2Fpay:" });
+      expect(state.readHtml()).toContain("<h1>Compare 3 runs</h1>");
+      // Three runs are peers. Pair selectors and pair-only content stay absent; Screens restores
+      // the equal-weight Grid/Replay workspace and Events renders every run as an equal column.
+      expect(state.readHtml()).not.toContain('class="cmppickers"');
+      expect(state.readHtml()).toContain('data-cmp-tab="screens"');
+      expect(state.readHtml()).toContain('data-cmp-tab="replay"');
+      expect(state.readHtml()).toContain('data-cmp-tab="events"');
+      expect(state.readHtml()).not.toContain('data-cmp-tab="tools"');
+      expect(state.readHtml()).not.toContain('aria-label="Run A"');
+      expect(state.readHtml()).not.toContain('aria-label="Run B"');
+      expect(state.readHtml()).not.toContain("A and B feed the detailed comparison tabs");
+      expect(state.readRoute()).toContain("pick=0%2C1%2C2");
+      expect(state.readRoute()).not.toContain("base=");
+      expect(state.readRoute()).not.toContain("vs=");
+      expect(state.readRoute()).not.toContain("trail=");
+
+      const stalePairLink = renderViewer(three, { query: "?view=compare&base=0&vs=1&pick=0,1,2&tab=tools" });
+      expect(stalePairLink).toContain("<h1>Compare 3 runs</h1>");
+      expect(stalePairLink).toContain("<h2>Screens</h2>");
+      expect(stalePairLink).not.toContain("<h2>Tool calls</h2>");
+      expect(stalePairLink).not.toContain('data-cmp-picker=');
     });
 
     // Both runs are already in the document, so the pair the reader ticked is the pair the diff
     // should open on — otherwise choosing what to compare means going to the Compare view first and
     // re-picking there, with the index's own selection ignored.
-    test("ticking two runs opens the diff on those two, not on the report's default pair", () => {
+    test("ticking runs opens the workspace on those runs, not on the report's default pair", () => {
       const settle = [trailRow(1, { objective: true, trailhead: true, label: "Settle up", ts: 1000 }), trailRow(2, { ts: 1000, ms: 200 })];
       const three = { generatedAt: "now", sessions: [...mixed.sessions, run("android-tablet", settle, { title: "Payouts", trailId: "payouts/daily" })] };
 
       const index = renderViewerState(three, { query: "?view=runs", pick: [1, 2] }).readHtml();
-      expect(index).toContain("data-pick-diff");
+      expect(index).toContain("data-pick-open");
 
       // Runs 1 and 2, never 0 and 1 — the default pair, which is what a wiring that ignored the
       // selection would land on and which no assertion on run 0 could tell apart.
-      const state = renderViewerState(three, { query: "?view=runs", pick: [1, 2], pickDiff: true });
+      const state = renderViewerState(three, { query: "?view=runs", pick: [1, 2], pickOpen: true });
       const diff = state.readHtml();
       expect(diff).toContain("<h1>Compare runs</h1>");
       expect(state.readRoute()).toContain("base=1");
       expect(state.readRoute()).toContain("vs=2");
     });
 
-    test("a diff is offered only for a pick of two", () => {
-      // One run has nothing to be diffed against, and three has no second side — both are stages
-      // the side-by-side lanes handle and a two-column diff cannot.
+    test("Compare selected requires two runs and accepts larger sets", () => {
+      // One run has nothing to compare against. Larger sets belong in the shared step grid as
+      // equal peers; pairwise diff controls only appear when the selection itself is a pair.
       const one = renderViewerState(mixed, { query: "?view=runs", pick: [0] }).readHtml();
       expect(one).toContain('class="pickbar"');
-      expect(one).not.toContain("data-pick-diff");
+      expect(one).toContain('data-pick-open disabled');
 
       const settle = [trailRow(1, { objective: true, trailhead: true, label: "Settle up", ts: 1000 }), trailRow(2, { ts: 1000, ms: 200 })];
       const three = { generatedAt: "now", sessions: [...mixed.sessions, run("android-tablet", settle, { title: "Payouts", trailId: "payouts/daily" })] };
-      expect(renderViewerState(three, { query: "?view=runs", pick: [0, 1, 2] }).readHtml()).not.toContain("data-pick-diff");
+      const picked = renderViewerState(three, { query: "?view=runs", pick: [0, 1, 2] }).readHtml();
+      expect(picked).toContain("data-pick-open");
+      expect(picked).not.toContain('data-pick-open disabled');
+
+      const compared = renderViewerState(three, { query: "?view=runs", pick: [0, 1, 2], pickOpen: true });
+      expect(compared.readHtml()).toContain("<h1>Compare 3 runs</h1>");
+      expect(compared.readHtml()).not.toContain('data-cmp-picker=');
+      expect(compared.readHtml()).toContain('data-cmp-tab="screens"');
+      expect(compared.readHtml()).toContain('data-cmp-tab="replay"');
+      expect(compared.readHtml()).toContain('data-cmp-tab="events"');
+      expect(compared.readHtml()).not.toContain('data-cmp-tab="tools"');
+      expect(compared.readRoute()).toContain("view=compare&pick=0%2C1%2C2");
     });
 
-    test("clearing the selection puts the index back the way it was", () => {
+    test("clearing the selection keeps Compare mode ready for another choice", () => {
       const cleared = renderViewerState(mixed, { query: "?view=runs", pick: [0, 1], pickClear: true }).readHtml();
-      expect(cleared).not.toContain('class="pickbar"');
+      expect(cleared).toContain('class="pickbar"');
+      expect(cleared).toContain('<strong>0</strong> selected');
       expect(cleared).toContain('data-pick="0"');
+      expect(cleared).toContain('data-pick-open disabled');
+      expect(cleared).not.toContain('class="btn pickopen ready"');
     });
 
     test("ticking a run neither opens it nor expands its attempt history", () => {
@@ -10495,34 +10667,26 @@ describe("Trail view (the same trail across devices, one lane per run)", () => {
     expect(html).toContain('data-trail-lane="1" aria-pressed="true"');
   });
 
-  test("a single run gets the Trail view too, entered from its own header", () => {
-    // One Android phone run is still a trail — its Replay in particular. With no run index to host
-    // the button, the detail header carries it, and Back returns to the run rather than an index.
+  test("a single-run detail has no Trail view or unavailable Compare action", () => {
     const solo = { generatedAt: "now", sessions: [run("android-phone", laneATrace)] };
-    const state = renderViewerState(solo, { gotoTrail: true });
-    const trail = state.readHtml();
-    expect(trail).toContain('class="trailcanvas"');
-    expect(trail).toContain("1 device ·");
-    expect(trail).toContain(">Back to run</button>");
-    // A lane bar with one lane would be a switch with no positions.
-    expect(trail).not.toContain("traillanebar");
-    const returned = renderViewerState(solo, { gotoTrail: true, back: true });
-    expect(returned.readHtml()).toContain('class="timeline');
+    const detail = renderViewer(solo);
+    expect(detail).not.toContain('data-goto-trail');
+    expect(detail).not.toContain('data-goto-compare');
   });
 
-  test("the index's trail row opens the Trail view, and unnamed runs are not offered one", () => {
+  test("the index's trail row opens Compare, and unnamed runs are not offered it", () => {
     // The row IS the trail — it was inert while only the header button worked.
     const index = renderViewer(payload, { query: "?view=runs" });
-    expect(index).toContain('class="nm nmtrail" type="button" data-goto-trail');
-    const state = renderViewerState(payload, { query: "?view=runs", gotoTrail: true });
-    expect(state.readHtml()).toContain('class="trailcanvas"');
+    expect(index).toContain('class="nm nmtrail" type="button" data-goto-compare-trail');
+    const state = renderViewerState(payload, { query: "?view=runs", gotoCompareTrail: true });
+    expect(state.readHtml()).toContain('<h1>Compare runs</h1>');
     // Runs with neither a trail id nor a title share no identity — they are unidentified, not
     // "the same trail", so neither entry point appears.
     const unnamed = { generatedAt: "now", sessions: [
       { ...run("android-phone", laneATrace), meta: { status: "passed", platform: "android", deviceClassifier: "android-phone" } },
       { ...run("ios-ipad", laneBTrace), meta: { status: "failed", platform: "ios", deviceClassifier: "ios-ipad" } },
     ] };
-    expect(renderViewer(unnamed, { query: "?view=runs" })).not.toContain("data-goto-trail");
+    expect(renderViewer(unnamed, { query: "?view=runs" })).not.toContain("data-goto-compare-trail");
   });
 
   test("the retired Time projection is gone, and its old links land on the map", () => {
@@ -11033,19 +11197,39 @@ describe("Compare view (run-vs-run tool-call and event-stream diffs)", () => {
   };
 
   test("the run index offers Compare exactly when two payload-carrying runs are loaded", () => {
-    expect(renderViewer(payload, { query: "?view=runs" })).toContain("data-goto-compare");
+    expect(renderViewer(payload, { query: "?view=runs" })).toContain("data-index-compare");
     // One run has nothing to compare against.
     const single = { generatedAt: "now", sessions: [payload.sessions[0]] };
     expect(renderViewer({ ...single, sessions: [...single.sessions] }, { query: "?run=0" })).not.toContain("data-goto-compare");
     // Link-out stubs carry no payload to diff.
     const linked = { generatedAt: "now", sessions: [payload.sessions[0], { ...payload.sessions[1], meta: { ...payload.sessions[1].meta, linkOut: true } }] };
     expect(renderViewer(linked, { query: "?view=runs" })).not.toContain("data-goto-compare");
+    // Skipped rows are present in the document but have no run payload to select or compare.
+    const skipped = { generatedAt: "now", sessions: [payload.sessions[0], { ...payload.sessions[1], meta: { ...payload.sessions[1].meta, status: "skipped", skipReason: "not applicable" } }] };
+    expect(renderViewer(skipped, { query: "?view=runs" })).not.toContain("data-index-compare");
     // And a compare route on such a document falls back to the index rather than a broken diff.
     expect(renderViewer(linked, { query: "?view=compare" })).toContain('class="idxsummary"');
   });
 
+  test("run detail replaces Trail view with Compare and starts against another device in that trail", () => {
+    const otherTrail = {
+      ...payload.sessions[0],
+      meta: { ...payload.sessions[0].meta, title: "Refund", trailId: "refund/full", deviceClassifier: "android-watch" },
+    };
+    const withOtherTrailFirst = { generatedAt: "now", sessions: [otherTrail, ...payload.sessions] };
+    const detail = renderViewer(withOtherTrailFirst, { query: "?run=2" });
+    expect(detail).not.toContain('data-goto-trail');
+    expect(detail).toContain('data-goto-compare="2" title="Compare with another device in this trail"');
+
+    const compared = renderViewerState(withOtherTrailFirst, { query: "?run=2", gotoCompare: true });
+    expect(compared.readHtml()).toContain("<h1>Compare runs</h1>");
+    expect(compared.readHtml()).toContain('data-cmp-side="base" data-cmp-run="2" aria-pressed="true"');
+    expect(compared.readHtml()).toContain('data-cmp-side="vs" data-cmp-run="1" aria-pressed="true"');
+    expect(compared.readRoute()).toContain("view=compare&base=2&vs=1");
+  });
+
   test("the view diffs tool calls as one unified diff, agreement collapsed in place", () => {
-    const out = renderViewer(payload, { query: "?view=compare" });
+    const out = renderViewer(payload, { query: "?view=compare&tab=tools" });
     // Both runs are pickable, with the device naming each option.
     expect(out).toContain('data-cmp-side="base"');
     expect(out).toContain("android-phone");
@@ -11053,7 +11237,7 @@ describe("Compare view (run-vs-run tool-call and event-stream diffs)", () => {
     // A replaced value prints as the git pair — baseline line, then the line that replaced it.
     expect(out).toContain('<span class="dl dl-del">− text: <mark class="dlhi">Coffee</mark></span><span class="dl dl-add">+ text: <mark class="dlhi">Bagel</mark></span>');
     // A call only one run made is wholly signed, so the gutter alone says which run it came from.
-    expect(out).toContain("only in current");
+    expect(out).toContain('only in <span class="cmppairtag current"');
     expect(out).toContain("tapOnElementBySelector");
     expect(out).toContain('<span class="dl dl-add">+   id: checkout</span>'); // indent preserved: nested under selector:
     // Identical calls collapse to a gap line where they happened, not to a footnote at the end:
@@ -11072,20 +11256,17 @@ describe("Compare view (run-vs-run tool-call and event-stream diffs)", () => {
   // The gap line is a control, not just elision: expanded, it lists the identical calls dimmed,
   // so "what did the two runs agree ON" is answerable without leaving the diff.
   test("a collapsed gap expands to the identical calls it stands for", () => {
-    const collapsed = renderViewer(payload, { query: "?view=compare" });
+    const collapsed = renderViewer(payload, { query: "?view=compare&tab=tools" });
     expect(collapsed).toContain("⋯ 1 matching tool call — show");
     expect(collapsed).not.toContain('class="cmpsame"');
 
-    const expanded = renderViewer(payload, { query: "?view=compare", cmpGap: 0 });
+    const expanded = renderViewer(payload, { query: "?view=compare&tab=tools", cmpGap: 0 });
     expect(expanded).toContain("⋯ 1 matching tool call — hide");
     expect(expanded).toContain('class="cmpsame"');
     expect(expanded).toContain("<code>launchApp</code>");
   });
 
-  // Each hunk carries the screens both runs were on when the call happened — the trail context the
-  // argument text can't. A call that captured nothing borrows the most recent frame before it, and
-  // a hunk whose screens haven't moved since the previous hunk repeats nothing.
-  test("a hunk shows both runs' screens, once per scene change", () => {
+  test("screens stay in their comparison plugin instead of stretching tool-call hunks", () => {
     const shotRun = (deviceClassifier: string, trace: unknown[], shots: Record<string, string>) => ({
       meta: { title: "Checkout", status: "passed", trailId: "checkout/pay", platform: "android", deviceClassifier },
       trace, llm: [], shots, recordingYaml: null, events: [],
@@ -11104,43 +11285,62 @@ describe("Compare view (run-vs-run tool-call and event-stream diffs)", () => {
         ], { "c1.png": "data:image/png;base64,BB==" }),
       ],
     };
-    const out = renderViewer(withShots, { query: "?view=compare&base=0&vs=1" });
-    // The inputText hunk captured nothing itself: both sides borrow launchApp's frame.
-    expect(out).toContain('data-shot="b1.png" data-shot-run="0"');
-    expect(out).toContain('data-shot="c1.png" data-shot-run="1"');
-    expect(out).toContain('class="cmpframecap">baseline<');
-    expect(out).toContain('class="cmpframecap">current<');
-    // Two hunks (inputText changed, wait only-in-current) but one scene: the frames print once.
-    expect((out.match(/cmphunkframes/g) || []).length).toBe(1);
+    const diff = renderViewer(withShots, { query: "?view=compare&base=0&vs=1&tab=tools" });
+    expect(diff).not.toContain('class="cmpframe"');
+
+    const compare = renderViewer(withShots, { query: "?view=compare&base=0&vs=1&tab=screens" });
+    expect(compare).toContain('data-shot="b1.png" data-shot-run="0"');
+    expect(compare).toContain('data-shot="c1.png" data-shot-run="1"');
+    expect(compare).toContain('class="cmpscenes"');
+    expect(compare).toContain('class="cmpframe cmpdiffcell"');
+    expect(compare).not.toContain('class="trailgrid"');
   });
 
-  // The reader's first question is "what KINDS of difference are there" — the overview answers it
-  // per lane, and each card is also the control that narrows the page to that lane.
-  test("the overview summarises each lane, and a card narrows the page to its lane", () => {
+  test("the comparison uses content-oriented navigation", () => {
     const out = renderViewer(payload, { query: "?view=compare" });
-    expect(out).toContain("1 args changed · 1 only in current");
-    expect(out).toContain("1 of 1 stream differ");
-    expect(out).toContain("no screenshots");
-    expect(out).toContain("<h2>Tool calls</h2>");
-    expect(out).toContain("<h2>Event streams</h2>");
+    expect(out).toContain('class="back" type="button" data-back aria-label="Back to runs"');
+    expect(out).toContain('<div class="comparetitleheading"><h1>Compare runs</h1></div>');
+    expect(out).toContain('summary aria-label="Choose A run;');
+    expect(out).toContain('summary aria-label="Choose B run;');
+    expect(out).not.toContain("data-theme-toggle");
+    expect(out).toContain('<nav aria-label="Comparison features">');
+    expect(out).toContain('class="active" type="button" data-cmp-tab="screens" aria-current="page">Screens</button>');
+    expect(out).not.toContain('data-cmp-tab="steps"');
+    expect(out).toContain('data-cmp-tab="replay">Replay</button>');
+    expect(out).toContain('data-cmp-tab="tools">Tool calls</button>');
+    expect(out).toContain('data-cmp-tab="events">Event streams</button>');
     expect(out).toContain("<h2>Screens</h2>");
 
-    // The lane choice rides the URL, so a shared link opens on the same slice.
-    const narrowed = renderViewer(payload, { query: "?view=compare&lane=tools" });
-    expect(narrowed).toContain('data-cmp-lane="tools" aria-pressed="true"');
-    expect(narrowed).toContain("<h2>Tool calls</h2>");
-    expect(narrowed).not.toContain("<h2>Event streams</h2>");
-    expect(narrowed).not.toContain("<h2>Screens</h2>");
-
-    // Clicking the active card restores the whole diff rather than trapping the reader in a lane.
-    const restored = renderViewer(payload, { query: "?view=compare&lane=tools", cmpLane: "tools" });
-    expect(restored).toContain("<h2>Event streams</h2>");
-    expect(restored).toContain("<h2>Screens</h2>");
+    const compare = renderViewer(payload, { query: "?view=compare&tab=screens" });
+    expect(compare).toContain('class="active" type="button" data-cmp-tab="screens" aria-current="page">Screens</button>');
+    expect(compare).toContain('aria-label="Screens across selected runs"');
+    expect(compare).toContain("Neither run resolved screenshots along the aligned timeline.");
+    expect(compare).not.toContain("<h2>Tool calls</h2>");
+    expect(compare).not.toContain("<h2>Event streams</h2>");
   });
 
-  // "I only care about analytics" is a real way to read the events lane: one chip per stream
-  // narrows the section to that stream alone.
-  test("a stream chip narrows the events lane to that stream alone", () => {
+  test("three or more runs get an equal-weight event matrix instead of a hidden pair diff", () => {
+    const third = run("android-watch", [callRow(1, "launchApp", ["appId: com.example.pos"])], [
+      stream("analytics", [{ Event: "Tap" }, { Event: "View" }, { Event: "View" }]),
+    ]);
+    const three = { generatedAt: "now", sessions: [...payload.sessions, third] };
+    const state = renderViewerState(three, { query: "?view=compare&pick=0,1,2&tab=events&stream=analytics" });
+    const out = state.readHtml();
+
+    expect(out).toContain("<h1>Compare 3 runs</h1>");
+    expect(out).toContain('class="active" type="button" data-cmp-tab="events" aria-current="page"');
+    expect(out).toContain('class="cmptable cmpevents cmpmanytable"');
+    expect(out).toContain('aria-label="Run A:');
+    expect(out).toContain('aria-label="Run B:');
+    expect(out).toContain('aria-label="Run C:');
+    expect(out).toContain("Equal-weight N-run comparison");
+    expect(out).toContain("Select exactly two runs for ordered record-by-record and field differences.");
+    expect(out).not.toContain('data-cmp-picker=');
+    expect(out).not.toContain('class="cmpdiff cmpeventlist"');
+    expect(state.readRoute()).toContain("view=compare&pick=0%2C1%2C2&tab=events&stream=analytics");
+  });
+
+  test("the stream inventory keeps one explicit working set in the inspector", () => {
     const twoStreams = {
       generatedAt: "now",
       sessions: [
@@ -11150,26 +11350,20 @@ describe("Compare view (run-vs-run tool-call and event-stream diffs)", () => {
           [stream("analytics", [{ Event: "Tap" }, { Event: "View" }]), stream("network", [{ url: "/pay" }])]),
       ],
     };
-    const out = renderViewer(twoStreams, { query: "?view=compare&base=0&vs=1" });
-    expect(out).toContain('data-cmp-stream=""'); // the All-streams chip
+    const out = renderViewer(twoStreams, { query: "?view=compare&base=0&vs=1&tab=events" });
     expect(out).toContain('data-cmp-stream="analytics"');
-    expect(out).toContain("network (1)"); // the unchanged stream is still accounted for
+    expect(out).not.toContain('data-cmp-stream="network"'); // differences-only is the default
+    expect(out).toContain('<section class="cmpinspector"');
 
-    const narrowed = renderViewer(twoStreams, { query: "?view=compare&base=0&vs=1&stream=analytics" });
-    expect(narrowed).toContain("<code>analytics</code>");
-    expect(narrowed).not.toContain("network (1)");
+    const all = renderViewer(twoStreams, { query: "?view=compare&base=0&vs=1&tab=events&eventall=1&stream=network" });
+    expect(all).toContain('data-cmp-stream="network" aria-current="true"');
+    expect(all).toContain('<code title="network">network</code>');
 
-    // A filter naming a stream this pair does not carry filters nothing — an empty lane would
-    // read as "no event differences", which is not what the data says.
-    const stale = renderViewer(twoStreams, { query: "?view=compare&base=0&vs=1&stream=missing" });
-    expect(stale).toContain("<code>analytics</code>");
-    expect(stale).toContain("network (1)");
+    const stale = renderViewer(twoStreams, { query: "?view=compare&base=0&vs=1&tab=events&stream=missing" });
+    expect(stale).toContain('<code title="analytics">analytics</code>');
   });
 
-  // The screens lane reduces the aligned run to its scene changes and pairs both runs' frames at
-  // each one. Pixel verdicts need image decoding this environment does not have, so the cells hold
-  // the comparing state; the states a comparison can't reach are spelled out, not folded into "match".
-  test("the screens lane pairs each scene's frames and says what it could not compare", () => {
+  test("screens and replay are peer plugins over the same selected runs", () => {
     const shotRun = (deviceClassifier: string, trace: unknown[], shots: Record<string, string>) => ({
       meta: { title: "Checkout", status: "passed", trailId: "checkout/pay", platform: "android", deviceClassifier },
       trace, llm: [], shots, recordingYaml: null, events: [],
@@ -11178,27 +11372,26 @@ describe("Compare view (run-vs-run tool-call and event-stream diffs)", () => {
       generatedAt: "now",
       sessions: [
         shotRun("android-phone", [
-          callRow(1, "launchApp", ["appId: a"], { screenshotFile: "b1.png" }),
-          callRow(2, "inputText", ["text: Coffee"]),
+          callRow(1, "launchApp", ["appId: a"], { screenshotFile: "b1.png", ts: 1000 }),
+          callRow(2, "inputText", ["text: Coffee"], { ts: 2000 }),
         ], { "b1.png": "data:image/png;base64,AA==" }),
         shotRun("android-tablet", [
-          callRow(1, "launchApp", ["appId: a"], { screenshotFile: "c1.png" }),
-          callRow(2, "inputText", ["text: Bagel"]),
+          callRow(1, "launchApp", ["appId: a"], { screenshotFile: "c1.png", ts: 1000 }),
+          callRow(2, "inputText", ["text: Bagel"], { ts: 2000 }),
         ], { "c1.png": "data:image/png;base64,BB==" }),
       ],
     };
-    const out = renderViewer(withShots, { query: "?view=compare&base=0&vs=1" });
+    const out = renderViewer(withShots, { query: "?view=compare&base=0&vs=1&tab=screens" });
+    expect(out).toContain('aria-label="Screens across selected runs"');
     expect(out).toContain('class="cmpscenes"');
-    expect(out).toContain("comparing pixels…");
-    expect(out).toContain("1 scene · comparing pixels…"); // the overview card tracks the queue
+    expect(out).toContain('class="cmpframe cmpdiffcell"');
+    const allScreens = renderViewer(withShots, { query: "?view=compare&base=0&vs=1&tab=screens&all=1" });
+    expect(allScreens).not.toContain('id="trailall"');
 
-    // A scene one run never captured has nothing to diff — the cell says which side is missing.
-    const oneSided = {
-      generatedAt: "now",
-      sessions: [withShots.sessions[0], shotRun("android-tablet", [callRow(1, "launchApp", ["appId: a"])], {})],
-    };
-    expect(renderViewer(oneSided, { query: "?view=compare&base=0&vs=1" }))
-      .toContain("only the baseline run has a frame here");
+    const replay = renderViewer(withShots, { query: "?view=compare&base=0&vs=1&tab=replay" });
+    expect(replay).toContain('class="active" type="button" data-cmp-tab="replay" aria-current="page">Replay</button>');
+    expect(replay).toContain('aria-label="Replay across selected runs"');
+    expect(replay).toContain('class="rpwrap"');
   });
 
   test("opens on a same-trail pair rather than the document's first two runs", () => {
@@ -11209,7 +11402,7 @@ describe("Compare view (run-vs-run tool-call and event-stream diffs)", () => {
     // Document order interleaves the trails, so runs 0 and 1 are different trails.
     const mixed = { generatedAt: "now", sessions: [payload.sessions[0], other("android-phone"), payload.sessions[1], other("android-tablet")] };
 
-    const out = renderViewer(mixed, { query: "?view=compare" });
+    const out = renderViewer(mixed, { query: "?view=compare&tab=tools" });
 
     // Runs 0 and 2 are the Checkout pair; the view opens on them, not on 0 and 1.
     expect(out).toContain('data-cmp-open="0:2"');
@@ -11225,7 +11418,7 @@ describe("Compare view (run-vs-run tool-call and event-stream diffs)", () => {
     };
     const mixed = { generatedAt: "now", sessions: [payload.sessions[0], other] };
 
-    const out = renderViewer(mixed, { query: "?view=compare&base=0&vs=1" });
+    const out = renderViewer(mixed, { query: "?view=compare&base=0&vs=1&tab=tools" });
 
     expect(out).toContain("These are different trails");
     expect(out).toContain("Checkout");
@@ -11244,7 +11437,7 @@ describe("Compare view (run-vs-run tool-call and event-stream diffs)", () => {
     });
     const unnamed = { generatedAt: "now", sessions: [anonymous("android-phone", "Coffee"), anonymous("android-tablet", "Bagel")] };
 
-    const out = renderViewer(unnamed, { query: "?view=compare&base=0&vs=1" });
+    const out = renderViewer(unnamed, { query: "?view=compare&base=0&vs=1&tab=tools" });
 
     expect(out).toContain("These runs carry no trail identity");
     expect(out).not.toContain("These are different trails");
@@ -11261,39 +11454,124 @@ describe("Compare view (run-vs-run tool-call and event-stream diffs)", () => {
     };
     const mixed = { generatedAt: "now", sessions: [payload.sessions[0], other, payload.sessions[1]] };
 
-    expect(renderViewer(mixed, { query: "?view=compare" })).toContain('<optgroup label="Checkout">');
-    // One trail needs no grouping — a single heading over every option is noise.
-    expect(renderViewer(payload, { query: "?view=compare" })).not.toContain("<optgroup");
+    const grouped = renderViewer(mixed, { query: "?view=compare" });
+    expect(grouped).toContain('<div class="idxsortmenulabel">Checkout</div>');
+    expect(grouped).toContain('<div class="idxsortmenulabel">Refund</div>');
+    // A single-trail menu keeps the same structure, so adding another trail does not change how
+    // keyboard and screen-reader users encounter the choices.
+    expect(renderViewer(payload, { query: "?view=compare" })).toContain('<div class="idxsortmenulabel">Checkout</div>');
   });
 
   test("the view groups event streams by the auto-detected key and reports per-group deltas", () => {
-    const out = renderViewer(payload, { query: "?view=compare" });
-    expect(out).toContain("<code>analytics</code>");
+    const out = renderViewer(payload, { query: "?view=compare&tab=events" });
+    expect(out).toContain('<code title="analytics">analytics</code>');
     expect(out).toContain("3 → 4");
     // The grouping key was detected from the payloads, not configured.
-    expect(out).toContain("<th>Event</th>");
+    expect(out).toContain('<th scope="col">Event</th>');
+    expect(out).toContain('<th class="cmpcolbase" scope="col"><span class="cmppairtag base"');
+    expect(out).toContain('<th class="cmpcolcurrent" scope="col"><span class="cmppairtag current"');
+    expect(out).toContain('<th scope="col">Δ</th>');
     expect(out).toContain("<td class=\"cmpkey\">Tap</td>");
     // View (1→1) is unchanged, so only Tap's delta row renders.
     expect(out).toContain("1 group(s) unchanged");
   });
 
+  test("the title selectors carry device and version identity without a secondary context row", () => {
+    const deviceOut = renderViewer(payload, { query: "?view=compare&tab=events" });
+    expect(deviceOut).not.toContain("Same trail · Different devices");
+    expect(deviceOut).toContain("android-phone");
+    expect(deviceOut).toContain("android-tablet");
+    const versioned = {
+      generatedAt: "now",
+      sessions: [
+        { ...payload.sessions[0], meta: { ...payload.sessions[0].meta, deviceClassifier: "android-phone", appVersion: "5.1", buildNumber: "101" } },
+        { ...payload.sessions[1], meta: { ...payload.sessions[1].meta, deviceClassifier: "android-phone", appVersion: "5.2", buildNumber: "112" } },
+      ],
+    };
+    const out = renderViewer(versioned, { query: "?view=compare&tab=events" });
+    expect(out).not.toContain("Same device · Different versions");
+    expect(out).toContain("android-phone · 5.1 · build 101");
+    expect(out).toContain("android-phone · 5.2 · build 112");
+    expect(out).not.toContain("Captured events that changed between A and B.");
+  });
+
+  test("step organization appears only for an honestly aligned authored sequence", () => {
+    const objective = (i: number, label: string, ts: number) => callRow(i, label, [], { objective: true, ts, args: undefined });
+    const withSteps = {
+      generatedAt: "now",
+      sessions: [
+        run("android-phone", [objective(0, "Open checkout", 1000), objective(2, "Submit payment", 1002)],
+          [stream("analytics", [{ Event: "Open" }, { Event: "View" }, { Event: "Pay" }, { Event: "Done" }])]),
+        run("android-tablet", [objective(0, "Open checkout", 1000), objective(2, "Submit payment", 1002)],
+          [stream("analytics", [{ Event: "Open" }, { Event: "View" }, { Event: "Decline" }, { Event: "Done" }])]),
+      ],
+    };
+    const out = renderViewer(withSteps, { query: "?view=compare&tab=events&organize=step&eventstep=2" });
+    expect(out).toContain('data-cmp-organize="step" aria-pressed="true"');
+    expect(out).toContain('<strong>Submit payment</strong>');
+    expect(out).toContain("Captured during step 2");
+    expect(out).toContain("temporal context, not proof");
+
+    const drifted = {
+      ...withSteps,
+      sessions: [withSteps.sessions[0], { ...withSteps.sessions[1], trace: [objective(0, "Open cart", 1000)] }],
+    };
+    const unavailable = renderViewer(drifted, { query: "?view=compare&tab=events&organize=step" });
+    expect(unavailable).not.toContain('data-cmp-organize="step"');
+    expect(unavailable).toContain("authored-step sequences do not align");
+  });
+
+  test("step organization uses canonical trailhead and retry groups", () => {
+    const objective = (i: number, label: string, ts: number, extra: Record<string, unknown> = {}) =>
+      callRow(i, label, [], { objective: true, ts, args: undefined, ...extra });
+    const trace = [
+      objective(0, "Prepare account", 1000, { trailhead: true }),
+      objective(1, "Submit payment", 2000, { ok: false, selfHeal: true }),
+      objective(2, "Submit payment", 2400),
+      objective(3, "Confirm receipt", 3000),
+    ];
+    const withRetry = {
+      generatedAt: "now",
+      sessions: [
+        run("android-phone", trace, [stream("analytics", [{ Event: "Pay" }])]),
+        run("android-tablet", trace.map((row) => ({ ...row })), [stream("analytics", [{ Event: "Pay" }])]),
+      ],
+    };
+
+    const out = renderViewer(withRetry, { query: "?view=compare&tab=events&organize=step&eventall=1" });
+    expect(out).toContain('data-cmp-event-step="0"');
+    expect(out).toContain('data-cmp-event-step="1"');
+    expect(out).toContain('data-cmp-event-step="2"');
+    expect(out).not.toContain('data-cmp-event-step="3"');
+    expect(out.match(/<strong>Submit payment<\/strong>/g)).toHaveLength(1);
+  });
+
+  test("partial capture truth stays beside the focused stream", () => {
+    const capped = {
+      generatedAt: "now",
+      sessions: [
+        { ...payload.sessions[0], events: [{ ...payload.sessions[0].events[0], truncated: true }] },
+        payload.sessions[1],
+      ],
+    };
+    const out = renderViewer(capped, { query: "?view=compare&tab=events" });
+    expect(out).toContain("Partial capture · retained prefix only");
+    expect(out).toContain("Anything after the retained prefix is unknown");
+  });
+
   test("each changed stream lists its events in order, one row each, with the extra one signed", () => {
-    const out = renderViewer(payload, { query: "?view=compare" });
-    // The list reads like a file of the events that fired: every event both runs share is a
-    // context row, and the current run's extra Tap is the one row carrying a +.
-    // The summary answers "how much of this run differs, and is it one place or all over" before
-    // the reader counts a single row.
-    expect(out).toContain("Events, in order — 1 of 4 differ (25%) in one place · 1 added");
-    expect(out).toContain('class="dl dlrow dl-add" type="button" data-cmp-event="analytics:2"');
+    const out = renderViewer(payload, { query: "?view=compare&tab=events" });
+    expect(out).toContain("1 added");
+    expect(out).toContain('class="dl dlrow dl-add" type="button" data-cmp-event="analytics|1|added0"');
     expect(out).toContain("+ Tap");
-    expect(out).toContain('class="dl dlrow dl-ctx" type="button" data-cmp-event="analytics:0"');
+    expect(out).toContain('class="dl dlrow dl-ctx" type="button" data-cmp-event="analytics|0|head0"');
     // The fields stay behind the row until it's clicked.
     expect(out).not.toContain("cmpevtdetail");
   });
 
   test("clicking an event row reveals that event's fields under it", () => {
-    const out = renderViewer(payload, { query: "?view=compare", cmpEvent: "analytics:2" });
-    expect(out).toContain('data-cmp-event="analytics:2" data-cmp-anchor="analytics|0" aria-expanded="true"');
+    const out = renderViewer(payload, { query: "?view=compare&tab=events", cmpEvent: "analytics|1|added0" });
+    expect(out).toContain('data-cmp-event="analytics|1|added0" aria-expanded="true"');
     expect(out).toContain("cmpevtdetail");
     expect(out).toContain("Event: &quot;Tap&quot;");
   });
@@ -11317,13 +11595,14 @@ describe("Compare view (run-vs-run tool-call and event-stream diffs)", () => {
     };
   };
 
-  test("the summary says how much of the run differs and whether it went wrong in one place", () => {
-    const out = renderViewer(scatteredPayload(), { query: "?view=compare" });
-    expect(out).toMatch(/Events, in order — \d+ of \d+ differ \(\d+%\) in \d+ places/);
+  test("the focused stream names how many semantic difference places it contains", () => {
+    const out = renderViewer(scatteredPayload(), { query: "?view=compare&tab=events" });
+    expect(out).toContain("Difference <strong>1</strong> of 3");
+    expect(out).toContain('aria-label="Difference places"');
   });
 
   test("a fold says which stretch of the run it stands for", () => {
-    const out = renderViewer(scatteredPayload(), { query: "?view=compare" });
+    const out = renderViewer(scatteredPayload(), { query: "?view=compare&tab=events" });
     // Not just "16 matching events" — where those events sit, so "early or late in the run" stops
     // being arithmetic on row numbers.
     expect(out).toMatch(/⋯ \d+ matching events \(\d+%–\d+%\)/);
@@ -11340,51 +11619,63 @@ describe("Compare view (run-vs-run tool-call and event-stream diffs)", () => {
           [stream("analytics", [{ Event: "A", id: "b1" }, { Event: "B", id: "b2" }, { Event: "C", id: "b3" }, { Event: "D", id: "b4" }, { Event: "E", id: "b5" }, { Event: "F", id: "b6" }, { Event: "Z", id: "b7" }])]),
       ],
     };
-    const out = renderViewer(shortPayload, { query: "?view=compare" });
+    const out = renderViewer(shortPayload, { query: "?view=compare&tab=events" });
     expect(out).toContain("matching events");
     expect(out).not.toMatch(/matching events \(\d+%–\d+%\)/);
   });
 
-  test("each place the runs diverge gets one anchor, and the stepper walks them", () => {
-    const view = renderViewerState(scatteredPayload(), { query: "?view=compare" });
-    const anchors = [...view.html.matchAll(/data-cmp-anchor="([^"]+)"/g)].map((m) => m[1]);
-    // One per place, numbered in order — not one per differing row.
-    expect(anchors).toEqual(["analytics|0", "analytics|1", "analytics|2"]);
-    expect(view.html).toContain("3 places differ");
-    expect(view.html).toContain('data-cmp-jump="analytics|next"');
+  test("the navigator renders one difference cluster at a time", () => {
+    const out = renderViewer(scatteredPayload(), { query: "?view=compare&tab=events" });
+    expect(out).toContain('data-cmp-place-action="prev" data-cmp-place-total="3"');
+    expect(out).toContain('data-cmp-place-action="next" data-cmp-place-total="3"');
+    expect(out).not.toContain(">+ Search</button>"); // a later cluster stays out of the focused payload
+    const full = renderViewer(scatteredPayload(), { query: "?view=compare&tab=events", cmpFull: "analytics" });
+    expect(full).toContain(">+ Search</button>");
+    expect(full).toContain("Show focused difference");
   });
 
-  test("stepping moves the page to each difference in turn, and wraps", () => {
-    const first = renderViewerState(scatteredPayload(), { query: "?view=compare", cmpJump: "analytics|next" });
-    expect(first.cmpScrolledTo()).toBe("analytics|0");
-    const second = renderViewerState(scatteredPayload(), { query: "?view=compare", cmpJump: ["analytics|next", "analytics|next"] });
-    expect(second.cmpScrolledTo()).toBe("analytics|1");
-    // The first press of ↑ goes to the last difference rather than nowhere.
-    const back = renderViewerState(scatteredPayload(), { query: "?view=compare", cmpJump: "analytics|prev" });
-    expect(back.cmpScrolledTo()).toBe("analytics|2");
+  test("event filters remain shareable and keep keyboard focus", () => {
+    const state = renderViewerState(scatteredPayload(), { query: "?view=compare&tab=events", cmpEventSearch: "analytics" });
+    expect(state.readRoute()).toContain("eventq=analytics");
+    expect(state.readRestoredFocus()).toBe("[data-cmp-event-search]");
+    const all = renderViewerState(scatteredPayload(), { query: "?view=compare&tab=events", cmpEventAll: true });
+    expect(all.readRoute()).toContain("eventall=1");
+    expect(all.readRestoredFocus()).toBe("[data-cmp-event-all]");
+  });
+
+  test("next and previous difference update the URL, focus, and wrap", () => {
+    const first = renderViewerState(scatteredPayload(), { query: "?view=compare&tab=events", cmpPlace: "next" });
+    expect(first.readRoute()).toContain("place=2");
+    expect(first.readHtml()).toContain("Difference <strong>2</strong> of 3");
+    expect(first.readRestoredFocus()).toBe('[data-cmp-place-action="next"]');
+    const wrapped = renderViewerState(scatteredPayload(), { query: "?view=compare&tab=events", cmpPlace: ["next", "next", "next"] });
+    expect(wrapped.readRoute()).not.toContain("place=");
+    expect(wrapped.readHtml()).toContain("Difference <strong>1</strong> of 3");
+    const back = renderViewerState(scatteredPayload(), { query: "?view=compare&tab=events", cmpPlace: "prev" });
+    expect(back.readRoute()).toContain("place=3");
   });
 
   // One place to reach is the place the reader is already looking at.
   test("a stream that differs in one place gets no stepper", () => {
-    const out = renderViewer(payload, { query: "?view=compare" });
-    expect(out).toContain("Events, in order —");
-    expect(out).not.toContain("cmpstepper");
+    const out = renderViewer(payload, { query: "?view=compare&tab=events" });
+    expect(out).toContain("1 difference place");
+    expect(out).not.toContain("data-cmp-place-action");
   });
 
   // Masked fields are the ones the comparison never looked at, so a reader who can't see their
   // names can't tell "these runs agree" from "the field that disagreed is one we hid".
   test("a stream names the fields its comparison left out", () => {
-    const out = renderViewer(scatteredPayload(), { query: "?view=compare" });
+    const out = renderViewer(scatteredPayload(), { query: "?view=compare&tab=events" });
     // `id` never repeats across the two runs, so it was masked; `Event` and `amount` repeat and
     // were compared.
-    expect(out).toContain("⊘ Not compared here: id");
-    expect(out).not.toContain("Not compared here: Event");
-    expect(out).toContain("left out of the comparison");
+    expect(out).toContain("⊘ 1 volatile field masked");
+    expect(out).toContain("Not compared: id");
+    expect(out).not.toContain("Not compared: Event");
     // A comparison that looked at everything says nothing — both the per-stream list and the note
     // explaining it are about an exception.
-    const nothingMasked = renderViewer(payload, { query: "?view=compare" });
-    expect(nothingMasked).not.toContain("Not compared here");
-    expect(nothingMasked).not.toContain("left out of the comparison");
+    const nothingMasked = renderViewer(payload, { query: "?view=compare&tab=events" });
+    expect(nothingMasked).toContain("No fields masked");
+    expect(nothingMasked).not.toContain("Not compared:");
   });
 
   // Every difference below reads differently depending on which side failed, and the picker labels
@@ -11398,12 +11689,12 @@ describe("Compare view (run-vs-run tool-call and event-stream diffs)", () => {
       ],
     };
     const out = renderViewer(failed, { query: "?view=compare&base=0&vs=1" });
-    expect(out).toContain('<span class="badge passed" title="The baseline run passed">passed</span>');
-    expect(out).toContain('<span class="badge failed" title="The current run failed">failed</span>');
+    expect(out).toContain('<span class="cmppickstatus" title="Run A passed"><span class="idxstatusdot passed" aria-hidden="true"></span>passed</span>');
+    expect(out).toContain('<span class="cmppickstatus" title="Run B failed"><span class="idxstatusdot failed" aria-hidden="true"></span>failed</span>');
   });
 
   // `indexOutcome` folds cancelled, running and unstamped runs all into `other`, which would render
-  // a badge reading `other` under the title "The baseline run other". The generator distinguishes
+  // a badge reading `other` under the title "Run A other". The generator distinguishes
   // them, so the badge has to as well — a cancelled run called "no result" is a wrong answer.
   test("a run that neither passed nor failed reports its actual status", () => {
     const withStatus = (status: string | undefined) => renderViewer({
@@ -11414,10 +11705,10 @@ describe("Compare view (run-vs-run tool-call and event-stream diffs)", () => {
       ],
     }, { query: "?view=compare&base=0&vs=1" });
 
-    expect(withStatus("cancelled")).toContain('<span class="badge unknown" title="The baseline run was cancelled">cancelled</span>');
-    expect(withStatus("running")).toContain('<span class="badge unknown" title="The baseline run is still running">running</span>');
+    expect(withStatus("cancelled")).toContain('<span class="cmppickstatus" title="Run A was cancelled"><span class="idxstatusdot other" aria-hidden="true"></span>cancelled</span>');
+    expect(withStatus("running")).toContain('<span class="cmppickstatus" title="Run A is still running"><span class="idxstatusdot other" aria-hidden="true"></span>running</span>');
     // Only a run carrying no status at all — or the generator's own `unknown` — is "no result".
-    expect(withStatus(undefined)).toContain('<span class="badge unknown" title="The baseline run has no recorded outcome">no result</span>');
+    expect(withStatus(undefined)).toContain('<span class="cmppickstatus" title="Run A has no recorded outcome"><span class="idxstatusdot other" aria-hidden="true"></span>no result</span>');
     expect(withStatus("unknown")).toContain('>no result</span>');
     // Whatever the status, the enum name never reaches the reader and the title stays a sentence.
     ["cancelled", "running", "unknown", undefined].forEach((status) => {
@@ -11438,13 +11729,13 @@ describe("Compare view (run-vs-run tool-call and event-stream diffs)", () => {
         run("android-tablet", [callRow(1, "launchApp", ["appId: a"])], [stream("audit", ids("curr-"))]),
       ],
     };
-    const out = renderViewer(maskedIntoAgreement, { query: "?view=compare" });
+    const out = renderViewer(maskedIntoAgreement, { query: "?view=compare&tab=events&eventall=1" });
     // Every `id` differs, but each is unique, so the field is masked and the stream compares equal.
-    expect(out).toContain("1 stream(s) unchanged: audit (4, not compared: id)");
-    // And the note explaining why a field went uncompared fires off the unchanged stream too.
-    expect(out).toContain("left out of the comparison");
+    expect(out).toContain('<code title="audit">audit</code>');
+    expect(out).toContain("Matches after masking");
+    expect(out).toContain("Not compared: id");
     // A stream that really was compared end to end carries no such tail.
-    expect(renderViewer(payload, { query: "?view=compare" })).not.toContain("not compared:");
+    expect(renderViewer(payload, { query: "?view=compare&tab=events" })).not.toContain("Not compared:");
   });
 
   test("a stream with identical counts but different payload content is surfaced, with the per-line change", () => {
@@ -11455,9 +11746,9 @@ describe("Compare view (run-vs-run tool-call and event-stream diffs)", () => {
         run("android-tablet", [callRow(1, "launchApp", ["appId: com.example.pos"])], [stream("flags", [{ name: "x", on: false }, { name: "y", on: true }])]),
       ],
     };
-    const out = renderViewer(contentPayload, { query: "?view=compare" });
+    const out = renderViewer(contentPayload, { query: "?view=compare&tab=events" });
     // Counts and group mix are identical — only the payload content flags this stream.
-    expect(out).toContain("same counts, content differs");
+    expect(out).toContain("same count · content differs");
     // The changed event is two rows leading with the event it is — `x` — and the changed value is
     // marked whole on the summary itself, so the reader sees what changed without opening anything.
     expect(out).toContain('− x  on=<mark class="dlhi">true</mark>');
@@ -11465,7 +11756,7 @@ describe("Compare view (run-vs-run tool-call and event-stream diffs)", () => {
     // The unchanged `y` still lists, in place, so the change is read against the whole stream.
     expect(out).toContain("  y  on=true");
     // A diff this small shows itself instead of hiding behind the expander.
-    expect(out).toContain('<details class="cmpdiffwrap" open>');
+    expect(out).toContain('<div class="cmpdiffwrap cmpfocused">');
   });
 
   test("opening a changed event shows the per-line diff of its fields", () => {
@@ -11476,17 +11767,14 @@ describe("Compare view (run-vs-run tool-call and event-stream diffs)", () => {
         run("android-tablet", [callRow(1, "launchApp", ["appId: com.example.pos"])], [stream("flags", [{ name: "x", on: false }, { name: "y", on: true }])]),
       ],
     };
-    const out = renderViewer(contentPayload, { query: "?view=compare", cmpEvent: "flags:0" });
+    const out = renderViewer(contentPayload, { query: "?view=compare&tab=events", cmpEvent: "flags|0|changed0" });
     // Behind the row: the git-style ± line diff, with the event's stable fields as context.
     expect(out).toContain('<span class="dl dl-del">− on: <mark class="dlhi">true</mark></span>');
     expect(out).toContain('<span class="dl dl-add">+ on: <mark class="dlhi">false</mark></span>');
     expect(out).toContain("name: &quot;x&quot;");
   });
 
-  // A wall of differing events renders behind the expander, and the click that asks for one event's
-  // fields re-renders the section — so the stream has to stay open across that render, or the
-  // reader's click collapses the very thing they opened it to read.
-  test("opening an event inside a large stream diff leaves the stream expanded", () => {
+  test("opening an event inside a large focused diff keeps that working set visible", () => {
     const flag = (i: number, on: boolean) => ({ name: `f${i}`, on });
     const bigPayload = {
       generatedAt: "now",
@@ -11497,18 +11785,18 @@ describe("Compare view (run-vs-run tool-call and event-stream diffs)", () => {
           [stream("flags", Array.from({ length: 12 }, (_, i) => flag(i, false)))]),
       ],
     };
-    expect(renderViewer(bigPayload, { query: "?view=compare" })).toContain('<details class="cmpdiffwrap"><summary>');
-    const opened = renderViewer(bigPayload, { query: "?view=compare", cmpEvent: "flags:0" });
-    expect(opened).toContain('<details class="cmpdiffwrap" open>');
+    expect(renderViewer(bigPayload, { query: "?view=compare&tab=events" })).toContain('<div class="cmpdiffwrap cmpfocused">');
+    const opened = renderViewer(bigPayload, { query: "?view=compare&tab=events", cmpEvent: "flags|0|changed0" });
+    expect(opened).toContain('<code title="flags">flags</code>');
     expect(opened).toContain('<span class="dl dl-add">+ on: <mark class="dlhi">false</mark></span>');
   });
 
   // The re-render detaches the row that was just activated, which drops focus to the document and
   // strands a keyboard reader at the top of the page.
   test("expanding an event or a gap hands focus to the row that replaced it", () => {
-    const event = renderViewerState(payload, { query: "?view=compare", cmpEvent: "analytics:2" });
-    expect(event.readRestoredFocus()).toBe('[data-cmp-event="analytics:2"]');
-    const gap = renderViewerState(payload, { query: "?view=compare", cmpGap: 0 });
+    const event = renderViewerState(payload, { query: "?view=compare&tab=events", cmpEvent: "analytics|1|added0" });
+    expect(event.readRestoredFocus()).toBe('[data-cmp-event="analytics|1|added0"]');
+    const gap = renderViewerState(payload, { query: "?view=compare&tab=tools", cmpGap: 0 });
     expect(gap.readRestoredFocus()).toBe('[data-cmp-gap="0"]');
   });
 
@@ -11518,13 +11806,29 @@ describe("Compare view (run-vs-run tool-call and event-stream diffs)", () => {
     const state = renderViewerState(payload, { query: "?view=compare&base=0&vs=1", cmpSide: { side: "base", value: 1 } });
     expect(state.readRoute()).toContain("base=1");
     expect(state.readRoute()).toContain("vs=0");
+
+    const third = { ...payload.sessions[0], meta: { ...payload.sessions[0].meta, deviceClassifier: "android-watch" } };
+    const replacement = renderViewerState({ ...payload, sessions: [...payload.sessions, third] }, {
+      query: "?view=compare&base=0&vs=1",
+      cmpSide: { side: "base", value: 2 },
+    });
+    expect(replacement.readRoute()).toContain("base=2");
+    expect(replacement.readRoute()).toContain("vs=1");
+    expect(replacement.readRoute()).not.toContain("pick=");
+    expect(replacement.readHtml()).toContain("<h1>Compare runs</h1>");
+    expect(replacement.readHtml()).not.toContain("<h1>Compare 3 runs</h1>");
   });
 
-  // Clearing the lane filter has to clear it out of the URL too — a key the viewer writes but
-  // never deletes leaves a shared link opening on a lane the reader had already left.
-  test("clicking the active lane card drops the lane out of the URL", () => {
-    const state = renderViewerState(payload, { query: "?view=compare&lane=tools", cmpLane: "tools" });
+  test("switching comparison tabs updates the route and canonicalizes legacy lane links", () => {
+    const state = renderViewerState(payload, { query: "?view=compare&lane=tools", cmpTab: "screens" });
     expect(state.readRoute()).not.toContain("lane=");
+    // Screens is the default plugin, so its canonical route omits a redundant tab parameter.
+    expect(state.readRoute()).not.toContain("tab=");
+    expect(state.readRoute()).toContain("view=compare");
+    expect(state.readHtml()).toContain('aria-label="Screens across selected runs"');
+
+    const legacyScreens = renderViewer(payload, { query: "?view=compare&lane=screens" });
+    expect(legacyScreens).toContain('class="active" type="button" data-cmp-tab="screens" aria-current="page">Screens</button>');
   });
 
   // A run index that lists skipped rows as link-out stubs next to real runs is ordinary, so the
@@ -11534,10 +11838,10 @@ describe("Compare view (run-vs-run tool-call and event-stream diffs)", () => {
     const withStub = { generatedAt: "now", sessions: [stub, payload.sessions[0], payload.sessions[1]] };
     const out = renderViewer(withStub, { query: "?view=compare&base=0&vs=2" });
     expect(out).toContain('data-cmp-side="base"');
-    expect(out).not.toContain('<option value="0"');
+    expect(out).not.toContain('data-cmp-run="0"');
     // base=0 named the stub, so it snaps to the first comparable run; vs=2 was already valid.
-    expect(out).toMatch(/data-cmp-side="base"[^>]*>[^]*?value="1" selected/);
-    expect(out).toMatch(/data-cmp-side="vs"[^>]*>[^]*?value="2" selected/);
+    expect(out).toContain('data-cmp-side="base" data-cmp-run="1" aria-pressed="true"');
+    expect(out).toContain('data-cmp-side="vs" data-cmp-run="2" aria-pressed="true"');
   });
 
   // A payload that arrived but wouldn't inflate compares as if the run captured nothing. Silence
@@ -11547,7 +11851,7 @@ describe("Compare view (run-vs-run tool-call and event-stream diffs)", () => {
       generatedAt: "now",
       sessions: payload.sessions.map((s) => ({ ...s, events: null, eventsGz: Buffer.from("not actually gzip").toString("base64") })),
     };
-    const state = renderViewerState(broken, { query: "?view=compare" });
+    const state = renderViewerState(broken, { query: "?view=compare&tab=events" });
     for (let i = 0; i < 100 && state.readHtml().includes("Inflating event payloads"); i++) {
       await new Promise((resolve) => setTimeout(resolve, 5));
     }
@@ -11556,12 +11860,33 @@ describe("Compare view (run-vs-run tool-call and event-stream diffs)", () => {
     expect(out).not.toContain("Inflating event payloads");
   });
 
+  test("a missing or malformed run chunk makes comparison explicitly incomplete", () => {
+    const html = core.buildMultiReportHtml({
+      generatedAt: "now",
+      sessions: payload.sessions.map((s) => ({ meta: s.meta, trace: s.trace, llmLogs: [], shots: s.shots, events: s.events })),
+    });
+    const missing = chunksOf(html);
+    delete missing.sessions["1"];
+    const missingView = renderViewer(null, { chunks: missing, query: "?view=compare&base=0&vs=1&tab=tools" });
+    expect(missingView).toContain('<div class="cmpdegraded" role="alert"><strong>Comparison is incomplete.</strong>');
+    expect(missingView).toContain("Run 2 could not be loaded");
+    expect(missingView).toContain("this comparison cannot be completed");
+    expect(missingView).not.toContain("Neither run recorded tool calls");
+
+    const malformed = chunksOf(html);
+    malformed.sessions["0"] = "{";
+    const malformedView = renderViewer(null, { chunks: malformed, query: "?view=compare&base=0&vs=1&tab=events" });
+    expect(malformedView).toContain("Run 1 could not be loaded");
+    expect(malformedView).toContain("Unavailable");
+    expect(malformedView).not.toContain("Neither run captured event streams");
+  });
+
   test("the baseline and current pickers ride the route so a copied link reopens the same pair", () => {
-    const out = renderViewer(payload, { query: "?view=compare&base=1&vs=0" });
+    const out = renderViewer(payload, { query: "?view=compare&base=1&vs=0&tab=tools" });
     expect(out).toContain('data-cmp-side="base"');
     // base=1 selects the second run as baseline: its option is the selected one.
-    expect(out).toMatch(/data-cmp-side="base"[^>]*>[^]*?value="1" selected/);
+    expect(out).toContain('data-cmp-side="base" data-cmp-run="1" aria-pressed="true"');
     expect(out).toContain('<span class="dl dl-del">− text: <mark class="dlhi">Bagel</mark></span><span class="dl dl-add">+ text: <mark class="dlhi">Coffee</mark></span>');
-    expect(out).toContain("only in baseline");
+    expect(out).toContain('only in <span class="cmppairtag base"');
   });
 });

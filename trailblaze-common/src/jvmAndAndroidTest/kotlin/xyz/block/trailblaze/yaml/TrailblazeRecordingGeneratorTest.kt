@@ -28,10 +28,12 @@ import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
 import xyz.block.trailblaze.logs.model.TaskId
+import xyz.block.trailblaze.logs.model.TrailblazeClockDomain
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.TraceId
+import xyz.block.trailblaze.toolcalls.CoreTools
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.toLogPayload
@@ -40,13 +42,16 @@ import xyz.block.trailblaze.toolcalls.commands.AssertVisibleBySelectorTrailblaze
 import xyz.block.trailblaze.toolcalls.commands.AssertVisibleWithTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.InputTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.LaunchAppTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.ObjectiveStatusTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.PasteClipboardTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.Status
 import xyz.block.trailblaze.toolcalls.commands.SwipeTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.SwitchDeviceTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.TapOnByElementSelector
 import xyz.block.trailblaze.toolcalls.commands.TapTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.WaitForIdleSyncTrailblazeTool
 import xyz.block.trailblaze.toolcalls.getIsRecordableFromAnnotation
+import xyz.block.trailblaze.toolcalls.getToolNameFromAnnotation
 
 /**
  * Tests for the recording generator that transforms [TrailblazeLog] entries into trail YAML —
@@ -116,15 +121,18 @@ class TrailblazeRecordingGeneratorTest {
   private fun objectiveStart(
     prompt: PromptStep,
     timestamp: kotlinx.datetime.Instant = now,
+    clock: TrailblazeClockDomain? = null,
   ) = TrailblazeLog.ObjectiveStartLog(
     promptStep = prompt,
     session = testSession,
     timestamp = timestamp,
+    clock = clock,
   )
 
   private fun objectiveComplete(
     prompt: PromptStep,
     timestamp: kotlinx.datetime.Instant = now,
+    clock: TrailblazeClockDomain? = null,
   ) = TrailblazeLog.ObjectiveCompleteLog(
     promptStep = prompt,
     objectiveResult = AgentTaskStatus.Success.ObjectiveComplete(
@@ -139,6 +147,7 @@ class TrailblazeRecordingGeneratorTest {
     ),
     session = testSession,
     timestamp = timestamp,
+    clock = clock,
   )
 
   private fun objectiveCompleteFailed(prompt: PromptStep, failureReason: String) =
@@ -170,6 +179,9 @@ class TrailblazeRecordingGeneratorTest {
     /** The authored token-bearing form, when the dispatch boundary rewrote [tool] before execution. */
     rawTool: xyz.block.trailblaze.toolcalls.TrailblazeTool? = null,
     traceId: xyz.block.trailblaze.logs.model.TraceId? = null,
+    clock: TrailblazeClockDomain? = null,
+    hostReceivedAt: kotlinx.datetime.Instant? = null,
+    deviceName: String? = null,
   ) = TrailblazeLog.TrailblazeToolLog(
     trailblazeTool = tool.toLogPayload(),
     rawTrailblazeTool = rawTool?.toLogPayload(),
@@ -182,6 +194,9 @@ class TrailblazeRecordingGeneratorTest {
     isRecordable = isRecordable,
     isTopLevelToolCall = isTopLevelToolCall,
     isVerification = isVerification,
+    clock = clock,
+    hostReceivedAt = hostReceivedAt,
+    deviceName = deviceName,
   )
 
   private fun delegatingToolLog(
@@ -365,6 +380,45 @@ class TrailblazeRecordingGeneratorTest {
     val prompts = decoded[0] as TrailYamlItem.PromptsTrailItem
     assertThat(prompts.promptSteps[0].recording!!.tools.size).isEqualTo(1)
     assertThat(prompts.promptSteps[0].recording!!.tools[0].name).isEqualTo("tapOnElementBySelector")
+  }
+
+  @Test
+  fun objectiveStatusIsNeverRecorded() {
+    val objectiveStatus = ObjectiveStatusTrailblazeTool(
+      explanation = "The objective is complete",
+      status = Status.COMPLETED,
+    )
+    assertThat(objectiveStatus.getIsRecordableFromAnnotation()).isEqualTo(false)
+    // Read the name off the tool instead of repeating a literal. A rename would otherwise leave
+    // this test asserting the absence of a name nothing is called any more — passing vacuously
+    // while the recorder happily persisted the marker under its new name.
+    val markerToolName = objectiveStatus.getToolNameFromAnnotation()
+    assertThat(markerToolName).isEqualTo(CoreTools.OBJECTIVE_STATUS)
+
+    val step = DirectionStep(step = "Tap login")
+    val logs = listOf(
+      objectiveStart(step),
+      toolLog(
+        TapOnByElementSelector(
+          reason = "Tap the login button",
+          nodeSelector = TrailblazeNodeSelector.withMatch(
+            DriverNodeMatch.AndroidAccessibility(textRegex = "Login")
+          ),
+        ),
+        "tapOnElementBySelector",
+      ),
+      toolLog(
+        objectiveStatus,
+        markerToolName,
+        isRecordable = objectiveStatus.getIsRecordableFromAnnotation(),
+      ),
+      objectiveComplete(step),
+    )
+
+    val yaml = logs.recordedYaml()
+
+    assertThat(yaml).contains("tapOnElementBySelector")
+    assertThat(yaml).doesNotContain(markerToolName)
   }
 
   /**
@@ -1200,6 +1254,411 @@ class TrailblazeRecordingGeneratorTest {
       .isEqualTo(listOf("tapOnElementBySelector", "inputText"))
   }
 
+  @Test
+  fun aShortFirstToolUnderLargeSkewIsNormalizedByItsClockDomainAnchors() {
+    // Span-overlap assignment alone (the #6607 fix, covered above) still misassigns when device
+    // lag exceeds a first tool's offset-into-window plus its duration: a 100ms tool starting 10ms
+    // after its window under ~1s device lag stamps a span overlapping ONLY the previous window.
+    // Device-clock logs marked at emission and anchored at host ingestion carry enough to derive
+    // the session's clock offset, so the generator normalizes the span before assignment.
+    val trailheadStep = DirectionStep(step = "Launch the app", isTrailhead = true)
+    val menuStep = DirectionStep(step = "Open the menu")
+    fun at(ms: Long): kotlinx.datetime.Instant =
+      kotlinx.datetime.Instant.fromEpochMilliseconds(now.toEpochMilliseconds() + ms)
+    // Host clock: trailhead window [0, 3800], menu window [3810, 10400]. Device clock ~1s behind.
+    // The menu step's first tap truly runs [3820, 3920] on the host timeline but stamps
+    // [2820, 2920] — a span overlapping only the trailhead window, so overlap alone misassigns
+    // it. Each device log's ingestion anchor puts the offset at 1005ms; normalized, the tap's
+    // span [3825, 3925] overlaps its own window again.
+    val logs = listOf(
+      objectiveStart(trailheadStep, timestamp = at(0)),
+      toolLog(
+        LaunchAppTrailblazeTool(appId = "com.example.app"),
+        "launchApp",
+        timestamp = at(200),
+        durationMs = 500,
+        clock = TrailblazeClockDomain.DEVICE,
+        hostReceivedAt = at(1_705),
+      ),
+      toolLog(
+        TapOnByElementSelector(
+          reason = "Tap the menu",
+          nodeSelector = TrailblazeNodeSelector.withMatch(DriverNodeMatch.AndroidAccessibility(textRegex = "Menu")),
+        ),
+        "tapOnElementBySelector",
+        timestamp = at(2_820),
+        durationMs = 100,
+        clock = TrailblazeClockDomain.DEVICE,
+        hostReceivedAt = at(3_925),
+      ),
+      objectiveComplete(trailheadStep, timestamp = at(3_800)),
+      objectiveStart(menuStep, timestamp = at(3_810)),
+      toolLog(
+        InputTextTrailblazeTool(text = "settings"),
+        "inputText",
+        timestamp = at(5_900),
+        durationMs = 1_000,
+        clock = TrailblazeClockDomain.DEVICE,
+        hostReceivedAt = at(7_905),
+      ),
+      objectiveComplete(menuStep, timestamp = at(10_400)),
+    )
+
+    val decoded = logs.generateRecordedTrailItems(trailblazeYaml)
+
+    val trailhead = decoded.filterIsInstance<TrailYamlItem.TrailheadTrailItem>().single()
+    assertThat(trailhead.trailhead.tools!!.map { it.name }).isEqualTo(listOf("launchApp"))
+    val prompts = decoded.filterIsInstance<TrailYamlItem.PromptsTrailItem>().single()
+    assertThat(prompts.promptSteps.single().recording!!.tools.map { it.name })
+      .isEqualTo(listOf("tapOnElementBySelector", "inputText"))
+  }
+
+  @Test
+  fun hostClockToolLogsAreNeverShiftedByAnotherClockDomainsOffset() {
+    // One session legitimately mixes clocks: host-stamped MCP top-level tool logs sit beside
+    // device-stamped executor logs. The derived device offset must apply ONLY to device-clock
+    // logs — shifting this host-stamped tool by the session's ~1s device offset would push its
+    // span [3400, 3500] out of the trailhead window it belongs to.
+    val trailheadStep = DirectionStep(step = "Launch the app", isTrailhead = true)
+    val menuStep = DirectionStep(step = "Open the menu")
+    fun at(ms: Long): kotlinx.datetime.Instant =
+      kotlinx.datetime.Instant.fromEpochMilliseconds(now.toEpochMilliseconds() + ms)
+    val logs = listOf(
+      objectiveStart(trailheadStep, timestamp = at(0)),
+      toolLog(
+        LaunchAppTrailblazeTool(appId = "com.example.app"),
+        "launchApp",
+        timestamp = at(200),
+        durationMs = 500,
+        clock = TrailblazeClockDomain.DEVICE,
+        hostReceivedAt = at(1_705),
+      ),
+      // Host-stamped (clock absent), e.g. a top-level MCP dispatch: stays on the host timeline.
+      toolLog(
+        TapOnByElementSelector(
+          reason = "Dismiss the tutorial overlay",
+          nodeSelector = TrailblazeNodeSelector.withMatch(DriverNodeMatch.AndroidAccessibility(textRegex = "Skip")),
+        ),
+        "tapOnElementBySelector",
+        timestamp = at(3_400),
+        durationMs = 100,
+      ),
+      objectiveComplete(trailheadStep, timestamp = at(3_800)),
+      objectiveStart(menuStep, timestamp = at(3_810)),
+      toolLog(
+        InputTextTrailblazeTool(text = "settings"),
+        "inputText",
+        timestamp = at(5_900),
+        durationMs = 1_000,
+        clock = TrailblazeClockDomain.DEVICE,
+        hostReceivedAt = at(7_905),
+      ),
+      objectiveComplete(menuStep, timestamp = at(10_400)),
+    )
+
+    val decoded = logs.generateRecordedTrailItems(trailblazeYaml)
+
+    val trailhead = decoded.filterIsInstance<TrailYamlItem.TrailheadTrailItem>().single()
+    assertThat(trailhead.trailhead.tools!!.map { it.name })
+      .isEqualTo(listOf("launchApp", "tapOnElementBySelector"))
+    val prompts = decoded.filterIsInstance<TrailYamlItem.PromptsTrailItem>().single()
+    assertThat(prompts.promptSteps.single().recording!!.tools.map { it.name })
+      .isEqualTo(listOf("inputText"))
+  }
+
+  @Test
+  fun anAllOnDeviceSessionIsNotSkewedAgainstItsOwnWindows() {
+    // A fully on-device run stamps BOTH the objective logs and the tool logs on the device clock —
+    // there is no cross-clock skew to correct, only a shared offset from the host. Shifting the
+    // tools without shifting the windows would introduce a ~1s error where none existed: step 1's
+    // tool runs 100ms before its own window closes, so a one-sided +1005ms shift carries it clean
+    // past the boundary and into step 2.
+    val menuStep = DirectionStep(step = "Open the menu")
+    val itemStep = DirectionStep(step = "Pick an item")
+    fun at(ms: Long): kotlinx.datetime.Instant =
+      kotlinx.datetime.Instant.fromEpochMilliseconds(now.toEpochMilliseconds() + ms)
+    val logs = listOf(
+      objectiveStart(menuStep, timestamp = at(0), clock = TrailblazeClockDomain.DEVICE),
+      toolLog(
+        LaunchAppTrailblazeTool(appId = "com.example.app"),
+        "launchApp",
+        timestamp = at(3_600),
+        durationMs = 100,
+        clock = TrailblazeClockDomain.DEVICE,
+        hostReceivedAt = at(4_705),
+      ),
+      objectiveComplete(menuStep, timestamp = at(3_800), clock = TrailblazeClockDomain.DEVICE),
+      objectiveStart(itemStep, timestamp = at(3_810), clock = TrailblazeClockDomain.DEVICE),
+      toolLog(
+        TapOnByElementSelector(
+          reason = "Pick the first item",
+          nodeSelector = TrailblazeNodeSelector.withMatch(DriverNodeMatch.AndroidAccessibility(textRegex = "Item")),
+        ),
+        "tapOnElementBySelector",
+        timestamp = at(3_820),
+        durationMs = 100,
+        clock = TrailblazeClockDomain.DEVICE,
+        hostReceivedAt = at(4_925),
+      ),
+      objectiveComplete(itemStep, timestamp = at(10_400), clock = TrailblazeClockDomain.DEVICE),
+    )
+
+    val decoded = logs.generateRecordedTrailItems(trailblazeYaml)
+
+    val prompts = decoded.filterIsInstance<TrailYamlItem.PromptsTrailItem>().single()
+    assertThat(prompts.promptSteps.map { it.recording?.tools.orEmpty().map { tool -> tool.name } })
+      .isEqualTo(listOf(listOf("launchApp"), listOf("tapOnElementBySelector")))
+  }
+
+  @Test
+  fun deviceClockLogsWithoutIngestionAnchorsFallBackToSpanOverlap() {
+    // Disk-fallback device logs (server unreachable at emission, files pulled off the device)
+    // carry the clock marker but no hostReceivedAt anchor. With no anchor anywhere in the
+    // session there is no offset to derive, so assignment falls back to span overlap — the same
+    // fixture as the span-overlap test above must keep producing the same result.
+    val trailheadStep = DirectionStep(step = "Launch the app", isTrailhead = true)
+    val menuStep = DirectionStep(step = "Open the menu")
+    fun at(ms: Long): kotlinx.datetime.Instant =
+      kotlinx.datetime.Instant.fromEpochMilliseconds(now.toEpochMilliseconds() + ms)
+    val logs = listOf(
+      objectiveStart(trailheadStep, timestamp = at(0)),
+      toolLog(
+        LaunchAppTrailblazeTool(appId = "com.example.app"),
+        "launchApp",
+        timestamp = at(1_000),
+        durationMs = 500,
+        clock = TrailblazeClockDomain.DEVICE,
+      ),
+      toolLog(
+        TapOnByElementSelector(
+          reason = "Tap the menu",
+          nodeSelector = TrailblazeNodeSelector.withMatch(DriverNodeMatch.AndroidAccessibility(textRegex = "Menu")),
+        ),
+        "tapOnElementBySelector",
+        timestamp = at(3_200),
+        durationMs = 3_400,
+        clock = TrailblazeClockDomain.DEVICE,
+      ),
+      objectiveComplete(trailheadStep, timestamp = at(3_800)),
+      objectiveStart(menuStep, timestamp = at(3_810)),
+      toolLog(
+        InputTextTrailblazeTool(text = "settings"),
+        "inputText",
+        timestamp = at(6_900),
+        durationMs = 1_000,
+        clock = TrailblazeClockDomain.DEVICE,
+      ),
+      objectiveComplete(menuStep, timestamp = at(10_400)),
+    )
+
+    val decoded = logs.generateRecordedTrailItems(trailblazeYaml)
+
+    val trailhead = decoded.filterIsInstance<TrailYamlItem.TrailheadTrailItem>().single()
+    assertThat(trailhead.trailhead.tools!!.map { it.name }).isEqualTo(listOf("launchApp"))
+    val prompts = decoded.filterIsInstance<TrailYamlItem.PromptsTrailItem>().single()
+    assertThat(prompts.promptSteps.single().recording!!.tools.map { it.name })
+      .isEqualTo(listOf("tapOnElementBySelector", "inputText"))
+  }
+
+  @Test
+  fun aBatchedUploadsLateAnchorCannotDragTheDerivedOffset() {
+    // Every ingestion anchor measures the true skew PLUS that upload's latency, so a batch-flushed
+    // upload — received seconds after its tool finished — carries a wildly inflated sample. The
+    // offset must come from the LEAST delayed upload (latency only ever adds): a central estimate
+    // over these two anchors {1005, 7000} lands on the batched sample, shifting the unanchored
+    // boundary tap's span clean past both windows, where the positional fallback drops it back
+    // into the trailhead — the exact misassignment normalization exists to prevent.
+    val trailheadStep = DirectionStep(step = "Launch the app", isTrailhead = true)
+    val menuStep = DirectionStep(step = "Open the menu")
+    fun at(ms: Long): kotlinx.datetime.Instant =
+      kotlinx.datetime.Instant.fromEpochMilliseconds(now.toEpochMilliseconds() + ms)
+    // Host clock: trailhead window [0, 3800], menu window [3810, 6000]. Device clock ~1s behind.
+    val logs = listOf(
+      objectiveStart(trailheadStep, timestamp = at(0)),
+      // Prompt upload: received ~5ms after the tool truly finished — the honest anchor (1005).
+      toolLog(
+        LaunchAppTrailblazeTool(appId = "com.example.app"),
+        "launchApp",
+        timestamp = at(200),
+        durationMs = 500,
+        clock = TrailblazeClockDomain.DEVICE,
+        hostReceivedAt = at(1_705),
+      ),
+      // The boundary tap: truly runs [3820, 3920] but stamps [2820, 2920], and its own upload
+      // never reached the host (disk fallback) — it depends entirely on the derived offset.
+      toolLog(
+        TapOnByElementSelector(
+          reason = "Tap the menu",
+          nodeSelector = TrailblazeNodeSelector.withMatch(DriverNodeMatch.AndroidAccessibility(textRegex = "Menu")),
+        ),
+        "tapOnElementBySelector",
+        timestamp = at(2_820),
+        durationMs = 100,
+        clock = TrailblazeClockDomain.DEVICE,
+      ),
+      objectiveComplete(trailheadStep, timestamp = at(3_800)),
+      objectiveStart(menuStep, timestamp = at(3_810)),
+      // Batched upload: the tool truly finished at 5700 but its log was flushed ~6s later,
+      // inflating this anchor's sample to 7000.
+      toolLog(
+        InputTextTrailblazeTool(text = "settings"),
+        "inputText",
+        timestamp = at(4_200),
+        durationMs = 500,
+        clock = TrailblazeClockDomain.DEVICE,
+        hostReceivedAt = at(11_700),
+      ),
+      objectiveComplete(menuStep, timestamp = at(6_000)),
+    )
+
+    val decoded = logs.generateRecordedTrailItems(trailblazeYaml)
+
+    val trailhead = decoded.filterIsInstance<TrailYamlItem.TrailheadTrailItem>().single()
+    assertThat(trailhead.trailhead.tools!!.map { it.name }).isEqualTo(listOf("launchApp"))
+    val prompts = decoded.filterIsInstance<TrailYamlItem.PromptsTrailItem>().single()
+    assertThat(prompts.promptSteps.single().recording!!.tools.map { it.name })
+      .isEqualTo(listOf("tapOnElementBySelector", "inputText"))
+  }
+
+  @Test
+  fun eachDevicesSpansAreNormalizedByItsOwnOffsetNotABlendedOne() {
+    // A multi-device session binds devices with INDEPENDENT clocks — here the seller device runs
+    // ~1s behind the host while the buyer device runs ~0.8s ahead. Any single blended offset
+    // mis-normalizes one of them: the buyer's offset applied to the seller tap leaves it in step 1,
+    // and the seller's applied to the buyer tap pushes it into step 2. Each device-clock span must
+    // be shifted by ITS OWN device's anchors.
+    val ringUpStep = DirectionStep(step = "Ring up the item")
+    val payStep = DirectionStep(step = "Pay for the item")
+    fun at(ms: Long): kotlinx.datetime.Instant =
+      kotlinx.datetime.Instant.fromEpochMilliseconds(now.toEpochMilliseconds() + ms)
+    // Host clock: step 1 window [0, 3800], step 2 window [3810, 10400].
+    val logs = listOf(
+      objectiveStart(ringUpStep, timestamp = at(0)),
+      // Seller device, ~1s behind: truly runs [3820, 3920] in step 2 but stamps [2820, 2920].
+      toolLog(
+        TapOnByElementSelector(
+          reason = "Tap the charge button",
+          nodeSelector = TrailblazeNodeSelector.withMatch(DriverNodeMatch.AndroidAccessibility(textRegex = "Charge")),
+        ),
+        "tapOnElementBySelector",
+        timestamp = at(2_820),
+        durationMs = 100,
+        clock = TrailblazeClockDomain.DEVICE,
+        hostReceivedAt = at(3_925),
+        deviceName = "seller",
+      ),
+      // Buyer device, ~0.8s ahead: truly runs [2995, 3095] in step 1 but stamps [3795, 3895] —
+      // a raw span overlapping only step 2's window.
+      toolLog(
+        InputTextTrailblazeTool(text = "tip"),
+        "inputText",
+        timestamp = at(3_795),
+        durationMs = 100,
+        clock = TrailblazeClockDomain.DEVICE,
+        hostReceivedAt = at(3_100),
+        deviceName = "buyer",
+      ),
+      objectiveComplete(ringUpStep, timestamp = at(3_800)),
+      objectiveStart(payStep, timestamp = at(3_810)),
+      objectiveComplete(payStep, timestamp = at(10_400)),
+    )
+
+    val decoded = logs.generateRecordedTrailItems(trailblazeYaml)
+
+    val prompts = decoded.filterIsInstance<TrailYamlItem.PromptsTrailItem>().single()
+    assertThat(prompts.promptSteps.map { it.recording?.tools.orEmpty().map { tool -> tool.name } })
+      .isEqualTo(listOf(listOf("inputText"), listOf("tapOnElementBySelector")))
+  }
+
+  @Test
+  fun aWindowWhoseBoundsInvertUnderNormalizationKeepsItsRawBounds() {
+    // A window can be stamped by two different clocks — a device-stamped ObjectiveStart beside a
+    // host-stamped Complete (a run handed from the on-device runner to the host mid-objective).
+    // Normalizing only the start would put the window's bounds at [4005, 3800]: inverted, every
+    // overlap non-positive, and the device tap below — which sorts BEFORE the window's start log,
+    // so the positional fallback can't rescue it — would fall out of the recording entirely. The
+    // generator must detect the inversion and keep that window's raw bounds.
+    val menuStep = DirectionStep(step = "Open the menu")
+    val itemStep = DirectionStep(step = "Pick an item")
+    fun at(ms: Long): kotlinx.datetime.Instant =
+      kotlinx.datetime.Instant.fromEpochMilliseconds(now.toEpochMilliseconds() + ms)
+    val logs = listOf(
+      // Device tap truly runs [3505, 3605], inside window 1's raw bounds [3000, 3800]; its stamp
+      // sorts before the window's own start log.
+      toolLog(
+        TapOnByElementSelector(
+          reason = "Tap the menu",
+          nodeSelector = TrailblazeNodeSelector.withMatch(DriverNodeMatch.AndroidAccessibility(textRegex = "Menu")),
+        ),
+        "tapOnElementBySelector",
+        timestamp = at(2_500),
+        durationMs = 100,
+        clock = TrailblazeClockDomain.DEVICE,
+        hostReceivedAt = at(3_610),
+      ),
+      objectiveStart(menuStep, timestamp = at(3_000), clock = TrailblazeClockDomain.DEVICE),
+      objectiveComplete(menuStep, timestamp = at(3_800)),
+      objectiveStart(itemStep, timestamp = at(3_810)),
+      toolLog(
+        InputTextTrailblazeTool(text = "settings"),
+        "inputText",
+        timestamp = at(5_900),
+        durationMs = 1_000,
+        clock = TrailblazeClockDomain.DEVICE,
+        hostReceivedAt = at(7_905),
+      ),
+      objectiveComplete(itemStep, timestamp = at(10_400)),
+    )
+
+    val decoded = logs.generateRecordedTrailItems(trailblazeYaml)
+
+    val prompts = decoded.filterIsInstance<TrailYamlItem.PromptsTrailItem>().single()
+    assertThat(prompts.promptSteps.map { it.recording?.tools.orEmpty().map { tool -> tool.name } })
+      .isEqualTo(listOf(listOf("tapOnElementBySelector"), listOf("inputText")))
+  }
+
+  @Test
+  fun aDeviceStampedNestedCallIsStillDroppedFromItsHostStampedComposite() {
+    // A composite (scripted) tool's dispatch is logged on the HOST while the primitive it invokes
+    // is logged on the DEVICE. Nested-call detection is span containment, so comparing those raw
+    // across ~1s of skew makes the child appear to start before its parent — both survive, and the
+    // recording replays the primitive twice (once alone, once inside the composite). Containment
+    // must be checked on normalized spans: the child truly ran [2210, 2710], inside the composite's
+    // [2000, 5000].
+    val step = DirectionStep(step = "Sign in")
+    fun at(ms: Long): kotlinx.datetime.Instant =
+      kotlinx.datetime.Instant.fromEpochMilliseconds(now.toEpochMilliseconds() + ms)
+    val logs = listOf(
+      objectiveStart(step, timestamp = at(0)),
+      // Device-stamped primitive the composite invoked: stamps [1200, 1700], truly [2210, 2710].
+      toolLog(
+        TapOnByElementSelector(
+          reason = "Tap the sign-in button",
+          nodeSelector = TrailblazeNodeSelector.withMatch(DriverNodeMatch.AndroidAccessibility(textRegex = "Sign in")),
+        ),
+        "tapOnElementBySelector",
+        timestamp = at(1_200),
+        durationMs = 500,
+        clock = TrailblazeClockDomain.DEVICE,
+        hostReceivedAt = at(2_710),
+      ),
+      // Host-stamped composite dispatch spanning [2000, 5000].
+      toolLog(
+        InputTextTrailblazeTool(text = "credentials"),
+        "inputText",
+        timestamp = at(2_000),
+        durationMs = 3_000,
+      ),
+      objectiveComplete(step, timestamp = at(10_000)),
+    )
+
+    val decoded = logs.generateRecordedTrailItems(trailblazeYaml)
+
+    val prompts = decoded.filterIsInstance<TrailYamlItem.PromptsTrailItem>().single()
+    assertThat(prompts.promptSteps.single().recording!!.tools.map { it.name })
+      .isEqualTo(listOf("inputText"))
+  }
+
   /**
    * Simulates a realistic AI-driven session where the LLM calls multiple tools
    * within an objective window, including non-recordable infrastructure tools,
@@ -1450,7 +1909,7 @@ class TrailblazeRecordingGeneratorTest {
 
   @Test
   fun verificationDuplicatesCollapseInStepActionsPreserved() {
-    // Reproduces the case_5370490 step 6 pattern: 4 assertVisibleBySelector for the same key
+    // Reproduces a real trail's step 6 pattern: 4 assertVisibleBySelector for the same key
     // with varying `reason:` strings, plus 2 identical TapOnByElementSelector calls. The
     // assertions collapse to one (verifications are idempotent); the taps preserve both
     // (entering "11" needs both presses).

@@ -12,7 +12,7 @@ import xyz.block.trailblaze.cli.CheckCommand
 /**
  * Pins [DevicePinLint]'s decision contract on how a trail spells its `config.devices:` block.
  *
- * The cases are ported from `scripts/test_migrate_device_form.py`, the repo-local Python ratchet
+ * The cases are ported from a repo-local Python ratchet
  * this gate generalizes into the framework. The properties worth pinning are the ones that would
  * let the gate corrupt a trail quietly or fail a legitimate one:
  *

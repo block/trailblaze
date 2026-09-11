@@ -519,20 +519,10 @@ internal fun generateSessionReport(
     return TrailblazeExitCode.SUCCESS.code
   }
 
+  // Neither "no such session" nor "ambiguous prefix" is an infra failure — the daemon, network,
+  // and logs repo all worked correctly, the user typed an id that does not name one session.
   val sessionIds = if (sessionId != null) {
-    val matches = allIds.filter { it.value == sessionId || it.value.startsWith(sessionId) }
-    if (matches.isEmpty()) {
-      // No session matching the user-typed --id is a misuse (bad input), not an
-      // infra failure — the daemon, network, and logs repo all worked correctly.
-      Console.error("Error: No session matching '$sessionId' found.")
-      return TrailblazeExitCode.MISUSE.code
-    }
-    if (matches.size > 1) {
-      // Ambiguous --id prefix is also misuse — the user needs to disambiguate.
-      Console.error("Error: Session prefix '$sessionId' is ambiguous: ${matches.joinToString(", ") { it.value }}")
-      return TrailblazeExitCode.MISUSE.code
-    }
-    matches
+    SessionIdResolver.resolve(allIds, sessionId) ?: return TrailblazeExitCode.MISUSE.code
   } else {
     allIds
   }

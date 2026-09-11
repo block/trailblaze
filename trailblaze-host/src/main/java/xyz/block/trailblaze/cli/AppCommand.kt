@@ -136,15 +136,21 @@ open class AppCommand : Callable<Int> {
       httpPort = port,
       httpsPort = parent.getEffectiveHttpsPort(),
     )
+    if (headless) {
+      // IDE/direct-JVM runs do not have the distribution launcher. Keep their established
+      // in-process fallback instead of routing through the launcher-based daemon helper.
+      if (findTrailblazeLauncher() == null) return parent.launchDesktop(headless)
+      return if (ensureDaemonServerRunning(port, respectAutoStartDisable = false)) {
+        TrailblazeExitCode.SUCCESS.code
+      } else {
+        TrailblazeExitCode.INFRA_FAILED.code
+      }
+    }
 
     // Single DaemonClient instance for all checks in this method.
     return DaemonClient(port = port).use { daemon ->
       // If already running, show window or report status
       if (daemon.isRunningBlocking()) {
-        if (headless) {
-          Console.log("Trailblaze is already running on port $port.")
-          return@use TrailblazeExitCode.SUCCESS.code
-        }
         if (daemon.showWindowBlocking().success) {
           Console.log("Trailblaze is already running on port $port.")
           return@use TrailblazeExitCode.SUCCESS.code

@@ -282,8 +282,8 @@ export const aspectHeld = (prev: number, next: number): boolean =>
 /**
  * Media seconds per run-clock second for a lane's recording: `duration / window`.
  *
- * A recorder's own bookends routinely span longer than the file they produced — the iPad lane of
- * C5804013 declares a 182.1s window for a 178.0s mp4 — so a recording's own time runs slightly
+ * A recorder's own bookends routinely span longer than the file they produced — one real iPad lane
+ * declares a 182.1s window for a 178.0s mp4 — so a recording's own time runs slightly
  * slower than the run clock it is being replayed against. 1 when there is nothing to scale by
  * (unknown duration, or a window that isn't positive), which leaves the caller on the run clock.
  */

@@ -72,6 +72,8 @@ data class CliEndpointCallbacks(
    * worker permanently until the whole pool starved and every route (including /ping) hung.
    */
   val statusProvider: suspend () -> CliStatusResponse,
+  /** Other daemon-owned work that must prevent an automatic restart. */
+  val additionalActiveRunSummaries: () -> List<String> = { emptyList() },
   /**
    * Called when CLI wants to execute a subcommand in-process on the daemon
    * (IPC fast path). Null means the feature isn't wired up and the endpoint
@@ -180,7 +182,7 @@ object ServerEndpoints {
         // count from the same summaries snapshot so the two fields can't disagree if a run
         // starts/finishes between two separate reads.
         CliStatusEndpoint.register(this) {
-          val summaries = runManager.activeRunSummaries()
+          val summaries = runManager.activeRunSummaries() + callbacks.additionalActiveRunSummaries()
           callbacks.statusProvider().copy(
             activeRuns = summaries.size,
             activeRunSummaries = summaries,

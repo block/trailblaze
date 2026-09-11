@@ -31,9 +31,7 @@ Verify the value of an element on the page. Supports checking:
 
 - `ref` — `String`
   Element ID (e.g., 'e5'), ARIA descriptor (e.g., 'textbox "Email"'), or CSS selector with css= prefix (e.g., 'css=#email-input').
-- `type` — `ToolParameterType.Enum(
-  entries = [TEXT, VALUE, ATTRIBUTE]
-)`
+- `type` — `enum(TEXT | VALUE | ATTRIBUTE)`
   What property of the element to verify. TEXT checks visible text content, VALUE checks form field input values, ATTRIBUTE checks a specific HTML attribute.
 - `attribute` — `String`
   The attribute name to check (required when type is ATTRIBUTE).

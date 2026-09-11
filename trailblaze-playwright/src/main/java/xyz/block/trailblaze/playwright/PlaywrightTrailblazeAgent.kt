@@ -11,7 +11,6 @@ import xyz.block.trailblaze.api.DriverNodeDetail
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TrailblazeNodeSelectorGenerator
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
-import xyz.block.trailblaze.exception.TrailblazeException
 import xyz.block.trailblaze.logToolExecution
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
@@ -174,16 +173,17 @@ class PlaywrightTrailblazeAgent(
         TrailblazeToolResult.Success(message = "Browser already open (launchApp is a no-op on web)")
       }
       else ->
-        throw TrailblazeException(
-          message =
-            buildString {
-              appendLine("Unhandled Trailblaze tool ${tool::class.java.simpleName} - $tool.")
-              appendLine("PlaywrightTrailblazeAgent supports:")
-              appendLine("- ${PlaywrightExecutableTool::class.java.simpleName}")
-              appendLine("- ${ExecutableTrailblazeTool::class.java.simpleName}")
-              appendLine("- ${DelegatingTrailblazeTool::class.java.simpleName}")
-              appendLine("- ${MemoryTrailblazeTool::class.java.simpleName}")
-            },
+        throw unsupportedToolShapeException(
+          tool = tool,
+          agentName = "PlaywrightTrailblazeAgent",
+          supportedShapes = listOf(
+            PlaywrightExecutableTool::class.java.simpleName,
+            ExecutableTrailblazeTool::class.java.simpleName,
+            DelegatingTrailblazeTool::class.java.simpleName,
+            MemoryTrailblazeTool::class.java.simpleName,
+          ),
+          remediation = "Register a ${PlaywrightExecutableTool::class.java.simpleName} or a " +
+            "generic ${ExecutableTrailblazeTool::class.java.simpleName}.",
         )
     }
   }

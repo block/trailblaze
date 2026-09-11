@@ -1,0 +1,2 @@
+id: rememberRandomValue
+class: xyz.block.trailblaze.toolcalls.commands.memory.RememberRandomValueTrailblazeTool

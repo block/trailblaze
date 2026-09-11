@@ -71,13 +71,27 @@ declare module "@trailblaze/scripting" {
     // and the legacy `TrailblazeElementSelector`, via its `excludedParameterTypes`) because
     // reflecting their self-referencing fields (childOf / containsChild / …) overflows the stack
     // during descriptor codegen. For RECORDABLE selector tools the generated recordable surface
-    // re-injects the selector arg via `selectorParamsForTs` — but `findMatches` / `waitUntilNotVisible`
-    // are `isRecordable = false` (never in a recording), so they aren't in the generated surface and
-    // THIS hand-curated `selector` / `nodeSelector` typing is their authoritative scripted-author
-    // surface. Keep it in sync with the Kotlin tool classes by hand.
+    // re-injects the selector arg via `selectorParamsForTs` — but `findMatches`,
+    // `findSelectorMatches` and `waitUntilNotVisible` are `isRecordable = false` (never in a
+    // recording), so they aren't in the generated surface and THIS hand-curated `selector` /
+    // `selectors` / `nodeSelector` typing is their authoritative scripted-author surface. Keep it
+    // in sync with the Kotlin tool classes by hand.
     /**
      * Resolve a [TrailblazeNodeSelector] against the current view hierarchy and return
      * every match as a [MatchDescriptor] list. Read-only — never mutates the device.
+     *
+     * @deprecated Use `findSelectorMatches` instead — it answers N selectors from ONE
+     * capture, which this tool structurally cannot (see "It does NOT deduplicate across
+     * scripted calls" below). A single-element `selectors` list behaves identically to
+     * this tool, so migrating is mechanical:
+     *
+     * ```ts
+     * const [matches] = await client.tools.findSelectorMatches({
+     *   selectors: [selector],
+     * });
+     * ```
+     *
+     * This tool is scheduled for deletion once its callers move — don't add new ones.
      *
      * Use the result length as a visibility / uniqueness gate:
      *
@@ -93,11 +107,16 @@ declare module "@trailblaze/scripting" {
      * Each match carries enough identity + position info (indexPath, bounds, text,
      * accessibilityId, resourceId) to act on without re-querying.
      *
-     * Snapshot reuse: calling `findMatches` multiple times within one tool invocation
-     * shares the captured view hierarchy via the host-side snapshot cache — the
-     * multi-second hierarchy fetch is paid at most once per invocation. An action
-     * tool dispatched in the same batch (tap, swipe, inputText, …) invalidates the
-     * cache so a follow-up `findMatches` reads the post-action tree.
+     * Snapshot reuse: the host-side cache shares one captured hierarchy between
+     * `findMatches` calls dispatched as SIBLINGS in the same batch, and an action tool
+     * in that batch (tap, swipe, inputText, …) invalidates it so the next `findMatches`
+     * reads the post-action tree.
+     *
+     * **It does NOT deduplicate across scripted calls.** Each `client.tools.*` callback
+     * enters its own cache frame, so four `await client.tools.findMatches(…)` from one
+     * tool body really do pay four multi-second captures. To ask several questions of
+     * one screen, use `findSelectorMatches` below — batching is explicit, not
+     * something the cache does for you.
      *
      * Source: `FindMatchesTrailblazeTool.kt`.
      */
@@ -116,6 +135,80 @@ declare module "@trailblaze/scripting" {
         timeoutMs?: number;
       };
       result: MatchDescriptor[];
+    };
+
+    /**
+     * Capture the view hierarchy ONCE and resolve several selectors against that one capture.
+     * Read-only. The result is index-aligned to `selectors` — `result[i]` is `selectors[i]`'s
+     * matches, empty array if it matched nothing, so the two always have the same length.
+     *
+     * **Use this instead of N `findMatches` calls.** A hierarchy capture is the expensive part of
+     * a query (multiple seconds on a loaded Android device, where every node is a live
+     * accessibility fetch); resolving a selector against a tree already in hand is free. The
+     * host-side snapshot cache does NOT deduplicate across scripted calls — each
+     * `client.tools.*` callback enters its own cache frame — so four `findMatches` calls really do
+     * pay four captures.
+     *
+     * ```ts
+     * const [wizard, home] = await client.tools.findSelectorMatches({
+     *   selectors: [
+     *     { androidAccessibility: { textRegex: "Select a mode" } },
+     *     { androidAccessibility: { textRegex: "Charge \\$.*" } },
+     *   ],
+     *   timeoutMs: 30_000,
+     * });
+     * if (wizard.length > 0) {
+     *   // the wizard is up — handle it
+     * } else if (home.length > 0) {
+     *   // already past it, nothing to do
+     * }
+     * ```
+     *
+     * Also more correct than sequential probes, not just faster: every answer comes from the SAME
+     * tree, so it describes one instant of one screen. With sequential calls the screen can change
+     * between captures, and a caller racing two conditions can see both true or neither depending
+     * on which it probed first. Ties within one frame are the caller's to break — check the
+     * selector you want to win first, as above.
+     *
+     * **An empty array is an ANSWER, not a failure.** The tool answers one question — did each
+     * selector match, within the timeout — so `result[i].length === 0` is a *measured* absence and
+     * is your absent branch. Every way this tool can throw means the question could not be asked
+     * (no hierarchy from this driver, a capture too incomplete to read absence out of, an empty
+     * `selectors`), never that the answer was no.
+     *
+     * **A selector may match many elements**, in reading order — sorted by `bounds.top` then
+     * `bounds.left`. Detecting ambiguity is yours (`result[i].length > 1` → narrow it). To pick one
+     * of several, prefer the selector's own `index`, which selects the Nth match after that sort,
+     * over indexing into the array.
+     *
+     * Source: `FindSelectorMatchesTrailblazeTool.kt`.
+     */
+    findSelectorMatches: {
+      args: {
+        /**
+         * Selectors to resolve against one capture. Order is the result's contract, so duplicates
+         * and reordering are fine. Must be non-empty.
+         */
+        selectors: TrailblazeNodeSelector[];
+        /**
+         * Optional wait budget in milliseconds. Omit for a single point-in-time capture. When set,
+         * the tool polls the LIVE hierarchy and returns as soon as ANY selector matches, or when
+         * the budget elapses (all-empty arrays).
+         *
+         * "Any" is what makes this a race primitive: one wait that ends the instant whichever
+         * screen you're waiting for renders, with the other selectors answered from that same
+         * frame. To wait for one specific selector, pass it alone.
+         *
+         * Omitting this and passing `0` are NOT the same knob. Omitted goes through the host-side
+         * snapshot cache and retries a capture that lost nodes; `0` is one immediate live capture
+         * with no cache and no retry, so a holey capture has no second look and the call throws
+         * rather than answering. Prefer omitting it. Polling in TypeScript over `timeoutMs: 0` is
+         * possible but pays a round trip and a fresh cache frame per iteration, and turns that
+         * retry-less throw into your loop's normal control flow — let the tool own the wait.
+         */
+        timeoutMs?: number;
+      };
+      result: MatchDescriptor[][];
     };
 
     /**

@@ -110,7 +110,7 @@ class TrailblazeAiRunnerMessagesTest {
     assertThat(message).doesNotContain("CONDITIONAL")
   }
 
-  // Regression for the on-demand failure on case_5582734 ios-ipad: the prompt opens with
+  // Regression for a CI failure on an iPad trail: the prompt opens with
   // `If "<dialog>"` — the quote after `if` caused the narrower allow-list (`if the`, `if a`,
   // etc.) to miss it, the LLM never got conditional guidance, and it called
   // `objectiveStatus(FAILED)` the moment the dialog wasn't visible. Any `^if\s+\S` prompt is

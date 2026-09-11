@@ -27,17 +27,22 @@ import xyz.block.trailblaze.yaml.VerificationStep
  * Pins [UnifiedTrailAdapter.mergeRecordedClassifier] — the recorder's write-back primitive that
  * folds one device's freshly-recorded v1 items into a unified trail's per-classifier slots.
  *
- * The contract under test: a recording contributes ONLY its own classifier (driver pin + per-step
- * recordings + trailhead tool); every other classifier already on disk is preserved; re-recording
- * the same device replaces its slot rather than appending; and the shared NL is never rewritten by
- * a re-record.
+ * The contract under test: a recording contributes ONLY its own classifier (device settings +
+ * per-step recordings + trailhead tool); every other classifier already on disk is preserved;
+ * re-recording the same device replaces its slot rather than appending; and the shared NL is never
+ * rewritten by a re-record.
  */
 class UnifiedTrailMergeTest {
 
   @Test
   fun `first write with no existing file builds a fresh single-classifier unified trail`() {
     val recorded = recordedItems(
-      config = v1Config(driver = "ANDROID_ONDEVICE_INSTRUMENTATION", id = "app/checkout", target = "app"),
+      config = v1Config(
+        driver = "ANDROID_ONDEVICE_INSTRUMENTATION",
+        id = "app/checkout",
+        target = "app",
+        locale = "es",
+      ),
       steps = listOf(
         directionStep("Open the cart", tool("tapCart")),
         directionStep("Pay", tool("tapPay")),
@@ -48,7 +53,10 @@ class UnifiedTrailMergeTest {
 
     assertEquals("app/checkout", merged.config.id)
     assertEquals("app", merged.config.target)
-    assertEquals(mapOf("android" to devicePin("ANDROID_ONDEVICE_INSTRUMENTATION")), merged.config.devices)
+    assertEquals(
+      mapOf("android" to devicePin("ANDROID_ONDEVICE_INSTRUMENTATION", locale = "es")),
+      merged.config.devices,
+    )
     assertEquals(2, merged.trail.size)
     assertEquals("Open the cart", merged.trail[0].step)
     assertEquals(listOf("tapCart"), merged.trail[0].recordings["android"]?.map { it.name })
@@ -88,7 +96,13 @@ class UnifiedTrailMergeTest {
   @Test
   fun `re-recording the same classifier replaces its slot rather than appending`() {
     val existing = UnifiedTrail(
-      config = UnifiedTrailConfig(id = "x", target = "y", devices = mapOf("android" to devicePin("ANDROID_ONDEVICE_INSTRUMENTATION"))),
+      config = UnifiedTrailConfig(
+        id = "x",
+        target = "y",
+        devices = mapOf(
+          "android" to devicePin("ANDROID_ONDEVICE_INSTRUMENTATION", locale = "es"),
+        ),
+      ),
       trail = listOf(
         UnifiedTrailStep(
           step = "Open the cart",
@@ -100,7 +114,12 @@ class UnifiedTrailMergeTest {
       ),
     )
     val recorded = recordedItems(
-      config = v1Config(driver = "ANDROID_ONDEVICE_ACCESSIBILITY", id = "x", target = "y"),
+      config = v1Config(
+        driver = "ANDROID_ONDEVICE_ACCESSIBILITY",
+        id = "x",
+        target = "y",
+        locale = "ja",
+      ),
       steps = listOf(directionStep("Open the cart", tool("new-android"))),
     )
 
@@ -112,7 +131,11 @@ class UnifiedTrailMergeTest {
       "android slot must be the new recording, not appended to the old",
     )
     assertEquals(listOf("ios-cart"), merged.trail[0].recordings["ios"]?.map { it.name }, "ios slot untouched")
-    assertEquals(devicePin("ANDROID_ONDEVICE_ACCESSIBILITY"), merged.config.devices?.get("android"), "driver pin replaced")
+    assertEquals(
+      devicePin("ANDROID_ONDEVICE_ACCESSIBILITY", locale = "ja"),
+      merged.config.devices?.get("android"),
+      "the re-recorded device settings replace the prior classifier entry",
+    )
   }
 
   @Test
@@ -993,8 +1016,10 @@ class UnifiedTrailMergeTest {
     ),
   )
 
-  private fun v1Config(driver: String?, id: String?, target: String?) =
-    TrailYamlItem.ConfigTrailItem(TrailConfig(id = id, target = target, driver = driver))
+  private fun v1Config(driver: String?, id: String?, target: String?, locale: String? = null) =
+    TrailYamlItem.ConfigTrailItem(
+      TrailConfig(id = id, target = target, driver = driver, locale = locale),
+    )
 
   private fun directionStep(nl: String, vararg tools: TrailblazeToolYamlWrapper) =
     DirectionStep(step = nl, recording = if (tools.isEmpty()) null else ToolRecording(tools = tools.toList()))
@@ -1021,5 +1046,8 @@ class UnifiedTrailMergeTest {
 }
 
 /** The canonical devices-map value for a driver pin, keeping test fixtures terse. */
-private fun devicePin(driverName: String): TrailblazeDeviceDefinition =
-  TrailblazeDeviceDefinition(driver = TrailblazeDriverType.fromString(driverName)!!)
+private fun devicePin(driverName: String, locale: String? = null): TrailblazeDeviceDefinition =
+  TrailblazeDeviceDefinition(
+    driver = TrailblazeDriverType.fromString(driverName)!!,
+    locale = locale,
+  )

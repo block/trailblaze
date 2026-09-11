@@ -54,6 +54,24 @@ class DaemonScriptedToolBundler(
    * caller's responsibility mirrors how [esbuildBinary] itself is wired.
    */
   private val inProcessSdkEntryOverride: File? = null,
+  /**
+   * Whether a null [inProcessSdkEntryOverride] may fall back to
+   * [legacyInProcessSdkEntryFromEsbuildWalkup].
+   *
+   * **False for any caller that resolves the entry itself.** For those, null is a DECISION — "do not
+   * alias this tree" — not an omission, and the walk-up would overrule it: esbuild is normally the
+   * SDK's own `node_modules/.bin/esbuild` (it is a devDependency, and nothing in the pinned toolchain
+   * provides one), so walking up from the binary lands right back on the tree the caller rejected.
+   * That defeats the deps gate in
+   * [xyz.block.trailblaze.scripting.LazyYamlScriptedToolRegistration.resolveInProcessSdkEntry]
+   * exactly where it matters most — a partially installed tree, where esbuild exists but `zod` does
+   * not — and every bundle fails `Could not resolve "zod"` again.
+   *
+   * False by default: every production caller resolves the entry itself, so the safe reading of a
+   * null is "the caller decided". The walk-up is opt-in for callers whose esbuild IS in-tree and
+   * that don't resolve separately (the tests here), which is the only case it ever helped.
+   */
+  private val allowLegacyEsbuildWalkup: Boolean = false,
   private val cacheDir: File = File(
     TrailblazeDesktopUtil.getDefaultAppDataDirectory(),
     TrailblazeDesktopUtil.SCRIPTED_BUNDLES_CACHE_SUBDIR,
@@ -731,11 +749,13 @@ class DaemonScriptedToolBundler(
    *     `src/in-process.ts`. This ONLY works when esbuild is the SDK's bundled binary — when esbuild
    *     came from PATH (Homebrew, `npm -g`) the walk-up lands in an unrelated tree and finds nothing.
    *     That gap is exactly why the override exists; this remains for callers (e.g. tests) whose
-   *     esbuild IS in-tree and that don't bother resolving the entry separately.
+   *     esbuild IS in-tree and that don't bother resolving the entry separately. Skipped entirely
+   *     when [allowLegacyEsbuildWalkup] is false, because for a caller that resolved the entry
+   *     itself a null override means "do not alias", and the walk-up would overrule that.
    *
    * Null if neither yields a file; the alias is then omitted and `@trailblaze/scripting` resolves
-   * from node_modules (the full ~1.2 MB SDK) — a heavier bundle, but no failure. Logged so it isn't
-   * silent.
+   * from node_modules (the full ~1.2 MB SDK) — a heavier bundle where that resolves, and a bundle
+   * failure where it doesn't. Logged so it isn't silent.
    */
   private val inProcessSdkEntry: File? by lazy {
     // A caller-supplied override that ISN'T a readable file (resolved-then-deleted, or a misconfigured
@@ -744,10 +764,12 @@ class DaemonScriptedToolBundler(
     inProcessSdkEntryOverride?.takeUnless { it.isFile }?.let {
       Console.log(
         "[DaemonScriptedToolBundler] caller-supplied slim in-process SDK entry ${it.absolutePath} is not " +
-          "a readable file — ignoring it and falling back to the esbuild walk-up.",
+          "a readable file — ignoring it" +
+          if (allowLegacyEsbuildWalkup) " and falling back to the esbuild walk-up." else ".",
       )
     }
-    val resolved = inProcessSdkEntryOverride?.takeIf { it.isFile } ?: legacyInProcessSdkEntryFromEsbuildWalkup()
+    val resolved = inProcessSdkEntryOverride?.takeIf { it.isFile }
+      ?: if (allowLegacyEsbuildWalkup) legacyInProcessSdkEntryFromEsbuildWalkup() else null
     if (resolved != null) {
       // Positive breadcrumb so an operator can confirm the slim profile took effect (this fix's whole
       // point) without inspecting bundle sizes. Suppressed in CLI quiet mode like the rest.
@@ -757,10 +779,20 @@ class DaemonScriptedToolBundler(
       )
     } else {
       Console.log(
-        "[DaemonScriptedToolBundler] slim in-process SDK entry (sdks/typescript/src/in-process.ts) not " +
-          "found (no usable caller-supplied entry, and the walk-up from esbuild at ${esbuildBinary.absolutePath} " +
-          "found no SDK tree). `@trailblaze/scripting` will resolve from node_modules (full SDK) — bundles " +
-          "will be heavier. Expected only when the SDK source isn't reachable (e.g. an installed CLI).",
+        "[DaemonScriptedToolBundler] no slim in-process SDK entry " +
+          "(sdks/typescript/src/in-process.ts) — " +
+          if (allowLegacyEsbuildWalkup) {
+            "the caller supplied none usable, and the walk-up from esbuild at " +
+              "${esbuildBinary.absolutePath} found no SDK tree. Expected only when the SDK source " +
+              "isn't reachable (e.g. an installed CLI)."
+          } else {
+            "the caller resolved none and asked for no walk-up, so the SDK tree it found was " +
+              "rejected (usually deps that aren't installed — see " +
+              "LazyYamlScriptedToolRegistration.resolveInProcessSdkEntry)."
+          } +
+          " `@trailblaze/scripting` will resolve from node_modules instead: a heavier full-SDK " +
+          "bundle where that resolves, and a bundle failure where it doesn't — which the caller's " +
+          "per-tool precompiled fallback then covers.",
       )
     }
     resolved
@@ -1115,6 +1147,11 @@ class DaemonScriptedToolBundler(
     /**
      * Environment variables stripped from the esbuild child. Named here rather than referencing
      * `MakeTestApkCommand`, which lives in the CLI layer this module must not depend on.
+     *
+     * SISTER-IMPL-TAG: esbuild-withheld-secrets. `LazyYamlScriptedToolRegistration`'s
+     * `SECRETS_WITHHELD_FROM_PROBE` is the same list for the deps probe's esbuild child, duplicated
+     * for the same layering reason (that module can't see this one either). A password added here
+     * has to be added there too, or the probe leaks what the bundler withholds.
      */
     private val SECRETS_WITHHELD_FROM_ESBUILD = setOf(
       "TRAILBLAZE_INPROCESS_KEYSTORE_PASSWORD",

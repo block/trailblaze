@@ -1,0 +1,32 @@
+Trail Runner companion mode - for coding agents authoring a trail from their own CLI session.
+
+The agent is the single writer: edit the trail folder directly on disk. Trail Runner renders a
+read-only live view of that folder and sends the human's actions back through the event stream.
+
+Workflow:
+  1. trailblaze companion start --folder <relative-folder> --title "<goal>" \
+       [--agent claude|codex] [--label "<label>"] [--trails-dir <workspace-root>]
+     The command starts or attaches to the daemon, opens Trail Runner, and prints a JSON handle.
+     Keep runId; every later command needs it.
+  2. Edit files under <primaryRoot>/<folder> and narrate progress:
+       trailblaze companion event <runId> --text "Scaffolding the login steps."
+  3. Steer Trail Runner with standing directives:
+       trailblaze companion send <runId> banner --text "Reviewing your feedback..."
+       trailblaze companion send <runId> checklist --title Plan --item Scaffold --item Record
+       trailblaze companion send <runId> actions --item "Looks good" --item "Change a step"
+       trailblaze companion send <runId> arm-recording --variant ios
+     Supported directives: navigate, banner, checklist, actions, select-device,
+     select-app-target, and arm-recording. Re-send a standing directive with no fields to retract
+     it. navigate is live-only and requires --route. --payload accepts extra fields as JSON.
+  4. Tail the human's actions and lifecycle events:
+       trailblaze companion listen <runId> [--after <last-seq>]
+     Output is JSON Lines. Resume a dropped stream with the last sequence number you received.
+     Important human_action titles include user-action, device-connected, recording-saved,
+     handback, and agent-request.
+  5. Settle an agent-request after completing its work:
+       trailblaze companion respond <runId> --request <requestId> --status done|error [--note ...]
+  6. Always disconnect when the authoring session ends:
+       trailblaze companion disconnect <runId> [--note "<summary>"]
+
+Every command prints one JSON object to stdout and exits non-zero on failure. listen is the one
+exception: it streams one JSON event per line until the daemon sends a done or error event.

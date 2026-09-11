@@ -3,6 +3,7 @@ package xyz.block.trailblaze.yaml.unified
 import xyz.block.trailblaze.devices.TrailblazeClassifierLineage
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDriverType
+import xyz.block.trailblaze.toolcalls.CoreTools
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.yaml.DirectionStep
 import xyz.block.trailblaze.yaml.PromptStep
@@ -147,14 +148,13 @@ object UnifiedTrailAdapter {
     val resolutionChain = listOfNotNull(selectedDeviceConfiguration) +
       TrailblazeClassifierLineage.resolutionChain(classifiers).map { it.classifier }
     val configurationNames = allConfigurationNames - setOfNotNull(selectedDeviceConfiguration)
-    // Resolve the per-classifier driver pin (config.devices maps classifier -> device definition)
-    // for THIS device the same closest-wins way as recordings, collapsing to the single driver
-    // name the v1 executor consumes for the run. A matched entry that pins no driver resolves to
-    // null the same as no match — the driver then falls back to runtime resolution. ALL
-    // configuration names are excluded here (even the selected one): a configuration entry never
-    // pins the run driver — per-device drivers live on its named devices.
-    val resolvedDriver =
-      resolveClosestMatch(unified.config.devices, resolutionChain, allConfigurationNames)?.driver?.name
+    // Resolve this device's definition once so every per-device setting comes from the same
+    // closest-wins classifier entry. ALL configuration names are excluded here (even the selected
+    // one): a configuration entry has no device identity — its settings live on named members.
+    val resolvedDeviceDefinition =
+      resolveClosestMatch(unified.config.devices, resolutionChain, allConfigurationNames)
+    val resolvedDriver = resolvedDeviceDefinition?.driver?.name
+    val resolvedLocale = resolvedDeviceDefinition?.locale
     // Resolve the per-classifier skip reason the same closest-wins way, lowering to the single v1
     // `TrailConfig.skip` the runner/CLI consult before executing.
     val resolvedSkip = resolveSkip(unified.config, classifiers, selectedDeviceConfiguration)
@@ -162,9 +162,10 @@ object UnifiedTrailAdapter {
     // for some classifiers but none match this device's chain, so the driver silently falls back
     // to runtime resolution (--driver > app setting). Surface it so an unexpected default-driver
     // run is debuggable. Same non-empty-chain gate keeps the config-only safe-mode decode quiet.
-    if (resolvedDriver == null && !unified.config.devices.isNullOrEmpty() && resolutionChain.isNotEmpty()) {
+    val driverPins = unified.config.devices.orEmpty().filterValues { it.driver != null }
+    if (resolvedDeviceDefinition == null && driverPins.isNotEmpty() && resolutionChain.isNotEmpty()) {
       Console.log(
-        "[unified-resolve] config pins drivers for ${unified.config.devices!!.keys} but none match " +
+        "[unified-resolve] config pins drivers for ${driverPins.keys} but none match " +
           "this device's chain $resolutionChain — driver falls back to runtime resolution.",
       )
     }
@@ -179,15 +180,26 @@ object UnifiedTrailAdapter {
       )
     }
     val promptSteps = unified.trail.map { step ->
-      val tools = resolveClosestMatch(step.recordings, resolutionChain, configurationNames)
+      val matchedTools = resolveClosestMatch(step.recordings, resolutionChain, configurationNames)
+      val tools = matchedTools.withoutNonReplayableControlTools()
       // Observability: a step that DECLARES recordings but matches none on this device's chain
       // lowers to LLM mode indistinguishably from an intentional `recordable`/no-recording step.
       // Surface it so a mis-keyed classifier or a genuine coverage gap is debuggable. Gated on a
       // non-empty chain so the config-only safe-mode decode (empty classifiers) stays quiet.
-      if (tools == null && step.recordings.isNotEmpty() && resolutionChain.isNotEmpty()) {
+      if (matchedTools == null && step.recordings.isNotEmpty() && resolutionChain.isNotEmpty()) {
         Console.log(
           "[unified-resolve] step \"${step.step.take(60)}\" declares recordings for " +
             "${step.recordings.keys} but none match this device's chain $resolutionChain — " +
+            "running it in LLM mode.",
+        )
+      }
+      // The other way a step reaches LLM mode: it matched a legacy leg whose every tool is a
+      // control marker. Reported separately because "matched nothing" and "matched a leg with no
+      // replayable action in it" call for different fixes (a mis-keyed classifier vs a re-record).
+      if (matchedTools != null && tools == null && resolutionChain.isNotEmpty()) {
+        Console.log(
+          "[unified-resolve] step \"${step.step.take(60)}\" matched a recording whose only tools " +
+            "are non-replayable control markers ($NON_REPLAYABLE_CONTROL_TOOL_NAMES) — " +
             "running it in LLM mode.",
         )
       }
@@ -216,14 +228,22 @@ object UnifiedTrailAdapter {
     // The optional trailhead lowers to a TrailheadTrailItem between config and prompts — its
     // per-classifier tools resolve the same closest-wins way as a regular step's recordings.
     val trailheadItem = unified.trailhead?.let { th ->
-      val trailheadTools = resolveClosestMatch(th.recordings, resolutionChain, configurationNames)
+      val matchedTrailheadTools =
+        resolveClosestMatch(th.recordings, resolutionChain, configurationNames)
+      val trailheadTools = matchedTrailheadTools.withoutNonReplayableControlTools()
       // Observability: the trailhead is the deterministic step 0, so a declared-but-unmatched
       // recording that silently drops its bootstrap tools is even worse than the per-step case
       // above — surface it the same way. Same non-empty-chain gate keeps the safe-mode decode quiet.
-      if (trailheadTools == null && th.recordings.isNotEmpty() && resolutionChain.isNotEmpty()) {
+      if (matchedTrailheadTools == null && th.recordings.isNotEmpty() && resolutionChain.isNotEmpty()) {
         Console.log(
           "[unified-resolve] trailhead declares recordings for ${th.recordings.keys} but none " +
             "match this device's chain $resolutionChain — running the trailhead in LLM mode.",
+        )
+      }
+      if (matchedTrailheadTools != null && trailheadTools == null && resolutionChain.isNotEmpty()) {
+        Console.log(
+          "[unified-resolve] trailhead matched a recording whose only tools are non-replayable " +
+            "control markers ($NON_REPLAYABLE_CONTROL_TOOL_NAMES) — running the trailhead in LLM mode.",
         )
       }
       TrailYamlItem.TrailheadTrailItem(
@@ -238,10 +258,47 @@ object UnifiedTrailAdapter {
       )
     }
     return listOfNotNull(
-      TrailYamlItem.ConfigTrailItem(config = lowerConfig(unified.config, resolvedDriver, resolvedSkip)),
+      TrailYamlItem.ConfigTrailItem(
+        config = lowerConfig(unified.config, resolvedDriver, resolvedSkip, resolvedLocale),
+      ),
       trailheadItem,
       TrailYamlItem.PromptsTrailItem(promptSteps = promptSteps),
     )
+  }
+
+  /**
+   * Recorded tool names that report the AGENT's control flow instead of driving the device, so
+   * replaying one does nothing: `objectiveStatus` tells the agent loop an objective finished, and a
+   * deterministic replay has no agent loop. The tool is `isRecordable = false` now, so only
+   * recordings captured before that change carry one.
+   *
+   * Named by the same constant the tool is registered under, so a rename moves both together —
+   * a string literal here would silently stop matching while the tests kept passing.
+   */
+  private val NON_REPLAYABLE_CONTROL_TOOL_NAMES = setOf(CoreTools.OBJECTIVE_STATUS)
+
+  /**
+   * Strip [NON_REPLAYABLE_CONTROL_TOOL_NAMES] from a resolved recording leg, mapping a leg that was
+   * nothing BUT those markers back to `null`.
+   *
+   * The null/empty distinction is the contract, not an accident (see [ToolRecording]'s 3-state doc),
+   * so this is careful on both sides of it:
+   *  - An AUTHORED `classifier: []` is returned unchanged — the filter removes nothing, so it stays
+   *    a matched, non-null, zero-tool recording: a deliberate deterministic no-op.
+   *  - A leg whose only tool was a marker becomes `null`, i.e. LLM mode. That step recorded no
+   *    device action in the first place — it reached the marker via the agent — so running it via
+   *    the agent again replays it the way it ran. Keeping it as a zero-tool recording would instead
+   *    turn it into a no-op that silently SKIPS the step and still reports success.
+   *
+   * Pure, so [describeRecordingResolution] and [hasRecordingForDevice] can apply the identical
+   * filter and stay consistent with what [lowerToTrailItems] will actually run. The lowering logs
+   * the mode change, where the step's text is in scope.
+   */
+  private fun List<TrailblazeToolYamlWrapper>?.withoutNonReplayableControlTools(): List<TrailblazeToolYamlWrapper>? {
+    if (this == null) return null
+    val replayableTools = filterNot { it.name in NON_REPLAYABLE_CONTROL_TOOL_NAMES }
+    if (replayableTools.size == size) return this
+    return replayableTools.takeIf { it.isNotEmpty() }
   }
 
   /**
@@ -254,7 +311,10 @@ object UnifiedTrailAdapter {
    * "Recorded" here means the device's chain resolves to a DECLARED classifier entry, matching the
    * 3-state model in [lowerToTrailItems] / [TrailblazeYaml.hasRecordedSteps]:
    *  - no classifier in the chain matches → [resolveClosestMatch] is `null` → the step runs in LLM
-   *    mode (blaze via AI). This is the "no recording" case, and the only one that returns `false`.
+   *    mode (blaze via AI). This is the "no recording" case, and one of the two that return `false`.
+   *  - a matched list holding nothing but non-replayable control markers → the same LLM mode, for
+   *    the same reason: the lowering drops them and there is no device action left. See
+   *    [withoutNonReplayableControlTools]. The other case that returns `false`.
    *  - a matched non-empty list → a captured deterministic recording.
    *  - a matched empty list (an explicit `android: []`) → a NON-NULL zero-tool [ToolRecording], a
    *    deterministic no-op that replays with zero tools (NOT AI). [lowerToTrailItems] carries it
@@ -263,8 +323,9 @@ object UnifiedTrailAdapter {
    *    replays (the false-negative this gate exists to prevent), and the two "is it recorded?"
    *    predicates would disagree.
    *
-   * Returns `false` only when NOTHING on the device's chain resolves to a declared entry — the trail
-   * declares recordings for other classifiers only, or none at all.
+   * Returns `false` only when nothing on the device's chain resolves to a declared entry with a
+   * replayable action in it — the trail declares recordings for other classifiers only, declares
+   * none at all, or its only matching legs are legacy marker-only ones.
    *
    * A run that selects a multi-device configuration must use the overload that names it.
    */
@@ -306,12 +367,17 @@ object UnifiedTrailAdapter {
     val resolutionChain = listOfNotNull(selectedDeviceConfiguration) +
       TrailblazeClassifierLineage.resolutionChain(classifiers).map { it.classifier }
     val configurationNames = allConfigurationNames - setOfNotNull(selectedDeviceConfiguration)
+    // Control markers are filtered exactly as lowerToTrailItems filters them, so a legacy
+    // marker-only leg answers `false` here too. Otherwise a `requireRecordings` gate would select a
+    // case on the strength of a recording the executor hands straight to the LLM.
     val stepHasRecording = unified.trail.any { step ->
-      resolveClosestMatch(step.recordings, resolutionChain, configurationNames) != null
+      resolveClosestMatch(step.recordings, resolutionChain, configurationNames)
+        .withoutNonReplayableControlTools() != null
     }
     if (stepHasRecording) return true
     return unified.trailhead?.let {
-      resolveClosestMatch(it.recordings, resolutionChain, configurationNames) != null
+      resolveClosestMatch(it.recordings, resolutionChain, configurationNames)
+        .withoutNonReplayableControlTools() != null
     } ?: false
   }
 
@@ -329,14 +395,22 @@ object UnifiedTrailAdapter {
    * (`--driver` > config driver > app setting) is unchanged. Callers with no
    * device (e.g. static config extraction) pass null.
    *
-   * [resolvedSkip] is the closest-wins skip reason for the device under test (see [resolveSkip]);
-   * like [resolvedDriver] it's resolved by the caller so this stays a pure field-mapper. `tags`
-   * are trail-level, so they lower verbatim (no per-device resolution).
+   * [resolvedSkip] is the closest-wins skip reason for the device under test (see [resolveSkip]).
+   * Per-device locale lowering uses the internal overload once the caller has resolved a device
+   * definition. `tags` are trail-level, so they lower verbatim (no per-device resolution).
    */
   fun lowerConfig(
     unified: UnifiedTrailConfig,
     resolvedDriver: String? = null,
     resolvedSkip: String? = null,
+  ): TrailConfig = lowerConfig(unified, resolvedDriver, resolvedSkip, resolvedLocale = null)
+
+  /** Device-aware lowering that also carries the resolved `config.devices.<classifier>.locale`. */
+  internal fun lowerConfig(
+    unified: UnifiedTrailConfig,
+    resolvedDriver: String?,
+    resolvedSkip: String?,
+    resolvedLocale: String?,
   ): TrailConfig {
     val (bridgedSource, plainMetadata) = splitBridgedMetadata(unified.metadata)
     return TrailConfig(
@@ -353,6 +427,7 @@ object UnifiedTrailAdapter {
       metadata = plainMetadata,
       memory = unified.memory,
       args = unified.args,
+      locale = resolvedLocale,
     )
   }
 
@@ -362,11 +437,12 @@ object UnifiedTrailAdapter {
    * one-to-one, while the informational `source` is bridged into the unified `metadata` under
    * the reserved keys (see [UnifiedTrailConfig.metadata]) — [lowerConfig] lifts it back, so
    * v1 readers of `TrailConfig.source` see identical values from either format. The
-   * per-classifier maps (`devices`, `skip`) and the trail-level `tags` are left null for the
-   * caller to fill from every contributing file/recording — a single v1 config can't express
-   * them. v1's `platform` is dropped (retired — the device set derives from the classifier
-   * slots). Electron launch config has no per-trail home in either format — it lives on the
-   * target (`target.electron:` / [xyz.block.trailblaze.config.AppTargetYamlConfig.electron]),
+   * per-classifier fields (`devices`, `skip`, and the resolved device `locale`) and the trail-level
+   * `tags` are left null for the caller to fill from every contributing file/recording — a single
+   * v1 config can't express their classifier key. v1's `platform` is dropped (retired — the device
+   * set derives from the classifier slots). Electron launch config has no per-trail home in either
+   * format — it lives on the target (`target.electron:` /
+   * [xyz.block.trailblaze.config.AppTargetYamlConfig.electron]),
    * reached by selecting the target.
    *
    * Single source of truth for the target-identity mapping, seeded first-write by the recorder's
@@ -440,9 +516,8 @@ object UnifiedTrailAdapter {
    * (`devices`, `skip`) and the trail-level `tags` are merged by the caller and left untouched
    * here.
    *
-   * Lives next to [v1ConfigToUnifiedConfig] so the scalar field list has one home — the
-   * round-trip completeness test covers both, so a new `TrailConfig` field can't be carried by
-   * one and silently dropped by the other.
+   * Lives next to [v1ConfigToUnifiedConfig] so the scalar field list has one home. Device-specific
+   * fields such as locale are merged through `devices` by [mergeRecordedClassifier], not here.
    */
   fun fillMissingConfigScalars(
     base: UnifiedTrailConfig,
@@ -550,10 +625,37 @@ object UnifiedTrailAdapter {
   fun resolveDriver(
     config: UnifiedTrailConfig,
     deviceClassifiers: List<TrailblazeDeviceClassifier>,
-  ): String? {
+  ): String? = resolveDeviceDefinition(config, deviceClassifiers)?.driver?.name
+
+  /**
+   * Whether `config.devices` NAMES a device reachable from this classifier chain, closest-wins —
+   * whatever that entry pins.
+   *
+   * Deliberately not `resolveDriver(...) != null`. [TrailblazeDeviceDefinition.driver] is optional,
+   * so an `android-tablet:` entry with no `driver:` is a legal, complete declaration whose driver
+   * resolves at run time — and reading its null driver as "the trail says nothing about this
+   * device" would drop a trail written for exactly that device.
+   *
+   * Ask this when the question is authorship ("was this trail written for that device?"). Ask
+   * [resolveDriver] when the question is which driver to run it on.
+   */
+  fun declaresDevice(
+    config: UnifiedTrailConfig,
+    deviceClassifiers: List<TrailblazeDeviceClassifier>,
+  ): Boolean = resolveDeviceDefinition(config, deviceClassifiers) != null
+
+  /** Resolve the device language declared for this classifier chain, closest-wins. */
+  internal fun resolveLocale(
+    config: UnifiedTrailConfig,
+    deviceClassifiers: List<TrailblazeDeviceClassifier>,
+  ): String? = resolveDeviceDefinition(config, deviceClassifiers)?.locale
+
+  private fun resolveDeviceDefinition(
+    config: UnifiedTrailConfig,
+    deviceClassifiers: List<TrailblazeDeviceClassifier>,
+  ): TrailblazeDeviceDefinition? {
     val resolutionChain = TrailblazeClassifierLineage.resolutionChain(deviceClassifiers).map { it.classifier }
     return resolveClosestMatch(config.devices, resolutionChain, config.multiDeviceConfigurationNames)
-      ?.driver?.name
   }
 
   /**
@@ -607,15 +709,20 @@ object UnifiedTrailAdapter {
     val resolutionChain = listOfNotNull(selectedDeviceConfiguration) + deviceChain
     val configurationNames = allConfigurationNames - setOfNotNull(selectedDeviceConfiguration)
     fun describe(stepIndex: Int?, step: UnifiedTrailStep): RecordingResolution {
-      // One traversal: the winning key drives both fields, so they cannot disagree about whether
-      // the step matched.
+      // One traversal, and BOTH fields come from the same filtered list, so they cannot disagree
+      // about whether the step matched — and neither can disagree with the lowering. A legacy leg
+      // whose only tool is a control marker lowers to LLM mode, so it must report as unmatched
+      // here rather than as a one-tool replay (which `exactIdentities` would then call an exact
+      // replay of a step that actually runs on the LLM).
       val key = resolveClosestKey(step.recordings, resolutionChain, configurationNames)
+      val replayableTools = key?.let { step.recordings.getValue(it) }
+        .withoutNonReplayableControlTools()
       return RecordingResolution(
         stepIndex = stepIndex,
         isVerify = step.verify,
         declaredClassifiers = step.recordings.keys.toList(),
-        resolvedClassifier = key,
-        toolNames = key?.let { step.recordings.getValue(it).map { tool -> tool.name } },
+        resolvedClassifier = key.takeIf { replayableTools != null },
+        toolNames = replayableTools?.map { tool -> tool.name },
       )
     }
     return TrailRecordingResolution(
@@ -804,8 +911,8 @@ object UnifiedTrailAdapter {
     // is lossless: the scalar fields via the shared seed helper (identity/title/priority/context/
     // memory verbatim; source bridged into metadata's reserved keys), trail-level `tags`
     // verbatim, and the v1 scalar `skip` lifted into this classifier's slot of the per-classifier
-    // skip map (blank reasons dropped — v1 semantics). The driver is handled per-classifier just
-    // below. (v1 `platform` is the one field with no unified home and is not seeded here.)
+    // skip map (blank reasons dropped — v1 semantics). Driver and locale are handled per-classifier
+    // just below. (v1 `platform` is the one field with no unified home and is not seeded here.)
     val baseConfig = existing?.config
       ?: recordedConfig?.let {
         v1ConfigToUnifiedConfig(it).copy(
@@ -816,40 +923,51 @@ object UnifiedTrailAdapter {
       ?: UnifiedTrailConfig()
 
     // Replace this classifier's device entry: strip it, then re-add if the recording carried a
-    // driver pin. Collapse an emptied map back to null so an unpinned trail stays unpinned. The
-    // recorded v1 `driver:` is a string; the device model is typed, so an unknown name fails loud
-    // here rather than writing an unparseable pin into the file.
+    // driver or locale. Collapse an emptied map back to null so an unconfigured trail stays that
+    // way. The recorded v1 `driver:` is a string; the device model is typed, so an unknown name
+    // fails loud here rather than writing an unparseable pin into the file.
     //
     // A key naming a multi-device CONFIGURATION leaves config.devices completely untouched: the
     // entry is the authored cast (stripping it would delete the cast), and a configuration entry
-    // can't carry `driver:` — per-device drivers live on its named devices. The caller's
+    // can't carry device settings — they live on its named devices. The caller's
     // [selectedDeviceConfiguration] is the authoritative signal; reading the document is the
     // fallback for callers that don't carry one, and it can't see a configuration on a first write
     // (where [baseConfig] is seeded from the recording's own v1 config, which has no cast).
     val keyNamesConfiguration = selectedDeviceConfiguration != null ||
       baseConfig.devices?.get(classifier)?.isConfiguration == true
     val mergedConfig = if (keyNamesConfiguration) {
-      // The recorded driver is the LAUNCH DEVICE's, not the configuration's, so not pinning it is
-      // the contract rather than a downgrade — the cast's member entries pin their own. Logged so a
-      // run whose driver went nowhere is still traceable.
-      recordedConfig?.driver?.let { driverName ->
+      // Recorded settings describe the LAUNCH DEVICE, not the configuration, so not pinning them is
+      // the contract rather than a downgrade — the cast's member entries own their settings.
+      recordedConfig?.let { config ->
+        val settings = listOfNotNull(
+          config.driver?.let { "driver `$it`" },
+          config.locale?.let { "locale `$it`" },
+        )
+        if (settings.isEmpty()) return@let
         Console.log(
           "[unified-record] `$classifier` names a multi-device configuration, so this run's " +
-            "`$driverName` driver is not pinned on it — a configuration's drivers live on its " +
-            "named devices.",
+            "${settings.joinToString(" and ")} are not pinned on it — a configuration's device " +
+            "settings live on its named devices.",
         )
       }
       baseConfig
     } else {
       val devicesStripped = baseConfig.devices?.minus(classifier)?.ifEmpty { null }
-      val mergedDevices = recordedConfig?.driver
-        ?.let { driverName ->
-          val driver = requireNotNull(TrailblazeDriverType.fromString(driverName)) {
+      val recordedDeviceDefinition = recordedConfig?.let { config ->
+        val driver = config.driver?.let { driverName ->
+          requireNotNull(TrailblazeDriverType.fromString(driverName)) {
             "Recorded config for classifier `$classifier` names unknown driver '$driverName' — " +
               "valid driver types: ${TrailblazeDriverType.entries.joinToString { it.name }}."
           }
-          (devicesStripped ?: emptyMap()) + (classifier to TrailblazeDeviceDefinition(driver = driver))
         }
+        if (driver != null || config.locale != null) {
+          TrailblazeDeviceDefinition(driver = driver, locale = config.locale)
+        } else {
+          null
+        }
+      }
+      val mergedDevices = recordedDeviceDefinition
+        ?.let { (devicesStripped ?: emptyMap()) + (classifier to it) }
         ?: devicesStripped
       baseConfig.copy(devices = mergedDevices)
     }

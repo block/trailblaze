@@ -10,7 +10,7 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceId
  *
  * [activeMaestroDriver] is here because some drivers' live session state still lives on the
  * shared device manager during the conversion (the Maestro path's active driver per device,
- * which serves both Playwright drivers and unconverted iOS). It is the narrow capability those
+ * which serves both Playwright drivers and Maestro-backed iOS). It is the narrow capability those
  * captures use, not the whole manager, so descriptor tests can stub it with `{ null }`. A
  * descriptor that owns its own session state — Revyl's per-device CLI clients, say — ignores it.
  */

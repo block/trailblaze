@@ -50,7 +50,24 @@ class WebToolSetCatalogTest {
       PlaywrightNativeVerifyValueTool::class,
       PlaywrightNativeVerifyListVisibleTool::class,
       PlaywrightNativeAssertNetworkEventTool::class,
+      PlaywrightNativeVerifyTextAbsentForDurationTool::class,
     )
+  }
+
+  @Test
+  fun `web_framework resolves hidden composition primitives for generated tool maps`() {
+    val resolved =
+      TrailblazeToolSetCatalog.resolveForDriver(
+        driverType = TrailblazeDriverType.PLAYWRIGHT_NATIVE,
+        requestedIds = listOf("web_framework"),
+      )
+    assertThat(resolved.toolClasses)
+      .containsAll(
+        PlaywrightNativeBeginResponseObservationTool::class,
+        PlaywrightNativeAssertResponseObservedTool::class,
+        PlaywrightNativeCancelResponseObservationTool::class,
+        PlaywrightNativeRequireTextInViewportTool::class,
+      )
   }
 
   @Test

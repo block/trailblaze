@@ -2,7 +2,7 @@ config:
   id: evals/click-back
   devices:
     android:
-      driver: ANDROID_ONDEVICE_INSTRUMENTATION
+      driver: ANDROID_ONDEVICE_ACCESSIBILITY
 
 trail:
   - step: "Click the back button"

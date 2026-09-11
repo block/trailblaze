@@ -54,7 +54,7 @@ This also collapses the observed-vs-authored split that #2541 left as a follow-u
 
 ## The Robot Pattern parallel
 
-The Robot Pattern that mobile testing has used at Square for years gives the same maintenance economics: one method update fixes thousands of tests; here, one shortcut body update fixes thousands of recordings. Anyone with a mobile-test background already understands the load-bearing idea — the pitch becomes "this, but cross-platform, observable, and machine-navigable" instead of "here's a new abstraction."
+The Robot Pattern that mobile testing has long used gives the same maintenance economics: one method update fixes every test that goes through it; here, one shortcut body update fixes every recording that goes through it. Anyone with a mobile-test background already understands the load-bearing idea — the pitch becomes "this, but cross-platform, observable, and machine-navigable" instead of "here's a new abstraction."
 
 What the waypoint+shortcut model adds beyond classical Robot Pattern:
 

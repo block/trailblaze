@@ -28,8 +28,8 @@ import xyz.block.trailblaze.android.test.hierarchy.AndroidHybridHierarchyCollect
  * that keeps something busy for as long as it is up, so a read that synchronizes first can only
  * expire there. An unanswered read is not a degraded read — it is no tree at all, and every caller
  * on this driver polls the tree — which is why [RuleBackedAndroidTestTarget.composeRoots] falls
- * back to an unsynchronized read, and why that fallback is worth a test of its own. Cases 5380698,
- * 5380821 and 5380822 each lost a whole sign-in inside it.
+ * back to an unsynchronized read, and why that fallback is worth a test of its own. Three separate
+ * trails each lost a whole sign-in inside it.
  *
  * Held busy through a never-idle [IdlingResource] rather than an animation. That is the mechanism
  * either way — an animating screen keeps the app busy through the same registry — and it is the

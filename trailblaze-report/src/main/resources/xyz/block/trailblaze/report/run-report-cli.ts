@@ -4,7 +4,7 @@
 //
 // TypeScript run directly by bun (no transpile step for this file — bun strips types in memory).
 // Types come from the ambient run-report-types.d.ts, compiled together via the tsconfig.json at
-// xyz/block/trailblaze/ (`tsc --noEmit` gate in pr_typescript_unit_tests.sh).
+// xyz/block/trailblaze/ (`tsc --noEmit` gate in the TypeScript unit-test CI step).
 //
 // The Kotlin side (RunReportGenerator) copies this file and run-report-core.js (the transpiled
 // artifact of run-report-core.ts) into a temp dir, writes an input JSON describing the run(s),

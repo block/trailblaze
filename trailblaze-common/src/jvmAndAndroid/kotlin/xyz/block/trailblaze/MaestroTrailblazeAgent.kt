@@ -374,13 +374,14 @@ abstract class MaestroTrailblazeAgent(
           appendLine("Raw parameters: ${repoResolvedTool.raw}")
         },
       )
-      else -> throw TrailblazeException(
-        message = buildString {
-          appendLine("Unhandled Trailblaze tool ${repoResolvedTool::class.java.simpleName} - ${repoResolvedTool}.")
-          appendLine("Supported Trailblaze Tools must implement one of the following:")
-          appendLine("- ${ExecutableTrailblazeTool::class.java.simpleName}")
-          appendLine("- ${DelegatingTrailblazeTool::class.java.simpleName}")
-        },
+      else -> throw unsupportedToolShapeException(
+        tool = repoResolvedTool,
+        agentName = "MaestroTrailblazeAgent",
+        supportedShapes = listOf(
+          ExecutableTrailblazeTool::class.java.simpleName,
+          DelegatingTrailblazeTool::class.java.simpleName,
+        ),
+        remediation = "A Trailblaze tool must implement one of those to be dispatchable.",
       )
     }
   }

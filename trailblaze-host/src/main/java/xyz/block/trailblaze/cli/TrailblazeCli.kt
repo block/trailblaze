@@ -466,6 +466,7 @@ class TrailblazeVersionProvider : IVersionProvider {
     UsagesCommand::class,
     SessionCommand::class,
     ReportCommand::class,
+    StringsCommand::class,
     ViewerCommand::class,
     ProfileCommand::class,
     OtelCommand::class,
@@ -482,6 +483,7 @@ class TrailblazeVersionProvider : IVersionProvider {
     // runs both on a machine with no Android SDK. See docs/internal/inprocess-dogfooding-plan.md.
     InProcessCommand::class,
     SkillCommand::class,
+    CompanionCommand::class,
     // (No standalone `test` subcommand — bun unit tests run as part of `trailblaze
     // check`'s third phase. `trailblaze test` collided with "Trailblaze runs trails"
     // and was deleted in favor of the bundled-in-check flow. If a finer-grained
@@ -658,11 +660,11 @@ internal class GroupedCommandListRenderer(
     ),
     Group(
       "Trail:",
-      listOf("run", "usages", "session", "report", "viewer", "profile", "results", "waypoint"),
+      listOf("run", "usages", "session", "report", "strings", "viewer", "profile", "results", "waypoint"),
     ),
     Group(
       "Setup:",
-      listOf("config", "device", "show", "app", "mcp", "check", "test", "skill", "inprocess"),
+      listOf("config", "device", "show", "app", "mcp", "companion", "check", "test", "skill", "inprocess"),
     ),
     Group(
       BUILT_IN_AGENT_GROUP_NAME,

@@ -6,7 +6,7 @@ import {
 
 // Probe selector for the fundraising-banner close button. The previous shape
 // was a CSS class list (`.frb-close, .cdx-button.frb-close`) which doesn't
-// round-trip through `findMatches` — the captured `cssSelector` field is
+// round-trip through `findSelectorMatches` — the captured `cssSelector` field is
 // equality-matched against a single `#id` / `[data-testid="..."]`, not a
 // query. Matching by ARIA `button` role + accessible-name regex catches the
 // banner close button regardless of which class variant the Codex skin ships

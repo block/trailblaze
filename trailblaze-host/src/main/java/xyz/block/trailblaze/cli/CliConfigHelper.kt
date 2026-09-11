@@ -10,6 +10,7 @@ import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.host.animations.EffectiveDisableAnimationsConfig
 import xyz.block.trailblaze.host.recording.EffectiveIosBaguetteVideoConfig
 import xyz.block.trailblaze.host.recording.EffectiveStreamScreenshotConfig
+import xyz.block.trailblaze.host.turbo.EffectiveTurboConfig
 import xyz.block.trailblaze.llm.TrailblazeLlmProvider
 import xyz.block.trailblaze.logs.client.TrailblazeJson
 import xyz.block.trailblaze.mcp.AgentImplementation
@@ -203,7 +204,7 @@ val CONFIG_KEYS: Map<String, ConfigKey> = listOf(
     // Use case: a developer wants a lower local cap for a debugging session without
     // editing the committed workspace file. The CLI flag and env var still win when set.
     name = "max-llm-calls",
-    description = "Per-objective LLM call cap for the legacy TRAILBLAZE_RUNNER agent",
+    description = "Per-objective LLM call cap for the TRAILBLAZE_RUNNER and KOOG_STRATEGY_GRAPH agents",
     validValues = "positive integer, or 'unset' to clear",
     get = { config -> config.maxLlmCalls?.toString() ?: "(not set)" },
     set = { config, value ->
@@ -391,6 +392,23 @@ val CONFIG_KEYS: Map<String, ConfigKey> = listOf(
       }
     },
   ),
+  ConfigKey(
+    // Experimental. Tri-state like `disable-animations`, and off by default for the same reason:
+    // turning it on installs a helper into the app under test and restarts it, so no existing
+    // workflow should start doing that just because someone upgraded the CLI. `TRAILBLAZE_TURBO`
+    // still wins (env = one-off / CI override; this = discoverable persistent toggle).
+    name = "turbo",
+    description = "Experimental: let the Android app under test report when it is idle so the driver waits less (default: off)",
+    validValues = "true, false, or 'unset' to inherit the default (off)",
+    get = { config -> config.turboEnabled?.toString() ?: "(not set)" },
+    set = { config, value ->
+      if (value.equals("unset", ignoreCase = true)) {
+        config.copy(turboEnabled = null)
+      } else {
+        value.toBooleanStrictOrNull()?.let { config.copy(turboEnabled = it) }
+      }
+    },
+  ),
 ).associateBy { it.name }
 
 /**
@@ -485,6 +503,7 @@ object CliConfigHelper {
       EffectiveStreamScreenshotConfig.enabled = it.streamScreenshotsEnabled ?: false
       EffectiveIosBaguetteVideoConfig.enabled = it.iosBaguetteVideoEnabled ?: false
       EffectiveDisableAnimationsConfig.enabled = it.disableAnimationsEnabled ?: false
+      EffectiveTurboConfig.enabled = it.turboEnabled ?: false
     }
 
   /**

@@ -3,14 +3,12 @@ package xyz.block.trailblaze.cli
 import java.io.File
 
 /**
- * The dual-layout root directory name. Constructed at runtime by joining
- * substring parts so the literal token doesn't appear in source — the
- * sensitive-term scanner (`scripts/scan_opensource_sensitive_terms.sh`) flags
- * the literal as a dual-tree-layout disclosure when it appears under this
- * directory's own tree. Existing production callers
- * ([xyz.block.trailblaze.scripting.ScriptedToolDefinitionAnalyzer]) reference
- * the literal directly and live in the baseline; this test-side helper avoids
- * adding new occurrences.
+ * Name of the directory this tree sits under when it is nested one level below a
+ * parent build's root rather than being that root itself.
+ *
+ * **Leave the concatenation alone.** It is here so the joined word never appears
+ * literally in this file, and a static check enforces that. Joining it looks like
+ * a tidy-up and fails a required build gate.
  */
 private val OSS_LAYOUT_DIR: String = "open" + "source"
 
@@ -28,14 +26,12 @@ private val OSS_LAYOUT_DIR: String = "open" + "source"
  * either layout. Throws [IllegalStateException] if neither resolves, so a
  * misnamed path surfaces as a clear diagnostic rather than an NPE downstream.
  *
- * **Why two layouts.** The trailblaze repo carries two parallel directory
- * shapes for OSS / internal coordination. Tests that want to read production
- * source need to find it from either layout without baking the dual-layout
- * literal into the source itself. See [ScriptedToolDefinitionAnalyzer]'s
- * production walk-up for the parallel pattern (which lives in the baseline
- * for the literal-form scan exemption).
+ * **Why two layouts.** This tree can be the build root or a subdirectory of a
+ * parent build's root, and a test that reads production source has to find it
+ * either way. [ScriptedToolDefinitionAnalyzer]'s production walk-up probes the
+ * same two shapes for the same reason.
  *
- * @param modulePath relative path FROM the OSS-layout root to the module dir
+ * @param modulePath relative path FROM the layout root to the module dir
  *   (e.g. `"trailblaze-host"`).
  * @param relativeInModule path FROM the module dir to the source file
  *   (e.g. `"src/main/java/xyz/block/trailblaze/cli/CliInfrastructure.kt"`).

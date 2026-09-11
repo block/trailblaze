@@ -1,0 +1,2 @@
+id: web_requireTextInViewport
+class: xyz.block.trailblaze.playwright.tools.PlaywrightNativeRequireTextInViewportTool

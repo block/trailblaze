@@ -5,8 +5,11 @@ import android.view.accessibility.AccessibilityNodeInfo
 import maestro.TreeNode
 import xyz.block.trailblaze.android.AndroidSdkVersion
 
-/** Transforms a [AccessibilityNodeInfo] into a Maestro [TreeNode]. */
-fun AccessibilityNodeInfo.toTreeNode(): TreeNode {
+/**
+ * Transforms a [AccessibilityNodeInfo] into a Maestro [TreeNode]. Children the app did not hand
+ * over are counted on [tally] rather than skipped silently — see [TreeCaptureTally].
+ */
+fun AccessibilityNodeInfo.toTreeNode(tally: TreeCaptureTally = TreeCaptureTally()): TreeNode {
   val nodeRect: Rect = Rect().apply { getBoundsInScreen(this) }
 
   // Top-left coordinate
@@ -81,9 +84,12 @@ fun AccessibilityNodeInfo.toTreeNode(): TreeNode {
   }
 
   val childNodes = (0 until childCount).mapNotNull { index ->
-    val child = getChild(index) ?: return@mapNotNull null
+    val child = getChild(index) ?: run {
+      tally.recordDroppedNode()
+      return@mapNotNull null
+    }
     try {
-      child.toTreeNode()
+      child.toTreeNode(tally)
     } finally {
       child.recycle()
     }
@@ -110,8 +116,8 @@ fun AccessibilityNodeInfo.toTreeNode(): TreeNode {
  * order, so dialog/popup/sub-panel content captured from secondary windows appears in the tree
  * after the base application window.
  */
-fun List<AccessibilityNodeInfo>.toMergedTreeNode(): TreeNode? = when (size) {
+fun List<AccessibilityNodeInfo>.toMergedTreeNode(tally: TreeCaptureTally = TreeCaptureTally()): TreeNode? = when (size) {
   0 -> null
-  1 -> this[0].toTreeNode()
-  else -> TreeNode(attributes = mutableMapOf(), children = map { it.toTreeNode() })
+  1 -> this[0].toTreeNode(tally)
+  else -> TreeNode(attributes = mutableMapOf(), children = map { it.toTreeNode(tally) })
 }

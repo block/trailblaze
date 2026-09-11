@@ -31,7 +31,14 @@ internal class TrailblazeLogWebSocketClient(
   baseUrl: String,
 ) {
   sealed interface Attempt {
-    data object Success : Attempt
+    /**
+     * [wireBytes] is THIS send's own encoded size, carried out with its result rather than left on
+     * the client for the caller to read back. Uploads overlap — driver logging is async while tool
+     * logging uploads on its own — and each send releases the send mutex before awaiting its ack,
+     * so a shared "last size" field is read after some other send has already overwritten it.
+     */
+    data class Success(val wireBytes: Long) : Attempt
+
     /** Connection failed before an upload frame was sent, so HTTP is safe. */
     data object FallbackToHttp : Attempt
     /** Delivery after send is uncertain; callers must use their durable disk fallback. */
@@ -57,14 +64,15 @@ internal class TrailblazeLogWebSocketClient(
     val uploadId = requestIds.incrementAndGet()
     val ack = CompletableDeferred<LogUploadAck>()
     pending[uploadId] = ack
+    // Local to this send, so a concurrent upload cannot overwrite it between the frame going out
+    // and this call's ack coming back. The encode already happens here; reporting its size costs
+    // nothing, whereas measuring it later would mean encoding the envelope a second time.
+    var wireBytes = 0L
     try {
       sendMutex.withLock {
-        activeSession.send(
-          Frame.Binary(
-            fin = true,
-            data = OnDeviceRpcProtoCodec.encode(payload(uploadId)),
-          ),
-        )
+        val data = OnDeviceRpcProtoCodec.encode(payload(uploadId))
+        wireBytes = data.size.toLong()
+        activeSession.send(Frame.Binary(fin = true, data = data))
       }
     } catch (e: CancellationException) {
       pending.remove(uploadId)
@@ -86,7 +94,7 @@ internal class TrailblazeLogWebSocketClient(
     }
     return when {
       response == null -> Attempt.Failure("Protobuf log upload timed out waiting for acknowledgement")
-      response.success -> Attempt.Success
+      response.success -> Attempt.Success(wireBytes)
       else -> Attempt.Failure(response.error_message ?: "Host rejected protobuf log upload")
     }
   }

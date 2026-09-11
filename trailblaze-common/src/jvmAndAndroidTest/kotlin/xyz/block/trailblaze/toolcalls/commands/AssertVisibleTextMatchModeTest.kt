@@ -193,7 +193,7 @@ class AssertVisibleTextMatchModeTest {
   /**
    * An unfilled field publishes its placeholder as `hintText` and nothing as `text`, so without the
    * hint in the fold this tool disagrees with itself: the selector matches the field on `textRegex`
-   * — which folds to the hint — and the post-pass then reports "no readable text". Case 5380822
+   * — which folds to the hint — and the post-pass then reports "no readable text". A real trail
    * asserts the item-search field shows "Search all items", which the field only ever carries as a
    * hint.
    */

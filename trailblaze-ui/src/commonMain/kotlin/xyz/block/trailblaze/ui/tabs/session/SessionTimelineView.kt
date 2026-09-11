@@ -84,6 +84,11 @@ import xyz.block.trailblaze.ui.utils.FormattingUtils.formatDuration
  */
 @Composable
 internal fun SessionTimelineView(
+  /**
+   * Logs already on ONE timeline — pass `SessionDetail.logs`, never the raw session logs. Every
+   * ordering and screenshot association below compares `timestamp` directly, which a device-stamped
+   * log breaks by its clock's skew until `normalizedToHostClock` has re-stamped it.
+   */
   logs: List<TrailblazeLog>,
   overallStatus: SessionStatus?,
   sessionId: String,

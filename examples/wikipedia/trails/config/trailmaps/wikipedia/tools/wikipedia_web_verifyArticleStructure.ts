@@ -25,7 +25,7 @@ const REFERENCES_SCROLL_PX = 1200;
 // child `<span>` (older skins). The captured `cssSelector` field on web nodes
 // is equality-matched against a single `#id` / `[data-testid="..."]`, so a
 // comma-list CSS selector (the previous shape) wouldn't round-trip through
-// `findMatches`.
+// `findSelectorMatches`.
 //
 // `ariaNameRegex` is case-sensitive by contract — Wikipedia consistently
 // renders this heading as "References" (Title Case), so the pattern is the
@@ -63,7 +63,7 @@ export interface VerifyArticleStructureArgs {
 //      content actually rendered (not just the chrome).
 //   3. Optional References section — present on most full-length articles.
 // The References scan uses the fast `elementIsVisible` probe (a
-// snapshot-cached `findMatches` over the captured ARIA tree) rather than
+// snapshot-cached `findSelectorMatches` over the captured ARIA tree) rather than
 // `web_verifyTextVisible` so each iteration of the scroll-and-check loop costs
 // ~milliseconds instead of the ~5 s default Playwright assertion timeout. The
 // loop scrolls *first* and verifies *second* so the final scroll's

@@ -15,7 +15,9 @@ import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.client.TrailblazeScreenStateLog
 import xyz.block.trailblaze.logs.client.TrailblazeSession
 import xyz.block.trailblaze.logs.client.TrailblazeSessionManager
+import xyz.block.trailblaze.logs.client.withClockMetadata
 import xyz.block.trailblaze.logs.model.SessionId
+import xyz.block.trailblaze.logs.model.TrailblazeClockDomain
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.devices.TrailblazeDevicePort
 import xyz.block.trailblaze.tracing.TrailblazeTraceExporter
@@ -50,14 +52,21 @@ abstract class TrailblazeLoggingRule(
   protected open val useBinaryLogTransport: Boolean = false
 
   /**
-   * Whether this rule's spans are stamped on a device's clock rather than the host's. On-device
-   * runners override it; a host runner records against the same clock the report is drawn on.
+   * Whether this rule's timestamps — trace spans AND agent logs — are stamped on a device's clock
+   * rather than the host's. On-device runners override it; a host runner records against the same
+   * clock the report is drawn on.
    *
-   * Declared here because the upload has to carry it: the host uploads its own trace through the
-   * same endpoint a device does, so a receiver that assumed "an upload is a device upload" would
-   * take the host's spans off the timeline.
+   * Declared here because the emitter is the only place that knows: the host uploads its own
+   * traces and logs through the same endpoints a device does, so a receiver that assumed "an
+   * upload is a device upload" would take the host's spans off the timeline. And it must be
+   * stamped at EMISSION, not at server ingestion, because [logEmitter] falls back to
+   * [writeLogToDisk] when the server is unreachable or rejects an upload — those device logs
+   * never pass through the host, yet readers still need their clock domain.
+   *
+   * Either way the answer is recorded on the log: false stamps [TrailblazeClockDomain.HOST], not
+   * absence, so "host" is something a reader knows rather than something it assumes.
    */
-  protected open val tracesUseDeviceClock: Boolean = false
+  protected open val useDeviceClock: Boolean = false
 
   /**
    * Current session for this test.
@@ -154,8 +163,24 @@ abstract class TrailblazeLoggingRule(
    * Shared by both SessionManager and Logger.
    */
   private val logEmitter: LogEmitter by lazy {
-    LogEmitter { log: TrailblazeLog ->
+    LogEmitter { emittedLog: TrailblazeLog ->
       if (noLogging) return@LogEmitter
+
+      // Stamp the clock domain first, so every downstream consumer — observers, server upload,
+      // and the disk fallback that never reaches the server — sees the same marked log.
+      //
+      // Host logs are stamped too, positively, rather than left to absence: a reader can't tell an
+      // unstamped host log from one written before the field existed, and the report profiler
+      // still falls back to guessing device-vs-host from the log CLASS for those — a guess that is
+      // wrong for every host driver, because a host driver's AgentDriverLog carries the same
+      // serial name an on-device Maestro driver log does. A positive HOST retires that guess.
+      val log = if (emittedLog.clock == null) {
+        emittedLog.withClockMetadata(
+          clock = if (useDeviceClock) TrailblazeClockDomain.DEVICE else TrailblazeClockDomain.HOST,
+        )
+      } else {
+        emittedLog
+      }
 
       // Notify additional log emitter (for test inspection, etc.)
       additionalLogEmitter?.emit(log)
@@ -375,7 +400,7 @@ abstract class TrailblazeLoggingRule(
         client = trailblazeLogServerClient,
         isServerAvailable = isServerAvailable,
         writeToDisk = { traceJson -> writeTraceToDisk(sessionId, traceJson) },
-        onDeviceClock = tracesUseDeviceClock,
+        onDeviceClock = useDeviceClock,
       )
     }
   }

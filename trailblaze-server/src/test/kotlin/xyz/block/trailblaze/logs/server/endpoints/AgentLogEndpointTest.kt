@@ -8,6 +8,7 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
 import io.ktor.server.testing.testApplication
 import kotlinx.datetime.Clock
+import kotlinx.datetime.Instant
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import org.junit.Test
@@ -25,6 +26,7 @@ import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.logs.model.TaskId
 import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.logs.model.TraceId.Companion.TraceOrigin
+import xyz.block.trailblaze.logs.model.TrailblazeClockDomain
 import xyz.block.trailblaze.logs.server.ServerEndpoints.logsServerKtorEndpoints
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
@@ -337,6 +339,155 @@ class AgentLogEndpointTest {
         (decoded.sessionStatus as SessionStatus.Started).trailConfig,
         "the parameterized trail's args must survive the JSON log round trip",
       )
+    } finally {
+      AgentLogEndpoint.setServerReceivedLogsListener {}
+    }
+  }
+
+  @Test
+  fun `a device-clock log is anchored with the host receipt time and a host-clock log is not`() = testApplication {
+    // The anchor is what lets a reader derive the device→host offset
+    // (offset ≈ hostReceivedAt - (timestamp + durationMs)); a host-clock log needs none, and
+    // stamping one would make an already-host-domain timestamp look like it needed correcting.
+    val logsRepo = createTestLogsRepo()
+    application {
+      logsServerKtorEndpoints(logsRepo)
+    }
+
+    val received = mutableListOf<TrailblazeLog>()
+    AgentLogEndpoint.setServerReceivedLogsListener { received += it }
+    try {
+      val deviceLog = TrailblazeLog.MaestroCommandLog(
+        maestroCommandJsonObj = JsonObject(mapOf("command" to JsonPrimitive("tap"))),
+        traceId = TraceId.generate(TraceOrigin.MAESTRO),
+        successful = true,
+        trailblazeToolResult = TrailblazeToolResult.Success(),
+        session = SessionId("device-clock-session"),
+        timestamp = Clock.System.now(),
+        durationMs = 300L,
+        clock = TrailblazeClockDomain.DEVICE,
+      )
+      val hostLog = deviceLog.copy(session = SessionId("host-clock-session"), clock = null)
+
+      for (log in listOf(deviceLog, hostLog)) {
+        val response = client.post("/agentlog") {
+          contentType(ContentType.Application.Json)
+          setBody(TrailblazeJsonInstance.encodeToString(TrailblazeLog.serializer(), log))
+        }
+        assertEquals(HttpStatusCode.OK, response.status)
+      }
+
+      val (persistedDevice, persistedHost) = received
+      assertTrue(
+        persistedDevice.hostReceivedAt != null,
+        "a device-clock log must carry the host receipt anchor readers derive the offset from",
+      )
+      // The anchor is added by a polymorphic copy — pin that it didn't cost the log its clock
+      // marker (an anchored log with a nulled marker is skipped by every offset reader, silently
+      // reverting the feature) or any other field.
+      assertEquals(
+        TrailblazeClockDomain.DEVICE,
+        persistedDevice.clock,
+        "anchoring must preserve the device-clock marker the offset readers filter on",
+      )
+      assertEquals(
+        deviceLog,
+        (persistedDevice as TrailblazeLog.MaestroCommandLog).copy(hostReceivedAt = null),
+        "anchoring must change nothing but hostReceivedAt",
+      )
+      assertEquals(
+        null,
+        persistedHost.hostReceivedAt,
+        "a host-clock log is already on the host timeline and must be persisted unchanged",
+      )
+    } finally {
+      AgentLogEndpoint.setServerReceivedLogsListener {}
+    }
+  }
+
+  @Test
+  fun `a re-uploaded device-clock log keeps its first anchor`() = testApplication {
+    // A log can reach ingestion twice (upload retry, a session re-pushed to another daemon). The
+    // FIRST receipt is the measurement — a later receipt time is pure re-delivery latency, and
+    // re-stamping would inflate the derived offset by however long the re-upload waited.
+    val logsRepo = createTestLogsRepo()
+    application {
+      logsServerKtorEndpoints(logsRepo)
+    }
+
+    val received = mutableListOf<TrailblazeLog>()
+    AgentLogEndpoint.setServerReceivedLogsListener { received += it }
+    try {
+      val firstAnchor = Instant.parse("2026-09-01T10:00:00.500Z")
+      val alreadyAnchored = TrailblazeLog.MaestroCommandLog(
+        maestroCommandJsonObj = JsonObject(mapOf("command" to JsonPrimitive("tap"))),
+        traceId = TraceId.generate(TraceOrigin.MAESTRO),
+        successful = true,
+        trailblazeToolResult = TrailblazeToolResult.Success(),
+        session = SessionId("re-upload-session"),
+        timestamp = Instant.parse("2026-09-01T09:59:59.000Z"),
+        durationMs = 300L,
+        clock = TrailblazeClockDomain.DEVICE,
+        hostReceivedAt = firstAnchor,
+      )
+
+      val response = client.post("/agentlog") {
+        contentType(ContentType.Application.Json)
+        setBody(TrailblazeJsonInstance.encodeToString(TrailblazeLog.serializer(), alreadyAnchored))
+      }
+      assertEquals(HttpStatusCode.OK, response.status)
+
+      assertEquals(
+        firstAnchor,
+        received.single().hostReceivedAt,
+        "a re-upload's later receipt time says nothing new — the first anchor is the measurement",
+      )
+    } finally {
+      AgentLogEndpoint.setServerReceivedLogsListener {}
+    }
+  }
+
+  @Test
+  fun `a legacy log without clock fields decodes as host-clock and gets no anchor`() = testApplication {
+    // Logs written before the clock-domain field existed carry neither key. They must decode as
+    // "host, or unknown" (never inferred to device — one session legitimately mixes clocks) and
+    // must NOT be anchored, so re-ingesting an old session's files leaves them byte-identical.
+    val logsRepo = createTestLogsRepo()
+    application {
+      logsServerKtorEndpoints(logsRepo)
+    }
+
+    val received = mutableListOf<TrailblazeLog>()
+    AgentLogEndpoint.setServerReceivedLogsListener { received += it }
+    try {
+      // encodeDefaults=false means a null-clock log encodes byte-identical to a log written
+      // before the fields existed — assert that, so this payload really is legacy-shaped.
+      val legacyJson = TrailblazeJsonInstance.encodeToString(
+        TrailblazeLog.serializer(),
+        TrailblazeLog.MaestroCommandLog(
+          maestroCommandJsonObj = JsonObject(mapOf("command" to JsonPrimitive("tap"))),
+          traceId = TraceId.generate(TraceOrigin.MAESTRO),
+          successful = true,
+          trailblazeToolResult = TrailblazeToolResult.Success(),
+          session = SessionId("legacy-session"),
+          timestamp = Instant.parse("2026-09-01T09:59:59.000Z"),
+          durationMs = 300L,
+        ),
+      )
+      assertTrue(
+        "clock" !in legacyJson && "hostReceivedAt" !in legacyJson,
+        "a log without clock metadata must encode without the keys, i.e. legacy-shaped",
+      )
+
+      val response = client.post("/agentlog") {
+        contentType(ContentType.Application.Json)
+        setBody(legacyJson)
+      }
+      assertEquals(HttpStatusCode.OK, response.status)
+
+      val persisted = received.single()
+      assertEquals(null, persisted.clock, "an absent clock field must decode as host-or-unknown")
+      assertEquals(null, persisted.hostReceivedAt, "a legacy log must not be anchored on re-ingestion")
     } finally {
       AgentLogEndpoint.setServerReceivedLogsListener {}
     }

@@ -9,7 +9,12 @@ import assertk.assertions.isInstanceOf
 import assertk.assertions.isNotNull
 import assertk.assertions.isNull
 import assertk.assertions.startsWith
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.runBlocking
+import xyz.block.trailblaze.config.ToolYamlConfig
+import xyz.block.trailblaze.config.YamlDefinedTrailblazeTool
 import xyz.block.trailblaze.toolcalls.ToolSetCatalogEntry
+import xyz.block.trailblaze.toolcalls.resolveToolName
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
@@ -25,6 +30,7 @@ import xyz.block.trailblaze.toolcalls.toolName
 import xyz.block.trailblaze.yaml.DirectionStep
 import xyz.block.trailblaze.yaml.VerificationStep
 import kotlin.test.Test
+import kotlin.test.assertFailsWith
 
 /**
  * Unit tests for [resolveKoogObjectiveResult] — the pure mapping from the Koog agent's terminal
@@ -45,13 +51,107 @@ class KoogStrategyGraphHostRunnerTest {
   }
 
   @Test
-  fun `IN_PROGRESS maps to Success`() {
+  fun `IN_PROGRESS maps to an error, not a hollow pass`() {
+    // Two verify steps ended on objectiveStatus(IN_PROGRESS) with zero assertions and scored
+    // complete. The graph now loops on IN_PROGRESS, so this is the backstop.
     val result = resolveKoogObjectiveResult(
       outcome = Status.IN_PROGRESS,
       explanation = "still going",
       finalMessage = "final",
     )
-    assertThat(result).isInstanceOf(TrailblazeToolResult.Success::class)
+    assertThat(result).isInstanceOf(TrailblazeToolResult.Error.ExceptionThrown::class)
+    assertThat((result as TrailblazeToolResult.Error.ExceptionThrown).errorMessage).contains("still going")
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // countsAsAssertionEvidence — what the COMPLETED gate is allowed to rest on.
+  // ---------------------------------------------------------------------------------------------
+
+  @Test
+  fun `a successful assertion is evidence`() {
+    assertThat(
+      countsAsAssertionEvidence(
+        AssertVisibleTrailblazeTool(ref = "y778"),
+        TrailblazeToolResult.Success(),
+      ),
+    ).isEqualTo(true)
+  }
+
+  @Test
+  fun `a successful device handover is not evidence, though a verify step can call it`() {
+    // switchDevice rides a verify step's surface so a cross-device claim can be authored. It
+    // asserts nothing, so counting it would let COMPLETED through with no claim checked.
+    assertThat(
+      countsAsAssertionEvidence(
+        SwitchDeviceTrailblazeTool(name = "buyer"),
+        TrailblazeToolResult.Success(),
+      ),
+    ).isEqualTo(false)
+  }
+
+  @Test
+  fun `a failed assertion is not evidence`() {
+    assertThat(
+      countsAsAssertionEvidence(
+        AssertVisibleTrailblazeTool(ref = "y778"),
+        TrailblazeToolResult.Error.ExceptionThrown("not visible"),
+      ),
+    ).isEqualTo(false)
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // objectiveStatusDisposition — what the dispatcher records, refuses, and tells the model.
+  // ---------------------------------------------------------------------------------------------
+
+  private fun status(status: Status, explanation: String = "because") =
+    ObjectiveStatusTrailblazeTool(explanation = explanation, status = status)
+
+  @Test
+  fun `COMPLETED on a direction step is recorded and ends the objective`() {
+    val d = objectiveStatusDisposition(status(Status.COMPLETED), verificationBlock = false, passedAssertions = 0)
+    assertThat(d).isInstanceOf(ObjectiveStatusDisposition.Recorded::class)
+    assertThat((d as ObjectiveStatusDisposition.Recorded).status).isEqualTo(Status.COMPLETED)
+    assertThat(d.endsObjective).isEqualTo(true)
+    assertThat(d.messageToLlm).contains("because")
+  }
+
+  @Test
+  fun `IN_PROGRESS is recorded but does not end the objective, and the model is told so`() {
+    val d = objectiveStatusDisposition(status(Status.IN_PROGRESS), verificationBlock = true, passedAssertions = 0)
+    assertThat(d).isInstanceOf(ObjectiveStatusDisposition.Recorded::class)
+    assertThat((d as ObjectiveStatusDisposition.Recorded).status).isEqualTo(Status.IN_PROGRESS)
+    assertThat(d.endsObjective).isEqualTo(false)
+    assertThat(d.messageToLlm).contains("still open")
+  }
+
+  @Test
+  fun `COMPLETED on a verify step with no passing assertion is refused`() {
+    val d = objectiveStatusDisposition(status(Status.COMPLETED), verificationBlock = true, passedAssertions = 0)
+    assertThat(d).isInstanceOf(ObjectiveStatusDisposition.Refused::class)
+    assertThat(d.endsObjective).isEqualTo(false)
+    assertThat(d.messageToLlm).contains("no assertion has passed")
+  }
+
+  @Test
+  fun `COMPLETED on a verify step with a passing assertion is recorded`() {
+    val d = objectiveStatusDisposition(status(Status.COMPLETED), verificationBlock = true, passedAssertions = 1)
+    assertThat(d).isInstanceOf(ObjectiveStatusDisposition.Recorded::class)
+    assertThat(d.endsObjective).isEqualTo(true)
+  }
+
+  @Test
+  fun `FAILED on a verify step is never refused - giving up is a valid verification result`() {
+    val d = objectiveStatusDisposition(status(Status.FAILED), verificationBlock = true, passedAssertions = 0)
+    assertThat(d).isInstanceOf(ObjectiveStatusDisposition.Recorded::class)
+    assertThat((d as ObjectiveStatusDisposition.Recorded).status).isEqualTo(Status.FAILED)
+    assertThat(d.endsObjective).isEqualTo(true)
+  }
+
+  @Test
+  fun `the passing-assertion rule applies only to verification blocks`() {
+    // A direction step ("tap X") legitimately completes without any assertion.
+    val d = objectiveStatusDisposition(status(Status.COMPLETED), verificationBlock = false, passedAssertions = 0)
+    assertThat(d).isInstanceOf(ObjectiveStatusDisposition.Recorded::class)
   }
 
   @Test
@@ -309,6 +409,109 @@ class KoogStrategyGraphHostRunnerTest {
   }
 
   // ---------------------------------------------------------------------------------------------
+  // resolveVerifyBlockSetup — the COMPLETED evidence gate must not ride on the tool surface.
+  // Every reason below leaves the surface full on a block that is still all assertions.
+  // ---------------------------------------------------------------------------------------------
+
+  private val oneVerifyStep = listOf(VerificationStep(verify = "the title is visible"))
+
+  @Test
+  fun `the kill switch widens the tool surface but keeps the evidence gate`() {
+    val setup = resolveVerifyBlockSetup(oneVerifyStep, verifyRepo(), scopeDisabled = true, evidenceDisabled = false)
+    assertThat(setup.advertisedTools).isNull()
+    assertThat(setup.scopeOverridden).isEqualTo(true)
+    assertThat(setup.evidenceGateApplies).isEqualTo(true)
+  }
+
+  @Test
+  fun `a driver outside the scope roll-out keeps the evidence gate`() {
+    // Compose is deliberately not in VERIFY_SCOPE_DRIVERS yet, so its verify steps keep the full
+    // surface — which must not also hand them a free COMPLETED.
+    val setup = resolveVerifyBlockSetup(oneVerifyStep, verifyRepo(TrailblazeDriverType.COMPOSE), scopeDisabled = false, evidenceDisabled = false)
+    assertThat(setup.advertisedTools).isNull()
+    // Nothing was taken away, so there is nothing to log — but it is still a verification block.
+    assertThat(setup.scopeOverridden).isEqualTo(false)
+    assertThat(setup.evidenceGateApplies).isEqualTo(true)
+  }
+
+  @Test
+  fun `a scoped verify block reports both the narrowed surface and the gate`() {
+    val setup = resolveVerifyBlockSetup(oneVerifyStep, verifyRepo(), scopeDisabled = false, evidenceDisabled = false)
+    assertThat(setup.advertisedTools).isNotNull()
+    assertThat(setup.scopeOverridden).isEqualTo(false)
+    assertThat(setup.evidenceGateApplies).isEqualTo(true)
+  }
+
+  @Test
+  fun `a direction step is not a verification block, kill switch or not`() {
+    val steps = listOf(DirectionStep(step = "tap the login button"))
+    assertThat(resolveVerifyBlockSetup(steps, verifyRepo(), scopeDisabled = false, evidenceDisabled = false).evidenceGateApplies)
+      .isEqualTo(false)
+    assertThat(resolveVerifyBlockSetup(steps, verifyRepo(), scopeDisabled = true, evidenceDisabled = false).evidenceGateApplies)
+      .isEqualTo(false)
+  }
+
+  @Test
+  fun `a mixed block is not a verification block`() {
+    val mixed = listOf(VerificationStep(verify = "title visible"), DirectionStep(step = "tap"))
+    assertThat(isVerificationBlock(mixed)).isEqualTo(false)
+  }
+
+  @Test
+  fun `an empty block is not a verification block`() {
+    assertThat(isVerificationBlock(emptyList())).isEqualTo(false)
+  }
+
+  @Test
+  fun `the evidence kill switch drops the gate without widening the tool surface`() {
+    // The two switches answer different questions, so turning the gate off must leave a verify
+    // block scoped to its assertion tools — otherwise the escape hatch for one is an escape hatch
+    // for the other.
+    val setup = resolveVerifyBlockSetup(oneVerifyStep, verifyRepo(), scopeDisabled = false, evidenceDisabled = true)
+    assertThat(setup.evidenceGateApplies).isEqualTo(false)
+    assertThat(setup.evidenceGateOverridden).isEqualTo(true)
+    assertThat(setup.advertisedTools).isNotNull()
+    assertThat(setup.scopeOverridden).isEqualTo(false)
+  }
+
+  @Test
+  fun `the evidence kill switch has nothing to override on a direction step`() {
+    // Reported so the disable is logged only where it changed something — a direction step never
+    // had the gate to begin with.
+    val steps = listOf(DirectionStep(step = "tap the login button"))
+    val setup = resolveVerifyBlockSetup(steps, verifyRepo(), scopeDisabled = false, evidenceDisabled = true)
+    assertThat(setup.evidenceGateApplies).isEqualTo(false)
+    assertThat(setup.evidenceGateOverridden).isEqualTo(false)
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // ObjectiveStatusGate — the graph's completion answer may not outlive the turn that produced it.
+  // ---------------------------------------------------------------------------------------------
+
+  @Test
+  fun `the gate answers with what the status just dispatched meant`() {
+    val gate = ObjectiveStatusGate()
+    assertThat(gate.endsObjective).isEqualTo(false)
+    gate.record(endsObjective = true)
+    assertThat(gate.endsObjective).isEqualTo(true)
+    gate.record(endsObjective = false)
+    assertThat(gate.endsObjective).isEqualTo(false)
+  }
+
+  @Test
+  fun `a recorded terminal status cannot end a LATER turn's objective`() {
+    // A status batched with other tool calls records that it would end the objective while the
+    // graph deliberately keeps looping. If a later objectiveStatus never reaches the dispatcher —
+    // malformed arguments, so Koog rejects it before the host sees it — the edge guard reads
+    // whatever is left standing. Clearing on the way back to the LLM is what stops that stale
+    // answer from ending the objective on a report the graph already declined to act on.
+    val gate = ObjectiveStatusGate()
+    gate.record(endsObjective = true)
+    gate.clearForNextTurn()
+    assertThat(gate.endsObjective).isEqualTo(false)
+  }
+
+  // ---------------------------------------------------------------------------------------------
   // renderRememberedValuesSection — surface non-sensitive memory into the system prompt.
   // ---------------------------------------------------------------------------------------------
 
@@ -400,5 +603,133 @@ class KoogStrategyGraphHostRunnerTest {
     // verify step keeps the full surface. Pin that until Compose verify scoping is validated.
     val composeRepo = verifyRepo(TrailblazeDriverType.COMPOSE)
     assertThat(verifyScopedAdvertisedTools(listOf(VerificationStep(verify = "the title is visible")), composeRepo)).isNull()
+  }
+
+  @Test
+  fun `a tool that returns an Error is recorded even though the agent is told in plain text`() {
+    // The production shape of a driver-tool failure: it comes back as an Error result, gets turned
+    // into ordinary text, and Koog is handed a successful String. Koog's own onToolCallFailed never
+    // fires for it, so if this dispatch didn't record it the recovered-failure count would read zero
+    // for every real session.
+    val instrumentation = KoogRunInstrumentation()
+
+    val text = runBlocking {
+      describeToolDispatch("tapOnElementWithText", instrumentation) {
+        TrailblazeToolResult.Error.ExceptionThrown(errorMessage = "no such element")
+      }
+    }
+
+    assertThat(instrumentation.recoveredToolFailureCount).isEqualTo(1)
+    assertThat(instrumentation.lastRecoveredToolFailure!!.toolName).isEqualTo("tapOnElementWithText")
+    assertThat(instrumentation.lastRecoveredToolFailure!!.summary).isEqualTo("no such element")
+    // Still handed back as an ordinary result, so the caller appends the fresh screen to it.
+    assertThat(text).contains("no such element")
+  }
+
+  @Test
+  fun `a tool that throws is recorded too, since the throw is swallowed here`() {
+    val instrumentation = KoogRunInstrumentation()
+
+    val text = runBlocking {
+      describeToolDispatch("tapOnElementWithText", instrumentation) {
+        throw IllegalStateException("stale ref [42]")
+      }
+    }
+
+    assertThat(instrumentation.recoveredToolFailureCount).isEqualTo(1)
+    assertThat(instrumentation.lastRecoveredToolFailure!!.summary).contains("stale ref [42]")
+    assertThat(text).contains("failed")
+  }
+
+  @Test
+  fun `a tool that succeeds records no failure`() {
+    val instrumentation = KoogRunInstrumentation()
+
+    runBlocking {
+      describeToolDispatch("tapOnElementWithText", instrumentation) {
+        TrailblazeToolResult.Success(message = "tapped")
+      }
+    }
+
+    assertThat(instrumentation.recoveredToolFailureCount).isEqualTo(0)
+    assertThat(instrumentation.lastRecoveredToolFailure).isNull()
+  }
+
+  @Test
+  fun `a YAML-authored tool is recorded under its own id, not its shared class`() {
+    // Every `tools:`-authored tool is the SAME YamlDefinedTrailblazeTool class, so recording
+    // `tool::class.simpleName` would name all of them "YamlDefinedTrailblazeTool" and a failure
+    // report could not say which one broke. resolveToolName resolves the instance name first.
+    val yamlTool = YamlDefinedTrailblazeTool(config = ToolYamlConfig(id = "logInAsMerchant"), params = emptyMap())
+
+    assertThat(yamlTool.resolveToolName()).isEqualTo("logInAsMerchant")
+
+    val instrumentation = KoogRunInstrumentation()
+    runBlocking {
+      describeToolDispatch(yamlTool.resolveToolName(), instrumentation) {
+        TrailblazeToolResult.Error.ExceptionThrown(errorMessage = "login timed out")
+      }
+    }
+
+    assertThat(instrumentation.lastRecoveredToolFailure!!.toolName).isEqualTo("logInAsMerchant")
+  }
+
+  @Test
+  fun `a class-backed tool still records its annotation name`() {
+    // The other half of the rule: no instance name, so the annotation's name is used — NOT the
+    // class simpleName, which is a different string for most tools.
+    assertThat(InputTextTrailblazeTool(text = "hi").resolveToolName())
+      .isEqualTo(InputTextTrailblazeTool::class.toolName().toolName)
+  }
+
+  @Test
+  fun `cancellation propagates rather than being recorded as a tool failure`() {
+    // Structured-concurrency cancellation is not a tool failure; swallowing it here would both
+    // mis-attribute the run and break cancellation of the enclosing scope.
+    val instrumentation = KoogRunInstrumentation()
+
+    assertFailsWith<CancellationException> {
+      runBlocking {
+        describeToolDispatch("tapOnElementWithText", instrumentation) { throw CancellationException("cancelled") }
+      }
+    }
+
+    assertThat(instrumentation.recoveredToolFailureCount).isEqualTo(0)
+  }
+
+  // --- retry after FAILED: which blocks get one, and what earns it ---
+
+  @Test
+  fun `a direction block may be retried`() {
+    assertThat(objectiveRetryApplies(listOf(DirectionStep(step = "tap Settings")))).isEqualTo(true)
+  }
+
+  @Test
+  fun `a block mixing directions and verifications may be retried, since it does something`() {
+    assertThat(
+      objectiveRetryApplies(listOf(DirectionStep(step = "tap Settings"), VerificationStep(verify = "Settings is open"))),
+    ).isEqualTo(true)
+  }
+
+  @Test
+  fun `a pure verification block is never retried, because its FAILED is the assertion result`() {
+    assertThat(objectiveRetryApplies(listOf(VerificationStep(verify = "the title is visible")))).isEqualTo(false)
+  }
+
+  @Test
+  fun `an empty block has nothing to retry`() {
+    assertThat(objectiveRetryApplies(emptyList())).isEqualTo(false)
+  }
+
+  @Test
+  fun `only a FAILED report earns retry feedback, and it quotes the model's reason`() {
+    val feedback = retryFeedbackFor(Status.FAILED, "no such button")
+
+    assertThat(feedback).isNotNull()
+    assertThat(feedback!!).contains("\"no such button\"")
+    assertThat(retryFeedbackFor(Status.COMPLETED, "done")).isNull()
+    assertThat(retryFeedbackFor(Status.IN_PROGRESS, "still going")).isNull()
+    // No report at all means the run threw before objectiveStatus — not the model giving up.
+    assertThat(retryFeedbackFor(null, null)).isNull()
   }
 }

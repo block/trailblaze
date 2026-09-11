@@ -30,6 +30,8 @@ data class CliRunRequest(
   val driverType: String? = null,
   /** Target device ID override. */
   val deviceId: String? = null,
+  /** Locale/variant-qualified device classifier selected for this run (for example ios-iphone-es). */
+  val deviceClassifierOverride: List<String> = emptyList(),
   /** LLM provider override (e.g., "openai", "anthropic"). */
   val llmProvider: String? = null,
   /** LLM model override (e.g., "gpt-5.6-terra"). */
@@ -58,6 +60,12 @@ data class CliRunRequest(
   val selfHeal: Boolean? = null,
   /** Override capture video setting (null = default: video off, opt-in per run). */
   val captureVideo: Boolean? = null,
+  /**
+   * Override turbo mode for this run (`trailblaze run --turbo` / `--no-turbo`). `null` = inherit
+   * `TRAILBLAZE_TURBO` and the saved `trailblaze config turbo` setting; `true`/`false` = explicit
+   * per-run choice, which outranks both.
+   */
+  val turbo: Boolean? = null,
   /** Override capture Android logcat setting (null = use app config default). */
   val captureLogcat: Boolean? = null,
   /** Override capture iOS Simulator system logs setting (null = use app config default). */

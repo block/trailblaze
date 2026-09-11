@@ -4,7 +4,7 @@ config:
   description: Launch Clock via the custom scripted tool, then visit each tab.
   devices:
     android:
-      driver: ANDROID_ONDEVICE_INSTRUMENTATION
+      driver: ANDROID_ONDEVICE_ACCESSIBILITY
 
 trail:
   - step: "Launch the Clock app via the custom scripted tool"

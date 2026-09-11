@@ -9,9 +9,8 @@ import kotlin.test.assertIs
  * instrumentation driver across the existing external trail estate — resolves against the
  * ANDROID_TEST driver's in-process hybrid tree without re-recording.
  *
- * The selector cases here are real ones from `suite_71172/case_4837703` (the transactions-applet
- * trail this bridge was proven on): bare `textRegex`, the structural
- * `containsChild: {androidMaestro: …}` tap shape, and the
+ * The selector cases here are real ones from the transactions trail this bridge was proven on:
+ * bare `textRegex`, the structural `containsChild: {androidMaestro: …}` tap shape, and the
  * `childOf: {containsChild: …}` filter-row shape.
  *
  * Two density rules do the heavy lifting, both exercised here:
@@ -249,7 +248,7 @@ class EstateSelectorBridgeTest {
   }
 
   /**
-   * The same filter tap on a DEEP tree — the on-device shape of case 4837703's failure. The
+   * The same filter tap on a DEEP tree — the on-device shape of that trail's failure. The
    * bridged anchor (`containsChild: Status`) matches every ancestor of the Status text, and a
    * childOf scope built by flat union entered each node once per enclosing anchor: the one
    * Active row came back as "36 elements" on device, every one of them the same node. The

@@ -1,0 +1,33 @@
+# A/B validation trail for iOS stream-sourced screenshots (baguette).
+#
+# Run against a booted iOS Simulator with baguette installed (`brew install baguette`).
+# It lives in the iOS Contacts example's own workspace because that is what registers the
+# `contacts` target — the workspace is resolved by walking up from the working directory, so run
+# it from this example's directory. Deliberately NOT under the `trails/ios-contacts/` tree, which
+# the recorded-replay lanes glob wholesale; this trail is hand-run and has no recording to replay.
+#
+#   cd examples/ios-contacts
+#   TRAILBLAZE_IOS_STREAM_SCREENSHOT_AB=1 \
+#     trailblaze run trails/stream-screenshot-ab.trail.yaml \
+#     --device ios/<booted-simulator-udid> --no-daemon -v
+#
+# AB mode keeps the on-simulator screenshot authoritative and logs one
+# `[stream-screenshot] AB matched|unmatched …` line per agent turn (match rate, host-clock
+# skew, JPEG payload sizes) so you can measure the stream path's viability before trusting it.
+# Flip the flag to `TRAILBLAZE_IOS_STREAM_SCREENSHOT=1` to actually serve the stream frames.
+#
+# Uses the stock iOS Contacts app (this workspace's `contacts` demo target) so there's no login and
+# the steps are natural-language — every step runs a full agent turn, which is what forces a
+# screen-state capture (and therefore an AB comparison) each round.
+config:
+  target: contacts
+  devices:
+    ios-iphone:
+      driver: IOS_HOST
+  title: 'iOS stream-screenshot A/B validation (Contacts)'
+
+trail:
+  - step: Open the Contacts app and confirm the contacts list is visible.
+  - step: Search for "John" and confirm at least one matching contact appears.
+  - step: Open the first matching contact and confirm the contact detail screen is shown.
+  - step: Go back to the contacts list.

@@ -109,7 +109,7 @@ class ProgressTrackingTest {
   }
 
   @Test
-  fun `length-2 reproduces the case_4839652 25-cycle loop`() {
+  fun `length-2 reproduces the observed 25-cycle loop`() {
     // The bug that motivated this work: AI alternated tap(Items) ↔ tap(Back) 25 times
     // before exhausting the LLM call budget. Detector must fire long before that.
     val pingPong = List(25) { listOf("tap(items)", "tap(back)") }.flatten()
@@ -250,7 +250,7 @@ class ProgressTrackingTest {
   }
 
   @Test
-  fun `verifySelfHealFailsGracefully build 4805 trace fires WARNING via dominant detector`() {
+  fun `verifySelfHealFailsGracefully trace fires WARNING via dominant detector`() {
     // Reproduction of the actual stuck pattern: swipe(UP) interleaved with scrollFail.
     // The 15-action window must end on a non-dominant action so the strict-tail-run
     // guard doesn't suppress. 13/15 swipe = 87% > 70% threshold.
@@ -263,7 +263,7 @@ class ProgressTrackingTest {
       "scrollUntilTextIsVisible(Pizza, UP)", // tail breaks consecutive
     )
     val hint = detectDominantActionHint(window15)
-    assertNotNull(hint, "Build 4805's stuck pattern should fire WARNING via dominant detector")
+    assertNotNull(hint, "the recorded stuck pattern should fire WARNING via dominant detector")
     assertTrue(hint.startsWith("WARNING:"))
   }
 
@@ -289,7 +289,7 @@ class ProgressTrackingTest {
   fun `strict cycle detector extracts bare tool name from runner colon-separated fingerprints`() {
     // Same colon-format issue as the dominant-action detector test above. The strict
     // length-1 detector calls formatCycleHint, which previously did substringBefore('(')
-    // and dumped the full "swipe:{...}" fingerprint into the WARNING text. Build 4884's
+    // and dumped the full "swipe:{...}" fingerprint into the WARNING text. A recorded
     // verifySelfHealFailsGracefully run showed exactly this: the LLM saw
     // 'swipe:{"direction":"UP"}' inside the WARNING instead of just 'swipe' — counts as
     // noise the LLM had to parse around. Fix routes through extractToolNameFromFingerprint

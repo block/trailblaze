@@ -6,9 +6,12 @@ import io.ktor.server.response.respondText
 import io.ktor.server.routing.Routing
 import io.ktor.server.routing.post
 import kotlinx.coroutines.CancellationException
+import kotlinx.datetime.Clock
 import org.jetbrains.annotations.TestOnly
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeLog
+import xyz.block.trailblaze.logs.client.withClockMetadata
+import xyz.block.trailblaze.logs.model.TrailblazeClockDomain
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.util.Console
 
@@ -70,7 +73,17 @@ object AgentLogEndpoint {
   }
 
   internal fun accept(logEvent: TrailblazeLog, logsRepo: LogsRepo): java.io.File {
-    logListener(logEvent)
-    return logsRepo.saveLogToDisk(logEvent)
+    // Anchor device-clock logs with the host-clock receipt time: readers derive the device→host
+    // offset from it (offset ≈ hostReceivedAt - (timestamp + durationMs); each sample is skew +
+    // upload latency, so readers take the per-device minimum). Host-clock logs are persisted
+    // byte-identical to before — they need no anchor. Received-twice logs keep their first
+    // anchor; a re-upload's later receipt time says nothing new.
+    val anchored = if (logEvent.clock == TrailblazeClockDomain.DEVICE && logEvent.hostReceivedAt == null) {
+      logEvent.withClockMetadata(hostReceivedAt = Clock.System.now())
+    } else {
+      logEvent
+    }
+    logListener(anchored)
+    return logsRepo.saveLogToDisk(anchored)
   }
 }

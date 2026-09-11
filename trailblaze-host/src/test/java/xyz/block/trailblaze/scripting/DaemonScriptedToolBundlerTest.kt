@@ -50,7 +50,14 @@ class DaemonScriptedToolBundlerTest {
     // missing. Without this split, every test in the class skipped on hosts lacking
     // `bun install`, masking genuinely useful coverage that has no esbuild dependency.
     esbuild = resolveEsbuildBinary() ?: File(tempFolder.root, "missing-esbuild")
-    bundler = DaemonScriptedToolBundler(esbuildBinary = esbuild, cacheDir = cacheDir)
+    // Opts into the legacy walk-up (off by default now that every production caller resolves the
+    // entry itself): this bundler supplies no override, and its esbuild IS the SDK tree's own
+    // devDependency, so the walk-up is what gives these tests the slim @trailblaze/scripting alias.
+    bundler = DaemonScriptedToolBundler(
+      esbuildBinary = esbuild,
+      allowLegacyEsbuildWalkup = true,
+      cacheDir = cacheDir,
+    )
   }
 
   private fun assumeEsbuildPresent() {
@@ -154,6 +161,54 @@ class DaemonScriptedToolBundlerTest {
       "a caller-supplied slim entry must keep @modelcontextprotocol/sdk OUT of the bundle (got ${out.length()} bytes)",
     )
     assertTrue(out.length() < 200_000L, "expected a slim KB-scale bundle; got ${out.length()} bytes")
+  }
+
+  @Test
+  fun `a caller that resolved no entry is not overruled by the walk-up from esbuild`() = runBlocking {
+    // A null override means two different things to two different callers. For a caller that never
+    // resolves the entry, it means "you figure it out" — the walk-up below. For a caller that DOES
+    // resolve it (every production caller), it means "I looked and rejected what I found", which is
+    // what LazyYamlScriptedToolRegistration.resolveInProcessSdkEntry returns for a tree whose deps
+    // can't bundle. Since esbuild is normally that same tree's own devDependency, walking up from
+    // the binary lands right back on the rejected tree and restores the alias — defeating the gate
+    // exactly where it matters, a partial install where esbuild exists but `zod` does not.
+    //
+    // The observable: with the walk-up off and nothing supplied, `@trailblaze/scripting` has to
+    // resolve from node_modules, and this tool source has none — so the bundle FAILS rather than
+    // being quietly aliased. That is the honest shape of the fallback: the aliasless bundle is not
+    // itself a rescue, the caller's per-tool precompiled bundle is.
+    assumeEsbuildPresent()
+    val noWalkupBundler = DaemonScriptedToolBundler(
+      esbuildBinary = esbuild,
+      inProcessSdkEntryOverride = null,
+      allowLegacyEsbuildWalkup = false,
+      cacheDir = tempFolder.newFolder("no-walkup-cache"),
+    )
+    val src = File(tempFolder.newFolder("noWalkupImport"), "slimTool.ts").apply {
+      writeText(
+        """
+        |import { trailblaze } from "@trailblaze/scripting";
+        |export const slimTool = trailblaze.tool(async (input) => String(input.text).toUpperCase());
+        |""".trimMargin(),
+      )
+    }
+
+    val failure = assertFailsWith<Exception> { noWalkupBundler.bundleOne(src, toolName = "slimTool") }
+
+    assertTrue(
+      failure.message?.contains("@trailblaze/scripting") == true,
+      "expected the bundle to fail resolving @trailblaze/scripting with no alias and no " +
+        "node_modules; got: ${failure.message}",
+    )
+    // The default bundler in this class has the SAME null override and an in-tree esbuild, and it
+    // bundles this source slim (see the tests above). So this test fails if the flag stops being
+    // honored, rather than passing for an unrelated reason.
+    val viaWalkup = bundler.bundleOne(src, toolName = "slimTool")
+    assertTrue(
+      viaWalkup.length() < 200_000L,
+      "precondition: the walk-up must still produce a slim bundle for the same source; got " +
+        "${viaWalkup.length()} bytes",
+    )
   }
 
   @Test

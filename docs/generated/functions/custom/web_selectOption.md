@@ -22,10 +22,7 @@ Provide the option values or labels to select.
 
 ### Required parameters
 
-- `values` — `ToolParameterType.List(
-  itemsType =
-    String
-)`
+- `values` — `array<String>`
   The option values or visible text labels to select.
 
 ### Optional parameters

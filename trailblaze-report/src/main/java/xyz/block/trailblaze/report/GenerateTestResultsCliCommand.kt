@@ -671,7 +671,7 @@ open class GenerateTestResultsCliCommand(
     /**
      * Sidecar file dropped into each session directory by the log-upload script, carrying the
      * originating CI job ID and logs-zip filename. Read by [readHostCiContext]; written by
-     * the wrapping upload script (in this repo's distribution: `scripts/<provider>/upload_logs.sh`)
+     * the wrapping log-upload script for the CI provider in use
      * before zipping. Filename intentionally starts with a non-hex character so [LogsRepo]'s
      * log-file filter skips it.
      */
@@ -1303,7 +1303,7 @@ open class GenerateTestResultsCliCommand(
       .sortedByDescending { it.failed_on.size }
   }
 
-  /** Pulls `4837766` out of a `.../suite_71172/section_838951/case_4837766` test key. */
+  /** Pulls `1003` out of a `.../suite_101/section_204/case_1003` test key. */
   private val CASE_ID_IN_TEST_KEY = Regex("""case_(\d+)""")
 
   /**

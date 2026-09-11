@@ -22,6 +22,7 @@ import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDevicePort
 import xyz.block.trailblaze.devices.TrailblazeDevicePort.getTrailblazeOnDeviceSpecificPort
 import xyz.block.trailblaze.devices.TrailblazeDriverType
+import xyz.block.trailblaze.llm.config.LlmAuthResolver
 import xyz.block.trailblaze.model.DeviceConnectionStatus
 import xyz.block.trailblaze.model.TrailblazeOnDeviceInstrumentationTarget
 
@@ -269,6 +270,185 @@ class HostAndroidDeviceConnectUtilsTest {
     entrants.forEach { it.join() }
 
     assertThat(handedForceRestart.toList()).containsExactly(true, false)
+  }
+
+  // ── reuse vs. a stale LLM token ───────────────────────────────────────────
+  // Same reuse hazard as the port, on the arg the runner needs most. A reused runner keeps the
+  // token it was launched with, and provider tokens expire — so once the host refreshes one, every
+  // subsequent on-device run kept sending the dead one and failed with the provider's 401/403.
+  // Reloading the token in the app did nothing, because nothing relaunched the runner that holds it.
+
+  @Test
+  fun aRefreshedLlmTokenRelaunchesTheRunnerThatStillHoldsTheOldOne() = runBlocking {
+    val device = deviceId.copy(instanceId = "emulator-5592")
+    val handedForceRestart = mutableListOf<Boolean>()
+    suspend fun connectWithToken(token: String) {
+      HostAndroidDeviceConnectUtils.connectWithRoutePinnedForTest(
+        deviceId = device,
+        httpsPort = TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTPS_PORT,
+        additionalInstrumentationArgs = mapOf(LlmAuthResolver.resolve("openai") to token),
+      ) { effectiveForceRestart ->
+        handedForceRestart.add(effectiveForceRestart)
+        DeviceConnectionStatus.WithTargetDevice.TrailblazeInstrumentationRunning(device)
+      }
+    }
+
+    connectWithToken("token-a")
+    connectWithToken("token-a")
+    connectWithToken("token-b")
+
+    // First connect has nothing to compare against, second is the same token so reuse still wins,
+    // third carries a refreshed token the live runner cannot have — the only way to deliver it is
+    // to relaunch.
+    assertThat(handedForceRestart.toList()).containsExactly(false, false, true)
+  }
+
+  @Test
+  fun aRunWithNoResolvedTokenLeavesTheRunningOneAlone() = runBlocking {
+    // Token resolution can come back empty transiently (an OAuth refresh that failed, an env var
+    // that is not set on this invocation). Relaunching on that would force-stop a working runner
+    // and hand it NO token, turning a recoverable blip into a broken device. A relaunch is only
+    // ever worth it when there is a new token to deliver.
+    val device = deviceId.copy(instanceId = "emulator-5594")
+    val handedForceRestart = mutableListOf<Boolean>()
+    suspend fun connectWithArgs(args: Map<String, String>) {
+      HostAndroidDeviceConnectUtils.connectWithRoutePinnedForTest(
+        deviceId = device,
+        httpsPort = TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTPS_PORT,
+        additionalInstrumentationArgs = args,
+      ) { effectiveForceRestart ->
+        handedForceRestart.add(effectiveForceRestart)
+        DeviceConnectionStatus.WithTargetDevice.TrailblazeInstrumentationRunning(device)
+      }
+    }
+
+    connectWithArgs(mapOf(LlmAuthResolver.resolve("openai") to "token-a"))
+    connectWithArgs(mapOf("trailblaze.llm.default_model" to "openai/some-model"))
+    // And the blip must not swallow the next real refresh.
+    connectWithArgs(mapOf(LlmAuthResolver.resolve("openai") to "token-b"))
+
+    assertThat(handedForceRestart.toList()).containsExactly(false, false, true)
+  }
+
+  @Test
+  fun aRelaunchThatCarriedNoTokenIsNotRememberedAsStillHoldingTheOldOne() = runBlocking {
+    // The dangerous direction of the same question. A relaunch a caller forces for its own reasons
+    // — zombie recovery passes forceRestart = true — hands the runner whatever args this connect
+    // resolved, so if that was nothing, the process now answering holds no credential at all.
+    // Recording it as still holding the token from before its relaunch would leave that device
+    // silently unable to authenticate: the token comes back looking unchanged, so nothing ever
+    // relaunches it again.
+    val device = deviceId.copy(instanceId = "emulator-5602")
+    val handedForceRestart = mutableListOf<Boolean>()
+    suspend fun connectWith(args: Map<String, String>, forceRestart: Boolean = false) {
+      HostAndroidDeviceConnectUtils.connectWithRoutePinnedForTest(
+        deviceId = device,
+        httpsPort = TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTPS_PORT,
+        additionalInstrumentationArgs = args,
+        forceRestart = forceRestart,
+      ) { effectiveForceRestart ->
+        handedForceRestart.add(effectiveForceRestart)
+        DeviceConnectionStatus.WithTargetDevice.TrailblazeInstrumentationRunning(device)
+      }
+    }
+
+    val tokenA = mapOf(LlmAuthResolver.resolve("openai") to "token-a")
+    connectWith(tokenA)
+    connectWith(emptyMap(), forceRestart = true)
+    // The same token string as the first connect, but the runner answering now is a different
+    // process that never received it.
+    connectWith(tokenA)
+
+    assertThat(handedForceRestart.toList()).containsExactly(false, true, true)
+  }
+
+  @Test
+  fun aNonAuthArgChangeDoesNotRelaunch() = runBlocking {
+    // Only the token args gate this. Relaunching on any arg change would make routine differences
+    // between callers (the MCP bridge and a trail run do not assemble identical args) tear down a
+    // healthy runner mid-session.
+    val device = deviceId.copy(instanceId = "emulator-5596")
+    val handedForceRestart = mutableListOf<Boolean>()
+    suspend fun connectWithModel(model: String) {
+      HostAndroidDeviceConnectUtils.connectWithRoutePinnedForTest(
+        deviceId = device,
+        httpsPort = TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTPS_PORT,
+        additionalInstrumentationArgs = mapOf(
+          LlmAuthResolver.resolve("openai") to "token-a",
+          "trailblaze.llm.default_model" to model,
+        ),
+      ) { effectiveForceRestart ->
+        handedForceRestart.add(effectiveForceRestart)
+        DeviceConnectionStatus.WithTargetDevice.TrailblazeInstrumentationRunning(device)
+      }
+    }
+
+    connectWithModel("openai/model-one")
+    connectWithModel("openai/model-two")
+
+    assertThat(handedForceRestart.toList()).containsExactly(false, false)
+  }
+
+  @Test
+  fun aFailedConnectForgetsTheTokenItTriedToLaunchWith() = runBlocking {
+    // Same reason the port entry is dropped on failure: a failed launch can leave a process running
+    // with unknown args, so the recorded token is no longer evidence of what is on the device.
+    val device = deviceId.copy(instanceId = "emulator-5598")
+    val handedForceRestart = mutableListOf<Boolean>()
+    suspend fun connectWithToken(token: String, succeed: Boolean) {
+      HostAndroidDeviceConnectUtils.connectWithRoutePinnedForTest(
+        deviceId = device,
+        httpsPort = TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTPS_PORT,
+        additionalInstrumentationArgs = mapOf(LlmAuthResolver.resolve("openai") to token),
+      ) { effectiveForceRestart ->
+        handedForceRestart.add(effectiveForceRestart)
+        if (succeed) {
+          DeviceConnectionStatus.WithTargetDevice.TrailblazeInstrumentationRunning(device)
+        } else {
+          DeviceConnectionStatus.DeviceConnectionError.ConnectionFailure("boom")
+        }
+      }
+    }
+
+    connectWithToken("token-a", succeed = true)
+    connectWithToken("token-b", succeed = false)
+    // Nothing is known about the device now, so this behaves like a first connect and reuses —
+    // the readiness probe, not a remembered token, is what proves the runner is usable.
+    connectWithToken("token-c", succeed = true)
+
+    assertThat(handedForceRestart.toList()).containsExactly(false, true, false)
+  }
+
+  @Test
+  fun aRelaunchForAStaleTokenSaysWhyInTheProgressStream() = runBlocking {
+    // The operator watching a run sees an unexpected reinstall/relaunch. Without a line naming the
+    // reason it reads as a flaky connect.
+    val device = deviceId.copy(instanceId = "emulator-5600")
+    val progress = mutableListOf<String>()
+    suspend fun connectWithToken(token: String) {
+      HostAndroidDeviceConnectUtils.connectWithRoutePinnedForTest(
+        deviceId = device,
+        httpsPort = TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTPS_PORT,
+        additionalInstrumentationArgs = mapOf(LlmAuthResolver.resolve("openai") to token),
+        sendProgressMessage = { progress.add(it) },
+      ) {
+        DeviceConnectionStatus.WithTargetDevice.TrailblazeInstrumentationRunning(device)
+      }
+    }
+
+    connectWithToken("token-a")
+    connectWithToken("token-b")
+
+    assertThat(progress.joinToString(" | ")).contains("refreshed LLM credential")
+  }
+
+  @Test
+  fun theTokenArgPrefixIsTheOneTheDeviceReads() {
+    // OpenAiInstrumentationArgUtil reads this exact key off the instrumentation Bundle, so the
+    // fingerprint has to be taken over the same keys the device authenticates with.
+    assertThat(LlmAuthResolver.resolve("openai")).isEqualTo("trailblaze.llm.auth.token.openai")
+    assertThat(LlmAuthResolver.isAuthTokenArg("trailblaze.llm.auth.token.openai")).isEqualTo(true)
+    assertThat(LlmAuthResolver.isAuthTokenArg("trailblaze.llm.default_model")).isEqualTo(false)
   }
 
   @Test

@@ -457,7 +457,7 @@ class GenerateTestResultsCliCommandTest {
             SessionStatus.Started(
               trailConfig =
                 TrailConfig(
-                  id = "suite_71172/section_838946/case_4837740",
+                  id = "suite_101/section_202/case_1005",
                 ),
               trailFilePath = "trails/sample-app/self-heal.trail.yaml",
               hasRecordedSteps = true,
@@ -604,7 +604,7 @@ class GenerateTestResultsCliCommandTest {
       val result = report.results.single()
       assertTrue(result.self_heal_ran)
       val evidence = assertNotNull(result.category2_evidence)
-      assertEquals("4837740", evidence.case_id)
+      assertEquals("1005", evidence.case_id)
       assertEquals(CATEGORY2_HEAL_DIFF_FILENAME, evidence.heal_diff_artifact)
       val healDiffFile = File(logsDir, "${sessionId.value}/$CATEGORY2_HEAL_DIFF_FILENAME")
       assertTrue(healDiffFile.isFile)
@@ -2150,13 +2150,13 @@ class GenerateTestResultsCliCommandTest {
       // cases were behind it.
       writeTrailRun(
         logsDir, deviceInfo, SessionId("2026_06_15_case_a"),
-        trailFilePath = "trails/cases/suite_71172/section_838951/case_4837766/trail.yaml",
+        trailFilePath = "trails/cases/suite_101/section_204/case_1003/trail.yaml",
         startedAt = "2026-06-15T10:00:00Z",
         ended = SessionStatus.Ended.Failed(durationMs = 1_000, exceptionMessage = "Element not found: Save"),
       )
       writeTrailRun(
         logsDir, deviceInfo, SessionId("2026_06_15_case_b"),
-        trailFilePath = "trails/cases/suite_71172/section_838949/case_4866622/trail.yaml",
+        trailFilePath = "trails/cases/suite_101/section_203/case_1004/trail.yaml",
         startedAt = "2026-06-15T10:05:00Z",
         ended = SessionStatus.Ended.Failed(durationMs = 1_000, exceptionMessage = "Element not found: Save"),
       )
@@ -2174,11 +2174,11 @@ class GenerateTestResultsCliCommandTest {
       // Every counted failure is enumerated, and each one names its own case.
       assertEquals(group.count, group.affected_failures.size)
       assertEquals(
-        listOf("4837766", "4866622"),
+        listOf("1003", "1004"),
         group.affected_failures.mapNotNull { it.case_id }.sorted(),
       )
-      val first = group.affected_failures.single { it.case_id == "4837766" }
-      assertEquals("cases/suite_71172/section_838951/case_4837766", first.test_key)
+      val first = group.affected_failures.single { it.case_id == "1003" }
+      assertEquals("cases/suite_101/section_204/case_1003", first.test_key)
       assertEquals("Element not found: Save", first.reason)
       assertEquals("2026_06_15_case_a", first.session_id)
     } finally {

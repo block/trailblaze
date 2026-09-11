@@ -14,10 +14,12 @@ import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDevicePort
 import xyz.block.trailblaze.devices.TrailblazeDevicePort.getTrailblazeOnDeviceSpecificPort
 import xyz.block.trailblaze.devices.TrailblazeDriverType
+import xyz.block.trailblaze.llm.config.LlmAuthResolver
 import xyz.block.trailblaze.model.DeviceConnectionStatus
 import xyz.block.trailblaze.model.TrailblazeOnDeviceInstrumentationTarget
 import xyz.block.trailblaze.util.AndroidHostAdbUtils.adbPortForward
 import xyz.block.trailblaze.util.AndroidHostAdbUtils.adbPortReverse
+import java.security.MessageDigest
 import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicReference
@@ -658,6 +660,72 @@ object HostAndroidDeviceConnectUtils {
     requestedHttpsPort
 
   /**
+   * The LLM credentials each device's currently-running instrumentation was launched with, as
+   * [llmAuthFingerprint].
+   *
+   * Same rationale as [lastLaunchedHttpsPortByDevice] and kept alongside it, for the arg a run
+   * cannot proceed without. Fingerprints rather than values: this map lives for the life of the
+   * daemon, and a token held in host memory is a token that can end up in a heap dump or a
+   * `toString()`.
+   */
+  private val lastLaunchedLlmAuthByDevice = ConcurrentHashMap<TrailblazeDeviceId, String>()
+
+  /**
+   * A stable, non-reversible summary of the LLM credentials in [additionalInstrumentationArgs], or
+   * `""` when it carries none.
+   *
+   * Keyed by arg name as well as value so that gaining or losing a provider counts as a change, and
+   * sorted so that two equal arg maps of different iteration order agree.
+   */
+  internal fun llmAuthFingerprint(additionalInstrumentationArgs: Map<String, String>): String {
+    val authArgs = additionalInstrumentationArgs
+      .filterKeys { LlmAuthResolver.isAuthTokenArg(it) }
+      .toSortedMap()
+    if (authArgs.isEmpty()) return ""
+    val digest = MessageDigest.getInstance("SHA-256")
+    authArgs.forEach { (key, value) ->
+      digest.update(key.encodeToByteArray())
+      digest.update(0)
+      digest.update(value.encodeToByteArray())
+      digest.update(0)
+    }
+    return digest.digest().joinToString("") { byte -> (byte.toInt() and 0xFF).toString(16).padStart(2, '0') }
+  }
+
+  /**
+   * Whether instrumentation must be relaunched because the LLM credentials it was launched with are
+   * not the ones the host would send now.
+   *
+   * Provider tokens expire, and a reused runner keeps the immutable arg bundle it was launched with
+   * — the same reuse hazard as [requiresRelaunchForHttpsPort], on the arg a run cannot proceed
+   * without. Once the host refreshed a token, every later on-device run kept presenting the dead one
+   * and failed with the provider's 401/403; reloading the token in the app changed nothing, because
+   * nothing relaunched the runner that holds it. Relaunching is the only delivery mechanism there
+   * is: the run RPC carries no credentials.
+   *
+   * Two deliberate asymmetries with the port rule, both erring towards leaving a live runner alone:
+   *
+   * - An empty [requestedLlmAuthFingerprint] never relaunches. Token resolution comes back empty on
+   *   a failed OAuth refresh or an unset env var; tearing down a working runner to hand it NO token
+   *   turns a recoverable blip into a broken device. A relaunch is only worth it when there is a new
+   *   credential to deliver. This does leave a runner holding a credential that no longer works
+   *   while the host has none — but relaunching it credential-less fails those runs just the same,
+   *   and the moment the host holds a real credential again the fingerprint differs and it relaunches.
+   * - A null [launchedLlmAuthFingerprint] never relaunches. Unlike the port, there is no
+   *   device-side default to assume — a runner this daemon did not launch could hold anything — so
+   *   assuming staleness would relaunch on the first connect after every daemon start. The cost is
+   *   that a runner left holding an expired token by a PREVIOUS daemon is still only fixed by
+   *   restarting it. An EMPTY launched fingerprint is not that case and does relaunch: it is this
+   *   daemon recording that the runner it last handed args to got no credential.
+   */
+  internal fun requiresRelaunchForLlmAuth(
+    launchedLlmAuthFingerprint: String?,
+    requestedLlmAuthFingerprint: String,
+  ): Boolean = requestedLlmAuthFingerprint.isNotEmpty() &&
+    launchedLlmAuthFingerprint != null &&
+    launchedLlmAuthFingerprint != requestedLlmAuthFingerprint
+
+  /**
    * [httpsPort] must be the port the daemon's HTTPS server actually bound (resolved by
    * `TrailblazePortManager`), and deliberately has no default: with the daemon on a non-default
    * port, a defaulted value reverse-forwards `tcp:52526` to a host port nothing listens on, and
@@ -686,6 +754,7 @@ object HostAndroidDeviceConnectUtils {
     return withRoutePinnedUnderDeviceLock(
       deviceId = deviceId,
       httpsPort = httpsPort,
+      additionalInstrumentationArgs = additionalInstrumentationArgs,
       forceRestart = forceRestart,
       sendProgressMessage = sendProgressMessage,
     ) { effectiveForceRestart ->
@@ -720,6 +789,7 @@ object HostAndroidDeviceConnectUtils {
   private suspend fun withRoutePinnedUnderDeviceLock(
     deviceId: TrailblazeDeviceId,
     httpsPort: Int,
+    additionalInstrumentationArgs: Map<String, String>,
     forceRestart: Boolean,
     sendProgressMessage: (String) -> Unit,
     connect: suspend (effectiveForceRestart: Boolean) -> DeviceConnectionStatus,
@@ -735,14 +805,37 @@ object HostAndroidDeviceConnectUtils {
       )
     }
 
-    val status = connect(forceRestart || staleRouting)
+    val requestedLlmAuth = llmAuthFingerprint(additionalInstrumentationArgs)
+    val staleLlmAuth = requiresRelaunchForLlmAuth(
+      launchedLlmAuthFingerprint = lastLaunchedLlmAuthByDevice[deviceId],
+      requestedLlmAuthFingerprint = requestedLlmAuth,
+    )
+    if (staleLlmAuth && !forceRestart) {
+      sendProgressMessage(
+        "The on-device runner still holds the credential it was launched with and the host has a " +
+          "refreshed LLM credential — relaunching instrumentation so the device authenticates " +
+          "with the current one.",
+      )
+    }
+
+    val status = connect(forceRestart || staleRouting || staleLlmAuth)
 
     // Record only on success: a failed launch may leave a process running with unknown args, and
     // forgetting is what makes the next connect relaunch instead of trusting a stale entry.
     if (status is DeviceConnectionStatus.DeviceConnectionError) {
       lastLaunchedHttpsPortByDevice.remove(deviceId)
+      lastLaunchedLlmAuthByDevice.remove(deviceId)
     } else {
       lastLaunchedHttpsPortByDevice[deviceId] = httpsPort
+      // Recorded even when empty, and that empty entry is NOT the same as an absent one: absent
+      // means "no idea what this runner holds", empty means "as far as this daemon knows it holds
+      // no credential", which the next real credential compares unequal to and so relaunches.
+      // Keeping the previous entry instead would be a guess that the connect reused — and a
+      // connect that relaunched (forceRestart, stale routing) or launched a runner that was not
+      // running just handed the device these very args. Guessing wrong there leaves a device the
+      // host believes is holding a credential it does not have, and nothing later disagrees. The
+      // cost of guessing this way instead is one redundant relaunch.
+      lastLaunchedLlmAuthByDevice[deviceId] = requestedLlmAuth
     }
     status
   }
@@ -751,12 +844,14 @@ object HostAndroidDeviceConnectUtils {
   internal suspend fun connectWithRoutePinnedForTest(
     deviceId: TrailblazeDeviceId,
     httpsPort: Int,
+    additionalInstrumentationArgs: Map<String, String> = emptyMap(),
     forceRestart: Boolean = false,
     sendProgressMessage: (String) -> Unit = {},
     connect: suspend (effectiveForceRestart: Boolean) -> DeviceConnectionStatus,
   ): DeviceConnectionStatus = withRoutePinnedUnderDeviceLock(
     deviceId = deviceId,
     httpsPort = httpsPort,
+    additionalInstrumentationArgs = additionalInstrumentationArgs,
     forceRestart = forceRestart,
     sendProgressMessage = sendProgressMessage,
     connect = connect,

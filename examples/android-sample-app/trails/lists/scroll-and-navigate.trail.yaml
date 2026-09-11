@@ -1,6 +1,6 @@
 config:
   id: sample-app/lists/scroll-and-navigate
-  target: xyz.block.trailblaze.examples.sampleapp
+  target: sampleapp
 
 trailhead:
   step: Launch the sample app

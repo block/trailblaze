@@ -24,7 +24,7 @@ import xyz.block.trailblaze.logs.client.TrailblazeJson
  *  - [SessionLogScreenState.readTimestamp] is the sort key for "most recent match."
  *  - [SessionLogScreenState.listScreenStateLogs] orders the per-step log set.
  *
- * The previous implementation sorted by FILENAME, which silently mis-orders ATF /
+ * The previous implementation sorted by FILENAME, which silently mis-orders device-farm /
  * accessibility-driver logs that use hex-hash names (e.g. `7d50895f_AgentDriverLog.json`)
  * — so the auto-search could pick an OLDER step's screenshot. The fix moved both
  * `listScreenStateLogs` and `findMatchingLog` to sort by the JSON `timestamp` field;
@@ -158,7 +158,7 @@ class SessionLogScreenStateTest {
 
   @Test
   fun `listScreenStateLogs orders by JSON timestamp NOT by filename`() {
-    // This is the load-bearing fix: ATF logs use hex-hash filenames whose alphabetical
+    // This is the load-bearing fix: device-farm logs use hex-hash filenames whose alphabetical
     // sort doesn't match emit order. If we sorted by filename here, capture-example's
     // "default last step" pick would be wrong.
     val sessionDir = newTempDir()

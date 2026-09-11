@@ -395,6 +395,12 @@ export interface CreateMockContextOptions {
  */
 export interface QueuedFindMatchesClient extends TrailblazeClient {
   calls: Array<{ tool: string; args: Record<string, unknown> }>;
+  /**
+   * Queue the per-probe match sets. Serves BOTH `findMatches` (one response per call) and
+   * `findSelectorMatches` (one response per selector, in selector order) out of the same
+   * queue, so a test written against the per-selector model keeps working now that
+   * `captureViewHierarchy` batches its selectors into one call.
+   */
   queueFindMatches(responses: Array<MatchDescriptor[]>): void;
   /**
    * Queue the per-call boolean results for `waitUntilNotVisible` — the non-throwing
@@ -443,6 +449,24 @@ export function createQueuedFindMatchesClient(): QueuedFindMatchesClient {
         );
       }
       return findMatchesQueue.shift();
+    }
+    if (name === "findSelectorMatches") {
+      // Served from the SAME queue as `findMatches`, one queued response per selector, in order.
+      // That is what keeps `queueFindMatches([a, b])` meaning "the first probe sees a, the second
+      // sees b" now that `captureViewHierarchy` batches its N selectors into one call — a test
+      // written against the per-selector model keeps passing, and keeps modelling what it meant.
+      const selectors = (args["selectors"] ?? []) as unknown[];
+      return selectors.map((selector, index) => {
+        if (findMatchesQueue.length === 0) {
+          throw new Error(
+            `createQueuedFindMatchesClient: no more findMatches responses queued; ` +
+              `findSelectorMatches needs one per selector and ran out at index ${index} of ` +
+              `${selectors.length} (selector=${JSON.stringify(selector)}). Did the test forget ` +
+              `a queueFindMatches?`,
+          );
+        }
+        return findMatchesQueue.shift();
+      });
     }
     if (name === "waitUntilNotVisible") {
       if (waitUntilNotVisibleQueue.length === 0) {

@@ -6,7 +6,7 @@
 // as monolithic fallbacks for older files and in-app embedders).
 // Shared contract types come from the ambient run-report-types.d.ts (see its header for why it
 // stays ambient rather than becoming module exports).
-import { alignedScenes, compareEventStreams, compareToolTimelines, defaultComparePair as comparePairDefault, diffPixels, SCENE_DIFF_THRESHOLD_PERCENT, type CompareScene } from './run-report-compare-model';
+import { alignedScenes, compareEventStreams, compareEventStreamsByStep, compareEventStreamsMany, compareToolTimelines, defaultComparePair as comparePairDefault, diffPixels, SCENE_DIFF_THRESHOLD_PERCENT, type CompareEventStep, type CompareEventStepAnchor, type CompareEventsResult, type CompareManyEventsResult, type CompareManyStreamDiff, type CompareScene, type CompareStreamDiff, type ContentDiff, type ContentHunk } from './run-report-compare-model';
 import { declaredTrailSteps, isLlmTurnRow, localRunAgentPrompt, rowToolCallCount, traceStepCount, traceToolCallCount, transcriptCallMessages, yamlRootSection } from './run-report-extract';
 import { hitTestNode, inspectorDetailsHtml, inspectorModel, inspectorRectsHtml, inspectorTreeHtml } from './run-report-inspector';
 import { chunkJsonWithoutRuntimeAttachments, eventPrettyText, eventValueText, inflateEventsGz, inflateGzJsonArray, inflateGzJsonRecord, inflateGzText, inflateLlmMessagesGz, normalizeEventPayload, parseEventJsonish, rawPrettyText, rekeySprites, tbBootLoaderHtml, jsonToYaml, toInertJson, transcriptToolCallYaml, transcriptToolResultDisplay, withoutRuntimeAttachments } from './run-report-payload';
@@ -180,6 +180,10 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   // INTO the existing stub (object identity preserved — the inflater caches and `D` hold object
   // references) and removes the entry. Empty for monolithic payloads (everything starts hydrated).
   const unhydrated = new Set<number>(INDEX_PAYLOAD && RAW.sessions && RAW.sessions.length ? SESSIONS.map((_, i) => i) : []);
+  // A completed document with no parseable session chunk is degraded, not an empty run. Keep that
+  // distinction durable after hydration gives up so comparison views never turn a truncated report
+  // into authoritative "nothing changed" or "nothing captured" claims.
+  const hydrationFailures = new Set<number>();
   // The Trail view compares the SAME authored trail across runs — one lane per device, joined on
   // the authored step — so it exists only when every session names one trail (by trailId when
   // present, title otherwise), carries its own payload (a link-out stub has no trace to align),
@@ -206,12 +210,6 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     return scopeKey != null && scopeKey !== '' && trailScopes().has(scopeKey);
   };
   const trailViewAvailable = () => trailViewAvailableFor(null);
-  // What the entry point promises, by how many lanes the trail actually has. A trail that ran once
-  // is still offered — in the common CI report (many trails, one device each) that is EVERY row —
-  // so a blanket "compare across devices" would promise a comparison that cannot exist.
-  const trailEntryTitle = (key: string) => (trailScopes().get(key) || []).length > 1
-    ? 'Compare this trail across devices, step by step'
-    : 'See this run as a trail — map, grid, and replay';
   // The scoped trail's own name, for every surface that labels the stage. SESSIONS[0] is some other
   // trail entirely in a many-trail report.
   const trailScopeTitle = () => {
@@ -317,8 +315,15 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   // Link-out stubs carry no payload to diff, so they are filtered OUT of the pickers rather than
   // disqualifying the report: a run index that lists skipped rows as stubs alongside real runs is
   // ordinary, and the usable pair is exactly what the reader wants compared.
-  const comparableRuns = () => SESSIONS.map((_, i) => i).filter((i) => !isLinkOut(SESSIONS[i]));
+  const comparableRuns = () => SESSIONS.map((_, i) => i).filter((i) => stageable(SESSIONS[i]));
   const compareViewAvailable = () => comparableRuns().length > 1;
+  const sameTrailComparePartner = (session: number) => {
+    const key = trailKey(SESSIONS[session]);
+    if (!key || comparableRuns().indexOf(session) < 0) return null;
+    const candidates = comparableRuns().filter((i) => i !== session && trailKey(SESSIONS[i]) === key);
+    const deviceKey = (i: number) => [runPlatform(SESSIONS[i]), runDeviceClassifier(SESSIONS[i]), runDeviceType(SESSIONS[i])].join('\u0001');
+    return candidates.find((i) => deviceKey(i) !== deviceKey(session)) ?? candidates[0] ?? null;
+  };
   // Which pair the view opens on. The rule is in the compare model (pure, bun-tested); this only
   // supplies the document's comparable runs and their trail identities.
   const defaultComparePair = () => comparePairDefault(comparableRuns().map((i) => ({ index: i, trailKey: trailKey(SESSIONS[i]) })));
@@ -381,9 +386,9 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       Object.assign(SESSIONS[i], full);
       const patch = livePatched.get(i);
       if (patch) { Object.assign(SESSIONS[i], patch); livePatched.delete(i); }
-      unhydrated.delete(i); return true;
+      hydrationFailures.delete(i); unhydrated.delete(i); return true;
     }
-    if (docComplete) { unhydrated.delete(i); return true; }
+    if (docComplete) { hydrationFailures.add(i); unhydrated.delete(i); return true; }
     return false;
   };
   // Await a chunk that hasn't streamed in yet (the run was opened while the document tail is
@@ -447,6 +452,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     return `<button class="themetoggle" type="button" data-theme-toggle aria-label="Use ${next} mode" title="Use ${next} mode"><svg class="themeicon sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.6" fill="none" stroke="currentColor" stroke-width="1.75"/><path d="M12 2.5v2M12 19.5v2M5.28 5.28l1.42 1.42M17.3 17.3l1.42 1.42M2.5 12h2M19.5 12h2M5.28 18.72l1.42-1.42M17.3 6.7l1.42-1.42" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/></svg><svg class="themeicon moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M19.5 15.1A8 8 0 0 1 8.9 4.5a8 8 0 1 0 10.6 10.6Z" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/></svg></button>`;
   };
   const BACK_ICON_SVG = '<svg class="backicon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5 5 12l7 7M5 12h14" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  const COMPARE_ICON_SVG = '<svg class="idxsorticon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 5h9m-2.5-2.5L11.5 5 9 7.5M13.5 11h-9M7 8.5 4.5 11 7 13.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
   const CHEVRON_LEFT_SVG = '<svg class="txnavicon" viewBox="0 0 16 16" aria-hidden="true"><path d="m10 3-5 5 5 5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
   const CHEVRON_RIGHT_SVG = '<svg class="txnavicon" viewBox="0 0 16 16" aria-hidden="true"><path d="m6 3 5 5-5 5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
   const setTheme = (theme, persist = true) => {
@@ -731,7 +737,30 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   // `kid` narrows the step selection to one folded child dispatch (index into the row's children):
   // the preview pane shows that dispatch's own frame and its args panel expands — how a batched
   // step's every interaction is reachable (WASM-report parity). Null selects the row itself.
-  const st = { view: MULTI ? 'index' : 'detail', session: 0, tab: 'timeline', step: 0, kid: null, llmSel: 0, tlStreams: [], tlEventKinds: allTimelineEventKinds(), tlMenuOpen: false, tlEventMenuOpen: false, trailheadOpen: true, trailOpen: true, stepsOpen: {}, kidsOpen: {}, lightboxAll: false, lightboxZoom: 1, runGroup: 'status', runSort: 'original', runSearch: '', idxOpen: [], playing: false, vSpeed: 1, pageTransition: '', trailMode: 'map', trailDir: 'v', trailAll: false, trailRowsOpen: {}, trailCam: null, trailT: -1, trailLane: null, trailSpeed: 10, trailLanesOff: {}, trailScope: null as string | null, trailPick: null as number[] | null, pick: [] as number[], backTo: '', cmpBase: defaultComparePair()[0] || 0, cmpVs: defaultComparePair()[1] || 1, cmpGapsOpen: {}, cmpEventsOpen: {} as Record<string, boolean>, cmpStreamsOpen: {} as Record<string, boolean>, cmpJumpAt: {} as Record<string, number>, cmpLane: null as string | null, cmpStream: null as string | null };
+  const st = { view: MULTI ? 'index' : 'detail', session: 0, tab: 'timeline', step: 0, kid: null, llmSel: 0, tlStreams: [], tlEventKinds: allTimelineEventKinds(), tlMenuOpen: false, tlEventMenuOpen: false, trailheadOpen: true, trailOpen: true, stepsOpen: {}, kidsOpen: {}, lightboxAll: false, lightboxZoom: 1, runGroup: 'status', runSort: 'original', runSearch: '', idxOpen: [], compareMode: false, playing: false, vSpeed: 1, pageTransition: '', trailMode: 'map', trailDir: 'v', trailAll: false, trailRowsOpen: {}, trailCam: null, trailT: -1, trailLane: null, trailSpeed: 10, trailLanesOff: {}, trailScope: null as string | null, trailPick: null as number[] | null, pick: [] as number[], backTo: '', cmpBase: defaultComparePair()[0] || 0, cmpVs: defaultComparePair()[1] || 1, cmpGapsOpen: {}, cmpEventsOpen: {} as Record<string, boolean>, cmpStreamsOpen: {} as Record<string, boolean>, cmpJumpAt: {} as Record<string, number>, cmpTab: 'screens', cmpStream: null as string | null, cmpEventGroup: 'stream' as 'stream' | 'step', cmpEventStep: null as string | null, cmpEventPlace: 0, cmpEventSearch: '', cmpEventDiffOnly: true };
+  const resetEventNavigator = () => {
+    st.cmpStream = null;
+    st.cmpEventGroup = 'stream';
+    st.cmpEventStep = null;
+    st.cmpEventPlace = 0;
+    st.cmpEventSearch = '';
+    st.cmpEventDiffOnly = true;
+    st.cmpEventsOpen = {};
+    st.cmpStreamsOpen = {};
+    st.cmpJumpAt = {};
+  };
+  // A one-render entry marker lets the compare controls explain where they came from without
+  // replaying their entrance every time a checkbox updates the selected count.
+  let compareModeEntering = false;
+  // One comparison workspace owns both the N-run step grid and the A/B detail projections. The
+  // staged runs are kept in the existing picked-stage state so the mature Trail grid renderer can
+  // draw them without inventing a second alignment model. The pair is always present even for old
+  // links that predate `pick=`.
+  const comparisonRuns = () => {
+    const staged = (st.trailPick || []).filter((i) => comparableRuns().indexOf(i) >= 0);
+    const pair = [st.cmpBase, st.cmpVs].filter((i, at, all) => comparableRuns().indexOf(i) >= 0 && all.indexOf(i) === at);
+    return staged.length >= 2 ? staged : pair;
+  };
   // Hover previews are transient and never enter the route. Selection still owns focus, expansion,
   // and keyboard navigation; this only changes the device preview pane until the pointer leaves.
   let timelinePreview: { step: number; kid: number | null } | null = null;
@@ -1027,7 +1056,13 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     // identical to "the address named runs 0 and 1", and the default-pair rule could never run.
     if (p.get('view') === 'compare') {
       const side = (key: string) => (p.get(key) == null ? null : Number(p.get(key)));
-      return { view: 'compare', base: side('base'), vs: side('vs'), lane: p.get('lane') || null, stream: p.get('stream') || null };
+      return {
+        view: 'compare', base: side('base'), vs: side('vs'), pick: p.get('pick') || '',
+        tab: p.get('tab') || null, lane: p.get('lane') || null, stream: p.get('stream') || null,
+        organize: p.get('organize') || null, eventstep: p.get('eventstep') || null,
+        place: p.has('place') ? Number(p.get('place')) : null,
+        all: p.get('all') === '1', eventq: p.get('eventq') || '', eventall: p.get('eventall') === '1',
+      };
     }
     if (p.get('view') === 'runs' || p.has('runs')) {
       // `sort=grouped|owner` came from the original overloaded menu. Read those links as their
@@ -1105,7 +1140,10 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
         // The checkboxes too, not just the stage: without this, Back out of a `?pick=` link lands on
         // an index with nothing ticked and no pick bar, and the reader re-picks what they just came
         // from.
-        if (pick) st.pick = pick.slice();
+        if (pick) {
+          st.pick = pick.slice();
+          st.compareMode = true;
+        }
         st.view = 'trail';
         st.trailMode = TRAIL_MODES.indexOf(r.mode) >= 0 ? r.mode : 'map';
         demoteMapForJoin();
@@ -1142,8 +1180,43 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
         st.cmpBase = pickRun(r.base, fallback[0]);
         st.cmpVs = pickRun(r.vs, fallback[1]);
         if (st.cmpVs === st.cmpBase) st.cmpVs = runs.find((i) => i !== st.cmpBase);
-        st.cmpLane = ['tools', 'events', 'screens'].indexOf(r.lane) >= 0 ? r.lane : null;
-        st.cmpStream = r.stream || null;
+        const picked = [...new Set(String(r.pick || '').split(',')
+          .filter((n) => n.trim() !== '')
+          .map((n) => Number(n))
+          .filter((i) => Number.isInteger(i) && runs.indexOf(i) >= 0))]
+          .sort((a, b) => a - b);
+        st.trailPick = picked.length >= 2 ? picked : [st.cmpBase, st.cmpVs];
+        st.pick = st.trailPick.slice();
+        st.compareMode = true;
+        st.trailScope = null;
+        st.trailLanesOff = {};
+        // The old Diff/Compare method names collided with the workspace title. Preserve those URLs
+        // while moving navigation to stable content categories shared by every comparison.
+        const legacyTab = r.tab === 'diff' ? 'tools'
+          : r.tab === 'compare' ? 'screens'
+            : r.tab === 'screens' && r.mode === 'replay' ? 'replay'
+              : r.tab;
+        const legacyLane = r.lane === 'tools' ? 'tools' : r.lane === 'events' ? 'events' : r.lane === 'screens' ? 'screens' : null;
+        const requestedTab = ['screens', 'replay', 'tools', 'events'].indexOf(legacyTab) >= 0
+          ? legacyTab
+          : legacyLane || 'screens';
+        // Three or more runs remain equal peers. They can share the authored-step matrix, visual
+        // grid/replay, and N-column event inventory; pair-only pixel/tool/ordered-event diffs stay
+        // unavailable.
+        const multiRun = st.trailPick.length > 2;
+        st.cmpTab = multiRun
+          ? (['screens', 'replay', 'events'].indexOf(requestedTab) >= 0 ? requestedTab : 'screens')
+          : requestedTab;
+        if (st.cmpTab === 'screens') st.trailMode = 'steps';
+        if (st.cmpTab === 'replay') st.trailMode = 'replay';
+        if (st.cmpTab === 'screens') st.trailAll = !!r.all;
+        st.cmpStream = st.cmpTab === 'events' ? r.stream || null : null;
+        st.cmpEventGroup = !multiRun && r.organize === 'step' ? 'step' : 'stream';
+        st.cmpEventStep = !multiRun ? r.eventstep || null : null;
+        st.cmpEventPlace = !multiRun && Number.isFinite(r.place) && r.place > 0 ? Math.floor(r.place - 1) : 0;
+        st.cmpEventSearch = st.cmpTab === 'events' ? r.eventq || '' : '';
+        st.cmpEventDiffOnly = st.cmpTab === 'events' ? !r.eventall : true;
+        ensureScopeChunks(st.trailPick, pickToken(st.trailPick));
       } else if (MULTI) st.view = 'index';
       return;
     }
@@ -1178,10 +1251,32 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       if (st.trailAll) params.set('all', '1');
     } else if (st.view === 'compare') {
       params.set('view', 'compare');
-      params.set('base', String(st.cmpBase));
-      params.set('vs', String(st.cmpVs));
-      if (st.cmpLane) params.set('lane', st.cmpLane);
-      if (st.cmpStream) params.set('stream', st.cmpStream);
+      const runs = comparisonRuns();
+      if (runs.length > 2) {
+        // The overview has no privileged pair. Its shareable state names the full run set and the
+        // active equal-weight projection: visual grid/replay or N-column event inventory.
+        params.set('pick', runs.join(','));
+        if (st.cmpTab !== 'screens') params.set('tab', st.cmpTab);
+        if (st.cmpTab === 'screens' && st.trailAll) params.set('all', '1');
+        if (st.cmpTab === 'events') {
+          if (st.cmpStream) params.set('stream', st.cmpStream);
+          if (st.cmpEventSearch) params.set('eventq', st.cmpEventSearch);
+          if (!st.cmpEventDiffOnly) params.set('eventall', '1');
+        }
+      } else {
+        params.set('base', String(st.cmpBase));
+        params.set('vs', String(st.cmpVs));
+        if (st.cmpTab !== 'screens') params.set('tab', st.cmpTab);
+        if (st.cmpTab === 'screens' && st.trailAll) params.set('all', '1');
+        if (st.cmpStream) params.set('stream', st.cmpStream);
+        if (st.cmpTab === 'events') {
+          if (st.cmpEventGroup === 'step') params.set('organize', 'step');
+          if (st.cmpEventGroup === 'step' && st.cmpEventStep) params.set('eventstep', st.cmpEventStep);
+          if (st.cmpEventPlace > 0) params.set('place', String(st.cmpEventPlace + 1));
+          if (st.cmpEventSearch) params.set('eventq', st.cmpEventSearch);
+          if (!st.cmpEventDiffOnly) params.set('eventall', '1');
+        }
+      }
     } else if (st.view === 'index') {
       params.set('view', 'runs');
       if (st.runGroup !== 'status') params.set('group', st.runGroup);
@@ -2646,31 +2741,55 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
 
   type LightboxEntry = { trace: TraceStep; group: ReportTraceGroup; kid?: TraceChild; kidIndex?: number };
   const lightboxShotAvailable = (file) => !!(file && safeImageSrc(D.shots[file]));
+  const lightboxCapturedAt = (entry: LightboxEntry): number | null => entry.kid
+    ? (entry.kid.ts ?? entry.trace.ts ?? null)
+    : (entry.trace.shotTs ?? entry.trace.ts ?? null);
   // A step's closing frames — one PER DEVICE, not one per step. A single step can act on more than
   // one device ("check that both screens show $25"), and keeping only the last frame would drop the
   // other device's evidence entirely. Single-device steps are unchanged: every row keys to the same
-  // device, so exactly one frame survives. Chronological, so the last entry is the step's last frame.
+  // device, so exactly one frame survives.
   const lightboxStepFrames = (group: ReportTraceGroup): LightboxEntry[] => {
     const rows = [group.header, ...group.items].filter((row): row is TraceStep => Boolean(row));
-    // Candidates span row captures AND folded-dispatch captures, in wall-clock order. A device
-    // whose work in this step was batched into one folded row has its only frame on a child, so
-    // considering rows first and children only as a whole-group fallback would drop that device.
+    // Candidates span row captures AND folded-dispatch captures. A device whose work in this step
+    // was batched into one folded row has its only frame on a child, so considering rows first and
+    // children only as a whole-group fallback would drop that device.
     const candidates: LightboxEntry[] = rows.flatMap((trace) => [
-      // Children first: a folded dispatch runs DURING its row, so the row's own capture is the
-      // later — and still the one that represents the step when both exist.
+      // Children first preserves the historical row preference when captures have no usable clock
+      // (or the same instant). When their clocks differ, the comparison below decides truthfully.
       ...(trace.children || []).flatMap((kid, kidIndex) =>
         lightboxShotAvailable(kid.screenshotFile) ? [{ trace, group, kid, kidIndex }] : []),
       ...(lightboxShotAvailable(trace.screenshotFile) ? [{ trace, group }] : []),
     ]);
+    // Establish the historical structural fallback first: the last candidate for each device.
+    // Only a pair of observed clocks may override it; one missing clock says nothing about order.
     const last = new Map<string | null, LightboxEntry>();
     for (const entry of candidates) last.set(entry.trace.device || null, entry);
+    for (const entry of candidates) {
+      const device = entry.trace.device || null;
+      const previous = last.get(device);
+      const at = lightboxCapturedAt(entry);
+      const previousAt = previous ? lightboxCapturedAt(previous) : null;
+      // Some iOS tool batches keep the row's pre-action frame while a later folded child carries
+      // the post-action screen. Structural row preference dropped that later state (for example,
+      // the email after inputText). Prefer the observed capture clock; retain the old stable order
+      // only when both sides distinguish themselves in time.
+      if (!previous || (at != null && previousAt != null && at >= previousAt)) {
+        last.set(device, entry);
+      }
+    }
     return candidates.filter((entry) => last.get(entry.trace.device || null) === entry);
   };
   // The one frame that stands for a step (the hover preview's target): its last screen, whichever
   // device that landed on.
   const lightboxStepFrame = (group: ReportTraceGroup): LightboxEntry | null => {
     const frames = lightboxStepFrames(group);
-    return frames.length ? frames[frames.length - 1] : null;
+    let picked = frames.length ? frames[frames.length - 1] : null;
+    for (const frame of frames) {
+      const at = lightboxCapturedAt(frame);
+      const pickedAt = picked ? lightboxCapturedAt(picked) : null;
+      if (!picked || (at != null && pickedAt != null && at >= pickedAt)) picked = frame;
+    }
+    return picked;
   };
 
   // Screenshot lightbox: default to the final captured frame for each authored step so the view is
@@ -3051,6 +3170,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   // by the latest attempt's session, which is what identifies that row.
   const retryOpenKey = (session: number) => `retry:${session}`;
   const pickControl = (s: SessionPayload, session: number, label: string) => {
+    if (!st.compareMode) return EMPTY_PICK_SLOT;
     if (!stageable(s)) return EMPTY_PICK_SLOT;
     const on = st.pick.indexOf(session) >= 0;
     return `<label class="idxpick${on ? ' on' : ''}" title="${esc(on ? `Remove ${label} from the selection` : `Select ${label} to compare`)}"><input type="checkbox" data-pick="${session}"${on ? ' checked' : ''} aria-label="${esc(`Select ${label} to compare`)}" /></label>`;
@@ -3186,39 +3306,30 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     const searchIcon = '<svg class="idxsearchicon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="m10.5 10.5 3 3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>';
     const groupIcon = '<svg class="idxsorticon" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 3.5h3v3H3zm0 6h3v3H3zm5-5h5m-5 6h5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
     const sortIcon = '<svg class="idxsorticon" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 4h10M5 8h8m-6 4h6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>';
-    return `<div class="idxfilter">
+    const compareButton = compareViewAvailable() ? `<button class="btn idxcompare${st.compareMode ? ' active' : ''}" type="button" data-index-compare aria-pressed="${st.compareMode}" title="${st.compareMode ? 'Exit run selection' : 'Select runs to compare'}">${COMPARE_ICON_SVG}<span>Compare</span></button>` : '';
+    return `<div class="idxfilter${compareButton ? ' hascompare' : ''}">
       <div class="idxsearch">${searchIcon}<input id="runsearch" type="search" aria-label="Search" placeholder="Search" autocomplete="off" value="${esc(st.runSearch)}" /></div>
       <details class="idxsort idxgroup" id="rungroup" data-rungroup><summary aria-label="Group runs by ${groupLabel}"><span class="idxsortvalue">${groupIcon}<span>${groupLabel}</span></span><span class="idxsortchev" aria-hidden="true"></span></summary><div class="idxsortmenu"><div class="idxsortmenulabel">Group by</div><button class="idxsortoption" type="button" aria-pressed="${st.runGroup === 'status'}" data-run-group="status">Status</button><button class="idxsortoption" type="button" aria-pressed="${st.runGroup === 'owner'}" data-run-group="owner">Owner</button></div></details>
       <details class="idxsort idxorder" id="runsort" data-runsort><summary aria-label="Sort runs by ${sortLabel}"><span class="idxsortvalue">${sortIcon}<span>${sortLabel}</span></span><span class="idxsortchev" aria-hidden="true"></span></summary><div class="idxsortmenu"><div class="idxsortmenulabel">Sort by</div><button class="idxsortoption" type="button" aria-pressed="${st.runSort === 'name'}" data-run-sort="name">Name</button><button class="idxsortoption" type="button" aria-pressed="${st.runSort === 'original'}" data-run-sort="original">Order</button><button class="idxsortoption" type="button" aria-pressed="${st.runSort === 'cost'}" data-run-sort="cost">Cost</button></div></details>
+      ${compareButton}
     </div>`;
   };
 
-  // The selection's own bar: what is picked, what opening it will do, and the way back out. Only
-  // present once something is picked — an empty bar would be a permanent strip of chrome over a
-  // report nobody is comparing anything in.
+  // The selection's own bar sits directly below the report header while Compare mode is active.
+  // It appears before anything is picked so the button's cause and the new controls' purpose read
+  // as one transition, rather than making the reader discover the action rail after the first box.
   const renderPickBar = () => {
     const picked = st.pick.filter((i) => SESSIONS[i]);
-    if (!picked.length) return '';
-    // Says which kind of stage the button opens, because that is the difference between a real
-    // step-by-step comparison and runs parked side by side. The stage's own rule, asked of what is
-    // ticked, so the promise here and the stage it opens cannot disagree.
-    const note = picked.length === 1
-      ? 'one run'
-      : joinFor(picked) === 'step' ? 'one trail — lanes line up step by step' : 'different trails — shown side by side';
-    // A diff is a two-sided question, so it is offered only for a two-run pick. Deliberately NOT
-    // gated on same-trail: the same test on two device types is exactly the pair whose differences
-    // matter. Link-out stubs carry no payload, so a pick containing one has nothing to diff.
-    const diffable = picked.length === 2 && picked.every((i) => !isLinkOut(SESSIONS[i]));
-    // Announced: the count and note change under a checkbox the reader is still standing on, and a
-    // bar that appears silently is a bar a screen reader never mentions.
-    return `<div class="pickbar" role="region" aria-label="Selected runs" aria-live="polite">
+    if (!st.compareMode) return '';
+    const ready = picked.length >= 2;
+    // Announced: the count changes under a checkbox the reader is still standing on, and a bar
+    // that appears silently is a bar a screen reader never mentions.
+    return `<div class="pickbar${compareModeEntering ? ' compareenter' : ''}" role="region" aria-label="Selected runs" aria-live="polite">
       <div class="indexshell pickbarcontent"${indexShellStyle()}>
         <span class="pickcount"><strong>${picked.length}</strong> selected</span>
-        <span class="picknote">${esc(note)}</span>
         <span class="pickactions">
-          <button class="btn" type="button" data-pick-clear>Clear</button>
-          ${diffable ? '<button class="btn" type="button" data-pick-diff title="Diff these two runs: tool calls and captured event streams">Diff the two</button>' : ''}
-          <button class="btn pickopen" type="button" data-pick-open>Compare selected</button>
+          <button class="btn" type="button" data-pick-clear${picked.length ? '' : ' disabled'}>Clear</button>
+          <button class="btn pickopen${ready ? ' ready' : ''}" type="button" data-pick-open${ready ? '' : ' disabled title="Select at least two runs"'}>Compare selected</button>
         </span>
       </div>
     </div>`;
@@ -3251,11 +3362,8 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     const reportMenu = reportMenuItems
       ? `<details class="exportmenu" data-export-menu><summary aria-label="Report options" title="Report options"><span class="exportdots" aria-hidden="true"><span class="exportdot"></span><span class="exportdot"></span><span class="exportdot"></span></span></summary><div class="exportmenuitems">${reportMenuItems}</div></details>`
       : '';
-    const documentTrail = documentTrailScope();
-    const trailButton = documentTrail ? `<button class="btn" type="button" data-goto-trail="${esc(documentTrail)}" title="${esc(trailEntryTitle(documentTrail))}">Trail view</button>` : '';
-    const compareButton = compareViewAvailable() ? '<button class="btn" type="button" data-goto-compare title="Diff two runs: tool calls and captured event streams">Compare</button>' : '';
     return `<header class="indexheader"><div class="indexshell"${indexShellStyle()}>
-      <div class="title-row indexheadrow"><h1>Trailblaze Report</h1><div class="indexheadactions">${trailButton}${compareButton}${renderThemeToggle()}${reportMenu}</div></div>
+      <div class="title-row indexheadrow"><h1>Trailblaze Report</h1><div class="indexheadactions">${renderThemeToggle()}${reportMenu}</div></div>
       <div class="indexcontext"><div class="meta indexmeta">${meta}</div>${renderIndexControls()}</div>
       </div>
     </header>`;
@@ -3567,8 +3675,8 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       // opens the cross-device view, the same as the header button. The per-device cells beside it
       // keep opening their own run.
       const rowTrail = trailKey(row.latest.s);
-      const name = trailViewAvailableFor(rowTrail)
-        ? `<button class="nm nmtrail" type="button" data-goto-trail="${esc(rowTrail)}" title="${esc(trailEntryTitle(rowTrail))}">${esc(title)}</button>`
+      const name = trailViewAvailableFor(rowTrail) && (trailScopes().get(rowTrail) || []).length > 1
+        ? `<button class="nm nmtrail" type="button" data-goto-compare-trail="${esc(rowTrail)}" title="Compare this trail across its runs">${esc(title)}</button>`
         : `<div class="nm">${esc(title)}</div>`;
       return `<div class="idxentry" data-run-entry data-search="${esc(search)}">
           <div class="idxrow idxmatrixrow"><div class="idxmain">${name}${subtitle ? `<div class="idxowner">${esc(subtitle)}</div>` : ''}${entryStats(row)}</div><div class="idxcells">${cells}</div></div>
@@ -3765,17 +3873,19 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
         </div>
       </div>`;
   };
-  const trailStepsBody = (lanes, matrix) => {
+  const trailStepsBody = (lanes, matrix, pair: { base: number; current: number } | null = null) => {
     const heads = lanes.map((lane) => `<div class="traillanehead">
         <span class="idxstatusdot ${esc(lane.outcome)}" role="img" aria-label="${esc(lane.outcomeLabel)}" title="${esc(lane.outcomeLabel)}"></span>
         <span class="traillanename">${esc(lane.label)}</span>
+        ${pair && lane.session === pair.base ? `<span class="cmppairtag base" role="img" aria-label="Run A: ${esc(compareRunLabel(pair.base))}" title="${esc(compareRunLabel(pair.base))}">A</span>` : ''}
+        ${pair && lane.session === pair.current ? `<span class="cmppairtag current" role="img" aria-label="Run B: ${esc(compareRunLabel(pair.current))}" title="${esc(compareRunLabel(pair.current))}">B</span>` : ''}
         ${lane.duration ? `<span class="traillanedur">${esc(lane.duration)}</span>` : ''}
       </div>`).join('');
     const rows = matrix.rows.map((row) => {
       const open = trailRowOpen(row.num);
       const label = `<div class="trailstep">
           <button class="trailsteptoggle" type="button" data-trail-row="${row.num}" aria-expanded="${open}" aria-label="${open ? 'Show final frame only for' : 'Show every frame of'} ${esc(trailStepToken(row.num))}">
-            <span class="galchip${row.num === 0 ? ' trailhead' : ''}">${trailStepToken(row.num)}</span><span class="trailstepdisclosure" aria-hidden="true"><span class="trailstepchev${open ? ' open' : ''}"></span></span>
+            <span class="trailstepdisclosure" aria-hidden="true"><span class="trailstepchev${open ? ' open' : ''}"></span></span><span class="galchip${row.num === 0 ? ' trailhead' : ''}">${trailStepToken(row.num)}</span>
           </button>
           <div class="trailsteplabel">${esc(row.label)}</div>
         </div>`;
@@ -4584,9 +4694,10 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     const laneCount = trailDeviceMode()
       ? `${lanes.length} devices, one run`
       : `${lanes.length}${scope.length > lanes.length ? ` of ${scope.length}` : ''} ${laneUnit}${scope.length === 1 ? '' : 's'}`;
+    const trailBackLabel = MULTI ? 'Back to runs' : 'Back to run';
     return `
       <header class="indexheader trailheader"><div class="indexshell trailshellwide">
-        <div class="title-row indexheadrow"><div class="runidentity"><h1>${esc(title)}</h1></div><div class="indexheadactions">${renderThemeToggle()}<button class="btn" type="button" data-back>${MULTI ? 'All runs' : 'Back to run'}</button></div></div>
+        <div class="title-row detailtitle"><div class="detailedge"><button class="back" type="button" data-back aria-label="${trailBackLabel}" title="${trailBackLabel}">${BACK_ICON_SVG}</button></div><div class="runidentity"><h1>${esc(title)}</h1></div><div class="detailactions">${renderThemeToggle()}</div></div>
         <div class="trailcontext"><div class="trailsub">${laneCount} · ${stepCount} step${stepCount === 1 ? '' : 's'} · ${trailDeviceMode() ? 'one trail, one lane per device' : matrix.join === 'position' ? 'different trails, side by side' : 'same trail, one lane per run'}${st.trailMode === 'replay' ? '' : ' <span class="trailkeys">· ← → walks the steps</span>'}</div><div class="trailtools">${laneBar}${dir}${showAll}${zoom}${modes}</div></div>
       </div></header>
       <main class="trailmain${st.trailMode === 'map' ? ' trailmapmain' : ''}${st.trailMode === 'replay' ? ' trailreplaymain' : ''}">${body}</main>
@@ -4684,38 +4795,153 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     const s = SESSIONS[i];
     const device = runDeviceClassifier(s) || [runPlatform(s), runDeviceType(s)].filter(Boolean).join(' · ');
     const title = (s.meta && s.meta.title) || `Run ${i + 1}`;
-    return `${i + 1}. ${device ? `${title} — ${device}` : title}`;
+    const version = String((s.meta && s.meta.appVersion) || '');
+    const build = String((s.meta && s.meta.buildNumber) || '');
+    const revision = [version, build ? `build ${build}` : ''].filter(Boolean).join(' · ');
+    return `${i + 1}. ${title}${device ? ` — ${device}` : ''}${revision ? ` · ${revision}` : ''}`;
+  };
+  const compareStepAnchors = (baseline: SessionPayload, current: SessionPayload): { anchors: CompareEventStepAnchor[]; unavailable: string | null } => {
+    if (!trailKey(baseline) || trailKey(baseline) !== trailKey(current)) {
+      return { anchors: [], unavailable: 'Trail steps are unavailable because these runs do not share a trail identity.' };
+    }
+    // Use the same canonical authored-step groups as the timeline. Raw objective rows include
+    // self-heal retries as new boundaries and would shift every later event into a fabricated step;
+    // the trace model folds those retries and gives the trailhead its stable step-zero identity.
+    const authoredGroups = (session: SessionPayload) => resolveTraceModel(session).groups.filter((group) => group.header != null);
+    const baselineSteps = authoredGroups(baseline);
+    const currentSteps = authoredGroups(current);
+    if (!baselineSteps.length || !currentSteps.length) {
+      return { anchors: [], unavailable: 'Trail steps are unavailable because one or both runs recorded no authored-step boundaries.' };
+    }
+    const sharedSteps = Math.min(baselineSteps.length, currentSteps.length);
+    if (Array.from({ length: sharedSteps }, (_, at) => at).some((at) => baselineSteps[at].num !== currentSteps[at].num
+      || String((baselineSteps[at].header && baselineSteps[at].header.label) || '') !== String((currentSteps[at].header && currentSteps[at].header.label) || ''))) {
+      return { anchors: [], unavailable: 'Trail steps are unavailable because the authored-step sequences do not align across these run versions.' };
+    }
+    const anchors: CompareEventStepAnchor[] = [];
+    for (let at = 0; at < Math.max(baselineSteps.length, currentSteps.length); at++) {
+      const baselineGroup = baselineSteps[at];
+      const currentGroup = currentSteps[at];
+      const baselineStep = baselineGroup && baselineGroup.header;
+      const currentStep = currentGroup && currentGroup.header;
+      const canonicalGroup = (baselineGroup || currentGroup)!;
+      anchors.push({
+        key: String(canonicalGroup.num),
+        label: String((baselineStep && baselineStep.label) || (currentStep && currentStep.label) || `Step ${at + 1}`),
+        baselineT: baselineStep && typeof baselineStep.ts === 'number' && Number.isFinite(baselineStep.ts) ? baselineStep.ts : null,
+        currentT: currentStep && typeof currentStep.ts === 'number' && Number.isFinite(currentStep.ts) ? currentStep.ts : null,
+      });
+    }
+    if (!anchors.some((step) => step.baselineT != null) || !anchors.some((step) => step.currentT != null)) {
+      return { anchors: [], unavailable: 'Trail steps are unavailable because one or both runs carry no event-compatible timestamps.' };
+    }
+    return { anchors, unavailable: null };
+  };
+  let compareEventsCache: {
+    baseline: SessionPayload;
+    current: SessionPayload;
+    baselineEvents: EventStream[] | null;
+    currentEvents: EventStream[] | null;
+    baselineNetwork: NetworkEvent[] | null;
+    currentNetwork: NetworkEvent[] | null;
+    result: CompareEventsResult;
+    stepKey: string | null;
+    steps: CompareEventStep[] | null;
+  } | null = null;
+  const cachedCompareEvents = (baseline: SessionPayload, current: SessionPayload) => {
+    const baselineEvents = sessionEvents(baseline);
+    const currentEvents = sessionEvents(current);
+    const baselineNetwork = sessionNetwork(baseline);
+    const currentNetwork = sessionNetwork(current);
+    if (compareEventsCache && compareEventsCache.baseline === baseline && compareEventsCache.current === current
+      && compareEventsCache.baselineEvents === baselineEvents && compareEventsCache.currentEvents === currentEvents
+      && compareEventsCache.baselineNetwork === baselineNetwork && compareEventsCache.currentNetwork === currentNetwork) return compareEventsCache;
+    compareEventsCache = {
+      baseline,
+      current,
+      baselineEvents,
+      currentEvents,
+      baselineNetwork,
+      currentNetwork,
+      result: compareEventStreams({ events: baselineEvents, network: baselineNetwork }, { events: currentEvents, network: currentNetwork }),
+      stepKey: null,
+      steps: null,
+    };
+    return compareEventsCache;
+  };
+  let compareManyEventsCache: {
+    sessions: SessionPayload[];
+    events: Array<EventStream[] | null>;
+    network: Array<NetworkEvent[] | null>;
+    result: CompareManyEventsResult;
+  } | null = null;
+  const cachedCompareManyEvents = (sessions: SessionPayload[]) => {
+    const events = sessions.map(sessionEvents);
+    const network = sessions.map(sessionNetwork);
+    if (compareManyEventsCache && compareManyEventsCache.sessions.length === sessions.length
+      && compareManyEventsCache.sessions.every((session, at) => session === sessions[at])
+      && compareManyEventsCache.events.every((value, at) => value === events[at])
+      && compareManyEventsCache.network.every((value, at) => value === network[at])) return compareManyEventsCache;
+    compareManyEventsCache = {
+      sessions: sessions.slice(),
+      events,
+      network,
+      result: compareEventStreamsMany(events.map((value, at) => ({ events: value, network: network[at] }))),
+    };
+    return compareManyEventsCache;
   };
   const renderCompareView = () => {
-    // A chunked document hydrates per-open: pull both picked runs' chunks in (synchronous when the
-    // chunk has streamed — the common case), and hold a loading shell for the ones still arriving.
-    const stillLoading = [st.cmpBase, st.cmpVs].filter((i) => unhydrated.has(i) && !hydrateSession(i));
+    const staged = comparisonRuns();
+    const multiRun = staged.length > 2;
+    const compareTitle = multiRun ? `Compare ${staged.length} runs` : 'Compare runs';
+    // A chunked document hydrates every staged run: the Steps tab can show more than the A/B pair.
+    // Pull chunks in synchronously when they have streamed and hold a loading shell for the rest.
+    const stillLoading = comparisonRuns().filter((i) => unhydrated.has(i) && !hydrateSession(i));
     if (stillLoading.length) {
-      Promise.all(stillLoading.map((i) => awaitSessionChunk(i))).then(() => { if (st.view === 'compare') { stillLoading.forEach((i) => hydrateSession(i)); render(); } });
+      Promise.all(stillLoading.map((i) => awaitSessionChunk(i))).then(() => { if (st.view === 'compare') { stillLoading.forEach((i) => hydrateSession(i)); render(true); } });
       return `
-        <header class="indexheader trailheader"><div class="indexshell trailshellwide">
-          <div class="title-row indexheadrow"><div class="runidentity"><h1>Compare runs</h1></div><div class="indexheadactions">${renderThemeToggle()}<button class="btn" type="button" data-back>${MULTI ? 'All runs' : 'Back to run'}</button></div></div>
-        </div></header>
-        <main class="cmpmain"><div class="indexshell trailshellwide"><div class="runloading" role="status"><div class="tb-boot-spinner" aria-hidden="true"></div><div class="tb-boot-title">Loading runs…</div></div></div></main>`;
+        <header class="detailheader notabs compareheader">
+          <div class="title-row detailtitle comparetitle"><div class="detailedge"><button class="back" type="button" data-back aria-label="Back to runs" title="Back to runs">${BACK_ICON_SVG}</button></div><div class="runidentity"><h1>${compareTitle}</h1></div></div>
+        </header>
+        <main class="cmpmain"><div class="runloading" role="status"><div class="tb-boot-spinner" aria-hidden="true"></div><div class="tb-boot-title">Loading runs…</div><div class="tb-boot-note" data-run-loading-progress>${esc(loadingProgressText())}</div></div></main>`;
     }
     const a = SESSIONS[st.cmpBase];
     const b = SESSIONS[st.cmpVs];
-    // Compressed payloads inflate lazily; kick both runs' inflations and re-render when they land.
+    const comparedSessions = multiRun ? staged.map((i) => SESSIONS[i]) : [a, b];
+    const degradedRuns = comparisonRuns().filter((i) => hydrationFailures.has(i));
+    const degradedNote = degradedRuns.length
+      ? `<div class="cmpdegraded" role="alert"><strong>Comparison is incomplete.</strong> Run ${degradedRuns.map((i) => i + 1).join(', ')} ${degradedRuns.length === 1 ? 'could not be loaded' : 'could not be loaded'}. Reload the report or regenerate it before treating missing data as agreement.</div>`
+      : '';
+    // Compressed payloads inflate lazily; kick every compared run's inflations and re-render when
+    // they land. Pair comparisons still pass exactly A and B through this same path.
     // Pending means inflation hasn't SETTLED — a failed inflate settles with null, and asking the
     // data accessor instead would re-arm this every render.
-    const pendingInflate = [a, b].some((s) => !eventsInflater.settled(s) || !logsInflater.settled(s));
+    const pendingInflate = st.cmpTab === 'events' && comparedSessions.some((s) => !eventsInflater.settled(s) || !logsInflater.settled(s));
     if (pendingInflate) {
-      Promise.all([ensureEventsInflated(a), ensureEventsInflated(b), ensureLogsInflated(a), ensureLogsInflated(b)])
-        .then(() => { if (st.view === 'compare') render(); });
+      Promise.all(comparedSessions.flatMap((session) => [ensureEventsInflated(session), ensureLogsInflated(session)]))
+        .then(() => { if (st.view === 'compare') render(true); });
     }
     // Settled with nothing to show: the payload was there but could not be decoded.
-    const eventsUnavailable = !pendingInflate && [a, b].some((s) => (s.eventsGz && !sessionEvents(s)) || (s.networkGz && !sessionNetwork(s)));
+    const eventsUnavailable = !pendingInflate && comparedSessions.some((s) => (s.eventsGz && !sessionEvents(s)) || (s.networkGz && !sessionNetwork(s)));
 
     const tools = compareToolTimelines(a.trace || [], b.trace || []);
-    const events = pendingInflate ? null : compareEventStreams(
-      { events: sessionEvents(a), network: sessionNetwork(a) },
-      { events: sessionEvents(b), network: sessionNetwork(b) },
-    );
+    const eventCache = multiRun || st.cmpTab !== 'events' || pendingInflate ? null : cachedCompareEvents(a, b);
+    const events = eventCache ? eventCache.result : null;
+    const manyEvents = !multiRun || st.cmpTab !== 'events' || pendingInflate ? null : cachedCompareManyEvents(comparedSessions).result;
+    const stepAlignment = compareStepAnchors(a, b);
+    let eventSteps: CompareEventStep[] = [];
+    if (eventCache && st.cmpEventGroup === 'step' && !stepAlignment.unavailable) {
+      const stepKey = stepAlignment.anchors.map((step) => `${step.key}:${step.baselineT ?? ''}:${step.currentT ?? ''}`).join('|');
+      if (eventCache.stepKey !== stepKey || !eventCache.steps) {
+        eventCache.stepKey = stepKey;
+        eventCache.steps = compareEventStreamsByStep(
+          { events: eventCache.baselineEvents, network: eventCache.baselineNetwork },
+          { events: eventCache.currentEvents, network: eventCache.currentNetwork },
+          stepAlignment.anchors,
+        );
+      }
+      eventSteps = eventCache.steps;
+    }
 
     // How each outcome finishes "The <side> run …" in the picker badge's tooltip.
     const OUTCOME_PHRASE: Record<string, string> = {
@@ -4723,23 +4949,40 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       skipped: 'was skipped', cancelled: 'was cancelled', running: 'is still running',
       'no result': 'has no recorded outcome',
     };
-    // Grouped by trail so the structure the comparison depends on is visible BEFORE picking: the
-    // runs that can meaningfully pair sit together under one heading, and reaching across headings
-    // is a deliberate act rather than the accident of two adjacent list entries.
-    const picker = (side, selected, label) => {
+    const sideName = (side: 'base' | 'current') => side === 'base' ? 'A' : 'B';
+    const sideRun = (side: 'base' | 'current') => side === 'base' ? st.cmpBase : st.cmpVs;
+    // A and B use one compact visual language throughout the workspace. The marker keeps dense
+    // tables scannable; hovering it restores the selected run's full identity on demand.
+    const sideBadge = (side: 'base' | 'current', hidden = false) => {
+      const label = sideName(side);
+      const detail = compareRunLabel(sideRun(side));
+      return `<span class="cmppairtag ${side}"${hidden ? ' aria-hidden="true"' : ` role="img" aria-label="Run ${label}: ${esc(detail)}"`} title="${esc(detail)}">${label}</span>`;
+    };
+    const sideValue = (side: 'base' | 'current', value: string | number) => `<span class="cmpsidevalue ${side}">${sideBadge(side)}<strong>${esc(String(value))}</strong></span>`;
+    const runBadge = (sessionIndex: number, at: number) => {
+      const label = at < 26 ? String.fromCharCode(65 + at) : String(at + 1);
+      const detail = compareRunLabel(sessionIndex);
+      return `<span class="cmppairtag cmpmanytag run${at % 4}" role="img" aria-label="Run ${label}: ${esc(detail)}" title="${esc(detail)}">${label}</span>`;
+    };
+    // Every comparison capability starts from this same compact anatomy: product title, useful
+    // facts, then its controls. Explanatory prose belongs beside ambiguous/error states, not in a
+    // permanent tagline that pushes the actual comparison down on every tab.
+    const compareViewHeader = (title: string, facts = '', actions = '') => `<header class="cmpviewhead">
+      <div class="cmpviewidentity"><h2>${esc(title)}</h2>${facts ? `<div class="cmpviewfacts">${facts}</div>` : ''}</div>
+      ${actions ? `<div class="cmpviewactions">${actions}</div>` : ''}
+    </header>`;
+    // Group by canonical trail identity, never display title: duplicate titles remain distinct and
+    // title drift within one trail does not fabricate a boundary. The menu uses the same native
+    // details/button language as the run-index grouping and sorting controls.
+    const picker = (side: 'base' | 'vs', selected, label) => {
       const groups = new Map<string, number[]>();
       comparableRuns().forEach((i) => {
-        const title = ((SESSIONS[i].meta || {}).title) || `Run ${i + 1}`;
-        groups.set(title, (groups.get(title) || []).concat(i));
+        const key = trailKey(SESSIONS[i]) || `run:${i}`;
+        groups.set(key, (groups.get(key) || []).concat(i));
       });
-      const option = (i) => `<option value="${i}"${i === selected ? ' selected' : ''}>${esc(compareRunLabel(i))}</option>`;
-      const body = groups.size > 1
-        ? Array.from(groups.entries()).map(([title, indexes]) => `<optgroup label="${esc(title)}">${indexes.map(option).join('')}</optgroup>`).join('')
-        : comparableRuns().map(option).join('');
       // The picked run's outcome, beside the picker. Every difference below reads differently
       // depending on which side failed, and without this the reader has to leave the view to find out.
       const outcome = indexOutcome(SESSIONS[selected]);
-      const tone = outcome === 'passed' || outcome === 'failed' ? outcome : 'unknown';
       // `indexOutcome` folds everything that is neither a pass, a fail, nor a skip into 'other',
       // but the generator does distinguish them — `cancelled` and `running` are statuses in the
       // report contract, and a cancelled run reported as "no result" is a wrong answer, not a
@@ -4751,12 +4994,23 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
         : 'no result';
       // "The baseline run other" was the bug; the phrase map is what keeps any future status the
       // generator adds from reintroducing it, since the fallback still finishes the sentence.
-      const outcomeTitle = `The ${label.toLowerCase()} run ${OUTCOME_PHRASE[outcomeText] || `reported ${outcomeText}`}`;
-      const badge = `<span class="badge ${tone}" title="${esc(outcomeTitle)}">${esc(outcomeText)}</span>`;
-      return `<label class="cmppick"><span class="cmppicklabel">${label}</span><select class="cmpsel" data-cmp-side="${side}" aria-label="${label} run">${body}</select>${badge}</label>`;
+      const outcomeTitle = `Run ${label} ${OUTCOME_PHRASE[outcomeText] || `reported ${outcomeText}`}`;
+      const option = (i) => {
+        const optionOutcome = indexOutcome(SESSIONS[i]);
+        return `<button class="idxsortoption cmprunoption" type="button" data-cmp-side="${side}" data-cmp-run="${i}" aria-pressed="${i === selected}"><span class="idxstatusdot ${esc(optionOutcome)}" aria-hidden="true"></span><span>${esc(compareRunLabel(i))}</span>${i === selected ? '<span class="cmpruncheck" aria-hidden="true">✓</span>' : ''}</button>`;
+      };
+      const menu = Array.from(groups.entries()).map(([key, indexes]) => {
+        const title = ((SESSIONS[indexes[0]].meta || {}).title) || `Run ${indexes[0] + 1}`;
+        const duplicate = Array.from(groups.entries()).some(([otherKey, other]) => otherKey !== key && (((SESSIONS[other[0]].meta || {}).title) || `Run ${other[0] + 1}`) === title);
+        const groupLabel = duplicate ? `${title} · ${key}` : title;
+        return `<div class="cmprungroup"><div class="idxsortmenulabel">${esc(groupLabel)}</div>${indexes.map(option).join('')}</div>`;
+      }).join('');
+      return `<div class="cmppick" role="group" aria-label="${label} run">
+        <details class="idxsort cmpsel" data-cmp-picker="${side}"><summary aria-label="Choose ${label} run; ${esc(compareRunLabel(selected))}"><span class="idxsortvalue">${sideBadge(side === 'base' ? 'base' : 'current', true)}<span>${esc(compareRunLabel(selected))}</span></span><span class="cmppickstatus" title="${esc(outcomeTitle)}"><span class="idxstatusdot ${esc(outcome)}" aria-hidden="true"></span>${esc(outcomeText)}</span><span class="idxsortchev" aria-hidden="true"></span></summary><div class="idxsortmenu cmpselmenu">${menu}</div></details>
+      </div>`;
     };
 
-    const openBtn = (sessionIndex, step, label) => (step == null ? '' : `<button class="cmpopen" type="button" data-cmp-open="${sessionIndex}:${step}" title="Open this call in the ${label} run's timeline">${label} →</button>`);
+    const openBtn = (sessionIndex, step, side: 'base' | 'current') => (step == null ? '' : `<button class="cmpopen" type="button" data-cmp-open="${sessionIndex}:${step}" aria-label="Open this call in run ${sideName(side)}'s timeline" title="Open in ${esc(compareRunLabel(sessionIndex))}">${sideBadge(side, true)}<span aria-hidden="true">→</span></button>`);
 
     // One renderer for every diff line in this view, so the tool lane and the event lane read as the
     // same document: a fixed −/+/space gutter down the left, and the side a line belongs to carried
@@ -4780,8 +5034,8 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     const toolBadge = {
       args_changed: '<span class="badge running">args changed</span>',
       outcome_changed: '<span class="badge failed">outcome changed</span>',
-      baseline_only: '<span class="badge selfheal">only in baseline</span>',
-      current_only: '<span class="badge selfheal">only in current</span>',
+      baseline_only: `<span class="badge selfheal cmpsideonly">only in ${sideBadge('base')}</span>`,
+      current_only: `<span class="badge selfheal cmpsideonly">only in ${sideBadge('current')}</span>`,
     };
     // The screen a run was looking at when this call happened: the call's own capture, else the
     // most recent one before it — a tool that captured nothing still ran ON some screen, and that
@@ -4806,7 +5060,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     // against that run's own shots map, exactly as the Trail view's cross-run frames do.
     const cmpFrame = (sessionIndex, file, side, position, tool) => (!file ? '' : `<figure class="cmpframe">
       <div class="galshot" data-shot="${esc(file)}" data-shot-run="${sessionIndex}" data-shot-device="${esc(compareRunLabel(sessionIndex))}" data-shot-token="#${position}" data-shot-label="${esc(side)}" data-shot-tool="${esc(tool)}" role="button" tabindex="0" aria-label="${esc(side)} run's screen at ${esc(tool)}"><img alt="${esc(side)} run's screen at this call" loading="lazy" /></div>
-      <figcaption class="cmpframecap">${side}</figcaption>
+      <figcaption class="cmpframecap">${sideBadge(side === 'baseline' ? 'base' : 'current')}</figcaption>
     </figure>`);
     // The tool timeline as one unified diff rather than a table of rows. Runs of identical calls
     // collapse to a gap line in place, so the reader keeps the shape of the run — where the two
@@ -4818,10 +5072,6 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       const out: string[] = [];
       let matching: Array<{ row; position: number }> = [];
       let gapIndex = 0;
-      // What the reader last saw for each side. A hunk shows its frames only when a side's screen
-      // moved on — repeating an unchanged screenshot under every hunk would bury the ones that
-      // mark an actual scene change.
-      const shown = { base: null, vs: null };
       const flushMatching = () => {
         if (!matching.length) return;
         const k = gapIndex++;
@@ -4829,24 +5079,16 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
         const n = matching.length;
         out.push(`<button class="cmpgap cmpgapkeep cmpgapbtn" type="button" data-cmp-gap="${k}" aria-expanded="${open}">⋯ ${n} matching tool call${n === 1 ? '' : 's'} — ${open ? 'hide' : 'show'}</button>`);
         if (open) {
-          out.push(matching.map(({ row, position }) => `<div class="cmpsame"><span class="cmphunkpos">#${position + 1}</span><code>${esc(row.toolName)}</code><span class="cmphunklinks">${openBtn(st.cmpBase, row.baselineStep, 'baseline')}${openBtn(st.cmpVs, row.currentStep, 'current')}</span></div>`).join(''));
+          out.push(matching.map(({ row, position }) => `<div class="cmpsame"><span class="cmphunkpos">#${position + 1}</span><code>${esc(row.toolName)}</code><span class="cmphunklinks">${openBtn(st.cmpBase, row.baselineStep, 'base')}${openBtn(st.cmpVs, row.currentStep, 'current')}</span></div>`).join(''));
         }
         matching = [];
       };
       tools.rows.forEach((row, position) => {
         if (row.status === 'same') { matching.push({ row, position }); return; }
         flushMatching();
-        const baseFile = row.baselineStep == null ? null : frameFileAt(st.cmpBase, row.baselineStep);
-        const vsFile = row.currentStep == null ? null : frameFileAt(st.cmpVs, row.currentStep);
-        const fresh = (baseFile && baseFile !== shown.base) || (vsFile && vsFile !== shown.vs);
-        const frames = fresh
-          ? `<div class="cmphunkframes">${cmpFrame(st.cmpBase, baseFile, 'baseline', position + 1, row.toolName)}${cmpFrame(st.cmpVs, vsFile, 'current', position + 1, row.toolName)}</div>`
-          : '';
-        if (baseFile) shown.base = baseFile;
-        if (vsFile) shown.vs = vsFile;
         out.push(`<div class="cmphunk cmp-${row.status}">
-          <div class="cmphunkhead"><span class="cmphunkpos">#${position + 1}</span><code class="cmphunktool">${esc(row.toolName)}</code>${toolBadge[row.status] || ''}<span class="cmphunklinks">${openBtn(st.cmpBase, row.baselineStep, 'baseline')}${openBtn(st.cmpVs, row.currentStep, 'current')}</span></div>
-          <div class="cmphunkrow"><div class="cmphunkbody">${diffLines(row.changes)}</div>${frames}</div>
+          <div class="cmphunkhead"><span class="cmphunkpos">#${position + 1}</span><code class="cmphunktool">${esc(row.toolName)}</code>${toolBadge[row.status] || ''}<span class="cmphunklinks">${openBtn(st.cmpBase, row.baselineStep, 'base')}${openBtn(st.cmpVs, row.currentStep, 'current')}</span></div>
+          <div class="cmphunkbody">${diffLines(row.changes)}</div>
         </div>`);
       });
       flushMatching();
@@ -4857,7 +5099,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       : tools.rows.every((r) => r.status === 'same')
         ? `<p class="cmpnote">All ${tools.sameCount} tool calls identical.</p>`
         : `<div class="cmpdiff cmptooldiff">${toolDiff()}</div>
-          <p class="cmpnote">− is the baseline, + is the current run. # is the call's position in the aligned timeline.</p>`;
+          <p class="cmpnote cmpsidelegend">− is ${sideBadge('base')}, + is ${sideBadge('current')}. # is the call's position in the aligned timeline.</p>`;
 
     // One stream's events as a list, diffed: one row per event — what fired and its fields —
     // with the gutter saying which run it belongs to. A stream IS a list of events, so the row is
@@ -4866,153 +5108,277 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     // context so a change can be read against the sequence it happened in, and only a long run of
     // them folds. Big hunks cap at MAX_DIFF_EVENTS_SHOWN rows — the gap line says what was elided.
     const MAX_DIFF_EVENTS_SHOWN = 20;
-    // Below this many events a fold's position in the run is noise — the whole list is already one
-    // screen, and "12%–34%" of forty events says less than the rows either side of the fold do.
     const MIN_SLOTS_FOR_POSITION = 50;
-    const contentDiffBlock = (stream) => {
+    type IndexedHunk = { hunk: ContentHunk; at: number };
+    const contentClusters = (content: ContentDiff): IndexedHunk[][] => {
+      const clusters: IndexedHunk[][] = [];
+      let current: IndexedHunk[] = [];
+      let preceding: IndexedHunk | null = null;
+      content.hunks.forEach((hunk, at) => {
+        const indexed = { hunk, at };
+        if (hunk.kind === 'same') {
+          if (current.length) { current.push(indexed); clusters.push(current); current = []; }
+          preceding = indexed;
+          return;
+        }
+        if (!current.length && preceding) current.push(preceding);
+        current.push(indexed);
+        preceding = null;
+      });
+      if (current.length) clusters.push(current);
+      return clusters;
+    };
+    const contentDiffBlock = (stream: CompareStreamDiff, scopeKey: string) => {
       const content = stream.content;
-      if (!content) return '';
-      // Row keys index the stream's rendered rows in order. The diff is recomputed per render from
-      // the same data, so the Nth row is the same event across renders and an open row stays open.
-      let rowIndex = 0;
-      // The first row of each place the runs diverge carries an anchor, so the stepper can walk
-      // them without the reader scrolling a thousand matching rows to find the next one. Adjacent
-      // differing hunks share one anchor — they are one divergence, the same way the model counts
-      // clusters.
-      let anchorIndex = 0;
-      let diverging = false;
-      const anchorAttr = () => ` data-cmp-anchor="${esc(`${stream.stream}|${anchorIndex++}`)}"`;
-      const eventRow = (row, sign, detail, anchor = '') => {
-        const key = `${stream.stream}:${rowIndex++}`;
-        const open = !!st.cmpEventsOpen[key];
-        const cls = sign === '+' ? ' dl-add' : sign === '-' ? ' dl-del' : ' dl-ctx';
-        return `<button class="dl dlrow${cls}" type="button" data-cmp-event="${esc(key)}"${anchor} aria-expanded="${open}" title="${open ? 'Hide' : 'Show'} this event's fields">${gutterFor(sign)} ${markSpan(row.summary, row.hi)}</button>`
-          + (open ? `<div class="cmpevtdetail">${diffLines(detail)}</div>` : '');
-      };
+      if (!content) {
+        return `<div class="cmpeventempty">${stream.incomplete ? 'The retained prefix matches, but the capped tail is unknown.' : 'No event-content differences remain after masking.'}</div>`;
+      }
+      const clusters = contentClusters(content);
+      const place = Math.max(0, Math.min(clusters.length - 1, st.cmpEventPlace));
+      const fullSequence = !!st.cmpStreamsOpen[scopeKey];
+      const visibleHunks: IndexedHunk[] = fullSequence
+        ? content.hunks.map((hunk, at) => ({ hunk, at }))
+        : (clusters[place] || content.hunks.map((hunk, at) => ({ hunk, at })));
       const asContext = (lines) => lines.map((text) => ({ sign: ' ', text }));
       const elided = (n, what) => (n > 0 ? diffGap(`… ${n} more ${what} event${n === 1 ? '' : 's'}`) : '');
-      // Where a fold sits in the run. A count alone ("152 matching events") says how much is hidden
-      // but not which stretch of the run it stands for, which is the half readers were working out
-      // by hand. Short streams skip it — a percentage across 12 events is noise.
       const foldSpan = (hunk) => {
         if (!content.ordered || content.slots < MIN_SLOTS_FOR_POSITION) return '';
         const pctAt = (at) => Math.round((at / content.slots) * 100);
         const from = hunk.from + hunk.head.length;
         return ` (${pctAt(from)}%–${pctAt(from + hunk.folded)}%)`;
       };
-      const hunkHtml = content.hunks.map((hunk) => {
+      const eventRow = (row, sign, detail, key) => {
+        const open = !!st.cmpEventsOpen[key];
+        const cls = sign === '+' ? ' dl-add' : sign === '-' ? ' dl-del' : ' dl-ctx';
+        return `<button class="dl dlrow${cls}" type="button" data-cmp-event="${esc(key)}" aria-expanded="${open}" title="${open ? 'Hide' : 'Show'} this event's fields">${gutterFor(sign)} ${markSpan(row.summary, row.hi)}</button>`
+          + (open ? `<div class="cmpevtdetail">${diffLines(detail)}</div>` : '');
+      };
+      const hunkHtml = visibleHunks.map(({ hunk, at: hunkAt }) => {
         if (hunk.kind === 'same') {
-          diverging = false;
-          return hunk.head.map((row) => eventRow(row, ' ', asContext(row.detail))).join('')
+          return hunk.head.map((row, at) => eventRow(row, ' ', asContext(row.detail), `${scopeKey}|${hunkAt}|head${at}`)).join('')
             + (hunk.folded ? diffGapKeep(`⋯ ${hunk.folded} matching event${hunk.folded === 1 ? '' : 's'}${foldSpan(hunk)}`) : '')
-            + hunk.tail.map((row) => eventRow(row, ' ', asContext(row.detail))).join('');
+            + hunk.tail.map((row, at) => eventRow(row, ' ', asContext(row.detail), `${scopeKey}|${hunkAt}|tail${at}`)).join('');
         }
-        const anchor = diverging ? '' : anchorAttr();
-        diverging = true;
         if (hunk.kind === 'changed') {
-          // Both sides of a replaced event share one row key: they are one change, and expanding it
-          // shows the per-field diff rather than either side's payload alone.
           const shown = hunk.pairs.slice(0, MAX_DIFF_EVENTS_SHOWN);
           return shown.map((pair, at) => {
-            const key = `${stream.stream}:${rowIndex++}`;
+            const key = `${scopeKey}|${hunkAt}|changed${at}`;
             const open = !!st.cmpEventsOpen[key];
-            const side = (row, sign, mark = '') => `<button class="dl dlrow ${sign === '+' ? 'dl-add' : 'dl-del'}" type="button" data-cmp-event="${esc(key)}"${mark} aria-expanded="${open}" title="${open ? 'Hide' : 'Show'} what changed inside this event">${gutterFor(sign)} ${markSpan(row.summary, row.hi)}</button>`;
-            return side(pair.before, '-', at === 0 ? anchor : '') + side(pair.after, '+')
+            const side = (row, sign) => `<button class="dl dlrow ${sign === '+' ? 'dl-add' : 'dl-del'}" type="button" data-cmp-event="${esc(key)}" aria-expanded="${open}" title="${open ? 'Hide' : 'Show'} what changed inside this event">${gutterFor(sign)} ${markSpan(row.summary, row.hi)}</button>`;
+            return side(pair.before, '-') + side(pair.after, '+')
               + (open ? `<div class="cmpevtdetail">${diffLines(pair.lines)}</div>` : '');
           }).join('') + elided(hunk.pairs.length - shown.length, 'changed');
         }
-        // ASCII, not the typographic minus the gutter prints: the styling keys off this, and an
-        // unrecognized sign would render the whole hunk as unmarked context.
         const sign = hunk.kind === 'added' ? '+' : '-';
         const shown = hunk.rows.slice(0, MAX_DIFF_EVENTS_SHOWN);
-        return shown.map((row, at) => eventRow(row, sign, asContext(row.detail), at === 0 ? anchor : '')).join('')
+        return shown.map((row, at) => eventRow(row, sign, asContext(row.detail), `${scopeKey}|${hunkAt}|${hunk.kind}${at}`)).join('')
           + elided(hunk.rows.length - shown.length, hunk.kind);
       }).join('');
       const counts = [
         content.changedCount ? `${content.changedCount} changed` : '',
         content.addedCount ? `${content.addedCount} added` : '',
         content.removedCount ? `${content.removedCount} removed` : '',
-      ].filter(Boolean).join(', ');
-      // What the reader was computing by hand before reading a single row: how much of this run
-      // differs, and whether it went wrong in one place or all over.
-      const diffTotal = content.changedCount + content.addedCount + content.removedCount;
-      const pct = content.slots ? Math.round((diffTotal / content.slots) * 100) : 0;
-      const share = diffTotal && content.slots ? `${diffTotal} of ${content.slots} differ (${pct || '<1'}%)` : '';
-      const places = diffTotal && content.ordered && content.clusters
-        ? ` in ${content.clusters === 1 ? 'one place' : `${content.clusters} places`}` : '';
-      const headline = diffTotal ? `${share}${places}${counts ? ` · ${counts}` : ''}` : 'no event-level differences';
-      const orderNote = content.ordered ? '' : '<p class="cmpnote">Too many differing events to align in order — showing the unordered content difference.</p>';
-      // Walking the changes beats scrolling for them once there is more than one place to reach.
-      const stepper = content.ordered && anchorIndex > 1
-        ? `<div class="cmpstepper"><span class="cmpstepwhat">${anchorIndex} places differ</span>`
-          + `<button class="btn cmpstep" type="button" data-cmp-jump="${esc(`${stream.stream}|prev`)}" title="Jump to the previous difference">↑</button>`
-          + `<button class="btn cmpstep" type="button" data-cmp-jump="${esc(`${stream.stream}|next`)}" title="Jump to the next difference">↓</button></div>`
-        : '';
-      // A handful of differing events shows itself; a wall of them waits for the click.
-      const open = content.changedCount + content.addedCount + content.removedCount <= 10
-        || st.cmpStreamsOpen[stream.stream] ? ' open' : '';
-      return `<details class="cmpdiffwrap"${open}><summary>Events, in order — ${esc(headline)}</summary>${orderNote}${stepper}<div class="cmpdiff cmpeventlist">${hunkHtml}</div><p class="cmpnote">One row per event, in the order it fired. Click a row for its fields.</p></details>`;
+      ].filter(Boolean).join(' · ');
+      const clusterNav = content.ordered && clusters.length > 1 && !fullSequence
+        ? `<div class="cmpclusternav" role="group" aria-label="Difference places">
+          <button class="btn cmpstep" type="button" data-cmp-place-action="prev" data-cmp-place-total="${clusters.length}" aria-label="Previous difference place">↑</button>
+          <span role="status" aria-live="polite">Difference <strong>${place + 1}</strong> of ${clusters.length}</span>
+          <button class="btn cmpstep" type="button" data-cmp-place-action="next" data-cmp-place-total="${clusters.length}" aria-label="Next difference place">↓</button>
+        </div>`
+        : `<span class="cmpclusterlabel">${content.ordered ? `${clusters.length || 1} difference ${clusters.length === 1 ? 'place' : 'places'}` : 'Unordered content difference'}</span>`;
+      const orderNote = content.ordered ? '' : '<p class="cmpnote cmporderwarn">This stream is too large to align in order. The rows below are an unordered content difference and do not imply where the records occurred.</p>';
+      return `<div class="cmpdiffwrap cmpfocused">
+        <div class="cmpdiffhead"><span>${counts || 'Content differs'}</span>${clusterNav}</div>
+        ${orderNote}<div class="cmpdiff cmpeventlist">${hunkHtml}</div>
+        <div class="cmpdifffoot"><span>One row per compared record. Select a row for its fields.</span><button class="cmptextbtn" type="button" data-cmp-full="${esc(scopeKey)}" aria-pressed="${fullSequence}">${fullSequence ? 'Show focused difference' : 'View full sequence'}</button></div>
+      </div>`;
+    };
+    const streamInspector = (stream: CompareStreamDiff, scopeKey: string, contextLabel = '') => {
+      const changedGroups = stream.groups.filter((group) => group.delta !== 0);
+      const deltaLabel = stream.delta !== 0 ? `${stream.delta > 0 ? '+' : ''}${stream.delta}`
+        : changedGroups.length ? 'same count · different mix' : stream.changed ? 'same count · content differs' : 'matches';
+      const groupTable = stream.groupPath == null || !changedGroups.length ? '' : `
+        <div class="cmpgrouptable"><table class="cmptable cmpevents" aria-label="Changed ${esc(stream.stream)} groups">
+          <thead><tr><th scope="col">${esc(stream.groupPath)}</th><th class="cmpcolbase" scope="col">${sideBadge('base')}</th><th class="cmpcolcurrent" scope="col">${sideBadge('current')}</th><th scope="col">Δ</th></tr></thead>
+          <tbody>${changedGroups.map((group) => `<tr><td class="cmpkey">${esc(group.key)}</td><td class="cmpnum cmpcolbase">${group.baselineCount}</td><td class="cmpnum cmpcolcurrent">${group.currentCount}</td><td class="cmpnum">${group.delta > 0 ? '+' : ''}${group.delta}</td></tr>`).join('')}</tbody>
+        </table><p class="cmpnote">${stream.groups.length - changedGroups.length} group(s) unchanged · auto-grouped by <code>${esc(stream.groupPath)}</code>.</p></div>`;
+      const trust = [
+        stream.incomplete ? '<span class="cmptrustwarn">Partial capture · retained prefix only</span>' : '<span>Complete retained capture</span>',
+        stream.maskedPaths.length ? `<span title="${esc(stream.maskedPaths.join(', '))}">⊘ ${stream.maskedPaths.length} volatile field${stream.maskedPaths.length === 1 ? '' : 's'} masked</span>` : '<span>No fields masked</span>',
+        stream.content && !stream.content.ordered ? '<span class="cmptrustwarn">Unordered fallback</span>' : '<span>Sequence aligned</span>',
+      ].join('');
+      return `<section class="cmpinspector" aria-labelledby="cmp-active-stream">
+        <header class="cmpinspectorhead"><div>${contextLabel ? `<span class="cmpinspectorkicker">${esc(contextLabel)}</span>` : ''}<h3 id="cmp-active-stream">${esc(streamDisplayName(stream.stream))}</h3><code title="${esc(stream.stream)}">${esc(stream.stream)}</code></div><div class="cmpinspectorcount"><div>${sideValue('base', stream.baselineCount)}<span class="cmpsidearrow" aria-hidden="true">→</span>${sideValue('current', stream.currentCount)}</div><span>${esc(deltaLabel)}</span></div></header>
+        <div class="cmpevidence">
+          <div class="cmptrust" role="group" aria-label="Comparison evidence">${trust}</div>
+          ${stream.incomplete ? '<p class="cmpnote cmptrustdetail">One or both runs capped this stream. Anything after the retained prefix is unknown, even when the visible records match.</p>' : ''}
+          ${stream.maskedPaths.length ? `<p class="cmpnote cmpmask" title="${esc(stream.maskedPaths.join(', '))}">Not compared: ${esc(stream.maskedPaths.slice(0, 4).join(', '))}${stream.maskedPaths.length > 4 ? ` and ${stream.maskedPaths.length - 4} more` : ''}</p>` : ''}
+        </div>
+        ${groupTable}${contentDiffBlock(stream, scopeKey)}
+      </section>`;
     };
     const eventSection = () => {
-      if (pendingInflate) return '<p class="cmpnote">Inflating event payloads…</p>';
-      // A run that carried a payload we could not decode compares as if it captured nothing, so say
-      // so — silence here would read as "this run genuinely emitted no events".
+      if (pendingInflate) return `${compareViewHeader('Event streams', '<span role="status" aria-live="polite">Loading records…</span>')}<div class="cmpeventloading" role="status" aria-live="polite">Inflating event payloads…</div>`;
+      if (!events) return compareViewHeader('Event streams', '<span>Unavailable</span>');
+      if (!events.streams.length) {
+        return compareViewHeader('Event streams', '<span>No captured streams</span>') + (eventsUnavailable
+          ? '<div class="cmpdegraded" role="alert"><strong>Event comparison is unavailable.</strong> One or both event payloads could not be decoded, so an empty result cannot be treated as agreement.</div>'
+          : '<p class="cmpnote">Neither run captured event streams.</p>');
+      }
       const decodeNote = eventsUnavailable
-        ? '<p class="cmpnote">One or both runs carry event payloads that could not be decoded; streams missing from this diff may exist in the archive.</p>'
+        ? '<div class="cmpdegraded" role="alert"><strong>Event comparison is incomplete.</strong> One or both payloads could not be decoded; streams missing here may still exist in the archive.</div>'
         : '';
-      if (!events.streams.length) return `${decodeNote}<p class="cmpnote">Neither run captured event streams.</p>`;
-      // "I only care about analytics" is a real way to read this lane: one chip per stream narrows
-      // the section to that stream alone. A filter naming a stream this pair doesn't carry (a link
-      // from another pair, say) filters nothing rather than presenting an empty lane as "no diff".
-      const streamFilter = st.cmpStream && events.streams.some((s) => s.stream === st.cmpStream) ? st.cmpStream : null;
-      const chipFor = (s) => `<button class="cmpchip${streamFilter === s.stream ? ' on' : ''}" type="button" data-cmp-stream="${esc(s.stream)}" aria-pressed="${streamFilter === s.stream}">${esc(s.stream)}${s.changed ? `<span class="cmpchipdelta">${s.delta !== 0 ? `${s.delta > 0 ? '+' : ''}${s.delta}` : '±'}</span>` : ''}</button>`;
-      const chips = events.streams.length > 1
-        ? `<div class="cmpchips" role="group" aria-label="Event streams"><button class="cmpchip${streamFilter ? '' : ' on'}" type="button" data-cmp-stream="" aria-pressed="${!streamFilter}">All streams</button>${events.streams.map(chipFor).join('')}</div>`
+      const changedCount = events.streams.filter((stream) => stream.changed).length;
+      const baselineRecords = events.streams.reduce((count, stream) => count + stream.baselineCount, 0);
+      const currentRecords = events.streams.reduce((count, stream) => count + stream.currentCount, 0);
+      const stepMode = st.cmpEventGroup === 'step' && !stepAlignment.unavailable;
+      const search = st.cmpEventSearch.trim().toLowerCase();
+      const matchesSearch = (stream: CompareStreamDiff) => !search || stream.stream.toLowerCase().includes(search)
+        || stream.groups.some((group) => group.key.toLowerCase().includes(search));
+      // Rank what can be interpreted precisely ahead of a huge unordered fallback. Partial
+      // evidence still leads because uncertainty itself needs attention; a one-sided stream is the
+      // next clearest finding. Magnitude only breaks ties inside the same evidence class.
+      const streamPriority = (stream: CompareStreamDiff) => stream.incomplete ? 0
+        : (stream.baselineCount === 0 || stream.currentCount === 0) ? 1
+          : stream.content && stream.content.ordered ? 2
+            : stream.groups.some((group) => group.delta !== 0) ? 3
+              : stream.content && !stream.content.ordered ? 4 : 5;
+      const rankedStreams = (streams: CompareStreamDiff[]) => streams.slice().sort((a, b) => streamPriority(a) - streamPriority(b)
+        || Math.abs(b.delta) - Math.abs(a.delta) || a.stream.localeCompare(b.stream));
+      const organizer = `<div class="cmpeventtoolbar">
+        <div class="cmpsegment" role="group" aria-label="Organize event differences">
+          <button type="button" data-cmp-organize="stream" aria-pressed="${!stepMode}">By stream</button>
+          ${stepAlignment.unavailable ? '' : `<button type="button" data-cmp-organize="step" aria-pressed="${stepMode}">By trail step</button>`}
+        </div>
+        <label class="cmpsearch"><input type="search" data-cmp-event-search value="${esc(st.cmpEventSearch)}" placeholder="Filter streams, event groups, or steps" aria-label="Filter event differences"></label>
+        <button class="btn cmponly" type="button" data-cmp-event-all aria-pressed="${st.cmpEventDiffOnly}">${st.cmpEventDiffOnly ? 'Differences only' : 'All captured'}</button>
+      </div>`;
+      const stepUnavailable = stepAlignment.unavailable ? `<p class="cmporganizenote">${esc(stepAlignment.unavailable)} Stream organization remains available for this pair.</p>` : '';
+      const overview = compareViewHeader('Event streams', [
+        `<strong role="status" aria-live="polite">${changedCount} of ${events.streams.length} differ</strong>`,
+        `<span class="cmpsidecomparison">${sideValue('base', baselineRecords.toLocaleString())}<span class="cmpsidearrow" aria-hidden="true">→</span>${sideValue('current', currentRecords.toLocaleString())}<span>records</span></span>`,
+        `<span>${events.streams.filter((stream) => stream.incomplete).length} partial</span>`,
+        `<span>${events.streams.filter((stream) => stream.content && !stream.content.ordered).length} unordered</span>`,
+        `<span>${events.streams.reduce((count, stream) => count + stream.maskedPaths.length, 0)} masked</span>`,
+      ].join(''));
+
+      const renderStreamMode = () => {
+        const candidates = rankedStreams(events.streams.filter((stream) => (!st.cmpEventDiffOnly || stream.changed) && matchesSearch(stream)));
+        const selected = candidates.find((stream) => stream.stream === st.cmpStream) || candidates[0] || null;
+        const rows = candidates.map((stream) => {
+          const content = stream.content;
+          const displayName = streamDisplayName(stream.stream);
+          const description = stream.incomplete ? 'Partial capture'
+            : content && !content.ordered ? 'Unordered content difference'
+              : content ? `${content.clusters} difference ${content.clusters === 1 ? 'place' : 'places'}`
+                : stream.changed ? 'Counts or groups differ' : 'Matches after masking';
+          const flags = [stream.incomplete ? 'partial' : '', content && !content.ordered ? 'unordered' : ''].filter(Boolean).join(' · ');
+          const producer = displayName === stream.stream ? '' : `<small class="cmpmasterid">${esc(stream.stream)}</small>`;
+          return `<button class="cmpmasterrow${selected === stream ? ' selected' : ''}" type="button" data-cmp-stream="${esc(stream.stream)}" aria-current="${selected === stream ? 'true' : 'false'}" title="${esc(stream.stream)}"><span><strong>${esc(displayName)}</strong>${producer}<small>${esc(description)}${flags ? ` · ${flags}` : ''}</small></span><span class="cmpmastercounts"><b>${stream.baselineCount} → ${stream.currentCount}</b><em>${stream.delta > 0 ? '+' : ''}${stream.delta || (stream.changed ? '±' : '0')}</em></span></button>`;
+        }).join('');
+        if (!selected) return '<div class="cmpeventnomatch">No event streams match the current filter.</div>';
+        return `<div class="cmpeventworkspace"><nav class="cmpmaster" aria-label="Event streams"><header><strong>Streams</strong><span>${candidates.length} shown</span></header>${rows}</nav>${streamInspector(selected, selected.stream)}</div>`;
+      };
+
+      const renderStepMode = () => {
+        const candidates = eventSteps.filter((step) => {
+          const relevantStreams = step.streams.filter((stream) => (!st.cmpEventDiffOnly || stream.changed));
+          return (!st.cmpEventDiffOnly || relevantStreams.some((stream) => stream.changed))
+            && (!search || step.label.toLowerCase().includes(search) || relevantStreams.some(matchesSearch));
+        });
+        const selectedStep = candidates.find((step) => step.key === st.cmpEventStep) || candidates[0] || null;
+        const rows = candidates.map((step) => {
+          const stepChanged = step.streams.filter((stream) => stream.changed).length;
+          const delta = step.currentCount - step.baselineCount;
+          return `<button class="cmpmasterrow cmpsteprow${selectedStep === step ? ' selected' : ''}" type="button" data-cmp-event-step="${esc(step.key)}" aria-current="${selectedStep === step ? 'true' : 'false'}"><span class="cmpsteplabel"><i>${step.unattributed ? '?' : esc(step.key)}</i><span><strong>${esc(step.label)}</strong><small>${step.unattributed ? 'Timestamp unavailable' : `${stepChanged} changed stream${stepChanged === 1 ? '' : 's'}`}</small></span></span><span class="cmpmastercounts"><b>${step.baselineCount} → ${step.currentCount}</b><em>${delta > 0 ? '+' : ''}${delta}</em></span></button>`;
+        }).join('');
+        if (!selectedStep) return '<div class="cmpeventnomatch">No trail steps match the current filter.</div>';
+        const stepStreams = rankedStreams(selectedStep.streams.filter((stream) => (!st.cmpEventDiffOnly || stream.changed)));
+        const selectedStream = stepStreams.find((stream) => stream.stream === st.cmpStream) || stepStreams[0] || null;
+        const chooser = selectedStream && stepStreams.length > 1 ? `<label class="cmpstepstream"><span>Stream</span><select data-cmp-step-stream aria-label="Stream within ${esc(selectedStep.label)}">${stepStreams.map((stream) => {
+          const displayName = streamDisplayName(stream.stream);
+          const name = displayName === stream.stream ? displayName : `${displayName} — ${stream.stream}`;
+          return `<option value="${esc(stream.stream)}"${stream === selectedStream ? ' selected' : ''}>${esc(name)} · ${stream.baselineCount} → ${stream.currentCount}</option>`;
+        }).join('')}</select></label>` : '';
+        const unattributedNote = selectedStep.unattributed ? '<div class="cmpsteptruth" role="note"><strong>Not placed on the trail timeline.</strong> These records have no compatible timestamp. Their content can be compared, but the report cannot say which authored step produced them.</div>' : '<p class="cmpsteptruth">Records are assigned to the most recent authored-step boundary on each run. This is temporal context, not proof that the step caused the event.</p>';
+        const wholeStream = selectedStream && events.streams.find((stream) => stream.stream === selectedStream.stream);
+        // A step bucket contains only retained records, so carry the whole-stream capture warning
+        // into its inspector. Otherwise a capped stream would look complete after being sliced.
+        const inspectedStream = selectedStream && wholeStream && wholeStream.incomplete
+          ? { ...selectedStream, incomplete: true }
+          : selectedStream;
+        const inspector = inspectedStream
+          ? `${chooser}${unattributedNote}${streamInspector(inspectedStream, `${selectedStep.key}:${inspectedStream.stream}`, selectedStep.unattributed ? 'Unattributed records' : `Captured during step ${selectedStep.key}`)}`
+          : `${chooser}${unattributedNote}<div class="cmpeventempty">No retained event records were attributed to this step.</div>`;
+        return `<div class="cmpeventworkspace"><nav class="cmpmaster" aria-label="Trail steps"><header><strong>Trail steps</strong><span>${candidates.length} shown</span></header>${rows}</nav><div class="cmpstepdetail"><header><span>${selectedStep.unattributed ? 'Unattributed' : `Step ${esc(selectedStep.key)}`}</span><h3>${esc(selectedStep.label)}</h3><p class="cmpsidecomparison">${sideValue('base', selectedStep.baselineCount)}<span class="cmpsidearrow" aria-hidden="true">→</span>${sideValue('current', selectedStep.currentCount)}<span>retained records</span></p></header>${inspector}</div></div>`;
+      };
+      return `${decodeNote}${overview}${organizer}${stepUnavailable}${stepMode ? renderStepMode() : renderStreamMode()}`;
+    };
+
+    const manyEventSection = () => {
+      if (pendingInflate) return `${compareViewHeader('Event streams', '<span role="status" aria-live="polite">Loading records…</span>')}<div class="cmpeventloading" role="status" aria-live="polite">Inflating event payloads…</div>`;
+      if (!manyEvents) return compareViewHeader('Event streams', '<span>Unavailable</span>');
+      if (!manyEvents.streams.length) {
+        return compareViewHeader('Event streams', '<span>No captured streams</span>') + (eventsUnavailable
+          ? '<div class="cmpdegraded" role="alert"><strong>Event comparison is unavailable.</strong> One or more event payloads could not be decoded, so an empty result cannot be treated as agreement.</div>'
+          : '<p class="cmpnote">None of the selected runs captured event streams.</p>');
+      }
+      const allEqual = (values: number[]) => values.every((value) => value === values[0]);
+      const search = st.cmpEventSearch.trim().toLowerCase();
+      const matchesSearch = (stream: CompareManyStreamDiff) => !search || stream.stream.toLowerCase().includes(search)
+        || stream.groups.some((group) => group.key.toLowerCase().includes(search));
+      const spread = (stream: CompareManyStreamDiff) => Math.max(...stream.counts) - Math.min(...stream.counts);
+      const candidates = manyEvents.streams
+        .filter((stream) => (!st.cmpEventDiffOnly || stream.changed) && matchesSearch(stream))
+        .slice()
+        .sort((left, right) => Number(right.incomplete.some(Boolean)) - Number(left.incomplete.some(Boolean))
+          || spread(right) - spread(left) || left.stream.localeCompare(right.stream));
+      const selected = candidates.find((stream) => stream.stream === st.cmpStream) || candidates[0] || null;
+      const changedCount = manyEvents.streams.filter((stream) => stream.changed).length;
+      const totalRecords = comparedSessions.map((_, at) => manyEvents.streams.reduce((total, stream) => total + stream.counts[at], 0));
+      const decodeNote = eventsUnavailable
+        ? '<div class="cmpdegraded" role="alert"><strong>Event comparison is incomplete.</strong> One or more payloads could not be decoded; streams missing here may still exist in the archive.</div>'
         : '';
-      const visible = streamFilter ? events.streams.filter((s) => s.stream === streamFilter) : events.streams;
-      const changed = visible.filter((s) => s.changed);
-      const unchanged = visible.filter((s) => !s.changed);
-      const sections = changed.map((stream) => {
-        const changedGroups = stream.groups.filter((g) => g.delta !== 0);
-        const deltaBadge = stream.delta !== 0
-          ? `<span class="badge running">${stream.delta > 0 ? '+' : ''}${stream.delta}</span>`
-          : changedGroups.length
-            ? '<span class="badge running">same count, different mix</span>'
-            : '<span class="badge running">same counts, content differs</span>';
-        const groupTable = stream.groupPath == null || !changedGroups.length ? '' : `
-          <table class="cmptable cmpevents">
-            <tr><th>${esc(stream.groupPath)}</th><th>Baseline</th><th>Current</th><th>Δ</th></tr>
-            ${changedGroups.map((g) => `<tr><td class="cmpkey">${esc(g.key)}</td><td class="cmpnum">${g.baselineCount}</td><td class="cmpnum">${g.currentCount}</td><td class="cmpnum">${g.delta > 0 ? '+' : ''}${g.delta}</td></tr>`).join('')}
-          </table>
-          <p class="cmpnote">${stream.groups.length - changedGroups.length} group(s) unchanged. Grouped by the auto-detected field <code>${esc(stream.groupPath)}</code>.</p>`;
-        // A capped stream only ever had its retained prefix compared, so say what the comparison
-        // could not see rather than letting a matching prefix read as a matching stream.
-        const partialNote = stream.incomplete
-          ? '<p class="cmpnote">One or both runs capped this stream, so only the events kept in the report were compared — anything past the cap is unknown.</p>'
-          : '';
-        // Name the masked fields. Masking is why ids and timestamps don't report as differences, but
-        // it also means those fields went uncompared, and a reader who can't see which ones they were
-        // can't tell "the runs agree" from "the field that disagreed is one we hid".
-        const masked = stream.maskedPaths;
-        const maskChip = masked.length
-          ? `<p class="cmpnote cmpmask" title="${esc(masked.join(', '))}">⊘ Not compared here: ${esc(masked.slice(0, 3).join(', '))}${masked.length > 3 ? ` and ${masked.length - 3} more` : ''}</p>`
-          : '';
-        return `<h3 class="cmpstream"><code>${esc(stream.stream)}</code> <span class="cmpcounts">${stream.baselineCount} → ${stream.currentCount}</span> ${deltaBadge}</h3>${partialNote}${maskChip}${groupTable}${contentDiffBlock(stream)}`;
+      const runTotals = totalRecords.map((count, at) => `<span class="cmpmanyvalue run${at % 4}" title="${esc(compareRunLabel(staged[at]))}">${runBadge(staged[at], at)}<strong>${count.toLocaleString()}</strong></span>`).join('');
+      const overview = compareViewHeader('Event streams', `<strong role="status" aria-live="polite">${changedCount} of ${manyEvents.streams.length} differ</strong><span>${staged.length} runs</span><span class="cmpmanysummary">${runTotals}</span>`);
+      const toolbar = `<div class="cmpeventtoolbar cmpmanytoolbar">
+        <label class="cmpsearch"><input type="search" data-cmp-event-search value="${esc(st.cmpEventSearch)}" placeholder="Filter streams or event groups" aria-label="Filter event differences"></label>
+        <button class="btn cmponly" type="button" data-cmp-event-all aria-pressed="${st.cmpEventDiffOnly}">${st.cmpEventDiffOnly ? 'Differences only' : 'All captured'}</button>
+      </div>`;
+      if (!selected) return `${decodeNote}${overview}${toolbar}<div class="cmpeventnomatch">No event streams match the current filter.</div>`;
+
+      const inventory = candidates.map((stream) => {
+        const min = Math.min(...stream.counts);
+        const max = Math.max(...stream.counts);
+        const description = stream.incomplete.some(Boolean) ? 'Partial capture'
+          : min !== max ? `${min.toLocaleString()}–${max.toLocaleString()} records`
+            : !stream.contentSame ? `Same count · record content varies`
+              : stream.groups.some((group) => !allEqual(group.counts)) ? 'Event-group mix varies' : 'Matches after masking';
+        const producer = streamDisplayName(stream.stream) === stream.stream ? '' : `<small class="cmpmasterid">${esc(stream.stream)}</small>`;
+        return `<button class="cmpmasterrow${selected === stream ? ' selected' : ''}" type="button" data-cmp-stream="${esc(stream.stream)}" aria-current="${selected === stream ? 'true' : 'false'}" title="${esc(stream.stream)}"><span><strong>${esc(streamDisplayName(stream.stream))}</strong>${producer}<small>${esc(description)}</small></span><span class="cmpmastercounts"><b>${stream.counts.map((count) => count.toLocaleString()).join(' · ')}</b><em>${stream.changed ? 'varies' : 'same'}</em></span></button>`;
       }).join('');
-      const maskNote = visible.some((s) => s.maskedPaths.length)
-        ? '<p class="cmpnote">Fields whose values never repeat (ids, timestamps) are left out of the comparison — shown as ‹…› in content diffs, and listed per stream above.</p>'
-        : '';
-      // A stream reported unchanged is where the mask matters most: masking is what made the two
-      // runs agree, so "unchanged" and "the only field that disagreed is one we hid" read
-      // identically unless this names what went uncompared. The changed streams get the same list
-      // as a chip; an unchanged stream has no section to hang one on, so it rides the summary.
-      const maskedTail = (s) => (s.maskedPaths.length
-        ? `, not compared: ${esc(s.maskedPaths.slice(0, 3).join(', '))}${s.maskedPaths.length > 3 ? ` and ${s.maskedPaths.length - 3} more` : ''}`
-        : '');
-      const unchangedNote = unchanged.length
-        ? `<p class="cmpnote">${unchanged.length} stream(s) unchanged: ${unchanged.map((s) => `${esc(s.stream)} (${s.baselineCount}${maskedTail(s)})`).join(', ')}.</p>`
-        : '';
-      return chips + decodeNote + sections + maskNote + unchangedNote;
+      const shownGroups = selected.groupPath == null ? [] : selected.groups.filter((group) => !st.cmpEventDiffOnly || !allEqual(group.counts));
+      const tableRows = selected.groupPath == null
+        ? `<tr><th class="cmpkey" scope="row">All records</th>${selected.counts.map((count, at) => `<td class="cmpnum cmpmanycol run${at % 4}">${count.toLocaleString()}</td>`).join('')}</tr>`
+        : shownGroups.map((group) => `<tr><th class="cmpkey" scope="row">${esc(group.key)}</th>${group.counts.map((count, at) => `<td class="cmpnum cmpmanycol run${at % 4}">${count.toLocaleString()}</td>`).join('')}</tr>`).join('');
+      const hiddenGroups = selected.groupPath == null ? 0 : selected.groups.length - shownGroups.length;
+      const headers = staged.map((sessionIndex, at) => `<th class="cmpmanycol run${at % 4}" scope="col">${runBadge(sessionIndex, at)}</th>`).join('');
+      const partialRuns = selected.incomplete.map((incomplete, at) => incomplete ? runBadge(staged[at], at) : '').filter(Boolean);
+      const trust = [
+        partialRuns.length ? `<span class="cmptrustwarn">Partial capture: ${partialRuns.join('')}</span>` : '<span>All retained captures complete</span>',
+        selected.maskedPaths.length ? `<span title="${esc(selected.maskedPaths.join(', '))}">⊘ ${selected.maskedPaths.length} volatile field${selected.maskedPaths.length === 1 ? '' : 's'} masked</span>` : '<span>No fields masked</span>',
+        '<span>Equal-weight N-run comparison</span>',
+      ].join('');
+      const groupNote = selected.groupPath == null
+        ? '<p class="cmpnote">No trustworthy shared grouping field was found, so this row compares stream totals.</p>'
+        : `<p class="cmpnote">${hiddenGroups ? `${hiddenGroups} matching group${hiddenGroups === 1 ? '' : 's'} hidden · ` : ''}auto-grouped by <code>${esc(selected.groupPath)}</code>.</p>`;
+      const inspector = `<section class="cmpinspector cmpmanyinspector" aria-labelledby="cmp-active-stream">
+        <header class="cmpinspectorhead"><div><h3 id="cmp-active-stream">${esc(streamDisplayName(selected.stream))}</h3><code title="${esc(selected.stream)}">${esc(selected.stream)}</code></div><div class="cmpinspectorcount"><strong>${selected.changed ? 'Varies across runs' : 'Matches across runs'}</strong><span>${selected.groups.length ? `${shownGroups.length} groups shown` : 'stream totals'}</span></div></header>
+        <div class="cmpevidence"><div class="cmptrust" role="group" aria-label="Comparison evidence">${trust}</div>${selected.maskedPaths.length ? `<p class="cmpnote cmpmask" title="${esc(selected.maskedPaths.join(', '))}">Not compared: ${esc(selected.maskedPaths.slice(0, 4).join(', '))}${selected.maskedPaths.length > 4 ? ` and ${selected.maskedPaths.length - 4} more` : ''}</p>` : ''}</div>
+        <div class="cmpgrouptable"><table class="cmptable cmpevents cmpmanytable" aria-label="${esc(selected.stream)} across ${staged.length} runs"><thead><tr><th scope="col">${esc(selected.groupPath || 'Records')}</th>${headers}</tr></thead><tbody>${tableRows}</tbody></table>${groupNote}</div>
+        <p class="cmpnote cmpmanytruth">This view compares totals and event-group distribution across every run. Select exactly two runs for ordered record-by-record and field differences.</p>
+      </section>`;
+      return `${decodeNote}${overview}${toolbar}<div class="cmpeventworkspace"><nav class="cmpmaster" aria-label="Event streams"><header><strong>Streams</strong><span>${candidates.length} shown</span></header>${inventory}</nav>${inspector}</div>`;
     };
 
     // ── Screens lane ──
@@ -5020,20 +5386,19 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     // the JVM golden gate's centre panel (baseline pixels, red where the runs disagree), computed
     // in the browser off the same threshold, so this view and a CI golden failure agree.
     const scenes = alignedScenes(tools.rows, (step) => frameFileAt(st.cmpBase, step), (step) => frameFileAt(st.cmpVs, step));
-    queueSceneDiffs(scenes);
     const sceneEntry = (scene) => (scene.baselineFile && scene.currentFile ? cmpSceneDiffs.get(cmpDiffKey(scene)) : null) || null;
     const pctLabel = (percent) => (percent === 0 ? 'identical pixels' : `${percent >= 10 ? percent.toFixed(0) : percent.toFixed(2)}% of pixels differ`);
     const sceneDiffCell = (scene) => {
-      const note = (text) => `<figure class="cmpframe cmpdiffcell"><div class="cmpdiffnote">${esc(text)}</div><figcaption class="cmpframecap">diff</figcaption></figure>`;
-      if (!scene.baselineFile || !scene.currentFile) return note(`only the ${scene.baselineFile ? 'baseline' : 'current'} run has a frame here`);
+      const note = (html) => `<figure class="cmpframe cmpdiffcell"><div class="cmpdiffnote">${html}</div><figcaption class="cmpframecap">Difference</figcaption></figure>`;
+      if (!scene.baselineFile || !scene.currentFile) return note(`Only ${sideBadge(scene.baselineFile ? 'base' : 'current')} has a frame here`);
       const entry = sceneEntry(scene);
       if (!entry || entry.state === 'pending') return note('comparing pixels…');
       if (entry.state === 'unavailable') return note('pixels unreadable — an image failed to load or is remote without CORS');
-      if (entry.state === 'size_mismatch') return note(`different sizes: ${entry.baseline.join('×')} vs ${entry.current.join('×')} — no shared pixel grid to diff`);
+      if (entry.state === 'size_mismatch') return note(`Different sizes: ${sideBadge('base')} is ${esc(entry.baseline.join('×'))}, ${sideBadge('current')} is ${esc(entry.current.join('×'))} — no shared pixel grid to diff`);
       const over = entry.percent > SCENE_DIFF_THRESHOLD_PERCENT;
       return `<figure class="cmpframe cmpdiffcell${over ? ' cmpdiffover' : ''}">
         <div class="galshot cmpdiffshot" data-cmp-diff="${esc(cmpDiffKey(scene))}" role="button" tabindex="0" aria-label="Pixel diff at #${scene.position}: ${esc(pctLabel(entry.percent))}"><img alt="Pixel diff: ${esc(pctLabel(entry.percent))}" src="${entry.src}" /></div>
-        <figcaption class="cmpframecap">${esc(pctLabel(entry.percent))}</figcaption>
+        <figcaption class="cmpframecap">Difference · ${esc(pctLabel(entry.percent))}</figcaption>
       </figure>`;
     };
     const screensSection = () => {
@@ -5043,7 +5408,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
         <div class="cmpsceneframes">${cmpFrame(st.cmpBase, scene.baselineFile, 'baseline', scene.position, scene.toolName)}${cmpFrame(st.cmpVs, scene.currentFile, 'current', scene.position, scene.toolName)}${sceneDiffCell(scene)}</div>
       </div>`).join('');
       return `<div class="cmpscenes">${cells}</div>
-        <p class="cmpnote">A scene starts where either run's screen moves on. The diff panel is the baseline's pixels, red where the current run disagrees (differ's 0.1 RGBA distance); "differ" in the overview means more than ${SCENE_DIFF_THRESHOLD_PERCENT}% of pixels moved — the golden gate's default threshold.</p>`;
+        <p class="cmpnote cmpsidelegend">A scene starts where either run's screen moves on. The diff panel uses ${sideBadge('base')}'s pixels, red where ${sideBadge('current')} differs by more than 0.1 RGBA distance; "differ" in the overview means more than ${SCENE_DIFF_THRESHOLD_PERCENT}% of pixels moved — the golden gate's default threshold.</p>`;
     };
     // The screens headline: known scene count immediately, pixel verdicts as they land. States are
     // spelled out — a scene that could not be compared must not disappear into the "match" tally.
@@ -5081,47 +5446,73 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     const unidentified = !keyA || !keyB;
     const crossTrail = unidentified || keyA !== keyB;
     const pairing = ' — rows below pair calls by tool name, not by intent, so a difference here is not necessarily a change.';
-    const crossTrailNote = !crossTrail ? ''
+    const crossTrailNote = multiRun || !crossTrail ? ''
       : unidentified
         ? `<p class="cmpcross" role="note"><strong>These runs carry no trail identity.</strong> Whether they are the same test cannot be told from the report${pairing}</p>`
-        : `<p class="cmpcross" role="note"><strong>These are different trails.</strong> ${esc(((a.meta || {}).title) || 'Baseline')} vs ${esc(((b.meta || {}).title) || 'Current')}${pairing}</p>`;
-    // ── Overview: one card per lane, the drill-in control as well as the summary ──
-    // The reader's first question is "what KINDS of difference are there" — tool calls, events,
-    // screens — and only then "show me". A card answers the first; clicking it narrows the page to
-    // that lane, and clicking again restores the whole diff.
+        : `<p class="cmpcross" role="note"><strong>These are different trails.</strong> ${sideBadge('base')} ${esc(((a.meta || {}).title) || `Run ${st.cmpBase + 1}`)} vs ${sideBadge('current')} ${esc(((b.meta || {}).title) || `Run ${st.cmpVs + 1}`)}${pairing}</p>`;
+    // ── Compact summaries for the content tabs ──
     const toolChangedCount = tools.argsChangedCount + tools.outcomeChangedCount + tools.baselineOnlyCount + tools.currentOnlyCount;
     const toolStat = !tools.rows.length ? 'none recorded'
       : !toolChangedCount ? `all ${tools.sameCount} identical`
         : [
           tools.argsChangedCount ? `${tools.argsChangedCount} args changed` : '',
-          tools.outcomeChangedCount ? `${tools.outcomeChangedCount} outcome changed` : '',
-          tools.baselineOnlyCount ? `${tools.baselineOnlyCount} only in baseline` : '',
-          tools.currentOnlyCount ? `${tools.currentOnlyCount} only in current` : '',
+          tools.outcomeChangedCount ? `${tools.outcomeChangedCount} outcome${tools.outcomeChangedCount === 1 ? '' : 's'} changed` : '',
+          tools.baselineOnlyCount ? `${tools.baselineOnlyCount} only in ${sideBadge('base')}` : '',
+          tools.currentOnlyCount ? `${tools.currentOnlyCount} only in ${sideBadge('current')}` : '',
         ].filter(Boolean).join(' · ');
-    const changedStreamCount = events ? events.streams.filter((s) => s.changed).length : 0;
-    const eventStat = pendingInflate ? 'inflating…'
-      : !events.streams.length ? 'none captured'
-        : !changedStreamCount ? `all ${events.streams.length} stream${events.streams.length === 1 ? '' : 's'} match`
-          : `${changedStreamCount} of ${events.streams.length} stream${events.streams.length === 1 ? '' : 's'} differ`;
-    const laneCard = (lane, title, stat, differs) => `<button class="cmpcard${st.cmpLane === lane ? ' on' : ''}${differs ? ' cmpcarddiff' : ''}" type="button" data-cmp-lane="${lane}" aria-pressed="${st.cmpLane === lane}"><span class="cmpcardtitle">${title}</span><span class="cmpcardstat">${esc(stat)}</span></button>`;
-    const laneShown = (lane) => !st.cmpLane || st.cmpLane === lane;
-    const screens = screensGlance();
-    const cards = `<div class="cmpcards" role="group" aria-label="Difference lanes">
-      ${laneCard('tools', 'Tool calls', toolStat, toolChangedCount > 0)}
-      ${laneCard('events', 'Events', eventStat, changedStreamCount > 0)}
-      ${laneCard('screens', 'Screens', screens.text, screens.differs)}
-    </div>`;
+    const tabButton = (tab, label) => `<button class="${st.cmpTab === tab ? 'active' : ''}" type="button" data-cmp-tab="${tab}"${st.cmpTab === tab ? ' aria-current="page"' : ''}>${label}</button>`;
+    // Comparison capabilities register as peer tabs. New products can add a descriptor here
+    // without creating another comparison shell; a capability may still declare that it needs a
+    // deliberate pair until its model supports N equal peers.
+    const comparePlugins = [
+      { id: 'screens', label: 'Screens', scope: 'many' },
+      { id: 'replay', label: 'Replay', scope: 'many' },
+      { id: 'tools', label: 'Tool calls', scope: 'pair' },
+      { id: 'events', label: 'Event streams', scope: 'many' },
+    ].filter((plugin) => plugin.scope === 'many' || !multiRun);
+    const tabs = `<nav aria-label="Comparison features">${comparePlugins.map((plugin) => tabButton(plugin.id, plugin.label)).join('')}</nav>`;
+    const visualBody = (mode: 'screens' | 'replay') => {
+      if (mode === 'screens' && !multiRun) {
+        queueSceneDiffs(scenes);
+        const glance = screensGlance();
+        const facts = `<span>2 runs</span><span>${glance.text}</span><span>Pixel comparison</span>`;
+        return `<section class="cmpvisuals" aria-label="Screens across selected runs">
+          ${compareViewHeader('Screens', facts)}
+          <div class="cmpvisualstage">${screensSection()}</div>
+        </section>`;
+      }
+      const lanes = trailLanes();
+      const matrix = trailMatrix();
+      const stepCount = matrix.rows.filter((row) => row.num > 0).length;
+      const laneBar = trailAllLanes().length > 1
+        ? `<div class="traillanebar" role="group" aria-label="Runs shown">${trailAllLanes().map((lane) => `<button class="traillanechip${lane.on ? ' on' : ''}" type="button" data-trail-lane="${lane.session}" aria-pressed="${lane.on}" title="${esc(lane.on ? `Hide ${lane.label}` : `Show ${lane.label}`)}"><span class="idxstatusdot ${esc(lane.outcome)}" aria-hidden="true"></span><span>${esc(lane.label)}</span></button>`).join('')}</div>`
+        : '';
+      const showAll = mode === 'screens'
+        ? `<button class="lightboxtoggle" type="button" role="switch" id="trailall" aria-checked="${st.trailAll}"><span class="lightboxtoggletrack" aria-hidden="true"><span class="lightboxtogglethumb"></span></span><span>All screenshots</span></button>`
+        : '';
+      const stage = mode === 'replay'
+        ? `<div class="cmpvisualstage trailmain trailreplaymain">${trailReplayBody(lanes, matrix, buildReplayTimeline(matrix))}</div>`
+        : `<div class="cmpvisualstage">${trailStepsBody(lanes, matrix, multiRun ? null : { base: st.cmpBase, current: st.cmpVs })}</div>`;
+      const alignment = matrix.join === 'step' ? 'Authored-step alignment' : 'Positional alignment';
+      const facts = `<span>${staged.length} runs</span><span>${stepCount} step${stepCount === 1 ? '' : 's'}</span><span>${alignment}</span>`;
+      return `<section class="cmpvisuals" aria-label="${mode === 'replay' ? 'Replay' : 'Screens'} across selected runs">
+        ${compareViewHeader(mode === 'replay' ? 'Replay' : 'Screens', facts, `${laneBar}${showAll}`)}
+        ${stage}
+      </section>`;
+    };
+    const unavailableTitle = st.cmpTab === 'screens' ? 'Screens' : st.cmpTab === 'replay' ? 'Replay' : st.cmpTab === 'tools' ? 'Tool calls' : 'Event streams';
+    const unavailableBody = `<section>${compareViewHeader(unavailableTitle, '<span>Unavailable</span>')}<div class="cmpdegraded" role="alert">One or more run payloads are missing or malformed, so this comparison cannot be completed.</div></section>`;
+    const body = degradedRuns.length ? unavailableBody
+      : st.cmpTab === 'screens' ? visualBody('screens')
+        : st.cmpTab === 'replay' ? visualBody('replay')
+        : st.cmpTab === 'tools' ? `<section>${compareViewHeader('Tool calls', `<span>${toolStat}</span>`)}${toolSection}</section>`
+          : `<section class="cmpeventssection" aria-label="Event streams">${multiRun ? manyEventSection() : eventSection()}</section>`;
     return `
-      <header class="indexheader trailheader"><div class="indexshell trailshellwide">
-        <div class="title-row indexheadrow"><div class="runidentity"><h1>Compare runs</h1></div><div class="indexheadactions">${renderThemeToggle()}<button class="btn" type="button" data-back>${MULTI ? 'All runs' : 'Back to run'}</button></div></div>
-        <div class="trailcontext"><div class="cmppickers">${picker('base', st.cmpBase, 'Baseline')}<button class="btn cmpswap" type="button" data-cmp-swap title="Swap baseline and current">⇄</button>${picker('vs', st.cmpVs, 'Current')}</div><div class="trailsub">what each run actually did — tool calls, captured events, and the screens along the way</div></div>
-      </div></header>
-      <main class="cmpmain"><div class="indexshell trailshellwide">
-        <section><h2>At a glance</h2>${crossTrailNote}${cards}</section>
-        ${laneShown('tools') ? `<section><h2>Tool calls</h2>${toolSection}</section>` : ''}
-        ${laneShown('events') ? `<section><h2>Event streams</h2>${eventSection()}</section>` : ''}
-        ${laneShown('screens') ? `<section><h2>Screens</h2>${screensSection()}</section>` : ''}
-      </div></main>`;
+      <header class="detailheader compareheader">
+        <div class="title-row detailtitle comparetitle"><div class="detailedge"><button class="back" type="button" data-back aria-label="Back to runs" title="Back to runs">${BACK_ICON_SVG}</button></div>${multiRun ? `<div class="runidentity"><h1>${compareTitle}</h1></div>` : `<div class="comparetitleheading"><h1>${compareTitle}</h1></div><div class="cmppickers comparetitlepickers">${picker('base', st.cmpBase, 'A')}<button class="btn cmpswap" type="button" data-cmp-swap aria-label="Swap A and B" title="Swap A and B">${COMPARE_ICON_SVG}</button>${picker('vs', st.cmpVs, 'B')}</div>`}</div>
+        ${tabs}
+      </header>
+      <main class="cmpmain"><div class="indexshell trailshellwide">${degradedNote}${crossTrailNote}${body}</div></main>`;
   };
 
   const render = (preserveTimelineScroll = false) => {
@@ -5130,8 +5521,11 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     const previousPageScroll = preserveTimelineScroll && typeof window.scrollY === 'number' ? window.scrollY : null;
     const openEventKeys = preserveTimelineScroll ? openTimelineEventKeys() : null;
     const active = preserveTimelineScroll ? document.activeElement as HTMLElement | null : null;
+    const activeCmpPicker = active && active.closest ? active.closest<HTMLElement>('[data-cmp-picker]') : null;
     timelinePreview = null;
     const focusSelector = active && active.matches('[data-scrub]') ? '[data-scrub]'
+      : active && active.matches('[data-back]') ? '[data-back]'
+      : active && active.matches('[data-theme-toggle]') ? '[data-theme-toggle]'
       : active && active.matches('[data-kidsel]') ? `[data-kidsel="${active.dataset.kidsel}"]`
       // A step header stays put across a render, so focus returns to the header the reader just
       // toggled. Sending it to the selected step instead would aim at a row the collapse just hid.
@@ -5145,6 +5539,19 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       // A pick checkbox survives its own toggle, so focus returns to the box the reader just ticked
       // rather than falling to <body> — otherwise ticking a second run means finding the list again.
       : active && active.matches('[data-pick]') ? `[data-pick="${active.dataset.pick}"]`
+      : activeCmpPicker ? `[data-cmp-picker="${activeCmpPicker.dataset.cmpPicker}"] > summary`
+      : active && active.matches('[data-cmp-swap]') ? '[data-cmp-swap]'
+      : active && active.matches('[data-cmp-tab]') ? `[data-cmp-tab="${active.dataset.cmpTab}"]`
+      : active && active.matches('[data-cmp-stream]') ? `[data-cmp-stream="${active.dataset.cmpStream || ''}"]`
+      : active && active.matches('[data-cmp-organize]') ? `[data-cmp-organize="${active.dataset.cmpOrganize}"]`
+      : active && active.matches('[data-cmp-event-step]') ? `[data-cmp-event-step="${active.dataset.cmpEventStep}"]`
+      : active && active.matches('[data-cmp-place-action]') ? `[data-cmp-place-action="${active.dataset.cmpPlaceAction}"]`
+      : active && active.matches('[data-cmp-full]') ? `[data-cmp-full="${active.dataset.cmpFull}"]`
+      : active && active.matches('[data-cmp-event-all]') ? '[data-cmp-event-all]'
+      : active && active.matches('[data-cmp-event-search]') ? '[data-cmp-event-search]'
+      : active && active.matches('[data-cmp-step-stream]') ? '[data-cmp-step-stream]'
+      : active && active.matches('[data-cmp-event]') ? `[data-cmp-event="${active.dataset.cmpEvent}"]`
+      : active && active.matches('[data-cmp-diff]') ? `[data-cmp-diff="${active.dataset.cmpDiff}"]`
       : active && ['prev', 'next', 'tlplay'].indexOf(active.id) >= 0 ? `#${active.id}`
       : null;
     const pageTransition = st.pageTransition;
@@ -5190,8 +5597,8 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       const runDate = indexRunDate();
       root.innerHTML = `
         ${renderIndexHeader()}
-        <main><div class="indexshell"${indexShellStyle()}>${renderIndex()}</div></main>
         ${renderPickBar()}
+        <main><div class="indexshell indexruns${st.compareMode ? ' comparemode' : ''}${compareModeEntering ? ' compareenter' : ''}"${indexShellStyle()}>${renderIndex()}</div></main>
         <footer class="indexfooter"><div class="indexshell indexfootercontent"${indexShellStyle()}>${renderIndexSummary()}${renderIndexMetrics()}${runDate ? `<span class="detailfooteritem indexrundate"><span class="k">Run on</span><span class="v">${esc(runDate)}</span></span>` : ''}</div></footer>`;
       wire();
       return;
@@ -5222,6 +5629,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     const m = D.meta;
     const detailOutcome = indexOutcome(D);
     const detailOutcomeLabel = indexOutcomeLabel(detailOutcome);
+    const detailComparePartner = sameTrailComparePartner(st.session);
     const lightboxStepFrameCount = groupTrace().filter((group) => [group.header, ...group.items]
       .some((t) => t && ((t.screenshotFile && D.shots[t.screenshotFile])
         || (t.children || []).some((c) => c.screenshotFile && D.shots[c.screenshotFile])))).length;
@@ -5271,7 +5679,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     const header = EMBEDDED
       ? `<header class="detailheader notitle"><div class="tabrow">${tabsNav}<div class="detailactions">${exportMenu}</div></div></header>`
       : `<header class="detailheader">
-        <div class="title-row detailtitle${MULTI ? '' : ' noback'}">${MULTI ? `<div class="detailedge"><button class="back" type="button" data-back aria-label="All runs" title="All runs">${BACK_ICON_SVG}</button></div>` : ''}<div class="runidentity"><span class="idxstatus" role="img" aria-label="${esc(detailOutcomeLabel)}" title="${esc(detailOutcomeLabel)}"><span class="idxstatusdot ${esc(detailOutcome)}" aria-hidden="true"></span></span><h1>${esc(m.title)}</h1></div><div class="detailactions">${trailViewAvailableFor(trailKey(SESSIONS[st.session])) ? `<button class="btn" type="button" data-goto-trail="${esc(trailKey(SESSIONS[st.session]))}" title="${esc(trailEntryTitle(trailKey(SESSIONS[st.session])))}">Trail view</button>` : ''}${renderThemeToggle()}${exportMenu}</div></div>
+        <div class="title-row detailtitle${MULTI ? '' : ' noback'}">${MULTI ? `<div class="detailedge"><button class="back" type="button" data-back aria-label="All runs" title="All runs">${BACK_ICON_SVG}</button></div>` : ''}<div class="runidentity"><span class="idxstatus" role="img" aria-label="${esc(detailOutcomeLabel)}" title="${esc(detailOutcomeLabel)}"><span class="idxstatusdot ${esc(detailOutcome)}" aria-hidden="true"></span></span><h1>${esc(m.title)}</h1></div><div class="detailactions">${detailComparePartner == null ? '' : `<button class="btn idxcompare" type="button" data-goto-compare="${st.session}" title="Compare with another device in this trail">${COMPARE_ICON_SVG}<span>Compare</span></button>`}${renderThemeToggle()}${exportMenu}</div></div>
         ${tabsNav}
       </header>`;
     root.innerHTML = `
@@ -6564,33 +6972,30 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       };
     });
     root.querySelectorAll<HTMLElement>('[data-pick-clear]').forEach((el) => el.onclick = () => { st.pick = []; render(true); });
-    // The index's own way into the diff: tick two runs, open them. The Compare view's pickers then
-    // let the reader move either side without coming back here, so this is an entry point rather
-    // than the only way to choose a pair.
-    root.querySelectorAll<HTMLElement>('[data-pick-diff]').forEach((el) => el.onclick = () => {
-      const picked = st.pick.filter((i) => SESSIONS[i] && !isLinkOut(SESSIONS[i]));
-      if (picked.length !== 2) return;
-      stopTimeline();
-      st.cmpBase = picked[0];
-      st.cmpVs = picked[1];
-      st.cmpGapsOpen = {}; st.cmpEventsOpen = {}; st.cmpStreamsOpen = {}; st.cmpJumpAt = {};
-      st.view = 'compare'; st.pageTransition = 'forward'; writeRoute(false);
-      render(); window.scrollTo({ top: 0 });
-    });
     root.querySelectorAll<HTMLElement>('[data-pick-open]').forEach((el) => el.onclick = () => {
-      const picked = st.pick.filter((i) => SESSIONS[i]);
-      if (!picked.length) return;
+      const picked = st.pick.filter((i) => SESSIONS[i] && !isLinkOut(SESSIONS[i]));
+      if (picked.length < 2) return;
       stopTimeline();
-      // A new stage: lane visibility from a previous one is about other sessions entirely.
       st.trailLanesOff = {};
       st.trailPick = picked.slice();
       st.trailScope = null;
-      // The Map's fan-out draws lanes leaving one shared step, which is a claim a mixed pick cannot
-      // make — so an unjoined stage opens on the Grid, where the cells simply sit side by side.
-      demoteMapForJoin();
-      st.view = 'trail'; st.pageTransition = 'forward'; writeRoute(false);
+      st.cmpBase = picked[0];
+      st.cmpVs = picked[1];
+      st.cmpTab = 'screens';
+      st.cmpGapsOpen = {};
+      resetEventNavigator();
+      st.view = 'compare'; st.pageTransition = 'forward'; writeRoute(false);
       ensureScopeChunks(picked, pickToken(picked));
       render(); window.scrollTo({ top: 0 });
+    });
+    root.querySelectorAll<HTMLElement>('[data-index-compare]').forEach((el) => el.onclick = () => {
+      const entering = !st.compareMode;
+      st.compareMode = entering;
+      if (!entering) st.pick = [];
+      compareModeEntering = entering;
+      render(true);
+      compareModeEntering = false;
+      root.querySelector<HTMLElement>('[data-index-compare]')?.focus({ preventScroll: true });
     });
     // ── Trail view controls ──
     root.querySelectorAll<HTMLElement>('[data-goto-trail]').forEach((el) => el.onclick = () => {
@@ -6606,6 +7011,24 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       ensureScopeChunks(trailRuns(key), key);
       render(); window.scrollTo({ top: 0 });
     });
+    root.querySelectorAll<HTMLElement>('[data-goto-compare-trail]').forEach((el) => el.onclick = () => {
+      const key = el.dataset.gotoCompareTrail || '';
+      const runs = trailRuns(key).filter((i) => comparableRuns().indexOf(i) >= 0);
+      if (runs.length < 2) return;
+      stopTimeline();
+      st.trailPick = runs;
+      st.pick = runs.slice();
+      st.compareMode = true;
+      st.trailScope = null;
+      st.trailLanesOff = {};
+      st.cmpBase = runs[0];
+      st.cmpVs = runs[1];
+      st.cmpTab = 'screens';
+      resetEventNavigator();
+      st.view = 'compare'; st.pageTransition = 'forward'; writeRoute(false);
+      ensureScopeChunks(runs, pickToken(runs));
+      render(); window.scrollTo({ top: 0 });
+    });
     // ── Compare view controls ──
     // A re-render replaces the whole subtree, so the control that was just clicked is detached and
     // focus falls back to the document — a keyboard reader loses their place in the list. Re-focus
@@ -6616,9 +7039,30 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       const next = root.querySelector<HTMLElement>(`[${attr}="${value}"]`);
       if (next && next.focus) next.focus();
     };
-    root.querySelectorAll<HTMLElement>('[data-goto-compare]').forEach((el) => el.onclick = () => { stopTimeline(); st.view = 'compare'; st.pageTransition = 'forward'; writeRoute(false); render(); window.scrollTo({ top: 0 }); });
-    root.querySelectorAll<HTMLSelectElement>('[data-cmp-side]').forEach((el) => el.onchange = () => {
-      const i = Number(el.value);
+    root.querySelectorAll<HTMLElement>('[data-goto-compare]').forEach((el) => el.onclick = () => {
+      const from = el.dataset.gotoCompare;
+      if (from) {
+        const base = Number(from);
+        const partner = sameTrailComparePartner(base);
+        if (partner == null) return;
+        st.cmpBase = base;
+        st.cmpVs = partner;
+        const key = trailKey(SESSIONS[base]);
+        const runs = key ? trailRuns(key).filter((i) => comparableRuns().indexOf(i) >= 0) : [base, partner];
+        st.trailPick = runs.length >= 2 ? runs : [base, partner];
+      } else {
+        st.trailPick = [st.cmpBase, st.cmpVs];
+      }
+      st.pick = comparisonRuns().slice();
+      st.compareMode = true;
+      st.trailScope = null;
+      st.trailLanesOff = {};
+      st.cmpTab = 'screens';
+      resetEventNavigator();
+      stopTimeline(); st.view = 'compare'; st.pageTransition = 'forward'; writeRoute(false); render(); window.scrollTo({ top: 0 });
+    });
+    root.querySelectorAll<HTMLElement>('[data-cmp-side][data-cmp-run]').forEach((el) => el.onclick = () => {
+      const i = Number(el.dataset.cmpRun);
       if (comparableRuns().indexOf(i) < 0) return;
       // Picking the run the other side already holds would compare a run against itself, and the
       // pair-normalizer then substitutes a different partner when that URL is reopened — a shared
@@ -6627,12 +7071,33 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       const onBase = el.dataset.cmpSide === 'base';
       if (i === (onBase ? st.cmpVs : st.cmpBase)) { if (onBase) st.cmpVs = st.cmpBase; else st.cmpBase = st.cmpVs; }
       if (onBase) st.cmpBase = i; else st.cmpVs = i;
+      // Pair pickers edit the pair workspace. Do not retain runs from an earlier pair: doing so
+      // silently turns a two-run comparison into an N-run stage and removes the pickers the reader
+      // was using. The index selection flow is the deliberate way to enter an N-run comparison.
+      st.trailPick = [st.cmpBase, st.cmpVs].sort((a, b) => a - b);
       // Gap positions are meaningless across pairs — the Nth gap of this diff is not the Nth gap
       // of the next one, so a stale open-set would expand arbitrary runs of the new diff.
-      st.cmpGapsOpen = {}; st.cmpEventsOpen = {}; st.cmpStreamsOpen = {}; st.cmpJumpAt = {};
-      writeRoute(true); render();
+      st.cmpGapsOpen = {};
+      resetEventNavigator();
+      writeRoute(true); render(true);
+      root.querySelector<HTMLElement>(`[data-cmp-picker="${onBase ? 'base' : 'vs'}"] > summary`)?.focus({ preventScroll: true });
     });
-    root.querySelectorAll<HTMLElement>('[data-cmp-swap]').forEach((el) => el.onclick = () => { const swap = st.cmpBase; st.cmpBase = st.cmpVs; st.cmpVs = swap; st.cmpGapsOpen = {}; st.cmpEventsOpen = {}; st.cmpStreamsOpen = {}; st.cmpJumpAt = {}; writeRoute(true); render(); });
+    root.querySelectorAll<HTMLDetailsElement>('[data-cmp-picker]').forEach((menu) => {
+      menu.addEventListener('focusout', (e) => { if (!menu.contains(e.relatedTarget as Node | null)) menu.open = false; });
+      menu.onkeydown = (e) => { if (e.key === 'Escape') { menu.open = false; menu.querySelector<HTMLElement>('summary')?.focus(); } };
+    });
+    root.querySelectorAll<HTMLElement>('[data-cmp-swap]').forEach((el) => el.onclick = () => {
+      const swap = st.cmpBase;
+      st.cmpBase = st.cmpVs;
+      st.cmpVs = swap;
+      st.cmpGapsOpen = {};
+      st.cmpEventPlace = 0;
+      st.cmpEventsOpen = {};
+      st.cmpStreamsOpen = {};
+      st.cmpJumpAt = {};
+      writeRoute(true); render(true);
+      root.querySelector<HTMLElement>('[data-cmp-swap]')?.focus({ preventScroll: true });
+    });
     root.querySelectorAll<HTMLElement>('[data-cmp-gap]').forEach((el) => el.onclick = () => {
       const k = Number(el.dataset.cmpGap);
       st.cmpGapsOpen[k] = !st.cmpGapsOpen[k];
@@ -6642,43 +7107,80 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     root.querySelectorAll<HTMLElement>('[data-cmp-event]').forEach((el) => el.onclick = () => {
       const key = el.dataset.cmpEvent || '';
       st.cmpEventsOpen[key] = !st.cmpEventsOpen[key];
-      // A stream whose diff is large renders collapsed by default; without pinning it open, the
-      // click that asked for one event's fields would collapse the stream and hide them.
-      st.cmpStreamsOpen[key.slice(0, key.lastIndexOf(':'))] = true;
       renderKeepingFocus('data-cmp-event', key);
     });
-    // A lane card narrows the page to its lane; clicking the active card restores the whole diff.
-    root.querySelectorAll<HTMLElement>('[data-cmp-lane]').forEach((el) => el.onclick = () => {
-      const lane = el.dataset.cmpLane;
-      st.cmpLane = st.cmpLane === lane ? null : lane;
-      writeRoute(true); render(true);
+    root.querySelectorAll<HTMLElement>('[data-cmp-tab]').forEach((el) => el.onclick = () => {
+      const tab = el.dataset.cmpTab;
+      if (['screens', 'replay', 'tools', 'events'].indexOf(tab) < 0 || tab === st.cmpTab) return;
+      st.cmpTab = tab;
+      if (tab === 'screens') st.trailMode = 'steps';
+      if (tab === 'replay') st.trailMode = 'replay';
+      writeRoute(false); render();
+      window.scrollTo({ top: 0 });
+      root.querySelector<HTMLElement>(`[data-cmp-tab="${tab}"]`)?.focus({ preventScroll: true });
     });
-    // A stream chip narrows the events lane to one stream; the empty value is the All chip.
+    // The master list keeps exactly one working set in the inspector. It never toggles back to an
+    // implicit "all" mode: the inventory stays visible beside the focused payload.
     root.querySelectorAll<HTMLElement>('[data-cmp-stream]').forEach((el) => el.onclick = () => {
-      const stream = el.dataset.cmpStream || null;
-      st.cmpStream = st.cmpStream === stream ? null : stream;
-      writeRoute(true); render(true);
+      const stream = el.dataset.cmpStream || '';
+      if (!stream) return;
+      st.cmpStream = stream;
+      st.cmpEventPlace = 0;
+      writeRoute(true);
+      renderKeepingFocus('data-cmp-stream', stream);
     });
-    // Walk the places a stream's runs diverge. This moves the page rather than re-rendering it: a
-    // render would rebuild the list and drop the reader back at the top, which is the scrolling the
-    // stepper exists to avoid.
-    root.querySelectorAll<HTMLElement>('[data-cmp-jump]').forEach((el) => el.onclick = () => {
-      const raw = String(el.dataset.cmpJump || '');
-      const cut = raw.lastIndexOf('|');
-      const [stream, dir] = [raw.slice(0, cut), raw.slice(cut + 1)];
-      const anchors = Array.from(root.querySelectorAll<HTMLElement>('[data-cmp-anchor]'))
-        .filter((a) => String(a.dataset.cmpAnchor || '').startsWith(`${stream}|`));
-      if (!anchors.length) return;
-      const step = dir === 'prev' ? -1 : 1;
-      // First press of ↓ lands on the first difference, first press of ↑ on the last.
-      const was = st.cmpJumpAt[stream];
-      const from = typeof was === 'number' ? was : (step > 0 ? -1 : 0);
-      const at = ((from + step) % anchors.length + anchors.length) % anchors.length;
-      st.cmpJumpAt[stream] = at;
-      anchors.forEach((a) => a.classList && a.classList.remove('cmpjumphit'));
-      const target = anchors[at];
-      if (target.classList) target.classList.add('cmpjumphit');
-      if (target.scrollIntoView) target.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    root.querySelectorAll<HTMLElement>('[data-cmp-organize]').forEach((el) => el.onclick = () => {
+      const mode = el.dataset.cmpOrganize === 'step' ? 'step' : 'stream';
+      if (mode === st.cmpEventGroup) return;
+      st.cmpEventGroup = mode;
+      st.cmpEventStep = null;
+      st.cmpEventPlace = 0;
+      writeRoute(false);
+      renderKeepingFocus('data-cmp-organize', mode);
+    });
+    root.querySelectorAll<HTMLElement>('[data-cmp-event-step]').forEach((el) => el.onclick = () => {
+      const step = el.dataset.cmpEventStep || '';
+      if (!step) return;
+      st.cmpEventStep = step;
+      st.cmpEventPlace = 0;
+      writeRoute(true);
+      renderKeepingFocus('data-cmp-event-step', step);
+    });
+    root.querySelectorAll<HTMLSelectElement>('[data-cmp-step-stream]').forEach((select) => select.onchange = () => {
+      st.cmpStream = select.value || null;
+      st.cmpEventPlace = 0;
+      writeRoute(true); render(true);
+      root.querySelector<HTMLSelectElement>('[data-cmp-step-stream]')?.focus({ preventScroll: true });
+    });
+    root.querySelectorAll<HTMLElement>('[data-cmp-place-action]').forEach((el) => el.onclick = () => {
+      const total = Math.max(1, Number(el.dataset.cmpPlaceTotal) || 1);
+      const current = ((st.cmpEventPlace % total) + total) % total;
+      st.cmpEventPlace = (current + (el.dataset.cmpPlaceAction === 'prev' ? -1 : 1) + total) % total;
+      writeRoute(true);
+      renderKeepingFocus('data-cmp-place-action', el.dataset.cmpPlaceAction || 'next');
+    });
+    root.querySelectorAll<HTMLElement>('[data-cmp-full]').forEach((el) => el.onclick = () => {
+      const scope = el.dataset.cmpFull || '';
+      if (!scope) return;
+      st.cmpStreamsOpen[scope] = !st.cmpStreamsOpen[scope];
+      renderKeepingFocus('data-cmp-full', scope);
+    });
+    root.querySelectorAll<HTMLElement>('[data-cmp-event-all]').forEach((el) => el.onclick = () => {
+      st.cmpEventDiffOnly = !st.cmpEventDiffOnly;
+      st.cmpEventPlace = 0;
+      writeRoute(false); render(true);
+      root.querySelector<HTMLElement>('[data-cmp-event-all]')?.focus({ preventScroll: true });
+    });
+    root.querySelectorAll<HTMLInputElement>('[data-cmp-event-search]').forEach((input) => input.oninput = () => {
+      const caret = input.selectionStart == null ? input.value.length : input.selectionStart;
+      st.cmpEventSearch = input.value;
+      st.cmpEventPlace = 0;
+      writeRoute(true); render(true);
+      const replacement = root.querySelector<HTMLInputElement>('[data-cmp-event-search]');
+      if (replacement) {
+        replacement.focus({ preventScroll: true });
+        replacement.setSelectionRange(caret, caret);
+      }
     });
     // The diff overlay is a generated data URL, not a shots-map frame, so the gallery pass above
     // can't wire it — zoom it directly.
@@ -6748,8 +7250,9 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     root.querySelectorAll<HTMLElement>('[data-trail-open]').forEach((el) => el.onclick = () => {
       const [lane, headerId] = String(el.dataset.trailOpen).split(':').map(Number);
       if (!SESSIONS[lane]) return;
+      const fromCompare = st.view === 'compare';
       openSession(lane);
-      st.backTo = 'trail';
+      st.backTo = fromCompare ? 'compare' : 'trail';
       st.step = headerId; st.kid = null; st.tab = 'timeline';
       revealTimelineStep(st.step);
       st.pageTransition = 'forward';

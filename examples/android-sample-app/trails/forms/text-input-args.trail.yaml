@@ -1,6 +1,6 @@
 config:
   id: sample-app/forms/text-input-args
-  target: xyz.block.trailblaze.examples.sampleapp
+  target: sampleapp
   # Parameterized trail: `config.args:` declares typed parameters the caller supplies per run with
   # `--arg name="…"` (repeatable) or `--args-file <yaml|json>`, referenced as the args tokens in the
   # step prose below. Each arg has a `default:`, which makes it optional — omit `default:` to make an

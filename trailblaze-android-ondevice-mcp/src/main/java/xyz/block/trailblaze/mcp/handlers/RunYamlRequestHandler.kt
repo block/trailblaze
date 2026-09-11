@@ -22,6 +22,7 @@ import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.mcp.RpcHandler
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcResult
 import xyz.block.trailblaze.mcp.progress.ProgressSessionManager
+import xyz.block.trailblaze.replay.ActionTrace
 import xyz.block.trailblaze.rules.TrailblazeLoggingRule
 import xyz.block.trailblaze.InstrumentationUtil
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
@@ -187,6 +188,7 @@ class RunYamlRequestHandler(
     // outlives the runs it serves, so a null left unsaid would file a run whose host is not
     // recording into the previous run's trace. Those runs trace their own half, as before this
     // field existed.
+    ActionTrace.mark(ActionTrace.Boundary.HANDLE_ENTERED)
     val dispatchTraceContext = TraceContext.parse(request.traceParent)
     if (dispatchTraceContext == null && request.traceParent != null) {
       // A host SENT a traceparent and this device could not place it — version or format skew, not
@@ -206,6 +208,8 @@ class RunYamlRequestHandler(
     } catch (e: Exception) {
       null
     }
+
+    ActionTrace.mark(ActionTrace.Boundary.YAML_PARSED)
 
     // Start session for this test execution
     val overrideId = request.config.overrideSessionId
@@ -257,6 +261,8 @@ class RunYamlRequestHandler(
         rawYaml = request.yaml,
       )
     }
+
+    ActionTrace.mark(ActionTrace.Boundary.SESSION_READY)
 
     // Extract objective from YAML for progress reporting
     val objective = trailConfig?.title ?: trailConfig?.id ?: request.testName
@@ -315,6 +321,7 @@ class RunYamlRequestHandler(
       // observe completion via [outcome] below.
       val job = backgroundScope.launch {
         try {
+          ActionTrace.mark(ActionTrace.Boundary.JOB_STARTED)
           // Emit execution started progress event
           progressManager?.onProgressEvent(
             TrailblazeProgressEvent.ExecutionStarted(
@@ -333,7 +340,9 @@ class RunYamlRequestHandler(
           // have completed. Without this, rapid sequential tool dispatches (e.g.,
           // tap → inputText → tap → inputText) can overwhelm the accessibility
           // service and crash the on-device server.
+          ActionTrace.mark(ActionTrace.Boundary.PRE_SETTLE_START)
           waitForSettled()
+          ActionTrace.mark(ActionTrace.Boundary.PRE_SETTLE_DONE)
 
           // Route to appropriate agent implementation
           // For TRAILBLAZE_RUNNER, suppress the Started log in the callback since
@@ -413,6 +422,7 @@ class RunYamlRequestHandler(
           // Dropping this settle halves the worst-case per-tool timeout penalty on noisy UIs
           // (e.g. text input with an active IME): we pay at most one 5s waitForSettled
           // timeout per tool-pair instead of two.
+          ActionTrace.mark(ActionTrace.Boundary.AGENT_DONE)
           val endTimeMs = System.currentTimeMillis()
 
           // Emit execution completed progress event
@@ -428,6 +438,8 @@ class RunYamlRequestHandler(
             )
           )
 
+          ActionTrace.mark(ActionTrace.Boundary.PROGRESS_COMPLETED)
+
           if (request.config.sendSessionEndLog) {
             // Terminal frame on success — the JUnit teardown hook that would do this
             // (TrailblazeLoggingRule.afterTestExecution) never fires on this RPC path.
@@ -440,6 +452,7 @@ class RunYamlRequestHandler(
             // Keep the session open
           }
 
+          ActionTrace.mark(ActionTrace.Boundary.SESSION_END_HANDLED)
           outcome.complete(Outcome.Success(lastToolSuccess, onDeviceToolLogCount))
         } catch (e: Exception) {
           // Propagate cancellation without capturing a failure screenshot —
@@ -562,6 +575,7 @@ class RunYamlRequestHandler(
             ),
           )
         }
+        ActionTrace.mark(ActionTrace.Boundary.OUTCOME_RESOLVED)
         val successOutcome = resolved as? Outcome.Success
         val toolPayload = successOutcome?.lastToolSuccess
         return RpcResult.Success(

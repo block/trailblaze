@@ -173,6 +173,36 @@ class UnifiedTrailRuntimeIntegrationTest {
   }
 
   @Test
+  fun `device-aware config extraction resolves skip from the selected configuration`() {
+    val unifiedYaml = """
+      config:
+        id: paired-devices
+        target: app
+        skip:
+          pair-a: maintenance
+        devices:
+          android: { driver: ANDROID_ONDEVICE_ACCESSIBILITY, locale: es }
+          pair-a:
+            devices:
+              primary: { classifier: android }
+          pair-b:
+            devices:
+              primary: { classifier: android }
+      trail:
+        - step: Launch the app
+    """.trimIndent()
+    val classifiers = listOf(TrailblazeDeviceClassifier("android"))
+
+    assertEquals(
+      "maintenance",
+      yaml.extractTrailConfig(unifiedYaml, classifiers, selectedDeviceConfiguration = "pair-a")?.skip,
+    )
+    assertNull(
+      yaml.extractTrailConfig(unifiedYaml, classifiers, selectedDeviceConfiguration = "pair-b")?.skip,
+    )
+  }
+
+  @Test
   fun `recordable false unified-format step lowers to LLM-mode DirectionStep for the executor`() {
     val unifiedYaml = """
       config:

@@ -1,0 +1,190 @@
+{
+  "comment": [
+    "Cross-language behavioral contract for device-clock normalization: how a session's",
+    "device->host offsets are derived, and where each log lands on the host timeline.",
+    "Implemented twice, because the profiler runs in a browser over raw JSON and cannot call the",
+    "Kotlin one: `deviceClockOffsets()` / `normalizedMs()` in TrailblazeLogClockNormalization.kt",
+    "(every Kotlin reader — LogsRepo, the recording generator, session info, the session viewers),",
+    "and `deviceClockOffsets()` / `logHostMs()` in perf-extract.ts (the interactive report's",
+    "profiler). Consumed by ClockNormalizationParityFixturesTest (Kotlin) and perf-extract.test.ts",
+    "(TS). Change a derivation rule in both implementations AND here, in one change — a drift makes",
+    "a session's profile and its recording disagree about where a device's spans sit.",
+    "",
+    "Encoding: `timestampMs` / `hostReceivedAtMs` are epoch ms (each side converts to its own",
+    "timestamp type); absent `durationMs` means 0; absent `deviceName` means the log carries none,",
+    "which both sides collapse to ONE key, spelled \"\" in `expectedOffsets.byDeviceName`.",
+    "`type` is `tool` for a TrailblazeToolLog (the only class that anchors an offset) and `status`",
+    "for any other log class. `expectedOffsets: null` means the session yielded no offsets at all.",
+    "",
+    "Not covered here, deliberately: a log with NO `clock` field. The TS side falls back to the log",
+    "class for those (`MaestroDriverLog` == device), which is the only signal a pre-field log",
+    "carries; Kotlin has no such fallback. That asymmetry is pinned in perf-extract.test.ts alone."
+  ],
+  "cases": [
+    {
+      "name": "an all-host session yields no offsets, even when its tools were anchored",
+      "logs": [
+        { "id": "start", "type": "status", "clock": "host", "timestampMs": 10000, "expectedHostMs": 10000 },
+        {
+          "id": "tap",
+          "type": "tool",
+          "clock": "host",
+          "timestampMs": 11000,
+          "durationMs": 500,
+          "deviceName": "emulator-5554",
+          "hostReceivedAtMs": 14500,
+          "expectedHostMs": 11000
+        }
+      ],
+      "expectedOffsets": null
+    },
+    {
+      "name": "one anchored device tool sets its device's offset",
+      "logs": [
+        { "id": "start", "type": "status", "clock": "host", "timestampMs": 10000, "expectedHostMs": 10000 },
+        {
+          "id": "tap",
+          "type": "tool",
+          "clock": "device",
+          "timestampMs": 8000,
+          "durationMs": 500,
+          "deviceName": "emulator-5554",
+          "hostReceivedAtMs": 11500,
+          "expectedHostMs": 11000
+        }
+      ],
+      "expectedOffsets": { "byDeviceName": { "emulator-5554": 3000 }, "sessionWideMs": 3000 }
+    },
+    {
+      "name": "the least-delayed upload wins, not the average and not the worst",
+      "logs": [
+        {
+          "id": "prompt-upload",
+          "type": "tool",
+          "clock": "device",
+          "timestampMs": 8000,
+          "durationMs": 500,
+          "deviceName": "emulator-5554",
+          "hostReceivedAtMs": 11500,
+          "expectedHostMs": 11000
+        },
+        {
+          "id": "slow-upload",
+          "type": "tool",
+          "clock": "device",
+          "timestampMs": 9000,
+          "durationMs": 500,
+          "deviceName": "emulator-5554",
+          "hostReceivedAtMs": 14500,
+          "expectedHostMs": 12000
+        },
+        {
+          "id": "batched-upload",
+          "type": "tool",
+          "clock": "device",
+          "timestampMs": 10000,
+          "durationMs": 500,
+          "deviceName": "emulator-5554",
+          "hostReceivedAtMs": 30000,
+          "expectedHostMs": 13000
+        }
+      ],
+      "expectedOffsets": { "byDeviceName": { "emulator-5554": 3000 }, "sessionWideMs": 3000 }
+    },
+    {
+      "name": "two devices keep independent offsets; an unanchored tool takes its own device's, a non-tool log the session-wide one",
+      "logs": [
+        {
+          "id": "seller-tap",
+          "type": "tool",
+          "clock": "device",
+          "timestampMs": 8000,
+          "durationMs": 500,
+          "deviceName": "seller-emulator",
+          "hostReceivedAtMs": 11500,
+          "expectedHostMs": 11000
+        },
+        {
+          "id": "buyer-tap",
+          "type": "tool",
+          "clock": "device",
+          "timestampMs": 14000,
+          "durationMs": 500,
+          "deviceName": "buyer-emulator",
+          "hostReceivedAtMs": 12500,
+          "expectedHostMs": 12000
+        },
+        {
+          "id": "unanchored-buyer-tap",
+          "type": "tool",
+          "clock": "device",
+          "timestampMs": 15000,
+          "durationMs": 500,
+          "deviceName": "buyer-emulator",
+          "expectedHostMs": 13000
+        },
+        { "id": "device-status", "type": "status", "clock": "device", "timestampMs": 20000, "expectedHostMs": 18000 }
+      ],
+      "expectedOffsets": {
+        "byDeviceName": { "seller-emulator": 3000, "buyer-emulator": -2000 },
+        "sessionWideMs": -2000
+      }
+    },
+    {
+      "name": "logs from a device that names itself and one that does not stay separate",
+      "logs": [
+        {
+          "id": "unnamed",
+          "type": "tool",
+          "clock": "device",
+          "timestampMs": 8000,
+          "durationMs": 500,
+          "hostReceivedAtMs": 11500,
+          "expectedHostMs": 11000
+        },
+        {
+          "id": "named",
+          "type": "tool",
+          "clock": "device",
+          "timestampMs": 8000,
+          "durationMs": 500,
+          "deviceName": "seller-emulator",
+          "hostReceivedAtMs": 12500,
+          "expectedHostMs": 12000
+        }
+      ],
+      "expectedOffsets": { "byDeviceName": { "": 3000, "seller-emulator": 4000 }, "sessionWideMs": 3000 }
+    },
+    {
+      "name": "a device-stamped session with no ingestion anchor reads raw",
+      "logs": [
+        { "id": "start", "type": "status", "clock": "host", "timestampMs": 10000, "expectedHostMs": 10000 },
+        {
+          "id": "tap",
+          "type": "tool",
+          "clock": "device",
+          "timestampMs": 8000,
+          "durationMs": 500,
+          "deviceName": "emulator-5554",
+          "expectedHostMs": 8000
+        }
+      ],
+      "expectedOffsets": null
+    },
+    {
+      "name": "a zero-duration tool anchors off its start alone",
+      "logs": [
+        {
+          "id": "tap",
+          "type": "tool",
+          "clock": "device",
+          "timestampMs": 8000,
+          "deviceName": "emulator-5554",
+          "hostReceivedAtMs": 11000,
+          "expectedHostMs": 11000
+        }
+      ],
+      "expectedOffsets": { "byDeviceName": { "emulator-5554": 3000 }, "sessionWideMs": 3000 }
+    }
+  ]
+}

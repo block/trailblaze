@@ -5,6 +5,7 @@ import androidx.compose.ui.test.runComposeUiTest
 import assertk.assertThat
 import assertk.assertions.contains
 import assertk.assertions.containsExactly
+import assertk.assertions.doesNotContain
 import assertk.assertions.hasSize
 import assertk.assertions.isEqualTo
 import assertk.assertions.isGreaterThan
@@ -13,6 +14,8 @@ import assertk.assertions.isNotEqualTo
 import assertk.assertions.isNotNull
 import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Clock
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import xyz.block.trailblaze.BaseTrailblazeAgent
 import xyz.block.trailblaze.compose.driver.ComposeViewHierarchyDetail
 import xyz.block.trailblaze.compose.driver.rpc.ComposeRpcClient
@@ -33,6 +36,7 @@ import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.client.TrailblazeSession
 import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
+import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
@@ -234,6 +238,45 @@ class ComposeRpcTrailblazeAgentTest {
       assertThat(result.executedTools).containsExactly(failing)
       // The post-batch screenshot still fires once (best-effort; report shows the failed state).
       assertThat(captured.filterIsInstance<TrailblazeLog.AgentDriverLog>()).hasSize(1)
+    }
+  }
+
+  /**
+   * This agent holds no tool repo in production, so an unregistered name reaches dispatch still
+   * wrapped in [OtherTrailblazeTool] and falls to the unsupported-shape branch. That branch used to
+   * print `tool::class.simpleName` — the wrapper — naming no tool at all and leaving a failed run
+   * without the one fact needed to fix it.
+   *
+   * It reports the failure instead of throwing so the batch keeps what already ran, and both halves
+   * of that are pinned here: the name has to survive the result-returning path too.
+   */
+  @Test
+  fun `an unresolvable tool is named in the error and does not discard the batch's earlier results`() {
+    val captured = mutableListOf<TrailblazeLog>()
+    withAgent(captured) { agent ->
+      val ran = ComposeTypeTool(text = "Buy milk", testTag = SampleTodoApp.TAG_TODO_INPUT)
+      val unresolvable = OtherTrailblazeTool(
+        toolName = "checkout_openTipScreen",
+        raw = buildJsonObject { put("password", "hunter2-do-not-log") },
+      )
+      val result = agent.runTrailblazeTools(
+        tools = listOf(ran, unresolvable),
+        traceId = null,
+        screenState = null,
+        elementComparator = stubElementComparator,
+        screenStateProvider = agent.screenStateProvider,
+      )
+
+      val message = (result.result as TrailblazeToolResult.Error).errorMessage
+      // Anchored to the naming position: `OtherTrailblazeTool` is a data class, so an unanchored
+      // contains() would be satisfied by a `toString()` dump and would pass against the old bug.
+      assertThat(message).contains("Unhandled Trailblaze tool checkout_openTipScreen")
+      assertThat(message).contains("ComposeRpcTrailblazeAgent supports:")
+      // Reported, not thrown — the tool that already succeeded is still in the ledger.
+      assertThat(result.executedTools).containsExactly(ran, unresolvable)
+      // `raw` is unredacted wire data and this message reaches CI logs and LLM-facing content.
+      assertThat(message).contains("Arguments provided (values omitted): password")
+      assertThat(message).doesNotContain("hunter2-do-not-log")
     }
   }
 

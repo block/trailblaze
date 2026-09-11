@@ -19,7 +19,7 @@ import xyz.block.trailblaze.yaml.TrailYamlValidator
  * directory, and only where a built CLI is available. This test walks the **git root** with nothing
  * but a JVM, so it covers every trail in the repo — fixtures, scratch trails, and anything not
  * shaped as a workspace — and it runs in plain `./gradlew check`. Same rule, cheaper and wider net.
- * It is what replaced the `session_driver_beside_devices` half of `scripts/migrate_device_form.py`.
+ * It is what replaced the `session_driver_beside_devices` half of a Python migration script.
  *
  * Deliberately mirrors [SelectorDialectCorpusTest]'s and
  * [xyz.block.trailblaze.yaml.TrailYamlValidationTest]'s discovery
@@ -29,7 +29,7 @@ import xyz.block.trailblaze.yaml.TrailYamlValidator
  * ## Only the fatal rule is gated here
  *
  * The deprecated bare-string device form is counted and logged, not failed. Its repo-wide ratchet
- * is still `scripts/migrate_device_form.py --check`, which stays until the decode-only branch in
+ * is still that script's `--check` mode, which stays until the decode-only branch in
  * [xyz.block.trailblaze.yaml.unified.TrailblazeDeviceDefinitionMapSerializer] is deleted. Two
  * absolute gates on one rule is exactly the drift worth avoiding — so this one reports the
  * inventory and lets the Python own the failure.

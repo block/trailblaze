@@ -417,7 +417,7 @@ data class AssertVisibleBySelectorTrailblazeTool(
    * is what keeps `expectedText` answerable on an EMPTY text field: an unfilled `EditText`
    * publishes its placeholder as the hint and nothing as its text, so a selector that matched the
    * field on `textRegex` would then fail the post-pass with "no readable text" — one tool
-   * disagreeing with itself about what the element says (case 5380822 asserts the item-search
+   * disagreeing with itself about what the element says (a real trail asserts the item-search
    * field shows "Search all items", which the field only ever carries as a hint).
    */
   private fun TrailblazeNode.extractText(): String? = when (val d = driverDetail) {

@@ -178,9 +178,9 @@ class RuleBackedAndroidTestTarget(
     // Resolved off the main thread on purpose, as in `AndroidScrollActions.scrollableViews`: a
     // host's activityProvider is free to reach for the resumed Activity through `runOnMainSync`,
     // which throws if it is already on the main thread. Square's does, and it also POLLS — so
-    // hoisting this is not only about the throw. Build 9923 lost case 5380821 here, 110s into a
-    // sign-in spent on the signed-out landing: that screen's looping carousel is never idle, which
-    // is the one condition that reaches this fallback at all.
+    // hoisting this is not only about the throw. One CI run lost a trail here, 110s into a
+    // sign-in spent on the signed-out landing: that screen's looping carousel is never idle,
+    // which is the one condition that reaches this fallback at all.
     val decorView = currentActivity().window.decorView
     // Through [onMainThread] rather than `runOnMainSync` directly, because this is reachable FROM
     // the UI thread — a tool dispatched inside an Espresso action reads the tree from there — and
@@ -214,30 +214,43 @@ class RuleBackedAndroidTestTarget(
   }
 
   private fun awaitIdle() {
-    // Espresso synchronizes every onView action/check with registered app idling resources. A root
-    // check is the public API for asking it to perform that synchronization without mutating UI.
+    // `onIdle`, not a root check, because a settle has no target window and must not depend on one
+    // holding focus. Every `onView` — `isRoot()` included — first runs `RootViewPicker`, which
+    // picks ONE window against `RootMatchers.DEFAULT` and then waits up to a hardcoded 10s for
+    // `Root.isReady()`, never re-picking. `DEFAULT` requires `isFocusable()`, which rules out the
+    // `FLAG_NOT_FOCUSABLE` branch of `isReady()`, so under it readiness means exactly "this window
+    // holds window focus". A settle runs immediately after the action that opened a modal — during
+    // a focus handover — so picking the outgoing window in the gap before the incoming one is a
+    // candidate leaves a wait that can only expire. A real trail died there on the tap that opens
+    // an item-detail sheet: picked root ty=BASE_APPLICATION, has-window-focus=false,
+    // is-layout-requested=false, 10s, while the sheet's own window held focus and the tap itself
+    // had landed. The same shape reaches any window this process cannot see — an expanded
+    // notification shade leaves the app's only root permanently unfocused.
+    //
+    // `onIdle` performs the same synchronization: it runs `UiController.loopMainThreadUntilIdle()`
+    // on the main thread, which is the wait every onView action and check is built on. It just does
+    // not pick a root first.
     //
     // Never idling is a legitimate state of a real app, not a test failure. A screen with a looping
     // animation — the signed-out Square landing runs an endless photo carousel — keeps Compose's
     // recomposer perpetually busy, so this synchronization can only ever expire there. Letting that
     // expiry propagate turns "the app is animating" into a failed trail on whichever step happened
-    // to be running: build 9907 lost its sign-in that way, after 69s of waiting on a screen that
+    // to be running: a CI run lost its sign-in that way, after 69s of waiting on a screen that
     // was healthy and had the Sign in button on it the whole time.
     //
     // So expiry means "stop waiting", not "give up". Every caller polls — the resolve loop re-reads
     // the tree until its own deadline, and the sign-in tool waits on screens with budgets of its
     // own — and a tree read off a still-animating screen is answerable in exactly the way a
     // never-arriving idle signal is not. The wait is an optimization; the polling is the contract.
-    val espressoTimedOut = runCatching {
-      Espresso.onView(androidx.test.espresso.matcher.ViewMatchers.isRoot())
-        .check { _: View?, _: androidx.test.espresso.NoMatchingViewException? -> }
-    }.fold(onSuccess = { false }) { if (it.isIdleTimeout()) true else throw it }
+    val espressoTimedOut =
+      runCatching { Espresso.onIdle() }
+        .fold(onSuccess = { false }) { if (it.isIdleTimeout()) true else throw it }
     // The Compose wait is SKIPPED once Espresso has already reported never-idle. Compose registers
-    // its recomposer as an Espresso idling resource, so the check above waits on it too and
+    // its recomposer as an Espresso idling resource, so the wait above covers it too and
     // `ComposeTestRule.waitForIdle()` delegates back to Espresso on Android — running it after a
     // timeout re-pays the whole framework timeout to be told the same thing. Every caller polls, so
-    // on a never-idle screen that doubling lands on each poll: build 9923 spent 110s of case
-    // 5380821's sign-in on the signed-out landing's endless carousel.
+    // on a never-idle screen that doubling lands on each poll: one run spent 110s of a single
+    // trail's sign-in waiting on the signed-out landing's endless carousel.
     if (espressoTimedOut) return
     runCatching { composeTestRule?.waitForIdle() }
       .onFailure { if (!it.isIdleTimeout()) throw it }

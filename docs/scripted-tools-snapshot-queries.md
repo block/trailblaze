@@ -1,8 +1,15 @@
 # Snapshot queries from scripted tools
 
-`findMatches` is the typed-authoring primitive for asking _"is this element visible,"_ _"is the selector unambiguous,"_ and _"where is the match on screen?"_ without
+`findSelectorMatches` is the typed-authoring primitive for asking _"is this element visible,"_ _"is the selector unambiguous,"_ and _"where is the match on screen?"_ without
 mutating the device. It complements the action tools (`tapOnPoint`, `inputText`,
 `swipe`, …) — together they let a scripted tool branch on the live screen state.
+
+It takes a LIST of selectors and answers all of them from ONE view-hierarchy capture,
+returning one match list per selector, index-aligned to the input.
+
+> `findMatches` — the single-selector tool this replaces — is **deprecated** and scheduled
+> for deletion once its callers move. A single-element `selectors` list behaves identically
+> to it, so migrating is mechanical. Don't add new callers.
 
 ## What it returns
 
@@ -16,8 +23,8 @@ export interface SubmitIfVisibleResult {
 export const submit_if_visible = trailblaze.tool<EmptyInput, SubmitIfVisibleResult>(
   { supportedPlatforms: ["android"], requiresContext: true },
   async (_input, ctx) => {
-    const matches = await ctx.tools.findMatches({
-      selector: { androidAccessibility: { textRegex: "Submit" } },
+    const [matches] = await ctx.tools.findSelectorMatches({
+      selectors: [{ androidAccessibility: { textRegex: "Submit" } }],
     });
 
     // matches.length === 0  -> not visible
@@ -45,6 +52,12 @@ function boundsCenter(b: { left: number; top: number; right: number; bottom: num
 }
 ```
 
+An empty match list is a MEASURED absence — the selector's "not on screen" answer, and
+the caller's absent branch. Every error path means the question could not be asked at
+all (nothing captured, or an answer that came out of a capture the device could not
+complete and so cannot be trusted as absence). A selector that simply matches nothing
+never throws.
+
 Each `MatchDescriptor` carries enough info to act on without re-querying:
 
 | Field             | Meaning                                                                |
@@ -70,14 +83,14 @@ re-query after any action that could change the screen.
 
 ```ts
 // Good — descriptor consumed immediately.
-const matches = await ctx.tools.findMatches({ ... });
+const [matches] = await ctx.tools.findSelectorMatches({ selectors: [submit] });
 if (matches.length === 1 && matches[0].bounds) {
   const { centerX, centerY } = boundsCenter(matches[0].bounds);
   await ctx.tools.tapOnPoint({ x: centerX, y: centerY });
 }
 
 // Avoid — storing descriptors across actions.
-const earlier = await ctx.tools.findMatches({ ... });
+const [earlier] = await ctx.tools.findSelectorMatches({ selectors: [submit] });
 await ctx.tools.tapOnPoint({ x: 100, y: 200 });   // mutates the tree
 // `earlier[0].indexPath` no longer points where you think it does.
 ```
@@ -120,38 +133,63 @@ Both forms are interchangeable; the literal form stays copy-paste compatible wit
 the YAML serialization. The factory (and the selector types) are code-generated
 from the Kotlin source of truth via `:trailblaze-models:generateSelectorsTs`.
 
-## Snapshot reuse
+## One capture, N selectors
 
-Calling `findMatches` multiple times within one tool invocation pays the
-multi-second view-hierarchy fetch _at most once_:
+**Batch every selector you want to ask about into ONE call.** A view-hierarchy capture
+takes seconds, and the tool pays exactly one for the whole list:
 
 ```ts
-// Both queries reuse the same captured tree.
-const submitMatches = await ctx.tools.findMatches({ … });
-const cancelMatches = await ctx.tools.findMatches({ … });
+// ONE capture answers both.
+const [submitMatches, cancelMatches] = await ctx.tools.findSelectorMatches({
+  selectors: [submit, cancel],
+});
 ```
 
-When an action tool dispatches in the same batch, the cache is invalidated
-automatically so a follow-up query reads the post-action tree:
+Splitting that into two calls pays TWO captures. The daemon's snapshot cache does not
+help here: each `ctx.tools.*` callback enters its own nested cache frame, so back-to-back
+queries from one scripted tool body each capture their own tree.
+
+Batching is also a correctness win, not just a speed one. Two sequential probes can
+report both conditions true, or neither, depending on which order they ran and how the
+screen moved in between; one capture removes that. Ties inside a single frame are yours
+to break — check your preferred selector first.
+
+An action tool dispatched in between invalidates the cached tree, so a query after it
+reads the post-action screen:
 
 ```ts
-const before = await ctx.tools.findMatches({ … });   // captures
-await ctx.tools.tapOnPoint({ x: 100, y: 200 });      // invalidates
-const after = await ctx.tools.findMatches({ … });    // re-captures
+const [before] = await ctx.tools.findSelectorMatches({ selectors: [submit] });
+await ctx.tools.tapOnPoint({ x: 100, y: 200 });   // invalidates
+const [after] = await ctx.tools.findSelectorMatches({ selectors: [submit] });
 ```
 
 Verification tools (`assertVisibleBySelector`, `assertVisibleWithText`, …) are
-read-only and don't invalidate — querying around a verification reuses the same
-tree.
+read-only and don't invalidate.
 
-## When NOT to use `findMatches`
+## Waiting for a screen
 
-- **For mutation** — `findMatches` never taps, scrolls, or types. Pair it with
+Pass `timeoutMs` and the call becomes an event-driven wait: it re-polls the live
+hierarchy until a match appears or the budget elapses, so it returns the moment the
+screen renders rather than after a fixed sleep.
+
+**With several selectors it is a race primitive** — the wait ends as soon as ANY
+selector matches, and every other selector is answered from that same frame. That is
+how you wait for "either the wizard or the home screen" in one round trip per poll
+instead of two:
+
+```ts
+const [wizard, home] = await ctx.tools.findSelectorMatches({
+  selectors: [wizardAnchor, homeAnchor],
+  timeoutMs: 30_000,
+});
+if (wizard.length > 0) { /* handle the wizard */ }
+```
+
+## When NOT to use `findSelectorMatches`
+
+- **For mutation** — it never taps, scrolls, or types. Pair it with
   `tapOnPoint` / `swipe` / `inputText` when you need to act on a result.
-- **As an LLM-callable tool** — `findMatches` is hidden from the LLM agent
+- **As an LLM-callable tool** — it is hidden from the LLM agent
   (`surfaceToLlm = false`). The LLM's verification surface is
-  `assertVisibleBySelector` and friends; `findMatches` is for scripted authors
+  `assertVisibleBySelector` and friends; this is for scripted authors
   who want explicit visibility branching.
-- **For waiting on conditions** — the snapshot is captured at call time. To
-  wait for an element to appear, loop with a short delay and re-query, or use
-  a higher-level wait primitive when one is available.

@@ -58,8 +58,10 @@ import xyz.block.trailblaze.util.Console
  * cached snapshot for a follow-up query:
  *
  *  - Mark the tool class with [ReadOnlyTrailblazeTool] for query-shaped tools
- *    (today: `FindMatchesTrailblazeTool`). Use this when the tool reads from
+ *    (today: `FindMatchesTrailblazeTool` and
+ *    `FindSelectorMatchesTrailblazeTool`). Use this when the tool reads from
  *    the device but never mutates state.
+ *
  *  - Set `@TrailblazeToolClass(isVerification = true)` for assertion tools.
  *    Verifications never mutate, and the dispatcher recognises this flag.
  *
@@ -67,6 +69,16 @@ import xyz.block.trailblaze.util.Console
  * delegation/recording marker, not a read-only marker. `TapTrailblazeTool`
  * has `isRecordable = false` while still mutating the device, so the gate
  * has to be explicit about which tools are genuinely read-only.
+ *
+ * ## What this cache does NOT do
+ *
+ * The frame is pushed once per tool BATCH by `BaseTrailblazeAgent.runTrailblazeTools`,
+ * and each scripting callback enters its own NESTED frame — so N
+ * `client.tools.findMatches(...)` calls from inside one scripted tool take N
+ * captures, whatever this cache holds. Widening a frame to span a whole scripted
+ * invocation would be worse, not better: a tool that polls for 30s would then
+ * read one stale capture for its entire run. Batching several selectors into one
+ * capture is therefore explicit, via `FindSelectorMatchesTrailblazeTool`.
  *
  * ## Diagnostic logging
  *

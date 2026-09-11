@@ -12,7 +12,7 @@ import kotlin.test.assertTrue
  * Unit tests for [TrailmapUnitTestRunner] — the bun-test phase that runs as step 3 of
  * `trailblaze check`. Coverage focuses on the pure-logic surface that doesn't require
  * spawning `bun`: file discovery and the timeout-parse fallback. The actual subprocess
- * dispatch is covered indirectly by `pr_validate_ts_tooling.sh` running against the real
+ * dispatch is covered indirectly by the TypeScript tooling validation step running against the real
  * example trailmaps in CI (where bun is on PATH and a real workspace exists).
  *
  * Why no end-to-end "tests pass" / "tests fail" cases here: `TrailmapUnitTestRunner.run()`
@@ -21,7 +21,7 @@ import kotlin.test.assertTrue
  * that depends on it would either need conditional skipping (which masks regressions on
  * agents that DO have bun) or a stubbed PathResolver injection (which adds production
  * complexity to support a unit-only seam). The chosen split — pure-logic unit-tested
- * here, integration covered by `pr_validate_ts_tooling.sh` against the real example
+ * here, integration covered by the TypeScript tooling validation step against the real example
  * trailmaps — keeps both layers honest without either masking failures or adding test-only
  * production code.
  */

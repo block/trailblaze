@@ -8,6 +8,9 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.llm.LlmSessionUsageAndCost
 import xyz.block.trailblaze.llm.LlmUsageAndCostExt.computeUsageSummary
 import xyz.block.trailblaze.logs.client.TrailblazeLog
+import xyz.block.trailblaze.logs.client.deviceClockOffsets
+import xyz.block.trailblaze.logs.client.normalizedMs
+import xyz.block.trailblaze.logs.client.normalizedTimestamp
 import xyz.block.trailblaze.model.TrailblazeTargetAppInfo
 import xyz.block.trailblaze.recordings.TrailRecordings
 import xyz.block.trailblaze.yaml.TrailConfig
@@ -46,6 +49,15 @@ data class SessionInfo(
   val llmUsageSummary: LlmSessionUsageAndCost? = null,
   /** See [SessionStatus.Started.selectedDeviceConfiguration]. Null for single-device sessions. */
   val selectedDeviceConfiguration: String? = null,
+  /**
+   * Milliseconds to add to a device stamp to reach the host clock, as measured from this session's
+   * ingestion anchors (see `deviceClockOffsets`). Carried here because normalizing a session's logs
+   * CONSUMES the evidence — a normalized log is marked `clock: host`, so a later reader can no
+   * longer derive it — while streams that were never normalized still need it: the device-log panel
+   * scrubs on the host timeline over logcat lines stamped by the device. Null when the session had
+   * no anchored device-clock log, and for the summary path, which parses only status logs.
+   */
+  val deviceClockOffsetMs: Long? = null,
 ) {
   // Title resolution priority:
   //  1. trailConfig.title  — explicit human-readable title in YAML
@@ -122,18 +134,18 @@ fun List<TrailblazeLog>.getSessionInfo(): SessionInfo? {
     return null
   }
   val sessionStartedInfo: SessionStatus.Started? = this.getSessionStartedInfo()
-  val firstLog: TrailblazeLog = this.first()
-  val lastLog: TrailblazeLog? = this.lastOrNull()
+  // Earliest/latest on the HOST timeline, not first/last in the list: a session mixing host- and
+  // device-stamped logs is not chronological in either raw order or raw timestamp, so positional
+  // bookends read a device's skew as session duration (and can report it negative).
+  val offsets = deviceClockOffsets()
+  val firstLog: TrailblazeLog = this.minBy { it.normalizedMs(offsets) }
+  val lastLog: TrailblazeLog = this.maxBy { it.normalizedMs(offsets) }
 
-  val durationMs = if (lastLog != null) {
-    lastLog.timestamp.toEpochMilliseconds() - firstLog.timestamp.toEpochMilliseconds()
-  } else {
-    0L
-  }
+  val durationMs = lastLog.normalizedMs(offsets) - firstLog.normalizedMs(offsets)
 
   return SessionInfo(
     sessionId = firstLog.session,
-    timestamp = firstLog.timestamp,
+    timestamp = firstLog.normalizedTimestamp(offsets),
     latestStatus = this.getSessionStatus(),
     trailblazeDeviceId = sessionStartedInfo?.trailblazeDeviceId,
     testName = sessionStartedInfo?.testMethodName,
@@ -146,5 +158,6 @@ fun List<TrailblazeLog>.getSessionInfo(): SessionInfo? {
     hasRecordedSteps = sessionStartedInfo?.hasRecordedSteps ?: false,
     llmUsageSummary = this.computeUsageSummary(),
     selectedDeviceConfiguration = sessionStartedInfo?.selectedDeviceConfiguration,
+    deviceClockOffsetMs = offsets?.sessionWideOffsetMs,
   )
 }

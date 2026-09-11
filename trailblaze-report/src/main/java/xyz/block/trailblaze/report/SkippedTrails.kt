@@ -25,7 +25,7 @@ import xyz.block.trailblaze.util.Console
  *
  * One file per skip under `<logsDir>/skipped/`, rather than one list file the runner rewrites.
  * CI invokes `trailblaze run <trail>` once per trail into a single logs dir (see
- * `run_trails_via_cli.sh`), so a shared list would be a read-modify-write race between
+ * the CLI trail-runner CI script), so a shared list would be a read-modify-write race between
  * consecutive - and, on a fan-out run, concurrent - processes. A file per skip needs no
  * coordination.
  *

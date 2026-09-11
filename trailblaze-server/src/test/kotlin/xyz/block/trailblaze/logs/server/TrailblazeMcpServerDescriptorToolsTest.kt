@@ -3,7 +3,10 @@ package xyz.block.trailblaze.logs.server
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.SerializationException
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.add
+import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
@@ -48,6 +51,8 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
 import xyz.block.trailblaze.toolcalls.commands.SwitchDeviceTrailblazeTool
 import kotlin.reflect.KClass
 import kotlin.test.assertEquals
+import kotlin.test.assertIs
+import kotlin.test.assertNotNull
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
@@ -459,6 +464,79 @@ class TrailblazeMcpServerDescriptorToolsTest {
       context.toolRepo != null,
       "The execution context must carry the session repo so Kotlin tools can compose " +
         "framework tools by name",
+    )
+  }
+
+  @Test
+  fun `a nested device call hands the host-local tool its typed payload`() {
+    // The #6653 defect on this entry point: the nested executor wrapped the bridge's RENDERED
+    // string as `Success(message = ...)`, so a composite doing
+    // `const { appIds } = await ctx.tools.listInstalledApps({})` saw structuredContent null and
+    // destructured a string into `undefined`.
+    val inlineTarget = InlineToolTarget(
+      id = "inlinetarget",
+      displayName = "Inline Target",
+      inlineToolName = "hostlocal_probe",
+    )
+    val payload = buildJsonObject {
+      put("appIds", buildJsonArray { add(JsonPrimitive("com.example.one")) })
+    }
+    val bridge = RecordingBridge(targets = setOf(inlineTarget), currentTargetId = inlineTarget.id)
+      .apply { nestedStructuredContent = payload }
+    val server = newServer(bridge)
+    var nestedResult: TrailblazeToolResult? = null
+    val hostLocalTool = FakeHostLocalTool(name = "hostlocal_probe") { context ->
+      nestedResult = context.nestedToolExecutor?.invoke(NestedProbeTool())
+      TrailblazeToolResult.Success(message = "done")
+    }
+
+    runBlocking {
+      server.executeDescriptorBackedTool(
+        sessionId = installHostLocalFixture(server, inlineTarget, hostLocalTool),
+        toolName = "hostlocal_probe",
+        arguments = buildJsonObject {},
+      )
+    }
+
+    val success = assertIs<TrailblazeToolResult.Success>(nestedResult)
+    assertEquals(
+      payload,
+      success.structuredContent,
+      "The nested tool's typed payload must reach the composing tool as a value",
+    )
+  }
+
+  @Test
+  fun `a nested call carries the host-local dispatch's trace id`() {
+    // Without this, each nested dispatch mints its own trace id and one logical tool call is
+    // scattered across the report with nothing tying the children to the parent.
+    val inlineTarget = InlineToolTarget(
+      id = "inlinetarget",
+      displayName = "Inline Target",
+      inlineToolName = "hostlocal_probe",
+    )
+    val bridge = RecordingBridge(targets = setOf(inlineTarget), currentTargetId = inlineTarget.id)
+    val server = newServer(bridge)
+    var contextTraceId: TraceId? = null
+    val hostLocalTool = FakeHostLocalTool(name = "hostlocal_probe") { context ->
+      contextTraceId = context.traceId
+      context.nestedToolExecutor?.invoke(NestedProbeTool())
+      TrailblazeToolResult.Success(message = "done")
+    }
+
+    runBlocking {
+      server.executeDescriptorBackedTool(
+        sessionId = installHostLocalFixture(server, inlineTarget, hostLocalTool),
+        toolName = "hostlocal_probe",
+        arguments = buildJsonObject {},
+      )
+    }
+
+    assertNotNull(contextTraceId, "The dispatch context must carry a trace id to inherit")
+    assertEquals(
+      listOf(contextTraceId),
+      bridge.dispatchedTraceIds,
+      "The nested dispatch must inherit the composing tool's trace id",
     )
   }
 
@@ -1024,6 +1102,9 @@ class TrailblazeMcpServerDescriptorToolsTest {
     /** Device id bound in [McpDeviceContext] at the moment each tool dispatched (null if unbound). */
     val dispatchedDeviceInstanceIds = mutableListOf<String?>()
 
+    /** Trace id each dispatch arrived with, so nested-call correlation is assertable. */
+    val dispatchedTraceIds = mutableListOf<TraceId?>()
+
     override fun getAvailableAppTargets(): Set<TrailblazeHostAppTarget> = targets
     override fun getCurrentAppTargetId(): String? = currentTargetId
     override fun getSessionTargetAppIdForDevice(deviceId: TrailblazeDeviceId): String? = currentTargetId
@@ -1048,7 +1129,27 @@ class TrailblazeMcpServerDescriptorToolsTest {
     ): String {
       executedTools += tool
       dispatchedDeviceInstanceIds += McpDeviceContext.currentDeviceId.get()?.instanceId
+      dispatchedTraceIds += traceId
       return "[OK] executed"
+    }
+
+    /**
+     * Set to make dispatch answer with a typed payload, the way a real structured-result tool
+     * (e.g. `listInstalledApps`) does. Left null to keep the string-only behavior.
+     */
+    var nestedStructuredContent: JsonElement? = null
+
+    override suspend fun executeTrailblazeToolForResult(
+      tool: TrailblazeTool,
+      blocking: Boolean,
+      traceId: TraceId?,
+    ): TrailblazeToolResult {
+      val structured = nestedStructuredContent
+        ?: return TrailblazeToolResult.Success(message = executeTrailblazeTool(tool, blocking, traceId))
+      executedTools += tool
+      dispatchedDeviceInstanceIds += McpDeviceContext.currentDeviceId.get()?.instanceId
+      dispatchedTraceIds += traceId
+      return TrailblazeToolResult.Success(message = null, structuredContent = structured)
     }
 
     // ── Unused — no-ops just to satisfy the interface ───────────────────────

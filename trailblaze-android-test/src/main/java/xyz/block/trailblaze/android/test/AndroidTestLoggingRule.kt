@@ -70,6 +70,9 @@ class AndroidTestLoggingRule(
   },
 ) {
 
+  /** This rule runs inside the app's instrumentation, so every timestamp is the device's clock. */
+  protected override val useDeviceClock: Boolean = true
+
   /** The level to hand back after the test, or null when this run asked for nothing. */
   private var levelToRestore: TraceLevel? = null
 
@@ -163,7 +166,7 @@ class AndroidTestLoggingRule(
         }
       }
 
-    /** Must match what CI pulls — see `ATF_DIRECTORIES_TO_PULL` in the farm step scripts. */
+    /** Must match the directory list the device-farm step scripts pull. */
     private const val LOGS_DIR = "trailblaze-logs"
 
     private fun writeToLogsDir(fileName: String, bytes: ByteArray, what: String) {

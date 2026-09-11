@@ -546,11 +546,11 @@ class TrailRunnerIntegrationTest {
     // in `.trail.yaml`. Drive the two routes the browser hits: the index must list it with the
     // directory-derived id `.../trail`, and the detail route must resolve that id back to the file —
     // the full walk → build → resolveTrailFile round-trip over HTTP, not just the unit-level resolver.
-    val caseDir = File(trailsDir, "regression/case_5374124").also { it.mkdirs() }
+    val caseDir = File(trailsDir, "regression/case_1001").also { it.mkdirs() }
     File(caseDir, "trail.yaml").writeText(
       """
       config:
-        id: regression/case_5374124
+        id: regression/case_1001
         title: Cold boot flow
         target: myapp
       trail:
@@ -561,12 +561,12 @@ class TrailRunnerIntegrationTest {
     withTrailRunner {
       val index = client.get("/trailrunner/api/trails").bodyAsText()
       assertTrue(
-        index.contains("\"0/regression/case_5374124/trail\""),
+        index.contains("\"0/regression/case_1001/trail\""),
         "index should list the bare trail id: ${index.take(500)}",
       )
       assertTrue(index.contains("Cold boot flow"), "index should carry the config title: ${index.take(500)}")
 
-      val detail = client.get("/trailrunner/api/trail/0/regression/case_5374124/trail")
+      val detail = client.get("/trailrunner/api/trail/0/regression/case_1001/trail")
       assertEquals(HttpStatusCode.OK, detail.status)
       assertTrue(
         detail.bodyAsText().contains("Open the app"),
@@ -580,9 +580,9 @@ class TrailRunnerIntegrationTest {
     // `buildEditedTrailsResponse` runs `git status --porcelain` under the workspace and keeps only
     // trail-shaped basenames. Guards that a migrated bare `trail.yaml` shows up under edited-only
     // filtering — the previous `endsWith(".trail.yaml")` filter dropped it (bare != `.trail.yaml`).
-    val caseDir = File(trailsDir, "regression/case_5374124").also { it.mkdirs() }
+    val caseDir = File(trailsDir, "regression/case_1001").also { it.mkdirs() }
     val bare = File(caseDir, "trail.yaml")
-    bare.writeText("config:\n  id: regression/case_5374124\ntrail:\n  - step: Open the app\n")
+    bare.writeText("config:\n  id: regression/case_1001\ntrail:\n  - step: Open the app\n")
 
     commitWorkspace()
     // Modify the now-committed bare trail so `git status --porcelain` reports it as ` M`.
@@ -593,7 +593,7 @@ class TrailRunnerIntegrationTest {
       assertEquals(HttpStatusCode.OK, response.status)
       val body = response.bodyAsText()
       assertTrue(
-        body.contains("regression/case_5374124/trail.yaml"),
+        body.contains("regression/case_1001/trail.yaml"),
         "edited list should include the modified bare trail: $body",
       )
     }

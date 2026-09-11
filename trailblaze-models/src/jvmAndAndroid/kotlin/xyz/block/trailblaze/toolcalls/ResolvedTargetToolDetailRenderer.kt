@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.toolcalls
 
+import ai.koog.agents.core.tools.ToolParameterType
 import java.io.File
 import kotlin.reflect.KClass
 import kotlin.reflect.full.findAnnotation
@@ -217,12 +218,32 @@ object ResolvedTargetToolDetailRenderer {
     }
     renderKoogParams(
       required = descriptor.requiredParameters.map {
-        ParamRow(it.name, it.type.toString(), it.description.takeIf(String::isNotBlank))
+        ParamRow(it.name, renderKoogType(it.type), it.description.takeIf(String::isNotBlank))
       },
       optional = descriptor.optionalParameters.map {
-        ParamRow(it.name, it.type.toString(), it.description.takeIf(String::isNotBlank))
+        ParamRow(it.name, renderKoogType(it.type), it.description.takeIf(String::isNotBlank))
       },
     )
+  }
+
+  /**
+   * Friendly type label for a Koog [ToolParameterType], in the same vocabulary
+   * [schemaTypeAndDescription] renders for scripted tools — so `enum(A | B)` and `array<string>`
+   * read identically whether the tool is class-backed or scripted.
+   *
+   * The composite types can't use their own `toString()`: it is a multi-line Kotlin data-class
+   * dump (`ToolParameterType.Enum(\n  entries = [...]\n)`), which leaks the type model into the
+   * doc and breaks the Markdown list item [appendParamRow] interpolates it into. The scalars
+   * (`String`, `Integer`, `Float`, `Boolean`, `Null`) render as their simple name, which is the
+   * shipped spelling, so they pass through — and the newline guard means a composite added by a
+   * future Koog falls back to its stable `name` instead of silently reintroducing the dump.
+   */
+  private fun renderKoogType(type: ToolParameterType): String = when (type) {
+    is ToolParameterType.Enum -> "enum(${type.entries.joinToString(" | ")})"
+    is ToolParameterType.List -> "array<${renderKoogType(type.itemsType)}>"
+    is ToolParameterType.Object -> "object"
+    is ToolParameterType.AnyOf -> "anyOf(${type.types.joinToString(" | ") { renderKoogType(it.type) }})"
+    else -> type.toString().takeUnless { it.contains('\n') } ?: type.name.lowercase()
   }
 
   private fun StringBuilder.renderYamlDefined(detail: ToolDetail.YamlDefined) {

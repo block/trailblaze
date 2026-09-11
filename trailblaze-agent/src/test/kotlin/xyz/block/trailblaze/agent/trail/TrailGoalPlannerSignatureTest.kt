@@ -80,7 +80,7 @@ class TrailGoalPlannerSignatureTest {
 
   @Test
   fun `coalesces SUCCESS and FAILED variants of the same action through the cycle detector`() {
-    // Reproduces the case_4839652 path through the strip helper: the same logical
+    // Reproduces that same 25-cycle loop's path through the strip helper: the same logical
     // action (tap Items → tap Back) ping-pongs, with mixed outcomes from the
     // recoverable-failure retry path. After stripping, the detector should see a
     // length-2 cycle and emit a CRITICAL hint.

@@ -212,7 +212,7 @@ class CheckCommandTest {
     // skip-everything `--no-typecheck` would also exit 0 and silently pass this
     // assertion). A negative case here would need a trailmap with a failing `*.test.ts`,
     // which in turn needs `bun` on PATH and the runtime SDK bundle — that integration
-    // shape is covered by `pr_validate_ts_tooling.sh` against the real example trailmaps,
+    // shape is covered by the TypeScript tooling validation step against the real example trailmaps,
     // not duplicated here.
     val workspaceRoot = newWorkspaceWithTrailmap(trailmapId = "alpha", withTarget = true)
     val toolsDir = File(workspaceRoot, "trails/config/trailmaps/alpha/tools").apply { mkdirs() }
@@ -1207,8 +1207,8 @@ class CheckCommandTest {
    * payload must fail the run, not pass it.
    *
    * Mainline builds went green with the entire trail-recording validation phase skipped — sampled
-   * directly, builds 12050 and 12280 logged `bundled tsc payload missing` for every workspace
-   * while 12362 ran the phase. Nothing caught it: the CI step runs `check --no-typecheck`, which
+   * directly, two of three CI runs logged `bundled tsc payload missing` for every workspace while
+   * only the third ran the phase. Nothing caught it: the CI step runs `check --no-typecheck`, which
    * skips the one phase ([CheckCommand.runTypecheckPhase]) that treated the missing payload as
    * fatal, and this phase then returned `EXIT_OK`. Asserted on the phase (with its payload resolver
    * injected) rather than on the classifier alone, so re-wiring this branch back to `EXIT_OK` fails.

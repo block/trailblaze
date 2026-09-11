@@ -16,6 +16,7 @@ import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeSession
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionStatus
+import xyz.block.trailblaze.logs.model.TrailblazeClockDomain
 
 /**
  * Tests for the two consolidated entry points shared by all run methods (JUnit hook, on-device
@@ -188,6 +189,49 @@ class TrailblazeLoggingRuleTest {
     assertEquals(started.sessionId, log.session)
   }
 
+  // -- Clock-domain stamping: the emitter is the only place that knows which clock it is on --
+
+  @Test
+  fun `a device-clock rule stamps DEVICE on every emitted log`() {
+    // Must happen at EMISSION, not server ingestion: this emitter's server is unreachable, so the
+    // log takes the disk-fallback path — exactly the device logs that never pass through the host
+    // and would otherwise carry no clock domain at all. Assert on the DISK artifact, not just the
+    // observer copy: the pulled-back file is what readers of a disk-fallback session decode, and
+    // a regression that stamped only the observer copy would leave those files unmarked.
+    val captured = mutableListOf<TrailblazeLog>()
+    val written = mutableListOf<TrailblazeLog>()
+    val rule = TestLoggingRule(
+      additionalLogEmitter = LogEmitter(captured::add),
+      useDeviceClock = true,
+      writeLogToDisk = { _, log -> written += log },
+    )
+
+    rule.endSession(session(), isSuccess = true)
+
+    val log = captured.filterIsInstance<TrailblazeLog.TrailblazeSessionStatusChangeLog>().single()
+    assertEquals(TrailblazeClockDomain.DEVICE, log.clock)
+    val diskLog = written.filterIsInstance<TrailblazeLog.TrailblazeSessionStatusChangeLog>().single()
+    assertEquals(
+      TrailblazeClockDomain.DEVICE,
+      diskLog.clock,
+      "the disk-fallback write must carry the same stamped log the observers saw",
+    )
+  }
+
+  @Test
+  fun `a host-clock rule stamps HOST rather than leaving the domain absent`() {
+    // Positively, not by omission: a reader can't distinguish an unstamped host log from a log
+    // written before the field existed, so it has to guess — and the report's profiler guesses
+    // from the log CLASS, which reads a host driver's logs as device-stamped.
+    val captured = mutableListOf<TrailblazeLog>()
+    val rule = TestLoggingRule(additionalLogEmitter = LogEmitter(captured::add))
+
+    rule.endSession(session(), isSuccess = true)
+
+    val log = captured.filterIsInstance<TrailblazeLog.TrailblazeSessionStatusChangeLog>().single()
+    assertEquals(TrailblazeClockDomain.HOST, log.clock)
+  }
+
   // -- Fixtures --
 
   private fun endStatus(captured: List<TrailblazeLog>): SessionStatus =
@@ -208,9 +252,12 @@ class TrailblazeLoggingRuleTest {
    */
   private class TestLoggingRule(
     additionalLogEmitter: LogEmitter? = null,
+    override val useDeviceClock: Boolean = false,
+    writeLogToDisk: ((SessionId, TrailblazeLog) -> Unit) = { _, _ -> },
   ) : TrailblazeLoggingRule(
     logsBaseUrl = "http://127.0.0.1:1",
     additionalLogEmitter = additionalLogEmitter,
+    writeLogToDisk = writeLogToDisk,
   ) {
     override val trailblazeDeviceInfoProvider: () -> TrailblazeDeviceInfo = {
       TrailblazeDeviceInfo(

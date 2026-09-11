@@ -46,6 +46,20 @@ fun TrailblazeTool.getToolNameFromAnnotation(): String = when {
 }
 
 /**
+ * The name this tool instance answers to — what a reader should see in a log, a trace span or a
+ * failure report.
+ *
+ * An instance that names itself wins over its class annotation. Every `tools:`-authored tool is a
+ * [xyz.block.trailblaze.config.YamlDefinedTrailblazeTool], so its annotation is the shared reserved
+ * `_yaml_defined` for all of them — going by the annotation alone collapses every YAML-defined tool
+ * into one indistinguishable name. Same rule the session-log payload applies in
+ * `toOtherTrailblazeToolPayload`.
+ */
+fun TrailblazeTool.resolveToolName(): String =
+  (this as? InstanceNamedTrailblazeTool)?.instanceToolName?.takeIf { it.isNotBlank() }
+    ?: getToolNameFromAnnotation()
+
+/**
  * Resolves the recordability bit for a tool instance.
  *
  * Per-instance [TrailblazeTool.toolMetadata] (when present) wins — that's the path

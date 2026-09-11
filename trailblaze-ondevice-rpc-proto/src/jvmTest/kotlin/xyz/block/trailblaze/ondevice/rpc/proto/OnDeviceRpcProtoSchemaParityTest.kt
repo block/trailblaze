@@ -70,7 +70,10 @@ class OnDeviceRpcProtoSchemaParityTest {
       // device has a concept of a companion or a configuration name. A multi-device trail cannot
       // reach this transport in the first place — dispatch requires `preferHostAgent`, and
       // DesktopYamlRunner refuses a declared configuration on every other path.
-      ignoredModelFields = setOf("deviceConfiguration", "deviceBindings"),
+      ignoredModelFields = setOf(
+        "deviceConfiguration",
+        "deviceBindings",
+      ),
     )
     assertParity(
       ModelRunYamlResponse.serializer(),

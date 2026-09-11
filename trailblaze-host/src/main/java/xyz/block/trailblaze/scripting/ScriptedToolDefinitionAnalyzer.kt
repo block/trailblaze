@@ -557,6 +557,9 @@ open class ScriptedToolDefinitionAnalyzer(
             "$EXTRACTOR_SHIM_RELPATH — ignoring the override and resolving normally.",
         )
       }
+      // SISTER-IMPL-TAG: sdk-package-subpaths. LazyYamlScriptedToolRegistration.SDK_PACKAGE_SUBPATHS
+      // in :trailblaze-quickjs-tools is the same list; it's internal to a module that can't depend on
+      // this one, so a third layout has to be added in both places.
       val subPaths = listOf("sdks/typescript", "opensource/sdks/typescript")
       var current: File? = startDir.absoluteFile
       while (current != null) {

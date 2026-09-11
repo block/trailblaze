@@ -71,6 +71,12 @@ export function resolveFormatterModule(mod: unknown): EventStreamFormatter | nul
   if (!f || typeof f !== "object") return null;
   if (typeof f.id !== "string" || !f.id) return null;
   if (!Array.isArray(f.streams) || !f.streams.length || f.streams.some((s) => typeof s !== "string")) return null;
+  if (f.comparisonNames != null && (
+    typeof f.comparisonNames !== "object" ||
+    Array.isArray(f.comparisonNames) ||
+    Object.entries(f.comparisonNames).some(([from, to]) => !from || typeof to !== "string" || !to)
+  )) return null;
+  if (f.comparisonValues != null && typeof f.comparisonValues !== "function") return null;
   if (typeof f.format !== "function") return null;
   return f;
 }
@@ -331,6 +337,23 @@ export function formatRows(
   return rows.length ? rows : null;
 }
 
+/** Run and bound a formatter's Compare-only canonical payload projection. */
+function formatComparisonValues(
+  formatter: EventStreamFormatter,
+  entries: FormatterEntry[],
+  ctx?: FormatterContext,
+): unknown[] | null {
+  if (typeof formatter.comparisonValues !== "function") return null;
+  let produced: unknown[] | null;
+  try {
+    produced = formatter.comparisonValues(entries, ctx ?? { sessionPassed: false });
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(produced) || !produced.length) return null;
+  return produced.slice(0, CAPS.rows).map(clampRawEntry);
+}
+
 /**
  * The whole pipeline for one `events/` file: raw lines in, embeddable EventStream out (null when
  * the file isn't a well-formed events stream). Every line is kept — with a matching formatter as
@@ -352,8 +375,22 @@ export function buildEventStream(
   const formatter = formatterForStream(formatters, name);
   const rows = formatter ? formatRows(formatter, entries, ctx) : null;
   if (rows) {
+    const comparisonNames = formatter?.comparisonNames;
+    const declaredComparisonName = comparisonNames && Object.prototype.hasOwnProperty.call(comparisonNames, name)
+      ? comparisonNames[name]
+      : undefined;
+    const comparisonValues = declaredComparisonName && formatter.comparisonValues
+      ? formatComparisonValues(formatter, entries, ctx)
+      : null;
+    // A formatter that declares a projection must produce it successfully before its alias is
+    // exposed. Falling back to raw rows under the canonical key would compare different schemas.
+    const comparisonName = declaredComparisonName && (!formatter.comparisonValues || comparisonValues)
+      ? declaredComparisonName
+      : undefined;
     return {
       name,
+      ...(comparisonName ? { comparisonName } : {}),
+      ...(comparisonValues ? { comparisonValues } : {}),
       total: rows.length,
       truncated: false,
       events: [],

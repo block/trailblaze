@@ -22,10 +22,9 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 /**
- * A converted driver lost its `when` arm in [TrailblazeHostYamlRunner], so if no descriptor claims
- * it the `else` would hand it to the Maestro runner — a driver Revyl cannot be driven by. Running
- * on the WRONG driver is worse than not running: it reports failures against machinery the trail
- * never asked for.
+ * [TrailblazeHostYamlRunner.runHostYaml] resolves a descriptor or throws — there is no generic
+ * path left to absorb a driver nobody plugged in. These cases pin the message, because the
+ * alternative to a clear one is a run that dies deep inside machinery the trail never asked for.
  */
 class HostYamlRunnerUnregisteredDriverTest {
 
@@ -99,8 +98,8 @@ class HostYamlRunnerUnregisteredDriverTest {
   }.message!!
 
   /**
-   * The failure has to name the driver and the remedy. Reaching the Maestro `else` instead would
-   * fail somewhere inside a Maestro session, blaming the trail rather than the missing plug-in.
+   * The failure has to name the driver and the remedy, because it is the only thing the user gets:
+   * a supported-but-unregistered driver looks like a normal run right up to dispatch.
    */
   @Test
   fun `running a converted driver with nothing registered fails saying so`() {
@@ -110,10 +109,6 @@ class HostYamlRunnerUnregisteredDriverTest {
     assertTrue(message.contains("hostDriverDescriptors"), "must name the remedy: $message")
   }
 
-  /**
-   * Same guard for Compose: its `when` arm is gone, and the Maestro `else` cannot drive a Compose
-   * RPC app. Dropping COMPOSE from `convertedDriverTypes` would send it there silently.
-   */
   @Test
   fun `running compose with nothing registered fails saying so`() {
     val message = failureMessageFor(TrailblazeDriverType.COMPOSE, TrailblazeDriverType.COMPOSE.platform)
@@ -122,11 +117,6 @@ class HostYamlRunnerUnregisteredDriverTest {
     assertTrue(message.contains("hostDriverDescriptors"), "must name the remedy: $message")
   }
 
-  /**
-   * Same guard for the web drivers: their `when` arms are gone, and the Maestro fallback cannot
-   * drive a Playwright page. Dropping either from `convertedDriverTypes` would send it there
-   * silently.
-   */
   @Test
   fun `running playwright native with nothing registered fails saying so`() {
     val message = failureMessageFor(
@@ -146,6 +136,27 @@ class HostYamlRunnerUnregisteredDriverTest {
     )
 
     assertTrue(message.contains("PLAYWRIGHT_ELECTRON"), "must name the driver that isn't plugged in: $message")
+    assertTrue(message.contains("hostDriverDescriptors"), "must name the remedy: $message")
+  }
+
+  /**
+   * The iOS drivers are the ones whose run body used to be the runner's `else`. Deleting that
+   * branch is only safe if an unregistered iOS driver now fails at dispatch instead of being
+   * driven by leftover generic machinery.
+   */
+  @Test
+  fun `running ios host with nothing registered fails saying so`() {
+    val message = failureMessageFor(TrailblazeDriverType.IOS_HOST, TrailblazeDriverType.IOS_HOST.platform)
+
+    assertTrue(message.contains("IOS_HOST"), "must name the driver that isn't plugged in: $message")
+    assertTrue(message.contains("hostDriverDescriptors"), "must name the remedy: $message")
+  }
+
+  @Test
+  fun `running ios axe with nothing registered fails saying so`() {
+    val message = failureMessageFor(TrailblazeDriverType.IOS_AXE, TrailblazeDriverType.IOS_AXE.platform)
+
+    assertTrue(message.contains("IOS_AXE"), "must name the driver that isn't plugged in: $message")
     assertTrue(message.contains("hostDriverDescriptors"), "must name the remedy: $message")
   }
 }

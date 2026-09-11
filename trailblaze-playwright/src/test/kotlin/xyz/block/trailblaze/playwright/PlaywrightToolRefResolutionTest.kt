@@ -918,6 +918,26 @@ class PlaywrightToolRefResolutionTest {
     assertEquals("Hyphenated", locator.textContent())
   }
 
+  @Test
+  fun `readiness selector enforces heading level`() {
+    page.setContent("<h2>Home</h2><h1>Home</h1>")
+
+    val locator = PlaywrightExecutableTool.nodeSelectorToReadinessLocator(
+      page,
+      TrailblazeNodeSelector(
+        web = DriverNodeMatch.Web(
+          ariaRole = "heading",
+          ariaNameRegex = "Home",
+          headingLevel = 1,
+        ),
+      ),
+    )
+
+    assertNotNull(locator)
+    assertEquals(1, locator.count())
+    assertEquals("H1", locator.evaluate("element => element.tagName"))
+  }
+
   /**
    * A caller-supplied timeout must beat the global [PlaywrightExecutableTool.elementResolutionTimeoutMs].
    * The overlay-center resolution in the agent depends on this: it resolves elements only

@@ -418,6 +418,21 @@ class TrailblazeYaml internal constructor(
   fun extractTrailConfig(
     yaml: String,
     deviceClassifiers: List<TrailblazeDeviceClassifier>,
+  ): TrailConfig? = extractTrailConfig(
+    yaml = yaml,
+    deviceClassifiers = deviceClassifiers,
+    selectedDeviceConfiguration = null,
+  )
+
+  /**
+   * Device-aware config extraction for a run whose multi-device configuration is already known.
+   * A null selection retains the single-configuration pre-flight fallback of the two-argument
+   * overload.
+   */
+  fun extractTrailConfig(
+    yaml: String,
+    deviceClassifiers: List<TrailblazeDeviceClassifier>,
+    selectedDeviceConfiguration: String?,
   ): TrailConfig? = when (val doc = decodeTrailDocument(yaml)) {
     is TrailDocument.Unified -> UnifiedTrailAdapter.lowerConfig(
       doc.trail.config,
@@ -425,8 +440,9 @@ class TrailblazeYaml internal constructor(
       resolvedSkip = UnifiedTrailAdapter.resolveSkip(
         doc.trail.config,
         deviceClassifiers,
-        doc.trail.config.soleMultiDeviceConfigurationName,
+        selectedDeviceConfiguration ?: doc.trail.config.soleMultiDeviceConfigurationName,
       ),
+      resolvedLocale = UnifiedTrailAdapter.resolveLocale(doc.trail.config, deviceClassifiers),
     )
   }
 

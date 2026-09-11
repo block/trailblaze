@@ -310,6 +310,10 @@ class UsagesCommand : Callable<Int> {
     val bundler = DaemonScriptedToolBundler(
       esbuildBinary = esbuild,
       inProcessSdkEntryOverride = resolveSdkAliasTarget(workspaceRoot),
+      // resolveSdkAliasTarget already gates on installed deps and falls back to the extracted SDK,
+      // so a null from it is a verdict. The bundler's walk-up from esbuild would re-select the tree
+      // that verdict rejected, since esbuild is normally that tree's own devDependency.
+      allowLegacyEsbuildWalkup = false,
     )
 
     val (summary, analysisDiagnostics, currentScriptedToolPaths) = try {
@@ -427,7 +431,7 @@ class UsagesCommand : Callable<Int> {
    *    is the property a comparison needs.
    * 3. The framework's own SDK, extracted from this JAR. Tier 2 requires a workspace some
    *    `trailblaze check` has already touched, and a FRESH worktree is not that — which is the
-   *    state `scripts/validate-trailmap-tool-change.sh` runs this command in.
+   *    state trailmap tool-change validation runs this command in.
    */
   private fun resolveSdkAliasTarget(workspaceRoot: Path): File? =
     LazyYamlScriptedToolRegistration.resolveInProcessSdkEntry()

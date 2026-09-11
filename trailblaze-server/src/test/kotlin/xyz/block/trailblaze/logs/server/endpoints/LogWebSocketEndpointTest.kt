@@ -16,6 +16,7 @@ import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeLogServerClient
 import xyz.block.trailblaze.logs.model.SessionId
+import xyz.block.trailblaze.logs.model.TrailblazeClockDomain
 import xyz.block.trailblaze.logs.server.ServerEndpoints.logsServerKtorEndpoints
 import xyz.block.trailblaze.logs.server.ServerEndpoints.logsServerKtorEndpointsWithWireTransport
 import xyz.block.trailblaze.report.utils.LogsRepo
@@ -63,6 +64,53 @@ class LogWebSocketEndpointTest {
     assertEquals("{\"trace\":true}", logsRepo.getSessionDir(session).resolve("trace.json").readText())
     assertEquals(1, connectionCount.get())
     LogWebSocketEndpoint.setServerConnectionListener {}
+    uploadClient.close()
+  }
+
+  @Test
+  fun `a device-clock log over the protobuf socket is anchored like an http upload`() = testApplication {
+    // `/logs-ws` funnels agent logs through the same AgentLogEndpoint.accept as the JSON POST —
+    // pin that the funnel is real: a device-clock log arriving over the socket must gain the
+    // hostReceivedAt anchor without losing its clock marker. (Traces on this socket treat an
+    // ABSENT clock param as device — a log's absent marker means host-or-unknown; see
+    // TrailblazeLog.clock.)
+    val logsDir = File.createTempFile("protobuf-clock-logs", "").apply {
+      delete()
+      mkdirs()
+    }
+    val logsRepo = LogsRepo(logsDir, watchFileSystem = false)
+    application { logsServerKtorEndpoints(logsRepo) }
+    val websocketHttpClient = createClient { install(WebSockets) }
+    val uploadClient = TrailblazeLogServerClient(
+      httpClient = websocketHttpClient,
+      baseUrl = "http://localhost",
+      useBinaryTransport = true,
+    )
+    val session = SessionId("binary-device-clock-session")
+    val deviceLog = TrailblazeLog.TrailblazeSnapshotLog(
+      displayName = "home",
+      screenshotFile = "home.png",
+      viewHierarchy = ViewHierarchyTreeNode(text = "Home"),
+      trailblazeNodeTree = TrailblazeNode(
+        nodeId = 1,
+        driverDetail = DriverNodeDetail.AndroidAccessibility(text = "Home"),
+      ),
+      deviceWidth = 1080,
+      deviceHeight = 1920,
+      session = session,
+      timestamp = Clock.System.now(),
+      clock = TrailblazeClockDomain.DEVICE,
+    )
+
+    assertTrue(runBlocking { uploadClient.sendAgentLog(deviceLog) })
+
+    val persisted = logsRepo.getLogsForSession(session).single()
+    assertTrue(
+      persisted.hostReceivedAt != null,
+      "the socket transport must anchor device-clock logs exactly like the JSON POST",
+    )
+    assertEquals(TrailblazeClockDomain.DEVICE, persisted.clock)
+    assertEquals(deviceLog, (persisted as TrailblazeLog.TrailblazeSnapshotLog).copy(hostReceivedAt = null))
     uploadClient.close()
   }
 

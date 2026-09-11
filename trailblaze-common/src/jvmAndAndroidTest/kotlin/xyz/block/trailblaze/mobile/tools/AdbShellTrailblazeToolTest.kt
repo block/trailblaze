@@ -4,7 +4,9 @@ import assertk.assertThat
 import assertk.assertions.contains
 import assertk.assertions.hasLength
 import assertk.assertions.isEqualTo
+import assertk.assertions.isGreaterThan
 import assertk.assertions.isInstanceOf
+import assertk.assertions.isLessThan
 import assertk.assertions.isNotInstanceOf
 import assertk.assertions.startsWith
 import kotlin.test.assertFailsWith
@@ -13,6 +15,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Clock
 import org.junit.Test
 import xyz.block.trailblaze.AgentMemory
+import xyz.block.trailblaze.device.AndroidShellBounds
 import xyz.block.trailblaze.device.decodeShellTrampoline
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
@@ -487,9 +490,20 @@ class AdbShellTrailblazeToolTest {
 
   @Test
   fun `on-device shell timeout is a positive bound well under the session inactivity watchdog`() {
-    // The watchdog abandons a silent session at ~13 min; the bound must fail fast before that so a
+    // The watchdog abandons a silent session at ~13 min; the bound must fail before that so a
     // wedged exec surfaces as an error instead of a multi-minute hang.
-    assertThat(AdbShellTrailblazeTool.ON_DEVICE_SHELL_TIMEOUT_MS).isEqualTo(60_000L)
+    assertThat(AdbShellTrailblazeTool.ON_DEVICE_SHELL_TIMEOUT_MS).isLessThan(13 * 60 * 1_000L)
+    assertThat(AdbShellTrailblazeTool.ON_DEVICE_SHELL_TIMEOUT_MS).isGreaterThan(0L)
+  }
+
+  @Test
+  fun `the dispatch bound gives the device-side read bound room to land first`() {
+    // Order, not the numbers. This bound only abandons the reader, which keeps holding the
+    // UiAutomation monitor; the read bound is the one that ends the read and frees it. Reporting
+    // first would tell the agent the call failed while every device action it tries next silently
+    // blocks on the monitor anyway.
+    assertThat(AdbShellTrailblazeTool.ON_DEVICE_SHELL_TIMEOUT_MS)
+      .isGreaterThan(AndroidShellBounds.SHELL_READ_TIMEOUT_MS)
   }
 
   @Test

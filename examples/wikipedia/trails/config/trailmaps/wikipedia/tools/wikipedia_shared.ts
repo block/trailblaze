@@ -71,13 +71,13 @@ export async function tryOrFalse<T>(attempt: () => Promise<T>): Promise<boolean>
 }
 
 /**
- * Sub-second presence probe via `findMatches`. Returns true if the captured
+ * Sub-second presence probe via `findSelectorMatches`. Returns true if the captured
  * ARIA tree contains at least one node matching the given selector whose
  * bounds are populated and non-zero (i.e. the element actually rendered).
  *
  * Avoids the default ~30s Playwright action timeout that
  * `web_verifyElementVisible` would otherwise pay when the element isn't
- * there: `findMatches` is read-only and snapshot-cached, so a "is this on
+ * there: `findSelectorMatches` is read-only and snapshot-cached, so a "is this on
  * screen?" probe costs at most one view-hierarchy capture per tool invocation
  * regardless of how many times it's called.
  *
@@ -104,7 +104,7 @@ export async function elementIsVisible(
   selector: TrailblazeNodeSelector,
 ): Promise<boolean> {
   try {
-    const matches = await ctx.tools.findMatches({ selector });
+    const [matches] = await ctx.tools.findSelectorMatches({ selectors: [selector] });
     // `Bounds` carries only `left`/`top`/`right`/`bottom` over the wire — the
     // Kotlin `width`/`height` are computed getters with no backing fields, so
     // they're not in the JSON payload. Compute the rect dimensions here to

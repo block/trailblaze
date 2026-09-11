@@ -190,7 +190,7 @@ object TrailIndexBuilder {
     // neither has a meaningful `<device>`/`<name>` filename stem. The id strips only `.yaml` (NOT
     // the `.trail.yaml` suffix, which a bare `trail.yaml` doesn't carry) so `resolveTrailFile`'s
     // `<id>.yaml` probe reconstructs the file on disk — the same round-trip `blaze.yaml` relies on.
-    // A directory-only id (`.../case_5374124`) would 404: the resolver never probes `.../trail.yaml`.
+    // A directory-only id (`.../case_1001`) would 404: the resolver never probes `.../trail.yaml`.
     // Assumes no sibling recording is literally `trail.trail.yaml` (classifier stem "trail"): it would
     // share this id and win the resolver's `.trail.yaml`-before-`.yaml` probe, shadowing the unified file.
     val derivedId = if (isBlaze || isUnifiedBare) {

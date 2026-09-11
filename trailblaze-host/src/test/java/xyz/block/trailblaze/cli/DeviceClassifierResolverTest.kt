@@ -6,6 +6,7 @@ import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
@@ -21,6 +22,79 @@ import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
  * Threshold pinned by the canonical classifier: `shortest side >= 1536 px → tablet/iPad`.
  */
 class DeviceClassifierResolverTest {
+
+  @Test
+  fun `locale-qualified classifier refines the detected device`() {
+    val detected = listOf("ios", "iphone").map(::TrailblazeDeviceClassifier)
+    val requested = DeviceClassifierResolver.parseClassifierKey("ios-iphone-es")
+
+    assertEquals(requested, DeviceClassifierResolver.resolveOverride(detected, requested))
+  }
+
+  @Test
+  fun `locale-qualified classifier may refine platform-only detection`() {
+    val detected = listOf(TrailblazeDeviceClassifier("ios"))
+    val requested = DeviceClassifierResolver.parseClassifierKey("ios-iphone-es")
+
+    assertEquals(requested, DeviceClassifierResolver.resolveOverride(detected, requested))
+  }
+
+  @Test
+  fun `classifier override cannot disguise a different form factor`() {
+    val error = assertFailsWith<IllegalArgumentException> {
+      DeviceClassifierResolver.resolveOverride(
+        detected = listOf("ios", "iphone").map(::TrailblazeDeviceClassifier),
+        requested = DeviceClassifierResolver.parseClassifierKey("ios-ipad-es"),
+      )
+    }
+
+    assertTrue(error.message.orEmpty().contains("does not match connected device"))
+  }
+
+  @Test
+  fun `physical token appended after a matching prefix is rejected`() {
+    val error = assertFailsWith<IllegalArgumentException> {
+      DeviceClassifierResolver.resolveOverride(
+        detected = listOf("ios", "iphone").map(::TrailblazeDeviceClassifier),
+        requested = DeviceClassifierResolver.parseClassifierKey("ios-iphone-ipad-es"),
+      )
+    }
+
+    assertTrue(error.message.orEmpty().contains("contradictory form-factor"))
+  }
+
+  @Test
+  fun `platform-only detection rejects a cross-platform form factor`() {
+    val error = assertFailsWith<IllegalArgumentException> {
+      DeviceClassifierResolver.resolveOverride(
+        detected = listOf(TrailblazeDeviceClassifier("ios")),
+        requested = DeviceClassifierResolver.parseClassifierKey("ios-phone-es"),
+      )
+    }
+
+    assertTrue(error.message.orEmpty().contains("incompatible with 'ios'"))
+  }
+
+  @Test
+  fun `non-definitive shape is reduced to platform for behavior selection`() {
+    val classifiers = DeviceClassifierResolver.trustedForBehavior(
+      DeviceClassifierResolver.Classification(
+        classifiers = listOf("android", "phone").map(::TrailblazeDeviceClassifier),
+        definitive = false,
+      ),
+    )
+
+    assertEquals(listOf("android"), classifiers.map { it.classifier })
+  }
+
+  @Test
+  fun `classifier key rejects empty or malformed values`() {
+    listOf("", "ios--iphone", "IOS-iphone", "ios iphone").forEach { value ->
+      assertFailsWith<IllegalArgumentException> {
+        DeviceClassifierResolver.parseClassifierKey(value)
+      }
+    }
+  }
 
   @BeforeTest
   fun resetCacheBetweenTests() {

@@ -14,6 +14,17 @@ Retarget a prebuilt in-process shell APK at one app and sign it with that app's
 key. Stamps the instrumentation's target package, injects trails / target
 config / scripted-tool bundles, then signs. Writes a build record beside the
 output APK.
+KNOWN LIMITATION: an app that uses androidx.startup cannot be attached to by a
+generic shell yet. AppInitializer is a process-wide singleton and the shell's
+duplicate copy latches first, so the app's own initializers never run and the
+process crashes before the first session starts. Given --app-apk, this command
+warns when the app's manifest declares that provider, and produces the APK
+anyway - the packaging is fine, the run is not. On the --fingerprint path it
+cannot warn at all: a fingerprint states the signing facts, not the manifest's
+components, so no warning there is not evidence of no androidx.startup. Until
+the shell stops packaging the duplicate runtime, use the Gradle in-process
+module for such an app - naming the app as targetProjectPath makes AGP dedupe
+startup-runtime out of the test APK.
       --alias=<alias>        Key alias inside --keystore.
       --allow-runtime-tool-source
                              Bake `allow_runtime_tool_source: true` into the
@@ -39,10 +50,15 @@ output APK.
                                PKCS12).
   -o, --out=<apk>            Output APK. Defaults to
                                <target-package>-trailblaze-test.apk in the CWD.
-      --release              Allow a non-debuggable target. Off by default: an
-                               instrumentation cannot attach to a
-                               non-debuggable app on an ordinary device, and
-                               the usual cause of one is the wrong APK.
+      --release              Allow a non-debuggable target. Off by default
+                               because the usual cause of one is the wrong APK,
+                               not a deliberate release target. Signature
+                               equality is what actually gates attach, so a
+                               release build signed with the SAME key this
+                               command signs with is attachable and --release
+                               is the explicit override for it. A release build
+                               signed with a production key you do not hold
+                               stays unattachable no matter what you pass here.
       --shell=<apk>          Prebuilt Trailblaze in-process shell test APK.
                                Required, and no release publishes one yet:
                                build it from a framework checkout with

@@ -55,6 +55,8 @@ class AndroidStandaloneServerTest : BaseAndroidStandaloneServerTest() {
     this.trailblazeDeviceId = runYamlRequest.trailblazeDeviceId
     // Propagate the runtime driver type so session logs reflect the actual driver
     runYamlRequest.driverType?.let { trailblazeLoggingRule.driverTypeOverride = it }
+    trailblazeLoggingRule.deviceClassifiersOverride =
+      runYamlRequest.deviceClassifierOverride.map(::TrailblazeDeviceClassifier)
     val androidTrailblazeRule = AndroidTrailblazeRule(
       trailblazeLlmModel = runYamlRequest.trailblazeLlmModel,
       llmClient = getDynamicLlmClient(runYamlRequest.trailblazeLlmModel).createLlmClient(),
@@ -73,7 +75,10 @@ class AndroidStandaloneServerTest : BaseAndroidStandaloneServerTest() {
         testYaml = runYamlRequest.yaml,
         useRecordedSteps = runYamlRequest.useRecordedSteps,
         trailFilePath = runYamlRequest.trailFilePath,
-        sendSessionStartLog = runYamlRequest.config.sendSessionStartLog
+        sendSessionStartLog = runYamlRequest.config.sendSessionStartLog,
+        // Session-owning dispatch: the handler emits SessionEnded once this returns, so
+        // the driver-log join has to happen inside this call, not in a next action.
+        sendSessionEndLog = runYamlRequest.config.sendSessionEndLog
       )
     }
     return lastToolSuccess

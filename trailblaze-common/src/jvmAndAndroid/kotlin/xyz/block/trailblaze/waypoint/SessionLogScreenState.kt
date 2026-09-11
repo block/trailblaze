@@ -69,7 +69,7 @@ object SessionLogScreenState {
    * them.
    *
    * Sorted by the JSON `timestamp` field (ISO-8601 string compare is order-preserving) rather
-   * than filename: ATF-produced logs use hex hashes (e.g. `7d50895f_AgentDriverLog.json`), so
+   * than filename: device-farm logs use hex hashes (e.g. `7d50895f_AgentDriverLog.json`), so
    * alphabetical order doesn't match emit order. The numeric-prefix convention (`008_…`) used
    * by local CLI runs sorts correctly by either key, so timestamp-sort is uniformly correct.
    * Files whose timestamp can't be read fall back to filename ordering — a stable secondary

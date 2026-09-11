@@ -15,8 +15,16 @@ import xyz.block.trailblaze.android.AndroidSdkVersion
  *
  * Compare with [toTreeNode] in `AccessibilityServiceExt.kt` which converts to Maestro's
  * `TreeNode` and drops most of the accessibility-specific properties.
+ *
+ * Public because this is the entry point of the pipeline, and the node it produces converts on
+ * through the already-public [AccessibilityNode.toTrailblazeNode]. Any reader of a real
+ * accessibility hierarchy wants both halves — a bound service is not the only such reader, and an
+ * in-process one that could only call the second half would have to reimplement the first.
  */
-internal fun AccessibilityNodeInfo.toAccessibilityNode(nodeIdCounter: NodeIdCounter = NodeIdCounter()): AccessibilityNode {
+fun AccessibilityNodeInfo.toAccessibilityNode(
+  nodeIdCounter: NodeIdCounter = NodeIdCounter(),
+  tally: TreeCaptureTally = TreeCaptureTally(),
+): AccessibilityNode {
   val nodeRect = Rect().apply { getBoundsInScreen(this) }
   val bounds = AccessibilityNode.Bounds(
     left = nodeRect.left,
@@ -87,11 +95,17 @@ internal fun AccessibilityNodeInfo.toAccessibilityNode(nodeIdCounter: NodeIdCoun
       ?: "ACTION_${action.id}"
   } ?: emptyList()
 
-  // Recursively convert children (recycle each child's AccessibilityNodeInfo after conversion)
+  // Recursively convert children (recycle each child's AccessibilityNodeInfo after conversion).
+  // A null child is a child the app did not hand over — `childCount` promised it, the fetch
+  // came back empty — so the subtree is missing from this capture. Record it rather than
+  // silently producing a smaller tree: see [TreeCaptureTally].
   val childNodes = (0 until childCount).mapNotNull { index ->
-    val child = getChild(index) ?: return@mapNotNull null
+    val child = getChild(index) ?: run {
+      tally.recordDroppedNode()
+      return@mapNotNull null
+    }
     try {
-      child.toAccessibilityNode(nodeIdCounter)
+      child.toAccessibilityNode(nodeIdCounter, tally)
     } finally {
       child.recycle()
     }
@@ -204,23 +218,64 @@ internal fun AccessibilityNodeInfo.toAccessibilityNode(nodeIdCounter: NodeIdCoun
  * content from secondary windows is included after the base application window. A shared
  * [NodeIdCounter] keeps `nodeId` values unique across the merged windows.
  */
-internal fun List<AccessibilityNodeInfo>.toMergedAccessibilityNode(): AccessibilityNode? =
+internal fun List<AccessibilityNodeInfo>.toMergedAccessibilityNode(
+  tally: TreeCaptureTally = TreeCaptureTally(),
+): AccessibilityNode? =
   when (size) {
     0 -> null
-    1 -> this[0].toAccessibilityNode()
+    1 -> this[0].toAccessibilityNode(tally = tally)
     else -> {
       val counter = NodeIdCounter()
       AccessibilityNode(
         nodeId = counter.next(),
-        children = map { it.toAccessibilityNode(counter) },
+        children = map { it.toAccessibilityNode(counter, tally) },
       )
     }
   }
 
 /** Auto-incrementing counter for assigning node IDs within a single tree capture. Not thread-safe — intended for single-threaded recursive use only. */
-internal class NodeIdCounter {
+class NodeIdCounter {
   private var counter = 0L
   fun next(): Long = ++counter
+}
+
+/**
+ * Per-capture count of the nodes a tree walk asked the app for and did not get back.
+ *
+ * Every walker that converts live [AccessibilityNodeInfo]s reads `childCount` and then fetches
+ * each child; the fetch is a binder round trip into the app, and it returns null when the app
+ * cannot answer — most often because its main thread is blocked and the accessibility
+ * interaction call timed out, occasionally because the view was removed between the two reads.
+ * Either way the resulting tree is missing a subtree the screen has. Before this tally existed
+ * the walkers skipped such children silently, so a capture taken while the app was busy looked
+ * like a smaller screen rather than an incomplete read, and a "not visible" check would accept
+ * it as proof of absence.
+ *
+ * A capture with [droppedNodes] == 0 is complete: every node the app advertised is in the tree.
+ * Anything else is partial, and callers deciding that something is NOT on screen must not treat
+ * it as authoritative (see `AbsenceConfirmation`). Not thread-safe — one instance per capture.
+ */
+class TreeCaptureTally {
+  /** Children a walker asked for (per `childCount`) and got null back. */
+  var droppedNodes: Int = 0
+    private set
+
+  /** Application windows whose root would not resolve, so their whole content is missing. */
+  var droppedWindowRoots: Int = 0
+    private set
+
+  fun recordDroppedNode() {
+    droppedNodes++
+  }
+
+  fun recordDroppedWindowRoot() {
+    droppedWindowRoots++
+  }
+
+  /** Every fetch this capture lost, of either kind. */
+  val total: Int get() = droppedNodes + droppedWindowRoots
+
+  val isComplete: Boolean get() = total == 0
 }
 
 /**

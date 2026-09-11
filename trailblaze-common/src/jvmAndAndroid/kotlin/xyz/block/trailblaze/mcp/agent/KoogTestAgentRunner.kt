@@ -50,7 +50,8 @@ import xyz.block.trailblaze.yaml.PromptStep
  * @param trailblazeLlmModel the model to use (and for cost/token reporting).
  * @param logger session logger for the per-request `TrailblazeLlmRequestLog`.
  * @param sessionProvider resolves the active session at call time (it may not exist at construction).
- * @param maxLlmCalls optional per-step iteration cap.
+ * @param maxLlmCalls optional per-step budget, counted in requests sent to the model (not in graph
+ *   iterations); null uses [KoogStrategyGraphAgent.DEFAULT_MAX_LLM_CALLS].
  * @param systemPromptTemplate the platform system prompt template (rendered + augmented by the helper);
  *   [appendToSystemPrompt] appends trail `config.context` to it, matching the legacy runner.
  */
@@ -99,6 +100,9 @@ class KoogTestAgentRunner(
 
   private suspend fun blaze(prompt: PromptStep): AgentTaskStatus {
     val startTime = Clock.System.now()
+    // Fresh per objective, and owned HERE rather than inside the graph run: the case worth
+    // instrumenting is the one where the run throws, and the record has to survive that.
+    val instrumentation = KoogRunInstrumentation()
     // Emit the objective lifecycle logs the AI path is responsible for — the shared per-step loop
     // (TrailblazeRunnerUtil) only emits these on the RECORDED branch and delegates the unrecorded
     // (AI) branch to the agent, exactly as the legacy TrailblazeRunner does. Without this pair,
@@ -114,6 +118,7 @@ class KoogTestAgentRunner(
     // joins LLM + tool activity by traceId can't correlate them (or mark the actions AI-generated).
     val traceId = TraceId.generate(TraceId.Companion.TraceOrigin.TOOL)
     var status: AgentTaskStatus? = null
+    var thrown: Throwable? = null
     try {
       val result = runPromptsWithKoogStrategyGraph(
         promptSteps = listOf(prompt),
@@ -130,23 +135,43 @@ class KoogTestAgentRunner(
         systemPromptTemplate = currentSystemPrompt.withPerStepSystemPromptContext(
           perStepSystemPromptContextProvider?.invoke(),
         ),
+        instrumentation = instrumentation,
       )
-      status = result.toAgentTaskStatus(prompt, startTime)
+      status = result.toAgentTaskStatus(prompt, startTime, instrumentation)
       return status
+    } catch (t: Throwable) {
+      // Capture and re-throw unchanged: the caller's handling of an exhausted budget / LLM error is
+      // unaffected, but the `finally` below can now name what went wrong instead of guessing.
+      thrown = t
+      throw t
     } finally {
       // Always close the objective lifecycle so the ObjectiveStartLog above is never left dangling
       // for report/progress builders that pair Start↔Complete — even if the run THREW (e.g.
       // max-iterations or an LLM error). On a throw `status` is still null, so synthesize a failed
       // one. (The legacy AI path skips its complete log on a throw; this is strictly better.)
+      // Into the SESSION LOG, not the console: the console line is dropped entirely under
+      // `Console.enableQuietMode` (every CLI command that isn't --verbose), and an A/B comparison
+      // reads session logs, not stdout. This is the only surface carrying the peak prompt estimate.
+      logger.log(
+        session,
+        TrailblazeLog.TrailblazeProgressLog(
+          eventType = KOOG_RUN_EVENT_TYPE,
+          description = instrumentation.describeRun(),
+          session = session.sessionId,
+          timestamp = Clock.System.now(),
+        ),
+      )
       val completeStatus = status ?: AgentTaskStatus.Failure.ObjectiveFailed(
         statusData = AgentTaskStatusData(
           taskId = TaskId.generate(),
           prompt = prompt.prompt,
-          callCount = 0,
+          callCount = instrumentation.llmCallsCompleted,
           taskStartTime = startTime,
           totalDurationMs = (Clock.System.now() - startTime).inWholeMilliseconds,
         ),
-        llmExplanation = "Koog strategy graph ended without reporting a status (threw before completion)",
+        // Names the node that threw, so a failed session says which part of the graph broke rather
+        // than reporting every failure as the same "ended without reporting a status".
+        llmExplanation = instrumentation.describeThrow(thrown),
       )
       logger.log(
         session,
@@ -163,19 +188,24 @@ class KoogTestAgentRunner(
   private fun TrailblazeToolResult.toAgentTaskStatus(
     prompt: PromptStep,
     startTime: kotlinx.datetime.Instant,
+    instrumentation: KoogRunInstrumentation,
   ): AgentTaskStatus {
     val statusData = AgentTaskStatusData(
       taskId = TaskId.generate(),
       prompt = prompt.prompt,
-      // callCount is the legacy runner's per-step LLM round count; the Koog graph runs its own
-      // internal loop and we don't surface a count here, so 0. This does NOT affect cost/token
-      // reporting — those come from the per-request TrailblazeLlmRequestLog the LoggingLlmClient
-      // emits inside runPromptsWithKoogStrategyGraph, independent of statusData.
-      callCount = 0,
+      // The legacy runner's per-step LLM round count, counted here at Koog's own pipeline. This does
+      // NOT affect cost/token reporting — those come from the per-request TrailblazeLlmRequestLog
+      // the LoggingLlmClient emits inside runPromptsWithKoogStrategyGraph, independent of statusData.
+      callCount = instrumentation.llmCallsCompleted,
       taskStartTime = startTime,
       totalDurationMs = (Clock.System.now() - startTime).inWholeMilliseconds,
     )
     return toKoogAgentTaskStatus(statusData)
+  }
+
+  companion object {
+    /** `eventType` of the per-objective run readout, so an A/B comparison can grep one string. */
+    const val KOOG_RUN_EVENT_TYPE = "KoogRun"
   }
 }
 

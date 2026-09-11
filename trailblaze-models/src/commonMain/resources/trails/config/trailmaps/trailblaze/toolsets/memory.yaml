@@ -14,5 +14,6 @@ tools:
   - assertWithAi
   - dumpMemory
   - rememberNumber
+  - rememberRandomValue
   - rememberText
   - rememberWithAi

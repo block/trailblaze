@@ -114,16 +114,19 @@ data class RunYamlRequest(
   val memorySnapshot: Map<String, String> = emptyMap(),
 
   /**
-   * Per-objective cap on LLM calls issued by the legacy [AgentImplementation.TRAILBLAZE_RUNNER]
-   * inner loop. When non-null, overrides the runner's built-in default
-   * (`xyz.block.trailblaze.agent.TrailblazeRunner.DEFAULT_MAX_STEPS`). Surfaced as
-   * `--max-llm-calls` on the CLI so users on metered or expensive providers can cut off a
-   * stuck self-heal loop before it racks up many round trips.
+   * Per-objective cap on requests sent to the model. Honored by
+   * [AgentImplementation.TRAILBLAZE_RUNNER] (counted in its inner loop) and by
+   * [AgentImplementation.KOOG_STRATEGY_GRAPH] (counted at its LLM client, not in graph
+   * iterations). When non-null, overrides each agent's own built-in default of 25 —
+   * `xyz.block.trailblaze.agent.TrailblazeRunner.DEFAULT_MAX_STEPS` and
+   * `KoogStrategyGraphAgent.DEFAULT_MAX_LLM_CALLS`. Surfaced as `--max-llm-calls` on the CLI
+   * so users on metered or expensive providers can cut off a stuck self-heal loop before it
+   * racks up many round trips.
    *
    * The cap is per [xyz.block.trailblaze.yaml.PromptStep]/objective, not per trail — a trail
-   * with three prompt blocks runs the inner loop up to 3 × maxLlmCalls times in the worst
-   * case. The runner's existing cycle/stuck detection still trips earlier when the LLM
-   * spins on the same tool call.
+   * with three prompt blocks issues up to 3 × maxLlmCalls requests in the worst case. The
+   * legacy runner's cycle/stuck detection still trips earlier when the LLM spins on the same
+   * tool call.
    *
    * Not honored by [AgentImplementation.MULTI_AGENT_V3], which manages its own iteration
    * budget internally. The `init` block rejects the combination at construction time rather
@@ -265,6 +268,13 @@ data class RunYamlRequest(
    * Host-side only, for the same reason as [deviceConfiguration].
    */
   val deviceBindings: Map<String, String> = emptyMap(),
+
+  /**
+   * Host-selected device classifiers for this run, including catalog suffixes such as locale.
+   * The host validates that these refine the connected device before selecting a recording, then
+   * forwards them to on-device execution so its recording selection and session metadata agree.
+   */
+  val deviceClassifierOverride: List<String> = emptyList(),
 ) : RpcRequest<RunYamlResponse> {
   init {
     require(awaitCompletion || memorySnapshot.isEmpty()) {
@@ -284,7 +294,7 @@ data class RunYamlRequest(
     }
     require(maxLlmCalls == null || agentImplementation != AgentImplementation.MULTI_AGENT_V3) {
       "maxLlmCalls is not honored by AgentImplementation.MULTI_AGENT_V3; pass null or use " +
-        "AgentImplementation.TRAILBLAZE_RUNNER."
+        "AgentImplementation.TRAILBLAZE_RUNNER or AgentImplementation.KOOG_STRATEGY_GRAPH."
     }
   }
 

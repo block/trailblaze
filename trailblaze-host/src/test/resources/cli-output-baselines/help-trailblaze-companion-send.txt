@@ -1,0 +1,25 @@
+# This file is a CHECKED-IN baseline of CLI output rendered by trailblaze-host's CLI helpers.
+# It is NOT a contract — if a test fails here because output drifted, decide whether the
+# drift is intentional. The test always (re)writes this file from the current rendered output,
+# then asserts the working tree is clean. So `git diff` of this file IS the failure message.
+# Reviewers: scrutinize diffs to baselines the same way you would scrutinize a UI screenshot —
+# small wording / spacing changes can be intentional or accidental.
+# ----------------------------------------------------------------------
+Usage: trailblaze companion send [-hV] [--app=<app>] [--payload=<payload>]
+                                 [--platform=<platform>] [--route=<route>]
+                                 [--text=<text>] [--title=<title>]
+                                 [--variant=<variant>] [--item=<items>]...
+                                 <runId> <directive>
+Send or retract Trail Runner UI guidance.
+      <runId>               Companion run id.
+      <directive>           Directive name.
+      --app=<app>
+  -h, --help                Show this help message and exit.
+      --item=<items>        List item; repeat for multiple items.
+      --payload=<payload>   Additional directive fields as a JSON object.
+      --platform=<platform>
+      --route=<route>
+      --text=<text>
+      --title=<title>
+  -V, --version             Print version information and exit.
+      --variant=<variant>

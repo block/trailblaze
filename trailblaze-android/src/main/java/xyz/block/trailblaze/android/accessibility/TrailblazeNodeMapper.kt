@@ -24,12 +24,12 @@ import xyz.block.trailblaze.api.TrailblazeNode
  * (page title, ARIA-labeled landmarks, etc.). See `TrailblazeNodeMapperTest` for the
  * regression coverage.
  */
-internal fun TrailblazeNode.filterImportantForAccessibility(): TrailblazeNode {
+fun TrailblazeNode.filterImportantForAccessibility(): TrailblazeNode {
   // Receiver-side check: if the tree this filter is invoked on is itself rooted at a
   // WebView, return it untouched. Without this, the recursion below would still trim
   // non-important descendants of the root WebView, breaking the kdoc's "entire subtree
   // is preserved" promise for any caller that passes a WebView-rooted subtree (today
-  // there is no such caller, but the function is `internal` and tests/future callers
+  // there is no such caller, but this function is public API and out-of-module callers
   // should not silently see the wrong behavior).
   if (isWebView()) return this
   fun processChildren(children: List<TrailblazeNode>): List<TrailblazeNode> =

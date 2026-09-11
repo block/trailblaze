@@ -5,7 +5,7 @@ import xyz.block.trailblaze.llm.TrailblazeLlmProvider
 internal const val PROVIDERS_PATH = TrailblazeConfigPaths.PROVIDERS_DIR
 
 /** Core providers shipped with trailblaze-models — used as fallback if discovery fails. */
-private val CORE_PROVIDERS = setOf(
+internal val CORE_PROVIDERS = setOf(
   TrailblazeLlmProvider.ANTHROPIC.id,
   TrailblazeLlmProvider.GOOGLE.id,
   TrailblazeLlmProvider.OLLAMA.id,

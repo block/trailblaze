@@ -36,3 +36,25 @@ class FakeHostDriverDescriptor(
     deps: HostScreenStateDeps,
   ): ScreenState? = error("FakeHostDriverDescriptor has no screen")
 }
+
+/**
+ * The same fake, but declining a host run body — for testing what a registry does with the
+ * [HostDriverDescriptor.OnDeviceTools] declaration, including pairing it with a driver that does
+ * reach the host run path.
+ */
+class FakeOnDeviceHostDriverDescriptor(
+  override val driverTypes: Set<TrailblazeDriverType>,
+  override val listingVisibility: DeviceListingVisibility = DeviceListingVisibility.LISTED,
+) : HostDriverDescriptor.OnDeviceTools {
+
+  constructor(vararg driverTypes: TrailblazeDriverType) : this(driverTypes.toSet())
+
+  override suspend fun discoverDevices(inventory: HostDeviceInventory): List<TrailblazeConnectedDeviceSummary> =
+    emptyList()
+
+  override suspend fun screenState(
+    driverType: TrailblazeDriverType,
+    deviceId: TrailblazeDeviceId,
+    deps: HostScreenStateDeps,
+  ): ScreenState? = error("FakeOnDeviceHostDriverDescriptor has no screen")
+}

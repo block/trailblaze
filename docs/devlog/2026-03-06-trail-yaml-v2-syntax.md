@@ -55,7 +55,7 @@ The `trailhead` is everything about the starting point: what this trail is, how 
 ```yaml
 # ── Trailhead: identity, configuration, and setup ──────────────────
 trailhead:
-  id: regression/suite_71172/section_838052/case_4837714
+  id: regression/suite_101/section_201/case_1006
   title: Verify user cannot load more than $2,000 onto a Gift Card within 24 hours
   priority: P0
 
@@ -77,8 +77,8 @@ trailhead:
 
   # Informational — never used at runtime, only for reporting/traceability
   metadata:
-    caseId: "4837714"
-    sectionId: "838052"
+    caseId: "1006"
+    sectionId: "201"
     sourceUrl: https://tracker.example.com/cases/view/12345
 
   # Setup objectives (checkpoint for recording iteration)
@@ -144,7 +144,7 @@ The blaze file is purely NL objectives — no tool recordings. Platform-specific
 
 ```yaml
 trailhead:
-  id: suite/71172/section/838052/case/4837714
+  id: suite/101/section/201/case/1006
   title: Verify gift card load limit
   memory:
     giftCardNumber: "7783 3224 0646 3436"
@@ -412,7 +412,7 @@ trailhead:
 **NL-only `blaze.yaml` (recorder materializes `tools:` on first run):**
 ```yaml
 config:
-  id: regression/suite_71172/section_946176/case_5552497
+  id: regression/suite_101/section_205/case_1007
   target: myapp
   platform: android
 trailhead:

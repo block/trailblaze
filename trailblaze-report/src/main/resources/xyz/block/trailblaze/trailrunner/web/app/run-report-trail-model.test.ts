@@ -131,6 +131,63 @@ describe("buildTrailMatrix", () => {
     expect(cell?.lastFrame?.kid).toBeNull();
   });
 
+  test("summarizes a step with a folded child's later post-action frame", () => {
+    const model = buildReportTraceModel([
+      row(1, { objective: true, label: "Enter the account's email", ts: 1000 }),
+      row(2, {
+        ts: 1100,
+        screenshotFile: "before-input.webp",
+        children: [
+          { i: 0, label: "tap submit", ms: 1, ts: 1200, ok: true, err: null, screenshotFile: "after-input.webp", mark: null },
+        ],
+      } as Partial<TraceStep>),
+    ], 0);
+    const cell = buildTrailMatrix([model], everyShot, isLlmTurn).rows[0].cells[0];
+    expect(cell?.frames.map((f) => f.file)).toEqual(["before-input.webp", "after-input.webp"]);
+    expect(cell?.lastFrame?.file).toBe("after-input.webp");
+    expect(cell?.lastFrame?.kid).toBe(0);
+  });
+
+  test("keeps the last row fallback when capture timestamps cannot be compared", () => {
+    const model = buildReportTraceModel([
+      row(1, { objective: true, label: "Enter the account's email", ts: 1000 }),
+      row(2, { ts: 1100, screenshotFile: "before-input.webp" }),
+      row(3, { ts: null, screenshotFile: "after-input.webp" }),
+    ], 0);
+    const cell = buildTrailMatrix([model], everyShot, isLlmTurn).rows[0].cells[0];
+    expect(cell?.frames.map((f) => f.file)).toEqual(["before-input.webp", "after-input.webp"]);
+    expect(cell?.lastFrame?.file).toBe("after-input.webp");
+    expect(cell?.lastFrame?.kid).toBeNull();
+  });
+
+  test("keeps structural order among frames tied for the newest timestamp", () => {
+    const model = buildReportTraceModel([
+      row(1, { objective: true, label: "Confirm the receipt", ts: 1000 }),
+      row(2, { ts: 1200, screenshotFile: "first-newest.webp" }),
+      row(3, { ts: 1200, screenshotFile: "second-newest.webp" }),
+      row(4, { ts: 1100, screenshotFile: "older-fallback.webp" }),
+    ], 0);
+    const cell = buildTrailMatrix([model], everyShot, isLlmTurn).rows[0].cells[0];
+    expect(cell?.lastFrame?.file).toBe("second-newest.webp");
+  });
+
+  test("keeps the row fallback when its untimed child inherits the same clock", () => {
+    const model = buildReportTraceModel([
+      row(1, { objective: true, label: "Confirm the receipt", ts: 1000 }),
+      row(2, {
+        ts: 1100,
+        screenshotFile: "row.webp",
+        children: [
+          { i: 0, label: "assert receipt", ms: 1, ts: null, ok: true, err: null, screenshotFile: "child.webp", mark: null },
+        ],
+      } as Partial<TraceStep>),
+    ], 0);
+    const cell = buildTrailMatrix([model], everyShot, isLlmTurn).rows[0].cells[0];
+    expect(cell?.frames.map((frame) => frame.atMs)).toEqual([100, 100]);
+    expect(cell?.lastFrame?.file).toBe("row.webp");
+    expect(cell?.lastFrame?.kid).toBeNull();
+  });
+
   test("places a capture and its interaction at the moment the action ran, not the row's start", () => {
     // A tool logged at timeBeforeExecution that spent 4s resolving its selector before tapping: the
     // frame and the tap both belong at 4s into the lane, not at the row's start. Replay draws them

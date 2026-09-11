@@ -186,6 +186,15 @@ data class AndroidTestAssertNotVisibleTool(
 )
 data class AndroidTestScrollUntilVisibleTool(
   val nodeSelector: TrailblazeNodeSelector,
+  /**
+   * Wall-clock ceiling on the whole loop, or null for the scroll cap alone.
+   *
+   * The cap counts scrolls, which is the right bound for "how far down a trail should look"; a
+   * caller that recorded a TIME bound (Maestro's `scrollUntilVisible: timeout`) means something the
+   * cap cannot express — a slow list can burn a long time inside far fewer than [MAX_SCROLLS]
+   * scrolls. Both bounds apply, and whichever is reached first ends the loop.
+   */
+  val timeoutMs: Long? = null,
 ) : AndroidTestExecutableTool {
   override suspend fun executeWithAndroidTest(
     target: AndroidTestTarget,
@@ -194,7 +203,8 @@ data class AndroidTestScrollUntilVisibleTool(
     var scrolls = 0
     var idleAttempts = 0
     var triedOwnAncestor = false
-    while (scrolls < MAX_SCROLLS) {
+    val deadline = timeoutMs?.let { SystemClock.uptimeMillis() + it }
+    while (scrolls < MAX_SCROLLS && (deadline == null || SystemClock.uptimeMillis() < deadline)) {
       // Matched against a snapshot directly rather than through the resolver: the element is
       // expected to be absent for most of this loop, and paying the resolver's settle budget on
       // every attempt would turn a ten-row scroll into a minute of waiting.
@@ -258,10 +268,19 @@ data class AndroidTestScrollUntilVisibleTool(
         message = "Scrolled ${nodeSelector.description()} into view after $scrolls scrolls.",
       )
     }
+    // Which bound ended the search, read from the bound itself. Inferring it from the scroll count
+    // instead would name the wrong one whenever both are reached in the same pass — and the count
+    // is the one that gets there first on a screen whose snapshot is cheap.
     throw TrailblazeToolExecutionException(
-      "Gave up after $MAX_SCROLLS scrolls without ${nodeSelector.description()} appearing. The " +
-        "container was still scrolling, so either the element is much further down than a trail " +
-        "should scroll for, or the selector is wrong.",
+      if (deadline != null && SystemClock.uptimeMillis() >= deadline) {
+        "Gave up after ${timeoutMs}ms without ${nodeSelector.description()} appearing, having " +
+          "scrolled $scrolls times. Either the element is further down than the timeout allows " +
+          "for, or the selector is wrong."
+      } else {
+        "Gave up after $MAX_SCROLLS scrolls without ${nodeSelector.description()} appearing. The " +
+          "container was still scrolling, so either the element is much further down than a trail " +
+          "should scroll for, or the selector is wrong."
+      },
       this,
     )
   }.getOrElse { TrailblazeToolResult.Error.ExceptionThrown.fromThrowable(it, this) }
@@ -449,7 +468,7 @@ private fun pollForNode(
         // were made on does — `AccessibilityDeviceManager.pickPreferredMatch`: first visible-to-user
         // match, else the first. Refusing ambiguity instead was stricter than the recorded
         // semantics, and strictness the corpus never agreed to is indistinguishable from a bug:
-        // case 5380720 taps `checkout_button_title`, which is unique in the tree it was recorded
+        // one trail taps `checkout_button_title`, which is unique in the tree it was recorded
         // against and names two live buttons here ("Save ticket" and "Review sale") the moment the
         // merchant has open tickets on. The recording cannot be more specific than the driver that
         // produced it, so an in-process replay that demands more replays nothing.

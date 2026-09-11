@@ -2,6 +2,7 @@ package xyz.block.trailblaze.waypoint
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlinx.coroutines.runBlocking
 import xyz.block.trailblaze.api.DriverNodeDetail
@@ -235,7 +236,135 @@ class WaypointAssertionTest {
     assertTrue(msg.contains("target context"), "msg should hint at the missing target wiring: $msg")
   }
 
+  @Test
+  fun `poll does not release on a capture that lost the nodes holding a forbidden element`() = runBlocking {
+    // The screen still shows "Loading", but the first two captures never got that subtree from
+    // the app, so nothing forbidden resolves in them. Releasing there is the bug: the step after
+    // the waypoint would run against the loading screen. The third capture is complete and
+    // "Loading" is really gone, which is the first moment the waypoint may match.
+    val def = waypoint("test/loaded", required = listOf("Home"), forbidden = listOf("Loading"))
+    val captures = listOf(
+      partialScreen(listOf("Home")),
+      partialScreen(listOf("Home")),
+      completeScreen(listOf("Home")),
+    )
+    val seen = mutableListOf<Int>()
+    var index = 0
+    var clock = 0L
+
+    val result = WaypointAssertion.poll(
+      waypointId = def.id,
+      timeoutMs = 1_000L,
+      pollIntervalMs = 1L,
+      screenStateProvider = { captures[index.coerceAtMost(captures.lastIndex)].also { seen += index; index++ } },
+      waypointResolver = { id -> if (id == def.id) def else null },
+      now = { clock.also { clock += 10L } },
+    )
+
+    assertTrue(result is WaypointAssertion.Result.Matched, "expected Matched, got $result")
+    assertEquals(3, seen.size, "should have kept polling past both partial captures")
+  }
+
+  @Test
+  fun `poll that only ever sees partial captures reports the capture problem, not a screen diff`() = runBlocking {
+    val def = waypoint("test/loaded", required = listOf("Home"), forbidden = listOf("Loading"))
+    val screen = partialScreen(listOf("Home"))
+    var clock = 0L
+
+    val result = WaypointAssertion.poll(
+      waypointId = def.id,
+      timeoutMs = 100L,
+      pollIntervalMs = 10L,
+      screenStateProvider = { screen },
+      waypointResolver = { id -> if (id == def.id) def else null },
+      now = { clock.also { clock += 60L } },
+    )
+
+    assertTrue(result is WaypointAssertion.Result.NotMatched, "expected NotMatched, got $result")
+    assertEquals(
+      xyz.block.trailblaze.api.waypoint.WaypointMatchResult.SkipReason.PARTIAL_CAPTURE,
+      result.lastResult.skipped,
+    )
+    val msg = WaypointAssertion.describeMismatch(result)
+    assertTrue(msg.contains("PARTIAL_CAPTURE"), "msg should name the skip reason: $msg")
+    assertTrue(
+      msg.contains("forbidden"),
+      "msg should say which half of the waypoint contract could not be evaluated: $msg",
+    )
+    assertFalse(result.sawCompleteCapture, "no capture in this window was complete")
+    // Here the strong claim IS earned: the poll saw nothing but partial captures.
+    assertTrue(
+      msg.contains("No capture in the whole 100ms window came back whole"),
+      "msg should say the app never answered, and name the window it did not answer for: $msg",
+    )
+  }
+
+  /**
+   * `poll()` keeps only the LAST result, and one lossy capture is enough to produce a
+   * PARTIAL_CAPTURE skip. So the skip reason alone cannot support "every capture in the window was
+   * partial" — a reader told the app was blocked for the whole wait would go looking for a stall
+   * that never happened. This pins the distinction: complete captures early, a partial one at the
+   * moment the waypoint would have matched.
+   */
+  @Test
+  fun `a partial capture after complete ones is reported as intermittent, not a whole-window stall`() = runBlocking {
+    val def = waypoint("test/loaded", required = listOf("Home"), forbidden = listOf("Loading"))
+    // The first two captures are whole and genuinely do not match — "Loading" is still there. The
+    // third is the one that would have matched, and it lost nodes, so the matcher declines it.
+    val captures = listOf(
+      completeScreen(listOf("Home", "Loading")),
+      completeScreen(listOf("Home", "Loading")),
+      partialScreen(listOf("Home")),
+    )
+    var index = 0
+    var clock = 0L
+
+    val result = WaypointAssertion.poll(
+      waypointId = def.id,
+      timeoutMs = 100L,
+      pollIntervalMs = 1L,
+      screenStateProvider = { captures[index.coerceAtMost(captures.lastIndex)].also { index++ } },
+      waypointResolver = { id -> if (id == def.id) def else null },
+      now = { clock.also { clock += 40L } },
+    )
+
+    assertTrue(result is WaypointAssertion.Result.NotMatched, "expected NotMatched, got $result")
+    assertEquals(
+      xyz.block.trailblaze.api.waypoint.WaypointMatchResult.SkipReason.PARTIAL_CAPTURE,
+      result.lastResult.skipped,
+    )
+    assertTrue(result.sawCompleteCapture, "the first two captures were complete")
+
+    val msg = WaypointAssertion.describeMismatch(result)
+    assertTrue(msg.contains("PARTIAL_CAPTURE"), "msg should still name the skip reason: $msg")
+    assertTrue(
+      msg.contains("Earlier captures in this window did come back whole"),
+      "msg should say the block was intermittent: $msg",
+    )
+    // The claim the skip reason cannot support must not appear.
+    assertFalse(
+      msg.contains("No capture in the whole"),
+      "msg must not claim the app never answered when it demonstrably did: $msg",
+    )
+  }
+
   // ---- fixtures ----
+
+  private fun partialScreen(texts: List<String>): ScreenState = screenWithTexts(texts, droppedNodeFetches = 4)
+
+  private fun completeScreen(texts: List<String>): ScreenState = screenWithTexts(texts, droppedNodeFetches = 0)
+
+  private fun screenWithTexts(texts: List<String>, droppedNodeFetches: Int?): ScreenState =
+    object : ScreenState {
+      override val screenshotBytes: ByteArray? = null
+      override val deviceWidth: Int = 1080
+      override val deviceHeight: Int = 1920
+      override val viewHierarchy: ViewHierarchyTreeNode = ViewHierarchyTreeNode()
+      override val trailblazeDevicePlatform: TrailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID
+      override val deviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList()
+      override val droppedNodeFetches: Int? = droppedNodeFetches
+      override val trailblazeNodeTree: TrailblazeNode = nodeTreeWithTexts(texts)
+    }
 
   private fun waypoint(
     id: String,

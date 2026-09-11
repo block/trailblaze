@@ -25,3 +25,7 @@ drivers:
   - playwright-electron
 tools:
   - web_evaluate
+  - web_beginResponseObservation
+  - web_assertResponseObserved
+  - web_cancelResponseObservation
+  - web_requireTextInViewport

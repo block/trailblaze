@@ -13,6 +13,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+import xyz.block.trailblaze.android.AndroidSdkVersion
 import xyz.block.trailblaze.tracing.TraceLevel
 import xyz.block.trailblaze.tracing.TrailblazeTracer
 import xyz.block.trailblaze.util.Console
@@ -23,7 +24,7 @@ import xyz.block.trailblaze.util.Console
  * only place this can be shown. The limb is on-device by construction: no JVM test can bind the
  * accessibility service, so without this the spans would be "it compiles" and nothing more.
  *
- * Five claims, each of which fails loudly if the instrumentation regresses:
+ * Six claims, each of which fails loudly if the instrumentation regresses:
  *
  * 1. **The phases are there.** A capture at [TraceLevel.VERBOSE] records the named phases of the
  *    screen-state build and of the framework work underneath it. A phase that stops being wrapped
@@ -43,7 +44,11 @@ import xyz.block.trailblaze.util.Console
  *    one of them may record. A `traceDetail` that became a `trace` would pass claim 1 and quietly
  *    change the shape of every ordinary run.
  *
- * 5. **No span records a text payload.** `trace.json` is uploaded to the host, packaged into report
+ * 5. **The capture gets fresh nodes exactly one way, and says which.** Dropping the client cache
+ *    replaced the per-node refresh walk on API 34+; a capture that does both pays back the cost the
+ *    drop removed, and every span assertion above passes anyway.
+ *
+ * 6. **No span records a text payload.** `trace.json` is uploaded to the host, packaged into report
  *    artifacts and exported as OpenTelemetry attributes, so a typed password or a
  *    `rememberSensitive` value must not reach it. Actions carry their text in
  *    `AccessibilityAction.description`, which makes "name the action in its span" a one-word change
@@ -147,6 +152,40 @@ class AccessibilityTracingOnDeviceTest {
         "${enclosing.getLong("tid")}), but it recorded on the same one.",
       screenshot.getLong("tid") != enclosing.getLong("tid"),
     )
+  }
+
+  /**
+   * A capture makes its nodes fresh ONE way, and which way is visible in the profile.
+   *
+   * Dropping the client cache costs a handful of prefetching round trips; refreshing node by node
+   * costs one round trip per node and was the largest slice of every capture. Where the platform
+   * supports the drop, paying both is the regression to catch — and it is invisible to every other
+   * test here, since a capture that does both still records every span in [VERBOSE_ONLY_SPANS].
+   */
+  @Test
+  fun theFreshnessPathIsNamedAndOnlyOneOfThemRuns() {
+    val events = captureWithTracingAt(TraceLevel.VERBOSE)
+
+    assertNotNull(
+      "Missing the \"dropAccessibilityCache\" span, so a profile cannot say how this capture got " +
+        "fresh nodes at all. Recorded: ${events.names()}",
+      events.firstNamed("dropAccessibilityCache"),
+    )
+    val perNodeRefresh = events.firstNamed("refreshTree")
+    if (AndroidSdkVersion.isAtLeast(34)) {
+      assertNull(
+        "This device can drop the accessibility cache, so the per-node refresh walk must not run " +
+          "as well — it is one binder round trip per node and doing both puts the cost back that " +
+          "dropping the cache removed. Recorded: ${events.names()}",
+        perNodeRefresh,
+      )
+    } else {
+      assertNotNull(
+        "Below API 34 there is no cache to drop, so the capture MUST still refresh node by node " +
+          "or it will read the client's stale values. Recorded: ${events.names()}",
+        perNodeRefresh,
+      )
+    }
   }
 
   @Test
@@ -301,7 +340,9 @@ class AccessibilityTracingOnDeviceTest {
       // The framework work underneath the capture, which is where the time actually goes.
       "awaitTreeStable",
       "getCaptureWindowRoots",
-      "refreshTree",
+      // How the capture gets fresh nodes. Records on both paths, unlike the `refreshTree` fallback
+      // it replaced — see [theFreshnessPathIsNamedAndOnlyOneOfThemRuns].
+      "dropAccessibilityCache",
       "buildMaestroTree",
       "buildAccessibilityTree",
       "captureScreenshot",

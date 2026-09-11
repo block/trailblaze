@@ -27,6 +27,16 @@ import java.util.concurrent.Callable
     "Retarget a prebuilt in-process shell APK at one app and sign it with that app's key. " +
       "Stamps the instrumentation's target package, injects trails / target config / scripted-tool " +
       "bundles, then signs. Writes a build record beside the output APK.",
+    "KNOWN LIMITATION: an app that uses androidx.startup cannot be attached to by a generic " +
+      "shell yet. AppInitializer is a process-wide singleton and the shell's duplicate copy " +
+      "latches first, so the app's own initializers never run and the process crashes before the " +
+      "first session starts. Given --app-apk, this command warns when the app's manifest declares " +
+      "that provider, and produces the APK anyway - the packaging is fine, the run is not. On the " +
+      "--fingerprint path it cannot warn at all: a fingerprint states the signing facts, not the " +
+      "manifest's components, so no warning there is not evidence of no androidx.startup. " +
+      "Until the shell stops packaging the duplicate runtime, use the Gradle in-process module " +
+      "for such an app - naming the app as targetProjectPath makes AGP dedupe startup-runtime out " +
+      "of the test APK.",
   ],
 )
 class MakeTestApkCommand : Callable<Int> {
@@ -100,8 +110,11 @@ class MakeTestApkCommand : Callable<Int> {
   @Option(
     names = ["--release"],
     description = [
-      "Allow a non-debuggable target. Off by default: an instrumentation cannot attach to a " +
-        "non-debuggable app on an ordinary device, and the usual cause of one is the wrong APK.",
+      "Allow a non-debuggable target. Off by default because the usual cause of one is the wrong " +
+        "APK, not a deliberate release target. Signature equality is what actually gates attach, " +
+        "so a release build signed with the SAME key this command signs with is attachable and " +
+        "--release is the explicit override for it. A release build signed with a production key " +
+        "you do not hold stays unattachable no matter what you pass here.",
     ],
   )
   var release: Boolean = false
@@ -171,6 +184,33 @@ class MakeTestApkCommand : Callable<Int> {
       Console.error("${missing.first} is not a readable file: ${missing.second}")
       return TrailblazeExitCode.MISUSE.code
     }
+    // Also before the prompt: this binary gets forked, so a non-executable path is a bad argument
+    // and not the bundler failure it would otherwise be reported as.
+    esbuild?.takeIf { !it.canExecute() }?.let {
+      Console.error("--esbuild is not executable: $it")
+      return TrailblazeExitCode.MISUSE.code
+    }
+
+    // Resolved before the password prompt too, for the same reason and one more: this probes the SDK
+    // tree by forking esbuild, and doing that while a signing password sits live in this process
+    // means a probe that fails hard leaves the password unzeroed.
+    //
+    // Skipped entirely unless a trailmap actually carries TypeScript. A request of only `.bundle.js`
+    // tools is packaged without bundling, so nothing would read the answer — and on a host whose SDK
+    // esbuild is broken, resolving it anyway spends the probe's whole deadline for nothing.
+    //
+    // The SDK-source tier gates on whether the bundler can resolve `zod` from the tree, so it has to
+    // probe with the SAME binary this request will bundle with. `--esbuild` exists for a host with
+    // none on PATH; leaving the gate to look for one itself would find nothing there, report the
+    // structural verdict "usable", and pair the caller's esbuild with a source tree that cannot
+    // resolve the alias.
+    val inProcessSdkEntry = if (InProcessShellPackager.carriesTypeScriptToolSource(trailmapDirs)) {
+      resolveInProcessSdkEntry(
+        sourceTreeEntry = LazyYamlScriptedToolRegistration.resolveInProcessSdkEntry(esbuildOverride = esbuild),
+      )
+    } else {
+      null
+    }
 
     val storePassword = readPassword(
       envVar = KEYSTORE_PASSWORD_ENV,
@@ -202,7 +242,7 @@ class MakeTestApkCommand : Callable<Int> {
       // Resolved here, not inside the packager, so a host with no esbuild still works for the
       // pre-built-bundle inputs and only fails when something actually needs bundling.
       esbuildBinary = esbuild ?: LazyYamlScriptedToolRegistration.resolveEsbuildBinary(),
-      inProcessSdkEntry = resolveInProcessSdkEntry(),
+      inProcessSdkEntry = inProcessSdkEntry,
     )
 
     val result = try {
@@ -297,9 +337,13 @@ class MakeTestApkCommand : Callable<Int> {
      * second tier, the one input `make-test-apk` is meant to accept from a team that has no
      * framework checkout is the one it cannot bundle. The SDK is pinned by the framework, so this
      * JAR's copy is the right thing to resolve against; it is extracted once and reused.
+     *
+     * [sourceTreeEntry] has no default on purpose: the source-tree resolver has to be called with
+     * this invocation's `--esbuild`, and a default here would let a caller resolve without it and
+     * silently gate the tree with a different binary than the one that bundles.
      */
     internal fun resolveInProcessSdkEntry(
-      sourceTreeEntry: File? = LazyYamlScriptedToolRegistration.resolveInProcessSdkEntry(),
+      sourceTreeEntry: File?,
       cacheRoot: File = File(
         TrailblazeDesktopUtil.getDefaultAppDataDirectory(),
         TrailblazeDesktopUtil.SDK_CACHE_SUBDIR,

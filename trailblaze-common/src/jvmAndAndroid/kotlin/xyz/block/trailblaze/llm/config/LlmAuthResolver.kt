@@ -37,6 +37,16 @@ object LlmAuthResolver {
   /** Returns the instrumentation arg key for a provider's auth token by ID. */
   fun resolve(providerId: String): String = "$AUTH_TOKEN_PREFIX$providerId"
 
+  /**
+   * Whether [key] is one of the per-provider auth-token args [toInstrumentationArgs] produces.
+   *
+   * Lets a caller pick the credential-bearing args out of an assembled arg map without holding the
+   * prefix itself. Used by the host's connect path to notice that a running on-device runner was
+   * launched with credentials the host has since replaced — its arg bundle is fixed at launch, so a
+   * refreshed token only reaches the device by relaunching.
+   */
+  fun isAuthTokenArg(key: String): Boolean = key.startsWith(AUTH_TOKEN_PREFIX)
+
   /** Instrumentation arg for the selected provider's base URL (for openai_compatible on device). */
   const val BASE_URL_ARG = "trailblaze.llm.provider.base_url"
 

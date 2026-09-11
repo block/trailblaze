@@ -278,9 +278,9 @@ will need to issue.
 No Kotlin, no Gradle, no JVM in your author loop. If bun isn't on your
 PATH, Trailblaze falls back to `node + tsx`.
 
-## What we want from web-team review
+## Open questions on the API shape
 
-Specific questions:
+Still undecided, and worth review by anyone authoring against it:
 
 1. **`trailblaze.tool()` API shape.** Is `(name, spec, handler)` the
    right shape, or do you prefer `trailblaze.tool({ name, description,

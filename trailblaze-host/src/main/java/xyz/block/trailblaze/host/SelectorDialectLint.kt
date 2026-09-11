@@ -23,13 +23,18 @@ import xyz.block.trailblaze.yaml.unified.UnifiedTrailTargets
  * ## The failure this catches
  *
  * `TrailblazeNodeSelectorResolver.matchesDriverDetail` dispatches on the node-detail type the
- * driver produced, not on the running driver: `DriverNodeMatch.AndroidMaestro` matches only
- * `DriverNodeDetail.AndroidMaestro`, and `DriverNodeMatch.AndroidAccessibility` only
- * `DriverNodeDetail.AndroidAccessibility`. Android has no cross-dialect bridge (the sole bridge in
- * the resolver is iOS Maestro → AXe, `matchesIosMaestroAgainstAxe`; see [NATIVE_DIALECT_DRIVERS]).
- * So an `androidMaestro:` selector under `ANDROID_ONDEVICE_ACCESSIBILITY` resolves to `NoMatch`
- * every time, regardless of its text — and `assertVisibleBySelector` / `tapOnElementBySelector`
- * have no fallback, so the step hard-fails.
+ * driver produced, not on the running driver, and bridges only the pairs it has an arm for.
+ * `DriverNodeMatch.AndroidAccessibility` matches `DriverNodeDetail.AndroidAccessibility` and
+ * bridges onto the in-process driver's `AndroidView` / `Compose` details
+ * (`matchesAndroidAccessibilityAgainstView` / `...AgainstCompose`) — the a11y shape is the
+ * canonical selector, which is what lets one recorded trail replay on either Android driver.
+ * `DriverNodeMatch.AndroidMaestro` has the same two bridges onto that tree.
+ *
+ * What has no arm is the reverse direction: an `androidMaestro:` selector against a
+ * `DriverNodeDetail.AndroidAccessibility` node resolves to `NoMatch` every time, regardless of its
+ * text — and `assertVisibleBySelector` / `tapOnElementBySelector` have no fallback, so the step
+ * hard-fails. That single pair is what this gate catches. (iOS has its own bridge, Maestro → AXe,
+ * `matchesIosMaestroAgainstAxe`; see [NATIVE_DIALECT_DRIVERS].)
  *
  * The shape that produces it: a trail whose android devices ran one driver shared a single
  * `android:` recording leg. Migrating ONE of them (say `android-phone`) to the accessibility driver
@@ -115,8 +120,13 @@ object SelectorDialectLint {
    * `IOS_AXE` is deliberately NOT here: the resolver has an explicit cross-dialect bridge
    * (`DriverNodeMatch.IosMaestro` vs `DriverNodeDetail.IosAxe` → `matchesIosMaestroAgainstAxe`)
    * that keeps `iosMaestro:` selectors resolving under the AXe driver, failing closed only on
-   * `focused`/`selected` and selectors with no bridgeable field. Android has no such bridge, so
-   * `androidMaestro:` under the accessibility driver is the genuinely unmatchable pair.
+   * `focused`/`selected` and selectors with no bridgeable field.
+   *
+   * `ANDROID_ONDEVICE_ACCESSIBILITY` is here because `DriverNodeMatch.AndroidMaestro` against
+   * `DriverNodeDetail.AndroidAccessibility` is the one Android pair the resolver has no arm for.
+   * Android is not bridgeless — that same `androidMaestro:` selector resolves against the
+   * in-process driver's `androidView` / `compose` tree — so what is unmatchable is this
+   * direction, not the platform. See the class KDoc.
    */
   private val NATIVE_DIALECT_DRIVERS: Set<TrailblazeDriverType> = setOf(
     TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
@@ -128,8 +138,8 @@ object SelectorDialectLint {
    * Used only by the multi-device pass, to catch a dialect belonging to a DIFFERENT platform than
    * the active member's driver — a `web:` selector while the phone is active, or an
    * `androidAccessibility:` one while the browser is. No cross-platform bridge exists in the
-   * resolver (the only bridge at all is iOS Maestro → AXe, within one platform), so such a selector
-   * resolves to `NoMatch` on every run, exactly like the same-platform Maestro pair above.
+   * resolver — every bridge it has is within a single platform — so such a selector resolves to
+   * `NoMatch` on every run, exactly like the same-platform Maestro pair above.
    *
    * A single-device leg can't produce this pairing — the trail would have to declare a selector for
    * a platform it never runs on — so the gate spends the check where the mistake is reachable:
@@ -524,10 +534,10 @@ object SelectorDialectLint {
       appendLine(
         "$dialectTrails trail(s) resolve a recording leg whose selector dialect the device's " +
           "driver cannot match. An androidMaestro: selector under ANDROID_ONDEVICE_ACCESSIBILITY " +
-          "never matches — the resolver dispatches on the tree shape the driver produced, and " +
-          "Android has no cross-dialect bridge — so these steps fail on every run. Fix: give the " +
-          "device its own recording leg carrying androidAccessibility: selectors, instead of " +
-          "sharing a leg whose dialect belongs to the other driver.",
+          "never matches — the resolver dispatches on the tree shape the driver produced, and that " +
+          "is the one Android pair it has no bridge for — so these steps fail on every run. Fix: " +
+          "give the device its own recording leg carrying androidAccessibility: selectors, instead " +
+          "of sharing a leg whose dialect belongs to the other driver.",
       )
     }
     val handoverTrails = findings.count { it.undeclaredHandovers.isNotEmpty() }

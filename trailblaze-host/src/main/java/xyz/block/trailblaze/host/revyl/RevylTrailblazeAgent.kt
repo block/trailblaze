@@ -89,10 +89,19 @@ class RevylTrailblazeAgent(
         }
         is ObjectiveStatusTrailblazeTool -> TrailblazeToolResult.Success()
         else -> {
-          val unsupportedToolName = memoryResolvedTool::class.simpleName ?: toolName
-          Console.log("RevylAgent: unsupported tool $unsupportedToolName")
+          // Reported rather than thrown so a batch keeps the results of the tools that already ran.
+          val errorMessage = unsupportedToolShapeMessage(
+            tool = memoryResolvedTool,
+            agentName = "RevylTrailblazeAgent",
+            supportedShapes = listOf(
+              RevylExecutableTool::class.java.simpleName,
+              ObjectiveStatusTrailblazeTool::class.java.simpleName,
+            ),
+            remediation = "Register a ${RevylExecutableTool::class.java.simpleName}.",
+          )
+          Console.log("RevylAgent: $errorMessage")
           TrailblazeToolResult.Error.ExceptionThrown(
-            errorMessage = "Unsupported tool '$unsupportedToolName' for RevylTrailblazeAgent",
+            errorMessage = errorMessage,
             command = memoryResolvedTool,
             stackTrace = "",
           )

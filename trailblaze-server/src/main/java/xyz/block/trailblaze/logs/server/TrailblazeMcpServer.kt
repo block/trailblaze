@@ -223,6 +223,9 @@ class TrailblazeMcpServer(
    * run a whitelisted subcommand in-process and skip the CLI's JVM cold start.
    */
   var onCliExecRequest: (suspend (xyz.block.trailblaze.logs.server.endpoints.CliExecRequest) -> xyz.block.trailblaze.logs.server.endpoints.CliExecResponse)? = null,
+  /** Additional daemon-owned workloads that make automatic restart unsafe. */
+  var additionalActiveRunSummaries: () -> List<String> = { emptyList() },
+
   /**
    * Optional provider for the LLM client to use for local sampling.
    * When provided, enables the Koog agent to use Trailblaze's configured LLM
@@ -771,10 +774,12 @@ class TrailblazeMcpServer(
         // parse. The opt-outs ride separately, below.
         additional = ResolvedAgentToolbox(
           toolClasses = customSurface.toolClasses +
-            // The driver-specific replacement set (Revyl, Playwright, Compose). The trailmap's
-            // own toolsets are filtered out for those drivers, so without these the agent has
-            // nothing to drive the device with — no `revyl_tap`, no `revyl_type`. The non-runtime
-            // advertise path already folds them in; this is the dispatch side of the same thing.
+            // The driver-specific replacement set (Revyl and Playwright — NOT Compose, whose
+            // trailmaps declare their own `compose_*` toolsets and whose inner agent is served by
+            // `getInnerAgentToolClasses` instead; see McpDriverToolSurfaces). The trailmap's own
+            // toolsets are filtered out for those drivers, so without these the agent has nothing
+            // to drive the device with — no `revyl_tap`, no `revyl_type`. The non-runtime advertise
+            // path already folds them in; this is the dispatch side of the same thing.
             mcpBridge.getInnerAgentBuiltInToolClasses(),
           yamlToolNames = customSurface.yamlToolNames,
           scriptedToolNames = customSurface.scriptedToolNames,
@@ -1020,8 +1025,9 @@ class TrailblazeMcpServer(
    * `tools/call`, mirroring the short-circuit `BaseTrailblazeAgent.runTrailblazeTools` applies
    * on the trail-run path: host-local tools go straight to `execute(context)`, never to the
    * device driver. Nested framework calls the scripted tool makes (`client.callTool(...)`)
-   * route back through [TrailblazeMcpBridge.executeTrailblazeTool], which dispatches them to
-   * the bound device.
+   * route back through [TrailblazeMcpBridge.executeTrailblazeToolForResult], which dispatches
+   * them to the bound device and returns their typed result — the string-rendering twin would
+   * flatten `structuredContent` into JSON text (#6653).
    */
   private suspend fun executeHostLocalToolInline(
     sessionId: String,
@@ -1052,9 +1058,13 @@ class TrailblazeMcpServer(
       sessionId = SessionId.sanitized("mcp_${sessionId}_${deviceId.instanceId}"),
       startTime = Clock.System.now(),
     )
+    // One trace id for this dispatch AND everything nested under it: letting each nested
+    // dispatch mint its own scatters a single logical tool call across the report. Mirrors
+    // `TrailblazeMcpBridgeImpl.executeHostLocalToolOnDaemon`.
+    val dispatchTraceId = TraceId.generate(origin = TraceId.Companion.TraceOrigin.MCP)
     val context = TrailblazeToolExecutionContext(
       screenState = null,
-      traceId = TraceId.generate(origin = TraceId.Companion.TraceOrigin.MCP),
+      traceId = dispatchTraceId,
       trailblazeDeviceInfo = buildSyntheticDeviceInfo(deviceId, driverType),
       sessionProvider = { syntheticSession },
       trailblazeLogger = TrailblazeLogger(
@@ -1066,7 +1076,14 @@ class TrailblazeMcpServer(
       toolRepo = toolRepo,
       nestedToolExecutor = { nested ->
         try {
-          TrailblazeToolResult.Success(message = mcpBridge.executeTrailblazeTool(nested, blocking = true))
+          // Typed dispatch, not the string-rendering twin: that one serializes the nested tool's
+          // `structuredContent` to JSON text, and re-wrapping the text as `Success(message = ...)`
+          // leaves a composing tool destructuring a typed result with `undefined` (#6653).
+          mcpBridge.executeTrailblazeToolForResult(
+            tool = nested,
+            blocking = true,
+            traceId = dispatchTraceId,
+          )
         } catch (e: CancellationException) {
           throw e
         } catch (e: Exception) {
@@ -2140,6 +2157,7 @@ class TrailblazeMcpServer(
           onCliExecRequest = onCliExecRequest?.let { handler ->
             { request -> handler(request) }
           },
+          additionalActiveRunSummaries = additionalActiveRunSummaries,
           statusProvider = {
             // Bounded and suspend on purpose: the device scan walks live adb/RPC channels and
             // can hang indefinitely when a device wedges. An unbounded (or runBlocking) call
@@ -2623,9 +2641,10 @@ class TrailblazeMcpServer(
           // to run.
           val activeTarget = findCurrentTarget(activeDeviceId(sessionContext))
           // Ask the bridge for device-appropriate built-in tools.
-          // For WEB/Playwright/Compose/Revyl: returns a driver-specific replacement (no kitchen sink).
-          // For Android/iOS: returns empty → we resolve from the active target's trailmap `tool_sets:`
-          // declarations via TrailblazeToolSetCatalog.resolveForDriver (driver-aware, target-scoped),
+          // For WEB/Playwright/Revyl: returns a driver-specific replacement (no kitchen sink).
+          // For Android/iOS AND Compose: returns empty → we resolve from the active target's
+          // trailmap `tool_sets:` declarations via TrailblazeToolSetCatalog.resolveForDriver
+          // (driver-aware, target-scoped),
           // not the catalog-wide kitchen sink. With no active target, the LLM sees only the
           // catalog's `always_enabled` toolsets — trailmap authors opt into more by declaring tool_sets.
           val bridgeToolClasses = mcpBridge.getInnerAgentBuiltInToolClasses()
@@ -3175,7 +3194,7 @@ class TrailblazeMcpServer(
     closingMcpSessionId: String,
   ): Boolean {
     // Android: releasing while a yielded-to session still claims the device
-    // tears down the on-device RPC server and wedges system_server (build 5463).
+    // tears down the on-device RPC server and wedges system_server.
     if (deviceId.trailblazeDevicePlatform != TrailblazeDevicePlatform.ANDROID) {
       return true
     }

@@ -23,7 +23,7 @@ import xyz.block.trailblaze.InstrumentationUtil.withUiAutomation
  *
  * The reconnect case is what earns the test its keep. `withUiAutomation`'s happy path is on the
  * critical path of every on-device run (`AndroidOnDeviceUiAutomatorScreenState`'s screenshot and
- * `rootInActiveWindow`, `MaestroAndroidUiAutomatorDriver.isKeyboardVisible`), so every ATF lane
+ * `rootInActiveWindow`, `MaestroAndroidUiAutomatorDriver.isKeyboardVisible`), so every device-farm run
  * already covers it; dropping the cached handle and asserting recovery is covered nowhere else.
  * `capturesScreenshot` is kept as a separate case only so a plain-capture failure reads differently
  * from a reconnect failure — it costs nothing in the same instrumentation process.

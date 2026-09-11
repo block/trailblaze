@@ -355,7 +355,7 @@ class VideoSpriteExtractorTest {
       println("skipping: ffmpeg or ffprobe not on PATH")
       return
     }
-    // Reproduces the CLI smoke regression on the Android shards (build 8290+): the daemon-
+    // Reproduces the CLI smoke regression on the Android shards: the daemon-
     // driven `trailblaze blaze "Describe what's on screen"` finishes in roughly one wall-clock
     // second on a static-screen AVD, so the recorder hands the extractor an mp4 with
     // `nb_frames=1, duration=0.04s` together with `expectedDurationMs=~1000`. The original
@@ -530,7 +530,7 @@ class VideoSpriteExtractorTest {
     // A plain-text file named video.mp4: ffmpeg's frame-extraction pass will exit non-zero
     // ("Invalid data found when processing input" or similar), which routes through the
     // helper-migrated failure path and should also call `writeFailureMarker(dir, reason)` so
-    // the CI smoke test (`cli_smoke_tests_common.sh`) can surface the reason. The marker is
+    // the CLI smoke suite in CI can surface the reason. The marker is
     // the load-bearing contract between this code and the CI smoke step — verify both that
     // it's written AND that its content includes the per-stage diagnostic.
     val notReallyAVideo = File(tempDir, "video.mp4").apply { writeText("not an mp4") }
@@ -574,8 +574,8 @@ class VideoSpriteExtractorTest {
   }
 
   @Test
-  fun `K1-style broken-timing mp4 over a long session trips the broken-mp4 gate`() {
-    // Reproduces the K1 CI pathology (trailblaze-ios-pr build 11092). The CI mp4 there
+  fun `a broken-timing mp4 over a long session trips the broken-mp4 gate`() {
+    // Reproduces a pathology seen in CI. The mp4 there
     // claimed 2 seconds of duration for an 87-second test; ffmpeg sampled the truncated
     // timeline directly (re-stamp didn't fire) and emitted only 4 sprite frames vs the
     // ~174 the wall-clock window called for. We synthesize the same shape by feeding the
@@ -792,7 +792,7 @@ class VideoSpriteExtractorTest {
     val diagText = diagFile.readText()
     assertTrue(
       diagText.contains("expectedDurationMs=10000"),
-      "diag should include expectedDurationMs for the K1-style post-hoc triage, got:\n$diagText",
+      "diag should include expectedDurationMs for post-hoc triage, got:\n$diagText",
     )
     assertTrue(
       diagText.contains("probe=reportedS="),

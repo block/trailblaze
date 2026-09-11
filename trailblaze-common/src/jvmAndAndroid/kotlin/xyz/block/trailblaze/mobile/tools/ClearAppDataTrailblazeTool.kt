@@ -2,6 +2,7 @@ package xyz.block.trailblaze.mobile.tools
 
 import ai.koog.agents.core.tools.annotations.LLMDescription
 import kotlinx.serialization.Serializable
+import xyz.block.trailblaze.device.PmClearOutcome
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
@@ -36,7 +37,14 @@ data class ClearAppDataTrailblazeTool(
             ?: return TrailblazeToolResult.Error.ExceptionThrown(
               errorMessage = "AndroidDeviceCommandExecutor is not provided",
             )
-          executor.clearAppData(appId)
+          // Report a no-op as a no-op. A mistyped or hallucinated appId is the likeliest failure on
+          // this surface, and answering "Cleared app data" for a package that was never installed
+          // sends the caller looking for the bug anywhere but here.
+          if (executor.clearAppData(appId) == PmClearOutcome.PACKAGE_NOT_INSTALLED) {
+            return TrailblazeToolResult.Success(
+              message = "Nothing to clear: '$appId' is not installed on this device.",
+            )
+          }
         }
 
         TrailblazeDevicePlatform.IOS -> {

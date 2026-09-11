@@ -6,6 +6,7 @@ import kotlinx.datetime.Clock
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TrailblazeAgent
 import xyz.block.trailblaze.api.TrailblazeAgent.RunTrailblazeToolsResult
+import xyz.block.trailblaze.exception.TrailblazeException
 import xyz.block.trailblaze.exception.TrailblazeToolExecutionException
 import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
 import xyz.block.trailblaze.logs.model.TraceId
@@ -27,6 +28,7 @@ import xyz.block.trailblaze.toolcalls.commands.memory.MemoryTrailblazeTool
 import xyz.block.trailblaze.toolcalls.getToolNameFromAnnotation
 import xyz.block.trailblaze.toolcalls.interpolateMemoryInTool
 import xyz.block.trailblaze.toolcalls.isSuccess
+import xyz.block.trailblaze.toolcalls.resolveToolName
 import xyz.block.trailblaze.toolcalls.withAuthoredFailureContent
 import xyz.block.trailblaze.toolcalls.isVerificationToolInstance
 import xyz.block.trailblaze.tracing.TrailblazeTracer
@@ -36,19 +38,6 @@ import xyz.block.trailblaze.utils.NoOpElementComparator
 
 /** Trace category for tool dispatch — one span per tool call, on every driver. */
 private const val TOOL_TRACE_CAT = "tool"
-
-/**
- * The name this tool's dispatch span carries.
- *
- * An instance that names itself wins over its class annotation. Every `tools:`-authored tool is a
- * `YamlDefinedTrailblazeTool`, so the annotation is the shared reserved `_yaml_defined` for all of
- * them — going by it alone collapses every YAML-defined tool in the trail into one span name, and
- * the trace can no longer say which of them was slow. Same rule the session log already applies in
- * `toOtherTrailblazeToolPayload`.
- */
-private fun TrailblazeTool.traceSpanName(): String =
-  (this as? InstanceNamedTrailblazeTool)?.instanceToolName?.takeIf { it.isNotBlank() }
-    ?: getToolNameFromAnnotation()
 
 /**
  * Shared base for [TrailblazeAgent] implementations.
@@ -237,7 +226,7 @@ abstract class BaseTrailblazeAgent(
       // stops an agent phase reading as one opaque block of seconds. Recorded at NORMAL: one span
       // per tool call, each wrapping work measured in hundreds of milliseconds.
       val result = TrailblazeTracer.trace(
-        name = resolved.traceSpanName(),
+        name = resolved.resolveToolName(),
         cat = TOOL_TRACE_CAT,
       ) {
         when (resolved) {
@@ -479,6 +468,85 @@ abstract class BaseTrailblazeAgent(
       )
       tool
     }
+  }
+
+  /**
+   * The failure an agent throws when a tool implements none of the shapes it can dispatch.
+   *
+   * Lives here, next to [resolveDynamicTool] — the function that produces the unresolved state
+   * this message describes — because every driver agent needs the identical message and had been
+   * hand-rolling it. Three of them printed only `tool::class.simpleName`, which reads
+   * `OtherTrailblazeTool` for EVERY unresolvable tool: one message for all of them, naming none.
+   *
+   * Two details a hand-rolled copy keeps getting wrong, and the reason to call this instead:
+   *
+   *  - The name comes from [resolveToolName], which unwraps [OtherTrailblazeTool], honors an
+   *    instance's own name (every `tools:`-authored tool shares one annotation, so going by the
+   *    annotation collapses them all into `YamlDefinedTrailblazeTool`), and cannot return null
+   *    the way `::class.simpleName` can.
+   *  - The wrapper note states an OBSERVATION and lists the causes; it does not pick one.
+   *    Arriving wrapped means only that nothing resolved the name. It may be unregistered, its
+   *    args may not fit the schema of the tool that IS registered under it, or the agent may hold
+   *    no repo to resolve against at all — the Compose agent holds none in production, so it
+   *    never performs the lookup a single-cause message would be reporting.
+   *
+   * Argument VALUES are never rendered. [OtherTrailblazeTool.raw] is unredacted wire data, and
+   * this message reaches CI logs and LLM-facing error content; a trail that inlines a credential
+   * would copy it straight through. The argument NAMES are what diagnose a schema mismatch — the
+   * values never are.
+   *
+   * Agents whose unresolved-name branch carries a richer, repo-specific taxonomy — the Maestro,
+   * iOS and on-device RPC agents share one deliberately — should keep it and use this only for
+   * their unsupported-SHAPE branch.
+   *
+   * @param agentName how the agent calls itself in the message, e.g. `"ComposeTrailblazeAgent"`.
+   * @param supportedShapes the tool interfaces this agent dispatches.
+   * @param remediation what the reader should do about it — the last line of the message.
+   */
+  protected fun unsupportedToolShapeException(
+    tool: TrailblazeTool,
+    agentName: String,
+    supportedShapes: List<String>,
+    remediation: String,
+  ): TrailblazeException = TrailblazeException(
+    message = unsupportedToolShapeMessage(tool, agentName, supportedShapes, remediation),
+  )
+
+  /**
+   * The same message as [unsupportedToolShapeException], for agents that REPORT this failure
+   * rather than throwing it.
+   *
+   * The Compose-RPC and Revyl agents return a [TrailblazeToolResult.Error] so a batch keeps the
+   * results of the tools that already ran, and a thrown exception would discard those. They should
+   * not have to give up the named message to keep that contract — which is what happened before:
+   * both hand-rolled `::class.simpleName` and reported `OtherTrailblazeTool` for every unresolvable
+   * tool.
+   */
+  protected fun unsupportedToolShapeMessage(
+    tool: TrailblazeTool,
+    agentName: String,
+    supportedShapes: List<String>,
+    remediation: String,
+  ): String = buildString {
+      append("Unhandled Trailblaze tool ${tool.resolveToolName()}")
+      if (tool is OtherTrailblazeTool) {
+        appendLine(" (arrived unresolved as OtherTrailblazeTool).")
+        appendLine(
+          "Nothing resolved that name: it may be unregistered, its arguments may not fit the " +
+            "tool that is registered under it, or this agent may hold no tool repo to resolve " +
+            "against.",
+        )
+        if (tool.raw.isNotEmpty()) {
+          appendLine(
+            "Arguments provided (values omitted): ${tool.raw.keys.sorted().joinToString(", ")}",
+          )
+        }
+      } else {
+        appendLine(".")
+      }
+    appendLine("$agentName supports:")
+    supportedShapes.forEach { appendLine("- $it") }
+    append(remediation)
   }
 
   /**

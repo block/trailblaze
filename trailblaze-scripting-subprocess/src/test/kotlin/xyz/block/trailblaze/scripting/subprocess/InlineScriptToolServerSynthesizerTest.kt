@@ -151,7 +151,7 @@ class InlineScriptToolServerSynthesizerTest {
    * looking for the bundle's source path on disk. That worked when running tests from inside
    * the repo (source tree visible) but failed when the host daemon ran from an installed uber
    * jar with a working directory outside the repo — exactly the CI shape after
-   * `scripts/install-trailblaze-from-source.sh`. The fix routes resolution through
+   * an install-from-source script. The fix routes resolution through
    * [SdkBundleResource.extractToFile] in `:trailblaze-scripting-bundle`, which loads the
    * bundle from the classpath resource and writes it to a process-scoped temp file.
    *

@@ -1,7 +1,7 @@
 // Unit tests for the `sampleapp_launchToLoadedContent` TypeScript trailhead. Drives the tool
 // directly (no daemon, no device) with the mock context + queued client from
 // `@trailblaze/scripting/testing`, pinning the launch → open Loading tab → start load →
-// findMatches-wait orchestration on the accessibility driver, and that it refuses a non-
+// findSelectorMatches-wait orchestration on the accessibility driver, and that it refuses a non-
 // accessibility driver up front.
 //
 // Run via:  ./trailblaze check sampleapp
@@ -23,7 +23,7 @@ const argsOf = (c: { calls: Array<{ tool: string; args: Record<string, unknown> 
   c.calls.filter((x) => x.tool === tool).map((x) => x.args);
 
 describe("sampleapp_launchToLoadedContent — accessibility driver", () => {
-  test("launches, opens Loading, starts the load, then waits via findMatches", async () => {
+  test("launches, opens Loading, starts the load, then waits via findSelectorMatches", async () => {
     const c = createQueuedFindMatchesClient();
     c.queueFindMatches([[MATCH]]); // "Content Loaded" appears
 
@@ -33,7 +33,7 @@ describe("sampleapp_launchToLoadedContent — accessibility driver", () => {
       "launchApp",
       "tapOnElementBySelector", // Loading tab
       "tapOnElementBySelector", // Start Loading
-      "findMatches", // wait for Content Loaded
+      "findSelectorMatches", // wait for Content Loaded
     ]);
     // Falls back to the module default app id when ctx.target is absent.
     expect(argsOf(c, "launchApp")[0]).toEqual({ appId: APP_ID, launchMode: "FORCE_RESTART" });
@@ -42,9 +42,9 @@ describe("sampleapp_launchToLoadedContent — accessibility driver", () => {
       { androidAccessibility: { textRegex: "^Loading$" } },
       { androidAccessibility: { textRegex: "^Start Loading$" } },
     ]);
-    // The wait is an event-driven findMatches with a budget.
-    expect(argsOf(c, "findMatches")[0]).toEqual({
-      selector: { androidAccessibility: { textRegex: "^Content Loaded$" } },
+    // The wait is an event-driven findSelectorMatches with a budget.
+    expect(argsOf(c, "findSelectorMatches")[0]).toEqual({
+      selectors: [{ androidAccessibility: { textRegex: "^Content Loaded$" } }],
       timeoutMs: 30_000,
     });
     expect(result).toBe(

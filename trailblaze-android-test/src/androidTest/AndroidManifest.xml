@@ -45,12 +45,24 @@
       ai.koog.utils
   " />
 
+  <!-- Read-only, and test-only: InProcessVocabularyOnDeviceTest asserts that networkConnection
+       really switched the radios, which means asking the framework what state Wi-Fi is in. The
+       tool itself needs no permission — it drives `svc` on the instrumentation's shell channel. -->
+  <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+
   <!-- Test-only mixed View + Compose fixture Activity; ships only in the test APK. Not exported:
        only this APK's own instrumentation launches it, and an exported test Activity is reachable
        by anything else on a shared emulator. -->
   <application>
     <activity
         android:name="xyz.block.trailblaze.android.test.MixedUiFixtureActivity"
+        android:exported="false"
+        android:theme="@android:style/Theme.Material.Light.NoActionBar" />
+
+    <!-- Test-only tall-content fixture for the scroll-until-visible contracts. Not exported, for
+         the same reason as the mixed fixture above. -->
+    <activity
+        android:name="xyz.block.trailblaze.android.test.ScrollFixtureActivity"
         android:exported="false"
         android:theme="@android:style/Theme.Material.Light.NoActionBar" />
 

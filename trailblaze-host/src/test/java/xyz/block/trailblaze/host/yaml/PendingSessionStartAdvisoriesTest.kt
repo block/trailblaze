@@ -19,7 +19,7 @@ import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
-import xyz.block.trailblaze.ui.resolveDaemonRunTargetApp
+import xyz.block.trailblaze.ui.resolveRunTargetApp
 import xyz.block.trailblaze.ui.unresolvedDeclaredTargetWarning
 
 /**
@@ -31,7 +31,7 @@ import xyz.block.trailblaze.ui.unresolvedDeclaredTargetWarning
  *
  * Exercises the real seams end-to-end minus the runner's callback glue (`DesktopYamlRunner` isn't
  * hermetically constructable — it needs the full `TrailblazeDeviceManager` graph): the resolution
- * announcement ([resolveDaemonRunTargetApp]) builds the production warning text
+ * announcement ([resolveRunTargetApp]) builds the production warning text
  * ([unresolvedDeclaredTargetWarning]), which drains through a REAL [LogsRepo] disk round-trip.
  */
 class PendingSessionStartAdvisoriesTest {
@@ -64,7 +64,7 @@ class PendingSessionStartAdvisoriesTest {
       // Same wiring shape as TrailblazeDesktopApp.handleCliRunRequest: the resolution announcement
       // builds the production warning and defers it as a session-start advisory.
       val advisories = mutableListOf<String>()
-      resolveDaemonRunTargetApp(
+      resolveRunTargetApp(
         configTarget = "otherapp",
         callerWorkspaceDir = null,
         findTargetById = { null },

@@ -341,6 +341,7 @@ abstract class TrailblazeDesktopApp(
       initialMemorySeeds = request.initialMemorySeeds,
       initialMemorySensitiveSeeds = request.initialMemorySensitiveSeeds,
       initialArgs = request.initialArgs,
+      deviceClassifierOverride = request.deviceClassifierOverride,
       // Per-run multi-device selection from `run --configuration` / `run --bind`. Carried on the
       // request instead of read from the daemon's environment so two multi-device runs can bind
       // different device sets on one daemon.
@@ -366,31 +367,43 @@ abstract class TrailblazeDesktopApp(
     // the session log once the session is created — see
     // [DesktopAppRunYamlParams.sessionStartAdvisories].
     val sessionStartAdvisories = mutableListOf<String>()
+    // Set by the resolver when `config.target` named no loaded target, so turbo can decline rather
+    // than attach to the fallback's app — see [DesktopAppRunYamlParams.unresolvedDeclaredTarget].
+    var unresolvedDeclaredTarget: String? = null
+
+    // Resolved BEFORE the params are built, not inline in the argument list: read inline, this
+    // would depend on `targetTestApp` being written above `unresolvedDeclaredTarget` in the
+    // argument list, and reordering two named arguments would silently pass null here — which is
+    // exactly the bug this flag exists to prevent, with no test to catch the reorder.
+    //
+    // `config.target` first; else fall back to the workspace-resolved target (rungs 2-3) anchored
+    // at the RUN CALLER's cwd, not this daemon's launch dir — so a daemon-dispatched run targets
+    // the same app that `config get target` reports from that cwd. Forwarded via
+    // CliRunRequest.callerWorkspaceDir; null (older CLI / non-CLI submission) keeps the
+    // daemon-anchored behavior. Precedence + caller-cwd threading are unit-tested via
+    // resolveRunTargetApp (CliRunTargetResolutionTest).
+    val resolvedTargetTestApp = resolveRunTargetApp(
+      configTarget = trailConfig?.target,
+      callerWorkspaceDir = request.callerWorkspaceDir,
+      // The device manager's LIVE set, not `desktopAppConfig.availableAppTargets` (the frozen
+      // startup seed) — a workspace switch reloads the former, so reading the seed here would
+      // reject a target the picker is already offering.
+      findTargetById = { deviceManager.availableAppTargets.findById(it) },
+      resolveForCallerCwd = { deviceManager.getCurrentSelectedTargetAppForCallerCwd(it) },
+      onDeclaredTargetUnresolved = { declared, fallback ->
+        val message = unresolvedDeclaredTargetWarning(declared, fallback)
+        Console.error(message)
+        onProgress(message)
+        sessionStartAdvisories += message
+        unresolvedDeclaredTarget = declared
+      },
+    )
 
     val params = DesktopAppRunYamlParams(
       forceStopTargetApp = request.forceStopTargetApp,
       runYamlRequest = runYamlRequest,
-      // `config.target` first; else fall back to the workspace-resolved target (rungs 2-3)
-      // anchored at the RUN CALLER's cwd, not this daemon's launch dir — so a daemon-dispatched
-      // run targets the same app that `config get target` reports from that cwd. Forwarded via
-      // CliRunRequest.callerWorkspaceDir; null (older CLI / non-CLI submission) keeps the
-      // daemon-anchored behavior. Precedence + caller-cwd threading are unit-tested via
-      // resolveDaemonRunTargetApp (CliRunTargetResolutionTest).
-      targetTestApp = resolveDaemonRunTargetApp(
-        configTarget = trailConfig?.target,
-        callerWorkspaceDir = request.callerWorkspaceDir,
-        // The device manager's LIVE set, not `desktopAppConfig.availableAppTargets` (the frozen
-        // startup seed) — a workspace switch reloads the former, so reading the seed here would
-        // reject a target the picker is already offering.
-        findTargetById = { deviceManager.availableAppTargets.findById(it) },
-        resolveForCallerCwd = { deviceManager.getCurrentSelectedTargetAppForCallerCwd(it) },
-        onDeclaredTargetUnresolved = { declared, fallback ->
-          val message = unresolvedDeclaredTargetWarning(declared, fallback)
-          Console.error(message)
-          onProgress(message)
-          sessionStartAdvisories += message
-        },
-      ),
+      targetTestApp = resolvedTargetTestApp,
+      unresolvedDeclaredTarget = unresolvedDeclaredTarget,
       // A multi-device configuration's per-device `target:` override resolves against the same
       // LIVE registry as the session target above. Unlike `config.target`, an unresolved id here
       // is a hard error rather than a fallback — see [DesktopAppRunYamlParams.findTargetById].
@@ -398,6 +411,7 @@ abstract class TrailblazeDesktopApp(
       sessionStartAdvisories = sessionStartAdvisories,
       noLogging = request.noLogging,
       captureVideo = request.captureVideo,
+      turbo = request.turbo,
       captureLogcat = request.captureLogcat,
       captureIosLogs = request.captureIosLogs,
       snapshotBaselineRef = request.snapshotBaseline,

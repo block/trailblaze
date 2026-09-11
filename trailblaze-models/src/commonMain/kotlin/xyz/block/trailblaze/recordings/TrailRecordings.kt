@@ -112,9 +112,9 @@ object TrailRecordings {
    *
    * Two ports outside Kotlin depend on producing the identical string, and both are pinned by
    * their own tests. If this rule changes shape, update all three in the same change:
-   * - bash `expected_test_name` (`scripts/lib/trail_discovery.sh`), so a no-title/no-id trail's
+   * - a bash `expected_test_name` helper, so a no-title/no-id trail's
    *   CI expected-tests manifest line exact-matches its report title.
-   * - TypeScript `shortTrailName` (`scripts/trail-dashboard/lib.ts`), which is how the trails
+   * - a TypeScript `shortTrailName`, which is how the trails
    *   dashboard joins a Snowflake run's key back onto the trail file that produced it.
    */
   fun shortTrailName(trailFilePath: String): String {
@@ -196,8 +196,7 @@ object TrailRecordings {
    *
    * A v1 trail is a YAML *list* (`- config:` … at the root) and never carries a column-0 `trail:`
    * key; the unified format is a mapping whose required `trail:` key sits at column 0. This mirrors
-   * the discriminator the coverage scripts use (`scripts/dashboard-coverage/merge.py` uses
-   * `line.startswith("trail:")`) so CI
+   * the discriminator the coverage scripts use (they test `line.startswith("trail:")`) so CI
    * selection, the coverage reports, and the runtime agree on what "unified" means.
    *
    * Cheap by design — a line scan, no YAML parse — so a caller can classify a large corpus without

@@ -36,4 +36,10 @@ class DaemonAutoStartFlagTest {
     assertFalse(isDaemonAutoStartDisabled("yes"))
     assertFalse(isDaemonAutoStartDisabled(" 1 "))
   }
+
+  @Test
+  fun `explicit app start bypasses the implicit auto-start kill switch`() {
+    assertFalse(daemonAutoStartIsBlocked(respectAutoStartDisable = false, flag = "1"))
+    assertTrue(daemonAutoStartIsBlocked(respectAutoStartDisable = true, flag = "1"))
+  }
 }

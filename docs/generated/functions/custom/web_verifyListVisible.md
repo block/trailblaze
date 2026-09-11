@@ -22,10 +22,7 @@ Checks that each expected item text is visible within the container element.
 
 ### Required parameters
 
-- `items` — `ToolParameterType.List(
-  itemsType =
-    String
-)`
+- `items` — `array<String>`
   The expected item texts that should be visible in the list.
 
 ### Optional parameters

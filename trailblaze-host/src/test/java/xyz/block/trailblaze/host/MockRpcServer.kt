@@ -117,7 +117,7 @@ class MockRpcServer(deviceId: TrailblazeDeviceId) {
    * promptly and [awaitListening] then sees the squatter still listening, so the teardown fails with
    * its own "still listening" error — reporting the squatter instead of the real failure and burying
    * whichever test failed first. It does NOT cost a second [PORT_STATE_TIMEOUT_MS]; the wasted 60s
-   * in build 15969 was all [awaitBindable] in [start].
+   * in the run that exposed this was all [awaitBindable] in [start].
    */
   @Volatile private var engineStarted = false
 
@@ -215,8 +215,8 @@ class MockRpcServer(deviceId: TrailblazeDeviceId) {
      *
      * Waiting *here* rather than letting the engine take the `BindException` is what keeps the
      * failure contained: Ktor reports a failed bind on its own coroutine as well as to the caller,
-     * and the uncaught half lands on whatever `runTest`-based test runs next — build 12247's
-     * collateral shape, and how one bind failure in this class took `DevicesPageEndpointTest`
+     * and the uncaught half lands on whatever `runTest`-based test runs next — the collateral
+     * shape seen in CI, and how one bind failure in this class took `DevicesPageEndpointTest`
      * down with it.
      */
     internal fun awaitBindable(port: Int, timeoutMs: Long = PORT_STATE_TIMEOUT_MS): Boolean {

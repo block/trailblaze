@@ -107,6 +107,24 @@ These filenames are recognized as trails, matched case-sensitively on the exact 
 
 A unified `trail.yaml` is one trail covering every platform: a device with a matching recording slot replays it deterministically, and a device without one runs the step's prose through the agent. It may also open with an optional `trailhead:` — the deterministic step 0 that reaches a starting state (launched, signed in) via a specialized bootstrap tool before the first `trail:` step. Directories that still hold legacy files keep working — one `blaze.yaml` alongside one or more per-platform `*.trail.yaml` recordings. Each legacy file is its own trail from the runner's point of view when passed explicitly or matched by a shell glob (`trailblaze run flows/**/*.trail.yaml`) — every matched file runs. The desktop UI's Trails browser groups files in one directory into a single row with a variant chip per file for browsability — that's a UI affordance, not a runtime rule.
 
+### Device language
+
+Set `locale` on a top-level, single-device `config.devices` entry when that device must run in a particular language. The runner applies the BCP-47 language tag before it stops or launches the target app, so both app strings and system UI use the requested language. Devices without `locale` keep their current language:
+
+```yaml
+config:
+  id: checkout-in-spanish
+  target: storefront
+  devices:
+    android-phone: ANDROID_ONDEVICE_ACCESSIBILITY
+    android-phone-spanish:
+      driver: ANDROID_ONDEVICE_ACCESSIBILITY
+      locale: es
+    ios: IOS_AXE
+```
+
+Use a language-and-region tag when the language variant matters (`fr-CA`, `es-MX`). The setting is supported on Android devices that expose `cmd locale set-device-locale`, Android emulators whose root shell can apply the documented `persist.sys.locale` fallback, and iOS Simulators. A requested locale that cannot be applied fails the run instead of silently using the device's previous language. The language remains on the device after the run, and omitting `locale` does not restore an earlier value. As with other device-global setup, don't run trails requesting different languages concurrently on the same device; the last setup wins. Named members inside a multi-device configuration reject `locale` until setup can apply it to every bound device.
+
 ### The workspace-anchor rule
 
 `trailblaze.yaml` is the workspace config filename, not a trail file. Trailblaze treats the

@@ -62,6 +62,20 @@ class DesktopAppRunYamlParams(
   val noLogging: Boolean = false,
   /** Override capture video setting (null = default: video off, opt-in per run). */
   val captureVideo: Boolean? = null,
+  /**
+   * Override turbo mode for this run (`trailblaze run --turbo` / `--no-turbo`). `null` = inherit
+   * `TRAILBLAZE_TURBO` and the saved `trailblaze config turbo` setting; `true`/`false` = explicit
+   * per-run choice, which outranks both.
+   */
+  val turbo: Boolean? = null,
+  /**
+   * The trail's `config.target` when it named no loaded target, so [targetTestApp] is the
+   * workspace fallback rather than the app the trail was written for. Null when the declared target
+   * resolved (or none was declared). Turbo reads this to decline: attaching to the fallback's app
+   * and reporting "turbo on" made a mistyped target look like a successful turbo run of an app the
+   * trail never drives.
+   */
+  val unresolvedDeclaredTarget: String? = null,
   /** Override capture Android logcat setting (null = use app config default). */
   val captureLogcat: Boolean? = null,
   /** Override capture iOS Simulator system logs setting (null = use app config default). */

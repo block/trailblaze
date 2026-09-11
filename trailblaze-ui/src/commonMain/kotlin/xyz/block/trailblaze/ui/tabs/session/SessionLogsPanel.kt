@@ -105,6 +105,14 @@ fun SessionLogsPanel(
   sessionEndMs: Long = 0L,
   activeEventStartMs: Long? = null,
   activeEventEndMs: Long? = null,
+  /**
+   * How far this device's clock ran behind the host's, in ms, as derived from the session's log
+   * ingestion anchors — see
+   * [xyz.block.trailblaze.ui.tabs.session.models.SessionDetail.deviceClockOffsetMs]. Null when the
+   * session gave nothing to derive it from, which falls the panel back to reading the offset off
+   * its own first parseable line.
+   */
+  deviceClockOffsetMs: Long? = null,
   modifier: Modifier = Modifier,
 ) {
   // Only entries with content for this session get a tab. With nothing to show, the panel
@@ -168,30 +176,27 @@ fun SessionLogsPanel(
   val listState = rememberLazyListState()
   val horizontalScrollState = rememberScrollState()
 
-  // Offset between device clock and host clock, used to map host timestamps to device timestamps.
-  // When no log line carries a parseable timestamp, fall back to a 0L offset and surface a one-shot
-  // log so the developer knows why the panel won't follow the timeline.
-  val deviceClockOffsetMs =
-    remember(allParsedLines, sessionStartMs) {
+  // Offset to add to a host timestamp to get the device timestamp these lines are stamped with —
+  // see [deviceLogClockOffset] for how it's chosen. An unsyncable stream gets a one-shot log so
+  // the developer knows why the panel won't follow the timeline.
+  val hostToDeviceOffsetMs =
+    remember(allParsedLines, sessionStartMs, deviceClockOffsetMs) {
       val firstDeviceMs = allParsedLines.firstNotNullOfOrNull { it.epochMs }
-      if (firstDeviceMs != null && sessionStartMs > 0) {
-        firstDeviceMs - sessionStartMs
-      } else {
-        if (allParsedLines.isNotEmpty() && firstDeviceMs == null) {
-          Console.log(
-            "${source.displayName}: no parseable timestamps in ${allParsedLines.size} lines — " +
-              "timeline sync disabled (lines will not auto-scroll or highlight).",
-          )
-        }
-        0L
+      val offset = deviceLogClockOffset(deviceClockOffsetMs, firstDeviceMs, sessionStartMs)
+      if (offset.basis == DeviceLogClockBasis.UNSYNCED && allParsedLines.isNotEmpty() && firstDeviceMs == null) {
+        Console.log(
+          "${source.displayName}: no parseable timestamps in ${allParsedLines.size} lines — " +
+            "timeline sync disabled (lines will not auto-scroll or highlight).",
+        )
       }
+      offset.hostToDeviceMs
     }
   val timestampsAvailable = allParsedLines.any { it.epochMs != null }
 
   // Auto-scroll to match timeline position (only when not filtering).
   LaunchedEffect(currentTimestampMs, isExpanded, filterText) {
     if (!isExpanded || displayLines.isEmpty() || filterText.isNotBlank()) return@LaunchedEffect
-    val deviceCurrentMs = currentTimestampMs + deviceClockOffsetMs
+    val deviceCurrentMs = currentTimestampMs + hostToDeviceOffsetMs
     // Find nearest log line by device timestamp
     var targetIndex = -1
     for ((index, parsed) in displayLines.withIndex()) {
@@ -212,8 +217,8 @@ fun SessionLogsPanel(
   }
 
   // Map active event range to device clock for highlighting
-  val highlightStartMs = activeEventStartMs?.let { it + deviceClockOffsetMs }
-  val highlightEndMs = activeEventEndMs?.let { it + deviceClockOffsetMs }
+  val highlightStartMs = activeEventStartMs?.let { it + hostToDeviceOffsetMs }
+  val highlightEndMs = activeEventEndMs?.let { it + hostToDeviceOffsetMs }
   val highlightColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
   val zebraColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.03f)
 

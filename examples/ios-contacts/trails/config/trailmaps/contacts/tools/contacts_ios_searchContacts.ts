@@ -131,9 +131,9 @@ export const contacts_ios_searchContacts = trailblaze.tool<SearchContactsArgs>(
     //    sufficient: the search field's own label ("Search") contains plenty of substrings a
     //    caller may legitimately pass as `rowText` — `rowText: "ear"` opening a "Teddy Bear"
     //    row also matches "Search", and so do "Search results" and the "Clear text" button.
-    //    Since `findMatches` and the tap share this selector with `index: 0`, the topmost of
-    //    those could be the search field: the wait would succeed, the tap would only focus the
-    //    field, and the tool would report success without ever opening the row. `childOf`
+    //    Since `findSelectorMatches` and the tap share this selector with `index: 0`, the
+    //    topmost of those could be the search field: the wait would succeed, the tap would only
+    //    focus the field, and the tool would report success without opening the row. `childOf`
     //    fixes that structurally instead of narrowing the text match: on the real Contacts
     //    hierarchy every result row is a descendant of the "Search results" container, while
     //    the search field and all its chrome (the magnifying-glass image, "Clear text",
@@ -155,7 +155,7 @@ export const contacts_ios_searchContacts = trailblaze.tool<SearchContactsArgs>(
     //
     // The guarantee survives the Maestro fallback too. Under the default PREFER_NODE_SELECTOR
     // mode, if the node-selector tap returns no node (transient tree-fetch failure, row stops
-    // resolving between the `findMatches` probe and the tap), `TapOnByElementSelector` falls
+    // resolving between the `findSelectorMatches` probe and the tap), `TapOnByElementSelector` falls
     // back to Maestro — whose lowering turns `accessibilityTextRegex` into legacy `textRegex`
     // (text | hintText | accessibilityText), which a typed query CAN satisfy. But the same
     // lowering also carries `childOf` through, so even there the match set stays inside the
@@ -165,12 +165,12 @@ export const contacts_ios_searchContacts = trailblaze.tool<SearchContactsArgs>(
       childOf: { iosMaestro: { accessibilityTextRegex: RESULTS_LIST_LABEL } },
       index: 0,
     };
-    // Bounded wait for the row to render (`findMatches` re-polls the live hierarchy
+    // Bounded wait for the row to render (`findSelectorMatches` re-polls the live hierarchy
     // until a match appears or the budget elapses — no fixed sleep),
     // plus a distinct error for "results exist but none is labeled `rowText`" — a different
     // failure from the no-results branch above (wrong rowText vs wrong query).
-    const rows = await ctx.tools.findMatches({
-      selector: rowSelector,
+    const [rows] = await ctx.tools.findSelectorMatches({
+      selectors: [rowSelector],
       timeoutMs: ROW_WAIT_MS,
     });
     if (rows.length === 0) {

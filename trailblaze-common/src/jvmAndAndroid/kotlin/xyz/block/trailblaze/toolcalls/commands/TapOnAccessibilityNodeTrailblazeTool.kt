@@ -19,14 +19,13 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
  * the most common case is canvas widgets whose "buttons" are virtual views of an
  * `ExploreByTouchHelper` (PIN pads, drawing-app palettes, custom map markers). Those nodes
  * have a `contentDescription` but no `text`, so [TapOnElementWithTextTrailblazeTool] can't
- * reach them; the underlying [TapOnByElementSelector] dispatcher can, but Sam's split in
- * PR #3272 classified it as an internal "delegated-to" dispatcher and gated it from
- * scripted authors. This tool is the higher-level public face that fills that gap while
- * keeping the dispatcher itself internal.
+ * reach them; the underlying [TapOnByElementSelector] dispatcher can, but it is classified as an
+ * internal "delegated-to" dispatcher and gated from scripted authors. This tool is the
+ * higher-level public face that fills that gap while keeping the dispatcher itself internal.
  *
  * Routes through the same `executeTapOnElement` path the LLM `tap` tool uses, so the
  * per-tap `ACTION_CLICK` routing from PR #3524 applies — the route that fixes canvas-widget
- * tap drops (`case_5559262` / Padlock 6-digit passcode entry).
+ * tap drops (observed on a numeric passcode entry).
  *
  * **Multi-match disambiguation.** If the regexes match more than one node, the underlying
  * `AccessibilityDeviceManager` resolver logs `"matched N elements, using first"` and taps

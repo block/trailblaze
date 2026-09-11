@@ -16,10 +16,12 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * Pins [LogsRepo.getSessionInfoSummary], the cheap read the sessions-list poll uses: it must agree
- * with the full-parse [LogsRepo.getSessionInfoDirect] on the fields the list renders, while parsing
- * only the status-change logs (the full parse across every session on every poll exhausted the
- * daemon heap).
+ * Pins the cheaper [SessionInfo] read paths against the full-parse [LogsRepo.getSessionInfoDirect].
+ *
+ * [LogsRepo.getSessionInfoSummary] is what the sessions-list poll uses: it must agree on the fields
+ * the list renders while parsing only the status-change logs (the full parse across every session
+ * on every poll exhausted the daemon heap). [LogsRepo.sessionInfoFrom] is for a caller that already
+ * holds the logs and would otherwise parse the session a second time to get its header.
  */
 class LogsRepoSummaryTest {
 
@@ -88,6 +90,40 @@ class LogsRepoSummaryTest {
       summary?.latestStatus is SessionStatus.Started,
       "recent-activity session must read as Started; got ${summary?.latestStatus}",
     )
+  }
+
+  @Test
+  fun `info built from logs already in hand matches info read from disk`() {
+    val logsDir = tempLogsDir()
+    val logsRepo = LogsRepo(logsDir, watchFileSystem = false)
+    val sessionId = SessionId("info-from-logs")
+
+    logsRepo.saveLogToDisk(
+      TrailblazeLog.TrailblazeSessionStatusChangeLog(
+        sessionStatus = startedStatus(),
+        session = sessionId,
+        timestamp = Clock.System.now(),
+      ),
+    )
+    logsRepo.saveLogToDisk(
+      TrailblazeLog.TrailblazeSessionStatusChangeLog(
+        sessionStatus = SessionStatus.Ended.Succeeded(durationMs = 1234L),
+        session = sessionId,
+        timestamp = Clock.System.now(),
+      ),
+    )
+
+    assertEquals(
+      logsRepo.getSessionInfoDirect(sessionId),
+      logsRepo.sessionInfoFrom(logsRepo.getLogsForSession(sessionId)),
+    )
+  }
+
+  @Test
+  fun `info from an empty log list is null, the same as a session with nothing on disk`() {
+    val logsRepo = LogsRepo(tempLogsDir(), watchFileSystem = false)
+
+    assertNull(logsRepo.sessionInfoFrom(emptyList()))
   }
 
   @Test

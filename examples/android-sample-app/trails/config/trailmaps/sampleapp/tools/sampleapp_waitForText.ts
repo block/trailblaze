@@ -7,12 +7,13 @@
 // say, a sign-in screen to render after a cold start before it interacts with it — distilled here
 // against the Loading demo screen so it's easy to see in isolation.
 //
-// It composes the framework's `findMatches`/`maestro` primitives, uses zero Node APIs, and so runs
-// unchanged on the in-process (QuickJS) path — see `runtime: inProcess` semantics in the README.
+// It composes the framework's `findSelectorMatches`/`maestro` primitives, uses zero Node APIs, and
+// so runs unchanged on the in-process (QuickJS) path — see `runtime: inProcess` semantics in the
+// README.
 
 import { trailblaze, type ToolContext } from "@trailblaze/scripting";
 
-// The on-device accessibility driver exposes the selector-native `findMatches` wait; the
+// The on-device accessibility driver exposes the selector-native `findSelectorMatches` wait; the
 // instrumentation/Maestro driver waits through Maestro's own `extendedWaitUntil`. A dual-driver
 // wait has to branch here — an `androidAccessibility` selector isn't valid on the Maestro branch.
 const ACCESSIBILITY_DRIVER_TYPE = "android-ondevice-accessibility";
@@ -62,9 +63,9 @@ export const sampleapp_waitForText = trailblaze.tool<WaitForTextInput>(
 );
 
 /**
- * On the accessibility driver, use the selector-native `findMatches` wait (non-throwing — an empty
- * result means "never appeared", which we turn into a clear error). On the instrumentation driver,
- * let Maestro perform the `extendedWaitUntil` against its own hierarchy.
+ * On the accessibility driver, use the selector-native `findSelectorMatches` wait (non-throwing — an
+ * empty result means "never appeared", which we turn into a clear error). On the instrumentation
+ * driver, let Maestro perform the `extendedWaitUntil` against its own hierarchy.
  *
  * Both branches match on the SAME anchored, regex-escaped value: Maestro's `text` selector is
  * regex-backed too, so feeding it the raw input would let metacharacters in arbitrary text (e.g.
@@ -74,8 +75,8 @@ export const sampleapp_waitForText = trailblaze.tool<WaitForTextInput>(
 async function waitUntilTextShown(ctx: ToolContext, text: string, timeoutMs: number): Promise<void> {
   const anchored = anchoredTextRegex(text);
   if (usesAccessibilityDriver(ctx)) {
-    const matches = await ctx.tools.findMatches({
-      selector: { androidAccessibility: { textRegex: anchored } },
+    const [matches] = await ctx.tools.findSelectorMatches({
+      selectors: [{ androidAccessibility: { textRegex: anchored } }],
       timeoutMs,
     });
     if (matches.length === 0) {

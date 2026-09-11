@@ -272,4 +272,53 @@ class TrailblazeKoogToolTest {
   @Test fun `selectorParamsForTs returns empty for a tool with no selector params`() {
     assertThat(NoSelectorTool::class.selectorParamsForTs()).isEmpty()
   }
+
+  // ---- A selector param can be a LIST of selectors ----
+  //
+  // The exclusion used to read only a param's top-level classifier, so `List<TrailblazeNodeSelector>`
+  // read as `kotlin.collections.List` and was NOT stripped — asToolType's List branch then recursed
+  // into the self-referential selector grammar and died with a StackOverflowError. That is an Error,
+  // not an Exception, so toScriptedToolDescriptor's catch does not absorb it and per-trailmap codegen
+  // crashes outright instead of skipping one tool.
+
+  @LLMDescription("Resolve several selectors against one capture.")
+  @TrailblazeToolClass("listNodeSelectorTool")
+  private data class ListNodeSelectorTool(
+    @LLMDescription("The selectors to resolve.")
+    val selectors: List<TrailblazeNodeSelector>,
+    val timeoutMs: Long? = null,
+  ) : TrailblazeTool
+
+  @LLMDescription("Carries a list of legacy selectors.")
+  @TrailblazeToolClass("listElementSelectorTool")
+  private data class ListElementSelectorTool(
+    val selectors: List<TrailblazeElementSelector> = emptyList(),
+  ) : TrailblazeTool
+
+  @Test fun `a list of selectors is stripped from the descriptor rather than overflowing the stack`() {
+    val descriptor = ListNodeSelectorTool::class.buildToolDescriptorIgnoringSurface()
+    val paramNames = (descriptor.requiredParameters + descriptor.optionalParameters).map { it.name }
+    // Stripped, so the recursive grammar never reaches the lowering — and the non-selector params
+    // still flow through, which is what makes this a strip rather than a skip of the whole tool.
+    assertThat(paramNames).containsExactly("timeoutMs")
+  }
+
+  @Test fun `the scripted-tool surface keeps a list-of-selectors tool instead of dying on it`() {
+    // The production codegen path. It catches Exception, so this assertion is only meaningful
+    // because a StackOverflowError would escape it and fail the test rather than return null.
+    assertThat(ListNodeSelectorTool::class.toScriptedToolDescriptor()).isNotNull()
+  }
+
+  @Test fun `selectorParamsForTs re-emits a list of selectors as an array type`() {
+    val p = ListNodeSelectorTool::class.selectorParamsForTs().single()
+    assertThat(p.name).isEqualTo("selectors")
+    // Scalar `TrailblazeNodeSelector` here would make every recorded call to the tool read as a
+    // type error in the generated surface.
+    assertThat(p.tsType).isEqualTo("TrailblazeNodeSelector[]")
+    assertThat(p.optional).isFalse()
+    assertThat(p.description).isEqualTo("The selectors to resolve.")
+
+    val legacy = ListElementSelectorTool::class.selectorParamsForTs().single()
+    assertThat(legacy.tsType).isEqualTo("unknown[]")
+  }
 }

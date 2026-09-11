@@ -6,12 +6,13 @@
 # pattern a real app's launch flow uses to wait for a screen to render after a cold start.
 #
 # The recorded per-driver variants (trails/android-ondevice-*/loading/wait-for-content.trail.yaml)
-# perform the wait with the built-in `findMatches` / `maestro extendedWaitUntil` primitives. The
-# `sampleapp_waitForText` scripted tool (trails/config/trailmaps/sampleapp/tools/) shows how to wrap
-# those same primitives into a reusable, driver-aware tool — see the config README for the full story.
+# perform the wait with the built-in `findSelectorMatches` / `maestro extendedWaitUntil` primitives.
+# The `sampleapp_waitForText` scripted tool (trails/config/trailmaps/sampleapp/tools/) shows how to
+# wrap those same primitives into a reusable, driver-aware tool — see the config README for the
+# full story.
 config:
   id: sample-app/loading/wait-for-content
-  target: xyz.block.trailblaze.examples.sampleapp
+  target: sampleapp
 
 trailhead:
   step: Launch the sample app

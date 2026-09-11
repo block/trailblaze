@@ -139,7 +139,7 @@ class McpSubprocessSessionConnectCleanupTest {
    * Verifies the bounded handshake: a subprocess that stays alive but never answers the MCP
    * `initialize` handshake must make [McpSubprocessSession.connect] time out and tear the
    * subprocess down — instead of parking indefinitely, which was the root of the daemon-wide
-   * MCP wedge (build 3366). `sleep 30` is that subprocess: alive, silent on stdout.
+   * MCP wedge seen in CI. `sleep 30` is that subprocess: alive, silent on stdout.
    *
    * Also the regression guard for the mechanism itself: `client.connect` parks on a blocking,
    * non-cancellable native read of the subprocess's stdout, so a plain `withTimeout` around it
