@@ -1,5 +1,7 @@
 package xyz.block.trailblaze.scripting.subprocess
 
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import xyz.block.trailblaze.config.McpServerConfig
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.devices.TrailblazeDriverType
@@ -24,6 +26,11 @@ class LaunchedSubprocessRuntime internal constructor(
   val sessions: List<McpSubprocessSession>,
   private val repo: TrailblazeToolRepo,
   private val registeredNames: List<xyz.block.trailblaze.toolcalls.ToolName>,
+  /**
+   * This runtime's share of the JVM-wide `Dispatchers.IO` budget ([SubprocessIoCapacity]). Held
+   * until [shutdownAll], because that is how long the transports park their permits.
+   */
+  private val ioReservation: SubprocessIoReservation,
 ) {
 
   /**
@@ -37,15 +44,72 @@ class LaunchedSubprocessRuntime internal constructor(
    * Best-effort: failures in one shutdown don't short-circuit the rest — subprocesses and
    * tool registrations are peer resources, and a stuck MCP session shouldn't keep another
    * running or leak a dynamic-tool registration into the next session.
+   *
+   * Runs under [NonCancellable] because this IS the teardown. [McpSubprocessSession.shutdown] does
+   * its blocking waits inside `withContext(Dispatchers.IO)`, which in a cancelled context throws
+   * without ever running the body — and the `runCatching`s here would swallow that. A caller
+   * cancelled mid-teardown would leave every subprocess alive while the release below hands their
+   * permits back, which is the accounting error that lets a later launch be admitted against
+   * permits that are still parked.
+   *
+   * Returns whether every subprocess actually exited. `false` means at least one outlived SIGKILL's
+   * wait; its permit stays counted (see [releasePermitsOfExitedProcesses]) and the survivors are
+   * named on stderr, since nothing else will ever mention them.
    */
-  suspend fun shutdownAll() {
-    for (name in registeredNames) {
-      runCatching { repo.removeDynamicTool(name) }
+  suspend fun shutdownAll(): Boolean {
+    withContext(NonCancellable) {
+      for (name in registeredNames) {
+        runCatching { repo.removeDynamicTool(name) }
+      }
+      for (session in sessions) {
+        runCatching { session.shutdown() }
+      }
     }
-    for (session in sessions) {
-      runCatching { session.shutdown() }
-    }
+    // Last, and outside every `runCatching` above: a shutdown that threw still ended the session,
+    // and permits withheld from the next launch are indistinguishable from a leak.
+    return releasePermitsOfExitedProcesses(ioReservation, sessions.map { it.spawnedProcess })
   }
+}
+
+/**
+ * Give [reservation]'s permits back for every subprocess in [spawned] that is gone, and keep
+ * counting the ones still alive.
+ *
+ * Asked of the process itself, not of what `shutdown` returned, so a shutdown that threw — or a
+ * subprocess that was spawned but never reached a session, because its handshake failed — is judged
+ * by what it actually left behind. A subprocess that survived the escalation ladder still has a
+ * transport parking its IO permit; refunding it would let the next launch be admitted against
+ * capacity that is not there, which is the daemon-wide hang [SubprocessIoCapacity] exists to
+ * prevent, reached through the accounting instead of the cap.
+ *
+ * Each survivor's permit is reclaimed when the OS finally reaps it, so a child that took a moment
+ * longer than the ladder allowed costs the budget nothing permanently.
+ *
+ * Returns whether every subprocess exited.
+ */
+private fun releasePermitsOfExitedProcesses(
+  reservation: SubprocessIoReservation,
+  spawned: List<SpawnedProcess>,
+): Boolean {
+  val survivors = spawned.filter { it.process.isAlive }
+  // Named, not counted: overlapping teardowns see different children alive, and a reservation given
+  // only a number cannot tell a child that has since died from one that is still parking a permit.
+  reservation.releaseAllBut(survivors.map { it.process })
+  if (survivors.isEmpty()) return true
+
+  Console.error(
+    "[McpSubprocessRuntime] ${survivors.size} scripted-tool subprocess(es) did not exit after SIGKILL " +
+      "(${survivors.joinToString { "${it.scriptFile.name} pid ${it.process.pid()}" }}). Their " +
+      "Dispatchers.IO permits stay reserved until the OS reaps them.",
+  )
+  for (survivor in survivors) {
+    // Self-healing, because the alternative is a permit burned for the daemon's lifetime every time
+    // a child is reaped a moment after the ladder gave up. One refund per child however many
+    // overlapping teardowns ask, and none at all once a later teardown has given the permit back —
+    // see the reservation's note on why this has to be accounted per child rather than by count.
+    reservation.refundWhenExited(survivor.process)
+  }
+  return false
 }
 
 /**
@@ -140,7 +204,12 @@ object McpSubprocessRuntimeLauncher {
   ): LaunchedSubprocessRuntime {
     val scriptEntries = mcpServers.filter { it.script != null }
     if (scriptEntries.isEmpty()) {
-      return LaunchedSubprocessRuntime(sessions = emptyList(), repo = toolRepo, registeredNames = emptyList())
+      return LaunchedSubprocessRuntime(
+        sessions = emptyList(),
+        repo = toolRepo,
+        registeredNames = emptyList(),
+        ioReservation = SubprocessIoCapacity.reserve(0),
+      )
     }
     val skipped = mcpServers.size - scriptEntries.size
     if (skipped > 0) {
@@ -170,14 +239,28 @@ object McpSubprocessRuntimeLauncher {
     }
 
     val started = mutableListOf<McpSubprocessSession>()
+    // Every process this call spawns, including any whose handshake failed and so never became a
+    // session. The permit is parked by the process, not by the session, so this is the list the
+    // accounting has to be done against.
+    val spawnedProcesses = mutableListOf<SpawnedProcess>()
     val pendingRegistrations = mutableListOf<SubprocessToolRegistration>()
     val usedBaseNames = mutableMapOf<String, Int>()
 
+    // Each entry becomes one subprocess whose MCP transport parks a Dispatchers.IO permit for the
+    // session's lifetime, so the number of entries is bounded by the IO cap, not by CPU or memory.
+    // Claimed against a JVM-wide tally rather than this launch alone — a daemon runs one of these
+    // per live session. Past the cap the symptom is a daemon that answers /ping and hangs
+    // everything else, which is unreadable from the outside.
+    //
+    // Immediately before the `try` that owns its release: anything that throws between the claim
+    // and the `try` would leak the whole reservation for the daemon's lifetime.
+    val ioReservation = SubprocessIoCapacity.reserve(scriptEntries.size)
     try {
       for (entry in scriptEntries) {
         // Spawn FIRST so a `ProcessBuilder.start()` failure can't leave an unclosed
         // StderrCapture dangling — there'd be no session to own the writer's cleanup.
         val spawned = McpSubprocessSpawner.spawn(config = entry, context = spawnContext)
+        spawnedProcesses += spawned
         val base = spawned.scriptFile.nameWithoutExtension
         val collisionIndex = usedBaseNames.getOrDefault(base, 0)
         usedBaseNames[base] = collisionIndex + 1
@@ -215,13 +298,24 @@ object McpSubprocessRuntimeLauncher {
         sessions = started.toList(),
         repo = toolRepo,
         registeredNames = pendingRegistrations.map { it.name },
+        ioReservation = ioReservation,
       )
     } catch (t: Throwable) {
       // Session startup is aborting: shut down whatever did spawn so we don't leak subprocesses
-      // or stderr-capture file handles on a half-successful launch.
-      for (session in started) {
-        runCatching { session.shutdown() }
+      // or stderr-capture file handles on a half-successful launch. NonCancellable for the same
+      // reason `shutdownAll` is — a cancelled launch is the likeliest way to get here, and a
+      // cancelled shutdown returns without killing anything while the release below refunds it.
+      withContext(NonCancellable) {
+        for (session in started) {
+          runCatching { session.shutdown() }
+        }
       }
+      // No runtime is returned, so nothing else will ever release these. A launch that fails
+      // without giving its permits back would shrink the budget for every later session in the
+      // daemon's life, and would do it silently. Entries that never spawned hold nothing; a spawned
+      // subprocess that outlived SIGKILL still does, and keeps its permit — including one torn down
+      // by `connect`'s own handshake-failure cleanup, which never became a session.
+      releasePermitsOfExitedProcesses(ioReservation, spawnedProcesses)
       throw t
     }
   }

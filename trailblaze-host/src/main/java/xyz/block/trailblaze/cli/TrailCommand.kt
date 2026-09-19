@@ -107,7 +107,7 @@ import kotlin.system.exitProcess
 // `docs/internal/devlog/2026-05-26-cli-trail-to-run-rename.md` for the rationale and
 // the removal recipe. Once removed, follow the established `StepCommand` /
 // `AskCommand` / `VerifyCommand` convention and rename to `RunCommand`.
-open class TrailCommand : Callable<Int> {
+open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
 
   @CommandLine.ParentCommand
   private lateinit var parent: TrailblazeCliCommand
@@ -220,7 +220,7 @@ open class TrailCommand : Callable<Int> {
         "Default: ${AgentImplementation.DEFAULT_NAME}",
     ],
   )
-  var agent: String = AgentImplementation.DEFAULT.name
+  var agent: String? = null
 
   @Option(
     names = ["--use-recorded-steps"],
@@ -290,9 +290,17 @@ open class TrailCommand : Callable<Int> {
   )
   var verbose: Boolean = false
 
+  /**
+   * Closes the internal [Console.log] channel for this command unless `--verbose`, applied at
+   * dispatch so the early-return paths are covered too — see [QuietUnlessVerbose]. The in-`call`
+   * quiet switch below stays for the entry points that construct this command directly, without
+   * a picocli dispatch.
+   */
+  override val verboseRequested: Boolean get() = verbose
+
   @Option(
     names = ["--driver"],
-    description = ["Driver type to use (e.g., PLAYWRIGHT_NATIVE, ANDROID_ONDEVICE_INSTRUMENTATION). Overrides driver from trail config."]
+    description = ["Driver type to use (e.g., PLAYWRIGHT_NATIVE, ANDROID_ONDEVICE_ACCESSIBILITY). Overrides driver from trail config."]
   )
   var driverType: String? = null
 
@@ -313,6 +321,10 @@ open class TrailCommand : Callable<Int> {
         "--headless=false to surface a visible window. Equivalent to --show-browser when negated.",
     ],
     negatable = true,
+    // `fallbackValue` is load-bearing on a `negatable` Boolean whose initializer is `true`:
+    // without it picocli 4.7.7 reads the initializer as "the option name IS the negated form",
+    // so `--headless` assigned false (a visible browser) and `--no-headless` did nothing.
+    fallbackValue = "true",
   )
   var headless: Boolean = true
 
@@ -532,7 +544,8 @@ open class TrailCommand : Callable<Int> {
     names = ["--capture-logcat"],
     description = [
       "Capture Android logcat (filtered to the app under test) to <session-dir>/device.log " +
-        "(only takes effect on Android). On by default; use --no-capture-logcat to disable.",
+        "(only takes effect on Android). Recognized fatal crashes are also indexed in " +
+        "<session-dir>/events/crash.ndjson. On by default; use --no-capture-logcat to disable.",
     ],
     negatable = true,
   )
@@ -544,7 +557,8 @@ open class TrailCommand : Callable<Int> {
       "Capture the iOS Simulator system log via `xcrun simctl spawn log stream` to " +
         "<session-dir>/device.log (only takes effect on iOS). On by default; the stream is " +
         "scoped to the app under test (the logcat-equivalent app log, not the system firehose). " +
-        "Use --no-capture-ios-logs to disable.",
+        "Recognized fatal crashes are also indexed in <session-dir>/events/crash.ndjson. Use " +
+        "--no-capture-ios-logs to disable.",
     ],
     negatable = true,
   )
@@ -586,6 +600,15 @@ open class TrailCommand : Callable<Int> {
    * Forwarding a resolved `false` here would silently outrank both.
    */
   private fun resolvedCaptureVideo(): Boolean? = if (captureAll) true else captureVideo
+
+  /**
+   * Whether the Playwright browser runs headless. Headless unless the run asked for a visible
+   * window, either through the current spelling (`--no-headless` / `--headless=false`) or the
+   * deprecated `--show-browser`. Downstream wants this both ways round — `CliRunRequest` carries
+   * `showBrowser`, `TrailblazeConfig` carries `browserHeadless` — so both read it from here
+   * rather than each restating the boolean.
+   */
+  internal fun resolvedBrowserHeadless(): Boolean = !showBrowser && headless
 
   /**
    * The device-log toggles only. Video is deliberately absent: it is forwarded downstream as the
@@ -727,6 +750,17 @@ open class TrailCommand : Callable<Int> {
       }
     }
 
+    val effectiveAgent = try {
+      resolveEffectiveAgent()
+    } catch (e: IllegalArgumentException) {
+      reportCliError(
+        verb = "Trail run",
+        reason = "invalid agent implementation '${agent}'",
+        hint = "valid options: ${AgentImplementation.entries.joinToString(", ") { it.name }}",
+      )
+      return TrailblazeExitCode.MISUSE.code
+    }
+
     // Agent-incompatibility check fires on the *resolved* value — any tier that contributes
     // a non-null cap (CLI flag, env var, workspace yaml, persisted config) combined with
     // MULTI_AGENT_V3 produces the same friendly USAGE exit instead of an
@@ -734,7 +768,7 @@ open class TrailCommand : Callable<Int> {
     // twice (once here, once at request construction); workspace yaml lookup is the only I/O
     // and it's a one-off file read.
     if (resolveEffectiveMaxLlmCalls() != null &&
-      agent.equals(AgentImplementation.MULTI_AGENT_V3.name, ignoreCase = true)
+      effectiveAgent == AgentImplementation.MULTI_AGENT_V3
     ) {
       Console.error(
         "Error: max-llm-calls is not supported with --agent ${AgentImplementation.MULTI_AGENT_V3.name}. " +
@@ -884,10 +918,28 @@ open class TrailCommand : Callable<Int> {
     // device loading, which reports its own errors).
     (autodetect as? DeviceAutodetectResult.DaemonUnreachable)?.let { unreachable ->
       if (allDevices) {
-        if (!unreachable.alreadyReported) {
-          reportDaemonUnreachable("daemon device listing failed — cannot resolve --all-devices")
-        }
+        unreachable.reportIfOwed("daemon device listing failed — cannot resolve --all-devices")
         return TrailblazeExitCode.INFRA_FAILED.code
+      }
+      // The tolerance above assumes downstream device loading will answer, and for a daemon that
+      // is DOWN it does: the connection is refused at once and that path reports it. A daemon that
+      // let the pre-flight bound expire is the case the tolerance does not cover -- it accepts and
+      // never answers, so downstream would wait out the full request deadline instead of failing.
+      // Hence the narrow condition: fail fast only on the bound-expiry verdict.
+      if (unreachable.starvedDaemonReason != null) {
+        // `--no-daemon` never sends the run to the daemon; it stops it and runs in-process below.
+        // The probe was only a device-resolution tier there, so a daemon that did not answer costs
+        // that tier and nothing else -- failing the run would deny one that was about to work.
+        if (defaultDevice == null && !noDaemon) {
+          unreachable.reportIfOwed("daemon device listing failed — cannot resolve a device")
+          return TrailblazeExitCode.INFRA_FAILED.code
+        }
+        // A device resolved from another tier (`cliDevicePlatform`, an explicit pin), so the run
+        // can proceed -- but not in silence. The daemon it is about to use is the one that just
+        // failed to answer, so the likeliest next event is a long stall; the reason belongs on
+        // stderr where the user can act on it. Warning rather than an error envelope because this
+        // run is still going ahead.
+        Console.error("Warning: ${unreachable.starvedDaemonReason}")
       }
     }
 
@@ -967,7 +1019,13 @@ open class TrailCommand : Callable<Int> {
           )
           return TrailblazeExitCode.INFRA_FAILED.code
         }
-        return delegateToDaemon(daemon, explicitDevices, defaultDevice, connectedSpecs)
+        return delegateToDaemon(
+          daemon,
+          explicitDevices,
+          defaultDevice,
+          connectedSpecs,
+          resolveDelegatedAgent(),
+        )
       }
     } else if (daemon.isRunningBlocking()) {
       // Shut down existing daemon so this process can bind the port.
@@ -1082,7 +1140,7 @@ open class TrailCommand : Callable<Int> {
             }
             Console.info("\n[${index + 1}/$total] Running: $runLabel")
             Console.info(ITEM_DIVIDER)
-            val (exitCode, sessionIds) = runSingleTrailFile(item.file, deviceSpec, app)
+            val (exitCode, sessionIds) = runSingleTrailFile(item.file, deviceSpec, app, effectiveAgent)
             allNewSessionIds.addAll(sessionIds)
             if (exitCode == TrailblazeExitCode.SUCCESS.code) {
               passed++
@@ -1174,6 +1232,7 @@ open class TrailCommand : Callable<Int> {
     explicitDevices: List<String>,
     defaultDevice: String?,
     connectedSpecs: List<String>?,
+    explicitAgent: AgentImplementation?,
   ): Int {
     // Same plan-then-iterate shape as the in-process path so the daemon-delegated and
     // in-process flows produce identical headers, filter counts, and summaries. Device
@@ -1317,11 +1376,9 @@ open class TrailCommand : Callable<Int> {
               llmProvider = llmProvider,
               llmModel = llmModel,
               useRecordedSteps = effectiveUseRecordedSteps,
-              // --show-browser is the legacy flag; --headless is the new spelling. Either
-              // produces a visible browser when explicitly requested. Both are off by default.
-              showBrowser = showBrowser || !headless,
+              showBrowser = !resolvedBrowserHeadless(),
               noLogging = noLogging,
-              agentImplementation = agent.takeIf { it != AgentImplementation.DEFAULT.name },
+              agentImplementation = explicitAgent?.name,
               selfHeal = selfHeal,
               captureVideo = resolvedCaptureVideo(),
               turbo = turbo,
@@ -1728,6 +1785,7 @@ open class TrailCommand : Callable<Int> {
     file: File,
     deviceSpec: String?,
     app: TrailblazeDesktopApp,
+    effectiveAgent: AgentImplementation,
   ): Pair<Int, List<SessionId>> {
     // Read the YAML file and resolve template variables (e.g., {{CWD}}, {{BASE_URL}})
     val rawYaml = file.readText()
@@ -1817,24 +1875,12 @@ open class TrailCommand : Callable<Int> {
     Console.info("Target device: ${targetDevice.trailblazeDeviceId.instanceId} (${targetDevice.platform.displayName})")
     Console.info("Driver: ${trailDriverType ?: targetDevice.trailblazeDriverType}")
 
-    // Parse agent implementation
-    val agentImpl = try {
-      AgentImplementation.valueOf(agent.uppercase())
-    } catch (e: IllegalArgumentException) {
-      reportCliError(
-        verb = "Trail run",
-        reason = "invalid agent implementation '$agent'",
-        hint = "valid options: ${AgentImplementation.entries.joinToString(", ") { it.name }}",
-      )
-      return TrailblazeExitCode.MISUSE.code to emptyList()
-    }
-
     val config = parent.configProvider()
     val llmModel = resolveLlmModel(config, llmProvider, llmModel)
       ?: return TrailblazeExitCode.INFRA_FAILED.code to emptyList()
 
     Console.info("Using LLM: ${llmModel.trailblazeLlmProvider.id}/${llmModel.modelId}")
-    Console.info("Agent: $agentImpl")
+    Console.info("Agent: $effectiveAgent")
 
     val testName = testNameOverride?.trim()?.takeIf { it.isNotBlank() } ?: deriveTestName(file)
 
@@ -1868,9 +1914,7 @@ open class TrailCommand : Callable<Int> {
       trailblazeLlmModel = llmModel,
       driverType = trailDriverType,
       config = TrailblazeConfig(
-        // Either --show-browser or --no-headless (i.e. headless=false) makes the browser
-        // visible. Both default to off (browser stays headless).
-        browserHeadless = !showBrowser && headless,
+        browserHeadless = resolvedBrowserHeadless(),
         selfHeal = resolveEffectiveSelfHeal(),
         overrideSessionId = pinnedSessionId,
         // Tri-state: the explicit flag wins; when omitted, inherit the desktop app's saved
@@ -1892,7 +1936,7 @@ open class TrailCommand : Callable<Int> {
           config.trailblazeSettingsRepo.serverStateFlow.value.appConfig.preferHostAgent,
       ),
       referrer = TrailblazeReferrer(id = "cli", display = "CLI"),
-      agentImplementation = agentImpl,
+      agentImplementation = effectiveAgent,
       maxLlmCalls = resolveEffectiveMaxLlmCalls(),
       initialMemorySeeds = parsedMemorySeeds(),
       initialMemorySensitiveSeeds = parsedSensitiveSeeds(),
@@ -2798,6 +2842,43 @@ open class TrailCommand : Callable<Int> {
       ?: System.getenv("TRAILBLAZE_SELF_HEAL_ENABLED")?.lowercase()?.toBooleanStrictOrNull()
       ?: CliConfigHelper.readConfig()?.selfHealEnabled
       ?: false
+
+  /**
+   * Resolves the agent implementation for an in-process run: an explicit `--agent` flag wins,
+   * followed by the agent saved in the settings file, then the framework default.
+   *
+   * Daemon-delegated runs use [resolveDelegatedAgent] instead — there the daemon owns the saved
+   * tier.
+   */
+  internal fun resolveEffectiveAgent(
+    persistedConfigReader: () -> AgentImplementation? = {
+      CliConfigHelper.readConfig()?.agentImplementation
+    },
+  ): AgentImplementation =
+    agent?.let { AgentImplementation.valueOf(it.uppercase()) }
+      ?: persistedConfigReader()
+      ?: AgentImplementation.DEFAULT
+
+  /**
+   * Agent to put on a daemon-delegated request: an explicit `--agent` flag, else an agent the user
+   * actually chose and saved, else `null` so the daemon supplies the default tier itself.
+   *
+   * Stopping short of the default matters because both sides of this handoff can hold a stale
+   * agent, in opposite directions. The desktop app mutates settings in memory and persists
+   * asynchronously, so this process's file read can lag an in-app pick; `trailblaze config agent`
+   * writes the file from a separate process and the daemon never re-reads it, so the daemon's
+   * in-memory copy lags that one permanently. Sending only values the user explicitly chose means
+   * a stale read can at worst substitute one of their own picks for another, never override a live
+   * choice with a manufactured default. [resolveEffectiveAgent] keeps the default tier for
+   * in-process runs, which have no daemon to ask.
+   */
+  internal fun resolveDelegatedAgent(
+    persistedConfigReader: () -> AgentImplementation? = {
+      CliConfigHelper.readConfig()?.agentImplementation
+    },
+  ): AgentImplementation? =
+    agent?.let { AgentImplementation.valueOf(it.uppercase()) }
+      ?: persistedConfigReader()
 
   /**
    * Resolves the effective per-objective LLM call cap for this run, honoring:

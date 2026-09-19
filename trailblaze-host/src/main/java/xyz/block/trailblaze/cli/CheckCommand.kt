@@ -90,10 +90,10 @@ import java.util.concurrent.TimeUnit
   name = "check",
   mixinStandardHelpOptions = true,
   description = [
-    "Validate a trailmap: materialize manifests, type-check TypeScript/JavaScript sources, " +
-      "and run `*.test.ts` unit tests via `bun test`. On first run, scaffolds a minimal " +
-      "package.json at the workspace root if absent so `bun install` can be used as the " +
-      "canonical bootstrap (its `postinstall` hook re-runs `trailblaze check`).",
+    "Validate a trailmap: materialize manifests, type-check its TypeScript, run its `*.test.ts` tests.",
+    "Type-checking covers TypeScript/JavaScript sources; tests run via `bun test`. On first run, " +
+      "scaffolds a minimal package.json at the workspace root if absent so `bun install` can be " +
+      "used as the canonical bootstrap (its `postinstall` hook re-runs `trailblaze check`).",
   ],
 )
 class CheckCommand : Callable<Int> {

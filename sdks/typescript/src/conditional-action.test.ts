@@ -553,7 +553,7 @@ describe("captureViewHierarchy", () => {
     expect(snap.find(HOME)?.indexPath).toEqual([1]);
 
     // The cost claim, pinned: two selectors, one dispatch. Answers alone can't catch a
-    // regression back to per-selector `findMatches` — that version returns the same snapshot
+    // regression back to a per-selector probe — that version returns the same snapshot
     // while paying a multi-second hierarchy capture per selector.
     expect(client.calls.map((c) => c.tool)).toEqual(["findSelectorMatches"]);
     expect(client.calls[0]!.args["selectors"]).toEqual([POPUP, HOME]);

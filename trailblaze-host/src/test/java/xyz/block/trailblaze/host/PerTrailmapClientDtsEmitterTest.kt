@@ -111,7 +111,7 @@ class PerTrailmapClientDtsEmitterTest {
       waypoints = emptyList(),
     )
 
-    val emitted = PerTrailmapClientDtsEmitter.emit(listOf(alphaTrailmap, betaTrailmap))
+    val emitted = PerTrailmapClientDtsEmitter.emit(listOf(alphaTrailmap, betaTrailmap), workspaceRoot = null)
 
     assertEquals(2, emitted.size, "expected one binding per trailmap, got: $emitted")
     val alphaPath = File(alphaTrailmapDir, "tools/trailblaze-client.d.ts")
@@ -195,7 +195,7 @@ class PerTrailmapClientDtsEmitterTest {
       waypoints = emptyList(),
     )
 
-    PerTrailmapClientDtsEmitter.emit(listOf(libTrailmap, appTrailmap))
+    PerTrailmapClientDtsEmitter.emit(listOf(libTrailmap, appTrailmap), workspaceRoot = null)
 
     val appRendered = Files.readString(File(appTrailmapDir, "tools/trailblaze-client.d.ts").toPath())
     val libRendered = Files.readString(File(libTrailmapDir, "tools/trailblaze-client.d.ts").toPath())
@@ -266,7 +266,7 @@ class PerTrailmapClientDtsEmitterTest {
     )
 
     val ex = assertFailsWith<IllegalStateException> {
-      PerTrailmapClientDtsEmitter.emit(listOf(libTrailmap, appTrailmap))
+      PerTrailmapClientDtsEmitter.emit(listOf(libTrailmap, appTrailmap), workspaceRoot = null)
     }
     val msg = ex.message ?: ""
     assertTrue("expected message to name the unresolved export: $msg") {
@@ -344,7 +344,7 @@ class PerTrailmapClientDtsEmitterTest {
     )
 
     val ex = assertFailsWith<IllegalStateException> {
-      PerTrailmapClientDtsEmitter.emit(listOf(depA, depB, appTrailmap))
+      PerTrailmapClientDtsEmitter.emit(listOf(depA, depB, appTrailmap), workspaceRoot = null)
     }
     val msg = ex.message ?: ""
     assertTrue("expected message to name the colliding tool: $msg") { msg.contains("'login'") }
@@ -414,7 +414,7 @@ class PerTrailmapClientDtsEmitterTest {
     )
 
     // Should NOT throw — trailmap-local overrides are intentional.
-    PerTrailmapClientDtsEmitter.emit(listOf(libTrailmap, appTrailmap))
+    PerTrailmapClientDtsEmitter.emit(listOf(libTrailmap, appTrailmap), workspaceRoot = null)
 
     val appRendered = Files.readString(File(appTrailmapDir, "tools/trailblaze-client.d.ts").toPath())
     assertTrue("expected trailmap-local override to surface: $appRendered") {
@@ -440,7 +440,7 @@ class PerTrailmapClientDtsEmitterTest {
       waypoints = emptyList(),
     )
 
-    val emitted = PerTrailmapClientDtsEmitter.emit(listOf(classpathTrailmap))
+    val emitted = PerTrailmapClientDtsEmitter.emit(listOf(classpathTrailmap), workspaceRoot = null)
 
     assertTrue(emitted.isEmpty(), "expected no emissions for classpath-only pool: $emitted")
   }
@@ -497,7 +497,7 @@ class PerTrailmapClientDtsEmitterTest {
       waypoints = emptyList(),
     )
 
-    val emitted = PerTrailmapClientDtsEmitter.emit(listOf(classpathDep, consumer))
+    val emitted = PerTrailmapClientDtsEmitter.emit(listOf(classpathDep, consumer), workspaceRoot = null)
 
     // Only the filesystem consumer gets a file — the classpath dep is skipped for output.
     assertEquals(1, emitted.size, "expected exactly the consumer's binding, got: $emitted")
@@ -510,7 +510,7 @@ class PerTrailmapClientDtsEmitterTest {
 
   @Test
   fun `empty resolvedTrailmaps is a no-op`() {
-    val emitted = PerTrailmapClientDtsEmitter.emit(emptyList())
+    val emitted = PerTrailmapClientDtsEmitter.emit(emptyList(), workspaceRoot = null)
     assertTrue(emitted.isEmpty())
   }
 
@@ -535,7 +535,7 @@ class PerTrailmapClientDtsEmitterTest {
       waypoints = emptyList(),
     )
 
-    PerTrailmapClientDtsEmitter.emit(listOf(trailmap))
+    PerTrailmapClientDtsEmitter.emit(listOf(trailmap), workspaceRoot = null)
     val rendered = Files.readString(File(trailmapDir, "tools/trailblaze-client.d.ts").toPath())
 
     // Selector-migration tools that are in no tool_sets still appear — including
@@ -703,6 +703,7 @@ class PerTrailmapClientDtsEmitterTest {
         buildTrailmap(trailmapWithToolset, listOf("core_interaction")),
         buildTrailmap(trailmapWithoutToolset, emptyList()),
       ),
+      workspaceRoot = null,
     )
 
     val withToolset = Files.readString(File(trailmapWithToolset, "tools/trailblaze-client.d.ts").toPath())
@@ -789,7 +790,7 @@ class PerTrailmapClientDtsEmitterTest {
       ),
     )
 
-    PerTrailmapClientDtsEmitter.emit(listOf(trailmap), catalog = catalog)
+    PerTrailmapClientDtsEmitter.emit(listOf(trailmap), catalog = catalog, workspaceRoot = null)
 
     val rendered = Files.readString(File(trailmapDir, "tools/trailblaze-client.d.ts").toPath())
     assertTrue("LLM-hidden tool must still be emitted to the scripted surface: $rendered") {
@@ -853,7 +854,7 @@ class PerTrailmapClientDtsEmitterTest {
       ),
     )
 
-    PerTrailmapClientDtsEmitter.emit(listOf(trailmap), catalog = catalog)
+    PerTrailmapClientDtsEmitter.emit(listOf(trailmap), catalog = catalog, workspaceRoot = null)
 
     val rendered = Files.readString(File(trailmapDir, "tools/trailblaze-client.d.ts").toPath())
     assertTrue("expected an import of the declared result type: $rendered") {
@@ -900,7 +901,7 @@ class PerTrailmapClientDtsEmitterTest {
       ),
     )
 
-    PerTrailmapClientDtsEmitter.emit(listOf(trailmap), catalog = catalog)
+    PerTrailmapClientDtsEmitter.emit(listOf(trailmap), catalog = catalog, workspaceRoot = null)
 
     val rendered = Files.readString(File(trailmapDir, "tools/trailblaze-client.d.ts").toPath())
     // Positive case: the annotation value flows all the way through to the rendered tag.
@@ -1015,7 +1016,7 @@ class PerTrailmapClientDtsEmitterTest {
       waypoints = emptyList(),
     )
 
-    PerTrailmapClientDtsEmitter.emit(listOf(trailmap), analyzer = analyzer)
+    PerTrailmapClientDtsEmitter.emit(listOf(trailmap), analyzer = analyzer, workspaceRoot = null)
 
     val rendered = Files.readString(File(trailmapDir, "tools/trailblaze-client.d.ts").toPath())
     // TSDoc on the exported const replaces the YAML-derived description.
@@ -1078,7 +1079,7 @@ class PerTrailmapClientDtsEmitterTest {
       waypoints = emptyList(),
     )
 
-    PerTrailmapClientDtsEmitter.emit(listOf(trailmap), analyzer = null)
+    PerTrailmapClientDtsEmitter.emit(listOf(trailmap), analyzer = null, workspaceRoot = null)
 
     val rendered = Files.readString(File(trailmapDir, "tools/trailblaze-client.d.ts").toPath())
     // The today-default `result: string;` shape MUST appear when the analyzer is null —
@@ -1159,7 +1160,7 @@ class PerTrailmapClientDtsEmitterTest {
       waypoints = emptyList(),
     )
 
-    PerTrailmapClientDtsEmitter.emit(listOf(libTrailmap, appTrailmap), analyzer = analyzer)
+    PerTrailmapClientDtsEmitter.emit(listOf(libTrailmap, appTrailmap), analyzer = analyzer, workspaceRoot = null)
 
     val appRendered = Files.readString(File(appTrailmapDir, "tools/trailblaze-client.d.ts").toPath())
     // The app trailmap inherits `typed_demo` from the lib's `exports:`. Its emitted typed
@@ -1232,7 +1233,7 @@ class PerTrailmapClientDtsEmitterTest {
       )
     }
 
-    PerTrailmapClientDtsEmitter.emit(listOf(trailmap), analyzer = analyzer)
+    PerTrailmapClientDtsEmitter.emit(listOf(trailmap), analyzer = analyzer, workspaceRoot = null)
     val rendered = Files.readString(File(trailmapDir, "tools/trailblaze-client.d.ts").toPath())
     // Healthy tool from partialTools should still surface its typed shape.
     assertTrue("expected typed args from partialTools: $rendered") { rendered.contains("q: string;") }
@@ -1254,7 +1255,7 @@ class PerTrailmapClientDtsEmitterTest {
       throw RuntimeException("test-injected generic failure")
     }
 
-    PerTrailmapClientDtsEmitter.emit(listOf(trailmap), analyzer = analyzer)
+    PerTrailmapClientDtsEmitter.emit(listOf(trailmap), analyzer = analyzer, workspaceRoot = null)
     val rendered = Files.readString(File(trailmapDir, "tools/trailblaze-client.d.ts").toPath())
     // emit() didn't abort — the file exists and carries the YAML-derived flat shape.
     assertTrue("expected foo entry: $rendered") { rendered.contains("foo: {") }
@@ -1335,7 +1336,7 @@ class PerTrailmapClientDtsEmitterTest {
       waypoints = emptyList(),
     )
 
-    PerTrailmapClientDtsEmitter.emit(listOf(trailmap), catalog = openUrlToolsetCatalog())
+    PerTrailmapClientDtsEmitter.emit(listOf(trailmap), catalog = openUrlToolsetCatalog(), workspaceRoot = null)
 
     val rendered = Files.readString(File(trailmapDir, "tools/trailblaze-client.d.ts").toPath())
     assertTrue("expected toolset-delivered openUrl in the typed surface: $rendered") {
@@ -1380,7 +1381,7 @@ class PerTrailmapClientDtsEmitterTest {
       waypoints = emptyList(),
     )
 
-    PerTrailmapClientDtsEmitter.emit(listOf(trailmap), catalog = openUrlToolsetCatalog())
+    PerTrailmapClientDtsEmitter.emit(listOf(trailmap), catalog = openUrlToolsetCatalog(), workspaceRoot = null)
 
     val rendered = Files.readString(File(trailmapDir, "tools/trailblaze-client.d.ts").toPath())
     assertTrue("expected driver-delivered openUrl in the typed surface despite no tool_sets: $rendered") {
@@ -1426,7 +1427,7 @@ class PerTrailmapClientDtsEmitterTest {
       waypoints = emptyList(),
     )
 
-    PerTrailmapClientDtsEmitter.emit(listOf(trailmap), catalog = mobileOnlyCatalog)
+    PerTrailmapClientDtsEmitter.emit(listOf(trailmap), catalog = mobileOnlyCatalog, workspaceRoot = null)
 
     val rendered = Files.readString(File(trailmapDir, "tools/trailblaze-client.d.ts").toPath())
     assertTrue("expected mobile-only openUrl to be absent from the web-only surface: $rendered") {
@@ -1471,7 +1472,7 @@ class PerTrailmapClientDtsEmitterTest {
       waypoints = emptyList(),
     )
 
-    PerTrailmapClientDtsEmitter.emit(listOf(trailmap), catalog = openUrlToolsetCatalog())
+    PerTrailmapClientDtsEmitter.emit(listOf(trailmap), catalog = openUrlToolsetCatalog(), workspaceRoot = null)
 
     val rendered = Files.readString(File(trailmapDir, "tools/trailblaze-client.d.ts").toPath())
     assertTrue("expected the trailmap-local openUrl declaration to win: $rendered") {
@@ -1534,6 +1535,31 @@ class PerTrailmapClientDtsEmitterTest {
     ) {
       override suspend fun analyze(trailmapToolsDir: File): List<ScriptedToolDefinition> = body(trailmapToolsDir)
     }
+  }
+
+  @Test
+  fun `a trailmap reached through a symlink into another workspace gets no client dts`() {
+    // This repo's trails/config/trailmaps/sampleapp is a symlink into the open-source example
+    // app's own workspace; a d.ts generated there would carry this workspace's whole catalog.
+    val parent = createTempDirectory("per-trailmap-client-dts-borrowed").toFile().also { tempDirs += it }
+    val workspaceRoot = File(parent, "trails").apply { mkdirs() }
+    val otherWorkspaceTrailmap = File(parent, "other/trails/config/trailmaps/sampleapp").apply { mkdirs() }
+    val link = File(workspaceRoot, "config/trailmaps/sampleapp")
+    link.parentFile.mkdirs()
+    Files.createSymbolicLink(link.toPath(), otherWorkspaceTrailmap.toPath())
+    val borrowed = ResolvedTrailmap(
+      manifest = TrailblazeTrailmapManifest(id = "sampleapp", target = TrailmapTargetConfig(displayName = "sampleapp")),
+      source = TrailmapSource.Filesystem(link),
+      target = AppTargetYamlConfig(id = "sampleapp", displayName = "sampleapp"),
+      toolsets = emptyList(),
+      tools = emptyList(),
+      waypoints = emptyList(),
+    )
+
+    val emitted = PerTrailmapClientDtsEmitter.emit(listOf(borrowed), analyzer = null, workspaceRoot = workspaceRoot.toPath())
+
+    assertTrue(emitted.isEmpty(), "no d.ts should be claimed for a borrowed trailmap: $emitted")
+    assertFalse(File(otherWorkspaceTrailmap, "tools").exists(), "files were generated into the other workspace")
   }
 
   private fun newTrailmapDir(id: String): File {

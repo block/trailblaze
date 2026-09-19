@@ -12,6 +12,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import xyz.block.trailblaze.config.InlineScriptToolConfig
 import xyz.block.trailblaze.config.KnownTargetMessages
+import xyz.block.trailblaze.config.ToolNameResolver
 import xyz.block.trailblaze.config.ToolYamlLoader
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.llm.config.ConfigResourceSource
@@ -27,16 +28,45 @@ import xyz.block.trailblaze.scripting.InProcessScriptedToolLauncher
 import xyz.block.trailblaze.scripting.mcp.TrailblazeToolMeta
 import xyz.block.trailblaze.scripting.mcp.shouldRegisterForPlatform
 import xyz.block.trailblaze.toolcalls.KoogToolExt
+import xyz.block.trailblaze.toolcalls.ToolNameSuggestions
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.getExcludedToolSurfaceForDriver
 import xyz.block.trailblaze.toolcalls.commands.ObjectiveStatusTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolDescriptor
 import xyz.block.trailblaze.toolcalls.TrailblazeToolParameterDescriptor
 import xyz.block.trailblaze.toolcalls.TrailblazeToolParameterVisibility
+import xyz.block.trailblaze.toolcalls.ToolSetCatalogEntry
+import xyz.block.trailblaze.toolcalls.TrailblazeToolSetCatalog
+import xyz.block.trailblaze.toolcalls.commands.SwitchDeviceTrailblazeTool
+import xyz.block.trailblaze.toolcalls.toTrailblazeToolDescriptorIgnoringLlmSurface
+import xyz.block.trailblaze.toolcalls.trailblazeToolClassAnnotation
 import xyz.block.trailblaze.toolcalls.toTrailblazeToolDescriptorWithSource
 import xyz.block.trailblaze.toolcalls.trailblazeToolSourceForScript
 import xyz.block.trailblaze.util.Console
 import kotlin.reflect.KClass
+
+/**
+ * The default registry lookup: one [ToolNameResolver] per tool set, built on first use.
+ *
+ * Building a resolver scans the classpath for tool YAML, so it must not happen per lookup, and it
+ * must not happen at construction either — most `toolbox()` calls never reach a registry lookup,
+ * and the tool set is constructed on every MCP session.
+ */
+private fun memoizedRegistryLookup(
+  resourceSourceProvider: () -> ConfigResourceSource,
+): (String) -> KClass<out TrailblazeTool>? {
+  val resolver = lazy { ToolNameResolver.fromBuiltInAndCustomTools(resourceSource = resourceSourceProvider()) }
+  return { name ->
+    val exact = resolver.value.resolveOrNull(name)
+    // [ToolNameResolver.resolveOrNull] is an exact map lookup, which is what a trail's YAML decode
+    // needs. A lookup is the other case: the catalogue half of this same query already matches
+    // case-insensitively, so without this `TAPON` is described as offered-by-nobody or as
+    // not-found depending purely on which half answered.
+    exact ?: resolver.value.allKnownNames()
+      .firstOrNull { it.equals(name, ignoreCase = true) }
+      ?.let { resolver.value.resolveOrNull(it) }
+  }
+}
 
 /**
  * MCP tool for discovering available Trailblaze tools.
@@ -66,6 +96,19 @@ class ToolDiscoveryToolSet(
    * workspace-authored role YAMLs that aren't on the classpath.
    */
   private val resourceSourceProvider: () -> ConfigResourceSource = { platformConfigResourceSource() },
+  /**
+   * Looks a bare tool name up in the global tool registry — the same namespace the YAML decoder
+   * resolves a recorded trail's steps against — returning the backing class or null.
+   *
+   * Separate from the toolset catalogue on purpose: the catalogue answers "what is on offer",
+   * this answers "does this name mean anything at all". Injected so a test can pin either answer
+   * without building a real registry, which scans the classpath.
+   *
+   * Expected to match case-insensitively, as the catalogue half of a name lookup does — otherwise
+   * `TAPON` and `tapOn` get different verdicts from the same query.
+   */
+  private val knownToolClassProvider: (String) -> KClass<out TrailblazeTool>? =
+    memoizedRegistryLookup(resourceSourceProvider),
 ) : ToolSet {
 
   @LLMDescription(
@@ -299,9 +342,33 @@ class ToolDiscoveryToolSet(
     }
 
     if (match == null) {
+      // The catalogue above is what this device and target OFFER. A name can be a real tool and
+      // still be absent from it — `tapOn` is class-backed, has a `.tool.yaml`, and is what the
+      // recorder writes when it upgrades a coordinate tap, but no toolset lists it. Denying those
+      // names leaves a reader holding a recorded trail that the CLI says contains a tool which
+      // does not exist. Answer with the tool and say where it stands instead.
+      registryOnlyDescriptor(name)?.let { descriptor ->
+        val standing = toolSetStanding(descriptor.name)
+        return jsonFormat.encodeToString(
+          ToolDiscoveryNameResult(
+            tool = descriptor,
+            availability = standing.availability,
+            usage = when (standing.door) {
+              ToolDoor.AGENT -> buildUsageHint(descriptor)
+              ToolDoor.SESSION -> buildSessionToolUsageHint(descriptor)
+              ToolDoor.TRAIL ->
+                if (recordable(descriptor.name)) {
+                  buildRecordedTrailUsageHint(descriptor)
+                } else {
+                  buildScriptedUsageHint(descriptor, standing.runsOnlyOnDrivers)
+                }
+            },
+          )
+        )
+      }
       return jsonFormat.encodeToString(
         ToolDiscoveryNameResult(
-          error = "Tool '$name' not found. Use toolbox() to see all available tools.",
+          error = unknownToolLookupMessage(name, allTools.map { (descriptor, _) -> descriptor.name }),
         )
       )
     }
@@ -324,6 +391,190 @@ class ToolDiscoveryToolSet(
       )
     )
   }
+
+  /**
+   * The descriptor for a name the global tool registry knows but no toolset offers, or `null` when
+   * the name really is unknown.
+   *
+   * The registry here is the same one the YAML decoder resolves against, which is what makes the
+   * distinction meaningful: a name it knows decodes into a real tool and executes when a recorded
+   * trail replays it, so "not found" is the wrong answer even though the tool is not on offer.
+   *
+   * The descriptor is built ignoring `surfaceToLlm`, without which this returns null for exactly
+   * the tools that land here — `tapOn` is hidden from the model on purpose, and hiding it from
+   * the model is not a reason to deny it to someone who typed its name.
+   *
+   * [SYSTEM_INTERNAL_TOOLS] stays hidden. Those are the agent framework talking to itself, they
+   * are excluded from every other discovery surface, and being in the registry is not a reason to
+   * make one of them the exception.
+   */
+  private fun registryOnlyDescriptor(name: String): TrailblazeToolDescriptor? =
+    knownToolClassProvider(name)
+      ?.takeUnless { it in SYSTEM_INTERNAL_TOOLS }
+      ?.toTrailblazeToolDescriptorIgnoringLlmSurface()
+
+  /**
+   * How a tool the catalogue above did not list can actually be invoked from here, which decides
+   * the usage hint that goes with its availability note.
+   */
+  private enum class ToolDoor {
+    /** The inner agent has it: `blaze(...)` and `trailblaze tool` both work. */
+    AGENT,
+
+    /**
+     * The session's own tool list has it and the inner agent does not. `trailblaze tool` ends at
+     * `step`, which is the inner agent's gate, so it refuses; the caller invokes the tool directly.
+     */
+    SESSION,
+
+    /** Nothing here runs it. Only a trail's `tools:` block does. */
+    TRAIL,
+  }
+
+  /**
+   * [runsOnlyOnDrivers] is set when every toolset offering the tool is scoped to drivers this
+   * session does not have (or there is no device at all): the tool's executor will not run on
+   * this session's device whatever door it comes through, so a scripted `client.tools.<name>(…)`
+   * offered as a way in from here would fail. Null means the driver is not the obstacle.
+   */
+  private class ToolSetStanding(
+    val availability: String,
+    val door: ToolDoor,
+    val runsOnlyOnDrivers: List<String>? = null,
+  )
+
+  /**
+   * Missing from the catalogue does not mean "in no toolset". The catalogue is the discoverable
+   * categories plus the loaded targets' toolsets, and a toolset can be in neither:
+   *
+   * - `multi_device` is declared by no target and switched on per session, so `switchDevice` used
+   *   to be described as a tool no agent can choose in the very session that was advertising it.
+   * - An `always_enabled` toolset (`android_framework`, `mobile_primitives`) is on every session
+   *   whose driver it lists without any target declaring it, so `mobile_listInstalledApps` was
+   *   described as unseen by any agent in an Android session where the inner agent had it.
+   *
+   * Ask the toolset catalogue by name before saying nothing offers a tool; then ask the session
+   * (for a session-bound toolset) or the driver (for an always-enabled one) whether it is on offer
+   * here, and say which door it is behind.
+   */
+  private fun toolSetStanding(toolName: String): ToolSetStanding {
+    val offering = TrailblazeToolSetCatalog.defaultEntries()
+      .filter { entry -> entry.toolNames.any { it.equals(toolName, ignoreCase = true) } }
+    if (offering.isEmpty()) return ToolSetStanding(notOfferedAvailability(toolName), ToolDoor.TRAIL)
+    val tail = notOfferedTail(toolName)
+
+    val multiDevice = offering.firstOrNull { it.id == SwitchDeviceTrailblazeTool.MULTI_DEVICE_TOOLSET_ID }
+    if (multiDevice != null) {
+      // Same predicate the server registers the toolset on, so this cannot say "not offered" to a
+      // session that has the tool in its tool list.
+      val session = sessionContext
+      if (session != null && session.advertisesMultiDeviceTools()) {
+        return ToolSetStanding(
+          availability = "Offered by the `${multiDevice.id}` toolset: this session has bound " +
+            session.boundDeviceNames().joinToString(", ") +
+            ", so the tool is advertised to it directly — call it as its own tool. 'trailblaze tool' " +
+            "routes through the inner agent, which does not have it, and refuses to run it.",
+          door = ToolDoor.SESSION,
+        )
+      }
+      return ToolSetStanding(
+        availability = "Offered only by the `${multiDevice.id}` toolset, which no target declares: a " +
+          "session gets it when it binds two or more named devices (a trail's `config.devices:`), " +
+          "and this session has not. Until then $tail",
+        door = ToolDoor.TRAIL,
+      )
+    }
+
+    val driver = currentDriverTypeProvider()
+    val alwaysEnabled = offering.filter { it.alwaysEnabled }
+    if (alwaysEnabled.isNotEmpty()) {
+      // `resolveForSession` puts every always-enabled toolset the driver lists on the inner
+      // agent's surface, target or no target — so on a listed driver the tool is simply there.
+      val onThisDriver = alwaysEnabled.filter { driver != null && it.isCompatibleWith(driver) }
+      if (onThisDriver.isNotEmpty()) {
+        // The toolset being on the surface does not put every tool in it there. A tool marked
+        // `surfaceToLlm = false` (`mobile_clearAppData`) is dropped from the agent's descriptors,
+        // and `step` gates on those descriptors — so it is refused exactly like a tool no toolset
+        // offers, and only a trail runs it.
+        if (!surfacedToAgents(toolName)) {
+          return ToolSetStanding(
+            availability = "Always enabled by the ${onThisDriver.ids()} toolset(s) on this session's " +
+              "driver (${driver!!.yamlKey}), but hidden from agents on purpose: $tail",
+            door = ToolDoor.TRAIL,
+          )
+        }
+        return ToolSetStanding(
+          availability = "Always enabled by the ${onThisDriver.ids()} toolset(s) on this session's " +
+            "driver (${driver!!.yamlKey}), so every agent here has it.",
+          door = ToolDoor.AGENT,
+        )
+      }
+      val drivers = alwaysEnabled.driverKeys()
+      val here = if (driver == null) "This session has no device bound" else "This session's driver is ${driver.yamlKey}"
+      return ToolSetStanding(
+        availability = "Always enabled by the ${alwaysEnabled.ids()} toolset(s) on drivers " +
+          "${drivers.joinToString(", ")}. $here, so it is not in scope here: ${notOfferedTail(toolName, drivers)}",
+        door = ToolDoor.TRAIL,
+        runsOnlyOnDrivers = drivers,
+      )
+    }
+
+    // A driver-scoped toolset (`web_*` in an Android session) is out of scope for the same reason
+    // an always-enabled one is: the tool does not run on this device, so no door from here works.
+    val runsOnlyOnDrivers = offering.driverKeys()
+      .takeIf { it.isNotEmpty() && (driver == null || offering.none { it.isCompatibleWith(driver) }) }
+    return ToolSetStanding(
+      availability = "Offered by the ${offering.ids()} toolset(s), which this session's device and " +
+        "target do not put in scope, so ${notOfferedTail(toolName, runsOnlyOnDrivers)}",
+      door = ToolDoor.TRAIL,
+      runsOnlyOnDrivers = runsOnlyOnDrivers,
+    )
+  }
+
+  /** The `yamlKey`s of every driver these toolsets are scoped to, deduplicated and sorted. */
+  private fun List<ToolSetCatalogEntry>.driverKeys(): List<String> =
+    flatMap { it.compatibleDriverTypes }.map { it.yamlKey }.distinct().sorted()
+
+  /**
+   * Whether the recorder ever writes this tool into a trail. `isRecordable = false` means a
+   * recording never carries it — so "a recording that uses it replays" is a promise about a
+   * recording that cannot exist, and the doors left are a hand-written trail step or a scripted
+   * tool's `client.tools.<name>(…)`, which resolves through the unfiltered registry.
+   */
+  private fun recordable(toolName: String): Boolean =
+    knownToolClassProvider(toolName)?.trailblazeToolClassAnnotation()?.isRecordable ?: true
+
+  private fun notOfferedTail(toolName: String, runsOnlyOnDrivers: List<String>? = null): String =
+    if (recordable(toolName)) NOT_OFFERED_TAIL else notRecordableTail(toolName, runsOnlyOnDrivers)
+
+  private fun notOfferedAvailability(toolName: String): String =
+    if (recordable(toolName)) NOT_OFFERED_AVAILABILITY else "$NOT_OFFERED_OPENING ${notRecordableTail(toolName)}"
+
+  /**
+   * A trail step names its own device, so "a hand-written trail step runs it" holds whatever this
+   * session is bound to. A scripted tool runs on THIS session's device — so when the tool is
+   * scoped to drivers this session lacks, the `client.tools.<name>(…)` door is named with the
+   * drivers it opens on, not offered as a way in from here.
+   */
+  private fun notRecordableTail(toolName: String, runsOnlyOnDrivers: List<String>? = null): String {
+    val opening = "no agent here sees it and 'trailblaze tool' refuses to run it. The recorder never " +
+      "writes it, so no recording carries it; "
+    if (runsOnlyOnDrivers == null) {
+      return opening + "a hand-written trail step or a scripted tool's `client.tools.$toolName(…)` runs it."
+    }
+    return opening + "a hand-written trail step runs it on a device whose driver is one of " +
+      "${runsOnlyOnDrivers.joinToString(", ")}, and a scripted tool's `client.tools.$toolName(…)` " +
+      "runs it only from a session on one of those drivers — not this one."
+  }
+
+  private fun List<ToolSetCatalogEntry>.ids(): String = joinToString(", ") { "`${it.id}`" }
+
+  /**
+   * Whether the agent's toolbox advertises this tool. Same flag the descriptor builders filter on,
+   * so this cannot call a tool agent-visible that the agent's own tool list omits.
+   */
+  private fun surfacedToAgents(toolName: String): Boolean =
+    knownToolClassProvider(toolName)?.trailblazeToolClassAnnotation()?.surfaceToLlm ?: true
 
   private fun handleTargetMode(targetId: String, detail: Boolean, platformFilter: TrailblazeDevicePlatform? = null): String {
     val allTargets = allTargetAppsProvider()
@@ -1095,24 +1346,76 @@ class ToolDiscoveryToolSet(
   /**
    * Builds a usage hint for a specific tool showing how to invoke it via blaze().
    */
-  private fun buildUsageHint(descriptor: TrailblazeToolDescriptor): String {
-    val allParams = descriptor.requiredParameters + descriptor.optionalParameters
-    val yamlExample = if (allParams.isEmpty()) {
-      "- ${descriptor.name}"
+  private fun buildUsageHint(descriptor: TrailblazeToolDescriptor): String =
+    "Automatic: blaze(objective=\"your objective\") — the inner agent selects this tool when appropriate.\n" +
+      "Direct: blaze(objective=\"description\", tools=\"${toolYamlExample(descriptor)}\")"
+
+  /**
+   * The usage hint for a tool nothing offers ([NOT_OFFERED_AVAILABILITY]).
+   *
+   * [buildUsageHint] is false here by construction, in both halves: no toolset lists the tool, so
+   * no agent can select it, and the `blaze(tools=…)` form it shows is what the device/target gate
+   * refuses. Showing it next to "no agent will choose it" hands the reader two contradictory
+   * answers. What is left is the one form that does run: the tool block of a trail.
+   */
+  private fun buildRecordedTrailUsageHint(descriptor: TrailblazeToolDescriptor): String =
+    "In a trail's tools: block — the only form that runs this tool, and what the recorder " +
+      "writes:\n${toolYamlExample(descriptor)}"
+
+  /**
+   * The usage hint for a tool a session-bound toolset offers to THIS session. It is in the
+   * session's own tool list, not the inner agent's, so [buildUsageHint]'s `blaze(...)` forms are
+   * the wrong door: the caller invokes it directly, or a trail records it.
+   */
+  private fun buildSessionToolUsageHint(descriptor: TrailblazeToolDescriptor): String =
+    "Call ${descriptor.name} directly — this session advertises it as its own tool.\n" +
+      "In a trail's tools: block:\n${toolYamlExample(descriptor)}"
+
+  /**
+   * The usage hint for a tool nothing here runs AND the recorder never writes (`isRecordable =
+   * false`). [buildRecordedTrailUsageHint] promises "what the recorder writes", which for this tool
+   * is nothing. The doors that exist: a scripted tool composing it through `client.tools.<name>`
+   * (the dispatcher resolves that through the unfiltered registry, so toolset scope and LLM
+   * visibility do not apply), or a trail step someone typed by hand.
+   */
+  private fun buildScriptedUsageHint(descriptor: TrailblazeToolDescriptor, runsOnlyOnDrivers: List<String>?): String {
+    // The scripted door opens on the session's own device. When the tool is scoped to drivers this
+    // session lacks, the call below fails here — so say where it runs before showing the form.
+    val where = if (runsOnlyOnDrivers == null) {
+      "From a scripted tool"
     } else {
-      val params = allParams.joinToString("\n") { param ->
-        val placeholder = when {
-          param.type.contains("String", ignoreCase = true) -> "\"value\""
-          param.type.contains("Int", ignoreCase = true) || param.type.contains("Long", ignoreCase = true) -> "0"
-          param.type.contains("Boolean", ignoreCase = true) -> "true"
-          else -> "\"value\""
-        }
-        "    ${param.name}: $placeholder"
-      }
-      "- ${descriptor.name}:\n$params"
+      "Runs only on drivers ${runsOnlyOnDrivers.joinToString(", ")}, so from a scripted tool on one of those"
     }
-    return "Automatic: blaze(objective=\"your objective\") — the inner agent selects this tool when appropriate.\n" +
-      "Direct: blaze(objective=\"description\", tools=\"$yamlExample\")"
+    return "$where: client.tools.${descriptor.name}(${toolArgsJsExample(descriptor)})\n" +
+      "The recorder never writes this tool; a trail runs it only as a hand-written step:\n" +
+      toolYamlExample(descriptor)
+  }
+
+  /** The argument object of one `client.tools.<name>(…)` call, with placeholder values. */
+  private fun toolArgsJsExample(descriptor: TrailblazeToolDescriptor): String {
+    val allParams = descriptor.requiredParameters + descriptor.optionalParameters
+    if (allParams.isEmpty()) return "{}"
+    return allParams.joinToString(", ", prefix = "{ ", postfix = " }") { "${it.name}: ${placeholderFor(it.type)}" }
+  }
+
+  private fun placeholderFor(type: String): String = when {
+    // Composites first: an `OBJECT` param (a restored selector, say) takes a nested block, and
+    // `"value"` would be a type error rather than a starting point. Checked before the scalar
+    // branches so a future type name that merely contains "int" can't claim it.
+    type.equals("OBJECT", ignoreCase = true) -> "{ }"
+    type.equals("ARRAY", ignoreCase = true) -> "[ ]"
+    type.contains("String", ignoreCase = true) -> "\"value\""
+    type.contains("Int", ignoreCase = true) || type.contains("Long", ignoreCase = true) -> "0"
+    type.contains("Boolean", ignoreCase = true) -> "true"
+    else -> "\"value\""
+  }
+
+  /** One tool call as it appears in a trail's `tools:` block, with placeholder argument values. */
+  private fun toolYamlExample(descriptor: TrailblazeToolDescriptor): String {
+    val allParams = descriptor.requiredParameters + descriptor.optionalParameters
+    if (allParams.isEmpty()) return "- ${descriptor.name}"
+    val params = allParams.joinToString("\n") { param -> "    ${param.name}: ${placeholderFor(param.type)}" }
+    return "- ${descriptor.name}:\n$params"
   }
 
   companion object {
@@ -1137,6 +1440,52 @@ class ToolDiscoveryToolSet(
     val SYSTEM_INTERNAL_TOOLS: Set<KClass<out TrailblazeTool>> = setOf(
       ObjectiveStatusTrailblazeTool::class,
     )
+
+    /**
+     * What a lookup says about a tool that exists but that nothing offers — no toolset in the
+     * catalogue lists it. A tool some toolset lists that this session merely has out of scope gets
+     * a note naming that toolset instead; see [toolSetStanding].
+     *
+     * The honest scope matters here, because the two halves point opposite ways: nothing will
+     * *choose* this tool — it is in no toolset, so no agent sees it and `trailblaze tool <name>`
+     * refuses to run it — yet the name is real, so a recorded trail that names it still replays.
+     * `tapOn` is the case that motivated this: the recorder writes it when it upgrades a
+     * coordinate tap to a selector, and every lookup surface used to answer "not found".
+     *
+     * The `trailblaze tool` half of that is not a guess: the CLI's `tool` command ends at
+     * `callTool("step", …)`, so it lands in [StepToolSet]'s device/target gate — the gate
+     * `StepToolSetDirectToolsTest` drives directly.
+     */
+    private const val NOT_OFFERED_OPENING: String = "Not offered by any toolset, so"
+
+    internal const val NOT_OFFERED_AVAILABILITY: String =
+      "$NOT_OFFERED_OPENING no agent will choose it and 'trailblaze tool' refuses to " +
+        "run it. The name is still valid in a trail — a recording that uses it replays."
+
+    /**
+     * The consequence shared by every "a toolset offers it, but not to this session" verdict in
+     * `toolSetStanding`: the same two facts as [NOT_OFFERED_AVAILABILITY], minus its opening claim.
+     */
+    private const val NOT_OFFERED_TAIL: String =
+      "no agent here sees it and 'trailblaze tool' refuses to run it. The name is still valid in a " +
+        "trail — a recording that uses it replays."
+
+    /**
+     * What a lookup for an unrecognized tool name says back.
+     *
+     * Names the closest real tools. A bare "not found" is least believable exactly here, where
+     * the reader usually arrived holding a name they saw somewhere real, so the reply should
+     * carry them toward the tool they meant. Names the registry knows never reach this message —
+     * they get the descriptor and [NOT_OFFERED_AVAILABILITY] instead.
+     *
+     * The recovery is phrased as the command to run. This string is read by CLI users as often as
+     * by agents, and `Use toolbox()` is a function call in neither of their vocabularies.
+     */
+    internal fun unknownToolLookupMessage(name: String, knownToolNames: List<String>): String {
+      val didYouMean = ToolNameSuggestions.didYouMeanSuffix(name, knownToolNames)
+      return "Tool '$name' not found.$didYouMean Run 'trailblaze toolbox' to list every tool " +
+        "available for the current device and target."
+    }
   }
 }
 
@@ -1204,6 +1553,13 @@ data class ToolDiscoveryNameResult(
   val tool: TrailblazeToolDescriptor? = null,
   val foundInCategories: List<String>? = null,
   val foundInTargets: List<String>? = null,
+  /**
+   * Set only when the tool was found outside the catalogue of offered tools: nothing offers it
+   * ([ToolDiscoveryToolSet.NOT_OFFERED_AVAILABILITY]), or a toolset this session does not have in
+   * scope does, or a session-bound toolset this session has bound does. Null is the ordinary
+   * case and means the tool is offered, as [foundInCategories] / [foundInTargets] then say where.
+   */
+  val availability: String? = null,
   val usage: String? = null,
   val error: String? = null,
 )

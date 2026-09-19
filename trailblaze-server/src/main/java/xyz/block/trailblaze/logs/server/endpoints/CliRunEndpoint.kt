@@ -26,7 +26,7 @@ data class CliRunRequest(
   val trailFilePath: String? = null,
   /** Override test name. */
   val testName: String? = null,
-  /** Driver type override (e.g., "ANDROID_ONDEVICE_INSTRUMENTATION"). */
+  /** Driver type override (e.g., "ANDROID_ONDEVICE_ACCESSIBILITY"). */
   val driverType: String? = null,
   /** Target device ID override. */
   val deviceId: String? = null,

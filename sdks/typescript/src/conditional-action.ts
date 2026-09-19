@@ -28,7 +28,7 @@
 //    against that one tree. So a catalog's snapshot costs one capture, not one
 //    per selector, and it is **atomic** — every predicate sees the same instant
 //    of the same screen.
-//  - Batching had to be explicit in the tool. N parallel `findMatches` calls do
+//  - Batching had to be explicit in the tool. N parallel single-selector calls do
 //    NOT share a SnapshotCache frame: each scripting callback enters its own
 //    nested `runTrailblazeTools` frame on the daemon (see
 //    `MaestroTrailblazeAgent.kt:214`), so that shape paid N multi-second

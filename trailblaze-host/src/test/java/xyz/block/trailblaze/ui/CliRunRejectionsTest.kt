@@ -3,11 +3,13 @@ package xyz.block.trailblaze.ui
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import xyz.block.trailblaze.cli.TrailblazeExitCode
 import xyz.block.trailblaze.cli.daemonRunFailureExitCode
+import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.model.TrailExecutionResult
 
 /**
@@ -37,6 +39,43 @@ class CliRunRejectionsTest {
         "error should name candidate $spec: ${response.error}",
       )
     }
+  }
+
+  @Test
+  fun `saved V3 agent with a request LLM cap produces a structured misuse error`() {
+    val resolvedAgent =
+      assertIs<CliRunAgentResolution.Resolved>(
+          resolveRunAgentImplementation(
+            requestedAgent = null,
+            savedAgent = AgentImplementation.MULTI_AGENT_V3,
+          ),
+        )
+        .agentImplementation
+
+    val response = cliRunAgentMaxLlmCallsResponse(resolvedAgent, maxLlmCalls = 5)
+
+    assertNotNull(response)
+    assertFalse(response.success)
+    assertEquals(TrailblazeExitCode.MISUSE, daemonRunFailureExitCode(response))
+    assertTrue(response.error.orEmpty().contains("daemon's saved agent is MULTI_AGENT_V3"))
+    assertTrue(response.error.orEmpty().contains("request carries max-llm-calls"))
+  }
+
+  @Test
+  fun `unrecognized requested agent produces a structured misuse error`() {
+    val resolution =
+      assertIs<CliRunAgentResolution.Unrecognized>(
+        resolveRunAgentImplementation(
+          requestedAgent = "KOOG_TYPO",
+          savedAgent = AgentImplementation.MULTI_AGENT_V3,
+        ),
+      )
+    val response = cliRunMisuseResponse(resolution.message)
+
+    assertFalse(response.success)
+    assertEquals(TrailblazeExitCode.MISUSE, daemonRunFailureExitCode(response))
+    assertTrue(response.error.orEmpty().contains("KOOG_TYPO"))
+    assertTrue(response.error.orEmpty().contains(AgentImplementation.KOOG_STRATEGY_GRAPH.name))
   }
 
   @Test

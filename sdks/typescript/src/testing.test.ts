@@ -312,16 +312,18 @@ describe("createQueuedFindMatchesClient: queueToolFailure", () => {
     ]);
   });
 
-  test("a queued failure on findMatches pre-empts its response queue", async () => {
+  test("a queued failure on findSelectorMatches pre-empts its response queue", async () => {
     const client = createQueuedFindMatchesClient();
     client.queueFindMatches([[{ indexPath: [0] }]]);
-    client.queueToolFailure("findMatches", ["driver not ready"]);
-    const findMatches = (
+    client.queueToolFailure("findSelectorMatches", ["driver not ready"]);
+    const findSelectorMatches = (
       client.tools as Record<string, (a: Record<string, unknown>) => Promise<unknown>>
-    )["findMatches"]!;
+    )["findSelectorMatches"]!;
+    const args = { selectors: [{}] };
 
-    await expect(findMatches({})).rejects.toThrow("driver not ready");
-    // The queued response is untouched, so the next call still serves it.
-    expect(await findMatches({})).toEqual([{ indexPath: [0] }]);
+    await expect(findSelectorMatches(args)).rejects.toThrow("driver not ready");
+    // The queued response is untouched, so the next call still serves it — one array per
+    // selector, so a single-selector probe nests one level deeper than the queued entry.
+    expect(await findSelectorMatches(args)).toEqual([[{ indexPath: [0] }]]);
   });
 });

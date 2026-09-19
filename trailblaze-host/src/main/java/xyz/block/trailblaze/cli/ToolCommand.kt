@@ -7,6 +7,7 @@ import picocli.CommandLine.Parameters
 import xyz.block.trailblaze.config.ToolNameResolver
 import xyz.block.trailblaze.config.project.WorkspaceRoot
 import xyz.block.trailblaze.config.project.findWorkspaceRoot
+import xyz.block.trailblaze.toolcalls.ToolNameSuggestions
 import xyz.block.trailblaze.util.Console
 import java.nio.file.Files
 import java.nio.file.Path
@@ -26,7 +27,7 @@ import java.util.concurrent.Callable
   mixinStandardHelpOptions = true,
   description = ["Run a Trailblaze tool by name (e.g., tap, inputText)"],
 )
-class ToolCommand : Callable<Int> {
+class ToolCommand : Callable<Int>, QuietUnlessVerbose {
 
   @Parameters(
     index = "0",
@@ -71,6 +72,12 @@ class ToolCommand : Callable<Int> {
     description = ["Enable verbose output"],
   )
   var verbose: Boolean = false
+
+  /**
+   * Closes the internal [Console.log] channel for this command unless `--verbose`, applied at
+   * dispatch so the early-return paths are covered too — see [QuietUnlessVerbose].
+   */
+  override val verboseRequested: Boolean get() = verbose
 
   @Option(
     names = ["--no-screenshots", "--text-only"],
@@ -197,11 +204,25 @@ class ToolCommand : Callable<Int> {
       // tool now returns its real payload here, and a payload that merely contains a marker
       // phrase (e.g. command output mentioning "Unknown tool") must print normally, not exit 3.
       if (isMisuseResult(result.content)) {
-        Console.error(result.content.replace(Regex("\\*\\*.*?\\*\\*\\s*—\\s*"), ""))
+        // The daemon's `Use toolbox() to see available tools.` tail is MCP phrasing for an LLM
+        // caller; the Tip line below is the CLI-shaped version, so the tail goes.
+        Console.error(
+          result.content
+            .replace(Regex("\\*\\*.*?\\*\\*\\s*—\\s*"), "")
+            .replace(" Use toolbox() to see available tools.", ""),
+        )
         emitToolboxTip()
         return@cliReusableWithDevice TrailblazeExitCode.MISUSE.code
       }
       formatBlazeResultAgent(result)
+      // Same error gate as [isMisuseResult] above: a SUCCESSFUL read/shell tool returns its real
+      // payload here, and payload text that merely quotes the marker phrase (command output
+      // mentioning a missing property, say) must not be turned into a "you mistyped a key" tip.
+      // [resultIsFailure], not `isError` — a YAML parse failure renders as `**❌ Error**` markdown
+      // and reaches here unflagged, and a mistyped key is exactly what produces one.
+      if (parsedToolArgs != null && resultIsFailure(result)) {
+        missingParameterHint(result.content, toolName!!, parsedToolArgs.keys)?.let { Console.error(it) }
+      }
       blazeExitCode(result)
     }
   }
@@ -215,14 +236,20 @@ class ToolCommand : Callable<Int> {
    * shared helper keeps the two sites in lockstep against drift, same reason
    * [MISUSE_MARKERS] is a single constant.
    *
-   * [source] is a debug breadcrumb ("fast-path" or "daemon") logged via
-   * [Console.log] (verbose-only, doesn't reach stderr); it's *not* a user-facing
-   * distinction. Workspace-tool authors hitting the documented false-negative
-   * trade-off use this to verify which layer rejected them.
+   * [source] is a debug breadcrumb ("fast-path" or "daemon") on the internal channel, not a
+   * user-facing distinction: it reaches the terminal only under `-v`/`--verbose`, which
+   * [QuietUnlessVerbose] guarantees for this command from dispatch onwards — including on this
+   * early-return path. Workspace-tool authors hitting the documented false-negative trade-off
+   * pass `-v` to see which layer rejected them.
    */
   private fun emitUnknownToolEnvelope(name: String, source: String) {
     Console.log("[ToolCommand] $source rejected '$name' (not in local registry)")
-    Console.error("Unknown tool: $name. Use toolbox() to see available tools.")
+    // No "Use toolbox()" tail: that is the MCP tool's phrasing for an LLM caller; the Tip line
+    // below is the CLI-shaped version of the same advice.
+    //
+    // The rejecting registry knows every name it would have accepted, so a one-character typo is
+    // answered with the name rather than a catalog the reader has to go read.
+    Console.error("Unknown tool: $name.${LocalToolNameRegistry.didYouMeanSuffix(name)}")
     emitToolboxTip()
   }
 
@@ -275,13 +302,10 @@ class ToolCommand : Callable<Int> {
         .getOrNull()
     }
 
+    // No breadcrumb here: this runs before the command enables quiet mode, so a `Console.log`
+    // at this point prints on every `tool` invocation in a workspace with its own tool YAML.
     private val workspaceMayHaveCustomTools: Boolean by lazy {
-      val cwd = Paths.get(System.getProperty("user.dir") ?: ".")
-      val present = workspaceHasToolDefinitions(cwd)
-      if (present) {
-        Console.log("[ToolCommand] Workspace tool/toolset YAML detected near $cwd; fast-path disabled")
-      }
-      present
+      workspaceHasToolDefinitions(Paths.get(System.getProperty("user.dir") ?: "."))
     }
 
     /**
@@ -295,6 +319,15 @@ class ToolCommand : Callable<Int> {
       if (workspaceMayHaveCustomTools) return true
       return resolver?.isKnown(name) ?: true
     }
+
+    /**
+     * "Did you mean …" for a name [isKnown] just rejected — empty when nothing is close, or when
+     * there is no resolver to ask. A rejection only happens when the resolver exists AND the
+     * workspace ships no tools of its own, so the candidate set really is everything that could
+     * have been meant.
+     */
+    fun didYouMeanSuffix(name: String): String =
+      resolver?.let { ToolNameSuggestions.didYouMeanSuffix(name, it.allKnownNames()) }.orEmpty()
   }
 }
 

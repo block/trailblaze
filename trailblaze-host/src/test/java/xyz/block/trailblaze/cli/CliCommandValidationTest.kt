@@ -9,6 +9,7 @@ import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.docs.Scenario
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget
+import xyz.block.trailblaze.mcp.AgentImplementation
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
@@ -26,6 +27,84 @@ import kotlin.test.assertTrue
  * before accessing the uninitialized `parent` field) are exercised.
  */
 class CliCommandValidationTest {
+
+  @Test
+  fun `trail without agent resolves the Koog default`() {
+    val cmd = TrailCommand()
+
+    CommandLine(cmd).parseArgs("any.trail.yaml")
+
+    assertNull(cmd.agent)
+    assertEquals(AgentImplementation.KOOG_STRATEGY_GRAPH, cmd.resolveEffectiveAgent { null })
+  }
+
+  @Test
+  fun `trail accepts an explicit legacy agent`() {
+    val cmd = TrailCommand()
+
+    CommandLine(cmd).parseArgs("--agent", "TRAILBLAZE_RUNNER", "any.trail.yaml")
+
+    assertEquals(AgentImplementation.TRAILBLAZE_RUNNER, cmd.resolveEffectiveAgent { null })
+  }
+
+  @Test
+  fun `trail persisted legacy agent wins when flag is absent`() {
+    val cmd = TrailCommand()
+
+    CommandLine(cmd).parseArgs("any.trail.yaml")
+
+    assertEquals(
+      AgentImplementation.TRAILBLAZE_RUNNER,
+      cmd.resolveEffectiveAgent { AgentImplementation.TRAILBLAZE_RUNNER },
+    )
+  }
+
+  @Test
+  fun `trail explicit agent wins over persisted agent`() {
+    val cmd = TrailCommand()
+
+    CommandLine(cmd).parseArgs("--agent", "KOOG_STRATEGY_GRAPH", "any.trail.yaml")
+
+    assertEquals(
+      AgentImplementation.KOOG_STRATEGY_GRAPH,
+      cmd.resolveEffectiveAgent { AgentImplementation.TRAILBLAZE_RUNNER },
+    )
+  }
+
+  @Test
+  fun `a delegated run with nothing chosen sends no agent so the daemon supplies the default`() {
+    // Putting the framework default on the request would override whatever the running daemon
+    // holds, including a selection the desktop app has applied in memory but not yet persisted.
+    // Only values the user actually chose go on the wire; the daemon fills the default tier.
+    val cmd = TrailCommand()
+
+    CommandLine(cmd).parseArgs("any.trail.yaml")
+
+    assertNull(cmd.resolveDelegatedAgent { null })
+  }
+
+  @Test
+  fun `a delegated run carries the saved agent so a running daemon cannot miss it`() {
+    // `trailblaze config agent` writes the settings file from a separate process and the daemon
+    // never re-reads it, so the client has to forward a saved choice for it to take effect.
+    val cmd = TrailCommand()
+
+    CommandLine(cmd).parseArgs("any.trail.yaml")
+
+    assertEquals(
+      AgentImplementation.TRAILBLAZE_RUNNER,
+      cmd.resolveDelegatedAgent { AgentImplementation.TRAILBLAZE_RUNNER },
+    )
+  }
+
+  @Test
+  fun `an explicit agent still reaches a delegated run`() {
+    val cmd = TrailCommand()
+
+    CommandLine(cmd).parseArgs("--agent", "TRAILBLAZE_RUNNER", "any.trail.yaml")
+
+    assertEquals(AgentImplementation.TRAILBLAZE_RUNNER, cmd.resolveDelegatedAgent { null })
+  }
 
   @Test
   fun `root parses --stop as a daemon shutdown request`() {
@@ -1005,6 +1084,89 @@ class CliCommandValidationTest {
   fun `parseKeyValuePairs flat double`() {
     val result = KeyValueParser.parse(listOf("scale=1.5"))
     assertEquals(mapOf("scale" to 1.5), result)
+  }
+
+  @Test
+  fun `parseKeyValuePairs flat negative integer`() {
+    val result = KeyValueParser.parse(listOf("offset=-3"))
+    assertEquals(mapOf("offset" to -3), result)
+  }
+
+  @Test
+  fun `parseKeyValuePairs keeps a numeric value whose text a number would not print back`() {
+    // A Double prints 1.00 as 1.0 and an Int prints 007 as 7. The tool's declared parameter type
+    // re-aligns a string to a number downstream, but dropped digits are gone for good, so these
+    // must reach the tool exactly as typed.
+    val result = KeyValueParser.parse(
+      listOf("amount=1.00", "code=007", "count=+5", "scale=1e3", "id=12345678901"),
+    )
+    assertEquals(
+      mapOf(
+        "amount" to "1.00",
+        "code" to "007",
+        "count" to "+5",
+        "scale" to "1e3",
+        "id" to "12345678901",
+      ),
+      result,
+    )
+  }
+
+  @Test
+  fun `parseKeyValuePairs infers a number past Int range when a Double prints the same text`() {
+    // Deliberate: the rule is "the number reproduces the text", not "the number fits in an Int".
+    // Nothing is lost here, and the YAML carries the same digits a string would have carried.
+    val result = KeyValueParser.parse(listOf("threshold=2.147483648E9"))
+    assertEquals(mapOf("threshold" to 2.147483648E9), result)
+    val yaml = ToolYamlBuilder.build("enterAmount", result)
+    assertTrue(yaml.contains("threshold: 2.147483648E9"), yaml)
+  }
+
+  @Test
+  fun `parseKeyValuePairs does not infer NaN or Infinity as numbers`() {
+    val result = KeyValueParser.parse(listOf("a=NaN", "b=Infinity", "c=-Infinity"))
+    assertEquals(mapOf("a" to "NaN", "b" to "Infinity", "c" to "-Infinity"), result)
+  }
+
+  @Test
+  fun `tool YAML carries a cents-bearing amount verbatim`() {
+    val yaml = ToolYamlBuilder.build("enterAmount", KeyValueParser.parse(listOf("amount=1.00")))
+    assertTrue(yaml.contains("amount: \"1.00\""), yaml)
+  }
+
+  @Test
+  fun `parseKeyValuePairs keeps the cents of a number inside a JSON object value`() {
+    val result = KeyValueParser.parse(listOf("""payload={"amount":1.00,"count":2,"on":true}"""))
+    assertEquals(
+      mapOf("payload" to mapOf("amount" to "1.00", "count" to 2, "on" to true)),
+      result,
+    )
+  }
+
+  @Test
+  fun `parseKeyValuePairs keeps the cents of a number inside a JSON array value`() {
+    val result = KeyValueParser.parse(listOf("amounts=[1.00,2]"))
+    assertEquals(mapOf("amounts" to listOf("1.00", 2)), result)
+  }
+
+  @Test
+  fun `parseKeyValuePairs does not renumber a quoted string inside a JSON value`() {
+    // A quoted JSON scalar is text by construction — it must survive even when its content reads
+    // like a number or a boolean.
+    val result = KeyValueParser.parse(listOf("""payload={"code":"007","pin":"0000","on":"true"}"""))
+    assertEquals(
+      mapOf("payload" to mapOf("code" to "007", "pin" to "0000", "on" to "true")),
+      result,
+    )
+  }
+
+  @Test
+  fun `tool YAML carries a cents-bearing amount nested in a JSON value verbatim`() {
+    val yaml = ToolYamlBuilder.build(
+      "enterAmount",
+      KeyValueParser.parse(listOf("""payload={"amount":1.00}""")),
+    )
+    assertTrue(yaml.contains("amount: \"1.00\""), yaml)
   }
 
   @Test

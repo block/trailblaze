@@ -14,6 +14,7 @@ import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.contentType
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
@@ -52,6 +53,18 @@ class CliMcpClient(
   private val serverUrl: String = "http://localhost:${TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTP_PORT}/mcp",
   private val requestTimeoutMs: Long = resolveRequestTimeoutMs(),
   /**
+   * The short bound applied to the read-only pre-flight steps (the `initialize` handshake and the
+   * `device` probes that precede the user's work), resolved once per client the same way
+   * [requestTimeoutMs] is. Per-client rather than per-step so an override's diagnostic prints once
+   * per command instead of once per step, and so a future per-command or per-verb bound has a seam
+   * to arrive at.
+   *
+   * Clamped to [requestTimeoutMs]: the pre-flight bound only means anything below the deadline it
+   * is carving a window out of, and a larger value would leave the caller waiting out the request
+   * timeout and reporting a generic connect failure instead of the starved-daemon verdict.
+   */
+  internal val preflightTimeoutMs: Long = minOf(resolvePreflightTimeoutMs(), requestTimeoutMs),
+  /**
    * Optional value for the `X-Trailblaze-Origin` header sent on initialize.
    * Defaults to the CLI argv captured by [captureOrigin]; null means no
    * header is sent (used when an embedded caller has no meaningful origin).
@@ -59,10 +72,17 @@ class CliMcpClient(
   origin: String? = capturedOrigin,
 ) : AutoCloseable {
 
+  /**
+   * The connect budget this client installs, clamped to fit inside [requestTimeoutMs].
+   *
+   * Published so a test can read the value the client actually uses rather than re-deriving it.
+   */
+  internal val connectTimeoutMs: Long = connectTimeoutMsFor(requestTimeoutMs)
+
   private val httpClient = HttpClient(OkHttp) {
     install(HttpTimeout) {
       requestTimeoutMillis = requestTimeoutMs
-      connectTimeoutMillis = CONNECT_TIMEOUT_MS
+      connectTimeoutMillis = connectTimeoutMs
       socketTimeoutMillis = requestTimeoutMs
     }
     engine {
@@ -81,6 +101,18 @@ class CliMcpClient(
   internal var sessionId: String? = null
   private val requestId = AtomicInteger(0)
   internal var terminateSessionOnClose: Boolean = false
+
+  /**
+   * Set when a pre-flight bound expired on this client, which shortens [close]'s session teardown
+   * to [STARVED_CLEANUP_TIMEOUT_MS].
+   *
+   * The teardown is a request like any other, so on the daemon that just failed to answer within
+   * the bound it waits out its own fresh [CLEANUP_TIMEOUT_MS] and doubles what the user waits
+   * before their command starts -- the bound promises 5s and delivered 10s. Shortened rather than
+   * skipped: a daemon that has freed a slot in the meantime answers a DELETE in milliseconds, and
+   * that is the case where terminating a session nothing can reattach to still matters.
+   */
+  internal var preflightBoundExpired: Boolean = false
   private var hasConnectedDevice: Boolean = false
 
   /** Whether this client reconnected to a session that already has a device. */
@@ -937,10 +969,11 @@ class CliMcpClient(
   }
 
   private fun HttpRequestBuilder.applyCleanupTimeouts() {
+    val budgetMs = if (preflightBoundExpired) STARVED_CLEANUP_TIMEOUT_MS else CLEANUP_TIMEOUT_MS
     timeout {
-      requestTimeoutMillis = CLEANUP_TIMEOUT_MS
-      connectTimeoutMillis = CONNECT_TIMEOUT_MS
-      socketTimeoutMillis = CLEANUP_TIMEOUT_MS
+      requestTimeoutMillis = budgetMs
+      connectTimeoutMillis = connectTimeoutMsFor(budgetMs)
+      socketTimeoutMillis = budgetMs
     }
   }
 
@@ -984,7 +1017,16 @@ class CliMcpClient(
     fun toFullyQualifiedDeviceId(): String = platform.toFullyQualifiedDeviceId(instanceId)
   }
 
-  class CliMcpException(message: String, cause: Throwable? = null) : Exception(message, cause)
+  open class CliMcpException(message: String, cause: Throwable? = null) : Exception(message, cause)
+
+  /**
+   * The daemon accepted the connection and never answered a read-only pre-flight step (the MCP
+   * handshake or a device probe) within the bound from [resolvePreflightTimeoutMs]. It is up, so
+   * the usual recovery for a failed connect (clear the saved scope, auto-start, reconnect) is
+   * wrong: nothing needs starting, the saved session is most likely alive, and a fresh handshake
+   * would hang the same way.
+   */
+  class DaemonStarvedException(message: String) : CliMcpException(message)
 
   companion object {
     const val PROTOCOL_VERSION = "2025-11-25"
@@ -996,24 +1038,160 @@ class CliMcpClient(
     const val CLIENT_NAME: String = xyz.block.trailblaze.mcp.TRAILBLAZE_CLI_CLIENT_NAME
     const val CONNECT_TIMEOUT_MS = 10_000L
 
-    // Long by default because agent operations (`blaze`/`ask`/`verify`) legitimately run the
-    // multi-round-trip agent loop on the daemon and can take minutes. A direct device `tool` call
-    // (tap/snapshot) should never need this long — when a device wedges it would otherwise hang the
-    // full 3 minutes — so the value is overridable via REQUEST_TIMEOUT_ENV for fast-fail without a
-    // rebuild (mirrors TRAILBLAZE_ADB_TIMEOUT_MS). A future refinement could default direct tool
-    // calls to a shorter per-call timeout while keeping agent ops long.
-    const val DEFAULT_REQUEST_TIMEOUT_MS = 180_000L
+    /**
+     * The connect budget for one request, never larger than the request budget that encloses it.
+     *
+     * Ktor's `requestTimeoutMillis` covers connection establishment too, so the two timers race.
+     * If the enclosing budget is the smaller one it fires first and the failure arrives as
+     * `HttpRequestTimeoutException` — the type [ioFailureHint] reads as "the daemon took this
+     * request and is still working on it," which is exactly wrong for a request that never got
+     * out. [CONNECT_TIMEOUT_MS] is fixed while [REQUEST_TIMEOUT_ENV] is operator-settable, so
+     * without this clamp any override under 10s (or the shorter [CLEANUP_TIMEOUT_MS]) inverted
+     * the order and made an unreachable daemon look busy.
+     *
+     * Halving leaves the connect attempt room to be followed by a response inside the same
+     * budget; the floor keeps a degenerate 1ms override from producing a non-positive timeout,
+     * which Ktor would reject.
+     */
+    internal fun connectTimeoutMsFor(
+      enclosingBudgetMs: Long,
+      ceilingMs: Long = CONNECT_TIMEOUT_MS,
+    ): Long = minOf(ceilingMs, enclosingBudgetMs / 2).coerceAtLeast(1L)
+
+    /**
+     * How long any client of this daemon waits for one request to be answered, and the budget
+     * `McpProxy.DAEMON_REQUEST_TIMEOUT_MS` forwards with — the two are the same hop, the outermost
+     * one above the daemon's `/mcp`.
+     *
+     * Long by default because agent operations (`blaze`/`ask`/`verify`) legitimately run the
+     * multi-round-trip agent loop on the daemon and can take minutes, and a target's scripted
+     * launch tool (clear data, cold start, sign in) runs a nested tool chain the daemon allows the
+     * whole callback budget for (`JsScriptingCallbackDispatcher.DEFAULT_DISPATCH_TIMEOUT_MS`, plus
+     * the buffers the spawner stacks above it and the daemon's own per-call cap
+     * `TrailblazeMcpServer.MCP_TOOL_EXECUTION_TIMEOUT_MS` above those). This outermost budget has
+     * to outlast that whole ladder, or the CLI reports a failure for a step the daemon then
+     * finishes on its own. None of those numbers are restated here, because a prose copy of one is
+     * what drifts; `McpProxyForwardTimeoutOutlastsCallbackBudgetTest` asserts the ordering instead.
+     *
+     * A direct device `tool` call (tap/snapshot) should never need this long — when a device wedges
+     * it would otherwise hang the full default — so the value is overridable via
+     * [REQUEST_TIMEOUT_ENV] for fast-fail without a rebuild (mirrors `TRAILBLAZE_ADB_TIMEOUT_MS`).
+     * A future refinement could default direct tool calls to a shorter per-call timeout while
+     * keeping agent ops long.
+     */
+    const val DEFAULT_REQUEST_TIMEOUT_MS = 630_000L
     const val REQUEST_TIMEOUT_ENV = "TRAILBLAZE_MCP_REQUEST_TIMEOUT_MS"
     const val CLEANUP_TIMEOUT_MS = 5_000L
+
+    /**
+     * Cleanup budget once a pre-flight bound has expired (see [preflightBoundExpired]). Long
+     * enough that a daemon which has freed an IO slot still answers, short enough that one which
+     * has not cannot add a second wait to the bound the user was promised.
+     */
+    const val STARVED_CLEANUP_TIMEOUT_MS = 250L
+
+    /**
+     * How long a read-only pre-flight step may wait before the CLI gives up on it: the MCP
+     * `initialize` handshake that opens every session, the `device` INFO call that validates a
+     * persisted session, and the `device` LIST call that autodetects the only connected device.
+     *
+     * These run BEFORE the user's command starts, and a healthy daemon answers each in
+     * milliseconds. Left on [DEFAULT_REQUEST_TIMEOUT_MS] they inherit a deadline sized for a
+     * composed tool call, so a daemon that is alive but starved of IO slots (it answers `/ping`
+     * while every `/mcp` POST, the handshake included, waits for a slot; see
+     * `TRAILBLAZE_IO_PARALLELISM`) would hold a `tap` for over ten minutes before the tap was even
+     * sent. `McpProxy.AUTODETECT_PROBE_TIMEOUT_MS` is the same budget for the proxy's copy of the
+     * LIST probe, and an alias of this rather than a second number. A loaded machine whose healthy
+     * daemon genuinely needs longer can raise it through [PREFLIGHT_TIMEOUT_ENV]; the message
+     * [preflightTimedOutMessage] says where to look before doing that, because a slow handshake
+     * is far more often a starved daemon than a slow box.
+     *
+     * Applied with [withTimeoutOrNull] around the call, not through the HTTP client's per-request
+     * timeout: only the coroutine deadline is guaranteed to fire whatever the transport is doing,
+     * and an OUTER cancellation (Ctrl+C) must still propagate as a cancellation, which
+     * `withTimeoutOrNull` leaves untouched.
+     */
+    const val DEFAULT_PREFLIGHT_TIMEOUT_MS = 5_000L
+    const val PREFLIGHT_TIMEOUT_ENV = "TRAILBLAZE_MCP_PREFLIGHT_TIMEOUT_MS"
+
+    /**
+     * Resolves the pre-flight bound: [DEFAULT_PREFLIGHT_TIMEOUT_MS] unless [PREFLIGHT_TIMEOUT_ENV]
+     * names a positive number of milliseconds. Same contract as [resolveRequestTimeoutMs]:
+     * malformed or non-positive values fall back to the default with a warning rather than
+     * disabling the bound, and [getenv] is injectable for the parse tests.
+     *
+     * Reads the CALLER's environment ([CliCallerContext.callerEnv]), not this JVM's: a command the
+     * launcher forwards to the daemon over `/cli/exec` runs inside the daemon process, whose own
+     * environment is whatever it was started with. The launcher forwards this variable in that
+     * payload for the same reason it forwards `TRAILBLAZE_DEVICE`.
+     */
+    internal fun resolvePreflightTimeoutMs(getenv: (String) -> String? = CliCallerContext::callerEnv): Long {
+      val raw = getenv(PREFLIGHT_TIMEOUT_ENV)?.takeIf { it.isNotBlank() }
+        ?: return DEFAULT_PREFLIGHT_TIMEOUT_MS
+      val parsed = raw.toLongOrNull()
+      if (parsed == null || parsed <= 0) {
+        Console.error(
+          "[CliMcpClient] $PREFLIGHT_TIMEOUT_ENV='$raw' is not a positive number of milliseconds; " +
+            "using default ${DEFAULT_PREFLIGHT_TIMEOUT_MS}ms",
+        )
+        return DEFAULT_PREFLIGHT_TIMEOUT_MS
+      }
+      Console.error("[CliMcpClient] pre-flight timeout overridden via $PREFLIGHT_TIMEOUT_ENV=${parsed}ms")
+      return parsed
+    }
+
+    /**
+     * Runs the MCP `initialize` handshake under the pre-flight bound. Every `/mcp` POST on the
+     * daemon, this one included, waits for an IO slot, so on a starved daemon the handshake is
+     * the first thing to hang; bounding only the device probes after it would leave the CLI
+     * waiting the full request deadline before the bounded step was ever reached.
+     */
+    private suspend fun CliMcpClient.initializeUnderPreflightBound(port: Int) {
+      if (withTimeoutOrNull(preflightTimeoutMs) { initialize() } == null) {
+        preflightBoundExpired = true
+        throw DaemonStarvedException(
+          preflightTimedOutMessage(port, "initialize handshake", preflightTimeoutMs),
+        )
+      }
+    }
+
+    /**
+     * The error a CLI command fails with when the pre-flight bound ([timeoutMs], resolved by
+     * [resolvePreflightTimeoutMs]) expires on [step]: the handshake or a device probe.
+     *
+     * Names the symptom that separates this from a daemon that is down (that one refuses the
+     * connection and is reported as "not running" elsewhere): something accepted the request and
+     * never answered it. Deliberately claims no more than that. This path never probes `/ping`, and
+     * anything that accepts TCP and stalls reaches it -- a wedged server, or an `adb forward` to a
+     * port with nothing behind it -- so naming starvation as certain would misdiagnose those as a
+     * Trailblaze daemon. ASCII "--" rather than an em dash for the same `eval $(...)` safety as
+     * every other stderr line this client writes.
+     */
+    internal fun preflightTimedOutMessage(port: Int, step: String, timeoutMs: Long): String =
+      "The daemon on port $port accepted the connection but did not answer the MCP $step within " +
+        "${timeoutMs}ms -- it is listening but not serving, most often because every IO slot is " +
+        "held by a scripted tool. Run `trailblaze status` to see what it is doing; if that is the " +
+        "cause, raise TRAILBLAZE_IO_PARALLELISM and restart the daemon (that variable only takes " +
+        "effect for a daemon the launcher started -- a bare `java -jar` or the packaged desktop " +
+        "app ignores it). If the daemon is healthy and this machine is just slow, raise " +
+        "$PREFLIGHT_TIMEOUT_ENV."
 
     /**
      * Resolves the per-request MCP timeout (applied to both request and socket timeouts). Defaults
      * to [DEFAULT_REQUEST_TIMEOUT_MS]; an operator triaging a wedged device can lower it via
      * [REQUEST_TIMEOUT_ENV] (e.g. `TRAILBLAZE_MCP_REQUEST_TIMEOUT_MS=15000`) so a hung call fails
-     * fast instead of blocking for 3 minutes. Malformed or non-positive values fall back to the
+     * fast instead of blocking for the full default. Malformed or non-positive values fall back to the
      * default with a warning. [getenv] is injectable so the parse branches are unit-testable.
+     *
+     * Reads the caller's shell env via [CliCallerContext.callerEnv] rather than [System.getenv],
+     * because on the daemon-forwarded path (`/cli/exec`: `snapshot`, `ask`, `tool`, `config`) this
+     * runs inside the daemon's JVM, whose env was frozen at `app start`. Direct-JVM invocations
+     * fall back to [System.getenv] and behave exactly as before. That forwarding is what makes
+     * [DAEMON_STILL_WORKING_HINT] — the timeout error's own advice to raise
+     * [REQUEST_TIMEOUT_ENV] — true for a forwarded command rather than a no-op the user retries
+     * in vain.
      */
-    internal fun resolveRequestTimeoutMs(getenv: (String) -> String? = System::getenv): Long {
+    internal fun resolveRequestTimeoutMs(getenv: (String) -> String? = CliCallerContext::callerEnv): Long {
       val raw = getenv(REQUEST_TIMEOUT_ENV)?.takeIf { it.isNotBlank() } ?: return DEFAULT_REQUEST_TIMEOUT_MS
       val parsed = raw.toLongOrNull()
       if (parsed == null || parsed <= 0) {
@@ -1199,8 +1377,27 @@ class CliMcpClient(
       )
       try {
         client.terminateSessionOnClose = true
-        client.initialize()
+        client.initializeUnderPreflightBound(port)
         return client
+      } catch (e: CancellationException) {
+        // A cancelled CLI is not a connect failure. CancellationException is a RuntimeException on
+        // the JVM, so without this the catch-all below would rewrap Ctrl+C as a plain connect
+        // error and `connectOrStartDaemonOneShot` would react by starting a daemon for a command
+        // the user just cancelled. Same guard as [connectReusable].
+        client.close()
+        throw e
+      } catch (e: DaemonStarvedException) {
+        // Already the right message; must not be re-wrapped as a plain connect failure, or the
+        // connect-or-start wrappers would try to start a daemon that is running. Still ours to
+        // close, though: [initializeUnderPreflightBound] abandons the POST but owns no client, so
+        // without this the HTTP engine and its pools outlive the attempt. That matters most on the
+        // path where it is least visible -- a command the launcher forwards runs INSIDE the daemon,
+        // so a starved `snapshot` would leak a client in the process that is already short of
+        // slots. No daemon-side session is orphaned by this particular failure: the client only
+        // adopts `mcp-session-id` once the response body has been read, which on this path never
+        // arrives.
+        client.close()
+        throw e
       } catch (e: Exception) {
         client.close()
         throw CliMcpException(
@@ -1271,10 +1468,30 @@ class CliMcpClient(
         } else {
           client.sessionId = savedSessionId
           try {
-            val result = client.callTool(
-              DEVICE_TOOL_NAME,
-              mapOf(ACTION_KEY to DEVICE_ACTION_INFO, SESSION_ONLY_KEY to true),
-            )
+            // Bounded by the pre-flight bound, not the request deadline: this is a read-only
+            // liveness check the user did not ask for, and a starved daemon would otherwise hold
+            // the command here for the whole composed-tool budget before it even started.
+            val probeTimeoutMs = client.preflightTimeoutMs
+            val result = withTimeoutOrNull(probeTimeoutMs) {
+              client.callTool(
+                DEVICE_TOOL_NAME,
+                mapOf(ACTION_KEY to DEVICE_ACTION_INFO, SESSION_ONLY_KEY to true),
+              )
+            }
+            if (result == null) {
+              // Fail, do not recreate. The saved session is very likely still alive on the
+              // daemon, so "starting a new session" would orphan it and rewrite this scope's
+              // pointer -- and the initialize that mints the replacement would hang the same way.
+              // The session file is left as it is for the next command to find once the daemon
+              // has slots again. A distinct type so `connectOrStartDaemonReusable`, whose
+              // catch-all clears the scope and reconnects, can recognise this verdict and do
+              // neither.
+              client.preflightBoundExpired = true
+              client.close()
+              throw DaemonStarvedException(
+                preflightTimedOutMessage(port, "device $DEVICE_ACTION_INFO query", probeTimeoutMs),
+              )
+            }
             val sessionIsAlive = !result.isError || result.content.contains("No device connected")
             if (sessionIsAlive) {
               // Session is alive — reuse it
@@ -1299,8 +1516,17 @@ class CliMcpClient(
               client.reusedSessionProbeContent = result.content
               return client
             }
-            // Daemon responded but doesn't recognize our session — it was restarted
-            Console.error("Daemon doesn't recognize the saved session -- starting a new one.")
+            // Daemon responded but doesn't recognize our session — it was restarted. Only claim
+            // a replacement when this call will actually make one; an inspecting caller
+            // (createIfMissing = false) reports the gap itself.
+            //
+            // Says WHY, and in the same shape as the unreachable-daemon message below: the two
+            // are the same event to whoever is reading, and one command hitting one branch and
+            // the next command the other used to read as two unrelated problems. ASCII "--" for
+            // the same eval-safety reason as the "Switching device" message in [ensureDevice].
+            if (createIfMissing) {
+              Console.error("The daemon has restarted since this shell last used it -- starting a new session.")
+            }
           } catch (e: CancellationException) {
             // A cancelled CLI is not a dead session. Swallowing this would report the saved
             // session as unrecognized and, under createIfMissing, open a replacement nobody is
@@ -1308,9 +1534,18 @@ class CliMcpClient(
             // catch below would otherwise take it.
             client.close()
             throw e
+          } catch (e: DaemonStarvedException) {
+            // Our own probe-timeout verdict from above: the daemon is up, so there is nothing to
+            // recreate and the message already says what to do.
+            throw e
           } catch (_: Exception) {
-            // Daemon probe failed mid-call — recreate below
-            Console.error("Daemon probe failed -- starting a new session.")
+            // The saved session's daemon is unreachable (most often: no daemon is running any
+            // more, so the session it belonged to is gone) — recreate below. Same gate as the
+            // unrecognized-session branch above: an inspecting caller (createIfMissing = false)
+            // throws instead of recreating, so promising a new session here would be a lie.
+            if (createIfMissing) {
+              Console.error("The daemon did not respond, so this shell's session is gone -- starting a new session.")
+            }
           }
           client.sessionId = null
         }
@@ -1326,12 +1561,15 @@ class CliMcpClient(
       // Create fresh session
       client.sessionId = null
       try {
-        client.initialize()
+        client.initializeUnderPreflightBound(port)
       } catch (e: CancellationException) {
-        client.close()
+        client.terminateUnpublishedSession()
+        throw e
+      } catch (e: DaemonStarvedException) {
+        client.terminateUnpublishedSession()
         throw e
       } catch (e: Exception) {
-        client.close()
+        client.terminateUnpublishedSession()
         throw CliMcpException(
           "Failed to connect to Trailblaze daemon on port $port: ${e.message}",
           e,
@@ -1342,6 +1580,22 @@ class CliMcpClient(
       writeSessionFile(file, client.sessionId, effectiveTargetAppId)
 
       return client
+    }
+
+    /**
+     * Closes a reusable client whose handshake did not finish, terminating the MCP session if one
+     * was nonetheless created.
+     *
+     * A reusable client normally leaves its session alive on close -- that is the whole point of
+     * the pointer file. This path is the exception: the bound can expire between `initialize`
+     * answering (so the daemon has minted a session and the client has adopted its id) and
+     * `notifications/initialized` returning, and the pointer is only written after the handshake
+     * succeeds. Nobody will ever reattach to that session, so leaving it behind would accumulate
+     * sessions on a daemon that is already struggling.
+     */
+    private fun CliMcpClient.terminateUnpublishedSession() {
+      if (sessionId != null) terminateSessionOnClose = true
+      close()
     }
 
     /**

@@ -35,7 +35,16 @@ data class SessionInfo(
   val sessionId: SessionId,
   val latestStatus: SessionStatus,
   val timestamp: Instant,
-  /** How long the session lasted (based on calculating from logs) */
+  /**
+   * How long the session lasted. The session's own counter when its end status carries one
+   * ([SessionStatus.Ended.durationMs]), else the span of its logs.
+   *
+   * The two differ by whatever ran between the session being minted and its first log. On a device
+   * runner that is the pre-trail setup — turbo's detector attach, a locale change — which the log
+   * span cannot see because the Started log comes after it. A comparison of two runs that differ
+   * only in that setup reads as a tie on the log span. [timestamp] stays the first log's, so
+   * `timestamp + durationMs` can land later than the last log by that same setup.
+   */
   val durationMs: Long,
   val trailFilePath: String?,
   val hasRecordedSteps: Boolean,
@@ -58,6 +67,19 @@ data class SessionInfo(
    * no anchored device-clock log, and for the summary path, which parses only status logs.
    */
   val deviceClockOffsetMs: Long? = null,
+  /**
+   * When the session ended, or null while it is still running.
+   *
+   * The unambiguous end of the interval [durationMs] measures, which [timestamp] plus [durationMs]
+   * is not: that lands later than the session really ended, by whatever ran before the first log.
+   * A synthetic end (an abandoned session) has no log of its own to read, so its end is carried
+   * here rather than inferred from the last log that happened to be written.
+   *
+   * Last in the parameter list on purpose: a field added in the middle shifts every `componentN`
+   * after it, so an already-compiled consumer destructures into the wrong values rather than
+   * failing to link.
+   */
+  val endTimestamp: Instant? = null,
 ) {
   // Title resolution priority:
   //  1. trailConfig.title  — explicit human-readable title in YAML
@@ -141,12 +163,29 @@ fun List<TrailblazeLog>.getSessionInfo(): SessionInfo? {
   val firstLog: TrailblazeLog = this.minBy { it.normalizedMs(offsets) }
   val lastLog: TrailblazeLog = this.maxBy { it.normalizedMs(offsets) }
 
-  val durationMs = lastLog.normalizedMs(offsets) - firstLog.normalizedMs(offsets)
+  val latestStatus = this.getSessionStatus()
+  // The session's own counter first: it starts when the session is minted — on a device runner,
+  // before the pre-trail setup and the Started log — and is measured on one clock, so neither the
+  // setup nor device skew is lost. The log span is the fallback for an end status that carries no
+  // duration (a synthetic end, an unfinished session).
+  val durationMs = (latestStatus as? SessionStatus.Ended)?.durationMs?.takeIf { it > 0 }
+    ?: (lastLog.normalizedMs(offsets) - firstLog.normalizedMs(offsets))
+
+  // The log that CLOSED the session, not the last log written: logs keep arriving after a session
+  // ends — a recording's save-back appends its progress afterwards — and taking the newest of those
+  // reports a completion later than the session actually reached. An unfinished session has no end
+  // at all; reporting one would invent a completion it never had.
+  val endTimestamp = (latestStatus as? SessionStatus.Ended)?.let {
+    this.filterIsInstance<TrailblazeLog.TrailblazeSessionStatusChangeLog>()
+      .filter { statusLog -> statusLog.sessionStatus is SessionStatus.Ended }
+      .maxByOrNull { statusLog -> statusLog.normalizedMs(offsets) }
+      ?.normalizedTimestamp(offsets)
+  }
 
   return SessionInfo(
     sessionId = firstLog.session,
     timestamp = firstLog.normalizedTimestamp(offsets),
-    latestStatus = this.getSessionStatus(),
+    latestStatus = latestStatus,
     trailblazeDeviceId = sessionStartedInfo?.trailblazeDeviceId,
     testName = sessionStartedInfo?.testMethodName,
     testClass = sessionStartedInfo?.testClassName,
@@ -154,6 +193,7 @@ fun List<TrailblazeLog>.getSessionInfo(): SessionInfo? {
     targetAppInfo = sessionStartedInfo?.targetAppInfo,
     trailConfig = sessionStartedInfo?.trailConfig,
     durationMs = durationMs,
+    endTimestamp = endTimestamp,
     trailFilePath = sessionStartedInfo?.trailFilePath,
     hasRecordedSteps = sessionStartedInfo?.hasRecordedSteps ?: false,
     llmUsageSummary = this.computeUsageSummary(),

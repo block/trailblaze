@@ -1,24 +1,25 @@
 package xyz.block.trailblaze.android
 
-import android.os.ParcelFileDescriptor
 import android.os.SystemClock
 import java.util.concurrent.TimeUnit
 import org.junit.After
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.Timeout
 import xyz.block.trailblaze.AdbCommandUtil
-import xyz.block.trailblaze.InstrumentationUtil.withUiAutomation
 import xyz.block.trailblaze.device.BoundedReadTimeoutException
-import xyz.block.trailblaze.device.readWithDeadline
+import xyz.block.trailblaze.util.UiAutomationHandleErrors
 
 /**
- * On-device verification for the bound `AdbCommandUtil` puts on a device shell read, covering the
- * two things its JVM unit tests cannot reach: that a read blocked on a pipe fed by another process
- * really does end when the descriptor under it is closed, and that the shell connection survives
- * being closed out from under mid-read.
+ * On-device verification of what `AdbCommandUtil` does with a shell command whose output never
+ * ends, covering the three things its JVM unit tests cannot reach: that a read blocked on a pipe
+ * fed by another process really does end when the descriptor under it is closed, that the shell
+ * connection survives being closed out from under mid-read, and that the recovery this triggers —
+ * drop the cached UiAutomation handle, report a failure nothing will replay — works against the
+ * real platform rather than a double.
  *
  * `BoundedReadTest` covers the decision logic against a test double, which is the right place for
  * it. But the reason `readWithDeadline` takes a `cancel` lambda at all is a claim about real Android
@@ -28,16 +29,36 @@ import xyz.block.trailblaze.device.readWithDeadline
  * on the process-wide UiAutomation monitor, so a read that never unwinds holds that monitor for the
  * life of the process and queues every later device action behind a call already reported as failed.
  *
- * What each half establishes:
+ * This calls [AdbCommandUtil.runShellCommand] itself rather than restating its wiring, so the
+ * assertions below are about the shipped path. A copy could — and did — drift out from under them:
+ * it went on asserting a raw [BoundedReadTimeoutException] long after production started converting
+ * that into the handle-discarding error asserted here.
+ *
+ * What each part establishes:
  *  - **The read unwinds at all**, which is what releases the monitor — the JVM drops it when the
  *    `synchronized` block exits. So a `cancel` that fails to break the read shows up here as this
  *    test never returning, contained only by [timeout]. It is deliberately *not* claimed that the
  *    later shell command detects a still-held monitor: Java monitors are reentrant, so the test
  *    thread would re-enter one it held itself.
+ *  - **The failure is not classified as a replayable one.** `UiAutomationHandleErrors.isStaleHandleSignature`
+ *    IS the replay decision in `InstrumentationUtil.runWithStaleUiAutomationRecovery`, so the
+ *    assertion is on that predicate rather than on any wording: a wedged `pm clear` / `input tap` /
+ *    `am force-stop` that classified as stale would be re-issued on a real device, having possibly
+ *    already taken effect.
  *  - **The shell still answers afterwards** ([LIVENESS_COMMAND]). Cancelling closes the descriptor
- *    while the platform is still writing into it, and a UiAutomation connection that did not
- *    survive that would answer every later command with `""` rather than failing — the silent-shell
- *    wedge `AdbCommandUtil.execShellCommand` exists to catch.
+ *    while the platform is still writing into it, and a UiAutomation connection that did not survive
+ *    that would answer every later command with `""` rather than failing — the silent-shell wedge
+ *    `AdbCommandUtil.execShellCommand` exists to catch. "Promptly" is enforced by [timeout] covering
+ *    the whole test, not by a wall-clock bound on the command: a held monitor parks forever rather
+ *    than running slowly, so a stopwatch here would only add a machine-speed bet.
+ * Deliberately NOT asserted here: *which* of the two
+ * [UiAutomationHandleErrors.wedgedShellReadMessage] branches the failure takes, i.e. whether the
+ * cached UiAutomation handle was droppable. That is a platform fact rather than a device-only
+ * behaviour — dropping it is reflection into `Instrumentation`, which hidden-API enforcement refuses
+ * unless `am instrument` is given `--no-hidden-api-checks` — and both branches, including the
+ * escalation to a runner restart when the drop fails, are already covered precisely by
+ * `UiAutomationHandleErrorsTest` on the JVM. Pinning a branch here would only make this test a claim
+ * about the image's hidden-API policy.
  *
  * ## Why the budget here is not a machine-speed bet
  *
@@ -82,21 +103,14 @@ class BoundedShellReadOnDeviceTest {
   @Test
   fun aWedgedShellReadFailsOnItsDeadlineAndReleasesTheUiAutomationMonitor() {
     val startedAt = SystemClock.elapsedRealtime()
-    // Mirrors AdbCommandUtil.runShellCommand's wiring exactly — same nesting inside
-    // withUiAutomation, same stream, same cancel — with only the budget swapped for one this test
-    // owns.
+    // The real function, with only the budget swapped for one this test owns. `loggableCommand` is
+    // what the caller would have redacted; there is nothing to redact in a `sleep`.
     val outcome = runCatching {
-      withUiAutomation {
-        val stream = ParcelFileDescriptor.AutoCloseInputStream(executeShellCommand(WEDGING_COMMAND))
-        stream.use {
-          readWithDeadline(
-            description = "adb shell $WEDGING_COMMAND",
-            timeoutMs = TEST_BUDGET_MS,
-            cancel = { stream.close() },
-            read = { stream.readBytes().toString(Charsets.UTF_8) },
-          )
-        }
-      }
+      AdbCommandUtil.runShellCommand(
+        shellCommand = WEDGING_COMMAND,
+        loggableCommand = WEDGING_COMMAND,
+        timeoutMs = TEST_BUDGET_MS,
+      )
     }
     val elapsedMs = SystemClock.elapsedRealtime() - startedAt
 
@@ -104,10 +118,10 @@ class BoundedShellReadOnDeviceTest {
     // happened. This lane collects no logcat, so a wrong outcome has to explain itself from the
     // assertion text alone, and "nothing was thrown" would throw away the two facts that tell a
     // broken bound apart from a command that never blocked: what the read returned, and when.
-    val timedOut = outcome.exceptionOrNull() as? BoundedReadTimeoutException
+    val wedged = outcome.exceptionOrNull() as? IllegalStateException
       ?: throw AssertionError(
-        "expected `$WEDGING_COMMAND` to be bounded out after ${TEST_BUDGET_MS}ms, but after " +
-          "${elapsedMs}ms it " +
+        "expected `$WEDGING_COMMAND` to be bounded out after ${TEST_BUDGET_MS}ms and reported as a " +
+          "wedged shell read, but after ${elapsedMs}ms it " +
           outcome.fold(
             onSuccess = { "returned '$it' — the command never blocked" },
             onFailure = { "failed with $it" },
@@ -121,17 +135,52 @@ class BoundedShellReadOnDeviceTest {
       "expected the read to block for its full ${TEST_BUDGET_MS}ms budget, took ${elapsedMs}ms",
       elapsedMs >= TEST_BUDGET_MS,
     )
+
+    // A wedged read must never be replayed: `isStaleHandleSignature` is what decides that in
+    // `InstrumentationUtil.runWithStaleUiAutomationRecovery`, so the classification is asserted
+    // rather than the wording. Stand-ins for `$WEDGING_COMMAND` in production are `pm clear`,
+    // `input tap` and `am force-stop` — commands that may already have taken effect by the time
+    // their output pipe wedges. Holds on both branches of [UiAutomationHandleErrors.wedgedShellReadMessage].
+    assertFalse(
+      "a wedged shell read must not classify as a replayable stale handle, message was: " +
+        "'${wedged.message}'",
+      UiAutomationHandleErrors.isStaleHandleSignature(wedged.message),
+    )
+
+    // The two fields the failure has to carry, named individually rather than by asserting the
+    // whole diagnostic — the wording of a human-readable message is not a contract. Comparing it to
+    // the same formatter's own output would be worse than loose: a formatter that stopped naming
+    // either field would move both sides of the comparison and assert nothing at all.
+    //
+    // The budget is the load-bearing one here: it is what shows the `timeoutMs` this test passed in
+    // actually reached the failure, rather than the production default being reported. Matched WITH
+    // its unit, because the bare number would not discriminate — the production default is
+    // `300000`, and `"300000".contains("3000")` is true. `"300000ms".contains("3000ms")` is not.
+    val message = wedged.message.orEmpty()
+    assertTrue("the failure should name the command that hung, was: '$message'", message.contains(WEDGING_COMMAND))
+    assertTrue(
+      "the failure should name the ${TEST_BUDGET_MS}ms budget this test gave it, was: '$message'",
+      message.contains("${TEST_BUDGET_MS}ms"),
+    )
+
+    // The bounded read's own timeout is kept as the cause so a non-timeout failure stays readable.
+    val boundedTimeout = wedged.cause as? BoundedReadTimeoutException
+      ?: throw AssertionError(
+        "the wedged-shell failure should carry the bounded read's timeout as its cause, was: " +
+          "${wedged.cause}",
+      )
     // Cancelling is what lands the deadline, so the read must have failed rather than returned, and
     // that failure is kept as the cause. A null cause means the read returned at the same moment
     // the deadline fired — a timeout this test did not actually produce.
     assertNotNull(
       "the cancelled read's own failure should be kept as the timeout's cause; a null cause means " +
         "`$WEDGING_COMMAND` returned on its own after ${elapsedMs}ms instead of being cancelled",
-      timedOut.cause,
+      boundedTimeout.cause,
     )
     assertTrue(
-      "the timeout should name the command that hung, was: '${timedOut.description}'",
-      timedOut.description.contains(WEDGING_COMMAND),
+      "the bounded read should have been told which command it was guarding, was: " +
+        "'${boundedTimeout.description}'",
+      boundedTimeout.description.contains(WEDGING_COMMAND),
     )
 
     // The shell connection survived having a read closed out from under it. Goes through

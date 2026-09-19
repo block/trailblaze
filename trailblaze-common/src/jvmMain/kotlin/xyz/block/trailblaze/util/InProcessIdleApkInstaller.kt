@@ -289,6 +289,9 @@ object InProcessIdleApkInstaller {
       deviceId,
       listOf("setprop", InProcessIdle.SETTLE_SYSPROP, "0"),
     )
+    // The debug app an attach named lives in a persistent setting, so it must go with the switch:
+    // left behind, the next non-turbo run on this device would have its ANRs silently waited out.
+    clearDebugApp(deviceId)
     // Bounded, like the write: this runs inside session start, and a wedged adb transport must
     // surface as "could not confirm" rather than hold the run.
     if (readSettleRaceSwitch(deviceId) != false) return false
@@ -326,6 +329,23 @@ object InProcessIdleApkInstaller {
     // process-start ANR watchdog on a heavy app.
     if (aotCompileTarget) aotCompileTarget(deviceId, appId, log)
 
+    // A device left with error dialogs hidden (an earlier on-device turbo run did exactly that)
+    // kills an ANR'd app instead of showing the dialog a trail would dismiss with Wait. See
+    // [InProcessIdle.showErrorDialogsShellArgs].
+    AndroidHostAdbUtils.execAdbShellCommandWithTimeout(deviceId, InProcessIdle.showErrorDialogsShellArgs())
+
+    // Otherwise the first tap the target falls 5 s behind ends the instrumentation and force-stops
+    // the app instead of raising an ANR. See [InProcessIdle.keepAliveThroughAnrShellArgs].
+    log("[turbo] marking $appId as the debug app so a stall while attached is waited out, not killed")
+    val debugAppOutput = AndroidHostAdbUtils.execAdbShellCommand(deviceId, InProcessIdle.keepAliveThroughAnrShellArgs(appId))
+    // The command is silent on success, so anything it printed is a refusal. Attaching over one
+    // would report turbo as on while the target has none of the ANR protection turbo depends on.
+    if (InProcessIdle.setDebugAppReportedFailure(debugAppOutput)) {
+      log("[turbo] am set-debug-app refused $appId: ${debugAppOutput.trim().replace('\n', ' ').take(300)}")
+      clearDebugApp(deviceId)
+      return Outcome.Failed("am set-debug-app refused $appId")
+    }
+
     log("[turbo] attaching $detectorPackage to $appId")
     val output = AndroidHostAdbUtils.execAdbShellCommand(
       deviceId,
@@ -339,6 +359,9 @@ object InProcessIdleApkInstaller {
           "usual cause is that $appId is signed with a different certificate than the bundled " +
           "detector, which Android will not allow.",
       )
+      // No detector, so no reason to keep the debug app: turbo is off for this session and the
+      // flag would otherwise sit in the device's settings until something else cleared it.
+      clearDebugApp(deviceId)
       return Outcome.Failed("am instrument rejected the attach")
     }
 
@@ -351,12 +374,27 @@ object InProcessIdleApkInstaller {
         "[turbo] $appId never answered within ${PONG_WAIT_MS}ms — leaving turbo off so the " +
           "session runs at normal speed rather than half-attached",
       )
+      clearDebugApp(deviceId)
       return Outcome.Failed("detector never answered PING")
     }
 
     log("[turbo] attached to $appId")
     enableSettleRace(deviceId, log)
     return Outcome.Attached(alreadyAttached = false)
+  }
+
+  /**
+   * Undoes the `am set-debug-app` an attach ran. Bounded because it runs on the session-start and
+   * turbo-off paths, where a wedged transport must not hold the run; a failure here is not worth a
+   * log line of its own — the switch read-back that follows on the turbo-off path already reports
+   * the transport, and on the attach-rejected path the caller has just logged the real problem.
+   */
+  private fun clearDebugApp(deviceId: TrailblazeDeviceId) {
+    try {
+      AndroidHostAdbUtils.execAdbShellCommandWithTimeout(deviceId, InProcessIdle.clearDebugAppShellArgs())
+    } catch (t: Throwable) {
+      Console.log("[turbo] am clear-debug-app failed on ${deviceId.instanceId}: ${t.message}")
+    }
   }
 
   /**

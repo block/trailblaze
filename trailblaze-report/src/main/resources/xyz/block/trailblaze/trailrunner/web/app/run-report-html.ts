@@ -39,7 +39,7 @@ function buildRunReportHtml({ meta, trace, llmLogs, shots, events = null, attach
 // this HTML as the srcDoc of a same-origin iframe, where the object URLs the loading page minted
 // over the archive's own bytes still resolve. Every other caller writes a document that outlives
 // this page — a downloaded file, a POST to the daemon — so the default stays "strip".
-function buildMultiReportHtml({ generatedAt, shareUrl, sessions, selectorEngine, keepAttachmentObjectUrls = false }: { generatedAt?: string; shareUrl?: string; sessions: SessionInput[]; selectorEngine?: SelectorEnginePayload | null; keepAttachmentObjectUrls?: boolean }): string {
+function buildMultiReportHtml({ generatedAt, shareUrl, allRunsUrl, sessions, selectorEngine, keepAttachmentObjectUrls = false }: { generatedAt?: string; shareUrl?: string; allRunsUrl?: string; sessions: SessionInput[]; selectorEngine?: SelectorEnginePayload | null; keepAttachmentObjectUrls?: boolean }): string {
   // Slimming, the llmLogs → llm rename, and lifting recording/original YAML off meta are shared with
   // the viewer shell's in-place hydration (toSessionPayloads in run-report-extract), so an embedded
   // payload and a shell-loaded one are the same shape. The sprite hoist below is this path's alone:
@@ -99,7 +99,7 @@ function buildMultiReportHtml({ generatedAt, shareUrl, sessions, selectorEngine,
   // is equivalent to the old object-literal embed: textContent → JSON.parse is not an HTML sink
   // (nothing is reinterpreted as markup), and every user-supplied field is still escaped at
   // render time. toInertJson keeps the `</script>`-closes-the-element escape in one place.
-  const indexJson = toInertJson({ generatedAt: generatedAt || '', ...(shareUrl ? { shareUrl } : {}), sessions: indexEntries });
+  const indexJson = toInertJson({ generatedAt: generatedAt || '', ...(shareUrl ? { shareUrl } : {}), ...(allRunsUrl ? { allRunsUrl } : {}), sessions: indexEntries });
   const sessionChunks = list.map((s, i) => `<script type="application/json" id="tb-session-${i}">${toInertJson(s)}</script>`
     + (sprites[String(i)] ? `\n<script type="application/json" id="tb-sprites-${i}">${toInertJson(sprites[String(i)])}</script>` : '')).join('\n');
   // The selector engine rides LAST: it is never on the boot path (evaluated only when an inspector

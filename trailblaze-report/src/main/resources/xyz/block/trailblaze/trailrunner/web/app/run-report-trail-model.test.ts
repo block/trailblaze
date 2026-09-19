@@ -427,6 +427,16 @@ describe("trailViewScopes", () => {
     expect(Array.from(scopes.keys()).sort()).toEqual(["trail:a:", "trail:b:", "trail:c:"]);
   });
 
+  test("a lone run is its own scope, whether named by trailId or only by title", () => {
+    // The single-session document (a daemon-served `/report?session=`, a loaded recording) has one
+    // candidate. It is offered the view on its own: a title identity refuses to JOIN runs, but it
+    // still identifies a run to itself.
+    expect(trailViewScopes([run({ key: "trail:checkout%2Fpay:" })]).get("trail:checkout%2Fpay:")).toEqual([0]);
+    expect(trailViewScopes([run({ key: "title:Checkout:" })]).get("title:Checkout:")).toEqual([0]);
+    // Two runs sharing only a title are unrelated histories, not one trail.
+    expect(trailViewScopes([run({ key: "title:Checkout:" }), run({ key: "title:Checkout:" })]).size).toBe(0);
+  });
+
   test("a run with no trace takes only ITS trail out, not the whole document", () => {
     const scopes = trailViewScopes([
       run({ key: "trail:a:", hasTrace: false }), run({ key: "trail:a:" }), run({ key: "trail:b:" }),

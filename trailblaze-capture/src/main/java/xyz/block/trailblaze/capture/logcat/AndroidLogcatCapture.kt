@@ -4,6 +4,7 @@ import java.io.File
 import xyz.block.trailblaze.capture.CaptureOptions
 import xyz.block.trailblaze.capture.CaptureStream
 import xyz.block.trailblaze.capture.DeviceClock
+import xyz.block.trailblaze.capture.AppScopedCaptureStream
 import xyz.block.trailblaze.capture.model.CaptureArtifact
 import xyz.block.trailblaze.capture.model.CaptureFilenames
 import xyz.block.trailblaze.capture.model.CaptureType
@@ -26,8 +27,10 @@ import xyz.block.trailblaze.util.Console
  * 1772846521.234  5432  5432 D MyApp   : onCreate called
  * ```
  */
-class AndroidLogcatCapture : CaptureStream {
+class AndroidLogcatCapture : CaptureStream, AppScopedCaptureStream {
   override val type = CaptureType.LOGCAT
+  override var isAppScoped: Boolean = false
+    private set
 
   private var streamHandle: AutoCloseable? = null
   private var outputFile: File? = null
@@ -36,6 +39,7 @@ class AndroidLogcatCapture : CaptureStream {
 
   override fun start(sessionDir: File, deviceId: String, appId: String?) {
     this.deviceId = deviceId
+    isAppScoped = false
     startTimestampMs = DeviceClock.nowMs(deviceId)
     outputFile = File(sessionDir, CaptureFilenames.DEVICE_LOG)
 
@@ -59,6 +63,7 @@ class AndroidLogcatCapture : CaptureStream {
         val pid = getAppPid(deviceId, appId)
         if (pid != null) {
           append(" --pid=").append(pid)
+          isAppScoped = true
           Console.log("Filtering logcat to PID $pid ($appId)")
         }
       }

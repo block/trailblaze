@@ -141,7 +141,11 @@ object InstrumentationArgUtil {
    * instrumentation arg in root `build.gradle.kts`).
    */
   fun agentImplementation(): AgentImplementation {
-    val value = instrumentationArguments.getString("trailblaze.agent") ?: return AgentImplementation.DEFAULT
+    return parseAgentImplementation(instrumentationArguments.getString("trailblaze.agent"))
+  }
+
+  internal fun parseAgentImplementation(value: String?): AgentImplementation {
+    value ?: return AgentImplementation.DEFAULT
     return try {
       AgentImplementation.valueOf(value)
     } catch (e: IllegalArgumentException) {

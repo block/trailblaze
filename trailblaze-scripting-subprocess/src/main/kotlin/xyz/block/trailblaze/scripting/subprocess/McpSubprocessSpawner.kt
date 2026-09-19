@@ -8,6 +8,7 @@ import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
 import xyz.block.trailblaze.config.McpServerConfig
 import xyz.block.trailblaze.llm.config.ClasspathResourceDiscovery
+import xyz.block.trailblaze.scripting.callback.JsScriptingCallbackDispatcher
 import java.io.File
 import java.io.IOException
 import java.nio.file.AtomicMoveNotSupportedException
@@ -354,19 +355,44 @@ object McpSubprocessSpawner {
     // `-Dtrailblaze.callback.timeoutMs`. Without this the client's default 32s abort would
     // fire before a daemon configured for a longer callback dispatch could return, defeating
     // the override. Buffer is small (2s) so the daemon is normally the source of a structured
-    // timeout error rather than a client-side abort. Default-duplication with
-    // `ScriptingCallbackEndpoint.DEFAULT_CALLBACK_TIMEOUT_MS` is intentional — a cross-module
-    // constant accessor would create a dependency from `:trailblaze-scripting-subprocess` to
-    // `:trailblaze-server` (wrong direction); the comment flags the two as in-lockstep.
+    // timeout error rather than a client-side abort.
     put("TRAILBLAZE_CLIENT_FETCH_TIMEOUT_MS", resolveClientFetchTimeoutMs().toString())
   }
 
-  /** Keep in sync with `ScriptingCallbackEndpoint.DEFAULT_CALLBACK_TIMEOUT_MS`. */
-  private const val DEFAULT_CALLBACK_TIMEOUT_MS: Long = 120_000L
-  private const val CLIENT_FETCH_BUFFER_MS: Long = 2_000L
+  /**
+   * Daemon-side dispatch budget this spawner forwards to the subprocess. Reads the single source
+   * of truth in `:trailblaze-common` rather than repeating the number, so the client's abort can
+   * no longer drift below the daemon's own deadline.
+   */
+  private const val DEFAULT_CALLBACK_TIMEOUT_MS: Long = JsScriptingCallbackDispatcher.DEFAULT_DISPATCH_TIMEOUT_MS
+
+  /**
+   * How far the client's abort sits above the daemon's deadline, so the daemon is the side that
+   * produces a structured timeout rather than the client aborting the HTTP request first.
+   */
+  internal const val CLIENT_FETCH_BUFFER_MS: Long = 2_000L
 
   internal fun resolveClientFetchTimeoutMs(): Long {
     val override = System.getProperty("trailblaze.callback.timeoutMs")?.toLongOrNull()?.takeIf { it > 0 }
     return (override ?: DEFAULT_CALLBACK_TIMEOUT_MS) + CLIENT_FETCH_BUFFER_MS
   }
+
+  /**
+   * How far the outer `tools/call` sits above the fetch timeout the subprocess is given, so the
+   * subprocess is the side that reports a structured failure.
+   */
+  private const val OUTER_REQUEST_BUFFER_MS: Long = 2_000L
+
+  /**
+   * Budget for the daemon's own `tools/call` into a scripted-tool subprocess.
+   *
+   * Applied by `SubprocessTrailblazeTool` around the whole `tools/call`, because the SDK's own
+   * `RequestOptions.timeout` bounds only the write, not the wait for the answer (MCP SDK 0.13.0);
+   * over stdio a subprocess can accept a request and go quiet forever. Every hop above this one
+   * expresses expiry as a bare coroutine cancellation, which reads as "the run was cancelled"
+   * rather than "the tool took too long", so the readable answer has to come from here. Sits one
+   * buffer above [resolveClientFetchTimeoutMs] so the ladder expires innermost-first and the
+   * outer hop is never the one that fires.
+   */
+  internal fun resolveOuterRequestTimeoutMs(): Long = resolveClientFetchTimeoutMs() + OUTER_REQUEST_BUFFER_MS
 }

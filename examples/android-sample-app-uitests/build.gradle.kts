@@ -10,7 +10,7 @@
 //
 // WHAT DOESN'T: no CI step installs this APK and executes those generated tests. That is deliberate
 // rather than a gap — the trails it stages are the sample app's own
-// `android-ondevice-instrumentation` tree, which a device-farm step already replays on every PR.
+// `android-ondevice-accessibility` tree, which a device-farm step already replays on every PR.
 // Running them here too would pay a second emulator per trail for identical coverage. The module's
 // job is to prove the PLUGIN works end to end, which compiling the generated source does.
 //
@@ -38,8 +38,8 @@ val installSampleAppMcpTools =
 // `<staging>/trails/GeneratedSampleAppTests/<methodName>/` for directory-per-test unified
 // recordings. Two inputs are merged:
 //
-//  1) Instrumentation trails under
-// `../android-sample-app/trails/android-ondevice-instrumentation/`,
+//  1) Sample-app trails under
+// `../android-sample-app/trails/android-ondevice-accessibility/`,
 //     where each scenario is either a named unified file `<category>/<scenario>.trail.yaml` or a
 //     directory-per-test unified recording `<category>/<scenario>/trail.yaml` (the default
 //     new-recording output). The Copy's `eachFile` flattens the named form to
@@ -154,13 +154,13 @@ val stageSampleAppTrails =
         )
       }
     }
-    // Instrumentation trails: named unified `<cat>/<scenario>.trail.yaml` →
+    // Sample-app trails: named unified `<cat>/<scenario>.trail.yaml` →
     // `trails/GeneratedSampleAppTests/<scenarioCamel>.trail.yaml`; directory-per-test recording
     // `<cat>/<scenario>/trail.yaml` → `trails/GeneratedSampleAppTests/<scenarioCamel>/…`. The
     // scenario name is the file's basename or recording-directory name (the pre-unified layout
     // put it in the parent dir; the camel-cased result is identical either way, so generated
     // test-method names are unchanged).
-    from("../android-sample-app/trails/android-ondevice-instrumentation") {
+    from("../android-sample-app/trails/android-ondevice-accessibility") {
       exclude("**/node_modules/**", "**/install/**")
       eachFile { stageTrailFile(this) }
       includeEmptyDirs = false

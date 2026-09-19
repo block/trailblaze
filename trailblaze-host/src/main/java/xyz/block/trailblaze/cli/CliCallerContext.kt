@@ -75,6 +75,21 @@ internal object CliCallerContext {
    *    shell, one PID, pin works), critical for agents (each Bash-tool
    *    call is a fresh shell with a different PID, pin invisible to
    *    follow-ups). See [isInteractiveCaller] in `CliInfrastructure.kt`.
+   *  - `TRAILBLAZE_MCP_REQUEST_TIMEOUT_MS` — how long the CLI waits for one
+   *    daemon response. Consumed by [CliMcpClient.resolveRequestTimeoutMs].
+   *    Forwarded because the CLI's own timeout error tells the user to raise
+   *    it, and on this path the JVM that reads it is the daemon: the advice
+   *    did nothing for `snapshot`, `ask`, `tool` or `config` until the value
+   *    came across with the request.
+   *  - `TRAILBLAZE_MCP_PREFLIGHT_TIMEOUT_MS` — consumed by
+   *    `resolvePreflightTimeoutMs` in `CliMcpClient.kt`, which bounds the
+   *    read-only pre-flight steps (the `initialize` handshake and the `device`
+   *    probes) so a daemon that accepts but never answers cannot hold a
+   *    command for the full request deadline. Forwarded because those steps
+   *    run inside the daemon on this path, whose own environment is whatever
+   *    `app start` froze. An older shim that does not send the key leaves the
+   *    default in force — the slow-box escape hatch is unavailable until the
+   *    launcher is upgraded, which is no worse than before it existed.
    *
    * Adding a new key requires three coordinated edits: this kdoc, the bash
    * shim's allowlist, and a `resolveCli*`/`env*` consumer in

@@ -14,6 +14,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.seconds
 
 /**
  * Pins the cheaper [SessionInfo] read paths against the full-parse [LogsRepo.getSessionInfoDirect].
@@ -117,6 +118,35 @@ class LogsRepoSummaryTest {
       logsRepo.getSessionInfoDirect(sessionId),
       logsRepo.sessionInfoFrom(logsRepo.getLogsForSession(sessionId)),
     )
+  }
+
+  @Test
+  fun `duration is the session's own counter, not the gap between its status logs`() {
+    // The Started log is written AFTER a device runner's pre-trail setup; the end status's counter
+    // started before it. Both read paths must agree on the counter or the sessions list and the
+    // session page would show two different durations for one run.
+    val logsDir = tempLogsDir()
+    val logsRepo = LogsRepo(logsDir, watchFileSystem = false)
+    val sessionId = SessionId("own-counter")
+    val started = Clock.System.now()
+
+    logsRepo.saveLogToDisk(
+      TrailblazeLog.TrailblazeSessionStatusChangeLog(
+        sessionStatus = startedStatus(),
+        session = sessionId,
+        timestamp = started,
+      ),
+    )
+    logsRepo.saveLogToDisk(
+      TrailblazeLog.TrailblazeSessionStatusChangeLog(
+        sessionStatus = SessionStatus.Ended.Succeeded(durationMs = 25_000L),
+        session = sessionId,
+        timestamp = started.plus(2.seconds),
+      ),
+    )
+
+    assertEquals(25_000L, logsRepo.getSessionInfoDirect(sessionId)?.durationMs)
+    assertEquals(25_000L, logsRepo.getSessionInfoSummary(sessionId)?.durationMs)
   }
 
   @Test

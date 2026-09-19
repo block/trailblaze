@@ -85,6 +85,47 @@ class OnDeviceTurboDecisionTest {
   }
 
   @Test
+  fun `an attach deferred to the launch keeps the switch on and says armed, not on`() {
+    val plan = OnDeviceTurbo.decide(requested = true, appId = appId, attachError = null, deferredToLaunch = true)
+    assertEquals(Outcome.DEFERRED_TO_LAUNCH, plan.outcome)
+    // The launch re-attach reads the same switch this run just set; clearing here would turn the
+    // deferred attach into no attach at all.
+    assertFalse(plan.clearSwitch, "cleared the switch the launch re-attach depends on")
+    assertFalse(Outcome.DEFERRED_TO_LAUNCH.isFailure, "deferring is the plan, not a failure to attach")
+    val message = plan.message(scope = "session-1", deviceLabel = "Pixel (API 35)")
+    assertTrue(message!!.contains(appId), message)
+    assertTrue(message.contains("Pixel (API 35)"), message)
+    assertTrue(message.contains("armed"), message)
+    assertFalse(message.contains("turbo is on"), "claims turbo before anything is attached: $message")
+  }
+
+  @Test
+  fun `an attach that failed is a failure even if the attacher also said deferred`() {
+    // The two cannot both be true of one call, but the policy must not let a stale defer flag
+    // paper over an error: the error is the outcome that clears the switch.
+    val plan = OnDeviceTurbo.decide(
+      requested = true,
+      appId = appId,
+      attachError = IllegalStateException("install failed"),
+      deferredToLaunch = true,
+    )
+    assertEquals(Outcome.ATTACH_FAILED, plan.outcome)
+    assertTrue(plan.clearSwitch)
+  }
+
+  @Test
+  fun `a completed and a deferred attach both name the turbo target, nothing else does`() {
+    // The launch re-attach's strict gate (`trailblaze.turbo.required`) only fires for the turbo
+    // target. A deferred attach is a promise the launch keeps, so it must name the target as firmly
+    // as a completed one — otherwise deferring would quietly switch strict mode off, which is the
+    // silent green the flag exists to prevent. Spelled out as a set so a new Outcome has to decide.
+    assertEquals(
+      setOf(Outcome.ATTACHED, Outcome.DEFERRED_TO_LAUNCH),
+      Outcome.entries.filter { it.namesTurboTarget }.toSet(),
+    )
+  }
+
+  @Test
   fun `only the two turbo-was-wanted-but-unavailable outcomes are failures`() {
     // Spelled out as a set rather than per-case so adding an Outcome forces a decision here about
     // whether `trailblaze.turbo.required` should redden on it.
@@ -212,6 +253,76 @@ class OnDeviceTurboDecisionTest {
   }
 
   @Test
+  fun `an armed attach that no launch ever kept fails a run that required turbo`() {
+    // The gap this closes: the launch gate only fires on a launch that HAPPENED. A trail that taps
+    // its way in without ever calling launchApp never reaches it, so without this check the run
+    // reports green having replayed every action at heuristic speed — the exact silent green
+    // `trailblaze.turbo.required` exists to eliminate.
+    assertFalse(
+      OnDeviceTurbo.deferredAttachKept(
+        outcome = Outcome.DEFERRED_TO_LAUNCH,
+        required = true,
+        confirmedAppId = null,
+        targetAppId = appId,
+      ),
+    )
+  }
+
+  @Test
+  fun `an armed attach a launch confirmed for the target is kept`() {
+    assertTrue(
+      OnDeviceTurbo.deferredAttachKept(
+        outcome = Outcome.DEFERRED_TO_LAUNCH,
+        required = true,
+        confirmedAppId = appId,
+        targetAppId = appId,
+      ),
+    )
+  }
+
+  @Test
+  fun `a detector confirmed for a different app does not keep the promise`() {
+    // Only one app per device can be turbo, and a trail may launch a second app, a browser or
+    // Settings. A detector answering for one of those says nothing about the target.
+    assertFalse(
+      OnDeviceTurbo.deferredAttachKept(
+        outcome = Outcome.DEFERRED_TO_LAUNCH,
+        required = true,
+        confirmedAppId = "com.example.other",
+        targetAppId = appId,
+      ),
+    )
+  }
+
+  @Test
+  fun `a run that did not require turbo is never failed for an unkept deferral`() {
+    // Turbo is an accelerator everywhere except a lane that set the required flag. Failing here
+    // would redden every ordinary farm run whose trail happens not to launch its target.
+    assertTrue(
+      OnDeviceTurbo.deferredAttachKept(
+        outcome = Outcome.DEFERRED_TO_LAUNCH,
+        required = false,
+        confirmedAppId = null,
+        targetAppId = appId,
+      ),
+    )
+  }
+
+  @Test
+  fun `a completed pre-trail attach needs no launch to confirm it`() {
+    // ATTACHED already polled PONG before the trail started. Holding it to a launch confirmation
+    // too would fail every required-turbo trail that never re-launches its target.
+    assertTrue(
+      OnDeviceTurbo.deferredAttachKept(
+        outcome = Outcome.ATTACHED,
+        required = true,
+        confirmedAppId = null,
+        targetAppId = appId,
+      ),
+    )
+  }
+
+  @Test
   fun `the instrumentation arg names match what the runner scripts forward`() {
     // The scripts bridge TRAILBLAZE_TURBO / TRAILBLAZE_TURBO_REQUIRED to these exact strings. A
     // rename on either side is silent — turbo simply never engages — so pin the names here, on the
@@ -219,4 +330,157 @@ class OnDeviceTurboDecisionTest {
     assertEquals("trailblaze.turbo", OnDeviceTurbo.TURBO_ARG)
     assertEquals("trailblaze.turbo.required", OnDeviceTurbo.TURBO_REQUIRED_ARG)
   }
+  @Test
+  fun `a deferred attach makes its target's next launch the run's first attach`() {
+    // The budget question this answers: a first attach starts a process the device has not started
+    // this run, so it is not owed the patience of a re-attach. Anything else would hold a cold
+    // attach to a warm attach's clock.
+    assertTrue(
+      OnDeviceTurbo.carriesFirstAttach(
+        outcome = Outcome.DEFERRED_TO_LAUNCH,
+        confirmedAppId = null,
+        targetAppId = appId,
+        appId = appId,
+      ),
+    )
+  }
+
+  @Test
+  fun `a launch after the deferred attach was confirmed is a re-attach`() {
+    // Once a detector has answered for this app, every later launch restarts a process the device
+    // has already started — the case the narrower budget was measured on.
+    assertFalse(
+      OnDeviceTurbo.carriesFirstAttach(
+        outcome = Outcome.DEFERRED_TO_LAUNCH,
+        confirmedAppId = appId,
+        targetAppId = appId,
+        appId = appId,
+      ),
+    )
+  }
+
+  @Test
+  fun `a launch of some other app never carries the first attach`() {
+    // A trail launching a browser or Settings must not widen its own wait on the strength of a
+    // deferral that was made for the target.
+    assertFalse(
+      OnDeviceTurbo.carriesFirstAttach(
+        outcome = Outcome.DEFERRED_TO_LAUNCH,
+        confirmedAppId = null,
+        targetAppId = appId,
+        appId = "com.example.other",
+      ),
+    )
+  }
+
+  @Test
+  fun `a completed pre-trail attach leaves every launch a re-attach`() {
+    // ATTACHED already paid the cold start before the trail, so its launches are re-attaches even
+    // before any launch has confirmed one.
+    assertFalse(
+      OnDeviceTurbo.carriesFirstAttach(
+        outcome = Outcome.ATTACHED,
+        confirmedAppId = null,
+        targetAppId = appId,
+        appId = appId,
+      ),
+    )
+  }
+
+  @Test
+  fun `a launch that lost its detector fails a required run at the end of the trail`() {
+    // The confirmation that discovers this runs after the trail has moved past the launch, so it
+    // has nothing to throw into. Carrying the reason to the end is the only way the run reports it.
+    assertEquals(
+      "$appId lost turbo at a launch — never answered PING",
+      OnDeviceTurbo.turboFailureAtEndOfTrail(
+        outcome = Outcome.ATTACHED,
+        required = true,
+        confirmedAppId = appId,
+        targetAppId = appId,
+        lostReason = "never answered PING",
+      ),
+    )
+  }
+
+  @Test
+  fun `a lost launch is named ahead of the generic never-attached verdict`() {
+    // Both are true of a deferred attach whose only launch failed. The launch reason says WHICH
+    // launch and why; the generic one just says it never happened.
+    val failure = OnDeviceTurbo.turboFailureAtEndOfTrail(
+      outcome = Outcome.DEFERRED_TO_LAUNCH,
+      required = true,
+      confirmedAppId = null,
+      targetAppId = appId,
+      lostReason = "never answered PING",
+    )
+    assertEquals("$appId lost turbo at a launch — never answered PING", failure)
+  }
+
+  @Test
+  fun `a lost launch does not fail a run that only asked for turbo`() {
+    // Turbo is an accelerator everywhere except a lane that set the required flag. A lost detector
+    // there means the trail replayed at heuristic speed, which is not a failure.
+    assertNull(
+      OnDeviceTurbo.turboFailureAtEndOfTrail(
+        outcome = Outcome.ATTACHED,
+        required = false,
+        confirmedAppId = appId,
+        targetAppId = appId,
+        lostReason = "never answered PING",
+      ),
+    )
+  }
+
+  @Test
+  fun `a trail that kept turbo at every launch has no verdict to report`() {
+    assertNull(
+      OnDeviceTurbo.turboFailureAtEndOfTrail(
+        outcome = Outcome.ATTACHED,
+        required = true,
+        confirmedAppId = appId,
+        targetAppId = appId,
+        lostReason = null,
+      ),
+    )
+  }
+
+  @Test
+  fun `a later launch that got its detector clears an earlier launch's loss`() {
+    // A trail can launch its target more than once. The first launch timing out and the second
+    // succeeding is a trail that HAS turbo, and failing it at the end for the first would redden a
+    // run that recovered.
+    OnDeviceTurbo.noteDetectorLost("never answered PING")
+    assertEquals("never answered PING", OnDeviceTurbo.detectorLossReason)
+
+    OnDeviceTurbo.noteDetectorConfirmed(appId, targetAppId = appId)
+
+    assertNull(OnDeviceTurbo.detectorLossReason)
+  }
+
+  @Test
+  fun `launching another app does not undo the target's kept deferred attach`() {
+    // A deferred attach is kept by the launch that finally attaches the detector, and the
+    // end-of-trail check reads WHICH app was confirmed. Letting a later browser launch overwrite
+    // that record would fail a trail that did everything right, for opening a browser.
+    OnDeviceTurbo.noteDetectorConfirmed(appId, targetAppId = appId)
+
+    OnDeviceTurbo.noteDetectorConfirmed("com.android.chrome", targetAppId = appId)
+
+    assertEquals(appId, OnDeviceTurbo.detectorConfirmedApp)
+  }
+
+  @Test
+  fun `launching another app does not clear the target's loss`() {
+    // This runs after EVERY launch, and a trail is free to open a browser, Settings or a second
+    // app. Attaching a detector to one of those says nothing about the app that lost its own — and
+    // clearing the loss here would hand a `turboRequired` run a green it did not earn, for a launch
+    // that was never meant to be turbo in the first place.
+    OnDeviceTurbo.noteDetectorLost("never answered PING")
+
+    OnDeviceTurbo.noteDetectorConfirmed("com.android.chrome", targetAppId = appId)
+
+    assertEquals("never answered PING", OnDeviceTurbo.detectorLossReason)
+  }
+
 }

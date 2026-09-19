@@ -13,6 +13,11 @@
 /** The run header the viewer renders (title, badge, meta strip, error banner, rerun command). */
 interface RunMeta {
   title?: string;
+  /**
+   * The run's own session id. Stable across regenerations, unlike a session's index in the
+   * document, so a link from another report (`?view=compare&basesession=<sessionId>`) can name this run.
+   */
+  sessionId?: string;
   /** Badge class: passed | failed | cancelled | running | unknown (see RunReportGenerator.statusLabel). */
   status?: string;
   target?: string;
@@ -632,6 +637,17 @@ interface ReportPayload {
    * when the document is opened from file:// or an embed.
    */
   shareUrl?: string;
+  /**
+   * A wider report on the same daemon that also holds this document's runs, when one exists.
+   * Two kinds of page carry it: one scoped to a single session, which has nothing local to
+   * Compare against and so offers Compare as a link into this report, naming its run by
+   * `RunMeta.sessionId`; and an all-runs page the daemon capped, whose compare view offers it as
+   * a retry when a link named a run that fell outside the cap.
+   *
+   * Absent for standalone files, which are the whole report, and absent whenever widening would
+   * add nothing — so its presence is the only trustworthy answer to "is there more to see here".
+   */
+  allRunsUrl?: string;
   sessions: SessionPayload[];
   /** Pre-multi-session single-run shape, tolerated by the viewer for old exports. */
   meta?: RunMeta;

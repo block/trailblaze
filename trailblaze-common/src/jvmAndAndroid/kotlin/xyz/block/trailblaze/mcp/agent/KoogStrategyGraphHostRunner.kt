@@ -139,6 +139,11 @@ suspend fun runPromptsWithKoogStrategyGraph(
   // and, past a threshold, surfaces a nudge back to the agent via the tool result (signal only —
   // the LLM decides whether to change approach or report FAILED). Fresh per objective.
   val progressTracker = KoogProgressTracker(KoogProgressTracker.resolveThresholdFromEnv())
+  // One snapshot spans tool dispatch and the following LLM request. The request snapshot is the
+  // dispatcher's pre-action state; one fresh post-action capture then feeds the result hierarchy,
+  // screenshot attachment, and request logging.
+  val sharedScreenCapture = SharedScreenStateCapture(screenStateProvider)
+  val sharedScreenProvider = sharedScreenCapture.asProvider()
   // Per-call dispatcher: routes each Koog tool call through the driver agent (driver-correct
   // execution + logging), then returns the tool result PLUS the FRESH post-action screen so the
   // LLM perceives the latest state via Koog's native tool-result channel. The prune node in
@@ -196,7 +201,7 @@ suspend fun runPromptsWithKoogStrategyGraph(
         // Re-attach the current screen so the latest view hierarchy stays the newest tool result in
         // the prompt — a toolset switch doesn't touch the screen, but the prune node keeps only the
         // LAST tool result's screen verbatim, so omitting it here would strip the agent's perception.
-        val screen = screenStateProvider().viewHierarchyTextRepresentation
+        val screen = sharedScreenProvider().viewHierarchyTextRepresentation
         buildString {
           append("Executed ${tool::class.simpleName}: ")
           append((configResult as? TrailblazeToolResult.Success)?.message ?: configResult.toString())
@@ -218,12 +223,12 @@ suspend fun runPromptsWithKoogStrategyGraph(
           agent.runTrailblazeTools(
             tools = listOf(tool),
             traceId = traceId,
-            screenState = screenStateProvider(),
+            screenState = sharedScreenProvider(),
             elementComparator = elementComparator,
             screenStateProvider = screenStateProvider,
           ).result.also { if (countsAsAssertionEvidence(tool, it)) passedAssertions++ }
         }
-        val screen = screenStateProvider().viewHierarchyTextRepresentation
+        val screen = sharedScreenCapture.captureFresh().viewHierarchyTextRepresentation
         // Observe this dispatch for loop detection; a non-null nudge is prepended so it's the first
         // thing the agent reads in the result.
         val loopNudge = progressTracker.observe(tool.toString())
@@ -253,9 +258,10 @@ suspend fun runPromptsWithKoogStrategyGraph(
   // The live registry the AIAgent's environment resolves tool calls against. Built once from the
   // currently-active toolsets; [onToolSurfaceRefresh] tops it up in place when a toolset switch
   // makes new tools active (Koog's ToolRegistry is the same instance the environment holds).
-  val toolRegistry = toolRepo.asToolRegistry(
+  val toolRegistry = toolRepo.asToolRegistryWithDynamicToolHook(
     toolDispatcher = toolDispatcher,
     trailblazeToolContextProvider = trailblazeToolContextProvider,
+    afterDynamicToolExecution = sharedScreenCapture::clear,
   )
   // Invoked by the strategy graph's prune-pre-send node before each follow-up LLM request. When a
   // ConfigTrailblazeTool has changed the active toolsets (toolSurfaceDirty), rebuild the tool
@@ -274,18 +280,12 @@ suspend fun runPromptsWithKoogStrategyGraph(
         liveRegistry = toolRegistry,
         toolDispatcher = toolDispatcher,
         trailblazeToolContextProvider = trailblazeToolContextProvider,
+        afterDynamicToolExecution = sharedScreenCapture::clear,
       )
     } else {
       null
     }
   }
-
-  // The screenshot decorator (which attaches the screen) and the logging decorator (which records it
-  // + the image-token breakdown) both need the current screen per request. Share ONE capture per
-  // request instead of each re-capturing (a full device round-trip apiece on the RPC driver): both
-  // read the same shared provider, and the outermost decorator clears it at the end of each request.
-  val sharedScreenCapture = SharedScreenStateCapture(screenStateProvider)
-  val sharedScreenProvider = sharedScreenCapture.asProvider()
 
   // Inner: emit a TrailblazeLlmRequestLog (token usage / cost, prompt + response messages,
   // toolOptions) for every Koog `execute(...)` at parity with the legacy runner — the AIAgent calls
@@ -305,21 +305,21 @@ suspend fun runPromptsWithKoogStrategyGraph(
   // model perceives the rendered screen (set-of-mark), not just the accessibility text — parity with
   // the legacy runner's TrailblazeKoogLlmClientHelper. OUTERMOST so the LoggingLlmClient below sees
   // the post-attachment prompt and its token breakdown counts the image (the log stores attachments
-  // as a type marker, not bytes, so no log bloat); the real client receives the image last. Its
-  // onRequestEnd clears the shared capture after each request — the screen is captured once and
-  // reused within the request, then released so it isn't retained until the next one.
+  // as a type marker, not bytes, so no log bloat); the real client receives the image last.
+  // The shared capture remains seeded after each request so tool dispatch can reuse the exact screen
+  // the model acted on; dispatch replaces it once with the fresh post-action screen.
   val screenshotAttachingLlmClient = ScreenshotAttachingLlmClient(
     delegate = loggingLlmClient,
     screenStateProvider = sharedScreenProvider,
     trailblazeLlmModel = trailblazeLlmModel,
-    onRequestEnd = sharedScreenCapture::clear,
+    onRequestEnd = {},
   )
 
   // Render the system prompt the same way the legacy runner does — the template contains a
   // {{device_description}} placeholder, so passing it raw would leak the literal token to the LLM.
   // Mirrors TrailblazeKoogLlmClientHelper.buildDeviceDescription (classifiers/platform + dimensions);
   // rendered once from the run-start screen state (device size is static per run).
-  val koogDeviceDescription = screenStateProvider().let { ss ->
+  val koogDeviceDescription = sharedScreenProvider().let { ss ->
     val classifiers = ss.deviceClassifiers
     val platform = ss.trailblazeDevicePlatform.displayName
     val classifierList = classifiers.joinToString(", ") { it.classifier }
@@ -402,7 +402,11 @@ suspend fun runPromptsWithKoogStrategyGraph(
   } finally {
     // Suspend close in a finally (not `use { }`): close() is suspend, so wrapping the underlying
     // AIAgent.close() in runBlocking from this coroutine could deadlock a single-threaded dispatcher.
-    koogAgent.close()
+    try {
+      koogAgent.close()
+    } finally {
+      sharedScreenCapture.clear()
+    }
   }
 }
 
@@ -832,12 +836,14 @@ internal fun refreshKoogToolSurface(
   liveRegistry: ToolRegistry,
   toolDispatcher: suspend (TrailblazeTool) -> String,
   trailblazeToolContextProvider: () -> TrailblazeToolExecutionContext,
+  afterDynamicToolExecution: () -> Unit,
 ): List<ToolDescriptor> {
   // Execution: top up the live registry from the executor-routed (ungated, superset) view so every
   // currently-registered tool — including scripted tools from not-yet-active toolsets — can dispatch.
-  val fresh = toolRepo.asToolRegistry(
+  val fresh = toolRepo.asToolRegistryWithDynamicToolHook(
     toolDispatcher = toolDispatcher,
     trailblazeToolContextProvider = trailblazeToolContextProvider,
+    afterDynamicToolExecution = afterDynamicToolExecution,
   )
   fresh.tools.forEach { tool ->
     if (liveRegistry.getToolOrNull(tool.name) == null) {

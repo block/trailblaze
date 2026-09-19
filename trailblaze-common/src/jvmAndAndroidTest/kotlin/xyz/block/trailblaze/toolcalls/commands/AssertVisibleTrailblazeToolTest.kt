@@ -11,6 +11,7 @@ import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.api.DriverNodeDetail
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TrailblazeNode
+import xyz.block.trailblaze.api.TrailblazeNodeSelectorResolver
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.api.toViewHierarchyTreeNode
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
@@ -243,6 +244,52 @@ class AssertVisibleTrailblazeToolTest {
   }
 
   @Test
+  fun `accessibility driver records the asserted control, not an occluded label under it`() {
+    // Same shape as the tap regression: a smaller label from the screen underneath is still in
+    // the tree behind the asserted button. The recording must describe the button the ref
+    // named, not the occluded label the whole-tree hit-test prefers.
+    val occludedTitle = TrailblazeNode(
+      nodeId = 2,
+      bounds = TrailblazeNode.Bounds(389, 2168, 691, 2222),
+      driverDetail = DriverNodeDetail.AndroidAccessibility(text = "Review sale", className = "android.widget.TextView"),
+    )
+    val occludedBar = TrailblazeNode(
+      nodeId = 3,
+      bounds = TrailblazeNode.Bounds(42, 2148, 1038, 2295),
+      children = listOf(occludedTitle),
+      driverDetail = DriverNodeDetail.AndroidAccessibility(className = "android.view.ViewGroup", isClickable = true),
+    )
+    val chargeTitle = TrailblazeNode(
+      nodeId = 4,
+      bounds = TrailblazeNode.Bounds(369, 2195, 711, 2249),
+      driverDetail = DriverNodeDetail.AndroidAccessibility(text = "Charge \$2.00", className = "android.widget.TextView"),
+    )
+    val chargeButton = TrailblazeNode(
+      nodeId = 5,
+      ref = "t427",
+      bounds = TrailblazeNode.Bounds(42, 2148, 1038, 2295),
+      children = listOf(chargeTitle),
+      driverDetail = DriverNodeDetail.AndroidAccessibility(className = "android.view.ViewGroup", isClickable = true),
+    )
+    val root = TrailblazeNode(
+      nodeId = 1,
+      bounds = TrailblazeNode.Bounds(0, 0, 1080, 2400),
+      children = listOf(occludedBar, chargeButton),
+      driverDetail = DriverNodeDetail.AndroidAccessibility(),
+    )
+    val context = contextWithTree(trailblazeNodeTree = root)
+
+    val delegated = assertIs<AssertVisibleBySelectorTrailblazeTool>(
+      AssertVisibleTrailblazeTool(ref = "t427").toExecutableTrailblazeTools(context).single(),
+    )
+    val selector = delegated.nodeSelector ?: error("expected a nodeSelector recording")
+    val resolved = assertIs<TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch>(
+      TrailblazeNodeSelectorResolver.resolve(root, selector),
+    )
+    assertEquals(chargeButton.nodeId, resolved.node.nodeId)
+  }
+
+  @Test
   fun `android maestro assert on list row records the row's selector, not the scrollable container`() {
     // Regression companion to the tap mis-target after #4538: the TrailblazeNode hitTest
     // at the row's center climbs to the nearest interactive node — the scrollable list
@@ -356,6 +403,52 @@ class AssertVisibleTrailblazeToolTest {
       ).toExecutableTrailblazeTools(context).single(),
     )
     assertNotNull(delegated.nodeSelector)
+  }
+
+  @Test
+  fun `ios assert records the asserted control, not an occluded label under it`() {
+    // The non-accessibility recording path, which generates the modern selector for every
+    // non-Android platform. Same occlusion shape as the accessibility case: a label from the
+    // layer underneath covers the asserted button's center and is smaller, so the whole-tree
+    // hit-test hands the recording the wrong element's text.
+    val occludedLabel = TrailblazeNode(
+      nodeId = 3,
+      bounds = TrailblazeNode.Bounds(400, 1820, 600, 1880),
+      driverDetail = DriverNodeDetail.IosAxe(type = "StaticText", label = "Review sale"),
+    )
+    val occludedBar = TrailblazeNode(
+      nodeId = 2,
+      bounds = TrailblazeNode.Bounds(40, 1790, 960, 1910),
+      children = listOf(occludedLabel),
+      driverDetail = DriverNodeDetail.IosAxe(type = "Other"),
+    )
+    val chargeButton = TrailblazeNode(
+      nodeId = 4,
+      ref = "g941",
+      bounds = TrailblazeNode.Bounds(50, 1800, 950, 1900),
+      driverDetail = DriverNodeDetail.IosAxe(type = "Button", label = "Charge \$2.00"),
+    )
+    val trailblazeTree = TrailblazeNode(
+      nodeId = 1,
+      bounds = TrailblazeNode.Bounds(0, 0, 1000, 2000),
+      children = listOf(occludedBar, chargeButton),
+      driverDetail = DriverNodeDetail.IosAxe(type = "Application"),
+    )
+    val context = contextWithTree(
+      trailblazeNodeTree = trailblazeTree,
+      viewHierarchy = trailblazeTree.toViewHierarchyTreeNode(),
+      platform = TrailblazeDevicePlatform.IOS,
+      driverType = TrailblazeDriverType.IOS_AXE,
+    )
+
+    val delegated = assertIs<AssertVisibleBySelectorTrailblazeTool>(
+      AssertVisibleTrailblazeTool(ref = "g941").toExecutableTrailblazeTools(context).single(),
+    )
+    val selector = delegated.nodeSelector ?: error("expected a nodeSelector recording")
+    val resolved = assertIs<TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch>(
+      TrailblazeNodeSelectorResolver.resolve(trailblazeTree, selector),
+    )
+    assertEquals(chargeButton.nodeId, resolved.node.nodeId)
   }
 
   // region helpers

@@ -10,7 +10,10 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import xyz.block.trailblaze.cli.captureConsole
 import xyz.block.trailblaze.config.AppTargetYamlConfig
 import xyz.block.trailblaze.config.project.TrailmapSource
 import xyz.block.trailblaze.config.project.TrailmapTargetConfig
@@ -192,12 +195,15 @@ class PerTrailmapTsconfigEmitterTest {
   }
 
   @Test
-  fun `hand-authored tsconfig without framework banner is preserved verbatim and warns once`() {
-    // Upgrade-safety contract: the first compile on a workspace that came from
-    // the pre-emitter era must NOT silently destroy author overrides like
-    // `compilerOptions.allowJs: false`. AND the author must learn about the
-    // preservation — the warning is the entire UX of the migration path, so a
-    // future refactor that drops the diagnostic shouldn't pass tests silently.
+  fun `hand-authored tsconfig without framework banner is preserved verbatim and logged, not warned`() {
+    // Upgrade-safety contract: the first compile on a workspace that came from the pre-emitter
+    // era must NOT silently destroy author overrides like `compilerOptions.allowJs: false`, and
+    // the preservation has to be discoverable — the notice is the whole UX of the migration path.
+    //
+    // Discoverable is not the same as unmissable. This emitter runs at daemon init, so an
+    // always-visible warning landed on whatever command the developer ran first: a paragraph
+    // about TypeScript config in the middle of `trailblaze device list`, about an arrangement
+    // that is supported and needs nothing done. It belongs in the log.
     val workspaceRoot = newWorkspaceRootWithBundle()
     val trailmapDir = File(workspaceRoot, "config/trailmaps/legacy").apply { mkdirs() }
     val toolsDir = File(trailmapDir, "tools").apply { mkdirs() }
@@ -211,24 +217,43 @@ class PerTrailmapTsconfigEmitterTest {
     val tsconfig = File(toolsDir, "tsconfig.json").apply { writeText(handAuthored) }
 
     val trailmap = filesystemTrailmap(id = "legacy", trailmapDir = trailmapDir)
-    val stderr = captureStderr {
+    val captured = captureConsole {
       PerTrailmapTsconfigEmitter.emit(workspaceRoot = workspaceRoot.toPath(), resolvedTrailmaps = listOf(trailmap))
     }
+    val logged = captured.out
+    val stderr = captured.err
 
     assertEquals(
       handAuthored,
       tsconfig.readText(),
       "hand-authored tsconfig should be preserved verbatim",
     )
-    assertTrue("expected a per-trailmap warning naming the trailmap id: $stderr") {
-      stderr.contains("'legacy'") && stderr.contains("hand-authored")
+    assertTrue("expected the notice to name the trailmap id: $logged") {
+      logged.contains("legacy") && logged.contains("hand-authored")
     }
-    assertTrue("expected the warning to point at the migration path: $stderr") {
-      stderr.contains("Delete this file") || stderr.contains("delete this file")
+    assertTrue("expected the notice to point at the migration path: $logged") {
+      logged.contains("delete a hand-authored one") && logged.contains("trailblaze check")
     }
-    assertTrue("expected the warning to reference the current CLI verb: $stderr") {
-      stderr.contains("trailblaze check")
-    }
+    assertFalse(
+      stderr.contains("hand-authored"),
+      "a supported arrangement must not interrupt whatever command triggered daemon init: <<<$stderr>>>",
+    )
+  }
+
+  @Test
+  fun `hand-authored tsconfigs are reported in one line for the whole run`() {
+    // A workspace that hand-authors its tsconfigs on purpose re-runs codegen on every daemon
+    // start; one line per trailmap made that ten warnings a run. All ids ride one notice.
+    val notice = PerTrailmapTsconfigEmitter.handAuthoredTsconfigNotice(listOf("wikipedia", "contacts", "sampleapp"))
+    assertNotNull(notice)
+    assertEquals(1, notice.lines().size, notice)
+    assertTrue(notice) { notice.startsWith("3 trailmaps keep their hand-authored tools/tsconfig.json (contacts, sampleapp, wikipedia)") }
+
+    val single = PerTrailmapTsconfigEmitter.handAuthoredTsconfigNotice(listOf("legacy"))
+    assertNotNull(single)
+    assertTrue(single) { single.startsWith("1 trailmap keeps its hand-authored tools/tsconfig.json (legacy)") }
+
+    assertNull(PerTrailmapTsconfigEmitter.handAuthoredTsconfigNotice(emptyList()))
   }
 
   @Test
@@ -682,6 +707,27 @@ class PerTrailmapTsconfigEmitterTest {
 
     assertTrue(emitted.isEmpty(), "expected no tsconfig for an empty id list: $emitted")
     assertFalse("scratch dir must stay empty for an empty id list") { outputBase.exists() }
+  }
+
+  @Test
+  fun `a trailmap reached through a symlink into another workspace gets no generated files`() {
+    // This repo's trails/config/trailmaps/sampleapp is a symlink into the open-source example
+    // app's own workspace. Writing this workspace's tsconfig and .gitignore there hands the
+    // example checkout files that belong to a different workspace.
+    val workspaceRoot = newWorkspaceRootWithBundle()
+    val otherWorkspaceTrailmap = File(workspaceRoot.parentFile, "other/trails/config/trailmaps/sampleapp").apply { mkdirs() }
+    val link = File(workspaceRoot, "config/trailmaps/sampleapp")
+    link.parentFile.mkdirs()
+    Files.createSymbolicLink(link.toPath(), otherWorkspaceTrailmap.toPath())
+
+    val emitted = PerTrailmapTsconfigEmitter.emit(
+      workspaceRoot = workspaceRoot.toPath(),
+      resolvedTrailmaps = listOf(filesystemTrailmap(id = "sampleapp", trailmapDir = link)),
+    )
+
+    assertTrue(emitted.isEmpty(), "no files should be claimed for a borrowed trailmap: $emitted")
+    assertFalse(File(otherWorkspaceTrailmap, "tools/tsconfig.json").exists(), "tsconfig written into the other workspace")
+    assertFalse(File(otherWorkspaceTrailmap, ".gitignore").exists(), ".gitignore written into the other workspace")
   }
 
   private fun filesystemTrailmap(id: String, trailmapDir: File): ResolvedTrailmap = ResolvedTrailmap(

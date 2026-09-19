@@ -1,5 +1,7 @@
 package xyz.block.trailblaze.llm
 
+import kotlinx.serialization.EncodeDefault
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.Serializable
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDriverType
@@ -20,7 +22,9 @@ import xyz.block.trailblaze.model.TrailblazeConfig
  * The [agentImplementation] controls which architecture processes the request:
  * - [AgentImplementation.TRAILBLAZE_RUNNER]: Legacy YAML-based TrailblazeRunner
  * - [AgentImplementation.MULTI_AGENT_V3]: Mobile-Agent-v3 inspired implementation
+ * - [AgentImplementation.KOOG_STRATEGY_GRAPH]: Default Koog strategy-graph implementation
  */
+@OptIn(ExperimentalSerializationApi::class)
 @Serializable
 data class RunYamlRequest(
   /** Test identifier for logging/reporting */
@@ -61,7 +65,9 @@ data class RunYamlRequest(
    *
    * - [AgentImplementation.TRAILBLAZE_RUNNER]: Legacy YAML-based TrailblazeRunner
    * - [AgentImplementation.MULTI_AGENT_V3]: Mobile-Agent-v3 inspired implementation
+   * - [AgentImplementation.KOOG_STRATEGY_GRAPH]: Default Koog strategy-graph implementation
    */
+  @EncodeDefault(EncodeDefault.Mode.ALWAYS)
   val agentImplementation: AgentImplementation = AgentImplementation.DEFAULT,
 
   /**

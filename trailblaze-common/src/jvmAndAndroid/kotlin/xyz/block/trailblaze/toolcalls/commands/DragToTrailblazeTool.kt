@@ -74,8 +74,7 @@ data class DragToTrailblazeTool(
         // "Element ref 'X' not found on current screen" prefix is load-bearing for the runner's
         // stale-ref recovery detector (StaleRefRecovery.STALE_REF_REGEX) — keep the phrasing.
         message = "dragTo: Element ref '$ref' not found on current screen. The screen has " +
-          "changed since this ref was last visible. Re-read the view hierarchy appended to this " +
-          "request and pick a ref that is actually shown.",
+          "changed since this ref was last visible. Use a ref from the current view hierarchy instead.",
         tool = this,
       )
     val source = sourceNode.centerPoint()
@@ -88,8 +87,8 @@ data class DragToTrailblazeTool(
       toRef != null -> {
         val targetNode = tree.findFirst { it.ref == toRef }
           ?: throw TrailblazeToolExecutionException(
-            message = "dragTo: Element ref '$toRef' not found on current screen. Re-read the " +
-              "view hierarchy appended to this request and pick a ref that is actually shown.",
+            message = "dragTo: Element ref '$toRef' not found on current screen. " +
+              "Use a ref from the current view hierarchy instead.",
             tool = this,
           )
         targetNode.centerPoint()

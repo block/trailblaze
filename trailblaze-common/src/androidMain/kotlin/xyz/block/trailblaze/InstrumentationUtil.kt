@@ -68,6 +68,26 @@ object InstrumentationUtil {
   // the recovery block — so an acquisition-time stale handle is healed exactly like a use-time one.
   private val uiAutomationLock = Any()
 
+  /**
+   * Whether this instrumentation loads into Trailblaze's own process rather than into an app under
+   * test — the device-side read of
+   * `TrailblazeOnDeviceInstrumentationTarget.instrumentationProcessIsTrailblazeOwned`, which only
+   * the host can see directly.
+   *
+   * Derived from the manifest's `targetPackage`: Trailblaze's standalone runner self-instruments, so
+   * its test context and target context name the same package. An in-process harness is a
+   * `com.android.test` module pointed at the app under test, so the two differ. That is the same
+   * distinction the host draws, read from the only side that knows it here.
+   *
+   * Used for diagnosis only. Defaults to `false` when it cannot be read, because the advice that
+   * depends on it ("add `--no-hidden-api-checks`") is actively harmful for an app under test — see
+   * [UiAutomationHandleErrors.cacheClearFailureDiagnosis].
+   */
+  private val isSelfInstrumenting: Boolean
+    get() = runCatching {
+      instrumentation.context.packageName == instrumentation.targetContext.packageName
+    }.getOrDefault(false)
+
   fun <T> withInstrumentation(work: Instrumentation.() -> T): T = with(instrumentation) {
     work(instrumentation)
   }
@@ -242,7 +262,12 @@ object InstrumentationUtil {
     } catch (t: Throwable) {
       Console.log(
         "[InstrumentationUtil] Failed to clear Instrumentation.mUiAutomation reflectively: " +
-          "${t::class.java.simpleName}: ${t.message}"
+          "${t::class.java.simpleName}: ${t.message}. " +
+          UiAutomationHandleErrors.cacheClearFailureDiagnosis(
+            throwableClassName = t::class.java.name,
+            throwableMessage = t.message,
+            instrumentationProcessIsTrailblazeOwned = isSelfInstrumenting,
+          )
       )
       false
     }

@@ -80,6 +80,18 @@ class ShellPipelineCommandsTest {
   }
 
   @Test
+  fun `the on-device entry point wraps for the shell-less transport, not the shell-backed one`() {
+    // What an instrumentation gets: the same payload as `usesShellInterpreter = false`. A caller
+    // that landed on the shell-backed shape instead would emit a quoted `sh -c '…'` that
+    // `Runtime.exec` shatters on whitespace, and the pipeline would silently do nothing.
+    assertEquals(
+      wrapShellPipelineForTransport(usesShellInterpreter = false, innerCommand = innerCommand),
+      wrapShellPipelineForOnDeviceTransport(innerCommand),
+    )
+    assertEquals(innerCommand, decodeShellTrampoline(wrapShellPipelineForOnDeviceTransport(innerCommand)))
+  }
+
+  @Test
   fun `blank inner command is rejected on both transports`() {
     assertFailsWith<IllegalArgumentException> {
       wrapShellPipelineForTransport(usesShellInterpreter = true, innerCommand = " ")

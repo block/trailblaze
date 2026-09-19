@@ -55,7 +55,7 @@ class AxeScreenState(
    * `axe describe-ui` spans the whole scroll content, while the Maestro/XCUITest path never
    * sees below-fold content in the first place (XCTest doesn't materialize it) and filters
    * the stragglers via `filterOutOfBounds`. Every consumer of this state — the compact
-   * element list and its refs, `findMatches` / waypoint matching over [trailblazeNodeTree],
+   * element list and its refs, `findSelectorMatches` / waypoint matching over [trailblazeNodeTree],
    * the Maestro-shaped [viewHierarchy] — must therefore see only on-screen content, or
    * off-viewport elements match on IOS_AXE in exactly the flows the clamp exists to fix
    * (e.g. a sub-10%-visible edge straddler earning a ref whose tap falls back to a blind
@@ -101,7 +101,7 @@ class AxeScreenState(
    * [clampedTree] with refs applied from [compactElements]. Consumers (e.g.
    * `TapTrailblazeTool`) look up nodes by ref — without the refs stamped on, `tap ref=e964`
    * can't find the element even though the snapshot output shows the ref. Selector
-   * consumers (`findMatches`, waypoint matching) resolve against this tree too, so it must
+   * consumers (`findSelectorMatches`, waypoint matching) resolve against this tree too, so it must
    * be the clamped one: the host driver's equivalent carries no below-fold content, and an
    * unclamped tree here would let off-viewport elements match on IOS_AXE only.
    *

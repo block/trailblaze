@@ -52,7 +52,7 @@ object HomeEndpoint {
     }
     val allSessionsUtility = if (cappedReport) {
       """
-              <a class="utility" href="/report?limit=all">
+              <a class="utility" href="${GenerateReportEndpoint.ALL_RUNS_REPORT_URL}">
                 <span class="utility-copy"><strong>All ${sessions.size} sessions</strong><span>Every run in one page &mdash; slower and much larger</span></span>
                 <span class="utility-arrow" aria-hidden="true">&rarr;</span>
               </a>
@@ -403,14 +403,14 @@ object HomeEndpoint {
                 <p class="lede">$heroDescription</p>
                 <div class="hero-actions">
                   $trailRunnerButton
-                  <a class="$reportButtonClass" href="/report">Open the interactive report</a>
+                  <a class="$reportButtonClass" href="${GenerateReportEndpoint.ALL_RUNS_REPORT_PATH}">Open the interactive report</a>
                 </div>
               </div>
               $trailRunnerWorkflow
             </section>
 
             <nav class="utilities" aria-label="Daemon utilities">
-              <a class="utility" href="/report">
+              <a class="utility" href="${GenerateReportEndpoint.ALL_RUNS_REPORT_PATH}">
                 <span class="utility-copy"><strong>Interactive report</strong><span>$reportScopeDescription</span></span>
                 <span class="utility-arrow" aria-hidden="true">&rarr;</span>
               </a>
@@ -462,7 +462,7 @@ object HomeEndpoint {
     val title = htmlEscape(info.displayName)
     val when_ = htmlEscape(formatTimestamp(info))
     val duration = formatDuration(info.durationMs)
-    val href = "/report?session=${urlEncode(sessionId)}"
+    val href = GenerateReportEndpoint.sessionReportUrl(info.sessionId)
     // The storyboard HTML is generated on demand by StoryboardEndpoint, so this link is
     // always live — no dependency on a pre-generated `.storyboard.html` in the logs dir.
     val storyboardHref = "/storyboard?session=${urlEncode(sessionId)}"

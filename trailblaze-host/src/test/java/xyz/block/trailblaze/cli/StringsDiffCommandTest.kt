@@ -30,7 +30,7 @@ class StringsDiffCommandTest {
   ): String = buildString {
     append("""{"v":1,"kind":"screen","stepIndex":$stepIndex,"captureId":"shot-$stepIndex.png",""")
     append(""""logType":"AgentDriverLog","timestamp":"2026-09-09T17:04:11Z",""")
-    append(""""deviceWidth":1080,"deviceHeight":1920,"screenId":"id-$stepIndex",""")
+    append(""""deviceWidth":1080,"deviceHeight":1920,"screenContentHash":"hash-$stepIndex",""")
     if (partial) append(""""partialCapture":true,""")
     append(""""strings":[$strings]}""")
   }

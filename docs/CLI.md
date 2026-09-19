@@ -79,19 +79,19 @@ It does not reap device-scoped per-device sessions; use `app --stop` for those.
 | `run` | Run a trail file (.trail.yaml) — execute a scripted test on a device. |
 | `usages` | Find every trail that directly invokes a tool (IDE "Find Usages" for tools). |
 | `session` | Manage the current device session — save it as a replayable trail, inspect steps, end it |
-| `report` | Generate an HTML report for session recordings, plus a best-effort JSON summary, and optionally MP4/GIF/WebP exports for a single session. JSON-only failures log a warning and still exit 0 — HTML is the primary artifact and is what gates the exit code. Animated exports collapse long idle gaps between steps so their length tracks the number of steps, not the session's real wall-clock. The capture window for all three (--gif/--webp/--video) is bounded by the MAX_PLAYBACK_WAIT_MS environment variable (milliseconds, default 600000); if playback overruns it, a best-effort truncated artifact is still written with a warning. |
+| `report` | Generate an HTML report (plus JSON summary, optional MP4/GIF/WebP) for session recordings. |
 | `strings` | Extract the human-visible text a recorded session showed, for localization and copy diffs |
-| `viewer` | Write out the standalone report viewer (one self-contained HTML page) bundled into this binary. Serve it anywhere, or just open it: drop a session archive on the page, or point it at one with ?zip=<archive-url>. Versioned with this CLI, so it always matches the reports this binary generates. |
-| `profile` | Generate the performance-analysis report (an Instruments-style time profiler over each session's tools, LLM calls, timeouts, and idle gaps) for a logs directory. Defaults to the configured logs directory when <logs-dir> is omitted. Writes <logs-dir>/trailblaze_performance_analysis.html. Requires `bun` on PATH. |
-| `otel` | Convert recorded spans to OpenTelemetry. Writes <session>/otel.json (OTLP/JSON) for every session that recorded a trace, and with --post also sends them to an OTLP endpoint. Defaults to the configured logs directory when <dir> is omitted. |
+| `viewer` | Write out the standalone report viewer (one self-contained HTML page). |
+| `profile` | Generate a performance-analysis report (tools, LLM calls, timeouts, idle gaps) for a logs directory. |
+| `otel` | Convert recorded spans to OpenTelemetry (OTLP/JSON files, optionally posted to an endpoint). |
 | `waypoint` | Match named app locations (waypoints) against captured screen state. |
-| `results` | Query the persisted test-result index for a test case. Passing a positional `<case-id>` (e.g. `trailblaze results C12345 --device android-phone`) is equivalent to the explicit `trailblaze results show <case-id>` form — picocli routes the bare case-id straight to the `show` subcommand. |
+| `results` | Query the persisted test-result index for a test case. |
 | `config` | View and set configuration (target app, device defaults, AI provider) |
 | `device` | List and connect devices (Android, iOS, Web) |
 | `show` | Open the multi-device live grid (/devices/all) in your default browser |
 | `app` | Launch the legacy Trailblaze desktop app (use --v2 for Trail Runner or --headless for a daemon-only background service). |
 | `mcp` | Start a Model Context Protocol (MCP) server for AI agent integration |
-| `check` | Validate a trailmap: materialize manifests, type-check TypeScript/JavaScript sources, and run `*.test.ts` unit tests via `bun test`. On first run, scaffolds a minimal package.json at the workspace root if absent so `bun install` can be used as the canonical bootstrap (its `postinstall` hook re-runs `trailblaze check`). |
+| `check` | Validate a trailmap: materialize manifests, type-check its TypeScript, run its `*.test.ts` tests. |
 | `inprocess` | Check an app APK for in-process driver compatibility, and build a test APK that drives it. |
 | `skill` | Print or install the bundled agent skill that teaches a coding agent this CLI |
 | `companion` | Attach a coding agent to Trail Runner while it authors a trail. |
@@ -307,13 +307,13 @@ trailblaze run [OPTIONS] [<<trailFile>>]
 | `--all-devices` | Run each trail on EVERY connected device whose platform the trail supports (its `platform:`/`driver:` for v1, or its `devices:`/recording classifiers for the unified format). The opt-in way to exercise a multi-target trail across platforms in one command. Mutually exclusive with `--device` (passing both is rejected). Connected devices that don't match any supported platform are skipped. | - |
 | `--bind` | Bind a multi-device trail's COMPANION devices for this run: `--bind buyer=emulator-5562`. Repeatable or comma-separated. The names come from the trail's `config.devices:` configuration; the START device is the one `--device` names and must NOT be bound here. Per-run, so two multi-device trails can run concurrently against different device sets on one daemon — which `TRAILBLAZE_DEVICE_BINDINGS` cannot express (it is daemon-wide, and changing it needs a daemon restart). Takes precedence over that env var when passed. | - |
 | `--configuration` | Select which of a trail's `config.devices:` configurations to run when it declares more than one. Per-run, like --bind. Naming a configuration a single-device trail does not declare is an error rather than a silent single-device run. | - |
-| `-a`, `--agent` | Agent implementation name for AI-driven steps: TRAILBLAZE_RUNNER, MULTI_AGENT_V3, or KOOG_STRATEGY_GRAPH. Set it persistently with 'trailblaze config agent'. Default: TRAILBLAZE_RUNNER | - |
+| `-a`, `--agent` | Agent implementation name for AI-driven steps: TRAILBLAZE_RUNNER, MULTI_AGENT_V3, or KOOG_STRATEGY_GRAPH. Set it persistently with 'trailblaze config agent'. Default: KOOG_STRATEGY_GRAPH | - |
 | `--use-recorded-steps` | Three-way switch for replay vs. AI-driven execution:   --use-recorded-steps      Force replay mode (use the trail's `recording:` tools verbatim).   --no-use-recorded-steps   Force AI mode (ignore any recordings; LLM drives each step from `step:` NL).   (unset, default)          Auto-detect: AI mode if no `recording:` blocks present, replay if they are. Use --no-use-recorded-steps to re-run a trail with stale selectors and let the agent re-pick selectors from current page state. | - |
 | `--self-heal` | When a recorded step fails, let AI take over and continue. Overrides the persisted 'trailblaze config self-heal' setting for this run. Omit to inherit the saved setting (opt-in, off by default). | - |
 | `--snapshot-baseline` | Diff this run's `takeSnapshot` captures against a PREVIOUS run instead of checked-in golden files. <ref> is an http(s) URL to a session logs zip (e.g. the CI artifact store's latest_success.zip), a local zip, or an extracted session directory. Snapshots are matched by name; a snapshot missing from the baseline is skipped, a resolvable mismatch above the threshold fails the run, and an unresolvable <ref> fails it too. Alternatively set TRAILBLAZE_SNAPSHOT_BASELINE on the executing process (the daemon for delegated runs). | - |
 | `--snapshot-baseline-threshold` | Pass threshold for --snapshot-baseline: a snapshot passes when its pixel diff percentage is <= this value. Default: 2.0 (or TRAILBLAZE_SNAPSHOT_BASELINE_THRESHOLD when set). | - |
 | `-v`, `--verbose` | Enable verbose output | - |
-| `--driver` | Driver type to use (e.g., PLAYWRIGHT_NATIVE, ANDROID_ONDEVICE_INSTRUMENTATION). Overrides driver from trail config. | - |
+| `--driver` | Driver type to use (e.g., PLAYWRIGHT_NATIVE, ANDROID_ONDEVICE_ACCESSIBILITY). Overrides driver from trail config. | - |
 | `--headless` | Launch the Playwright browser headless (default true). Pass --no-headless or --headless=false to surface a visible window. Equivalent to --show-browser when negated. | - |
 | `--llm` | LLM provider/model shorthand (e.g., openai/gpt-4-1). Mutually exclusive with --llm-provider and --llm-model. | - |
 | `--llm-provider` | LLM provider override (e.g., openai, anthropic, google) | - |
@@ -332,8 +332,8 @@ trailblaze run [OPTIONS] [<<trailFile>>]
 | `--compose-port` | RPC port for Compose driver connections (default: 52600) | - |
 | `--turbo` | Turbo mode: let the Android app under test report when it is idle so the driver waits less after each action, instead of watching for its screen to go quiet. Each wait ends at whichever answer comes first, so this can only make a run faster, never slower. Needs an app signed with a key this build carries a helper for (debug and internal builds; not release or beta) — a run that can't use it says so and runs at normal speed. When neither flag is passed, inherits TRAILBLAZE_TURBO and the saved `trailblaze config turbo` setting. | - |
 | `--capture-video` | Record device screen video for the session. Off by default — video writes large files and sprite extraction is expensive — pass --capture-video to enable it for a run. When neither flag is passed, inherits TRAILBLAZE_CAPTURE_VIDEO and the saved `trailblaze config capture-video` setting. | - |
-| `--capture-logcat` | Capture Android logcat (filtered to the app under test) to <session-dir>/device.log (only takes effect on Android). On by default; use --no-capture-logcat to disable. | - |
-| `--capture-ios-logs` | Capture the iOS Simulator system log via `xcrun simctl spawn log stream` to <session-dir>/device.log (only takes effect on iOS). On by default; the stream is scoped to the app under test (the logcat-equivalent app log, not the system firehose). Use --no-capture-ios-logs to disable. | - |
+| `--capture-logcat` | Capture Android logcat (filtered to the app under test) to <session-dir>/device.log (only takes effect on Android). Recognized fatal crashes are also indexed in <session-dir>/events/crash.ndjson. On by default; use --no-capture-logcat to disable. | - |
+| `--capture-ios-logs` | Capture the iOS Simulator system log via `xcrun simctl spawn log stream` to <session-dir>/device.log (only takes effect on iOS). On by default; the stream is scoped to the app under test (the logcat-equivalent app log, not the system firehose). Recognized fatal crashes are also indexed in <session-dir>/events/crash.ndjson. Use --no-capture-ios-logs to disable. | - |
 | `--capture-network` | Auto-capture network requests/responses to <session-dir>/network.ndjson on supported devices (web today; mobile devices added as engines land). Mirrors the desktop-app "Capture Network Traffic" toggle. On by default; use --no-capture-network to disable. When neither flag is passed, inherits the desktop app's saved setting. | - |
 | `--capture-all` | Enable all capture streams: video, logcat, iOS logs, network (local dev mode) | - |
 | `--test-name` | Override the test name used as the session ID seed. When set, replaces the default name derived from the trail filename. Useful in CI environments where the caller can supply a richer identifier (e.g. including suite/section/case context). | - |
@@ -620,7 +620,7 @@ trailblaze session end [OPTIONS]
 
 ### `trailblaze report`
 
-Generate an HTML report for session recordings, plus a best-effort JSON summary, and optionally MP4/GIF/WebP exports for a single session. JSON-only failures log a warning and still exit 0 — HTML is the primary artifact and is what gates the exit code. Animated exports collapse long idle gaps between steps so their length tracks the number of steps, not the session's real wall-clock. The capture window for all three (--gif/--webp/--video) is bounded by the MAX_PLAYBACK_WAIT_MS environment variable (milliseconds, default 600000); if playback overruns it, a best-effort truncated artifact is still written with a warning.
+Generate an HTML report (plus JSON summary, optional MP4/GIF/WebP) for session recordings. JSON-only failures log a warning and still exit 0 — HTML is the primary artifact and is what gates the exit code. Animated exports collapse long idle gaps between steps so their length tracks the number of steps, not the session's real wall-clock. The capture window for all three (--gif/--webp/--video) is bounded by the MAX_PLAYBACK_WAIT_MS environment variable (milliseconds, default 600000); if playback overruns it, a best-effort truncated artifact is still written with a warning.
 
 **Synopsis:**
 
@@ -653,6 +653,7 @@ trailblaze report [OPTIONS] [<<session-id>>]
 | `--max-size` | Cap each exported artifact (--gif / --video / --webp / --storyboard) at the given byte size. Defaults to 10MB — GitHub's inline-attachment limit — so an export you paste into a PR fits without having to think about it. Accepts plain bytes (1024000) or human-readable suffixes (10MB, 5M, 1.5G); pass `none` (or `0`) for a genuinely uncapped export. After the initial encode, the exporter iteratively re-encodes at smaller viewport widths (1280→1024→720→640→480) until the artifact fits, then stops. If even the readability floor (480px) is still over the cap: an explicitly-passed --max-size fails the export with an actionable error, while the 10MB default keeps the oversized artifact and warns instead — a default you didn't ask for never turns a working export into a failure. Either way the remedies are the same: drop GIF for --webp or --video (both compress dramatically better), or shorten the recorded session (fewer trail steps, or split into multiple sessions). The cap is applied per artifact, so `--gif --webp --max-size=10MB` caps each one independently. | - |
 | `--full-report-payloads` | Embed full event payloads in the interactive report even for sessions that passed, instead of applying the report size budgets (which truncate large successful network bodies and elide repeated intermediate snapshots to keep the report small). Failed sessions always embed full payloads regardless. The on-disk events/ artifacts are never budgeted, so any session can be regenerated in full with this flag at any time. | - |
 | `--share-url` | Bake a canonical hosted URL (http/https) into the interactive report. Its Copy link button then produces deep links against that URL — with the current view, sort, run, and step grafted on as query parameters — no matter where the file is opened from (including file://). Use this when the report is published to a known location, e.g. a CI artifact URL or an internal report server. Without this flag, Copy link uses the browser's own address and only appears on http(s) pages. | - |
+| `-v`, `--verbose` | Show the generator's own progress logs — workspace config loading, tool-class discovery, per-session clock normalisation, and step timings. Suppressed by default so the report paths are the output; turn this on when a report is slow or empty and you need to see which session the generator was working on. | - |
 | `-h`, `--help` | Show this help message and exit. | - |
 | `-V`, `--version` | Print version information and exit. | - |
 
@@ -735,7 +736,7 @@ trailblaze strings diff [OPTIONS] <<baseline.ndjson>> <<candidate.ndjson>>
 
 ### `trailblaze viewer`
 
-Write out the standalone report viewer (one self-contained HTML page) bundled into this binary. Serve it anywhere, or just open it: drop a session archive on the page, or point it at one with ?zip=<archive-url>. Versioned with this CLI, so it always matches the reports this binary generates.
+Write out the standalone report viewer (one self-contained HTML page). Serve it anywhere, or just open it: drop a session archive on the page, or point it at one with ?zip=<archive-url>. Versioned with this CLI, so it always matches the reports this binary generates.
 
 **Synopsis:**
 
@@ -755,7 +756,7 @@ trailblaze viewer [OPTIONS]
 
 ### `trailblaze profile`
 
-Generate the performance-analysis report (an Instruments-style time profiler over each session's tools, LLM calls, timeouts, and idle gaps) for a logs directory. Defaults to the configured logs directory when <logs-dir> is omitted. Writes <logs-dir>/trailblaze_performance_analysis.html. Requires `bun` on PATH.
+Generate a performance-analysis report (tools, LLM calls, timeouts, idle gaps) for a logs directory. An Instruments-style time profiler over each session. Defaults to the configured logs directory when <logs-dir> is omitted. Writes <logs-dir>/trailblaze_performance_analysis.html. Requires `bun` on PATH.
 
 **Synopsis:**
 
@@ -781,7 +782,7 @@ trailblaze profile [OPTIONS] [<<logs-dir>>]
 
 ### `trailblaze otel`
 
-Convert recorded spans to OpenTelemetry. Writes <session>/otel.json (OTLP/JSON) for every session that recorded a trace, and with --post also sends them to an OTLP endpoint. Defaults to the configured logs directory when <dir> is omitted.
+Convert recorded spans to OpenTelemetry (OTLP/JSON files, optionally posted to an endpoint). Writes <session>/otel.json for every session that recorded a trace, and with --post also sends them to an OTLP endpoint. Defaults to the configured logs directory when <dir> is omitted.
 
 **Synopsis:**
 
@@ -1628,7 +1629,7 @@ trailblaze mcp [OPTIONS]
 | Option | Description | Default |
 |--------|-------------|---------|
 | `--http` | Use Streamable HTTP transport instead of STDIO. Starts a standalone HTTP MCP server. | - |
-| `--direct`, `--no-daemon` | Run as an in-process MCP server over STDIO instead of the default proxy mode. Bypasses the Trailblaze daemon and runs everything in a single process. Use this for environments where the HTTP daemon cannot run. | - |
+| `--direct`, `--no-daemon` | Run as an in-process MCP server over STDIO instead of the default proxy mode. Runs everything in a single process instead of proxying to a separate daemon process. This is not a way around the HTTP port: the process still starts the daemon's HTTP server itself when none is running. | - |
 | `-d`, `--device` | Pin this MCP session to a device on startup (e.g. android, android/emulator-5554). Defaults to whatever the launching terminal pinned via `trailblaze device connect`, or `$TRAILBLAZE_DEVICE` if set. | - |
 | `-t`, `--target` | Pin this MCP session to a target app on startup (e.g. default, sampleapp). Only meaningful with --device or $TRAILBLAZE_DEVICE. Defaults to $TRAILBLAZE_TARGET. | - |
 | `-h`, `--help` | Show this help message and exit. | - |
@@ -1638,7 +1639,7 @@ trailblaze mcp [OPTIONS]
 
 ### `trailblaze check`
 
-Validate a trailmap: materialize manifests, type-check TypeScript/JavaScript sources, and run `*.test.ts` unit tests via `bun test`. On first run, scaffolds a minimal package.json at the workspace root if absent so `bun install` can be used as the canonical bootstrap (its `postinstall` hook re-runs `trailblaze check`).
+Validate a trailmap: materialize manifests, type-check its TypeScript, run its `*.test.ts` tests. Type-checking covers TypeScript/JavaScript sources; tests run via `bun test`. On first run, scaffolds a minimal package.json at the workspace root if absent so `bun install` can be used as the canonical bootstrap (its `postinstall` hook re-runs `trailblaze check`).
 
 **Synopsis:**
 

@@ -6,10 +6,10 @@
 # small wording / spacing changes can be intentional or accidental.
 # ----------------------------------------------------------------------
 Usage: trailblaze viewer [-hV] [-o=<file-or-dir>]
-Write out the standalone report viewer (one self-contained HTML page) bundled
-into this binary. Serve it anywhere, or just open it: drop a session archive on
-the page, or point it at one with ?zip=<archive-url>. Versioned with this CLI,
-so it always matches the reports this binary generates.
+Write out the standalone report viewer (one self-contained HTML page).
+Serve it anywhere, or just open it: drop a session archive on the page, or
+point it at one with ?zip=<archive-url>. Versioned with this CLI, so it always
+matches the reports this binary generates.
   -h, --help      Show this help message and exit.
   -o, --output=<file-or-dir>
                   Where to write the viewer. A path ending in .html is used

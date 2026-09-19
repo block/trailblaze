@@ -101,9 +101,36 @@ dev_find_jar() {
   ls -t "$1"/*.jar 2>/dev/null | head -1
 }
 
+# Whether the command about to run needs the JAR to match the current sources.
+# False for the commands that only act on a daemon already running: they are implemented
+# entirely in scripts/trailblaze (curl + lsof) and execute no line of the code a rebuild
+# would produce.
+# Whether this invocation will execute code a rebuild would produce. Takes the whole argv, because
+# a `--help` the launcher answers itself is decided by more than the subcommand.
+dev_jar_needs_fresh_code() {
+  local arg
+  case "${1:-}" in
+    # `stop` and `status` act on a daemon that is already running.
+    stop|status) return 1 ;;
+    # The launcher prints usage for the commands it owns and exits without reaching the JAR. Only
+    # those commands: `run --help` and the rest are answered by the JVM, which needs current code.
+    # This list has to stay in step with the launcher's own help table; a launcher test fails if the
+    # two drift apart.
+    mcp|trailrunner)
+      for arg in "$@"; do
+        case "$arg" in -h | --help) return 1 ;; esac
+      done
+      ;;
+  esac
+  return 0
+}
+
 # Ensure the uber JAR is up-to-date.
 # On success: sets DEV_JAR_PATH and returns 0.
 # On failure: clears DEV_JAR_PATH and returns 1 (caller should fall back to Gradle).
+#
+# Set DEV_JAR_ALLOW_STALE=1 to accept a JAR that already exists even when the sources moved
+# past it. A build is still forced when there is no JAR at all.
 dev_ensure_jar() {
   local jar_dir="$1"
   local jar_path=$(dev_find_jar "$jar_dir")
@@ -112,9 +139,9 @@ dev_ensure_jar() {
   local stored_hash=""
   [ -f "$hash_file" ] && stored_hash=$(cat "$hash_file")
 
-  local need_build=false
+  local need_build=false build_reason=""
   if [ -z "$jar_path" ]; then
-    echo "Building uber JAR (first time, this may take a minute)..." >&2
+    build_reason="Building uber JAR (first time, this may take a minute)..."
     need_build=true
   elif [ -z "$current_hash" ]; then
     # Hash unavailable (repo root not a usable git checkout). Unknown is NOT
@@ -122,11 +149,20 @@ dev_ensure_jar() {
     # that may not even be possible in this environment. Trust the existing JAR.
     echo "Warning: cannot fingerprint sources at $DEV_JAR_REPO_ROOT — using existing JAR without staleness check." >&2
   elif [ "$current_hash" != "$stored_hash" ]; then
-    echo "Source changes detected, rebuilding uber JAR (this may take a minute)..." >&2
+    build_reason="Source changes detected, rebuilding uber JAR (this may take a minute)..."
     need_build=true
   fi
 
+  # Minutes of build for a command that runs none of the built code is bad enough on its own.
+  # Worse: the rebuild below stops the running daemon on its way to the build, so `trailblaze
+  # stop` went on to report "Trailblaze is not running" about the daemon it had just killed.
+  if [ "$need_build" = true ] && [ -n "$jar_path" ] && [ "${DEV_JAR_ALLOW_STALE:-0}" = "1" ]; then
+    need_build=false
+    build_reason=""
+  fi
+
   if [ "$need_build" = true ]; then
+    echo "$build_reason" >&2
     # Stop the daemon BEFORE building — it has stale code and must not survive into the
     # new JAR. It auto-starts on the next command, so this is safe. EXCEPTION: a daemon
     # with in-flight runs is left running (see the busy-daemon guard below); it picks up

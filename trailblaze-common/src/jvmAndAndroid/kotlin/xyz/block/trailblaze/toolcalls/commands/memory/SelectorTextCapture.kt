@@ -27,16 +27,16 @@ internal sealed interface SelectorTextCapture {
  * Shared by [RememberTextBySelectorTrailblazeTool] and [RememberNumberBySelectorTrailblazeTool] —
  * the deterministic, zero-LLM counterparts of the prompt-based `rememberText` / `rememberNumber`,
  * whose locator step always spends a model call and therefore cannot replay on a recording-only
- * leg. Resolution goes through the same [TrailblazeNodeSelectorResolver] as `findMatches` /
+ * leg. Resolution goes through the same [TrailblazeNodeSelectorResolver] as `findSelectorMatches` /
  * `assertVisibleBySelector`. The captured text comes from the field the selector matched on (see
  * [pinnedTextField]), falling back to the cross-driver [MatchDescriptorBuilder.extractIdentity]
- * rule `findMatches` reports as `matchedText` when the selector doesn't name one.
+ * rule `findSelectorMatches` reports as `matchedText` when the selector doesn't name one.
  *
  * A selector that matches more than once is an ERROR rather than a first-match pick: which node
  * won would depend on resolver traversal order, reintroducing the non-determinism this path exists
  * to remove.
  *
- * Point-in-time, like `findMatches` with no `timeoutMs`: it reads the screen as captured, and does
+ * Point-in-time, like `findSelectorMatches` with no `timeoutMs`: it reads the screen as captured, and does
  * not wait for an element to render. Precede it with an assertion that waits (e.g.
  * `assertVisibleBySelector`) when the value appears after a navigation.
  */

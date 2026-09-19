@@ -46,7 +46,10 @@ class RunYamlRequestFactory(
     referrer: TrailblazeReferrer,
     trailFilePath: String? = null,
     useRecordedSteps: Boolean = true,
-    agentImplementation: AgentImplementation = appConfig.agentImplementation,
+    // A never-chosen persisted agent is null (tri-state), so derive the default here rather than
+    // in the config.
+    agentImplementation: AgentImplementation = appConfig.agentImplementation
+      ?: AgentImplementation.DEFAULT,
   ): RunYamlRequest = RunYamlRequest(
     testName = testName,
     yaml = yaml,

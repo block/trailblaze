@@ -292,7 +292,7 @@ class ScreenshotAttachingLlmClientTest {
   }
 
   // ---------------------------------------------------------------------------------------------
-  // onRequestEnd — the per-request boundary hook (wired to SharedScreenStateCapture.clear).
+  // onRequestEnd — the caller-provided lifecycle hook.
   // ---------------------------------------------------------------------------------------------
 
   /** Delegate that always throws, to prove onRequestEnd still fires on the exception path. */

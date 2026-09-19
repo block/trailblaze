@@ -817,6 +817,9 @@ class LogsRepo(
               trailblazeDeviceId = startedStatus?.trailblazeDeviceId,
               trailConfig = startedStatus?.trailConfig,
               durationMs = durationMs,
+              // No log marks an abandonment; the deadline this status was synthesized at is the
+              // only thing that does.
+              endTimestamp = abandonedTimestamp,
               trailFilePath = startedStatus?.trailFilePath,
               hasRecordedSteps = startedStatus?.hasRecordedSteps ?: false,
               selectedDeviceConfiguration = startedStatus?.selectedDeviceConfiguration,
@@ -835,8 +838,11 @@ class LogsRepo(
     // (e.g., on-device instrumentation sessions that only emit Ended logs)
     val firstLog = allLogs.first()
     val referenceLog = sessionStartedLog ?: firstLog
-    val durationMs = lastSessionStatusLog.timestamp.toEpochMilliseconds() -
-      referenceLog.timestamp.toEpochMilliseconds()
+    // The session's own counter first — it starts when the session is minted, which on a device
+    // runner is before the pre-trail setup that the Started log comes after — and the log span only
+    // for an end status that carries no duration. See [SessionInfo.durationMs].
+    val durationMs = (lastSessionStatusLog.sessionStatus as? SessionStatus.Ended)?.durationMs?.takeIf { it > 0 }
+      ?: (lastSessionStatusLog.timestamp.toEpochMilliseconds() - referenceLog.timestamp.toEpochMilliseconds())
 
     return SessionInfo(
       sessionId = referenceLog.session,
@@ -849,6 +855,8 @@ class LogsRepo(
       trailblazeDeviceId = startedStatus?.trailblazeDeviceId,
       trailConfig = startedStatus?.trailConfig,
       durationMs = durationMs,
+      endTimestamp = (lastSessionStatusLog.sessionStatus as? SessionStatus.Ended)
+        ?.let { lastSessionStatusLog.timestamp },
       trailFilePath = startedStatus?.trailFilePath,
       hasRecordedSteps = startedStatus?.hasRecordedSteps ?: false,
       selectedDeviceConfiguration = startedStatus?.selectedDeviceConfiguration,

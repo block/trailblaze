@@ -53,8 +53,9 @@ class McpCommand : Callable<Int> {
     names = ["--direct", "--no-daemon"],
     description = [
       "Run as an in-process MCP server over STDIO instead of the default proxy mode. " +
-        "Bypasses the Trailblaze daemon and runs everything in a single process. " +
-        "Use this for environments where the HTTP daemon cannot run."
+        "Runs everything in a single process instead of proxying to a separate daemon process. " +
+        "This is not a way around the HTTP port: the process still starts the daemon's HTTP " +
+        "server itself when none is running."
     ],
   )
   var direct: Boolean = false
@@ -122,9 +123,10 @@ class McpCommand : Callable<Int> {
         },
       )
     } else if (direct) {
-      // Direct STDIO transport (opt-in via --direct/--no-daemon) — runs an in-process
-      // MCP server without the HTTP daemon proxy. Use for environments where the
-      // daemon cannot run.
+      // Direct STDIO transport (opt-in via --direct/--no-daemon) — runs the MCP server in this
+      // process instead of proxying to a separate daemon process. It is not an escape from the
+      // HTTP port: `ensureServerRunning()` below still starts the daemon's HTTP server here when
+      // nothing else holds it, so a port that cannot be bound fails this mode too.
       //
       // Capture the current stdout BEFORE redirecting — DesktopLogFileWriter may have
       // already wrapped it with a tee (JSON-RPC goes to both stdout and log file).

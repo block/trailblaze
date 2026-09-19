@@ -15,7 +15,7 @@ import { VIEWER_ROUTE_KEYS } from './run-report-route';
 import { inspectorKeyForNodeId, isSelectorAnalyzableTree, loadSelectorEngine, loadSelectorEngineFromChunk, mismatchVizHtml, nodeIdForInspectorKey, selectorSuggestionsHtml } from './run-report-selectors';
 import { buildReportTraceModel, createReportTraceModelResolver, failureAnchorIndex as traceFailureAnchorIndex, type ReportTraceGroup, type ReportTraceModel } from './run-report-trace-model';
 import { fitCamera, focusCamera, hubCounterScale, tweenCamera, unionBox, wirePlan, zoomedCamera, type TrailCamera, type WireBox, type WireHub } from './run-report-trail-camera';
-import { buildTrailMatrix, pruneIdleTrailCells, traceDeviceLanes, trailIdentity, trailJoinFor, trailViewScopes, type DeviceLaneTrace, type TrailCell, type TrailJoin, type TrailRow } from './run-report-trail-model';
+import { buildTrailMatrix, pruneIdleTrailCells, traceDeviceLaneCount, traceDeviceLanes, trailIdentity, trailJoinFor, trailViewScopes, type DeviceLaneTrace, type TrailCell, type TrailJoin, type TrailRow } from './run-report-trail-model';
 import { aspectHeld, buildReplayTimeline, clampTime, fmtReplayClock, laneMarksAt, laneStateAt, laneStops, markWindowMs, nextStop, replayable, replayTickSeconds, videoClipRate, videoClipTimeAt, type ReplayLane, type ReplayLaneFailure, type ReplayTimeline } from './run-report-trail-replay';
 import { formatUsd } from './report-format';
 import { findAttachmentRefs } from '../../../report/run-report-events';
@@ -110,19 +110,34 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     try { const url = new URL(String(value || '')); return url.protocol === 'https:' || url.protocol === 'http:' ? url.href : null; }
     catch (e) { return null; }
   };
-  // safeHref for the lightbox's attachment link, whose value is ROOT-RELATIVE. Link mode stores
-  // `/static/<id>/<path>` for every attachment MIME (run-payload.js), and non-media types are
-  // exactly the ones that reach that branch — so without a base it is dead for its only real
-  // producers: one-argument `new URL('/static/…')` throws and it falls through to the path-only
-  // note. In a standalone file:// report the base resolves to file:, correctly refused.
+  // The address to judge "same origin" against, which is deliberately NOT document.baseURI: a
+  // `<base href>` inside a crafted bundle sets baseURI to any origin it names, so an origin read
+  // back off baseURI only ever agrees with itself and proves nothing. `location` is the one
+  // address the document cannot author, so it wins wherever the frame has a real http(s) one.
+  // A srcdoc embed (Trail Runner's zip-report iframe) has no address of its own — there baseURI
+  // is both the only answer and an honest one, because the host page chose the bundle.
+  const originBase = () => {
+    const here = typeof location !== 'undefined' && /^https?:$/.test(String(location.protocol || '')) ? String(location.href || '') : '';
+    if (here) return here;
+    return typeof document !== 'undefined' && document.baseURI ? String(document.baseURI) : '';
+  };
+  // safeHref for values that are ROOT-RELATIVE, resolved against this document's base and required
+  // to land back on this document's own origin. Link mode stores `/static/<id>/<path>` for every
+  // attachment MIME (run-payload.js), and the daemon writes its all-runs report as `/report` — so
+  // without a base both are dead: one-argument `new URL('/static/…')` throws.
   //
-  // Same-origin is REQUIRED, not incidental: that link downloads rather than navigates (see
-  // attachmentBodyHtml), and `download` is ignored cross-origin — so an absolute off-origin URL
-  // in a crafted bundle would silently become the navigation this is here to prevent.
-  const sameOriginAttachmentHref = (value: unknown) => {
+  // Same-origin is REQUIRED, not incidental, for both callers. The attachment link downloads
+  // rather than navigates (see attachmentBodyHtml) and `download` is ignored cross-origin, so an
+  // absolute off-origin URL in a crafted bundle would silently become the navigation this is here
+  // to prevent; the Compare link is a navigation outright. In a standalone file:// report the base
+  // resolves to file: and is correctly refused.
+  const sameOriginHref = (value: unknown) => {
     const uri = String(value || '');
     if (!uri) return null;
-    const base = typeof document !== 'undefined' && document.baseURI ? document.baseURI : null;
+    // One address governs BOTH steps. Resolving against the authored base while validating
+    // against the real one would let a same-origin `<base href>` still redirect a relative value
+    // within the origin, and leaves two answers to "where is this document" to drift apart.
+    const base = originBase();
     if (!base) return null;
     try {
       const url = new URL(uri, base);
@@ -210,6 +225,37 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     return scopeKey != null && scopeKey !== '' && trailScopes().has(scopeKey);
   };
   const trailViewAvailable = () => trailViewAvailableFor(null);
+  // What the run's own Trail view entry point promises. A trail with several runs stages one lane
+  // per run; a lone run splits into one lane per DEVICE when the session drove several (see
+  // trailDeviceLanes), and is otherwise still a trail — its map, grid, and replay are the whole
+  // point of loading a recording — so the lone run keeps its entry point.
+  const trailEntryTitle = (runs: number[]) => {
+    if (runs.length > 1) return 'Compare this trail across devices, step by step';
+    const only = SESSIONS[runs[0]];
+    // Counts the lanes rather than building them: traceDeviceLanes clones every objective row per
+    // device, and only whether there is more than one is read here — on a header that re-renders
+    // on every tab click, step selection, and live event. The count comes from the lane splitter's
+    // own module so the promise and the split cannot drift apart.
+    return traceDeviceLaneCount(((only && only.trace) || []) as any) > 1
+      ? "Compare this run's devices, step by step"
+      : 'See this run as a trail — map, grid, and replay';
+  };
+  // The detail header's entry into the Trail view, for the run being read. This is the ONLY way
+  // into the view for a single-run document (a daemon-served `/report?session=` page, a loaded
+  // recording): the run index that hosts the per-trail entry points does not exist there, and the
+  // Compare action needs a second run. Absent when the run cannot be staged (no trail identity,
+  // a link-out stub, a hydrated run with no trace).
+  const detailTrailButton = (session: number) => {
+    const key = trailKey(SESSIONS[session]);
+    // One scope map for both the availability test and the tooltip: each rebuild walks every
+    // session in the document, and a 500-run CI report renders this header constantly.
+    const runs = key ? trailScopes().get(key) : null;
+    // Membership, not merely presence. A SKIPPED run is dropped from its trail's lane list while
+    // the key survives for the trail's other runs, so testing the key alone puts a button on a run
+    // whose own stage excludes it — one click and the reader is looking at somebody else's run.
+    if (!runs || runs.indexOf(session) < 0) return '';
+    return `<button class="btn" type="button" data-goto-trail="${esc(key)}" title="${esc(trailEntryTitle(runs))}">Trail view</button>`;
+  };
   // The scoped trail's own name, for every surface that labels the stage. SESSIONS[0] is some other
   // trail entirely in a many-trail report.
   const trailScopeTitle = () => {
@@ -317,6 +363,12 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   // ordinary, and the usable pair is exactly what the reader wants compared.
   const comparableRuns = () => SESSIONS.map((_, i) => i).filter((i) => stageable(SESSIONS[i]));
   const compareViewAvailable = () => comparableRuns().length > 1;
+  // A run's platform and device identity, read straight off meta. Hoisted above the boot-time
+  // route apply: a `?view=compare&basesession=<id>` link picks the baseline's same-trail partner while the
+  // route is applied, before the index's own helpers further down have initialized.
+  const runPlatform = (s) => String((s.meta && s.meta.platform) || '').trim();
+  const runDeviceType = (s) => String((s.meta && s.meta.deviceType) || '');
+  const runDeviceClassifier = (s) => String((s.meta && s.meta.deviceClassifier) || '');
   const sameTrailComparePartner = (session: number) => {
     const key = trailKey(SESSIONS[session]);
     if (!key || comparableRuns().indexOf(session) < 0) return null;
@@ -527,6 +579,17 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
           else if (el.id === `tb-sprites-${exportSession}`) el.id = 'tb-sprites-0';
           else el.remove();
         });
+      } else {
+        // A FULL chunked export ships #tb-index verbatim, so the daemon's all-runs URL has to be
+        // taken out here. It is root-relative and means something only on the host that served
+        // this document: re-hosted on a CI artifact server, `/report` resolves against THAT host
+        // and the header offers a Compare that goes nowhere. (The single-run branch above rebuilds
+        // the index from scratch and never carries it.)
+        const shipped = readJsonScript('tb-index');
+        if (shipped && shipped.allRunsUrl) {
+          const { allRunsUrl: _offHost, ...rest } = shipped;
+          index.textContent = toInertJson(rest);
+        }
       }
       // The chunked clone ships its #tb-session-<i> payloads verbatim, so the blob: rule the legacy
       // branch below applies has to be applied to them too: a report rendered with the object URLs
@@ -553,6 +616,9 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     // playing its recording after an export.
     // blob: attachment values (the zip pipeline's object URLs) are page-lifetime references, so
     // they get the same treatment: stripped from the download, kept on the live page.
+    // The document is rebuilt key by key below rather than spread from the source, which is also
+    // what keeps the daemon's host-bound all-runs URL out of the download — the chunked branch
+    // above has to delete it explicitly. Keep it that way: spreading the source would ship it.
     const exported = sessions.map((s) => {
       const att = withoutRuntimeAttachments(s.attachments);
       return (s.videoClip || att.changed) ? { ...s, videoClip: null, attachments: att.attachments } : s;
@@ -737,7 +803,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   // `kid` narrows the step selection to one folded child dispatch (index into the row's children):
   // the preview pane shows that dispatch's own frame and its args panel expands — how a batched
   // step's every interaction is reachable (WASM-report parity). Null selects the row itself.
-  const st = { view: MULTI ? 'index' : 'detail', session: 0, tab: 'timeline', step: 0, kid: null, llmSel: 0, tlStreams: [], tlEventKinds: allTimelineEventKinds(), tlMenuOpen: false, tlEventMenuOpen: false, trailheadOpen: true, trailOpen: true, stepsOpen: {}, kidsOpen: {}, lightboxAll: false, lightboxZoom: 1, runGroup: 'status', runSort: 'original', runSearch: '', idxOpen: [], compareMode: false, playing: false, vSpeed: 1, pageTransition: '', trailMode: 'map', trailDir: 'v', trailAll: false, trailRowsOpen: {}, trailCam: null, trailT: -1, trailLane: null, trailSpeed: 10, trailLanesOff: {}, trailScope: null as string | null, trailPick: null as number[] | null, pick: [] as number[], backTo: '', cmpBase: defaultComparePair()[0] || 0, cmpVs: defaultComparePair()[1] || 1, cmpGapsOpen: {}, cmpEventsOpen: {} as Record<string, boolean>, cmpStreamsOpen: {} as Record<string, boolean>, cmpJumpAt: {} as Record<string, number>, cmpTab: 'screens', cmpStream: null as string | null, cmpEventGroup: 'stream' as 'stream' | 'step', cmpEventStep: null as string | null, cmpEventPlace: 0, cmpEventSearch: '', cmpEventDiffOnly: true };
+  const st = { view: MULTI ? 'index' : 'detail', session: 0, tab: 'timeline', step: 0, kid: null, llmSel: 0, tlStreams: [], tlEventKinds: allTimelineEventKinds(), tlMenuOpen: false, tlEventMenuOpen: false, trailheadOpen: true, trailOpen: true, stepsOpen: {}, kidsOpen: {}, lightboxAll: false, lightboxZoom: 1, runGroup: 'status', runSort: 'original', runSearch: '', idxOpen: [], compareMode: false, playing: false, vSpeed: 1, pageTransition: '', trailMode: 'map', trailDir: 'v', trailAll: false, trailRowsOpen: {}, trailCam: null, trailT: -1, trailLane: null, trailSpeed: 10, trailLanesOff: {}, trailScope: null as string | null, trailPick: null as number[] | null, pick: [] as number[], backTo: '', cmpBase: defaultComparePair()[0] || 0, cmpVs: defaultComparePair()[1] || 1, cmpGapsOpen: {}, cmpEventsOpen: {} as Record<string, boolean>, cmpStreamsOpen: {} as Record<string, boolean>, cmpJumpAt: {} as Record<string, number>, cmpTab: 'screens', cmpStream: null as string | null, cmpEventGroup: 'stream' as 'stream' | 'step', cmpEventStep: null as string | null, cmpEventPlace: 0, cmpEventSearch: '', cmpEventDiffOnly: true, cmpMissing: null as { missingIds: string[]; wantedIds: { base: string | null; vs: string | null }; shownBase: number; shownVs: number; widenable: boolean } | null };
   const resetEventNavigator = () => {
     st.cmpStream = null;
     st.cmpEventGroup = 'stream';
@@ -749,6 +815,12 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     st.cmpStreamsOpen = {};
     st.cmpJumpAt = {};
   };
+  // The reader has now chosen a pair themselves, so the "the run your link asked for isn't here"
+  // notice is spent — including when their choice lands back ON the pair it was stamped with,
+  // which is exactly what leaving compare and re-entering it does. Only the handlers that can
+  // reproduce the stamped pair need this; the side pickers always change the pair, so the stamp
+  // retires the notice there on its own.
+  const clearSubstitutionNotice = () => { st.cmpMissing = null; };
   // A one-render entry marker lets the compare controls explain where they came from without
   // replaying their entrance every time a checkbox updates the selected count.
   let compareModeEntering = false;
@@ -1055,7 +1127,19 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     // Absent stays absent — substituting 0 and 1 here would make "the address named no pair" look
     // identical to "the address named runs 0 and 1", and the default-pair rule could never run.
     if (p.get('view') === 'compare') {
-      const side = (key: string) => (p.get(key) == null ? null : Number(p.get(key)));
+      // A side is a session INDEX in this document (`base`/`vs`, what every URL this viewer
+      // writes), or a session ID under its own key (`basesession`/`vssession`). A link written by
+      // ANOTHER document — the daemon's single-session page handing off to its all-runs report —
+      // cannot know this document's indices, and they renumber as sessions arrive anyway.
+      // Separate keys rather than one key told apart by shape: a session id may be all digits
+      // (`SessionId` only requires alphanumerics), so shape cannot decide, and a rule that can be
+      // wrong here silently opens two runs nobody asked for.
+      const side = (key: string) => {
+        const id = p.get(`${key}session`);
+        if (id) return id;
+        const raw = p.get(key);
+        return raw != null && /^\d+$/.test(raw) ? Number(raw) : null;
+      };
       return {
         view: 'compare', base: side('base'), vs: side('vs'), pick: p.get('pick') || '',
         tab: p.get('tab') || null, lane: p.get('lane') || null, stream: p.get('stream') || null,
@@ -1176,10 +1260,66 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
         // nearest comparable run rather than rendering a pane with no payload.
         const runs = comparableRuns();
         const fallback = defaultComparePair();
-        const pickRun = (value, fallbackIndex) => (runs.indexOf(value) >= 0 ? value : fallbackIndex);
-        st.cmpBase = pickRun(r.base, fallback[0]);
-        st.cmpVs = pickRun(r.vs, fallback[1]);
-        if (st.cmpVs === st.cmpBase) st.cmpVs = runs.find((i) => i !== st.cmpBase);
+        // A side named by session id resolves to the run carrying that id.
+        const resolveSide = (value: number | string | null): number | null => {
+          if (typeof value !== 'string') return value;
+          const at = SESSIONS.findIndex((s) => s.meta && s.meta.sessionId === value);
+          return at >= 0 ? at : null;
+        };
+        // A named run this document can't stage takes the fallback like any out-of-range index —
+        // but that substitution is announced: the reader asked for a named run and would otherwise
+        // be shown two unrelated runs as though they were the comparison they clicked for. Both
+        // sides are collected, and "can't stage" covers a run that is absent AND one that is here
+        // but undiffable (a link-out stub, a skipped run) — indistinguishable to the reader.
+        const staged = (value: number | string | null) => {
+          const at = resolveSide(value);
+          return at != null && runs.indexOf(at) >= 0 ? at : null;
+        };
+        const baseRun = staged(r.base);
+        const vsRun = staged(r.vs);
+        // A Set because a link can name the SAME absent id on both sides; listing it twice
+        // would read as two missing runs.
+        const missingIds = [...new Set([
+          typeof r.base === 'string' && baseRun == null ? r.base : null,
+          typeof r.vs === 'string' && vsRun == null ? r.vs : null,
+        ].filter((id): id is string => id != null))];
+        st.cmpBase = baseRun ?? fallback[0];
+        // A link that names only its baseline wants THAT run compared: against the same trail on
+        // another device when there is one — the pair the run's own header would open — rather
+        // than against whatever the document-wide default pair happens to be. A link whose OTHER
+        // side named a run this document can't stage is the same request with a dead half.
+        const partner = vsRun == null && baseRun != null ? sameTrailComparePartner(baseRun) : null;
+        st.cmpVs = vsRun ?? partner ?? fallback[1];
+        if (st.cmpVs === st.cmpBase) {
+          // The SUBSTITUTED side yields, not always side B. A link that named one run and lost the
+          // other keeps the run it named on the side it named it for, rather than having it shunted
+          // across the diff because a fallback happened to land on the same run.
+          const spare = runs.find((i) => i !== st.cmpBase);
+          if (baseRun == null && vsRun != null) st.cmpBase = spare;
+          else st.cmpVs = spare;
+        }
+        // Stamped with the pair it explains, so the notice cannot outlive that pair. This is the
+        // backstop, not the whole mechanism: a reader who leaves compare and comes back lands on
+        // the stamped pair again, so the handlers that establish a pair clear the notice outright
+        // (see clearSubstitutionNotice). The stamp covers the handler nobody remembered to touch.
+        // `wantedIds` is what the LINK named on each side, resolved or not — the widening link in
+        // the notice rebuilds itself from it. Kept for the resolved side too: indices renumber in a
+        // wider report, so naming only the missing run would leave the other side on a stranger.
+        //
+        // `widenable` separates the two things `staged` folds together. A run that is HERE but
+        // undiffable reads to the reader exactly like an absent one, so both go in the notice —
+        // but only an absent run is something a wider report can supply. The wider report carries
+        // the same stub, so offering the retry for it spends a navigation to arrive at the same
+        // sentence.
+        st.cmpMissing = missingIds.length
+          ? {
+            missingIds,
+            wantedIds: { base: typeof r.base === 'string' ? r.base : null, vs: typeof r.vs === 'string' ? r.vs : null },
+            shownBase: st.cmpBase,
+            shownVs: st.cmpVs,
+            widenable: missingIds.some((id) => resolveSide(id) == null),
+          }
+          : null;
         const picked = [...new Set(String(r.pick || '').split(',')
           .filter((n) => n.trim() !== '')
           .map((n) => Number(n))
@@ -1217,7 +1357,16 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
         st.cmpEventSearch = st.cmpTab === 'events' ? r.eventq || '' : '';
         st.cmpEventDiffOnly = st.cmpTab === 'events' ? !r.eventall : true;
         ensureScopeChunks(st.trailPick, pickToken(st.trailPick));
-      } else if (MULTI) st.view = 'index';
+      } else {
+        // A compare link that names a run THIS document holds opens that run. The run page's own
+        // Compare hand-off names its session id, so a reader who follows it into a report that
+        // turned out to have nothing to diff against still lands on the run they came from,
+        // rather than on an index that may not even list it.
+        const named = typeof r.base === 'string' ? r.base : typeof r.vs === 'string' ? r.vs : null;
+        const at = named ? SESSIONS.findIndex((x) => x.meta && x.meta.sessionId === named) : -1;
+        if (at >= 0) openSession(at);
+        else if (MULTI) st.view = 'index';
+      }
       return;
     }
     if (r.view === 'index' && MULTI) {
@@ -1319,6 +1468,63 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   // (`trailblaze report --share-url …`, e.g. CI pointing at the hosted artifact), which wins over
   // the browser address and keeps the affordance available from any viewing context.
   const SHARE_URL = safeHref(RAW.shareUrl) || '';
+  // The multi-run report this document's runs also belong to — set by the daemon on a page it
+  // serves scoped to one session. A single-run document has nothing in it to Compare against, so
+  // its Compare is a link into that report, opening on this run by session id (an index would
+  // point at a different run once more sessions land there).
+  // Resolved against this document's own base and REQUIRED to stay on its origin: the daemon
+  // writes it root-relative (`/report`), so it must resolve against wherever the reader reached
+  // the daemon — a tunnel, another host — and a crafted bundle must not be able to turn the
+  // header's Compare into a link off-site. In a standalone file:// report the base is file:,
+  // correctly refused: there is no daemon behind such a file.
+  const ALL_RUNS_URL = sameOriginHref(RAW.allRunsUrl) || '';
+  const allRunsCompareHref = (session: number) => {
+    const id = ((SESSIONS[session] || {}).meta || {}).sessionId;
+    if (MULTI || !ALL_RUNS_URL || !id) return '';
+    // Grafted with URL/searchParams rather than string concatenation: the sanitized value keeps
+    // whatever query and fragment it arrived with, and appending `?…` to a URL that already has a
+    // `#` buries the parameters inside the fragment where nothing reads them.
+    try {
+      const url = new URL(ALL_RUNS_URL);
+      // This link owns the whole view it opens: a stray `vs=` on the configured URL would pin
+      // side B to an arbitrary run of a report we know nothing about, and a stray `pick=` would
+      // land the reader on an N-run overview instead of the comparison. So every key the viewer
+      // reads is dropped; what the daemon put there for itself (`limit=all`) survives.
+      routeKeys.forEach((key) => url.searchParams.delete(key));
+      url.searchParams.set('view', 'compare');
+      url.searchParams.set('basesession', String(id));
+      return url.toString();
+    } catch (e) { return ''; }
+  };
+  // The retry offered by compare's substitution notice: the same daemon report, grafted with the
+  // pair the reader's link asked for. The daemon sets `allRunsUrl` on a capped all-runs page too,
+  // and only when widening would really add runs, so its presence IS the answer to "can anything
+  // here be widened" — a question this page's own address cannot answer, since a copy re-hosted on
+  // an artifact server keeps every query parameter and grows no runs.
+  //
+  // Named by session id on both sides, because the address a reader is looking at by then has been
+  // canonicalized to `base`/`vs` INDICES, and indices renumber in a wider report.
+  const widerRunsCompareHref = (stamp: NonNullable<typeof st.cmpMissing>) => {
+    if (!ALL_RUNS_URL || !stamp.widenable) return '';
+    const sideId = (wanted: string | null, shown: number) => wanted || String(((SESSIONS[shown] || {}).meta || {}).sessionId || '');
+    const base = sideId(stamp.wantedIds.base, stamp.shownBase);
+    const vs = sideId(stamp.wantedIds.vs, stamp.shownVs);
+    // Both sides or no link. Naming one and leaving the other to the widened report's own default
+    // pair is the unannounced substitution this notice exists to announce — arriving, this time,
+    // with nothing to announce it. (A side can go unnamed: `sessionId` is optional on run meta.)
+    if (!base || !vs) return '';
+    try {
+      const url = new URL(ALL_RUNS_URL);
+      routeKeys.forEach((key) => url.searchParams.delete(key));
+      url.searchParams.set('view', 'compare');
+      url.searchParams.set('basesession', base);
+      // One id named twice would resolve on both sides of the wider report, leave nothing missing,
+      // and pair that run with a stranger silently. Name the side once and let the wider report
+      // choose its partner, the way it does for any link that names a baseline and no rival.
+      if (vs !== base) url.searchParams.set('vssession', vs);
+      return url.toString();
+    } catch (e) { return ''; }
+  };
   // Embedded, the address IS this frame's `report-live.html?...&chrome=none` URL: it opens, but it
   // is a header-less document rather than the run page the host would send someone to, and the
   // host owns sharing its own runs. A baked share URL still wins, from any context.
@@ -1892,8 +2098,11 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     // render a Download control that can never resolve.
     if (/^blob:/i.test(uri)) {
       if (/["'<>`\\\s]/.test(uri)) return null;
-      // Origin comes from document.baseURI, the same source sameOriginAttachmentHref uses.
-      const base = typeof document !== 'undefined' && document.baseURI ? document.baseURI : null;
+      // Judged against the same address sameOriginHref uses, not the authored base. The origin
+      // comparison is repeated inline rather than delegated because this branch must accept the
+      // opaque `blob:null/<uuid>` a file:// page mints, which sameOriginHref's http(s)-only gate
+      // correctly refuses.
+      const base = originBase();
       if (!base) return null;
       // Parse the WHOLE blob: URL, not its inner half. `trailblaze viewer` opens the standalone
       // HTML over file://, where createObjectURL mints `blob:null/<uuid>` — and `null/<uuid>` is
@@ -1902,7 +2111,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       // still rejects a foreign `blob:https://elsewhere/...`.
       try { return new URL(uri).origin === new URL(base).origin ? uri : null; } catch (e) { return null; }
     }
-    return sameOriginAttachmentHref(uri);
+    return sameOriginHref(uri);
   };
   const attachmentBodyHtml = (ref) => {
     // Own properties only: a path like `constructor` would otherwise read Object.prototype's own
@@ -3095,7 +3304,6 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   // The well-known `owner` metadata key: a run's owning group, rendered as the row subtitle and
   // the section key for the "Owner" sort.
   const runOwner = (s) => String((s.meta && s.meta.metadata && s.meta.metadata.owner) || '').trim();
-  const runPlatform = (s) => String((s.meta && s.meta.platform) || '').trim();
   // A run's device identity, in two flavors. The INSTANCE leg (`meta.device` — a simulator UDID or
   // adb serial) names one concrete device. Retry groups use it together with the LANE leg, because
   // one CI worker can execute several device classes; sharing an instance id must not collapse a
@@ -3113,8 +3321,6 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   // payloads generated before deviceClassifier existed; those columns still get composed with their
   // platform below.
   const runDeviceInstance = (s) => String((s.meta && (s.meta.device || s.meta.deviceClassifier || s.meta.deviceType)) || '');
-  const runDeviceType = (s) => String((s.meta && s.meta.deviceType) || '');
-  const runDeviceClassifier = (s) => String((s.meta && s.meta.deviceClassifier) || '');
   const runLane = (s) => String((s.meta && (s.meta.deviceClassifier || s.meta.deviceType || s.meta.device)) || '');
   // Real step / tool-call counts come from the trace (traceStepCount/traceToolCallCount in
   // run-report-extract — shared with buildMultiReportHtml so the run list and detail view always
@@ -4912,6 +5118,28 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     const degradedNote = degradedRuns.length
       ? `<div class="cmpdegraded" role="alert"><strong>Comparison is incomplete.</strong> Run ${degradedRuns.map((i) => i + 1).join(', ')} ${degradedRuns.length === 1 ? 'could not be loaded' : 'could not be loaded'}. Reload the report or regenerate it before treating missing data as agreement.</div>`
       : '';
+    // The link named a run this report cannot stage — the daemon's Compare hand-off after that
+    // run aged out of the all-runs window, most often. Two other runs are shown instead, and
+    // saying so is the whole point: an unannounced substitution reads as the requested comparison.
+    // Shown only while the pair it was stamped for is still on screen.
+    const stamp = st.cmpMissing && st.cmpMissing.shownBase === st.cmpBase && st.cmpMissing.shownVs === st.cmpVs ? st.cmpMissing : null;
+    const missing = stamp ? stamp.missingIds : null;
+    // A LINK, not an instruction to go edit the address: by the time this is read the address has
+    // been canonicalized to `base`/`vs` INDICES (see routeParams), so a reader told to widen the
+    // report by hand gets the run they came for loaded but NOT selected.
+    //
+    // Withheld when embedded, where the host owns navigation and the anchor would take its frame
+    // out of the shell it is showing — the same reason shareLinkAvailable() excludes it.
+    const widenHref = stamp && !EMBEDDED ? widerRunsCompareHref(stamp) : '';
+    // Priced, because it is: the daemon's own banner for the same request calls it "slower, much
+    // larger", and one click is a lower bar than hand-editing an address was.
+    const widenLink = widenHref ? ` <a href="${esc(widenHref)}">Try again over every run this daemon holds</a> (slower, much larger).` : '';
+    // No live-region role. The notice is rebuilt on every compare render — a tab click, a picker
+    // change — so announcing it each time is noise, and a control inside a live region is read
+    // inconsistently. It is prose the reader meets in document order, like any other paragraph.
+    const missingNote = missing
+      ? `<div class="cmpmissingrun">${missing.length > 1 ? 'The runs' : 'The run'} this link asked for (${missing.map((id) => `<code>${esc(id)}</code>`).join(', ')}) ${missing.length > 1 ? "aren't" : "isn't"} in this report, so two other runs are compared below.${widenLink}</div>`
+      : '';
     // Compressed payloads inflate lazily; kick every compared run's inflations and re-render when
     // they land. Pair comparisons still pass exactly A and B through this same path.
     // Pending means inflation hasn't SETTLED — a failed inflate settles with null, and asking the
@@ -5512,7 +5740,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
         <div class="title-row detailtitle comparetitle"><div class="detailedge"><button class="back" type="button" data-back aria-label="Back to runs" title="Back to runs">${BACK_ICON_SVG}</button></div>${multiRun ? `<div class="runidentity"><h1>${compareTitle}</h1></div>` : `<div class="comparetitleheading"><h1>${compareTitle}</h1></div><div class="cmppickers comparetitlepickers">${picker('base', st.cmpBase, 'A')}<button class="btn cmpswap" type="button" data-cmp-swap aria-label="Swap A and B" title="Swap A and B">${COMPARE_ICON_SVG}</button>${picker('vs', st.cmpVs, 'B')}</div>`}</div>
         ${tabs}
       </header>
-      <main class="cmpmain"><div class="indexshell trailshellwide">${degradedNote}${crossTrailNote}${body}</div></main>`;
+      <main class="cmpmain"><div class="indexshell trailshellwide">${missingNote}${degradedNote}${crossTrailNote}${body}</div></main>`;
   };
 
   const render = (preserveTimelineScroll = false) => {
@@ -5630,6 +5858,9 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     const detailOutcome = indexOutcome(D);
     const detailOutcomeLabel = indexOutcomeLabel(detailOutcome);
     const detailComparePartner = sameTrailComparePartner(st.session);
+    // Built once: it parses and rewrites a URL, and the header asks both whether there is one and
+    // what it is.
+    const detailAllRunsCompare = allRunsCompareHref(st.session);
     const lightboxStepFrameCount = groupTrace().filter((group) => [group.header, ...group.items]
       .some((t) => t && ((t.screenshotFile && D.shots[t.screenshotFile])
         || (t.children || []).some((c) => c.screenshotFile && D.shots[c.screenshotFile])))).length;
@@ -5679,7 +5910,11 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     const header = EMBEDDED
       ? `<header class="detailheader notitle"><div class="tabrow">${tabsNav}<div class="detailactions">${exportMenu}</div></div></header>`
       : `<header class="detailheader">
-        <div class="title-row detailtitle${MULTI ? '' : ' noback'}">${MULTI ? `<div class="detailedge"><button class="back" type="button" data-back aria-label="All runs" title="All runs">${BACK_ICON_SVG}</button></div>` : ''}<div class="runidentity"><span class="idxstatus" role="img" aria-label="${esc(detailOutcomeLabel)}" title="${esc(detailOutcomeLabel)}"><span class="idxstatusdot ${esc(detailOutcome)}" aria-hidden="true"></span></span><h1>${esc(m.title)}</h1></div><div class="detailactions">${detailComparePartner == null ? '' : `<button class="btn idxcompare" type="button" data-goto-compare="${st.session}" title="Compare with another device in this trail">${COMPARE_ICON_SVG}<span>Compare</span></button>`}${renderThemeToggle()}${exportMenu}</div></div>
+        <div class="title-row detailtitle${MULTI ? '' : ' noback'}">${MULTI ? `<div class="detailedge"><button class="back" type="button" data-back aria-label="All runs" title="All runs">${BACK_ICON_SVG}</button></div>` : ''}<div class="runidentity"><span class="idxstatus" role="img" aria-label="${esc(detailOutcomeLabel)}" title="${esc(detailOutcomeLabel)}"><span class="idxstatusdot ${esc(detailOutcome)}" aria-hidden="true"></span></span><h1>${esc(m.title)}</h1></div><div class="detailactions">${detailTrailButton(st.session)}${detailComparePartner != null
+          ? `<button class="btn idxcompare" type="button" data-goto-compare="${st.session}" title="Compare with another device in this trail">${COMPARE_ICON_SVG}<span>Compare</span></button>`
+          : detailAllRunsCompare
+            ? `<a class="btn idxcompare" href="${esc(detailAllRunsCompare)}" title="Compare with another recent run">${COMPARE_ICON_SVG}<span>Compare</span></a>`
+            : ''}${renderThemeToggle()}${exportMenu}</div></div>
         ${tabsNav}
       </header>`;
     root.innerHTML = `
@@ -6983,6 +7218,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       st.cmpVs = picked[1];
       st.cmpTab = 'screens';
       st.cmpGapsOpen = {};
+      clearSubstitutionNotice();
       resetEventNavigator();
       st.view = 'compare'; st.pageTransition = 'forward'; writeRoute(false);
       ensureScopeChunks(picked, pickToken(picked));
@@ -7024,6 +7260,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       st.cmpBase = runs[0];
       st.cmpVs = runs[1];
       st.cmpTab = 'screens';
+      clearSubstitutionNotice();
       resetEventNavigator();
       st.view = 'compare'; st.pageTransition = 'forward'; writeRoute(false);
       ensureScopeChunks(runs, pickToken(runs));
@@ -7058,6 +7295,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       st.trailScope = null;
       st.trailLanesOff = {};
       st.cmpTab = 'screens';
+      clearSubstitutionNotice();
       resetEventNavigator();
       stopTimeline(); st.view = 'compare'; st.pageTransition = 'forward'; writeRoute(false); render(); window.scrollTo({ top: 0 });
     });

@@ -30,7 +30,7 @@ class VisibleStringsDiffTest {
     action = "tap",
     deviceWidth = 1080,
     deviceHeight = 1920,
-    screenId = "id-$stepIndex",
+    screenContentHash = "hash-$stepIndex",
     partialCapture = partialCapture,
     repeatOfStepIndex = repeatOf,
     strings = texts.map { ExtractedString(text = it, source = VisibleStringSource.TEXT) } +
@@ -46,7 +46,7 @@ class VisibleStringsDiffTest {
       action = "tap",
       deviceWidth = 1080,
       deviceHeight = 1920,
-      screenId = "id-$stepIndex",
+      screenContentHash = "hash-$stepIndex",
       strings = strings.map { ExtractedString(text = it.first, source = it.second) },
     )
 
@@ -55,6 +55,15 @@ class VisibleStringsDiffTest {
       run = VisibleStringsRunLine(session = "s", locale = locale),
       screens = screens.toList(),
     )
+
+  @Test
+  fun `a visible strings file with the old hash name still parses`() {
+    val parsed = VisibleStringsDiff.parse(
+      """{"kind":"screen","stepIndex":0,"captureId":"shot-0.png","logType":"AgentDriverLog","timestamp":"2026-09-09T17:04:11Z","deviceWidth":1080,"deviceHeight":1920,"screenId":"legacy-hash"}""",
+    )
+
+    assertEquals("legacy-hash", parsed.screens.single().screenContentHash)
+  }
 
   @Test
   fun `a step whose text changed reports what went and what arrived`() {

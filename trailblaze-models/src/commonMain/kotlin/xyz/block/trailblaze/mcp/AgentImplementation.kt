@@ -6,8 +6,9 @@ import kotlinx.serialization.Serializable
  * Agent implementation to use for UI automation.
  *
  * This controls which architecture handles the agent loop:
- * - [TRAILBLAZE_RUNNER]: Legacy YAML-based implementation (stable, well-tested)
+ * - [TRAILBLAZE_RUNNER]: Legacy YAML-based implementation retained for explicit selection
  * - [MULTI_AGENT_V3]: Modern multi-agent architecture with inner/outer agent separation
+ * - [KOOG_STRATEGY_GRAPH]: Default Koog strategy-graph implementation
  */
 @Serializable
 enum class AgentImplementation {
@@ -20,7 +21,7 @@ enum class AgentImplementation {
    * - Produces detailed logs (TrailblazeLlmRequestLog, TrailblazeToolLog)
    * - Is battle-tested in production
    *
-   * This is the stable option for backward compatibility.
+   * This legacy option remains available for explicit selection and backward compatibility.
    */
   TRAILBLAZE_RUNNER,
 
@@ -46,9 +47,8 @@ enum class AgentImplementation {
    * tool dispatch, and (over time) replanning / recovery / history compression — with
    * Trailblaze owning the domain (screen state, drivers, deterministic replay).
    *
-   * Opt-in and non-default: selected via the `trailblaze.agent` instrumentation arg, the
-   * desktop run request, or the settings dropdown. Lets us build and A/B the Koog-native
-   * loop against [TRAILBLAZE_RUNNER] per session without changing anyone's default path.
+   * This is the default agent. [TRAILBLAZE_RUNNER] remains available for explicit selection via
+   * the CLI, the `trailblaze.agent` instrumentation arg, desktop run requests, and MCP requests.
    *
    * Intended successor to [MULTI_AGENT_V3] — add opt-in, prove via eval, then collapse the
    * hand-rolled loops onto this one.
@@ -58,9 +58,9 @@ enum class AgentImplementation {
 
   companion object {
     /** Name of the default agent, usable in annotation parameters that require a const. */
-    const val DEFAULT_NAME = "TRAILBLAZE_RUNNER"
+    const val DEFAULT_NAME = "KOOG_STRATEGY_GRAPH"
 
     /** Global default agent implementation. Change this to switch the default everywhere. */
-    val DEFAULT = TRAILBLAZE_RUNNER
+    val DEFAULT = KOOG_STRATEGY_GRAPH
   }
 }

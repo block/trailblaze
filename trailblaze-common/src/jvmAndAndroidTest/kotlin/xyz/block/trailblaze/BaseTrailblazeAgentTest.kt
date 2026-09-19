@@ -805,7 +805,7 @@ class BaseTrailblazeAgentTest {
     assertThat(toolLogs[0].exceptionMessage).isEqualTo("subprocess transport died")
   }
 
-  // ── SnapshotCache integration (PR adding findMatches) ──
+  // ── SnapshotCache integration ──
 
   // Query-shaped stub: invokes [xyz.block.trailblaze.toolcalls.SnapshotCache.snapshot] using the
   // context's provider and records the returned state. Implements

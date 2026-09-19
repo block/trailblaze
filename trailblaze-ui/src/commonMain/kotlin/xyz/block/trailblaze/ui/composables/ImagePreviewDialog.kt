@@ -45,6 +45,8 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import xyz.block.trailblaze.api.AgentDriverAction
+import xyz.block.trailblaze.ui.images.ScreenshotDiagnostics
+import xyz.block.trailblaze.ui.images.rememberScreenshotFailure
 
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
@@ -64,6 +66,9 @@ fun ImagePreviewDialog(
   
   // Hover state for animations
   var isHovered by remember { mutableStateOf(false) }
+
+  // Keyed on the model so reopening the dialog on a different screenshot tries again.
+  val failure = rememberScreenshotFailure(resetKey = imageModel, pane = "Screenshot preview")
 
   // Dimensions state for button constraints
   var containerWidth by remember { mutableStateOf(0f) }
@@ -185,81 +190,110 @@ fun ImagePreviewDialog(
           imageWidth = finalWidth.value
           imageHeight = finalHeight.value
 
-          // Use BoxWithConstraints to get the exact image area for overlay positioning
-          BoxWithConstraints(
-            modifier = Modifier
-              .width(finalWidth)
-              .height(finalHeight)
-              .onPointerEvent(PointerEventType.Enter) { isHovered = true }
-              .onPointerEvent(PointerEventType.Exit) { isHovered = false }
-              .pointerInput(Unit) {
-                detectTransformGestures { _, pan, zoom, _ ->
-                  scale = (scale * zoom).coerceIn(0.5f, 5f) // Limit zoom between 50% and 500%
-                  offsetX += pan.x
-                  offsetY += pan.y
-                  // Apply panning constraints
-                  constrainPanning(maxWidth.value, maxHeight.value, finalWidth.value, finalHeight.value)
-                }
-              }
-              .onPointerEvent(PointerEventType.Scroll) { event ->
-                val scrollDelta = event.changes.firstOrNull()?.scrollDelta?.y ?: 0f
-                val position = event.changes.firstOrNull()?.position
-                if (scrollDelta != 0f && position != null) {
-                  val zoomFactor = if (scrollDelta > 0) 0.9f else 1.1f
-                  // Use the BoxWithConstraints maxWidth/maxHeight for container dimensions
-                  zoomAtPosition(zoomFactor, position.x, position.y, maxWidth.value, maxHeight.value)
-                  // Apply panning constraints after zoom
-                  constrainPanning(maxWidth.value, maxHeight.value, finalWidth.value, finalHeight.value)
-                }
-              }
-              .graphicsLayer(
-                scaleX = scale,
-                scaleY = scale,
-                translationX = offsetX,
-                translationY = offsetY
+          val cause = failure.cause
+          if (cause != null) {
+            // Said in the dialog because that is the only place the reader is looking; otherwise
+            // the zoom controls appear broken. The annotation is dropped with the image — it would
+            // be pointing at nothing.
+            //
+            // Deliberately outside the zoom/pan layer and the gesture handlers below: inside them
+            // the buttons and a drag would scale and slide the message until the fixed frame cut it
+            // off, which is the same "zoom is broken" read this message exists to prevent.
+            Box(
+              modifier = Modifier
+                // Not `finalWidth`/`finalHeight`: those are derived from the device size, and a
+                // step recorded with no device size makes them 0 — a frame that renders nothing at
+                // all, which is the failure mode this branch exists to replace.
+                .width(finalWidth.coerceAtLeast(minOf(MIN_MESSAGE_SIZE, availableWidth)))
+                .height(finalHeight.coerceAtLeast(minOf(MIN_MESSAGE_SIZE, availableHeight)))
+                .background(MaterialTheme.colorScheme.surfaceVariant),
+              contentAlignment = Alignment.Center,
+            ) {
+              SelectableText(
+                text = ScreenshotDiagnostics.messageForCause(cause),
+                modifier = Modifier.padding(24.dp),
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
               )
-          ) {
-            // Base image that exactly fills this container
-            AsyncImage(
-              model = imageModel,
-              contentDescription = "Screenshot Preview",
+            }
+          } else {
+            // Use BoxWithConstraints to get the exact image area for overlay positioning
+            BoxWithConstraints(
               modifier = Modifier
                 .width(finalWidth)
-                .height(finalHeight),
-              contentScale = ContentScale.FillBounds
-            )
-
-            // Overlay click point if provided
-            if (clickX != null && clickY != null && deviceWidth > 0 && deviceHeight > 0) {
-              val xRatio = clickX.coerceAtLeast(0).toFloat() / deviceWidth.toFloat()
-              val yRatio = clickY.coerceAtLeast(0).toFloat() / deviceHeight.toFloat()
-
-              // Calculate click point position using the exact display dimensions
-              val centerX = finalWidth * xRatio
-              val centerY = finalHeight * yRatio
-
-              ScreenshotAnnotation(
-                centerX = centerX,
-                centerY = centerY,
-                maxWidth = finalWidth,
-                maxHeight = finalHeight,
-                deviceWidth = deviceWidth,
-                deviceHeight = deviceHeight,
-                action = action,
-                isHovered = isHovered
+                .height(finalHeight)
+                .onPointerEvent(PointerEventType.Enter) { isHovered = true }
+                .onPointerEvent(PointerEventType.Exit) { isHovered = false }
+                .pointerInput(Unit) {
+                  detectTransformGestures { _, pan, zoom, _ ->
+                    scale = (scale * zoom).coerceIn(0.5f, 5f) // Limit zoom between 50% and 500%
+                    offsetX += pan.x
+                    offsetY += pan.y
+                    // Apply panning constraints
+                    constrainPanning(maxWidth.value, maxHeight.value, finalWidth.value, finalHeight.value)
+                  }
+                }
+                .onPointerEvent(PointerEventType.Scroll) { event ->
+                  val scrollDelta = event.changes.firstOrNull()?.scrollDelta?.y ?: 0f
+                  val position = event.changes.firstOrNull()?.position
+                  if (scrollDelta != 0f && position != null) {
+                    val zoomFactor = if (scrollDelta > 0) 0.9f else 1.1f
+                    // Use the BoxWithConstraints maxWidth/maxHeight for container dimensions
+                    zoomAtPosition(zoomFactor, position.x, position.y, maxWidth.value, maxHeight.value)
+                    // Apply panning constraints after zoom
+                    constrainPanning(maxWidth.value, maxHeight.value, finalWidth.value, finalHeight.value)
+                  }
+                }
+                .graphicsLayer(
+                  scaleX = scale,
+                  scaleY = scale,
+                  translationX = offsetX,
+                  translationY = offsetY
+                )
+            ) {
+              // Base image that exactly fills this container
+              AsyncImage(
+                model = imageModel,
+                contentDescription = "Screenshot Preview",
+                modifier = Modifier
+                  .width(finalWidth)
+                  .height(finalHeight),
+                contentScale = ContentScale.FillBounds,
+                onError = failure.onError,
               )
-            } else if (action is AgentDriverAction.Swipe) {
-              // For swipe gestures, always show annotation in center even without click coordinates
-              ScreenshotAnnotation(
-                centerX = finalWidth / 2,
-                centerY = finalHeight / 2,
-                maxWidth = finalWidth,
-                maxHeight = finalHeight,
-                deviceWidth = deviceWidth,
-                deviceHeight = deviceHeight,
-                action = action,
-                isHovered = isHovered
-              )
+
+              // Overlay click point if provided
+              if (clickX != null && clickY != null && deviceWidth > 0 && deviceHeight > 0) {
+                val xRatio = clickX.coerceAtLeast(0).toFloat() / deviceWidth.toFloat()
+                val yRatio = clickY.coerceAtLeast(0).toFloat() / deviceHeight.toFloat()
+
+                // Calculate click point position using the exact display dimensions
+                val centerX = finalWidth * xRatio
+                val centerY = finalHeight * yRatio
+
+                ScreenshotAnnotation(
+                  centerX = centerX,
+                  centerY = centerY,
+                  maxWidth = finalWidth,
+                  maxHeight = finalHeight,
+                  deviceWidth = deviceWidth,
+                  deviceHeight = deviceHeight,
+                  action = action,
+                  isHovered = isHovered
+                )
+              } else if (action is AgentDriverAction.Swipe) {
+                // For swipe gestures, always show annotation in center even without click coordinates
+                ScreenshotAnnotation(
+                  centerX = finalWidth / 2,
+                  centerY = finalHeight / 2,
+                  maxWidth = finalWidth,
+                  maxHeight = finalHeight,
+                  deviceWidth = deviceWidth,
+                  deviceHeight = deviceHeight,
+                  action = action,
+                  isHovered = isHovered
+                )
+              }
             }
           }
         }
@@ -328,3 +362,7 @@ fun ImagePreviewDialog(
   }
 }
 
+/**
+ * Enough of a frame to hold a sentence when the device size the layout is derived from is missing.
+ */
+private val MIN_MESSAGE_SIZE = 240.dp

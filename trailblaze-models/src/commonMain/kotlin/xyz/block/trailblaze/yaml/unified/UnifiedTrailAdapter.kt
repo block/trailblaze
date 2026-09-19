@@ -41,6 +41,12 @@ import xyz.block.trailblaze.yaml.VerificationStep
 object UnifiedTrailAdapter {
 
   /**
+   * The `narrate` argument for a merge that renders rather than writes — see
+   * [mergeRecordedClassifier]. Nothing reaches disk, so there is no decision to announce.
+   */
+  val SILENT: (String) -> Unit = {}
+
+  /**
    * NL stand-in for a recording that captured tools but no objective — the interactive recorder's
    * raw capture, before "Generate Trail" replaces it with real per-step prose. Every unified step
    * needs a `step:`, and the placeholder names itself as one so an author who saves without
@@ -844,6 +850,12 @@ object UnifiedTrailAdapter {
    *   then scoped to the window: recorded step `i` aligns to existing step `stepWindow.first + i`,
    *   and steps outside the window keep this classifier's recordings untouched. Null means the
    *   recording covers the whole trail (the ordinary save-back).
+   * @param narrate where the merge's data-affecting decisions are announced (prose replaced, a
+   *   classifier's recording cleared, trailhead tools relocated). Defaults to the terminal, where
+   *   a person saving a recording needs to see what their save did. A caller that is merging to
+   *   RENDER rather than to write — the report builds every past session's preview this way —
+   *   passes [SILENT]: nothing is being changed on disk, so there is no decision to report, and
+   *   one line per session buries the report's own output.
    */
   fun mergeRecordedClassifier(
     existing: UnifiedTrail?,
@@ -851,6 +863,23 @@ object UnifiedTrailAdapter {
     classifier: String,
     selectedDeviceConfiguration: String?,
     stepWindow: IntRange?,
+  ): UnifiedTrail = mergeRecordedClassifier(
+    existing,
+    recordedItems,
+    classifier,
+    selectedDeviceConfiguration,
+    stepWindow,
+    narrate = { Console.info(it) },
+  )
+
+  /** [mergeRecordedClassifier] with an explicit narration sink — see the `narrate` parameter. */
+  fun mergeRecordedClassifier(
+    existing: UnifiedTrail?,
+    recordedItems: List<TrailYamlItem>,
+    classifier: String,
+    selectedDeviceConfiguration: String?,
+    stepWindow: IntRange?,
+    narrate: (String) -> Unit,
   ): UnifiedTrail {
     require(selectedDeviceConfiguration == null || selectedDeviceConfiguration == classifier) {
       "A configuration session's recording is keyed by its configuration name: merging under " +
@@ -879,11 +908,11 @@ object UnifiedTrailAdapter {
     // A trailhead slot holds one tool per classifier, but a live run can record several tools for
     // step 0 — so map the recording onto that shape before anything below reads it (see
     // [withSingleToolTrailhead]).
-    val items = withSingleToolTrailhead(recordedItems, classifier, stepWindow)
+    val items = withSingleToolTrailhead(recordedItems, classifier, stepWindow, narrate)
     val recordedConfig = items
       .filterIsInstance<TrailYamlItem.ConfigTrailItem>()
       .firstOrNull()?.config
-    val recordedPrompts = recordedStepsFrom(items, classifier)
+    val recordedPrompts = recordedStepsFrom(items, classifier, narrate)
     val recordedTrailhead = items
       .filterIsInstance<TrailYamlItem.TrailheadTrailItem>()
       .firstOrNull()?.trailhead
@@ -944,6 +973,10 @@ object UnifiedTrailAdapter {
           config.locale?.let { "locale `$it`" },
         )
         if (settings.isEmpty()) return@let
+        // [Console.log], not [narrate]. Every narrated line reports a data-affecting decision —
+        // prose replaced, a recording cleared — and this one reports that nothing was pinned,
+        // which is the contract working. Narration defaults to [Console.info], which quiet mode
+        // never suppresses, so routing it here would put a line on every save to spare one.
         Console.log(
           "[unified-record] `$classifier` names a multi-device configuration, so this run's " +
             "${settings.joinToString(" and ")} are not pinned on it — a configuration's device " +
@@ -989,7 +1022,7 @@ object UnifiedTrailAdapter {
           // had none, and it says so in its own text. Existing-prose-wins would otherwise freeze it
           // into the file forever: every later re-record carrying real prose would lose to it.
           val canon = if (isSteplessPlaceholder(base.step) && !isSteplessPlaceholder(recorded.prompt)) {
-            Console.info(
+            narrate(
               "[unified-record] step ${i + 1} on classifier `$classifier`: replacing the recorded-" +
                 "actions placeholder with \"${recorded.prompt.take(60)}\".",
             )
@@ -1001,7 +1034,7 @@ object UnifiedTrailAdapter {
             // info (not log): a re-record whose NL diverged from the on-disk step keeps the existing
             // prose — the user should see that their recorded tools were bound to different wording,
             // even on a normal (non-verbose) run where Console.log is suppressed.
-            Console.info(
+            narrate(
               "[unified-record] step ${i + 1} NL drift on classifier `$classifier`: keeping existing " +
                 "\"${canon.step.take(60)}\" over recorded \"${recorded.prompt.take(60)}\".",
             )
@@ -1009,7 +1042,7 @@ object UnifiedTrailAdapter {
           if (canon.verify != (recorded is VerificationStep)) {
             // Same policy as NL drift: the existing kind is device-agnostic canon and wins; the
             // user should see that this device recorded the step under the other keyword.
-            Console.info(
+            narrate(
               "[unified-record] step ${i + 1} kind drift on classifier `$classifier`: keeping " +
                 "existing `${if (canon.verify) "verify" else "step"}:` over recorded " +
                 "`${if (recorded is VerificationStep) "verify" else "step"}:`.",
@@ -1022,13 +1055,13 @@ object UnifiedTrailAdapter {
           if (recordedTools.isNotEmpty() && canon.recordable) {
             canon.withClassifier(classifier, recordedTools)
           } else {
-            if (recordedTools.isNotEmpty()) logDroppedRecordableFalse(i, classifier)
+            if (recordedTools.isNotEmpty()) logDroppedRecordableFalse(i, classifier, narrate)
             // Replace semantics with nothing to put back: the run reached this step and recorded no
             // tools for it, so the leg it had is gone and replay falls through to the LLM there.
             // Deliberate (a re-record replaces what it covered), but data-affecting, so it says so
             // rather than leaving the step quietly emptied.
             if (recordedTools.isEmpty() && existing?.trail?.getOrNull(i)?.recordings?.get(classifier).orEmpty().isNotEmpty()) {
-              Console.info(
+              narrate(
                 "[unified-record] step ${i + 1}: this run recorded no tools for classifier " +
                   "`$classifier`, so the recording it had there is now cleared.",
               )
@@ -1040,7 +1073,7 @@ object UnifiedTrailAdapter {
         recorded != null -> {
           // Same invariant on an appended step: a recordable:false step keeps no recordings.
           val attach = recordedTools.isNotEmpty() && recorded.recordable
-          if (recordedTools.isNotEmpty() && !recorded.recordable) logDroppedRecordableFalse(i, classifier)
+          if (recordedTools.isNotEmpty() && !recorded.recordable) logDroppedRecordableFalse(i, classifier, narrate)
           UnifiedTrailStep(
             step = recorded.prompt,
             verify = recorded is VerificationStep,
@@ -1110,6 +1143,7 @@ object UnifiedTrailAdapter {
     recordedItems: List<TrailYamlItem>,
     classifier: String,
     stepWindow: IntRange?,
+    narrate: (String) -> Unit,
   ): List<TrailYamlItem> {
     val trailheadIndex = recordedItems.indexOfFirst { it is TrailYamlItem.TrailheadTrailItem }
     if (trailheadIndex < 0) return recordedItems
@@ -1122,7 +1156,7 @@ object UnifiedTrailAdapter {
     // decision the user should see on a normal run, same policy as the drift lines below. It names
     // the recordable:false outcome because that is where the move does not survive, and the drop
     // line that follows there only speaks of "the recorded tools" for the step as a whole.
-    Console.info(
+    narrate(
       "[unified-record] the trailhead recorded ${tools.size} tools on classifier `$classifier`, and " +
         "a trailhead holds one — keeping `${tools.first().name}` there and moving " +
         "${relocated.joinToString { "`${it.name}`" }} into the trail's first step, in recorded order " +
@@ -1154,6 +1188,7 @@ object UnifiedTrailAdapter {
   private fun recordedStepsFrom(
     recordedItems: List<TrailYamlItem>,
     classifier: String,
+    narrate: (String) -> Unit,
   ): List<PromptStep> {
     val promptSteps = recordedItems
       .filterIsInstance<TrailYamlItem.PromptsTrailItem>()
@@ -1166,7 +1201,7 @@ object UnifiedTrailAdapter {
     // info (not log): where a recording's tools ended up is a data-affecting decision, same policy
     // as the drift/dropped-tool lines below.
     if (promptSteps.isEmpty()) {
-      Console.info(
+      narrate(
         "[unified-record] ${steplessTools.size} tool(s) recorded with no objective on classifier " +
           "`$classifier`; saving them as one step titled \"$STEPLESS_TOOLS_STEP\".",
       )
@@ -1174,7 +1209,7 @@ object UnifiedTrailAdapter {
         DirectionStep(step = STEPLESS_TOOLS_STEP, recording = ToolRecording(tools = steplessTools)),
       )
     }
-    Console.info(
+    narrate(
       "[unified-record] ${steplessTools.size} tool(s) recorded before the first objective on " +
         "classifier `$classifier`; prepending them to step 1's recording.",
     )
@@ -1215,10 +1250,10 @@ object UnifiedTrailAdapter {
     )
   }
 
-  private fun logDroppedRecordableFalse(stepIndex: Int, classifier: String) {
+  private fun logDroppedRecordableFalse(stepIndex: Int, classifier: String, narrate: (String) -> Unit) {
     // info (not log): dropping recorded tools is a data-affecting decision the user should see even
     // on a normal run, not just under --verbose.
-    Console.info(
+    narrate(
       "[unified-record] step ${stepIndex + 1} is recordable:false (always-LLM); dropping the recorded " +
         "`$classifier` tools to preserve that intent (recordings and recordable:false are mutually exclusive).",
     )

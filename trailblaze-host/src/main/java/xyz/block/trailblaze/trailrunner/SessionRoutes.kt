@@ -79,8 +79,11 @@ internal suspend fun buildSessionAnalyticsResponse(deps: TrailRunnerDeps, id: St
     if (info == null) {
       emptyList()
     } else {
-      val startMs = info.timestamp.toEpochMilliseconds()
-      val endMs = if (info.durationMs > 0) startMs + info.durationMs else System.currentTimeMillis()
+      // Anchored on the session's end, because `durationMs` counts from the mint and `timestamp` is
+      // the first log — adding one to the other overshoots the end by whatever setup ran before
+      // that log, which both drops the setup's own events and pulls in events from after the run.
+      val endMs = info.endTimestamp?.toEpochMilliseconds() ?: System.currentTimeMillis()
+      val startMs = if (info.durationMs > 0) endMs - info.durationMs else info.timestamp.toEpochMilliseconds()
       runCatching { analyticsProvider(startMs - WINDOW_PAD_MS, endMs + WINDOW_PAD_MS) }
         .onFailure { Console.log("[TrailRunnerEndpoint] analytics provider failed for $id: ${it.message}") }
         .getOrDefault(emptyList())

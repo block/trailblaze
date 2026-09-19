@@ -58,15 +58,9 @@ class VideoPlaybackState internal constructor() {
    * the speed picker. #3064 originally bumped to 4x, #3083 took it from 2x → 4x after
    * dogfooding showed the size tradeoff dominates day-to-day.
    *
-   * **Exporter contract**: this value is read by the autoplay loop in
-   * [xyz.block.trailblaze.ui.tabs.session.SessionCombinedView] and dictates how fast
-   * `?autoplay=1` advances the scrubber. The CLI exporters
-   * `xyz.block.trailblaze.cli.ReportGifExporter` and
-   * `xyz.block.trailblaze.cli.ReportVideoExporter` capture in wall-clock and wait on
-   * `globalThis.__tbPlaybackEnded` (see
-   * [xyz.block.trailblaze.ui.signalExportPlaybackEnded]) — changing this default
-   * directly affects capture wall-clock duration and per-frame visual delta. Coordinate
-   * with the exporter tests before flipping it again.
+   * Only the desktop app reads this. `trailblaze report --video` exports from the TypeScript
+   * run-report renderer in `:trailblaze-report`, which has its own playback speed — changing
+   * this value does not affect an export.
    */
   internal var playbackSpeed: Float by mutableStateOf(4f)
 

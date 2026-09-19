@@ -1,12 +1,18 @@
 package xyz.block.trailblaze.capture
 
+import java.io.File
+import java.nio.file.Files
 import xyz.block.trailblaze.capture.logcat.AndroidLogcatCapture
 import xyz.block.trailblaze.capture.logcat.IosLogCapture
+import xyz.block.trailblaze.capture.model.CaptureArtifact
+import xyz.block.trailblaze.capture.model.CaptureType
 import xyz.block.trailblaze.capture.video.AndroidVideoCapture
 import xyz.block.trailblaze.capture.video.IosVideoCapture
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
+import xyz.block.trailblaze.events.SessionEvents
 import kotlin.test.Test
 import kotlin.test.assertContains
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -18,6 +24,49 @@ import kotlin.test.assertTrue
  * an exposed test seam if this becomes a maintenance problem.
  */
 class CaptureSessionTest {
+
+  @Test
+  fun `stopAll indexes a crash only after the app-scoped log stream stops`() {
+    val sessionDir = Files.createTempDirectory("capture-session-test").toFile()
+    try {
+      val logStream = FakeLogStream()
+      val session = CaptureSession(
+        streams = listOf(logStream),
+        options = CaptureOptions.NONE,
+        platform = TrailblazeDevicePlatform.ANDROID,
+      )
+
+      session.startAll(sessionDir, "emulator-5554", "com.example.store")
+      val crashEvents = File(sessionDir, "${SessionEvents.DIR_NAME}/crash.ndjson")
+      assertFalse(crashEvents.exists())
+
+      session.stopAll()
+
+      assertTrue(logStream.stopped)
+      assertTrue(crashEvents.isFile)
+    } finally {
+      sessionDir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun `stopAll ignores crash lines from an unscoped log stream`() {
+    val sessionDir = Files.createTempDirectory("capture-session-test").toFile()
+    try {
+      val session = CaptureSession(
+        streams = listOf(FakeLogStream(isAppScoped = false)),
+        options = CaptureOptions.NONE,
+        platform = TrailblazeDevicePlatform.ANDROID,
+      )
+
+      session.startAll(sessionDir, "emulator-5554", appId = null)
+      session.stopAll()
+
+      assertFalse(File(sessionDir, "${SessionEvents.DIR_NAME}/crash.ndjson").exists())
+    } finally {
+      sessionDir.deleteRecursively()
+    }
+  }
 
   private fun streamsOf(session: CaptureSession): List<CaptureStream> {
     val field = CaptureSession::class.java.getDeclaredField("streams").apply { isAccessible = true }
@@ -161,5 +210,30 @@ class CaptureSessionTest {
       TrailblazeDevicePlatform.ANDROID,
     )
     assertNull(session)
+  }
+
+  private class FakeLogStream(
+    override val isAppScoped: Boolean = true,
+  ) : CaptureStream, AppScopedCaptureStream {
+    override val type = CaptureType.LOGCAT
+    private lateinit var outputFile: File
+    var stopped = false
+      private set
+
+    override fun start(sessionDir: File, deviceId: String, appId: String?) {
+      outputFile = File(sessionDir, "device.log").apply {
+        writeText("1772846522.234  123  123 E AndroidRuntime: FATAL EXCEPTION: main")
+      }
+    }
+
+    override fun stop(options: CaptureOptions): CaptureArtifact {
+      stopped = true
+      return CaptureArtifact(
+        file = outputFile,
+        type = type,
+        startTimestampMs = 1772846522234L,
+        endTimestampMs = 1772846522234L,
+      )
+    }
   }
 }

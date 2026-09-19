@@ -8,14 +8,13 @@ import xyz.block.trailblaze.api.TrailblazeNodeSelectorResolver
 import xyz.block.trailblaze.api.toMatchDescriptor
 
 /**
- * Resolving one selector against one captured tree — shared by [FindMatchesTrailblazeTool] and
- * [FindSelectorMatchesTrailblazeTool] so the two query tools cannot drift apart on what
- * "matches" means.
+ * Resolving one selector against one captured tree — the per-selector step
+ * [FindSelectorMatchesTrailblazeTool] applies N times to a single capture.
  *
- * It exists as a separate object rather than a method on either tool because the sameness IS the
- * point: `findSelectorMatches([a, b])` has to answer exactly what `findMatches(a)` and
- * `findMatches(b)` would have, or callers migrating to the batched tool to save captures would be
- * silently changing their predicates at the same time.
+ * It stays a separate object rather than a method on the tool because the sameness across arities
+ * IS the point: `findSelectorMatches([a, b])` has to answer exactly what two one-selector calls
+ * would have, or batching to save captures would silently change a caller's predicates at the same
+ * time. `FindSelectorMatchesTrailblazeToolTest` pins that equivalence.
  */
 internal object SelectorMatchResolution {
 

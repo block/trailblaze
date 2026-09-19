@@ -29,9 +29,9 @@ import xyz.block.trailblaze.util.Console
   name = "otel",
   mixinStandardHelpOptions = true,
   description = [
-    "Convert recorded spans to OpenTelemetry. Writes <session>/otel.json (OTLP/JSON) for every " +
-      "session that recorded a trace, and with --post also sends them to an OTLP endpoint. " +
-      "Defaults to the configured logs directory when <dir> is omitted.",
+    "Convert recorded spans to OpenTelemetry (OTLP/JSON files, optionally posted to an endpoint).",
+    "Writes <session>/otel.json for every session that recorded a trace, and with --post also " +
+      "sends them to an OTLP endpoint. Defaults to the configured logs directory when <dir> is omitted.",
   ],
 )
 class OtelCommand : Callable<Int> {

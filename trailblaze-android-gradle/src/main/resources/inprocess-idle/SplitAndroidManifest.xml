@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="target.application.id.stamped.at.build.time"
+    split="trailblaze_inprocess_idle"
+    android:isFeatureSplit="true">
+
+  <!-- A split APK of the app under test: `package` is stamped to the app's applicationId and the
+       versionCode is injected at link time from the exact app build it will be installed next to
+       (the package manager rejects a split whose versionCode differs from the base). The provider
+       is the only content — the platform creates it at every process start of the app, which is
+       what starts the idle server. Signed with the app's own key, like every split must be. -->
+  <application android:hasCode="true">
+    <provider
+        android:name="xyz.block.trailblaze.inprocessidle.InProcessIdleProvider"
+        android:authorities="target.application.id.stamped.at.build.time.trailblaze.inprocessidle"
+        android:exported="false"
+        android:initOrder="1000" />
+  </application>
+</manifest>

@@ -111,6 +111,18 @@ object PerTrailmapClientDtsEmitter {
     resolvedTrailmaps: List<ResolvedTrailmap>,
     catalog: List<ToolSetCatalogEntry> = TrailblazeToolSetCatalog.defaultEntries(),
     analyzer: ScriptedToolDefinitionAnalyzer? = resolveAnalyzerOrNull(),
+    /**
+     * Trailmap directories that resolve outside this root get no files (see
+     * [trailmapDirIsInsideWorkspace]). `null` means "these trailmaps belong to no workspace" and
+     * exists for tests that emit into bare temp directories.
+     *
+     * Deliberately has NO default. The ownership filter is the only thing stopping a workspace
+     * from writing its whole tool catalog into another checkout, and a default would let a new
+     * production caller lose it by saying nothing — the failure mode being a file in someone
+     * else's repo, which nobody reviews this call site for. Making it explicit costs each caller
+     * one named argument and makes "no workspace" a decision rather than an omission.
+     */
+    workspaceRoot: Path?,
   ): List<Path> {
     if (resolvedTrailmaps.isEmpty()) return emptyList()
     val trailmapsById = resolvedTrailmaps.associateBy { it.manifest.id }
@@ -150,6 +162,10 @@ object PerTrailmapClientDtsEmitter {
 
     return resolvedTrailmaps.mapNotNull { trailmap ->
       val trailmapDir = (trailmap.source as? TrailmapSource.Filesystem)?.trailmapDir ?: return@mapNotNull null
+      // Another workspace's directory (reached through a symlink) generates its own files.
+      if (workspaceRoot != null && !trailmapDirIsInsideWorkspace(workspaceRoot, trailmapDir.toPath())) {
+        return@mapNotNull null
+      }
 
       val kotlinTools = resolveKotlinToolDescriptorsForTrailmap(trailmap, catalog)
       val scriptedTools = mergeScriptedToolsFirstWriteWins(

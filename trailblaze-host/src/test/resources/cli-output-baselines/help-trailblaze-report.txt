@@ -5,7 +5,7 @@
 # Reviewers: scrutinize diffs to baselines the same way you would scrutinize a UI screenshot —
 # small wording / spacing changes can be intentional or accidental.
 # ----------------------------------------------------------------------
-Usage: trailblaze report [-hV] [--current] [--full-report-payloads] [--no-gif]
+Usage: trailblaze report [-hvV] [--current] [--full-report-payloads] [--no-gif]
                          [--no-webp] [--open] [--[no-]storyboard-yaml] [--gif
                          [=<gifOutput>]] [--storyboard[=<storyboardOutput>]]
                          [--video[=<videoOutput>]] [--webp[=<webpOutput>]]
@@ -13,15 +13,15 @@ Usage: trailblaze report [-hV] [--current] [--full-report-payloads] [--no-gif]
                          [--output-dir=<outputDir>] [--share-url=<url>]
                          [--storyboard-columns=<storyboardColumns>]
                          [<session-id>]
-Generate an HTML report for session recordings, plus a best-effort JSON
-summary, and optionally MP4/GIF/WebP exports for a single session. JSON-only
-failures log a warning and still exit 0 — HTML is the primary artifact and is
-what gates the exit code. Animated exports collapse long idle gaps between
-steps so their length tracks the number of steps, not the session's real
-wall-clock. The capture window for all three (--gif/--webp/--video) is bounded
-by the MAX_PLAYBACK_WAIT_MS environment variable (milliseconds, default
-600000); if playback overruns it, a best-effort truncated artifact is still
-written with a warning.
+Generate an HTML report (plus JSON summary, optional MP4/GIF/WebP) for session
+recordings.
+JSON-only failures log a warning and still exit 0 — HTML is the primary
+artifact and is what gates the exit code. Animated exports collapse long idle
+gaps between steps so their length tracks the number of steps, not the
+session's real wall-clock. The capture window for all three
+(--gif/--webp/--video) is bounded by the MAX_PLAYBACK_WAIT_MS environment
+variable (milliseconds, default 600000); if playback overruns it, a best-effort
+truncated artifact is still written with a warning.
       [<session-id>]         Session ID to narrow the report to (positional
                                form of --id). Prefix matching is supported.
                                Mutually exclusive with --id and --current.
@@ -156,6 +156,13 @@ written with a warning.
                                typical session, at the cost of less actionable
                                per-cell labels). Has no effect without
                                --storyboard.
+  -v, --verbose              Show the generator's own progress logs — workspace
+                               config loading, tool-class discovery,
+                               per-session clock normalisation, and step
+                               timings. Suppressed by default so the report
+                               paths are the output; turn this on when a report
+                               is slow or empty and you need to see which
+                               session the generator was working on.
   -V, --version              Print version information and exit.
       --video[=<videoOutput>]
                              Export the HTML report's timeline autoplay (the

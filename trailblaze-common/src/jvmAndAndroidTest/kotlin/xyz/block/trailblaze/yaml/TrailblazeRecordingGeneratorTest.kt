@@ -2,6 +2,7 @@ package xyz.block.trailblaze.yaml
 
 import assertk.assertThat
 import assertk.assertions.contains
+import assertk.assertions.hasSize
 import assertk.assertions.isEmpty
 import assertk.assertions.isEqualTo
 import assertk.assertions.isInstanceOf
@@ -2514,6 +2515,33 @@ class TrailblazeRecordingGeneratorTest {
     val yaml = logs.generateUnifiedRecordedYaml(trailblazeYaml, classifierOverride = "")
 
     assertThat(yaml).isEqualTo("")
+  }
+
+  @Test
+  fun unifiedPreviewExplainsABlankClassifierThroughTheNarrationSink() {
+    // Declining to render is something ONE person saving ONE recording needs told. A caller
+    // rendering a whole directory of past sessions passes a silent sink instead, so this has to be
+    // routed through `narrate` rather than written straight to the console.
+    val step = DirectionStep(step = "Enter search text")
+    val logs = listOf(
+      objectiveStart(step),
+      toolLog(InputTextTrailblazeTool(text = "hello"), "inputText"),
+      objectiveComplete(step),
+    )
+    val narrated = mutableListOf<String>()
+
+    val yaml = logs.generateUnifiedRecordedYaml(
+      trailblazeYaml = trailblazeYaml,
+      sessionTrailConfig = null,
+      classifierOverride = "",
+      selectedDeviceConfiguration = null,
+      successfulObjectivesOnly = false,
+      narrate = { narrated += it },
+    )
+
+    assertThat(yaml).isEqualTo("")
+    assertThat(narrated).hasSize(1)
+    assertThat(narrated.single()).contains("no device classifiers")
   }
 
   @Test

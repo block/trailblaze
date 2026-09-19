@@ -17,7 +17,7 @@
 //    describes the same instant of the same screen. Predicates can compare two
 //    selectors' results without worrying about inter-frame UI drift.
 //  - **One capture, not N.** The earlier shape dispatched N parallel
-//    `findMatches` calls, and each callback enters its own nested
+//    `findSelectorMatches` calls, and each callback enters its own nested
 //    `runTrailblazeTools` frame on the daemon (see `MaestroTrailblazeAgent.kt:214`)
 //    and captures its own hierarchy via the SnapshotCache fallback path — so
 //    parallelism narrowed the drift window but still paid N multi-second
@@ -190,7 +190,7 @@ async function resolveSelectors(
 
   // ONE call, one host-side capture, every selector resolved against that same tree. This is
   // what makes the snapshot atomic as well as cheap: see the file header for why N parallel
-  // `findMatches` calls could not be deduplicated by the host's snapshot cache.
+  // separate selector queries could not be deduplicated by the host's snapshot cache.
   const matchesPerSelector = await client.tools.findSelectorMatches({
     selectors: [...selectors],
   });

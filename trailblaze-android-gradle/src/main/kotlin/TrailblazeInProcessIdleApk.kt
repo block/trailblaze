@@ -15,8 +15,10 @@ import org.gradle.api.file.RegularFileProperty
 import org.gradle.api.model.ObjectFactory
 import org.gradle.api.provider.Property
 import org.gradle.api.tasks.Input
+import org.gradle.api.tasks.InputFile
 import org.gradle.api.tasks.InputFiles
 import org.gradle.api.tasks.Internal
+import org.gradle.api.tasks.Optional
 import org.gradle.api.tasks.OutputFile
 import org.gradle.api.tasks.PathSensitive
 import org.gradle.api.tasks.PathSensitivity
@@ -87,8 +89,32 @@ internal object InProcessIdleConventions {
   const val SOURCE_RESOURCE = "inprocess-idle/InProcessIdleInstrumentation.java"
   const val MANIFEST_RESOURCE = "inprocess-idle/AndroidManifest.xml"
 
+  /** The idle server itself, compiled into BOTH hosts (the instrumentation and the split). */
+  const val SERVER_SOURCE_RESOURCE = "inprocess-idle/InProcessIdleServer.java"
+
+  /** The split-APK host: a ContentProvider of the app's own package. See [SPLIT_NAME]. */
+  const val PROVIDER_SOURCE_RESOURCE = "inprocess-idle/InProcessIdleProvider.java"
+  const val SPLIT_MANIFEST_RESOURCE = "inprocess-idle/SplitAndroidManifest.xml"
+
   /** Must match the manifest template's `package=` and the instrumentation class's package. */
   const val IN_PROCESS_IDLE_BASE_PACKAGE = "xyz.block.trailblaze.inprocessidle"
+
+  /**
+   * The `split=` name of the split-APK host. Shared with the on-device attach, which looks for
+   * `split_<name>.apk` in `pm path <app>` and removes it with `pm uninstall <app> <name>`.
+   */
+  const val SPLIT_NAME = "trailblaze_inprocess_idle"
+
+  /**
+   * Gradle property naming the app APK the split-APK host must be built against. A split is only
+   * installable next to a base with the SAME `versionCode` (the package manager rejects any other),
+   * so the split cannot be built until the exact app build is known — which, for a device farm, is
+   * the moment the pipeline has downloaded the app APK and not before. Set the property to that
+   * file's path when building the test APK, and every `inProcessIdle { }` whose target matches the
+   * APK's package stages a split alongside its instrumentation APK. Unset, no split is staged and
+   * the on-device attach uses the instrumentation host.
+   */
+  const val TARGET_APK_PROPERTY = "trailblaze.inProcessIdle.targetApk"
 
   const val DEFAULT_MIN_SDK = 28
   const val DEFAULT_TARGET_SDK = 35
@@ -103,6 +129,72 @@ internal object InProcessIdleConventions {
 
   fun apkAssetPath(targetApplicationId: String): String =
     "inprocess-idle-apks/trailblaze-inprocess-idle-${packageSuffix(targetApplicationId)}.apk"
+
+  /**
+   * Where the split-APK host is staged. Same convention as [apkAssetPath] with a `split-` marker,
+   * mirrored by `InProcessIdle.splitAssetPathFor` in `trailblaze-common`.
+   */
+  fun splitApkAssetPath(targetApplicationId: String): String =
+    "inprocess-idle-apks/trailblaze-inprocess-idle-split-${packageSuffix(targetApplicationId)}.apk"
+
+  /**
+   * What the app APK is: enough to decide whether a split can sit next to it. The package manager
+   * matches a split to its base on the LONG version code — `versionCodeMajor` in the high 32 bits
+   * over `versionCode` — so both halves have to be carried and stamped, or an app that sets the
+   * major would have every split refused as a version mismatch.
+   */
+  data class ApkIdentity(
+    val packageName: String,
+    val versionCode: Long,
+    val versionCodeMajor: Long = 0,
+  )
+
+  /**
+   * Parses the `package:` line of `aapt2 dump badging` output. Null when the output has no such
+   * line — an unreadable or non-APK file — so the caller can say which file rather than fail on a
+   * regex. The versionCode is parsed as a Long: Android's is a 32-bit int, but an APK can be built
+   * with a value that overflows it and the package manager still stores what aapt wrote.
+   *
+   * Badging never prints `versionCodeMajor`, even when the manifest sets one; that half comes from
+   * [parseManifestVersionCodeMajor] over `aapt2 dump xmltree`.
+   */
+  fun parseApkBadging(badging: String): ApkIdentity? {
+    val line = badging.lineSequence().firstOrNull { it.startsWith("package:") } ?: return null
+    val name = Regex("\\bname='([^']*)'").find(line)?.groupValues?.get(1) ?: return null
+    val code = Regex("\\bversionCode='([^']*)'").find(line)?.groupValues?.get(1)?.toLongOrNull()
+      ?: return null
+    return ApkIdentity(name, code)
+  }
+
+  /**
+   * The `android:versionCodeMajor` on the `<manifest>` element of `aapt2 dump xmltree --file
+   * AndroidManifest.xml` output, or 0 when the manifest sets none — which is the value the platform
+   * assumes for it, so absence and zero are the same identity.
+   */
+  fun parseManifestVersionCodeMajor(xmltree: String): Long =
+    Regex(":versionCodeMajor(?:\\(0x[0-9a-fA-F]+\\))?=(\\d+)")
+      .find(xmltree)
+      ?.groupValues
+      ?.get(1)
+      ?.toLongOrNull() ?: 0
+
+  /**
+   * Stamps the split manifest template for one target: the split's `package` and the provider's
+   * `authorities` both take the app's applicationId (a split IS the app's package, and authorities
+   * must be unique per device). The versionCode is NOT stamped here — `aapt2 link --version-code`
+   * injects it, so the template stays free of a number that is only ever right for one build.
+   * Throws on a template without the anchors, like [stampManifest].
+   */
+  fun stampSplitManifest(template: String, targetApplicationId: String): String {
+    val anchor = "target.application.id.stamped.at.build.time"
+    if (!template.contains("package=\"$anchor\"") || !template.contains("split=\"$SPLIT_NAME\"")) {
+      throw GradleException(
+        "inprocess-idle split manifest template is missing its `package=` anchor or " +
+          "`split=\"$SPLIT_NAME\"` — the bundled template and the stamping code have drifted."
+      )
+    }
+    return template.replace(anchor, targetApplicationId)
+  }
 
   fun taskName(targetApplicationId: String): String {
     val capSuffix = packageSuffix(targetApplicationId).replaceFirstChar { it.uppercase() }
@@ -232,6 +324,19 @@ internal fun registerInProcessIdleApk(
   val taskName = InProcessIdleConventions.taskName(appId)
   val outputApk =
     extension.inProcessIdleStagingRoot.map { it.file(InProcessIdleConventions.apkAssetPath(appId)) }
+  val outputSplitApk =
+    extension.inProcessIdleStagingRoot.map {
+      it.file(InProcessIdleConventions.splitApkAssetPath(appId))
+    }
+  // Relative paths resolve against the ROOT project: the property is set on a `./gradlew` command
+  // line run from the repository root, and a CI pipeline downloading the app next to the checkout
+  // names it that way.
+  val splitTargetApk =
+    project.providers
+      .gradleProperty(InProcessIdleConventions.TARGET_APK_PROPERTY)
+      .orNull
+      ?.takeIf { it.isNotBlank() }
+      ?.let { path -> File(path).takeIf { it.isAbsolute } ?: File(project.rootDir, path) }
   val workDir = project.layout.buildDirectory.dir("tmp/$taskName")
   // Resolved eagerly at configuration time (local.properties + env), matching when AGP itself
   // locates the SDK. May legitimately be absent — the task action raises the directed error so
@@ -252,6 +357,8 @@ internal fun registerInProcessIdleApk(
       if (sdkDir != null) t.sdkDir.set(sdkDir)
       t.workDir.set(workDir)
       t.outputApk.set(outputApk)
+      t.outputSplitApk.set(outputSplitApk)
+      if (splitTargetApk != null) t.splitTargetApk.set(splitTargetApk)
       when (mode) {
         is InProcessIdleSigningMode.Explicit -> {
           t.keystoreFile.set(mode.storeFile)
@@ -419,14 +526,23 @@ internal fun appendFileToZip(zip: File, add: File, entryName: String) {
  * the consumer's own Android SDK tools — no Gradle android plugin involvement, no checked-in
  * binaries, roughly a second of work:
  *
- * 1. Extract `InProcessIdleInstrumentation.java` + the manifest template from the plugin jar and
- *    stamp the manifest for [targetApplicationId].
+ * 1. Extract the idle server + `InProcessIdleInstrumentation.java` + the manifest template from
+ *    the plugin jar and stamp the manifest for [targetApplicationId].
  * 2. `javac --release 11` against the SDK's `android.jar` (NOT `-bootclasspath`, which would hide
  *    the JDK's lambda metafactory) — `d8 --min-api` desugars down to [minSdkVersion].
  * 3. `aapt2 link` with explicit min/target SDK versions (defaults to 0 otherwise, which installs
  *    reject with `INSTALL_FAILED_DEPRECATED_SDK_VERSION`), add `classes.dex`, `zipalign`.
  * 4. `apksigner sign` with the resolved keystore. `--v4-signing-enabled false` skips the `.idsig`
  *    sidecar (only needed for adb incremental install) so the staged asset is just the APK.
+ *
+ * When [splitTargetApk] names an app APK whose package is [targetApplicationId], the same four
+ * steps run a second time for the **split-APK host** — a split of the app's own package carrying
+ * the server as a ContentProvider, linked with that APK's exact `versionCode` — staged at
+ * [outputSplitApk]. That host starts with the app on every cold start, with no instrumentation and
+ * no second class loader, so a turbo launch costs what a plain one does. A target APK with a
+ * different package stages no split (a module targets several apps; only one is the downloaded
+ * one), and so does an unset property: in both cases a stale split from an earlier build is
+ * removed so the test APK cannot carry one built against a different app version.
  */
 abstract class BuildTrailblazeInProcessIdleApkTask : DefaultTask() {
   @get:Input abstract val targetApplicationId: Property<String>
@@ -434,6 +550,14 @@ abstract class BuildTrailblazeInProcessIdleApkTask : DefaultTask() {
   @get:Input abstract val minSdkVersion: Property<Int>
 
   @get:Input abstract val targetSdkVersion: Property<Int>
+
+  /** See [InProcessIdleConventions.TARGET_APK_PROPERTY]. */
+  @get:InputFile
+  @get:Optional
+  @get:PathSensitive(PathSensitivity.NONE)
+  abstract val splitTargetApk: RegularFileProperty
+
+  @get:OutputFile abstract val outputSplitApk: RegularFileProperty
 
   // The keystore PATH is @Internal (the standard debug keystore may not exist until this task
   // creates it, which @InputFile would reject); the file's CONTENTS are tracked via
@@ -498,16 +622,125 @@ abstract class BuildTrailblazeInProcessIdleApkTask : DefaultTask() {
     work.deleteRecursively()
     work.mkdirs()
 
-    // 1. Extract the embedded source + stamped manifest.
-    val javaFile = File(work, "InProcessIdleInstrumentation.java")
-    javaFile.writeText(readPluginResource(InProcessIdleConventions.SOURCE_RESOURCE))
-    val manifestFile = File(work, "AndroidManifest.xml")
-    manifestFile.writeText(
-      InProcessIdleConventions.stampManifest(
-        template = readPluginResource(InProcessIdleConventions.MANIFEST_RESOURCE),
-        targetApplicationId = appId,
-      )
+    val keystore = keystoreFile.get()
+    if (!keystore.isFile) {
+      if (!generateDebugKeystoreIfMissing.get()) {
+        throw GradleException("$name: keystore not found at $keystore.")
+      }
+      generateDebugKeystore(keystore)
+    }
+    val tools = SdkTools(buildTools, androidJar, keystore)
+
+    // The instrumentation host, always.
+    val output = outputApk.get().asFile
+    assembleApk(
+      tools = tools,
+      work = File(work, "instrumentation"),
+      manifest =
+        InProcessIdleConventions.stampManifest(
+          template = readPluginResource(InProcessIdleConventions.MANIFEST_RESOURCE),
+          targetApplicationId = appId,
+        ),
+      sources =
+        mapOf(
+          "InProcessIdleServer.java" to InProcessIdleConventions.SERVER_SOURCE_RESOURCE,
+          "InProcessIdleInstrumentation.java" to InProcessIdleConventions.SOURCE_RESOURCE,
+        ),
+      versionCode = null,
+      output = output,
     )
+    logger.lifecycle(
+      "$name: built inprocess-idle APK targeting $appId (${output.length()} bytes) at $output"
+    )
+
+    // The split host, only against a known app build. A stale split is removed on every other
+    // path: `@OutputFile` makes Gradle track it, and the test APK must never carry a split stamped
+    // for an app version this build was not told about.
+    val splitOutput = outputSplitApk.get().asFile
+    val identity = splitTargetIdentity(tools)
+    if (identity == null || identity.packageName != appId) {
+      if (identity != null) {
+        logger.lifecycle(
+          "$name: ${InProcessIdleConventions.TARGET_APK_PROPERTY} names ${identity.packageName}, " +
+            "not $appId — no split-APK host staged for $appId"
+        )
+      }
+      splitOutput.delete()
+      return
+    }
+    assembleApk(
+      tools = tools,
+      work = File(work, "split"),
+      manifest =
+        InProcessIdleConventions.stampSplitManifest(
+          template = readPluginResource(InProcessIdleConventions.SPLIT_MANIFEST_RESOURCE),
+          targetApplicationId = appId,
+        ),
+      sources =
+        mapOf(
+          "InProcessIdleServer.java" to InProcessIdleConventions.SERVER_SOURCE_RESOURCE,
+          "InProcessIdleProvider.java" to InProcessIdleConventions.PROVIDER_SOURCE_RESOURCE,
+        ),
+      versionCode = identity.versionCode,
+      versionCodeMajor = identity.versionCodeMajor,
+      output = splitOutput,
+    )
+    val major = if (identity.versionCodeMajor != 0L) " versionCodeMajor ${identity.versionCodeMajor}" else ""
+    logger.lifecycle(
+      "$name: built inprocess-idle split APK for $appId versionCode ${identity.versionCode}$major " +
+        "(${splitOutput.length()} bytes) at $splitOutput"
+    )
+  }
+
+  private class SdkTools(val buildTools: File, val androidJar: File, val keystore: File)
+
+  /**
+   * Package + versionCode (+ versionCodeMajor) of [splitTargetApk], or null when the property is
+   * unset. A file that is set but unreadable as an APK is an error, not a silent "no split": the
+   * caller asked for the split host by naming a file, and would otherwise get the slow host with no
+   * indication why. Two aapt2 dumps because badging never prints the major.
+   */
+  private fun splitTargetIdentity(tools: SdkTools): InProcessIdleConventions.ApkIdentity? {
+    val apk = splitTargetApk.orNull?.asFile ?: return null
+    val badging = runBuildTool(tools.buildTools, "aapt2", listOf("dump", "badging", apk.absolutePath))
+    val identity =
+      InProcessIdleConventions.parseApkBadging(badging)
+        ?: throw GradleException(
+          "$name: `aapt2 dump badging $apk` reported no package/versionCode — is " +
+            "${InProcessIdleConventions.TARGET_APK_PROPERTY} pointing at an APK?"
+        )
+    val manifestTree =
+      runBuildTool(
+        tools.buildTools,
+        "aapt2",
+        listOf("dump", "xmltree", "--file", "AndroidManifest.xml", apk.absolutePath),
+      )
+    return identity.copy(
+      versionCodeMajor = InProcessIdleConventions.parseManifestVersionCodeMajor(manifestTree)
+    )
+  }
+
+  /**
+   * One compile → dex → link → align → sign pass. [sources] maps the file name to write to the
+   * plugin resource to read; [versionCode] (and a non-zero [versionCodeMajor]) is injected at link
+   * time when set (the split host), and left to the manifest otherwise.
+   */
+  private fun assembleApk(
+    tools: SdkTools,
+    work: File,
+    manifest: String,
+    sources: Map<String, String>,
+    versionCode: Long?,
+    output: File,
+    versionCodeMajor: Long = 0,
+  ) {
+    work.mkdirs()
+    // 1. Extract the embedded sources + stamped manifest.
+    val javaFiles =
+      sources.map { (fileName, resource) ->
+        File(work, fileName).also { it.writeText(readPluginResource(resource)) }
+      }
+    val manifestFile = File(work, "AndroidManifest.xml").also { it.writeText(manifest) }
 
     // 2. Compile with the JDK running Gradle, then dex.
     val classesDir = File(work, "classes").also(File::mkdirs)
@@ -523,10 +756,10 @@ abstract class BuildTrailblazeInProcessIdleApkTask : DefaultTask() {
         "--release",
         "11",
         "-cp",
-        androidJar.absolutePath,
+        tools.androidJar.absolutePath,
         "-d",
         classesDir.absolutePath,
-        javaFile.absolutePath,
+        *javaFiles.map { it.absolutePath }.toTypedArray(),
       )
     if (javacExit != 0) {
       throw GradleException("$name: javac failed (exit $javacExit):\n$javacOut")
@@ -534,12 +767,12 @@ abstract class BuildTrailblazeInProcessIdleApkTask : DefaultTask() {
     val classFiles =
       classesDir.walkTopDown().filter { it.isFile && it.extension == "class" }.toList()
     runBuildTool(
-      buildTools,
+      tools.buildTools,
       "d8",
       listOf(
         "--release",
         "--lib",
-        androidJar.absolutePath,
+        tools.androidJar.absolutePath,
         "--min-api",
         minSdkVersion.get().toString(),
         "--output",
@@ -550,47 +783,40 @@ abstract class BuildTrailblazeInProcessIdleApkTask : DefaultTask() {
     // 3. Link, add the dex, align.
     val unsignedApk = File(work, "unsigned.apk")
     runBuildTool(
-      buildTools,
+      tools.buildTools,
       "aapt2",
       listOf(
         "link",
         "-o",
         unsignedApk.absolutePath,
         "-I",
-        androidJar.absolutePath,
+        tools.androidJar.absolutePath,
         "--manifest",
         manifestFile.absolutePath,
         "--min-sdk-version",
         minSdkVersion.get().toString(),
         "--target-sdk-version",
         targetSdkVersion.get().toString(),
-      ),
+      ) + (versionCode?.let { listOf("--version-code", it.toString()) } ?: emptyList()) +
+        (if (versionCodeMajor != 0L) listOf("--version-code-major", versionCodeMajor.toString()) else emptyList()),
     )
     appendFileToZip(unsignedApk, File(work, "classes.dex"), "classes.dex")
     val alignedApk = File(work, "aligned.apk")
     runBuildTool(
-      buildTools,
+      tools.buildTools,
       "zipalign",
       listOf("-f", "4", unsignedApk.absolutePath, alignedApk.absolutePath),
     )
 
     // 4. Sign.
-    val keystore = keystoreFile.get()
-    if (!keystore.isFile) {
-      if (!generateDebugKeystoreIfMissing.get()) {
-        throw GradleException("$name: keystore not found at $keystore.")
-      }
-      generateDebugKeystore(keystore)
-    }
-    val output = outputApk.get().asFile
     output.parentFile.mkdirs()
     runBuildTool(
-      buildTools,
+      tools.buildTools,
       "apksigner",
       listOf(
         "sign",
         "--ks",
-        keystore.absolutePath,
+        tools.keystore.absolutePath,
         "--ks-pass",
         "pass:${keystorePassword.get()}",
         "--ks-key-alias",
@@ -604,9 +830,6 @@ abstract class BuildTrailblazeInProcessIdleApkTask : DefaultTask() {
         alignedApk.absolutePath,
       ),
     )
-    logger.lifecycle(
-      "$name: built inprocess-idle APK targeting $appId (${output.length()} bytes) at $output"
-    )
   }
 
   private fun readPluginResource(path: String): String =
@@ -616,7 +839,8 @@ abstract class BuildTrailblazeInProcessIdleApkTask : DefaultTask() {
           "inprocess-idle source."
       )
 
-  private fun runBuildTool(buildToolsDir: File, toolName: String, args: List<String>) {
+  /** Runs a build-tools binary and returns its combined output; a non-zero exit throws with it. */
+  private fun runBuildTool(buildToolsDir: File, toolName: String, args: List<String>): String {
     val isWindows = System.getProperty("os.name").lowercase().contains("win")
     val candidates = if (isWindows) listOf("$toolName.exe", "$toolName.bat") else listOf(toolName)
     val executable =
@@ -633,6 +857,7 @@ abstract class BuildTrailblazeInProcessIdleApkTask : DefaultTask() {
     if (result.exitValue != 0) {
       throw GradleException("$name: `$toolName` failed (exit ${result.exitValue}):\n$toolOutput")
     }
+    return toolOutput.toString(Charsets.UTF_8)
   }
 
   /**

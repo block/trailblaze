@@ -1,8 +1,10 @@
 package xyz.block.trailblaze.report.strings
 
 import kotlinx.datetime.Instant
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonNames
 import xyz.block.trailblaze.api.ExtractedString
 import xyz.block.trailblaze.api.TrailblazeNode
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
@@ -68,7 +70,9 @@ data class VisibleStringsScreenLine(
   val deviceWidth: Int,
   val deviceHeight: Int,
   /** Content hash of [strings]. Collapses repeats within a run; useless across locales. */
-  val screenId: String,
+  @OptIn(ExperimentalSerializationApi::class)
+  @JsonNames("screenId")
+  val screenContentHash: String,
   /**
    * True when the capture is known to have lost part of the tree, so absent strings prove
    * nothing. Absent means unknown: only Android computes coverage, so no other driver can say
@@ -139,7 +143,7 @@ object VisibleStringsLog {
     val seenScreens = mutableMapOf<String, Int>()
     val screenLines = captures.mapIndexed { stepIndex, capture ->
       val strings = capture.extractStrings()
-      val screenId = screenId(strings.orEmpty())
+      val screenContentHash = screenContentHash(strings.orEmpty())
       VisibleStringsScreenLine(
         stepIndex = stepIndex,
         captureId = captureIdFrom(capture.screenshotFile),
@@ -151,7 +155,7 @@ object VisibleStringsLog {
         action = capture.action,
         deviceWidth = capture.deviceWidth,
         deviceHeight = capture.deviceHeight,
-        screenId = screenId,
+        screenContentHash = screenContentHash,
         // A capture with no tree lost all of it, which is the strongest form of this claim and
         // true on every platform, so it does not wait on the Android-only coverage assessment.
         partialCapture = if (strings == null) true else capture.partialCapture,
@@ -163,7 +167,7 @@ object VisibleStringsLog {
         // hashes to the empty-list id, so left in it would say two failed captures showed the
         // same screen, or that a failure repeated a screen that genuinely had no text.
         repeatOfStepIndex = strings
-          ?.let { seenScreens.putIfAbsent(screenId, stepIndex) }
+          ?.let { seenScreens.putIfAbsent(screenContentHash, stepIndex) }
           .takeIf { collapseRepeats },
         strings = strings.orEmpty(),
       )
@@ -229,7 +233,7 @@ object VisibleStringsLog {
   private fun decode(value: String): String =
     runCatching { URLDecoder.decode(value, "UTF-8") }.getOrDefault(value)
 
-  private fun screenId(strings: List<ExtractedString>): String {
+  private fun screenContentHash(strings: List<ExtractedString>): String {
     val canonical = strings.joinToString("\n") { "${it.source}\t${it.text}" }
     return MessageDigest.getInstance("SHA-256")
       .digest(canonical.encodeToByteArray())

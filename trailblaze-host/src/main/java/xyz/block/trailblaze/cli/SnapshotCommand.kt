@@ -18,7 +18,7 @@ import java.util.concurrent.Callable
   mixinStandardHelpOptions = true,
   description = ["Capture the current screen's UI tree (fast, no AI, no actions)"],
 )
-class SnapshotCommand : Callable<Int> {
+class SnapshotCommand : Callable<Int>, QuietUnlessVerbose {
 
   @Option(
     names = ["-d", "--device"],
@@ -31,6 +31,12 @@ class SnapshotCommand : Callable<Int> {
     description = ["Enable verbose output"],
   )
   var verbose: Boolean = false
+
+  /**
+   * Closes the internal [Console.log] channel for this command unless `--verbose`, applied at
+   * dispatch so the early-return paths are covered too — see [QuietUnlessVerbose].
+   */
+  override val verboseRequested: Boolean get() = verbose
 
   @Option(names = ["--bounds"], description = ["Include bounding box {x,y,w,h} for each element"])
   var bounds: Boolean = false

@@ -303,6 +303,12 @@ class OnDeviceRpcClient(
    *   accessibility service is bound — preventing UiAutomator fallback from faking readiness
    *   on accessibility-driver flows. Callers using `ANDROID_ONDEVICE_ACCESSIBILITY` MUST set
    *   this true; instrumentation-driver flows should leave it false.
+   * @return The response of the probe that proved readiness. It carries everything the runner
+   *   self-describes on a `GetScreenState` answer — notably [GetScreenStateResponse.runnerCapabilities]
+   *   — so a caller that needs to know what the installed runner supports reads it from here
+   *   instead of issuing a second probe. A second probe would re-enter the not-ready window this
+   *   loop just waited out (the screen can go blank again between two calls) and, unlike this
+   *   loop, would have no retry budget to absorb it.
    */
   @OptIn(ExperimentalTime::class)
   suspend fun waitForReady(
@@ -312,7 +318,7 @@ class OnDeviceRpcClient(
     timeoutMs: Long = 60_000L,
     pollIntervalMs: Long = 500L,
     requireAndroidAccessibilityService: Boolean = false,
-  ) {
+  ): GetScreenStateResponse {
     val startMs = Clock.System.now().toEpochMilliseconds()
     val probe = GetScreenStateRequest(
       includeScreenshot = false,
@@ -345,7 +351,7 @@ class OnDeviceRpcClient(
         is RpcResult.Success -> {
           val elapsedMs = Clock.System.now().toEpochMilliseconds() - startMs
           sendProgressMessage("Device ready after ${elapsedMs}ms ($attempt probe(s))")
-          return
+          return result.data
         }
         is RpcResult.Failure -> {
           lastRpcFailure = result.message + (result.details?.let { " | $it" } ?: "")

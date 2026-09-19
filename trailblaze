@@ -64,7 +64,21 @@ set -- "${FILTERED_ARGS[@]}"
 
 JAR_DIR=$(dev_jar_dir)
 
-if [ "$BLAZE_JAR" = "1" ]; then
+# `stop` and `status` act on a daemon that is already running, and a `--help` the launcher answers
+# itself prints and exits, so none of them execute the code a rebuild would produce. Skip JAR
+# resolution outright rather than merely tolerating a stale JAR:
+# on a checkout with no JAR at all there is nothing to tolerate, so dev_ensure_jar takes its
+# first-build branch — which stops the running daemon on its way to a build these commands never
+# run — and a failed build then drops the launcher into Gradle mode, paying a configure phase to
+# make two curl calls. DEV_JAR_ALLOW_STALE is still set for anything that reaches dev_ensure_jar
+# by another route.
+daemon_only_command=false
+if ! dev_jar_needs_fresh_code "$@"; then
+  DEV_JAR_ALLOW_STALE=1
+  daemon_only_command=true
+fi
+
+if [ "$BLAZE_JAR" = "1" ] && [ "$daemon_only_command" = false ]; then
   if [ -n "${TRAILBLAZE_JAR:-}" ] && [ -f "$TRAILBLAZE_JAR" ]; then
     # An explicitly provided jar wins: no staleness fingerprint, no rebuild, and crucially no
     # stop-the-running-daemon. The daemon exports its own jar here to processes it spawns, so a
@@ -120,12 +134,18 @@ if [ "$BLAZE_JAR" != "1" ]; then
   tb_run_background() {
     # Repo root is passed positionally (like the args) rather than interpolated into the
     # command string, so a path containing quotes can't break the spawned command.
+    #
+    # Output goes to the same daemon.log the JAR-mode launcher uses. A Gradle-mode daemon that
+    # dies during startup is exactly as hard to diagnose as a JAR-mode one, and every "see
+    # ~/.trailblaze/daemon.log" message the launcher prints has to be true in both modes.
     local gradle_args
     gradle_args="$(tb_gradle_args "$@")"
+    mkdir -p "$(dirname "$TRAILBLAZE_DAEMON_LOG")"
+    tb_roll_daemon_log
     if [ -n "$gradle_args" ]; then
-      nohup bash -c 'cd "$1" && ./gradlew "$2:run" --args="$3"' _ "$DEV_JAR_REPO_ROOT" "$TRAILBLAZE_MODULE" "$gradle_args" > /dev/null 2>&1 &
+      nohup bash -c 'cd "$1" && ./gradlew "$2:run" --args="$3"' _ "$DEV_JAR_REPO_ROOT" "$TRAILBLAZE_MODULE" "$gradle_args" >> "$TRAILBLAZE_DAEMON_LOG" 2>&1 &
     else
-      nohup bash -c 'cd "$1" && ./gradlew "$2:run"' _ "$DEV_JAR_REPO_ROOT" "$TRAILBLAZE_MODULE" > /dev/null 2>&1 &
+      nohup bash -c 'cd "$1" && ./gradlew "$2:run"' _ "$DEV_JAR_REPO_ROOT" "$TRAILBLAZE_MODULE" >> "$TRAILBLAZE_DAEMON_LOG" 2>&1 &
     fi
   }
 
@@ -156,10 +176,12 @@ if [ "$BLAZE_JAR" != "1" ]; then
   }
 
   tb_run_background_quiet() {
-    # Repo root passed positionally — see tb_run_background.
+    # Repo root passed positionally, output appended to daemon.log — see tb_run_background.
     local gradle_args
     gradle_args="$(tb_gradle_args "$@")"
-    nohup bash -c 'cd "$1" && ./gradlew -q --console=plain "$2:run" --args="$3"' _ "$DEV_JAR_REPO_ROOT" "$TRAILBLAZE_MODULE" "$gradle_args" > /dev/null 2>&1 &
+    mkdir -p "$(dirname "$TRAILBLAZE_DAEMON_LOG")"
+    tb_roll_daemon_log
+    nohup bash -c 'cd "$1" && ./gradlew -q --console=plain "$2:run" --args="$3"' _ "$DEV_JAR_REPO_ROOT" "$TRAILBLAZE_MODULE" "$gradle_args" >> "$TRAILBLAZE_DAEMON_LOG" 2>&1 &
   }
 fi
 

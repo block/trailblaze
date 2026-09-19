@@ -203,6 +203,43 @@ class RunReportGeneratorTest {
     }
   }
 
+  /**
+   * The all-runs URL has to survive Kotlin -> bun -> the embedded index JSON, and nothing else
+   * asserts that hop: a typo in the key name anywhere along it leaves every existing test green
+   * and silently costs a single-session report its Compare.
+   *
+   * Skipped (vacuous pass) when bun isn't resolvable, matching the other end-to-end tests here.
+   */
+  @Test
+  fun generate_carriesTheAllRunsUrlIntoTheReport() {
+    val bun = BunBinaryResolver.resolveBunBinary() ?: return
+    val tmp = Files.createTempDirectory("rrg-allruns-").toFile()
+    try {
+      val logsRepo = LogsRepo(logsDir = tmp, watchFileSystem = false)
+      val sessionId = SessionId("allrunssession")
+      writePassedSession(logsRepo, sessionId)
+
+      val linked = RunReportGenerator(bunBinary = bun)
+        .generate(logsRepo, listOf(sessionId), allRunsUrl = "/report?limit=all")
+      assertNotNull(linked, "generate(allRunsUrl) should produce a report file")
+      assertTrue(
+        linked.readText().contains("\"allRunsUrl\":\"/report?limit=all\""),
+        "the report should carry the all-runs URL the caller handed it",
+      )
+
+      // Absent and blank both mean "this document is the whole report", and neither may leave a
+      // key behind for the viewer to build a Compare link out of.
+      val standalone = RunReportGenerator(bunBinary = bun).generate(logsRepo, listOf(sessionId))
+      assertNotNull(standalone)
+      assertTrue(!standalone.readText().contains("\"allRunsUrl\":"), "a standalone report links nowhere")
+      val blank = RunReportGenerator(bunBinary = bun).generate(logsRepo, listOf(sessionId), allRunsUrl = "   ")
+      assertNotNull(blank)
+      assertTrue(!blank.readText().contains("\"allRunsUrl\":"), "a blank all-runs URL is dropped, not rendered")
+    } finally {
+      tmp.deleteRecursively()
+    }
+  }
+
   /** Minimal started-then-succeeded session: enough for a report to have one row to render. */
   private fun writePassedSession(logsRepo: LogsRepo, sessionId: SessionId) {
     val deviceId = TrailblazeDeviceId("web", TrailblazeDevicePlatform.WEB)
@@ -240,6 +277,8 @@ class RunReportGeneratorTest {
   @Test
   fun sessionMetaJson_carriesTitleStatusDurationAndRerunCommand() {
     val meta = RunReportGenerator.sessionMetaJson(info(SessionStatus.Ended.Succeeded(12_345)), SessionStatus.Ended.Succeeded(12_345), noSelfHeal)
+    // The run's own id rides along, so another document can name this run stably by id.
+    assertEquals("sess-1", meta["sessionId"]!!.jsonPrimitive.content)
     // Title falls back to the trail file's short name when there's no explicit config title.
     assertEquals("Login/login", meta["title"]!!.jsonPrimitive.content)
     assertEquals("passed", meta["status"]!!.jsonPrimitive.content)

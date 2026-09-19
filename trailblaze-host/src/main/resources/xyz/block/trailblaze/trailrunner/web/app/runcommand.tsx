@@ -10,6 +10,14 @@ function shQuote(v) {
   return "'" + s.replace(/'/g, "'\\''") + "'";
 }
 
+function seedRunAgent(currentAgent, effectiveAgent, touched) {
+  return !touched && effectiveAgent ? effectiveAgent : currentAgent;
+}
+
+function runAgentOption(agent) {
+  return agent || null;
+}
+
 function buildRunCommand(cfg) {
   const parts = ['trailblaze', 'run'];
   parts.push(cfg.trailPath || cfg.trailId || '<trail>');
@@ -21,7 +29,7 @@ function buildRunCommand(cfg) {
   if (cfg.selfHeal) parts.push('--self-heal');
   if (cfg.useRecordedSteps === 'replay') parts.push('--use-recorded-steps');
   else if (cfg.useRecordedSteps === 'ai') parts.push('--no-use-recorded-steps');
-  if (cfg.agent && cfg.agent !== 'TRAILBLAZE_RUNNER') parts.push('--agent', cfg.agent);
+  if (cfg.agent) parts.push('--agent', cfg.agent);
   if (cfg.maxLlmCalls !== '' && String(cfg.maxLlmCalls) !== String(DEFAULT_MAX_LLM_CALLS)) parts.push('--max-llm-calls', String(cfg.maxLlmCalls));
   if ((cfg.llm || '').trim()) parts.push('--llm', shQuote(cfg.llm.trim()));
   if (cfg.verbose) parts.push('--verbose');
@@ -62,4 +70,4 @@ function applyYamlOverrides(yaml, ov) {
   return lines.join('\n');
 }
 
-Object.assign(window, { shQuote, buildRunCommand, applyYamlOverrides });
+Object.assign(window, { shQuote, seedRunAgent, runAgentOption, buildRunCommand, applyYamlOverrides });

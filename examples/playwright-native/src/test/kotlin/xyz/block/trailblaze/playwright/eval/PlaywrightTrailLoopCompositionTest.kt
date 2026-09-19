@@ -32,7 +32,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
  * The regression this guards, from a web CI run: `runTrailblazeYamlSuspend`
  * used to run the whole trail loop ON the Playwright thread, so the blocked host-local
  * dispatch parked the very thread the nested bridge needed — every such composition hung
- * for the subprocess's full 122s callback timeout. If the loop is ever moved back onto
+ * for the subprocess's full callback timeout. If the loop is ever moved back onto
  * `browserManager.playwrightDispatcher`, the probe below times out and this test fails.
  */
 class PlaywrightTrailLoopCompositionTest {
@@ -135,7 +135,7 @@ class NestedPlaywrightCompositionProbeTool : HostLocalExecutableTrailblazeTool {
   companion object {
     /**
      * Generous against a healthy run (the nested wait tool needs ~1.5–2s including the
-     * post-action settle), tiny against the failure mode it detects (a 122s callback-timeout
+     * post-action settle), tiny against the failure mode it detects (a full callback-timeout
      * hang per composition).
      */
     const val NESTED_COMPLETION_TIMEOUT_MS: Long = 20_000L

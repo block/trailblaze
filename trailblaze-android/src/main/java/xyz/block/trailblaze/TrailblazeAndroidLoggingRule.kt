@@ -81,7 +81,7 @@ class TrailblazeAndroidLoggingRule(
    * is passed via CLI or `-e trailblaze.driverType` instrumentation arg).
    *
    * Defaults to the value from the `trailblaze.driverType` instrumentation arg if set,
-   * otherwise [TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION].
+   * otherwise [TrailblazeDriverType.DEFAULT_ANDROID], so this stays accurate if that default moves.
    */
   var driverTypeOverride: TrailblazeDriverType =
     InstrumentationArgUtil.driverType() ?: TrailblazeDriverType.DEFAULT_ANDROID

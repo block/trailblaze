@@ -18,6 +18,29 @@ val macOsJvmArgs = listOf(
   "--add-opens", "java.desktop/sun.lwawt.macosx=ALL-UNNAMED",
 )
 
+// Same Dispatchers.IO ceiling the JAR launcher sets (scripts/trailblaze), and for the same reason:
+// each scripted-tool subprocess pins one IO permit for its whole session, and exhausting the
+// 64-permit default does not fail - it hangs every daemon route while /ping keeps answering.
+// Neither the packaged DMG nor a Gradle `run` reads the launcher script, so both need it here or
+// they wedge where the shipped CLI does not. TRAILBLAZE_IO_PARALLELISM is read from the environment
+// that BUILDS the DMG (it is baked into the launcher the installer writes) and from the environment
+// that starts a `run` task.
+//
+// Validated for the same reason the launcher script validates it, and against the same rule:
+// kotlinx parses the raw property with `toLongOrNull()` and calls error() on anything that is not
+// an integer >= 1, killing the JVM the first time Dispatchers.IO is touched. An empty or blank
+// value is the trap - it is a SET property with no usable value, which kotlinx rejects, so it must
+// not be treated as "unset" here. Failing the build names the variable; the JVM's own death names
+// only a system property nobody set by hand.
+// SISTER-IMPL-TAG: io-parallelism-default. The 512 below must stay in lockstep with every other
+// site carrying that tag — grep for it; the launcher contract test pins them together.
+val ioParallelism = System.getenv("TRAILBLAZE_IO_PARALLELISM").orEmpty().ifBlank { "512" }
+require(ioParallelism.toIntOrNull().let { it != null && it >= 1 }) {
+  "TRAILBLAZE_IO_PARALLELISM must be an integer >= 1, got '$ioParallelism'. kotlinx.coroutines " +
+    "rejects anything else and kills the JVM the first time Dispatchers.IO is touched."
+}
+val ioParallelismJvmArg = "-Dkotlinx.coroutines.io.parallelism=$ioParallelism"
+
 // Exclude heavy transitive dependencies not needed in the uber JAR.
 // See trailblaze-host/build.gradle.kts for detailed "Why" comments on each exclusion.
 configurations.all {
@@ -96,6 +119,7 @@ compose.desktop {
   application {
     mainClass = "xyz.block.trailblaze.desktop.Trailblaze"
     jvmArgs += macOsJvmArgs
+    jvmArgs += ioParallelismJvmArg
 
     nativeDistributions {
       targetFormats(
@@ -305,6 +329,7 @@ afterEvaluate {
     // Same bounded heap the JAR launcher sets (scripts/trailblaze at the OSS repo root) - without it a
     // Gradle-mode daemon runs at the JVM default and drifts from the shipped configuration.
     maxHeapSize = System.getenv("TRAILBLAZE_MAX_HEAP") ?: "4g"
+    jvmArgs(ioParallelismJvmArg)
 
     if (System.getProperty("os.name").contains("Mac")) {
       jvmArgs(*macOsJvmArgs.toTypedArray())

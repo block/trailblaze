@@ -29,6 +29,11 @@ interface DriverInput {
   generatedAt?: string;
   /** Canonical hosted URL baked into the report so its Copy link works from any serving location. */
   shareUrl?: string;
+  /**
+   * The multi-run report this document's runs also belong to (the daemon's `/report` when it
+   * serves one session). A single-run document links its Compare there, scoped by session id.
+   */
+  allRunsUrl?: string;
   /** File names of event-formatter modules staged beside this driver (see run-report-events.ts). */
   formatters?: string[];
   /**
@@ -77,7 +82,7 @@ type ReportCore = {
   traceHierarchies(trace: RawTraceRow[], sessionPassed: boolean): Record<string, unknown> | null;
   traceScreenshotFiles(trace: RawTraceRow[]): string[];
   isSelectorAnalyzableTree(hierarchy: unknown): boolean;
-  buildMultiReportHtml(args: { generatedAt?: string; shareUrl?: string; sessions: SessionInput[]; selectorEngine?: SelectorEnginePayload | null }): string;
+  buildMultiReportHtml(args: { generatedAt?: string; shareUrl?: string; allRunsUrl?: string; sessions: SessionInput[]; selectorEngine?: SelectorEnginePayload | null }): string;
 };
 
 const MIME = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", webp: "image/webp", gif: "image/gif" };
@@ -715,7 +720,7 @@ function main(): void {
   const selectorEngine = anyAnalyzableHierarchy(liftedHierarchies, core.isSelectorAnalyzableTree)
     ? packSelectorEngine(readSelectorEngineSource(input.selectorEngine))
     : null;
-  const html = core.buildMultiReportHtml({ generatedAt: input.generatedAt || "", ...(input.shareUrl ? { shareUrl: input.shareUrl } : {}), ...(selectorEngine ? { selectorEngine } : {}), sessions });
+  const html = core.buildMultiReportHtml({ generatedAt: input.generatedAt || "", ...(input.shareUrl ? { shareUrl: input.shareUrl } : {}), ...(input.allRunsUrl ? { allRunsUrl: input.allRunsUrl } : {}), ...(selectorEngine ? { selectorEngine } : {}), sessions });
   writeFileSync(outputPath, html);
 }
 

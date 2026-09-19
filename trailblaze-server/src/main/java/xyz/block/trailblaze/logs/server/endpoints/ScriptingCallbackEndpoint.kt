@@ -51,28 +51,18 @@ object ScriptingCallbackEndpoint {
   }
 
   /**
-   * Default per-callback dispatch timeout, in milliseconds. Bounded so a buggy tool that never
-   * returns can't wedge the MCP session indefinitely — the outer agent timeout would eventually
-   * surface it, but at a much longer horizon and with a less actionable error. 30 s was picked
-   * for the client-callTool landing as "comfortably above a realistic tap/wait-for-settle
-   * sequence, comfortably below the outer agent timeout." Override via
-   * [CALLBACK_TIMEOUT_MS_PROPERTY] (for example, `-Dtrailblaze.callback.timeoutMs=<ms>`) when
-   * a specific test or deployment needs a different bound.
+   * Default per-callback dispatch timeout, in milliseconds. An alias of
+   * [JsScriptingCallbackDispatcher.DEFAULT_DISPATCH_TIMEOUT_MS], which is the single source of
+   * truth and the value this endpoint actually dispatches with (see
+   * [JsScriptingCallbackDispatcher.resolveTimeoutMs]); the rationale for the number lives there.
+   * Named here because this endpoint is the documented home of the `/scripting/callback` knobs.
+   *
+   * Override via [CALLBACK_TIMEOUT_MS_PROPERTY] (for example,
+   * `-Dtrailblaze.callback.timeoutMs=<ms>`) when a specific test or deployment needs a different
+   * bound. The spawner reads the same property and forwards it, plus a small buffer, to the
+   * subprocess as `TRAILBLAZE_CLIENT_FETCH_TIMEOUT_MS`, so one override moves both sides.
    */
-  // Keep in lockstep with `McpSubprocessSpawner.resolveClientFetchTimeoutMs` — the spawner
-  // reads `trailblaze.callback.timeoutMs` and forwards (value + 2 s buffer) to the subprocess
-  // as `TRAILBLAZE_CLIENT_FETCH_TIMEOUT_MS` so the daemon-side dispatch timeout and the
-  // client-side fetch timeout stay synchronized. Changing this default without updating the
-  // spawner's default breaks the "override both together" invariant.
-  //
-  // 120s accommodates the realistic worst-case nested-dispatch scenario: a scripted tool
-  // that calls a worker scripted tool that performs a real UI login. The inner UI login
-  // alone (e.g. waiting for staging's post-login redirect) can legitimately take up to 60s
-  // when the underlying app is slow. With a 30s default, the outer caller's wait timed out
-  // before the inner worker could complete, surfacing as
-  // `trailblaze.client.callTool("X") aborted after 32000ms`. Callers that want a tighter
-  // window can still set `-Dtrailblaze.callback.timeoutMs` explicitly.
-  const val DEFAULT_CALLBACK_TIMEOUT_MS: Long = 120_000L
+  const val DEFAULT_CALLBACK_TIMEOUT_MS: Long = JsScriptingCallbackDispatcher.DEFAULT_DISPATCH_TIMEOUT_MS
 
   /**
    * Default maximum `JsScriptingCallbackRequest` body size accepted by the endpoint, in bytes. A callback

@@ -429,6 +429,10 @@
       title: sessionDisplayName(started, sessionId),
       status: statusLabel(status),
     };
+    // Kept in parity with sessionMetaJson: a run is named by its id wherever one document links to
+    // another, and a zip-opened report is the same document shape. Omitted when unknown, like every
+    // other optional key here — an empty id would read as a real one to anything that resolves it.
+    if (sessionId) meta.sessionId = sessionId;
     var config = (started && started.trailConfig) || null;
     if (config && config.target) meta.target = config.target;
     var app = started && started.targetAppInfo;

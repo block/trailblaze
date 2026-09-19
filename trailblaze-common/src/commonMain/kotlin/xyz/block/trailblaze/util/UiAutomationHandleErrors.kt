@@ -78,6 +78,73 @@ object UiAutomationHandleErrors {
       }
 
   /**
+   * Names the likely cause when clearing the cached UiAutomation handle failed, so a regression is
+   * attributable from a log line instead of surfacing only as an unexplained server restart.
+   *
+   * The signature worth explaining: under hidden-API enforcement the platform does not report
+   * `mUiAutomation` as *blocked*, it reports it as *absent* (`NoSuchFieldException: No field
+   * mUiAutomation in class Landroid/app/Instrumentation;`) — which reads exactly like the field
+   * having been renamed by an SDK bump, and sent one investigation looking for a rename that had not
+   * happened.
+   *
+   * That signature is genuinely **ambiguous**, so this names both candidates and the check that
+   * separates them rather than asserting one. A real removal or rename of the field on a newer
+   * platform throws the identical exception, and no flag can make a removed field reappear.
+   *
+   * The flag is also not the only thing that decides this. `mUiAutomation` is on the platform's
+   * `max-target-o` list, so enforcement applies only to a process whose **targetSdk is above API
+   * 26** — measured on an API 34 emulator: a runner APK at targetSdk 26 is `allowed` with no flag,
+   * the same code at targetSdk 36 is `denied` without it and `allowed` with it. So a runner that
+   * has never carried the flag can still have working recovery, and quietly lose it the day
+   * someone raises its targetSdk. That is why the diagnosis points at the platform's own logcat
+   * verdict rather than at the launch argv alone.
+   *
+   * [instrumentationProcessIsTrailblazeOwned] is load-bearing and not cosmetic: only Trailblaze's
+   * own standalone runner is launched with `--no-hidden-api-checks`. For an in-process harness the
+   * flag is deliberately absent — the instrumented process is the app under test, and relaxing
+   * enforcement there would let that app call a blocklisted hidden API and pass. Telling that
+   * operator to "restore the flag" would be advice to weaken the very contract the harness exists to
+   * test, so this says the opposite: the failure is expected, and the restart is the intended
+   * fallback. Pass `false` whenever ownership cannot be determined.
+   *
+   * @param throwableClassName fully-qualified class name of what the reflective clear threw.
+   * @param throwableMessage its message, if any.
+   * @param instrumentationProcessIsTrailblazeOwned whether this process is Trailblaze's own runner
+   *   rather than an app under test — see
+   *   `TrailblazeOnDeviceInstrumentationTarget.instrumentationProcessIsTrailblazeOwned`.
+   */
+  fun cacheClearFailureDiagnosis(
+    throwableClassName: String,
+    throwableMessage: String?,
+    instrumentationProcessIsTrailblazeOwned: Boolean,
+  ): String {
+    val fallbackCost =
+      "In-process stale-handle recovery is unavailable here, so every stale handle costs an " +
+        "on-device server restart instead."
+    val looksLikeHiddenApiBlock = throwableClassName.endsWith("NoSuchFieldException") ||
+      throwableMessage.orEmpty().contains("No field mUiAutomation", ignoreCase = true)
+    if (!looksLikeHiddenApiBlock) {
+      return "Android internal API may have changed. $fallbackCost"
+    }
+    return if (instrumentationProcessIsTrailblazeOwned) {
+      "This is the ambiguous hidden-API signature: enforcement reports the private mUiAutomation " +
+        "field as ABSENT rather than blocked, and a genuine platform removal of the field throws " +
+        "the same exception. Logcat settles it — the platform logs its own verdict just before " +
+        "this line: `Accessing hidden field Landroid/app/Instrumentation;->mUiAutomation ... " +
+        "denied` means enforcement blocked it, and NO such line means the field really is gone. " +
+        "If it was blocked, this `am instrument` was launched WITHOUT --no-hidden-api-checks, " +
+        "which Trailblaze's own runner is supposed to carry (the field is max-target-o, so a " +
+        "runner APK targeting API 27 or lower is allowed it either way). If it is gone, no flag " +
+        "can undo that. " + fallbackCost
+    } else {
+      "Expected here: this instrumentation runs inside the app under test, which is deliberately " +
+        "launched WITHOUT --no-hidden-api-checks so the app cannot reach blocklisted hidden APIs " +
+        "it would be denied in production. Do NOT add that flag to restore this path — the " +
+        "enforcement is the point. $fallbackCost"
+    }
+  }
+
+  /**
    * @return true if [message] indicates that in-process UiAutomation recovery is impossible:
    *   either Android blocked clearing the cached handle, or reconnecting after the cache reset
    *   also failed. Both errors require the host to restart the on-device instrumentation.

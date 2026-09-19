@@ -140,7 +140,7 @@ class VisibleStringsLogTest {
   }
 
   @Test
-  fun `two screens saying different things get different screen ids`() {
+  fun `two screens saying different things get different screen content hashes`() {
     val lines = render(
       listOf(
         driverLog("shot-a.png", screen("Checkout")),
@@ -149,8 +149,10 @@ class VisibleStringsLogTest {
     ).drop(1)
 
     assertTrue(
-      lines[0].getValue("screenId").jsonPrimitive.content != lines[1].getValue("screenId").jsonPrimitive.content,
+      lines[0].getValue("screenContentHash").jsonPrimitive.content !=
+        lines[1].getValue("screenContentHash").jsonPrimitive.content,
     )
+    assertNull(lines[0]["screenId"])
   }
 
   @Test

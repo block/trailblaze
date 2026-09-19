@@ -1,8 +1,10 @@
 package xyz.block.trailblaze.toolcalls
 
+import ai.koog.agents.core.tools.Tool
 import ai.koog.agents.core.tools.ToolDescriptor
 import ai.koog.agents.core.tools.ToolRegistry
 import ai.koog.prompt.message.MessagePart
+import ai.koog.serialization.JSONSerializer
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.InternalSerializationApi
 import kotlinx.serialization.descriptors.elementNames
@@ -211,6 +213,16 @@ class TrailblazeToolRepo(
   fun asToolRegistry(
     toolDispatcher: suspend (TrailblazeTool) -> String,
     trailblazeToolContextProvider: () -> TrailblazeToolExecutionContext,
+  ): ToolRegistry = asToolRegistryWithDynamicToolHook(
+    toolDispatcher = toolDispatcher,
+    trailblazeToolContextProvider = trailblazeToolContextProvider,
+    afterDynamicToolExecution = {},
+  )
+
+  internal fun asToolRegistryWithDynamicToolHook(
+    toolDispatcher: suspend (TrailblazeTool) -> String,
+    trailblazeToolContextProvider: () -> TrailblazeToolExecutionContext,
+    afterDynamicToolExecution: () -> Unit,
   ): ToolRegistry {
     val snapshot = snapshotRegisteredTools()
     return ToolRegistry {
@@ -225,9 +237,27 @@ class TrailblazeToolRepo(
       // `toolCallToTrailblazeTool` — this only governs what's advertised.
       val advertisedDynamic = snapshot.advertisedDynamic()
       if (advertisedDynamic.isNotEmpty()) {
-        tools(advertisedDynamic.map { it.buildKoogTool(trailblazeToolContextProvider) })
+        tools(
+          advertisedDynamic.map {
+            it.buildKoogTool(trailblazeToolContextProvider)
+              .withAfterExecution(afterDynamicToolExecution)
+          },
+        )
       }
     }
+  }
+
+  private fun <T : TrailblazeTool> TrailblazeKoogTool<T>.withAfterExecution(
+    afterExecution: () -> Unit,
+  ): Tool<T, String> = object : Tool<T, String>(argsType, resultType, descriptor, metadata) {
+    override suspend fun execute(args: T): String = try {
+      this@withAfterExecution.execute(args)
+    } finally {
+      afterExecution()
+    }
+
+    override fun encodeResultToString(result: String, serializer: JSONSerializer): String =
+      this@withAfterExecution.encodeResultToString(result, serializer)
   }
 
   private fun addTrailblazeTools(vararg trailblazeTool: KClass<out TrailblazeTool>) = synchronized(registeredTrailblazeToolClasses) {
@@ -403,11 +433,7 @@ class TrailblazeToolRepo(
       snapshot.advertisedDynamic().forEach { add(it.name.toolName) }
     }
 
-    return candidateNames
-      .asSequence()
-      .filter { candidate -> isHighConfidenceToolNameMatch(requestedName, candidate) }
-      .sortedWith(compareBy({ toolNameMatchRank(requestedName, it) }, { it }))
-      .take(3)
+    return ToolNameSuggestions.suggestionsFor(requestedName, candidateNames)
       .map { name ->
         // Keep the suggestion's argument list on the resolver's canonical five-tier lookup.
         // Unknown-tool candidates are advertised names, so this should always resolve; use an
@@ -421,38 +447,6 @@ class TrailblazeToolRepo(
     val name: String,
     val argumentKeys: Set<String>,
   )
-
-  private fun isHighConfidenceToolNameMatch(requestedName: String, candidateName: String): Boolean {
-    val requested = requestedName.lowercase()
-    val candidate = candidateName.lowercase()
-    return candidate.startsWith(requested) ||
-      requested.startsWith(candidate) ||
-      toolNameEditDistance(requested, candidate) <= minOf(3, maxOf(1, requested.length / 3))
-  }
-
-  private fun toolNameMatchRank(requestedName: String, candidateName: String): Int {
-    val requested = requestedName.lowercase()
-    val candidate = candidateName.lowercase()
-    return if (candidate.startsWith(requested) || requested.startsWith(candidate)) 0
-    else toolNameEditDistance(requested, candidate)
-  }
-
-  private fun toolNameEditDistance(left: String, right: String): Int {
-    var previous = IntArray(right.length + 1) { it }
-    for (leftIndex in left.indices) {
-      val current = IntArray(right.length + 1)
-      current[0] = leftIndex + 1
-      for (rightIndex in right.indices) {
-        current[rightIndex + 1] = minOf(
-          previous[rightIndex + 1] + 1,
-          current[rightIndex] + 1,
-          previous[rightIndex] + if (left[leftIndex] == right[rightIndex]) 0 else 1,
-        )
-      }
-      previous = current
-    }
-    return previous[right.length]
-  }
 
   /**
    * Variant of [toolCallToTrailblazeTool] that bypasses the `surfaceToLlm` filter for YAML-defined

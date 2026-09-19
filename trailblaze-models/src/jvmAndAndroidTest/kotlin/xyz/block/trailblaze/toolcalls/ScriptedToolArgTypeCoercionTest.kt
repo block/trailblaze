@@ -9,6 +9,7 @@ import kotlinx.serialization.json.addJsonObject
 import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.double
 import kotlinx.serialization.json.long
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
@@ -72,6 +73,138 @@ class ScriptedToolArgTypeCoercionTest {
     val v = out["code"] as JsonPrimitive
     assertTrue(v.isString)
     assertEquals("0130", v.content)
+  }
+
+  @Test
+  fun `a cents-bearing string for a number param becomes that number`() {
+    // The CLI deliberately hands over the text the user typed (`amount=1.50`) so the cents survive
+    // the trip; a parameter the tool declares numeric must still arrive as a number.
+    val args = buildJsonObject {
+      put("amount", "1.50")
+      put("total", "2.00")
+      put("tip", "0.50")
+      put("count", "+5")
+    }
+    val out = coerceArgsToDescriptorTypes(
+      args,
+      descriptor("amount" to "number", "total" to "number", "tip" to "number", "count" to "integer"),
+    )
+    assertEquals(1.5, (out["amount"] as JsonPrimitive).double)
+    assertEquals(2L, (out["total"] as JsonPrimitive).long)
+    assertEquals(0.5, (out["tip"] as JsonPrimitive).double)
+    assertEquals(5L, (out["count"] as JsonPrimitive).long)
+    assertFalse((out["amount"] as JsonPrimitive).isString)
+    assertFalse((out["count"] as JsonPrimitive).isString)
+  }
+
+  @Test
+  fun `a number param takes a plain decimal whose printed form uses exponent notation`() {
+    // A double prints itself in exponent notation below 1e-3 and at/above 1e7, so a plain decimal
+    // in those ranges never matches its own printed text. These are ordinary typed values
+    // (`scale=0.0001`) and must reach the tool as numbers.
+    val args = buildJsonObject {
+      put("small", "0.0001")
+      put("large", "10000000.50")
+      put("padded", "10000000.00")
+      put("negative", "-0.0001")
+    }
+    val out = coerceArgsToDescriptorTypes(
+      args,
+      descriptor("small" to "number", "large" to "number", "padded" to "number", "negative" to "number"),
+    )
+    assertEquals(0.0001, (out["small"] as JsonPrimitive).double)
+    assertEquals(10000000.50, (out["large"] as JsonPrimitive).double)
+    assertEquals(10000000L, (out["padded"] as JsonPrimitive).long)
+    assertEquals(-0.0001, (out["negative"] as JsonPrimitive).double)
+    assertFalse((out["small"] as JsonPrimitive).isString)
+    assertFalse((out["large"] as JsonPrimitive).isString)
+    assertFalse((out["padded"] as JsonPrimitive).isString)
+    assertFalse((out["negative"] as JsonPrimitive).isString)
+  }
+
+  @Test
+  fun `a number param keeps a zero-padded decimal, exponent-notation notwithstanding`() {
+    // Accepting a value regardless of how a double prints it must not also start accepting the
+    // padding that marks a mistyped code.
+    val args = buildJsonObject {
+      put("code", "01.5")
+      put("small", "00.0001")
+    }
+    val out = coerceArgsToDescriptorTypes(args, descriptor("code" to "number", "small" to "number"))
+    assertSame(args, out)
+    assertEquals("01.5", (out["code"] as JsonPrimitive).content)
+    assertEquals("00.0001", (out["small"] as JsonPrimitive).content)
+  }
+
+  @Test
+  fun `a number param keeps a string whose value a number cannot hold`() {
+    // More precision than a Double holds, and more magnitude than a Long holds: converting either
+    // would drop digits, so the text is the only faithful thing to pass on.
+    val args = buildJsonObject {
+      put("precise", "1.00000000000000000001")
+      put("huge", "10000000000000000000.00")
+    }
+    val out = coerceArgsToDescriptorTypes(args, descriptor("precise" to "number", "huge" to "number"))
+    assertEquals("1.00000000000000000001", (out["precise"] as JsonPrimitive).content)
+    assertEquals("10000000000000000000.00", (out["huge"] as JsonPrimitive).content)
+    assertTrue((out["precise"] as JsonPrimitive).isString)
+    assertTrue((out["huge"] as JsonPrimitive).isString)
+  }
+
+  @Test
+  fun `a number param keeps a shortened integer too wide for a scripted tool's number type`() {
+    // A scripted tool gets its arguments via `JSON.parse`, where every number is a double, so an
+    // integer past 2^53 would arrive as a neighbouring value. Only the shortened spellings reach
+    // here as strings at all, and both must stay text so the tool's schema rejects them by name.
+    val args = buildJsonObject {
+      put("padded", "9007199254740993.00")
+      put("signed", "+9007199254740993")
+    }
+    val out = coerceArgsToDescriptorTypes(args, descriptor("padded" to "number", "signed" to "integer"))
+    assertEquals("9007199254740993.00", (out["padded"] as JsonPrimitive).content)
+    assertEquals("+9007199254740993", (out["signed"] as JsonPrimitive).content)
+    assertTrue((out["padded"] as JsonPrimitive).isString)
+    assertTrue((out["signed"] as JsonPrimitive).isString)
+  }
+
+  @Test
+  fun `a number param still takes the widest integer a scripted tool's number type holds exactly`() {
+    // The bound itself (2^53 - 1) is representable, so rejecting it would lose a usable value.
+    val args = buildJsonObject {
+      put("padded", "9007199254740991.00")
+      put("signed", "+9007199254740991")
+    }
+    val out = coerceArgsToDescriptorTypes(args, descriptor("padded" to "number", "signed" to "integer"))
+    assertEquals(9007199254740991L, (out["padded"] as JsonPrimitive).long)
+    assertEquals(9007199254740991L, (out["signed"] as JsonPrimitive).long)
+    assertFalse((out["padded"] as JsonPrimitive).isString)
+    assertFalse((out["signed"] as JsonPrimitive).isString)
+  }
+
+  @Test
+  fun `a number param keeps the sign of a negative zero`() {
+    // `-0` and `-0.00` name negative zero. Spelled as an integer it would coerce to Long 0, and a
+    // Long has no sign bit, so a tool dividing by it would see Infinity where -Infinity was typed.
+    val args = buildJsonObject {
+      put("plain", "-0")
+      put("padded", "-0.00")
+      put("positive", "+0.00")
+    }
+    val out = coerceArgsToDescriptorTypes(args, descriptor("plain" to "number", "padded" to "number", "positive" to "number"))
+    assertEquals(Double.NEGATIVE_INFINITY, 1.0 / (out["plain"] as JsonPrimitive).double)
+    assertEquals(Double.NEGATIVE_INFINITY, 1.0 / (out["padded"] as JsonPrimitive).double)
+    assertEquals("-0.0", (out["plain"] as JsonPrimitive).content)
+    assertEquals(0L, (out["positive"] as JsonPrimitive).long)
+    assertFalse((out["plain"] as JsonPrimitive).isString)
+    assertFalse((out["padded"] as JsonPrimitive).isString)
+  }
+
+  @Test
+  fun `a cents-bearing string for a string param keeps every digit`() {
+    val args = buildJsonObject { put("amount", "1.50") }
+    val out = coerceArgsToDescriptorTypes(args, descriptor("amount" to "string"))
+    assertSame(args, out)
+    assertEquals("1.50", (out["amount"] as JsonPrimitive).content)
   }
 
   @Test

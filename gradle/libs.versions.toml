@@ -119,6 +119,7 @@ assertk = { module = "com.willowtreeapps.assertk:assertk", version.ref = "assert
 clikt = { module = "com.github.ajalt.clikt:clikt", version.ref = "clikt" }
 coil3-compose = { module = "io.coil-kt.coil3:coil-compose", version.ref = "coil3" }
 coil3-network-ktor = { module = "io.coil-kt.coil3:coil-network-ktor3", version.ref = "coil3" }
+coil3-test = { module = "io.coil-kt.coil3:coil-test", version.ref = "coil3" }
 compose-components-resources = { module = "org.jetbrains.compose.components:components-resources", version.ref = "jetbrains-compose-multiplatform" }
 compose-components-ui-tooling-preview = { module = "org.jetbrains.compose.components:components-ui-tooling-preview", version.ref = "jetbrains-compose-multiplatform" }
 compose-foundation = { module = "org.jetbrains.compose.foundation:foundation", version.ref = "jetbrains-compose-multiplatform" }

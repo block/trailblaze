@@ -151,10 +151,6 @@ internal fun ScreenshotGallery(
                   modifier = Modifier.fillMaxWidth(),
                   imageLoader = imageLoader,
                 )
-                Box(
-                  modifier =
-                    Modifier.matchParentSize().clickable { onSelectedIndexChanged(index) },
-                )
               }
             } else {
               // Action card for events without screenshots — sized to match screenshot thumbnails

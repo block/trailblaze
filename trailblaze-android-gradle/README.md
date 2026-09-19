@@ -378,6 +378,32 @@ The Android SDK is located the way an Android build usually finds it: `local.pro
 `sdk.dir`, then `ANDROID_HOME` / `ANDROID_SDK_ROOT`, then the default install locations. Any
 modern build-tools + platform works — the highest installed of each is used.
 
+### Zero-cost launches: the split-APK host (`-Ptrailblaze.inProcessIdle.targetApk`)
+
+Attaching a foreign-package instrumentation makes Android open the app's APK in a **second class
+loader on every cold start** — seconds per launch for a heavy app, charged to every trail that
+launches it. The detector has a second host that avoids this entirely: a **split APK of the app's
+own package** whose `ContentProvider` starts the same server as the app starts. Nothing is
+attached, nothing restarts, and the app launches exactly as it does without Trailblaze.
+
+A split can only be installed next to a base with the **same `versionCode`**, so it is built per
+app build. Point the property at the exact app APK the device will have installed and every
+`inProcessIdle { }` whose `targetApplicationId` matches that APK's package also stages
+`inprocess-idle-apks/trailblaze-inprocess-idle-split-<suffix>.apk`:
+
+```bash
+./gradlew :my-tests:assembleDebugAndroidTest -Ptrailblaze.inProcessIdle.targetApk=/path/to/app.apk
+```
+
+At run time the on-device attach installs the split when it is staged and uses the instrumentation
+host otherwise, so a build without the property behaves as before. A stale split is removed from
+the staging dir on any build that cannot stamp one.
+
+The install goes through the package manager's own inheriting session (`pm install-create -p <app>`,
+then a streamed `install-write` and `install-commit`) rather than a `PackageInstaller` session from
+the test process: the latter is refused on API 34 with `INSTALL_FAILED_ALREADY_EXISTS`, which reads
+like the app is already installed rather than like a split being added to it.
+
 ## What it does not do
 
 This plugin scans **file and directory names only** — it never opens the

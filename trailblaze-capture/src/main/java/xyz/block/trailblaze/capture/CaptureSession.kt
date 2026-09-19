@@ -13,7 +13,13 @@ import xyz.block.trailblaze.util.Console
  * Start all streams before test execution, stop all after. Artifacts are saved alongside session
  * logs.
  */
-class CaptureSession(private val streams: List<CaptureStream>, private val options: CaptureOptions) {
+class CaptureSession internal constructor(
+  private val streams: List<CaptureStream>,
+  private val options: CaptureOptions,
+  private val platform: TrailblazeDevicePlatform?,
+) {
+
+  constructor(streams: List<CaptureStream>, options: CaptureOptions) : this(streams, options, null)
 
   fun startAll(sessionDir: File, deviceId: String, appId: String?) {
     for (stream in streams) {
@@ -28,11 +34,19 @@ class CaptureSession(private val streams: List<CaptureStream>, private val optio
 
   fun stopAll(): List<CaptureArtifact> {
     val artifacts = mutableListOf<CaptureArtifact>()
+    var appScopedDeviceLog: CaptureArtifact? = null
     for (stream in streams) {
       try {
         Console.log("Stopping ${stream.type} capture...")
         stream.stop(options)?.let { artifact ->
           artifacts.add(artifact)
+          if (
+            artifact.type == xyz.block.trailblaze.capture.model.CaptureType.LOGCAT &&
+            stream is AppScopedCaptureStream &&
+            stream.isAppScoped
+          ) {
+            appScopedDeviceLog = artifact
+          }
           Console.log(
             "${stream.type} captured: ${artifact.file.name} (${artifact.file.length() / 1024}KB)"
           )
@@ -44,8 +58,23 @@ class CaptureSession(private val streams: List<CaptureStream>, private val optio
     // Write metadata for timeline integration
     if (artifacts.isNotEmpty()) {
       writeCaptureMetadata(artifacts)
+      writeCrashEvents(appScopedDeviceLog)
     }
     return artifacts
+  }
+
+  private fun writeCrashEvents(deviceLogArtifact: CaptureArtifact?) {
+    val devicePlatform = platform ?: return
+    if (devicePlatform != TrailblazeDevicePlatform.ANDROID && devicePlatform != TrailblazeDevicePlatform.IOS) {
+      return
+    }
+    val deviceLog = deviceLogArtifact?.file ?: return
+    val sessionDir = deviceLog.parentFile ?: return
+    xyz.block.trailblaze.capture.logcat.CrashEventArtifactWriter.write(
+      sessionDir = sessionDir,
+      deviceLog = deviceLog,
+      platform = devicePlatform,
+    )
   }
 
   private fun writeCaptureMetadata(artifacts: List<CaptureArtifact>) {
@@ -111,7 +140,7 @@ class CaptureSession(private val streams: List<CaptureStream>, private val optio
         streams.add(xyz.block.trailblaze.capture.logcat.IosLogCapture())
       }
       if (streams.isEmpty()) return null
-      return CaptureSession(streams, options)
+      return CaptureSession(streams, options, platform)
     }
   }
 }

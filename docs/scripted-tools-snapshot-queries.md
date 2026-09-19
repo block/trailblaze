@@ -7,10 +7,6 @@ mutating the device. It complements the action tools (`tapOnPoint`, `inputText`,
 It takes a LIST of selectors and answers all of them from ONE view-hierarchy capture,
 returning one match list per selector, index-aligned to the input.
 
-> `findMatches` — the single-selector tool this replaces — is **deprecated** and scheduled
-> for deletion once its callers move. A single-element `selectors` list behaves identically
-> to it, so migrating is mechanical. Don't add new callers.
-
 ## What it returns
 
 ```ts

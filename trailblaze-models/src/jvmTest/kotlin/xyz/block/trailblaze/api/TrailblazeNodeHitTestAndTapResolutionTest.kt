@@ -1093,6 +1093,60 @@ class TrailblazeNodeHitTestAndTapResolutionTest {
     )
   }
 
+  // ======================================================================
+  // hitTestWithin: contest scoped to a subtree, climb unrestricted
+  // ======================================================================
+
+  @Test
+  fun `hitTestWithin ignores an overlapping node off the subtree but still climbs to the control`() {
+    nextId = 1L
+    val overlay = node(
+      detail = DriverNodeDetail.AndroidAccessibility(text = "Review sale", className = "android.widget.TextView"),
+      bounds = TrailblazeNode.Bounds(400, 300, 560, 340),
+    )
+    val label = node(
+      detail = DriverNodeDetail.AndroidAccessibility(text = "Continue", className = "android.widget.TextView"),
+      bounds = TrailblazeNode.Bounds(350, 280, 750, 370),
+    )
+    val wrapper = node(
+      detail = DriverNodeDetail.AndroidAccessibility(
+        resourceId = "com.example:id/continue_button",
+        className = "android.widget.FrameLayout",
+        isClickable = true,
+      ),
+      bounds = TrailblazeNode.Bounds(300, 250, 800, 400),
+      children = listOf(label),
+    )
+    val root = node(
+      bounds = TrailblazeNode.Bounds(0, 0, 1000, 1000),
+      children = listOf(overlay, wrapper),
+    )
+
+    // Unscoped, the smaller overlay wins the point — hitTest has no z-order.
+    assertEquals(overlay.nodeId, root.hitTest(550, 325)?.nodeId)
+    // Hit-testing the subtree alone would strand the point on the bare label, because the
+    // clickable wrapper is the label's parent and not part of its subtree.
+    assertEquals(label.nodeId, label.hitTest(550, 325)?.nodeId)
+    // Scoped contest plus the real ancestor climb: the overlay loses, the wrapper is found.
+    assertEquals(wrapper.nodeId, root.hitTestWithin(label, 550, 325)?.nodeId)
+  }
+
+  @Test
+  fun `hitTestWithin returns null when the point is outside the subtree`() {
+    nextId = 1L
+    val label = node(
+      detail = DriverNodeDetail.AndroidAccessibility(text = "Continue"),
+      bounds = TrailblazeNode.Bounds(350, 280, 750, 370),
+    )
+    val root = node(
+      bounds = TrailblazeNode.Bounds(0, 0, 1000, 1000),
+      children = listOf(label),
+    )
+    // Inside the root, so plain hitTest answers; nothing in the scope contains it.
+    assertNotNull(root.hitTest(10, 10))
+    assertNull(root.hitTestWithin(label, 10, 10))
+  }
+
   private fun loadAccessibilityFixture(name: String): TrailblazeNode {
     val resource = checkNotNull(this::class.java.classLoader.getResource("fixtures/android-accessibility/$name")) {
       "Fixture not found on test classpath: fixtures/android-accessibility/$name"

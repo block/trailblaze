@@ -70,9 +70,8 @@ import xyz.block.trailblaze.util.Console
  *   - If the existing file is missing OR carries the [FRAMEWORK_BANNER] string,
  *     it's framework-owned: rewrite freely.
  *   - If the existing file is hand-authored (anything else), preserve it verbatim
- *     and emit a one-line `Console.error` per trailmap telling the author to delete
- *     the file and re-run `trailblaze compile` to pick up the framework-generated
- *     version.
+ *     and log one line naming every trailmap it happened to, so an author who
+ *     expected framework-generated bindings can find out why they didn't get them.
  *
  * Classpath-backed trailmaps are skipped — they live inside JARs and can't accept
  * written files. Their consumers still get typed bindings through the workspace
@@ -91,9 +90,9 @@ object PerTrailmapTsconfigEmitter {
    * Emit `tools/tsconfig.json` + trailmap-root `.gitignore` for every filesystem-backed
    * trailmap in [resolvedTrailmaps]. Returns the absolute paths of every file the emitter
    * is responsible for (both files per trailmap, even when an individual write was a
-   * no-op because the on-disk content already matched). Authors of preserved
-   * hand-written tsconfigs get a per-trailmap [Console.error] explaining the upgrade
-   * path; the file path is still returned so caller logs reflect a stable count.
+   * no-op because the on-disk content already matched). Preserved hand-written tsconfigs
+   * are named in one logged line; the file path is still returned so caller logs reflect a
+   * stable count.
    *
    * @param workspaceRoot the workspace's `trails/` directory — the same root
    *   [WorkspaceTypeScriptSetup.setUp] writes `.trailblaze/sdk/dist/index.d.ts` into.
@@ -120,9 +119,12 @@ object PerTrailmapTsconfigEmitter {
     }
 
     val written = mutableListOf<Path>()
+    val handAuthored = mutableListOf<String>()
     resolvedTrailmaps.forEach { trailmap ->
       val trailmapDir = (trailmap.source as? TrailmapSource.Filesystem)?.trailmapDir ?: return@forEach
       val trailmapDirPath = trailmapDir.toPath().toAbsolutePath().normalize()
+      // Another workspace's directory (reached through a symlink) generates its own files.
+      if (!trailmapDirIsInsideWorkspace(absoluteWorkspaceRoot, trailmapDirPath)) return@forEach
       val toolsDir = trailmapDirPath.resolve(TOOLS_SUBDIR)
 
       val tsconfigPath = toolsDir.resolve(TSCONFIG_FILENAME)
@@ -131,12 +133,28 @@ object PerTrailmapTsconfigEmitter {
       val relativeSdkBundle = computeRelativePath(toolsDir, sdkDtsBundleAbsolute)
       val tsconfigContent = renderTsconfig(relativeSdkBundle)
 
-      writeTsconfigIfFrameworkOwned(tsconfigPath, tsconfigContent, trailmap.manifest.id)
+      if (!writeTsconfigIfFrameworkOwned(tsconfigPath, tsconfigContent)) {
+        handAuthored.add(trailmap.manifest.id)
+      }
       ensureGitignoreEntries(gitignorePath)
 
       written.add(tsconfigPath)
       written.add(gitignorePath)
     }
+    // Console.log, not Console.error. A workspace that hand-authors its tsconfigs has chosen a
+    // supported arrangement; nothing is wrong and nothing needs doing. This runs at daemon init,
+    // so as an always-visible line it landed on whatever command the developer happened to run
+    // first — a paragraph about TypeScript config in the middle of `trailblaze device list`.
+    //
+    // Where it ends up: on `compile`, `check` and the daemon — the commands that regenerate
+    // bindings, and so the ones a developer asking "why didn't my bindings change?" is running —
+    // Console.log reaches the terminal and the DesktopLogFileWriter tee in
+    // `~/.trailblaze/desktop-logs/`. Quiet commands drop it entirely, since quiet mode suppresses
+    // Console.log before the tee sees it. That loss is the point: `device list` enabling quiet
+    // mode is exactly the case this line must not print on, and it regenerates nothing, so there
+    // is no decision to explain. The sibling [WorkspaceCompileBootstrap] borrowed-trailmap notice
+    // routes the same way for the same reason.
+    handAuthoredTsconfigNotice(handAuthored)?.let { Console.log(it) }
     return written
   }
 
@@ -309,22 +327,36 @@ object PerTrailmapTsconfigEmitter {
   }
 
   /**
+   * One notice for every trailmap whose `tools/tsconfig.json` this run left alone, or null when
+   * there were none. One line for the whole run, not one per trailmap: a workspace that
+   * hand-authors its tsconfigs on purpose (this repo has ten) re-runs codegen on every daemon
+   * start and every CLI version change, and ten warnings each time buried the real output.
+   */
+  internal fun handAuthoredTsconfigNotice(trailmapIds: List<String>): String? {
+    if (trailmapIds.isEmpty()) return null
+    val noun = if (trailmapIds.size == 1) "trailmap keeps its" else "trailmaps keep their"
+    return "${trailmapIds.size} $noun hand-authored tools/tsconfig.json (${trailmapIds.sorted().joinToString(", ")}). " +
+      "A framework-managed tsconfig starts with the `${FRAMEWORK_BANNER.trim()}` line; delete a " +
+      "hand-authored one and re-run `trailblaze check` to switch."
+  }
+
+  /**
    * Banner-gated tsconfig writer. See the object kdoc for the contract — a
    * hand-authored tsconfig (one missing the [FRAMEWORK_BANNER] marker) is
-   * preserved verbatim and the author gets a single warning per trailmap.
+   * preserved verbatim. Returns false when that happened so [emit] can report
+   * all of them in one line.
    */
   private fun writeTsconfigIfFrameworkOwned(
     tsconfigPath: Path,
     rendered: String,
-    trailmapId: String,
-  ) {
+  ): Boolean {
     val existing = if (Files.isRegularFile(tsconfigPath)) Files.readString(tsconfigPath) else null
     if (existing == null) {
       Files.createDirectories(tsconfigPath.parent)
       Files.writeString(tsconfigPath, rendered)
-      return
+      return true
     }
-    if (existing == rendered) return
+    if (existing == rendered) return true
     // Recognize the current banner OR any legacy banner (e.g. the pre-#3236 string
     // that named `trailblaze compile`) so existing on-disk tsconfigs aren't misread
     // as hand-authored after the CLI verb is renamed. First-line equality matches the
@@ -332,17 +364,9 @@ object PerTrailmapTsconfigEmitter {
     // with the banner string buried in a hand-authored comment shouldn't be misread as
     // framework-owned just because the string appears somewhere.
     val firstLine = existing.lineSequence().firstOrNull().orEmpty()
-    if (firstLine != FRAMEWORK_BANNER && firstLine !in LEGACY_FRAMEWORK_BANNERS) {
-      Console.error(
-        "Trailmap '$trailmapId' has a hand-authored tools/tsconfig.json without the " +
-          "Trailblaze framework banner — preserving it verbatim. Delete this file " +
-          "and re-run `trailblaze check` to pick up the framework-managed " +
-          "version with typed `client.tools.<name>(args)` autocomplete. " +
-          "(Path: ${tsconfigPath.toAbsolutePath()})",
-      )
-      return
-    }
+    if (firstLine != FRAMEWORK_BANNER && firstLine !in LEGACY_FRAMEWORK_BANNERS) return false
     Files.writeString(tsconfigPath, rendered)
+    return true
   }
 
   /**

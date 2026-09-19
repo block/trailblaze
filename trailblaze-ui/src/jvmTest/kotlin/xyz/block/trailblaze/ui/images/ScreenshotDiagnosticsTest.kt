@@ -7,10 +7,11 @@ import kotlin.test.assertTrue
 /**
  * These are tests about what an inspector's failure message must NOT carry.
  *
- * A screenshot reference is usually a filename, but the published-report loader also accepts a
- * `data:` URI with the whole image inlined, and every loader folds the reference into the model it
- * returns — so the image pipeline's own failure text quotes it back. Both of those strings end up
- * in stdout and in a text pane with no scroll container and no line limit.
+ * A screenshot reference is usually a filename, but nothing stops a log from naming something far
+ * longer — a deep filesystem path, or a `data:` URI with the whole image inlined, which is how the
+ * retired WebAssembly report wrote them. Every loader folds the reference into the model it
+ * returns, so the image pipeline's own failure text quotes it back. Both of those strings end up in
+ * stdout and in a text pane with no scroll container and no line limit.
  */
 class ScreenshotDiagnosticsTest {
 
@@ -64,10 +65,8 @@ class ScreenshotDiagnosticsTest {
 
   @Test
   fun `a data uri with no payload is not marked as elided`() {
-    // These are the reachable short ones, and the reason it matters: `NetworkImageLoader` does not
-    // return null for a payload-free data URI, it falls through and hands the whole string to the
-    // image pipeline as a path — so this is what the reader sees when that fails. Claiming an
-    // elision here would send them looking for a payload that was never there.
+    // Short enough to say in full, and claiming an elision would send the reader looking for a
+    // payload that was never there.
     assertEquals("data:", ScreenshotDiagnostics.ref("data:"))
     assertEquals(
       "data:image/png;base64,",

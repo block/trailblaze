@@ -12,6 +12,7 @@ import xyz.block.trailblaze.api.DriverNodeMatch
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TrailblazeNode
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
+import xyz.block.trailblaze.api.TrailblazeNodeSelectorResolver
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
@@ -459,6 +460,229 @@ class TapOnTrailblazeToolTest {
     )
     assertEquals(false, tap.longPress)
     assertEquals(true, tap.nodeSelector?.androidAccessibility != null)
+  }
+
+  @Test
+  fun `accessibility-driver path records the tapped control, not an occluded label under it`() {
+    // A checkout bar from the screen underneath is still in the tree, behind the cart sheet's
+    // Charge button, and its label is smaller than the Charge label at the tap point. The
+    // whole-tree hit-test has no z-order and picks that occluded label, so the recording used
+    // to say "Review sale" for a tap on "Charge" — replay re-tapped the wrong element.
+    val occludedTitle = TrailblazeNode(
+      nodeId = nextId++,
+      bounds = TrailblazeNode.Bounds(389, 2168, 691, 2222),
+      driverDetail = DriverNodeDetail.AndroidAccessibility(
+        text = "Review sale",
+        resourceId = "com.example:id/checkout_button_title",
+        className = "android.widget.TextView",
+      ),
+    )
+    val occludedSubtitle = TrailblazeNode(
+      nodeId = nextId++,
+      bounds = TrailblazeNode.Bounds(444, 2222, 637, 2276),
+      driverDetail = DriverNodeDetail.AndroidAccessibility(
+        text = "1 item",
+        resourceId = "com.example:id/checkout_button_subtitle",
+        className = "android.widget.TextView",
+      ),
+    )
+    val occludedBar = TrailblazeNode(
+      nodeId = nextId++,
+      ref = "c223",
+      bounds = TrailblazeNode.Bounds(42, 2148, 1038, 2295),
+      children = listOf(occludedTitle, occludedSubtitle),
+      driverDetail = DriverNodeDetail.AndroidAccessibility(
+        className = "android.view.ViewGroup",
+        isClickable = true,
+      ),
+    )
+    val chargeTitle = TrailblazeNode(
+      nodeId = nextId++,
+      bounds = TrailblazeNode.Bounds(369, 2195, 711, 2249),
+      driverDetail = DriverNodeDetail.AndroidAccessibility(
+        text = "Charge \$2.00",
+        resourceId = "com.example:id/checkout_button_title",
+        className = "android.widget.TextView",
+      ),
+    )
+    val chargeButton = TrailblazeNode(
+      nodeId = nextId++,
+      ref = "t427",
+      bounds = TrailblazeNode.Bounds(42, 2148, 1038, 2295),
+      children = listOf(chargeTitle),
+      driverDetail = DriverNodeDetail.AndroidAccessibility(
+        className = "android.view.ViewGroup",
+        isClickable = true,
+      ),
+    )
+    val cartSheet = TrailblazeNode(
+      nodeId = nextId++,
+      bounds = TrailblazeNode.Bounds(0, 0, 1080, 2400),
+      children = listOf(chargeButton),
+      driverDetail = DriverNodeDetail.AndroidAccessibility(className = "android.widget.FrameLayout"),
+    )
+    val root = TrailblazeNode(
+      nodeId = nextId++,
+      bounds = TrailblazeNode.Bounds(0, 0, 1080, 2400),
+      children = listOf(occludedBar, cartSheet),
+      driverDetail = DriverNodeDetail.AndroidAccessibility(),
+    )
+    val context = contextWithTree(CapturingAgent(), tree = root)
+
+    val tap = assertIs<TapOnByElementSelector>(
+      TapTrailblazeTool(ref = "t427").toExecutableTrailblazeTools(context).single(),
+    )
+    val selector = tap.nodeSelector ?: error("expected a nodeSelector recording")
+    val resolved = assertIs<TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch>(TrailblazeNodeSelectorResolver.resolve(root, selector))
+    assertEquals(chargeButton.nodeId, resolved.node.nodeId)
+  }
+
+  @Test
+  fun `accessibility-driver path still records the clickable wrapper for a ref on its label`() {
+    // The occlusion guard must not disturb the ordinary case: a ref on a non-clickable label
+    // inside a clickable wrapper still records the wrapper the OS routes the touch to.
+    val label = TrailblazeNode(
+      nodeId = nextId++,
+      ref = "l1",
+      bounds = TrailblazeNode.Bounds(120, 210, 280, 250),
+      driverDetail = DriverNodeDetail.AndroidAccessibility(
+        text = "Continue",
+        className = "android.widget.TextView",
+      ),
+    )
+    val wrapper = TrailblazeNode(
+      nodeId = nextId++,
+      bounds = TrailblazeNode.Bounds(100, 200, 300, 260),
+      children = listOf(label),
+      driverDetail = DriverNodeDetail.AndroidAccessibility(
+        resourceId = "com.example:id/continue_button",
+        className = "android.widget.FrameLayout",
+        isClickable = true,
+      ),
+    )
+    val root = TrailblazeNode(
+      nodeId = nextId++,
+      bounds = TrailblazeNode.Bounds(0, 0, 1000, 1000),
+      children = listOf(wrapper),
+      driverDetail = DriverNodeDetail.AndroidAccessibility(),
+    )
+    val context = contextWithTree(CapturingAgent(), tree = root)
+
+    val tap = assertIs<TapOnByElementSelector>(
+      TapTrailblazeTool(ref = "l1").toExecutableTrailblazeTools(context).single(),
+    )
+    val selector = tap.nodeSelector ?: error("expected a nodeSelector recording")
+    val resolved = assertIs<TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch>(TrailblazeNodeSelectorResolver.resolve(root, selector))
+    assertEquals(wrapper.nodeId, resolved.node.nodeId)
+  }
+
+  @Test
+  fun `ref on a label still records its clickable wrapper when an occluded label wins the point`() {
+    // The two cases combined: the ref names a label whose control is its parent, AND a label
+    // from an occluded layer covers the same point and wins the whole-tree contest. Confining
+    // the contest to the label's subtree is not enough on its own — the label's subtree has no
+    // clickable wrapper in it — so the climb has to keep walking the label's real ancestors.
+    val occludedTitle = TrailblazeNode(
+      nodeId = nextId++,
+      bounds = TrailblazeNode.Bounds(400, 300, 560, 340),
+      driverDetail = DriverNodeDetail.AndroidAccessibility(
+        text = "Review sale",
+        className = "android.widget.TextView",
+      ),
+    )
+    val occludedBar = TrailblazeNode(
+      nodeId = nextId++,
+      bounds = TrailblazeNode.Bounds(0, 280, 1080, 360),
+      children = listOf(occludedTitle),
+      driverDetail = DriverNodeDetail.AndroidAccessibility(
+        resourceId = "com.example:id/checkout_button",
+        className = "android.view.ViewGroup",
+        isClickable = true,
+      ),
+    )
+    val label = TrailblazeNode(
+      nodeId = nextId++,
+      ref = "l7",
+      bounds = TrailblazeNode.Bounds(350, 280, 750, 370),
+      driverDetail = DriverNodeDetail.AndroidAccessibility(
+        text = "Continue",
+        className = "android.widget.TextView",
+      ),
+    )
+    val wrapper = TrailblazeNode(
+      nodeId = nextId++,
+      bounds = TrailblazeNode.Bounds(300, 250, 800, 400),
+      children = listOf(label),
+      driverDetail = DriverNodeDetail.AndroidAccessibility(
+        resourceId = "com.example:id/continue_button",
+        className = "android.widget.FrameLayout",
+        isClickable = true,
+      ),
+    )
+    val root = TrailblazeNode(
+      nodeId = nextId++,
+      bounds = TrailblazeNode.Bounds(0, 0, 1080, 2400),
+      children = listOf(occludedBar, wrapper),
+      driverDetail = DriverNodeDetail.AndroidAccessibility(),
+    )
+    val context = contextWithTree(CapturingAgent(), tree = root)
+
+    val tap = assertIs<TapOnByElementSelector>(
+      TapTrailblazeTool(ref = "l7").toExecutableTrailblazeTools(context).single(),
+    )
+    val selector = tap.nodeSelector ?: error("expected a nodeSelector recording")
+    val resolved = assertIs<TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch>(TrailblazeNodeSelectorResolver.resolve(root, selector))
+    assertEquals(wrapper.nodeId, resolved.node.nodeId)
+  }
+
+  @Test
+  fun `an ancestor of the ref that wins the point is still the selector source`() {
+    // The guard is confined to nodes the ref has no relationship to. A node on the ref's own
+    // ancestor chain keeps the point even when it is smaller than the ref's element — bounds
+    // do not nest in every capture, so a clipping container can be the frontmost node over its
+    // own content. That is pre-existing behavior, pinned here so the chain check is not
+    // "simplified" away into a change of it.
+    val rowTitle = TrailblazeNode(
+      nodeId = nextId++,
+      bounds = TrailblazeNode.Bounds(110, 210, 290, 290),
+      driverDetail = DriverNodeDetail.AndroidAccessibility(
+        text = "Balance",
+        className = "android.widget.TextView",
+      ),
+    )
+    val row = TrailblazeNode(
+      nodeId = nextId++,
+      ref = "r1",
+      bounds = TrailblazeNode.Bounds(100, 200, 300, 300),
+      children = listOf(rowTitle),
+      driverDetail = DriverNodeDetail.AndroidAccessibility(
+        className = "android.view.ViewGroup",
+        isClickable = true,
+      ),
+    )
+    val clip = TrailblazeNode(
+      nodeId = nextId++,
+      bounds = TrailblazeNode.Bounds(180, 220, 240, 250),
+      children = listOf(row),
+      driverDetail = DriverNodeDetail.AndroidAccessibility(
+        resourceId = "com.example:id/row_clip",
+        className = "android.view.ViewGroup",
+      ),
+    )
+    val root = TrailblazeNode(
+      nodeId = nextId++,
+      bounds = TrailblazeNode.Bounds(0, 0, 1000, 1000),
+      children = listOf(clip),
+      driverDetail = DriverNodeDetail.AndroidAccessibility(),
+    )
+    val context = contextWithTree(CapturingAgent(), tree = root)
+
+    val tap = assertIs<TapOnByElementSelector>(
+      TapTrailblazeTool(ref = "r1").toExecutableTrailblazeTools(context).single(),
+    )
+    val selector = tap.nodeSelector ?: error("expected a nodeSelector recording")
+    val resolved = assertIs<TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch>(TrailblazeNodeSelectorResolver.resolve(root, selector))
+    assertEquals(clip.nodeId, resolved.node.nodeId)
   }
 
   // endregion

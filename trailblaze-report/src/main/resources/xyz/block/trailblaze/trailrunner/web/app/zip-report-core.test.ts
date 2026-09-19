@@ -265,6 +265,12 @@ describe("run meta derivation", () => {
   test("derives the full meta from a passing session's logs", () => {
     const logs = [startedLog(), endedLog("Ended.Succeeded", {}, "2026-06-30T20:22:58.048796Z")];
     const meta = Zip.buildRunMeta(logs, { recordingYaml: "- config: {}\n", generatedAt: "test-time" });
+    // The run's own id, in parity with sessionMetaJson: a report opened from a zip is the same
+    // document shape, and every link from one document to another names a run by id.
+    expect(meta.sessionId).toBe(startedLog().session);
+    // A zip whose logs never name their session is OMITTED, not given an empty id: every reader
+    // of this key resolves it, and `""` would resolve to nothing while looking like a real run.
+    expect(Zip.buildRunMeta([startedLog({ session: "" }), endedLog("Ended.Succeeded")], { generatedAt: "test-time" }).sessionId).toBeUndefined();
     expect(meta.title).toBe("Remove item from cart");
     expect(meta.status).toBe("passed");
     expect(meta.target).toBe("sample-app");

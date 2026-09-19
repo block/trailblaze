@@ -32,6 +32,16 @@ object TurboMessages {
     "$LOG_TAG $scope: turbo on for $appId on $deviceLabel"
 
   /**
+   * Turbo is on for the run, but the detector is not attached yet: the app was not running when
+   * the run started, so the attach is left to the app's first launch. Says "armed", not "on", so a
+   * reader does not credit the steps before that launch to turbo — and says where the attach
+   * happens, so a run that then lost turbo at the launch reads as exactly that.
+   */
+  fun turboArmedForLaunch(scope: String, appId: String, deviceLabel: String): String =
+    "$LOG_TAG $scope: turbo armed for $appId on $deviceLabel — the app is not running, so the idle " +
+      "detector attaches at its first launch"
+
+  /**
    * Turbo was asked for and could not be had. Always names a reason, and always says the run
    * continues — a run that quietly says nothing here is indistinguishable from one that never
    * asked, and turbo failing must never read as the run failing.

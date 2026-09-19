@@ -18,8 +18,8 @@
 // that would break the whole validation compilation):
 //
 //  - **Non-recordable author utilities** (`isRecordable = false`, never in a recording): the
-//    selector query tools `findMatches` / `waitUntilNotVisible` (rich `MatchDescriptor[]` / `boolean`
-//    results), plus the host/composition primitives `exec`, `android_writeBytesToFile`,
+//    selector query tools `findSelectorMatches` / `waitUntilNotVisible` (rich `MatchDescriptor[][]`
+//    / `boolean` results), plus the host/composition primitives `exec`, `android_writeBytesToFile`,
 //    `android_adbShell`, `android_sendBroadcast`, `android_writeFileToDownloads`.
 //  - **Recordable tools the generator can't fully model** — `mobile_maestro` (free-form Maestro
 //    commands the descriptor lowering can't express) and `mobile_listInstalledApps` /
@@ -44,7 +44,7 @@
 
 // Selector-grammar types — `TrailblazeNodeSelector` and `MatchDescriptor` — are generated from the
 // Kotlin sealed-class hierarchy by `:trailblaze-models:generateSelectorsTs` and re-exported from
-// `index.ts`. The `findMatches` / `waitUntilNotVisible` entries below reference them; this file
+// `index.ts`. The `findSelectorMatches` / `waitUntilNotVisible` entries below reference them; this file
 // imports the type names locally for the declaration-merging block.
 import type {
   MatchDescriptor,
@@ -71,33 +71,21 @@ declare module "@trailblaze/scripting" {
     // and the legacy `TrailblazeElementSelector`, via its `excludedParameterTypes`) because
     // reflecting their self-referencing fields (childOf / containsChild / …) overflows the stack
     // during descriptor codegen. For RECORDABLE selector tools the generated recordable surface
-    // re-injects the selector arg via `selectorParamsForTs` — but `findMatches`,
-    // `findSelectorMatches` and `waitUntilNotVisible` are `isRecordable = false` (never in a
-    // recording), so they aren't in the generated surface and THIS hand-curated `selector` /
-    // `selectors` / `nodeSelector` typing is their authoritative scripted-author surface. Keep it
-    // in sync with the Kotlin tool classes by hand.
+    // re-injects the selector arg via `selectorParamsForTs` — but `findSelectorMatches` and
+    // `waitUntilNotVisible` are `isRecordable = false` (never in a recording), so they aren't in
+    // the generated surface and THIS hand-curated `selectors` / `nodeSelector` typing is their
+    // authoritative scripted-author surface. Keep it in sync with the Kotlin tool classes by hand.
     /**
-     * Resolve a [TrailblazeNodeSelector] against the current view hierarchy and return
-     * every match as a [MatchDescriptor] list. Read-only — never mutates the device.
+     * Capture the view hierarchy ONCE and resolve one or more selectors against that single
+     * capture. Read-only — never mutates the device. The result is index-aligned to `selectors` —
+     * `result[i]` is `selectors[i]`'s matches, empty array if it matched nothing, so the two
+     * always have the same length.
      *
-     * @deprecated Use `findSelectorMatches` instead — it answers N selectors from ONE
-     * capture, which this tool structurally cannot (see "It does NOT deduplicate across
-     * scripted calls" below). A single-element `selectors` list behaves identically to
-     * this tool, so migrating is mechanical:
+     * Use a result's length as a visibility / uniqueness gate:
      *
      * ```ts
      * const [matches] = await client.tools.findSelectorMatches({
-     *   selectors: [selector],
-     * });
-     * ```
-     *
-     * This tool is scheduled for deletion once its callers move — don't add new ones.
-     *
-     * Use the result length as a visibility / uniqueness gate:
-     *
-     * ```ts
-     * const matches = await client.tools.findMatches({
-     *   selector: { androidAccessibility: { textRegex: "Submit" } },
+     *   selectors: [{ androidAccessibility: { textRegex: "Submit" } }],
      * });
      * // matches.length === 0  -> not visible
      * // matches.length === 1  -> unique match, safe to act on
@@ -107,47 +95,13 @@ declare module "@trailblaze/scripting" {
      * Each match carries enough identity + position info (indexPath, bounds, text,
      * accessibilityId, resourceId) to act on without re-querying.
      *
-     * Snapshot reuse: the host-side cache shares one captured hierarchy between
-     * `findMatches` calls dispatched as SIBLINGS in the same batch, and an action tool
-     * in that batch (tap, swipe, inputText, …) invalidates it so the next `findMatches`
-     * reads the post-action tree.
-     *
-     * **It does NOT deduplicate across scripted calls.** Each `client.tools.*` callback
-     * enters its own cache frame, so four `await client.tools.findMatches(…)` from one
-     * tool body really do pay four multi-second captures. To ask several questions of
-     * one screen, use `findSelectorMatches` below — batching is explicit, not
-     * something the cache does for you.
-     *
-     * Source: `FindMatchesTrailblazeTool.kt`.
-     */
-    findMatches: {
-      args: {
-        /** Selector to match against the current view hierarchy. */
-        selector: TrailblazeNodeSelector;
-        /**
-         * Optional wait budget in milliseconds. Omit (the default) for a single point-in-time
-         * snapshot. When set, the tool polls the LIVE hierarchy until at least one match appears
-         * or the budget elapses, then returns whatever matched (an empty array if nothing did).
-         * This is the non-throwing "wait until this selector is visible" probe for conditional
-         * flows — use the result length as the gate (`matches.length === 0` → not visible within
-         * the timeout). Prefer this over hand-rolling a poll loop on top of point-in-time calls.
-         */
-        timeoutMs?: number;
-      };
-      result: MatchDescriptor[];
-    };
-
-    /**
-     * Capture the view hierarchy ONCE and resolve several selectors against that one capture.
-     * Read-only. The result is index-aligned to `selectors` — `result[i]` is `selectors[i]`'s
-     * matches, empty array if it matched nothing, so the two always have the same length.
-     *
-     * **Use this instead of N `findMatches` calls.** A hierarchy capture is the expensive part of
-     * a query (multiple seconds on a loaded Android device, where every node is a live
+     * **Ask every question of one screen in ONE call.** A hierarchy capture is the expensive part
+     * of a query (multiple seconds on a loaded Android device, where every node is a live
      * accessibility fetch); resolving a selector against a tree already in hand is free. The
-     * host-side snapshot cache does NOT deduplicate across scripted calls — each
-     * `client.tools.*` callback enters its own cache frame — so four `findMatches` calls really do
-     * pay four captures.
+     * host-side snapshot cache shares a captured hierarchy between sibling dispatches in one batch,
+     * but does NOT deduplicate across scripted calls — each `client.tools.*` callback enters its
+     * own cache frame — so four separate calls really do pay four captures. Batching is explicit,
+     * not something the cache does for you.
      *
      * ```ts
      * const [wizard, home] = await client.tools.findSelectorMatches({
@@ -216,7 +170,7 @@ declare module "@trailblaze/scripting" {
      * returning a NON-THROWING boolean verdict: `true` when the selector is (or became) not
      * visible within the budget, `false` when it is still visible after the wait.
      *
-     * The disappearance counterpart to `findMatches` (which waits for APPEARANCE). Use it for
+     * The disappearance counterpart to `findSelectorMatches` (which waits for APPEARANCE). Use it for
      * conditional flows that must branch on a screen having gone away — and keep their own custom
      * error messages — rather than throwing like the verification-style `assertNotVisibleWithText`:
      *
@@ -228,7 +182,7 @@ declare module "@trailblaze/scripting" {
      * if (!gone) throw new Error("…still loading after 60s; OAuth pipeline stuck.");
      * ```
      *
-     * Distinct from negating `findMatches`: a positive probe returns true the moment the text is
+     * Distinct from negating `findSelectorMatches`: a positive probe returns true the moment the text is
      * *currently* on screen, so negating it doesn't wait for the element to actually disappear.
      * This tool waits for the live tree to lose the match. Routes through the driver-native
      * not-visible wait on the accessibility driver, Maestro `extendedWaitUntil` otherwise.

@@ -1008,6 +1008,20 @@ object AndroidHostAdbUtils {
   }
 
   /**
+   * The device's Android API level via `getprop ro.build.version.sdk`, or null when it can't be read
+   * or parsed.
+   *
+   * Bounded and retryable ([execAdbShellCommandWithTimeout]) because it is a pure read taken on the
+   * connect path, where a wedged transport must not stall the launch. Callers get null rather than a
+   * guess, so a version-gated decision can fail towards whatever it did before the gate existed.
+   */
+  fun deviceApiLevel(deviceId: TrailblazeDeviceId): Int? =
+    execAdbShellCommandWithTimeout(
+      deviceId = deviceId,
+      args = listOf("getprop", "ro.build.version.sdk"),
+    )?.trim()?.toIntOrNull()
+
+  /**
    * Host-JVM (adb) backing for [xyz.block.trailblaze.device.AndroidDeviceCommandExecutor.listInstalledAppsDetailed].
    *
    * One `dumpsys package packages` call yields almost the whole record — `isSystemApp`, version,

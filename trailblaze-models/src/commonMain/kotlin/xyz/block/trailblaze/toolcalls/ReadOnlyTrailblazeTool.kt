@@ -3,8 +3,7 @@ package xyz.block.trailblaze.toolcalls
 /**
  * Marker interface for tools that are guaranteed not to mutate device state.
  *
- * Implemented by query-shaped tools (today: `FindMatchesTrailblazeTool` and
- * `FindSelectorMatchesTrailblazeTool`) so the
+ * Implemented by query-shaped tools (today: `FindSelectorMatchesTrailblazeTool`) so the
  * dispatch loop in `BaseTrailblazeAgent.runTrailblazeTools` can skip the
  * post-tool snapshot-cache invalidation step — the captured view hierarchy is
  * still valid for a follow-up query in the same batch.

@@ -5,6 +5,9 @@ import kotlinx.datetime.Clock
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.api.AnnotationElement
 import xyz.block.trailblaze.api.DriverNodeDetail
@@ -26,6 +29,8 @@ import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.toolcalls.SnapshotCache
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
+import xyz.block.trailblaze.tracing.TraceLevel
+import xyz.block.trailblaze.tracing.TrailblazeTracer
 import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
 import kotlin.test.AfterTest
@@ -46,17 +51,31 @@ import kotlin.test.assertTrue
  */
 class FindSelectorMatchesTrailblazeToolTest {
 
+  // `TrailblazeTracer` is a singleton shared by everything in this JVM, and its level is read from
+  // the environment (`TRAILBLAZE_TRACE_LEVEL`). At `off` the recorder short-circuits before opening
+  // a span, so the tracing tests below would see an empty recorder and fail for a reason that has
+  // nothing to do with the tool. Pin NORMAL for the duration, and hand back whatever this process
+  // was configured with rather than resetting to NORMAL — a developer running at `verbose` should
+  // not have it silently changed under whatever runs after this class.
+  private var incomingTraceLevel: TraceLevel = TraceLevel.NORMAL
+
   @BeforeTest
-  fun shrinkPollInterval() {
+  fun setUp() {
     // One cadence for both query tools, owned by the engine they share — which is also what keeps
     // these tests off real 300ms sleeps.
     SelectorQueryEngine.pollIntervalMs = 1L
+    incomingTraceLevel = TrailblazeTracer.level
+    TrailblazeTracer.clear()
+    TrailblazeTracer.level = TraceLevel.NORMAL
   }
 
   @AfterTest
   fun cleanup() {
     repeat(SnapshotCache.frameDepth()) { SnapshotCache.popFrame() }
     SelectorQueryEngine.pollIntervalMs = SelectorQueryEngine.DEFAULT_POLL_INTERVAL_MS
+    TrailblazeTracer.level = incomingTraceLevel
+    // Clearing at both ends keeps recorded spans from leaking in either direction.
+    TrailblazeTracer.clear()
   }
 
   // -- Fixtures --
@@ -162,7 +181,7 @@ class FindSelectorMatchesTrailblazeToolTest {
     val matches = decode(result)
     assertEquals(3, matches.size)
     assertTrue(matches.all { it.size == 1 }, "each selector matches its own node")
-    // The whole point. Three `findMatches` calls from a scripted tool would have captured three
+    // The whole point. Three separate one-selector calls from a scripted tool would have captured three
     // times, because each scripting callback enters its own SnapshotCache frame.
     assertEquals(1, captures[0], "three selectors must cost exactly one capture")
   }
@@ -223,6 +242,123 @@ class FindSelectorMatchesTrailblazeToolTest {
     assertEquals(3, captures[0], "the third query must re-capture rather than reuse the stale frame")
   }
 
+  // -- Snapshot caching across sibling calls --
+  //
+  // The tests above count captures WITHIN one call. These count them ACROSS calls, which is the
+  // frame's job rather than the tool's: three dispatches costing three captures is the right
+  // answer when a wait sits between them and the wrong one when nothing invalidates.
+
+  @Test
+  fun `sibling queries in one frame share a single capture`() = runBlocking {
+    val captures = intArrayOf(0)
+    val context = staticCtx(FakeScreenState(treeOf("Submit")), captures)
+
+    SnapshotCache.withFrame {
+      runBlocking {
+        repeat(3) {
+          FindSelectorMatchesTrailblazeTool(selectors = listOf(selectorFor("Submit")))
+            .execute(context)
+        }
+      }
+    }
+
+    assertEquals(1, captures[0], "three point-in-time queries in one frame must cost one capture")
+  }
+
+  @Test
+  fun `a sibling query re-captures after the frame is invalidated`() = runBlocking {
+    val captures = intArrayOf(0)
+    val context = staticCtx(FakeScreenState(treeOf("Submit")), captures)
+
+    SnapshotCache.withFrame {
+      runBlocking {
+        FindSelectorMatchesTrailblazeTool(selectors = listOf(selectorFor("Submit")))
+          .execute(context)
+        assertEquals(1, captures[0])
+
+        // What an action tool's dispatch does: the screen may have moved, so the frame's tree is
+        // no longer answerable.
+        SnapshotCache.invalidateCurrent()
+        FindSelectorMatchesTrailblazeTool(selectors = listOf(selectorFor("Submit")))
+          .execute(context)
+      }
+    }
+
+    assertEquals(2, captures[0], "an invalidated frame must be re-captured, not re-served")
+  }
+
+  @Test
+  fun `with no active frame every call captures for itself`() = runBlocking {
+    val captures = intArrayOf(0)
+    val context = staticCtx(FakeScreenState(treeOf("Submit")), captures)
+
+    // No `withFrame` — reuse is the frame's to offer, so outside one there is nothing to reuse
+    // and a stale tree can never be served.
+    FindSelectorMatchesTrailblazeTool(selectors = listOf(selectorFor("Submit"))).execute(context)
+    FindSelectorMatchesTrailblazeTool(selectors = listOf(selectorFor("Submit"))).execute(context)
+
+    assertEquals(2, captures[0])
+  }
+
+  // -- Tracing --
+  //
+  // One span per CALL is the contract, and both halves of it are load-bearing: a call that emits
+  // none is invisible to the same trace tooling that profiles every other resolve, and a poll that
+  // emits one per capture floods the trace.
+
+  @Test
+  fun `emits a trace span carrying every selector's description`() = runBlocking {
+    val context = staticCtx(FakeScreenState(treeOf("Submit", "Cancel")))
+
+    TrailblazeTracer.clear()
+    FindSelectorMatchesTrailblazeTool(
+      selectors = listOf(selectorFor("Submit"), selectorFor("Cancel")),
+    ).execute(context)
+
+    val event = traceSpans().singleOrNull()
+    assertNotNull(event, "expected exactly one findSelectorMatches trace event")
+    assertEquals(
+      "FindSelectorMatchesTrailblazeTool",
+      event.jsonObject["cat"]?.jsonPrimitive?.content,
+      "cat should name the source tool so the span groups with it",
+    )
+    val args = event.jsonObject["args"]?.jsonObject
+    assertEquals("2", args?.get("selectorCount")?.jsonPrimitive?.content)
+    val selectors = args?.get("selectors")?.jsonPrimitive?.content
+    assertNotNull(selectors, "span should carry the rendered selector descriptions")
+    assertTrue(
+      selectors.contains("Submit") && selectors.contains("Cancel"),
+      "every selector must be described, got: $selectors",
+    )
+  }
+
+  @Test
+  fun `polling emits one span for the whole wait, not one per capture`() = runBlocking {
+    // Regression guard for the per-poll span flood: the wait must be wrapped once by execute, not
+    // re-entered as a traced resolve on each re-capture. The selector never matches, so the poll
+    // re-captures repeatedly within the budget — and still owes exactly one span.
+    val captures = intArrayOf(0)
+    val context = ctx(captures) { FakeScreenState(treeOf("Loading")) }
+
+    TrailblazeTracer.clear()
+    FindSelectorMatchesTrailblazeTool(
+      selectors = listOf(selectorFor("Submit")),
+      timeoutMs = 40,
+    ).execute(context)
+
+    assertTrue(captures[0] >= 2, "test must exercise multiple polls; captured ${captures[0]}x")
+    assertEquals(
+      1,
+      traceSpans().size,
+      "polling must emit one span across ${captures[0]} captures",
+    )
+  }
+
+  /** Every `findSelectorMatches` span the tracer recorded, in order. */
+  private fun traceSpans() = Json.parseToJsonElement(TrailblazeTracer.exportJson())
+    .jsonArray
+    .filter { it.jsonObject["name"]?.jsonPrimitive?.content == "findSelectorMatches" }
+
   // -- The alignment contract --
 
   @Test
@@ -266,10 +402,11 @@ class FindSelectorMatchesTrailblazeToolTest {
   }
 
   @Test
-  fun `answers each selector exactly as findMatches would`() = runBlocking {
-    // Pins the shared-resolver contract: a caller batching to save captures must not be changing
-    // its predicates at the same time. If this fails, SelectorMatchResolution has drifted from
-    // one of its two callers.
+  fun `answers each selector exactly as a one-selector call would`() = runBlocking {
+    // Pins the batching contract: a caller batching to save captures must not be changing its
+    // predicates at the same time. Batched-of-N and N separate one-selector calls have to agree
+    // selector for selector, so batching stays a cost optimisation and never becomes semantically
+    // load-bearing. If this fails, SelectorMatchResolution has drifted between arities.
     val screen = FakeScreenState(treeOf("Submit", "Item", "Item"))
     val selectors = listOf(selectorFor("Submit"), selectorFor("Item"), selectorFor("Missing"))
 
@@ -281,14 +418,16 @@ class FindSelectorMatchesTrailblazeToolTest {
 
     selectors.forEachIndexed { index, selector ->
       val single = SnapshotCache.withFrame {
-        runBlocking { FindMatchesTrailblazeTool(selector = selector).execute(staticCtx(screen)) }
+        runBlocking {
+          FindSelectorMatchesTrailblazeTool(selectors = listOf(selector)).execute(staticCtx(screen))
+        }
       }
-      assertIs<TrailblazeToolResult.Success>(single)
-      val payload = single.structuredContent
-      assertNotNull(payload)
-      assertIs<JsonArray>(payload)
-      val expected = Json.decodeFromJsonElement(ListSerializer(MatchDescriptor.serializer()), payload)
-      assertEquals(expected, batched[index], "selector $index must match findMatches' answer")
+      // One selector in, so exactly one match list out — unwrap before comparing.
+      assertEquals(
+        decode(single).single(),
+        batched[index],
+        "selector $index must match its one-at-a-time answer",
+      )
     }
   }
 

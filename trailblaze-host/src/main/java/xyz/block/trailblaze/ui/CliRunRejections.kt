@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.ui
 
 import xyz.block.trailblaze.logs.server.endpoints.CliRunResponse
+import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.model.TrailExecutionResult
 
 /**
@@ -19,6 +20,20 @@ internal fun cliRunMisuseResponse(error: String): CliRunResponse = CliRunRespons
 
 /** Rejection for a `/cli/run` request that carries no trail YAML at all. */
 internal fun cliRunNoYamlResponse(): CliRunResponse = cliRunMisuseResponse("No YAML content provided")
+
+/** Rejection for a delegated request whose daemon-resolved agent cannot accept its LLM cap. */
+internal fun cliRunAgentMaxLlmCallsResponse(
+  agentImplementation: AgentImplementation,
+  maxLlmCalls: Int?,
+): CliRunResponse? =
+  if (agentImplementation == AgentImplementation.MULTI_AGENT_V3 && maxLlmCalls != null) {
+    cliRunMisuseResponse(
+      "max-llm-calls is not supported because the daemon's saved agent is " +
+        "${AgentImplementation.MULTI_AGENT_V3.name} and the request carries max-llm-calls.",
+    )
+  } else {
+    null
+  }
 
 /**
  * Rejection for a `/cli/run` request that could run on several connected devices ([specs],

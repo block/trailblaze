@@ -32,10 +32,10 @@ import xyz.block.trailblaze.util.Console
   name = "profile",
   mixinStandardHelpOptions = true,
   description = [
-    "Generate the performance-analysis report (an Instruments-style time profiler over each " +
-      "session's tools, LLM calls, timeouts, and idle gaps) for a logs directory. " +
-      "Defaults to the configured logs directory when <logs-dir> is omitted. Writes " +
-      "<logs-dir>/trailblaze_performance_analysis.html. Requires `bun` on PATH.",
+    "Generate a performance-analysis report (tools, LLM calls, timeouts, idle gaps) for a logs directory.",
+    "An Instruments-style time profiler over each session. Defaults to the configured logs " +
+      "directory when <logs-dir> is omitted. Writes <logs-dir>/trailblaze_performance_analysis.html. " +
+      "Requires `bun` on PATH.",
   ],
 )
 class ProfileCommand : Callable<Int> {

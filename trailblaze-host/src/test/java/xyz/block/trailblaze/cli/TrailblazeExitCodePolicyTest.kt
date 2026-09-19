@@ -1,9 +1,13 @@
 package xyz.block.trailblaze.cli
 
+import io.ktor.client.network.sockets.ConnectTimeoutException
+import io.ktor.client.plugins.HttpRequestTimeoutException
 import picocli.CommandLine
 import xyz.block.trailblaze.logs.server.endpoints.CliRunResponse
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 /**
  * Pins the four-class exit-code policy: SUCCESS=0, ASSERTION_FAILED=1,
@@ -200,6 +204,88 @@ class TrailblazeExitCodePolicyTest {
       }
     }
     assertEquals(TrailblazeExitCode.INFRA_FAILED.code, exitCode)
+  }
+
+  // ---------------------------------------------------------------------------
+  // ioFailureHint - which of the two hints each transport failure earns. "The daemon accepted a
+  // request it has not answered yet" and "nothing is listening at all" are opposite
+  // instructions, and the CLI only gets to print one. Every type Ktor's OkHttp engine can hand
+  // us is pinned here by type, not by message, because the engine is what chooses the type.
+  // ---------------------------------------------------------------------------
+
+  @Test
+  fun `a response timeout says the daemon is still working, not that it is down`() {
+    // A target launch tool or an agent loop can outlast the per-request budget while the daemon
+    // keeps working. Sending that user to restart the daemon would kill their own command, so
+    // the hint must name the wait, not the daemon's health.
+    val hint = ioFailureHint(
+      java.net.SocketTimeoutException("Socket timeout has expired [url=http://localhost:52525/mcp, socket_timeout=180000] ms"),
+    )
+    assertTrue(hint.contains("still working on this command"), hint)
+    assertTrue(hint.contains(CliMcpClient.REQUEST_TIMEOUT_ENV), hint)
+    assertFalse(hint.contains("trailblaze app start"), hint)
+  }
+
+  @Test
+  fun `a whole-request timeout says the daemon is still working`() {
+    // Ktor's HttpTimeout plugin raises this when `requestTimeoutMillis` expires. CliMcpClient
+    // sets that budget and the socket read budget to the same value, so which of the two fires
+    // is a race - and both mean the daemon has the request. Safe to read that way only because
+    // CliMcpClient.connectTimeoutMsFor keeps the connect budget under the request budget, so
+    // this type can never mean "never connected".
+    val hint = ioFailureHint(HttpRequestTimeoutException("http://localhost:52525/mcp", 180_000L))
+    assertTrue(hint.contains("still working on this command"), hint)
+    assertFalse(hint.contains("trailblaze app start"), hint)
+  }
+
+  @Test
+  fun `a ktor connect timeout keeps the daemon-down hint`() {
+    // The engine's own classification: a connect timeout arrives as this type, never as a
+    // SocketTimeoutException, so the hint follows the type rather than the message.
+    val hint = ioFailureHint(ConnectTimeoutException("http://localhost:52525/mcp"))
+    assertEquals("is the Trailblaze daemon running? try `trailblaze app start`", hint)
+  }
+
+  @Test
+  fun `a bare connect timeout outside the engine mapping keeps the daemon-down hint`() {
+    val hint = ioFailureHint(java.net.SocketTimeoutException("connect timed out"))
+    assertTrue(hint.contains("trailblaze app start"), hint)
+  }
+
+  @Test
+  fun `a refused connection keeps the daemon-down hint`() {
+    val hint = ioFailureHint(java.net.ConnectException("Connection refused"))
+    assertTrue(hint.contains("trailblaze app start"), hint)
+  }
+
+  @Test
+  fun `an unclassified IO failure keeps the daemon-down hint`() {
+    val hint = ioFailureHint(java.io.IOException("unexpected end of stream"))
+    assertTrue(hint.contains("trailblaze app start"), hint)
+  }
+
+  @Test
+  fun `a timeout with no message is treated as the daemon still working`() {
+    // Only a connect failure can claim the daemon is gone, and the engine gives connect failures
+    // their own type. A message-less read timeout must not be guessed into the down hint.
+    val hint = ioFailureHint(java.net.SocketTimeoutException())
+    assertTrue(hint.contains("still working on this command"), hint)
+  }
+
+  @Test
+  fun `the envelope a timed-out command prints carries the still-working hint`() {
+    // Pins the wiring, not just the classifier: a change that stopped passing ioFailureHint into
+    // reportCliError would leave every test above green while the user still read "is the
+    // daemon running?".
+    val captured = captureConsole {
+      kotlinx.coroutines.runBlocking {
+        runActionWithIoEnvelope(target = "android", verb = "Tool") {
+          throw java.net.SocketTimeoutException("Socket timeout has expired [url=http://localhost:52525/mcp, socket_timeout=180000] ms")
+        }
+      }
+    }
+    assertEquals(TrailblazeExitCode.INFRA_FAILED.code, captured.result)
+    assertTrue(captured.err.contains("hint: the daemon is still working on this command"), captured.err)
   }
 
   @Test

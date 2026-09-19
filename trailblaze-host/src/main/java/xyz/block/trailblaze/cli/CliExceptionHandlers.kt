@@ -33,10 +33,13 @@ internal fun installTrailblazeExceptionHandlers(commandLine: CommandLine) {
       if (printStackTraces()) ex.printStackTrace(System.err)
       return@IParameterExceptionHandler companionFailure(ex.message ?: "invalid companion arguments")
     }
+    // The subcommand that rejected the arguments, not the root: `trailblaze tool tap --ref x`
+    // should send the reader to `trailblaze tool --help`, where the key=value argument form is
+    // explained, not to the top-level command list.
     reportCliError(
       verb = "Command parse",
       reason = ex.message ?: "invalid arguments",
-      hint = "run `${commandLine.commandName} --help` to see the supported flags",
+      hint = "run `${ex.commandLine.commandSpec.qualifiedName(" ")} --help` to see the supported flags",
     )
     if (printStackTraces()) ex.printStackTrace(System.err)
     TrailblazeExitCode.MISUSE.code

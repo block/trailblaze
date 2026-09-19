@@ -175,7 +175,13 @@ object TrailblazeDesktopUtil {
     return logFile
   }
 
-  /** Roll `daemon.log` once it exceeds this size; one `.1` generation is kept. */
+  /**
+   * Roll `daemon.log` once it exceeds this size; one `.1` generation is kept.
+   *
+   * SISTER-IMPL-TAG: daemon-log-roll-bytes. The size and the one-generation rule are duplicated in
+   * the launcher's `tb_roll_daemon_log`, which caps the same file for daemons it starts itself;
+   * both write `~/.trailblaze/daemon.log`, so they must agree. Grep the tag for every site.
+   */
   private const val DAEMON_LOG_ROLL_BYTES = 50L * 1024 * 1024
 
   /**

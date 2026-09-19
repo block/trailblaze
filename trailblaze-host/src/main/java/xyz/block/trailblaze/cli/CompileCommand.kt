@@ -10,12 +10,14 @@ import xyz.block.trailblaze.config.project.TrailblazeProjectConfig
 import xyz.block.trailblaze.config.project.TrailblazeProjectConfigException
 import xyz.block.trailblaze.config.project.TrailblazeProjectConfigLoader
 import xyz.block.trailblaze.config.project.TrailblazeTrailmapManifestLoader
+import xyz.block.trailblaze.config.project.TrailmapSource
 import xyz.block.trailblaze.host.AppTargetDiscovery
 import xyz.block.trailblaze.host.PerTrailmapClientDtsEmitter
 import xyz.block.trailblaze.host.PerTrailmapTsconfigEmitter
 import xyz.block.trailblaze.host.ResolvedTargetReportEmitter
 import xyz.block.trailblaze.host.TrailTscValidator
 import xyz.block.trailblaze.host.WorkspaceTypeScriptSetup
+import xyz.block.trailblaze.host.trailmapDirIsInsideWorkspace
 import xyz.block.trailblaze.scripting.AnalyzerScriptedToolEnrichment
 import xyz.block.trailblaze.llm.config.ClasspathConfigResourceSource
 import xyz.block.trailblaze.llm.config.TrailblazeConfigPaths
@@ -295,10 +297,28 @@ class CompileCommand : Callable<Int> {
       logPrefix = "trailblaze $commandLabel:",
     )
 
+    // Say which trailmaps got no typed bindings and why. The emitter skips any trailmap whose real
+    // directory resolves outside this workspace — a symlink into another checkout is that
+    // checkout's to generate — and without this line the author just sees their trailmap missing
+    // from the emitted list with no explanation.
+    val borrowedTrailmaps = resolvedTrailmaps.mapNotNull { trailmap ->
+      val dir = (trailmap.source as? TrailmapSource.Filesystem)?.trailmapDir ?: return@mapNotNull null
+      if (trailmapDirIsInsideWorkspace(generatorRoot, dir.toPath())) null else "${trailmap.manifest.id} ($dir)"
+    }
+    if (borrowedTrailmaps.isNotEmpty()) {
+      Console.log(
+        "trailblaze $commandLabel: not generating TypeScript files for ${borrowedTrailmaps.joinToString()}: " +
+          "the directory resolves outside this workspace, so the workspace that owns it generates its own.",
+      )
+    }
+
     val emitted = try {
       PerTrailmapClientDtsEmitter.emit(
         resolvedTrailmaps = resolvedTrailmaps,
         catalog = toolSetCatalog,
+        // Same root the tsconfig emitter below uses, so `compile` honors the same ownership rule
+        // the daemon does: a trailmap symlinked into another checkout is that checkout's to generate.
+        workspaceRoot = generatorRoot,
       )
     } catch (e: Exception) {
       Console.error("trailblaze $commandLabel: typed-bindings codegen failed: ${e.message ?: e.javaClass.simpleName}")

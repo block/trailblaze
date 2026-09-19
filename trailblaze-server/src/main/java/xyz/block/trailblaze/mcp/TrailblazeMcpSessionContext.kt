@@ -577,6 +577,14 @@ class TrailblazeMcpSessionContext(
   /** Bound names in bind order. Empty for an ordinary single-device session. */
   fun boundDeviceNames(): List<String> = synchronized(namedBindingsLock) { namedDevices.keys.toList() }
 
+  /**
+   * Whether this session offers `switchDevice`: two or more named devices, so there is something
+   * to switch between. The one definition of the gate — `TrailblazeMcpServer.registerTools`
+   * advertises the tool on it and `ToolDiscoveryToolSet` describes the tool as offered on it, so
+   * the two cannot disagree about when a session has the tool.
+   */
+  fun advertisesMultiDeviceTools(): Boolean = boundDeviceNames().size >= 2
+
   /** The bound device for [name], or null when nothing is bound under it. */
   fun boundDevice(name: String): SessionDeviceBindings.BoundDevice? =
     synchronized(namedBindingsLock) { namedDevices[name] }

@@ -84,7 +84,6 @@ import xyz.block.trailblaze.ui.getPlatform
 import xyz.block.trailblaze.ui.loadDeviceLogs
 import xyz.block.trailblaze.ui.loadNetworkLogs
 import xyz.block.trailblaze.ui.openVideoInSystemPlayer
-import xyz.block.trailblaze.ui.resolveImageModel
 import xyz.block.trailblaze.ui.utils.FormattingUtils
 import xyz.block.trailblaze.ui.utils.FormattingUtils.formatCompactDuration
 import xyz.block.trailblaze.ui.utils.FormattingUtils.formatDuration
@@ -205,13 +204,15 @@ internal fun SessionCombinedView(
     }
   }
 
-  // Export autoplay: when this WASM instance is loaded with `?autoplay=...` in the URL
-  // (the path `trailblaze report --video` drives), seek to the start of the session and
-  // kick off timeline playback once data is loaded. Watch `isVideoPlaying` for the
-  // transition back to false (set by the playback loop in [PlaybackDriverEffect] when
-  // the scrubber reaches `effectiveEndMs`) and signal the external recorder. The signal
-  // also fires for empty sessions (sessionEnd == sessionStart) so the exporter doesn't
-  // hang waiting on playback that never starts.
+  // Export autoplay: seek to the start of the session and kick off timeline playback once data
+  // is loaded, then signal the external recorder when `isVideoPlaying` goes back to false (set by
+  // [PlaybackDriverEffect] once the scrubber reaches `effectiveEndMs`). The signal also fires for
+  // empty sessions (sessionEnd == sessionStart) so a recorder doesn't hang waiting on playback
+  // that never starts.
+  //
+  // Inert today: `isExportAutoplayRequested()` is false on every platform, because the only
+  // caller was the Compose/WebAssembly report and `trailblaze report --video` now exports from
+  // the TypeScript run-report renderer instead.
   LaunchedEffect(effectiveStartMs, effectiveEndMs) {
     if (!isExportAutoplayRequested()) return@LaunchedEffect
     if (effectiveEndMs <= effectiveStartMs) {
@@ -1200,10 +1201,10 @@ private fun ColumnScope.ScreenshotKeyframePanel(
       val dw = hasScreenshot.deviceWidth
       val dh = hasScreenshot.deviceHeight
 
-      // Resolve the screenshot for the active log
-      val imageModel = resolveImageModel(sessionId, screenshotFile, imageLoader)
-
-      if (imageModel != null) {
+      // Whether the screenshot can be drawn — and what to say when it cannot — belongs to
+      // `ScreenshotImage`, which says why. Deciding it here as well resolved the model twice and
+      // could only ever say "Loading screenshot...", with nothing to stop saying it.
+      if (!screenshotFile.isNullOrBlank()) {
         BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
           val imageAspect = if (dh > 0) dw.toFloat() / dh.toFloat() else DEFAULT_PHONE_ASPECT_RATIO
           val (renderedWidth, renderedHeight) = computeFitDimensions(imageAspect, maxWidth, maxHeight)
@@ -1263,7 +1264,7 @@ private fun ColumnScope.ScreenshotKeyframePanel(
           contentAlignment = Alignment.Center,
         ) {
           Text(
-            "Loading screenshot...",
+            "This step has no screenshot",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
           )

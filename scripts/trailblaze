@@ -6,7 +6,8 @@
 #   ./trailblaze app                 - Launch the legacy desktop app
 #   ./trailblaze app --v2            - Open Trail Runner in its native desktop window
 #   ./trailblaze trailrunner         - Compatibility alias for `app --v2`
-#   ./trailblaze --stop              - Stop the daemon
+#   ./trailblaze stop                - Stop the daemon (kills it if it will not exit on request)
+#   ./trailblaze status [--json]     - Show the daemon: PID, uptime, devices, runs; --json for scripts
 #   ./trailblaze app --headless      - Start headless daemon
 #   ./trailblaze app --stop          - Stop the daemon
 #   ./trailblaze blaze "objective"   - Take a UI action (auto-starts daemon)
@@ -99,6 +100,16 @@ done
 tb_check_java_version() {
   [ "${TB_JAVA_VERSION_CHECKED:-0}" = "1" ] && return 0
   TB_JAVA_VERSION_CHECKED=1
+  # A wrapper around this launcher may pin a particular JDK, and working out which one costs a JVM
+  # probe of its own. Called from here — the one point every JVM launch passes through, and past the
+  # commands this launcher answers itself — so asking for usage never pays for it. JAVA_BIN was
+  # resolved at load time, before that JAVA_HOME existed, so re-resolve it against the pinned one.
+  if declare -f tb_pin_java > /dev/null 2>&1; then
+    tb_pin_java
+    if [ -n "${JAVA_HOME:-}" ] && [ -x "$JAVA_HOME/bin/java" ]; then
+      JAVA_BIN="$JAVA_HOME/bin/java"
+    fi
+  fi
   local java_version
   java_version=$("$JAVA_BIN" -version 2>&1 | head -1 | sed -E 's/.*"([0-9]+).*/\1/')
   if [ -n "$java_version" ] && [ "$java_version" -lt 17 ] 2>/dev/null; then
@@ -106,6 +117,153 @@ tb_check_java_version() {
     return 1
   fi
 }
+
+# ---------------------------------------------------------------------------
+# Port configuration
+# ---------------------------------------------------------------------------
+
+TRAILBLAZE_DEFAULT_PORT=52525
+TRAILBLAZE_PORT="${TRAILBLAZE_PORT:-$TRAILBLAZE_DEFAULT_PORT}"
+# HTTPS defaults to TRAILBLAZE_PORT + 1 so a single port override is enough to
+# run multiple daemons in isolation. Mirrors TrailblazeDevicePort's Kotlin-side
+# convention (the on-device RPC server defaults to TRAILBLAZE_PORT + 2).
+TRAILBLAZE_HTTPS_PORT="${TRAILBLAZE_HTTPS_PORT:-$((TRAILBLAZE_PORT + 1))}"
+
+# Export so the JVM process can read them via System.getenv()
+export TRAILBLAZE_PORT
+export TRAILBLAZE_HTTPS_PORT
+
+# Ports Trailblaze allocates to devices. Mirrors PORT_RANGE_START and PORT_RANGE_SIZE in
+# TrailblazeDevicePort.kt; a port-range test fails if they drift apart.
+TRAILBLAZE_DEVICE_PORT_RANGE_START=52530
+TRAILBLAZE_DEVICE_PORT_RANGE_END=59529
+
+# Refuse a daemon port a device could be allocated, before this script probes /ping.
+#
+# The JVM refuses one too, but it never gets the chance: the host bridges a device with
+# `adb forward tcp:<port> tcp:<port>`, so the device answers this script's probe, the daemon is
+# never spawned, and the script goes on to send workspace requests and open Trail Runner against
+# the device's RPC server. Callers that act on an already-running daemon (`stop`, `status`) skip
+# this — one started before the check existed still has to be stoppable.
+require_usable_daemon_port() {
+    local port
+    for port in "$TRAILBLAZE_PORT" "$TRAILBLAZE_HTTPS_PORT"; do
+        if [ "$port" -ge "$TRAILBLAZE_DEVICE_PORT_RANGE_START" ] 2>/dev/null &&
+            [ "$port" -le "$TRAILBLAZE_DEVICE_PORT_RANGE_END" ] 2>/dev/null; then
+            echo "ERROR: port $port is inside the range Trailblaze allocates device ports from" >&2
+            echo "       (${TRAILBLAZE_DEVICE_PORT_RANGE_START}-${TRAILBLAZE_DEVICE_PORT_RANGE_END})." \
+                "A connected device can be assigned it, and \`adb forward\`" >&2
+            echo "       would take it from the daemon without reporting an error." >&2
+            echo "       Set TRAILBLAZE_PORT below $((TRAILBLAZE_DEVICE_PORT_RANGE_START - 1))," \
+                "or change serverPort in trailblaze-settings.json" >&2
+            echo "       (a saved port outranks the env var). The HTTPS port derives as +1." >&2
+            exit 1
+        fi
+    done
+}
+
+# ---------------------------------------------------------------------------
+# Help for the commands the launcher answers itself
+# ---------------------------------------------------------------------------
+#
+# `stop` and `status` never reach the JVM, so nothing else can answer `--help` for them: before
+# this existed, `trailblaze stop --help` stopped the daemon, because the dispatch that owns those
+# words reads `$1` and never looks at what follows it. `mcp` and `trailrunner` do reach a JVM, but
+# only after the launcher has acted: `mcp` auto-starts the daemon before the JVM can print anything,
+# and `trailrunner` is a launcher alias the JVM does not know, so its `--help` was a picocli error.
+#
+# `app` is not here on purpose. Its flags (`--headless`, `--stop`, `--v2`) are picocli options the
+# JVM owns, and `trailblaze app --help` reaches it without starting a daemon.
+#
+# Answered up here, ahead of every JVM-touching block, because printing usage has to cost nothing.
+# Below this point the launcher would first build the AppCDS archive — three JVM launches and a
+# "preparing for first use" notice — and an unrelated bad TRAILBLAZE_IO_PARALLELISM would exit
+# before the text ever appeared.
+launcher_command_help_requested() {
+    local arg
+    shift
+    for arg in "$@"; do
+        case "$arg" in -h | --help) return 0 ;; esac
+    done
+    return 1
+}
+
+# Usage for one launcher-answered command. Returns non-zero for anything else, so a `--help` meant
+# for the JVM (`trailblaze run x --help`) falls through to the normal dispatch instead of being
+# answered with silence.
+print_launcher_command_help() {
+    case "${1:-}" in
+        stop)
+            cat <<EOF
+Usage: trailblaze stop
+
+Stop the Trailblaze daemon on port ${TRAILBLAZE_PORT} (set TRAILBLAZE_PORT to pick another).
+Asks it to exit, then ends its process if it will not, including a wedged daemon that holds the
+port without answering. Exits 0 when nothing is running.
+EOF
+            ;;
+        status)
+            cat <<EOF
+Usage: trailblaze status [--json]
+
+Show the Trailblaze daemon on port ${TRAILBLAZE_PORT} (set TRAILBLAZE_PORT to pick another):
+PID, uptime, version, connected devices, active runs, workspace, and log path.
+  --json   Print the daemon's status object for scripts; still JSON when nothing is running.
+EOF
+            ;;
+        mcp)
+            cat <<EOF
+Usage: trailblaze mcp [--http] [--direct | --no-daemon] [-d <device>] [-t <target>]
+
+Start a Model Context Protocol (MCP) server so an AI coding agent can drive Trailblaze.
+By default it speaks STDIO and proxies to the Trailblaze daemon on port ${TRAILBLAZE_PORT},
+starting one if none is running (set TRAILBLAZE_PORT to pick another port, or
+TRAILBLAZE_DISABLE_DAEMON_AUTOSTART=1 to never start one).
+  --http                  Serve Streamable HTTP as a standalone MCP server instead of STDIO.
+  --direct, --no-daemon   Run the MCP server in this process over STDIO instead of proxying to a
+                          separate daemon process. Not a way around the HTTP port: this process
+                          still starts the daemon's HTTP server itself when none is running.
+  -d, --device <device>   Pin this session to a device on startup (e.g. android,
+                          android/emulator-5554). Defaults to the device this terminal pinned
+                          with \`trailblaze device connect\`, or \$TRAILBLAZE_DEVICE.
+  -t, --target <target>   Pin this session to a target app on startup (e.g. default, sampleapp).
+                          Only meaningful with a device. Defaults to \$TRAILBLAZE_TARGET.
+
+Quick setup:
+  Claude Code:  claude mcp add trailblaze -- trailblaze mcp
+  Cursor:       Add to .cursor/mcp.json with command 'trailblaze mcp'
+  Windsurf:     Add to MCP config with command 'trailblaze mcp'
+EOF
+            ;;
+        trailrunner)
+            cat <<EOF
+Usage: trailblaze trailrunner
+
+Open Trail Runner in its native desktop window; the same as \`trailblaze app --v2\`. Starts the
+Trailblaze daemon on port ${TRAILBLAZE_PORT} if none is running (set TRAILBLAZE_PORT to pick
+another), makes the git repository containing the current directory the active workspace, then
+opens http://localhost:${TRAILBLAZE_PORT}/trailrunner/ — on macOS in a native shell compiled with
+Xcode's command-line tools, elsewhere through xdg-open. Takes no options.
+EOF
+            ;;
+        *) return 1 ;;
+    esac
+}
+
+if launcher_command_help_requested "$@" && print_launcher_command_help "${1:-}"; then
+    exit 0
+fi
+
+# `trailrunner` takes no options, and the JVM does not know the word: anything after it used to fall
+# through to a picocli "Unknown command 'trailrunner'", a diagnosis of the wrong token. Refused here,
+# before anything costs a JVM, with the same exit status picocli gives a usage error.
+if [ "${1:-}" = "trailrunner" ] && [ $# -gt 1 ]; then
+    # Every extra token, not just the first: a reader who passed three needs to see all three to
+    # know which one they have to drop.
+    printf "ERROR: 'trailblaze trailrunner' takes no arguments; got: %s\n" "${*:2}" >&2
+    printf "Run 'trailblaze trailrunner --help' for usage.\n" >&2
+    exit 2
+fi
 
 # ---------------------------------------------------------------------------
 # Execution
@@ -116,6 +274,42 @@ tb_check_java_version() {
 # Default max heap covers report generation with large session logs.
 # TRAILBLAZE_MAX_HEAP overrides (e.g. TRAILBLAZE_MAX_HEAP=8g for very large workspaces).
 TRAILBLAZE_JVM_ARGS="-Xmx${TRAILBLAZE_MAX_HEAP:-4g}"
+
+# Dispatchers.IO parallelism. Every scripted-tool subprocess holds one IO permit for its whole
+# session: the MCP SDK reads the subprocess's stdout with a blocking read and hardcodes
+# Dispatchers.IO for it, so the permit is parked from handshake to shutdown. Inline tools are one
+# subprocess per author file, so a target with 64 tool files exhausts the 64-permit default — and
+# an exhausted IO pool does not fail, it hangs every daemon route while /ping keeps answering 200
+# (it is served on the Netty event loop and needs no permit).
+#
+# Set here rather than in Kotlin because kotlinx.coroutines reads this property once, the first
+# time Dispatchers.IO is touched; a System.setProperty after that point is a silent no-op.
+# Permits are lazy — threads materialize only as they are used — so a high ceiling costs nothing
+# when unused.
+#
+# Validated here because kotlinx accepts only an integer in 1..2147483647 and calls error() on
+# anything else, killing the JVM the first time Dispatchers.IO is touched — with a message naming
+# the system property, not the environment variable someone actually mistyped. The upper bound is
+# part of the contract: kotlinx range-checks against Int.MAX_VALUE, so a value above it is as fatal
+# as a letter.
+# SISTER-IMPL-TAG: io-parallelism-default. The 512 below must stay in lockstep with every other
+# site carrying that tag — grep for it; the launcher contract test pins them together.
+if [[ -n "${TRAILBLAZE_IO_PARALLELISM:-}" ]]; then
+  if ! [[ "$TRAILBLAZE_IO_PARALLELISM" =~ ^[1-9][0-9]*$ ]] \
+      || [ "${#TRAILBLAZE_IO_PARALLELISM}" -gt 10 ] \
+      || [ "$TRAILBLAZE_IO_PARALLELISM" -gt 2147483647 ]; then
+    echo "trailblaze: TRAILBLAZE_IO_PARALLELISM must be an integer between 1 and 2147483647, got '$TRAILBLAZE_IO_PARALLELISM'" >&2
+    exit 1
+  fi
+  # Accepted, but it cannot do what the operator wants: the host holds 16 permits back for its own
+  # adb, file and HTTP work, so at or below that every scripted-tool launch is refused. Warn rather
+  # than fail — a value this low is valid for a run with no scripted tools at all.
+  if [ "$TRAILBLAZE_IO_PARALLELISM" -le 16 ]; then
+    echo "trailblaze: TRAILBLAZE_IO_PARALLELISM=$TRAILBLAZE_IO_PARALLELISM leaves no room for scripted-tool subprocesses (16 permits are reserved for the host), so any target with scripted tools will fail to start." >&2
+  fi
+fi
+TRAILBLAZE_JVM_ARGS="$TRAILBLAZE_JVM_ARGS -Dkotlinx.coroutines.io.parallelism=${TRAILBLAZE_IO_PARALLELISM:-512}"
+
 if [[ "$(uname)" == "Darwin" ]]; then
   TRAILBLAZE_JVM_ARGS="$TRAILBLAZE_JVM_ARGS --add-opens java.desktop/sun.awt=ALL-UNNAMED --add-opens java.desktop/sun.lwawt=ALL-UNNAMED --add-opens java.desktop/sun.lwawt.macosx=ALL-UNNAMED"
 fi
@@ -165,6 +359,11 @@ tb_ensure_cds_archive() {
   classlist="$(mktemp "${TMPDIR:-/tmp}/trailblaze-classlist.XXXXXX")" || return 1
   tmp_jsa="${jsa}.tmp.$$"
 
+  # Three JVM launches follow before the user's command runs — a silent pause long enough
+  # to look like a hang on a fresh install or right after an upgrade. Say so once, on stderr
+  # so a captured stdout (`out=$(trailblaze config show)`) stays clean.
+  echo "Preparing Trailblaze for first use after install (one-time)..." >&2
+
   # Class list is dumped from `config show` (not --help) because it exercises
   # CLI parsing + Ktor init for ~60% more coverage without needing a device.
   #
@@ -198,6 +397,23 @@ if [ "${BLAZE_CDS:-1}" = "1" ] && [ -f "$TRAILBLAZE_JAR" ]; then
   fi
 fi
 
+# Roll daemon.log at 50 MB, keeping one generation. The JVM only applies that rule when it opens
+# the file itself; a launcher-started daemon inherits the redirect below instead, so on that path
+# nothing capped the file and it grew without bound.
+#
+# SISTER-IMPL-TAG: daemon-log-roll-bytes. The size and the one-generation rule are duplicated in
+# TrailblazeDesktopUtil.DAEMON_LOG_ROLL_BYTES; both write the same file, so they must agree. Grep
+# the tag for every site.
+TRAILBLAZE_DAEMON_LOG_ROLL_BYTES=$((50 * 1024 * 1024))
+tb_roll_daemon_log() {
+    local size
+    [ -f "$TRAILBLAZE_DAEMON_LOG" ] || return 0
+    size=$(wc -c < "$TRAILBLAZE_DAEMON_LOG" 2>/dev/null | tr -d '[:space:]')
+    case "$size" in "" | *[!0-9]*) return 0 ;; esac
+    [ "$size" -gt "$TRAILBLAZE_DAEMON_LOG_ROLL_BYTES" ] || return 0
+    mv -f "$TRAILBLAZE_DAEMON_LOG" "${TRAILBLAZE_DAEMON_LOG}.1" 2>/dev/null || true
+}
+
 # Execution functions — overridable by defining them before sourcing this script.
 # All functions accept variadic args to preserve quoting (e.g., YAML with newlines).
 if ! declare -f tb_run > /dev/null 2>&1; then
@@ -205,8 +421,13 @@ if ! declare -f tb_run > /dev/null 2>&1; then
     "$JAVA_BIN" $TRAILBLAZE_JVM_ARGS -jar "$TRAILBLAZE_JAR" "$@"
   }
 
+  # The daemon's output goes to daemon.log, the same file a daemon started from inside the CLI JVM
+  # appends to. Discarding it made a daemon that died during startup undiagnosable: all the
+  # launcher could report was that the PID it was waiting on had stopped answering.
   tb_run_background() {
-    nohup "$JAVA_BIN" $TRAILBLAZE_JVM_ARGS -jar "$TRAILBLAZE_JAR" "$@" > /dev/null 2>&1 &
+    mkdir -p "$(dirname "$TRAILBLAZE_DAEMON_LOG")"
+    tb_roll_daemon_log
+    nohup "$JAVA_BIN" $TRAILBLAZE_JVM_ARGS -jar "$TRAILBLAZE_JAR" "$@" >> "$TRAILBLAZE_DAEMON_LOG" 2>&1 &
   }
 
   tb_run_quiet() {
@@ -219,53 +440,9 @@ if ! declare -f tb_run > /dev/null 2>&1; then
   }
 
   tb_run_background_quiet() {
-    nohup "$JAVA_BIN" $TRAILBLAZE_JVM_ARGS -jar "$TRAILBLAZE_JAR" "$@" > /dev/null 2>&1 &
+    tb_run_background "$@"
   }
 fi
-
-# ---------------------------------------------------------------------------
-# Port configuration
-# ---------------------------------------------------------------------------
-
-TRAILBLAZE_DEFAULT_PORT=52525
-TRAILBLAZE_PORT="${TRAILBLAZE_PORT:-$TRAILBLAZE_DEFAULT_PORT}"
-# HTTPS defaults to TRAILBLAZE_PORT + 1 so a single port override is enough to
-# run multiple daemons in isolation. Mirrors TrailblazeDevicePort's Kotlin-side
-# convention (the on-device RPC server defaults to TRAILBLAZE_PORT + 2).
-TRAILBLAZE_HTTPS_PORT="${TRAILBLAZE_HTTPS_PORT:-$((TRAILBLAZE_PORT + 1))}"
-
-# Export so the JVM process can read them via System.getenv()
-export TRAILBLAZE_PORT
-export TRAILBLAZE_HTTPS_PORT
-
-# Ports Trailblaze allocates to devices. Mirrors PORT_RANGE_START and PORT_RANGE_SIZE in
-# TrailblazeDevicePort.kt; a port-range test fails if they drift apart.
-TRAILBLAZE_DEVICE_PORT_RANGE_START=52530
-TRAILBLAZE_DEVICE_PORT_RANGE_END=59529
-
-# Refuse a daemon port a device could be allocated, before this script probes /ping.
-#
-# The JVM refuses one too, but it never gets the chance: the host bridges a device with
-# `adb forward tcp:<port> tcp:<port>`, so the device answers this script's probe, the daemon is
-# never spawned, and the script goes on to send workspace requests and open Trail Runner against
-# the device's RPC server. Callers that act on an already-running daemon (`stop`, `status`) skip
-# this — one started before the check existed still has to be stoppable.
-require_usable_daemon_port() {
-    local port
-    for port in "$TRAILBLAZE_PORT" "$TRAILBLAZE_HTTPS_PORT"; do
-        if [ "$port" -ge "$TRAILBLAZE_DEVICE_PORT_RANGE_START" ] 2>/dev/null &&
-            [ "$port" -le "$TRAILBLAZE_DEVICE_PORT_RANGE_END" ] 2>/dev/null; then
-            echo "ERROR: port $port is inside the range Trailblaze allocates device ports from" >&2
-            echo "       (${TRAILBLAZE_DEVICE_PORT_RANGE_START}-${TRAILBLAZE_DEVICE_PORT_RANGE_END})." \
-                "A connected device can be assigned it, and \`adb forward\`" >&2
-            echo "       would take it from the daemon without reporting an error." >&2
-            echo "       Set TRAILBLAZE_PORT below $((TRAILBLAZE_DEVICE_PORT_RANGE_START - 1))," \
-                "or change serverPort in trailblaze-settings.json" >&2
-            echo "       (a saved port outranks the env var). The HTTPS port derives as +1." >&2
-            exit 1
-        fi
-    done
-}
 
 # ---------------------------------------------------------------------------
 # Daemon management
@@ -297,9 +474,14 @@ TRAILBLAZE_PING_TIMEOUT_SECONDS=5
 # /cli/status path fails closed to avoid. Point at the owner instead and let the
 # reader decide. Asking that daemon what it is doing is not an option here; a
 # daemon that cannot answer /ping cannot answer /cli/status either.
-tb_daemon_unresponsive=false
-is_daemon_running() {
-    [ "$tb_daemon_unresponsive" = true ] && return 1
+# One probe of the daemon port, with no memory and no advice:
+#   0 = answered, 1 = nothing is there, 2 = something holds the port but did not answer.
+#
+# `stop` asks this directly rather than through [is_daemon_running], for two reasons. The latch
+# below makes every probe after the first timeout say "not running", which is the wrong answer for a
+# command whose job is to end whatever is on the port — and the advisory below ends with "running in
+# its own JVM instead", which is simply untrue of `stop`.
+probe_daemon_port() {
     local rc
     curl -s --connect-timeout 1 --max-time "$TRAILBLAZE_PING_TIMEOUT_SECONDS" \
         "http://localhost:${TRAILBLAZE_PORT}/ping" > /dev/null 2>&1
@@ -307,7 +489,18 @@ is_daemon_running() {
     [ "$rc" -eq 0 ] && return 0
     # 28 is curl's timeout: the port answered the connect and then went quiet.
     # Anything else (refused, DNS, no route) just means no daemon is there.
-    if [ "$rc" -eq 28 ]; then
+    [ "$rc" -eq 28 ] && return 2
+    return 1
+}
+
+tb_daemon_unresponsive=false
+is_daemon_running() {
+    [ "$tb_daemon_unresponsive" = true ] && return 1
+    local rc
+    probe_daemon_port
+    rc=$?
+    [ "$rc" -eq 0 ] && return 0
+    if [ "$rc" -eq 2 ]; then
         tb_daemon_unresponsive=true
         echo "WARNING: whatever is on port ${TRAILBLAZE_PORT} did not answer /ping within" >&2
         echo "         ${TRAILBLAZE_PING_TIMEOUT_SECONDS}s, so this command is running in its own JVM instead." >&2
@@ -346,6 +539,9 @@ daemon_autostart_disabled() {
 TRAILBLAZE_PIDFILE_DIR="${TRAILBLAZE_HOME:-${HOME}/.trailblaze}"
 TRAILBLAZE_PIDFILE="${TRAILBLAZE_PIDFILE_DIR}/daemon-${TRAILBLAZE_PORT}.pid"
 TRAILBLAZE_START_LOCK="${TRAILBLAZE_PIDFILE}.starting"
+# Where every daemon spawn appends its stdout/stderr; rolled at 50 MB (tb_roll_daemon_log here,
+# TrailblazeDesktopUtil.getDaemonLogFile in the JVM).
+TRAILBLAZE_DAEMON_LOG="${TRAILBLAZE_PIDFILE_DIR}/daemon.log"
 
 # Records the spawned JVM's PID so a subsequent invocation can detect a
 # stuck daemon. Called immediately after tb_run_background / tb_run_background_quiet.
@@ -571,12 +767,29 @@ release_daemon_startup() {
 #
 # The daemon is the single source of truth for which subcommands it will run
 # in-process (TrailblazeCli.FORWARDABLE_SUBCOMMANDS). Anything else responds
-# with forwarded=false and we fall through. We don't mirror the allowlist here
-# — the only cost of trying is one localhost round-trip, negligible next to
-# the ~1s JVM startup we're about to pay anyway.
+# with forwarded=false and we fall through.
+#
+# We pre-filter on the same predicate the daemon applies — argv[0] against the
+# allowlist, nothing more — because "one localhost round-trip" is only cheap
+# when the daemon is healthy. A daemon that accepts connections but never
+# answers (it still serves /ping, so nothing upstream notices) makes that
+# round-trip cost the full `--max-time` below, and it charges that to commands
+# the daemon was never going to run: `trailblaze run`, `device`, `report`, and
+# every typo. Skipping the POST for those is what keeps a sick daemon from
+# taking down the commands that do not need it.
+#
+# Version drift between this shim and the daemon is safe in both directions:
+# a subcommand this list doesn't know is simply not forwarded and takes the
+# JVM path, which is where an unforwardable one ends up anyway. Safe, but silent
+# — a subcommand added daemon-side and not here just quietly goes back to paying
+# JVM startup, with nothing failing to say so. The launcher's own shell test
+# diffs this line against the Kotlin set so the drift is loud instead; keep the
+# declaration on one line and space-separated, because that check parses it.
+TRAILBLAZE_IPC_FORWARDABLE_SUBCOMMANDS="snapshot ask config tool"
 #
 # Falls through to the normal JVM path if:
 #   - jq isn't installed (we can't assemble/parse JSON safely without it)
+#   - argv[0] is not a subcommand the daemon runs in-process
 #   - the daemon is unreachable
 #   - the daemon responds with forwarded=false (subcommand not in allowlist)
 #   - the curl POST fails for any reason (HTTP error, network blip)
@@ -589,11 +802,112 @@ release_daemon_startup() {
 # for every forwarded subcommand except `ask`.
 TRAILBLAZE_IPC_NOTICE_SECONDS=10
 
+# Decode one /cli/exec response and replay it on this shell's stdout and stderr, in the order
+# the daemon's command actually wrote it.
+#
+# The daemon sends `transcript`: both streams as one ordered list of tagged chunks. Replaying
+# all of stdout and then all of stderr — which is all an older daemon's response supports, and
+# what the fallback below still does — reorders a command's output against itself, so an error
+# and the tip that explains it end up with an unrelated status line between them.
+#
+# Returns 1 without printing anything when the body is not a usable forwarded response, so the
+# caller can fall through to the JVM path. On success, sets IPC_REPLAY_EXIT_CODE.
+# Marks a decode that ran to completion. Any value works as long as it cannot collide with a
+# stream tag ("1"/"2") or an exit code, which is why it is not a bare number.
+IPC_REPLAY_TERMINATOR='__tb_end__'
+
+ipc_replay_response() {
+    local response="$1"
+    IPC_REPLAY_EXIT_CODE=1
+
+    # Validate and decode in ONE jq process: the exit code, then a (stream, text) pair per chunk,
+    # then a terminator. NUL delimiters let bash `read` preserve trailing newlines exactly;
+    # command substitution strips them, which used to smash the first stderr line onto the last
+    # stdout line.
+    #
+    # The terminator is what makes a partial decode detectable. jq streams, so a filter that dies
+    # partway has already written everything before the failure: a forwarded body whose
+    # `transcript` is an object, say, emits the exit code and then errors inside `map`. jq's own
+    # non-zero status is unreachable here — it is the left side of a pipe inside a process
+    # substitution — so without a terminator that wreckage arrives as a field count of 1, which is
+    # indistinguishable from a well-formed "exit code, no chunks" response. The shim would report
+    # success having replayed nothing, silently swallowing the command's whole output instead of
+    # falling through to the slow path. Only a filter that ran to completion emits the terminator.
+    local fields=()
+    local field
+    while IFS= read -r -d '' field; do
+        fields+=("$field")
+    done < <(printf '%s' "$response" | jq -j --arg end "$IPC_REPLAY_TERMINATOR" '
+      if (.forwarded // false) != true then
+        error("not forwarded")
+      else
+        (
+          if (.exitCode | type) == "number" then
+            (.exitCode | floor | if . < 0 then 256 + (. % 256) elif . > 255 then . % 256 else . end)
+          else 1 end
+          | tostring
+        ), "\u0000",
+        (
+          (
+            if ((.transcript // []) | length) > 0 then
+              (.transcript | map({ s: (if .stream == "stderr" then "2" else "1" end), t: (.text // "") }))
+            else
+              [ { s: "1", t: (.stdout // "") }, { s: "2", t: (.stderr // "") } ]
+            end
+          )
+          | map(select(.t != ""))
+          | .[]
+          | (.s, "\u0000", .t, "\u0000")
+        ),
+        $end, "\u0000"
+      end
+    ' 2>/dev/null)
+    # The exit code, then whole (stream, text) pairs, then the terminator. Any other shape is a
+    # response we could not decode — fall through rather than replay half of it.
+    [ "${#fields[@]}" -ge 2 ] || return 1
+    local last=$(( ${#fields[@]} - 1 ))
+    [ "${fields[$last]}" = "$IPC_REPLAY_TERMINATOR" ] || return 1
+    [ $(( (${#fields[@]} - 2) % 2 )) -eq 0 ] || return 1
+
+    local exit_code="${fields[0]}"
+    [[ "$exit_code" =~ ^[0-9]+$ ]] || exit_code=1
+
+    local i=1
+    while [ "$i" -lt "$last" ]; do
+        if [ "${fields[$i]}" = "2" ]; then
+            printf '%s' "${fields[$((i + 1))]}" >&2
+        else
+            printf '%s' "${fields[$((i + 1))]}"
+        fi
+        i=$((i + 2))
+    done
+
+    IPC_REPLAY_EXIT_CODE="$exit_code"
+    return 0
+}
+
 # Attempt to run via the daemon's /cli/exec endpoint.
-# On success prints stdout/stderr and exits with the daemon's exit code.
+# On success replays the command's output and exits with the daemon's exit code.
 # On any form of failure, returns 1 so the caller can fall through.
 ipc_try_forward() {
     command -v jq >/dev/null 2>&1 || return 1
+
+    # Same test the daemon runs on the other side (`args.firstOrNull() !in
+    # FORWARDABLE_SUBCOMMANDS`): argv[0] verbatim, no flag skipping, so a command
+    # this shim forwards is one the daemon agrees to run.
+    #
+    # Whole-word equality, not a substring probe on the space-joined list. Kotlin
+    # compares argv[0] against a set of single tokens, so one argument that spells
+    # two adjacent entries — `trailblaze "snapshot ask"` — is rejected there. A
+    # substring probe accepted it here and spent the full `--max-time` finding out.
+    local ipc_requested="${1:-}" ipc_candidate ipc_forwardable=
+    for ipc_candidate in $TRAILBLAZE_IPC_FORWARDABLE_SUBCOMMANDS; do
+        if [ "$ipc_requested" = "$ipc_candidate" ]; then
+            ipc_forwardable=1
+            break
+        fi
+    done
+    [ -n "$ipc_forwardable" ] || return 1
     # Forward the user's interactive shell env vars that drive CLI resolution. The
     # daemon's own JVM env was captured at `app start` time, so `System.getenv`
     # on the daemon side never sees an `export TRAILBLAZE_DEVICE=…` the user did
@@ -609,6 +923,12 @@ ipc_try_forward() {
     # that drive CLI resolution. Keep this list in sync with `CliCallerContext`
     # consumers in `CliInfrastructure.kt` — one `env*()` / `resolveCli*()`
     # reader function per allowlisted var.
+    #
+    # TRAILBLAZE_MCP_REQUEST_TIMEOUT_MS is on the list because the CLI's own timeout
+    # error tells the user to raise it, and a forwarded command's timeout is decided
+    # in the daemon's JVM: without forwarding, following that advice changed nothing
+    # for `snapshot`, `ask`, `tool` and `config`. Read by
+    # `CliMcpClient.resolveRequestTimeoutMs`.
     #
     # Build argv + cwd + env in ONE jq process. The old implementation appended every
     # argument and env var with a separate jq invocation, then spawned another jq for the
@@ -627,6 +947,8 @@ ipc_try_forward() {
         --arg target "${TRAILBLAZE_TARGET:-}" \
         --arg shell_pid "${TRAILBLAZE_SHELL_PID:-}" \
         --arg interactive "${TRAILBLAZE_INTERACTIVE:-}" \
+        --arg mcp_timeout "${TRAILBLAZE_MCP_REQUEST_TIMEOUT_MS:-}" \
+        --arg preflight_timeout "${TRAILBLAZE_MCP_PREFLIGHT_TIMEOUT_MS:-}" \
         --args '
           {
             args: $ARGS.positional,
@@ -637,6 +959,8 @@ ipc_try_forward() {
               + (if $target == "" then {} else {TRAILBLAZE_TARGET: $target} end)
               + (if $shell_pid == "" then {} else {TRAILBLAZE_SHELL_PID: $shell_pid} end)
               + (if $interactive == "" then {} else {TRAILBLAZE_INTERACTIVE: $interactive} end)
+              + (if $mcp_timeout == "" then {} else {TRAILBLAZE_MCP_REQUEST_TIMEOUT_MS: $mcp_timeout} end)
+              + (if $preflight_timeout == "" then {} else {TRAILBLAZE_MCP_PREFLIGHT_TIMEOUT_MS: $preflight_timeout} end)
             )
           }
         ' -- "$@") || return 1
@@ -664,7 +988,9 @@ ipc_try_forward() {
     {
         sleep "$TRAILBLAZE_IPC_NOTICE_SECONDS"
         echo "Waiting for the Trailblaze daemon on port ${TRAILBLAZE_PORT} to respond..." >&2
-        echo "  Bypass the daemon for this command with --no-daemon." >&2
+        # No `--no-daemon` hint here: none of the forwardable subcommands accept that flag
+        # (only `trail` and `mcp` do), so the old hint sent users to an "Unknown option" error.
+        echo "  It may be busy with another command. 'trailblaze status' shows the daemon; 'trailblaze stop' restarts it fresh on the next command." >&2
     } > /dev/null &
     notice_pid=$!
     set +m
@@ -673,8 +999,38 @@ ipc_try_forward() {
     # The process group is unaffected, so the kill below still reaches it.
     disown "$notice_pid" 2> /dev/null || true
 
+    # This ceiling has to cover the budget the forwarded command itself waits on:
+    # the CLI's default request budget (CliMcpClient.DEFAULT_REQUEST_TIMEOUT_MS)
+    # plus the same 30 s margin, or the override below when that is larger.
+    # Abandoning the forward does not cancel the command — the daemon keeps running
+    # it. So a user who takes the CLI's advice and raises
+    # TRAILBLAZE_MCP_REQUEST_TIMEOUT_MS past this would see the launcher give up on
+    # a command that is still going. Non-numeric and smaller values keep the
+    # standard ceiling: the point is to never sit below the forwarded budget, not
+    # to track it. A test pins this floor against the CLI default.
+    #
+    # The daemon reads the same value with Kotlin's `toLongOrNull`, which accepts a
+    # leading `+` and leading zeros. Bash does not: the pattern below would reject
+    # the `+`, and arithmetic reads a leading zero as octal. Normalize first so both
+    # sides agree on the budget; past 18 digits Kotlin gives up on the value and so
+    # do we, rather than let the arithmetic wrap.
+    local ipc_max_time=660
+    local ipc_budget_ms="${TRAILBLAZE_MCP_REQUEST_TIMEOUT_MS:-}"
+    ipc_budget_ms="${ipc_budget_ms#+}"
+    case "$ipc_budget_ms" in
+        '' | *[!0-9]*) ;;
+        *)
+            if [ "${#ipc_budget_ms}" -le 18 ]; then
+                ipc_budget_ms=$((10#$ipc_budget_ms))
+                if [ "$ipc_budget_ms" -gt $(((ipc_max_time - 30) * 1000)) ]; then
+                    ipc_max_time=$((ipc_budget_ms / 1000 + 30))
+                fi
+            fi
+            ;;
+    esac
+
     local response rc
-    response=$(curl -sS --connect-timeout 2 --max-time 600 \
+    response=$(curl -sS --connect-timeout 2 --max-time "$ipc_max_time" \
         -X POST "http://localhost:${TRAILBLAZE_PORT}/cli/exec" \
         -H "Content-Type: application/json" \
         -d "$payload" 2>/dev/null)
@@ -685,42 +1041,24 @@ ipc_try_forward() {
     # threshold. `kill "$notice_pid"` as well, for a shell that gave the job no
     # group of its own.
     kill -- "-$notice_pid" 2> /dev/null || kill "$notice_pid" 2> /dev/null
+    if [ "$rc" -eq 28 ]; then
+        # curl 28 is curl's own clock running out — `--connect-timeout` or `--max-time`.
+        # The daemon answered /ping a moment ago, so this is a daemon that is starved
+        # or is still running the command, and the ceiling above can only ever
+        # approximate how long that takes (the daemon's own setup runs before the
+        # budgeted action). Falling through here would run the command a SECOND time
+        # in a fresh JVM — a second tap, a second app launch — so fail instead, with
+        # the infra exit code the CLI itself uses for a daemon that did not answer.
+        printf '%s\n' \
+            "trailblaze: no answer from the Trailblaze daemon on port ${TRAILBLAZE_PORT} within ${ipc_max_time}s." \
+            "  If the daemon accepted the command it is still running it; the command was NOT re-run." \
+            "  'trailblaze status' shows the daemon; 'trailblaze stop' restarts it fresh on the next command." >&2
+        exit 2
+    fi
     [ "$rc" -eq 0 ] || return 1
 
-    # Validate and decode the response in ONE jq process. NUL delimiters let bash `read`
-    # preserve trailing newlines exactly; the previous four command substitutions each
-    # spawned jq and stripped those newlines, forcing replay to guess one back with `%s\n`.
-    # A JSON/non-forwarded/shape error leaves fewer than three fields and falls through.
-    local fields=()
-    local field
-    while IFS= read -r -d '' field; do
-        fields+=("$field")
-    done < <(printf '%s' "$response" | jq -j '
-      if (.forwarded // false) != true then
-        error("not forwarded")
-      else
-        (.stdout // ""), "\u0000",
-        (.stderr // ""), "\u0000",
-        (
-          if (.exitCode | type) == "number" then
-            (.exitCode | floor | if . < 0 then 256 + (. % 256) elif . > 255 then . % 256 else . end)
-          else 1 end
-          | tostring
-        ), "\u0000"
-      end
-    ' 2>/dev/null)
-    [ "${#fields[@]}" -eq 3 ] || return 1
-
-    local stdout="${fields[0]}"
-    local stderr="${fields[1]}"
-    local exit_code="${fields[2]}"
-    [[ "$exit_code" =~ ^[0-9]+$ ]] || exit_code=1
-
-    # Streams are still replayed sequentially (all stdout, then all stderr). Proper
-    # chronological interleaving requires a tagged-chunk wire format and remains separate.
-    [ -n "$stdout" ] && printf '%s' "$stdout"
-    [ -n "$stderr" ] && printf '%s' "$stderr" >&2
-    exit "$exit_code"
+    ipc_replay_response "$response" || return 1
+    exit "$IPC_REPLAY_EXIT_CODE"
 }
 
 show_window() {
@@ -729,50 +1067,311 @@ show_window() {
         -d '{}' > /dev/null 2>&1
 }
 
+fetch_daemon_status_json() {
+    curl -s --max-time 5 "http://localhost:${TRAILBLAZE_PORT}/cli/status" 2>/dev/null
+}
+
+# One scalar field out of the status JSON, string or number. Enough for the flat fields the
+# launcher reads; nothing here parses nested values.
+#
+# jq when it is there, because the sed fallback reads a value up to the first `"` and so truncates
+# any field containing an escaped quote — a workspace path is the realistic one. The fallback stays
+# because jq is not a Trailblaze dependency, and the fields this reads (pid, version, counts) are
+# quote-free in practice.
+status_json_field() {
+    local json="$1" key="$2" value
+    if command -v jq > /dev/null 2>&1; then
+        value=$(printf '%s' "$json" | jq -r --arg k "$key" '.[$k] // empty' 2>/dev/null)
+        printf '%s' "$value"
+        return 0
+    fi
+    value=$(printf '%s' "$json" | sed -n 's/.*"'"$key"'":"\([^"]*\)".*/\1/p')
+    [ -n "$value" ] || value=$(printf '%s' "$json" | sed -n 's/.*"'"$key"'":\([^,}"]*\).*/\1/p')
+    printf '%s' "$value"
+}
+
+# Whether $1 looks like a Trailblaze daemon JVM rather than whatever else the OS has given that
+# number to. Used only for the pidfile, which is the one source nothing corroborates: it outlives
+# reboots, so on a long-lived machine it can name a process the OS handed to someone else — and the
+# callers of this end in `kill -9`. Deliberately loose (any JVM, or anything naming Trailblaze), so
+# it rules out the editor or browser that inherited the number without ever refusing to stop a real
+# daemon, which would be the worse failure of the two.
+pid_looks_like_trailblaze() {
+    case "$(LC_ALL=C ps -o command= -p "$1" 2>/dev/null)" in
+        *trailblaze* | *Trailblaze* | *java*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# The PID of the process serving the daemon port. The pidfile alone is not it: a daemon the CLI
+# auto-started from inside its own JVM never wrote one, so after a launcher-started daemon dies
+# and the CLI starts a replacement, the pidfile names a dead process while a live one answers.
+#
+# $1, when given, is a status body already fetched by the caller — `status` has one in hand and
+# would otherwise pay a second five-second request for a field it already holds.
+daemon_process_pid() {
+    local pid status_json="${1-}"
+    [ -n "$status_json" ] || status_json=$(fetch_daemon_status_json)
+    pid=$(status_json_field "$status_json" pid)
+    # Only a numeric answer counts. A garbled body would otherwise short-circuit the corroborated
+    # sources below and leave the caller with "could not be identified".
+    case "$pid" in 0* | *[!0-9]*) pid="" ;; esac
+    if [ -z "$pid" ] && command -v lsof > /dev/null 2>&1; then
+        pid=$(lsof -nP -t -iTCP:"${TRAILBLAZE_PORT}" -sTCP:LISTEN 2>/dev/null | head -n 1)
+        case "$pid" in 0* | *[!0-9]*) pid="" ;; esac
+        # This is the port's real owner, and a daemon that answered /cli/status without a pid is
+        # indistinguishable here from an unrelated HTTP server on the same port. If it does not
+        # look like a Trailblaze JVM, give up entirely rather than falling through to the pidfile:
+        # that would name a process which does not even hold the port, and these paths end in
+        # `kill -9`.
+        if [ -n "$pid" ] && ! pid_looks_like_trailblaze "$pid"; then
+            return 1
+        fi
+    fi
+    if [ -z "$pid" ]; then
+        pid=$(cat "$TRAILBLAZE_PIDFILE" 2>/dev/null)
+        case "$pid" in "" | 0* | *[!0-9]*) return 1 ;; esac
+        pid_looks_like_trailblaze "$pid" || return 1
+    fi
+    case "$pid" in "" | 0* | *[!0-9]*) return 1 ;; esac
+    printf '%s' "$pid"
+}
+
+# Polls in half-second steps; $2 is the number of steps.
+wait_for_process_exit() {
+    local waited=0
+    while process_is_alive "$1" && [ "$waited" -lt "$2" ]; do
+        sleep 0.5
+        waited=$((waited + 1))
+    done
+    ! process_is_alive "$1"
+}
+
+# TERM first so shutdown hooks get their turn, KILL when they cannot finish — the wedge this
+# covers is a daemon whose own shutdown path is what is blocked.
+terminate_process() {
+    kill "$1" 2>/dev/null || true
+    wait_for_process_exit "$1" 10 && return 0
+    kill -9 "$1" 2>/dev/null || true
+    wait_for_process_exit "$1" 10
+}
+
 stop_daemon() {
-    local stopped_pid
-    if ! is_daemon_running; then
+    local daemon_pid attempts probe
+    probe_daemon_port
+    probe=$?
+    if [ "$probe" -eq 1 ]; then
         echo "Trailblaze is not running."
+        return 0
+    fi
+
+    daemon_pid=$(daemon_process_pid) || daemon_pid=""
+
+    if [ "$probe" -eq 2 ]; then
+        # Something holds the port and cannot answer — the exact state `stop` exists for. Reporting
+        # it as "not running" left the wedge in place and exited 0, so the next start failed on a
+        # bound port with no explanation. Asking it to shut down politely would go where the ping
+        # went, so go straight to the process.
+        stop_daemon_by_signal "$daemon_pid" "Trailblaze is not answering on port ${TRAILBLAZE_PORT}" || return 1
+        finish_daemon_stop "$daemon_pid"
         return 0
     fi
 
     echo "Stopping Trailblaze..."
-    curl -s -X POST "http://localhost:${TRAILBLAZE_PORT}/cli/shutdown" \
+    # Bounded: a daemon that accepts the socket and then never answers must not park `stop` here,
+    # because the TERM/KILL escalation below is what actually ends that daemon.
+    curl -s -X POST --connect-timeout 2 --max-time 10 "http://localhost:${TRAILBLAZE_PORT}/cli/shutdown" \
         -H "Content-Type: application/json" \
         -d '{}' > /dev/null 2>&1
 
+    # Poll only while the daemon is still ANSWERING (status 0) — that is a daemon shutting down in
+    # an orderly way, and it deserves the few seconds. Status 2 means it stopped answering without
+    # closing the port, which is the wedge, and no amount of waiting fixes it: each of those probes
+    # costs the full ping timeout, so continuing to poll spends a minute before the escalation that
+    # was always going to be the answer.
     attempts=0
-    while is_daemon_running && [ $attempts -lt 10 ]; do
+    probe_daemon_port
+    probe=$?
+    while [ "$probe" -eq 0 ] && [ "$attempts" -lt 10 ]; do
         sleep 0.5
         attempts=$((attempts + 1))
+        probe_daemon_port
+        probe=$?
     done
 
-    if is_daemon_running; then
-        echo "Daemon did not stop gracefully."
-        return 1
-    else
-        stopped_pid=$(cat "$TRAILBLAZE_PIDFILE" 2>/dev/null)
-        read_daemon_startup_owner || true
-        if [ -n "$stopped_pid" ] && [ "${TRAILBLAZE_START_OWNER_PID:-}" = "$stopped_pid" ]; then
-            if [ -f "$TRAILBLAZE_START_OWNER_FILE" ] \
-                && rm -f "$TRAILBLAZE_START_OWNER_FILE"; then
-                rmdir "$TRAILBLAZE_START_LOCK" 2>/dev/null || true
-            fi
+    if [ "$probe" -ne 1 ]; then
+        # Still holding the port, whether it is still answering or went deaf while shutting down.
+        # Both need the same thing done to them — and the second is why this asks the port again
+        # rather than trusting the loop's own last answer.
+        stop_daemon_by_signal "$daemon_pid" "Trailblaze did not stop on request" || return 1
+    elif [ -n "$daemon_pid" ] && ! wait_for_process_exit "$daemon_pid" 10; then
+        # The port closed, so every readiness probe says "stopped", but the JVM is still here —
+        # and with it every subprocess it owns. Left alone it holds the device connections and
+        # the next start finds a live PID it refuses to start past.
+        echo "Trailblaze closed its port but process ${daemon_pid} did not exit; stopping it directly." >&2
+        if ! terminate_process "$daemon_pid"; then
+            echo "Daemon process ${daemon_pid} is still running. Stop it yourself: kill -9 ${daemon_pid}" >&2
+            return 1
         fi
-        rm -f "$TRAILBLAZE_PIDFILE"
-        echo "Trailblaze stopped."
-        return 0
+    fi
+
+    finish_daemon_stop "$daemon_pid"
+    return 0
+}
+
+# End the daemon's process and confirm the port came free with it. $2 is why we are escalating; it
+# leads both the action line and the could-not-identify line so every path explains itself the same
+# way. Returns non-zero, having said what to do next, when the daemon is still there afterwards.
+stop_daemon_by_signal() {
+    local daemon_pid="$1" reason="$2" probe
+    if [ -z "$daemon_pid" ]; then
+        echo "${reason}, and its process could not be identified." >&2
+        echo "  Find it with: lsof -nP -iTCP:${TRAILBLAZE_PORT} -sTCP:LISTEN" >&2
+        return 1
+    fi
+    echo "${reason}; stopping daemon process ${daemon_pid} directly." >&2
+    if ! terminate_process "$daemon_pid"; then
+        echo "Daemon process ${daemon_pid} is still running. Stop it yourself: kill -9 ${daemon_pid}" >&2
+        return 1
+    fi
+    # The process is gone, so the port must be too. Anything else means what we ended was not what
+    # holds it — say so instead of reporting a stop that did not happen.
+    probe_daemon_port
+    probe=$?
+    if [ "$probe" -ne 1 ]; then
+        echo "Daemon process ${daemon_pid} ended but port ${TRAILBLAZE_PORT} is still held." >&2
+        echo "  Find its owner: lsof -nP -iTCP:${TRAILBLAZE_PORT} -sTCP:LISTEN" >&2
+        return 1
+    fi
+    return 0
+}
+
+# Clears the state a stopped daemon leaves behind, and says it stopped. Shared by every path
+# through stop_daemon so a daemon ended by signal cleans up exactly like one that shut itself down.
+finish_daemon_stop() {
+    local daemon_pid="${1:-}" stopped_pid
+    # Release the startup claim if the daemon just stopped held it, or if whoever held it is gone.
+    # A CLI-started daemon's claim names the launcher shell that wrapped its JVM, not the pidfile's
+    # PID, so matching the pidfile alone left the claim behind after every such stop.
+    stopped_pid=$(cat "$TRAILBLAZE_PIDFILE" 2>/dev/null)
+    read_daemon_startup_owner || true
+    if [ -n "${TRAILBLAZE_START_OWNER_FILE:-}" ] \
+        && { [ "${TRAILBLAZE_START_OWNER_PID:-}" = "${stopped_pid:-none}" ] \
+            || [ "${TRAILBLAZE_START_OWNER_PID:-}" = "${daemon_pid:-none}" ] \
+            || ! daemon_startup_owner_alive; }; then
+        if [ -f "$TRAILBLAZE_START_OWNER_FILE" ] \
+            && rm -f "$TRAILBLAZE_START_OWNER_FILE"; then
+            rmdir "$TRAILBLAZE_START_LOCK" 2>/dev/null || true
+        fi
+    fi
+    rm -f "$TRAILBLAZE_PIDFILE"
+    echo "Trailblaze stopped."
+}
+
+format_uptime() {
+    # `${1-0}`, not `${1:-0}` — an empty argument is a daemon that did not report an uptime, and
+    # must reach the 'unknown' arm below rather than being substituted into a confident "0s".
+    local total="${1-0}"
+    case "$total" in "" | *[!0-9]*) printf 'unknown'; return ;; esac
+    if [ "$total" -ge 3600 ]; then
+        printf '%dh %dm' "$((total / 3600))" "$((total % 3600 / 60))"
+    elif [ "$total" -ge 60 ]; then
+        printf '%dm %ds' "$((total / 60))" "$((total % 60))"
+    else
+        printf '%ds' "$total"
     fi
 }
 
-get_status() {
-    if is_daemon_running; then
-        echo "Trailblaze is running on port ${TRAILBLAZE_PORT}."
-        curl -s "http://localhost:${TRAILBLAZE_PORT}/cli/status" 2>/dev/null | cat
-        echo ""
-    else
-        echo "Trailblaze is not running."
+# The `--json` answer for a daemon that cannot be asked. $1 is a [probe_daemon_port] status.
+#
+# Carries every field `CliStatusResponse` declares without a default, so a consumer decoding this
+# with the shipped serializer gets `running: false` rather than a missing-field failure — the
+# stand-in has to satisfy the same schema as the real thing or it is not an answer.
+not_running_status_json() {
+    local unresponsive=false
+    [ "${1:-}" = "2" ] && unresponsive=true
+    printf '{"running":false,"port":%s,"connectedDevices":0,"uptimeSeconds":0,"unresponsive":%s}' \
+        "$TRAILBLAZE_PORT" "$unresponsive"
+}
+
+# Whether $1 parses as a JSON object. Without `jq` this only rules out the obvious non-JSON bodies
+# (an HTML error page, a bare 404 line), which is what it is here to catch.
+json_is_object() {
+    [ -n "$1" ] || return 1
+    if command -v jq > /dev/null 2>&1; then
+        printf '%s' "$1" | jq -e 'type == "object"' > /dev/null 2>&1
+        return $?
     fi
+    case "$1" in '{'*'}') return 0 ;; *) return 1 ;; esac
+}
+
+# One indented line per in-flight run.
+#
+# The sed fallback is anchored on `activeRunSummaries` being followed by `capabilities`, so adding a
+# field between them makes the whole list vanish while the count above it still says there are runs.
+# Nothing warns you about that, which is why jq gets first refusal.
+status_active_run_lines() {
+    local json="$1"
+    if command -v jq > /dev/null 2>&1; then
+        printf '%s' "$json" | jq -r '(.activeRunSummaries // [])[] | "    - " + .' 2>/dev/null
+        return 0
+    fi
+    printf '%s' "$json" \
+        | sed -n 's/.*"activeRunSummaries":\[\(.*\)\],"capabilities".*/\1/p' \
+        | awk 'BEGIN { RS = "\",\"" } { gsub(/^"|"$/, ""); if (length($0)) print "    - " $0 }'
+}
+
+# `trailblaze status` is read by a person deciding whether to stop or restart the daemon, so it
+# answers those questions directly. `trailblaze status --json` keeps the raw response for scripts.
+get_status() {
+    local json pid uptime version devices runs workspace probe
+    probe_daemon_port
+    probe=$?
+    if [ "$probe" -ne 0 ]; then
+        # --json is parsed by scripts, so it has to answer in JSON even when there is no daemon to
+        # ask. Printing the human sentence there fed `jq` a parse error instead of "nothing running".
+        if [ "${1:-}" = "--json" ]; then
+            printf '%s\n' "$(not_running_status_json "$probe")"
+            return 0
+        fi
+        if [ "$probe" -eq 2 ]; then
+            # Not the same thing as "not running", and saying so would send the reader off to start
+            # a daemon that cannot bind. `stop` is what clears this.
+            echo "Trailblaze is not answering on port ${TRAILBLAZE_PORT}."
+            echo "  Something holds the port but did not respond within ${TRAILBLAZE_PING_TIMEOUT_SECONDS}s."
+            echo "  See who owns it:  lsof -nP -iTCP:${TRAILBLAZE_PORT} -sTCP:LISTEN"
+            echo "  Clear it with:    trailblaze stop"
+            return 0
+        fi
+        echo "Trailblaze is not running."
+        return 0
+    fi
+    json=$(fetch_daemon_status_json)
+    # A body that is not JSON is no better than no body — an older daemon answers /cli/status with
+    # 404 text, and `--json` promised something parseable either way.
+    json_is_object "$json" || json=""
+    if [ "${1:-}" = "--json" ]; then
+        [ -n "$json" ] || json="$(not_running_status_json 0)"
+        printf '%s\n' "$json"
+        return 0
+    fi
+    # Older daemons do not report their PID; fall back to the listening socket / pidfile. The body
+    # already in hand is passed along so this does not pay a second request for a field it holds.
+    pid=$(daemon_process_pid "$json" 2>/dev/null || true)
+    uptime=$(format_uptime "$(status_json_field "$json" uptimeSeconds)")
+    version=$(status_json_field "$json" version)
+    devices=$(status_json_field "$json" connectedDevices)
+    runs=$(status_json_field "$json" activeRuns)
+    workspace=$(status_json_field "$json" workspaceAnchor)
+    echo "Trailblaze is running on port ${TRAILBLAZE_PORT}${pid:+ (PID ${pid})}, up ${uptime}."
+    echo "  Version:   ${version:-unknown}"
+    echo "  Devices:   ${devices:-0} connected"
+    echo "  Runs:      ${runs:-0} active"
+    echo "  Workspace: ${workspace:-none (scratch)}"
+    if [ "${runs:-0}" != "0" ]; then
+        status_active_run_lines "$json"
+    fi
+    echo "  Log:       ${TRAILBLAZE_DAEMON_LOG}"
 }
 
 # Open Trail Runner in its native desktop shell. Bare `app` and `app start`
@@ -854,7 +1453,7 @@ launch_trailrunner_app() {
         while [ "$attempts" -lt 120 ] && ! is_daemon_running; do
             if ! process_is_alive "$daemon_pid"; then
                 release_daemon_startup
-                printf '\nERROR: the Trailblaze daemon exited during startup.\n' >&2
+                printf '\nERROR: the Trailblaze daemon exited during startup. See %s\n' "$TRAILBLAZE_DAEMON_LOG" >&2
                 return 1
             fi
             echo -n "." >&2
@@ -969,7 +1568,7 @@ elif [ "${#ARGS_ARRAY[@]}" -eq 2 ] && [ "${ARGS_ARRAY[0]}" = "app" ] && [ "${ARG
     NATIVE_APP_MODE=true
 fi
 
-# STDIO mode: `mcp` subcommand without `--http` flag (includes --bridge mode)
+# STDIO mode: `mcp` subcommand without `--http` flag (`--direct` / `--no-daemon` included)
 if [ "${1:-}" = "mcp" ] && [ "$HAS_HTTP" = false ]; then
     STDIO_MODE=true
 fi
@@ -989,7 +1588,7 @@ if [ "$NATIVE_APP_MODE" = true ]; then
 elif [ "$1" = "stop" ]; then
     stop_daemon
 elif [ "$1" = "status" ]; then
-    get_status
+    get_status "${2:-}"
 elif [ "${TRAILBLAZE_IPC:-1}" = "1" ] \
     && [ "$HAS_DIRECT" = false ] \
     && [ "$STDIO_MODE" = false ] \
@@ -1028,7 +1627,7 @@ elif [ "$STDIO_MODE" = true ]; then
                 fi
                 if ! process_is_alive "$TRAILBLAZE_DAEMON_START_PID"; then
                     release_daemon_startup
-                    printf '[mcp] Warning: daemon exited during startup.\n' >&2
+                    printf '[mcp] Warning: daemon exited during startup. See %s\n' "$TRAILBLAZE_DAEMON_LOG" >&2
                     break
                 fi
                 sleep 1
@@ -1080,7 +1679,7 @@ elif ([ "$1" = "trail" ] || [ "$1" = "run" ] || [ "$1" = "blaze" ] || [ "$1" = "
     if ! is_daemon_running; then
         echo "" >&2
         if [ "$daemon_exited_during_startup" = true ]; then
-            echo "Warning: the Trailblaze daemon exited during startup. Falling back to direct execution." >&2
+            echo "Warning: the Trailblaze daemon exited during startup (see ${TRAILBLAZE_DAEMON_LOG}). Falling back to direct execution." >&2
         else
             echo "Warning: Daemon did not start in time. Falling back to direct execution." >&2
         fi

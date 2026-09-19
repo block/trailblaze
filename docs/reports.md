@@ -202,16 +202,19 @@ the viewer script.
 
 ## Comparing runs: the Trail view
 
-Any report holding more than one run can put several of them on one stage, as lanes side by side —
-the same trail across devices, a retry beside the run it followed, or any two runs you want to look
-at together. Every projection there (Map, Grid, Replay) reads across the lanes rather than down one
-run.
+A report can put several runs on one stage, as lanes side by side — the same trail across devices,
+a retry beside the run it followed, or any two runs you want to look at together. Every projection
+there (Map, Grid, Replay) reads across the lanes rather than down one run. A report holding a single
+run opens it as one lane, or as one lane per device when that one run drove several.
 
-There are two ways in:
+There are three ways in:
 
+- **A run's own header.** A run page carries a Trail view button whenever there is a stage to open
+  — which excludes a run that was skipped and one whose report is only a link out to another. On a
+  report that holds only one run — the daemon's page for a single session, a loaded recording —
+  this is the only way in.
 - **A trail's own entry point.** A run index row whose trail ran on more than one device opens that
-  trail's runs as lanes, in one click. A trail that ran once opens as a single lane — the same
-  projections, one column.
+  trail's runs as lanes, in one click.
 - **Pick the runs yourself.** Each index row and matrix cell carries a checkbox. Tick any set of
   runs and open them together, whether or not the report groups them.
 
@@ -227,6 +230,27 @@ The stage travels in the URL, so it can be shared or reloaded: `?view=trail&trai
 for a trail's own runs, `?view=trail&pick=0,2,5` for a set you picked. The `pick` indices are
 positions in *that* report — a report regenerated with different runs opens on whichever of them it
 still has, or falls back to the run index.
+
+### Comparing across reports
+
+Comparing needs two runs, and a report holding one run has nowhere to get the second. The daemon
+solves this for the page it serves per session: that page's Compare is a link into the daemon's
+report over every session, opening on the run you were reading. The run is named by its session id
+rather than its position, because positions renumber as new runs land. If the all-runs report turns
+out not to hold that run, the view says so instead of quietly comparing two others, and offers a
+link that retries over every run the daemon holds — still naming both runs by id, since the address
+you are looking at by then has been rewritten in positions.
+
+That retry appears only when the daemon told this document a wider report exists, and the daemon
+says so only when the wider report would really add runs. The page never guesses it from its own
+address, so a report you download — or re-host on a build server, where the address still looks
+live — offers no retry. It is a fixed set of runs however you ask for it. The retry is also the
+most expensive report the daemon builds, which is why the link says so.
+
+The daemon's all-runs report covers its 25 most recent sessions by default, which is also the cap
+on how much work one request can ask for. Add `?limit=all` to go further back — the Compare link
+adds it for you when the run you came from is older than that window — or `?limit=<n>` for a
+specific number.
 
 Two runs that merely share a title are never treated as one trail. Only an explicit trail id
 coalesces runs, because two runs named the same can be unrelated histories — the run index takes

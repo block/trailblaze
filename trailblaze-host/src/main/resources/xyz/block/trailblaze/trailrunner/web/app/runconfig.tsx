@@ -28,6 +28,7 @@ function RunConfigDialog({ trail: initialTrail, seed, pinnedId, go, close, closi
   const allTrails = trailsResult.data || [];
   const devicesResult = TB.useDevices();
   const deviceList = devicesResult.data || [];
+  const settingsResult = TB.useSettings();
   const [gt] = TB.useGlobalTarget(); // active target + its selected devices (the target picker)
   // The target selection holds a set of devices; a run starts out on the first one (the user can
   // check more devices, or a different one, below). gtFirstDevice is that default.
@@ -222,7 +223,16 @@ function RunConfigDialog({ trail: initialTrail, seed, pinnedId, go, close, closi
 
   const [selfHeal, setSelfHeal] = React.useState(false);
   const [useRecordedSteps, setUseRecordedSteps] = React.useState(seed && seed.replay ? 'replay' : 'auto');
-  const [agent, setAgent] = React.useState('TRAILBLAZE_RUNNER');
+  const [agent, setAgent] = React.useState('');
+  const agentTouched = React.useRef(false);
+  const effectiveAgent = settingsResult.data?.llm?.agent || null;
+  React.useEffect(() => {
+    setAgent((currentAgent) => seedRunAgent(currentAgent, effectiveAgent, agentTouched.current));
+  }, [effectiveAgent]);
+  const chooseAgent = (nextAgent) => {
+    agentTouched.current = true;
+    setAgent(nextAgent);
+  };
   const [maxLlmCalls, setMaxLlmCalls] = React.useState(String(DEFAULT_MAX_LLM_CALLS));
   const [llm, setLlm] = React.useState('');
   const [verbose, setVerbose] = React.useState(false);
@@ -362,7 +372,7 @@ function RunConfigDialog({ trail: initialTrail, seed, pinnedId, go, close, closi
         selfHeal: cfg.selfHeal,
         useRecordedSteps: cfg.useRecordedSteps === 'replay' ? true : cfg.useRecordedSteps === 'ai' ? false : null,
         maxLlmCalls: (!isNaN(maxCalls) && maxCalls > 0 && maxCalls !== DEFAULT_MAX_LLM_CALLS) ? maxCalls : null,
-        agent: cfg.agent,
+        agent: runAgentOption(cfg.agent),
         captureVideo: cfg.captureVideo,
         captureLogcat: cfg.captureLogcat,
         captureNetworkTraffic: cfg.captureNetwork,
@@ -582,7 +592,7 @@ function RunConfigDialog({ trail: initialTrail, seed, pinnedId, go, close, closi
               {advanced && (
                 <Section id="behavior" title="Behavior" ico="bot">
                   <BehaviorSection selfHeal={selfHeal} setSelfHeal={setSelfHeal} useRecordedSteps={useRecordedSteps} setUseRecordedSteps={setUseRecordedSteps}
-                    agent={agent} setAgent={setAgent} maxLlmCalls={maxLlmCalls} setMaxLlmCalls={setMaxLlmCalls} llm={llm} setLlm={setLlm}
+                    agent={agent} setAgent={chooseAgent} maxLlmCalls={maxLlmCalls} setMaxLlmCalls={setMaxLlmCalls} llm={llm} setLlm={setLlm}
                     verbose={verbose} setVerbose={setVerbose} headless={headless} setHeadless={setHeadless} web={selectedDevice && selectedDevice.platform === 'web'} />
                 </Section>
               )}

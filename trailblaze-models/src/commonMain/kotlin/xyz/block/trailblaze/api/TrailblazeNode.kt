@@ -174,7 +174,36 @@ data class TrailblazeNode(
    * than every looser bound tried; see `hitTest returns the leaf inside a clickable row that
    * carries two labels of its own`.
    */
-  fun hitTest(x: Int, y: Int): TrailblazeNode? {
+  fun hitTest(x: Int, y: Int): TrailblazeNode? = hitTest(x, y, candidatesWithin = null)
+
+  /**
+   * [hitTest] with step 1 — the frontmost-element contest — restricted to [candidatesWithin]'s
+   * subtree, while step 2 still climbs that element's real ancestors in this whole tree.
+   *
+   * Recording a selector for a node the caller already named (a `ref`) needs exactly this
+   * split. The contest must ignore a node that merely overlaps the named element from another
+   * branch — a layer the screen replaced but the capture still reports, a neighbouring row —
+   * because a touch on the named element can never resolve to one of those. The control that
+   * owns the named element, on the other hand, is routinely its parent, outside
+   * [candidatesWithin], and the climb must still reach it: a `ref` on a button's label records
+   * the button.
+   *
+   * Returns null when nothing inside [candidatesWithin] contains the point, including when
+   * [candidatesWithin] is not part of this tree.
+   *
+   * Deliberately not mirrored in the TypeScript matcher: only recording resolves a point
+   * relative to an already-named node, and recording is Kotlin-only. `hitTest(x, y)` itself,
+   * which the mirror does implement, is unchanged.
+   */
+  fun hitTestWithin(candidatesWithin: TrailblazeNode, x: Int, y: Int): TrailblazeNode? =
+    hitTest(x, y, candidatesWithin)
+
+  /**
+   * Shared implementation of [hitTest] and [hitTestWithin]. A non-null [candidatesWithin] keeps
+   * nodes outside its subtree out of step 1; traversal still starts at this root either way, so
+   * step 2's climb sees the full ancestor chain.
+   */
+  private fun hitTest(x: Int, y: Int, candidatesWithin: TrailblazeNode?): TrailblazeNode? {
     val ancestors = mutableListOf<TrailblazeNode>()
     var best: TrailblazeNode? = null
     var bestDegenerate = true
@@ -182,9 +211,10 @@ data class TrailblazeNode(
     var bestArea = Long.MAX_VALUE
     var bestAncestors: List<TrailblazeNode> = emptyList()
 
-    fun visit(node: TrailblazeNode) {
+    fun visit(node: TrailblazeNode, inCandidateScope: Boolean) {
+      val eligible = inCandidateScope || node === candidatesWithin
       val bounds = node.bounds
-      if (bounds != null && bounds.containsPoint(x, y)) {
+      if (eligible && bounds != null && bounds.containsPoint(x, y)) {
         val area = bounds.width.toLong() * bounds.height.toLong()
         val degenerate = area <= 0L
         val identifiable = node.driverDetail.hasIdentifiableProperties
@@ -220,10 +250,10 @@ data class TrailblazeNode(
         }
       }
       ancestors.add(node)
-      node.children.forEach { visit(it) }
+      node.children.forEach { visit(it, eligible) }
       ancestors.removeAt(ancestors.size - 1)
     }
-    visit(this)
+    visit(this, candidatesWithin == null)
 
     val target = best ?: return null
     if (target.driverDetail.isInteractive) return target

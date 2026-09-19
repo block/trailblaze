@@ -73,6 +73,23 @@ data class CliStatusResponse(
    * result reported as a pass, so callers of such fields check here first and refuse to delegate.
    */
   val capabilities: Set<String> = emptySet(),
+  /**
+   * The daemon's own process id. The launcher's pidfile is not a reliable source for it — a
+   * daemon the CLI auto-started from inside a JVM never wrote one — and `trailblaze stop` needs
+   * the real pid to confirm the process ended after the port closed.
+   */
+  val pid: Long? = null,
+  /**
+   * Always false on a response the daemon itself produced — a daemon that answered is by
+   * definition responsive.
+   *
+   * The field exists so `trailblaze status --json` has one schema for both outcomes: when the port
+   * is held but nothing answers `/ping`, the launcher synthesizes `{"running":false,…,
+   * "unresponsive":true}` locally, and a script reading the JSON can tell "no daemon" from "a
+   * wedged daemon you need to stop" without parsing human text. Declared here so the two
+   * producers cannot drift into different key names.
+   */
+  val unresponsive: Boolean = false,
 )
 
 /**

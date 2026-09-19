@@ -25,8 +25,8 @@ import java.util.concurrent.Callable
   name = "viewer",
   mixinStandardHelpOptions = true,
   description = [
-    "Write out the standalone report viewer (one self-contained HTML page) bundled into this " +
-      "binary. Serve it anywhere, or just open it: drop a session archive on the page, or point " +
+    "Write out the standalone report viewer (one self-contained HTML page).",
+    "Serve it anywhere, or just open it: drop a session archive on the page, or point " +
       "it at one with ?zip=<archive-url>. Versioned with this CLI, so it always matches the " +
       "reports this binary generates.",
   ],

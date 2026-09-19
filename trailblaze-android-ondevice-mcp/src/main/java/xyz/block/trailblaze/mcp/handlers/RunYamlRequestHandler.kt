@@ -235,8 +235,8 @@ class RunYamlRequestHandler(
 
     if (shouldEmitStartLogHere) {
       val deviceInfo = trailblazeDeviceInfoProvider(request.trailblazeDeviceId).let { info ->
-        // Use the driver type from the request (set by CLI --driver flag or trail config)
-        // rather than the provider's default, which is always ANDROID_ONDEVICE_INSTRUMENTATION.
+        // Use the driver type from the request (set by CLI --driver flag or trail config) rather
+        // than the provider's default, which knows nothing about what this run was asked to use.
         val requestDriverType = request.driverType
         if (requestDriverType != null) info.copy(trailblazeDriverType = requestDriverType) else info
       }

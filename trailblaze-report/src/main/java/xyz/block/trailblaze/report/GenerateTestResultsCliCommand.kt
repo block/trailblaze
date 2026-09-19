@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.report
 
+import kotlin.time.Duration.Companion.milliseconds
 import com.charleskorn.kaml.Yaml
 import com.charleskorn.kaml.YamlConfiguration
 import com.github.ajalt.clikt.core.CliktCommand
@@ -253,8 +254,12 @@ open class GenerateTestResultsCliCommand(
           )
         }
         // Get timestamps
-        val firstLog = logs.firstOrNull()
         val lastLog = logs.lastOrNull()
+        // The session's own end, not the last log that happened to be written: an abandoned session is
+        // ended at a deadline no log marks, and anchoring the interval there is what keeps
+        // `completed_at - started_at` equal to the reported duration in both cases.
+        val completedAt = sessionInfo.endTimestamp ?: lastLog?.timestamp
+        val startedAt = completedAt?.minus(sessionInfo.durationMs.milliseconds)
 
         // Collect tool usage from TrailblazeToolLog entries
         allSessionToolUsage.add(extractToolUsage(title, outcome, logs))
@@ -350,10 +355,13 @@ open class GenerateTestResultsCliCommand(
             duration_ms = sessionInfo.durationMs,
             llm_call_count = countLlmCalls(logs),
             llm_cost_usd = logs.computeUsageSummary()?.totalCostInUsDollars,
-            started_at = firstLog?.timestamp?.toIso8601String(),
-            started_at_epoch_ms = firstLog?.timestamp?.toEpochMilliseconds(),
-            completed_at = lastLog?.timestamp?.toIso8601String(),
-            completed_at_epoch_ms = lastLog?.timestamp?.toEpochMilliseconds(),
+            // Anchored on the end so `completed_at - started_at == duration_ms`: the duration is the
+            // session's own counter, which starts before the first log on a device runner (see
+            // [SessionInfo.durationMs]), so the first log's stamp would overstate the start.
+            started_at = startedAt?.toIso8601String(),
+            started_at_epoch_ms = startedAt?.toEpochMilliseconds(),
+            completed_at = completedAt?.toIso8601String(),
+            completed_at_epoch_ms = completedAt?.toEpochMilliseconds(),
             ci_job_id = hostCiContext.ci_job_id,
             ci_agent_name = hostCiContext.ci_agent_name,
             logs_zip_filename = hostCiContext.logs_zip_filename,

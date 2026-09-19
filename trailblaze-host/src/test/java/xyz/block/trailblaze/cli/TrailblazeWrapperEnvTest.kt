@@ -4,6 +4,7 @@ import java.io.File
 import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import org.junit.Assume.assumeTrue
 
@@ -64,6 +65,7 @@ class TrailblazeWrapperEnvTest {
       remove("TRAILBLAZE_DEVICE")
       remove("TRAILBLAZE_TARGET")
       remove("TRAILBLAZE_IPC")
+      remove("TRAILBLAZE_MCP_REQUEST_TIMEOUT_MS")
       putAll(extraEnv)
     }
     val proc = pb.start()
@@ -234,7 +236,7 @@ class TrailblazeWrapperEnvTest {
   // ---------------------------------------------------------------------------
 
   @Test
-  fun `wrapper allowlist in ipc_try_forward forwards TRAILBLAZE_SHELL_PID and TRAILBLAZE_INTERACTIVE`() {
+  fun `wrapper allowlist in ipc_try_forward forwards TRAILBLAZE_SHELL_PID, TRAILBLAZE_INTERACTIVE and the pre-flight timeout`() {
     assumeTrue("bash required for wrapper tests", File("/bin/bash").exists())
     assumeTrue(
       "jq required for wrapper IPC test",
@@ -264,7 +266,7 @@ class TrailblazeWrapperEnvTest {
           printf '%s' '{"stdout":"","stderr":"","exitCode":0,"forwarded":true}'
         }
         ( source '${wrapper.absolutePath}' snapshot )
-        jq -r '[.env.TRAILBLAZE_SHELL_PID, .env.TRAILBLAZE_INTERACTIVE] | @tsv' \
+        jq -r '[.env.TRAILBLAZE_SHELL_PID, .env.TRAILBLAZE_INTERACTIVE, .env.TRAILBLAZE_MCP_PREFLIGHT_TIMEOUT_MS] | @tsv' \
           '${capturedPayload.absolutePath}'
       """.trimIndent()
 
@@ -273,14 +275,201 @@ class TrailblazeWrapperEnvTest {
         mapOf(
           "TRAILBLAZE_SHELL_PID" to "424242",
           "TRAILBLAZE_INTERACTIVE" to "1",
+          // A daemon-executed command reads the CALLER's pre-flight bound, so the launcher has to
+          // carry it across; the daemon's own environment is whatever it was started with.
+          "TRAILBLAZE_MCP_PREFLIGHT_TIMEOUT_MS" to "20000",
         ),
       )
 
       assertEquals(0, exitCode, "bash harness must exit cleanly; stderr=\n$stderr")
-      assertEquals("424242\t1", stdout.trim())
+      assertEquals("424242\t1\t20000", stdout.trim())
     } finally {
       capturedPayload.delete()
     }
+  }
+
+  /**
+   * Capture the `/cli/exec` request line and its JSON body, printing
+   * `ARGS=<curl argv>` followed by the `jq` extraction of [jqFilter] over the payload.
+   */
+  private fun forwardSnapshotCapturing(jqFilter: String, extraEnv: Map<String, String>): Triple<Int, String, String> {
+    val wrapper = locateWrapperScript()
+    val capturedPayload = File.createTempFile("trailblaze-cli-exec-payload", ".json")
+    val capturedArgs = File.createTempFile("trailblaze-cli-exec-args", ".txt")
+    try {
+      val script = """
+        set -e
+        tb_run() { :; }
+        tb_run_quiet() { :; }
+        tb_run_background() { :; }
+        tb_run_background_quiet() { :; }
+        tb_run_exec_quiet() { :; }
+        curl() {
+          case "${'$'}*" in
+            *"/ping"*) return 0 ;;
+          esac
+          printf '%s' "${'$'}*" > '${capturedArgs.absolutePath}'
+          while [ "${'$'}#" -gt 0 ]; do
+            if [ "${'$'}1" = "-d" ]; then
+              shift
+              printf '%s' "${'$'}1" > '${capturedPayload.absolutePath}'
+            fi
+            shift
+          done
+          printf '%s' '{"stdout":"","stderr":"","exitCode":0,"forwarded":true}'
+        }
+        ( source '${wrapper.absolutePath}' snapshot )
+        printf 'ARGS=%s\n' "${'$'}(cat '${capturedArgs.absolutePath}')"
+        jq -r '$jqFilter' '${capturedPayload.absolutePath}'
+      """.trimIndent()
+      return runBash(script, extraEnv)
+    } finally {
+      capturedPayload.delete()
+      capturedArgs.delete()
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // A timed-out command's own hint tells the user to raise
+  // TRAILBLAZE_MCP_REQUEST_TIMEOUT_MS. On this path the JVM that waits is the daemon, whose env
+  // was frozen at `app start`, so the advice is a no-op unless the value travels with the
+  // request — and unless curl's own ceiling covers the budget it just forwarded, because
+  // abandoning the forward re-runs the whole command in a fresh JVM instead of waiting.
+  // ---------------------------------------------------------------------------
+
+  @Test
+  fun `ipc_try_forward forwards the request-timeout override and waits out the budget it sent`() {
+    assumeTrue("bash required for wrapper tests", File("/bin/bash").exists())
+    assumeTrue(
+      "jq required for wrapper IPC test",
+      ProcessBuilder("bash", "-c", "command -v jq >/dev/null 2>&1").start().waitFor() == 0,
+    )
+
+    val (exitCode, stdout, stderr) = forwardSnapshotCapturing(
+      jqFilter = ".env.TRAILBLAZE_MCP_REQUEST_TIMEOUT_MS",
+      extraEnv = mapOf("TRAILBLAZE_MCP_REQUEST_TIMEOUT_MS" to "900000"),
+    )
+
+    assertEquals(0, exitCode, "bash harness must exit cleanly; stderr=\n$stderr")
+    assertTrue(
+      stdout.lineSequence().any { it.trim() == "900000" },
+      "the override must reach the daemon in the /cli/exec env; payload read:\n$stdout",
+    )
+    val args = stdout.lineSequence().first { it.startsWith("ARGS=") }
+    assertTrue(
+      args.contains("--max-time 930"),
+      "curl must outlast the 900s budget it forwarded, or the forward is abandoned and the " +
+        "command re-runs in a fresh JVM; curl got:\n$args",
+    )
+  }
+
+  @Test
+  fun `ipc_try_forward keeps the standard ceiling for a lowered request timeout`() {
+    assumeTrue("bash required for wrapper tests", File("/bin/bash").exists())
+    assumeTrue(
+      "jq required for wrapper IPC test",
+      ProcessBuilder("bash", "-c", "command -v jq >/dev/null 2>&1").start().waitFor() == 0,
+    )
+
+    // Lowering the budget is the documented triage move for a wedged device. It must not drag
+    // curl's ceiling down with it — the daemon can still be mid-command from an earlier call.
+    val (exitCode, stdout, stderr) = forwardSnapshotCapturing(
+      jqFilter = ".env.TRAILBLAZE_MCP_REQUEST_TIMEOUT_MS",
+      extraEnv = mapOf("TRAILBLAZE_MCP_REQUEST_TIMEOUT_MS" to "15000"),
+    )
+
+    assertEquals(0, exitCode, "bash harness must exit cleanly; stderr=\n$stderr")
+    assertTrue(
+      stdout.lineSequence().any { it.trim() == "15000" },
+      "the override must reach the daemon in the /cli/exec env; payload read:\n$stdout",
+    )
+    val args = stdout.lineSequence().first { it.startsWith("ARGS=") }
+    assertTrue(
+      args.contains("--max-time 660"),
+      "curl's ceiling must stay at the standard floor; curl got:\n$args",
+    )
+  }
+
+  @Test
+  fun `the launcher's forward ceiling outlasts the CLI's default request budget`() {
+    // A forwarded command waits CliMcpClient.DEFAULT_REQUEST_TIMEOUT_MS inside the daemon. If
+    // the launcher's curl gives up first, the user is told the daemon has their command and gets
+    // no result, or (before the exit-28 guard) had the command run twice. Whoever raises the
+    // default must move this floor with it; this is the test that says so.
+    val launcher = locateWrapperScript().readText()
+    val floor = Regex("""^\s*local ipc_max_time=(\d+)\s*$""", RegexOption.MULTILINE)
+      .find(launcher)?.groupValues?.get(1)?.toLong()
+      ?: error("could not find `local ipc_max_time=<seconds>` in the launcher")
+    val budgetSeconds = CliMcpClient.DEFAULT_REQUEST_TIMEOUT_MS / 1000
+    assertTrue(
+      floor >= budgetSeconds + 30,
+      "launcher forward ceiling ${floor}s must be at least the CLI default budget ${budgetSeconds}s plus 30s",
+    )
+  }
+
+  @Test
+  fun `ipc_try_forward reads the override the way the daemon does, plus sign and leading zeros included`() {
+    assumeTrue("bash required for wrapper tests", File("/bin/bash").exists())
+    assumeTrue(
+      "jq required for wrapper IPC test",
+      ProcessBuilder("bash", "-c", "command -v jq >/dev/null 2>&1").start().waitFor() == 0,
+    )
+
+    // Kotlin's toLongOrNull takes both spellings as 900000, so the daemon waits 900s. If the
+    // launcher read either as "not a number" (the `+`) or as octal (the leading zero), curl's
+    // ceiling would stay at 600s and give up on a command the daemon is still running.
+    for (spelling in listOf("+900000", "0900000")) {
+      val (exitCode, stdout, stderr) = forwardSnapshotCapturing(
+        jqFilter = ".env.TRAILBLAZE_MCP_REQUEST_TIMEOUT_MS",
+        extraEnv = mapOf("TRAILBLAZE_MCP_REQUEST_TIMEOUT_MS" to spelling),
+      )
+
+      assertEquals(0, exitCode, "bash harness must exit cleanly for '$spelling'; stderr=\n$stderr")
+      val args = stdout.lineSequence().first { it.startsWith("ARGS=") }
+      assertTrue(
+        args.contains("--max-time 930"),
+        "'$spelling' is 900000ms to the daemon, so curl must wait 930s; curl got:\n$args",
+      )
+    }
+  }
+
+  @Test
+  fun `ipc_try_forward does not re-run a command curl gave up waiting on`() {
+    assumeTrue("bash required for wrapper tests", File("/bin/bash").exists())
+    assumeTrue(
+      "jq required for wrapper IPC test",
+      ProcessBuilder("bash", "-c", "command -v jq >/dev/null 2>&1").start().waitFor() == 0,
+    )
+    val wrapper = locateWrapperScript()
+
+    // curl exit 28 is its clock running out. The daemon answered /ping just before, so the
+    // request is one the daemon is starved on or still running; the old fall-through ran the
+    // whole command AGAIN in a fresh JVM. The fallback stubs print a marker so a re-run is
+    // visible, and the launcher must instead fail with the CLI's infra exit code.
+    val script = """
+      tb_run() { printf 'JVM_RAN\\n'; }
+      tb_run_quiet() { printf 'JVM_RAN\\n'; }
+      tb_run_background() { printf 'JVM_RAN\\n'; }
+      tb_run_background_quiet() { printf 'JVM_RAN\\n'; }
+      tb_run_exec_quiet() { printf 'JVM_RAN\\n'; }
+      tb_check_java_version() { :; }
+      curl() {
+        case "${'$'}*" in
+          *"/ping"*) return 0 ;;
+        esac
+        return 28
+      }
+      rc=0
+      ( source '${wrapper.absolutePath}' snapshot ) || rc=${'$'}?
+      printf 'RC=%s\n' "${'$'}rc"
+    """.trimIndent()
+
+    val (exitCode, stdout, stderr) = runBash(script, extraEnv = emptyMap())
+
+    assertEquals(0, exitCode, "bash harness must exit cleanly; stderr=\n$stderr")
+    assertFalse(stdout.contains("JVM_RAN"), "a timed-out forward must not re-run the command in a JVM; stdout:\n$stdout")
+    assertTrue(stdout.lineSequence().any { it.trim() == "RC=2" }, "expected the infra exit code 2; stdout:\n$stdout")
+    assertTrue(stderr.contains("NOT re-run"), "the user must be told the command was not re-run; stderr:\n$stderr")
   }
 
   @Test

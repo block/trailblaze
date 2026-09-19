@@ -20,7 +20,7 @@ import xyz.block.trailblaze.toolcalls.isSuccess
  * selector is (or became) not visible within the budget, `false` when it is still visible after
  * the wait.
  *
- * This is the disappearance counterpart to [FindMatchesTrailblazeTool] (which waits for
+ * This is the disappearance counterpart to [FindSelectorMatchesTrailblazeTool] (which waits for
  * APPEARANCE). It's the scripted-tool equivalent of the Kotlin agent's
  * `SquareVisibilityUtils.isTextNotVisibleAndroid` / `executeNodeSelectorAssertNotVisible`, but it
  * RETURNS a boolean rather than asserting — so "still visible after the timeout" is a normal
@@ -29,7 +29,7 @@ import xyz.block.trailblaze.toolcalls.isSuccess
  * (e.g. "App is still blocked on 2FA", the sign-in-loading-stuck diagnostic) instead of inheriting
  * the generic message a throwing `assertNotVisibleWithText` would emit.
  *
- * Why a dedicated primitive (rather than negating `findMatches`): a positive
+ * Why a dedicated primitive (rather than negating `findSelectorMatches`): a positive
  * visibility probe returns true the moment the text is *currently* on screen, so negating it
  * doesn't WAIT for the element to actually go away — right after an action triggers a transition
  * the negation flips to false before the screen leaves the tree. This tool waits for the element
@@ -54,7 +54,7 @@ import xyz.block.trailblaze.toolcalls.isSuccess
  * NOT marked [xyz.block.trailblaze.toolcalls.ReadOnlyTrailblazeTool]: waiting for an element to
  * disappear means the live tree changes during the wait, so the per-invocation
  * [xyz.block.trailblaze.toolcalls.SnapshotCache] frame MUST be invalidated afterward — otherwise a
- * follow-up point-in-time `findMatches` in the same batch could read the stale pre-disappearance
+ * follow-up point-in-time selector query in the same batch could read the stale pre-disappearance
  * tree. `isVerification = false` for the same reason (the assertion lives in the caller's branch on
  * the returned boolean, never in this tool).
  */
@@ -68,7 +68,7 @@ import xyz.block.trailblaze.toolcalls.isSuccess
 @LLMDescription(
   "Waits for the element matching the selector to become NOT visible (up to timeoutMs) and " +
     "returns a boolean verdict without throwing: true if it is/became not visible, false if it " +
-    "is still visible after the wait. The non-throwing disappearance counterpart to findMatches.",
+    "is still visible after the wait. The non-throwing disappearance counterpart to findSelectorMatches.",
 )
 data class WaitUntilNotVisibleTrailblazeTool(
   /** Selector whose disappearance is awaited against the live view hierarchy. */

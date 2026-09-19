@@ -381,8 +381,19 @@ internal object ToolboxFormatter {
     val toolDesc = tool["description"]?.jsonPrimitive?.contentOrNull ?: ""
     out += toolName
     out += "  $toolDesc"
+    // Directly under the description, ahead of `Run:` — a tool nothing offers still gets a
+    // copy-pasteable command line below, and the reader has to learn it will be refused before
+    // they read it, not after they run it.
+    val availability = (json["availability"] as? JsonPrimitive)
+      ?.takeUnless { it is JsonNull }
+      ?.content
+    if (!availability.isNullOrBlank()) {
+      out += "  Note: $availability"
+    }
     out += ""
     out += renderParameterLines(tool, "  ")
+    out += ""
+    out += "  Run: ${invocationExample(toolName, tool)}"
 
     // Defensive joins: a malformed daemon payload (null entry, nested object, accidental
     // array-of-arrays) must not crash help rendering — sibling parsers in this file
@@ -402,6 +413,21 @@ internal object ToolboxFormatter {
   }
 
   /**
+   * One copy-pasteable command line for the tool: required arguments first, optional ones in
+   * brackets, in the `key=value` form `trailblaze tool` takes. The parameter table above it
+   * says what each argument means; this says how to pass them, which the table cannot.
+   * `reasoning` is the agent's own annotation and never something a person types.
+   */
+  internal fun invocationExample(toolName: String, toolObj: JsonObject): String {
+    fun names(key: String): List<String> = (toolObj[key] as? JsonArray)
+      ?.mapNotNull { (it as? JsonObject)?.get("name")?.jsonPrimitive?.contentOrNull }
+      .orEmpty()
+    val args = names("requiredParameters").map { " $it=<$it>" } +
+      names("optionalParameters").filter { it != "reasoning" }.map { " [$it=<$it>]" }
+    return "trailblaze tool $toolName${args.joinToString("")} -s \"<what this step does>\""
+  }
+
+  /**
    * Renders parameter rows for a single tool — required first, then optional, each
    * prefixed with [indent]. Empty list when the tool has no parameters.
    */
@@ -414,7 +440,7 @@ internal object ToolboxFormatter {
         val pName = pObj["name"]?.jsonPrimitive?.contentOrNull ?: continue
         val pType = pObj["type"]?.jsonPrimitive?.contentOrNull ?: ""
         val pDesc = pObj["description"]?.jsonPrimitive?.contentOrNull ?: ""
-        out += "${indent}$pName ($pType, required): $pDesc"
+        out += parameterLine(indent, pName, pType, "required", pDesc)
       }
     }
     val optional = toolObj["optionalParameters"] as? JsonArray
@@ -424,10 +450,20 @@ internal object ToolboxFormatter {
         val pName = pObj["name"]?.jsonPrimitive?.contentOrNull ?: continue
         val pType = pObj["type"]?.jsonPrimitive?.contentOrNull ?: ""
         val pDesc = pObj["description"]?.jsonPrimitive?.contentOrNull ?: ""
-        out += "${indent}$pName ($pType, optional): $pDesc"
+        out += parameterLine(indent, pName, pType, "optional", pDesc)
       }
     }
     return out
+  }
+
+  /**
+   * One parameter row. A parameter with no description ends after its type instead of
+   * trailing a bare `: ` — `reasoning`, which every action tool carries without an
+   * `@LLMDescription`, rendered as `reasoning (STRING, optional): ` on every `tool --help`.
+   */
+  internal fun parameterLine(indent: String, name: String, type: String, requirement: String, description: String): String {
+    val head = "$indent$name ($type, $requirement)"
+    return if (description.isBlank()) head else "$head: $description"
   }
 
   /**

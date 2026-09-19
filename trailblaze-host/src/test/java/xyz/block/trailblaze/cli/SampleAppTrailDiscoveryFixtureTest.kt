@@ -124,7 +124,7 @@ class SampleAppTrailDiscoveryFixtureTest {
       // silent discovery drift that drops it fails here with a clear "known trail missing".
       "trails/mcp-tools-demo/mcp-tools-demo.trail.yaml",
       "trails/catalog/overlay-tap.trail.yaml",
-      "trails/android-ondevice-instrumentation/forms/text-input.trail.yaml",
+      "trails/android-ondevice-accessibility/forms/text-input.trail.yaml",
     )
 
     val discovered = TrailDiscovery.discoverTrailFiles(sampleAppRoot.toPath())

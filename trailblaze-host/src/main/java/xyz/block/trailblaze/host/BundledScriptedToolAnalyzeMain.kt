@@ -102,10 +102,11 @@ object BundledScriptedToolAnalyzeMain {
     val result = analyzeAll(trailmapsDir)
     outFile.parentFile?.mkdirs()
     outFile.writeText(json.encodeToString(JsonObject.serializer(), result))
-    Console.log(
-      "BundledScriptedToolAnalyzeMain: wrote ${result.size} trailmap group(s) of analyzer-derived " +
-        "scripted-tool configs to ${outFile.absolutePath}",
-    )
+    // No success line. A JavaExec forwards its child's stdout to the terminal whatever the
+    // Gradle log level is, so the old "wrote N trailmap group(s) to <absolute build path>"
+    // survived `./gradlew -q` — and the dev launcher rebuilds the JAR inline, which put that
+    // build-internal detail on whatever Trailblaze command the developer happened to run first.
+    // The output file is the evidence the step ran; failures still speak, on stderr.
   }
 
   /**

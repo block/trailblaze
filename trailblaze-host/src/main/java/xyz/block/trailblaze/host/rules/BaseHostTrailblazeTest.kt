@@ -397,7 +397,8 @@ abstract class BaseHostTrailblazeTest(
   /**
    * Which agent implementation to use for this test.
    * Configurable via the `trailblaze.agent` system property for CI toggle.
-   * Defaults to TRAILBLAZE_RUNNER (stable, battle-tested).
+   * Defaults to KOOG_STRATEGY_GRAPH; TRAILBLAZE_RUNNER remains available as an explicit legacy
+   * selection.
    */
   protected open val agentImplementation: AgentImplementation =
     System.getProperty("trailblaze.agent", AgentImplementation.DEFAULT_NAME)

@@ -51,8 +51,8 @@ import java.util.concurrent.Callable
   name = "results",
   mixinStandardHelpOptions = true,
   description = [
-    "Query the persisted test-result index for a test case. " +
-      "Passing a positional `<case-id>` (e.g. `trailblaze results C12345 --device android-phone`) " +
+    "Query the persisted test-result index for a test case.",
+    "Passing a positional `<case-id>` (e.g. `trailblaze results C12345 --device android-phone`) " +
       "is equivalent to the explicit `trailblaze results show <case-id>` form — picocli routes " +
       "the bare case-id straight to the `show` subcommand.",
   ],

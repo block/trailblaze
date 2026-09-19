@@ -93,7 +93,7 @@ data class MatchDescriptor(
 
 /**
  * Build a [MatchDescriptor] from this node, paired with the [root] of the tree
- * the node was matched in. Used by `FindMatchesTrailblazeTool` and tests —
+ * the node was matched in. Used by `FindSelectorMatchesTrailblazeTool` and tests —
  * anywhere the resolver hands back a [TrailblazeNode] and the caller wants the
  * lightweight descriptor instead.
  *

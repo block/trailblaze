@@ -2,6 +2,7 @@ package xyz.block.trailblaze.capture.logcat
 
 import java.io.File
 import java.util.concurrent.TimeUnit
+import xyz.block.trailblaze.capture.AppScopedCaptureStream
 import xyz.block.trailblaze.capture.CaptureOptions
 import xyz.block.trailblaze.capture.CaptureStream
 import xyz.block.trailblaze.capture.model.CaptureArtifact
@@ -22,8 +23,10 @@ import xyz.block.trailblaze.util.isMacOs
  * 2026-03-10 14:23:45.678901-0700  MyApp[12345]: (subsystem) message
  * ```
  */
-class IosLogCapture : CaptureStream {
+class IosLogCapture : CaptureStream, AppScopedCaptureStream {
   override val type = CaptureType.LOGCAT
+  override var isAppScoped: Boolean = false
+    private set
 
   private var process: Process? = null
   private var outputFile: File? = null
@@ -31,6 +34,7 @@ class IosLogCapture : CaptureStream {
 
   override fun start(sessionDir: File, deviceId: String, appId: String?) {
     if (!isMacOs()) return
+    isAppScoped = false
     startTimestampMs = System.currentTimeMillis()
     outputFile = File(sessionDir, CaptureFilenames.DEVICE_LOG)
 
@@ -57,6 +61,7 @@ class IosLogCapture : CaptureStream {
     val predicate = buildIosLogStreamPredicate(appId)
     if (predicate != null) {
       command.addAll(listOf("--predicate", predicate))
+      isAppScoped = true
     } else if (appId != null) {
       Console.log(
         "iOS log capture: appId '$appId' resolved to a blank process name; " +

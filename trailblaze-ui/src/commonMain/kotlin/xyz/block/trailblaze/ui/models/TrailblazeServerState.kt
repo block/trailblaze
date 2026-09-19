@@ -90,8 +90,20 @@ data class TrailblazeServerState(
      * normal speed and says why.
      */
     val turboEnabled: Boolean? = null,
-    /** Agent implementation to use. Defaults to [AgentImplementation.DEFAULT]. */
-    val agentImplementation: AgentImplementation = AgentImplementation.DEFAULT,
+    /**
+     * Agent implementation the user picked in the desktop app, or `null` when they never picked
+     * one.
+     *
+     * Tri-state like [turboEnabled], for the reason `TrailblazeJson` spells out: with
+     * `encodeDefaults = false` only a non-default value is written, so `null` is the one state
+     * that stays absent from the settings file. Readers resolve absence to
+     * [AgentImplementation.DEFAULT] themselves, which keeps "never chose" distinguishable from
+     * "chose today's default". Always-encoding a non-nullable field would instead freeze the
+     * current default into every existing user's config on the next settings write, and the
+     * persisted tier of agent resolution would then pin them to it — making the next default
+     * change unshippable.
+     */
+    val agentImplementation: AgentImplementation? = null,
     val yamlContent: String = """
 trail:
   - step: click back

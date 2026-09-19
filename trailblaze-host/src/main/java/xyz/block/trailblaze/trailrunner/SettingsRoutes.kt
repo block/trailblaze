@@ -46,7 +46,13 @@ internal fun settingsDtoFromConfig(
   trailsDirectory = config.trailsDirectory,
   logsDirectory = config.logsDirectory,
   appDataDirectory = config.appDataDirectory,
-  llm = buildLlmSettingsDto(deps, config.llmProvider, config.llmModel, config.agentImplementation),
+  // A never-chosen saved agent is null (tri-state); report the one a run would use.
+  llm = buildLlmSettingsDto(
+    deps,
+    config.llmProvider,
+    config.llmModel,
+    config.agentImplementation ?: AgentImplementation.DEFAULT,
+  ),
   selfHealEnabled = config.selfHealEnabled,
   requireSteps = config.requireSteps,
   saveAnnotatedScreenshots = config.saveAnnotatedScreenshots,

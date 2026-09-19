@@ -1,6 +1,8 @@
 package xyz.block.trailblaze.mcp.newtools
 
+import ai.koog.agents.core.tools.annotations.LLMDescription
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import xyz.block.trailblaze.docs.Scenario
 import kotlinx.serialization.json.JsonArray
@@ -14,19 +16,28 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import org.junit.Test
+import xyz.block.trailblaze.api.TrailblazeNodeSelector
 import xyz.block.trailblaze.config.InlineScriptToolConfig
 import xyz.block.trailblaze.config.TrailheadMetadata
+import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.llm.config.ConfigResourceSource
+import xyz.block.trailblaze.mcp.TrailblazeMcpSessionContext
+import xyz.block.trailblaze.mcp.models.McpSessionId
+import xyz.block.trailblaze.toolcalls.SessionDeviceBindings
 import xyz.block.trailblaze.llm.config.TrailblazeConfigPaths
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.toolcalls.ToolName
+import xyz.block.trailblaze.toolcalls.ToolSetCatalogEntry
+import xyz.block.trailblaze.toolcalls.TrailblazeToolSetCatalog
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
+import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toTrailblazeToolDescriptor
 import xyz.block.trailblaze.toolcalls.TrailblazeToolDescriptor
 import xyz.block.trailblaze.toolcalls.TrailblazeToolParameterDescriptor
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSourceType
+import xyz.block.trailblaze.toolcalls.commands.ObjectiveStatusTrailblazeTool
 import xyz.block.trailblaze.toolcalls.toKoogToolDescriptor
 import xyz.block.trailblaze.mcp.toolsets.ToolSetCategory
 import xyz.block.trailblaze.mcp.toolsets.ToolSetCategoryMapping
@@ -69,6 +80,35 @@ class ToolDiscoveryToolSetTest {
       driverType: TrailblazeDriverType,
     ): Set<KClass<out TrailblazeTool>> = emptySet()
   }
+
+  /**
+   * A class-backed tool that is hidden from the LLM and listed in no toolset — `tapOn`'s shape,
+   * down to the required [TrailblazeNodeSelector]. Two things ride on that shape:
+   * `surfaceToLlm = false`, because describing a tool someone named explicitly must not go through
+   * the gate that composes the model's toolbox; and the selector param, because both descriptor
+   * builders strip it and a lookup has to put it back.
+   */
+  @Serializable
+  @TrailblazeToolClass("registryOnly", surfaceToLlm = false)
+  @LLMDescription("A tool the registry knows and no toolset offers.")
+  private data class RegistryOnlyTool(val selector: TrailblazeNodeSelector) : TrailblazeTool
+
+  /**
+   * Stands in for a web-only, hidden, non-recordable tool (`web_evaluate`): a workspace toolset
+   * scoped to one driver offers it, and nothing else does. Whether its scripted door opens depends
+   * on which driver the asking session has.
+   */
+  @Serializable
+  @TrailblazeToolClass("web_probeEvaluate", surfaceToLlm = false, isRecordable = false)
+  @LLMDescription("Runs a script in the page.")
+  private data class WebOnlyHiddenTool(val script: String) : TrailblazeTool
+
+  private val webOnlyToolSet = ToolSetCatalogEntry(
+    id = "web_probe",
+    description = "Web-only evidence tools",
+    toolClasses = setOf(WebOnlyHiddenTool::class),
+    compatibleDriverTypes = setOf(TrailblazeDriverType.PLAYWRIGHT_NATIVE),
+  )
 
   private val testTarget =
     TestAppTarget(id = "testapp", displayName = "Test App", androidAppIds = listOf("com.test.app"))
@@ -213,12 +253,23 @@ class ToolDiscoveryToolSetTest {
     allTargets: Set<TrailblazeHostAppTarget> = setOf(testTarget, secondTarget),
     currentTarget: TrailblazeHostAppTarget? = null,
     currentDriverType: TrailblazeDriverType? = null,
+    /**
+     * Stands in for the global tool registry. Empty by default — "the catalogue is the whole
+     * truth" — so a test that cares about the registry has to say so. One test below deliberately
+     * omits this seam and exercises the real registry instead.
+     */
+    knownToolClasses: Map<String, KClass<out TrailblazeTool>> = emptyMap(),
   ): ToolDiscoveryToolSet =
     ToolDiscoveryToolSet(
       sessionContext = null,
       allTargetAppsProvider = { allTargets },
       currentTargetProvider = { currentTarget },
       currentDriverTypeProvider = { currentDriverType },
+      // Case-insensitive, matching the production lookup's contract — a seam that were stricter
+      // than the thing it stands in for would hide the bug it is meant to catch.
+      knownToolClassProvider = { name ->
+        knownToolClasses.entries.firstOrNull { it.key.equals(name, ignoreCase = true) }?.value
+      },
     )
 
   // -- 1. Index mode -- no target, no device ----------------------------------
@@ -570,6 +621,528 @@ class ToolDiscoveryToolSetTest {
     val error = obj["error"]?.jsonPrimitive?.content
     assertNotNull(error, "Should return an error")
     assertContains(error, "not found")
+  }
+
+  @Test
+  fun `NAME mode recovery is a command a CLI user can run`() = runTest {
+    val toolSet = createToolSet()
+
+    val result = toolSet.toolbox(name = "nonexistentTool")
+    val error = json.parseToJsonElement(result).jsonObject["error"]!!.jsonPrimitive.content
+
+    // `trailblaze tool <name> --help` reaches this message, so it is read by people at a terminal
+    // at least as often as by an LLM. `toolbox()` is a function call in neither vocabulary.
+    assertContains(error, "trailblaze toolbox")
+    assertFalse(error.contains("toolbox()"), "MCP call syntax leaked into the message: $error")
+  }
+
+  @Test
+  fun `a real tool that no toolset offers is described, not denied`() = runTest {
+    // The reported contradiction: every lookup surface said `tapOn` did not exist, while a
+    // recorded trail containing `tapOn` replayed it. Being absent from the catalogue means
+    // nothing offers the tool; it does not mean the name is meaningless.
+    val toolSet = createToolSet(
+      knownToolClasses = mapOf("tapOn" to RegistryOnlyTool::class),
+    )
+
+    val obj = json.parseToJsonElement(toolSet.toolbox(name = "tapOn")).jsonObject
+
+    assertNull(obj["error"], "A tool the registry knows must not be reported as not found: $obj")
+    assertEquals("registryOnly", obj["tool"]!!.jsonObject["name"]!!.jsonPrimitive.content)
+    val availability = obj["availability"]!!.jsonPrimitive.content
+    // Both halves, because they point opposite ways and either alone misleads.
+    assertContains(availability, "Not offered by any toolset")
+    assertContains(availability, "replays")
+  }
+
+  @Test
+  fun `tapOn is the tool the recorder writes, and it resolves through the real registry`() = runTest {
+    // Deliberately no registry seam: the production default has to resolve `tapOn` for the fix to
+    // do anything. It is class-backed with a `.tool.yaml` but hidden from the LLM, so this also
+    // pins that the descriptor is built without the `surfaceToLlm` gate.
+    val toolSet = ToolDiscoveryToolSet(
+      sessionContext = null,
+      allTargetAppsProvider = { emptySet() },
+      currentTargetProvider = { null },
+      currentDriverTypeProvider = { null },
+    )
+
+    val obj = json.parseToJsonElement(toolSet.toolbox(name = "tapOn")).jsonObject
+
+    assertNull(obj["error"], "`tapOn` is what the recorder writes and must be documented: $obj")
+    assertEquals("tapOn", obj["tool"]!!.jsonObject["name"]!!.jsonPrimitive.content)
+    assertNotNull(obj["availability"], "A tool no toolset offers must say so: $obj")
+  }
+
+  @Test
+  fun `the real tapOn is described with the selector it cannot run without`() = runTest {
+    // Both descriptor builders strip selector params, because expanding the self-referential
+    // selector grammar overflows Koog's lowering. Right for a toolbox the model picks from; wrong
+    // here, where `tapOn` would otherwise describe as `relativePoint` + `longPress` and nothing to
+    // say WHAT to tap. No seam: this is about the real tool's real constructor.
+    val toolSet = ToolDiscoveryToolSet(
+      sessionContext = null,
+      allTargetAppsProvider = { emptySet() },
+      currentTargetProvider = { null },
+      currentDriverTypeProvider = { null },
+    )
+
+    val obj = json.parseToJsonElement(toolSet.toolbox(name = "tapOn")).jsonObject
+    val tool = obj["tool"]!!.jsonObject
+    val required = tool["requiredParameters"]!!.jsonArray.map { it.jsonObject }
+
+    val selector = required.singleOrNull { it["name"]!!.jsonPrimitive.content == "selector" }
+    assertNotNull(selector, "`tapOn` must require the selector it taps: $tool")
+    // A nested block, not a scalar — `selector: "value"` would be a type error, not a start.
+    assertEquals("OBJECT", selector["type"]!!.jsonPrimitive.content)
+    // The params that survived stripping are still there; this restores, it does not replace.
+    val optional = tool["optionalParameters"]!!.jsonArray
+      .map { it.jsonObject["name"]!!.jsonPrimitive.content }
+    assertContains(optional, "longPress")
+  }
+
+  @Test
+  fun `a selector Kotlin declares nullable is still described as required`() = runTest {
+    // `assertVisibleBySelector` declares `nodeSelector: TrailblazeNodeSelector? = null` so a trail
+    // recorded before the field existed still deserializes — and then `execute` rejects null. Help
+    // that called it optional would document a call that always fails. No seam: the real tool.
+    val toolSet = ToolDiscoveryToolSet(
+      sessionContext = null,
+      allTargetAppsProvider = { emptySet() },
+      currentTargetProvider = { null },
+      currentDriverTypeProvider = { null },
+    )
+
+    val obj = json.parseToJsonElement(toolSet.toolbox(name = "assertVisibleBySelector")).jsonObject
+    val tool = obj["tool"]!!.jsonObject
+    val required = tool["requiredParameters"]!!.jsonArray
+      .map { it.jsonObject["name"]!!.jsonPrimitive.content }
+    val optional = tool["optionalParameters"]!!.jsonArray
+      .map { it.jsonObject["name"]!!.jsonPrimitive.content }
+
+    assertContains(required, "nodeSelector")
+    assertFalse(
+      optional.contains("nodeSelector"),
+      "The selector `execute` requires must not read as omittable: $tool",
+    )
+  }
+
+  @Test
+  fun `a custom-serialized tool is described by the arguments it actually decodes`() = runTest {
+    // `mobile_maestro` holds a single `yaml` string in Kotlin but its serializer reads and writes
+    // `commands: [...]`. Reflection over the constructor describes the field, so help printed a
+    // trail step keyed on `yaml` — which the tool's own deserializer rejects. No seam: the real
+    // tool, and it is registry-only (`surfaceToLlm = false`), so this lookup is the only surface
+    // that describes it at all.
+    val toolSet = ToolDiscoveryToolSet(
+      sessionContext = null,
+      allTargetAppsProvider = { emptySet() },
+      currentTargetProvider = { null },
+      currentDriverTypeProvider = { null },
+    )
+
+    val obj = json.parseToJsonElement(toolSet.toolbox(name = "mobile_maestro")).jsonObject
+    val tool = obj["tool"]!!.jsonObject
+    // `optionalParameters` is omitted entirely when empty, so read both defensively.
+    val names = listOf("requiredParameters", "optionalParameters")
+      .flatMap { key -> tool[key]?.jsonArray.orEmpty() }
+      .map { it.jsonObject["name"]!!.jsonPrimitive.content }
+
+    assertContains(names, "commands")
+    assertFalse("yaml" in names, "help named an argument the tool's serializer does not read: $tool")
+    // The usage block is the copy-paste target, so the wrong key there is the actual damage.
+    assertFalse("yaml:" in obj["usage"]!!.jsonPrimitive.content, "usage still shows the Kotlin field: $obj")
+  }
+
+  @Test
+  fun `a tool nothing offers is not told an agent will pick it`() = runTest {
+    val toolSet = createToolSet(
+      knownToolClasses = mapOf("tapOn" to RegistryOnlyTool::class),
+    )
+
+    val obj = json.parseToJsonElement(toolSet.toolbox(name = "tapOn")).jsonObject
+    val usage = obj["usage"]!!.jsonPrimitive.content
+
+    // The ordinary usage hint opens with "the inner agent selects this tool when appropriate",
+    // which sits directly under "no agent will choose it". Only one of the two can be true.
+    assertFalse(usage.contains("inner agent"), "Usage contradicts the availability note: $usage")
+    assertFalse(usage.contains("blaze("), "Usage offers a form the device/target gate refuses: $usage")
+    assertContains(usage, "trail")
+    // Still shows the call shape — the reader is holding or writing a trail step — including the
+    // restored selector, as a nested block rather than a scalar.
+    assertContains(usage, "- registryOnly:")
+    assertContains(usage, "selector: { }")
+  }
+
+  @Test
+  fun `an internal agent tool stays hidden even though the registry knows it`() = runTest {
+    // `objectiveStatus` is the agent framework talking to itself. Every other discovery surface
+    // excludes it via SYSTEM_INTERNAL_TOOLS, and the registry fallback must not become the one
+    // exception — it is also not recordable, so the "a recording that uses it replays" note
+    // would be false for it.
+    val toolSet = createToolSet(
+      knownToolClasses = mapOf("objectiveStatus" to ObjectiveStatusTrailblazeTool::class),
+    )
+
+    val obj = json.parseToJsonElement(toolSet.toolbox(name = "objectiveStatus")).jsonObject
+
+    assertNull(obj["tool"], "Internal agent machinery leaked into discovery: $obj")
+    assertContains(obj["error"]!!.jsonPrimitive.content, "not found")
+  }
+
+  @Test
+  fun `a registry-only name is matched case-insensitively, as the catalogue is`() = runTest {
+    // The catalogue half of this lookup matches with `ignoreCase = true`. Before the fix the
+    // registry half was an exact map lookup, so `TAPON` was "not found" while `tapOn` was
+    // described — two verdicts from one query, decided by which half answered.
+    val toolSet = ToolDiscoveryToolSet(
+      sessionContext = null,
+      allTargetAppsProvider = { emptySet() },
+      currentTargetProvider = { null },
+      currentDriverTypeProvider = { null },
+    )
+
+    val obj = json.parseToJsonElement(toolSet.toolbox(name = "TAPON")).jsonObject
+
+    assertNull(obj["error"], "`TAPON` and `tapOn` must get the same verdict: $obj")
+    assertEquals("tapOn", obj["tool"]!!.jsonObject["name"]!!.jsonPrimitive.content)
+  }
+
+  @Test
+  fun `a tool only a session-bound toolset offers is not called unoffered`() = runTest {
+    // `switchDevice` is in the `multi_device` toolset, which no target declares and no discovery
+    // category maps — a session gets it by binding two named devices. The catalogue lookup misses
+    // it, and the registry fallback then said "not offered by any toolset", which is false: the
+    // toolset exists, this session just has not bound it. No seam: the real tool, real catalogue.
+    val toolSet = ToolDiscoveryToolSet(
+      sessionContext = null,
+      allTargetAppsProvider = { emptySet() },
+      currentTargetProvider = { null },
+      currentDriverTypeProvider = { null },
+    )
+
+    val obj = json.parseToJsonElement(toolSet.toolbox(name = "switchDevice")).jsonObject
+
+    assertNull(obj["error"], "`switchDevice` is a real tool and must be described: $obj")
+    val availability = obj["availability"]!!.jsonPrimitive.content
+    assertContains(availability, "multi_device")
+    assertFalse(
+      availability.contains("Not offered by any toolset"),
+      "a tool a bundled toolset lists was called unoffered: $availability",
+    )
+    // Still says what a single-device session can do with it — and what it cannot.
+    assertContains(availability, "refuses to run it")
+    assertContains(availability, "replays")
+  }
+
+  @Test
+  fun `switchDevice is described as offered once the session binds two named devices`() = runTest {
+    // The server advertises `switchDevice` to a session on exactly this condition. Discovery in
+    // that session must agree, or the tool list and the tool's own help contradict each other.
+    val session = TrailblazeMcpSessionContext(mcpServerSession = null, mcpSessionId = McpSessionId("t"))
+    session.bindNamedDevice("seller", boundDevice("emulator-5554"))
+    session.bindNamedDevice("buyer", boundDevice("emulator-5556"))
+    val toolSet = ToolDiscoveryToolSet(
+      sessionContext = session,
+      allTargetAppsProvider = { emptySet() },
+      currentTargetProvider = { null },
+      currentDriverTypeProvider = { null },
+    )
+
+    val obj = json.parseToJsonElement(toolSet.toolbox(name = "switchDevice")).jsonObject
+
+    val availability = obj["availability"]!!.jsonPrimitive.content
+    assertContains(availability, "seller")
+    assertContains(availability, "buyer")
+    assertContains(availability, "advertised to it directly")
+    // Offered to the session is not offered to `trailblaze tool`: that command ends at `step`,
+    // the inner agent's gate, and the inner agent never has `switchDevice`. The note must keep
+    // saying so, or the CLI reader tries the one door that is shut.
+    assertContains(availability, "refuses to run it")
+    // The tool is in the session's own list, not the inner agent's: the usage must not send the
+    // caller through `blaze(...)`, and must not claim an agent picks it.
+    val usage = obj["usage"]!!.jsonPrimitive.content
+    assertContains(usage, "switchDevice")
+    assertFalse(usage.contains("blaze("), "usage points at a door this tool is not behind: $usage")
+    assertFalse(usage.contains("inner agent"), "the inner agent does not see this tool: $usage")
+  }
+
+  @Test
+  fun `one named device is still a session switchDevice is not offered to`() = runTest {
+    // The gate is two or more. A single named binding must read as not-yet, exactly as the
+    // server's advertisement does for the same roster.
+    val session = TrailblazeMcpSessionContext(mcpServerSession = null, mcpSessionId = McpSessionId("t"))
+    session.bindNamedDevice("seller", boundDevice("emulator-5554"))
+    val toolSet = ToolDiscoveryToolSet(
+      sessionContext = session,
+      allTargetAppsProvider = { emptySet() },
+      currentTargetProvider = { null },
+      currentDriverTypeProvider = { null },
+    )
+
+    val obj = json.parseToJsonElement(toolSet.toolbox(name = "switchDevice")).jsonObject
+    val availability = obj["availability"]!!.jsonPrimitive.content
+
+    assertContains(availability, "this session has not")
+    assertFalse(availability.contains("advertised to it directly"), "one device read as two: $availability")
+    assertContains(availability, "refuses to run it")
+    assertFalse(obj["usage"]!!.jsonPrimitive.content.contains("directly"), "not offered, yet usage says call it")
+  }
+
+  private fun boundDevice(instanceId: String) = SessionDeviceBindings.BoundDevice(
+    trailblazeDeviceId = TrailblazeDeviceId(instanceId, TrailblazeDevicePlatform.ANDROID),
+    trailblazeDeviceInfo = null,
+    description = null,
+    targetId = null,
+  )
+
+  @Test
+  fun `an always-enabled tool on a compatible driver is offered to every agent`() = runTest {
+    // `mobile_listInstalledApps` is in `android_framework` and `mobile_primitives`, both
+    // `always_enabled`: no target declares them and no discovery category maps them, yet the
+    // inner agent has them on any driver they list. The catalogue lookup misses the tool, and the
+    // registry fallback then said no agent here sees it — in a session where `blaze(...)` runs it.
+    val toolSet = ToolDiscoveryToolSet(
+      sessionContext = null,
+      allTargetAppsProvider = { emptySet() },
+      currentTargetProvider = { null },
+      currentDriverTypeProvider = { TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY },
+    )
+
+    val obj = json.parseToJsonElement(toolSet.toolbox(name = "mobile_listInstalledApps")).jsonObject
+
+    assertNull(obj["error"], "a real tool must be described: $obj")
+    val availability = obj["availability"]!!.jsonPrimitive.content
+    assertContains(availability, "android_framework")
+    assertContains(availability, "lways enabled")
+    assertContains(availability, "android-ondevice-accessibility")
+    assertFalse(availability.contains("refuses"), "the inner agent has this tool, yet: $availability")
+    assertFalse(availability.contains("not in scope"), "the inner agent has this tool, yet: $availability")
+    // Every agent has it, so the ordinary door applies: the inner agent picks it under `blaze(...)`.
+    assertContains(obj["usage"]!!.jsonPrimitive.content, "blaze(")
+  }
+
+  @Test
+  fun `a hidden tool in an always-enabled toolset is not called agent-visible`() = runTest {
+    // `mobile_clearAppData` sits in `mobile_primitives` next to `mobile_listInstalledApps`, but is
+    // `surfaceToLlm = false`: the agent's descriptors omit it, and `step` gates on those, so
+    // `trailblaze tool mobile_clearAppData` is refused on the very driver the toolset lists.
+    // The toolset being on the surface must not promote a tool the surface leaves out.
+    val toolSet = ToolDiscoveryToolSet(
+      sessionContext = null,
+      allTargetAppsProvider = { emptySet() },
+      currentTargetProvider = { null },
+      currentDriverTypeProvider = { TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY },
+    )
+
+    val obj = json.parseToJsonElement(toolSet.toolbox(name = "mobile_clearAppData")).jsonObject
+
+    assertNull(obj["error"], "a real, recordable tool must be described: $obj")
+    val availability = obj["availability"]!!.jsonPrimitive.content
+    assertContains(availability, "mobile_primitives")
+    assertContains(availability, "hidden")
+    assertContains(availability, "refuses to run it")
+    assertContains(availability, "replays")
+    assertFalse(availability.contains("every agent here has it"), "hidden, yet agent-visible: $availability")
+    assertFalse(obj["usage"]!!.jsonPrimitive.content.contains("blaze("), "no agent has it, yet usage says blaze")
+  }
+
+  @Test
+  fun `a non-recordable hidden tool is not promised a recording`() = runTest {
+    // `android_adbShell` is hidden AND `isRecordable = false`: the recorder filters it out of every
+    // recording, so "a recording that uses it replays" describes a recording that cannot exist.
+    // What does run it: a scripted tool's `client.tools.android_adbShell(…)` (the dispatcher
+    // resolves through the unfiltered registry) or a trail step someone typed by hand.
+    val toolSet = ToolDiscoveryToolSet(
+      sessionContext = null,
+      allTargetAppsProvider = { emptySet() },
+      currentTargetProvider = { null },
+      currentDriverTypeProvider = { TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY },
+    )
+
+    val obj = json.parseToJsonElement(toolSet.toolbox(name = "android_adbShell")).jsonObject
+
+    assertNull(obj["error"], "a real tool must be described: $obj")
+    val availability = obj["availability"]!!.jsonPrimitive.content
+    assertContains(availability, "android_framework")
+    assertContains(availability, "hidden")
+    assertContains(availability, "refuses to run it")
+    assertContains(availability, "recorder never writes it")
+    assertFalse(availability.contains("a recording that uses it replays"), "promised a recording that cannot exist: $availability")
+    val usage = obj["usage"]!!.jsonPrimitive.content
+    assertContains(usage, "client.tools.android_adbShell(")
+    assertContains(usage, "command:")
+    assertContains(usage, "hand-written")
+    assertFalse(usage.contains("what the recorder writes"), "the recorder never writes this tool: $usage")
+    assertFalse(usage.contains("blaze("), "no agent has it, yet usage says blaze")
+    // The driver IS compatible here, so the scripted door is open from this session: no caveat.
+    assertFalse(availability.contains("not this one"), "compatible driver, yet the note disowns the session: $availability")
+    assertFalse(usage.contains("Runs only on drivers"), "compatible driver, yet usage names other drivers: $usage")
+  }
+
+  @Test
+  fun `an always-enabled tool on an incompatible driver names the drivers that have it`() = runTest {
+    // Same tool, a web session. The toolsets exist and are always on — for Android drivers. Here
+    // nothing runs it, and the note must say which drivers would, not merely "out of scope".
+    val toolSet = ToolDiscoveryToolSet(
+      sessionContext = null,
+      allTargetAppsProvider = { emptySet() },
+      currentTargetProvider = { null },
+      currentDriverTypeProvider = { TrailblazeDriverType.PLAYWRIGHT_NATIVE },
+    )
+
+    val obj = json.parseToJsonElement(toolSet.toolbox(name = "mobile_listInstalledApps")).jsonObject
+
+    val availability = obj["availability"]!!.jsonPrimitive.content
+    assertContains(availability, "android_framework")
+    assertContains(availability, "android-ondevice-accessibility")
+    assertContains(availability, TrailblazeDriverType.PLAYWRIGHT_NATIVE.yamlKey)
+    assertContains(availability, "refuses to run it")
+    assertContains(availability, "replays")
+    assertFalse(obj["usage"]!!.jsonPrimitive.content.contains("blaze("), "no agent here has it, yet usage says blaze")
+  }
+
+  @Test
+  fun `an always-enabled tool with no device bound is not yet offered`() = runTest {
+    // No driver, no always-enabled surface: the answer is "not here", with the drivers that would.
+    val toolSet = ToolDiscoveryToolSet(
+      sessionContext = null,
+      allTargetAppsProvider = { emptySet() },
+      currentTargetProvider = { null },
+      currentDriverTypeProvider = { null },
+    )
+
+    val availability = json.parseToJsonElement(toolSet.toolbox(name = "mobile_listInstalledApps"))
+      .jsonObject["availability"]!!.jsonPrimitive.content
+
+    assertContains(availability, "no device")
+    assertContains(availability, "android-ondevice-accessibility")
+    assertContains(availability, "refuses to run it")
+  }
+
+
+  @Test
+  fun `a non-recordable tool on an incompatible driver is not handed a scripted call that fails here`() = runTest {
+    // `android_adbShell` from a web session. Its executor rejects any non-Android platform, so a
+    // scripted `client.tools.android_adbShell(…)` from THIS session fails — the scripted door only
+    // opens on the drivers the toolset lists, and the answer has to say so instead of offering it.
+    // A hand-written trail step still runs it: a trail names its own device.
+    val toolSet = ToolDiscoveryToolSet(
+      sessionContext = null,
+      allTargetAppsProvider = { emptySet() },
+      currentTargetProvider = { null },
+      currentDriverTypeProvider = { TrailblazeDriverType.PLAYWRIGHT_NATIVE },
+    )
+
+    val obj = json.parseToJsonElement(toolSet.toolbox(name = "android_adbShell")).jsonObject
+
+    val availability = obj["availability"]!!.jsonPrimitive.content
+    assertContains(availability, "android_framework")
+    assertContains(availability, TrailblazeDriverType.PLAYWRIGHT_NATIVE.yamlKey)
+    assertContains(availability, "recorder never writes it")
+    assertContains(availability, "hand-written trail step runs it")
+    assertContains(availability, "only from a session on one of those drivers — not this one")
+    assertFalse(availability.contains("a recording that uses it replays"), "promised a recording that cannot exist: $availability")
+    val usage = obj["usage"]!!.jsonPrimitive.content
+    assertContains(usage, "Runs only on drivers")
+    assertContains(usage, TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY.yamlKey)
+    assertContains(usage, "client.tools.android_adbShell(")
+    assertFalse(usage.startsWith("From a scripted tool:"), "offered the scripted door from a driver that rejects it: $usage")
+    assertFalse(usage.contains("blaze("), "no agent here has it, yet usage says blaze")
+  }
+
+  @Test
+  fun `a non-recordable tool with no device bound names the drivers its scripted call needs`() = runTest {
+    val toolSet = ToolDiscoveryToolSet(
+      sessionContext = null,
+      allTargetAppsProvider = { emptySet() },
+      currentTargetProvider = { null },
+      currentDriverTypeProvider = { null },
+    )
+
+    val obj = json.parseToJsonElement(toolSet.toolbox(name = "android_adbShell")).jsonObject
+
+    val availability = obj["availability"]!!.jsonPrimitive.content
+    assertContains(availability, "no device")
+    assertContains(availability, "not this one")
+    val usage = obj["usage"]!!.jsonPrimitive.content
+    assertContains(usage, "Runs only on drivers")
+    assertContains(usage, TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY.yamlKey)
+  }
+
+  @Test
+  fun `a driver-scoped workspace tool names its drivers from the wrong session and not from the right one`() = runTest {
+    // The same rule for a toolset that is NOT always-enabled: a workspace web toolset offering a
+    // hidden, non-recordable tool. From an Android session the scripted call cannot run, so the
+    // note names the drivers; from a web session the door is open and no caveat is added.
+    TrailblazeToolSetCatalog.registerWorkspaceToolSets(listOf(webOnlyToolSet))
+    try {
+      val known = mapOf("web_probeEvaluate" to WebOnlyHiddenTool::class)
+
+      val fromAndroid = json.parseToJsonElement(
+        createToolSet(currentDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY, knownToolClasses = known)
+          .toolbox(name = "web_probeEvaluate"),
+      ).jsonObject
+      assertNull(fromAndroid["error"], "a real tool must be described: $fromAndroid")
+      val androidNote = fromAndroid["availability"]!!.jsonPrimitive.content
+      assertContains(androidNote, "`web_probe`")
+      assertContains(androidNote, TrailblazeDriverType.PLAYWRIGHT_NATIVE.yamlKey)
+      assertContains(androidNote, "not this one")
+      val androidUsage = fromAndroid["usage"]!!.jsonPrimitive.content
+      assertContains(androidUsage, "Runs only on drivers ${TrailblazeDriverType.PLAYWRIGHT_NATIVE.yamlKey}")
+      assertContains(androidUsage, "client.tools.web_probeEvaluate(")
+
+      val fromWeb = json.parseToJsonElement(
+        createToolSet(currentDriverType = TrailblazeDriverType.PLAYWRIGHT_NATIVE, knownToolClasses = known)
+          .toolbox(name = "web_probeEvaluate"),
+      ).jsonObject
+      val webNote = fromWeb["availability"]!!.jsonPrimitive.content
+      assertContains(webNote, "`web_probe`")
+      assertContains(webNote, "client.tools.web_probeEvaluate(…)` runs it")
+      assertFalse(webNote.contains("not this one"), "compatible driver, yet the note disowns the session: $webNote")
+      val webUsage = fromWeb["usage"]!!.jsonPrimitive.content
+      assertTrue(webUsage.startsWith("From a scripted tool:"), "compatible driver, yet the scripted door is caveated: $webUsage")
+    } finally {
+      // The overlay is process-wide; leaving a test's version installed would leak into others.
+      TrailblazeToolSetCatalog.registerWorkspaceToolSets(emptyList())
+    }
+  }
+  @Test
+  fun `an offered tool carries no availability note`() = runTest {
+    val toolSet = createToolSet()
+
+    val obj = json.parseToJsonElement(toolSet.toolbox(name = "tap")).jsonObject
+
+    // The note is the exception, not a field every lookup decorates — `foundInCategories`
+    // already says where an offered tool lives.
+    assertNull(obj["availability"], "An offered tool was flagged as unavailable: $obj")
+  }
+
+  @Test
+  fun `a name neither the catalogue nor the registry knows is still not found`() = runTest {
+    val toolSet = createToolSet(
+      knownToolClasses = mapOf("tapOn" to RegistryOnlyTool::class),
+    )
+
+    val obj = json.parseToJsonElement(toolSet.toolbox(name = "tapOnn")).jsonObject
+
+    // The registry fallback must not swallow the did-you-mean repair for a genuine typo.
+    val error = obj["error"]!!.jsonPrimitive.content
+    assertContains(error, "Tool 'tapOnn' not found.")
+    assertContains(error, "Did you mean")
+    assertNull(obj["tool"], "A name nothing knows must not produce a descriptor: $obj")
+  }
+
+  @Test
+  fun `a name nothing resembles gets no did you mean tail`() {
+    val message = ToolDiscoveryToolSet.unknownToolLookupMessage(
+      name = "frobnicate",
+      knownToolNames = listOf("tap", "swipe", "inputText"),
+    )
+
+    // A guess the reader will go try and find equally absent is worse than no guess.
+    assertFalse(message.contains("Did you mean"), message)
+    assertContains(message, "trailblaze toolbox")
   }
 
   // -- 6. Target mode -- valid target -----------------------------------------

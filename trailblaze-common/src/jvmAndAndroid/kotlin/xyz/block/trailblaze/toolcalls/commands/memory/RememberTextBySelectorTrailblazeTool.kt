@@ -22,7 +22,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
  *
  * The deterministic counterpart to [RememberTextTrailblazeTool]. Where `rememberText` describes the
  * element in natural language and spends an LLM call to pick a locator, this names the element with
- * the same [TrailblazeNodeSelector] grammar `assertVisibleBySelector` / `findMatches` use and reads
+ * the same [TrailblazeNodeSelector] grammar `assertVisibleBySelector` / `findSelectorMatches` use and reads
  * its text straight off the captured tree. Zero LLM calls, so a capture replays on a
  * recording-only leg and on iOS, where the prompt path's locator step fails outright.
  *

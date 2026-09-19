@@ -262,10 +262,10 @@ type PlaybackDriveContext = {
   scrubHoverState: () => { tooltipVisible: boolean; rangeVisible: boolean; step: string; kind: string; ariaHidden: string | undefined };
 };
 
-type ViewerOptions = { session?: number; step?: number; clickGroup?: number; toggleKids?: number; clickKid?: string; routeStep?: number; query?: string; legacyHash?: string; protocol?: string; copyLink?: boolean; clipboardRejects?: boolean; tab?: string; toggleCell?: string; lightboxAll?: boolean; galZoom?: number[]; zoomShot?: string; zoomKey?: "ArrowLeft" | "ArrowRight"; timelineKey?: "ArrowLeft" | "ArrowRight" | "ArrowUp" | "ArrowDown"; timelineKeyTarget?: string; tlStream?: number; tlStreamBeforeTab?: number; spaceOnStep?: number; timelineScrollTop?: number; focusedStep?: number; focusedGroup?: number; focusedTlStream?: number; llmEnter?: number; llmClick?: number; openTx?: number; txEscape?: boolean; inspect?: number; inspectEscape?: boolean; popstate?: string; deferHistoryBack?: boolean; transport?: "prev" | "next"; stackedTimeline?: boolean; shotLayoutShift?: boolean; copyLocalPrompt?: boolean; exportLogs?: boolean; exportRun?: boolean; pointerDown?: "outside" | "insideTimelineMenu"; gotoTrail?: boolean | string; gotoCompareTrail?: boolean | string; gotoCompare?: boolean; toggleCompare?: boolean; toggleCompareAfterPick?: boolean; pick?: number[]; openRetries?: number[]; pickClear?: boolean; pickOpen?: boolean; pickDiff?: boolean; cmpGap?: number; cmpTab?: string; cmpStream?: string; cmpEvent?: string; cmpSide?: { side: "base" | "vs"; value: number }; cmpOrganize?: "stream" | "step"; cmpEventStep?: string; cmpPlace?: "prev" | "next" | Array<"prev" | "next">; cmpFull?: string; cmpEventAll?: boolean; cmpEventSearch?: string; cmpStepStream?: string; trailOpen?: string; toggleLanes?: number[]; back?: boolean; viewer?: () => void; drive?: (ctx: PlaybackDriveContext) => void; payloadViaGlobal?: boolean; sprites?: Record<string, string[]>; deferBoot?: boolean; rebootViewer?: boolean; shellDocument?: boolean; chunks?: { index: string; sessions: Record<string, string>; sprites: Record<string, string> }; holdChunks?: number[]; holdSpriteChunks?: number[]; streamingChunks?: number[]; loadingDocument?: boolean; baseURI?: string };
+type ViewerOptions = { session?: number; step?: number; clickGroup?: number; toggleKids?: number; clickKid?: string; routeStep?: number; query?: string; legacyHash?: string; protocol?: string; copyLink?: boolean; clipboardRejects?: boolean; tab?: string; toggleCell?: string; lightboxAll?: boolean; galZoom?: number[]; zoomShot?: string; zoomKey?: "ArrowLeft" | "ArrowRight"; timelineKey?: "ArrowLeft" | "ArrowRight" | "ArrowUp" | "ArrowDown"; timelineKeyTarget?: string; tlStream?: number; tlStreamBeforeTab?: number; spaceOnStep?: number; timelineScrollTop?: number; focusedStep?: number; focusedGroup?: number; focusedTlStream?: number; llmEnter?: number; llmClick?: number; openTx?: number; txEscape?: boolean; inspect?: number; inspectEscape?: boolean; popstate?: string; deferHistoryBack?: boolean; transport?: "prev" | "next"; stackedTimeline?: boolean; shotLayoutShift?: boolean; copyLocalPrompt?: boolean; exportLogs?: boolean; exportRun?: boolean; exportAll?: boolean; pointerDown?: "outside" | "insideTimelineMenu"; gotoTrail?: boolean | string; gotoCompareTrail?: boolean | string; gotoCompare?: boolean; toggleCompare?: boolean; toggleCompareAfterPick?: boolean; pick?: number[]; openRetries?: number[]; pickClear?: boolean; pickOpen?: boolean; pickDiff?: boolean; cmpGap?: number; cmpTab?: string; cmpStream?: string; cmpEvent?: string; cmpSide?: { side: "base" | "vs"; value: number }; cmpOrganize?: "stream" | "step"; cmpEventStep?: string; cmpPlace?: "prev" | "next" | Array<"prev" | "next">; cmpFull?: string; cmpEventAll?: boolean; cmpEventSearch?: string; cmpStepStream?: string; trailOpen?: string; toggleLanes?: number[]; back?: boolean; viewer?: () => void; drive?: (ctx: PlaybackDriveContext) => void; payloadViaGlobal?: boolean; sprites?: Record<string, string[]>; deferBoot?: boolean; rebootViewer?: boolean; shellDocument?: boolean; chunks?: { index: string; sessions: Record<string, string>; sprites: Record<string, string> }; holdChunks?: number[]; holdSpriteChunks?: number[]; streamingChunks?: number[]; loadingDocument?: boolean; baseURI?: string; pageUrl?: string };
 
 function renderViewerState(payload: unknown, opts: ViewerOptions = {}): { html: string; htmlBeforeBoot: string; liveHtml: () => string; readHtml: () => string; timelineScrollTop: number; mainScrollTop: number; restoredFocus: string | null; route: string; readRoute: () => string; routeWrites: () => Array<{ method: string; next: string }>; historyBack: () => void; historyForward: () => void; flushHistoryBack: () => void; escapeOverlay: () => void; liveZoomRoot: () => any; zoomSrc: string | null; zoomRoot: any; copiedText: string | null; copyBtnText: () => string; timelineMenuOpen: boolean; spriteMeasures: Array<{ src: string; fireLoad: (naturalWidth: number) => void }>; tlvframeStyle: Record<string, string>; releaseChunks: () => void; partialChunkReads: () => number; loadingProgressWrites: () => number; settleDocument: () => void; documentKeyListeners: Array<(e: any) => void>; autoplayMarker: () => string | undefined; embeddedMarker: () => string | undefined; llmScrolledTo: string | null; cmpScrolledTo: () => string | null; llmRow: (i: number) => any; readRestoredFocus: () => string | null; pageClass: () => string; pageClassWrites: () => string[]; readActiveElement: () => any; live: () => { update: (i: number, payload: Record<string, unknown>) => void; destroy: () => void } | undefined; readTimelineScrollTop: () => number; readMainScrollTop: () => number; expandTimelineEvent: (key: string) => void; timelineEvent: (key: string) => { open: boolean; body: string } | undefined; openAttachment: (key: string) => void; pickClicksStopped: () => string[]; pickLabelClicksStopped: () => number; pickLabels: () => number; firePopstate: (next?: string) => void } {
-  const handlers: { session: Record<string, () => void>; tab: Record<string, () => void>; step: Map<string, () => void>; group: Record<string, () => void>; groupEnter: Record<string, (e: any) => void>; groupLeave: Record<string, (e: any) => void>; kids: Record<string, (e: any) => void>; kidsel: Record<string, (e: any) => void>; stepKey: Map<string, (e: any) => void>; shot: Record<string, () => void>; tlStream: Record<string, () => void>; cellToggle: Record<string, (e: any) => void>; retryToggle: Record<string, (open: boolean) => void>; galZoom: Record<string, () => void>; llmKey: Record<string, (e: any) => void>; llmClick: Record<string, () => void>; txOpen: Record<string, () => void>; inspect: Record<string, () => void>; trailOpen: Record<string, () => void>; trailLane: Record<string, () => void>; attach: Record<string, () => void>; gotoTrail: Record<string, () => void>; gotoCompareTrail: Record<string, () => void>; gotoCompare?: () => void; compareToggle?: () => void; pick: Record<string, (e: any) => void>; pickClick: Record<string, (e: any) => void>; pickClear?: () => void; pickOpen?: () => void; pickDiff?: () => void; cmpGap: Record<string, () => void>; cmpTab: Record<string, () => void>; cmpStream: Record<string, () => void>; cmpEvent: Record<string, () => void>; cmpSide: Record<string, () => void>; cmpOrganize: Record<string, () => void>; cmpEventStep: Record<string, () => void>; cmpPlace: Record<string, () => void>; cmpFull: Record<string, () => void>; cmpEventAll?: () => void; cmpEventSearch?: (value: string) => void; cmpStepStream?: (value: string) => void; back?: () => void; documentKey?: (e: any) => void; timelinePlay?: () => void; gridMode?: () => void; prev?: () => void; next?: () => void; shotLoad?: () => void; copyLocalPrompt?: () => void; copyLink?: () => void; exportLogs?: () => void; exportRun?: () => void } = { session: {}, tab: {}, step: new Map(), group: {}, groupEnter: {}, groupLeave: {}, kids: {}, kidsel: {}, stepKey: new Map(), shot: {}, tlStream: {}, cellToggle: {}, retryToggle: {}, galZoom: {}, llmKey: {}, llmClick: {}, txOpen: {}, inspect: {}, trailOpen: {}, trailLane: {}, attach: {}, gotoTrail: {}, gotoCompareTrail: {}, pick: {}, pickClick: {}, cmpGap: {}, cmpTab: {}, cmpStream: {}, cmpEvent: {}, cmpSide: {}, cmpOrganize: {}, cmpEventStep: {}, cmpPlace: {}, cmpFull: {} };
+  const handlers: { session: Record<string, () => void>; tab: Record<string, () => void>; step: Map<string, () => void>; group: Record<string, () => void>; groupEnter: Record<string, (e: any) => void>; groupLeave: Record<string, (e: any) => void>; kids: Record<string, (e: any) => void>; kidsel: Record<string, (e: any) => void>; stepKey: Map<string, (e: any) => void>; shot: Record<string, () => void>; tlStream: Record<string, () => void>; cellToggle: Record<string, (e: any) => void>; retryToggle: Record<string, (open: boolean) => void>; galZoom: Record<string, () => void>; llmKey: Record<string, (e: any) => void>; llmClick: Record<string, () => void>; txOpen: Record<string, () => void>; inspect: Record<string, () => void>; trailOpen: Record<string, () => void>; trailLane: Record<string, () => void>; attach: Record<string, () => void>; gotoTrail: Record<string, () => void>; gotoCompareTrail: Record<string, () => void>; gotoCompare?: () => void; compareToggle?: () => void; pick: Record<string, (e: any) => void>; pickClick: Record<string, (e: any) => void>; pickClear?: () => void; pickOpen?: () => void; pickDiff?: () => void; cmpGap: Record<string, () => void>; cmpTab: Record<string, () => void>; cmpStream: Record<string, () => void>; cmpEvent: Record<string, () => void>; cmpSide: Record<string, () => void>; cmpOrganize: Record<string, () => void>; cmpEventStep: Record<string, () => void>; cmpPlace: Record<string, () => void>; cmpFull: Record<string, () => void>; cmpEventAll?: () => void; cmpEventSearch?: (value: string) => void; cmpStepStream?: (value: string) => void; back?: () => void; documentKey?: (e: any) => void; timelinePlay?: () => void; gridMode?: () => void; prev?: () => void; next?: () => void; shotLoad?: () => void; copyLocalPrompt?: () => void; copyLink?: () => void; exportLogs?: () => void; exportRun?: () => void; exportAll?: () => void } = { session: {}, tab: {}, step: new Map(), group: {}, groupEnter: {}, groupLeave: {}, kids: {}, kidsel: {}, stepKey: new Map(), shot: {}, tlStream: {}, cellToggle: {}, retryToggle: {}, galZoom: {}, llmKey: {}, llmClick: {}, txOpen: {}, inspect: {}, trailOpen: {}, trailLane: {}, attach: {}, gotoTrail: {}, gotoCompareTrail: {}, pick: {}, pickClick: {}, cmpGap: {}, cmpTab: {}, cmpStream: {}, cmpEvent: {}, cmpSide: {}, cmpOrganize: {}, cmpEventStep: {}, cmpPlace: {}, cmpFull: {} };
   let shotLoaded = !opts.shotLayoutShift;
   const mainScroller: any = { scrollTop: 0, clientHeight: 400, get scrollHeight() { return opts.shotLayoutShift && !shotLoaded ? 800 : 1200; }, parentElement: null, getBoundingClientRect: () => ({ top: 0 }), scrollTo({ top }: { top: number }) { this.scrollTop = top; } };
   const timelineList: any = { scrollTop: 0, clientHeight: 400, scrollHeight: opts.stackedTimeline ? 400 : 1200, parentElement: opts.stackedTimeline ? mainScroller : null, getBoundingClientRect: () => ({ top: 0 }), scrollTo({ top }: { top: number }) { this.scrollTop = top; } };
@@ -660,7 +660,23 @@ function renderViewerState(payload: unknown, opts: ViewerOptions = {}): { html: 
   // longer finds it, so the boot gate behaves exactly as it would against live DOM.
   let bootNode: { remove(): void } | null = opts.deferBoot ? { remove() { bootNode = null; } } : null;
   const routeQuery = opts.query ?? (opts.routeStep == null ? "" : `?run=0&tab=timeline&step=${opts.routeStep}`);
-  const testLocation = { pathname: "/report.html", search: routeQuery, hash: opts.legacyHash || "", protocol: opts.protocol || "" };
+  // The page's own address, which is deliberately NOT document.baseURI: a report can author a
+  // <base href>, and the viewer's same-origin rules judge against this instead. Defaults to the
+  // base so every existing test keeps describing one consistent page; pass `pageUrl` to model a
+  // document whose authored base disagrees with where it is actually served from.
+  const pageUrl = opts.pageUrl ?? opts.baseURI ?? "https://report.example/report.html";
+  const testLocation = {
+    pathname: "/report.html",
+    search: routeQuery,
+    hash: opts.legacyHash || "",
+    protocol: opts.protocol || "",
+    // Composed like a real Location rather than stored: the route rewrites path and query, and an
+    // href frozen at boot would make the page look like it never moved.
+    get href() {
+      const here = `${testLocation.pathname}${testLocation.search}${testLocation.hash}`;
+      try { return new URL(here, pageUrl).href; } catch (e) { return here; }
+    },
+  };
   (globalThis as Record<string, unknown>).location = testLocation;
   let route = `/report.html${routeQuery}${opts.legacyHash || ""}`;
   const routeWrites: Array<{ method: string; next: string }> = [];
@@ -944,6 +960,7 @@ function renderViewerState(payload: unknown, opts: ViewerOptions = {}): { html: 
       : (id === "copylink" || id === "copylinkrun") && app._h.includes(`id="${id}"`) ? copyBtn
       : id === "exportlogs" && app._h.includes('id="exportlogs"') ? { set onclick(fn: () => void) { handlers.exportLogs = fn; } }
       : id === "exportrun" && app._h.includes('id="exportrun"') ? { set onclick(fn: () => void) { handlers.exportRun = fn; } }
+      : id === "exportall" && app._h.includes('id="exportall"') ? { set onclick(fn: () => void) { handlers.exportAll = fn; } }
       : null),
     // The base a live daemon report is served from: the attachment link branch resolves the
     // root-relative `/static/...` link mode produces against it, and refuses anything that lands
@@ -1091,6 +1108,7 @@ function renderViewerState(payload: unknown, opts: ViewerOptions = {}): { html: 
   if (opts.copyLink && handlers.copyLink) handlers.copyLink();
   if (opts.exportLogs && handlers.exportLogs) handlers.exportLogs();
   if (opts.exportRun && handlers.exportRun) handlers.exportRun();
+  if (opts.exportAll && handlers.exportAll) handlers.exportAll();
   if (opts.shotLayoutShift && handlers.shotLoad) { shotLoaded = true; handlers.shotLoad(); }
   if (opts.spaceOnStep != null && handlers.stepKey.has(String(opts.spaceOnStep))) {
     const event = { key: " ", defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } };
@@ -1145,7 +1163,7 @@ function renderViewerState(payload: unknown, opts: ViewerOptions = {}): { html: 
   bootTimeouts.forEach((cb) => cb());
   // readHtml re-reads the rendered html after the synchronous pass — for asserting on renders
   // triggered by async work (e.g. the lazy gz inflation re-render).
-  return { html: app._h, htmlBeforeBoot, liveHtml: () => app._h as string, readHtml: () => app._h as string, timelineScrollTop: timelineList.scrollTop, mainScrollTop: mainScroller.scrollTop, restoredFocus, route, readRoute: () => route, routeWrites: () => routeWrites.slice(), historyBack: () => historyApi.back(), historyForward: () => historyApi.forward(), flushHistoryBack: () => { const pending = pendingHistoryBack; pendingHistoryBack = null; if (pending) pending(); }, escapeOverlay: () => { if (zoomRoot && zoomRoot.onkeydown) zoomRoot.onkeydown({ key: "Escape", preventDefault() {}, stopPropagation() {} }); }, liveZoomRoot: () => zoomRoot, zoomSrc, zoomRoot, copiedText, copyBtnText: () => copyBtn.textContent as string, timelineMenuOpen: timelineMenu.open, spriteMeasures, tlvframeStyle: tlvframeNode.style, shotImg, releaseChunks: () => { heldChunks.clear(); heldSpriteChunks.clear(); streamingChunks.clear(); }, partialChunkReads: () => partialChunkReads, loadingProgressWrites: () => progressWrites, settleDocument: () => { documentLoading = false; }, documentKeyListeners, autoplayMarker: () => documentElement.dataset.tbAutoplay, embeddedMarker: () => documentElement.dataset.tbEmbedded, llmScrolledTo, cmpScrolledTo: () => cmpScrolledTo, llmRow: (i: number) => llmRowEl(String(i)), readRestoredFocus: () => restoredFocus, pageClass: () => app.className || "", pageClassWrites: () => pageClassWrites.slice(), readActiveElement: () => (globalThis as any).document.activeElement, live: () => (globalThis as Record<string, any>).__TB_REPORT_LIVE__, openSession: (i: number) => handlers.session[String(i)]?.(), clickTab: (id: string) => handlers.tab[id]?.(), clickGotoTrail: (key: string) => handlers.gotoTrail[key]?.(), readTimelineScrollTop: () => timelineList.scrollTop, readMainScrollTop: () => mainScroller.scrollTop, expandTimelineEvent, timelineEvent: (key: string) => tlEventEls.get(key), openAttachment: (key: string) => handlers.attach[key]?.(), pickClicksStopped: () => pickClicksStopped.slice(), pickLabelClicksStopped: () => pickLabelClicksStopped, pickLabels: () => pickLabelClicks.length, firePopstate: (next?: string) => { if (next != null) navigate(`/report.html${next}`); firePopstate(); } };
+  return { html: app._h, htmlBeforeBoot, liveHtml: () => app._h as string, readHtml: () => app._h as string, timelineScrollTop: timelineList.scrollTop, mainScrollTop: mainScroller.scrollTop, restoredFocus, route, readRoute: () => route, routeWrites: () => routeWrites.slice(), historyBack: () => historyApi.back(), historyForward: () => historyApi.forward(), flushHistoryBack: () => { const pending = pendingHistoryBack; pendingHistoryBack = null; if (pending) pending(); }, escapeOverlay: () => { if (zoomRoot && zoomRoot.onkeydown) zoomRoot.onkeydown({ key: "Escape", preventDefault() {}, stopPropagation() {} }); }, liveZoomRoot: () => zoomRoot, zoomSrc, zoomRoot, copiedText, copyBtnText: () => copyBtn.textContent as string, timelineMenuOpen: timelineMenu.open, spriteMeasures, tlvframeStyle: tlvframeNode.style, shotImg, releaseChunks: () => { heldChunks.clear(); heldSpriteChunks.clear(); streamingChunks.clear(); }, partialChunkReads: () => partialChunkReads, loadingProgressWrites: () => progressWrites, settleDocument: () => { documentLoading = false; }, documentKeyListeners, autoplayMarker: () => documentElement.dataset.tbAutoplay, embeddedMarker: () => documentElement.dataset.tbEmbedded, llmScrolledTo, cmpScrolledTo: () => cmpScrolledTo, llmRow: (i: number) => llmRowEl(String(i)), readRestoredFocus: () => restoredFocus, pageClass: () => app.className || "", pageClassWrites: () => pageClassWrites.slice(), readActiveElement: () => (globalThis as any).document.activeElement, live: () => (globalThis as Record<string, any>).__TB_REPORT_LIVE__, openSession: (i: number) => handlers.session[String(i)]?.(), clickTab: (id: string) => handlers.tab[id]?.(), clickGotoTrail: (key: string) => handlers.gotoTrail[key]?.(), clickGotoCompare: () => handlers.gotoCompare?.(), clickGotoCompareTrail: (key?: string) => handlers.gotoCompareTrail[key ?? Object.keys(handlers.gotoCompareTrail)[0]]?.(), toggleIndexCompare: () => handlers.compareToggle?.(), tickPick: (i: number) => { handlers.pickClick[String(i)]?.({ stopPropagation() {} }); handlers.pick[String(i)]?.({ stopPropagation() {} }); }, clickPickOpen: () => handlers.pickOpen?.(), clickBack: () => handlers.back?.(), readTimelineScrollTop: () => timelineList.scrollTop, readMainScrollTop: () => mainScroller.scrollTop, expandTimelineEvent, timelineEvent: (key: string) => tlEventEls.get(key), openAttachment: (key: string) => handlers.attach[key]?.(), pickClicksStopped: () => pickClicksStopped.slice(), pickLabelClicksStopped: () => pickLabelClicksStopped, pickLabels: () => pickLabelClicks.length, firePopstate: (next?: string) => { if (next != null) navigate(`/report.html${next}`); firePopstate(); } };
 }
 
 function renderViewer(payload: unknown, opts: ViewerOptions = {}): string {
@@ -3045,7 +3063,7 @@ describe("live updates (__TB_REPORT_LIVE__)", () => {
 
   // Link mode (the live daemon report) stores `/static/<id>/<path>` for every attachment MIME, so a
   // type with no native element — the only kind that reaches the link branch — arrives here.
-  const linkedAttachmentState = (uri: string) => {
+  const linkedAttachmentState = (uri: string, page?: { protocol?: string; pageUrl?: string; baseURI?: string }) => {
     const stream = [{
       name: "com.example.plugin.speech",
       total: 1,
@@ -3053,7 +3071,7 @@ describe("live updates (__TB_REPORT_LIVE__)", () => {
       events: [{ t: 1000, d: JSON.stringify({ $attachment: true, path: "attachments/notes.html", mimeType: "text/html", sizeBytes: 2048 }) }],
     }];
     const payload = { events: stream, attachments: { "attachments/notes.html": uri } };
-    const state = renderViewerState(livePayload(2, "running", payload), { tlStream: 0 });
+    const state = renderViewerState(livePayload(2, "running", payload), { tlStream: 0, ...page });
     state.expandTimelineEvent("com.example.plugin.speech-0");
     state.openAttachment((/data-attach="(\d+)"/.exec(state.timelineEvent("com.example.plugin.speech-0")!.body) || [])[1]);
     return state.liveZoomRoot().innerHTML;
@@ -3076,6 +3094,19 @@ describe("live updates (__TB_REPORT_LIVE__)", () => {
     const html = linkedAttachmentState("https://evil.example/payload.html");
     expect(html).not.toContain("<a ");
     expect(html).toContain("attachments/notes.html");
+  });
+
+  // The bundle authors the markup too, so it can author a <base href> — and neither the origin a
+  // root-relative value must land back on nor the address it resolves against can be read off that
+  // authored base, which would only ever agree with itself. Both come from the address the page is
+  // served from, so an authored base is simply ignored: the link is absolute and unmoved.
+  test("a report that authors its own base cannot relocate its attachment links", () => {
+    const served = { protocol: "https:", pageUrl: "https://report.example/report.html" };
+    const expected = 'href="https://report.example/static/run-1/attachments/notes.html"';
+    expect(linkedAttachmentState("/static/run-1/attachments/notes.html", served)).toContain(expected);
+    const hostile = linkedAttachmentState("/static/run-1/attachments/notes.html", { ...served, baseURI: "https://evil.example/" });
+    expect(hostile).not.toContain("evil.example");
+    expect(hostile).toContain(expected);
   });
 
   // The dialog's body is a native <audio>/<video> player, so Space and the arrows belong to whatever
@@ -3241,6 +3272,40 @@ describe("embedded chrome (?chrome=none)", () => {
       expect(text).not.toContain("blob:https://app.test/att-wav");
       // The portable embed is exactly what makes an attachment survive the trip, so it travels.
       expect(text).toContain("data:image/png;base64,ATTACHBYTES");
+    } finally {
+      urlAny.createObjectURL = original.create;
+      urlAny.revokeObjectURL = original.revoke;
+    }
+  });
+
+  // A daemon-served report tells the viewer where its all-runs report is, as a root-relative path
+  // that means something only on the host that served the document. A saved copy is opened from
+  // somewhere else — a CI artifact server, a file:// path — where `/report` resolves against the
+  // wrong host, so a Compare grafted onto it goes nowhere.
+  test("a downloaded report drops the all-runs URL that only resolves on the host that served it", async () => {
+    const runOf = (title: string) => ({
+      meta: { title, status: "passed" },
+      trace: [{ i: 1, label: "Open app", objective: true, ok: true, screenshotFile: "s1.png" }],
+      llmLogs: [],
+      shots: { "s1.png": "data:image/png;base64,EMB" },
+    });
+    const html = core.buildMultiReportHtml({
+      generatedAt: "now",
+      allRunsUrl: "/report?limit=all",
+      sessions: [runOf("First run"), runOf("Second run")] as never,
+    });
+    expect(html).toContain('"allRunsUrl":"/report?limit=all"'); // the served document really carries it
+
+    const urlAny = URL as any;
+    const original = { create: urlAny.createObjectURL, revoke: urlAny.revokeObjectURL };
+    let downloaded: Blob | null = null;
+    urlAny.createObjectURL = (blob: Blob) => { downloaded = blob; return "blob:test"; };
+    urlAny.revokeObjectURL = () => {};
+    try {
+      renderViewerState(null, { chunks: chunksOf(html), exportAll: true });
+      const text = await downloaded!.text();
+      expect(text).not.toContain('"allRunsUrl"');
+      expect(text).toContain("Second run"); // a FULL export, so both runs did travel
     } finally {
       urlAny.createObjectURL = original.create;
       urlAny.revokeObjectURL = original.revoke;
@@ -5889,7 +5954,9 @@ describe("RUN_REPORT_VIEWER (rendered output)", () => {
     expect(out).toContain('<main class="timelinemain">');
     expect(out).toContain('<footer class="detailfooter">');
     expect(out).toContain('<header class="detailheader">');
-    expect(out).not.toContain('data-goto-trail');
+    // A lone run still gets the Trail view (its Replay is the whole point of loading a recording);
+    // Compare needs a second run, so it is absent.
+    expect(out).toContain('<div class="detailactions"><button class="btn" type="button" data-goto-trail="title:Solo:demo"');
     expect(out).not.toContain('data-goto-compare');
     expect(out).toContain('<details class="exportmenu"');
     expect(out).toContain('<span class="exportdots" aria-hidden="true"><span class="exportdot"></span><span class="exportdot"></span><span class="exportdot"></span></span>');
@@ -10667,11 +10734,59 @@ describe("Trail view (the same trail across devices, one lane per run)", () => {
     expect(html).toContain('data-trail-lane="1" aria-pressed="true"');
   });
 
-  test("a single-run detail has no Trail view or unavailable Compare action", () => {
+  test("a single run gets the Trail view too, entered from its own header", () => {
+    // One Android phone run is still a trail — its Replay in particular. With no run index to host
+    // the button, the detail header carries it, and Back returns to the run rather than an index.
+    // Compare is absent: it needs a second run.
     const solo = { generatedAt: "now", sessions: [run("android-phone", laneATrace)] };
     const detail = renderViewer(solo);
-    expect(detail).not.toContain('data-goto-trail');
+    expect(detail).toContain('data-goto-trail="trail:checkout%2Fpay:" title="See this run as a trail — map, grid, and replay">Trail view</button>');
     expect(detail).not.toContain('data-goto-compare');
+    const state = renderViewerState(solo, { gotoTrail: true });
+    const trail = state.readHtml();
+    expect(trail).toContain('class="trailcanvas"');
+    expect(trail).toContain("1 device ·");
+    expect(trail).toContain('data-back aria-label="Back to run"');
+    expect(state.readRoute()).toContain("view=trail");
+    // A lane bar with one lane would be a switch with no positions.
+    expect(trail).not.toContain("traillanebar");
+    const returned = renderViewerState(solo, { gotoTrail: true, back: true });
+    expect(returned.readHtml()).toContain('class="timeline');
+  });
+
+  test("a single session that drove several devices opens its Trail view one lane per device", () => {
+    // The daemon serves `/report?session=<id>` as a one-session document. A multi-device run there
+    // has no run index and nothing to Compare against, so the detail header is its only way into
+    // the per-device lanes the view splits it into.
+    const fleet = { generatedAt: "now", sessions: [run("android-phone", [
+      trailRow(1, { objective: true, trailhead: true, label: "Prepare", ts: 1000, device: "server" }),
+      trailRow(2, { ts: 1000, ms: 500, screenshotFile: "a-prep.webp", device: "server" }),
+      trailRow(3, { objective: true, label: "Sign in", ts: 2000, device: "kitchen" }),
+      trailRow(4, { ts: 2000, ms: 3000, screenshotFile: "a-signin-1.webp", device: "kitchen" }),
+    ])] };
+    const detail = renderViewer(fleet);
+    expect(detail).toContain(`data-goto-trail="trail:checkout%2Fpay:" title="Compare this run's devices, step by step">Trail view</button>`);
+    expect(detail).not.toContain('data-goto-compare');
+    const trail = renderViewerState(fleet, { gotoTrail: true }).readHtml();
+    expect(trail).toContain('class="trailcanvas"');
+    expect(trail).toContain("2 devices, one run · 1 step · one trail, one lane per device");
+    expect(trail).toContain('data-shot-device="server · android-phone"');
+    expect(trail).toContain('data-shot-device="kitchen"');
+    expect(trail).toContain('data-back aria-label="Back to run"');
+  });
+
+  test("a run whose trace is only partly device-attributed still says it will open lanes", () => {
+    // The lane split keys on `device ?? null`, so an unattributed prefix — a trailhead that ran
+    // before any device was chosen — is a lane of its own. A button counting only NAMED devices
+    // would find one, promise a plain trail, and then open two lanes.
+    const mixed = { generatedAt: "now", sessions: [run("android-phone", [
+      trailRow(1, { objective: true, trailhead: true, label: "Prepare", ts: 1000 }),
+      trailRow(2, { ts: 1000, ms: 500, screenshotFile: "a-prep.webp" }),
+      trailRow(3, { objective: true, label: "Sign in", ts: 2000, device: "kitchen" }),
+      trailRow(4, { ts: 2000, ms: 3000, screenshotFile: "a-signin-1.webp", device: "kitchen" }),
+    ])] };
+    expect(renderViewer(mixed)).toContain(`title="Compare this run's devices, step by step">Trail view</button>`);
+    expect(renderViewerState(mixed, { gotoTrail: true }).readHtml()).toContain("2 devices, one run");
   });
 
   test("the index's trail row opens Compare, and unnamed runs are not offered it", () => {
@@ -11211,14 +11326,16 @@ describe("Compare view (run-vs-run tool-call and event-stream diffs)", () => {
     expect(renderViewer(linked, { query: "?view=compare" })).toContain('class="idxsummary"');
   });
 
-  test("run detail replaces Trail view with Compare and starts against another device in that trail", () => {
+  test("run detail offers Trail view beside Compare, and Compare starts against another device in that trail", () => {
     const otherTrail = {
       ...payload.sessions[0],
       meta: { ...payload.sessions[0].meta, title: "Refund", trailId: "refund/full", deviceClassifier: "android-watch" },
     };
     const withOtherTrailFirst = { generatedAt: "now", sessions: [otherTrail, ...payload.sessions] };
     const detail = renderViewer(withOtherTrailFirst, { query: "?run=2" });
-    expect(detail).not.toContain('data-goto-trail');
+    // Trail view stages every run of THIS trail (not the Refund run in front of it); Compare picks
+    // the other device as the partner.
+    expect(detail).toContain('data-goto-trail="trail:checkout%2Fpay:" title="Compare this trail across devices, step by step">Trail view</button>');
     expect(detail).toContain('data-goto-compare="2" title="Compare with another device in this trail"');
 
     const compared = renderViewerState(withOtherTrailFirst, { query: "?run=2", gotoCompare: true });
@@ -11226,6 +11343,292 @@ describe("Compare view (run-vs-run tool-call and event-stream diffs)", () => {
     expect(compared.readHtml()).toContain('data-cmp-side="base" data-cmp-run="2" aria-pressed="true"');
     expect(compared.readHtml()).toContain('data-cmp-side="vs" data-cmp-run="1" aria-pressed="true"');
     expect(compared.readRoute()).toContain("view=compare&base=2&vs=1");
+  });
+
+  test("a single-run document links Compare into the all-runs report, naming its run by session id", () => {
+    // The daemon's /report?session= page holds one run, so there is nothing in it to diff. The
+    // daemon tells it where the all-runs report is; the header offers Compare as a link there,
+    // scoped to THIS run by id — an index would name a different run once more sessions land.
+    const withId = { ...payload.sessions[0], meta: { ...payload.sessions[0].meta, sessionId: "2026_09_15_checkout_phone" } };
+    const solo = { generatedAt: "now", allRunsUrl: "/report", sessions: [withId] };
+    const detail = renderViewer(solo);
+    // Root-relative from the daemon, resolved against the page's own origin (the harness's base is
+    // https://report.example/report.html), so it follows whatever host or tunnel reached the daemon.
+    // The run is named under `basesession`, the id-specific key — `base` is always an index.
+    expect(detail).toContain('<a class="btn idxcompare" href="https://report.example/report?view=compare&amp;basesession=2026_09_15_checkout_phone" title="Compare with another recent run">');
+    // Both entry points, side by side: the run's own Trail view and the hand-off Compare.
+    expect(detail).toContain('data-goto-trail="trail:checkout%2Fpay:"');
+    // A standalone file has no all-runs report to link to, and a run with no id cannot be named.
+    expect(renderViewer({ generatedAt: "now", sessions: [withId] })).not.toContain("idxcompare");
+    expect(renderViewer({ generatedAt: "now", allRunsUrl: "/report", sessions: [payload.sessions[0]] })).not.toContain("idxcompare");
+    // A document that holds a partner compares in place; the link is only for the run that has none.
+    const pair = { generatedAt: "now", allRunsUrl: "/report", sessions: [withId, payload.sessions[1]] };
+    const inDocument = renderViewer(pair, { query: "?run=0" });
+    expect(inDocument).toContain('data-goto-compare="0"');
+    expect(inDocument).not.toContain('href="https://report.example/report?view=compare');
+    // Off-origin all-runs URLs are refused: the header's Compare never leaves the report's own host.
+    expect(renderViewer({ ...solo, allRunsUrl: "https://evil.example/report" })).not.toContain("idxcompare");
+    // The daemon's own `limit=all` query survives the graft instead of being overwritten, and the
+    // parameters land in the query even when the URL already carries a fragment.
+    expect(renderViewer({ ...solo, allRunsUrl: "/report?limit=all#top" }))
+      .toContain('href="https://report.example/report?limit=all&amp;view=compare&amp;basesession=2026_09_15_checkout_phone#top"');
+    // Viewer route keys already on the configured URL are dropped rather than joined: this link
+    // decides the whole view it opens. A stray `vs=` would pin side B to an arbitrary run of a
+    // report this document knows nothing about, and a stray `pick=` would land the reader on an
+    // N-run overview instead of the comparison they clicked. Only the daemon's own `limit` stays.
+    expect(renderViewer({ ...solo, allRunsUrl: "/report?limit=all&vs=4&base=9&vssession=whoever&pick=3,4&tab=events" }))
+      .toContain('href="https://report.example/report?limit=all&amp;view=compare&amp;basesession=2026_09_15_checkout_phone"');
+  });
+
+  test("a report that authors its own base cannot aim the all-runs Compare off the origin serving it", () => {
+    // A report is an artifact people open from CI, so its markup is not trusted. The daemon's
+    // root-relative `/report` is resolved against the address the page is SERVED from, never
+    // against an authored document.baseURI — which, being authored by the same bundle, would only
+    // ever agree with itself. A hostile base is therefore inert: the href stays absolute and on
+    // the serving origin, which is also where the browser's own anchor resolution would send it.
+    const withId = { ...payload.sessions[0], meta: { ...payload.sessions[0].meta, sessionId: "2026_09_15_checkout_phone" } };
+    const solo = { generatedAt: "now", allRunsUrl: "/report", sessions: [withId] };
+    const served = { protocol: "https:", pageUrl: "https://report.example/report.html" };
+    expect(renderViewer(solo, served)).toContain('href="https://report.example/report?view=compare');
+    const hostile = renderViewer(solo, { ...served, baseURI: "https://evil.example/" });
+    expect(hostile).not.toContain("evil.example");
+    expect(hostile).toContain('href="https://report.example/report?view=compare');
+  });
+
+  test("a compare link naming its baseline by session id opens on that run against its same-trail partner", () => {
+    const withIds = {
+      generatedAt: "now",
+      sessions: [
+        { ...payload.sessions[0], meta: { ...payload.sessions[0].meta, title: "Refund", trailId: "refund/full", sessionId: "refund-run" } },
+        { ...payload.sessions[0], meta: { ...payload.sessions[0].meta, sessionId: "phone-run" } },
+        { ...payload.sessions[1], meta: { ...payload.sessions[1].meta, sessionId: "tablet-run" } },
+      ],
+    };
+    const state = renderViewerState(withIds, { query: "?view=compare&basesession=tablet-run" });
+    expect(state.readHtml()).toContain("<h1>Compare runs</h1>");
+    // Resolved to the tablet run, paired with the phone run of the same trail — not the Refund run
+    // that a document-wide default would put first — and the address is rewritten in indices.
+    expect(state.readHtml()).toContain('data-cmp-side="base" data-cmp-run="2" aria-pressed="true"');
+    expect(state.readHtml()).toContain('data-cmp-side="vs" data-cmp-run="1" aria-pressed="true"');
+    expect(state.readRoute()).toContain("view=compare&base=2&vs=1");
+    // An id this document does not hold falls back like an out-of-range index — still a
+    // comparison, never a broken pane — but the substitution is SAID, because two unrelated runs
+    // presented as the comparison someone clicked for is the wrong answer told convincingly.
+    const unknown = renderViewerState(withIds, { query: "?view=compare&basesession=no-such-run" });
+    expect(unknown.readHtml()).toContain("<h1>Compare runs</h1>");
+    expect(unknown.readHtml()).toContain("<code>no-such-run</code>");
+    expect(unknown.readHtml()).toContain("isn't in this report");
+    expect(unknown.readRoute()).toContain("view=compare&base=");
+    // A resolved link says nothing.
+    expect(state.readHtml()).not.toContain("isn't in this report");
+    // `base` is only ever an index — an all-digit session id belongs under the id key, and cannot
+    // be mistaken for a position. `SessionId` allows one, so shape cannot tell the two apart.
+    expect(renderViewerState(withIds, { query: "?view=compare&base=1&vs=2" }).readRoute()).toContain("view=compare&base=1&vs=2");
+    const digitIds = {
+      generatedAt: "now",
+      sessions: withIds.sessions.map((s, i) => ({ ...s, meta: { ...s.meta, sessionId: String([2, 0, 1][i]) } })),
+    };
+    const byDigitId = renderViewerState(digitIds, { query: "?view=compare&basesession=1" });
+    // Session id "1" is the LAST run, index 2 — not index 1, which is what a shape rule would pick.
+    expect(byDigitId.readHtml()).toContain('data-cmp-side="base" data-cmp-run="2" aria-pressed="true"');
+    // Both sides can be named by id — one report links into another, whose run order it has no way
+    // to know, so neither side can be addressed by position.
+    const byBothIds = renderViewerState(withIds, { query: "?view=compare&basesession=phone-run&vssession=refund-run" });
+    expect(byBothIds.readHtml()).toContain('data-cmp-side="base" data-cmp-run="1" aria-pressed="true"');
+    expect(byBothIds.readHtml()).toContain('data-cmp-side="vs" data-cmp-run="0" aria-pressed="true"');
+    expect(byBothIds.readRoute()).toContain("view=compare&base=1&vs=0");
+    // One id named on both sides is ONE missing run. Listing it twice would read as two.
+    const sameIdTwice = renderViewerState(withIds, { query: "?view=compare&basesession=gone&vssession=gone" });
+    expect(sameIdTwice.readHtml()).toContain("<code>gone</code>");
+    expect(sameIdTwice.readHtml()).toContain("isn't in this report");
+    expect(sameIdTwice.readHtml().split("<code>gone</code>")).toHaveLength(2);
+    // A compare link into a document that cannot diff still lands on the run it NAMED, when that
+    // run is here. This is the run page's own Compare hand-off followed into a report whose other
+    // sessions turned out to be unstageable: an index that may not even list the run is a worse
+    // answer than the run itself.
+    const nothingToDiff = {
+      generatedAt: "now",
+      sessions: [withIds.sessions[0], { ...withIds.sessions[2], meta: { ...withIds.sessions[2].meta, status: "skipped", skipReason: "no tablet fixture" } }],
+    };
+    const landed = renderViewer(nothingToDiff, { query: "?view=compare&basesession=refund-run" });
+    expect(landed).toContain("<h1>Refund</h1>");
+    expect(landed).not.toContain('class="indexheader"');
+    // An id it does not hold has nothing to land on, so the index is still the answer there.
+    expect(renderViewer(nothingToDiff, { query: "?view=compare&basesession=gone" })).toContain('class="indexheader"');
+  });
+
+  test("the substitution notice names every run it could not stage, and retires once the reader picks their own pair", () => {
+    const session = (title: string, trailId: string, sessionId: string, extra: Record<string, unknown> = {}) => ({
+      ...payload.sessions[0],
+      meta: { ...payload.sessions[0].meta, title, trailId, sessionId, ...extra },
+    });
+    const withIds = {
+      generatedAt: "now",
+      sessions: [session("Refund", "refund/full", "refund-run"), session("Checkout", "checkout/pay", "phone-run"), { ...payload.sessions[1], meta: { ...payload.sessions[1].meta, sessionId: "tablet-run" } }],
+    };
+    // Both sides unresolvable names both of them. Naming one and silently substituting the other
+    // is the same wrong answer told convincingly, one side at a time.
+    const gone = renderViewerState(withIds, { query: "?view=compare&basesession=gone-a&vssession=gone-b" });
+    expect(gone.readHtml()).toContain("<code>gone-a</code>");
+    expect(gone.readHtml()).toContain("<code>gone-b</code>");
+    expect(gone.readHtml()).toContain("aren't in this report");
+    // A named run this document HOLDS but cannot stage — skipped here, a link-out stub elsewhere —
+    // is indistinguishable to the reader from one that is absent, so it is announced the same way.
+    const unstageable = {
+      generatedAt: "now",
+      sessions: [withIds.sessions[0], withIds.sessions[1], { ...withIds.sessions[2], meta: { ...withIds.sessions[2].meta, status: "skipped", skipReason: "no tablet fixture" } }],
+    };
+    const rejected = renderViewerState(unstageable, { query: "?view=compare&basesession=tablet-run" });
+    expect(rejected.readHtml()).toContain("<h1>Compare runs</h1>");
+    expect(rejected.readHtml()).toContain("<code>tablet-run</code>");
+    expect(rejected.readHtml()).toContain("isn't in this report");
+    // Picking a side yourself retires it: the pair on screen is now your own choice, and a stale
+    // "the run you asked for is missing" over an unrelated diff is a lie about what you are seeing.
+    // Losing one side must not move the other. The baseline fallback can land on the very run the
+    // link named as side B, and resolving that collision by always moving side B would shunt the
+    // one run the reader actually asked for across the diff.
+    // `phone-run` is index 1, which is also where the baseline fallback lands, so the two collide.
+    const halfGone = renderViewerState(withIds, { query: "?view=compare&basesession=gone-a&vssession=phone-run" });
+    expect(halfGone.readHtml()).toContain("<code>gone-a</code>");
+    expect(halfGone.readHtml()).toContain('data-cmp-side="vs" data-cmp-run="1" aria-pressed="true"');
+    expect(halfGone.readRoute()).toContain("view=compare&base=0&vs=1");
+    const repicked = renderViewerState(withIds, { query: "?view=compare&basesession=gone-a", cmpSide: { side: "base", value: 2 } });
+    expect(repicked.readHtml()).not.toContain("isn't in this report");
+    // Leaving compare and coming back is also the reader picking a pair — and it lands on the very
+    // pair the notice was stamped with, so the stamp alone cannot retire it. `gone-a` falls back to
+    // runs 2 and 3; opening run 2 and clicking its Compare re-picks exactly those two.
+    // Every way back into compare that can reproduce that pair has to retire it: the run's own
+    // Compare button, the index's trail name, and an index selection of those same two runs.
+    const reenter = (act: (state: ReturnType<typeof renderViewerState>) => void) => {
+      const state = renderViewerState(withIds, { protocol: "https:", query: "?view=compare&basesession=gone-a" });
+      expect(state.readHtml()).toContain("<code>gone-a</code>");
+      state.clickBack();
+      act(state);
+      expect(state.readHtml()).toContain("<h1>Compare runs</h1>");
+      expect(state.readHtml()).not.toContain("isn't in this report");
+    };
+    reenter((state) => { state.openSession(1); state.clickGotoCompare(); });
+    reenter((state) => state.clickGotoCompareTrail());
+    reenter((state) => { state.toggleIndexCompare(); state.tickPick(1); state.tickPick(2); state.clickPickOpen(); });
+  });
+
+  test("the substitution notice's retry link names both runs, and is offered only when a wider report can supply one", () => {
+    const named = (title: string, trailId: string, sessionId: string) => ({ ...payload.sessions[0], meta: { ...payload.sessions[0].meta, title, trailId, sessionId } });
+    const runs = [named("Refund", "refund/full", "refund-run"), named("Checkout", "checkout/pay", "phone-run"), { ...payload.sessions[1], meta: { ...payload.sessions[1].meta, sessionId: "tablet-run" } }];
+    // `allRunsUrl` is the daemon saying a wider report exists AND would add runs. Every assertion
+    // below is about the notice's own markup, so a link that moved or a notice that vanished
+    // cannot pass as "no link offered".
+    const widenable = { generatedAt: "now", allRunsUrl: "/report?limit=all", sessions: runs };
+    const served = { protocol: "https:", pageUrl: "https://report.example/report.html" };
+    const notice = (html: string) => (html.match(/<div class="cmpmissingrun">[\s\S]*?<\/div>/) || [""])[0];
+
+    // The retry has to carry both ids itself: by the time the notice is read the address has been
+    // canonicalized to indices, so "reopen this page over more runs" would load the run the reader
+    // came for and select two others.
+    const advised = renderViewerState(widenable, { ...served, query: "?view=compare&basesession=gone-a" });
+    expect(advised.readRoute()).toContain("view=compare&base=1&vs=2");
+    expect(advised.readRoute()).not.toContain("gone-a");
+    // The run the link asked for, by id — and the run the OTHER side settled on, also by id,
+    // because indices renumber in a wider report and a side left to fall back lands on a stranger.
+    expect(notice(advised.readHtml())).toContain('<a href="https://report.example/report?limit=all&amp;view=compare&amp;basesession=gone-a&amp;vssession=tablet-run">');
+    expect(notice(advised.readHtml())).toContain("(slower, much larger)");
+
+    // No `allRunsUrl` is the daemon saying there is nothing wider — a downloaded copy, a build
+    // server re-hosting the file, an all-runs report that already covers everything. The address
+    // cannot answer that question: a re-hosted copy is served over https too.
+    const fixed = renderViewerState({ generatedAt: "now", sessions: runs }, { ...served, query: "?view=compare&basesession=gone-a" });
+    expect(notice(fixed.readHtml())).toContain("<code>gone-a</code>");
+    expect(notice(fixed.readHtml())).not.toContain("<a ");
+
+    // A run this report HOLDS but cannot stage is announced the same way — but the wider report
+    // carries the same unusable stub, so the retry would spend a navigation to arrive back at this
+    // sentence. Announced, not offered.
+    const skipped = { ...widenable, sessions: [runs[0], runs[1], { ...runs[2], meta: { ...runs[2].meta, status: "skipped", skipReason: "no tablet fixture" } }] };
+    const stub = notice(renderViewerState(skipped, { ...served, query: "?view=compare&basesession=tablet-run" }).readHtml());
+    expect(stub).toContain("<code>tablet-run</code>");
+    expect(stub).not.toContain("<a ");
+    // One genuinely absent side is enough to be worth the trip, even paired with an unstageable one.
+    expect(notice(renderViewerState(skipped, { ...served, query: "?view=compare&basesession=tablet-run&vssession=gone-b" }).readHtml()))
+      .toContain("basesession=tablet-run&amp;vssession=gone-b");
+
+    // A side that cannot be named is no link at all. Handing the wider report one id and letting it
+    // choose the other from its own defaults is the silent substitution this notice exists to
+    // announce, arriving with nothing to announce it. (`sessionId` is optional on run meta.)
+    const anonymous = { ...widenable, sessions: [runs[0], runs[1], { ...runs[2], meta: { ...runs[2].meta, sessionId: undefined } }] };
+    const unnameable = notice(renderViewerState(anonymous, { ...served, query: "?view=compare&basesession=gone-a" }).readHtml());
+    expect(unnameable).toContain("<code>gone-a</code>");
+    expect(unnameable).not.toContain("<a ");
+
+    // One id named twice is named once. Both sides would resolve in the wider report, leaving
+    // nothing missing, and it would pair that run with a stranger under no notice at all.
+    const twice = notice(renderViewerState(widenable, { ...served, query: "?view=compare&basesession=gone-a&vssession=gone-a" }).readHtml());
+    expect(twice).toContain('?limit=all&amp;view=compare&amp;basesession=gone-a"');
+    expect(twice).not.toContain("vssession");
+
+    // A side named by POSITION is not an id the reader asked for, so the link carries the id of the
+    // run that position currently shows. Emitting the position instead would point the wider
+    // report, which renumbers, at whoever lands there.
+    expect(notice(renderViewerState(widenable, { ...served, query: "?view=compare&base=1&vssession=gone-b" }).readHtml()))
+      .toContain("basesession=phone-run&amp;vssession=gone-b");
+
+    // Embedded, the host owns navigation: following this would take its frame out of the shell it
+    // is showing. The notice still explains the substitution, it just has nowhere to send you.
+    const framed = notice(renderViewerState(widenable, { ...served, query: "?chrome=none&view=compare&basesession=gone-a" }).readHtml());
+    expect(framed).toContain("<code>gone-a</code>");
+    expect(framed).not.toContain("<a ");
+
+    // The daemon's URL is honoured, not rebuilt: whatever scoping it put there survives, and the
+    // reader's own address contributes nothing — it is the capped view being escaped.
+    const elsewhere = { ...widenable, allRunsUrl: "/report?limit=all&build=42" };
+    expect(notice(renderViewerState(elsewhere, { ...served, query: "?limit=5&session=phone-run&view=compare&basesession=gone-a" }).readHtml()))
+      .toContain('<a href="https://report.example/report?limit=all&amp;build=42&amp;view=compare&amp;basesession=gone-a&amp;vssession=tablet-run">');
+    // Off-origin is refused the same way the header's Compare hand-off refuses it.
+    expect(notice(renderViewerState({ ...widenable, allRunsUrl: "https://evil.example/report" }, { ...served, query: "?view=compare&basesession=gone-a" }).readHtml()))
+      .not.toContain("<a ");
+  });
+
+  test("a run with no trail to stage gets no Trail view button, and still gets the rest of its header", () => {
+    // The button is the ONLY way into the view on a single-run page, so what it does when there is
+    // nothing to stage decides whether the header offers a dead end.
+    const bare = renderViewer({ generatedAt: "now", sessions: [{ ...payload.sessions[0], meta: { status: "passed" } }] });
+    expect(bare).not.toContain("data-goto-trail");
+    expect(bare).toContain('class="detailactions"');
+    // A hydrated run with no trace has nothing to draw a map, grid, or replay from.
+    const empty = renderViewer({ generatedAt: "now", sessions: [{ ...payload.sessions[0], trace: [] }] });
+    expect(empty).not.toContain("data-goto-trail");
+    // A link-out stub holds no run at all — its report lives somewhere else.
+    const stub = renderViewer({
+      generatedAt: "now",
+      sessions: [{ ...payload.sessions[0], meta: { ...payload.sessions[0].meta, linkOut: true, reportUrl: "https://ci.example/run/9" }, trace: [], llm: [] }],
+    });
+    expect(stub).not.toContain("data-goto-trail");
+    // A run SKIPPED on its device, whose trail ran on the others. The trail has a stage and this
+    // run shares its identity, but it is not ON that stage — a button here would open the other
+    // devices' runs under the heading of a run that never happened.
+    const fleet = {
+      generatedAt: "now",
+      sessions: [
+        payload.sessions[0],
+        payload.sessions[1],
+        { ...payload.sessions[0], meta: { ...payload.sessions[0].meta, deviceClassifier: "android-watch", status: "skipped", skipReason: "no watch fixture" }, trace: [], llm: [] },
+      ],
+    };
+    expect(renderViewer(fleet, { query: "?run=0" })).toContain("data-goto-trail");
+    expect(renderViewer(fleet, { query: "?run=2" })).not.toContain("data-goto-trail");
+  });
+
+  test("a compare link naming only a baseline index pairs it with its same-trail partner", () => {
+    // The pre-existing deep-link shape. Its partner used to be whatever the document-wide default
+    // pair held; it is now the same run the baseline's own header would open against.
+    const withIds = {
+      generatedAt: "now",
+      sessions: [
+        { ...payload.sessions[0], meta: { ...payload.sessions[0].meta, title: "Refund", trailId: "refund/full" } },
+        payload.sessions[0],
+        payload.sessions[1],
+      ],
+    };
+    expect(renderViewerState(withIds, { query: "?view=compare&base=2" }).readRoute()).toContain("view=compare&base=2&vs=1");
   });
 
   test("the view diffs tool calls as one unified diff, agreement collapsed in place", () => {

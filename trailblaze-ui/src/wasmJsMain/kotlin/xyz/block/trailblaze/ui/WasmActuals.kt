@@ -1,6 +1,5 @@
 package xyz.block.trailblaze.ui
 
-import androidx.compose.runtime.Composable
 import xyz.block.trailblaze.ui.images.ImageLoader
 import xyz.block.trailblaze.ui.tabs.session.VideoMetadata
 
@@ -27,15 +26,7 @@ private object NoOpImageLoader : ImageLoader {
 
 actual fun createLogsFileSystemImageLoader(): ImageLoader = NoOpImageLoader
 
-actual fun getCurrentUrl(): String? = null
-
 actual fun getPlatform(): Platform = Platform.WASM
-
-@Composable
-actual fun resolveImageModel(sessionId: String, screenshotFile: String?, imageLoader: ImageLoader): Any? = null
-
-@Composable
-actual fun preloadedScreenshotKeys(): Set<String> = emptySet()
 
 actual fun openVideoInSystemPlayer(filePath: String) = Unit
 

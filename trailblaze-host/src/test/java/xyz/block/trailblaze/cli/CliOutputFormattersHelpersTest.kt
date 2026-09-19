@@ -150,6 +150,18 @@ class CliOutputFormattersHelpersTest {
   // ─────────────────────────────────────────────────────────────────────────
 
   @Test
+  fun `stale ref tip names the snapshot command only for a missing-ref failure`() {
+    val staleRef = "**❌ Error** — Tool tap failed: tap: Element ref 'a1b2' not found on current screen. " +
+      "The screen has changed since this ref was last visible."
+    val tip = staleRefTip(staleRef)
+    assertTrue(tip != null && "trailblaze snapshot" in tip, "tip=$tip")
+
+    // A ref that resolves but has no geometry is not stale — re-snapshotting would not help.
+    assertNull(staleRefTip("**❌ Error** — tap: Element ref 'a1b2' found but has no bounds."))
+    assertNull(staleRefTip("**✓ Executed** — Tapped Checkout"))
+  }
+
+  @Test
   fun `misuse fires on a daemon error whose message carries a marker`() {
     assertTrue(isMisuseResult("**❌ Error** — Unknown tool: tap_on_text. Use toolbox() to see available tools."))
     assertTrue(isMisuseResult("**❌ Error** — Tool not valid for the current device/target: openUrl."))
@@ -206,6 +218,58 @@ class CliOutputFormattersHelpersTest {
   fun `dedup does NOT fire when answer is a common short substring of screen`() {
     // Regression guard: "Search" must not suppress "Search results found for…".
     assertFalse(screenSummaryDuplicatesAnswer("Search", "Search results found for shoes"))
+  }
+
+  @Test
+  fun `a missing required parameter names what the user actually typed`() {
+    // `trailblaze tool tap reff=t955` — the daemon can only say 'ref' is missing; the CLI knows
+    // the misspelled key and puts the two side by side.
+    val hint = missingParameterHint(
+      content = "**Error** — Failed to parse tools YAML: Property 'ref' is required but it is missing.",
+      toolName = "tap",
+      givenArgs = listOf("reff"),
+    )
+    assertEquals(
+      "Tip: 'ref' is required but you passed arguments: reff. Run 'trailblaze tool tap --help' for the parameter names.",
+      hint,
+    )
+  }
+
+  @Test
+  fun `no missing-parameter hint for other failures`() {
+    assertNull(missingParameterHint("**Error** — Element t955 not found on current screen", "tap", listOf("ref")))
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // resultIsFailure — the gate the recovery tips ask instead of `isError`
+  // ─────────────────────────────────────────────────────────────────────────
+
+  @Test
+  fun `a markdown-rendered failure counts as a failure even unflagged`() {
+    // `trailblaze tool tap reff=t955`: the daemon renders the parse failure as markdown, and the
+    // bridge only sets isError for an `Error:`/`Failed:` prefix or a JSON error, so this arrives
+    // unflagged. Asking `isError` here would drop the typo hint for the exact case it was for.
+    val parseFailure = CliMcpClient.ToolResult(
+      content = "**❌ Error** — Failed to parse tools YAML: Property 'ref' is required but it is missing.",
+      isError = false,
+    )
+    assertTrue(resultIsFailure(parseFailure))
+    assertTrue(resultIsFailure(CliMcpClient.ToolResult("**❌ FAILED** — assertion did not hold", isError = false)))
+    assertTrue(resultIsFailure(CliMcpClient.ToolResult("Error: no such device", isError = true)))
+  }
+
+  @Test
+  fun `a successful result quoting a failure phrase is not a failure`() {
+    // The whole point of the gate: a read tool's payload can quote anything, including the marker
+    // phrases, and a tip fired on that would tell the user to recover from a call that worked.
+    assertFalse(resultIsFailure(CliMcpClient.ToolResult("**✓ Executed** — Tapped Checkout")))
+    assertFalse(
+      resultIsFailure(
+        CliMcpClient.ToolResult("Element ref 'a1b2' not found on current screen (from a log file I just read)"),
+      ),
+    )
+    // A ❌ that isn't the leading status header is page content, not a verdict.
+    assertFalse(resultIsFailure(CliMcpClient.ToolResult("**✓ Executed** — Tapped the **❌ Error** banner")))
   }
 
   @Test

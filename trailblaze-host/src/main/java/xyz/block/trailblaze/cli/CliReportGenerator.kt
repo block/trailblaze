@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.cli
 
+import kotlin.time.Duration.Companion.milliseconds
 import java.io.File
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
@@ -140,9 +141,21 @@ open class CliReportGenerator {
       delayMs = (delayMs * 2).coerceAtMost(maxDelayMs)
     }
 
-    // Any sessions still pending after the timeout are treated as unknown.
+    // Any sessions still pending after the timeout are treated as unknown. One line for all of
+    // them: a logs directory that outlived a few daemon restarts holds dozens of sessions that
+    // never ended, and a warning per session buried the report paths under them.
+    if (pending.isNotEmpty()) {
+      // Console.error, not Console.log: `trailblaze report` runs the generator in quiet mode, and
+      // an unknown status changes what the report says, so the reader must still see this.
+      val shown = pending.sortedBy { it.value }.take(5).joinToString(", ") { it.value }
+      val more = pending.size - 5
+      Console.error(
+        "Warning: ${pending.size} session(s) never reached a terminal status (still running, or their " +
+          "daemon stopped mid-session); reporting them as unknown: $shown" +
+          (if (more > 0) " and $more more" else ""),
+      )
+    }
     for (sessionId in pending) {
-      Console.log("Warning: session $sessionId did not reach a terminal status within ${maxWaitMs}ms")
       resolved[sessionId] = TerminalSessionState(SessionStatus.Unknown, logsRepo.getLogsForSession(sessionId))
     }
 
@@ -514,8 +527,12 @@ open class CliReportGenerator {
       ?: sessionId.value
 
     val recordingInfo = SessionRecordingInfo.fromLogs(logs)
-    val firstLog = logs.firstOrNull()
     val lastLog = logs.lastOrNull()
+    // The session's own end, not the last log that happened to be written: an abandoned session is
+    // ended at a deadline no log marks, and anchoring the interval there is what keeps
+    // `completed_at - started_at` equal to the reported duration in both cases.
+    val completedAt = sessionInfo.endTimestamp ?: lastLog?.timestamp
+    val startedAt = completedAt?.minus(sessionInfo.durationMs.milliseconds)
     val deviceLogExcerpt = if (outcome != Outcome.PASSED) {
       extractDeviceLogExcerpt(logsRepo, sessionId)
     } else null
@@ -553,10 +570,13 @@ open class CliReportGenerator {
       duration_ms = sessionInfo.durationMs,
       llm_call_count = countLlmCalls(logs),
       llm_cost_usd = logs.computeUsageSummary()?.totalCostInUsDollars,
-      started_at = firstLog?.timestamp?.toIso8601String(),
-      started_at_epoch_ms = firstLog?.timestamp?.toEpochMilliseconds(),
-      completed_at = lastLog?.timestamp?.toIso8601String(),
-      completed_at_epoch_ms = lastLog?.timestamp?.toEpochMilliseconds(),
+      // Anchored on the end so `completed_at - started_at == duration_ms`: the duration is the
+      // session's own counter, which starts before the first log on a device runner (see
+      // [SessionInfo.durationMs]), so the first log's stamp would overstate the start.
+      started_at = startedAt?.toIso8601String(),
+      started_at_epoch_ms = startedAt?.toEpochMilliseconds(),
+      completed_at = completedAt?.toIso8601String(),
+      completed_at_epoch_ms = completedAt?.toEpochMilliseconds(),
       accessibility_truncation = AccessibilityTruncationSummary.fromLogs(logs),
     )
   } catch (e: Exception) {

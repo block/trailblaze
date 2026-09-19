@@ -11,16 +11,15 @@ import xyz.block.trailblaze.toolcalls.SnapshotCache
 import xyz.block.trailblaze.util.Console
 
 /**
- * The capture/retry/wait policy the read-only selector query tools share: WHEN to capture, when a
- * capture may be trusted, when to re-capture, and when to refuse to answer.
+ * The capture/retry/wait policy behind read-only selector queries: WHEN to capture, when a capture
+ * may be trusted, when to re-capture, and when to refuse to answer.
  *
- * [FindMatchesTrailblazeTool] and [FindSelectorMatchesTrailblazeTool] differ in exactly one
- * respect — one selector versus N — and that difference belongs entirely in the [Resolution] each
- * one produces from a captured tree. Everything else was duplicated line-for-line, which is the
- * worst place to duplicate: the rules here are subtle (a completeness flag that must describe the
- * capture actually being returned, a transient null tree that is not an error, a retry budget) and a
- * copy that drifts produces a tool that silently answers "absent" where its sibling refuses to. The
- * engine makes the two agree by construction rather than by review.
+ * It is a separate object from [FindSelectorMatchesTrailblazeTool] because the two answer different
+ * questions: the engine owns the device-facing policy, the tool owns the [Resolution] it produces
+ * from a captured tree. The rules here are subtle — a completeness flag that must describe the
+ * capture actually being returned, a transient null tree that is not an error, a retry budget — and
+ * keeping them in one place is what stops a second caller from acquiring a drifted copy that
+ * silently answers "absent" where this one refuses to.
  *
  * ## The trust rule
  *
@@ -152,8 +151,8 @@ internal object SelectorQueryEngine {
    * - **A match out of a partial capture does not end the wait if the same frame also claims
    *   absence.** The budget is already there, so spending more of it to get a frame worth trusting is
    *   strictly better than returning one that isn't. For a single selector this can never fire (a
-   *   match claims no absence), which is why `findMatches` behaves exactly as it did; for N it is
-   *   what keeps the polling path as strict as the point-in-time path.
+   *   match claims no absence), so this only ever narrows the N>1 case — which is what keeps the
+   *   polling path as strict as the point-in-time path.
    *
    * The per-iteration sleep is capped to the remaining budget, so a small [timeoutMs] returns at
    * ~`timeoutMs` rather than rounding up to a whole poll interval.
@@ -227,7 +226,7 @@ internal object SelectorQueryEngine {
     // frame (something matched, something didn't) out of a partial capture — the new match is
     // evidence the screen changed since the last trustworthy look, which is exactly when the holey
     // frame's empty slots stop being safe to read as absence. A single selector can never be mixed,
-    // so this arm is unreachable for `findMatches`.
+    // so this arm is unreachable for a one-selector query.
     val mayReportAbsence = !finalResolution.claimsAbsence ||
       lastResolveWasComplete ||
       (!finalResolution.matched && sawCompleteCapture)
@@ -263,10 +262,10 @@ internal object SelectorQueryEngine {
   /**
    * Delay between live re-captures. A mutable seam (not a `const`) so tests can shrink it to avoid
    * real-time sleeps; production uses [DEFAULT_POLL_INTERVAL_MS]. Lives here, on the shared engine,
-   * rather than on either tool: when it sat on `FindMatchesTrailblazeTool` the sibling tool read
-   * it across a class boundary, so a test shrinking it for one tool silently reconfigured the
-   * other. The per-iteration sleep is additionally capped to the remaining budget in [poll], so it
-   * never overshoots `timeoutMs`.
+   * rather than on the tool: it once sat on a query tool that a sibling read across a class
+   * boundary, so a test shrinking it for one silently reconfigured the other. The per-iteration
+   * sleep is additionally capped to the remaining budget in [poll], so it never overshoots
+   * `timeoutMs`.
    */
   var pollIntervalMs: Long = DEFAULT_POLL_INTERVAL_MS
 

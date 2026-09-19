@@ -4,6 +4,7 @@ import assertk.assertFailure
 import assertk.assertThat
 import assertk.assertions.contains
 import assertk.assertions.isEqualTo
+import assertk.assertions.isGreaterThan
 import assertk.assertions.isNotNull
 import assertk.assertions.isNull
 import assertk.assertions.messageContains
@@ -15,6 +16,7 @@ import xyz.block.trailblaze.config.McpServerConfig
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.logs.model.SessionId
+import xyz.block.trailblaze.scripting.callback.JsScriptingCallbackDispatcher
 import java.io.File
 import java.nio.file.Files
 import java.util.concurrent.TimeUnit
@@ -77,18 +79,18 @@ class McpSubprocessSpawnerTest {
     assertThat(env["TRAILBLAZE_DEVICE_HEIGHT_PX"]).isEqualTo("2400")
     assertThat(env["TRAILBLAZE_SESSION_ID"]).isEqualTo("session_test")
     assertThat(env["TRAILBLAZE_TOOLSET_FILE"]).isEqualTo(scriptFile.absolutePath)
-    // Default path: daemon uses 120s dispatch timeout, subprocess fetch timeout is 122s
-    // (120 + 2s buffer) so the daemon is normally the one that returns a structured error
+    // Default path: daemon uses a 600s dispatch timeout, subprocess fetch timeout is 602s
+    // (600 + 2s buffer) so the daemon is normally the one that returns a structured error
     // rather than the client aborting first.
-    assertThat(env["TRAILBLAZE_CLIENT_FETCH_TIMEOUT_MS"]).isEqualTo("122000")
+    assertThat(env["TRAILBLAZE_CLIENT_FETCH_TIMEOUT_MS"]).isEqualTo("602000")
   }
 
-  @Test fun `resolveClientFetchTimeoutMs defaults to 122s and honors daemon override plus buffer`() {
+  @Test fun `resolveClientFetchTimeoutMs defaults to 602s and honors daemon override plus buffer`() {
     // The whole point of threading this through is to keep the client's abort above the
     // daemon's callback timeout. A regression that dropped the buffer or ignored the system
     // property would let the client abort first and swallow the daemon's structured error.
     System.clearProperty("trailblaze.callback.timeoutMs")
-    assertThat(McpSubprocessSpawner.resolveClientFetchTimeoutMs()).isEqualTo(122_000L)
+    assertThat(McpSubprocessSpawner.resolveClientFetchTimeoutMs()).isEqualTo(602_000L)
 
     try {
       System.setProperty("trailblaze.callback.timeoutMs", "60000")
@@ -97,10 +99,38 @@ class McpSubprocessSpawnerTest {
       // Non-positive / non-numeric overrides silently fall back to the default — same
       // "silently-default on typo" tradeoff as the daemon-side resolveTimeoutMs.
       System.setProperty("trailblaze.callback.timeoutMs", "-1")
-      assertThat(McpSubprocessSpawner.resolveClientFetchTimeoutMs()).isEqualTo(122_000L)
+      assertThat(McpSubprocessSpawner.resolveClientFetchTimeoutMs()).isEqualTo(602_000L)
 
       System.setProperty("trailblaze.callback.timeoutMs", "abc")
-      assertThat(McpSubprocessSpawner.resolveClientFetchTimeoutMs()).isEqualTo(122_000L)
+      assertThat(McpSubprocessSpawner.resolveClientFetchTimeoutMs()).isEqualTo(602_000L)
+    } finally {
+      System.clearProperty("trailblaze.callback.timeoutMs")
+    }
+  }
+
+  @Test fun `the forwarded fetch timeout is derived from the shared dispatch default, not a copy of it`() {
+    // Hand-typed copies of this number in three modules are what let the client's abort drift
+    // below the daemon's own deadline twice. Asserting the relationship rather than today's value
+    // means a future change to the shared default cannot leave this side behind.
+    System.clearProperty("trailblaze.callback.timeoutMs")
+    assertThat(McpSubprocessSpawner.resolveClientFetchTimeoutMs()).isEqualTo(
+      JsScriptingCallbackDispatcher.DEFAULT_DISPATCH_TIMEOUT_MS + McpSubprocessSpawner.CLIENT_FETCH_BUFFER_MS,
+    )
+  }
+
+  @Test fun `the outer tools-call budget outlasts the subprocess fetch timeout it encloses`() {
+    // Left to itself the MCP SDK bounds the daemon's `tools/call` at 60s, abandoning the call
+    // while the tool is still legitimately working — and an SDK timeout arrives as a bare
+    // coroutine cancellation, so the user is told the run was cancelled rather than that the tool
+    // ran long. The outer hop has to be the last one to expire, under an override too.
+    System.clearProperty("trailblaze.callback.timeoutMs")
+    assertThat(McpSubprocessSpawner.resolveOuterRequestTimeoutMs())
+      .isGreaterThan(McpSubprocessSpawner.resolveClientFetchTimeoutMs())
+
+    try {
+      System.setProperty("trailblaze.callback.timeoutMs", "60000")
+      assertThat(McpSubprocessSpawner.resolveOuterRequestTimeoutMs())
+        .isGreaterThan(McpSubprocessSpawner.resolveClientFetchTimeoutMs())
     } finally {
       System.clearProperty("trailblaze.callback.timeoutMs")
     }

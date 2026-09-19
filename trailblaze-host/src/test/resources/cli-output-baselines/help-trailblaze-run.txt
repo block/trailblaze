@@ -52,7 +52,7 @@ removed in a future release.
                                TRAILBLAZE_RUNNER, MULTI_AGENT_V3, or
                                KOOG_STRATEGY_GRAPH. Set it persistently with
                                'trailblaze config agent'. Default:
-                               TRAILBLAZE_RUNNER
+                               KOOG_STRATEGY_GRAPH
       --all-devices          Run each trail on EVERY connected device whose
                                platform the trail supports (its `platform:
                                `/`driver:` for v1, or its `devices:`/recording
@@ -112,11 +112,15 @@ removed in a future release.
                                log (only takes effect on iOS). On by default;
                                the stream is scoped to the app under test (the
                                logcat-equivalent app log, not the system
-                               firehose). Use --no-capture-ios-logs to disable.
+                               firehose). Recognized fatal crashes are also
+                               indexed in <session-dir>/events/crash.ndjson.
+                               Use --no-capture-ios-logs to disable.
       --[no-]capture-logcat  Capture Android logcat (filtered to the app under
                                test) to <session-dir>/device.log (only takes
-                               effect on Android). On by default; use
-                               --no-capture-logcat to disable.
+                               effect on Android). Recognized fatal crashes are
+                               also indexed in <session-dir>/events/crash.
+                               ndjson. On by default; use --no-capture-logcat
+                               to disable.
       --[no-]capture-network Auto-capture network requests/responses to
                                <session-dir>/network.ndjson on supported
                                devices (web today; mobile devices added as
@@ -159,7 +163,7 @@ removed in a future release.
                                must refine the connected device's detected
                                classifiers. Only valid for a single-device run.
       --driver=<driverType>  Driver type to use (e.g., PLAYWRIGHT_NATIVE,
-                               ANDROID_ONDEVICE_INSTRUMENTATION). Overrides
+                               ANDROID_ONDEVICE_ACCESSIBILITY). Overrides
                                driver from trail config.
       --full-report-payloads Embed full event payloads in the after-run HTML
                                report even for sessions that passed, instead of

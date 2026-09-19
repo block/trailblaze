@@ -189,7 +189,7 @@ abstract class BaseTrailblazeAgent(
     // QuickJS — the binding consumes the slot on the read side instead.
     ToolExecutionContextThreadLocal.install(context)
     // Wrap the whole batch in a single [SnapshotCache] frame so query tools issued by
-    // the same batch (e.g. `findMatches` called multiple times across siblings) share one
+    // the same batch (e.g. `findSelectorMatches` called multiple times across siblings) share one
     // captured view hierarchy instead of re-fetching it every call. Action tools
     // (non-read-only, non-verification) invalidate the slot on success so a post-action query
     // re-captures rather than reading a pre-action tree. Outside this frame,
@@ -328,7 +328,7 @@ abstract class BaseTrailblazeAgent(
       // this batch is potentially stale. Two opt-out paths preserve the
       // captured tree for a follow-up query:
       //
-      //  - [ReadOnlyTrailblazeTool] (e.g. `findMatches`) explicitly declares
+      //  - [ReadOnlyTrailblazeTool] (e.g. `findSelectorMatches`) explicitly declares
       //    the tool does not mutate state.
       //  - `isVerification = true` (assertion tools) — successful execution
       //    IS the assertion verdict, and verifications never mutate.

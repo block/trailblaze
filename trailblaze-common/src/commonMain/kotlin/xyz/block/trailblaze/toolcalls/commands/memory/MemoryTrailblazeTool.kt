@@ -21,7 +21,7 @@ import xyz.block.trailblaze.utils.ElementComparator
  * MUST NOT issue device-mutating side effects — taps, swipes, navigations, app launches,
  * network calls, focus changes, or anything else observable on the device — even if the
  * tool ALSO writes to memory along the way. A tool that breaks this contract will silently
- * leave the snapshot cache showing a stale view-hierarchy to any follow-up `findMatches`
+ * leave the snapshot cache showing a stale view-hierarchy to any follow-up `findSelectorMatches`
  * in the same batch.
  *
  * If you need a tool that touches both memory and the device, model it as an

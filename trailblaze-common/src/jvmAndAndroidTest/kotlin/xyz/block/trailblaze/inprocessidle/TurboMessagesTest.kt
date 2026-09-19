@@ -27,6 +27,7 @@ class TurboMessagesTest {
     val lines =
       listOf(
         TurboMessages.turboOn("session-1", "com.example.app", "emulator-5554"),
+        TurboMessages.turboArmedForLaunch("session-1", "com.example.app", "emulator-5554"),
         TurboMessages.normalSpeed("session-1", "no helper for com.example.app"),
         TurboMessages.clearing("session-1", "emulator-5554"),
         TurboMessages.leavingSwitchToItsOwner("session-1", "com.example.app", "emulator-5554"),
@@ -45,6 +46,17 @@ class TurboMessagesTest {
     // has to be able to tell whether it was theirs.
     assertTrue(line.contains("com.example.app"), line)
     assertTrue(line.contains("emulator-5554"), line)
+  }
+
+  @Test
+  fun aDeferredAttachSaysArmedNotOnAndSaysWhereTheAttachHappens() {
+    val line = TurboMessages.turboArmedForLaunch("session-1", "com.example.app", "emulator-5554")
+    assertTrue(line.contains("com.example.app"), line)
+    assertTrue(line.contains("emulator-5554"), line)
+    assertTrue(line.contains("armed"), line)
+    assertTrue(line.contains("first launch"), "does not say where the attach happens: $line")
+    // Steps before that launch run at heuristic speed; a reader must not credit them to turbo.
+    assertFalse(line.contains("turbo is on"), line)
   }
 
   @Test

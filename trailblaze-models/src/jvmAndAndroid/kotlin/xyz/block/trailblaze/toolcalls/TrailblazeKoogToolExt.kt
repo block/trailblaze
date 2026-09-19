@@ -4,6 +4,14 @@ import ai.koog.agents.core.tools.ToolDescriptor
 import ai.koog.agents.core.tools.ToolParameterDescriptor
 import ai.koog.agents.core.tools.ToolParameterType
 import ai.koog.agents.core.tools.annotations.LLMDescription
+import kotlinx.serialization.ExperimentalSerializationApi
+import kotlinx.serialization.InternalSerializationApi
+import kotlinx.serialization.KSerializer
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.descriptors.PrimitiveKind
+import kotlinx.serialization.descriptors.SerialKind
+import kotlinx.serialization.descriptors.StructureKind
+import kotlinx.serialization.serializer
 import xyz.block.trailblaze.api.TrailblazeElementSelector
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
 import xyz.block.trailblaze.util.Console
@@ -140,7 +148,191 @@ private fun KType.excludedSelectorType(): ExcludedSelectorType? {
 
 /**
  * A selector-typed constructor parameter that [buildToolDescriptorIgnoringSurface] STRIPS (via
- * [excludedParameterTypes]), re-surfaced with a hand-picked TypeScript type so the trail-recording
+ * [excludedParameterTypes]), in a surface-neutral form.
+ *
+ * One source of truth for *which* params were stripped, so no two consumers can disagree about
+ * that. Each consumer then re-surfaces them in its own vocabulary: [selectorParamsForTs] picks a
+ * TypeScript type for the trail-recording type-validation codegen, and
+ * [withSelectorParamsRestored] picks a descriptor type string for human-facing tool help.
+ *
+ * @property name the constructor parameter name (also the recorded arg key), e.g. `nodeSelector`.
+ * @property isLegacyElementSelector true for the deprecated Maestro-shaped
+ *   [TrailblazeElementSelector], false for the rich [TrailblazeNodeSelector] grammar.
+ * @property isCollection true when the param takes a collection of selectors rather than one.
+ * @property optional whether the param has a default or is nullable in Kotlin.
+ * @property description the param's `@LLMDescription`.
+ */
+private data class StrippedSelectorParam(
+  val name: String,
+  val isLegacyElementSelector: Boolean,
+  val isCollection: Boolean,
+  val optional: Boolean,
+  val description: String?,
+)
+
+/** The selector-typed primary-constructor params [buildToolDescriptorIgnoringSurface] strips. */
+private fun KClass<out TrailblazeTool>.strippedSelectorParams(): List<StrippedSelectorParam> {
+  val nodeSelectorType = TrailblazeNodeSelector::class.qualifiedName
+  val elementSelectorType = TrailblazeElementSelector::class.qualifiedName
+  return primaryConstructor?.parameters.orEmpty().mapNotNull { param ->
+    val excluded = param.type.excludedSelectorType() ?: return@mapNotNull null
+    val isLegacy = when (excluded.typeName) {
+      nodeSelectorType -> false
+      elementSelectorType -> true
+      // An excluded type neither consumer knows how to name. Dropping it keeps a future addition
+      // to [excludedParameterTypes] from silently being described as a node selector.
+      else -> return@mapNotNull null
+    }
+    // Guard the empty string too (not just null): an empty name would render `"": …;` — a TS
+    // syntax error in the generated surface. Reflection normally never yields one, but cheap to pin.
+    val name = param.name?.trim()?.takeIf { it.isNotEmpty() } ?: return@mapNotNull null
+    StrippedSelectorParam(
+      name = name,
+      isLegacyElementSelector = isLegacy,
+      isCollection = excluded.isCollection,
+      optional = param.isOptional || param.type.isMarkedNullable,
+      // trimIndent() BEFORE trim(): trimming the first line first would corrupt trimIndent()'s
+      // common-indent detection on multi-line descriptions. Matches the object-property path above.
+      description = param.findAnnotation<LLMDescription>()?.value?.trimIndent()?.trim(),
+    )
+  }
+}
+
+/** What a [TrailblazeElementSelector] param says when the tool itself documents nothing. */
+private const val LEGACY_SELECTOR_DESCRIPTION: String =
+  "Deprecated legacy Maestro-shaped selector; prefer `nodeSelector`."
+
+/**
+ * This descriptor with [toolClass]'s stripped selector params put back, for a **human-facing**
+ * description of the tool (`toolbox(name=…)`, `trailblaze tool <name> --help`). Unchanged for the
+ * vast majority of tools, which have no selector param.
+ *
+ * Without this, a selector-only tool describes as taking no required arguments at all: `tapOn`
+ * comes back with `relativePoint` and `longPress` and nothing to say WHAT to tap, and the rendered
+ * `Run:`/YAML example cannot supply it. Do not reach for this on the LLM or scripted-tool paths —
+ * they have their own answers ([toKoogToolDescriptor] omits selectors deliberately, the scripted
+ * surface types them via `built-in-tools.ts`).
+ *
+ * The type is the flat string `OBJECT` (`ARRAY` for a collection) rather than the expanded selector
+ * grammar on purpose: expanding it is the thing that overflows the stack (see
+ * [excludedParameterTypes]), and a reader needs to know the argument exists and is a nested block,
+ * not to read its whole schema inline.
+ */
+fun TrailblazeToolDescriptor.withSelectorParamsRestored(
+  toolClass: KClass<out TrailblazeTool>,
+): TrailblazeToolDescriptor {
+  val stripped = toolClass.strippedSelectorParams()
+  if (stripped.isEmpty()) return this
+  fun StrippedSelectorParam.toDescriptor() = TrailblazeToolParameterDescriptor(
+    name = name,
+    // Matches `ToolParameterType.Object.name` / `List.name`, so a restored param's type reads the
+    // same as one the normal lowering produced.
+    type = if (isCollection) "ARRAY" else "OBJECT",
+    description = description ?: LEGACY_SELECTOR_DESCRIPTION.takeIf { isLegacyElementSelector },
+  )
+  // A node selector is required even where Kotlin declares it nullable with a `= null` default.
+  // That default exists so a trail recorded before the field was added still deserializes; it is
+  // never a valid call. Every tool in the tree that declares one nullable rejects null at
+  // execution: `assertVisibleBySelector` and `assertNotVisibleBySelector` with `require`,
+  // `assertMatchCount` and the `rememberBySelector` family with a failed result,
+  // `tapOnElementBySelector` with a loud error. Calling it optional in help would tell a reader
+  // they may omit the one argument the tool cannot run without.
+  //
+  // The legacy selector is the opposite case, and stays optional to match [selectorParamsForTs]:
+  // it is deprecated and superseded by `nodeSelector`, so no caller should be told to fill it in.
+  val (optional, required) = stripped.partition { it.isLegacyElementSelector }
+  return copy(
+    // Selectors lead: they are what the tool acts ON, and the params that survived stripping
+    // (`longPress`, `relativePoint`) only modify that. Declaration order among selectors is kept.
+    requiredParameters = required.map { it.toDescriptor() } + requiredParameters,
+    optionalParameters = optional.map { it.toDescriptor() } + optionalParameters,
+  )
+}
+
+/** One element of a hand-written serializer's wire shape. */
+private data class SerializedElement(val name: String, val type: String, val optional: Boolean)
+
+/** The descriptor-side type string for a serialized element's kind. */
+@OptIn(ExperimentalSerializationApi::class)
+private fun SerialKind.toParameterTypeName(): String = when (this) {
+  StructureKind.LIST -> "ARRAY"
+  StructureKind.MAP, StructureKind.CLASS, StructureKind.OBJECT -> "OBJECT"
+  PrimitiveKind.BOOLEAN -> "BOOLEAN"
+  PrimitiveKind.BYTE, PrimitiveKind.SHORT, PrimitiveKind.INT, PrimitiveKind.LONG -> "INTEGER"
+  PrimitiveKind.FLOAT, PrimitiveKind.DOUBLE -> "FLOAT"
+  // Enums and anything unmodelled read as a scalar, which is what the YAML author writes.
+  else -> "STRING"
+}
+
+/**
+ * The wire shape of [this] tool's **hand-written** serializer, or null when it has none — which is
+ * every tool but one. The compiler-generated serializer reads exactly the primary-constructor
+ * params reflection already found, so there is nothing to reconcile for those.
+ */
+@OptIn(ExperimentalSerializationApi::class, InternalSerializationApi::class)
+private fun KClass<out TrailblazeTool>.handWrittenSerializedElements(): List<SerializedElement>? {
+  val custom = findAnnotation<Serializable>()?.with?.takeIf { it != KSerializer::class } ?: return null
+  val descriptor = try {
+    serializer().descriptor
+  } catch (_: Throwable) {
+    // A serializer that cannot be resolved reflectively is a reason to keep the constructor-derived
+    // answer, not to fail a help lookup.
+    Console.log("Could not read the serial descriptor of $custom for $qualifiedName")
+    return null
+  }
+  if (descriptor.kind != StructureKind.CLASS) return null
+  return (0 until descriptor.elementsCount).map { index ->
+    SerializedElement(
+      name = descriptor.getElementName(index),
+      type = descriptor.getElementDescriptor(index).kind.toParameterTypeName(),
+      optional = descriptor.isElementOptional(index),
+    )
+  }
+}
+
+/**
+ * This descriptor's parameters reconciled against [toolClass]'s serializer — the thing that
+ * actually decodes a trail step — for a **human-facing** description of the tool. A no-op for
+ * every tool whose serializer the compiler generated, which is all but one of them.
+ *
+ * `mobile_maestro` is the exception and the reason this exists: it holds a single `yaml` string in
+ * Kotlin and reads and writes `commands: [...]` on the wire. Describing it from the primary
+ * constructor printed a trail step keyed on `yaml`, which its own deserializer rejects outright —
+ * help that cannot be copied. It is `surfaceToLlm = false`, so this lookup is the only surface
+ * that describes it at all.
+ *
+ * Reconciles rather than replaces: a parameter the serializer also knows keeps the type,
+ * `@LLMDescription` and required/optional verdict the reflection path gave it, because a serial
+ * descriptor carries none of those. Only names the serializer does not know are dropped, and only
+ * names it alone knows are added.
+ */
+fun TrailblazeToolDescriptor.withSerializedParameterNames(
+  toolClass: KClass<out TrailblazeTool>,
+): TrailblazeToolDescriptor {
+  val serialized = toolClass.handWrittenSerializedElements() ?: return this
+  val described = requiredParameters + optionalParameters
+  if (serialized.map { it.name }.toSet() == described.map { it.name }.toSet()) return this
+
+  val requiredByName = requiredParameters.associateBy { it.name }
+  val optionalByName = optionalParameters.associateBy { it.name }
+  val newRequired = mutableListOf<TrailblazeToolParameterDescriptor>()
+  val newOptional = mutableListOf<TrailblazeToolParameterDescriptor>()
+  serialized.forEach { element ->
+    val known = requiredByName[element.name] ?: optionalByName[element.name]
+    when {
+      known != null && optionalByName.containsKey(element.name) -> newOptional += known
+      known != null -> newRequired += known
+      else -> {
+        val added = TrailblazeToolParameterDescriptor(name = element.name, type = element.type)
+        if (element.optional) newOptional += added else newRequired += added
+      }
+    }
+  }
+  return copy(requiredParameters = newRequired, optionalParameters = newOptional)
+}
+
+/**
+ * A stripped selector param re-surfaced with a hand-picked TypeScript type so the trail-recording
  * type-validation surface can model it. See [selectorParamsForTs].
  *
  * @property name the constructor parameter name (also the recorded arg key), e.g. `nodeSelector`.
@@ -175,45 +367,33 @@ data class SelectorParamTs(
  *
  * Empty for the vast majority of tools (no selector param). Ordered by declaration.
  */
-fun KClass<out TrailblazeTool>.selectorParamsForTs(): List<SelectorParamTs> {
-  val nodeSelectorType = TrailblazeNodeSelector::class.qualifiedName
-  val elementSelectorType = TrailblazeElementSelector::class.qualifiedName
-  return primaryConstructor?.parameters.orEmpty().mapNotNull { param ->
-    val excluded = param.type.excludedSelectorType() ?: return@mapNotNull null
-    // Guard the empty string too (not just null): an empty name would render `"": …;` — a TS
-    // syntax error in the generated surface. Reflection normally never yields one, but cheap to pin.
-    val name = param.name?.trim()?.takeIf { it.isNotEmpty() } ?: return@mapNotNull null
-    // trimIndent() BEFORE trim(): trimming the first line first would corrupt trimIndent()'s
-    // common-indent detection on multi-line descriptions. Matches the object-property path above.
-    val llmDescription = param.findAnnotation<LLMDescription>()?.value?.trimIndent()?.trim()
-    val optional = param.isOptional || param.type.isMarkedNullable
+fun KClass<out TrailblazeTool>.selectorParamsForTs(): List<SelectorParamTs> =
+  strippedSelectorParams().map { param ->
     // A `List<Selector>` param is stripped for the same reason a bare one is, so it has to come
     // back as an ARRAY of the same TS type — emitting the scalar type would make every recorded
     // call to such a tool read as a type error in the generated surface.
-    val arraySuffix = if (excluded.isCollection) "[]" else ""
-    when (excluded.typeName) {
-      nodeSelectorType -> SelectorParamTs(
-        name = name,
-        // Must match the `TrailblazeNodeSelector` export in the generated `selectors.ts` and
-        // `WorkspaceClientDtsGenerator.NODE_SELECTOR_TS_TYPE` (which emits the matching `import type`).
-        // Codegen-boundary coupling with no static check — keep the three in sync if the export renames.
-        tsType = "TrailblazeNodeSelector$arraySuffix",
-        optional = optional,
-        description = llmDescription,
-      )
-      elementSelectorType -> SelectorParamTs(
-        name = name,
+    val arraySuffix = if (param.isCollection) "[]" else ""
+    if (param.isLegacyElementSelector) {
+      SelectorParamTs(
+        name = param.name,
         // No generated TS type for the deprecated Maestro-shaped selector; `unknown` accepts a
         // legacy `selector:` block in an old recording without a false positive.
         tsType = "unknown$arraySuffix",
         optional = true,
-        description = llmDescription
-          ?: "Deprecated legacy Maestro-shaped selector; prefer `nodeSelector`.",
+        description = param.description ?: LEGACY_SELECTOR_DESCRIPTION,
       )
-      else -> null
+    } else {
+      SelectorParamTs(
+        name = param.name,
+        // Must match the `TrailblazeNodeSelector` export in the generated `selectors.ts` and
+        // `WorkspaceClientDtsGenerator.NODE_SELECTOR_TS_TYPE` (which emits the matching `import type`).
+        // Codegen-boundary coupling with no static check — keep the three in sync if the export renames.
+        tsType = "TrailblazeNodeSelector$arraySuffix",
+        optional = param.optional,
+        description = param.description,
+      )
     }
   }
-}
 
 /**
  * Builds a [ToolDescriptor] from a [TrailblazeTool] class, ignoring any surface-visibility

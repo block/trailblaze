@@ -138,7 +138,7 @@ class PartialCaptureOnDeviceTest {
   @Test
   fun screenState_carriesTheCaptureCompletenessOffTheDevice() {
     // The tally is only useful to the consumers that decide absence, and every one of them —
-    // the waypoint matcher, `findMatches`, and anything reading a capture over the on-device RPC
+    // the waypoint matcher, `findSelectorMatches`, and anything reading a capture over the on-device RPC
     // — sees a ScreenState, never a MergedScreenTrees. This is the only link between the two, and
     // nothing off the device can exercise it.
     val partial = onFixture(CoverageFixtureActivity.LAYOUT_UNFETCHABLE_CHILD) {

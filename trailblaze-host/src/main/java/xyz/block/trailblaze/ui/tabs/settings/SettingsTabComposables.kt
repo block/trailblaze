@@ -561,11 +561,16 @@ object SettingsTabComposables {
         val agentImplOptions = listOf(
           AgentImplementation.TRAILBLAZE_RUNNER to "TrailblazeRunner (Legacy)",
           AgentImplementation.MULTI_AGENT_V3 to "Multi-Agent V3",
-          AgentImplementation.KOOG_STRATEGY_GRAPH to "Koog Strategy Graph (experimental)"
+          AgentImplementation.KOOG_STRATEGY_GRAPH to "Koog Strategy Graph (default)"
         )
+        // An unset persisted agent means "never chose" (tri-state), and the run itself falls back
+        // to AgentImplementation.DEFAULT — so show that, not a hardcoded label that would now name
+        // an agent the user is not getting.
+        val effectiveAgentImpl =
+          serverState.appConfig.agentImplementation ?: AgentImplementation.DEFAULT
         val currentAgentImplLabel =
-          agentImplOptions.find { it.first == serverState.appConfig.agentImplementation }?.second
-            ?: "TrailblazeRunner (Legacy)"
+          agentImplOptions.find { it.first == effectiveAgentImpl }?.second
+            ?: effectiveAgentImpl.name
 
         Column(
           modifier = Modifier.fillMaxWidth(),

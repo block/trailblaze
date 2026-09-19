@@ -606,7 +606,7 @@ object SelectorDialectLint {
    * VERBATIM, inner calls and all — `block_runIf` keeps its `condition.tool` and `then:`/`else:`
    * entries in its own args as `{ <toolName>: <args> }` — and those inner selectors are dispatched
    * for real. A wrong dialect in a `condition.selector:` makes the conditional silently
-   * always-false (`findMatches` dispatches on the tree shape the driver produced, so it never
+   * always-false (the query tool dispatches on the tree shape the driver produced, so it never
    * matches), and a nested tap hard-fails whenever its branch runs. Both belong in the findings.
    *
    * The one exception is a subtree keyed by a [SAFE_FALLBACK_TOOL_NAMES] tool: nested dispatch

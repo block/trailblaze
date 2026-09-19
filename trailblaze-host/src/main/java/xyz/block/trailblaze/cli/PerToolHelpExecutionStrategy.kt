@@ -24,13 +24,25 @@ import picocli.CommandLine
  *
  * Installed in [TrailblazeCli.run] and [TrailblazeCli.executeForDaemon] alongside the
  * other CommandLine wiring (grouped sections, exception handlers).
+ *
+ * Both branches dispatch inside [withUserFacingOutputPolicy] — the execution strategy is the one
+ * place that sees every subcommand after its options are bound and before any of its code runs,
+ * which is exactly what closing the internal output channel needs. Wrapping rather than
+ * fire-and-forget matters twice: per-tool help is covered too (it resolves the tool through the
+ * daemon, which is as chatty as the run path), and quiet mode is restored on the way out instead of
+ * left on for whatever else shares the JVM.
  */
 internal fun installPerToolHelpExecutionStrategy(commandLine: CommandLine) {
   val defaultStrategy = CommandLine.RunLast()
   commandLine.executionStrategy = CommandLine.IExecutionStrategy { parseResult ->
-    val toolName = perToolHelpToolName(parseResult)
-    if (toolName != null) return@IExecutionStrategy ToolHelpRenderer.renderHelp(toolName)
-    defaultStrategy.execute(parseResult)
+    withUserFacingOutputPolicy(parseResult) {
+      val toolName = perToolHelpToolName(parseResult)
+      if (toolName != null) {
+        ToolHelpRenderer.renderHelp(toolName)
+      } else {
+        defaultStrategy.execute(parseResult)
+      }
+    }
   }
 }
 
@@ -52,7 +64,7 @@ internal fun perToolHelpToolName(parseResult: CommandLine.ParseResult): String? 
 }
 
 /** Walk the parsed subcommand chain to its deepest entry. */
-private fun leafParseResult(root: CommandLine.ParseResult): CommandLine.ParseResult {
+internal fun leafParseResult(root: CommandLine.ParseResult): CommandLine.ParseResult {
   var current = root
   while (current.subcommand() != null) {
     current = current.subcommand()

@@ -114,10 +114,15 @@ object HostAndroidDeviceConnectUtils {
    * where the command is emitted, instead of by each caller. This is the only place an
    * `am instrument` is built, so every connect path — CLI run, Sessions UI, MCP bridge, recording
    * — forwards the force identically and none of them can forget to.
+   *
+   * [deviceApiLevel] is the device's own API level (null when it could not be read), used by
+   * [shouldRelaxHiddenApiChecks]. Not defaulted: a caller that silently passed "unknown" would turn
+   * the stale-handle recovery off again without anyone noticing.
    */
   internal fun instrumentationAdbShellCommandArgs(
     trailblazeOnDeviceInstrumentationTarget: TrailblazeOnDeviceInstrumentationTarget,
     deviceId: TrailblazeDeviceId,
+    deviceApiLevel: Int?,
     additionalInstrumentationArgs: Map<String, String> = emptyMap(),
   ): List<String> = buildList {
     val testAppId = trailblazeOnDeviceInstrumentationTarget.testAppId
@@ -129,6 +134,14 @@ object HostAndroidDeviceConnectUtils {
         "-r",
       ),
     )
+    if (
+      shouldRelaxHiddenApiChecks(
+        trailblazeOnDeviceInstrumentationTarget = trailblazeOnDeviceInstrumentationTarget,
+        deviceApiLevel = deviceApiLevel,
+      )
+    ) {
+      add(NO_HIDDEN_API_CHECKS_FLAG)
+    }
     addAll(
       listOf(
         "-e",
@@ -162,6 +175,46 @@ object HostAndroidDeviceConnectUtils {
 
     add("$testAppId/androidx.test.runner.AndroidJUnitRunner".shellEscape())
   }
+
+  internal const val NO_HIDDEN_API_CHECKS_FLAG = "--no-hidden-api-checks"
+
+  /** `am instrument --no-hidden-api-checks` exists from Android P; earlier `am` rejects the flag. */
+  internal const val NO_HIDDEN_API_CHECKS_MIN_API = 28
+
+  /**
+   * Whether to launch this instrumentation with [NO_HIDDEN_API_CHECKS_FLAG].
+   *
+   * ### What it buys
+   *
+   * The on-device recovery from a stale/half-connected UiAutomation handle
+   * (`InstrumentationUtil.runWithStaleUiAutomationRecovery`) can only clear the platform's cached
+   * handle by reflecting on `Instrumentation`'s private `mUiAutomation` field —
+   * `Instrumentation.disconnectUiAutomation()` no longer exists on modern images. With hidden-API
+   * enforcement on, that field is not merely blocked but *reported as absent*
+   * (`NoSuchFieldException: No field mUiAutomation`), so the recovery always fails and the host
+   * restarts the whole on-device server instead of healing in place. With the flag, the same reset
+   * succeeds. Latency and robustness, not correctness: the restart path does recover, slowly, by
+   * killing the process.
+   *
+   * ### Why it is not unconditional
+   *
+   * The flag relaxes hidden-API enforcement for the ENTIRE instrumented process. For an in-process
+   * harness that process is the app under test, so an app calling a blocklisted hidden API would
+   * pass under Trailblaze and crash in production — Trailblaze silently weakening the platform
+   * contract for the thing it exists to test. Hence
+   * [TrailblazeOnDeviceInstrumentationTarget.instrumentationProcessIsTrailblazeOwned]: only
+   * Trailblaze's own standalone runner APK, which contains no product code, gets the relaxation.
+   *
+   * A null [deviceApiLevel] means the probe failed, not that the device is old; the flag is omitted
+   * there so an unreadable device behaves exactly as it did before this gate existed rather than
+   * risking an `am instrument` that rejects the option.
+   */
+  internal fun shouldRelaxHiddenApiChecks(
+    trailblazeOnDeviceInstrumentationTarget: TrailblazeOnDeviceInstrumentationTarget,
+    deviceApiLevel: Int?,
+  ): Boolean = trailblazeOnDeviceInstrumentationTarget.instrumentationProcessIsTrailblazeOwned &&
+    deviceApiLevel != null &&
+    deviceApiLevel >= NO_HIDDEN_API_CHECKS_MIN_API
 
   /**
    * What a fresh connect will force-stop, and why — [targets] to act on, [diagnostics] to report.
@@ -432,6 +485,15 @@ object HostAndroidDeviceConnectUtils {
       val command = instrumentationAdbShellCommandArgs(
         trailblazeOnDeviceInstrumentationTarget = trailblazeOnDeviceInstrumentationTarget,
         deviceId = trailblazeDeviceId,
+        // Read only for the harnesses whose launch can actually use it: an in-process harness
+        // never passes the flag, so asking its device for an API level would be a round-trip
+        // whose answer is discarded.
+        deviceApiLevel =
+          if (trailblazeOnDeviceInstrumentationTarget.instrumentationProcessIsTrailblazeOwned) {
+            AndroidHostAdbUtils.deviceApiLevel(trailblazeDeviceId)
+          } else {
+            null
+          },
         additionalInstrumentationArgs = additionalInstrumentationArgs,
       ).joinToString(" ")
       val handle = AndroidHostAdbUtils.streamingShell(

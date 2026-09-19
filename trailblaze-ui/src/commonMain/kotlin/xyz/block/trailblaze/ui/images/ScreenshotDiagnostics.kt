@@ -4,11 +4,12 @@ package xyz.block.trailblaze.ui.images
  * What an inspector says when it cannot show a screenshot.
  *
  * Everything here is bounded, because none of these strings is as small as it looks. A screenshot
- * reference is usually a filename, but [NetworkImageLoader] also accepts a `data:` URI with the
- * whole image inlined — and the loaders fold whatever they are given into the model they return, so
- * a failure from the image pipeline quotes it back in its own message. Untruncated, one bad
- * screenshot puts megabytes into stdout and into a text pane that has no scroll container and no
- * line limit.
+ * reference is usually a filename, but nothing stops a log from naming something far longer — a
+ * deep filesystem path, a signed URL, or a `data:` URI with the whole image inlined, which is how
+ * the retired WebAssembly report wrote them. The loaders fold whatever they are given into the
+ * model they return, so a failure from the image pipeline quotes it back in its own message.
+ * Untruncated, one bad screenshot puts megabytes into stdout and into a text pane that has no
+ * scroll container and no line limit.
  */
 internal object ScreenshotDiagnostics {
 
@@ -52,11 +53,21 @@ internal object ScreenshotDiagnostics {
    * produced anything to fetch — a different thing to go look at, and in neither case "this node
    * has no screenshot": [screenshotFile] is non-null, so something was always named.
    */
-  fun message(loadError: String?, screenshotFile: String): String = if (loadError != null) {
-    "Failed to load screenshot: $loadError"
-  } else {
-    "Failed to load screenshot: nothing to load for ${ref(screenshotFile)}"
-  }
+  fun message(loadError: String?, screenshotFile: String): String =
+    if (loadError != null) {
+      messageForCause(loadError)
+    } else {
+      messageForCause("nothing to load for ${ref(screenshotFile)}")
+    }
+
+  /**
+   * What a surface says when it has the failure but not the reference.
+   *
+   * The zoom dialog is handed a resolved image model, not the screenshot reference it came from, so
+   * there is nothing to name — and nothing is missing from the sentence either: an image pipeline
+   * failure quotes the model back inside [loadError].
+   */
+  fun messageForCause(loadError: String): String = "Failed to load screenshot: $loadError"
 
   private fun bounded(text: String): String = if (text.length <= MAX_CHARS) {
     text

@@ -71,6 +71,7 @@ import xyz.block.trailblaze.scripting.fetch.OkHttpFetchExtension
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
+import xyz.block.trailblaze.toolcalls.failureMessage
 import xyz.block.trailblaze.toolcalls.carriesPayload
 import xyz.block.trailblaze.yaml.DirectionStep
 import xyz.block.trailblaze.yaml.TrailConfig
@@ -557,6 +558,34 @@ open class AndroidTrailblazeRule(
   }
 
   /**
+   * Holds a deferred turbo attach to account once the trail is over.
+   *
+   * The launch gate in `InProcessIdleLaunchReattacher` only fires on a launch that happened, so a
+   * trail whose target was armed for turbo but never launched through `launchApp` would otherwise
+   * report green having replayed at heuristic speed. [OnDeviceTurbo.requireTurboHeld] is a
+   * no-op on every other shape of run.
+   *
+   * Checked BEFORE the chain's teardown and handed down as the session's result, because the
+   * session-end log is where the report gets its verdict. Throwing after that teardown would fail
+   * JUnit while the report row still read PASSED — a green trail that replayed entirely at
+   * heuristic speed is the exact silent pass `turboRequired` exists to eliminate, and a lane whose
+   * report disagrees with its own exit status is worse than either answer alone.
+   *
+   * Only on a PASSING test: a trail that already failed has a real cause, and turning that into a
+   * turbo complaint would bury it. Same driver guard as the [OnDeviceTurbo.start] above; no other
+   * driver reads the detector.
+   */
+  override fun afterTestExecution(description: Description, result: Result<Nothing?>) {
+    val verdict = turboVerdict(result) {
+      if (trailblazeLoggingRule.driverTypeOverride == TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY) {
+        OnDeviceTurbo.requireTurboHeld(description.displayName)
+      }
+    }
+    super.afterTestExecution(description, verdict.sessionResult)
+    verdict.failure?.let { throw it }
+  }
+
+  /**
    * Subclass seam: resolve any per-trail driver override (e.g. by peeking at the trail asset
    * for this test method) before [onBeforeTest] runs, so driver-conditional setup there sees
    * the final driver. Must not touch [trailblazeAgent], any lazy field derived from it, or
@@ -611,9 +640,9 @@ open class AndroidTrailblazeRule(
    * Agent implementation selected via [agentImplementationOverride] (the on-device RPC path) or,
    * when that's null, the instrumentation arg `-e trailblaze.agent` via
    * [InstrumentationArgUtil.agentImplementation]. Defaults to
-   * [AgentImplementation.TRAILBLAZE_RUNNER] (legacy, stable). `MULTI_AGENT_V3` opts into the
-   * multi-agent V3 architecture; `KOOG_STRATEGY_GRAPH` runs the Koog strategy-graph agent for
-   * live prompt steps (see [runSuspend]).
+   * [AgentImplementation.KOOG_STRATEGY_GRAPH]. `TRAILBLAZE_RUNNER` retains the legacy agent as an
+   * explicit selection; `MULTI_AGENT_V3` opts into the multi-agent V3 architecture (see
+   * [runSuspend]).
    */
   private val agentImplementation: AgentImplementation =
     agentImplementationOverride ?: InstrumentationArgUtil.agentImplementation()
@@ -1132,7 +1161,7 @@ open class AndroidTrailblazeRule(
       return if (result is TrailblazeToolResult.Success) {
         result
       } else {
-        throw TrailblazeException(result.toString())
+        throw TrailblazeException(result.failureMessage())
       }
     } finally {
       // Same log-upload join as [prompt] — see the comment there.
@@ -1152,7 +1181,7 @@ open class AndroidTrailblazeRule(
       return if (runCommandsResult is TrailblazeToolResult.Success) {
         runCommandsResult
       } else {
-        throw TrailblazeException(runCommandsResult.toString())
+        throw TrailblazeException(runCommandsResult.failureMessage())
       }
     } finally {
       // Same log-upload join as [prompt] — see the comment there.

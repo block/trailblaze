@@ -289,6 +289,26 @@ class TrailblazeMcpBridgeImpl(
   private val onDeviceAgentReady = ConcurrentHashMap.newKeySet<String>()
 
   /**
+   * The Android process that hosts each ready on-device agent (`instrumentationProcessAppId` of
+   * the target it was started from), keyed like [onDeviceAgentReady]. A ready flag alone can
+   * outlive the runner — `am force-stop`, a crash, or another connect's clean-slate restart ends
+   * the process without telling this bridge — so [getDriverConnectionStatus] confirms the process
+   * still exists before vouching for the agent.
+   *
+   * Only recorded for targets where `processLivenessProvesInstrumentationAttached` — a
+   * self-instrumenting runner, whose process exists only because `am instrument` created it. For
+   * an in-process harness the process IS the app under test, so it is running whenever anyone
+   * launched it and its death is not the runner's death; an entry here would let the process
+   * check speak for a signal its own contract says it cannot carry. Invalidating a stale in-process
+   * attachment needs an RPC probe, which this status path does not have.
+   *
+   * Maintained through [recordRunnerProcessForReadyAgent], which also CLEARS the entry when the
+   * new attachment has no such process — otherwise a switch onto an in-process harness would be
+   * judged by the package the switch just force-stopped.
+   */
+  private val onDeviceRunnerProcessIds = ConcurrentHashMap<String, String>()
+
+  /**
    * Tracks devices whose driver creation failed. Keyed by device instanceId,
    * value is the error message. Cleared when a new connection attempt starts.
    * Used by [getDriverConnectionStatus] to report failures instead of returning null.
@@ -676,6 +696,40 @@ class TrailblazeMcpBridgeImpl(
     }
 
     /**
+     * Record which process's liveness stands for [key]'s freshly-ready on-device agent, or clear
+     * the entry when no process can stand for it.
+     *
+     * The clear is the load-bearing half. Only a self-instrumenting runner leaves a process whose
+     * death is the agent's death; for an in-process harness the process IS the app under test, so
+     * there is nothing to record. But a driver switch reaches this after force-stopping the
+     * previous target's instrumentation, and an entry left over from it names a package that is
+     * now deliberately dead — which the status path reads as this agent having vanished, tearing
+     * down an attachment that is working.
+     */
+    internal fun recordRunnerProcessForReadyAgent(
+      runnerProcessIds: MutableMap<String, String>,
+      key: String,
+      target: TrailblazeOnDeviceInstrumentationTarget,
+    ) {
+      if (target.processLivenessProvesInstrumentationAttached) {
+        runnerProcessIds[key] = target.instrumentationProcessAppId
+      } else {
+        runnerProcessIds.remove(key)
+      }
+    }
+
+    /**
+     * Driver status for an Android device whose serial is attached but whose on-device runner
+     * process has exited. Deliberately does not say "No device connected": the device is there,
+     * only the runner is gone, and reconnecting the device is what reinstalls and relaunches it.
+     */
+    internal fun onDeviceRunnerStoppedStatus(
+      deviceId: TrailblazeDeviceId,
+      runnerAppId: String,
+    ): String = "The Trailblaze on-device runner ($runnerAppId) is no longer running on " +
+      "'${deviceId.instanceId}'. Reconnect the device to relaunch it and retry."
+
+    /**
      * Routing decision for one resolved tool. Pure — no bridge, device, or daemon required, so
      * the contract is unit-testable with plain inputs.
      *
@@ -1019,21 +1073,21 @@ class TrailblazeMcpBridgeImpl(
      * Longer than HOST mode because it may need to install APK, start instrumentation,
      * enable accessibility service, and verify the RPC server — including one clean-restart
      * retry when the first readiness probe finds a zombie server on a slow API 36 cold start.
-     * Kept below CliMcpClient.DEFAULT_REQUEST_TIMEOUT_MS (180s): this await blocks inside the
-     * MCP request, so it must leave headroom for the round-trip or the CLI times out first. If
-     * the agent still isn't ready when this elapses, the background setup keeps going and the
-     * driver status provider reports progress.
+     * Kept below CliMcpClient.DEFAULT_REQUEST_TIMEOUT_MS: this await blocks inside the MCP
+     * request, so it must leave headroom for the round-trip or the CLI times out first. If the
+     * agent still isn't ready when this elapses, the background setup keeps going and the driver
+     * status provider reports progress.
      *
      * Budget math (worst case, zombie path): connect (~5s reuse) + INITIAL_READINESS_PROBE_MS +
      * force-restart connect (~25s) + RESTART_READINESS_PROBE_MS = ~130s, comfortably under both
-     * this latch and the 180s MCP request timeout.
+     * this latch and the MCP request timeout.
      */
     private const val ON_DEVICE_AGENT_TIMEOUT_SECONDS = 150L
 
     /**
      * First readiness-probe budget. A healthy clean start serves in ~26s (APK install + launch),
      * so this is sized to confirm health fast and detect a zombie server quickly — short enough
-     * that a full force-restart + re-probe still fits under the 180s MCP request timeout.
+     * that a full force-restart + re-probe still fits under the MCP request timeout.
      */
     private const val INITIAL_READINESS_PROBE_MS = 40_000L
 
@@ -1354,6 +1408,7 @@ class TrailblazeMcpBridgeImpl(
           awaitReady(timeoutMs = RESTART_READINESS_PROBE_MS)
         }
 
+        recordRunnerProcessForReadyAgent(onDeviceRunnerProcessIds, key, target)
         onDeviceAgentReady.add(key)
         if (recoverFromPriorWedge) {
           onDeviceRunnerRecovery.markRecovered(trailblazeDeviceId)
@@ -1379,9 +1434,24 @@ class TrailblazeMcpBridgeImpl(
     }
   }
 
+  /**
+   * Forget a ready on-device agent whose process is gone, so the next `connectToDevice` for this
+   * serial takes the [ensureOnDeviceAgentRunning] path (install + launch) instead of trusting a
+   * runner that no longer exists. The pooled RPC client is evicted with it: its socket points at
+   * the dead process.
+   */
+  private fun markOnDeviceRunnerStopped(deviceId: TrailblazeDeviceId) {
+    val key = deviceId.instanceId
+    onDeviceAgentReady.remove(key)
+    onDeviceRunnerProcessIds.remove(key)
+    cachedScreenStates.remove(key)
+    onDeviceRpcClients.evict(deviceId)
+  }
+
   override fun releasePersistentDeviceConnection(deviceId: TrailblazeDeviceId) {
     cachedScreenStates.remove(deviceId.instanceId)
     onDeviceAgentReady.remove(deviceId.instanceId)
+    onDeviceRunnerProcessIds.remove(deviceId.instanceId)
     driverCreationFailures.remove(deviceId.instanceId)
     // Per-session target overrides clean up on session end / cancel via
     // TrailblazeDeviceManager, so no extra cleanup needed here.
@@ -1589,6 +1659,19 @@ class TrailblazeMcpBridgeImpl(
     // outlive a disconnected emulator, so they are not sufficient as a liveness signal.
     if (id.trailblazeDevicePlatform == TrailblazeDevicePlatform.ANDROID) {
       androidDisconnectStatus(id, AndroidHostAdbUtils.listConnectedAdbDevices())?.let { return it }
+      // The serial is attached, but the agent process the ready flag stands for may be gone. One
+      // `pidof` round-trip settles it; without it a dead runner reads as "ready", every screen
+      // read fails, and the tools fall back to the generic "No device connected" text while the
+      // stale flag keeps the next connect from ever relaunching the runner. Only populated for a
+      // self-instrumenting runner — see [onDeviceRunnerProcessIds].
+      val runnerAppId = onDeviceRunnerProcessIds[key]
+      if (runnerAppId != null && onDeviceAgentReady.contains(key) &&
+        !AndroidHostAdbUtils.isAppRunning(id, runnerAppId)
+      ) {
+        Console.log("[MCP Bridge] On-device runner $runnerAppId is gone on $key; the next connect relaunches it")
+        markOnDeviceRunnerStopped(id)
+        return onDeviceRunnerStoppedStatus(id, runnerAppId)
+      }
     }
 
     // WEB: check Playwright browser initialization state separately from Maestro drivers.
@@ -2548,7 +2631,11 @@ class TrailblazeMcpBridgeImpl(
               val message = response.errorMessage?.takeUnless { it.isBlank() }
                 ?: "unknown on-device error"
               Console.log("[executeToolViaRpc] On-device execution failed: $message")
-              error("On-device execution of ${tool::class.simpleName} failed: $message")
+              // Raise the device's own sentence unchanged. The caller already names the tool that
+              // failed ("Tool tap failed: …"), and the daemon log line above keeps the dispatch
+              // context — a second "On-device execution of TapTrailblazeTool failed:" here only
+              // pushes the readable cause further right in the user's terminal.
+              error(message)
             }
             null -> {
               val message = "On-device server returned null success inline for " +
@@ -2980,7 +3067,10 @@ class TrailblazeMcpBridgeImpl(
   }
 
   override fun getAgentImplementation(): AgentImplementation {
+    // Report the agent a run would actually use: a never-chosen saved agent is null (tri-state)
+    // and resolves to the framework default.
     return trailblazeDeviceManager.settingsRepo.serverStateFlow.value.appConfig.agentImplementation
+      ?: AgentImplementation.DEFAULT
   }
 
   override fun setAgentImplementation(implementation: AgentImplementation): String? {

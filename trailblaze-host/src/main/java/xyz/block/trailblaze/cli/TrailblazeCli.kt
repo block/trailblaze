@@ -11,13 +11,13 @@ import xyz.block.trailblaze.devices.TrailblazeDevicePort
 import xyz.block.trailblaze.host.WorkspaceCompileBootstrap
 import xyz.block.trailblaze.logs.server.endpoints.CliExecRequest
 import xyz.block.trailblaze.logs.server.endpoints.CliExecResponse
+import xyz.block.trailblaze.logs.server.endpoints.CliExecStream
 import xyz.block.trailblaze.ui.TrailblazeDesktopApp
 import xyz.block.trailblaze.ui.TrailblazeDesktopUtil
 import xyz.block.trailblaze.ui.TrailblazePortManager
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.util.canRunDesktopGui
 import kotlinx.coroutines.CancellationException
-import java.io.ByteArrayOutputStream
 import java.util.concurrent.Callable
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.system.exitProcess
@@ -307,8 +307,9 @@ object TrailblazeCli {
       )
     }
 
-    val stdoutBuf = CappedByteArrayOutputStream(MAX_CAPTURE_BYTES)
-    val stderrBuf = CappedByteArrayOutputStream(MAX_CAPTURE_BYTES)
+    // One recording for both streams, so the caller can replay them in the order the command
+    // wrote them rather than all of one and then all of the other.
+    val transcript = CliOutputTranscript(MAX_CAPTURE_BYTES)
 
     val callerCwd = request.cwd?.takeIf { it.isNotBlank() }?.let {
       try {
@@ -343,7 +344,10 @@ object TrailblazeCli {
       // `System.getenv` which is the prior behavior for shims that don't forward.
       CliCallerContext.withCallerEnv(request.env) {
         CliCallerContext.withCallerCwd(callerCwd) {
-        CliOutCapture.withCapture(stdoutBuf, stderrBuf) {
+        CliOutCapture.withCapture(
+          transcript.sink(CliExecStream.STDOUT),
+          transcript.sink(CliExecStream.STDERR),
+        ) {
           val cli = TrailblazeCliCommand(appProvider, configProvider)
           val commandLine = CommandLine(cli).setCaseInsensitiveEnumValuesAllowed(true)
           // Same tree as the JVM-spawn path. No distribution command is in
@@ -386,10 +390,11 @@ object TrailblazeCli {
     }
 
     return CliExecResponse(
-      stdout = stdoutBuf.toString(Charsets.UTF_8),
-      stderr = stderrBuf.toString(Charsets.UTF_8),
+      stdout = transcript.textFor(CliExecStream.STDOUT),
+      stderr = transcript.textFor(CliExecStream.STDERR),
       exitCode = exitCode,
       forwarded = true,
+      transcript = transcript.chunks(),
     )
   }
 
@@ -397,43 +402,17 @@ object TrailblazeCli {
    * Cap on captured stdout/stderr per forwarded CLI invocation. A pathological
    * `snapshot` on a dense UI tree or a tight error-logging loop shouldn't be
    * able to OOM the daemon by producing megabytes of output.
+   *
+   * This bounds what is *recorded*, not what is sent. The response carries the same bytes twice
+   * — once as ordered `transcript` chunks, and once flattened into `stdout`/`stderr` for shims
+   * that predate the transcript — so a run that saturates the cap serializes to roughly twice
+   * this, and holds a few multiples of it in heap while the JSON is built (the recorded
+   * segments, the per-stream joins, and the chunk list). Both numbers are still small against a
+   * daemon heap, which is why the cap buys headroom rather than tracking the wire size exactly.
+   * Halving it to make the two match would truncate real output to describe a payload nothing
+   * struggles with.
    */
   private const val MAX_CAPTURE_BYTES: Int = 4 * 1024 * 1024 // 4 MiB
-
-  /**
-   * [java.io.ByteArrayOutputStream] that silently stops accepting bytes once
-   * [limit] is reached and appends a truncation marker the first time it
-   * happens. The surrounding picocli command is unaware — its `println` calls
-   * just become no-ops — which is the right behavior for the daemon fast path
-   * (stopping execution on output overflow would be a bigger surprise).
-   */
-  private class CappedByteArrayOutputStream(val limit: Int) : ByteArrayOutputStream() {
-    private var truncated: Boolean = false
-    private val marker: ByteArray = "\n[cli/exec: output truncated at $limit bytes]\n"
-      .toByteArray(Charsets.UTF_8)
-
-    @Synchronized override fun write(b: Int) {
-      if (tryTruncate(1)) return
-      super.write(b)
-    }
-
-    @Synchronized override fun write(b: ByteArray, off: Int, len: Int) {
-      if (tryTruncate(len)) return
-      val remaining = limit - size()
-      if (remaining <= 0) return
-      super.write(b, off, minOf(len, remaining))
-      if (size() >= limit) tryTruncate(0)
-    }
-
-    private fun tryTruncate(incoming: Int): Boolean {
-      if (size() + incoming <= limit) return false
-      if (!truncated) {
-        truncated = true
-        super.write(marker, 0, marker.size)
-      }
-      return true
-    }
-  }
 }
 
 /** Provides the version string dynamically from [TrailblazeVersion]. */

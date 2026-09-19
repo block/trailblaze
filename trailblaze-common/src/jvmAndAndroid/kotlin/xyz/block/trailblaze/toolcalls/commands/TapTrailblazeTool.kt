@@ -70,11 +70,12 @@ data class TapTrailblazeTool(
         // count consecutive hallucinations and inject a recovery message. Do NOT change
         // that phrase without also updating the regex. The pointer text was previously
         // "use 'snapshot'" — there is no `snapshot` LLM tool, so it sent models chasing a
-        // nonexistent tool. The view hierarchy is appended to every chat request, so the
-        // accurate guidance is to re-read it.
+        // nonexistent tool. The same text reaches a `trailblaze tool tap ref=…` user, who has
+        // no "request" the hierarchy is appended to, so it names the current hierarchy and
+        // leaves each caller to fetch it its own way (the CLI adds its own snapshot tip).
         message = "tap: Element ref '$ref' not found on current screen. " +
-          "The screen has changed since this ref was last visible. Re-read the view " +
-          "hierarchy appended to this request and pick a ref that is actually shown.",
+          "The screen has changed since this ref was last visible. " +
+          "Use a ref from the current view hierarchy instead.",
         tool = this,
       )
 
@@ -120,7 +121,7 @@ data class TapTrailblazeTool(
       // center), hitTest's interactive-first ordering picks the clickable wrapper, which is
       // both the user's intent (the ref points at the meaningful element) and the OS's
       // touch-routing target.
-      val accessibilityHitTestNode = tree.hitTest(center.first, center.second) ?: targetNode
+      val accessibilityHitTestNode = selectorSourceNode(tree, targetNode, center.first, center.second)
       // [tap-divergence] log: when hitTest at the target's centerPoint returns a
       // different node than the LLM picked by `ref`, the recorded selector will
       // describe the hitTest winner rather than the LLM's intended target. This is
@@ -131,6 +132,8 @@ data class TapTrailblazeTool(
       // doesn't match the NL step. Logging both nodes here makes that observable
       // in every future capture; the bug was previously invisible because the
       // recorded selector "looked correct" relative to the resolved coordinate.
+      // The occlusion case does not reach this branch — [selectorSourceNode] resolves it
+      // back to the ref's own element, so the refs match — and logs under the same tag.
       if (accessibilityHitTestNode.ref != targetNode.ref) {
         Console.log(
           "[tap-divergence] ref='$ref' wanted=${targetNode.describe()} " +
@@ -202,22 +205,21 @@ data class TapTrailblazeTool(
       )
     }
 
-    // Generate a rich TrailblazeNodeSelector. hitTest resolves the frontmost interactive
-    // node at the tap coordinates — the element the OS would route the touch event to.
-    // Using that node as the selector source is the round-trip validation: the generated
-    // selector targets exactly what gets tapped. hitTest now prefers interactive nodes
-    // over non-interactive decorative children (see TrailblazeNode.hitTest).
-    val hitTestNode = tree.hitTest(center.first, center.second)
+    // Generate a rich TrailblazeNodeSelector. The selector source is the frontmost node at the
+    // tap coordinates that the ref could actually have meant — the element the OS would route
+    // the touch event to, minus an overlapping node from a layer the ref has nothing to do with
+    // (see SelectorSourceNode, and TrailblazeNode.hitTest for the tiebreakers). Using that node
+    // as the selector source is the round-trip validation: the generated selector targets
+    // exactly what gets tapped.
+    val hitTestNode = selectorSourceNode(tree, targetNode, center.first, center.second)
 
-    val nodeSelector = hitTestNode?.let { node ->
-      try {
-        TrailblazeNodeSelectorGenerator.findBestSelector(tree, node)
-      } catch (e: Exception) {
-        Console.log(
-          "WARNING: TrailblazeNodeSelector generation failed, falling back to legacy selector: ${e.message}",
-        )
-        null
-      }
+    val nodeSelector = try {
+      TrailblazeNodeSelectorGenerator.findBestSelector(tree, hitTestNode)
+    } catch (e: Exception) {
+      Console.log(
+        "WARNING: TrailblazeNodeSelector generation failed, falling back to legacy selector: ${e.message}",
+      )
+      null
     }
 
     val mode = executionContext.nodeSelectorMode

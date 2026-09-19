@@ -376,39 +376,42 @@ export interface CreateMockContextOptions {
  * a clearly-marked test sentinel.
  */
 /**
- * Test client surface for scenarios that need sequenced, per-call responses from
- * `findMatches` — different from [createMockClient]'s single-static-stub-per-tool model.
+ * Test client surface for scenarios that need sequenced, per-probe responses from
+ * `findSelectorMatches` — different from [createMockClient]'s single-static-stub-per-tool model.
  *
  * Built for `ConditionalAction` + `captureViewHierarchy` tests, where a flow typically
  * needs distinct match sets across the initial snapshot and the post-action verify
- * snapshot (or per-selector). The same primitive is useful for future waypoint detection
- * tests that need to model a moving UI across multiple `findMatches` callbacks.
+ * snapshot (or per-selector). The same primitive is useful for waypoint detection
+ * tests that need to model a moving UI across several probes.
  *
  * `calls` records every dispatched tool name + args in insertion order (mirrors
- * [createMockClient]). `queueFindMatches(responses)` appends to the queue; each
- * `findMatches` callback dequeues the next response. Non-`findMatches` tools resolve to
- * `""` (mirrors the production `textContent: ""` happy-path default).
+ * [createMockClient]). `queueFindMatches(responses)` appends to the queue; each SELECTOR
+ * dequeues the next response. Other tools resolve to `""` (mirrors the production
+ * `textContent: ""` happy-path default).
  *
- * Queue exhaustion is loud — if `findMatches` is called more times than the test queued
- * responses, the dispatcher throws with the offending args so the test failure points at
- * the unexpected dispatch.
+ * Queue exhaustion is loud — if more selectors are probed than the test queued responses,
+ * the dispatcher throws with the offending args so the test failure points at the
+ * unexpected dispatch.
+ *
+ * The `FindMatches` in these names outlived the single-selector `findMatches` tool they were
+ * named for, and is kept deliberately: they are exported API with callers in other repositories,
+ * and the per-probe queue semantics the names describe are unchanged.
  */
 export interface QueuedFindMatchesClient extends TrailblazeClient {
   calls: Array<{ tool: string; args: Record<string, unknown> }>;
   /**
-   * Queue the per-probe match sets. Serves BOTH `findMatches` (one response per call) and
-   * `findSelectorMatches` (one response per selector, in selector order) out of the same
-   * queue, so a test written against the per-selector model keeps working now that
-   * `captureViewHierarchy` batches its selectors into one call.
+   * Queue the per-probe match sets, served to `findSelectorMatches` one response per selector in
+   * selector order. `queueFindMatches([a, b])` therefore means "the first probe sees a, the second
+   * sees b" whether the caller asks for both in one batched call or across two.
    */
   queueFindMatches(responses: Array<MatchDescriptor[]>): void;
   /**
    * Queue the per-call boolean results for `waitUntilNotVisible` — the non-throwing
    * disappearance probe (see `WaitUntilNotVisibleTrailblazeTool` / `built-in-tools.ts`). Each
    * `client.tools.waitUntilNotVisible(...)` call dequeues the next boolean. Mirrors
-   * [queueFindMatches] so a flow that interleaves appearance probes (`findMatches`) and
+   * [queueFindMatches] so a flow that interleaves appearance probes (`findSelectorMatches`) and
    * disappearance probes (`waitUntilNotVisible`) — the shape every launch step has — can model a
-   * moving UI across both. Like the findMatches queue, exhaustion is loud (throws with the args).
+   * moving UI across both. Like the match queue, exhaustion is loud (throws with the args).
    */
   queueWaitUntilNotVisible(responses: boolean[]): void;
   /**
@@ -423,9 +426,9 @@ export interface QueuedFindMatchesClient extends TrailblazeClient {
 
 /**
  * Build a [QueuedFindMatchesClient]. The minimal `TrailblazeClient` surface plus a queue
- * for `findMatches` responses — see [QueuedFindMatchesClient] for the semantics.
+ * for per-selector match responses — see [QueuedFindMatchesClient] for the semantics.
  *
- * Use for any test that exercises multi-call `findMatches` flows (catalog-driven
+ * Use for any test that exercises multi-probe selector flows (catalog-driven
  * conditional actions, multi-snapshot verify refreshes, waypoint detection iterations).
  * The [createMockClient] mock is simpler when each tool is called at most once per test.
  */
@@ -441,25 +444,15 @@ export function createQueuedFindMatchesClient(): QueuedFindMatchesClient {
     if (queuedFailure !== undefined) {
       throw new Error(`trailblaze.client.callTool("${name}") tool failed: ${queuedFailure}`);
     }
-    if (name === "findMatches") {
-      if (findMatchesQueue.length === 0) {
-        throw new Error(
-          `createQueuedFindMatchesClient: no more findMatches responses queued; received ` +
-            `call with args=${JSON.stringify(args)}. Did the test forget a queueFindMatches?`,
-        );
-      }
-      return findMatchesQueue.shift();
-    }
     if (name === "findSelectorMatches") {
-      // Served from the SAME queue as `findMatches`, one queued response per selector, in order.
-      // That is what keeps `queueFindMatches([a, b])` meaning "the first probe sees a, the second
-      // sees b" now that `captureViewHierarchy` batches its N selectors into one call — a test
-      // written against the per-selector model keeps passing, and keeps modelling what it meant.
+      // One queued response per SELECTOR, in order. That is what makes `queueFindMatches([a, b])`
+      // mean "the first probe sees a, the second sees b" whether the caller batches both selectors
+      // into one call or asks across two — so a test keeps modelling what it meant either way.
       const selectors = (args["selectors"] ?? []) as unknown[];
       return selectors.map((selector, index) => {
         if (findMatchesQueue.length === 0) {
           throw new Error(
-            `createQueuedFindMatchesClient: no more findMatches responses queued; ` +
+            `createQueuedFindMatchesClient: no more queued match responses; ` +
               `findSelectorMatches needs one per selector and ran out at index ${index} of ` +
               `${selectors.length} (selector=${JSON.stringify(selector)}). Did the test forget ` +
               `a queueFindMatches?`,

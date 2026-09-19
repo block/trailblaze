@@ -64,6 +64,39 @@ class ToolCommandTest {
   }
 
   @Test
+  fun `a typo is answered with the name the user meant`() {
+    // The registry that just rejected the name knows every name it would have accepted, so the
+    // reader gets the answer instead of a catalog to go read.
+    val cmd = ToolCommand().apply {
+      toolName = "tap_on_text"
+      step = "test"
+    }
+
+    val (_, stderr) = captureStderr { cmd.call() }
+
+    val primaryLine = stderr.lineSequence().first { "Unknown tool: tap_on_text" in it }
+    assertTrue(
+      "Did you mean" in primaryLine && "'tap'" in primaryLine,
+      "The rejection must name the closest real tool; got: <<$primaryLine>>",
+    )
+  }
+
+  @Test
+  fun `a name nothing resembles is rejected without a guess`() {
+    // A suggestion the reader will go try and find equally absent is worse than none.
+    val cmd = ToolCommand().apply {
+      toolName = "zzzqqqxyzzy"
+      step = "test"
+    }
+
+    val (exit, stderr) = captureStderr { cmd.call() }
+
+    assertEquals(TrailblazeExitCode.MISUSE.code, exit)
+    val primaryLine = stderr.lineSequence().first { "Unknown tool: zzzqqqxyzzy" in it }
+    assertFalse("Did you mean" in primaryLine, "Got a far-fetched guess: <<$primaryLine>>")
+  }
+
+  @Test
   fun `unknown tool name with garbage chars also short-circuits`() {
     // Defense in depth: a name with characters that can't appear in a real tool
     // (whitespace, punctuation) still has to land in MISUSE. Otherwise picocli's

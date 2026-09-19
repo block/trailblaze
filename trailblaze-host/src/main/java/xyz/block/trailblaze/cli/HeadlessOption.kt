@@ -54,10 +54,9 @@ class HeadlessOption {
     val showBrowser = runCatching { CliConfigHelper.readConfig()?.showWebBrowser }
       .onFailure { Console.log("HeadlessOption.resolve: config read failed, using default — ${it.message}") }
       .getOrNull() ?: true
-    if (showBrowser && !hasDisplay()) {
-      Console.log("HeadlessOption.resolve: no display detected — defaulting to headless")
-      return true
-    }
+    // Silent on purpose: this resolves before the command enables quiet mode, so a log line
+    // here would print on every display-less invocation (every daemon-forwarded command).
+    if (showBrowser && !hasDisplay()) return true
     return !showBrowser
   }
 }

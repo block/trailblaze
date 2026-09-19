@@ -35,6 +35,7 @@ import xyz.block.trailblaze.util.BunBinaryResolver
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
 import xyz.block.trailblaze.yaml.generateUnifiedRecordedYaml
+import xyz.block.trailblaze.yaml.unified.UnifiedTrailAdapter
 
 /**
  * Headless generator for the interactive Trailblaze run report — the CLI/CI counterpart to the
@@ -86,19 +87,23 @@ class RunReportGenerator(
     fullEventPayloads: Boolean = false,
     imageBaseUrl: String? = null,
     skips: List<SkippedTrail> = emptyList(),
+    allRunsUrl: String? = null,
   ): File? {
     if (sessionIds.isEmpty()) return null
     if (bunBinary == null) {
       logBunUnavailable()
       return null
     }
+    // Named: seven parameters, five of them optional and three of them nullable strings, so a
+    // positional call would forward a mis-ordered pair without a type error.
     return generateFromSnapshots(
-      logsRepo,
-      SessionLogSnapshot.captureAll(logsRepo, sessionIds),
-      shareUrl,
-      fullEventPayloads,
-      imageBaseUrl,
-      skips,
+      logsRepo = logsRepo,
+      snapshots = SessionLogSnapshot.captureAll(logsRepo, sessionIds),
+      shareUrl = shareUrl,
+      fullEventPayloads = fullEventPayloads,
+      imageBaseUrl = imageBaseUrl,
+      skips = skips,
+      allRunsUrl = allRunsUrl,
     )
   }
 
@@ -127,6 +132,12 @@ class RunReportGenerator(
    *   a report over ten sessions must not list a trail some earlier invocation held back. Only a
    *   caller reporting on a WHOLE logs directory (CI's `ReportMain`, `trailblaze report` with no
    *   `--id`) passes `SkippedTrails.read(...)`.
+   * @param allRunsUrl URL of a wider report on the same host that also contains these runs, when
+   *   one exists. Set only when that report holds runs this one does not.
+   *   A single-run document uses it to offer Compare — which needs a second run it does not hold
+   *   — as a link into that report, scoped to this run by session id. Absent for a standalone
+   *   report, which is the whole report. The daemon supplies its own `/report` here; nothing
+   *   about the field is daemon-specific, and it is not reachable from `trailblaze report` yet.
    */
   @JvmOverloads
   fun generateFromSnapshots(
@@ -136,6 +147,7 @@ class RunReportGenerator(
     fullEventPayloads: Boolean = false,
     imageBaseUrl: String? = null,
     skips: List<SkippedTrail> = emptyList(),
+    allRunsUrl: String? = null,
   ): File? {
     if (snapshots.isEmpty()) return null
     if (bunBinary == null) {
@@ -168,7 +180,7 @@ class RunReportGenerator(
     // as trailblaze_report.html in the logs-dir root (ReportMain copies the latest of these to the
     // canonical trailblaze_report_interactive.html).
     val dest = File(reportsDir, "trailblaze_report_interactive_${LocalDateTime.now().format(FILE_TS)}.html")
-    return render(sessionsJson, dest, shareUrl, fullEventPayloads, imageBaseUrl)
+    return render(sessionsJson, dest, shareUrl, fullEventPayloads, imageBaseUrl, allRunsUrl)
   }
 
   /**
@@ -191,6 +203,7 @@ class RunReportGenerator(
     shareUrl: String? = null,
     fullEventPayloads: Boolean = false,
     imageBaseUrl: String? = null,
+    allRunsUrl: String? = null,
   ): File? {
     val bun = bunBinary
     if (bun == null) {
@@ -225,6 +238,7 @@ class RunReportGenerator(
         // present-vs-absent, so "" is a meaningful base here, not "unset". Deliberately unlike
         // `shareUrl` two lines up, where blank does mean unset.
         if (imageBaseUrl != null) put("imageBaseUrl", imageBaseUrl)
+        allRunsUrl?.takeIf { it.isNotBlank() }?.let { put("allRunsUrl", it) }
         if (selectorEngineStaged) put("selectorEngine", SELECTOR_ENGINE_FILE_NAME)
         put("sessions", sessionsJson)
       }
@@ -287,8 +301,20 @@ class RunReportGenerator(
     // per-classifier `recordings:`) — the format the save path writes to disk — so the report
     // preview matches the saved artifact rather than the legacy v1 list. Falls back to v1 for a
     // session with no resolvable device classifier.
+    //
+    // Silent: this render writes nothing, and the report runs it once per session in the logs
+    // directory. Its narration ("this session logged no device classifiers", "step 2 NL drift…")
+    // is written for a person saving one recording; repeated a few hundred times it is just noise
+    // around the two paths the report exists to print.
     val recordingYaml = runCatching {
-      logs.generateUnifiedRecordedYaml(createTrailblazeYaml())
+      logs.generateUnifiedRecordedYaml(
+        trailblazeYaml = createTrailblazeYaml(),
+        sessionTrailConfig = null,
+        classifierOverride = null,
+        selectedDeviceConfiguration = null,
+        successfulObjectivesOnly = false,
+        narrate = UnifiedTrailAdapter.SILENT,
+      )
     }.getOrNull()?.takeIf { it.isNotBlank() }
     // Use only the immutable source captured at session start. Reading trailFilePath here would
     // both expose an arbitrary local file to the report and show edited content for an older run.
@@ -574,6 +600,10 @@ class RunReportGenerator(
       recordingInfo: SessionRecordingInfo,
       provenance: JsonObject = JsonObject(emptyMap()),
     ): JsonObject = buildJsonObject {
+      // The run's own id, so a link from another document can name this run stably: a report
+      // regenerated with more sessions renumbers its indices, and the daemon's single-session
+      // page hands off to its all-runs report by this id (see `allRunsUrl`).
+      put("sessionId", sessionInfo.sessionId.value)
       put("title", sessionInfo.displayName)
       put("status", statusLabel(status))
       sessionInfo.trailConfig?.target?.let { put("target", it) }

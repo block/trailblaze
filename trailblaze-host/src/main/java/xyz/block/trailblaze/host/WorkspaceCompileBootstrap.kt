@@ -9,6 +9,7 @@ import xyz.block.trailblaze.config.project.TrailblazeProjectConfig
 import xyz.block.trailblaze.config.project.TrailblazeProjectConfigException
 import xyz.block.trailblaze.config.project.TrailblazeProjectConfigLoader
 import xyz.block.trailblaze.config.project.TrailblazeWorkspaceConfigResolver
+import xyz.block.trailblaze.config.project.TrailmapSource
 import xyz.block.trailblaze.scripting.AnalyzerScriptedToolEnrichment
 import xyz.block.trailblaze.scripting.ScriptedToolDefinitionAnalyzer
 import xyz.block.trailblaze.llm.config.ClasspathConfigResourceSource
@@ -368,9 +369,23 @@ object WorkspaceCompileBootstrap {
           scriptedToolEnrichment = resolveScriptedToolEnrichment(),
         )
         .resolvedTrailmaps
-      val clientDtsFiles = PerTrailmapClientDtsEmitter.emit(resolvedTrailmaps = resolvedTrailmaps)
+      val workspaceRoot = configDir.parentFile.toPath()
+      val borrowed = resolvedTrailmaps.mapNotNull { trailmap ->
+        val dir = (trailmap.source as? TrailmapSource.Filesystem)?.trailmapDir ?: return@mapNotNull null
+        if (trailmapDirIsInsideWorkspace(workspaceRoot, dir.toPath())) null else "${trailmap.manifest.id} ($dir)"
+      }
+      if (borrowed.isNotEmpty()) {
+        Console.log(
+          "[WorkspaceCompileBootstrap] Not generating TypeScript files for ${borrowed.joinToString()}: " +
+            "the directory resolves outside this workspace, so the workspace that owns it generates its own.",
+        )
+      }
+      val clientDtsFiles = PerTrailmapClientDtsEmitter.emit(
+        resolvedTrailmaps = resolvedTrailmaps,
+        workspaceRoot = workspaceRoot,
+      )
       val configFiles = PerTrailmapTsconfigEmitter.emit(
-        workspaceRoot = configDir.parentFile.toPath(),
+        workspaceRoot = workspaceRoot,
         resolvedTrailmaps = resolvedTrailmaps,
       )
       // The client emitter writes a validation sidecar next to each d.ts but returns only the d.ts

@@ -9,6 +9,7 @@ import xyz.block.trailblaze.report.SkippedTrails
 import xyz.block.trailblaze.ui.TrailblazeDesktopApp
 import xyz.block.trailblaze.ui.TrailblazeDesktopUtil
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.util.runQuiet
 import java.io.File
 import java.util.concurrent.Callable
 import kotlin.system.exitProcess
@@ -45,15 +46,16 @@ import kotlin.system.exitProcess
 @Command(
   name = "report",
   mixinStandardHelpOptions = true,
+  // First element is the one-line summary the top-level `trailblaze --help` index shows;
+  // the rest only appears in `trailblaze report --help`.
   description = [
-    "Generate an HTML report for session recordings, plus a best-effort JSON summary, and " +
-      "optionally MP4/GIF/WebP exports for a single session. JSON-only failures log a warning " +
-      "and still exit 0 — HTML is the primary artifact and is what gates the exit code. " +
-      "Animated exports collapse long idle gaps between steps so their length tracks the " +
-      "number of steps, not the session's real wall-clock. The capture window for all three " +
-      "(--gif/--webp/--video) is bounded by the MAX_PLAYBACK_WAIT_MS environment variable " +
-      "(milliseconds, default 600000); if playback overruns it, a best-effort truncated " +
-      "artifact is still written with a warning.",
+    "Generate an HTML report (plus JSON summary, optional MP4/GIF/WebP) for session recordings.",
+    "JSON-only failures log a warning and still exit 0 — HTML is the primary artifact and is " +
+      "what gates the exit code. Animated exports collapse long idle gaps between steps so " +
+      "their length tracks the number of steps, not the session's real wall-clock. The capture " +
+      "window for all three (--gif/--webp/--video) is bounded by the MAX_PLAYBACK_WAIT_MS " +
+      "environment variable (milliseconds, default 600000); if playback overruns it, a " +
+      "best-effort truncated artifact is still written with a warning.",
   ]
 )
 class ReportCommand : Callable<Int> {
@@ -292,6 +294,17 @@ class ReportCommand : Callable<Int> {
   )
   var shareUrl: String? = null
 
+  @Option(
+    names = ["-v", "--verbose"],
+    description = [
+      "Show the generator's own progress logs — workspace config loading, tool-class discovery, " +
+        "per-session clock normalisation, and step timings. Suppressed by default so the report " +
+        "paths are the output; turn this on when a report is slow or empty and you need to see " +
+        "which session the generator was working on.",
+    ],
+  )
+  var verbose: Boolean = false
+
   override fun call(): Int {
     if (positionalId != null && id != null) {
       Console.error("Positional <session-id> and --id are two ways to spell the same thing — pass only one.")
@@ -387,8 +400,11 @@ class ReportCommand : Callable<Int> {
       Console.error("--share-url must be a valid http(s) URL with a host, got '$trimmedShareUrl'.")
       return TrailblazeExitCode.MISUSE.code
     }
+    // Building the app loads the workspace config and logs every file it read; those lines are
+    // daemon-log breadcrumbs, not part of a report the person asked for.
+    val app = if (verbose) parent.appProvider() else Console.runQuiet { parent.appProvider() }
     val exitCode = generateSessionReport(
-      parent.appProvider(),
+      app,
       resolvedId,
       open,
       outputDir = outputDir,
@@ -404,6 +420,7 @@ class ReportCommand : Callable<Int> {
       maxBytesStrict = cap.strict,
       shareUrl = trimmedShareUrl,
       fullEventPayloads = fullReportPayloads,
+      verbose = verbose,
     )
     // Exit for every outcome, not just the successful one. `TrailblazeCli.run` force-exits on
     // non-zero codes but returns normally on 0, so a non-daemon thread left running anywhere in
@@ -491,6 +508,9 @@ class ReportCommand : Callable<Int> {
  * @param fullEventPayloads When true (`--full-report-payloads`), event formatters embed full
  *   payloads in the interactive report even for passed sessions instead of applying their
  *   report size budgets.
+ * @param verbose When true (`-v`/`--verbose`), the generator's own progress logs reach the
+ *   terminal instead of being swallowed. Off by default: those lines are one-per-session
+ *   breadcrumbs, and the report paths are what the person asked for.
  * @return the exit code for the run. Every path returns rather than exiting the process — the
  *   caller ([ReportCommand.call]) owns process termination, so one force-exit covers all of them.
  */
@@ -511,6 +531,7 @@ internal fun generateSessionReport(
   maxBytesStrict: Boolean = true,
   shareUrl: String? = null,
   fullEventPayloads: Boolean = false,
+  verbose: Boolean = false,
 ): Int {
   val logsRepo = app.deviceManager.logsRepo
   val allIds = logsRepo.getSessionIds()
@@ -535,20 +556,32 @@ internal fun generateSessionReport(
 
   Console.log("Generating HTML + JSON report for ${sessionIds.size} session(s)...")
 
-  val reportGenerator = app.createCliReportGenerator()
-  val generatedHtml = reportGenerator.generateHtmlReports(
-    logsRepo,
-    sessionIds,
-    shareUrl = shareUrl,
-    fullEventPayloads = fullEventPayloads,
-    skips = directorySkips,
-  )
+  // The generator narrates its work on Console.log (tool-class discovery, per-session clock
+  // normalisation, timings) — one line per session, dozens in a lived-in logs directory. Those are
+  // debugging breadcrumbs; the report paths below are the output. Failures still reach the user:
+  // RunReportGenerator reports them on Console.error, which quiet mode does not suppress. `-v`
+  // restores them for the case where a report is slow or empty and the breadcrumbs are the only
+  // way to see how far the generator got.
+  fun <T> quietUnlessVerbose(block: () -> T): T = if (verbose) block() else Console.runQuiet { block() }
+
+  val reportGenerator = quietUnlessVerbose { app.createCliReportGenerator() }
+  val generatedHtml = quietUnlessVerbose {
+    reportGenerator.generateHtmlReports(
+      logsRepo,
+      sessionIds,
+      shareUrl = shareUrl,
+      fullEventPayloads = fullEventPayloads,
+      skips = directorySkips,
+    )
+  }
   if (generatedHtml == null) {
     // RunReportGenerator already logged the specific cause (bun missing / subprocess failure).
     Console.error("Failed to generate the HTML report.")
     return TrailblazeExitCode.INFRA_FAILED.code
   }
-  val initialJson = reportGenerator.generateJsonReport(logsRepo, sessionIds, skips = directorySkips)
+  val initialJson = quietUnlessVerbose {
+    reportGenerator.generateJsonReport(logsRepo, sessionIds, skips = directorySkips)
+  }
   if (initialJson == null) {
     // Partial failure: HTML succeeded. Better to ship that than fail the whole command.
     Console.error("Warning: failed to generate JSON report — HTML produced anyway.")

@@ -1,6 +1,5 @@
 package xyz.block.trailblaze.ui
 
-import androidx.compose.runtime.Composable
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.Dispatchers
@@ -48,29 +47,13 @@ actual fun createLogsFileSystemImageLoader(): ImageLoader {
   return FileSystemImageLoader(logsDir)
 }
 
-actual fun getCurrentUrl(): String? {
-  // URL detection doesn't make sense on JVM
-  return null
-}
-
 actual fun getPlatform(): Platform {
   return Platform.JVM
 }
 
-@Composable
-actual fun resolveImageModel(sessionId: String, screenshotFile: String?, imageLoader: ImageLoader): Any? {
-  // On JVM, images are loaded via file URLs - no lazy loading needed
-  return imageLoader.getImageModel(sessionId, screenshotFile)
-}
-
-// Empty on JVM so `ScreenshotPreloadStrip` is a true no-op on desktop. File-system reads
-// are already fast and pre-decoding full-resolution bitmaps for every screenshot in a long
-// session would balloon JVM heap. The visible slideshow paints fast enough without help.
-@Composable
-actual fun preloadedScreenshotKeys(): Set<String> = emptySet()
-
-// Autoplay-on-load is a WASM-report-only signal — the JVM desktop app has its own UX
-// for browsing sessions and never needs to coordinate with an external screen recorder.
+// Nothing requests autoplay-on-load any more: video export runs against the TypeScript
+// run-report renderer, and the desktop app has its own UX for browsing sessions. Kept as a
+// seam rather than deleted — see the declarations in Expects.kt.
 actual fun isExportAutoplayRequested(): Boolean = false
 actual fun signalExportPlaybackEnded() {
   // no-op on JVM

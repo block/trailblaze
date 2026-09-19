@@ -5,12 +5,6 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.boolean
-import kotlinx.serialization.json.booleanOrNull
-import kotlinx.serialization.json.double
-import kotlinx.serialization.json.doubleOrNull
-import kotlinx.serialization.json.int
-import kotlinx.serialization.json.intOrNull
 
 /**
  * Parses key=value argument pairs into nested maps.
@@ -67,25 +61,42 @@ internal object KeyValueParser {
     return inferPrimitive(raw)
   }
 
-  /** Infer Int, Double, Boolean, or String from a raw value. */
-  internal fun inferPrimitive(raw: String): Any = when {
-    raw.toIntOrNull() != null -> raw.toInt()
-    raw.toDoubleOrNull() != null -> raw.toDouble()
-    raw == "true" -> true
-    raw == "false" -> false
-    else -> raw
+  /**
+   * Infer Int, Double, Boolean, or String from a raw value.
+   *
+   * A value only becomes a number when the number prints back as exactly the text the user typed —
+   * which is the only thing that matters, since a number that reproduces the text loses nothing.
+   * `1.00`, `007`, `+5`, `1e3`, and a value past Int range that a Double cannot print back exactly
+   * stay strings, because nothing can restore the cents a Double dropped: `amount=1.00` used to
+   * reach a string-typed tool argument as `"1.0"`. (A value past Int range that a Double does print
+   * back, such as `2.147483648E9`, still becomes a number — the text survives either way.)
+   * A parameter the tool declares numeric still gets a number: the daemon re-aligns the
+   * string from the tool's own declared type, accepting any spelling of a value a JSON number holds
+   * exactly (`1.50` -> 1.5, `+5` -> 5) and leaving the rest as text.
+   */
+  internal fun inferPrimitive(raw: String): Any {
+    raw.toIntOrNull()?.let { if (it.toString() == raw) return it }
+    raw.toDoubleOrNull()?.let { if (it.isFinite() && it.toString() == raw) return it }
+    return when (raw) {
+      "true" -> true
+      "false" -> false
+      else -> raw
+    }
   }
 
-  /** Convert a [JsonElement] tree to plain Kotlin types (Map/List/String/Number/Boolean). */
+  /**
+   * Convert a [JsonElement] tree to plain Kotlin types (Map/List/String/Number/Boolean).
+   *
+   * A scalar inside a JSON value follows the same rule as a flat one ([inferPrimitive]): it only
+   * becomes a number or boolean when that prints back as exactly the text written. So
+   * `amount='{"v":1.00}'` and `amounts=[1.00]` carry their cents through, and a quoted `"007"`
+   * stays a string — kotlinx's `intOrNull`/`booleanOrNull` read a primitive's content without
+   * asking whether it was quoted, so the quoted forms used to be renumbered too.
+   */
   internal fun jsonElementToAny(element: JsonElement): Any = when (element) {
     is JsonObject -> element.entries.associate { (k, v) -> k to jsonElementToAny(v) }
     is JsonArray -> element.map { jsonElementToAny(it) }
-    is JsonPrimitive -> when {
-      element.booleanOrNull != null -> element.boolean
-      element.intOrNull != null -> element.int
-      element.doubleOrNull != null -> element.double
-      else -> element.content
-    }
+    is JsonPrimitive -> if (element.isString) element.content else inferPrimitive(element.content)
   }
 
   /**

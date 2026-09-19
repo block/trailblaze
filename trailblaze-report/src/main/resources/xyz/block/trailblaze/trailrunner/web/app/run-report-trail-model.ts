@@ -335,6 +335,20 @@ export interface DeviceLaneTrace {
  * because the failure anchor is matched by identity. Non-header rows appear only in the lane that
  * owns them. Returns [] when the trace names fewer than two devices — nothing to split.
  */
+/**
+ * How many device lanes a trace splits into, in first-appearance order. The keying rule lives here
+ * and nowhere else: an unattributed row is its own lane (`device ?? null`), so anything describing
+ * the split — a header promising "compare this run's devices" — agrees with what actually opens.
+ */
+export function traceDeviceLaneCount(trace: TraceStep[]): number {
+  const keys: Array<string | null> = [];
+  for (const row of trace) {
+    const key = row.device ?? null;
+    if (keys.indexOf(key) < 0) keys.push(key);
+  }
+  return keys.length;
+}
+
 export function traceDeviceLanes(trace: TraceStep[]): DeviceLaneTrace[] {
   const keys: Array<string | null> = [];
   for (const row of trace) {

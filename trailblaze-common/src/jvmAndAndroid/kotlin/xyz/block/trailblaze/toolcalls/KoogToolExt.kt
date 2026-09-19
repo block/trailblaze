@@ -234,7 +234,34 @@ object KoogToolExt {
 }
 
 fun KClass<out TrailblazeTool>.toTrailblazeToolDescriptorWithSource(): TrailblazeToolDescriptor? =
-  toKoogToolDescriptor()?.toTrailblazeToolDescriptor()?.copy(
+  toKoogToolDescriptor()?.toTrailblazeToolDescriptor()?.withKotlinSource(qualifiedName)
+
+/**
+ * Same as [toTrailblazeToolDescriptorWithSource], but describes tools the LLM is not shown.
+ *
+ * `@TrailblazeToolClass(surfaceToLlm = false)` means "don't let the model pick this", not "this
+ * does not exist". Documenting a tool someone named explicitly — a `--help` lookup, or a step
+ * read back out of a recording — is the second thing, so it must not go through the gate that
+ * composes the agent's toolbox. Use [toTrailblazeToolDescriptorWithSource] for anything the LLM
+ * chooses from.
+ *
+ * Selector params come back too ([withSelectorParamsRestored]). Both descriptor paths strip them,
+ * which is right for a caller composing a toolbox and wrong for one describing a tool to a person:
+ * `tapOn` without its `nodeSelector` reads as a tap with nothing to tap.
+ *
+ * And the result is reconciled against the tool's serializer ([withSerializedParameterNames]),
+ * because what a person is shown has to be what a trail step decodes. The two differ only for a
+ * tool with a hand-written serializer.
+ */
+fun KClass<out TrailblazeTool>.toTrailblazeToolDescriptorIgnoringLlmSurface(): TrailblazeToolDescriptor? =
+  toScriptedToolDescriptor()
+    ?.toTrailblazeToolDescriptor()
+    ?.withSelectorParamsRestored(this)
+    ?.withSerializedParameterNames(this)
+    ?.withKotlinSource(qualifiedName)
+
+private fun TrailblazeToolDescriptor.withKotlinSource(qualifiedName: String?): TrailblazeToolDescriptor =
+  copy(
     source = TrailblazeToolSourceDescriptor(
       type = TrailblazeToolSourceType.KOTLIN,
       identifier = qualifiedName,

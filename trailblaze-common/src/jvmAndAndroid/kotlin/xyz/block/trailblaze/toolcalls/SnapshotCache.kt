@@ -9,19 +9,19 @@ import xyz.block.trailblaze.util.Console
  * Carries one cached snapshot per frame. Within a frame, repeated calls to
  * [snapshot] return the same captured [ScreenState] without re-running the
  * multi-second view-hierarchy fetch — the query tool that motivated this
- * (`findMatches`) needs to be cheap enough that scripted authors can call it
- * naturally on every branch in a tool body. When the frame pops the cached
+ * (`findSelectorMatches`) needs to be cheap enough that scripted authors can
+ * call it naturally on every branch in a tool body. When the frame pops the cached
  * snapshot is freed, so a future batch starts with a fresh capture.
  *
  * ## Frame lifecycle in [xyz.block.trailblaze.BaseTrailblazeAgent.runTrailblazeTools]
  *
  * Today the dispatch loop pushes **one frame per batch** (around the whole
  * `for (tool in tools)` loop), not one frame per tool. All sibling tools in
- * the same batch share the slot — that's what makes
- * `findMatches → findMatches` in the same batch reuse the captured tree. The
+ * the same batch share the slot — that's what makes two sibling
+ * `findSelectorMatches` dispatches reuse the captured tree. The
  * loop calls [invalidateCurrent] on the way out of any tool that isn't a
- * [ReadOnlyTrailblazeTool] and isn't a verification, so a `findMatches →
- * tap → findMatches` sequence re-captures after `tap`.
+ * [ReadOnlyTrailblazeTool] and isn't a verification, so a `query →
+ * tap → query` sequence re-captures after `tap`.
  *
  * Re-entrant frame nesting (one tool's execute() pushes another frame via
  * [withFrame]) is supported by the stack — child frames don't affect the
@@ -58,9 +58,8 @@ import xyz.block.trailblaze.util.Console
  * cached snapshot for a follow-up query:
  *
  *  - Mark the tool class with [ReadOnlyTrailblazeTool] for query-shaped tools
- *    (today: `FindMatchesTrailblazeTool` and
- *    `FindSelectorMatchesTrailblazeTool`). Use this when the tool reads from
- *    the device but never mutates state.
+ *    (today: `FindSelectorMatchesTrailblazeTool`). Use this when the tool reads
+ *    from the device but never mutates state.
  *
  *  - Set `@TrailblazeToolClass(isVerification = true)` for assertion tools.
  *    Verifications never mutate, and the dispatcher recognises this flag.
@@ -74,8 +73,8 @@ import xyz.block.trailblaze.util.Console
  *
  * The frame is pushed once per tool BATCH by `BaseTrailblazeAgent.runTrailblazeTools`,
  * and each scripting callback enters its own NESTED frame — so N
- * `client.tools.findMatches(...)` calls from inside one scripted tool take N
- * captures, whatever this cache holds. Widening a frame to span a whole scripted
+ * `client.tools.findSelectorMatches(...)` calls from inside one scripted tool take
+ * N captures, whatever this cache holds. Widening a frame to span a whole scripted
  * invocation would be worse, not better: a tool that polls for 30s would then
  * read one stale capture for its entire run. Batching several selectors into one
  * capture is therefore explicit, via `FindSelectorMatchesTrailblazeTool`.

@@ -133,14 +133,25 @@ object JsScriptingCallbackDispatcher {
   }
 
   /**
-   * Default per-dispatch timeout. Overridable via the [CALLBACK_TIMEOUT_MS_PROPERTY] system
-   * property. 120s matches
-   * [xyz.block.trailblaze.logs.server.endpoints.ScriptingCallbackEndpoint.DEFAULT_CALLBACK_TIMEOUT_MS]
-   * and the spawner-side `McpSubprocessSpawner.DEFAULT_CALLBACK_TIMEOUT_MS`. 30s was too tight
-   * for the realistic worst-case nested-dispatch (a scripted tool that delegates to a worker
-   * scripted tool which performs a real UI login can easily run 60+ seconds end-to-end).
+   * Default per-dispatch timeout, and the single source of truth for it: the endpoint
+   * (`ScriptingCallbackEndpoint.DEFAULT_CALLBACK_TIMEOUT_MS`) and the spawner
+   * (`McpSubprocessSpawner`, which derives the subprocess's own fetch timeout and the outer
+   * `tools/call` budget from it) both read this constant, so the ladder cannot drift out of
+   * lockstep the way three hand-edited copies did. Overridable via the
+   * [CALLBACK_TIMEOUT_MS_PROPERTY] system property, which moves every derived value with it.
+   *
+   * This bound exists to catch a nested tool that never returns, not to bound a slow one: every
+   * device action the nested tool performs already carries its own budget. Two previous values
+   * were each exceeded by a legitimate composed launch (clear app state, cold start, drive a real
+   * sign-in): 30s, then 120s, which a cold emulator launch outran at ~140s. Because the nested
+   * tool keeps running on the daemon after the caller gives up, a too-short bound reports a
+   * failure for a launch that then quietly succeeds.
+   *
+   * Lower it via the system property when an enclosing harness caps the run more tightly than
+   * this — an on-device suite whose JUnit rule kills the test at ten minutes would otherwise take
+   * the process down before this deadline can report anything.
    */
-  const val DEFAULT_DISPATCH_TIMEOUT_MS: Long = 120_000L
+  const val DEFAULT_DISPATCH_TIMEOUT_MS: Long = 600_000L
 
   /**
    * System property (`-Dtrailblaze.callback.timeoutMs=...`) overriding

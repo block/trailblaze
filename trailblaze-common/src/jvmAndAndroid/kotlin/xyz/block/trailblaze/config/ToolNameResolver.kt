@@ -102,6 +102,10 @@ class ToolNameResolver(
     it in knownTools.keys || it in knownYamlToolNames || it in knownScriptedToolNames
   }
 
+  /** Every name [isKnown] accepts, for "did you mean" repair of one it rejected. */
+  fun allKnownNames(): Set<String> =
+    (knownTools.keys + knownYamlToolNames + knownScriptedToolNames).mapTo(mutableSetOf()) { it.toolName }
+
   /**
    * Resolves a list of tool names. All must be class-backed and found.
    */

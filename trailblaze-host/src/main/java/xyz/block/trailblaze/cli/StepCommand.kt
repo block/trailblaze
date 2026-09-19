@@ -47,7 +47,7 @@ import java.util.concurrent.Callable
     "Requires an LLM provider configured (`trailblaze config llm`).",
   ],
 )
-class StepCommand : Callable<Int> {
+class StepCommand : Callable<Int>, QuietUnlessVerbose {
   // The shared per-device CLI session scope ([cliDeviceSessionScope]) and
   // [readLastCliSessionScope] / [writeLastCliSessionScope] live in
   // CliInfrastructure.kt so `tool`, `snapshot`, `ask`, `verify`, and `step`
@@ -83,6 +83,12 @@ class StepCommand : Callable<Int> {
     description = ["Enable verbose output (show daemon logs, MCP calls)"]
   )
   var verbose: Boolean = false
+
+  /**
+   * Closes the internal [Console.log] channel for this command unless `--verbose`, applied at
+   * dispatch so the early-return paths are covered too — see [QuietUnlessVerbose].
+   */
+  override val verboseRequested: Boolean get() = verbose
 
   @Option(
     names = ["--target"],
@@ -302,6 +308,11 @@ class StepCommand : Callable<Int> {
       }
       val client = try {
         CliMcpClient.connectReusable(port, sessionScope = sessionScope)
+      } catch (e: CliMcpClient.DaemonStarvedException) {
+        // Not "no active session" -- the session may well be there; the daemon just did not answer
+        // in time to say. Its own message names the symptom and what to do.
+        reportDaemonStarved(e.message ?: "the daemon did not answer the pre-flight probe")
+        return@runBlocking TrailblazeExitCode.INFRA_FAILED.code
       } catch (e: Exception) {
         Console.error("Error: No active session. ${e.message}")
         return@runBlocking TrailblazeExitCode.INFRA_FAILED.code

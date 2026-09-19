@@ -1179,6 +1179,7 @@ export interface SessionInfo {
   llmUsageSummary?: LlmSessionUsageAndCost | null;
   selectedDeviceConfiguration?: string | null;
   deviceClockOffsetMs?: number | null;
+  endTimestamp?: string | null;
 }
 
 export type SessionStatus = Cancelled | Failed | FailedWithSelfHeal | SessionStatusEndedMaxCallsLimitReached | Started | Succeeded | SucceededWithSelfHeal | TimeoutReached | Unknown;

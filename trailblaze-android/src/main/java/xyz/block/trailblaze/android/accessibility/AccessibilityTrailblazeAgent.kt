@@ -179,11 +179,11 @@ class AccessibilityTrailblazeAgent(
    * stop app, clear data, grant permissions, then launch.
    *
    * This runs in the instrumentation process (has UiAutomation access for shell commands). The
-   * actual app launch uses the accessibility service's [Context.startActivity]. All of it is
-   * blocking (shell execs, plus — when the inprocess-idle re-attach engages — a socket PING poll of
-   * up to [InProcessIdleLaunchReattacher.awaitAttachedAfterLaunch]'s bound), so it runs on
-   * [Dispatchers.IO] to keep those seconds off the caller's (bounded) coroutine dispatcher — same
-   * treatment [waitForTreeChange] gives its blocking device call.
+   * actual app launch uses the accessibility service's [Context.startActivity]. The shell execs
+   * block, so it runs on [Dispatchers.IO] to keep those seconds off the caller's (bounded)
+   * coroutine dispatcher — same treatment [waitForTreeChange] gives its blocking device call. The
+   * idle-detector confirmation does NOT block: see
+   * [InProcessIdleLaunchReattacher.confirmAttachedAfterLaunch].
    */
   private suspend fun executeLaunchAppViaAdb(command: LaunchAppCommand) = withContext(Dispatchers.IO) {
     val appId = command.appId
@@ -220,7 +220,7 @@ class AccessibilityTrailblazeAgent(
     // Launch via accessibility service (Context.startActivity with FLAG_ACTIVITY_CLEAR_TASK)
     TrailblazeAccessibilityService.launchApp(appId)
     if (inProcessIdleAttachStarted) {
-      InProcessIdleLaunchReattacher.awaitAttachedAfterLaunch(appId)
+      InProcessIdleLaunchReattacher.confirmAttachedAfterLaunch(appId)
     }
     TrailblazeAccessibilityService.waitForSettled(timeoutMs = 10_000L)
   }

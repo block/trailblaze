@@ -21,6 +21,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.parseKoogPara
 import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toKoogParameterTypePreservingComposites
 import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toKoogToolDescriptor
 import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toTrailblazeToolDescriptor
+import kotlin.reflect.KClass
 import kotlin.test.Test
 
 /**
@@ -320,5 +321,64 @@ class TrailblazeKoogToolTest {
 
     val legacy = ListElementSelectorTool::class.selectorParamsForTs().single()
     assertThat(legacy.tsType).isEqualTo("unknown[]")
+  }
+
+  // ---- withSelectorParamsRestored: the same stripped params, for human-facing tool help ----
+  //
+  // A lookup that describes one tool to a person ("toolbox(name=tapOn)", "trailblaze tool tapOn
+  // --help") has the opposite need from a toolbox the model picks from: a selector-only tool
+  // otherwise describes as requiring nothing at all, and its rendered example cannot supply the
+  // one argument it does not work without.
+
+  private fun KClass<out TrailblazeTool>.helpDescriptor() =
+    buildToolDescriptorIgnoringSurface().toTrailblazeToolDescriptor().withSelectorParamsRestored(this)
+
+  @Test fun `withSelectorParamsRestored puts a required selector back as an OBJECT`() {
+    val descriptor = RequiredNodeSelectorTool::class.helpDescriptor()
+
+    val selector = descriptor.requiredParameters.single()
+    assertThat(selector.name).isEqualTo("nodeSelector")
+    // Flat `OBJECT`, not the expanded grammar — expanding it is what overflows the lowering. Also
+    // matches `ToolParameterType.Object.name`, so a restored param reads like a lowered one.
+    assertThat(selector.type).isEqualTo("OBJECT")
+    assertThat(selector.description).isEqualTo("The node selector identifying the element to tap.")
+    // Restores; does not replace. The params that survived stripping are still there.
+    assertThat(descriptor.optionalParameters.map { it.name }).containsExactly("longPress")
+  }
+
+  @Test fun `withSelectorParamsRestored requires a node selector that Kotlin declares nullable`() {
+    val descriptor = OptionalNodeSelectorTool::class.helpDescriptor()
+
+    // `nodeSelector: TrailblazeNodeSelector? = null` is a deserialization concession for trails
+    // recorded before the field existed, not permission to omit it: every such tool in the tree
+    // rejects null at execution. Listing it as optional would document a call that always fails.
+    assertThat(descriptor.requiredParameters.map { it.name }).containsExactly("nodeSelector")
+    assertThat(descriptor.optionalParameters).isEmpty()
+  }
+
+  @Test fun `withSelectorParamsRestored describes a list of selectors as an ARRAY`() {
+    val descriptor = ListNodeSelectorTool::class.helpDescriptor()
+
+    val selectors = descriptor.requiredParameters.single()
+    assertThat(selectors.name).isEqualTo("selectors")
+    // `OBJECT` here would tell the reader to write a single mapping where a sequence goes.
+    assertThat(selectors.type).isEqualTo("ARRAY")
+  }
+
+  @Test fun `withSelectorParamsRestored never asks a caller to fill in the legacy selector`() {
+    val descriptor = BothSelectorsTool::class.helpDescriptor()
+
+    // The modern selector is what a caller should supply, even on a tool that still carries both.
+    assertThat(descriptor.requiredParameters.map { it.name }).containsExactly("nodeSelector")
+    val legacy = descriptor.optionalParameters.single { it.name == "selector" }
+    // Deprecated, so it is described but never presented as something to supply, and it says so
+    // even though the tool itself documents nothing.
+    assertThat(legacy.description).isNotNull()
+  }
+
+  @Test fun `withSelectorParamsRestored leaves a tool with no selector untouched`() {
+    val plain = NoSelectorTool::class.buildToolDescriptorIgnoringSurface().toTrailblazeToolDescriptor()
+
+    assertThat(plain.withSelectorParamsRestored(NoSelectorTool::class)).isEqualTo(plain)
   }
 }

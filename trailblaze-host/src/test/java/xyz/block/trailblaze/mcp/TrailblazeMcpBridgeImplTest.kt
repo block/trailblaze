@@ -39,6 +39,7 @@ import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
 import xyz.block.trailblaze.model.ResolvedTarget
 import xyz.block.trailblaze.model.TrailExecutionResult
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
+import xyz.block.trailblaze.model.TrailblazeOnDeviceInstrumentationTarget
 import xyz.block.trailblaze.toolcalls.DelegatingTrailblazeTool
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
@@ -95,6 +96,62 @@ class TrailblazeMcpBridgeImplTest {
         ?.contains("emulator-5554") == true,
     )
     assertEquals(null, TrailblazeMcpBridgeImpl.androidDisconnectStatus(ios, emptyList()))
+  }
+
+  @Test
+  fun `onDeviceRunnerStoppedStatus names the serial and the runner instead of claiming no device`() {
+    val android = TrailblazeDeviceId(
+      instanceId = "emulator-5560",
+      trailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID,
+    )
+
+    val status = TrailblazeMcpBridgeImpl.onDeviceRunnerStoppedStatus(android, "xyz.block.trailblaze.runner")
+
+    assertTrue(status.contains("emulator-5560"), status)
+    assertTrue(status.contains("xyz.block.trailblaze.runner"), status)
+    // The device IS attached; only the runner died. The generic text sends users to reconnect a
+    // device that never left and hides that a relaunch is what fixes it.
+    assertFalse(status.contains("No device connected"), status)
+    assertTrue(status.contains("Reconnect the device"), status)
+  }
+
+  /**
+   * The cached runner package is what lets the status path tell a dead runner from a live one, so
+   * it has to describe the attachment that is ready NOW. Switching drivers force-stops the previous
+   * target's instrumentation on the way in; an entry surviving that switch names a package that is
+   * deliberately dead, and the status path reads it as this agent having vanished — tearing down an
+   * in-process attachment that is working.
+   */
+  @Test
+  fun `a ready in-process agent clears the runner package cached by the driver it replaced`() {
+    val key = "emulator-5554"
+    val selfInstrumenting = TrailblazeOnDeviceInstrumentationTarget(
+      testAppId = "xyz.block.trailblaze.runner",
+      fqTestName = "xyz.block.trailblaze.AndroidStandaloneServerTest",
+    )
+    // A `com.android.test` module pointed at the app under test: instrumentation loads into the
+    // app's process, and nothing is ever named after the test package.
+    val inProcess = TrailblazeOnDeviceInstrumentationTarget(
+      testAppId = "com.example.app.test",
+      fqTestName = "com.example.app.InProcessTest",
+      hostProcessAppId = "com.example.app",
+    )
+    val runnerProcessIds = mutableMapOf<String, String>()
+
+    TrailblazeMcpBridgeImpl.recordRunnerProcessForReadyAgent(runnerProcessIds, key, selfInstrumenting)
+    assertEquals("xyz.block.trailblaze.runner", runnerProcessIds[key])
+
+    // The switch. The app's own process is not proof of anything, so there is nothing to record —
+    // and the runner's package must not be left behind speaking for it.
+    TrailblazeMcpBridgeImpl.recordRunnerProcessForReadyAgent(runnerProcessIds, key, inProcess)
+    assertEquals(null, runnerProcessIds[key])
+
+    // Other devices are untouched: the entry is per device, and a switch on one says nothing
+    // about the runner serving another.
+    val otherKey = "emulator-5556"
+    TrailblazeMcpBridgeImpl.recordRunnerProcessForReadyAgent(runnerProcessIds, otherKey, selfInstrumenting)
+    TrailblazeMcpBridgeImpl.recordRunnerProcessForReadyAgent(runnerProcessIds, key, inProcess)
+    assertEquals("xyz.block.trailblaze.runner", runnerProcessIds[otherKey])
   }
 
   @Test

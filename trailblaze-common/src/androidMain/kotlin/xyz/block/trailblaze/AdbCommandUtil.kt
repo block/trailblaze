@@ -5,6 +5,7 @@ import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.os.ParcelFileDescriptor
 import android.os.SystemClock
+import androidx.annotation.VisibleForTesting
 import maestro.KeyCode
 import maestro.Point
 import xyz.block.trailblaze.InstrumentationUtil.withInstrumentation
@@ -115,15 +116,26 @@ object AdbCommandUtil {
    * would replay a command that may already have taken effect.
    *
    * @param loggableCommand [shellCommand] already redacted for logging — see [execShellCommand].
+   * @param timeoutMs the read bound. Only ever overridden by
+   *   `BoundedShellReadOnDeviceTest`, which exercises this whole path — the bound, the handle
+   *   discard, and the error it raises — against a command that never returns. Parking a device
+   *   lane for the production [SHELL_COMMAND_TIMEOUT_MS] to do that would cost five minutes a run.
    */
-  private fun runShellCommand(shellCommand: String, loggableCommand: String): String = withUiAutomation {
+  // Non-private, rather than `internal`, because that test lives in `:trailblaze-android` — a
+  // different Gradle module, which Kotlin's module-scoped `internal` does not reach.
+  @VisibleForTesting
+  fun runShellCommand(
+    shellCommand: String,
+    loggableCommand: String,
+    timeoutMs: Long = SHELL_COMMAND_TIMEOUT_MS,
+  ): String = withUiAutomation {
     val description = "adb shell $loggableCommand"
     val startedAt = SystemClock.elapsedRealtime()
     val output = try {
       ParcelFileDescriptor.AutoCloseInputStream(executeShellCommand(shellCommand)).use { stream ->
         readWithDeadline(
           description = description,
-          timeoutMs = SHELL_COMMAND_TIMEOUT_MS,
+          timeoutMs = timeoutMs,
           cancel = { stream.close() },
           read = { stream.readBytes().toString(Charsets.UTF_8) },
         )
@@ -137,7 +149,7 @@ object AdbCommandUtil {
       throw IllegalStateException(
         UiAutomationHandleErrors.wedgedShellReadMessage(
           command = description,
-          timeoutMs = SHELL_COMMAND_TIMEOUT_MS,
+          timeoutMs = timeoutMs,
           handleDiscarded = discarded,
         ),
         timeout,

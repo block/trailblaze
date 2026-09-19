@@ -39,6 +39,7 @@ import io.modelcontextprotocol.kotlin.sdk.types.ToolSchema
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.asContextElement
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -68,6 +69,7 @@ import xyz.block.trailblaze.logs.server.SslConfig.configureForSelfSignedSsl
 import xyz.block.trailblaze.logs.server.endpoints.CliRunRequest
 import xyz.block.trailblaze.logs.server.endpoints.CliRunResponse
 import xyz.block.trailblaze.logs.server.endpoints.CliStatusResponse
+import xyz.block.trailblaze.logs.server.endpoints.ScriptingCallbackEndpoint
 import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.mcp.DeviceBusyException
 import xyz.block.trailblaze.mcp.DeviceClaimRegistry
@@ -133,6 +135,7 @@ import xyz.block.trailblaze.toolcalls.toolName
 import xyz.block.trailblaze.scripting.InProcessScriptedToolLauncher
 import xyz.block.trailblaze.scripting.LazyYamlScriptedToolRegistration
 import xyz.block.trailblaze.scripting.callback.JsScriptingCallbackBaseUrl
+import xyz.block.trailblaze.scripting.callback.JsScriptingCallbackDispatcher
 import xyz.block.trailblaze.scripting.fetch.OkHttpFetchExtension
 import xyz.block.trailblaze.scripting.subprocess.InlineScriptToolServerSynthesizer
 import xyz.block.trailblaze.scripting.subprocess.LaunchedSubprocessRuntime
@@ -284,13 +287,51 @@ class TrailblazeMcpServer(
 
   companion object {
     /**
+     * Slack between the nested-callback budget and the per-call cap below. Has to cover the two
+     * 2s buffers `McpSubprocessSpawner` stacks on that budget (the subprocess's client fetch
+     * timeout, then the daemon's outer `tools/call`) plus the transport hops between them, so
+     * the innermost deadline is always the one that fires and names the slow tool.
+     */
+    private const val CALLBACK_LADDER_HEADROOM_MS: Long = 10_000L
+
+    /**
      * Maximum time an MCP tool call can execute before being cancelled.
      * Prevents indefinite hangs when a device session crashes mid-execution
-     * (broken driver connection, dead Maestro session, etc.).
-     * 5 minutes is generous enough for long operations like trail(action=RUN)
-     * while still ensuring the MCP client always gets a response.
+     * (broken driver connection, dead Maestro session, etc.), so the MCP client
+     * always gets a response.
+     *
+     * Derived rather than chosen, because a scripted tool that composes other tools runs
+     * *inside* this cap: it holds the daemon for the whole nested-callback budget
+     * ([ScriptingCallbackEndpoint.DEFAULT_CALLBACK_TIMEOUT_MS]) plus the buffers the subprocess
+     * ladder stacks above it. A cap below that ladder makes the longer budget unreachable over
+     * MCP, and expires as a bare coroutine cancellation — so the caller is told its run was
+     * cancelled instead of being told which tool ran long. [CALLBACK_LADDER_HEADROOM_MS] keeps
+     * this above the ladder; `McpProxyForwardTimeoutOutlastsCallbackBudgetTest` keeps it below
+     * the proxy hop that encloses it.
      */
-    private const val MCP_TOOL_EXECUTION_TIMEOUT_MS = 5 * 60 * 1000L
+    const val MCP_TOOL_EXECUTION_TIMEOUT_MS: Long =
+      ScriptingCallbackEndpoint.DEFAULT_CALLBACK_TIMEOUT_MS + CALLBACK_LADDER_HEADROOM_MS
+
+    /**
+     * [MCP_TOOL_EXECUTION_TIMEOUT_MS] for the budget actually in effect, which is what a tool call
+     * is bounded by.
+     *
+     * The constant above can only be derived from the *default* callback budget, because it is a
+     * `const`. Every other rung of the ladder reads
+     * [JsScriptingCallbackDispatcher.CALLBACK_TIMEOUT_MS_PROPERTY] at runtime, so a raised property
+     * used to move the callback dispatch and the subprocess buffers while this cap stayed put — and
+     * the cap is the innermost of the three, so it cancelled the call first and the longer budget
+     * the operator asked for was unreachable over MCP. Resolved per call for the same reason the
+     * dispatcher resolves per dispatch: a test can flip the property without rebuilding the server.
+     *
+     * Raising the property past the caller's own deadline is still the operator's problem —
+     * `TRAILBLAZE_MCP_REQUEST_TIMEOUT_MS` has to be raised alongside it. That is documented with
+     * the property, not enforced here. Both callers honour that variable: a CLI command and the
+     * MCP proxy's forwarding client. The proxy used to pin the compile-time default instead, which
+     * left an external agent no way to follow a raised cap.
+     */
+    fun resolveMcpToolExecutionTimeoutMs(): Long =
+      JsScriptingCallbackDispatcher.resolveTimeoutMs() + CALLBACK_LADDER_HEADROOM_MS
 
     /** Timeout for ending a session during disconnect cleanup to prevent blocking the close callback. */
     private const val SESSION_END_TIMEOUT_MS = 5_000L
@@ -681,9 +722,22 @@ class TrailblazeMcpServer(
       .onFailure {
         Console.log("[TrailblazeMcpServer] Failed to shut down scripted runtime for $sessionId: ${it.message}")
       }
-    // Free each in-process QuickJS engine (idempotent; otherwise the engine + its retained JS
-    // allocations leak for the daemon's lifetime).
-    for (reg in existing.inProcessRegistrations) {
+    disposeInProcessRegistrations(existing.inProcessRegistrations, sessionId)
+  }
+
+  /**
+   * Free each in-process QuickJS engine (idempotent; otherwise the engine + its retained JS
+   * allocations leak for the daemon's lifetime).
+   *
+   * `NonCancellable` because a cancelled caller is one of the ways this is reached, and
+   * [LazyYamlScriptedToolRegistration.dispose] suspends — in a cancelled context it would throw
+   * before freeing anything, and the `runCatching` would file that away as a disposal that failed.
+   */
+  private suspend fun disposeInProcessRegistrations(
+    registrations: List<LazyYamlScriptedToolRegistration>,
+    sessionId: String,
+  ) = withContext(NonCancellable) {
+    for (reg in registrations) {
       runCatching { reg.dispose() }
         .onFailure {
           Console.log(
@@ -836,15 +890,24 @@ class TrailblazeMcpServer(
           tools = spawnableInlineTools,
           outputDir = File(sessionDir, "inline-script-tools"),
         )
-        McpSubprocessRuntimeLauncher.launchAll(
-          mcpServers = inlineToolServers,
-          deviceInfo = buildSyntheticDeviceInfo(deviceId, driverType),
-          config = TrailblazeConfig.DEFAULT,
-          sessionId = launchSessionId,
-          sessionLogDir = sessionDir,
-          toolRepo = toolRepo,
-          baseUrl = JsScriptingCallbackBaseUrl.get(),
-        )
+        try {
+          McpSubprocessRuntimeLauncher.launchAll(
+            mcpServers = inlineToolServers,
+            deviceInfo = buildSyntheticDeviceInfo(deviceId, driverType),
+            config = TrailblazeConfig.DEFAULT,
+            sessionId = launchSessionId,
+            sessionLogDir = sessionDir,
+            toolRepo = toolRepo,
+            baseUrl = JsScriptingCallbackBaseUrl.get(),
+          )
+        } catch (t: Throwable) {
+          // The engines above are already live but not yet owned by a SessionScriptToolRuntimeState,
+          // so nothing downstream can reach them to free them. Every failure mode of `launchAll` is
+          // retryable at the next tool-surface refresh, so leaving them behind leaks one QuickJS
+          // engine per catalog tool per attempt, for the daemon's lifetime.
+          disposeInProcessRegistrations(inProcessRegistrations, sessionId)
+          throw t
+        }
       } else {
         null
       }
@@ -1795,7 +1858,7 @@ class TrailblazeMcpServer(
           // Timeout prevents indefinite hangs when a device session crashes mid-execution
           // (e.g., device driver dies, Maestro session fails). Without this, a broken device
           // connection can leave the MCP call blocked forever, confusing the MCP client.
-          val toolResponse = withTimeout(MCP_TOOL_EXECUTION_TIMEOUT_MS) {
+          val toolResponse = withTimeout(resolveMcpToolExecutionTimeoutMs()) {
             withContext(Dispatchers.IO + deviceIdContext) {
               @OptIn(InternalAgentToolsApi::class)
               koogTool.executeUnsafe(args = koogToolArgs)
@@ -2141,8 +2204,11 @@ class TrailblazeMcpServer(
               ?: CliRunResponse(success = false, error = "Run handler not configured")
           },
           onShutdownRequest = {
-            // Call the shutdown callback if set, otherwise fall back to System.exit
-            onShutdownRequest?.invoke() ?: System.exit(0)
+            // The desktop app installs a callback that exits through Compose. Headless daemons have
+            // none, and this runs on the request's event-loop thread, where a direct System.exit
+            // deadlocks against Ktor's shutdown hook (see DaemonExit) — the port closes but the
+            // JVM and its subprocesses never die.
+            onShutdownRequest?.invoke() ?: DaemonExit.exitOffCallerThread()
           },
           onShowWindowRequest = {
             // The UI installs this callback after Compose startup. Report honestly whether a
@@ -2195,6 +2261,7 @@ class TrailblazeMcpServer(
               // loaded — no chance of a stale file misrepresenting the daemon.
               workspaceContentHash =
                 xyz.block.trailblaze.config.project.WorkspaceContentHasher.lastCapturedHash,
+              pid = ProcessHandle.current().pid(),
             )
           },
         ),
@@ -2490,7 +2557,7 @@ class TrailblazeMcpServer(
       // The gate is re-evaluated on every registration and every bind/unbind chains a
       // refreshToolsForSession, so the tool appears when the roster reaches two and is
       // diffed away again by addToolsAsMcpToolsFromRegistry when it drops below.
-      if (sessionContext.boundDeviceNames().size >= 2) {
+      if (sessionContext.advertisesMultiDeviceTools()) {
         tools(
           MultiDeviceToolSet(
             sessionContext = sessionContext,

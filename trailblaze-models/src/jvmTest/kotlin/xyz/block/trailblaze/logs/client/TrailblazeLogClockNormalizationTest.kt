@@ -145,6 +145,41 @@ class TrailblazeLogClockNormalizationTest {
     assertEquals(2_000, info.durationMs)
   }
 
+  @Test
+  fun `getSessionInfo reports the session's own duration, not the span of its logs`() {
+    // A device runner mints the session, then does its pre-trail setup (turbo's detector attach),
+    // THEN writes the Started log — so the log span misses that setup entirely, and two runs that
+    // differ only in it tie. The end status carries the counter that started at the mint.
+    val logs = listOf(
+      statusLog(atMs = 10_000),
+      endedLog(atMs = 12_000, durationMs = 25_000),
+    )
+
+    val info = assertNotNull(logs.getSessionInfo())
+    assertEquals(25_000, info.durationMs)
+    // The start stays the first log's: it is when the session became observable, and readers sort on it.
+    assertEquals(10_000, info.timestamp.toEpochMilliseconds())
+  }
+
+  @Test
+  fun `an end status carrying no duration falls back to the log span`() {
+    // The host's synthetic end for a session it lost writes a zero. Zero is "no counter", not
+    // "took no time"; the span is the best remaining estimate.
+    val logs = listOf(
+      statusLog(atMs = 10_000),
+      endedLog(atMs = 12_000, durationMs = 0),
+    )
+
+    assertEquals(2_000, assertNotNull(logs.getSessionInfo()).durationMs)
+  }
+
+  private fun endedLog(atMs: Long, durationMs: Long) = TrailblazeLog.TrailblazeSessionStatusChangeLog(
+    sessionStatus = SessionStatus.Ended.Succeeded(durationMs = durationMs),
+    session = session,
+    timestamp = Instant.fromEpochMilliseconds(atMs),
+    clock = TrailblazeClockDomain.HOST,
+  )
+
   private fun toolLog(
     startMs: Long,
     durationMs: Long,

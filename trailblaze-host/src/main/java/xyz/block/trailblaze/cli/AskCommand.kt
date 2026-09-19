@@ -26,7 +26,7 @@ import java.util.concurrent.Callable
   mixinStandardHelpOptions = true,
   description = ["Ask a question about what's on screen (uses AI vision, no actions taken)"]
 )
-class AskCommand : Callable<Int> {
+class AskCommand : Callable<Int>, QuietUnlessVerbose {
 
   @Parameters(
     description = ["Question about the screen (e.g., 'What's the current balance?')"],
@@ -45,6 +45,12 @@ class AskCommand : Callable<Int> {
     description = ["Enable verbose output (show daemon logs, MCP calls)"]
   )
   var verbose: Boolean = false
+
+  /**
+   * Closes the internal [Console.log] channel for this command unless `--verbose`, applied at
+   * dispatch so the early-return paths are covered too — see [QuietUnlessVerbose].
+   */
+  override val verboseRequested: Boolean get() = verbose
 
   @CommandLine.Mixin
   val headlessOption: HeadlessOption = HeadlessOption()

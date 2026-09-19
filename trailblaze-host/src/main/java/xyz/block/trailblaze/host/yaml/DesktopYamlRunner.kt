@@ -36,7 +36,6 @@ import xyz.block.trailblaze.logs.model.SessionInfo
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.logs.model.getSessionStatus
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.OnDeviceRpcClient
-import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetScreenStateRequest
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetScreenStateResponse
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.OnDeviceRunnerCapabilities
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcResult
@@ -135,6 +134,29 @@ class DesktopYamlRunner(
       return "the installed on-device runner predates device classifier overrides, so it would " +
         "select recordings using only the device's physical classifiers; rebuild and reinstall " +
         "the on-device runner before retrying"
+    }
+
+    /**
+     * The launch step that follows the readiness handshake: gate a classifier-qualified run on the
+     * capabilities the runner advertised in [readiness], then send [runYamlRequest].
+     *
+     * Judged on the handshake's own answer, not a fresh probe: the runner already described itself
+     * there, and a second `GetScreenState` would re-enter the not-ready window the handshake just
+     * waited out with no budget to absorb it — a device that had not drawn a frame yet used to fail
+     * here as "unsupported" before the trailhead launched the app. Kept as its own step so a test
+     * can hold a mock server that answers every probe "not ready" and prove the only request this
+     * sends is the launch itself; see DesktopYamlRunnerLaunchGateTest.
+     */
+    internal suspend fun startYamlAfterReadiness(
+      onDeviceRpc: OnDeviceRpcClient,
+      readiness: GetScreenStateResponse,
+      runYamlRequest: RunYamlRequest,
+    ): RpcResult<RunYamlResponse> {
+      deviceClassifierOverrideCapabilityRejection(
+        requestsOverride = runYamlRequest.deviceClassifierOverride.isNotEmpty(),
+        runnerCapabilities = readiness.runnerCapabilities,
+      )?.let { throw TrailblazeException(it) }
+      return onDeviceRpc.rpcCall(runYamlRequest)
     }
 
     /**
@@ -314,7 +336,7 @@ class DesktopYamlRunner(
   ): TrailblazeOnDeviceInstrumentationTarget {
     if (companionTarget == null) return launchDeviceFallback
     return companionTarget.getTrailblazeOnDeviceInstrumentationTargetForDriver(
-      driverType ?: TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+      driverType ?: TrailblazeDriverType.DEFAULT_ANDROID,
     ) ?: throw TrailblazeException(
       "Configuration '$configurationName' binds companion device '$companionName' to target " +
         "'${companionTarget.id}'. ${companionTarget.missingInProcessHarnessMessage()}",
@@ -1101,7 +1123,7 @@ class DesktopYamlRunner(
      * coming from two different targets is exactly the bug this union is meant to close.
      */
     runTargetApp: TrailblazeHostAppTarget,
-  ): DeviceConnectionStatus {
+  ): ReadyOnDeviceConnection {
     // Step 1: connect (install/reuse) and enable accessibility if needed. Any IOException in
     // here is an infrastructure-level failure (ADB, instrumentation launch, APK install) that
     // a `forceRestart` retry would just repeat — so we let it propagate rather than hiding it
@@ -1167,11 +1189,11 @@ class DesktopYamlRunner(
     val initialStatus = doConnectAndEnable(forceRestart = recoverFromPriorWedge)
     initialStatus.failFastIfTerminal()
     if (recoverFromPriorWedge) {
-      onDeviceRpc.waitForReady(
+      val readiness = onDeviceRpc.waitForReady(
         requireAndroidAccessibilityService = requireAndroidAccessibilityService,
       )
       wedgedDeviceIds -= trailblazeDeviceId
-      return initialStatus
+      return ReadyOnDeviceConnection(initialStatus, readiness)
     }
 
     // Step 2: readiness probe. This is the specific failure mode we retry — the instrumentation
@@ -1180,22 +1202,33 @@ class DesktopYamlRunner(
     // instrumentation, which is the only thing that actually recovers a zombie. The common path
     // pays nothing for this fallback: the first `waitForReady` succeeds in ms on a warm device.
     return try {
-      onDeviceRpc.waitForReady(
+      val readiness = onDeviceRpc.waitForReady(
         requireAndroidAccessibilityService = requireAndroidAccessibilityService,
       )
-      initialStatus
+      ReadyOnDeviceConnection(initialStatus, readiness)
     } catch (e: IOException) {
       onProgressMessage(
         "Device readiness probe failed (${e.message}); force-restarting instrumentation and retrying once.",
       )
       val restartedStatus = doConnectAndEnable(forceRestart = true)
       restartedStatus.failFastIfTerminal()
-      onDeviceRpc.waitForReady(
+      val readiness = onDeviceRpc.waitForReady(
         requireAndroidAccessibilityService = requireAndroidAccessibilityService,
       )
-      restartedStatus
+      ReadyOnDeviceConnection(restartedStatus, readiness)
     }
   }
+
+  /**
+   * What [connectAndEnsureReady] hands back: the connect step's status plus the `GetScreenState`
+   * answer that proved the runner ready. The answer is kept because it is the runner describing
+   * itself ([GetScreenStateResponse.runnerCapabilities]); the launch path reads the device
+   * classifier override capability from it rather than probing again.
+   */
+  private data class ReadyOnDeviceConnection(
+    val status: DeviceConnectionStatus,
+    val readiness: GetScreenStateResponse,
+  )
 
   /**
    * Connects instrumentation on-device and runs MULTI_AGENT_V3 on the host, using the
@@ -1226,7 +1259,7 @@ class DesktopYamlRunner(
   ): SessionId? {
     return withContext(Dispatchers.IO) {
       // V3 + on-host path always uses the accessibility driver on-device.
-      val status = connectAndEnsureReady(
+      val (status, _) = connectAndEnsureReady(
         onDeviceRpc = onDeviceRpc,
         trailblazeDeviceId = connectedTrailblazeDevice.trailblazeDeviceId,
         trailblazeOnDeviceInstrumentationTarget = trailblazeOnDeviceInstrumentationTarget,
@@ -1303,7 +1336,7 @@ class DesktopYamlRunner(
     return withContext(Dispatchers.IO) {
       val needsAccessibility =
         AndroidAccessibilityServiceDrivers.includes(runYamlRequest.driverType)
-      val status = connectAndEnsureReady(
+      val (status, _) = connectAndEnsureReady(
         onDeviceRpc = onDeviceRpc,
         trailblazeDeviceId = connectedTrailblazeDevice.trailblazeDeviceId,
         trailblazeOnDeviceInstrumentationTarget = trailblazeOnDeviceInstrumentationTarget,
@@ -1640,7 +1673,7 @@ class DesktopYamlRunner(
     return withContext(Dispatchers.IO) {
       val needsAccessibility =
         AndroidAccessibilityServiceDrivers.includes(runYamlRequest.driverType)
-      val status = connectAndEnsureReady(
+      val (status, readiness) = connectAndEnsureReady(
         onDeviceRpc = onDeviceRpc,
         trailblazeDeviceId = trailblazeConnectedDevice.trailblazeDeviceId,
         trailblazeOnDeviceInstrumentationTarget = trailblazeOnDeviceInstrumentationTarget,
@@ -1653,8 +1686,8 @@ class DesktopYamlRunner(
 
       withContext(Dispatchers.Default) {
         onConnectionStatus(status)
-        requireDeviceClassifierOverrideCapability(onDeviceRpc, runYamlRequest)
-        when (val result: RpcResult<RunYamlResponse> = onDeviceRpc.rpcCall(runYamlRequest)) {
+        // The capability gate reads the readiness handshake's answer; see startYamlAfterReadiness.
+        when (val result: RpcResult<RunYamlResponse> = startYamlAfterReadiness(onDeviceRpc, readiness, runYamlRequest)) {
           is RpcResult.Failure -> {
             onProgressMessage("Failed to start YAML execution: ${result.message}${result.details?.let { " | $it" } ?: ""}")
             null
@@ -1691,33 +1724,6 @@ class DesktopYamlRunner(
         }
       }
     }
-  }
-
-  /**
-   * Probes only runs that carry an override. An older runner still understands GetScreenState but
-   * omits runnerCapabilities, letting the host reject the run before field 23 can be discarded.
-   */
-  private suspend fun requireDeviceClassifierOverrideCapability(
-    onDeviceRpc: OnDeviceRpcClient,
-    runYamlRequest: RunYamlRequest,
-  ) {
-    if (runYamlRequest.deviceClassifierOverride.isEmpty()) return
-    val probe = GetScreenStateRequest(
-      includeScreenshot = false,
-      includeAnnotatedScreenshot = false,
-      includeTree = false,
-    )
-    val response: GetScreenStateResponse = when (val result = onDeviceRpc.rpcCall(probe)) {
-      is RpcResult.Success -> result.data
-      is RpcResult.Failure -> throw TrailblazeException(
-        "Could not verify on-device runner support for device classifier overrides: " +
-          result.message + (result.details?.let { " | $it" } ?: ""),
-      )
-    }
-    deviceClassifierOverrideCapabilityRejection(
-      requestsOverride = true,
-      runnerCapabilities = response.runnerCapabilities,
-    )?.let { throw TrailblazeException(it) }
   }
 
   /**

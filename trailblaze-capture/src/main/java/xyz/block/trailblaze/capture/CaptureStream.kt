@@ -31,3 +31,8 @@ interface CaptureStream {
    */
   fun stop(options: CaptureOptions = CaptureOptions.NONE): CaptureArtifact?
 }
+
+/** Implemented by capture streams that can prove their output is restricted to the target app. */
+internal interface AppScopedCaptureStream {
+  val isAppScoped: Boolean
+}

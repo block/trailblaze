@@ -1,6 +1,10 @@
 package xyz.block.trailblaze.scripting
 
+import java.io.ByteArrayInputStream
 import java.io.File
+import java.io.IOException
+import java.io.InputStream
+import java.io.SequenceInputStream
 import kotlin.io.path.createTempDirectory
 import kotlin.test.AfterTest
 import kotlin.test.Test
@@ -513,6 +517,34 @@ class ScriptedToolAnalyzerBundledShimTest {
       File(libRoot, "node_modules/typescript/lib/lib.es5.d.ts").isFile,
       "a skipped entry must not abort the rest of the archive",
     )
+  }
+
+  @Test
+  fun `a bundled shim resource that fails mid-read degrades instead of throwing`() {
+    // The real read is `getResourceAsStream(...).use { it.readBytes() }` against a JAR entry: a
+    // truncated download, a corrupt deflate stream or a filesystem error all surface as an
+    // IOException partway through. `extractBundledAnalyzerShim` promises that every such failure
+    // becomes null + a diagnostic, because the caller — tool discovery, on nearly every CLI
+    // command — has no handler for it and would abort the whole command.
+    //
+    // This case is only expressible while the read is a lambda the function invokes inside its
+    // own `try`. A default-argument read is evaluated at the CALL SITE, outside that `try`.
+    val failing = ByteArrayInputStream("// bundle prefix".toByteArray()).let { prefix ->
+      SequenceInputStream(
+        prefix,
+        object : InputStream() {
+          override fun read(): Int = throw IOException("simulated truncated JAR entry")
+        },
+      )
+    }
+
+    val resolved = ScriptedToolDefinitionAnalyzer.extractBundledAnalyzerShim(
+      cacheRoot = File(tempRoot(), "analyzer"),
+      shimResource = { failing.use { it.readBytes() } },
+      tsLibArchive = { null },
+    )
+
+    assertEquals(null, resolved, "a failed resource read must degrade to \"analyzer unavailable\", not escape")
   }
 
   @Test

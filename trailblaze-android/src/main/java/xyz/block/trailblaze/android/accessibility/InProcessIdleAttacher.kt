@@ -9,6 +9,7 @@ import android.content.pm.ApplicationInfo
 import android.content.pm.PackageInstaller
 import android.os.SystemClock
 import androidx.test.platform.app.InstrumentationRegistry
+import java.util.Base64
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -17,6 +18,7 @@ import xyz.block.trailblaze.AdbCommandUtil
 import xyz.block.trailblaze.android.InstrumentationArgUtil
 import xyz.block.trailblaze.device.AndroidPackageDump
 import xyz.block.trailblaze.device.androidPackageNameViolation
+import xyz.block.trailblaze.device.wrapShellPipelineForOnDeviceTransport
 import xyz.block.trailblaze.inprocessidle.AotCompileDecision
 import xyz.block.trailblaze.inprocessidle.InProcessIdle
 import xyz.block.trailblaze.util.Console
@@ -57,6 +59,13 @@ import xyz.block.trailblaze.util.Console
  * on its own ([InProcessIdleLaunchReattacher]), which is why this attach runs once before a trail
  * rather than around every launch.
  *
+ * That re-attach is also why [attachNowOrAtLaunch] exists. Steps 3–6 are two cold starts of the
+ * target, and on a device where the target is not running they buy nothing a trail can use: the
+ * first thing such a trail does is launch the app, and the launch attaches on its way in. On a
+ * device farm that hands every trail a fresh device, the app is never running, so the pre-trail
+ * attach was 20–47 s per trail of cold-starting an app the trailhead then cleared — real wall clock,
+ * charged to turbo, and invisible in the report because it ran before the session's first log.
+ *
  * All failures throw. A run that asked for the detector should fail loudly rather than silently
  * replay at heuristic speed and be read as a measurement of the detector.
  */
@@ -96,6 +105,9 @@ object InProcessIdleAttacher {
   private fun recordAttached(targetAppId: String) {
     attachedByThisProcess = targetAppId
     InProcessIdleForegroundGate.noteAttached(targetAppId)
+    // A completed attach is the evidence the end-of-trail deferred-attach check looks for, so an
+    // ATTACHED run satisfies it here rather than needing a launch to prove it again.
+    OnDeviceTurbo.noteDetectorConfirmed(targetAppId)
   }
 
   /**
@@ -146,21 +158,57 @@ object InProcessIdleAttacher {
   fun resolveTargetAppId(defaultAppId: String): String =
     resolveTargetAppId(InstrumentationArgUtil.getInstrumentationArg(TARGET_APP_ARG), defaultAppId)
 
+  /** What [attachNowOrAtLaunch] did. */
+  enum class Attach {
+    /** The detector is serving [InProcessIdleAttacher.attachedAppId] and the settle race is on. */
+    ATTACHED,
+
+    /**
+     * The target is not running, so nothing was started: the detector APK is installed and the
+     * settle race is on, and [InProcessIdleLaunchReattacher] attaches at the app's first launch.
+     */
+    DEFERRED_TO_LAUNCH,
+  }
+
   /** Idempotent: cheap PING short-circuit when the idle detector is already attached and serving. */
   fun ensureAttached(targetAppId: String) {
+    attach(targetAppId, deferWhenTargetNotRunning = false)
+  }
+
+  /**
+   * [ensureAttached], except that a target whose process is not running is left for its first
+   * launch to attach — [InProcessIdleLaunchReattacher] does that around every `launchApp` once the
+   * settle-race sysprop is on and the detector APK is installed, both of which this still does.
+   *
+   * A target that is not running cannot be driven until something launches it, so attaching now
+   * would cold-start it twice (the pre-warm and the instrumented restart) for a detector the launch
+   * would attach anyway — and, on a trail whose trailhead clears the app, throw away first. A target
+   * that IS running gets the full attach: the trail may start tapping it without a launch.
+   *
+   * Deferring narrows what the caller can claim: the detector is not attached yet, so nothing is
+   * [recordAttached] and the settle gates race against a port nobody answers on (a fast refusal,
+   * then the heuristic) until the launch. A run that requires turbo must therefore hold the launch
+   * re-attach to account — [OnDeviceTurbo] does, by naming the target from this outcome too.
+   */
+  fun attachNowOrAtLaunch(targetAppId: String): Attach = attach(targetAppId, deferWhenTargetNotRunning = true)
+
+  private fun attach(targetAppId: String, deferWhenTargetNotRunning: Boolean): Attach {
     val inProcessIdlePackage = InProcessIdle.packageFor(targetAppId)
 
-    // Suppress ANR / crash dialogs (standard device-farm setting): a heavy app's instrumented
-    // cold start can trip a transient "isn't responding" dialog that then occludes the UI the
-    // trails assert on.
-    AdbCommandUtil.execShellCommand("settings put global hide_error_dialogs 1")
+    // Error dialogs must stay ENABLED while attached. This used to set `hide_error_dialogs 1` so a
+    // transient "isn't responding" dialog could not occlude the UI — but with dialogs hidden, an
+    // ANR the debug-app flag does not cover kills the app outright instead of showing one. The
+    // farm phone stalls in Square's startup either way; a dialog is dismissed with Wait, a kill is
+    // final. See [InProcessIdle.showErrorDialogsShellArgs].
+    AdbCommandUtil.execShellCommand(InProcessIdle.showErrorDialogsShellArgs().joinToString(" "))
 
     val reply = ping()
     if (reply == "PONG $targetAppId") {
       Console.log("[$LOG_TAG] idle detector already attached to $targetAppId")
       recordAttached(targetAppId)
       enableSettleRace()
-      return
+      noteSplitResidencyFromPackageState(targetAppId)
+      return Attach.ATTACHED
     }
     if (reply != null && reply.startsWith("PONG ")) {
       // Port 7777 is shared across flavors — one attach at a time per device. A different app's
@@ -174,12 +222,52 @@ object InProcessIdleAttacher {
       awaitPortFree()
     }
 
+    // The split host first, when the test APK stages one: the detector then starts WITH the app
+    // at every process start, so there is nothing to instrument, no debug app to name, no second
+    // class loader on the app's cold start, and no ANR-ends-the-instrumentation hazard. The rest
+    // of this function is the instrumentation host, for a test APK built without the app's exact
+    // APK in hand.
+    if (installSplitHostFromAssets(targetAppId)) {
+      splitResidentFor = targetAppId
+      enableSettleRace()
+      if (deferWhenTargetNotRunning) {
+        // The install just stopped the app (any change to a package does), and a trail's first
+        // act is to launch it; the launch confirms the detector ([InProcessIdleLaunchReattacher]).
+        Console.log(
+          "[$LOG_TAG] $targetAppId carries the idle detector as split ${InProcessIdle.SPLIT_NAME} — " +
+            "it starts with the app at its first launch (the settle race is on)",
+        )
+        return Attach.DEFERRED_TO_LAUNCH
+      }
+      launchTargetForeground(targetAppId)
+      awaitPong(targetAppId)
+      return Attach.ATTACHED
+    }
+
     installInProcessIdleFromAssets(
       assetPath = InProcessIdle.assetPathFor(targetAppId),
       inProcessIdlePackage = inProcessIdlePackage,
     )
 
+    // Before the deferral, not after: the compile exists to keep the target's FIRST instrumented
+    // cold start inside the process-start ANR watchdog, and when the attach is deferred that start
+    // happens at the trail's first launch, where nothing would compile it. A debuggable target is
+    // skipped by [AotCompileDecision] either way, so an opted-in lane pays exactly what it did.
     maybeAotCompileTarget(targetAppId)
+
+    // Probed AFTER the install, the PING and the compile: a running target with no detector is the
+    // one case that needs the full attach, and the install has to be in place either way for the
+    // launch path to find a package to instrument. `pidof` over the shell, not the foreground
+    // activity — a target running in the background can still be tapped the moment the trail brings
+    // it forward.
+    if (deferWhenTargetNotRunning && !AdbCommandUtil.isAppRunning(targetAppId)) {
+      Console.log(
+        "[$LOG_TAG] $targetAppId is not running — leaving the attach to its first launch " +
+          "(the settle race is on; launchApp attaches the idle detector before the app comes up)",
+      )
+      enableSettleRace()
+      return Attach.DEFERRED_TO_LAUNCH
+    }
 
     // Pre-warm the target with a NORMAL foreground launch before attaching. `am instrument`
     // cold-starts the app process headless and enforces a ~20s process-start ANR on
@@ -188,6 +276,22 @@ object InProcessIdleAttacher {
     // that one-time cost with no ANR bound (dexopt + page cache survive the instrument restart),
     // so the subsequent instrumented start completes fast enough to bind the idle detector.
     warmUpTargetApp(targetAppId)
+
+    // Otherwise the first tap the target falls 5 s behind ends the instrumentation and force-stops
+    // the app instead of raising an ANR. See [InProcessIdle.keepAliveThroughAnrShellArgs].
+    Console.log("[$LOG_TAG] marking $targetAppId as the debug app so a stall while attached is waited out, not killed")
+    val debugAppOutput = AdbCommandUtil.execShellCommand(InProcessIdle.keepAliveThroughAnrShellArgs(targetAppId).joinToString(" "))
+    // `am set-debug-app` is silent on success, so anything it printed is a refusal. Attaching over
+    // one would give the caller a target that is instrumented but NOT protected — exactly the
+    // combination that turns a 5 s stall into a force-stop. OnDeviceTurbo records the throw as
+    // ATTACH_FAILED, which clears the turbo switch and reddens a lane that demanded turbo.
+    if (InProcessIdle.setDebugAppReportedFailure(debugAppOutput)) {
+      Console.log("[$LOG_TAG] am set-debug-app: ${debugAppOutput.trim()}")
+      throw IllegalStateException(
+        "am set-debug-app refused $targetAppId: ${debugAppOutput.trim()} — not attaching, an ANR " +
+          "while instrumented would kill the app",
+      )
+    }
 
     Console.log("[$LOG_TAG] starting idle detector instrumentation for $targetAppId")
     val instrumentOutput =
@@ -202,9 +306,14 @@ object InProcessIdleAttacher {
     // to poll PING 120 times anyway, spending a minute (longer if something else holds the port)
     // to rediscover an answer the shell already gave. Same parser the re-attach path uses, so both
     // reject on the same evidence.
-    check(!InProcessIdle.amInstrumentReportedFailure(instrumentOutput)) {
-      "[$LOG_TAG] am instrument was rejected for $inProcessIdlePackage, so the idle detector never " +
-        "started: ${instrumentOutput.trim()}"
+    if (InProcessIdle.amInstrumentReportedFailure(instrumentOutput)) {
+      // No detector, so no reason to keep the debug app named above: it lives in a persistent
+      // setting and would otherwise outlast this failed attach.
+      AdbCommandUtil.execShellCommand(InProcessIdle.clearDebugAppShellArgs().joinToString(" "))
+      error(
+        "[$LOG_TAG] am instrument was rejected for $inProcessIdlePackage, so the idle detector never " +
+          "started: ${instrumentOutput.trim()}",
+      )
     }
     // A single foreground bring-to-front after attach: keeps the instrumented restart visible
     // (foreground ANR window) without re-launching in a loop, which would restart the process
@@ -212,6 +321,7 @@ object InProcessIdleAttacher {
     launchTargetForeground(targetAppId)
     awaitPong(targetAppId)
     enableSettleRace()
+    return Attach.ATTACHED
   }
 
   /**
@@ -576,83 +686,248 @@ object InProcessIdleAttacher {
       }
 
       Console.log("[$LOG_TAG] installing $inProcessIdlePackage from asset $assetPath")
-      uiAutomation.adoptShellPermissionIdentity()
-      try {
-        val installer = context.packageManager.packageInstaller
-        val params =
-          PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL)
-        val sessionId = installer.createSession(params)
-        // Abandon the staged session on ANY pre-commit failure: `.use{}` only closes the client
-        // handle — the staged session survives system-side until commit, and `ensureAttached`
-        // retries per trail, so a repeated failure would otherwise leak sessions until the
-        // installer's active-session cap.
-        var committed = false
-        // The installer's own verdict, hoisted so the record below is derived from it rather than
-        // from having reached this line. Stays null if no status ever arrives.
-        var installStatus: Int? = null
-        try {
-          installer.openSession(sessionId).use { session ->
-            session.openWrite("inprocess-idle.apk", 0, -1).use { out ->
-              apk.copyTo(out)
-              session.fsync(out)
-            }
+      val installStatus = commitInstallSession(
+        context = context,
+        uiAutomation = uiAutomation,
+        params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL),
+        entryName = "inprocess-idle.apk",
+        apk = apk,
+        label = inProcessIdlePackage,
+      )
+      // Derived from the installer's status, not from having reached this line: every failure
+      // in the commit throws today, and [recordAfterInstallAttempt] keeps the record honest if one
+      // ever stops throwing.
+      installedFromAssetByThisProcess = recordAfterInstallAttempt(
+        previousRecord = installedFromAssetByThisProcess,
+        installKey = installKey,
+        installStatus = installStatus,
+      )
+      Console.log("[$LOG_TAG] installed $inProcessIdlePackage")
+    }
+  }
 
-            val statusRef = AtomicReference<Pair<Int, String?>>()
-            val latch = CountDownLatch(1)
-            val receiver = object : BroadcastReceiver() {
-              override fun onReceive(receiverContext: Context, intent: Intent) {
-                statusRef.set(
-                  intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE) to
-                    intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE),
-                )
-                latch.countDown()
-              }
-            }
-            // Derived from the test package so the action is unique per test bundle by construction.
-            val installAction = "${context.packageName}.INSTALL_COMPLETE"
-            // RECEIVER_EXPORTED: the status broadcast comes from the system package installer,
-            // not from this package. Mandatory flag choice on API 34+.
-            context.registerReceiver(receiver, IntentFilter(installAction), Context.RECEIVER_EXPORTED)
-            try {
-              val pendingIntent = PendingIntent.getBroadcast(
-                context,
-                sessionId,
-                Intent(installAction).setPackage(context.packageName),
-                // Mutable: the installer fills in the status extras.
-                PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+  /**
+   * Which asset this process last installed the split host from, keyed like
+   * [installedFromAssetByThisProcess] (by the target app, since the split has no package of its
+   * own) and process-scoped for the same reason.
+   */
+  @Volatile
+  private var splitInstalledFromAssetByThisProcess: String? = null
+
+  /**
+   * The app whose split host this process installed or found and kept, or null. Read by
+   * [InProcessIdleLaunchReattacher]: a launch of this app needs no `am instrument` — the split's
+   * provider starts the detector as the app starts — but still needs its post-launch confirmation,
+   * which is what a strict run's accounting rests on.
+   */
+  @Volatile
+  private var splitResidentFor: String? = null
+
+  /** Whether [appId] carries the split host this process put (or confirmed) in place. */
+  fun isSplitResident(appId: String): Boolean = splitResidentFor == appId
+
+  /**
+   * Records split residency for a detector this process found already answering, by asking the
+   * package manager rather than assuming. A new runner process on a device where the previous run
+   * installed the split gets its PONG before it has installed anything, and residency is
+   * per-process: left unrecorded, the first launch that stops the app would go looking for the
+   * instrumentation host — which a split-only test APK never staged — and a strict run would lose
+   * turbo at a launch the split was about to serve for free.
+   */
+  private fun noteSplitResidencyFromPackageState(targetAppId: String) {
+    if (splitResidentFor == targetAppId) return
+    // `pm path` over the shell needs no <queries> package-visibility declaration.
+    if (InProcessIdle.pmPathListsSplit(AdbCommandUtil.execShellCommand("pm path $targetAppId"))) {
+      Console.log("[$LOG_TAG] $targetAppId carries split ${InProcessIdle.SPLIT_NAME} from an earlier run — launches need no re-attach")
+      splitResidentFor = targetAppId
+    }
+  }
+
+  /**
+   * Installs the split-APK host for [targetAppId] from the test APK's assets, or returns false
+   * when the test APK stages none (a build that did not know the exact app APK — see
+   * [InProcessIdle.SPLIT_NAME]). True means the split is in place: the detector will start with
+   * the app's next process start, and nothing has to be attached.
+   *
+   * A split already present but not installed by this process is replaced, like the
+   * instrumentation package is: nothing readable says it was built for this test APK. Installing
+   * a split kills the app's process, which is why this runs where the attach runs — before the
+   * trail — and never on a path that keeps a running, attached target.
+   *
+   * A staged split that FAILS to install throws rather than falling back to the instrumentation
+   * host. The two hosts perform very differently at launch, and a lane measuring turbo would
+   * otherwise report the slow one as the fast one with only a logcat line to say so.
+   */
+  private fun installSplitHostFromAssets(targetAppId: String): Boolean {
+    val assetPath = InProcessIdle.splitAssetPathFor(targetAppId)
+    val instrumentation = InstrumentationRegistry.getInstrumentation()
+    val context = instrumentation.context
+    val apkStream = try {
+      context.assets.open(assetPath)
+    } catch (e: java.io.IOException) {
+      return false
+    }
+    apkStream.use { apk ->
+      val installKey = detectorInstallKey(targetAppId, assetPath)
+      // `pm path` over the shell needs no <queries> package-visibility declaration.
+      val alreadyInstalled = InProcessIdle.pmPathListsSplit(AdbCommandUtil.execShellCommand("pm path $targetAppId"))
+      if (shouldReuseInstalledDetector(alreadyInstalled, splitInstalledFromAssetByThisProcess, installKey)) {
+        Console.log("[$LOG_TAG] $targetAppId still carries split ${InProcessIdle.SPLIT_NAME} installed from asset $assetPath by this run")
+        return true
+      }
+      if (alreadyInstalled) {
+        Console.log("[$LOG_TAG] removing stale split ${InProcessIdle.SPLIT_NAME} from $targetAppId before fresh install")
+        AdbCommandUtil.execShellCommand(InProcessIdle.removeSplitShellArgs(targetAppId).joinToString(" "))
+      }
+      Console.log("[$LOG_TAG] installing the idle detector as split ${InProcessIdle.SPLIT_NAME} of $targetAppId from asset $assetPath")
+      // The split's versionCode and signature must match the installed base, which the build
+      // guaranteed by stamping it from the same APK the farm installs; a mismatch surfaces as the
+      // package manager's own error out of the commit below.
+      installSplitViaPackageManagerShell(targetAppId = targetAppId, apkBytes = apk.readBytes())
+      splitInstalledFromAssetByThisProcess = installKey
+      Console.log("[$LOG_TAG] installed split ${InProcessIdle.SPLIT_NAME} into $targetAppId")
+      return true
+    }
+  }
+
+  /**
+   * Installs [apkBytes] as the split host of [targetAppId] by driving `pm install-create -p` /
+   * `install-write` / `install-commit` over the shell, and confirms the split is listed afterwards.
+   *
+   * The package manager's own inheriting session rather than a [PackageInstaller] one from this
+   * process — see [InProcessIdle.splitInstallCreateShellArgs] for why that is not a style choice.
+   *
+   * Every step is checked against its stdout token, because this transport has no exit status
+   * ([InProcessIdle.installOutputSucceeded]), and the whole thing is checked once more against
+   * `pm path` at the end: a silent no-op anywhere in the sequence would otherwise read as an
+   * installed detector and leave the run waiting on a `PONG` that can never come.
+   */
+  private fun installSplitViaPackageManagerShell(targetAppId: String, apkBytes: ByteArray) {
+    val createOutput =
+      AdbCommandUtil.execShellCommand(InProcessIdle.splitInstallCreateShellArgs(targetAppId).joinToString(" "))
+    val sessionId = InProcessIdle.parseInstallSessionId(createOutput)
+      ?: error(
+        "[$LOG_TAG] pm install-create for split ${InProcessIdle.SPLIT_NAME} of $targetAppId named no " +
+          "session: ${createOutput.trim()}",
+      )
+    var sessionConsumed = false
+    try {
+      val writeCommand = wrapShellPipelineForOnDeviceTransport(
+        InProcessIdle.splitInstallWriteInnerCommand(
+          sessionId = sessionId,
+          apkBase64 = Base64.getEncoder().encodeToString(apkBytes),
+          sizeBytes = apkBytes.size.toLong(),
+        ),
+      )
+      check(writeCommand.length <= InProcessIdle.MAX_INSTALL_WRITE_COMMAND_LENGTH) {
+        "[$LOG_TAG] the split ${InProcessIdle.SPLIT_NAME} of $targetAppId is too big to stream over this " +
+          "transport: ${apkBytes.size} bytes becomes a ${writeCommand.length}-character command, over the " +
+          "${InProcessIdle.MAX_INSTALL_WRITE_COMMAND_LENGTH} this path allows"
+      }
+      val writeOutput = AdbCommandUtil.execShellCommand(writeCommand)
+      check(InProcessIdle.installOutputSucceeded(writeOutput)) {
+        "[$LOG_TAG] streaming split ${InProcessIdle.SPLIT_NAME} of $targetAppId into install session " +
+          "$sessionId failed: ${writeOutput.trim()}"
+      }
+      val commitOutput =
+        AdbCommandUtil.execShellCommand(InProcessIdle.splitInstallCommitShellArgs(sessionId).joinToString(" "))
+      // A committed session belongs to the package manager whether it installed or not, so there is
+      // nothing left to abandon past this line.
+      sessionConsumed = true
+      check(InProcessIdle.installOutputSucceeded(commitOutput)) {
+        "[$LOG_TAG] install of split ${InProcessIdle.SPLIT_NAME} of $targetAppId failed: ${commitOutput.trim()}"
+      }
+    } finally {
+      // An uncommitted session survives device-side until it is abandoned, and the attach retries
+      // per trail, so a repeated failure would otherwise leak sessions up to the installer's cap.
+      if (!sessionConsumed) {
+        runCatching {
+          AdbCommandUtil.execShellCommand(InProcessIdle.splitInstallAbandonShellArgs(sessionId).joinToString(" "))
+        }
+      }
+    }
+    check(InProcessIdle.pmPathListsSplit(AdbCommandUtil.execShellCommand("pm path $targetAppId"))) {
+      "[$LOG_TAG] install session $sessionId reported success but $targetAppId does not list split " +
+        "${InProcessIdle.SPLIT_NAME}"
+    }
+  }
+
+  /**
+   * Stages [apk] in a [PackageInstaller] session under the shell identity, commits it and waits
+   * for the installer's verdict. Returns the status the installer reported; anything but
+   * [PackageInstaller.STATUS_SUCCESS] throws with the installer's message, as does a commit that
+   * never reports back.
+   */
+  private fun commitInstallSession(
+    context: Context,
+    uiAutomation: android.app.UiAutomation,
+    params: PackageInstaller.SessionParams,
+    entryName: String,
+    apk: java.io.InputStream,
+    label: String,
+  ): Int {
+    uiAutomation.adoptShellPermissionIdentity()
+    try {
+      val installer = context.packageManager.packageInstaller
+      val sessionId = installer.createSession(params)
+      // Abandon the staged session on ANY pre-commit failure: `.use{}` only closes the client
+      // handle — the staged session survives system-side until commit, and `ensureAttached`
+      // retries per trail, so a repeated failure would otherwise leak sessions until the
+      // installer's active-session cap.
+      var committed = false
+      try {
+        installer.openSession(sessionId).use { session ->
+          session.openWrite(entryName, 0, -1).use { out ->
+            apk.copyTo(out)
+            session.fsync(out)
+          }
+
+          val statusRef = AtomicReference<Pair<Int, String?>>()
+          val latch = CountDownLatch(1)
+          val receiver = object : BroadcastReceiver() {
+            override fun onReceive(receiverContext: Context, intent: Intent) {
+              statusRef.set(
+                intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE) to
+                  intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE),
               )
-              session.commit(pendingIntent.intentSender)
-              // Commit transfers session ownership to the installer — only pre-commit failures
-              // leave a staged session that we must abandon.
-              committed = true
-              check(latch.await(60, TimeUnit.SECONDS)) {
-                "[$LOG_TAG] PackageInstaller commit for $inProcessIdlePackage timed out"
-              }
-              val (status, message) = statusRef.get()
-              installStatus = status
-              check(status == PackageInstaller.STATUS_SUCCESS) {
-                "[$LOG_TAG] install of $inProcessIdlePackage failed: status=$status message=$message"
-              }
-            } finally {
-              context.unregisterReceiver(receiver)
+              latch.countDown()
             }
           }
-        } catch (t: Throwable) {
-          if (!committed) runCatching { installer.abandonSession(sessionId) }
-          throw t
+          // Derived from the test package so the action is unique per test bundle by construction.
+          val installAction = "${context.packageName}.INSTALL_COMPLETE"
+          // RECEIVER_EXPORTED: the status broadcast comes from the system package installer,
+          // not from this package. Mandatory flag choice on API 34+.
+          context.registerReceiver(receiver, IntentFilter(installAction), Context.RECEIVER_EXPORTED)
+          try {
+            val pendingIntent = PendingIntent.getBroadcast(
+              context,
+              sessionId,
+              Intent(installAction).setPackage(context.packageName),
+              // Mutable: the installer fills in the status extras.
+              PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+            )
+            session.commit(pendingIntent.intentSender)
+            // Commit transfers session ownership to the installer — only pre-commit failures
+            // leave a staged session that we must abandon.
+            committed = true
+            check(latch.await(60, TimeUnit.SECONDS)) {
+              "[$LOG_TAG] PackageInstaller commit for $label timed out"
+            }
+            val (status, message) = statusRef.get()
+            check(status == PackageInstaller.STATUS_SUCCESS) {
+              "[$LOG_TAG] install of $label failed: status=$status message=$message"
+            }
+            return status
+          } finally {
+            context.unregisterReceiver(receiver)
+          }
         }
-        // Derived from the installer's status, not from having reached this line: every failure
-        // above throws today, and [recordAfterInstallAttempt] keeps the record honest if one ever
-        // stops throwing.
-        installedFromAssetByThisProcess = recordAfterInstallAttempt(
-          previousRecord = installedFromAssetByThisProcess,
-          installKey = installKey,
-          installStatus = installStatus,
-        )
-        Console.log("[$LOG_TAG] installed $inProcessIdlePackage")
-      } finally {
-        uiAutomation.dropShellPermissionIdentity()
+      } catch (t: Throwable) {
+        if (!committed) runCatching { installer.abandonSession(sessionId) }
+        throw t
       }
+    } finally {
+      uiAutomation.dropShellPermissionIdentity()
     }
   }
 

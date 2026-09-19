@@ -60,8 +60,7 @@ import xyz.block.trailblaze.api.TrailblazeNode
 import androidx.compose.foundation.text.selection.SelectionContainer
 import xyz.block.trailblaze.ui.composables.SelectableText
 import xyz.block.trailblaze.ui.images.ImageLoader
-import xyz.block.trailblaze.ui.images.ScreenshotDiagnostics
-import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.ui.images.rememberScreenshotLoadState
 
 /**
  * Screenshot overlay for TrailblazeNode - shows bounds rectangles on hover/select.
@@ -83,39 +82,18 @@ internal fun TrailblazeNodeInspector(
   val density = LocalDensity.current
   val allNodes = remember(trailblazeNodeTree) { trailblazeNodeTree.aggregate() }
 
-  val imageModel = remember(sessionId, screenshotFile, imageLoader) {
-    imageLoader.getImageModel(sessionId, screenshotFile)
-  }
-
-  // Which loader answered is the field that localizes this: the same node renders through a
-  // file-system loader in the desktop app and a network one in a published report, and only one of
-  // them can return null for a screenshot that exists. In an effect keyed on the screenshot so it
-  // is said once per screenshot — callers construct their loader inline, so the `remember` above
-  // re-runs whenever an ancestor recomposes.
-  LaunchedEffect(sessionId, screenshotFile) {
-    if (imageModel == null) {
-      Console.log(
-        "❌ Inspector has nothing to load for ${ScreenshotDiagnostics.ref(screenshotFile)}: " +
-          "${imageLoader::class.simpleName} produced no image model",
-      )
-    }
-  }
-
-  // Resolving the model is not the same as loading the image. When the loader itself fails, the
-  // pane would otherwise stay empty and draw overlays over nothing, with no message anywhere —
-  // that's what made the ProGuard/Coil ServiceLoader breakage (block/trailblaze#194) so hard to
-  // place. Recording the failure here routes it to the visible branch below, the same way
-  // [ViewHierarchyInspector] does. Keyed on the screenshot rather than the model, because a new
-  // model identity for the same screenshot is an ancestor recomposing, not a new thing to try.
-  var loadError by remember(sessionId, screenshotFile) { mutableStateOf<String?>(null) }
+  // Resolving the model is not the same as loading the image, and either failing leaves this pane
+  // drawing node overlays over nothing — which is what made the ProGuard/Coil ServiceLoader
+  // breakage (block/trailblaze#194) so hard to place. Both routes to the message below.
+  val screenshot = rememberScreenshotLoadState(sessionId, screenshotFile, imageLoader, pane = "Inspector")
 
   Box(
     modifier = Modifier.fillMaxSize(),
     contentAlignment = Alignment.Center
   ) {
-    if (imageModel != null && loadError == null) {
+    if (screenshot.message == null) {
       AsyncImage(
-        model = imageModel,
+        model = screenshot.model,
         contentDescription = "App Screenshot",
         modifier = Modifier
           .aspectRatio(deviceWidth.toFloat() / deviceHeight.toFloat())
@@ -123,17 +101,7 @@ internal fun TrailblazeNodeInspector(
           .defaultMinSize(minWidth = 200.dp, minHeight = 200.dp)
           .clip(MaterialTheme.shapes.medium),
         contentScale = ContentScale.Fit,
-        onError = { state ->
-          // The cause goes through the same bounding as the reference: an image pipeline failure
-          // quotes back the model the loader built, which is the reference with a base path or a
-          // server URL in front of it.
-          val cause = ScreenshotDiagnostics.cause(state.result.throwable)
-          Console.log(
-            "❌ Inspector screenshot failed to load: " +
-              "${ScreenshotDiagnostics.ref(screenshotFile)}: $cause",
-          )
-          loadError = cause
-        },
+        onError = screenshot.onError,
       )
 
       Canvas(
@@ -185,7 +153,7 @@ internal fun TrailblazeNodeInspector(
       }
     } else {
       SelectableText(
-        text = ScreenshotDiagnostics.message(loadError, screenshotFile),
+        text = screenshot.message,
         style = MaterialTheme.typography.bodyLarge,
         color = MaterialTheme.colorScheme.onSurfaceVariant
       )

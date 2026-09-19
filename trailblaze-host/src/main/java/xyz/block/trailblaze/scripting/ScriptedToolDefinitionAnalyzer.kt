@@ -552,7 +552,7 @@ open class ScriptedToolDefinitionAnalyzer(
       explicitSdkDir?.trim()?.takeIf { it.isNotEmpty() }?.let { explicit ->
         val candidate = File(explicit)
         if (File(candidate, EXTRACTOR_SHIM_RELPATH).isFile) return candidate
-        Console.info(
+        Console.error(
           "[ScriptedToolDefinitionAnalyzer] TRAILBLAZE_SDK_DIR=$explicit has no " +
             "$EXTRACTOR_SHIM_RELPATH — ignoring the override and resolving normally.",
         )
@@ -600,7 +600,7 @@ open class ScriptedToolDefinitionAnalyzer(
       if (!reportedUnusableSourceTrees.add(candidate.path)) return
       val prefix = "[ScriptedToolDefinitionAnalyzer] SDK source tree at $candidate has no " +
         "installed analyzer deps (`bun install` never ran there)"
-      Console.info(
+      Console.error(
         if (bundled != null) {
           "$prefix — using the JAR-bundled analyzer shim at $bundled instead."
         } else {
@@ -690,31 +690,60 @@ open class ScriptedToolDefinitionAnalyzer(
      * accept), or any I/O error all yield null + a diagnostic, never a thrown exception — the
      * caller then degrades to "analyzer unavailable". Split out (no memo) so it's unit-testable
      * with an explicit dir.
+     *
+     * [shimResource] and [tsLibArchive] default to the JAR resources and are injectable only so a
+     * test can drive the success and empty-resource branches — and assert which stream each one's
+     * diagnostic lands on — without depending on whether this build staged the ~7 MB bundle, or
+     * paying to unpack it.
+     *
+     * Both are lambdas so that reading them happens INSIDE the `try` below. A default argument is
+     * evaluated at the call site, so a read that fails mid-stream would throw straight past this
+     * function's catch and out of tool discovery — the one outcome the "never a thrown exception"
+     * contract above exists to rule out. [tsLibArchive] additionally stays lazy so the lib payload
+     * is read only on the success path, not on every call that finds no shim.
      */
-    internal fun extractBundledAnalyzerShim(cacheRoot: File): File? = try {
-      val bytes = ScriptedToolDefinitionAnalyzer::class.java.classLoader
-        ?.getResourceAsStream(BUNDLED_ANALYZER_SHIM_RESOURCE)
-        ?.use { it.readBytes() }
+    internal fun extractBundledAnalyzerShim(
+      cacheRoot: File,
+      shimResource: () -> ByteArray? = { readBundledShimResource() },
+      tsLibArchive: () -> ByteArray? = { readBundledTsLibArchive() },
+    ): File? = try {
+      val shimResourceBytes = shimResource()
       when {
-        bytes == null -> null
-        bytes.isEmpty() -> {
-          Console.info(
+        shimResourceBytes == null -> null
+        shimResourceBytes.isEmpty() -> {
+          Console.error(
             "[ScriptedToolDefinitionAnalyzer] bundled analyzer shim resource is empty — " +
               "skipping (typed-tool analysis unavailable from the bundled shim).",
           )
           null
         }
-        else -> extractBundledShim(bytes, cacheRoot, tsLibArchive = readBundledTsLibArchive()).also {
-          Console.info("[ScriptedToolDefinitionAnalyzer] using JAR-bundled analyzer shim at $it")
+        // Which shim path won is diagnostics, not a result, so it belongs on `log` rather than
+        // `info`: `log` is the only level a caller can suppress or redirect, and every consumer of
+        // clean stdout leans on one of those. `trailblaze config` and `device list` go quiet around
+        // discovery unconditionally, `--json` commands move `log` to stderr via `enableJsonMode`,
+        // and the device/daemon command helpers go quiet unless `--verbose` is passed. Quiet mode
+        // is per-command, not a global the CLI turns on once — but `info` would defeat all three.
+        else -> extractBundledShim(
+          shimResourceBytes,
+          cacheRoot,
+          tsLibArchive = tsLibArchive(),
+        ).also {
+          Console.log("[ScriptedToolDefinitionAnalyzer] using JAR-bundled analyzer shim at $it")
         }
       }
     } catch (e: Exception) {
-      Console.info(
+      Console.error(
         "[ScriptedToolDefinitionAnalyzer] failed to extract bundled analyzer shim " +
           "(${e.message ?: e.javaClass.simpleName}) — typed-tool analysis unavailable.",
       )
       null
     }
+
+    /** Read the bundled shim resource, or null when the JAR didn't carry one (dev build). */
+    private fun readBundledShimResource(): ByteArray? = ScriptedToolDefinitionAnalyzer::class.java
+      .classLoader
+      ?.getResourceAsStream(BUNDLED_ANALYZER_SHIM_RESOURCE)
+      ?.use { it.readBytes() }
 
     /** Read the shipped TypeScript lib archive, or null when the JAR didn't carry one. */
     private fun readBundledTsLibArchive(): ByteArray? = ScriptedToolDefinitionAnalyzer::class.java
@@ -751,7 +780,7 @@ open class ScriptedToolDefinitionAnalyzer(
           .toByteArray(Charsets.UTF_8)
       } else {
         if (ANALYZER_SDK_ROOT_PLACEHOLDER in shimBytes.toString(Charsets.UTF_8)) {
-          Console.info(
+          Console.error(
             "[ScriptedToolDefinitionAnalyzer] bundled analyzer shim expects a TypeScript lib " +
               "payload ($BUNDLED_ANALYZER_TS_LIB_RESOURCE) that this build didn't ship — types " +
               "declared in TypeScript's standard library (Record, Partial, Pick, …) will fail " +
@@ -815,7 +844,7 @@ open class ScriptedToolDefinitionAnalyzer(
           // Refuse entries that escape the extraction root. The archive is ours, but an
           // unpacker that trusts entry names is the kind of thing that stops being true later.
           if (!target.canonicalFile.toPath().startsWith(canonicalRoot.toPath())) {
-            Console.info(
+            Console.error(
               "[ScriptedToolDefinitionAnalyzer] skipping analyzer lib entry outside the " +
                 "extraction root: ${entry.name}",
             )

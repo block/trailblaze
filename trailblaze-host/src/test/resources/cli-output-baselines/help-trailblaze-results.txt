@@ -8,10 +8,11 @@
 Usage: trailblaze results [-hV] [--all-devices] [--json] [--latest]
                           [--device=<profile>] [--repo=<repo>] [<case-id>]
                           [COMMAND]
-Query the persisted test-result index for a test case. Passing a positional
-`<case-id>` (e.g. `trailblaze results C12345 --device android-phone`) is
-equivalent to the explicit `trailblaze results show <case-id>` form — picocli
-routes the bare case-id straight to the `show` subcommand.
+Query the persisted test-result index for a test case.
+Passing a positional `<case-id>` (e.g. `trailblaze results C12345 --device
+android-phone`) is equivalent to the explicit `trailblaze results show
+<case-id>` form — picocli routes the bare case-id straight to the `show`
+subcommand.
       [<case-id>]          Test-case ID. When supplied without a subcommand,
                              this routes to `show <case-id>`. Case-insensitive;
                              the leading `C` is required (e.g. C12345).

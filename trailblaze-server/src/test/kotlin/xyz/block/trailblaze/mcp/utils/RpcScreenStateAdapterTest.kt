@@ -38,7 +38,7 @@ class RpcScreenStateAdapterTest {
   fun `a device that reported nothing reads as unknown, which is not partial`() {
     // An on-device server that predates the field, or a request that asked for no tree. Unknown
     // must not be read as partial: that would make every forbidden-bearing waypoint and every
-    // absence-shaped findMatches unanswerable against an older device.
+    // absence-shaped selector queries unanswerable against an older device.
     val screenState = RpcScreenStateAdapter(response(droppedNodeFetches = null))
 
     assertNull(screenState.droppedNodeFetches)

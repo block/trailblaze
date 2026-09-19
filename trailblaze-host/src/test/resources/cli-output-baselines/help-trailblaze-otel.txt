@@ -7,9 +7,11 @@
 # ----------------------------------------------------------------------
 Usage: trailblaze otel [-hV] [--post] [--endpoint=<url>]
                        [--service-name=<serviceName>] [<dir>]
-Convert recorded spans to OpenTelemetry. Writes <session>/otel.json (OTLP/JSON)
-for every session that recorded a trace, and with --post also sends them to an
-OTLP endpoint. Defaults to the configured logs directory when <dir> is omitted.
+Convert recorded spans to OpenTelemetry (OTLP/JSON files, optionally posted to
+an endpoint).
+Writes <session>/otel.json for every session that recorded a trace, and with
+--post also sends them to an OTLP endpoint. Defaults to the configured logs
+directory when <dir> is omitted.
       [<dir>]            A logs directory (holding per-session subdirectories)
                            or a single session directory. Defaults to the
                            configured logs directory.

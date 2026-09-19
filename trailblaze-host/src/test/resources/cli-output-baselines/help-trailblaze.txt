@@ -26,41 +26,19 @@ Trailblaze - AI-powered device automation
                  for tools).
   session      Manage the current device session — save it as a replayable
                  trail, inspect steps, end it
-  report       Generate an HTML report for session recordings, plus a
-                 best-effort JSON summary, and optionally MP4/GIF/WebP exports
-                 for a single session. JSON-only failures log a warning and
-                 still exit 0 — HTML is the primary artifact and is what gates
-                 the exit code. Animated exports collapse long idle gaps
-                 between steps so their length tracks the number of steps, not
-                 the session's real wall-clock. The capture window for all
-                 three (--gif/--webp/--video) is bounded by the
-                 MAX_PLAYBACK_WAIT_MS environment variable (milliseconds,
-                 default 600000); if playback overruns it, a best-effort
-                 truncated artifact is still written with a warning.
+  report       Generate an HTML report (plus JSON summary, optional
+                 MP4/GIF/WebP) for session recordings.
   strings      Extract the human-visible text a recorded session showed, for
                  localization and copy diffs
   viewer       Write out the standalone report viewer (one self-contained HTML
-                 page) bundled into this binary. Serve it anywhere, or just
-                 open it: drop a session archive on the page, or point it at
-                 one with ?zip=<archive-url>. Versioned with this CLI, so it
-                 always matches the reports this binary generates.
-  profile      Generate the performance-analysis report (an Instruments-style
-                 time profiler over each session's tools, LLM calls, timeouts,
-                 and idle gaps) for a logs directory. Defaults to the
-                 configured logs directory when <logs-dir> is omitted. Writes
-                 <logs-dir>/trailblaze_performance_analysis.html. Requires
-                 `bun` on PATH.
-  otel         Convert recorded spans to OpenTelemetry. Writes <session>/otel.
-                 json (OTLP/JSON) for every session that recorded a trace, and
-                 with --post also sends them to an OTLP endpoint. Defaults to
-                 the configured logs directory when <dir> is omitted.
+                 page).
+  profile      Generate a performance-analysis report (tools, LLM calls,
+                 timeouts, idle gaps) for a logs directory.
+  otel         Convert recorded spans to OpenTelemetry (OTLP/JSON files,
+                 optionally posted to an endpoint).
   waypoint     Match named app locations (waypoints) against captured screen
                  state.
-  results      Query the persisted test-result index for a test case. Passing a
-                 positional `<case-id>` (e.g. `trailblaze results C12345
-                 --device android-phone`) is equivalent to the explicit
-                 `trailblaze results show <case-id>` form — picocli routes the
-                 bare case-id straight to the `show` subcommand.
+  results      Query the persisted test-result index for a test case.
   config       View and set configuration (target app, device defaults, AI
                  provider)
   device       List and connect devices (Android, iOS, Web)
@@ -70,12 +48,8 @@ Trailblaze - AI-powered device automation
                  Runner or --headless for a daemon-only background service).
   mcp          Start a Model Context Protocol (MCP) server for AI agent
                  integration
-  check        Validate a trailmap: materialize manifests, type-check
-                 TypeScript/JavaScript sources, and run `*.test.ts` unit tests
-                 via `bun test`. On first run, scaffolds a minimal package.json
-                 at the workspace root if absent so `bun install` can be used
-                 as the canonical bootstrap (its `postinstall` hook re-runs
-                 `trailblaze check`).
+  check        Validate a trailmap: materialize manifests, type-check its
+                 TypeScript, run its `*.test.ts` tests.
   inprocess    Check an app APK for in-process driver compatibility, and build
                  a test APK that drives it.
   skill        Print or install the bundled agent skill that teaches a coding

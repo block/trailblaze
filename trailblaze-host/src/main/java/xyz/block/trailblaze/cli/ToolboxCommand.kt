@@ -11,6 +11,7 @@ import xyz.block.trailblaze.model.TrailblazeHostAppTarget.DefaultTrailblazeHostA
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.util.runQuiet
 import java.util.concurrent.Callable
 
 /**
@@ -43,7 +44,7 @@ internal enum class ToolboxRenderOutcome(val exitCode: Int) {
   mixinStandardHelpOptions = true,
   description = ["Browse available tools by target app and platform"],
 )
-class ToolboxCommand : Callable<Int> {
+class ToolboxCommand : Callable<Int>, QuietUnlessVerbose {
 
   @CommandLine.Parameters(
     index = "0",
@@ -101,6 +102,12 @@ class ToolboxCommand : Callable<Int> {
   )
   var verbose: Boolean = false
 
+  /**
+   * Closes the internal [Console.log] channel for this command unless `--verbose`, applied at
+   * dispatch so the early-return paths are covered too — see [QuietUnlessVerbose].
+   */
+  override val verboseRequested: Boolean get() = verbose
+
   override fun call(): Int {
     // Validate the optional positional role filter early — surface usage rather than letting
     // a typo silently render the unfiltered grouped view.
@@ -155,7 +162,9 @@ class ToolboxCommand : Callable<Int> {
       resolvedTarget = null
       resolvedSource = ResolvedCliTargetSource.Explicit
     } else {
-      val resolution = resolveCliTarget(target)
+      // Reading the workspace's defaults logs where trailblaze.yaml was loaded from; that is a
+      // daemon-log breadcrumb, not part of the catalogue a person asked for.
+      val resolution = if (verbose) resolveCliTarget(target) else Console.runQuiet { resolveCliTarget(target) }
       resolvedTarget = resolution.id
       resolvedSource = resolution.source
     }

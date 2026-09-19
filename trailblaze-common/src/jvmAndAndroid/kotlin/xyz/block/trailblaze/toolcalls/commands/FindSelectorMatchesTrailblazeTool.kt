@@ -27,15 +27,15 @@ import xyz.block.trailblaze.tracing.TrailblazeTracer
  *
  * A view-hierarchy capture is the expensive part of a query — multiple seconds on a loaded Android
  * device, where every node is a live accessibility fetch — and resolving a selector against a tree
- * already in hand is free. [FindMatchesTrailblazeTool] answers one selector per call and therefore
- * one CAPTURE per selector, which is the right shape for one question and the wrong shape for the
- * common scripted pattern of asking several at once ("is the wizard up, or is the app already on
- * home?").
+ * already in hand is free. Asking one selector per call therefore costs one CAPTURE per selector,
+ * which is the right shape for one question and the wrong shape for the common scripted pattern of
+ * asking several at once ("is the wizard up, or is the app already on home?").
  *
  * [SnapshotCache] does not rescue that pattern from a scripted tool. It caches one [ScreenState]
  * per stack frame, and `BaseTrailblazeAgent.runTrailblazeTools` pushes one frame per tool BATCH —
- * but each scripting callback enters its own nested frame, so N `client.tools.findMatches(...)`
- * calls from inside one scripted tool pay N captures no matter what the cache holds. Widening the
+ * but each scripting callback enters its own nested frame, so N separate
+ * `client.tools.findSelectorMatches(...)` calls from inside one scripted tool pay N captures no
+ * matter what the cache holds. Widening the
  * frame to span a whole scripted-tool invocation is not the fix either: a tool that polls for 30s
  * would then read one stale capture for its entire run. The cache has to stay short-lived, so the
  * batching has to be explicit — which is this tool.
@@ -43,7 +43,7 @@ import xyz.block.trailblaze.tracing.TrailblazeTracer
  * ## Atomicity, not just speed
  *
  * Every selector is resolved against the SAME tree, so the answers describe one instant of one
- * screen. Sequential `findMatches` calls cannot promise that: between selector A's capture and
+ * screen. Sequential one-selector calls cannot promise that: between selector A's capture and
  * selector B's, the screen can change, and a caller racing two conditions can see both true, or
  * neither, in a way that depends on which it probed first. That ambiguity disappears here. Callers
  * that need a tie-break (A wins over B when both match in one frame) get to make it deterministic
@@ -62,8 +62,7 @@ import xyz.block.trailblaze.tracing.TrailblazeTracer
  *
  * Each entry is a LIST, so 0, 1 and N matches all have a home and N is never an error — two "Item"
  * tiles is an ordinary screen, and a race primitive that failed on them would be useless. Detecting
- * ambiguity is the caller's job (`matches.length > 1` → narrow the selector), exactly as with
- * `findMatches`.
+ * ambiguity is the caller's job (`matches.length > 1` → narrow the selector).
  *
  * Within one selector's matches the order is POSITIONAL, not tree order: sorted by `bounds.top`,
  * then `bounds.left` — reading order. Callers will build on that, so it is a contract, not an
@@ -85,12 +84,12 @@ import xyz.block.trailblaze.tracing.TrailblazeTracer
  *
  * ## Captures that lost nodes
  *
- * Inherits [FindMatchesTrailblazeTool]'s refusal to report absence out of a capture known to be
- * missing nodes ([ScreenState.droppedNodeFetches]), generalized per-selector and applied strictly:
+ * Absence is never reported out of a capture known to be missing nodes
+ * ([ScreenState.droppedNodeFetches]). That rule is per-selector and applied strictly:
  * a frame is trusted only if the capture was complete, or if EVERY selector matched something in
  * it. If any selector came back empty out of a holey tree, the capture is dropped and retaken; if
  * that never resolves, the call fails rather than handing back an empty list some caller reads as
- * "not on screen". Strict is the right default because it matches what N separate `findMatches`
+ * "not on screen". Strict is the right default because it matches what N separate one-selector
  * calls would have done — each of them would have refused for its own empty selector.
  *
  * **That applies to the [timeoutMs] wait too, and it is the one place a caller might be surprised.**
@@ -116,8 +115,7 @@ data class FindSelectorMatchesTrailblazeTool(
    */
   val selectors: List<TrailblazeNodeSelector>,
   /**
-   * Optional wait budget in milliseconds, with the same meaning as
-   * [FindMatchesTrailblazeTool.timeoutMs] widened to N selectors.
+   * Optional wait budget in milliseconds, applied across all N selectors.
    *
    * `null` (the default) is a single point-in-time capture through the per-invocation
    * [SnapshotCache] frame. When set, the tool polls the LIVE hierarchy — re-capturing every
@@ -165,7 +163,7 @@ data class FindSelectorMatchesTrailblazeTool(
     val selectorSummary = selectorDescs.joinToString(", ")
 
     // One trace span per CALL — covering the capture(s), every selector's resolve, and any wait.
-    // Never one per poll or per selector; see the same rule in FindMatchesTrailblazeTool.execute.
+    // Never one per poll or per selector.
     val traceArgs = mapOf(
       "selectorCount" to selectors.size.toString(),
       "selectors" to selectorSummary,
@@ -259,16 +257,15 @@ data class FindSelectorMatchesTrailblazeTool(
 
   /**
    * The whole point of the tool: N selectors, one already-captured [tree], no device round trip
-   * between them. Delegates each selector to [SelectorMatchResolution] — the same code
-   * `findMatches` uses — so batching changes when the captures happen and nothing about what
-   * matches.
+   * between them. Delegates each selector to [SelectorMatchResolution], so batching changes when
+   * the captures happen and nothing about what matches.
    *
    * The verdict it hands [SelectorQueryEngine] is where N selectors differ from one, and it is the
    * whole of the difference. `matched` and `claimsAbsence` are both true when SOME selectors
    * matched and others didn't — so a partial capture in that state is neither trusted nor
    * discarded on the strength of the match alone: the engine keeps looking for a frame that is
    * either complete or unanimous. That is deliberately the strict reading, because it is what N
-   * separate `findMatches` calls would have done — each one would have refused for its own empty
+   * separate one-selector calls would have done — each one would have refused for its own empty
    * selector.
    */
   private fun resolveAll(
@@ -307,7 +304,6 @@ data class FindSelectorMatchesTrailblazeTool(
 
   /**
    * The current driver produces no [TrailblazeNode] tree, so node selectors cannot be resolved.
-   * Worded to match [FindMatchesTrailblazeTool]'s so the two read the same in a log.
    */
   private fun missingTreeError(platform: TrailblazeDevicePlatform): TrailblazeToolResult.Error.ExceptionThrown =
     TrailblazeToolResult.Error.ExceptionThrown(

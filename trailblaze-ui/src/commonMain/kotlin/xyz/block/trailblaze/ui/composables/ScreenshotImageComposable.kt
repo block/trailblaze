@@ -4,10 +4,12 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -21,6 +23,7 @@ import androidx.compose.material.icons.filled.ArrowForward
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -40,6 +43,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -47,6 +51,8 @@ import coil3.compose.AsyncImage
 import xyz.block.trailblaze.api.AgentDriverAction
 import xyz.block.trailblaze.ui.images.ImageLoader
 import xyz.block.trailblaze.ui.images.NetworkImageLoader
+import xyz.block.trailblaze.ui.images.rememberScreenshotLoadState
+import xyz.block.trailblaze.ui.images.ScreenshotDiagnostics
 
 /**
  * Shared composable for rendering screenshot annotations consistently
@@ -263,10 +269,24 @@ fun ScreenshotImage(
   forceHighQuality: Boolean = false,
   onImageClick: ((imageModel: Any?, deviceWidth: Int, deviceHeight: Int, clickX: Int?, clickY: Int?) -> Unit)? = null,
 ) {
-    // Use platform-specific image resolution (lazy loading on WASM, direct loading on JVM)
-    val imageModel = xyz.block.trailblaze.ui.resolveImageModel(sessionId, screenshotFile, imageLoader)
+  // A step with no screenshot is the one case with nothing to show and nothing to say about it.
+  // Blank as well as null: a reference of "" reaches the loaders as a real name and resolves to a
+  // directory URL, which fails deep in the decoder instead of here.
+  if (screenshotFile.isNullOrBlank()) return
 
-  if (imageModel != null) {
+  val state = rememberScreenshotLoadState(sessionId, screenshotFile, imageLoader, pane = "Screenshot")
+  val imageModel = state.model
+  val message = state.message
+
+  if (message != null) {
+    ScreenshotUnavailable(
+      message = message,
+      deviceWidth = deviceWidth,
+      deviceHeight = deviceHeight,
+      onRetry = if (state.canRetry) state::retry else null,
+      modifier = modifier,
+    )
+  } else {
     var isHovered by remember { mutableStateOf(false) }
 
     BoxWithConstraints(
@@ -275,9 +295,18 @@ fun ScreenshotImage(
         .clip(RoundedCornerShape(8.dp))
         .onPointerEvent(PointerEventType.Enter) { isHovered = true }
         .onPointerEvent(PointerEventType.Exit) { isHovered = false }
-        .clickable { 
-          onImageClick?.invoke(imageModel, deviceWidth, deviceHeight, clickX, clickY)
-        }
+        // Only when there is something to do with the click. A clickable that calls nothing still
+        // consumes the event and paints a ripple, which takes the click away from whatever the
+        // caller wrapped this in — the gallery's own thumbnail selection, for one.
+        .then(
+          if (onImageClick != null) {
+            Modifier.clickable {
+              onImageClick.invoke(imageModel, deviceWidth, deviceHeight, clickX, clickY)
+            }
+          } else {
+            Modifier
+          },
+        )
     ) {
       val density = LocalDensity.current
       val widthPx = with(density) { maxWidth.toPx().toInt() }
@@ -289,7 +318,10 @@ fun ScreenshotImage(
           model = imageModel,
           contentDescription = "Screenshot",
           modifier = Modifier.fillMaxSize(),
-          contentScale = ContentScale.Fit
+          contentScale = ContentScale.Fit,
+          // Recording the failure routes it to the fallback above, which is what drops the
+          // annotation: drawn over a blank rectangle it reads as a tap that landed on nothing.
+          onError = state.onError,
         )
       }
 
@@ -328,6 +360,81 @@ fun ScreenshotImage(
     }
   }
 }
+
+/**
+ * What [ScreenshotImage] shows in place of a screenshot it cannot draw.
+ *
+ * Holds the screenshot's own aspect ratio so a timeline row or gallery cell keeps its shape, and —
+ * the reason this is a separate branch rather than an `error` slot on the image — draws no
+ * annotation. The annotation is placed in device coordinates over the screenshot; over a blank
+ * rectangle it reads as a tap that landed on nothing, which sends the reader after the trail
+ * instead of after the image.
+ *
+ * The message is bounded by [ScreenshotDiagnostics] and ellipsized here, so a screenshot inlined
+ * as a `data:` URI cannot stretch a timeline row. It stays complete in the semantics tree, which
+ * is what a screen reader and a copy of the pane get.
+ *
+ * [onRetry], when a retry could change the answer, makes the whole cell a retry target. A live
+ * session writes its screenshots while the timeline is already on screen, so a row can render
+ * before its file lands and latch a failure that is over by the time the reader sees it.
+ */
+@Composable
+private fun ScreenshotUnavailable(
+  message: String,
+  deviceWidth: Int,
+  deviceHeight: Int,
+  onRetry: (() -> Unit)?,
+  modifier: Modifier = Modifier,
+) {
+  Box(
+    modifier = modifier
+      .then(
+        // A device size is normally known even when the screenshot is missing; 0 would be a
+        // divide-by-zero, so fall back to a shape that is at least visible.
+        if (deviceWidth > 0 && deviceHeight > 0) {
+          Modifier.aspectRatio(deviceWidth.toFloat() / deviceHeight.toFloat())
+        } else {
+          Modifier.heightIn(min = 96.dp)
+        },
+      )
+      .clip(RoundedCornerShape(8.dp))
+      .background(MaterialTheme.colorScheme.surfaceVariant)
+      .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.4f), RoundedCornerShape(8.dp))
+      .then(if (onRetry != null) Modifier.clickable(onClick = onRetry) else Modifier)
+      .padding(8.dp),
+    contentAlignment = Alignment.Center,
+  ) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+      // Plain text rather than the selectable variant the full-pane surfaces use: selection would
+      // take the drag and the tap that the retry sits on, and this cell is small enough that the
+      // message is on screen in full anyway.
+      Text(
+        text = message,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        textAlign = TextAlign.Center,
+        // Compose applies the ellipsis per line limit, not per available height, so without a
+        // `maxLines` the overflow setting does nothing and a long cause is cropped with no sign it
+        // was cropped. Six lines holds the whole message in a normal pane and shows a "…" in a cell
+        // too small for it.
+        maxLines = 6,
+        overflow = TextOverflow.Ellipsis,
+      )
+      if (onRetry != null) {
+        Text(
+          text = RETRY_PROMPT,
+          style = MaterialTheme.typography.labelSmall,
+          color = MaterialTheme.colorScheme.primary,
+          textAlign = TextAlign.Center,
+          modifier = Modifier.padding(top = 4.dp),
+        )
+      }
+    }
+  }
+}
+
+/** Kept out of the message so the wording every pane shares stays one string. */
+internal const val RETRY_PROMPT = "Click to retry"
 
 @Composable
 fun ScreenshotImageModal(

@@ -35,6 +35,7 @@ import xyz.block.trailblaze.toolcalls.CoreTools
 import xyz.block.trailblaze.mcp.toolsets.ToolSetCategory
 import xyz.block.trailblaze.mcp.toolsets.ToolSetCategoryMapping
 import xyz.block.trailblaze.toolcalls.KoogToolExt
+import xyz.block.trailblaze.toolcalls.ToolNameSuggestions
 import xyz.block.trailblaze.toolcalls.toKoogToolDescriptor
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSetCatalog
@@ -108,6 +109,19 @@ class StepToolSet(
     /** Shorter timeout for transient capture failures (driver ready but session warming up). */
     internal const val SCREEN_CAPTURE_RETRY_MS = 5_000L
     private const val POLL_INTERVAL_MS = 1_000L
+
+    /**
+     * How a failed direct tool call reads back to the caller.
+     *
+     * Ref-taking tools already open their error with their own name — `"tap: Element ref 'h619'
+     * not found on current screen…"`, a prefix the agent's stale-ref recovery parses — so naming
+     * the tool again would render `Tool tap failed: tap: Element ref …`. When the cause doesn't
+     * identify itself, this does it.
+     */
+    internal fun toolFailureMessage(toolName: String, cause: String?): String {
+      val detail = cause?.takeUnless { it.isBlank() } ?: "failed with no error message"
+      return if (detail.startsWith("$toolName:")) detail else "Tool $toolName failed: $detail"
+    }
 
     /**
      * Chooses the await-screen-state timeout for a given driver status string.
@@ -650,9 +664,24 @@ class StepToolSet(
     val unknownTools = resolvedToolWrappers
       .filter { it.trailblazeTool is OtherTrailblazeTool && it.name !in knownScriptedToolNames }
       .map { it.name }
+    // Hoisted above the unknown-tool branch: it is the candidate set for "did you mean", and it is
+    // also the set the driver/target validity gate below filters against.
+    val availableNames = availableToolsProvider().map { it.name }.toSet()
     if (unknownTools.isNotEmpty()) {
+      // Name the closest real tools. This is the branch a CLI user in a workspace that ships its
+      // own `.tool.yaml` reaches — the CLI's local typo check stands down there, so this message,
+      // not the CLI's, is the one they read. Only names that decoded to nothing land here, e.g.
+      // the plain typo `tap_on_text`. A real tool that is merely not on offer — `tapOn` — decodes
+      // fine and is rejected by the device/target gate below instead.
+      // Candidates are [availableNames] alone. `knownScriptedToolNames` spans every driver, so
+      // including it here would answer `openUr` on a web device with `openUrl` — a name the very
+      // next gate rejects in favour of `web_navigate`. A suggestion the reader cannot run is
+      // worse than none, which is why the pool is the set this device and target actually offer.
+      val didYouMean = unknownTools.singleOrNull()
+        ?.let { ToolNameSuggestions.didYouMeanSuffix(it, availableNames) }
+        .orEmpty()
       val msg = "Unknown tool${if (unknownTools.size > 1) "s" else ""}: " +
-        "${unknownTools.joinToString(", ")}. Use toolbox() to see available tools."
+        "${unknownTools.joinToString(", ")}.$didYouMean Use toolbox() to see available tools."
       return fail(msg)
     }
 
@@ -666,7 +695,6 @@ class StepToolSet(
     // (the request may still succeed); we log so the daemon log shows when the catalog
     // gate was bypassed, which is useful when debugging "why did I get the cryptic cast
     // error back" reports.
-    val availableNames = availableToolsProvider().map { it.name }.toSet()
     if (availableNames.isEmpty()) {
       Console.log("Tool catalog empty for this device/target; skipping per-tool availability check")
     } else {
@@ -799,9 +827,10 @@ class StepToolSet(
           successful = false,
           exceptionMessage = e.message,
         )
+        val failure = toolFailureMessage(wrapper.name, e.message)
         Console.log("│ ✗ Failed: ${wrapper.name} — ${e.message}")
         Console.log("└──────────────────────────────────────────────────────────────────────────────")
-        emitObjectiveComplete(promptStep, stepStartTime, success = false, failureReason = "Tool ${wrapper.name} failed: ${e.message}")
+        emitObjectiveComplete(promptStep, stepStartTime, success = false, failureReason = failure)
         sessionContext?.recordStep(RecordedStep(
           type = RecordedStepType.STEP,
           input = objective,
@@ -809,7 +838,7 @@ class StepToolSet(
           result = "Failed at ${wrapper.name}: ${e.message}",
           success = false,
         ))
-        return StepResult(executed = true, error = "Tool ${wrapper.name} failed: ${e.message}").toMarkdown()
+        return StepResult(executed = true, error = failure).toMarkdown()
       }
     }
 

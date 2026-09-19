@@ -847,6 +847,16 @@ internal fun buildShellCpFallbackCommands(stagingPath: String, devicePath: Strin
  * (`ShellPipelineCommandsTest`); the executor-bound entry points are [executeShellPipelineAs]
  * and [writeFileAs].
  */
+/**
+ * [wrapShellPipelineForTransport] for the on-device transport, for callers outside this module.
+ *
+ * Named rather than a boolean at the call site because the choice is not a preference: code running
+ * as an instrumentation goes through `UiAutomation`, which never involves a shell, so a caller that
+ * guessed `true` would get a pipeline the device evaluates one level too early and silently drops.
+ */
+fun wrapShellPipelineForOnDeviceTransport(innerCommand: String): String =
+  wrapShellPipelineForTransport(usesShellInterpreter = false, innerCommand = innerCommand)
+
 internal fun wrapShellPipelineForTransport(
   usesShellInterpreter: Boolean,
   innerCommand: String,

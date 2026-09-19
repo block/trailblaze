@@ -107,6 +107,31 @@ fun List<TrailblazeLog>.generateUnifiedRecordedYaml(
   classifierOverride: String? = null,
   selectedDeviceConfiguration: String? = null,
   successfulObjectivesOnly: Boolean,
+): String = generateUnifiedRecordedYaml(
+  trailblazeYaml = trailblazeYaml,
+  sessionTrailConfig = sessionTrailConfig,
+  classifierOverride = classifierOverride,
+  selectedDeviceConfiguration = selectedDeviceConfiguration,
+  successfulObjectivesOnly = successfulObjectivesOnly,
+  narrate = { Console.info(it) },
+)
+
+/**
+ * [generateUnifiedRecordedYaml] with an explicit sink for the lines the render would otherwise
+ * print: why a session produced no recording, and what the per-classifier merge decided.
+ *
+ * A caller rendering ONE session's preview for a person leaves this at the terminal (the overloads
+ * above). A caller rendering a batch — the report walks every session in the logs directory —
+ * passes [UnifiedTrailAdapter.SILENT]: nothing is written to disk there, so none of it is a
+ * decision the reader has to know about, and one line per session buries the report's own output.
+ */
+fun List<TrailblazeLog>.generateUnifiedRecordedYaml(
+  trailblazeYaml: TrailblazeYaml,
+  sessionTrailConfig: TrailConfig?,
+  classifierOverride: String?,
+  selectedDeviceConfiguration: String?,
+  successfulObjectivesOnly: Boolean,
+  narrate: (String) -> Unit,
 ): String {
   val items = try {
     generateRecordedTrailItems(
@@ -128,7 +153,10 @@ fun List<TrailblazeLog>.generateUnifiedRecordedYaml(
     ?: getSessionStartedInfo()?.selectedDeviceConfiguration?.takeIf { it.isNotBlank() }
   val classifier = sessionConfiguration ?: classifierOverride ?: recordingClassifier()
   if (classifier.isBlank()) {
-    Console.error(
+    // Through [narrate], not Console.error. A session with no device classifiers is a shape this
+    // renderer declines, not a failure — and the report renders every past session, where 27
+    // copies of this sentence on stderr outnumbered the two paths it was asked to print.
+    narrate(
       "Can't render this recording: a unified trail keys each device's tools under a classifier " +
         "slot and this session logged no device classifiers.",
     )
@@ -140,6 +168,8 @@ fun List<TrailblazeLog>.generateUnifiedRecordedYaml(
       recordedItems = items,
       classifier = classifier,
       selectedDeviceConfiguration = sessionConfiguration,
+      stepWindow = null,
+      narrate = narrate,
     )
     // An empty `trail:` is emitted as a config-only unified doc (decodeUnifiedTrail accepts it),
     // so the recording round-trips without ever re-parsing v1. A trailhead-only merge still can't

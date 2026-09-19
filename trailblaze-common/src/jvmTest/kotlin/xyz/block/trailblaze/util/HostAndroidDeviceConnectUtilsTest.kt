@@ -6,6 +6,7 @@ import assertk.assertions.containsExactly
 import assertk.assertions.doesNotContain
 import assertk.assertions.isEmpty
 import assertk.assertions.isEqualTo
+import assertk.assertions.isLessThan
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -39,6 +40,7 @@ class HostAndroidDeviceConnectUtilsTest {
       trailblazeOnDeviceInstrumentationTarget =
         TrailblazeOnDeviceInstrumentationTarget.DEFAULT_ANDROID_ON_DEVICE,
       deviceId = deviceId,
+      deviceApiLevel = 34,
       additionalInstrumentationArgs = linkedMapOf(
         "trailblaze.llm.auth.token.test" to "token with spaces & symbols \$(echo nope)",
         "trailblaze.llm.provider.base_url" to "https://example.com/v1/chat?x=1&y=2",
@@ -51,6 +53,7 @@ class HostAndroidDeviceConnectUtilsTest {
       "instrument",
       "-w",
       "-r",
+      HostAndroidDeviceConnectUtils.NO_HIDDEN_API_CHECKS_FLAG,
       "-e",
       "class",
       "xyz.block.trailblaze.AndroidStandaloneServerTest".shellEscape(),
@@ -682,6 +685,7 @@ class HostAndroidDeviceConnectUtilsTest {
     val args = HostAndroidDeviceConnectUtils.instrumentationAdbShellCommandArgs(
       trailblazeOnDeviceInstrumentationTarget = harness,
       deviceId = deviceId,
+      deviceApiLevel = 34,
     )
 
     // Adjacent triple, in `am instrument` order: the device reads `-e <key> <value>` positionally.
@@ -700,9 +704,102 @@ class HostAndroidDeviceConnectUtilsTest {
       trailblazeOnDeviceInstrumentationTarget =
         TrailblazeOnDeviceInstrumentationTarget.DEFAULT_ANDROID_ON_DEVICE,
       deviceId = deviceId,
+      deviceApiLevel = 34,
     )
 
     assertThat(args).doesNotContain("trailblaze.driverType".shellEscape())
+  }
+
+  // ── hidden-API relaxation ──────────────────────────────────────────────────
+  // On-device recovery from a stale UiAutomation handle can only clear the platform's cached
+  // handle by reflecting on Instrumentation's private `mUiAutomation` field. Under hidden-API
+  // enforcement that field is reported ABSENT, so the recovery always failed and the host restarted
+  // the whole on-device server instead of healing in place. `--no-hidden-api-checks` is what makes
+  // the reset work — but it relaxes enforcement for the entire instrumented process, so it must
+  // reach Trailblaze's own runner and nothing else.
+  //
+  // CI never exercises this: `uitest-trailblaze-android` runs via Gradle connectedAndroidTest,
+  // which never builds an `am instrument` argv at all. These tests are the only gate on it.
+
+  @Test
+  fun theStandaloneRunnerLaunchRelaxesHiddenApiChecks() {
+    val args = HostAndroidDeviceConnectUtils.instrumentationAdbShellCommandArgs(
+      trailblazeOnDeviceInstrumentationTarget =
+        TrailblazeOnDeviceInstrumentationTarget.DEFAULT_ANDROID_ON_DEVICE,
+      deviceId = deviceId,
+      deviceApiLevel = 34,
+    )
+
+    assertThat(args).contains(HostAndroidDeviceConnectUtils.NO_HIDDEN_API_CHECKS_FLAG)
+    // `am` reads options before the component; a flag after it is a parse error, not an option.
+    assertThat(args.indexOf(HostAndroidDeviceConnectUtils.NO_HIDDEN_API_CHECKS_FLAG))
+      .isLessThan(args.indexOf("xyz.block.trailblaze.runner/androidx.test.runner.AndroidJUnitRunner".shellEscape()))
+  }
+
+  @Test
+  fun anInProcessHarnessLaunchKeepsHiddenApiEnforcement() {
+    // The fidelity constraint, and the reason this is not a blanket flag: the in-process harness's
+    // instrumented process IS the app under test. Relaxing enforcement there would let that app
+    // call a blocklisted hidden API, pass under Trailblaze, and crash in production.
+    val harness = inProcessHarnessTarget().getAndroidTestInstrumentationTarget()!!
+
+    val args = HostAndroidDeviceConnectUtils.instrumentationAdbShellCommandArgs(
+      trailblazeOnDeviceInstrumentationTarget = harness,
+      deviceId = deviceId,
+      deviceApiLevel = 34,
+    )
+
+    assertThat(args).doesNotContain(HostAndroidDeviceConnectUtils.NO_HIDDEN_API_CHECKS_FLAG)
+  }
+
+  @Test
+  fun aHarnessMustClaimTrailblazeOwnershipToGetTheRelaxation() {
+    // Default-false on the model, so a harness added later opts in deliberately rather than
+    // inheriting a process-wide platform relaxation it never asked for.
+    assertThat(
+      HostAndroidDeviceConnectUtils.shouldRelaxHiddenApiChecks(
+        trailblazeOnDeviceInstrumentationTarget = TrailblazeOnDeviceInstrumentationTarget(
+          testAppId = "com.example.app.uitests",
+          fqTestName = "com.example.app.uitests.SomeTest",
+        ),
+        deviceApiLevel = 34,
+      ),
+    ).isEqualTo(false)
+  }
+
+  @Test
+  fun theRelaxationIsOmittedOnDevicesWhoseAmCannotParseTheFlag() {
+    // `--no-hidden-api-checks` arrives in API 28; an older `am` rejects the option and the launch
+    // fails outright. Some Trailblaze consumers still declare minSdk 26.
+    assertThat(
+      HostAndroidDeviceConnectUtils.shouldRelaxHiddenApiChecks(
+        trailblazeOnDeviceInstrumentationTarget =
+          TrailblazeOnDeviceInstrumentationTarget.DEFAULT_ANDROID_ON_DEVICE,
+        deviceApiLevel = 27,
+      ),
+    ).isEqualTo(false)
+    // The literal contract value, NOT NO_HIDDEN_API_CHECKS_MIN_API: asserting against the constant
+    // would let the threshold drift to 29 and stay green, which is the whole thing being pinned.
+    assertThat(
+      HostAndroidDeviceConnectUtils.shouldRelaxHiddenApiChecks(
+        trailblazeOnDeviceInstrumentationTarget =
+          TrailblazeOnDeviceInstrumentationTarget.DEFAULT_ANDROID_ON_DEVICE,
+        deviceApiLevel = 28,
+      ),
+    ).isEqualTo(true)
+  }
+
+  @Test
+  fun anUnreadableApiLevelLaunchesExactlyAsItDidBeforeTheGate() {
+    // The probe is bounded and can answer null on a wedged transport. Guessing "new enough" there
+    // would turn a slow adb read into a connect that `am` refuses to start.
+    assertThat(
+      HostAndroidDeviceConnectUtils.shouldRelaxHiddenApiChecks(
+        trailblazeOnDeviceInstrumentationTarget =
+          TrailblazeOnDeviceInstrumentationTarget.DEFAULT_ANDROID_ON_DEVICE,
+        deviceApiLevel = null,
+      ),
+    ).isEqualTo(false)
   }
 
   @Test

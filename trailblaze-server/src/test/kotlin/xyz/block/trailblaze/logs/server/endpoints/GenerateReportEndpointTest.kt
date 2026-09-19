@@ -64,6 +64,112 @@ class GenerateReportEndpointTest {
   }
 
   @Test
+  fun `a session-scoped report is told where the all-runs report lives`() = testApplication {
+    // The single-session document has nothing to Compare against; the daemon holds other
+    // sessions, so the document gets the unscoped route to link its Compare into.
+    val logsRepo = createTestLogsRepo()
+    createSession(logsRepo, "session-a")
+    createSession(logsRepo, "session-b")
+    val source = FakeReportSource()
+    application { routing { GenerateReportEndpoint.register(this, logsRepo, source) } }
+
+    assertEquals(HttpStatusCode.OK, client.get("/report?session=session-b").status)
+
+    // The plain route, because this run is inside the window it shows. `limit=all` is the most
+    // expensive report the daemon can build, so it is asked for only when it is the only way to
+    // reach the run — see the next test.
+    assertEquals(listOf<String?>("/report"), source.allRunsUrls.toList())
+  }
+
+  @Test
+  fun `a run older than the default window is sent to the report that goes back far enough`() = testApplication {
+    // The unscoped route shows only the most recent DEFAULT_SESSION_LIMIT sessions, so a link
+    // without `limit=all` would drop a run older than that and the viewer would compare two other
+    // runs in its place. The oldest run on disk is exactly that case.
+    val logsRepo = createTestLogsRepo()
+    val limit = GenerateReportEndpoint.DEFAULT_SESSION_LIMIT
+    val newestFirst = (0 until limit + 1).map { createSession(logsRepo, "session-%02d".format(it), ageMinutes = it) }
+    val source = FakeReportSource()
+    application { routing { GenerateReportEndpoint.register(this, logsRepo, source) } }
+
+    assertEquals(HttpStatusCode.OK, client.get("/report?session=${newestFirst.last().value}").status)
+    assertEquals(HttpStatusCode.OK, client.get("/report?session=${newestFirst.first().value}").status)
+
+    // Outside the window, then inside it: the same endpoint answers with the report that will
+    // actually hold the run being read.
+    assertEquals(listOf<String?>("/report?limit=all", "/report"), source.allRunsUrls.toList())
+  }
+
+  @Test
+  fun `a logs directory of unreadable sessions is answered as empty rather than as a broken report`() = testApplication {
+    // Session directories exist, but not one has a status log the daemon can read, so the
+    // all-runs report covers nothing. Answered like an empty logs dir: handing the renderer an
+    // empty session list produces a generation-failed page, which reads as a daemon bug.
+    val logsRepo = createTestLogsRepo()
+    File(logsRepo.logsDir, "session-unreadable").mkdirs()
+    val source = FakeReportSource()
+    application { routing { GenerateReportEndpoint.register(this, logsRepo, source) } }
+
+    val response = client.get("/report")
+
+    assertEquals(HttpStatusCode.NotFound, response.status)
+    assertTrue("Run a trail first" in response.bodyAsText(), "expected the no-runs-yet answer")
+    assertEquals(emptyList(), source.generatedFor)
+  }
+
+  @Test
+  fun `a session directory with no run in it is answered as not found, not as a broken report`() = testApplication {
+    // The directory is real, so the traversal allowlist admits it — but it holds no
+    // session-status log, so the generator drops the session, finds nothing to render and fails.
+    // Answering that as "generation failed" blames the daemon for a run that was never there.
+    val logsRepo = createTestLogsRepo()
+    createSession(logsRepo, "session-a")
+    File(logsRepo.logsDir, "session-unreadable").mkdirs()
+    val source = FakeReportSource()
+    application { routing { GenerateReportEndpoint.register(this, logsRepo, source) } }
+
+    val response = client.get("/report?session=session-unreadable")
+
+    assertEquals(HttpStatusCode.NotFound, response.status)
+    assertTrue(response.bodyAsText().contains("no run to report on"), response.bodyAsText())
+    // And generation was never attempted, so nothing spawned bun to find that out.
+    assertEquals(emptyList<List<SessionId>>(), source.generatedFor.toList())
+  }
+
+  @Test
+  fun `a run whose only company is an unreadable session directory is not sent anywhere to Compare`() = testApplication {
+    // Two session dirs on disk, but only one of them is a run the all-runs report can show. The
+    // hand-off has to be decided on THAT list, not on a count of directories: pointing Compare at
+    // a report with nothing to pair against lands the reader on an index and no comparison.
+    val logsRepo = createTestLogsRepo()
+    createSession(logsRepo, "session-a")
+    File(logsRepo.logsDir, "session-unreadable").mkdirs()
+    val source = FakeReportSource()
+    application { routing { GenerateReportEndpoint.register(this, logsRepo, source) } }
+
+    assertEquals(HttpStatusCode.OK, client.get("/report?session=session-a").status)
+
+    assertEquals(listOf<String?>(null), source.allRunsUrls.toList())
+  }
+
+  @Test
+  fun `the only session on the daemon gets no all-runs link, and neither does the all-runs report itself`() = testApplication {
+    // One session on disk: the all-runs report would hold this same run and nothing else, so a
+    // Compare link there would land on an index with nothing to pair. The unscoped report IS the
+    // all-runs report, so it never links to itself.
+    val logsRepo = createTestLogsRepo()
+    createSession(logsRepo, "session-a")
+    val source = FakeReportSource()
+    application { routing { GenerateReportEndpoint.register(this, logsRepo, source) } }
+
+    assertEquals(HttpStatusCode.OK, client.get("/report?session=session-a").status)
+    createSession(logsRepo, "session-b")
+    assertEquals(HttpStatusCode.OK, client.get("/report").status)
+
+    assertEquals(listOf<String?>(null, null), source.allRunsUrls.toList())
+  }
+
+  @Test
   fun `an unfiltered report is generated for every session`() = testApplication {
     val logsRepo = createTestLogsRepo()
     createSession(logsRepo, "session-a")
@@ -131,6 +237,30 @@ class GenerateReportEndpointTest {
     // Nothing was left out of this one, so there is nothing to disclose.
     val complete = client.get("/report?limit=all").bodyAsText()
     assertFalse("most recent of" in complete, "a complete report must not claim to be truncated")
+  }
+
+  @Test
+  fun `a capped all-runs report is told where the wider one lives, and a complete one is not`() = testApplication {
+    // The document cannot work this out for itself: its own address is `/report?limit=2` whether it
+    // is served live or copied onto a build server, and only the daemon knows whether asking again
+    // would actually turn up more runs. Compare's "the run your link asked for isn't here" notice
+    // offers a retry only when this field is set, so setting it on a report that already covers
+    // everything would offer a trip back to the same set of runs.
+    val logsRepo = createTestLogsRepo()
+    repeat(4) { createSession(logsRepo, "session-$it", ageMinutes = it) }
+    val source = FakeReportSource()
+    application { routing { GenerateReportEndpoint.register(this, logsRepo, source) } }
+
+    assertEquals(HttpStatusCode.OK, client.get("/report?limit=2").status)
+    assertEquals(HttpStatusCode.OK, client.get("/report?limit=all").status)
+    assertEquals(HttpStatusCode.OK, client.get("/report?limit=4").status)
+    // `?limit=1` omits runs like any cap, but the document it produces holds one run — so the
+    // reader that would pick the field up is the single-run header's Compare button, not the
+    // compare retry, and it would offer the daemon's most expensive report with no mention of
+    // the cost. A one-run document has no compare view to put a retry in, so nothing is lost.
+    assertEquals(HttpStatusCode.OK, client.get("/report?limit=1").status)
+
+    assertEquals(listOf<String?>("/report?limit=all", null, null, null), source.allRunsUrls.toList())
   }
 
   @Test
@@ -326,10 +456,13 @@ class GenerateReportEndpointTest {
   ) : GenerateReportEndpoint.InteractiveReportSource {
 
     val generatedFor: MutableList<List<SessionId>> = CopyOnWriteArrayList()
+    /** The all-runs URL each generation was handed, in call order (null = none). */
+    val allRunsUrls: MutableList<String?> = CopyOnWriteArrayList()
     val leakedFiles: MutableList<File> = CopyOnWriteArrayList()
 
-    override fun generate(logsRepo: LogsRepo, sessionIds: List<SessionId>): File? {
+    override fun generate(logsRepo: LogsRepo, sessionIds: List<SessionId>, allRunsUrl: String?): File? {
       generatedFor.add(sessionIds)
+      allRunsUrls.add(allRunsUrl)
       onGenerate()
       val html = reportHtml ?: return null
       val reportsDir = File(logsRepo.logsDir, "reports").apply { mkdirs() }

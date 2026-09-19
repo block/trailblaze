@@ -307,14 +307,17 @@ button.btn.previewinspect:disabled > * { opacity: .45; }
 .scrubtransport #next .transporticon.direction::before { transform: rotate(225deg); }
 .transporticon.playicon { margin-left: 0; }
 .transporticon.stopicon::before { content: ''; width: 9px; height: 9px; border-radius: 1px; background: currentColor; }
-button.btn { min-height: 34px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; background: var(--bg3); border: 1px solid var(--line2); color: var(--txt); border-radius: var(--r-sm); padding: 6px 11px; font-size: 12.5px; font-weight: var(--font-weight-emphasis); cursor: pointer; transition: color 120ms ease-out, background-color 120ms ease-out, border-color 120ms ease-out, transform 100ms ease-out; }
+button.btn, a.btn { min-height: 34px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; background: var(--bg3); border: 1px solid var(--line2); color: var(--txt); border-radius: var(--r-sm); padding: 6px 11px; font-size: 12.5px; font-weight: var(--font-weight-emphasis); cursor: pointer; transition: color 120ms ease-out, background-color 120ms ease-out, border-color 120ms ease-out, transform 100ms ease-out; }
 button.btn:disabled { opacity: .4; cursor: default; }
-button.btn:not(:disabled):hover { border-color: var(--run); background: var(--button-hover); }
+/* The all-runs Compare is a real navigation to another document, so it is an anchor rather than
+   a button — it must still read as the button standing next to it. */
+a.btn { text-decoration: none; }
+button.btn:not(:disabled):hover, a.btn:hover { border-color: var(--run); background: var(--button-hover); }
 .scrubtransport button.timelinecontrol:not(:disabled):hover { background: var(--button-hover); color: var(--txt); }
 .scrubtransport button.timelinecontrol.play:not(:disabled):hover { background: var(--button-hover); color: var(--txt); }
 .scrubtransport button.timelinecontrol:focus-visible { position: relative; outline: 2px solid var(--focus); outline-offset: -3px; }
 .scrubtransport button.timelinecontrol:disabled { color: var(--disabled-text); cursor: default; }
-button.btn:not(:disabled):active { transform: translateY(1px); }
+button.btn:not(:disabled):active, a.btn:active { transform: translateY(1px); }
 button.btn.play { border-color: var(--run); background: var(--accent-surface); color: var(--run); min-width: 84px; }
 .card { border: 1px solid var(--line); border-radius: var(--r-md); background: var(--bg2); padding: 10px 13px; }
 .totals { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 6px; }
@@ -993,8 +996,8 @@ svg.swipe { position: absolute; inset: 0; width: 100%; height: 100%; pointer-eve
 .badge.selfheal { background: var(--warning-surface); color: var(--amber); }
 .zoom .zoomwrap { position: relative; }
 .zoom .zoomwrap img { display: block; }
-button:focus-visible, [role="button"]:focus-visible, summary:focus-visible, input:focus-visible, .shot:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
-@media (pointer: coarse) { nav button, button.btn, .evchip, .back, .streamselect summary, .idxsort summary, .exportmenu summary, .exportmenuitem, .phasecontrol, .grphdr { min-height: 44px; } .detailedge { width: 44px; height: 44px; } .back, .exportmenu summary { min-width: 44px; } .step { min-height: 44px; } .scrubtrack { height: 44px; } .scrubtransport button.timelinecontrol { width: 44px; height: 44px; min-width: 44px; min-height: 44px; } .txopenbtn { min-width: 44px; min-height: 44px; } }
+button:focus-visible, a.btn:focus-visible, [role="button"]:focus-visible, summary:focus-visible, input:focus-visible, .shot:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+@media (pointer: coarse) { nav button, button.btn, a.btn, .evchip, .back, .streamselect summary, .idxsort summary, .exportmenu summary, .exportmenuitem, .phasecontrol, .grphdr { min-height: 44px; } .detailedge { width: 44px; height: 44px; } .back, .exportmenu summary { min-width: 44px; } .step { min-height: 44px; } .scrubtrack { height: 44px; } .scrubtransport button.timelinecontrol { width: 44px; height: 44px; min-width: 44px; min-height: 44px; } .txopenbtn { min-width: 44px; min-height: 44px; } }
 @media (prefers-reduced-motion: reduce) { #app.page-enter-forward, #app.page-enter-back, .txoverlay, .inspector, .attachoverlay { animation: none; } }
 @media (max-width: 640px) {
   :root { --page-x: 18px; --page-y: 20px; }
@@ -1477,6 +1480,10 @@ html[data-tb-autoplay] *, html[data-tb-autoplay] *::before, html[data-tb-autopla
 /* Field names, not prose — they are values a reader will grep for, so keep them upright and monospaced. */
 .cmpmask { font-style: normal; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: var(--type-micro); }
 .cmpcross { margin: 0 0 var(--space-3); padding: 8px 10px; border: 1px solid var(--line2); border-radius: var(--r-sm); background: var(--accent-surface); color: var(--txt); font-size: var(--type-caption); line-height: 1.6; }
+.cmpmissingrun { margin: 0 0 var(--space-3); padding: 10px 12px; border: 1px solid var(--line2); border-radius: var(--r-sm); background: var(--surface2); color: var(--sub); font-size: var(--type-caption); line-height: 1.55; }
+.cmpmissingrun code { color: var(--txt); }
+.cmpmissingrun a { color: var(--txt); text-decoration: underline; text-underline-offset: 2px; }
+.cmpmissingrun a:hover { color: var(--run); }
 .cmpdegraded { margin: 0 0 var(--space-3); padding: 10px 12px; border: 1px solid var(--failed); border-radius: var(--r-sm); background: color-mix(in srgb, var(--failed) 8%, var(--surface)); color: var(--txt); font-size: var(--type-caption); line-height: 1.55; }
 .cmpeventloading, .cmpeventempty, .cmpeventnomatch { padding: var(--space-5) var(--space-3); color: var(--sub); font-size: var(--type-caption); text-align: center; }
 .cmpeventssection { display: grid; gap: 0; }

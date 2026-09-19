@@ -353,15 +353,17 @@ export type TrailblazeClient = Omit<TrailblazeClientImpl, "callTool">;
 // ---- Implementation ---------------------------------------------------------------------------
 
 /**
- * Default client-side fetch timeout. Matches the daemon's default
- * `DEFAULT_CALLBACK_TIMEOUT_MS` with a 2 s buffer so the daemon is normally the one that
- * surfaces a structured timeout error — keeps the failure mode readable
- * ("Tool X timed out after 30000ms") rather than a generic AbortError from the fetch.
+ * Fallback client-side fetch timeout, used only when nothing tells this process what the
+ * daemon's own deadline is. A Trailblaze-spawned subprocess is always told: the spawner sets
+ * `TRAILBLAZE_CLIENT_FETCH_TIMEOUT_MS` to the daemon's dispatch timeout plus a 2 s buffer, so the
+ * daemon is the side that surfaces a structured timeout error — keeping the failure mode readable
+ * ("Tool X timed out after Nms") rather than a generic AbortError from the fetch.
  *
- * Deployments that override the daemon-side timeout via `-Dtrailblaze.callback.timeoutMs`
- * should also override this client timeout via `TRAILBLAZE_CLIENT_FETCH_TIMEOUT_MS` so the
- * two stay in sync — otherwise the client aborts before the daemon can return and the
- * override is effectively defeated.
+ * This fallback is far below the daemon's current default, so a standalone caller that imports
+ * the SDK itself must set `TRAILBLAZE_CLIENT_FETCH_TIMEOUT_MS` above the daemon's deadline — and
+ * a deployment that overrides that deadline via `-Dtrailblaze.callback.timeoutMs` outside the
+ * spawner has to move this with it. Otherwise the client aborts before the daemon can return and
+ * the override is effectively defeated.
  *
  * **Env var is sampled once at module load.** `CLIENT_FETCH_TIMEOUT_MS` below is computed
  * when this module is imported, so `TRAILBLAZE_CLIENT_FETCH_TIMEOUT_MS` must be set *before*

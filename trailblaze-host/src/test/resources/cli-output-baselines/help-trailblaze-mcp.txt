@@ -22,10 +22,11 @@ Quick setup:
                             `$TRAILBLAZE_DEVICE` if set.
       --direct, --no-daemon
                           Run as an in-process MCP server over STDIO instead of
-                            the default proxy mode. Bypasses the Trailblaze
-                            daemon and runs everything in a single process. Use
-                            this for environments where the HTTP daemon cannot
-                            run.
+                            the default proxy mode. Runs everything in a single
+                            process instead of proxying to a separate daemon
+                            process. This is not a way around the HTTP port:
+                            the process still starts the daemon's HTTP server
+                            itself when none is running.
   -h, --help              Show this help message and exit.
       --http              Use Streamable HTTP transport instead of STDIO.
                             Starts a standalone HTTP MCP server.

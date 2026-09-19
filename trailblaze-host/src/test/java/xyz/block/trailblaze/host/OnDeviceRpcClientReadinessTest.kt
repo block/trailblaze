@@ -16,11 +16,14 @@ import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.DrainSessionRequest
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.DrainSessionResponse
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.OnDeviceRpcClient
+import xyz.block.trailblaze.mcp.android.ondevice.rpc.OnDeviceRunnerCapabilities
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcResult
 import java.io.IOException
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -103,6 +106,77 @@ class OnDeviceRpcClientReadinessTest {
     // Short poll interval so the test finishes in well under the default timeout.
     runBlocking { rpcClient.waitForReady(timeoutMs = 10_000L, pollIntervalMs = 50L) }
     assertThat(attempt).isGreaterThanOrEqualTo(3)
+  }
+
+  @Test
+  fun `waitForReady hands back the answer that proved readiness, capabilities included`() {
+    // The runner describes itself on every GetScreenState answer. Callers that need to know what
+    // the installed runner supports (the device classifier override gate) read it from THIS
+    // response rather than probing again — a second probe would re-enter the not-ready window
+    // this loop exists to wait out, with no budget of its own to absorb it.
+    val capability = OnDeviceRunnerCapabilities.DEVICE_CLASSIFIER_OVERRIDE
+    mockServer.onPost("/rpc/GetScreenStateRequest") {
+      HttpStatusCode.OK to
+        """
+          {
+            "viewHierarchy": {},
+            "screenshotBase64": null,
+            "deviceWidth": 1080,
+            "deviceHeight": 1920,
+            "runnerCapabilities": ["$capability"]
+          }
+        """.trimIndent()
+    }
+
+    val readiness = runBlocking { rpcClient.waitForReady(timeoutMs = 5_000L) }
+
+    assertEquals(listOf(capability), readiness.runnerCapabilities)
+  }
+
+  @Test
+  fun `waitForReady reports the capabilities of the probe that succeeded, not of the ones that failed`() {
+    // A cold device answers "not ready" a few times before its first real frame. The capability
+    // list must come from the eventual success — the failures carry none — so the gate that reads
+    // it sees the runner's real answer instead of aborting on the not-ready window.
+    var attempt = 0
+    mockServer.onPost("/rpc/GetScreenStateRequest") {
+      attempt++
+      if (attempt < 3) {
+        HttpStatusCode.InternalServerError to
+          """{"errorType":"UNKNOWN_ERROR","message":"Screen state capture is not ready yet","details":null}"""
+      } else {
+        HttpStatusCode.OK to
+          """
+            {
+              "viewHierarchy": {},
+              "screenshotBase64": null,
+              "deviceWidth": 1080,
+              "deviceHeight": 1920,
+              "runnerCapabilities": ["${OnDeviceRunnerCapabilities.DEVICE_CLASSIFIER_OVERRIDE}"]
+            }
+          """.trimIndent()
+      }
+    }
+
+    val readiness = runBlocking { rpcClient.waitForReady(timeoutMs = 10_000L, pollIntervalMs = 50L) }
+
+    assertThat(attempt).isGreaterThanOrEqualTo(3)
+    assertEquals(
+      listOf(OnDeviceRunnerCapabilities.DEVICE_CLASSIFIER_OVERRIDE),
+      readiness.runnerCapabilities,
+    )
+  }
+
+  @Test
+  fun `an older runner that omits runnerCapabilities reads back as advertising none`() {
+    // The pre-capability wire shape: readiness still succeeds (the device IS ready), but the gate
+    // downstream must see "no capabilities", not a decode failure, so it can reject an override
+    // run with the rebuild-the-runner message instead of a serialization error.
+    mockServer.onPost("/rpc/GetScreenStateRequest") { HttpStatusCode.OK to successBody }
+
+    val readiness = runBlocking { rpcClient.waitForReady(timeoutMs = 5_000L) }
+
+    assertNull(readiness.runnerCapabilities)
   }
 
   @Test

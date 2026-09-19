@@ -31,7 +31,7 @@ data class TrailConfig(
    * Optional driver type for device selection. When set, the CLI will select a device with the
    * matching driver. This is more explicit than [platform] and takes precedence over it. Valid
    * values correspond to [xyz.block.trailblaze.devices.TrailblazeDriverType] names (e.g.,
-   * "PLAYWRIGHT_NATIVE", "ANDROID_ONDEVICE_INSTRUMENTATION", "IOS_HOST").
+   * "PLAYWRIGHT_NATIVE", "ANDROID_ONDEVICE_ACCESSIBILITY", "IOS_HOST").
    */
   val driver: String? = null,
   /**

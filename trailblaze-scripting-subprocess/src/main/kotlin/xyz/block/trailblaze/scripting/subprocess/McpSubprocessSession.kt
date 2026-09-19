@@ -79,24 +79,30 @@ class McpSubprocessSession internal constructor(
   }
 
   /**
-   * Closes the MCP client (which closes the stdio transport + the process's stdin), then
-   * waits briefly for the subprocess to exit on its own. Escalates to SIGTERM / SIGKILL if
-   * it doesn't honor the EOF signal inside [exitWait]. Flushes + closes the stderr capture
-   * last so the on-disk log ends up complete regardless of which escalation step terminated
-   * the process.
+   * Closes the subprocess's stdin, waits briefly for it to exit on its own, and escalates to
+   * SIGTERM / SIGKILL if it doesn't honor the EOF signal inside [exitWait]. The MCP client is
+   * closed after the subprocess is gone, not before — see [destroyThenCloseClient] for why that
+   * order is load-bearing rather than cosmetic. Flushes + closes the stderr capture last so the
+   * on-disk log ends up complete regardless of which escalation step terminated the process.
    *
    * Blocking `Process.waitFor` calls run under [Dispatchers.IO] so the caller's coroutine
    * dispatcher (often `Default`) isn't pinned while we wait up to ~9 s on a stuck child.
    * After `destroyForcibly` we still wait `afterSigkillSeconds` so the function doesn't
    * return until the subprocess is actually gone — callers can safely re-spawn immediately.
+   *
+   * Returns whether the subprocess had exited when the ladder ran out. `false` means it outlived
+   * SIGKILL's wait — the OS has not reaped it yet, or it is blocked in an uninterruptible system
+   * call — so its transport is still parking its `Dispatchers.IO` permit. A caller that accounts
+   * for permits must keep that one counted until [isAlive] says otherwise.
    */
-  suspend fun shutdown(exitWait: Duration = Duration.DEFAULT) = withContext(Dispatchers.IO) {
-    runCatching { client.close() }
-    destroyWithEscalation(spawnedProcess.process, exitWait)
-    // The subprocess is gone now, so its stderr pipe is at EOF and the pump is finishing its
-    // last reads — join it before closing the capture so the on-disk log ends up complete.
+  suspend fun shutdown(exitWait: Duration = Duration.DEFAULT): Boolean = withContext(Dispatchers.IO) {
+    val exited = destroyThenCloseClient(spawnedProcess.process, client, exitWait)
+    // Once the subprocess is gone its stderr pipe is at EOF and the pump is finishing its last
+    // reads — join it before closing the capture so the on-disk log ends up complete. Bounded, so
+    // a subprocess that is still alive costs at most the join timeout here.
     joinPreservingInterrupt(stderrPump, STDERR_PUMP_JOIN_MS)
     stderrCapture.close()
+    exited
   }
 
   /** Shutdown timing knobs — exposed so tests can hurry the escalation. */
@@ -264,8 +270,7 @@ class McpSubprocessSession internal constructor(
       // subprocess. Shares the same escalation knobs as [shutdown] so both paths scale together.
       suspend fun teardownFailedHandshake() {
         withContext(NonCancellable) {
-          runCatching { client.close() }
-          withContext(Dispatchers.IO) { destroyWithEscalation(process, Duration.DEFAULT) }
+          withContext(Dispatchers.IO) { destroyThenCloseClient(process, client, Duration.DEFAULT) }
           joinPreservingInterrupt(stderrPump, STDERR_PUMP_JOIN_MS)
           runCatching { stderrCapture.close() }
         }
@@ -546,21 +551,61 @@ private fun renderLoggingData(data: JsonElement): String =
 
 /**
  * Escalates [process] teardown under one [exitWait] knob: SIGTERM → wait → SIGKILL → wait.
- * Assumes the caller has already signalled the subprocess (e.g. by closing stdin via
- * `client.close()`) and is just waiting for it to exit before escalating. Shared between
+ * Assumes the caller has already signalled the subprocess by closing its stdin (see
+ * [destroyThenCloseClient]) and is just waiting for it to exit before escalating. Shared between
  * the public `shutdown` path and the initialize-failure cleanup inside `connect` so both
  * honour the same [Duration] configuration.
  *
  * Must run under [Dispatchers.IO] — uses blocking [Process.waitFor].
+ *
+ * Returns whether [process] exited within the ladder. The last wait's answer is the result, not a
+ * formality: SIGKILL cannot be refused, but the OS can take longer than
+ * [McpSubprocessSession.Duration.afterSigkillSeconds] to reap the child, and a child blocked in an
+ * uninterruptible system call is not gone until it is. Treating "we sent SIGKILL" as "it exited"
+ * frees resources the child is still holding.
  */
-private fun destroyWithEscalation(process: Process, exitWait: McpSubprocessSession.Duration) {
-  if (!process.waitFor(exitWait.afterCloseSeconds, TimeUnit.SECONDS)) {
-    process.destroy()
-    if (!process.waitFor(exitWait.afterSigtermSeconds, TimeUnit.SECONDS)) {
-      process.destroyForcibly()
-      process.waitFor(exitWait.afterSigkillSeconds, TimeUnit.SECONDS)
-    }
-  }
+/**
+ * Ends [process] and then its [client], in the one order that cannot deadlock. Returns whether the
+ * subprocess exited, same contract as [destroyWithEscalation].
+ *
+ * Closing the client first is the obvious order and the wrong one. `StdioClientTransport.close()`
+ * joins its reader coroutine under `NonCancellable`, and that reader is parked in a **blocking**
+ * `readAtMostTo` on the subprocess's stdout — a call cancellation cannot interrupt, which returns
+ * only at EOF. A tool that ignores stdin EOF and stays silent never produces that EOF, so closing
+ * first parks teardown for as long as the subprocess lives. Teardown itself now runs under
+ * `NonCancellable`, so nothing upstream can break the tie, and the daemon's session teardown hangs
+ * forever — the same failure this module's capacity guard exists to prevent, reached from the one
+ * direction the guard cannot see.
+ *
+ * Destroying the subprocess is what unblocks that read: it closes the stdout the reader is parked
+ * on. That is the same lever [McpSubprocessSession.connect]'s handshake watchdog already relies on.
+ * So close stdin directly — the same EOF the client's close would have delivered, so a well-behaved
+ * tool still gets its full graceful window — run the ladder, and close the client last, once its
+ * reader has an EOF to return from.
+ *
+ * When the subprocess outlives SIGKILL its stdout never reaches EOF, so the close is skipped rather
+ * than entered: it could only park. The transport's coroutines stay up until the OS reaps the
+ * child, which is exactly what [SubprocessIoReservation] keeps counting a permit for.
+ */
+internal suspend fun destroyThenCloseClient(
+  process: Process,
+  client: Client,
+  exitWait: McpSubprocessSession.Duration,
+): Boolean {
+  // Idempotent: the transport's write coroutine closes this same stream when the client shuts down,
+  // and a second close on an already-closed stream is a no-op.
+  runCatching { process.outputStream.close() }
+  val exited = destroyWithEscalation(process, exitWait)
+  if (exited) runCatching { client.close() }
+  return exited
+}
+
+internal fun destroyWithEscalation(process: Process, exitWait: McpSubprocessSession.Duration): Boolean {
+  if (process.waitFor(exitWait.afterCloseSeconds, TimeUnit.SECONDS)) return true
+  process.destroy()
+  if (process.waitFor(exitWait.afterSigtermSeconds, TimeUnit.SECONDS)) return true
+  process.destroyForcibly()
+  return process.waitFor(exitWait.afterSigkillSeconds, TimeUnit.SECONDS)
 }
 
 /**

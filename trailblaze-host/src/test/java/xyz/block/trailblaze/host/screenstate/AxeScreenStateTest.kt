@@ -17,7 +17,7 @@ import xyz.block.trailblaze.host.axe.AxeJsonMapper
  * `axe describe-ui` spans the whole scroll content, while the host (Maestro/XCUITest)
  * driver's screen state never carries below-fold content (XCTest doesn't materialize it,
  * and Maestro's `filterOutOfBounds` trims edge stragglers). Selector consumers resolve
- * against [AxeScreenState.trailblazeNodeTree] directly (`findMatches`, waypoint matching),
+ * against [AxeScreenState.trailblazeNodeTree] directly (`findSelectorMatches`, waypoint matching),
  * the shared scroll loop reads [AxeScreenState.viewHierarchy], and refs come from the
  * compact element list — if any of those surfaces stayed unclamped, off-viewport elements
  * would assert/match/tap on IOS_AXE only. The nastiest case is a node that barely straddles
@@ -95,7 +95,7 @@ class AxeScreenStateTest {
       "precondition: without the clamp the straddler would earn a ref",
     )
 
-    // The tree findMatches / waypoint matching / ref taps resolve against: clamped.
+    // The tree findSelectorMatches / waypoint matching / ref taps resolve against: clamped.
     val tree = assertNotNull(screenState().trailblazeNodeTree)
     assertNull(
       tree.findByLabel("Straddler row"),
@@ -103,7 +103,7 @@ class AxeScreenStateTest {
     )
     assertNull(
       tree.findByLabel("Below-fold row"),
-      "a below-fold element must not match live findMatches / waypoint queries",
+      "a below-fold element must not match live findSelectorMatches / waypoint queries",
     )
     assertNotNull(
       assertNotNull(tree.findByLabel("On-screen row")).ref,

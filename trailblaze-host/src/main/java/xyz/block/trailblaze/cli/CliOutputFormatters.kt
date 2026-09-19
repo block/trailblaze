@@ -26,6 +26,7 @@ internal fun formatBlazeResultAgent(result: CliMcpClient.ToolResult) {
   if (result.isError) {
     Console.info("### Error")
     Console.error(result.content)
+    staleRefTip(result.content)?.let { Console.error(it) }
     return
   }
 
@@ -36,6 +37,7 @@ internal fun formatBlazeResultAgent(result: CliMcpClient.ToolResult) {
     if (error != null) {
       Console.info("### Error")
       Console.error(error)
+      staleRefTip(error)?.let { Console.error(it) }
       return
     }
     val screenSummary = json["screenSummary"]?.jsonPrimitive?.content
@@ -61,9 +63,8 @@ internal fun formatBlazeResultAgent(result: CliMcpClient.ToolResult) {
   // Surface the daemon's status header (`**✓ Executed** — Tapped Checkout`, `**✅ Done** — …`,
   // StepResult.toMarkdown) as a `→ Executed — Tapped Checkout` breadcrumb above the ### Screen
   // block, so a step isn't silent about what it did.
-  val screenMarker = "**Screen:** "
-  val screenIdx = text.indexOf(screenMarker)
-  val headerMatch = matchStatusHeader(if (screenIdx >= 0) text.substring(0, screenIdx) else text)
+  val screenIdx = text.indexOf(SCREEN_MARKER)
+  val headerMatch = statusHeaderOf(text)
 
   val bodyStart = headerMatch?.endIdx ?: 0
   val bodyEnd = listOf(screenIdx, screenshotIdx).filter { it >= 0 }.minOrNull() ?: text.length
@@ -91,7 +92,7 @@ internal fun formatBlazeResultAgent(result: CliMcpClient.ToolResult) {
 
   if (screenIdx >= 0) {
     val screenEnd = if (screenshotIdx >= 0 && screenshotIdx > screenIdx) screenshotIdx else text.length
-    val screenText = text.substring(screenIdx + screenMarker.length, screenEnd).trim()
+    val screenText = text.substring(screenIdx + SCREEN_MARKER.length, screenEnd).trim()
     formatScreenSummaryAgent(screenText)
   } else if (screenshotPath == null && headerMatch == null) {
     Console.info(text)
@@ -100,7 +101,69 @@ internal fun formatBlazeResultAgent(result: CliMcpClient.ToolResult) {
   if (screenshotPath != null) {
     Console.info("Screenshot: $screenshotPath")
   }
+  // Only on a failure. A successful result can quote the marker phrase perfectly innocently — a
+  // screen summary of a page that says "not found on current screen" — and telling someone to
+  // re-snapshot after a step that worked is worse than saying nothing.
+  if (resultIsFailure(result)) {
+    staleRefTip(text)?.let { Console.error(it) }
+  }
 }
+
+/** The daemon markdown's screen block marker. */
+private const val SCREEN_MARKER = "**Screen:** "
+
+/**
+ * The leading status header of a daemon markdown blob, matched against everything before the
+ * screen block. Shared so a caller deciding whether the verdict WILL be printed asks exactly the
+ * question [formatBlazeResultAgent] answers when it prints it.
+ */
+internal fun statusHeaderOf(text: String): StatusHeaderMatch? =
+  matchStatusHeader(text.substringBefore(SCREEN_MARKER))
+
+/**
+ * Whether [result] is a failure, including the failures the MCP layer doesn't flag.
+ *
+ * `isError` is set from a narrow shape check on the response (an `Error:` / `Failed:` prefix, or a
+ * JSON error field), so a daemon response that renders its failure as markdown instead — `**❌
+ * Error**`, which is what a YAML parse failure produces — arrives with `isError = false`. The CLI's
+ * recovery tips are wrong on a success and useful on a failure, so they ask this rather than the
+ * flag.
+ */
+internal fun resultIsFailure(result: CliMcpClient.ToolResult): Boolean =
+  result.isError || RENDERED_FAILURE_HEADER.containsMatchIn(result.content)
+
+/** A leading `**❌ …**` status header — `toMarkdown`'s rendering of `FAILED` and `Error`. */
+private val RENDERED_FAILURE_HEADER = Regex("""^\s*\*\*\s*❌[^*]*\*\*""")
+
+/**
+ * The CLI-side follow-up to a stale element ref. The tool's own error ("Element ref 'X' not found
+ * on current screen … use a ref from the current view hierarchy") is shared with LLM callers, who
+ * get that hierarchy appended to every request; a shell user has to ask for it, so this names the
+ * command. It adds ONLY the command — the error above it already explained why the ref went stale,
+ * and restating that here reads as the same advice twice. Null when [content] is not a stale-ref
+ * failure.
+ */
+internal fun staleRefTip(content: String): String? {
+  if (STALE_REF_MARKER !in content) return null
+  return "Tip: Run 'trailblaze snapshot' for the current screen's refs."
+}
+
+/** The load-bearing prefix every ref-taking tool emits for a missing ref; see `TapTrailblazeTool`. */
+internal const val STALE_REF_MARKER = "not found on current screen"
+
+/**
+ * When the daemon rejects `trailblaze tool <name> key=value …` because a required parameter is
+ * missing, the likeliest cause is a misspelled key (`reff=` for `ref=`). The daemon only sees
+ * the YAML, so it cannot say what was typed; the CLI can, and names it next to the missing one.
+ */
+internal fun missingParameterHint(content: String, toolName: String, givenArgs: Collection<String>): String? {
+  val missing = MISSING_PROPERTY.find(content)?.groupValues?.get(1) ?: return null
+  val given = if (givenArgs.isEmpty()) "no arguments" else "arguments: ${givenArgs.joinToString(", ")}"
+  return "Tip: '$missing' is required but you passed $given. " +
+    "Run 'trailblaze tool $toolName --help' for the parameter names."
+}
+
+private val MISSING_PROPERTY = Regex("Property '([^']+)' is required but it is missing")
 
 /**
  * Outcome of parsing the leading `**<emoji> Verb** — message` status block
@@ -188,7 +251,7 @@ internal fun matchStatusHeader(prefix: String): StatusHeaderMatch? {
       c.category in DECORATION_CATEGORIES ||
       c.code == VARIATION_SELECTOR_16
   }.trim()
-  val message = match.groupValues[2].trim().ifEmpty { null }
+  val message = match.groupValues[2].trim().ifEmpty { null }?.takeUnless { restatesVerb(it, verb) }
   val formatted = if (message != null) "→ $verb — $message" else "→ $verb"
   return StatusHeaderMatch(
     formatted = formatted,
@@ -197,6 +260,20 @@ internal fun matchStatusHeader(prefix: String): StatusHeaderMatch? {
     message = message,
   )
 }
+
+/**
+ * True when the message says nothing its verb didn't. The daemon pairs `**✅ PASSED**` with the
+ * message "Assertion passed", and `→ PASSED — Assertion passed` spends a line saying one thing
+ * twice; a reader looking for WHY it passed finds only the fact that it did, again.
+ */
+internal fun restatesVerb(message: String, verb: String): Boolean {
+  val words = message.lowercase().split(Regex("[^a-z]+")).filter { it.isNotEmpty() }
+  val remaining = words - VERB_RESTATEMENT_FILLER
+  return remaining.isNotEmpty() && remaining.all { it == verb.lowercase() }
+}
+
+/** Words that carry nothing on their own, so a message made only of these plus the verb restates it. */
+private val VERB_RESTATEMENT_FILLER = setOf("assertion", "step", "objective", "the", "was", "is", "successfully")
 
 private val DECORATION_CATEGORIES = setOf(
   CharCategory.OTHER_SYMBOL,
@@ -264,25 +341,24 @@ internal fun formatVerifyResultAgent(result: CliMcpClient.ToolResult): Int {
       return TrailblazeExitCode.INFRA_FAILED.code
     }
     val passed = json["passed"]?.jsonPrimitive?.content?.toBoolean() ?: false
+    val verdict = if (passed) "Passed" else "Failed"
     val resultText = json["result"]?.jsonPrimitive?.content ?: ""
-    if (passed) {
-      Console.info("### Passed")
-      Console.info(resultText)
-      return TrailblazeExitCode.SUCCESS.code
-    } else {
-      Console.info("### Failed")
-      Console.info(resultText)
-      return TrailblazeExitCode.ASSERTION_FAILED.code
-    }
+    Console.info("### $verdict")
+    // "Assertion passed" under a `### Passed` heading is the verdict twice. Print the daemon's
+    // sentence only when it says something the heading didn't — the reason, usually.
+    if (resultText.isNotBlank() && !restatesVerb(resultText, verdict)) Console.info(resultText)
+    return if (passed) TrailblazeExitCode.SUCCESS.code else TrailblazeExitCode.ASSERTION_FAILED.code
   } catch (_: Exception) {
     // Not JSON — parse markdown format from daemon (e.g., "**✅ PASSED** — reason").
-    // Print the verdict ABOVE the screen summary so an interactive user sees the
-    // pass/fail at a glance instead of inferring it from $?. formatBlazeResultAgent
-    // intentionally only prints the screen — without the header, the markdown path
-    // is silent on the verdict even though the exit code is correct (PR #3620).
     val text = result.content
     val passed = parseVerifyPassedFromMarkdown(text)
-    Console.info(if (passed) "### Passed" else "### Failed")
+    // The daemon's own `**✅ PASSED**` header renders below as a `→ PASSED — …` breadcrumb, so a
+    // `### Passed` heading here would be the verdict a second time. Keep the heading only when
+    // there is no header to render: [formatBlazeResultAgent] is then silent on the verdict even
+    // though the exit code is right.
+    if (statusHeaderOf(text) == null) {
+      Console.info(if (passed) "### Passed" else "### Failed")
+    }
     formatBlazeResultAgent(result)
     return if (passed) TrailblazeExitCode.SUCCESS.code else TrailblazeExitCode.ASSERTION_FAILED.code
   }
@@ -382,10 +458,22 @@ internal fun formatScreenSummaryAgent(summary: String) {
   }
 
   if (screenElements.isNotEmpty()) {
-    Console.info("### Screen")
+    Console.info(screenHeadingFor(screenElements))
     Console.info(screenElements.joinToString("\n"))
   }
 }
+
+/**
+ * `### Screen` means the element list everywhere else the CLI prints it — `[n635] "Options"`
+ * lines a `ref=` can be taken from. When the daemon has no element list to give it sends the
+ * model's one-paragraph description of the screen instead, which is what `verify` gets; under
+ * the same heading that promises refs that aren't there.
+ */
+private fun screenHeadingFor(screenElements: List<String>): String =
+  if (screenElements.any { ELEMENT_MARKER.containsMatchIn(it) }) "### Screen" else "### Screen summary"
+
+/** A `[n635]` / `[searchbox]` element marker: bracketed, no whitespace inside. Prose has none. */
+private val ELEMENT_MARKER = Regex("""\[[^\[\]\s]+]""")
 
 /**
  * Extract a human-readable error message from a daemon response.

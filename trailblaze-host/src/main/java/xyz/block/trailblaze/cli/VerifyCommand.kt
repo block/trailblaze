@@ -20,7 +20,7 @@ import java.util.concurrent.Callable
   mixinStandardHelpOptions = true,
   description = ["Check a condition on screen and pass/fail (exit code 0/1, ideal for CI)"],
 )
-class VerifyCommand : Callable<Int> {
+class VerifyCommand : Callable<Int>, QuietUnlessVerbose {
 
   @Parameters(
     description = ["Assertion to verify (e.g., 'The Sign In button is visible')"],
@@ -39,6 +39,12 @@ class VerifyCommand : Callable<Int> {
     description = ["Enable verbose output"],
   )
   var verbose: Boolean = false
+
+  /**
+   * Closes the internal [Console.log] channel for this command unless `--verbose`, applied at
+   * dispatch so the early-return paths are covered too — see [QuietUnlessVerbose].
+   */
+  override val verboseRequested: Boolean get() = verbose
 
   @Option(
     names = ["--no-screenshots", "--text-only"],

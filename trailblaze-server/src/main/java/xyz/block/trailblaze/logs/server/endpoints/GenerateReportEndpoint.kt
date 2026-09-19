@@ -63,6 +63,28 @@ object GenerateReportEndpoint {
   const val DEFAULT_SESSION_LIMIT: Int = 25
 
   /**
+   * This endpoint's route. Unscoped it is the report over every session the daemon holds, capped
+   * at [DEFAULT_SESSION_LIMIT]; with `?session=` it is one run's own page. See [sessionReportUrl].
+   */
+  const val ALL_RUNS_REPORT_PATH: String = "/report"
+
+  /** One run's own report page. The `session` key is parsed by this endpoint, so it is built here. */
+  fun sessionReportUrl(sessionId: SessionId): String =
+    "$ALL_RUNS_REPORT_PATH?session=${java.net.URLEncoder.encode(sessionId.value, Charsets.UTF_8)}"
+
+  /**
+   * Where a single-session document sends its Compare. Root-relative on purpose — the report is
+   * served from this daemon, over whatever host and tunnel the reader used to reach it.
+   *
+   * `limit=all` is load-bearing, not a preference: the unscoped route shows only the
+   * [DEFAULT_SESSION_LIMIT] most recent sessions, so a link without it drops any run old enough
+   * to have fallen out of that window, and the viewer would compare two other runs instead. It
+   * is also the most expensive report the daemon can build, so a run still inside the window is
+   * sent to [ALL_RUNS_REPORT_PATH] plain instead.
+   */
+  const val ALL_RUNS_REPORT_URL: String = "$ALL_RUNS_REPORT_PATH?limit=all"
+
+  /**
    * Where this endpoint's reports point their `<img>` tags: the daemon's own
    * `staticFiles("/static", logsRepo.logsDir)` route (see `ServerEndpoints`), which serves exactly
    * the `<sessionId>/<file>` layout [RunReportGenerator] emits for a linked-image report.
@@ -83,8 +105,13 @@ object GenerateReportEndpoint {
     /** Whether the report can be generated at all (i.e. `bun` resolved). */
     val isAvailable: Boolean
 
-    /** Generates the report for [sessionIds], or null when generation failed. */
-    fun generate(logsRepo: LogsRepo, sessionIds: List<SessionId>): File?
+    /**
+     * Generates the report for [sessionIds], or null when generation failed. [allRunsUrl] is the
+     * report over every session this daemon holds, handed to a single-session document so it can
+     * offer Compare as a link into it; null when the document IS that report, or when there is
+     * no other session to compare against.
+     */
+    fun generate(logsRepo: LogsRepo, sessionIds: List<SessionId>, allRunsUrl: String? = null): File?
   }
 
   fun register(
@@ -93,8 +120,11 @@ object GenerateReportEndpoint {
     reportSource: InteractiveReportSource = RunReportSource(),
   ) = with(routing) {
     val generations = ReportGenerations()
-    get("/report") {
+    get(ALL_RUNS_REPORT_PATH) {
       try {
+        // A present-but-blank `session` reads as absent, so a link that lost its id serves the
+        // all-runs report rather than 404-ing. Deliberate: the unscoped report is a superset of
+        // whatever that link meant to show, and the reader can find the run in its index.
         val requestedSession = call.request.queryParameters["session"]?.takeIf { it.isNotBlank() }
         val allSessionIds = logsRepo.getSessionIds()
 
@@ -108,7 +138,13 @@ object GenerateReportEndpoint {
         }
 
         val requestedLimit = parseLimit(call.request.queryParameters["limit"])
-        val candidates = if (requestedSession == null) recentSessionsFirst(logsRepo) else emptyList()
+        // The sessions the unscoped report can actually show: ordered by recency, and WITHOUT any
+        // session dir whose summary won't read. Read on a scoped request too, because that is
+        // precisely the list the Compare hand-off below has to be inside of.
+        // `by lazy` so a scoped request pays for it only if it gets as far as the Compare
+        // hand-off below — the bun-missing bail returns in milliseconds, and walking every
+        // session's status log to answer it would be the slowest part of that answer.
+        val reportable by lazy { recentSessionsFirst(logsRepo) }
         val filteredSessionIds = if (requestedSession != null) {
           val sessionId = SessionId(requestedSession)
           // Security: this exact-match membership check against the real on-disk session dirs
@@ -123,14 +159,39 @@ object GenerateReportEndpoint {
             )
             return@get
           }
+          // The directory exists but holds no run the report can build: no session-status log, so
+          // [RunReportGenerator] would drop it, find itself with nothing to render and return
+          // null — and the reader would get a "generation failed" page for what is really a
+          // not-found. One session read, not the whole logs dir, and it uses the same accessor
+          // [recentSessionsFirst] does so the two answers cannot disagree.
+          if (logsRepo.getSessionInfoSummary(sessionId) == null) {
+            Console.log("[Report] Session '$requestedSession' has no session-status log — nothing to report on.")
+            call.respondText(
+              "Session '$requestedSession' has no run to report on.",
+              ContentType.Text.Plain,
+              HttpStatusCode.NotFound,
+            )
+            return@get
+          }
           listOf(sessionId)
         } else if (requestedLimit == null) {
-          candidates
+          reportable
         } else {
-          candidates.take(requestedLimit)
+          reportable.take(requestedLimit)
         }
-        val omittedSessions = candidates.size - filteredSessionIds.size
-
+        if (filteredSessionIds.isEmpty()) {
+          // Session dirs exist, but not one has a readable status log — the same nothing-to-show
+          // the empty logs dir answers above, reached a different way. Answered as not-found
+          // because the alternative is an opaque "generation failed" from a renderer handed an
+          // empty session list, which reads as a daemon bug rather than as no runs yet.
+          call.respondText(
+            "No readable sessions found. Run a trail first.",
+            ContentType.Text.Plain,
+            HttpStatusCode.NotFound,
+          )
+          return@get
+        }
+        val omittedSessions = if (requestedSession == null) reportable.size - filteredSessionIds.size else 0
         if (!reportSource.isAvailable) {
           Console.error("[Report] bun not found on the daemon's PATH — cannot build the interactive report.")
           call.respondText(
@@ -141,9 +202,60 @@ object GenerateReportEndpoint {
           return@get
         }
 
+        // A single-session page holds nothing to Compare against. When the daemon has other
+        // sessions, the document links its Compare into the all-runs report instead — see
+        // [InteractiveReportSource.generate].
+        //
+        // Offered only when that report holds something ELSE to pair this run with. That the run
+        // itself is in there is already settled — an unreportable session 404s above — so what is
+        // left to ask is whether any other session is reportable. A raw count of session dirs is
+        // not that test: a dir whose status log won't read is dropped from the all-runs report,
+        // and the reader would arrive at an index with nothing to compare against.
+        //
+        // Below the availability check on purpose: this is the only thing a SCOPED request reads
+        // `reportable` for, and walking every session's status log to answer a request that is
+        // about to 503 is the slowest part of that 503.
+        val allRunsUrl = when {
+          requestedSession != null && reportable.size > 1 -> {
+            // `limit=all` only when this run is old enough to have fallen out of the default
+            // window. It is the most expensive report the daemon can build — on a logs dir with
+            // months of runs it is what the cap exists to prevent — and for a recent run the
+            // capped route holds it already.
+            if (reportable.indexOf(SessionId(requestedSession)) < DEFAULT_SESSION_LIMIT) {
+              ALL_RUNS_REPORT_PATH
+            } else {
+              ALL_RUNS_REPORT_URL
+            }
+          }
+          // A capped all-runs page is a partial view of a report that exists, so it gets the same
+          // field for the same reason: a compare link naming a run that aged out of the window can
+          // then offer a retry that actually holds it. This is the only way the document can know
+          // a wider report is available — the page's own address cannot answer it, since a copy
+          // re-hosted on an artifact server keeps every query parameter and grows no runs.
+          //
+          // Withheld unless widening would really add something. `omittedSessions` is 0 for a
+          // scoped page and for an all-runs page that already covers everything, so the retry is
+          // never offered where it leads back to the same set.
+          //
+          // The size test is what keeps ONE field serving two readers. The viewer's other reader
+          // is a single-run page's Compare button, which is withheld on any document holding more
+          // than one run — so handing the field to a document with two or more runs can only ever
+          // reach the compare retry. `?limit=1` is the case that makes this load-bearing: it omits
+          // runs like any cap, but its document holds one run, and that button would then offer
+          // the daemon's most expensive report from a header that says nothing about the cost.
+          // Nothing is lost by withholding it — comparing needs two runs, so a one-run document
+          // has no compare view to put a retry in.
+          omittedSessions > 0 && filteredSessionIds.size > 1 -> ALL_RUNS_REPORT_URL
+          else -> null
+        }
+
         Console.log(
           "[Report] Generating interactive report for ${filteredSessionIds.size} session(s)" +
-            if (omittedSessions > 0) " (most recent of ${candidates.size})..." else "...",
+            (if (omittedSessions > 0) " (most recent of ${reportable.size})" else "") +
+            // The Compare hand-off decision, because its only other evidence is grepping the
+            // generated HTML — and "the run page has no Compare button" is a support question.
+            (if (requestedSession != null) ", Compare " + (allRunsUrl?.let { "-> $it" } ?: "withheld (no other reportable session)") else "") +
+            "...",
         )
 
         // The scope is part of the report's identity, so it keys both the single-flight and the
@@ -159,9 +271,10 @@ object GenerateReportEndpoint {
             reportSource = reportSource,
             logsRepo = logsRepo,
             sessionIds = filteredSessionIds,
+            allRunsUrl = allRunsUrl,
             scopeKey = scopeKey,
             truncationNotice = if (omittedSessions > 0) {
-              "Showing the ${filteredSessionIds.size} most recent of ${candidates.size} sessions."
+              "Showing the ${filteredSessionIds.size} most recent of ${reportable.size} sessions."
             } else {
               null
             },
@@ -201,10 +314,18 @@ object GenerateReportEndpoint {
    * freshest slot in the window; and it applies the same has-a-status-log gate the report
    * renderer does, so the count the user is shown is the count they get.
    */
-  private fun recentSessionsFirst(logsRepo: LogsRepo): List<SessionId> = logsRepo.getSessionIds()
-    .mapNotNull { logsRepo.getSessionInfoSummary(it) }
-    .sortedByDescending { it.timestamp }
-    .map { it.sessionId }
+  private fun recentSessionsFirst(logsRepo: LogsRepo): List<SessionId> {
+    val sessionIds = logsRepo.getSessionIds()
+    val summaries = sessionIds.mapNotNull { logsRepo.getSessionInfoSummary(it) }
+    // A dropped dir is invisible in the report AND in its "most recent of N" notice, so the run
+    // someone came looking for is simply absent with nothing to explain it. Said once per
+    // request that reads this list.
+    val dropped = sessionIds.size - summaries.size
+    if (dropped > 0) {
+      Console.log("[Report] Skipping $dropped session dir(s) with no readable status log.")
+    }
+    return summaries.sortedByDescending { it.timestamp }.map { it.sessionId }
+  }
 
   /**
    * The `limit` query parameter: null means "no cap" (`all` or a non-positive number), absent or
@@ -237,10 +358,11 @@ object GenerateReportEndpoint {
     reportSource: InteractiveReportSource,
     logsRepo: LogsRepo,
     sessionIds: List<SessionId>,
+    allRunsUrl: String?,
     scopeKey: String?,
     truncationNotice: String?,
   ): File? {
-    val generated = reportSource.generate(logsRepo, sessionIds) ?: return null
+    val generated = reportSource.generate(logsRepo, sessionIds, allRunsUrl) ?: return null
     val reportsDir = File(logsRepo.logsDir, REPORTS_DIR_NAME).apply { mkdirs() }
     val outputFile = File(
       reportsDir,
@@ -284,7 +406,7 @@ object GenerateReportEndpoint {
   /** Dismissible floating notice naming the report's scope and the link that widens it. */
   private fun truncationBanner(notice: String): String = """
     <div id="trailblaze-report-scope-notice" style="position:fixed;left:16px;bottom:16px;z-index:2147483647;max-width:380px;background:#161b22;color:#e6edf3;border:1px solid #30363d;border-radius:10px;padding:10px 14px;box-shadow:0 6px 24px rgba(0,0,0,.35);font:13px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif">
-      $notice <a href="/report?limit=all" style="color:#58a6ff">Include every session</a> (slower, much larger).
+      $notice <a href="$ALL_RUNS_REPORT_URL" style="color:#58a6ff">Include every session</a> (slower, much larger).
       <button type="button" onclick="this.parentNode.remove()" style="margin-left:6px;background:none;border:0;color:#8b949e;cursor:pointer;font:inherit">Dismiss</button>
     </div>
   """.trimIndent()
@@ -315,8 +437,8 @@ object GenerateReportEndpoint {
     // instead of having to restart the daemon.
     override val isAvailable: Boolean get() = RunReportGenerator().isBunAvailable
 
-    override fun generate(logsRepo: LogsRepo, sessionIds: List<SessionId>): File? =
-      RunReportGenerator().generate(logsRepo, sessionIds, imageBaseUrl = STATIC_IMAGE_BASE_URL)
+    override fun generate(logsRepo: LogsRepo, sessionIds: List<SessionId>, allRunsUrl: String?): File? =
+      RunReportGenerator().generate(logsRepo, sessionIds, imageBaseUrl = STATIC_IMAGE_BASE_URL, allRunsUrl = allRunsUrl)
   }
 
   /**

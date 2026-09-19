@@ -1,5 +1,7 @@
 package xyz.block.trailblaze.cli
 
+import io.ktor.client.network.sockets.ConnectTimeoutException
+import io.ktor.client.plugins.HttpRequestTimeoutException
 import xyz.block.trailblaze.util.Console
 
 /**
@@ -17,8 +19,7 @@ import xyz.block.trailblaze.util.Console
  * - Replace raw stack traces and bare `Console.error(e.toString())` patterns with a
  *   single shape every command produces.
  * - Keep the body terse — `reason` is one line, `hint` is one line of actionable
- *   recovery (`is the daemon running? try \`trailblaze app start\``,
- *   `device not found; check \`trailblaze device list\``).
+ *   recovery ([DAEMON_DOWN_HINT], `device not found; check \`trailblaze device list\``).
  * - Pair with [TrailblazeExitCode] for the machine signal: the envelope tells the
  *   human what happened; the exit code tells the script what to do.
  */
@@ -63,6 +64,79 @@ internal fun describeThrowableForUser(e: Throwable): String {
       message ?: e::class.simpleName ?: "unknown error"
   }
 }
+
+/** Recovery line for every envelope that means "the CLI could not reach the daemon at all". */
+internal const val DAEMON_DOWN_HINT = "is the Trailblaze daemon running? try `trailblaze app start`"
+
+/**
+ * Recovery line for a request the daemon accepted and has not answered yet.
+ *
+ * Deliberately does not mention restarting anything: the command is still running on the other
+ * side of the socket, and `trailblaze app start` would throw that work away.
+ *
+ * The `raise …` half of the advice is only true because the launcher forwards
+ * [CliMcpClient.REQUEST_TIMEOUT_ENV] in its `/cli/exec` payload and
+ * [CliMcpClient.resolveRequestTimeoutMs] reads it from the caller's shell. Every command that
+ * can print this hint — `snapshot`, `ask`, `tool`, `config` — runs in the daemon's JVM on that
+ * path, so a var read from `System.getenv` there is the daemon's, frozen at `app start`, and
+ * exporting it in the user's shell would change nothing.
+ */
+internal const val DAEMON_STILL_WORKING_HINT =
+  "the daemon is still working on this command — check `trailblaze status` before retrying, " +
+    "or raise ${CliMcpClient.REQUEST_TIMEOUT_ENV} (ms) to wait longer"
+
+/**
+ * The [reportCliError] hint for an IO failure that escaped a CLI action.
+ *
+ * A timeout waiting for the *response* means the daemon took the request and is still working on
+ * it — a target's launch tool, `ask`, or `blaze` routinely outlasts the per-request budget — so
+ * [DAEMON_DOWN_HINT] would send that user to restart the daemon that is about to finish their
+ * command. Connect failures are the only case where the daemon really may be gone.
+ *
+ * The split is by exception type because the transport already draws the line for us. Ktor's
+ * OkHttp engine turns a connect timeout into [ConnectTimeoutException] (a
+ * [java.net.ConnectException]) and a response timeout into a plain
+ * [java.net.SocketTimeoutException], and its `HttpTimeout` plugin raises
+ * [HttpRequestTimeoutException] when the whole-request budget expires first. Both of those
+ * budgets are [CliMcpClient.REQUEST_TIMEOUT_ENV] set to the same value, so which one fires is a
+ * race and they have to produce the same hint.
+ *
+ * Reading [HttpRequestTimeoutException] as "in flight" is only sound because the whole-request
+ * budget always outlives the connect budget: Ktor's request timer covers connection setup as
+ * well, so a shorter [CliMcpClient.REQUEST_TIMEOUT_ENV] would otherwise expire mid-connect and
+ * report a command that never reached the daemon as one the daemon is working on.
+ * [CliMcpClient.connectTimeoutMsFor] keeps connect under the enclosing budget so the connect
+ * failure always wins that race and arrives with its own type.
+ *
+ * The message check is the fallback for a [java.net.SocketTimeoutException] raised outside that
+ * mapping — a bare socket probe, where `connect timed out` is the only thing separating a connect
+ * from a read.
+ */
+internal fun ioFailureHint(e: java.io.IOException): String = when (e) {
+  // Listed before its own supertype so the taxonomy reads as the transport writes it.
+  is ConnectTimeoutException -> DAEMON_DOWN_HINT
+  is java.net.ConnectException -> DAEMON_DOWN_HINT
+  is HttpRequestTimeoutException -> DAEMON_STILL_WORKING_HINT
+  is java.net.SocketTimeoutException ->
+    if (e.message?.contains("connect", ignoreCase = true) == true) {
+      DAEMON_DOWN_HINT
+    } else {
+      DAEMON_STILL_WORKING_HINT
+    }
+  else -> DAEMON_DOWN_HINT
+}
+
+/**
+ * Whether [e] means the request reached the daemon and may still be executing there — the same
+ * line [ioFailureHint] already draws, reused so the two cannot disagree about what "in flight"
+ * means.
+ *
+ * Asked by a caller that would otherwise RESEND the request. `tools/call` is not idempotent, so
+ * resending one the daemon is still running can tap twice or take a payment twice; a connect
+ * failure delivered nothing and is safe to retry.
+ */
+internal fun isRequestInFlightFailure(e: Throwable): Boolean =
+  e is java.io.IOException && ioFailureHint(e) == DAEMON_STILL_WORKING_HINT
 
 private val WHITESPACE_RUN = Regex("\\s+")
 

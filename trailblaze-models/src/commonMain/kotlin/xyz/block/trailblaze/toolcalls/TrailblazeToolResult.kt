@@ -158,3 +158,14 @@ Unknown custom command, ensure there is a mapping between the custom command and
  */
 fun TrailblazeToolResult.Success.carriesPayload(): Boolean =
   message != null || structuredContent != null
+
+/**
+ * The text to raise when a tool result has to become an exception: an [TrailblazeToolResult.Error]'s
+ * own [TrailblazeToolResult.Error.errorMessage], never the data class's `toString()`. The dump
+ * (`ExceptionThrown(errorMessage=…, command=TapTrailblazeTool(…), stackTrace=null, …)`) is what a
+ * `trailblaze tool` user or an LLM would otherwise read as the failure reason.
+ */
+fun TrailblazeToolResult.failureMessage(): String = when (this) {
+  is TrailblazeToolResult.Error -> errorMessage
+  is TrailblazeToolResult.Success -> message ?: "Tool succeeded"
+}

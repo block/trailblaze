@@ -3,10 +3,12 @@ package xyz.block.trailblaze.scripting.subprocess
 import io.modelcontextprotocol.kotlin.sdk.types.CallToolRequest
 import io.modelcontextprotocol.kotlin.sdk.types.CallToolRequestParams
 import io.modelcontextprotocol.kotlin.sdk.types.RequestMeta
+import io.modelcontextprotocol.kotlin.sdk.shared.RequestOptions
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.descriptors.SerialDescriptor
 import kotlinx.serialization.descriptors.buildClassSerialDescriptor
@@ -17,6 +19,7 @@ import kotlinx.serialization.json.JsonEncoder
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import xyz.block.trailblaze.scripting.callback.JsScriptingCallbackDispatcher.CALLBACK_TIMEOUT_MS_PROPERTY
 import xyz.block.trailblaze.scripting.callback.JsScriptingCallbackDispatchDepth
 import xyz.block.trailblaze.scripting.callback.JsScriptingInvocationRegistry
 import xyz.block.trailblaze.scripting.mcp.TrailblazeContextEnvelope
@@ -30,6 +33,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import java.util.concurrent.TimeUnit
+import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * [ExecutableTrailblazeTool] adapter for a single subprocess-advertised MCP tool.
@@ -99,6 +103,7 @@ class SubprocessTrailblazeTool(
     val argsWithContext = JsonObject(resolvedArgs + (TrailblazeContextEnvelope.RESERVED_KEY to legacyEnvelope))
     val session = sessionProvider()
     val sessionId = toolExecutionContext.sessionProvider.invoke().sessionId
+    val outerRequestTimeoutMs = McpSubprocessSpawner.resolveOuterRequestTimeoutMs()
 
     // Register-and-build inside a single try so a synchronous throw anywhere in the setup
     // (register, envelope construction, RequestMeta build) still closes the registry handle
@@ -142,25 +147,50 @@ class SubprocessTrailblazeTool(
         )
       }
 
-      val response = session.client.callTool(
-        request = CallToolRequest(
-          params = CallToolRequestParams(
-            name = advertisedName.toolName,
-            arguments = argsWithContext,
-            meta = requestMeta,
+      // `withTimeoutOrNull` is what actually bounds this call. `RequestOptions.timeout` covers
+      // only the SDK's `transport.send` (MCP SDK 0.13.0: `Protocol.request` wraps the send in
+      // `withTimeout` and then awaits the response outside it), and over stdio the send is a
+      // channel offer that returns immediately — so a subprocess that accepts the request and
+      // never answers is not bounded by the option at all. It is still passed, so a wedged stdin
+      // pipe can't block the write forever on the SDK's own 60s default either.
+      //
+      // The bound has to exist here, innermost, because every enclosing hop expresses expiry as
+      // a bare coroutine cancellation: the caller would be told its run was cancelled rather
+      // than which tool stopped answering. `withTimeoutOrNull` rather than `withTimeout` so an
+      // outer cancellation (session teardown, agent abort) still propagates untouched — only
+      // our own deadline produces the null below.
+      val response = withTimeoutOrNull(outerRequestTimeoutMs) {
+        session.client.callTool(
+          request = CallToolRequest(
+            params = CallToolRequestParams(
+              name = advertisedName.toolName,
+              arguments = argsWithContext,
+              meta = requestMeta,
+            ),
           ),
-        ),
-      )
-      // Apply any `_meta.trailblaze.memoryDelta` (+ memoryDeletions) the handler emitted
-      // into the shared `AgentMemory` — but only on a successful result. The TS SDK's
-      // `attachMemoryDelta` runs after the handler returns, so an `isError: true` result
-      // would otherwise commit partial scratchpad state while a THROW (same conceptual
-      // failure) would not. Gating here keeps the failure modes symmetric: both error
-      // shapes leave host memory untouched.
-      if (response.isError != true) {
-        TrailblazeContextEnvelope.applyResultMemoryDelta(toolExecutionContext.memory, response.meta)
+          options = RequestOptions(timeout = outerRequestTimeoutMs.milliseconds),
+        )
       }
-      response.toTrailblazeToolResult()
+      if (response == null) {
+        TrailblazeToolResult.Error.ExceptionThrown(
+          errorMessage = buildDispatchTimeoutMessage(
+            toolName = advertisedName.toolName,
+            timeoutMs = outerRequestTimeoutMs,
+          ),
+          command = this,
+        )
+      } else {
+        // Apply any `_meta.trailblaze.memoryDelta` (+ memoryDeletions) the handler emitted
+        // into the shared `AgentMemory` — but only on a successful result. The TS SDK's
+        // `attachMemoryDelta` runs after the handler returns, so an `isError: true` result
+        // would otherwise commit partial scratchpad state while a THROW (same conceptual
+        // failure) would not. Gating here keeps the failure modes symmetric: both error
+        // shapes leave host memory untouched.
+        if (response.isError != true) {
+          TrailblazeContextEnvelope.applyResultMemoryDelta(toolExecutionContext.memory, response.meta)
+        }
+        response.toTrailblazeToolResult()
+      }
     } catch (e: CancellationException) {
       // Coroutine cancellation must propagate — swallowing it here would break structured
       // concurrency for session teardown, driver disconnect, or agent abort. The catch
@@ -290,6 +320,23 @@ private fun buildCrashMessage(
     appendLine("tail stderr:")
     append(tailBlock)
   }
+}
+
+/**
+ * Message for a subprocess that accepted a `tools/call` and never answered it.
+ *
+ * Says who was slow (the tool), what the budget was, and that the subprocess kept running — the
+ * three things missing from the coroutine cancellation this path used to surface, which read as
+ * "the run was cancelled" and pointed at the wrong layer. The override is named because a tool
+ * that legitimately needs longer is the whole reason the budget is configurable.
+ */
+internal fun buildDispatchTimeoutMessage(
+  toolName: String,
+  timeoutMs: Long,
+): String = buildString {
+  appendLine("Subprocess MCP tool '$toolName' did not answer within ${timeoutMs}ms.")
+  appendLine("The subprocess is still running, so the tool may yet finish — its result is discarded.")
+  append("Raise the budget with -D$CALLBACK_TIMEOUT_MS_PROPERTY=<ms> if this tool needs longer.")
 }
 
 /**

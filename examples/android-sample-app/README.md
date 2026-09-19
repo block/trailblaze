@@ -65,8 +65,7 @@ trails/
 ├── forms/                       # Natural-language authoring trails (text-input, args, generated-user)
 ├── catalog/ lists/ loading/ swipe/ settings/ taps/   # More authoring trails, grouped by feature
 ├── mcp-tools-demo/              # Trails exercising MCP-backed tools
-├── android-ondevice-accessibility/     # Recorded per-driver variants (accessibility driver)
-└── android-ondevice-instrumentation/   # Recorded per-driver variants (instrumentation driver)
+└── android-ondevice-accessibility/     # Recorded per-driver variants (accessibility driver)
 ```
 
 See [`trails/config/README.md`](trails/config/README.md) for the workspace config layout and how

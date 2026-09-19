@@ -138,7 +138,12 @@ val CONFIG_KEYS: Map<String, ConfigKey> = listOf(
     name = "agent",
     description = "Agent implementation",
     validValues = AgentImplementation.entries.joinToString(", ") { it.name },
-    get = { config -> config.agentImplementation.name },
+    // A never-chosen agent is null (tri-state), and runs resolve absence to the framework default
+    // — so name that default instead of claiming "(not set)" while runs use something concrete.
+    get = { config ->
+      config.agentImplementation?.name
+        ?: "(not set — default: ${AgentImplementation.DEFAULT_NAME})"
+    },
     set = { config, value ->
       CliConfigHelper.parseAgent(value)?.let { config.copy(agentImplementation = it) }
     },

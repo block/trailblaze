@@ -48,6 +48,11 @@ jobs:
       # (non-publishing) workflows get Gradle caching instead.
       - name: Setup Android SDK
         uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407
+        with:
+          # Drop the action's default `tools` package. Google removed the obsolete SDK Tools
+          # package from the repository, so `sdkmanager tools` fails outright on runner images
+          # that no longer ship it preinstalled. `platform-tools` is what the build needs.
+          packages: platform-tools
 
       - name: Setup Bun
         # `-Ptrailblaze.wasm=true` packages this module's JAR resources, which

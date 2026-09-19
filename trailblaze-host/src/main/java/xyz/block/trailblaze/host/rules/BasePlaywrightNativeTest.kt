@@ -161,7 +161,8 @@ open class BasePlaywrightNativeTest(
    * [PlaywrightPageManager.playwrightDispatcher] via [PlaywrightPageManager.onPlaywrightThread].
    * Running the loop ON the Playwright thread therefore parks the very thread the nested
    * call needs, deadlocking every such composition until the subprocess's callback timeout
-   * (120s+) aborts it. Every Playwright API touch bridges onto the Playwright thread
+   * aborts it — minutes of deadlock before any error. Every Playwright API touch bridges onto the
+   * Playwright thread
    * per-call instead — the same model multi-device sessions already use (their loop runs
    * on the session's routing thread).
    */

@@ -36,6 +36,7 @@ import xyz.block.trailblaze.toolcalls.commands.TapOnPointTrailblazeTool
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import xyz.block.trailblaze.toolcalls.CoreTools
 import kotlin.test.assertTrue
 
 /**
@@ -827,6 +828,102 @@ class StepToolSetDirectToolsTest {
   }
 
   @Test
+  fun `an unknown tool name is answered with the closest available tool`() = runTest {
+    // This is the rejection a CLI user in a workspace that ships its own tools actually reads —
+    // the CLI's own typo check stands down there. The candidate set is what the current device
+    // and target offer, so the suggestion is always a name they can go run.
+    val toolSet =
+      StepToolSet(
+        screenAnalyzer = throwingScreenAnalyzer,
+        executor = throwingExecutor,
+        screenStateProvider = { _, _, _ -> dummyScreenState },
+        availableToolsProvider = {
+          listOf(TrailblazeToolDescriptor(name = "tap"), TrailblazeToolDescriptor(name = "swipe"))
+        },
+        rawToolExecutor = { _, _ -> "OK" },
+      )
+
+    val result = toolSet.step(objective = "Tap nonexistent", tools = "- tap_on_text: {}")
+
+    assertContains(result, "Unknown tool: tap_on_text.")
+    assertContains(result, "Did you mean 'tap'?")
+  }
+
+  @Test
+  fun `tapOn is a real tool nothing offers, not an unknown name`() = runTest {
+    // `tapOn` is class-backed with a `.tool.yaml`, so it decodes to a real tool and never reaches
+    // the unknown-name branch — it is rejected one gate later, for not being on offer. Pinned
+    // because the two branches give the reader opposite advice, and `trailblaze toolbox --name
+    // tapOn` now agrees with THIS one: the tool exists, and nothing here will run it.
+    //
+    // This is also the CLI's `trailblaze tool <name>` path, not just the MCP one — that command
+    // ends at `callTool("step", …)`, so the gate below is the same gate it hits. That is what
+    // licenses the "`trailblaze tool` refuses to run it" half of the availability note.
+    val toolSet =
+      StepToolSet(
+        screenAnalyzer = throwingScreenAnalyzer,
+        executor = throwingExecutor,
+        screenStateProvider = { _, _, _ -> dummyScreenState },
+        availableToolsProvider = {
+          listOf(TrailblazeToolDescriptor(name = "tap"), TrailblazeToolDescriptor(name = "swipe"))
+        },
+        rawToolExecutor = { _, _ -> "OK" },
+      )
+
+    val result = toolSet.step(
+      objective = "Tap the link",
+      tools = "- tapOn:\n    selector:\n      androidAccessibility:\n        textRegex: \"Settings\"",
+    )
+
+    assertContains(result, "not valid for the current device/target")
+    assertFalse("Unknown tool" in result, "`tapOn` was treated as a name nothing knows: <<$result>>")
+  }
+
+  @Test
+  fun `a typo for a tool this surface does not have is not suggested`() = runTest {
+    // `openUrl` is a real scripted tool, so it is in the cross-driver catalog — but not on a web
+    // device, where the driver gate answers it with `web_navigate`. Suggesting it for `openUr`
+    // would send the reader to a name that gets rejected the moment they run it.
+    val toolSet =
+      StepToolSet(
+        screenAnalyzer = throwingScreenAnalyzer,
+        executor = throwingExecutor,
+        screenStateProvider = { _, _, _ -> dummyScreenState },
+        availableToolsProvider = {
+          listOf(TrailblazeToolDescriptor(name = "web_navigate"), TrailblazeToolDescriptor(name = "tap"))
+        },
+        rawToolExecutor = { _, _ -> "OK" },
+      )
+
+    val result = toolSet.step(objective = "Open a page", tools = "- openUr: {}")
+
+    assertContains(result, "Unknown tool: openUr.")
+    assertFalse(
+      CoreTools.OPEN_URL in result,
+      "suggested a tool this device cannot run: <<$result>>",
+    )
+  }
+
+  @Test
+  fun `an unknown tool name nothing resembles gets no guess`() = runTest {
+    val toolSet =
+      StepToolSet(
+        screenAnalyzer = throwingScreenAnalyzer,
+        executor = throwingExecutor,
+        screenStateProvider = { _, _, _ -> dummyScreenState },
+        availableToolsProvider = {
+          listOf(TrailblazeToolDescriptor(name = "tap"), TrailblazeToolDescriptor(name = "swipe"))
+        },
+        rawToolExecutor = { _, _ -> "OK" },
+      )
+
+    val result = toolSet.step(objective = "Do something", tools = "- zzzqqqxyzzy: {}")
+
+    assertContains(result, "Unknown tool: zzzqqqxyzzy.")
+    assertFalse("Did you mean" in result, "Got a far-fetched guess: <<$result>>")
+  }
+
+  @Test
   fun `direct tools reject wrong-driver tool without invoking screenStateProvider`() = runTest {
     var screenStateInvocations = 0
     val toolSet =
@@ -1469,5 +1566,38 @@ class StepToolSetDirectToolsTest {
       )
 
     assertContains(result, "Device disconnected unexpectedly")
+  }
+
+  // -- 16. How a failed direct tool call reads back -----------------------------
+
+  @Test
+  fun `a self-identifying failure is not re-announced with the tool name`() {
+    // Ref-taking tools open their error with their own name, and the stale-ref recovery parses
+    // that prefix — so prepending here renders `Tool tap failed: tap: Element ref …`.
+    val message = StepToolSet.toolFailureMessage(
+      toolName = "tap",
+      cause = "tap: Element ref 'h619' not found on current screen.",
+    )
+
+    assertEquals("tap: Element ref 'h619' not found on current screen.", message)
+  }
+
+  @Test
+  fun `a cause that names nothing gets the tool name prepended`() {
+    val message = StepToolSet.toolFailureMessage(toolName = "swipe", cause = "Connection reset")
+
+    assertEquals("Tool swipe failed: Connection reset", message)
+  }
+
+  @Test
+  fun `a missing cause still says which tool failed`() {
+    assertEquals(
+      "Tool swipe failed: failed with no error message",
+      StepToolSet.toolFailureMessage(toolName = "swipe", cause = null),
+    )
+    assertEquals(
+      "Tool swipe failed: failed with no error message",
+      StepToolSet.toolFailureMessage(toolName = "swipe", cause = "   "),
+    )
   }
 }

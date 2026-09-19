@@ -20,13 +20,14 @@ import kotlinx.serialization.json.JsonPrimitive
  * Only same-value scalar reinterpretations are performed, and only when [descriptor] declares the
  * field:
  *  - declared `string`, value is a number/boolean → the value's textual form as a string
- *  - declared `number`/`integer`, value is a *canonical* numeric string → a JSON number
+ *  - declared `number`/`integer`, value is a numeric string naming that exact value → a JSON number
  *  - declared `boolean`, value is `"true"`/`"false"` (any case) → a JSON boolean
  *
  * Everything else is left untouched: unknown keys, object/array values, nulls, and any value
- * already matching its declared type. A numeric string that is not canonical (a zero-padded
- * `"0130"`, a phone number) is never turned into a number, so no significant digits are lost —
- * mirroring the round-trip guard in `YamlJsonBridge.scalarToJsonPrimitive`.
+ * already matching its declared type. A numeric string is only turned into a number when the number
+ * holds that exact value, so no significant digit is ever lost: a zero-padded `"0130"` and a phone
+ * number stay strings, while a differently-spelled but equal `"1.50"` or `"+5"` becomes a number
+ * (see [numericOrNull]).
  *
  * When [descriptor] carries a full [TrailblazeToolDescriptor.inputSchema], coercion is
  * schema-driven and RECURSES into nested objects and arrays-of-objects (see
@@ -220,8 +221,81 @@ private fun coerceScalar(value: JsonPrimitive, declaredType: String): JsonPrimit
   }
 }
 
-/** A JSON number primitive only when [content] round-trips exactly (no leading-zero / overflow loss). */
+/**
+ * A JSON number primitive only when [content] names a value a JSON number holds exactly.
+ *
+ * Any plain decimal spelling of that value is accepted, not just the shortest one: a leading `+`,
+ * trailing zeros in the fraction (`1.50`), and a value whose printed form uses exponent notation
+ * while the text does not (`0.0001`, `10000000.50`). That matters because the CLI hands the daemon
+ * the text the user typed — `amount=1.50` arrives as the string `"1.50"` rather than a Double that
+ * already dropped the cents — so without this a parameter the tool declares a number would receive
+ * a string.
+ *
+ * Leading zeros are deliberately NOT stripped: a zero-padded `"0130"` is far more likely a code
+ * whose schema mistyped it than the number 130, and keeping it a string is the recoverable choice.
+ * An exponent form (`1e3`) stays a string for the same reason. Anything that would lose digits — a
+ * value past Long range, more precision than a Double holds, an integer wider than a scripted tool's
+ * own number type — also stays a string.
+ */
 private fun numericOrNull(content: String): JsonPrimitive? {
+  exactNumericOrNull(content)?.let { return it }
+  if (!PLAIN_DECIMAL_LITERAL.matches(content)) return null
+  val unsigned = content.removePrefix("+").removePrefix("-")
+  val negative = content.startsWith("-")
+  val fraction = unsigned.substringAfter('.', "").trimEnd('0')
+
+  if (fraction.isEmpty()) {
+    // An integer, however it was spelled (`+5`, `2.00`). A scripted tool receives its arguments
+    // through `JSON.parse`, and every JavaScript number is a double, so an integer past 2^53
+    // arrives as a *different* number (9007199254740993 -> ...992). Keep the text: the tool's own
+    // schema then rejects it by name, which the caller can act on, instead of the tool running on
+    // a value nobody typed. A magnitude past Long range is that same case, further out.
+    val magnitude = unsigned.substringBefore('.').toLongOrNull() ?: return null
+    if (magnitude > MAX_EXACT_JS_INTEGER) return null
+    // `-0` / `-0.00` is negative zero. A Long has no sign to give it, so hand it over as the double
+    // that does — a tool computing `1 / scale` then gets -Infinity, not Infinity.
+    if (magnitude == 0L && negative) return JsonPrimitive(-0.0)
+    return JsonPrimitive(if (negative) -magnitude else magnitude)
+  }
+
+  val value = content.toDoubleOrNull() ?: return null
+  if (!value.isFinite()) return null
+  // Accept only when the double denotes the very value that was written, so nothing is silently
+  // rounded (`1.00000000000000000001` stays text). Compare the two as VALUES, not as text:
+  // `Double.toString` switches to exponent notation below 1e-3 and at/above 1e7, so a textual
+  // comparison would reject plain decimals such as `0.0001` and `10000000.50`.
+  if (decimalValueKeyOrNull(content) != decimalValueKeyOrNull(value.toString())) return null
+  return JsonPrimitive(value)
+}
+
+/**
+ * [text] reduced to a canonical key for the decimal value it denotes — sign, significant digits,
+ * and a power of ten — so two spellings of one value compare equal whatever notation each uses.
+ * Accepts a plain decimal and the exponent form `Double.toString` produces; null when [text] is
+ * neither.
+ */
+private fun decimalValueKeyOrNull(text: String): String? {
+  val negative = text.startsWith("-")
+  val unsigned = text.removePrefix("+").removePrefix("-")
+  val exponentAt = unsigned.indexOfFirst { it == 'e' || it == 'E' }
+  val mantissa = if (exponentAt < 0) unsigned else unsigned.substring(0, exponentAt)
+  val exponent = if (exponentAt < 0) 0 else unsigned.substring(exponentAt + 1).toIntOrNull() ?: return null
+  val digits = mantissa.substringBefore('.') + mantissa.substringAfter('.', "")
+  if (digits.isEmpty() || digits.any { !it.isDigit() }) return null
+  // The value is `0.<digits> * 10^pointExponent`; dropping a leading zero shifts that exponent,
+  // dropping a trailing one does not.
+  val significant = digits.trimStart('0')
+  val pointExponent = mantissa.substringBefore('.').length + exponent - (digits.length - significant.length)
+  val trimmed = significant.trimEnd('0')
+  if (trimmed.isEmpty()) return "0"
+  return "${if (negative) "-" else ""}${trimmed}e$pointExponent"
+}
+
+/** 2^53 - 1 — the widest integer magnitude an IEEE-754 double, and so a JavaScript number, holds exactly. */
+private const val MAX_EXACT_JS_INTEGER = 9007199254740991L
+
+/** A number primitive only when [content] is already exactly the text that number prints back. */
+private fun exactNumericOrNull(content: String): JsonPrimitive? {
   content.toLongOrNull()?.let { if (it.toString() == content) return JsonPrimitive(it) }
   // `isFinite` rejects "NaN"/"Infinity"/"-Infinity" — those satisfy the round-trip check but are
   // not valid JSON numbers, and the default kotlinx `Json` throws when re-encoding them. Leave such
@@ -229,3 +303,9 @@ private fun numericOrNull(content: String): JsonPrimitive? {
   content.toDoubleOrNull()?.let { if (it.isFinite() && it.toString() == content) return JsonPrimitive(it) }
   return null
 }
+
+/**
+ * A decimal with no exponent and no leading zero — `5`, `+5`, `-0.0001`, `2.00`. The unpadded
+ * integer part is what keeps a zero-padded code (`0130`, `01.5`) out of the numeric path.
+ */
+private val PLAIN_DECIMAL_LITERAL = Regex("""[+-]?(0|[1-9]\d*)(\.\d+)?""")

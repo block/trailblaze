@@ -9,6 +9,7 @@ import io.ktor.server.response.respondText
 import io.ktor.server.routing.Routing
 import io.ktor.server.routing.post
 import kotlinx.coroutines.CancellationException
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
@@ -51,10 +52,39 @@ data class CliExecRequest(
   val env: Map<String, String>? = null,
 )
 
+/** Which of the two standard streams a [CliExecChunk] was written to. */
+@Serializable
+enum class CliExecStream {
+  @SerialName("stdout")
+  STDOUT,
+
+  @SerialName("stderr")
+  STDERR,
+}
+
 /**
- * Result of an in-process CLI execution. The shim in `./trailblaze` prints
- * [stdout] on its own stdout, [stderr] on its own stderr, and exits with
- * [exitCode] to preserve the user-visible contract of a local invocation.
+ * One run of bytes the command wrote to a single stream, in the order it wrote them.
+ *
+ * @property stream where the command wrote these bytes.
+ * @property text the bytes, decoded as UTF-8.
+ */
+@Serializable
+data class CliExecChunk(
+  val stream: CliExecStream,
+  val text: String,
+)
+
+/**
+ * Result of an in-process CLI execution. The shim in `./trailblaze` replays the
+ * output on its own stdout and stderr and exits with [exitCode] to preserve the
+ * user-visible contract of a local invocation.
+ *
+ * [transcript] is the authoritative output: both streams in the single order the
+ * command actually wrote them. [stdout] and [stderr] are that same output flattened
+ * per stream, kept for shims that predate the transcript — those replay all of one
+ * stream and then all of the other, which reorders a command's output against
+ * itself. A command that prints a status line, then an error, then a tip about that
+ * error comes out with the status line wedged between the error and its tip.
  *
  * [forwarded] is false when the daemon declines to run the command locally
  * (e.g. not in the forwardable allowlist); the shim should fall through to
@@ -66,6 +96,7 @@ data class CliExecResponse(
   val stderr: String,
   val exitCode: Int,
   val forwarded: Boolean = true,
+  val transcript: List<CliExecChunk> = emptyList(),
 )
 
 /**

@@ -290,9 +290,21 @@ abstract class TrailblazeDesktopApp(
     val effectiveUseRecordedSteps = request.useRecordedSteps
       ?: TrailblazeYaml().hasRecordedSteps(resolvedYaml)
 
-    val agentImpl = request.agentImplementation?.let {
-      try { AgentImplementation.valueOf(it.uppercase()) } catch (_: IllegalArgumentException) { null }
-    } ?: AgentImplementation.DEFAULT
+    val agentImpl =
+      when (
+        val resolution =
+          resolveRunAgentImplementation(
+            requestedAgent = request.agentImplementation,
+            savedAgent = deviceManager.settingsRepo.serverStateFlow.value.appConfig.agentImplementation,
+          )
+      ) {
+        is CliRunAgentResolution.Resolved -> resolution.agentImplementation
+        is CliRunAgentResolution.Unrecognized ->
+          return@withContext cliRunMisuseResponse(resolution.message)
+      }
+    cliRunAgentMaxLlmCallsResponse(agentImpl, request.maxLlmCalls)?.let {
+      return@withContext it
+    }
 
     // Honor the CLI's --self-heal override when provided; fall back to the daemon's
     // persisted `trailblaze config self-heal` setting; otherwise stay opt-out.

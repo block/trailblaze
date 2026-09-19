@@ -90,6 +90,10 @@ kotlin {
       // examples/compose-desktop's test deps.
       implementation(compose.desktop.currentOs)
       implementation(libs.compose.ui.test.junit4)
+      // Coil's own test engine. Screenshot-failure tests need a load that fails (or succeeds) on
+      // demand; without it they have to point Coil at a real missing file and wait out a real
+      // fetch, which is a wall-clock bet on a shared CI agent for a decision the test already knows.
+      implementation(libs.coil3.test)
     }
   }
 }

@@ -5,6 +5,7 @@ import java.io.InputStreamReader
 import java.net.ServerSocket
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -43,6 +44,47 @@ class InProcessIdleTest {
         InProcessIdle.assetPathFor(appId),
       )
     }
+  }
+
+  @Test
+  fun keepAliveThroughAnrNamesTheTargetAsAPersistentDebugApp() {
+    // `--persistent` is load-bearing: every re-attach restarts the target, and a transient debug
+    // app is consumed by the first process start after it is set. Drop it and the first trail of a
+    // run is protected while every later launch is back to "a stall while attached kills the app".
+    assertEquals(
+      listOf("am", "set-debug-app", "--persistent", "com.example.app"),
+      InProcessIdle.keepAliveThroughAnrShellArgs("com.example.app"),
+    )
+  }
+
+  @Test
+  fun setDebugAppIsTreatedAsRefusedWheneverItPrintsAnything() {
+    // The command says nothing on success, so "silent" is the ONLY success signal an attach gets.
+    assertFalse(InProcessIdle.setDebugAppReportedFailure(""))
+    // A shell that echoed a trailing newline still succeeded — treating that as a refusal would
+    // turn every attach on such a device into a failure.
+    assertFalse(InProcessIdle.setDebugAppReportedFailure("  \n "))
+    // The shape a missing package takes. Attaching over this gives an instrumented target with no
+    // ANR protection, which is the exact combination the debug app exists to prevent.
+    assertTrue(InProcessIdle.setDebugAppReportedFailure("Error: Unknown package"))
+  }
+
+  @Test
+  fun clearDebugAppUndoesTheKeepAliveWithoutNamingAnApp() {
+    // `am clear-debug-app` takes no package: the slot is device-wide. The callers that run it
+    // (attach rejected, turbo turned off) have no attached app to name, so the command must not
+    // need one.
+    assertEquals(listOf("am", "clear-debug-app"), InProcessIdle.clearDebugAppShellArgs())
+  }
+
+  @Test
+  fun attachTurnsErrorDialogsBackOnRatherThanOff() {
+    // The value is the whole point: `1` here is what made ActivityManager kill an ANR'd app on the
+    // farm phone instead of showing the dialog the trails dismiss with Wait.
+    assertEquals(
+      listOf("settings", "put", "global", "hide_error_dialogs", "0"),
+      InProcessIdle.showErrorDialogsShellArgs(),
+    )
   }
 
   @Test

@@ -94,7 +94,7 @@ class SessionCommand : Callable<Int> {
   mixinStandardHelpOptions = true,
   description = ["Start a new session with automatic video and log capture"],
 )
-class SessionStartCommand : Callable<Int> {
+class SessionStartCommand : Callable<Int>, QuietUnlessVerbose {
 
   @CommandLine.ParentCommand
   private lateinit var parent: SessionCommand
@@ -158,6 +158,14 @@ class SessionStartCommand : Callable<Int> {
     description = ["Enable verbose output"],
   )
   var verbose: Boolean = false
+
+  /**
+   * Closes the internal [Console.log] channel for this command unless `--verbose`, applied at
+   * dispatch so the early-return paths are covered too — see [QuietUnlessVerbose]. The in-`call`
+   * quiet switch below stays for the entry points that construct this command directly, without
+   * a picocli dispatch.
+   */
+  override val verboseRequested: Boolean get() = verbose
 
   @CommandLine.Mixin
   val headlessOption: HeadlessOption = HeadlessOption()
@@ -888,8 +896,8 @@ class SessionListCommand : Callable<Int> {
     return runBlocking {
       val client = try {
         CliMcpClient.connectReusable(port)
-      } catch (_: Exception) {
-        reportDaemonUnreachable()
+      } catch (e: Exception) {
+        reportDaemonConnectFailure(e)
         return@runBlocking TrailblazeExitCode.INFRA_FAILED.code
       }
 
@@ -1011,8 +1019,8 @@ class SessionArtifactsCommand : Callable<Int> {
     return runBlocking {
       val client = try {
         CliMcpClient.connectReusable(port)
-      } catch (_: Exception) {
-        reportDaemonUnreachable()
+      } catch (e: Exception) {
+        reportDaemonConnectFailure(e)
         return@runBlocking TrailblazeExitCode.INFRA_FAILED.code
       }
 
@@ -1099,8 +1107,8 @@ class SessionDeleteCommand : Callable<Int> {
     return runBlocking {
       val client = try {
         CliMcpClient.connectReusable(port)
-      } catch (_: Exception) {
-        reportDaemonUnreachable()
+      } catch (e: Exception) {
+        reportDaemonConnectFailure(e)
         return@runBlocking TrailblazeExitCode.INFRA_FAILED.code
       }
 
@@ -1451,8 +1459,8 @@ class SessionRecordingCommand : Callable<Int> {
     return runBlocking {
       val client = try {
         CliMcpClient.connectReusable(port)
-      } catch (_: Exception) {
-        reportDaemonUnreachable()
+      } catch (e: Exception) {
+        reportDaemonConnectFailure(e)
         return@runBlocking TrailblazeExitCode.INFRA_FAILED.code
       }
 
@@ -1540,7 +1548,15 @@ class SessionInfoCommand : Callable<Int> {
     }
 
     return runBlocking {
-      val client = openSessionInfoClient(port, device)
+      val client = try {
+        openSessionInfoClient(port, device)
+      } catch (e: CliMcpClient.DaemonStarvedException) {
+        // "No active session." below is a SUCCESS answer. A daemon that never replied has not
+        // established that there is no session, and exiting 0 would tell a script the opposite of
+        // what happened.
+        reportDaemonStarved(e.message ?: "the daemon did not answer the pre-flight probe")
+        return@runBlocking TrailblazeExitCode.INFRA_FAILED.code
+      }
       if (client == null) {
         Console.log("No active session.")
         return@runBlocking TrailblazeExitCode.SUCCESS.code

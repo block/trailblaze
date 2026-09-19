@@ -1,5 +1,7 @@
 package xyz.block.trailblaze.report
 
+import kotlin.time.Duration.Companion.minutes
+import kotlinx.datetime.Clock
 import com.github.ajalt.clikt.core.main
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -832,6 +834,117 @@ class GenerateTestResultsCliCommandTest {
         .single { it.jsonObject.getValue("session_id").jsonPrimitive.content == harnessSessionId.value }
         .jsonObject
       assertEquals(JsonNull, encodedHarnessRow["trail_file_path"])
+    } finally {
+      logsDir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun `duration_ms is the session's own counter and started_at is anchored on the end`() {
+    // On a device runner the Started log lands after the pre-trail setup (turbo's detector attach,
+    // 20-47 s on a farm device), but the session's counter started before it. The report has to
+    // carry that counter or an arm that pays the setup ties an arm that does not — and
+    // `completed_at - started_at` must equal it, so the start is derived from the end rather than
+    // read off the first log.
+    val logsDir = Files.createTempDirectory("trailblaze-report-test").toFile()
+    val outputFile = File(logsDir, "results.json")
+    try {
+      val sessionId = SessionId("2026_09_11_own_counter")
+      val deviceInfo = webDeviceInfo()
+      writeLog(
+        logsDir = logsDir,
+        sessionId = sessionId,
+        fileName = "001_TrailblazeSessionStatusChangeLog.json",
+        log = TrailblazeLog.TrailblazeSessionStatusChangeLog(
+          sessionStatus = SessionStatus.Started(
+            trailConfig = null,
+            trailFilePath = "trails/sample-app/smoke.trail.yaml",
+            hasRecordedSteps = true,
+            testMethodName = "run",
+            testClassName = "WebTest",
+            trailblazeDeviceInfo = deviceInfo,
+            trailblazeDeviceId = deviceInfo.trailblazeDeviceId,
+            rawYaml = null,
+          ),
+          session = sessionId,
+          timestamp = Instant.parse("2026-09-11T10:00:30Z"),
+        ),
+      )
+      writeLog(
+        logsDir = logsDir,
+        sessionId = sessionId,
+        fileName = "002_TrailblazeSessionStatusChangeLog.json",
+        log = TrailblazeLog.TrailblazeSessionStatusChangeLog(
+          sessionStatus = SessionStatus.Ended.Succeeded(durationMs = 30_000),
+          session = sessionId,
+          timestamp = Instant.parse("2026-09-11T10:00:35Z"),
+        ),
+      )
+
+      captureStdout {
+        GenerateTestResultsCliCommand().main(
+          arrayOf(logsDir.absolutePath, outputFile.absolutePath, "--output-format", "JSON"),
+        )
+      }
+
+      val result = json.decodeFromString<CiSummaryReport>(outputFile.readText()).results.single()
+      assertEquals(30_000L, result.duration_ms)
+      val completedAt = assertNotNull(result.completed_at_epoch_ms)
+      assertEquals(Instant.parse("2026-09-11T10:00:35Z").toEpochMilliseconds(), completedAt)
+      assertEquals(completedAt - 30_000L, result.started_at_epoch_ms)
+      assertEquals("2026-09-11T10:00:05Z", result.started_at)
+    } finally {
+      logsDir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun `an abandoned session is reported as ending at its deadline, not at its last log`() {
+    // An abandonment is synthesized: no log marks it, so the last log written is the last thing
+    // that HAPPENED, minutes before the session was declared over. Reading the end off that log
+    // puts `completed_at` before the session ended and drags `started_at` back by the whole idle
+    // period — a run that started at 10:00 reported as starting at 09:58.
+    val logsDir = Files.createTempDirectory("trailblaze-report-test").toFile()
+    val outputFile = File(logsDir, "results.json")
+    try {
+      val sessionId = SessionId("2026_09_11_abandoned")
+      val deviceInfo = webDeviceInfo()
+      // Older than the two-minute inactivity deadline, so the abandonment path actually engages.
+      val startedAt = Clock.System.now().minus(10.minutes)
+      writeLog(
+        logsDir = logsDir,
+        sessionId = sessionId,
+        fileName = "001_TrailblazeSessionStatusChangeLog.json",
+        log = TrailblazeLog.TrailblazeSessionStatusChangeLog(
+          sessionStatus = SessionStatus.Started(
+            trailConfig = null,
+            trailFilePath = "trails/sample-app/smoke.trail.yaml",
+            hasRecordedSteps = true,
+            testMethodName = "run",
+            testClassName = "WebTest",
+            trailblazeDeviceInfo = deviceInfo,
+            trailblazeDeviceId = deviceInfo.trailblazeDeviceId,
+            rawYaml = null,
+          ),
+          session = sessionId,
+          timestamp = startedAt,
+        ),
+      )
+
+      captureStdout {
+        GenerateTestResultsCliCommand().main(
+          arrayOf(logsDir.absolutePath, outputFile.absolutePath, "--output-format", "JSON"),
+        )
+      }
+
+      val result = json.decodeFromString<CiSummaryReport>(outputFile.readText()).results.single()
+      val completedAt = assertNotNull(result.completed_at_epoch_ms)
+      // The deadline the session was declared abandoned at, which is two minutes past its last
+      // activity — NOT the Started log, which is the only log there is.
+      assertEquals(startedAt.plus(2.minutes).toEpochMilliseconds(), completedAt)
+      // And the interval still closes on the reported duration.
+      assertEquals(completedAt - result.duration_ms, result.started_at_epoch_ms)
+      assertEquals(startedAt.toEpochMilliseconds(), result.started_at_epoch_ms)
     } finally {
       logsDir.deleteRecursively()
     }

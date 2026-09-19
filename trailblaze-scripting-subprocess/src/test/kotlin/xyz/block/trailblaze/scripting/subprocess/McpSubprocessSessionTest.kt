@@ -26,6 +26,34 @@ class McpSubprocessSessionTest {
     assertThat(McpSubprocessSession.DEFAULT_CLIENT_INFO.name).isEqualTo("trailblaze")
   }
 
+  /**
+   * The escalation ladder's last wait is the answer, not a courtesy pause. SIGKILL cannot be
+   * refused, but the OS can take longer than the wait to reap the child, and a child blocked in an
+   * uninterruptible system call is not gone until it is. A caller told "it exited" frees resources
+   * — the transport's IO permit above all — that the child is still holding.
+   */
+  @Test fun `escalation reports a child that outlives SIGKILL as still alive`() {
+    val process = FakeProcess(survivesSigkill = true)
+    val hurried = McpSubprocessSession.Duration(afterCloseSeconds = 0, afterSigtermSeconds = 0, afterSigkillSeconds = 0)
+
+    val exited = destroyWithEscalation(process, hurried)
+
+    assertThat(exited).isEqualTo(false)
+    assertThat(process.isAlive).isEqualTo(true)
+    // Every rung was climbed before giving up: the answer is "still alive after SIGKILL", not
+    // "gave up early".
+    assertThat(process.destroyCalls).isEqualTo(1)
+    assertThat(process.destroyForciblyCalls).isEqualTo(1)
+  }
+
+  @Test fun `escalation reports a child that SIGKILL ends as exited`() {
+    val process = FakeProcess(survivesSigkill = false)
+    val hurried = McpSubprocessSession.Duration(afterCloseSeconds = 0, afterSigtermSeconds = 0, afterSigkillSeconds = 0)
+
+    assertThat(destroyWithEscalation(process, hurried)).isEqualTo(true)
+    assertThat(process.isAlive).isEqualTo(false)
+  }
+
   @Test fun `routeStderrLine fires the fail-fast callback only for FATAL`() {
     // FATAL is the contract the session-owned stderr pump must preserve from the old transport:
     // a fatal-classified line tears the subprocess down. No default classifier returns FATAL, so

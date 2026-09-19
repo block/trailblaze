@@ -79,8 +79,8 @@ data class AssertVisibleTrailblazeTool(
         // prefix is load-bearing (matched by StaleRefRecovery.STALE_REF_REGEX) and why we
         // dropped the "use 'snapshot'" pointer.
         message = "assertVisible: Element ref '$ref' not found on current screen. " +
-          "The screen has changed since this ref was last visible. Re-read the view " +
-          "hierarchy appended to this request and pick a ref that is actually shown.",
+          "The screen has changed since this ref was last visible. " +
+          "Use a ref from the current view hierarchy instead.",
         tool = this,
       )
 
@@ -102,7 +102,7 @@ data class AssertVisibleTrailblazeTool(
     if (tree.driverDetail is DriverNodeDetail.AndroidAccessibility ||
       tree.driverDetail is DriverNodeDetail.AndroidView
     ) {
-      val accessibilityHitTestNode = tree.hitTest(center.first, center.second) ?: targetNode
+      val accessibilityHitTestNode = selectorSourceNode(tree, targetNode, center.first, center.second)
       val accessibilityNodeSelector = TrailblazeNodeSelectorGenerator.findBestSelector(
         tree,
         accessibilityHitTestNode,
@@ -129,22 +129,25 @@ data class AssertVisibleTrailblazeTool(
 
     // Generate a rich TrailblazeNodeSelector where possible; AssertVisibleBySelectorTrailblazeTool
     // dispatches via nodeSelector or a Maestro-lowered projection of it based on NodeSelectorMode
-    // internally. hitTest resolves the frontmost interactive node at the coordinates — the same
-    // round-trip validation as TapTrailblazeTool (see TrailblazeNode.hitTest for tiebreaker logic).
+    // internally. [selectorSourceNode] resolves the frontmost node at the coordinates that the
+    // ref could actually have meant — the same round-trip validation as TapTrailblazeTool (see
+    // TrailblazeNode.hitTest for tiebreaker logic, and SelectorSourceNode for the occlusion
+    // case it overrides). It always answers, because a hit-test at the ref's own center cannot
+    // miss: bounds contain their own center point. The `?: null` that used to guard this and
+    // defer to the TapSelectorV2 projection below was therefore already dead.
     // Skipped on ANDROID: recordedNodeSelectorForMaestroPath below always records the
     // TapSelectorV2-derived selector there, so the modern generation would be dead work.
     val nodeSelector = if (screenState.trailblazeDevicePlatform == TrailblazeDevicePlatform.ANDROID) {
       null
     } else {
-      tree.hitTest(center.first, center.second)?.let { hitTestNode ->
-        try {
-          TrailblazeNodeSelectorGenerator.findBestSelector(tree, hitTestNode)
-        } catch (e: Exception) {
-          Console.log(
-            "WARNING: TrailblazeNodeSelector generation failed, falling back to legacy selector: ${e.message}",
-          )
-          null
-        }
+      val hitTestNode = selectorSourceNode(tree, targetNode, center.first, center.second)
+      try {
+        TrailblazeNodeSelectorGenerator.findBestSelector(tree, hitTestNode)
+      } catch (e: Exception) {
+        Console.log(
+          "WARNING: TrailblazeNodeSelector generation failed, falling back to legacy selector: ${e.message}",
+        )
+        null
       }
     }
 

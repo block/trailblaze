@@ -147,11 +147,38 @@ class McpProxy(
   private val daemonUrl: String = "http://localhost:$port/mcp"
   private val pingUrl: String = "http://localhost:$port/ping"
 
+  /**
+   * The deadline this proxy actually installs, resolved once per process from
+   * `TRAILBLAZE_MCP_REQUEST_TIMEOUT_MS` and defaulting to [DAEMON_REQUEST_TIMEOUT_MS].
+   *
+   * Resolved rather than pinned to the constant because the deadline it has to clear is itself
+   * resolved at runtime. The daemon derives its per-tool cap from `trailblaze.callback.timeoutMs`,
+   * so raising that property lifts the cap above a fixed proxy deadline and makes the proxy the
+   * first hop to expire -- an external agent gets a transport error for a tool the daemon goes on
+   * to finish, which is the failure this whole ladder exists to prevent. A fixed constant left
+   * that operator no lever at all: the CLI reads this variable and the proxy hop did not, so the
+   * escape hatch the daemon's own cap documents did not reach the one caller that has no other.
+   */
+  internal val daemonRequestTimeoutMs: Long = CliMcpClient.resolveRequestTimeoutMs()
+
+  /**
+   * The connect budget for one forwarded POST, never larger than the deadline that encloses it.
+   *
+   * Clamped for the same reason `CliMcpClient` clamps its own: the ceiling is fixed while
+   * [daemonRequestTimeoutMs] is operator-settable, so an override below the ceiling used to let
+   * the request timer expire while TCP setup was still going. That matters more here than it
+   * looks, because the in-flight classifier reads a request timeout as "the daemon may still be
+   * running this" -- so an undelivered POST was reported as in flight, and the proxy skipped the
+   * retry and the daemon start that a connection going nowhere actually calls for.
+   */
+  internal val daemonConnectTimeoutMs: Long =
+    CliMcpClient.connectTimeoutMsFor(daemonRequestTimeoutMs, PROXY_CONNECT_TIMEOUT_MS)
+
   private val httpClient = HttpClient(OkHttp) {
     install(HttpTimeout) {
-      connectTimeoutMillis = 5_000
-      requestTimeoutMillis = 300_000 // 5 min -- tool calls can be slow
-      socketTimeoutMillis = 300_000
+      connectTimeoutMillis = daemonConnectTimeoutMs
+      requestTimeoutMillis = daemonRequestTimeoutMs
+      socketTimeoutMillis = daemonRequestTimeoutMs
     }
   }
 
@@ -228,8 +255,8 @@ class McpProxy(
    *
    * Separate from [daemonStartupFailed] because the two need opposite handling in
    * [forwardRequest]. That flag's fast-fail hangs off `ConnectException`, which a held port never
-   * raises: the POST is accepted and then goes quiet until `requestTimeoutMillis` (5 minutes),
-   * so the client waits five minutes for its first response. Every other startup failure leaves
+   * raises: the POST is accepted and then goes quiet until [DAEMON_REQUEST_TIMEOUT_MS] elapses,
+   * so the client waits out that whole budget for its first response. Every other startup failure leaves
    * the port refusing connections, where `ConnectException` arrives immediately and the existing
    * path is correct.
    *
@@ -687,13 +714,13 @@ class McpProxy(
     }
 
     // Answer now rather than posting into a socket that will never answer. A held port accepts the
-    // POST, so `httpPost` would block for the full requestTimeoutMillis — five minutes for the
+    // POST, so `httpPost` would block for the full [DAEMON_REQUEST_TIMEOUT_MS] before the
     // client's first response — and the ConnectException fast-fail below cannot help, because
     // nothing refused the connection.
     if (daemonPortHeldUnresponsive.get()) {
       // Re-probed rather than latched: the user may have cleared the port since startup, and the
       // session has to be able to recover without being restarted. One bounded probe is the price,
-      // against five minutes of posting into a black hole.
+      // against a full forwarding budget of posting into a black hole.
       if (probeDaemon() == DaemonProbe.HELD_UNRESPONSIVE) {
         if (isNotification) return null
         val id = extractId(jsonRpcRequest) ?: "null"
@@ -773,6 +800,21 @@ class McpProxy(
           if (reInitializeSession(log)) {
             continue
           }
+        }
+        // A request the daemon already has must not be resent. A whole-request or socket read
+        // timeout both mean the POST was delivered and the daemon may still be executing it, and
+        // `tools/call` is not idempotent -- a resend can tap twice or take a payment twice. Only
+        // the deadline's owner can tell the caller that, so answer instead of looping.
+        //
+        // Reachable only since the deadline stopped being a fixed 630 s: at that value the retry
+        // window (`maxRetryMs`, 120 s) had always closed before the timeout could fire, so no
+        // override could produce a resend. Any value below `maxRetryMs` now can. A connect timeout
+        // is excluded by the same classifier the CLI's hint uses, because it delivered nothing.
+        if (isRequestInFlightFailure(e)) {
+          log("$LOG_REQUEST_ERROR ${e.message} -- not resent, the daemon may still be running it")
+          if (isNotification) return null
+          val timedOutId = extractId(jsonRpcRequest) ?: "null"
+          return """{"jsonrpc":"2.0","id":$timedOutId,"error":{"code":-32000,"message":"Trailblaze daemon did not answer within ${daemonRequestTimeoutMs}ms. The tool may still be running on the daemon, so this request was not resent. Raise ${CliMcpClient.REQUEST_TIMEOUT_ENV} if it legitimately takes longer."}}"""
         }
         // The same fast-fail as the ConnectException branch, for the same reason: waitForDaemon
         // has already given up, so another `maxRetryMs` of retrying is time the MCP client spends
@@ -1169,9 +1211,10 @@ class McpProxy(
       runBlocking {
         // Bound the probe aggressively: the proxy's stdin loop is blocked
         // until this returns, so a hung daemon shouldn't delay the client's
-        // first tool call indefinitely. [CliMcpClient.connectOneShot] uses a
-        // 3-minute default request timeout (sized for AI tool calls) — way
-        // too long for a single read-only LIST probe. If the daemon can't
+        // first tool call indefinitely. [CliMcpClient.connectOneShot] defaults
+        // to [CliMcpClient.DEFAULT_REQUEST_TIMEOUT_MS], sized for a composed
+        // tool call — way too long for a single read-only LIST probe. If the
+        // daemon can't
         // list devices in [AUTODETECT_PROBE_TIMEOUT_MS], we fall through to
         // "no auto-bind" and the agent gets the same unbound-device error
         // they'd have gotten before this autodetect existed.
@@ -1695,6 +1738,31 @@ class McpProxy(
     internal const val LOG_REQUEST_ERROR = "Request error:"
 
     /**
+     * How long the proxy waits for the daemon to answer one forwarded request.
+     *
+     * Has to outlast the longest thing a single tool call can legitimately do, because the proxy
+     * is the outermost hop an external agent's call passes through: a scripted tool that composes
+     * device work can hold the daemon for the full nested-callback budget
+     * (`ScriptingCallbackEndpoint.DEFAULT_CALLBACK_TIMEOUT_MS`) plus the buffers stacked above it.
+     * When this expires first the agent gets a transport error while the daemon keeps working, and
+     * the structured "tool took too long" message the inner budgets exist to produce is lost. Kept
+     * above that whole ladder, and pinned by `McpProxyForwardTimeoutOutlastsCallbackBudgetTest`.
+     *
+     * The same budget as [CliMcpClient.DEFAULT_REQUEST_TIMEOUT_MS] because it is the same hop, and
+     * an alias of it rather than a second copy of the number — the proxy forwards through this
+     * client anyway. This is the DEFAULT only: `TRAILBLAZE_MCP_REQUEST_TIMEOUT_MS` moves what the
+     * proxy waits as well as what a CLI command waits, via [daemonRequestTimeoutMs].
+     */
+    internal const val DAEMON_REQUEST_TIMEOUT_MS: Long = CliMcpClient.DEFAULT_REQUEST_TIMEOUT_MS
+
+    /**
+     * Ceiling on how long one forwarded POST waits for TCP setup. Lower than the CLI's own
+     * connect ceiling because the daemon this dials is on localhost; see
+     * [daemonConnectTimeoutMs] for why it is a ceiling rather than the value itself.
+     */
+    internal const val PROXY_CONNECT_TIMEOUT_MS = 5_000L
+
+    /**
      * How long a single `/ping` probe waits. A daemon that is up answers in milliseconds, so this
      * only has to outlast a loaded machine — and every second of it is a second the MCP client
      * spends waiting for its first response.
@@ -1726,11 +1794,24 @@ class McpProxy(
      * headroom. Configurable here (not via env) because there's no scenario
      * a user should tune this from the outside — if your LIST genuinely
      * takes >5s, the daemon's already broken. The CLI's
-     * [CliMcpClient.connectOneShot] uses a 3-minute default request timeout
-     * sized for AI tool calls; we override it locally for this read-only
-     * probe via [kotlinx.coroutines.withTimeout].
+     * [CliMcpClient.connectOneShot] defaults to
+     * [CliMcpClient.DEFAULT_REQUEST_TIMEOUT_MS], sized for a composed tool
+     * call; we override it locally for this read-only probe via
+     * [kotlinx.coroutines.withTimeout].
+     *
+     * An alias of [CliMcpClient.DEFAULT_PREFLIGHT_TIMEOUT_MS], which bounds
+     * the CLI's own pre-flight steps (the `initialize` handshake,
+     * `connectReusable`'s INFO check and `autodetectSingleConnectedDevice` in
+     * `CliInfrastructure`), so every read-only pre-flight step shares one
+     * number. Only the default is shared, and deliberately: `connectOneShot`
+     * below applies the CLI's own bound to the handshake, so
+     * `TRAILBLAZE_MCP_PREFLIGHT_TIMEOUT_MS` does reach that step -- but this
+     * `withTimeout` still caps the whole probe at the unraised number, which is
+     * what the proxy wants. A user raising the bound for a slow box should not
+     * lengthen the proxy's forwarding decision, the same split as
+     * [DAEMON_REQUEST_TIMEOUT_MS].
      */
-    internal const val AUTODETECT_PROBE_TIMEOUT_MS: Long = 5_000L
+    internal const val AUTODETECT_PROBE_TIMEOUT_MS: Long = CliMcpClient.DEFAULT_PREFLIGHT_TIMEOUT_MS
 
     /**
      * Max startup autodetect probes per proxy lifetime. Two = one attempt per

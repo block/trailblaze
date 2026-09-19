@@ -2,6 +2,7 @@ package xyz.block.trailblaze.cli
 
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
 import xyz.block.trailblaze.TrailblazeVersion
 import xyz.block.trailblaze.cli.TrailblazeExitCode.INFRA_FAILED
 import xyz.block.trailblaze.cli.TrailblazeExitCode.MISUSE
@@ -35,7 +36,7 @@ internal fun reportDaemonUnreachable(reason: String = "Trailblaze daemon is not 
   reportCliError(
     verb = "Daemon connection",
     reason = reason,
-    hint = "is the Trailblaze daemon running? try `trailblaze app start`",
+    hint = DAEMON_DOWN_HINT,
   )
 }
 
@@ -780,9 +781,58 @@ internal sealed class DeviceAutodetectResult {
    *    auto-start / stale-daemon path). Caller must NOT report again.
    *  - `false`: connected fine but the list call itself failed mid-flight
    *    (e.g. tool returned `isError`, or the transport threw). Caller still
-   *    owns the envelope.
+   *    owns the envelope, and prints it through [reportIfOwed] so a caller
+   *    that FALLS THROUGH instead (`trailblaze run` with a configured
+   *    `cliDevicePlatform`) prints nothing.
+   *
+   * [starvedDaemonReason] is set when the handshake or the LIST probe reached
+   * the daemon and was cut off by the pre-flight bound: the daemon is up but
+   * not answering, which calls for a different envelope than "is the daemon
+   * running?". Carried here rather than printed because only the caller knows
+   * whether this result ends the command.
    */
-  data class DaemonUnreachable(val alreadyReported: Boolean) : DeviceAutodetectResult()
+  data class DaemonUnreachable(
+    val alreadyReported: Boolean,
+    val starvedDaemonReason: String? = null,
+  ) : DeviceAutodetectResult() {
+    /**
+     * Prints the envelope this result still owes, if any. [fallbackReason] is the
+     * caller's wording for a plain listing failure; a probe timeout prints its own.
+     */
+    fun reportIfOwed(fallbackReason: String) {
+      if (alreadyReported) return
+      if (starvedDaemonReason != null) reportDaemonStarved(starvedDaemonReason) else reportDaemonUnreachable(fallbackReason)
+    }
+  }
+}
+
+/**
+ * The envelope for a daemon that is up but did not answer a device probe within the bound. The
+ * `reportDaemonUnreachable` hint ("is the daemon running? try `trailblaze app start`") would send
+ * the user the wrong way: the daemon IS running, and starting another is refused anyway.
+ */
+internal fun reportDaemonStarved(reason: String) {
+  reportCliError(
+    verb = "Daemon connection",
+    reason = reason,
+    hint = "pass --device or set TRAILBLAZE_DEVICE to skip the device probe once the daemon is answering again",
+  )
+}
+
+/**
+ * Reports a failure to open an MCP session, picking the envelope that matches what actually went
+ * wrong. Use this at any `connectReusable`/`connectOneShot` call site that does not go through
+ * [connectOrStartDaemonReusable] or [connectOrStartDaemonOneShot].
+ *
+ * Exists because [CliMcpClient.DaemonStarvedException] is an ordinary exception: a bare
+ * `catch (Exception)` takes it and collapses it into "the daemon is not running -- try
+ * `trailblaze app start`", which is the one hint that is certainly wrong when the daemon accepted
+ * the connection. Routing the choice through one function keeps the next call site from having to
+ * know the type exists.
+ */
+internal fun reportDaemonConnectFailure(e: Throwable) {
+  val starvedReason = (e as? CliMcpClient.DaemonStarvedException)?.message
+  if (starvedReason != null) reportDaemonStarved(starvedReason) else reportDaemonUnreachable()
 }
 
 /**
@@ -808,11 +858,38 @@ internal suspend fun autodetectSingleConnectedDevice(port: Int): DeviceAutodetec
   // connectOrStartDaemonOneShot already prints its own daemon-unreachable
   // envelope on failure, so flag this branch as already-reported to keep
   // the caller from doubling up the message.
-  val client = connectOrStartDaemonOneShot(port)
-    ?: return DeviceAutodetectResult.DaemonUnreachable(alreadyReported = true)
+  // A starved daemon hangs the handshake itself (every `/mcp` POST waits for an IO slot), so the
+  // connect is the first place the pre-flight bound can expire. Its verdict is carried on the
+  // result rather than printed: `trailblaze run` falls through to its configured default device
+  // on this result, and a fatal-looking envelope before a run that then proceeds is noise. Callers
+  // that DO fail on it print the reason via [DaemonUnreachable.reportIfOwed].
+  var starvedDaemonReason: String? = null
+  val client = connectOrStartDaemonOneShot(port, onStarved = { starvedDaemonReason = it })
+    ?: return DeviceAutodetectResult.DaemonUnreachable(
+      alreadyReported = starvedDaemonReason == null,
+      starvedDaemonReason = starvedDaemonReason,
+    )
   return client.use {
     try {
-      val result = it.callTool("device", mapOf("action" to "LIST"))
+      // Bounded by the pre-flight bound rather than the request deadline. The connect above
+      // succeeded, so a LIST that never comes back is a daemon that is alive but starved (out of
+      // IO slots), and the user's real command has not started yet -- waiting the composed-tool
+      // budget here would be ten minutes of silence before a `tap`. Same shape as
+      // `McpProxy.autodetectSingleConnectedDevice`, which bounds its copy of this probe.
+      val probeTimeoutMs = it.preflightTimeoutMs
+      val result = withTimeoutOrNull(probeTimeoutMs) {
+        it.callTool("device", mapOf("action" to "LIST"))
+      }
+      if (result == null) {
+        // Shortens the session teardown `use` runs on the way out. It is a request to the daemon
+        // that just failed to answer within the bound, so on its own fresh budget it doubles the
+        // wait the bound exists to cap.
+        it.preflightBoundExpired = true
+        return@use DeviceAutodetectResult.DaemonUnreachable(
+          alreadyReported = false,
+          starvedDaemonReason = CliMcpClient.preflightTimedOutMessage(port, "device LIST query", probeTimeoutMs),
+        )
+      }
       if (result.isError) return@use DeviceAutodetectResult.DaemonUnreachable(alreadyReported = false)
       // Filter out the always-present virtual web device. The daemon's device
       // LIST unconditionally includes `web/playwright-native` (a virtual entry
@@ -984,9 +1061,7 @@ internal suspend fun resolveDeviceWithAutodetect(
       // Only emit the envelope if the underlying helper didn't already do so.
       // `connectOrStartDaemonOneShot` reports itself on connect/start/stale
       // failures; we only own the message for mid-flight list errors.
-      if (!r.alreadyReported) {
-        reportDaemonUnreachable("daemon device listing failed — cannot autodetect")
-      }
+      r.reportIfOwed("daemon device listing failed — cannot autodetect")
       DeviceResolution.InfraFailed
     }
   }
@@ -1345,6 +1420,13 @@ internal suspend fun connectReusableOrNull(
   CliMcpClient.connectReusable(port, sessionScope = sessionScope, createIfMissing = createIfMissing)
 } catch (e: CancellationException) {
   throw e
+} catch (e: CliMcpClient.DaemonStarvedException) {
+  // `null` here means "this scope has no live session", which a caller is entitled to answer with
+  // "No active session" and exit 0. A daemon that accepted the connection and never replied has
+  // told us nothing about the scope, so reporting it as empty would be a guess dressed as an
+  // answer -- and for the candidate scan in [sessionOwningBoundDevice] it would be a guess per
+  // saved pointer, each paying the bound again. Callers surface this instead.
+  throw e
 } catch (_: Exception) {
   null
 }
@@ -1653,7 +1735,7 @@ internal suspend fun runActionWithIoEnvelope(
     verb = verb,
     target = target,
     reason = describeThrowableForUser(e),
-    hint = "is the daemon running? try `trailblaze app start`",
+    hint = ioFailureHint(e),
   )
   INFRA_FAILED.code
 }
@@ -1674,8 +1756,16 @@ private fun requireConnectablePort(port: Int) {
 /**
  * Connect to the daemon for a one-shot command, auto-starting it if missing.
  * Never reads or writes the persisted session file.
+ *
+ * @param onStarved Receives the pre-flight verdict when the daemon is up but did not answer the
+ *   handshake in time ([CliMcpClient.DaemonStarvedException]). Defaults to printing the envelope;
+ *   a caller whose command may still proceed without this connection (device autodetect under
+ *   `trailblaze run`) captures it instead and decides later.
  */
-internal suspend fun connectOrStartDaemonOneShot(port: Int): CliMcpClient? {
+internal suspend fun connectOrStartDaemonOneShot(
+  port: Int,
+  onStarved: (String) -> Unit = ::reportDaemonStarved,
+): CliMcpClient? {
   requireConnectablePort(port)
   if (!checkAndRestartStaleDaemon(port)) {
     reportDaemonUnreachable(
@@ -1687,12 +1777,20 @@ internal suspend fun connectOrStartDaemonOneShot(port: Int): CliMcpClient? {
 
   return try {
     CliMcpClient.connectOneShot(port)
+  } catch (e: CliMcpClient.DaemonStarvedException) {
+    // A daemon owns the port and is running; auto-start would be refused and the reconnect would
+    // hang the same way. Report (or hand back) the verdict and stop here.
+    onStarved(e.message.orEmpty())
+    return null
   } catch (_: Exception) {
     val outcome = cliTryStartDaemon(port)
     when (outcome) {
       // Already reported, and with the accurate reason — a daemon IS running, it just isn't
       // answering, so the generic "not running" envelope below would send the user the wrong way.
-      DaemonAutoStartOutcome.REFUSED_PORT_ALREADY_OWNED -> return null
+      // Same for a startup claim someone else still holds.
+      DaemonAutoStartOutcome.REFUSED_PORT_ALREADY_OWNED,
+      DaemonAutoStartOutcome.REFUSED_STARTUP_CLAIM_HELD,
+      -> return null
       DaemonAutoStartOutcome.FAILED -> {
         reportDaemonUnreachable("Trailblaze daemon is not running and could not be auto-started")
         return null
@@ -1701,6 +1799,9 @@ internal suspend fun connectOrStartDaemonOneShot(port: Int): CliMcpClient? {
     }
     try {
       CliMcpClient.connectOneShot(port = port)
+    } catch (e: CliMcpClient.DaemonStarvedException) {
+      onStarved(e.message.orEmpty())
+      null
     } catch (_: Exception) {
       reportDaemonUnreachable(daemonReconnectFailureReason(outcome, port))
       null
@@ -1733,12 +1834,22 @@ internal suspend fun connectOrStartDaemonReusable(
       targetAppId = targetAppId,
       sessionScope = sessionScope,
     )
+  } catch (e: CliMcpClient.DaemonStarvedException) {
+    // The daemon is up and holding the saved session; it just did not answer the liveness probe
+    // in time. The recovery below (clear the scope, auto-start, reconnect) would orphan that
+    // session and then hang on the fresh handshake for the full request deadline -- the exact
+    // wait the probe bound exists to prevent.
+    reportDaemonStarved(e.message.orEmpty())
+    return null
   } catch (_: Exception) {
     CliMcpClient.clearSession(port, sessionScope = sessionScope)
     val outcome = cliTryStartDaemon(port)
     when (outcome) {
-      // See the one-shot path above: an owned-but-unresponsive port has already been reported.
-      DaemonAutoStartOutcome.REFUSED_PORT_ALREADY_OWNED -> return null
+      // See the one-shot path above: an owned-but-unresponsive port, or a startup claim still held
+      // by a live process, has already been reported.
+      DaemonAutoStartOutcome.REFUSED_PORT_ALREADY_OWNED,
+      DaemonAutoStartOutcome.REFUSED_STARTUP_CLAIM_HELD,
+      -> return null
       DaemonAutoStartOutcome.FAILED -> {
         reportDaemonUnreachable("Trailblaze daemon is not running and could not be auto-started")
         return null
@@ -1751,6 +1862,9 @@ internal suspend fun connectOrStartDaemonReusable(
         targetAppId = targetAppId,
         sessionScope = sessionScope,
       )
+    } catch (e: CliMcpClient.DaemonStarvedException) {
+      reportDaemonStarved(e.message.orEmpty())
+      null
     } catch (_: Exception) {
       reportDaemonUnreachable(daemonReconnectFailureReason(outcome, port))
       null
@@ -2038,6 +2152,14 @@ internal enum class DaemonAutoStartOutcome {
    * envelope would be wrong — the port is held), so the caller should just give up.
    */
   REFUSED_PORT_ALREADY_OWNED,
+
+  /**
+   * Another process holds the startup claim, is still running, and never brought a daemon up. As
+   * with [REFUSED_PORT_ALREADY_OWNED] the specific failure — including the claimant's PID and the
+   * claim path — is reported here, because the caller's generic "not running" envelope names
+   * nothing the user can act on and its hint (`trailblaze app start`) re-enters the same wait.
+   */
+  REFUSED_STARTUP_CLAIM_HELD,
 
   /** No daemon owns the port and we could not start one. The caller reports it. */
   FAILED,
@@ -2357,27 +2479,49 @@ private fun cliTryStartDaemon(
       Console.info("A Trailblaze daemon is already starting (PID ${claim.pid}); waiting for it.")
       Console.appendInfo("Waiting for Trailblaze daemon to be ready")
       val started = DaemonClient(port = port).use {
-        it.waitForDaemon(isSpawnAlive = { processIsAlive(claim.pid) }) { Console.appendInfo(".") }
+        it.waitForDaemon(isSpawnAlive = { startupClaimIsStillHeld(pidFile) }) { Console.appendInfo(".") }
       }
       Console.info("")
-      if (
-        !started &&
-        !processIsAlive(claim.pid) &&
-        claimRetryRemaining > 0 &&
-        waitForStartupClaimRelease(pidFile)
-      ) {
-        return cliTryStartDaemon(
-          port,
-          childEnvironment,
-          claimRetryRemaining - 1,
-          respectAutoStartDisable,
+      if (started) return DaemonAutoStartOutcome.ALREADY_RUNNING
+
+      // Re-read rather than reusing `claim.pid`: see [startupClaimHolderPid].
+      val holderPid = startupClaimHolderPid(pidFile, claim.pid)
+      if (!startupClaimIsStillHeld(pidFile)) {
+        // The claimant died without serving, so its claim is ours to clear. Do that here rather
+        // than only polling for it: the claim is removed by a reaper the CLAIMANT spawned, and a
+        // zombie claimant is precisely the case where that reaper may never fire — its own parent
+        // is what has not reaped it. Waiting for a release nobody is going to perform is how this
+        // stall reached the user in the first place.
+        reclaimDaemonStartupClaimIfOwnerExited(pidFile)
+        if (claimRetryRemaining > 0 && waitForStartupClaimRelease(pidFile)) {
+          return cliTryStartDaemon(
+            port,
+            childEnvironment,
+            claimRetryRemaining - 1,
+            respectAutoStartDisable,
+          )
+        }
+        // Out of retries, or something re-took the claim while we were clearing it. The claim is no
+        // longer pinned to a process that cannot serve, so the next command elects a fresh starter.
+        Console.error(
+          "PID $holderPid held the daemon startup claim and exited without starting a daemon on " +
+            "port $port. Its claim has been cleared — re-run to elect a new starter.",
         )
+        return DaemonAutoStartOutcome.FAILED
       }
-      return if (started) {
-        DaemonAutoStartOutcome.ALREADY_RUNNING
-      } else {
-        DaemonAutoStartOutcome.FAILED
-      }
+
+      // Getting here means the claimant outlived the wait: still running, still holding the claim,
+      // and still not serving. The retry above cannot help — it is gated on the claimant being
+      // dead — so every later command repeats this wait until someone kills that process by hand.
+      // Say which process and which file, the way the port-held branch above does; the caller's
+      // envelope would name neither, and its `trailblaze app start` hint re-enters this same wait.
+      reportCliError(
+        verb = "Daemon start",
+        target = "port $port",
+        reason = heldStartupClaimReason(startupClaimHolderPid(pidFile, claim.pid), port),
+        hint = heldStartupClaimHint(startupClaimHolderPid(pidFile, claim.pid), pidFile),
+      )
+      return DaemonAutoStartOutcome.REFUSED_STARTUP_CLAIM_HELD
     }
     DaemonStartupClaim.Unavailable -> {
       if (claimRetryRemaining > 0 && waitForStartupClaimPublication(pidFile, port)) {
@@ -2470,6 +2614,27 @@ internal fun daemonStartupClaimFile(port: Int): File = File(
   "daemon-$port.pid.starting",
 )
 
+/**
+ * Why a live claimant that never served is refused rather than waited on again. Named so the escape
+ * route stays assertable: a user who only reads "daemon could not be started" has no way to find the
+ * process that is blocking every subsequent command.
+ */
+internal fun heldStartupClaimReason(claimantPid: Long, port: Int): String =
+  "PID $claimantPid has held the daemon startup claim since before this command and never brought " +
+    "a daemon up on port $port. It is still running, so it is not a crashed starter this CLI can " +
+    "clear and replace — refusing to elect a second starter past it"
+
+/**
+ * How to get out of it. `kill -9` and not a plain `kill`, because the wedge this covers is a daemon
+ * whose own shutdown path is blocked; and stopping the process rather than deleting the claim file,
+ * because a claim removed from under a live starter leaves two of them racing for the port.
+ */
+internal fun heldStartupClaimHint(claimantPid: Long, claimFile: File): String =
+  "see what it is doing with `ps -o pid,stat,command -p $claimantPid`; if it is wedged, " +
+    "`kill -9 $claimantPid` (a plain `kill` cannot finish a daemon whose shutdown hook is itself " +
+    "blocked) and re-run. Clearing ${claimFile.absolutePath} without stopping that process would " +
+    "leave two starters racing for the port"
+
 private fun waitForStartupClaimRelease(pidFile: File): Boolean {
   repeat(60) {
     if (!pidFile.exists()) return true
@@ -2541,8 +2706,56 @@ internal fun claimDaemonStartup(
   return DaemonStartupClaim.Unavailable
 }
 
+/**
+ * Whether [pid] names a process that is still running, excluding a defunct (zombie) one.
+ *
+ * `ProcessHandle.isAlive` answers **true** for a zombie — measured on macOS against a real defunct
+ * child — the same false positive `kill -0` gave the launcher's own liveness check before it was
+ * hardened. So a daemon whose parent never reaped it read as a daemon still booting, and all three
+ * callers below believed it: the readiness poll spent its whole budget on a process that had exited,
+ * self-heal retry stayed gated off because the PID "was alive", and [processIsSame] confirmed a
+ * defunct owner because `ps -o lstart=` still reports a zombie's start time — so the startup claim
+ * was never released and every later command waited on it.
+ *
+ * `ps -o stat=` with a leading `Z` is the same portable (macOS + Linux) discriminator
+ * `process_is_alive` uses in the launcher script, `scripts/trailblaze`. Keep the two in sync.
+ */
 private fun processIsAlive(pid: Long): Boolean =
-  ProcessHandle.of(pid).map { it.isAlive }.orElse(false)
+  ProcessHandle.of(pid).map { it.isAlive }.orElse(false) && !processIsDefunct(pid)
+
+/**
+ * An explicit `Z` from `ps`, and nothing else, makes a process defunct. An unreadable status means
+ * alive: [processIsAlive] has already seen the process, so only a positive `Z` may override that —
+ * treating a failed `ps` as "dead" would let a CLI elect a second daemon past a live claimant.
+ */
+private fun processIsDefunct(pid: Long): Boolean = readPsField(pid, "stat=")?.startsWith("Z") == true
+
+/**
+ * One `ps` field for [pid], or null if `ps` failed, answered nothing, or did not finish in time.
+ *
+ * The timeout is the point: these probes run inside the daemon readiness poll, so a `ps` that never
+ * returns would reimpose the very indefinite wait this file works to bound. A timed-out probe is
+ * reported as unknown, which every caller reads conservatively — unknown liveness means alive, and
+ * an unknown identity means the claim is left alone rather than reclaimed.
+ *
+ * Waiting before reading is deliberate: `readText` blocks until EOF, so reading first would be just
+ * as unbounded as the `waitFor` it precedes. A single `ps` field cannot fill the pipe buffer, so the
+ * child never blocks on a write we have not drained, and after exit the buffered output is complete.
+ */
+private fun readPsField(pid: Long, field: String): String? = runCatching {
+  val process = ProcessBuilder("ps", "-o", field, "-p", pid.toString())
+    .redirectError(ProcessBuilder.Redirect.DISCARD)
+    .also { it.environment()["LC_ALL"] = "C" }
+    .start()
+  if (!process.waitFor(PS_PROBE_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS)) {
+    process.destroyForcibly()
+    return@runCatching null
+  }
+  if (process.exitValue() != 0) return@runCatching null
+  process.inputStream.bufferedReader().use { it.readText() }.trim().takeIf { it.isNotBlank() }
+}.getOrNull()
+
+private const val PS_PROBE_TIMEOUT_SECONDS = 2L
 
 private data class DaemonStartupOwner(
   val ownerFile: File,
@@ -2561,17 +2774,30 @@ private fun readDaemonStartupOwner(claimDirectory: File): DaemonStartupOwner? {
   return DaemonStartupOwner(ownerFile, pid, identity)
 }
 
-private fun processIsSame(owner: DaemonStartupOwner): Boolean =
-  processIsAlive(owner.pid) && processStartIdentity(owner.pid) == owner.processIdentity
+private fun processIsSame(owner: DaemonStartupOwner): Boolean {
+  // Short-circuit before probing identity: a dead PID needs no second `ps`, and these run inside
+  // the readiness poll.
+  if (!processIsAlive(owner.pid)) return false
+  return daemonStartupClaimStillHeld(processStartIdentity(owner.pid), owner.processIdentity)
+}
 
-private fun processStartIdentity(pid: Long): String? = runCatching {
-  val process = ProcessBuilder("ps", "-o", "lstart=", "-p", pid.toString())
-    .redirectError(ProcessBuilder.Redirect.DISCARD)
-    .also { it.environment()["LC_ALL"] = "C" }
-    .start()
-  val identity = process.inputStream.bufferedReader().use { it.readText().trim() }
-  if (process.waitFor() == 0) identity.takeIf { it.isNotBlank() } else null
-}.getOrNull()
+/**
+ * Whether a claim whose recorded owner PID is **alive** is still held by that same process.
+ *
+ * A null [probedIdentity] means the `ps` probe timed out or failed — it does not mean the process
+ * is someone else. The PID is alive either way, so the only safe reading is that the claimant still
+ * holds the claim: treating an unreadable identity as a mismatch lets a second CLI delete a live
+ * starter's owner file and elect a competing daemon, which is the outcome the claim exists to
+ * prevent. Retaining a claim too long is recoverable and says so — the refusal names the PID and
+ * the signal that ends it.
+ *
+ * Separated from the probe because a unit test cannot make `ps` time out, and the timeout is the
+ * branch with the worse failure.
+ */
+internal fun daemonStartupClaimStillHeld(probedIdentity: String?, recordedIdentity: String): Boolean =
+  probedIdentity == null || probedIdentity == recordedIdentity
+
+private fun processStartIdentity(pid: Long): String? = readPsField(pid, "lstart=")
 
 /** Replace a live claimant PID without exposing an empty or partial startup lock to another CLI. */
 internal fun replaceDaemonStartupPid(ownerFile: File, childPid: Long): Boolean {
@@ -2611,6 +2837,28 @@ internal fun releaseDaemonStartupClaim(ownerFile: File) {
 }
 
 /** Reclaim a lifetime claim once its recorded owner is no longer alive. */
+/**
+ * The PID that holds the startup claim *now*, falling back to [observedPid] when the claim is gone.
+ *
+ * A starter hands its claim over to the daemon child it spawns ([replaceDaemonStartupPid]), so the
+ * PID an observer read at election time is only the starter CLI's own PID if it looked before that
+ * handoff. Reporting that stale PID would tell the user to `kill -9` a process that holds nothing —
+ * and, on a recycled PID, an unrelated one. When the claim has been released there is no holder to
+ * name, so the observed PID is the best identification left.
+ */
+internal fun startupClaimHolderPid(pidFile: File, observedPid: Long): Long =
+  readDaemonStartupOwner(pidFile)?.pid ?: observedPid
+
+/**
+ * Whether the claim is still held by a live process with the identity it was recorded under.
+ *
+ * Re-read per call for the same reason as [startupClaimHolderPid]: the holder can change during the
+ * wait. A released claim answers false, which is what the callers want — nothing is blocking them,
+ * so they should retry the election rather than keep waiting on a PID nobody owns.
+ */
+private fun startupClaimIsStillHeld(pidFile: File): Boolean =
+  readDaemonStartupOwner(pidFile)?.let { processIsSame(it) } ?: false
+
 internal fun reclaimDaemonStartupClaimIfOwnerExited(pidFile: File) {
   val owner = readDaemonStartupOwner(pidFile) ?: return
   if (!processIsSame(owner)) releaseDaemonStartupClaim(owner.ownerFile)
@@ -2637,7 +2885,17 @@ internal fun scheduleDaemonStartupClaimReaper(
         process_identity() {
           LC_ALL=C ps -o lstart= -p "${'$'}1" 2>/dev/null | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*${'$'}//'
         }
-        while kill -0 "${'$'}pid" 2>/dev/null && [ "${'$'}(process_identity "${'$'}pid")" = "${'$'}started" ]; do
+        # A zombie answers `kill -0` and still reports its start time, so both checks below would
+        # hold forever for a child this watcher's own parent never reaped — and the claim with them.
+        # Same leading-`Z` rule as `processIsAlive` and the launcher's `process_is_alive`.
+        process_is_alive() {
+          kill -0 "${'$'}1" 2>/dev/null || return 1
+          case "${'$'}(LC_ALL=C ps -o stat= -p "${'$'}1" 2>/dev/null | sed -e 's/^[[:space:]]*//')" in
+            Z*) return 1 ;;
+          esac
+          return 0
+        }
+        while process_is_alive "${'$'}pid" && [ "${'$'}(process_identity "${'$'}pid")" = "${'$'}started" ]; do
           sleep 5
         done
         if [ -f "${'$'}owner" ] && rm -f "${'$'}owner"; then
@@ -2675,7 +2933,10 @@ internal fun ensureDaemonServerRunning(
     )
   ) {
     DaemonAutoStartOutcome.STARTED, DaemonAutoStartOutcome.ALREADY_RUNNING -> true
-    DaemonAutoStartOutcome.REFUSED_PORT_ALREADY_OWNED, DaemonAutoStartOutcome.FAILED -> false
+    DaemonAutoStartOutcome.REFUSED_PORT_ALREADY_OWNED,
+    DaemonAutoStartOutcome.REFUSED_STARTUP_CLAIM_HELD,
+    DaemonAutoStartOutcome.FAILED,
+    -> false
   }
 }
 

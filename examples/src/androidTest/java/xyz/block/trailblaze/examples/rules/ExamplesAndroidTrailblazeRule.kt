@@ -10,7 +10,7 @@ class ExamplesAndroidTrailblazeRule(
   customToolClasses: CustomTrailblazeTools = CustomTrailblazeTools(
     registeredAppSpecificLlmTools = setOf(),
     config = config,
-    driverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+    driverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
   ),
 ) : AndroidTrailblazeRule(
   config = config,

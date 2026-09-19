@@ -198,7 +198,7 @@ Four failure shapes, four different log outcomes:
 |-------------------------------------------------------------|--------------------------------------------------------------------------|--------------------------------------------------------------------------------------|
 | Handler returns `{ isError: true, content: [{ text }] }`    | `exceptionMessage = <your text>`, `successful = false`                   | **Most common**. You control the message — make it actionable.                       |
 | Handler `throw new Error("...")` (sync or async-reject)     | `exceptionMessage = "Error: <message>\n<stack>"`, `successful = false`   | The SDK catches throws and preserves the JS stack — author file + line is visible.   |
-| Handler hangs longer than the dispatch timeout              | `exceptionMessage` includes `timed out after Nms`, `successful = false`  | Default 120 000 ms (`DEFAULT_CALLBACK_TIMEOUT_MS`); tune with `-Dtrailblaze.callback.timeoutMs=N` on the daemon. |
+| Handler hangs longer than the dispatch timeout              | `exceptionMessage` includes `timed out after Nms`, `successful = false`  | Default 600 000 ms (`DEFAULT_CALLBACK_TIMEOUT_MS`); tune with `-Dtrailblaze.callback.timeoutMs=N` on the daemon. |
 | Subprocess process dies (handler `process.exit`, OOM, etc.) | `exceptionMessage` includes exit code + stderr tail, `successful = false`| Reach for `console.error` liberally; the stderr tail is what saves you here.         |
 
 **What happens to the trail when your tool fails.** A tool whose log carries

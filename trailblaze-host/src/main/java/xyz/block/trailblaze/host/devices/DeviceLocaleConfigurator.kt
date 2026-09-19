@@ -47,6 +47,52 @@ internal object DeviceLocaleConfigurator {
   internal fun androidGetPersistedLocaleCommand(): List<String> =
     listOf("getprop", "persist.sys.locale")
 
+  /** The running framework's configuration; the only readback of what the UI is actually in. */
+  internal fun androidGetConfigCommand(): List<String> = listOf("cmd", "activity", "get-config")
+
+  /**
+   * How `cmd activity get-config` spells [locale], mirroring
+   * `Configuration.localesToResourceQualifier`. The legacy qualifier (`es`, `pt-rBR`) is used only
+   * for a two-letter language with no script or variant and at most a two-letter region. Anything
+   * else is `b+` followed by the components joined with `+`, where Java already joins several
+   * variants with `_` (`sl-rozaj-biske` -> `b+sl+rozaj_biske`). Unicode extensions are not
+   * components, so they fall away as they do on the device (`es-u-nu-latn` -> `es`,
+   * `de-DE-u-co-phonebk` -> `de-rDE`). Verified on an API 35 emulator.
+   */
+  internal fun androidConfigLocaleToken(locale: String): String {
+    val parsed = Locale.forLanguageTag(locale)
+    val legacy =
+      parsed.language.length == 2 &&
+        parsed.script.isEmpty() &&
+        parsed.variant.isEmpty() &&
+        (parsed.country.isEmpty() || parsed.country.length == 2)
+    return when {
+      !legacy ->
+        listOf(parsed.language, parsed.script, parsed.country, parsed.variant)
+          .filter { it.isNotEmpty() }
+          .joinToString(separator = "+", prefix = "b+")
+      parsed.country.isEmpty() -> parsed.language
+      else -> "${parsed.language}-r${parsed.country}"
+    }
+  }
+
+  /**
+   * True when the `config:` line of `cmd activity get-config` output carries [locale]. Qualifiers
+   * are joined by `-`, so the locale must sit between two of them; `es` inside `keysexposed` and
+   * `zh` inside `b+zh+Hans` do not count.
+   */
+  internal fun androidConfigHasLocale(configOutput: String?, locale: String): Boolean {
+    val line =
+      configOutput
+        ?.lineSequence()
+        ?.map { it.trim() }
+        ?.firstOrNull { it.startsWith("config:") }
+        ?.removePrefix("config:")
+        ?.trim()
+        ?: return false
+    return "-$line-".contains("-${androidConfigLocaleToken(locale)}-")
+  }
+
   internal fun androidEmulatorSetLocaleCommand(locale: String): List<String> {
     val script =
       "setprop persist.sys.locale $locale; stop; sleep 5; start; " +
@@ -88,18 +134,28 @@ internal object DeviceLocaleConfigurator {
     if (androidLocaleCommandUnavailable(currentLocale)) {
       val emulator = exec(deviceId, androidIsEmulatorCommand(), ANDROID_LOCALE_COMMAND_TIMEOUT_MS)
       if (emulator?.trim() == "1") {
+        // An emulator that was already switched into this language when it booted needs nothing,
+        // and the fallback below must not restart its framework a second time for nothing. The
+        // persisted property alone is not proof — it can hold the new value while the framework
+        // still runs the old one (a restart that never completed) — so the running configuration
+        // is what decides, here and after the restart.
+        val persistedBefore =
+          exec(deviceId, androidGetPersistedLocaleCommand(), ANDROID_LOCALE_COMMAND_TIMEOUT_MS)
+        if (localeReadbackMatches(locale, persistedBefore)) {
+          val configBefore = exec(deviceId, androidGetConfigCommand(), ANDROID_LOCALE_COMMAND_TIMEOUT_MS)
+          if (androidConfigHasLocale(configBefore, locale)) return
+        }
         val fallbackOutput =
           exec(
             deviceId,
             androidEmulatorSetLocaleCommand(locale),
             ANDROID_EMULATOR_RESTART_TIMEOUT_MS,
           )
-        val persistedLocale =
-          exec(deviceId, androidGetPersistedLocaleCommand(), ANDROID_LOCALE_COMMAND_TIMEOUT_MS)
-        check(localeReadbackMatches(locale, persistedLocale)) {
+        val configAfter = exec(deviceId, androidGetConfigCommand(), ANDROID_LOCALE_COMMAND_TIMEOUT_MS)
+        check(androidConfigHasLocale(configAfter, locale)) {
           "Could not apply device locale `$locale` to Android emulator `${deviceId.instanceId}` " +
             "with the persist.sys.locale fallback; output: ${fallbackOutput?.trim().orEmpty()}, " +
-            "readback: ${persistedLocale?.trim().orEmpty()}."
+            "running configuration: ${configAfter?.trim().orEmpty()}."
         }
         Console.log("[device-locale] set Android emulator ${deviceId.instanceId} to $locale")
         return

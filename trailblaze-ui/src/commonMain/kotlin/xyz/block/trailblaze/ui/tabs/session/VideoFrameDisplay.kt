@@ -28,7 +28,7 @@ import xyz.block.trailblaze.ui.composables.ScreenshotAnnotation
  * Displays a video frame bitmap with an optional action overlay (tap point, swipe, etc.).
  *
  * Handles: frame display, loading placeholder, and aspect-ratio-correct action
- * annotation positioning. Used by both SessionTimelineView and SessionCombinedView.
+ * annotation positioning. Used by SessionCombinedView.
  */
 @Composable
 internal fun VideoFrameWithOverlay(

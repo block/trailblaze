@@ -848,12 +848,105 @@ class CliMcpClientReusableTest {
       val stdout = out.toString(Charsets.UTF_8)
       val stderr = err.toString(Charsets.UTF_8)
       assertFalse(
-        stdout.contains("Daemon doesn't recognize"),
+        stdout.contains("starting a new session"),
         "daemon-restart transition must NOT appear on stdout. Got stdout: <<<$stdout>>>",
       )
       assertTrue(
-        stderr.contains("Daemon doesn't recognize"),
+        stderr.contains("The daemon has restarted since this shell last used it -- starting a new session."),
         "daemon-restart transition must appear on stderr. Got stderr: <<<$stderr>>>",
+      )
+    } finally {
+      server.stop(0)
+    }
+  }
+
+  @Test
+  fun `an inspecting caller is not told a new session is starting when none will`() {
+    // `session save -d <device>` probes the device scope with createIfMissing = false. It must
+    // not print "starting a new session": nothing starts, and the reader would think their
+    // recording had been abandoned for a fresh one.
+    val server = HttpServer.create(InetSocketAddress(0), 0)
+    server.createContext("/mcp") { exchange ->
+      val body = exchange.requestBody.bufferedReader().use { it.readText() }
+      when {
+        "\"tools/call\"" in body && "\"device\"" in body && "\"INFO\"" in body ->
+          send(exchange, """{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"Unknown session id"}],"isError":true}}""")
+        else -> error("Unexpected POST body: $body")
+      }
+    }
+    server.start()
+
+    val port = server.address.port
+    val sessionFile = CliMcpClient.sessionFile(port, "cli-android/emulator-1").also { createdFiles += it }
+    sessionFile.writeText("stale-session\nsampleapp")
+
+    CliOutCapture.install()
+    val out = ByteArrayOutputStream()
+    val err = ByteArrayOutputStream()
+    try {
+      var outcome: Result<Unit>? = null
+      CliOutCapture.withCapture(out, err) {
+        outcome = runCatching {
+          runBlocking {
+            CliMcpClient.connectReusable(
+              port = port,
+              sessionScope = "cli-android/emulator-1",
+              createIfMissing = false,
+            ).use { /* noop */ }
+          }
+        }
+      }
+
+      assertTrue(outcome?.isFailure == true, "a scope with no live session must be reported, not replaced")
+      val stderr = err.toString(Charsets.UTF_8)
+      assertFalse(
+        stderr.contains("starting a new session"),
+        "no session is created on this path, so none may be announced. Got stderr: <<<$stderr>>>",
+      )
+    } finally {
+      server.stop(0)
+    }
+  }
+
+  @Test
+  fun `an unreachable daemon says why the session is gone, like the restart message does`() {
+    // The two ways a saved session disappears — the daemon answered and didn't recognize it, and
+    // the daemon didn't answer at all — are one event to whoever is reading. One command hitting
+    // one branch and the next command hitting the other used to print two sentences that shared
+    // no wording, and the one here said only "Saved session is unreachable", which names no
+    // cause and reads like a failure rather than a recovery.
+    val server = HttpServer.create(InetSocketAddress(0), 0)
+    // Closes every connection with no response, so the client's call throws rather than
+    // returning an error result. Deterministic, unlike pointing the client at a free port.
+    server.createContext("/mcp") { exchange -> exchange.close() }
+    server.start()
+
+    val port = server.address.port
+    val sessionFile = CliMcpClient.sessionFile(port).also { createdFiles += it }
+    sessionFile.writeText("stale-session\nsampleapp")
+
+    CliOutCapture.install()
+    val out = ByteArrayOutputStream()
+    val err = ByteArrayOutputStream()
+    try {
+      CliOutCapture.withCapture(out, err) {
+        // Creating the replacement fails against this server too; the message under test is
+        // printed before that, and is the whole point of the branch.
+        runCatching {
+          runBlocking {
+            CliMcpClient.connectReusable(port = port, targetAppId = "sampleapp").use { /* noop */ }
+          }
+        }
+      }
+
+      val stderr = err.toString(Charsets.UTF_8)
+      assertTrue(
+        stderr.contains("The daemon did not respond, so this shell's session is gone -- starting a new session."),
+        "an unreachable daemon must name the cause and the recovery. Got stderr: <<<$stderr>>>",
+      )
+      assertFalse(
+        out.toString(Charsets.UTF_8).contains("starting a new session"),
+        "same eval-safety contract as every other transition line: stderr only",
       )
     } finally {
       server.stop(0)
