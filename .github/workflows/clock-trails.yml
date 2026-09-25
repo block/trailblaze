@@ -91,6 +91,8 @@ jobs:
       # never invoked. A non-empty sentinel satisfies the provider/client wiring (same
       # pattern as android-tests-host-rpc in pr-checks.yml).
       OPENAI_API_KEY: no-key-set
+      # Record each session's screen so the report plays the recording (off by default).
+      TRAILBLAZE_CAPTURE_VIDEO: "true"
 
     steps:
       - name: Enable KVM group perms
@@ -141,13 +143,10 @@ jobs:
           TRAILBLAZE_ARTIFACT_DIR: ${{ github.workspace }}/trailblaze-uber-jar
         run: ./scripts/install-trailblaze-from-artifact.sh
 
-      - name: Install ffmpeg (for the animated-timeline WebP)
-        # The docs gallery's animated timeline.webp is muxed via `ffmpeg -c:v libwebp_anim`
-        # (see pr_generate_report_assets.sh). The storyboard WebP uses bundled libwebp and
-        # does not need ffmpeg, so a missing/older ffmpeg only degrades the animation.
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg
+      - name: Install ffmpeg
+        # Session video and the docs gallery's animated WebP encode through it; see the script
+        # for why it is a pinned build.
+        run: ./.github/install-ffmpeg.sh
 
       - name: Create and start emulator and run the clock trail (Linux)
         if: runner.os == 'Linux'

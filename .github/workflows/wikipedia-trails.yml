@@ -86,6 +86,8 @@ jobs:
       # required to satisfy the provider/client wiring (see android-tests-host-rpc
       # in pr-checks.yml for the same pattern).
       OPENAI_API_KEY: no-key-set
+      # Record each session's screen so the report plays the recording (off by default).
+      TRAILBLAZE_CAPTURE_VIDEO: "true"
 
     steps:
       - name: Checkout
@@ -152,6 +154,10 @@ jobs:
             libxfixes3 \
             libxkbcommon0 \
             libxrandr2
+
+      - name: Install ffmpeg
+        # Session video encodes through it; see the script for why it is a pinned build.
+        run: ./.github/install-ffmpeg.sh
 
       - name: Create and run Wikipedia trail
         id: run-trails

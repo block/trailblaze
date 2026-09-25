@@ -102,6 +102,8 @@ jobs:
       # Recordings-only — LLM is never invoked. A non-empty sentinel value is
       # required to satisfy the provider/client wiring.
       OPENAI_API_KEY: no-key-set
+      # Record each session's screen so the report plays the recording (off by default).
+      TRAILBLAZE_CAPTURE_VIDEO: "true"
 
     steps:
       - name: Checkout
@@ -173,6 +175,21 @@ jobs:
           echo "SIMULATOR_UDID=$SIMULATOR_UDID" >> "$GITHUB_ENV"
           echo "✓ Simulator booted: $SIMULATOR_UDID"
 
+      - name: Install ffmpeg-full (session video + animated-timeline WebP)
+        # macOS runners don't ship ffmpeg, and homebrew-core's plain `ffmpeg` formula
+        # is NOT built against libwebp — so the `libwebp_anim` encoder the docs gallery's
+        # animated timeline.webp needs is missing, and `pr_generate_report_assets.sh`
+        # silently falls back to publishing the committed placeholder. The sister
+        # `ffmpeg-full` formula depends on `webp` and provides the encoder. It's
+        # keg-only (so it doesn't collide with a system `ffmpeg`), so prepend its bin
+        # dir to GITHUB_PATH so the report-asset step picks it up.
+        # The storyboard WebP uses bundled libwebp and needs no ffmpeg, so a brew
+        # hiccup only costs the animation and the session video, never the run.
+        continue-on-error: true
+        run: |
+          brew install ffmpeg-full
+          echo "$(brew --prefix ffmpeg-full)/bin" >> "$GITHUB_PATH"
+
       - name: Run iOS Contacts trail
         id: run-trails
         continue-on-error: true
@@ -182,22 +199,6 @@ jobs:
         if: always()
         continue-on-error: true
         run: ./.github/pr_generate_trailblaze_report.sh
-
-      - name: Install ffmpeg-full (for the animated-timeline WebP)
-        # macOS runners don't ship ffmpeg, and homebrew-core's plain `ffmpeg` formula
-        # is NOT built against libwebp — so the `libwebp_anim` encoder the docs gallery's
-        # animated timeline.webp needs is missing, and `pr_generate_report_assets.sh`
-        # silently falls back to publishing the committed placeholder. The sister
-        # `ffmpeg-full` formula depends on `webp` and provides the encoder. It's
-        # keg-only (so it doesn't collide with a system `ffmpeg`), so prepend its bin
-        # dir to GITHUB_PATH so the report-asset step picks it up.
-        # The storyboard WebP uses bundled libwebp and needs no ffmpeg, so a brew
-        # hiccup only degrades the animation, never the run.
-        if: always()
-        continue-on-error: true
-        run: |
-          brew install ffmpeg-full
-          echo "$(brew --prefix ffmpeg-full)/bin" >> "$GITHUB_PATH"
 
       - name: Generate docs report-gallery assets
         # Storyboard + animated-timeline WebP + interactive HTML report, consumed by the
