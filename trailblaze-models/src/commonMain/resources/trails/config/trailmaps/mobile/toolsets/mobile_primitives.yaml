@@ -31,7 +31,6 @@ id: mobile_primitives
 description: "Cross-platform mobile composition primitives (clearAppData, listInstalledApps[Detailed], paste/setClipboard). LLM-facing entries (paste/setClipboard, listInstalledApps) appear in the agent catalog; the surfaceToLlm=false entries (clearAppData, listInstalledAppsDetailed) are dispatch-only via `client.callTool(...)`."
 always_enabled: true
 drivers:
-  - android-ondevice-instrumentation
   - android-ondevice-accessibility
   - ios-host
   - ios-axe

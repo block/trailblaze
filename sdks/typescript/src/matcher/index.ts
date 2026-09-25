@@ -40,6 +40,8 @@
 export {
   resolve,
   resolveToCenter,
+  matchesPattern,
+  type MatchDialect,
   type ResolveResult,
 } from "./resolver.js";
 

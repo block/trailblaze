@@ -12,7 +12,8 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.logs.client.LogEmitter
-import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
+import xyz.block.trailblaze.logs.client.OnDeviceLogFileName
+import xyz.block.trailblaze.logs.client.TrailblazeCompactJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeScreenStateLog
 import xyz.block.trailblaze.logs.model.SessionId
@@ -28,8 +29,8 @@ class TrailblazeAndroidLoggingRule(
   additionalLogEmitter = additionalLogEmitter,
   writeLogToDisk = { currentTestName: SessionId, log: TrailblazeLog ->
     try {
-      val json = TrailblazeJsonInstance.encodeToString(TrailblazeLog.serializer(), log)
-      val fileName = "${currentTestName.value}_${log.timestamp.toEpochMilliseconds()}.json"
+      val json = TrailblazeCompactJsonInstance.encodeToString(TrailblazeLog.serializer(), log)
+      val fileName = OnDeviceLogFileName.forLog(currentTestName, log.timestamp.toEpochMilliseconds())
       FileReadWriteUtil.writeToDownloadsFile(
         context = InstrumentationRegistry.getInstrumentation().context,
         fileName = fileName,

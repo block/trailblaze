@@ -76,6 +76,11 @@ daemon_only_command=false
 if ! dev_jar_needs_fresh_code "$@"; then
   DEV_JAR_ALLOW_STALE=1
   daemon_only_command=true
+elif dev_jar_runs_on_any_build "$@"; then
+  # Usage and version text come out of the JAR, so one is still needed — but any build prints them
+  # well enough, and a source change is no reason to make `--help` wait minutes for a build or to
+  # stop the daemon on the way. Answer from the JAR on disk; build only when there is none.
+  DEV_JAR_ALLOW_STALE=1
 fi
 
 if [ "$BLAZE_JAR" = "1" ] && [ "$daemon_only_command" = false ]; then

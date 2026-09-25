@@ -36,6 +36,7 @@ import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
 import xyz.block.trailblaze.yaml.generateUnifiedRecordedYaml
 import xyz.block.trailblaze.yaml.unified.UnifiedTrailAdapter
+import xyz.block.trailblaze.yaml.toJsonObject
 
 /**
  * Headless generator for the interactive Trailblaze run report — the CLI/CI counterpart to the
@@ -118,7 +119,7 @@ class RunReportGenerator(
    * @param fullEventPayloads when true (the `--full-report-payloads` CLI flag), event formatters
    *   embed full payloads even for passed sessions instead of applying their report size budgets
    *   (grep REPORT_SIZE_BUDGET). Failed sessions always embed full payloads regardless.
-   * @param imageBaseUrl when non-null, screenshots and video sprite sheets that live on disk are
+   * @param imageBaseUrl when non-null, screenshots and the session recording that live on disk are
    *   REFERENCED at `<imageBaseUrl><sessionId>/<file>` instead of base64-embedded, so the report is
    *   a small document plus images the browser fetches. The two hosts that already serve that
    *   layout pass their own prefix: the daemon `/static/`, CI `""` (document-relative against the
@@ -219,7 +220,7 @@ class RunReportGenerator(
       copyResource(CORE_RESOURCE, File(workDir, "run-report-core.js"))
       copyResource(DRIVER_RESOURCE, File(workDir, "run-report-cli.ts"))
       copyResource(EVENTS_RESOURCE, File(workDir, "run-report-events.ts"))
-      copyResource(SPRITES_RESOURCE, File(workDir, "run-report-sprites.ts"))
+      copyResource(TRACE_SPANS_RESOURCE, File(workDir, "run-report-trace-spans.ts"))
       // The Kotlin/JS selector engine for the UI Inspector's suggestions. OPTIONAL by design: the
       // resource is only in the JAR when :trailblaze-selector-engine-js's bundle task ran at build
       // time, and an older/bundle-less JAR must keep producing reports — the driver embeds it (once
@@ -402,7 +403,9 @@ class RunReportGenerator(
     private const val CORE_RESOURCE = "xyz/block/trailblaze/trailrunner/web/app/run-report-core.js"
     private const val DRIVER_RESOURCE = "xyz/block/trailblaze/report/run-report-cli.ts"
     private const val EVENTS_RESOURCE = "xyz/block/trailblaze/report/run-report-events.ts"
-    private const val SPRITES_RESOURCE = "xyz/block/trailblaze/report/run-report-sprites.ts"
+
+    /** The driver's `trace.json` slimmer, a sibling module it imports like the two above. */
+    private const val TRACE_SPANS_RESOURCE = "xyz/block/trailblaze/report/run-report-trace-spans.ts"
 
     /**
      * The Kotlin/JS selector engine (built by `:trailblaze-selector-engine-js:bundleSelectorEngine`,
@@ -578,7 +581,7 @@ class RunReportGenerator(
           // `owner` gets first-class index treatment. A skipped row omitting them would drop out
           // of a search for its own owner while the same trail's runs still matched.
           skip.metadata?.takeIf { it.isNotEmpty() }?.let { metadata ->
-            put("metadata", buildJsonObject { metadata.forEach { (key, value) -> put(key, value) } })
+            put("metadata", metadata.toJsonObject())
           }
           put(
             "ranAt",
@@ -650,7 +653,7 @@ class RunReportGenerator(
       // Consumer-injected key/values from the trail's `config.metadata` — the report's generic
       // injection point (Info-tab rows, index search; `owner` gets first-class index treatment).
       sessionInfo.trailConfig?.metadata?.takeIf { it.isNotEmpty() }?.let { metadata ->
-        put("metadata", buildJsonObject { metadata.forEach { (key, value) -> put(key, value) } })
+        put("metadata", metadata.toJsonObject())
       }
       sessionInfo.trailFilePath?.takeIf { it.isNotBlank() }?.let { put("cmd", "./trailblaze run $it") }
       failureReason(status)?.let { put("error", it) }

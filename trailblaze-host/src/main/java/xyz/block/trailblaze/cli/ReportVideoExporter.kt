@@ -8,7 +8,8 @@ import java.util.UUID
 import kotlinx.coroutines.runBlocking
 import xyz.block.trailblaze.capture.CaptureOptions
 import xyz.block.trailblaze.capture.CaptureSession
-import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
+import xyz.block.trailblaze.capture.video.PlaywrightVideoCapture
+import xyz.block.trailblaze.capture.video.RecordingFormat
 import xyz.block.trailblaze.playwright.PlaywrightBrowserManager
 import xyz.block.trailblaze.util.Console
 
@@ -16,15 +17,16 @@ import xyz.block.trailblaze.util.Console
  * Renders a generated Trailblaze HTML report into an MP4 by loading it in a headless
  * Playwright browser, triggering timeline autoplay via the `?autoplay=1` URL parameter,
  * and capturing the resulting browser-tab playback via the same `setRecordVideoDir`
- * pipeline that powers `video.mp4` for live Playwright sessions (see
- * `PlaywrightVideoCapture` + `PlaywrightVideoRecordDir`).
+ * pipeline that records live Playwright sessions (see `PlaywrightVideoCapture` +
+ * `PlaywrightVideoRecordDir`).
  *
- * The exporter deliberately reuses [CaptureSession] for the WEB platform rather than
+ * The exporter deliberately reuses [CaptureSession] over a [PlaywrightVideoCapture] rather than
  * driving Playwright directly: that path already handles record-dir registration,
  * `BrowserContext` finalizer wiring, and WebM→MP4 transcoding with the right ffmpeg
  * flags — duplicating it here would just be a place for the two implementations to
- * drift. The result lands in the temp dir as `video.mp4`; we move it to the
- * caller-supplied [outputMp4].
+ * drift. Session recordings are WebM everywhere, but `--video` promises an MP4, so this is the
+ * one caller that asks the recorder for [RecordingFormat.MP4] explicitly. The result lands in
+ * the temp dir as `video.mp4`; we move it to the caller-supplied [outputMp4].
  *
  * Wall-clock recording: the report's own autoplay timeline decides how fast playback
  * advances, and the exporter just records what the viewport shows in real time. Both
@@ -72,14 +74,10 @@ object ReportVideoExporter {
       "trailblaze-report-video-$deviceId",
     ).apply { mkdirs() }
 
-    // Sprite extraction would otherwise run during `captureSession.stopAll()` (two ffmpeg
-    // passes — frame extraction + WebP assembly) but the caller asked for an MP4, not a
-    // scrubber-friendly sheet, so we set `spriteFrameFps = 0` to short-circuit it. The
-    // sprite path treats `fps <= 0` as a deliberate "skip" — see VideoSpriteExtractor.
-    val captureSession = CaptureSession.fromOptions(
-      CaptureOptions(captureVideo = true, spriteFrameFps = 0),
-      TrailblazeDevicePlatform.WEB,
-    ) ?: error("CaptureSession.fromOptions returned null for WEB — capture wiring regressed")
+    val captureSession = CaptureSession(
+      listOf(PlaywrightVideoCapture(format = RecordingFormat.MP4)),
+      CaptureOptions(captureVideo = true),
+    )
 
     captureSession.startAll(tempDir, deviceId, appId = null)
 
@@ -106,6 +104,11 @@ object ReportVideoExporter {
         headless = headless,
         deviceId = deviceId,
         onBrowserInstallProgress = onInstallProgress,
+        // Render at 1x, like the frame-capture exporters. Unlike them this is not a size win —
+        // the `.webm`'s resolution comes from `setRecordVideoSize`, which is CSS px and so is
+        // unaffected by the scale factor. It is pinned so a laptop and CI render the page the
+        // same way, rather than one of them downsampling a 2x surface into the same frame.
+        deviceScaleFactorOverride = 1.0,
       )
       val mgr = manager
       runBlocking(mgr.playwrightDispatcher) {

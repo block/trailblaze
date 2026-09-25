@@ -20,7 +20,7 @@ import xyz.block.trailblaze.api.DriverNodeMatch
 
 /**
  * Tests [MaestroCommandConverter.convert] handling of device setting, navigation,
- * and scroll commands that achieve parity with [MaestroAndroidUiAutomatorDriver].
+ * and scroll commands that achieve parity with the retired on-device UiAutomator driver.
  */
 class MaestroCommandConverterDeviceSettingsTest {
 

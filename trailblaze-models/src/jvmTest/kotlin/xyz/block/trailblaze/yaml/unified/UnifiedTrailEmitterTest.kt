@@ -11,6 +11,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
 import xyz.block.trailblaze.yaml.TrailblazeToolYamlWrapper
 import xyz.block.trailblaze.yaml.TrailblazeYaml
+import xyz.block.trailblaze.yaml.metadataOf
 
 /**
  * Pins the [UnifiedTrailEmitter]'s output shape so future "fix" changes to the
@@ -153,7 +154,7 @@ class UnifiedTrailEmitterTest {
         devices = mapOf("android" to devicePin("ANDROID_ONDEVICE_ACCESSIBILITY"), "ios" to devicePin("IOS_HOST")),
         context = "Test context — one line",
         memory = mapOf("email" to "tb+test@example.com"),
-        metadata = mapOf("jira" to "PROJ-123"),
+        metadata = metadataOf("jira" to "PROJ-123"),
       ),
       trail = listOf(
         UnifiedTrailStep(

@@ -500,6 +500,7 @@ internal suspend fun buildRecordTrailRangeResponse(
           captureLogcat = body.captureLogcat,
           captureNetworkTraffic = body.captureNetworkTraffic,
           captureIosLogs = body.captureIosLogs,
+          captureMemory = body.captureMemory,
           captureAnalytics = body.captureAnalytics,
           captureEvents = body.captureEvents,
           // Navigating from this run's card lands on the trail it was recorded against.

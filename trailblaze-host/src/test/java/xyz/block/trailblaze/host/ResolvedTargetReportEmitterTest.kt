@@ -1123,7 +1123,7 @@ class ResolvedTargetReportEmitterTest {
       "android" to PlatformConfig(
         appIds = listOf("com.example.dual.android"),
         toolSets = listOf("core_interaction"),
-        drivers = listOf("android-ondevice-instrumentation"),
+        drivers = listOf("android-ondevice-accessibility"),
       ),
     )
     val trailmap = ResolvedTrailmap(
@@ -1146,16 +1146,16 @@ class ResolvedTargetReportEmitterTest {
     val matrixSection = File(outDir, "dualplatform.report.md").readText()
       .substringAfter("## Tool availability matrix")
       .substringBefore("## Resolution trace")
-    // web_click under playwright-native ✅; under android-ondevice-instrumentation blank.
+    // web_click under playwright-native ✅; under android-ondevice-accessibility blank.
     val webClickRow = matrixSection.lines().firstOrNull { it.contains("`web_click`") }
     assertTrue("expected web_click row, got matrix:\n$matrixSection") { webClickRow != null }
     // Driver columns are alphabetical by platform key (matches the Agent toolbox section's
-    // `toSortedSet()` ordering) — so the column order is `android-ondevice-instrumentation
+    // `toSortedSet()` ordering) — so the column order is `android-ondevice-accessibility
     // (ANDROID) | playwright-native (WEB)`. Identify each cell by header rather than by
     // brittle positional index so a future ordering tweak doesn't silently slip.
     val headerRow = matrixSection.lines().first { it.startsWith("| Tool ") }
     val headers = headerRow.split("|").map { it.trim() }
-    val androidIdx = headers.indexOfFirst { it.startsWith("android-ondevice-instrumentation") }
+    val androidIdx = headers.indexOfFirst { it.startsWith("android-ondevice-accessibility") }
     val webIdx = headers.indexOfFirst { it.startsWith("playwright-native") }
     val cells = webClickRow!!.split("|").map { it.trim() }
     assertEquals("✅", cells[webIdx], "expected ✅ under playwright-native for web_click")
@@ -1282,7 +1282,7 @@ class ResolvedTargetReportEmitterTest {
       "android" to PlatformConfig(
         appIds = listOf("com.example.scoped"),
         toolSets = listOf("memory"),
-        drivers = listOf("android-ondevice-instrumentation"),
+        drivers = listOf("android-ondevice-accessibility"),
       ),
       "web" to PlatformConfig(
         appIds = listOf("com.example.scoped.web"),
@@ -1317,7 +1317,7 @@ class ResolvedTargetReportEmitterTest {
       .substringBefore("## Resolution trace")
     val headerRow = matrixSection.lines().first { it.startsWith("| Tool ") }
     val headers = headerRow.split("|").map { it.trim() }
-    val androidIdx = headers.indexOfFirst { it.startsWith("android-ondevice-instrumentation") }
+    val androidIdx = headers.indexOfFirst { it.startsWith("android-ondevice-accessibility") }
     val webIdx = headers.indexOfFirst { it.startsWith("playwright-native") }
 
     // androidOnly: ✅ under Android, blank under Playwright (the supportedPlatforms filter
@@ -1452,7 +1452,7 @@ class ResolvedTargetReportEmitterTest {
       "android" to PlatformConfig(
         appIds = listOf("com.example.nav"),
         toolSets = listOf("navigation"),
-        drivers = listOf("android-ondevice-instrumentation"),
+        drivers = listOf("android-ondevice-accessibility"),
       ),
     )
     val trailmap = ResolvedTrailmap(
@@ -1504,7 +1504,7 @@ class ResolvedTargetReportEmitterTest {
       "android" to PlatformConfig(
         appIds = listOf("com.example.scope.android"),
         toolSets = listOf("navigation"),
-        drivers = listOf("android-ondevice-instrumentation"),
+        drivers = listOf("android-ondevice-accessibility"),
       ),
       "web" to PlatformConfig(
         appIds = listOf("com.example.scope.web"),
@@ -1535,7 +1535,7 @@ class ResolvedTargetReportEmitterTest {
       .substringBefore("## Resolution trace")
     val headerRow = matrixSection.lines().first { it.startsWith("| Tool ") }
     val headers = headerRow.split("|").map { it.trim() }
-    val androidIdx = headers.indexOfFirst { it.startsWith("android-ondevice-instrumentation") }
+    val androidIdx = headers.indexOfFirst { it.startsWith("android-ondevice-accessibility") }
     val webIdx = headers.indexOfFirst { it.startsWith("playwright-native") }
 
     val openUrlRow = matrixSection.lines().first { it.contains("`openUrl`") }
@@ -1567,7 +1567,7 @@ class ResolvedTargetReportEmitterTest {
       "android" to PlatformConfig(
         appIds = listOf("com.example.navexcl"),
         toolSets = listOf("navigation"),
-        drivers = listOf("android-ondevice-instrumentation"),
+        drivers = listOf("android-ondevice-accessibility"),
         excludedTools = listOf("openUrl"),
       ),
     )

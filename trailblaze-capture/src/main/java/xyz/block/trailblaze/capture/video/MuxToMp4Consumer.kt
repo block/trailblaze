@@ -156,13 +156,13 @@ internal class MuxToMp4Consumer(
   /**
    * Run `ffmpeg -f concat -safe 0 -i list.txt -c copy -movflags +faststart+frag_keyframe`
    * to produce a playable MP4 with no re-encode. If ffmpeg is missing or the concat fails,
-   * fall back to renaming the first segment so the caller still gets a file (the existing
-   * sprite-extractor path can handle a raw H.264 file via ImageIO, though seeking won't work).
+   * fall back to renaming the first segment so the caller still gets a file (a raw H.264 file
+   * is decodable, though seeking won't work).
    */
   private fun concatSegments(segments: List<File>, output: File): File? {
     if (segments.size == 1) {
-      // Single segment is the fast path — wrap it in an MP4 container so callers (sprite
-      // extractor, UI <video>) see a uniform input. Still -c copy, so no re-encode.
+      // Single segment is the fast path — wrap it in an MP4 container so callers (the report's
+      // <video>, the desktop app) see a uniform input. Still -c copy, so no re-encode.
       return wrapSingleSegment(segments[0], output) ?: segments[0]
     }
     val listFile = File(sessionDir, "video.segments.txt")

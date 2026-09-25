@@ -1,8 +1,17 @@
 package xyz.block.trailblaze.android.test.tools
 
+import android.widget.EditText
+import androidx.compose.ui.semantics.SemanticsNode
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getOrNull
 import androidx.test.espresso.Espresso
+import androidx.test.espresso.NoMatchingViewException
+import androidx.test.espresso.action.ViewActions
+import androidx.test.espresso.matcher.ViewMatchers.hasFocus
+import androidx.test.espresso.matcher.ViewMatchers.isAssignableFrom
 import androidx.test.platform.app.InstrumentationRegistry
 import kotlin.random.Random
+import org.hamcrest.CoreMatchers.allOf
 import maestro.SwipeDirection
 import xyz.block.trailblaze.android.test.AndroidTestTarget
 import xyz.block.trailblaze.api.DriverNodeMatch
@@ -14,6 +23,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.commands.AssertNotVisibleWithTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.AssertVisibleBySelectorTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.ClearTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.InputTextRandomTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.InputTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.MaestroTrailblazeTool
@@ -210,6 +220,44 @@ internal object CanonicalToolAdapters {
     // than host-side for the same reason the canonical body does it inline: this execution is the
     // one that produced the value, and its memory write is what rides back in the RPC snapshot so
     // a later `{{variable}}` resolves.
+    // The canonical body erases the focused field with N backspaces through Maestro. In-process the
+    // field is ours to address directly: the focused Compose text input (most modern
+    // screens are Compose) or, failing that, the focused EditText — replaced with the empty string
+    // in one action, the same shape `AndroidViewActions.replaceText` uses so a field that re-renders
+    // mid-erase cannot drop half the keystrokes. Selector-free by design, like the canonical tool:
+    // "the focused field" is the whole contract.
+    is ClearTextTrailblazeTool -> CanonicalDispatch { target, _ ->
+      val focusedCompose = target.composeRoots().firstNotNullOfOrNull { findFocusedEditableText(it) }
+      val cleared =
+        when {
+          focusedCompose != null -> {
+            AndroidComposeActions.replaceText(target, focusedCompose.id, "")
+            "the focused Compose text input"
+          }
+          else ->
+            try {
+              target.dispatchAndAwaitSettle {
+                target.performViewAction(
+                  allOf(isAssignableFrom(EditText::class.java), hasFocus()),
+                  ViewActions.clearText(),
+                )
+              }
+              "the focused EditText"
+            } catch (_: NoMatchingViewException) {
+              null
+            }
+        }
+      if (cleared == null) {
+        return@CanonicalDispatch TrailblazeToolResult.Error.ExceptionThrown(
+          errorMessage = "clearText found no focused text field — neither a focused Compose text " +
+            "input nor a focused EditText is on screen.",
+          command = tool,
+        )
+      }
+      target.waitForIdle()
+      TrailblazeToolResult.Success(message = "Cleared $cleared")
+    }
+
     is InputTextRandomTrailblazeTool -> CanonicalDispatch { target, context ->
       if (tool.digitCount <= 0) {
         return@CanonicalDispatch malformed("inputTextRandom digitCount must be > 0 (was ${tool.digitCount})", tool)
@@ -257,6 +305,17 @@ internal object CanonicalToolAdapters {
   private fun hideKeyboard(target: AndroidTestTarget) {
     runCatching { Espresso.closeSoftKeyboard() }
     target.waitForIdle()
+  }
+
+  /** The focused node under [node] that carries editable text, or null — the field `clearText` erases. */
+  private fun findFocusedEditableText(node: SemanticsNode): SemanticsNode? {
+    val config = node.config
+    if (config.getOrNull(SemanticsProperties.Focused) == true &&
+      config.getOrNull(SemanticsProperties.EditableText) != null
+    ) {
+      return node
+    }
+    return node.children.firstNotNullOfOrNull { findFocusedEditableText(it) }
   }
 
   private fun malformed(reason: String, tool: TrailblazeTool): TrailblazeToolResult =

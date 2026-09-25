@@ -126,6 +126,10 @@ dependencies {
   testImplementation(gradleTestKit())
 }
 
+// A separate Gradle build, so the including root's `apply(from = ...)` does not reach it. Its
+// tests are the TestKit functional ones, where the default one-line failure is least useful.
+apply(from = "../gradle/test-conventions.gradle.kts")
+
 tasks.named<Test>("test") {
   useJUnit()
   // Expose the real TS SDK dir to the functional test JVM. The test reads this property

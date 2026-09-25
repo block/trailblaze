@@ -56,7 +56,7 @@ class MuxToMp4ConsumerTest {
       videoSize = "320x240",
       bitRate = "500000",
       producerFactory = streamFileOnceProducer(h264),
-      sdkLevelProvider = { H264Tee.ANDROID_R_SDK },
+      sdkLevelProvider = { H264Tee.ANDROID_U_SDK },
       restartOnUnexpectedExit = false,
     )
 
@@ -103,7 +103,7 @@ class MuxToMp4ConsumerTest {
       videoSize = "320x240",
       bitRate = "500000",
       producerFactory = factory,
-      sdkLevelProvider = { 28 }, // < 30 forces restart-on-EOF chain
+      sdkLevelProvider = { 28 }, // < 34, forces restart-on-exit chain
     )
 
     val consumer = MuxToMp4Consumer(sessionDir = tempDir, tee = tee)

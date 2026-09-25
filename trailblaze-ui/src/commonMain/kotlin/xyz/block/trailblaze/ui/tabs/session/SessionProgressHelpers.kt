@@ -481,6 +481,7 @@ internal fun latestActivityLabel(log: TrailblazeLog): String {
     is TrailblazeLog.McpToolCallResponseLog -> "MCP tool response: ${log.toolName}"
     is TrailblazeLog.McpAskLog -> "MCP ask"
     is TrailblazeLog.TrailblazeProgressLog -> log.description
+    is TrailblazeLog.TrailblazeToolCatalogLog -> "Loaded ${log.toolOptions.size} tools"
   }
 }
 

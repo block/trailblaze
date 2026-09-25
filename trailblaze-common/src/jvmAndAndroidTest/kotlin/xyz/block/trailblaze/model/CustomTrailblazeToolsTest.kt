@@ -43,7 +43,7 @@ class CustomTrailblazeToolsTest {
     val tools = CustomTrailblazeTools(
       registeredAppSpecificLlmTools = emptySet(),
       config = TrailblazeConfig.DEFAULT,
-      driverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+      driverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
     )
     val names = tools.initialToolRepoToolClasses.map { it.toolName().toolName }.toSet()
     assertTrue("tap" in names, "Android is a compatible driver for core_interaction")
@@ -116,7 +116,7 @@ class CustomTrailblazeToolsTest {
   fun `on-device tools come from the trailmap's declared toolsets, not the whole catalog`() {
     val repo = onDeviceTarget()
       .toCustomTrailblazeToolsForDriver(
-        driverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+        driverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
         catalog = onDeviceCatalog(),
       )
       .toTrailblazeToolRepo()
@@ -137,7 +137,7 @@ class CustomTrailblazeToolsTest {
     // scripted tools bundled and advertised.
     val repo = onDeviceTarget()
       .toCustomTrailblazeToolsForDriver(
-        driverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+        driverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
         catalog = onDeviceCatalog(),
       )
       .toTrailblazeToolRepo()
@@ -182,7 +182,7 @@ class CustomTrailblazeToolsTest {
     val androidTools = CustomTrailblazeTools(
       registeredAppSpecificLlmTools = emptySet(),
       config = TrailblazeConfig.DEFAULT,
-      driverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+      driverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
     )
     val androidYamlNames = androidTools.initialToolRepoYamlToolNames.map { it.toolName }.toSet()
     assertTrue(
@@ -212,7 +212,7 @@ class CustomTrailblazeToolsTest {
       registeredAppSpecificLlmTools = emptySet(),
       registeredAppSpecificYamlToolNames = setOf(ToolName("my_custom_yaml_tool")),
       config = TrailblazeConfig.DEFAULT,
-      driverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+      driverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
     )
     val names = tools.initialToolRepoYamlToolNames.map { it.toolName }.toSet()
     assertTrue(
@@ -231,7 +231,7 @@ class CustomTrailblazeToolsTest {
       registeredAppSpecificLlmTools = emptySet(),
       registeredAppSpecificYamlToolNames = setOf(ToolName("eraseText")),
       config = TrailblazeConfig.DEFAULT,
-      driverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+      driverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
     )
     val repo = tools.toTrailblazeToolRepo()
     val descriptorNames = repo.getCurrentToolDescriptors().map { it.name }.toSet()
@@ -248,7 +248,7 @@ class CustomTrailblazeToolsTest {
     // caller pre-subtracts the class/YAML opt-outs. Only forwarding the SCRIPTED exclusion partition
     // through toTrailblazeToolRepo actually drops it on this path. The baseline (no exclusions) must
     // advertise openUrl, otherwise the exclusion assertion would be vacuous.
-    val android = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION
+    val android = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY
     val baseline = CustomTrailblazeTools(
       registeredAppSpecificLlmTools = emptySet(),
       config = TrailblazeConfig.DEFAULT,
@@ -290,7 +290,7 @@ class CustomTrailblazeToolsTest {
     val repo = CustomTrailblazeTools(
       registeredAppSpecificLlmTools = emptySet(),
       config = TrailblazeConfig.DEFAULT,
-      driverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+      driverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
       toolSetCatalog = customCatalog,
     ).toTrailblazeToolRepo()
 

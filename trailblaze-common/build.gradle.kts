@@ -18,7 +18,6 @@ import org.gradle.api.tasks.OutputFiles
 import org.gradle.api.tasks.PathSensitive
 import org.gradle.api.tasks.PathSensitivity
 import org.gradle.api.tasks.TaskAction
-import org.gradle.api.tasks.testing.logging.TestExceptionFormat
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 abstract class BundleFrameworkScriptedToolsTask @Inject constructor(objects: ObjectFactory) : DefaultTask() {
@@ -48,27 +47,43 @@ abstract class BundleFrameworkScriptedToolsTask @Inject constructor(objects: Obj
   @get:PathSensitive(PathSensitivity.RELATIVE)
   abstract val scriptingWrapperTemplate: RegularFileProperty
 
+  /**
+   * The framework trailmaps root. Every `<trailmap>/tools` under it is swept for stale bundles.
+   *
+   * A scripted tool's bundle must sit next to its `.ts`, because the runtime derives the bundle's
+   * resource path from the descriptor's `script:` path — so a tool under `trailmaps/android/tools`
+   * cannot be bundled into some other trailmap's directory, and each source is written back beside
+   * itself rather than into one shared output dir. Held as the root rather than a list of tool
+   * directories so that adding a trailmap cannot quietly leave its tools unbundled.
+   */
   @get:Internal
-  abstract val outputDir: DirectoryProperty
+  abstract val trailmapsRoot: DirectoryProperty
 
   @get:Internal
   abstract val temporaryWorkDir: DirectoryProperty
 
   @TaskAction
   fun bundle() {
-    val toolsDir = outputDir.get().asFile
     val sources = inputSources.files.sortedBy { it.name }
+    val expectedBundlesByDir = sources.groupBy({ it.parentFile }, { "${it.nameWithoutExtension}.bundle.js" })
+    // Swept per directory, not per source: a directory whose last `.ts` was deleted still has a
+    // bundle to remove, and it has no sources left to find it from.
+    val toolDirectories = trailmapsRoot.get().asFile.listFiles()
+      .orEmpty()
+      .map { File(it, "tools") }
+      .filter { it.isDirectory }
+    toolDirectories.forEach { toolsDir ->
+      val expectedBundles = expectedBundlesByDir[toolsDir].orEmpty().toSet()
+      toolsDir.listFiles { f -> f.isFile && f.name.endsWith(".bundle.js") && f.name !in expectedBundles }
+        ?.forEach { stale ->
+          logger.lifecycle("Removing stale framework tool bundle ${stale.name} (no matching source)")
+          stale.delete()
+        }
+    }
     if (sources.isEmpty()) {
       logger.lifecycle("No framework scripted tools to bundle.")
       return
     }
-
-    val expectedBundles = sources.map { "${it.nameWithoutExtension}.bundle.js" }.toSet()
-    toolsDir.listFiles { f -> f.isFile && f.name.endsWith(".bundle.js") && f.name !in expectedBundles }
-      ?.forEach { stale ->
-        logger.lifecycle("Removing stale framework tool bundle ${stale.name} (no matching source)")
-        stale.delete()
-      }
 
     if (sdkDir.isPresent) {
       ensureSdkNodeModules(
@@ -78,12 +93,12 @@ abstract class BundleFrameworkScriptedToolsTask @Inject constructor(objects: Obj
     }
 
     sources.forEach { src ->
-      val out = File(toolsDir, "${src.nameWithoutExtension}.bundle.js")
+      val out = File(src.parentFile, "${src.nameWithoutExtension}.bundle.js")
       logger.lifecycle("Bundling ${src.name} -> ${out.name}")
       esbuildScriptedTool(
         source = src,
         outFile = out,
-        toolsDir = toolsDir,
+        toolsDir = src.parentFile,
         sdkSource = scriptingSdkSrc.orNull?.asFile,
         wrapperTemplate = scriptingWrapperTemplate.orNull?.asFile,
         tempDir = temporaryWorkDir.get().asFile,
@@ -91,15 +106,9 @@ abstract class BundleFrameworkScriptedToolsTask @Inject constructor(objects: Obj
     }
   }
 
-  private fun isSdkNodeModulesUpToDate(sdk: File): Boolean {
-    val esbuildOk = File(sdk, "node_modules/.bin/esbuild").isFile
-    val lockText = File(sdk, "bun.lock").let { if (it.exists()) it.readText() else "" }
-    val installStamp = File(sdk, "node_modules/.trailblaze-install-lock")
-    return esbuildOk && installStamp.exists() && installStamp.readText() == lockText
-  }
-
   private fun ensureSdkNodeModules(sdk: File, logFile: File) {
-    if (isSdkNodeModulesUpToDate(sdk)) return
+    // build-logic's check, shared by every task installing into this `node_modules`.
+    if (!shouldReinstallSdkNodeModules(sdk)) return
     val lockFile = File(sdk, "node_modules/.trailblaze-install.lock")
     lockFile.parentFile.mkdirs()
     RandomAccessFile(lockFile, "rw").channel.use { channel ->
@@ -111,7 +120,7 @@ abstract class BundleFrameworkScriptedToolsTask @Inject constructor(objects: Obj
         }
         if (lock != null) {
           lock.use {
-            if (isSdkNodeModulesUpToDate(sdk)) return
+            if (!shouldReinstallSdkNodeModules(sdk)) return
             installSdkNodeModules(sdk, logFile)
             return
           }
@@ -273,6 +282,10 @@ trailblazeDtoTsCodegen {
   }
 }
 
+// Developer-time files that sit next to the framework scripted tools they belong to, and that
+// nothing at runtime reads. Path globs, for the source-set `exclude` dialect.
+val DEVELOPER_ONLY_RESOURCE_GLOBS = arrayOf("**/*.test.ts", "**/tsconfig.json")
+
 android {
   namespace = "xyz.block.trailblaze.common"
   compileSdk = 36
@@ -289,7 +302,18 @@ android {
   sourceSets.getByName("main") {
     resources.srcDirs("src/commonMain/resources")
     assets.srcDirs("src/commonMain/resources")
+    // ...but the framework scripted tools' developer-time files are not runtime config and must
+    // not ride along: a `*.test.ts` fixture is read by `bun test` on a laptop, and `tsconfig.json`
+    // only tells an editor where the SDK types are. Nothing at runtime opens either. These are
+    // path globs (leading `**` works), and they cover the Java-resource copy — the tree is
+    // registered twice, so filtering only the assets leaves a `trails/...` copy in every
+    // consumer's APK.
+    resources.exclude(*DEVELOPER_ONLY_RESOURCE_GLOBS)
   }
+  // The asset merger ignores source-set excludes — it filters only on `ignoreAssetsPatterns`,
+  // which matches file NAMES, not paths, and takes a `*` at ONE end only (`*test*` matches
+  // nothing), so each name is spelled out. `+=` keeps AAPT's own defaults (`.*`, `*~`, ...).
+  androidResources { ignoreAssetsPatterns += listOf("*.test.ts", "tsconfig.json") }
 }
 
 kotlin {
@@ -325,6 +349,11 @@ kotlin {
   applyDefaultHierarchyTemplate()
 
   sourceSets {
+    // The same filter as the Android pipelines above, for the resources the JVM jar ships. The
+    // CLI reads its bundled trailmaps out of that jar, so an unfiltered fixture is weight there
+    // too.
+    commonMain { resources.exclude(*DEVELOPER_ONLY_RESOURCE_GLOBS) }
+
     // KMP-capable dependencies only. JVM-only libraries (junit, gson, exp4j, the OkHttp
     // ktor engine, kotlin-reflect, jackson) are declared on jvmAndAndroid below — they were
     // never used from commonMain code, and declaring them here would block ever adding a
@@ -361,6 +390,10 @@ kotlin {
         // level below.
         implementation(libs.koog.agents)
         implementation(libs.koog.prompt.executor.clients)
+        // Publishes the OpenTelemetry security floor to consumers of this artifact. Koog's
+        // OpenTelemetry feature requests an older, vulnerable BOM, and the local override in
+        // gradle/dependency-resolution.gradle.kts only applies inside this build.
+        implementation(project.dependencies.platform(libs.opentelemetry.bom))
         // JVM-only libraries, homed with the code that uses them (rules/, GenericGsonJsonSerializer,
         // AssertMath, the reflective Koog agents, jackson-tolerant YAML paths). `api(libs.junit)`
         // keeps junit on downstream JVM/Android compile classpaths exactly as before.
@@ -479,16 +512,6 @@ dependencyGuard {
   }
 }
 
-// Gradle's default console output for a failed test is `AssertionError at Foo.kt:42` with the message
-// dropped, which hides exactly the part an assertion writes for the reader (see TrailYamlValidationTest,
-// whose failures name the offending tool and file).
-tasks.withType<Test>().configureEach {
-  testLogging {
-    events("failed")
-    exceptionFormat = TestExceptionFormat.FULL
-  }
-}
-
 // ImageIoProguardKeepRegressionTest reads the desktop ProGuard ruleset off disk. Declare it as an
 // input so changing only the rules cannot leave jvmTest incorrectly UP-TO-DATE.
 tasks.named<Test>("jvmTest") {
@@ -530,22 +553,26 @@ val frameworkRoot: File? = run {
 tasks.register<BundleFrameworkScriptedToolsTask>("bundleFrameworkScriptedTools") {
   group = "build"
   description = "Regenerates the QuickJS .bundle.js for every framework scripted tool (build artifact)."
-  val frameworkToolsDirectory =
-    layout.projectDirectory.dir("src/commonMain/resources/trails/config/trailmaps/trailblaze/tools")
-  val frameworkToolSources =
-    frameworkToolsDirectory.asFileTree.matching {
-      include("*.ts")
-      exclude("*.d.ts", "*.test.ts", ".trailblaze-wrapper-*")
-    }
+  // Every framework trailmap's `tools/`, not a named list: a tool's name must carry its
+  // trailmap's prefix (`android_…` lives in the `android` trailmap) and the runtime looks its
+  // bundle up beside the `.ts` its descriptor points at, so a tool cannot be relocated under
+  // `trailblaze/` to get itself bundled. Globbing means adding a trailmap cannot silently leave
+  // its tools unbundled — which would fail at runtime as a missing tool, not at build time.
+  val frameworkTrailmapsRoot =
+    layout.projectDirectory.dir("src/commonMain/resources/trails/config/trailmaps")
+  val frameworkToolSources = frameworkTrailmapsRoot.asFileTree.matching {
+    include("*/tools/*.ts")
+    exclude("**/*.d.ts", "**/*.test.ts", "**/.trailblaze-wrapper-*")
+  }
   inputSources.from(frameworkToolSources)
   outputBundles.from(
     provider {
       frameworkToolSources.files.map { source ->
-        frameworkToolsDirectory.file("${source.nameWithoutExtension}.bundle.js").asFile
+        File(source.parentFile, "${source.nameWithoutExtension}.bundle.js")
       }
     },
   )
-  outputDir.set(frameworkToolsDirectory)
+  trailmapsRoot.set(frameworkTrailmapsRoot)
   temporaryWorkDir.set(layout.buildDirectory.dir("tmp/framework-scripted-tools"))
   frameworkRoot?.let { root ->
     val sdkDirectory = File(root, "sdks/typescript")

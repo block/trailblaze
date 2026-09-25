@@ -1,9 +1,13 @@
 package xyz.block.trailblaze.host.axe
 
 import java.io.File
+import java.util.concurrent.ExecutionException
 import java.util.concurrent.Executors
+import java.util.concurrent.Future
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.util.IosHostSimctlUtils
 
 /**
  * Thin wrapper around the [AXe CLI](https://github.com/cameroncooke/AXe).
@@ -65,6 +69,23 @@ object AxeCli {
    * resolution evenly. Lower the grid step, never this, to trade accuracy for speed.
    */
   private const val WEB_CONTENT_MAX_POINTS = "6000"
+
+  private const val LEFT_COMMAND_KEYCODE = 227
+  private const val V_KEYCODE = 25
+  private const val PROCESS_CLEANUP_MAX_MS = 250L
+  private val keypadDigitHidCodes = mapOf(
+    '0' to 98,
+    '1' to 89,
+    '2' to 90,
+    '3' to 91,
+    '4' to 92,
+    '5' to 93,
+    '6' to 94,
+    '7' to 95,
+    '8' to 96,
+    '9' to 97,
+    '/' to 84,
+  )
 
   data class Result(val exitCode: Int, val stdout: String, val stderr: String) {
     val success: Boolean get() = exitCode == 0
@@ -246,31 +267,186 @@ object AxeCli {
     run(listOf(axeBin, "gesture", preset, "--udid", udid), timeoutSeconds)
 
   /**
-   * Types [text] into the focused field via AXe's HID keyboard. Pipes text through stdin
-   * so we don't have to worry about shell escaping, then uses the same concurrent-drain
-   * pattern as [run] to avoid the pipe-buffer deadlock `describe-ui` hit (though `axe type`
-   * output is typically trivial, consistency is cheap).
+   * Inserts [text] into the focused field without layout-sensitive character remapping.
+   *
+   * AXe's `type` command converts characters to US-keyboard HID chords. iOS then interprets those
+   * physical chords through the active hardware-keyboard layout, so symbols change under localized
+   * layouts (`@` becomes `"` on Spanish, for example), and characters outside the US layout cannot
+   * be entered at all. Staging the UTF-8 text with `simctl pbcopy` and sending Cmd+V preserves the
+   * string independently of the active keyboard language. Numeric strings (including `/`
+   * separators) use USB numeric-
+   * keypad usages instead, preserving support for protected payment fields that disable paste.
+   *
+   * The staged text intentionally remains on the simulator pasteboard. AXe only tells us that the
+   * Cmd+V event was dispatched, not that UIKit consumed it; restoring after a fixed delay can make
+   * the field receive the old clipboard value while this action reports success. `simctl`
+   * `pbcopy`/`pbpaste` also cannot round-trip rich pasteboard items. Preserving deterministic text
+   * entry is therefore preferable to claiming unsafe or lossy clipboard restoration.
+   * As with every AXe HID action, success means the input event was dispatched; apps that reject
+   * paste for a non-numeric field need a follow-up field assertion because AXe does not expose a
+   * focused-field value or set-value API.
    */
   fun type(udid: String, text: String, timeoutSeconds: Long = 30): Result {
-    val proc = ProcessBuilder(axeBin, "type", "--stdin", "--udid", udid)
-      .redirectErrorStream(false)
-      .start()
-    val drainer = Executors.newFixedThreadPool(2)
-    val stdoutFuture = drainer.submit<String> { proc.inputStream.bufferedReader().readText() }
-    val stderrFuture = drainer.submit<String> { proc.errorStream.bufferedReader().readText() }
-    drainer.shutdown()
-    try {
-      proc.outputStream.use { it.write(text.toByteArray()) }
-      val finished = proc.waitFor(timeoutSeconds, TimeUnit.SECONDS)
-      if (!finished) {
-        proc.destroyForcibly()
-        return Result(-1, "", "axe type timed out after ${timeoutSeconds}s")
+    if (text.isEmpty()) return Result(0, "", "")
+
+    keypadDigitKeycodes(text)?.let { keycodes ->
+      return typeViaKeypad(udid, keycodes, timeoutSeconds)
+    }
+
+    val budget = TimeoutBudget(timeoutSeconds)
+    val safetyReserveMillis = DEFAULT_SETTLE_MS + PROCESS_CLEANUP_MAX_MS
+    return withPasteboardLock(budget, safetyReserveMillis) {
+      typeViaPasteboard(
+        udid = udid,
+        text = text,
+        writePasteboard = { deviceId, value ->
+          budget.run("simctl pbcopy", safetyReserveMillis) { remaining ->
+            writePasteboard(deviceId, value, remaining)
+          }
+        },
+        paste = { deviceId ->
+          budget.run("axe key-combo", safetyReserveMillis) { remaining ->
+            pasteFromPasteboard(deviceId, remaining)
+          }
+        },
+        waitForSettle = ::settleAfterPaste,
+      )
+    }
+  }
+
+  /** Cancellation must not release the clipboard lock while a dispatched paste is still pending. */
+  private fun settleAfterPaste() {
+    val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(DEFAULT_SETTLE_MS)
+    var interrupted = Thread.interrupted()
+    while (true) {
+      val remaining = deadline - System.nanoTime()
+      if (remaining <= 0) break
+      try {
+        TimeUnit.NANOSECONDS.sleep(remaining)
+      } catch (_: InterruptedException) {
+        interrupted = true
       }
-      val stdout = stdoutFuture.get(5, TimeUnit.SECONDS)
-      val stderr = stderrFuture.get(5, TimeUnit.SECONDS)
-      return Result(exitCode = proc.exitValue(), stdout = stdout, stderr = stderr)
-    } finally {
-      drainer.shutdownNow()
+    }
+    if (interrupted) throw InterruptedException("Paste settling was interrupted")
+  }
+
+  /**
+   * Payment fields such as card expiration reject paste but accept hardware-keyboard digits.
+   * Numeric-keypad HID usages are layout-independent, unlike AXe's US number-row mapping (`1`
+   * becomes `&` on French AZERTY), so this path works for both protected and paste-capable fields.
+   */
+  internal fun keypadDigitKeycodes(text: String): List<Int>? =
+    text.takeIf { it.isNotEmpty() }?.map { keypadDigitHidCodes[it] ?: return null }
+
+  private fun typeViaKeypad(udid: String, keycodes: List<Int>, timeoutSeconds: Long): Result =
+    run(
+      typeViaKeypadArgs(udid, keycodes),
+      timeoutSeconds,
+      timeoutDescription = "axe key-sequence",
+    )
+
+  internal fun typeViaKeypadArgs(udid: String, keycodes: List<Int>): List<String> =
+    listOf(axeBin, "key-sequence", "--keycodes", keycodes.joinToString(","), "--udid", udid)
+
+  internal fun withPasteboardLock(
+    budget: TimeoutBudget,
+    reserveMillis: Long = 0,
+    operation: () -> Result,
+  ): Result {
+    val remainingMillis = budget.remainingMillis(reserveMillis)
+    if (remainingMillis <= 0) return budget.timeoutResult("pasteboard lock")
+    return IosHostSimctlUtils.withPasteboardLock(
+      timeoutMillis = remainingMillis,
+      onTimeout = { budget.timeoutResult("pasteboard lock") },
+      action = operation,
+    )
+  }
+
+  internal fun typeViaPasteboard(
+    udid: String,
+    text: String,
+    writePasteboard: (String, String) -> Result,
+    paste: (String) -> Result,
+    waitForSettle: () -> Unit = {},
+  ): Result {
+    val stageResult = writePasteboard(udid, text)
+    if (!stageResult.success) return stageResult
+
+    // A timed-out AXe process may already have posted Cmd+V, so settling belongs to every attempt.
+    val pasteAttempt = runCatching { paste(udid) }
+    val settleAttempt = runCatching { waitForSettle() }
+    val pasteFailure = pasteAttempt.exceptionOrNull()
+    val settleFailure = settleAttempt.exceptionOrNull()
+
+    if (pasteFailure != null) {
+      settleFailure?.let(pasteFailure::addSuppressed)
+      if (pasteFailure is InterruptedException || settleFailure is InterruptedException) {
+        Thread.currentThread().interrupt()
+      }
+      throw pasteFailure
+    }
+    if (settleFailure is InterruptedException) {
+      Thread.currentThread().interrupt()
+      return Result(
+        -1,
+        pasteAttempt.getOrThrow().stdout,
+        "Interrupted while waiting for the paste event to settle",
+      )
+    }
+    if (settleFailure != null) throw settleFailure
+    return pasteAttempt.getOrThrow()
+  }
+
+  private fun writePasteboard(udid: String, text: String, timeoutMillis: Long): Result =
+    runWithTimeoutMillis(
+      writePasteboardArgs(udid),
+      timeoutMillis,
+      stdin = text,
+      timeoutDescription = "simctl pbcopy",
+    )
+
+  internal fun writePasteboardArgs(udid: String): List<String> =
+    listOf("xcrun", "simctl", "pbcopy", udid)
+
+  private fun pasteFromPasteboard(udid: String, timeoutMillis: Long): Result = runWithTimeoutMillis(
+    pasteFromPasteboardArgs(udid),
+    timeoutMillis,
+  )
+
+  internal fun pasteFromPasteboardArgs(udid: String): List<String> =
+    listOf(
+      axeBin,
+      "key-combo",
+      "--modifiers", LEFT_COMMAND_KEYCODE.toString(),
+      "--key", V_KEYCODE.toString(),
+      "--udid", udid,
+    )
+
+  internal class TimeoutBudget(
+    private val timeoutSeconds: Long,
+    private val nanoTime: () -> Long = System::nanoTime,
+  ) {
+    private val deadlineNanos = nanoTime() + TimeUnit.SECONDS.toNanos(timeoutSeconds)
+
+    internal fun remainingMillis(reserveMillis: Long = 0): Long {
+      val remainingNanos = deadlineNanos - nanoTime() - TimeUnit.MILLISECONDS.toNanos(reserveMillis)
+      if (remainingNanos <= 0) return 0
+      val nanosPerMilli = TimeUnit.MILLISECONDS.toNanos(1)
+      return (remainingNanos + nanosPerMilli - 1) / nanosPerMilli
+    }
+
+    internal fun timeoutResult(description: String): Result =
+      Result(-1, "", "$description exceeded the ${timeoutSeconds}s inputText timeout")
+
+    fun run(
+      description: String,
+      reserveMillis: Long = 0,
+      operation: (Long) -> Result,
+    ): Result {
+      val remainingMillis = remainingMillis(reserveMillis)
+      if (remainingMillis <= 0) return timeoutResult(description)
+      val result = operation(remainingMillis)
+      return if (remainingMillis(reserveMillis) <= 0) timeoutResult(description) else result
     }
   }
 
@@ -354,26 +530,112 @@ object AxeCli {
    * Drains stdout + stderr concurrently with the process wait. `describe-ui` on a complex UI
    * can emit well over the OS pipe buffer (~64 KB on macOS); if we called `waitFor` before
    * reading, the child would block on pipe backpressure and we'd time out spuriously.
+   *
+   * [stdin] is optional for commands such as `simctl pbcopy`; keeping those payloads off argv
+   * preserves whitespace/symbols and avoids exposing typed values in the process list.
    */
-  private fun run(args: List<String>, timeoutSeconds: Long): Result {
+  private fun run(
+    args: List<String>,
+    timeoutSeconds: Long,
+    stdin: String? = null,
+    timeoutDescription: String = "axe command",
+  ): Result = runWithTimeoutMillis(
+    args = args,
+    timeoutMillis = TimeUnit.SECONDS.toMillis(timeoutSeconds),
+    stdin = stdin,
+    timeoutDescription = timeoutDescription,
+  )
+
+  internal fun runWithTimeoutMillis(
+    args: List<String>,
+    timeoutMillis: Long,
+    stdin: String? = null,
+    timeoutDescription: String = "axe command",
+  ): Result {
+    if (timeoutMillis <= 0) {
+      return Result(-1, "", "$timeoutDescription timed out after ${timeoutMillis}ms")
+    }
+
+    val deadlineNanos = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis)
+    val cleanupDeadlineNanos = deadlineNanos + TimeUnit.MILLISECONDS.toNanos(PROCESS_CLEANUP_MAX_MS)
     val proc = ProcessBuilder(args)
       .redirectErrorStream(false)
       .start()
-    val drainer = Executors.newFixedThreadPool(2)
-    val stdoutFuture = drainer.submit<String> { proc.inputStream.bufferedReader().readText() }
-    val stderrFuture = drainer.submit<String> { proc.errorStream.bufferedReader().readText() }
-    drainer.shutdown()
-    try {
-      val finished = proc.waitFor(timeoutSeconds, TimeUnit.SECONDS)
-      if (!finished) {
-        proc.destroyForcibly()
-        return Result(exitCode = -1, stdout = "", stderr = "axe command timed out after ${timeoutSeconds}s")
-      }
-      val stdout = stdoutFuture.get(5, TimeUnit.SECONDS)
-      val stderr = stderrFuture.get(5, TimeUnit.SECONDS)
-      return Result(exitCode = proc.exitValue(), stdout = stdout, stderr = stderr)
-    } finally {
-      drainer.shutdownNow()
+    val executor = Executors.newFixedThreadPool(if (stdin == null) 2 else 3) { task ->
+      Thread(task, "axe-process-io").apply { isDaemon = true }
     }
+    val stdoutFuture = executor.submit<String> { proc.inputStream.bufferedReader(Charsets.UTF_8).readText() }
+    val stderrFuture = executor.submit<String> { proc.errorStream.bufferedReader(Charsets.UTF_8).readText() }
+    val stdinFuture = stdin?.let { value ->
+      executor.submit<Unit> {
+        proc.outputStream.use { it.write(value.toByteArray(Charsets.UTF_8)) }
+      }
+    }
+    executor.shutdown()
+
+    try {
+      val finished = proc.waitFor(remainingMillis(deadlineNanos), TimeUnit.MILLISECONDS)
+      if (!finished) {
+        terminateProcess(proc, cleanupDeadlineNanos)
+        return Result(-1, "", "$timeoutDescription timed out after ${timeoutMillis}ms")
+      }
+
+      val stdout = await(stdoutFuture, deadlineNanos)
+      val stderr = await(stderrFuture, deadlineNanos)
+      stdinFuture?.let { await(it, deadlineNanos) }
+      return Result(exitCode = proc.exitValue(), stdout = stdout, stderr = stderr)
+    } catch (_: TimeoutException) {
+      terminateProcess(proc, cleanupDeadlineNanos)
+      return Result(-1, "", "$timeoutDescription timed out after ${timeoutMillis}ms")
+    } catch (e: ExecutionException) {
+      terminateProcess(proc, cleanupDeadlineNanos)
+      val cause = e.cause ?: e
+      return Result(-1, "", "$timeoutDescription failed: ${cause.message ?: cause.javaClass.simpleName}")
+    } catch (_: InterruptedException) {
+      terminateProcess(proc, cleanupDeadlineNanos)
+      Thread.currentThread().interrupt()
+      return Result(-1, "", "$timeoutDescription was interrupted")
+    } finally {
+      executor.shutdownNow()
+    }
+  }
+
+  private fun remainingMillis(deadlineNanos: Long): Long {
+    val remainingNanos = deadlineNanos - System.nanoTime()
+    if (remainingNanos <= 0) return 0
+    val nanosPerMilli = TimeUnit.MILLISECONDS.toNanos(1)
+    return (remainingNanos + nanosPerMilli - 1) / nanosPerMilli
+  }
+
+  private fun <T> await(future: Future<T>, deadlineNanos: Long): T {
+    val remainingMillis = remainingMillis(deadlineNanos)
+    if (remainingMillis <= 0) throw TimeoutException()
+    return future.get(remainingMillis, TimeUnit.MILLISECONDS)
+  }
+
+  private fun terminateProcess(proc: Process, deadlineNanos: Long) {
+    // Closing stdin before killing can wait on the blocked writer's stream monitor.
+    // Kill first so pipe backpressure cannot defeat the process deadline.
+    val handles = proc.descendants().toList().asReversed() + proc.toHandle()
+    handles.filter { it.isAlive }.forEach { it.destroyForcibly() }
+
+    var interrupted = false
+    for (handle in handles) {
+      if (!handle.isAlive) continue
+      val remainingMillis = minOf(PROCESS_CLEANUP_MAX_MS, remainingMillis(deadlineNanos))
+      if (remainingMillis <= 0) break
+      try {
+        handle.onExit().get(remainingMillis, TimeUnit.MILLISECONDS)
+      } catch (_: ExecutionException) {
+        // The process is already being discarded; a failed exit future has no useful result.
+      } catch (_: TimeoutException) {
+        break
+      } catch (_: InterruptedException) {
+        interrupted = true
+        break
+      }
+    }
+    handles.filter { it.isAlive }.forEach { it.destroyForcibly() }
+    if (interrupted) Thread.currentThread().interrupt()
   }
 }

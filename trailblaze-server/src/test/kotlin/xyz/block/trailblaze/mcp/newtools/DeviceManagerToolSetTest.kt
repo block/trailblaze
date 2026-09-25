@@ -18,6 +18,7 @@ import xyz.block.trailblaze.mcp.TrailblazeMcpSessionContext
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetScreenStateResponse
 import xyz.block.trailblaze.mcp.models.McpSessionId
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
+import xyz.block.trailblaze.model.TrailblazeHostAppTarget.ToolGroup
 import xyz.block.trailblaze.toolcalls.ToolName
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import kotlin.reflect.full.valueParameters
@@ -347,6 +348,74 @@ class DeviceManagerToolSetTest {
       "Available ${TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget.displayName} tools" !in result,
       "Default target should not produce an 'Available Default tools' block. Got:\n$result",
     )
+  }
+
+  /**
+   * The connect summary describes every tool group of the bound target, and describing a scripted
+   * tool walks every trailmap's descriptor YAMLs. Before the shared catalog each group walked the
+   * tree again, so a target with many groups paid many walks on every connect. The contract: every
+   * group reads the summary's one catalog, that catalog is walked once, and the next summary gets
+   * a fresh one.
+   *
+   * The catalog holds a tool real discovery does not know, so a group described by a walk of its
+   * own would list nothing — see [CatalogOnlyScriptedTool].
+   */
+  @Test
+  fun `a connect summary describes every group from one catalog, built fresh per summary`() = runTest {
+    val androidDeviceId = TrailblazeDeviceId(
+      instanceId = androidDevice.instanceId,
+      trailblazeDevicePlatform = androidDevice.platform,
+    )
+    val groupedTarget = object : TrailblazeHostAppTarget(id = "groupedapp", displayName = "Grouped App") {
+      override fun getPossibleAppIdsForPlatform(platform: TrailblazeDevicePlatform): List<String>? =
+        if (platform == TrailblazeDevicePlatform.ANDROID) listOf("com.example.grouped") else null
+
+      override fun internalGetCustomToolsForDriver(
+        driverType: TrailblazeDriverType,
+      ): Set<kotlin.reflect.KClass<out TrailblazeTool>> = emptySet()
+
+      override fun getCustomToolGroupsForDriver(driverType: TrailblazeDriverType): List<ToolGroup> =
+        listOf("first", "second", "third").map { groupId ->
+          ToolGroup(
+            id = groupId,
+            description = "$groupId group",
+            toolClasses = emptySet(),
+            scriptedToolNames = setOf(CatalogOnlyScriptedTool.name),
+          )
+        }
+    }
+    val bridge = DeviceTestBridge(
+      devices = setOf(androidDevice),
+      driverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+      availableAppTargets = setOf(TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget, groupedTarget),
+      currentAppTargetId = groupedTarget.id,
+      sessionTargetsByDevice = mapOf(androidDeviceId to groupedTarget.id),
+    )
+    var catalogs = 0
+    var walks = 0
+    val toolSet = DeviceManagerToolSet(
+      sessionContext = createSessionContext(),
+      mcpBridge = bridge,
+      scriptedToolCatalogFactory = {
+        catalogs++
+        CatalogOnlyScriptedTool.catalog { walks++ }
+      },
+    )
+
+    val connected = toolSet.device(action = DeviceManagerToolSet.DeviceAction.ANDROID)
+    for (groupId in listOf("first", "second", "third")) {
+      assertContains(
+        connected,
+        "$groupId: ${CatalogOnlyScriptedTool.name.toolName}",
+        message = "group '$groupId' must be described from the summary's catalog — a walk of its own would not know this tool",
+      )
+    }
+    assertEquals(1, catalogs, "one summary builds one catalog")
+    assertEquals(1, walks, "three groups must share ONE descriptor walk")
+
+    toolSet.device(action = DeviceManagerToolSet.DeviceAction.INFO)
+    assertEquals(2, catalogs, "the next summary must build its own catalog")
+    assertEquals(2, walks, "the next summary must walk again so a workspace edit shows up")
   }
 
   @Test

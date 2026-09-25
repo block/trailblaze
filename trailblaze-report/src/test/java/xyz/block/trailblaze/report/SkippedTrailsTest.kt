@@ -12,6 +12,8 @@ import xyz.block.trailblaze.report.models.Outcome
 import xyz.block.trailblaze.report.models.SOURCE_TYPE_HANDWRITTEN
 import xyz.block.trailblaze.report.models.SkippedTrail
 import xyz.block.trailblaze.report.utils.LogsRepo
+import xyz.block.trailblaze.yaml.metadataOf
+import xyz.block.trailblaze.yaml.TrailMetadataValue
 
 /**
  * The runner-to-report channel for trails that never ran.
@@ -28,7 +30,7 @@ class SkippedTrailsTest {
     deviceClassifier: String? = "android-phone",
     reason: String = "flaky on tablets, see #2194",
     recordedAt: Long = 1_700_000_000_000,
-    metadata: Map<String, String>? = null,
+    metadata: Map<String, TrailMetadataValue>? = null,
   ) = SkippedTrail(
     trail_path = "/repo/trails/$testKey.trail.yaml",
     title = "Pay at checkout",
@@ -189,9 +191,9 @@ class SkippedTrailsTest {
     // spells. Every consumer prefers that map over parsing the key, so dropping it here would give
     // a skipped row a null case id while the same trail's runs carry a real one - one trail's
     // history split in two at exactly the rows that explain the gap.
-    val row = skip(metadata = mapOf("testRailCaseId" to "1017")).toSessionResult()
+    val row = skip(metadata = metadataOf("testRailCaseId" to "1017")).toSessionResult()
 
-    assertEquals(mapOf("testRailCaseId" to "1017"), row.metadata)
+    assertEquals(metadataOf("testRailCaseId" to "1017"), row.metadata)
   }
 
   @Test

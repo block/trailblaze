@@ -28,6 +28,11 @@ export {
   type TrailblazeTarget,
 } from "./context.js";
 export type {
+  TrailblazeSessionCleanup,
+  TrailblazeSessionCleanupContext,
+  TrailblazeSessionResources,
+} from "./session-resources.js";
+export type {
   TrailblazeCallToolResult,
   TrailblazeClient,
   TrailblazeToolEntry,

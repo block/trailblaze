@@ -80,6 +80,8 @@ class DesktopAppRunYamlParams(
   val captureLogcat: Boolean? = null,
   /** Override capture iOS Simulator system logs setting (null = use app config default). */
   val captureIosLogs: Boolean? = null,
+  /** Override the Android memory sampling setting (null = use app config default). */
+  val captureMemory: Boolean? = null,
   /**
    * Advisory messages raised while this run was being assembled — before any session existed —
    * that must also land in the session log once the runner creates the session (e.g. the daemon's

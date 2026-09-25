@@ -22,7 +22,7 @@ internal object MaestroDriverScreenStates {
   ): ScreenState? {
     val driver = deps.activeMaestroDriver(deviceId) ?: return null
     return try {
-      HostMaestroDriverScreenState(maestroDriver = driver)
+      HostMaestroDriverScreenState(maestroDriver = driver, trailblazeDeviceId = deviceId)
     } catch (e: Exception) {
       Console.log("❌ Exception getting screen state via driver: ${e.message}")
       e.printStackTrace()

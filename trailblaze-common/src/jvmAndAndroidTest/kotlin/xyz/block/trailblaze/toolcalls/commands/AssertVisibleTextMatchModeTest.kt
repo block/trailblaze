@@ -180,6 +180,25 @@ class AssertVisibleTextMatchModeTest {
     assertTrue(result is TrailblazeToolResult.Success, "text on a child of the matched container must be found")
   }
 
+  /**
+   * A container's own value is empty but it very often carries an accessibility label
+   * (`{text:"", contentDescription:"Item row"}`). Widening the readable-text fold to skip blanks
+   * must NOT make such a container look like a leaf: doing so drops its subtree from the
+   * candidate set and fails every assertion targeting a descendant — trails that are green
+   * today. The leaf/container question is therefore asked of the node's own value slot.
+   */
+  @Test
+  fun `a container with an accessibility label still searches its subtree`() = runBlocking {
+    val result = runReplayOnContainer(
+      containerResourceId = "mode_card",
+      containerText = "",
+      containerContentDescription = "Item row",
+      childText = "Active on 12 devices",
+      expectedText = "Active on 12 devices",
+    )
+    assertTrue(result is TrailblazeToolResult.Success, "a labelled container must not shadow the text on its child")
+  }
+
   @Test
   fun `textless container without the expected text anywhere still fails (no false green)`() = runBlocking {
     val result = runReplayOnContainer(
@@ -201,6 +220,237 @@ class AssertVisibleTextMatchModeTest {
   fun `expectedText reads an empty field's hint`() = runBlocking {
     val result = runHintReplay(hintText = "Search all items", expectedText = "Search all items")
     assertTrue(result is TrailblazeToolResult.Success, "a placeholder must be readable")
+  }
+
+  /**
+   * The same field as above, as a real device actually reports it. An unfilled `EditText`
+   * publishes its text as the EMPTY STRING, not as null — so an `?:` fold over the raw field
+   * stops at `""` and never reaches the hint, and the assertion fails with "no readable text"
+   * on exactly the screen the fold above was written to serve. The SHAPE is taken from a device
+   * capture (`{"className":"android.widget.EditText","text":"","hintText":"Search"}`), so a
+   * fixture that only ever passes null cannot reproduce it.
+   */
+  @Test
+  fun `expectedText reads the hint of a field whose text is empty, not null`() = runBlocking {
+    val result = runHintReplay(
+      text = "",
+      hintText = "Search all items",
+      expectedText = "Search all items",
+    )
+    assertTrue(result is TrailblazeToolResult.Success, "an empty text must fall through to the placeholder")
+  }
+
+  /** Blank is absent for every slot in the fold, not just the first one. */
+  @Test
+  fun `expectedText falls past a blank hint to the content description`() = runBlocking {
+    val result = runHintReplay(
+      text = "",
+      hintText = "",
+      contentDescription = "Search all items",
+      expectedText = "Search all items",
+    )
+    assertTrue(result is TrailblazeToolResult.Success, "a blank hint must not shadow the content description")
+  }
+
+  /** A whitespace-only value is not a value either — `trim()` would reduce it to nothing anyway. */
+  @Test
+  fun `expectedText treats a whitespace-only text as absent`() = runBlocking {
+    val result = runHintReplay(
+      text = "   ",
+      hintText = "Search all items",
+      expectedText = "Search all items",
+    )
+    assertTrue(result is TrailblazeToolResult.Success, "whitespace-only text must fall through to the placeholder")
+  }
+
+  /**
+   * Treating blank as absent must not go so far as to make an element with no text unreadable:
+   * asserting that a field was CLEARED is a real assertion, and it is spelled `expectedText: ""`.
+   */
+  @Test
+  fun `expectedText can still assert that a field is empty`() = runBlocking {
+    val result = runHintReplay(text = "", hintText = "", expectedText = "")
+    assertTrue(result is TrailblazeToolResult.Success, "an all-blank element must still read as empty, not as unreadable")
+  }
+
+  /**
+   * The negative half of the two tests around it, and the one that gives them their teeth: a
+   * `primaryText` hardcoded to `""` — or reading any slot other than the value — passes both of
+   * the positive emptiness tests. Only a filled field REFUSING `expectedText: ""` pins the
+   * reader to the slot the user typed into.
+   */
+  @Test
+  fun `a field with a value must not satisfy an assertion that it is empty`() = runBlocking {
+    val result = runHintReplay(text = "coffee", hintText = "Search all items", expectedText = "")
+    assertTrue(result is TrailblazeToolResult.Error, "a field holding 'coffee' is not empty")
+  }
+
+  /**
+   * An element with no value slot at all reads as null, not as `""`. That is the SAME answer to
+   * "is this empty?" — dropping it instead failed the assertion because the element was as empty
+   * as an element gets, and reported "no readable text" while saying so.
+   */
+  @Test
+  fun `expectedText empty asserts a field whose value slot is absent entirely`() = runBlocking {
+    val result = runHintReplay(text = null, hintText = "Search all items", expectedText = "")
+    assertTrue(result is TrailblazeToolResult.Success, "an absent value slot is empty, not unreadable")
+  }
+
+  /**
+   * A blank value means "empty" only under EXACT. Under REGEX it is an empty PATTERN, and the
+   * author who means emptiness writes `^$` — so both spellings must read the same slot. Ungated,
+   * `""` would consult the value slot and pass here while `^$` consulted the displayed text and
+   * failed, leaving one assertion with two different answers depending on how it was spelled.
+   */
+  @Test
+  fun `a blank REGEX pattern reads the displayed text, exactly as its caret-dollar spelling does`() = runBlocking {
+    val blankPattern = runHintReplay(
+      text = "",
+      hintText = "Search all items",
+      expectedText = "",
+      mode = TextMatchMode.REGEX,
+    )
+    val caretDollar = runHintReplay(
+      text = "",
+      hintText = "Search all items",
+      expectedText = "^$",
+      mode = TextMatchMode.REGEX,
+    )
+    assertTrue(blankPattern is TrailblazeToolResult.Error, "an empty REGEX pattern must not become an emptiness assertion")
+    assertTrue(caretDollar is TrailblazeToolResult.Error, "and its explicit spelling must agree with it")
+  }
+
+  /**
+   * The REGEX author spells emptiness `^$`, which must keep reading what the element DISPLAYS —
+   * otherwise the two spellings of one assertion disagree about which slot they consult. Pins
+   * the all-slots-blank tail of the fold too: it is the only caller that can tell `""` from
+   * null, and it stops matching if that tail returns null.
+   */
+  @Test
+  fun `an all-blank element matches a REGEX that spells emptiness`() = runBlocking {
+    val result = runHintReplay(
+      text = "",
+      hintText = "",
+      expectedText = "^$",
+      mode = TextMatchMode.REGEX,
+    )
+    assertTrue(result is TrailblazeToolResult.Success, "an element with no text at all must match ^$")
+  }
+
+  /**
+   * The case above with a placeholder present — which is the only way a cleared field appears in
+   * a real app, and the one the all-blank fixture above silently fails to cover.
+   *
+   * "Is this field empty?" and "what does this field say?" want different answers out of the same
+   * node (`text=""`, `hintText="Search all items"`): the first wants the value slot, the second
+   * wants the placeholder the user can see. The expectation itself is the disambiguator — a blank
+   * `expectedText` is asking about the value, so it must not be answered by the hint.
+   */
+  @Test
+  fun `expectedText empty asserts a cleared field that still shows a placeholder`() = runBlocking {
+    val result = runHintReplay(text = "", hintText = "Search all items", expectedText = "")
+    assertTrue(
+      result is TrailblazeToolResult.Success,
+      "asserting a field is cleared must read its value slot, not fall through to the placeholder",
+    )
+  }
+
+  /**
+   * AXe's text contract is label > value > title, so a node resolved by its accessibility id
+   * with a blank `AXLabel` must still read its `AXValue` — matching `IosAxe.resolveText()`,
+   * which has folded all three since before this change.
+   */
+  @Test
+  fun `expectedText falls past a blank AXLabel to the AXValue`() = runBlocking {
+    val result = runIosAxeReplay(label = "", value = "Search", expectedText = "Search")
+    assertTrue(result is TrailblazeToolResult.Success, "a blank AXLabel must fall through to AXValue")
+  }
+
+  /** The third slot of the AXe fold, which nothing else reaches. */
+  @Test
+  fun `expectedText falls past a blank AXLabel and AXValue to the AXTitle`() = runBlocking {
+    val result = runIosAxeReplay(label = "", value = "", title = "Search", expectedText = "Search")
+    assertTrue(result is TrailblazeToolResult.Success, "a blank label and value must fall through to AXTitle")
+  }
+
+  /**
+   * On AXe the DISPLAY order (label first) is the inverse of the VALUE order: a field's content
+   * is `AXValue` and `AXLabel` is its caption. Asking whether an iOS field is empty must read
+   * the value — reading the label would answer with the caption and make emptiness unassertable,
+   * which is the Android bug this change exists to fix, wearing an iOS hat.
+   */
+  @Test
+  fun `expectedText empty asserts a cleared iOS field whose AXLabel is its caption`() = runBlocking {
+    val cleared = runIosAxeReplay(label = "Search", value = "", expectedText = "")
+    val filled = runIosAxeReplay(label = "Search", value = "coffee", expectedText = "")
+    assertTrue(cleared is TrailblazeToolResult.Success, "a cleared AXValue must read as empty despite the AXLabel")
+    assertTrue(filled is TrailblazeToolResult.Error, "a field holding 'coffee' is not empty")
+  }
+
+  /**
+   * The leaf/emptiness reader must not disagree with the display reader about the SAME node.
+   * A node with only `title` set (`label=null, value=null, title="Search"`) is exactly the
+   * shape the AXTitle test above proves `extractText` reads as "Search" — so `expectedText:
+   * "Search"` and `expectedText: ""` cannot both pass for it. Before including `title` in
+   * `primaryText`, they did: a null value/label folds to blank for the emptiness reader
+   * regardless of what the leaf actually shows.
+   */
+  @Test
+  fun `a node whose only text is its AXTitle is not also readable as empty`() = runBlocking {
+    val asItsTitle = runIosAxeReplay(title = "Search", expectedText = "Search")
+    val asEmpty = runIosAxeReplay(title = "Search", expectedText = "")
+    assertTrue(asItsTitle is TrailblazeToolResult.Success, "extractText already reads this node's title as its text")
+    assertTrue(asEmpty is TrailblazeToolResult.Error, "so primaryText must not also call the same node empty")
+  }
+
+  /**
+   * On some AXe/iOS runtimes, an empty text-input field mirrors its placeholder onto AXLabel
+   * instead of AXValue (`label="Search", value=null` — the inverse of the shape covered above).
+   * Falling through to `label` on those types would read this as non-empty; it must not.
+   */
+  @Test
+  fun `expectedText empty asserts a text field whose placeholder mirrors onto AXLabel`() = runBlocking {
+    val result = runIosAxeReplay(label = "Search", value = null, type = "SearchField", expectedText = "")
+    assertTrue(result is TrailblazeToolResult.Success, "a null AXValue is empty regardless of a placeholder-shaped AXLabel")
+  }
+
+  /** The same text-input type, actually filled, must not read as empty despite its AXLabel caption. */
+  @Test
+  fun `a filled text-input field is not empty despite the label-fallback restriction`() = runBlocking {
+    val notEmpty = runIosAxeReplay(label = "Search", value = "coffee", type = "SearchField", expectedText = "")
+    assertTrue(notEmpty is TrailblazeToolResult.Error, "a field holding 'coffee' is not empty")
+  }
+
+  /**
+   * The half of this ambiguity that stays unfixable: on older AXe/iOS runtimes the placeholder
+   * surfaces on AXValue itself (`label=null, value="Search"`), the SAME slot real typed text
+   * lives in. Nothing on this node tags a string as placeholder vs. user-entered, so this shape
+   * still misreads as non-empty — documented here so a future change to this fold has to notice
+   * it, rather than assuming the type check above closed the whole gap.
+   */
+  @Test
+  fun `a placeholder mirrored onto AXValue is indistinguishable from real text`() = runBlocking {
+    val result = runIosAxeReplay(label = null, value = "Search", type = "SearchField", expectedText = "")
+    assertTrue(result is TrailblazeToolResult.Error, "known AXe capture-data gap: AXValue can't be told apart from a placeholder")
+  }
+
+  /**
+   * The converse guard: skipping a blank slot must not let a LABEL answer an assertion about a
+   * field's VALUE. A Compose text field publishes both, and an empty `editableText` is an
+   * authoritative "the user typed nothing" — so an assertion naming the label must still fail
+   * rather than being satisfied by the label the empty field displays.
+   */
+  @Test
+  fun `an empty compose value is authoritative and does not fall through to the label`() = runBlocking {
+    val result = runComposeReplay(
+      editableText = "",
+      text = "Card number",
+      expectedText = "Card number",
+    )
+    assertTrue(
+      result is TrailblazeToolResult.Error,
+      "an empty field must not satisfy an assertion naming its label",
+    )
   }
 
   /** Behind `text`, not in front of it — a filled field is asserted on its value, not its label. */
@@ -795,11 +1045,48 @@ class AssertVisibleTextMatchModeTest {
     return tool.execute(replayContext(tree))
   }
 
+  /** An AXe node resolved by its accessibility id, carrying any of the three text slots. */
+  private suspend fun runIosAxeReplay(
+    label: String? = null,
+    value: String? = null,
+    title: String? = null,
+    type: String? = null,
+    expectedText: String,
+  ): TrailblazeToolResult {
+    val matchedNode = TrailblazeNode(
+      nodeId = 2,
+      bounds = TrailblazeNode.Bounds(100, 200, 300, 260),
+      driverDetail = DriverNodeDetail.IosAxe(
+        uniqueId = "search_field",
+        label = label,
+        value = value,
+        title = title,
+        type = type,
+      ),
+    )
+    val tree = TrailblazeNode(
+      nodeId = 1,
+      bounds = TrailblazeNode.Bounds(0, 0, 1000, 1000),
+      driverDetail = DriverNodeDetail.IosAxe(),
+      children = listOf(matchedNode),
+    )
+    val tool = AssertVisibleBySelectorTrailblazeTool(
+      nodeSelector = TrailblazeNodeSelector.withMatch(
+        DriverNodeMatch.IosAxe(uniqueId = "search_field"),
+      ),
+      expectedText = expectedText,
+      textMatchMode = TextMatchMode.EXACT,
+    )
+    return tool.execute(replayContext(tree))
+  }
+
   /** A text field carrying a placeholder, and optionally a typed-in value over it. */
   private suspend fun runHintReplay(
     hintText: String,
     text: String? = null,
+    contentDescription: String? = null,
     expectedText: String,
+    mode: TextMatchMode = TextMatchMode.EXACT,
   ): TrailblazeToolResult {
     val field = TrailblazeNode(
       nodeId = 2,
@@ -808,6 +1095,7 @@ class AssertVisibleTextMatchModeTest {
       driverDetail = DriverNodeDetail.AndroidAccessibility(
         text = text,
         hintText = hintText,
+        contentDescription = contentDescription,
         resourceId = "item_search_field",
       ),
     )
@@ -822,7 +1110,7 @@ class AssertVisibleTextMatchModeTest {
         DriverNodeMatch.AndroidAccessibility(resourceIdRegex = "item_search_field"),
       ),
       expectedText = expectedText,
-      textMatchMode = TextMatchMode.EXACT,
+      textMatchMode = mode,
     )
     return tool.execute(replayContext(tree))
   }
@@ -869,6 +1157,8 @@ class AssertVisibleTextMatchModeTest {
     childText: String,
     expectedText: String,
     mode: TextMatchMode = TextMatchMode.EXACT,
+    containerText: String? = null,
+    containerContentDescription: String? = null,
   ): TrailblazeToolResult {
     val child = TrailblazeNode(
       nodeId = 3,
@@ -880,7 +1170,11 @@ class AssertVisibleTextMatchModeTest {
       nodeId = 2,
       ref = "card",
       bounds = TrailblazeNode.Bounds(100, 200, 300, 260),
-      driverDetail = DriverNodeDetail.AndroidAccessibility(resourceId = containerResourceId),
+      driverDetail = DriverNodeDetail.AndroidAccessibility(
+        text = containerText,
+        contentDescription = containerContentDescription,
+        resourceId = containerResourceId,
+      ),
       children = listOf(child),
     )
     val tree = TrailblazeNode(

@@ -276,6 +276,7 @@ class MainTrailblazeApp(
             window.requestFocus()
           }
         }
+        signalDesktopGuiReady()
         trailblazeMcpServer.onShutdownRequest = {
           exitApplication()
         }

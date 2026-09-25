@@ -18,6 +18,17 @@ function runAgentOption(agent) {
   return agent || null;
 }
 
+/**
+ * `seedRunAgent` for the memory toggle, where `null` means "not known yet". The dialog sends this
+ * value as a per-run override and the daemon reads a null override as "use the saved setting", so
+ * an unseeded dialog has to stay null: seeding a bare `false` makes a Run clicked before settings
+ * arrive silently disable capture even though Settings has it on.
+ */
+function seedCaptureMemory(current, saved, touched) {
+  if (touched || saved == null) return current;
+  return !!saved;
+}
+
 function buildRunCommand(cfg) {
   const parts = ['trailblaze', 'run'];
   parts.push(cfg.trailPath || cfg.trailId || '<trail>');
@@ -38,6 +49,12 @@ function buildRunCommand(cfg) {
   if (cfg.captureLogcat) parts.push('--capture-logcat');
   if (cfg.captureNetwork) parts.push('--capture-network');
   if (cfg.captureIosLogs) parts.push('--capture-ios-logs');
+  // Memory capture is ON by default in the CLI, so omitting the flag does not mean "off" the way it
+  // does for video and network — the negative spelling is what carries the toggle. Only an explicit
+  // `false` spells it: a null/absent value is "no override", which no CLI flag can express, and
+  // printing `--no-capture-memory` for it would show a command that turns capture off for a run
+  // that actually defers to the saved setting.
+  if (cfg.captureMemory === false) parts.push('--no-capture-memory');
   if (cfg.captureAnalytics) parts.push('--capture-analytics');
   if (!cfg.saveRecording) parts.push('--no-save-recording');
   if (cfg.noReport) parts.push('--no-report');
@@ -70,4 +87,4 @@ function applyYamlOverrides(yaml, ov) {
   return lines.join('\n');
 }
 
-Object.assign(window, { shQuote, seedRunAgent, runAgentOption, buildRunCommand, applyYamlOverrides });
+Object.assign(window, { shQuote, seedRunAgent, runAgentOption, seedCaptureMemory, buildRunCommand, applyYamlOverrides });

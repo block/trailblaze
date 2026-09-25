@@ -177,7 +177,7 @@ shape without new config.
 **No name overlays (prefix / rename).** Authors advertise tool names
 directly in their `.ts` source; Trailblaze registers those names as-is.
 See conventions § 4 — bare names are deterministic, and Trailblaze is
-curatorial about tool sources.
+deliberate about tool sources.
 
 ### Spawn scope
 

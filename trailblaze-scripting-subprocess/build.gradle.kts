@@ -19,6 +19,8 @@ import org.gradle.api.tasks.TaskAction
 plugins {
   alias(libs.plugins.kotlin.jvm)
   alias(libs.plugins.kotlin.serialization)
+  // Puts build-logic's `shouldReinstallSdkNodeModules` on this script's classpath.
+  id("trailblaze.build-logic-classpath")
 }
 
 dependencies {
@@ -107,6 +109,14 @@ abstract class InstallBunDepsTask : DefaultTask() {
   @get:InputFile
   @get:PathSensitive(PathSensitivity.RELATIVE)
   abstract val lockFile: RegularFileProperty
+
+  /**
+   * Whether [workingDir] is the TypeScript SDK, whose `node_modules` other tasks also install into
+   * and run esbuild from. Such an install is skipped when build-logic's shared check says the tree
+   * is already current; see the task action.
+   */
+  @get:Input
+  abstract val sharesSdkNodeModules: Property<Boolean>
 
   @get:OutputFile
   abstract val installSentinel: RegularFileProperty
@@ -209,7 +219,23 @@ abstract class InstallBunDepsTask : DefaultTask() {
     val installCommand =
       if (lockFile != null) listOf("bun", "install", "--frozen-lockfile") else listOf("bun", "install")
     val installSucceeded = withInstallLock {
-      tryInstall(installCommand) == 0
+      // Other tasks install into the SDK's `node_modules` too (the bundlers in
+      // `:trailblaze-common` and build-logic) and run esbuild from it AFTER releasing this lock.
+      // Re-running `bun install` over a tree they already use relinks `.bin/` and pulls esbuild
+      // out from under a bundle in progress ("esbuild not found"). So skip whenever the check they
+      // all share says the tree is current; using any other rule here would let one task reinstall
+      // a tree another has just trusted.
+      val lockText = lockFile?.readText()
+      if (sharesSdkNodeModules.get() && !shouldReinstallSdkNodeModules(workingDir)) {
+        logger.lifecycle("Skipping bun install: node_modules already matches the current bun.lock.")
+        return@withInstallLock true
+      }
+      // Cleared first so an interrupted install can't leave a stamp vouching for a partial tree,
+      // and written before the lock is released so no waiting task sees the gap and reinstalls.
+      sharedInstallStamp.delete()
+      val succeeded = tryInstall(installCommand) == 0
+      if (succeeded && lockText != null) sharedInstallStamp.writeText(lockText)
+      succeeded
     }
 
     if (installSucceeded) {
@@ -218,9 +244,6 @@ abstract class InstallBunDepsTask : DefaultTask() {
       // still exists.
       installSentinel.parentFile.mkdirs()
       installSentinel.writeText("ok\n")
-      if (lockFile != null) {
-        sharedInstallStamp.writeText(lockFile.readText())
-      }
     } else {
       val rootDir = rootDir.get().asFile.absolutePath
       val installCommandString = installCommand.joinToString(" ")
@@ -254,6 +277,8 @@ fun registerInstallTask(
   // task only warns — appropriate for the sample-app MCP install, which is gated by the
   // test's own `assumeTrue(node_modules/.install-ok)` skip.
   failOnInstallError: Boolean,
+  // See [InstallBunDepsTask.sharesSdkNodeModules].
+  sharesSdkNodeModules: Boolean = false,
 ) = tasks.register<InstallBunDepsTask>(taskName) {
   group = "verification"
   val tone = if (failOnInstallError) "required" else "best-effort"
@@ -262,6 +287,7 @@ fun registerInstallTask(
   this.label.set(label)
   this.testGateDocString.set(testGateDocString)
   this.failOnInstallError.set(failOnInstallError)
+  this.sharesSdkNodeModules.set(sharesSdkNodeModules)
   // 15 minutes is the default ceiling. It covers corporate proxies that aggressively
   // rate-limit or drop connections (e.g. an internal npm registry mirror, where a fresh
   // `bun install` can sit on triple-ECONNRESET retries before a 200). On CI and fast
@@ -322,6 +348,7 @@ val installTrailblazeScriptingSdk = registerInstallTask(
   // warn-only failure would let a broken daemon JAR ship — fail loudly instead so the issue
   // surfaces at build time, not at first SDK import.
   failOnInstallError = true,
+  sharesSdkNodeModules = true,
 )
 
 tasks.test {

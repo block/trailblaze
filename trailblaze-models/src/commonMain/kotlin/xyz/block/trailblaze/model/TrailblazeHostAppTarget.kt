@@ -301,7 +301,7 @@ abstract class TrailblazeHostAppTarget(
     "Target '$id' declares no in-process test harness, so the ANDROID_TEST driver has no RPC " +
       "server to reach on this target. Declare one in the target YAML " +
       "(`android_test: { test_app_id: ..., fq_test_name: ... }`), or pick a driver whose runner " +
-      "ships with Trailblaze (accessibility, instrumentation)."
+      "ships with Trailblaze (accessibility)."
 
   /**
    * Every instrumentation target this app target can present — the bundled runner plus the

@@ -22,7 +22,7 @@ androidx-test-core = "1.7.0"
 androidx-test-monitor = "1.8.0"
 androidx-test-orchestrator = "1.5.1"
 gson = "2.13.2"
-jackson = "2.21.2"
+jackson = "2.21.7"
 jansi = "2.4.1"
 jna = "5.14.0"
 jetbrains-compose-multiplatform = "1.11.1"
@@ -64,14 +64,15 @@ micrometer = "1.15.12"
 mcp-sdk = "0.13.0"
 multiplatformMarkdownRenderer = "0.39.2"
 okhttp = "5.3.2"
-# Must match the BOM that Koog's OpenTelemetry integration already puts on the classpath. Declaring
-# a newer one here silently overrides that BOM, and 1.65.0's OTLP sender drags okhttp 5.3.2 -> 5.4.0
-# onto six modules' runtime classpath while `okhttp` above still reads as the pinned version.
-opentelemetry = "1.61.0"
+# Repository security floor (CVE-2026-45292). trailblaze-report and trailblaze-common publish this
+# BOM, and the shared dependency-resolution rule overrides Koog's older one in every configuration.
+# Raising it is not free: 1.65.0's OTLP sender drags okhttp 5.3.2 -> 5.4.0 onto six modules' runtime
+# classpath while `okhttp` above still reads as the pinned version.
+opentelemetry = "1.62.0"
 okio = "3.16.4"
 picocli = "4.7.7"
 androidx-test-runner = "1.7.0"
-playwright = "1.59.0"
+playwright = "1.63.0"
 proguardGradle = "7.8.2"
 slf4j = "2.0.17"
 skiko = "0.144.6" # Must match Compose Multiplatform's expected Skiko version (CMP 1.11.1 → skiko 0.144.6)

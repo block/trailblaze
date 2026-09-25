@@ -3,15 +3,20 @@
 # carried the flat name prefix; this toolset makes the prefix-equals-trailmap-id rule hold by
 # grouping them under a trailmap-aligned name. Parallel to `mobile_primitives` (PR #3451).
 #
-# All three tools are declared `surfaceToLlm = false` at the class level, so this toolset
-# does NOT pollute the LLM's tool catalog. What toolset membership actually provides is:
+# Every tool here declares `surfaceToLlm = false` — on the class for the Kotlin ones, in the
+# descriptor for the scripted `android_ensureAppCompiled` — so this toolset does NOT pollute the
+# LLM's tool catalog. What toolset membership actually provides is:
 #  - **Scoped-lookup path** — the session's active `TrailblazeToolRepo.registeredTrailblazeToolClasses`
 #    set, which the callback dispatcher consults FIRST. Without toolset membership, callback
 #    dispatch falls through to the unfiltered global registry lookup
 #    (`TrailblazeToolRepo.toolCallToTrailblazeToolUnfiltered` → `TrailblazeSerializationInitializer.buildAllTools()`),
-#    which already had all three tools via their `@TrailblazeToolClass` annotations registered
-#    at JVM init. So this PR doesn't add a net-new dispatch surface — it adds a properly-scoped
-#    one.
+#    which already had the class-backed tools via their `@TrailblazeToolClass` annotations
+#    registered at JVM init. For those, membership is a properly-scoped version of a surface that
+#    already existed. NOT so for the scripted `android_ensureAppCompiled`: a scripted tool has no
+#    class and so no global-registry entry, and on device it is only launched into QuickJS if the
+#    session's catalog delivers it. For that one, this toolset IS the delivery — which is why the
+#    driver list below has to name every driver it must work on rather than the ones it happens
+#    to have been proven on.
 #  - **Per-trailmap typed surface** — once `PerTrailmapClientDtsEmitter` walks dependency
 #    closures (consumers depending on `android`), these three tools will appear in the
 #    consumer's `client.d.ts` typed bindings. Without toolset membership they'd remain in the
@@ -36,8 +41,14 @@
 # Driver scope matches where these primitives have working on-device actuals today. iOS is
 # deliberately omitted — the tools throw "Android only" at runtime if invoked under an iOS
 # device context, so registering them on `ios-host` would only surface as confusing runtime
-# failures rather than catalog-time filtering. Mirrors the scope decision in
-# `android_framework.yaml`.
+# failures rather than catalog-time filtering.
+#
+# `android-test` (the in-process instrumentation driver) has to be spelled out: the `android`
+# platform shorthand deliberately excludes it (`DriverTypeKey.SHORTHAND_EXCLUDED_DRIVERS`), so a
+# toolset that does not name it does not reach it. Leaving it off cost nothing while every tool
+# here was class-backed — the unfiltered global registry answered anyway — but it silently
+# withholds the scripted `android_ensureAppCompiled` from that driver, whose bundle is only
+# launched for tools the session's catalog delivers.
 #
 # NOTE: this toolset is additive. The existing `android_framework` toolset still lists
 # `android_sendBroadcast` and `android_adbShell` alongside `mobile_listInstalledApps`; that
@@ -49,10 +60,11 @@ id: android_primitives
 description: "Android framework-primitive composition tools (adbShell, sendBroadcast, systemUiDemoMode) used by scripted tools via `client.callTool(...)`. Not LLM-facing — registered so callback dispatch can resolve them by name."
 always_enabled: true
 drivers:
-  - android-ondevice-instrumentation
   - android-ondevice-accessibility
+  - android-test
 tools:
   - android_adbShell
+  - android_ensureAppCompiled
   - android_grantAppOpsPermission
   - android_grantPermissions
   - android_sendBroadcast

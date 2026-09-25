@@ -13,7 +13,6 @@ import xyz.block.trailblaze.AdbCommandUtil
 import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.AndroidDeviceLocale
 import xyz.block.trailblaze.AndroidAssetsUtil
-import xyz.block.trailblaze.AndroidMaestroTrailblazeAgent
 import xyz.block.trailblaze.MaestroTrailblazeAgent
 import xyz.block.trailblaze.android.accessibility.AccessibilityServiceScreenState
 import xyz.block.trailblaze.android.accessibility.AccessibilityTrailRunner
@@ -95,6 +94,18 @@ internal enum class ScreenStateKind { UIAUTOMATOR, ACCESSIBILITY }
  * pre-migration Maestro selectors and need them to resolve against the UiAutomator shape, so the
  * primary stays UiAutomator regardless of driver. The accessibility tree rides on the
  * [MigrationScreenState] side channel instead.
+ *
+ * That UiAutomator demotion is specific to the Android Maestro→accessibility migration, which is
+ * COMPLETE — no `androidMaestro:` selectors remain. It is retained rather than deleted because it
+ * is inert outside migration mode: `isMigrationMode` is only true when the capture argument is
+ * explicitly set, so a default accessibility run is unaffected. A future Android migration is what
+ * would reuse this, and it must choose its OWN primary/secondary shapes here — "primary =
+ * UiAutomator, secondary = accessibility" is this pair's answer, not a general rule. Every
+ * migration capture is dual-tree and runs on the SOURCE driver, so every future pair passes
+ * through here: the recorded selectors have to resolve against the tree shape they were authored
+ * on, and the target shape is captured alongside it. A cross-dialect resolver bridge is a runtime
+ * compatibility fallback that keeps legacy selectors executing on the new driver; it is not a
+ * capture shortcut, and it does not remove the need for the second tree.
  */
 internal fun chooseScreenStateKind(
   isAccessibilityDriver: Boolean,
@@ -159,7 +170,7 @@ open class AndroidTrailblazeRule(
     )
   },
   /**
-   * Optional shared [AgentMemory] threaded into the constructed [AndroidMaestroTrailblazeAgent].
+   * Optional shared [AgentMemory] threaded into the constructed agent.
    * The on-device `RunYamlRequestHandler` uses this seam to populate the agent's memory from
    * the host's snapshot at request entry, and to read the post-execution state into the
    * response. Defaults to a fresh instance for the in-process / unit-test case.
@@ -328,12 +339,12 @@ open class AndroidTrailblazeRule(
    *  - [TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY] →
    *    [AccessibilityTrailblazeAgent] (live accessibility-tree resolution + coordinate
    *    gestures via [TrailblazeAccessibilityService]).
-   *  - any other driver → [AndroidMaestroTrailblazeAgent] (UiAutomator-backed
-   *    Maestro Orchestra).
+   *  - any other driver → refused by name. This rule builds exactly one agent now; the
+   *    UiAutomator-backed Maestro agent the other branches used to share is deleted.
    *
-   * Cross-driver-portable trail recordings (carrying both a Maestro `selector` and an
-   * `androidAccessibility` nodeSelector) work under both runtimes — the right path is
-   * picked by [TapOnByElementSelector] based on [MaestroTrailblazeAgent.usesAccessibilityDriver].
+   * A retired driver is refused BEFORE [agentOverride] is honoured: the override is a public
+   * constructor seam, and letting it stand in for a deleted runtime would let a stale
+   * `trailblaze.driverType` arg run a trail on an agent nobody selected.
    *
    * Resolved lazily so [trailblazeLoggingRule] is fully initialized before we read
    * [TrailblazeAndroidLoggingRule.driverTypeOverride].
@@ -356,7 +367,15 @@ open class AndroidTrailblazeRule(
   }
 
   val trailblazeAgent: MaestroTrailblazeAgent by lazy {
-    agentOverride ?: when (trailblazeLoggingRule.driverTypeOverride) {
+    val driverType = trailblazeLoggingRule.driverTypeOverride
+    // Retired, not fallen through. The on-device runtime these drivers named is deleted; their
+    // enum values survive only so old recordings and pins deserialize. Matched against the set
+    // rather than a literal, so retiring the next driver stays the one-line diff that
+    // TrailblazeDriverType.RETIRED_DRIVERS claims it is.
+    if (driverType in TrailblazeDriverType.RETIRED_DRIVERS) {
+      throw TrailblazeException(TrailblazeDriverType.retiredDriverMessage(driverType))
+    }
+    agentOverride ?: when (driverType) {
       // Refused, not fallen through. ANDROID_TEST drives the app in-process through Espresso and
       // the app's own Compose rule, which this rule has neither of, so the `else` branch below
       // would silently replay the trail on Maestro instead — a green run on a driver nobody asked
@@ -390,24 +409,15 @@ open class AndroidTrailblazeRule(
         // so the agent resolves `openUrl` & friends at dispatch instead of failing "Unknown tool".
         trailblazeToolRepo = trailblazeToolRepo,
       )
-      else -> AndroidMaestroTrailblazeAgent(
-        trailblazeLogger = trailblazeLoggingRule.logger,
-        trailblazeDeviceInfoProvider = trailblazeLoggingRule.trailblazeDeviceInfoProvider,
-        sessionProvider = {
-          trailblazeLoggingRule.session ?: error("Session not available - ensure test is running")
-        },
-        nodeSelectorMode = config.nodeSelectorMode,
-        memory = agentMemory,
-        // Propagate the host bridge's capture toggle to the on-device agent so capture-aware
-        // launch tools can flip their app's debug SharedPref gates in the pre-launch seeding step.
-        captureNetworkTraffic = config.captureNetworkTraffic,
-        // See accessibility-agent branch above for why these are threaded into both paths —
-        // scripted tools dispatched through MaestroTrailblazeAgent.buildExecutionContext need
-        // `ctx.target` populated regardless of which Android driver the trail picked.
-        resolvedTarget = resolvedTargetForSession,
-        appId = agentAppId,
-        // Same repo the launcher registers scripted tools into so the agent resolves them at dispatch.
-        trailblazeToolRepo = trailblazeToolRepo,
+      // Every remaining driver is host-resident, a cloud service, or another platform entirely.
+      // This branch used to run them all on the UiAutomator agent, so an iOS / Playwright /
+      // Compose / Revyl pin arriving here replayed on Android and reported green on a driver
+      // nobody asked for. Refusing is the whole point of the branch now.
+      else -> throw TrailblazeException(
+        "AndroidTrailblazeRule cannot run the ${driverType.name} " +
+          "driver: this rule only drives an Android device from on-device instrumentation. " +
+          "Pick a driver this rule supports (${TrailblazeDriverType.DEFAULT_ANDROID.name}), or " +
+          "run this trail from the host, which owns that driver's runtime.",
       )
     }
   }
@@ -823,6 +833,18 @@ open class AndroidTrailblazeRule(
       )
       return null
     }
+
+    // A trail pinned to a RETIRED driver is refused here — before the locale is applied, before the
+    // session-start log, and before any lazy agent field is touched. The [onTrailConfigResolved]
+    // seam below is where a subclass copies `config.driver` onto the driver override, and its base
+    // implementation is a no-op: a direct AndroidTrailblazeRule run would otherwise leave the
+    // override at the Android default and execute an instrumentation-pinned trail to green on the
+    // accessibility driver. Checked in runSuspend rather than inside the seam so an override that
+    // omits the check cannot reopen the hole.
+    retiredTrailDriverPinRefusal(
+      pinnedDriver = trailConfig?.driver,
+      forcedDriver = InstrumentationArgUtil.driverType(),
+    )?.let { refusal -> throw TrailblazeException(refusal) }
 
     // A locale is a device setting, not an app launch argument. Apply it before the session starts
     // so the session snapshot and every subsequently launched target process observe it.

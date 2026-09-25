@@ -9,6 +9,7 @@ import io.ktor.client.plugins.logging.Logging
 import io.ktor.client.plugins.websocket.WebSockets
 import okhttp3.Interceptor
 import okhttp3.OkHttpClient
+import java.net.Proxy
 import java.security.SecureRandom
 import java.security.cert.X509Certificate
 import javax.net.ssl.SSLContext
@@ -69,8 +70,20 @@ object TrailblazeHttpClientFactory {
     install(WebSockets)
   }
 
+  /**
+   * [bypassSystemProxy] connects directly, ignoring the process's default proxy selection. On
+   * Android that selection is the device's global HTTP proxy — which a network capture points at
+   * the host and which outlives a daemon that died mid-capture — so a client talking to the host
+   * over `adb reverse` must not route through it.
+   *
+   * `@JvmOverloads` keeps the single-argument entry point this method used to be. The on-device
+   * runner is built and pinned separately from the host, so a caller compiled against the old
+   * signature would otherwise hit NoSuchMethodError on the descriptor change alone.
+   */
+  @JvmOverloads
   fun createInsecureTrustAllCertsHttpClient(
     timeoutInSeconds: Long,
+    bypassSystemProxy: Boolean = false,
   ) = HttpClient(OkHttp) {
     enablePerfettoTracing()
     enableNetworkLogging()
@@ -78,6 +91,9 @@ object TrailblazeHttpClientFactory {
     engine {
       config {
         configureOkHttpClient(timeoutInSeconds, true)
+        if (bypassSystemProxy) {
+          proxy(Proxy.NO_PROXY)
+        }
       }
     }
   }

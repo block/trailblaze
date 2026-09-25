@@ -3,7 +3,6 @@
 id: observation
 description: "Screenshots and screen inspection."
 drivers:
-  - android-ondevice-instrumentation
   - android-ondevice-accessibility
   - ios-host
   - ios-axe

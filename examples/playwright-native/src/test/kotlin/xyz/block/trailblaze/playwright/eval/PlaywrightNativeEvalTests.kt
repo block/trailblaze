@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.playwright.eval
 
 import java.io.File
+import java.util.UUID
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Test
@@ -29,9 +30,13 @@ class PlaywrightNativeEvalTests {
     BasePlaywrightNativeTest(
       trailblazeDeviceId =
         TrailblazeDeviceId(
-          instanceId = "playwright-native-eval",
+          // Unique per test: the tests run in parallel, and a recording is keyed by this id, so a
+          // shared one would film whichever browser registered last.
+          instanceId = "playwright-native-eval-${UUID.randomUUID().toString().take(8)}",
           trailblazeDevicePlatform = TrailblazeDevicePlatform.WEB,
-        )
+        ),
+      // CI's report plays each session's recording; video is opt-in.
+      captureVideo = true,
     )
 
   @JvmField

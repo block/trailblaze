@@ -2,6 +2,7 @@ package xyz.block.trailblaze.logs.client
 
 import ai.koog.prompt.message.Message
 import kotlinx.datetime.Instant
+import kotlinx.serialization.EncodeDefault
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
@@ -129,7 +130,49 @@ sealed interface TrailblazeLog {
     val llmMessages: List<TrailblazeLlmMessage>,
     val llmResponse: List<Message.Assistant>,
     val actions: List<Action>,
-    val toolOptions: List<TrailblazeToolDescriptor>,
+    /**
+     * LEGACY inline copy of the tool descriptors offered on this request. Written by logs from
+     * before the catalog split; empty on every log written since. Read it through
+     * [TrailblazeToolCatalog.resolveToolOptions], which falls back to this field when
+     * [toolCatalogId] is null — never read it directly, or new logs look like they offered no
+     * tools at all.
+     *
+     * The descriptors moved to a once-per-session [TrailblazeToolCatalogLog] because this field
+     * was byte-identical across every request in a session and made up ~58% of all LLM-log bytes.
+     * A `.zip` can't dedupe it either: entries are compressed independently, so 26 identical
+     * copies cost 26 times over.
+     *
+     * Always written, even though it is always empty now and session JSON otherwise omits
+     * defaults. This field was REQUIRED before the split, so a build from before it rejects any
+     * request log that leaves it out — and the two sides skew in practice, a newer device library
+     * posting to an older host daemon being the common way. `"toolOptions":[]` costs 16 bytes and
+     * keeps an older reader showing the request with no tools instead of dropping it entirely.
+     */
+    @EncodeDefault(EncodeDefault.Mode.ALWAYS)
+    val toolOptions: List<TrailblazeToolDescriptor> = emptyList(),
+    /**
+     * Identifies the [TrailblazeToolCatalogLog] holding the descriptors for [toolNames].
+     *
+     * THIS FIELD, not the position of catalog logs in the session, is the source of truth for
+     * what a request was offered. A session that switches toolsets A→B→A emits only two catalog
+     * logs (the second A is a hash already written), so change-detection that keys off catalog-log
+     * positions misses the return to A — diff this id across consecutive request logs instead.
+     *
+     * Null on logs predating the split, which carry [toolOptions] inline.
+     */
+    val toolCatalogId: String? = null,
+    /**
+     * Names of the tools offered on THIS request, which may be a subset of the catalog's.
+     *
+     * Redundant with the catalog whenever the full set was offered, but ~2 KB against the
+     * catalog's ~176 KB, and it keeps each request self-describing — you can see what a step had
+     * available without resolving anything. It is also the hook that makes per-request subsetting
+     * free to support later: if we ever offer real subsets, the catalog becomes an append-only
+     * dictionary and this field already expresses each request's slice of it.
+     *
+     * Empty on logs predating the split.
+     */
+    val toolNames: List<String> = emptyList(),
     val llmRequestUsageAndCost: LlmRequestUsageAndCost? = null,
     override val screenshotFile: String?,
     override val durationMs: Long,
@@ -184,6 +227,34 @@ sealed interface TrailblazeLog {
       val args: JsonObject,
     )
   }
+
+  /**
+   * The tool descriptors a session offered the LLM, written ONCE per distinct toolset instead of
+   * being repeated on every [TrailblazeLlmRequestLog].
+   *
+   * Emitted lazily, immediately before the first request that uses a given catalog — not at
+   * session start, because the toolset isn't resolved until the first LLM call. A session that
+   * changes toolsets mid-run (a target swap, a different tool bundle) emits another one with a
+   * new [toolCatalogId]; one that never changes emits exactly one.
+   *
+   * Written on FIRST SIGHT of a catalog id, so a repeat of an earlier toolset re-uses the
+   * existing entry rather than writing a duplicate. Duplicates are still possible across the two
+   * request-log producers, which track first sight separately; since the id is a content hash,
+   * both copies of an id carry the same descriptors.
+   * Readers must treat this log as a DICTIONARY keyed by [toolCatalogId] and read
+   * "what did this request have" off [TrailblazeLlmRequestLog.toolCatalogId] — see the warning
+   * there.
+   */
+  @Serializable
+  data class TrailblazeToolCatalogLog(
+    /** Content hash of [toolOptions] — see [TrailblazeToolCatalog.idFor]. */
+    val toolCatalogId: String,
+    val toolOptions: List<TrailblazeToolDescriptor>,
+    override val session: SessionId,
+    override val timestamp: Instant,
+    override val clock: TrailblazeClockDomain? = null,
+    override val hostReceivedAt: Instant? = null,
+  ) : TrailblazeLog
 
   @Serializable
   data class MaestroCommandLog(

@@ -302,17 +302,6 @@ class KoogStrategyGraphHostRunnerTest {
   }
 
   @Test
-  fun `verifyScopedAdvertisedTools also scopes on the instrumentation driver`() {
-    // Both Android on-device members of VERIFY_SCOPE_DRIVERS scope to the generic verification toolset.
-    val repo = verifyRepo(TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION)
-    val scoped = verifyScopedAdvertisedTools(listOf(VerificationStep(verify = "the title is visible")), repo)
-    assertThat(scoped).isNotNull()
-    assertThat(scoped!!.map { it.name }).contains(GENERIC_VERIFY_TOOL)
-    assertThat(scoped.map { it.name }).contains(KoogStrategyGraphAgent.OBJECTIVE_STATUS_TOOL_NAME)
-    assertThat(scoped.map { it.name }).doesNotContain(TYPING_TOOL)
-  }
-
-  @Test
   fun `verifyScopedAdvertisedTools scopes a web verify step to the web verification toolset`() {
     // Driver-awareness: a Playwright verify step advertises web_verification's tools — NOT the
     // generic Android verification tools (which would be wrong on web), and not the typing tool.

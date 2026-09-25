@@ -8,6 +8,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionStatus
+import xyz.block.trailblaze.yaml.TrailMetadataValue
 
 /**
  * Lifts [SessionResult.failure_code] out of a structured failure payload: the top-level
@@ -62,7 +63,7 @@ data class SessionResult(
    * metadata that survives a trail moving to another repo or being re-keyed under a new [test_key],
    * without that identity having to be re-encoded into [test_key] itself.
    */
-  val metadata: Map<String, String>? = null,
+  val metadata: Map<String, TrailMetadataValue>? = null,
 
   /**
    * Path of the trail file this session ran, from `SessionInfo.trailFilePath`, or null when the
@@ -354,4 +355,7 @@ data class SessionResult(
    * [AccessibilityTruncationSummary] for what the field means and how to read it.
    */
   val accessibility_truncation: AccessibilityTruncationSummary? = null,
+
+  /** The authored `config.id`, when present. */
+  val trail_id: String? = null,
 )

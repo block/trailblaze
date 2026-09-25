@@ -540,8 +540,13 @@ private fun sdkLockText(sdkDir: File): String =
  * `bun.lock` has since changed still has the old binaries on disk, and skipping on existence alone
  * would bundle against stale deps even though Gradle correctly re-ran the bundle task (`bun.lock`
  * is a declared input), silently breaking the determinism guarantee this PR relies on.
+ *
+ * Public because it is the ONE validity check for the SDK's shared `node_modules`: every task
+ * that installs into it calls this. Each task runs esbuild after releasing the install lock, so
+ * two tasks that disagree about whether the tree is current means one reinstalls, relinking
+ * `.bin/`, while the other is mid-bundle ("esbuild not found").
  */
-internal fun shouldReinstallSdkNodeModules(sdkDir: File): Boolean {
+fun shouldReinstallSdkNodeModules(sdkDir: File): Boolean {
   val dtsBin = File(sdkDir, "node_modules/.bin/dts-bundle-generator")
   val esbuildBin = File(sdkDir, "node_modules/.bin/esbuild")
   val installStamp = File(sdkDir, SDK_INSTALL_STAMP_PATH)

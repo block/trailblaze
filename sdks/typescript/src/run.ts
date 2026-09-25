@@ -4,8 +4,16 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
+import { z } from "zod";
 
+import { createClient } from "./client.js";
+import { fromMeta } from "./context.js";
 import { registerPendingTools } from "./tool.js";
+import {
+  releaseSessionResources,
+  SESSION_RESOURCE_FINALIZER_META_KEY,
+  SESSION_RESOURCE_FINALIZER_TOOL,
+} from "./session-resources.js";
 
 export interface RunOptions {
   /**
@@ -109,5 +117,51 @@ export async function run(options: RunOptions = {}): Promise<void> {
     { capabilities: { tools: {} } },
   );
   registerPendingTools(server);
+  // This is not an author-visible tool. The host detects its metadata at startup and calls it
+  // directly during teardown, before closing the subprocess. Keeping the cleanup registry in the
+  // script process lets a tool retain an opaque handle in a closure without serializing it into
+  // agent memory, results, or session logs.
+  server.registerTool(
+    SESSION_RESOURCE_FINALIZER_TOOL,
+    {
+      description: "Release opaque resources retained by this scripted-tool session.",
+      inputSchema: { sessionId: z.string() },
+      _meta: {
+        "trailblaze/surfaceToLlm": false,
+        "trailblaze/isRecordable": false,
+        [SESSION_RESOURCE_FINALIZER_META_KEY]: true,
+      },
+    },
+    async ({ sessionId }: { sessionId: string }, extra: unknown) => {
+      try {
+        // This hidden call gets its own live invocation envelope. Pass its callback handle into
+        // cleanup registrations instead of reusing the acquiring tool's now-closed invocation.
+        const ctx = fromMeta(extractMeta(extra));
+        await releaseSessionResources(sessionId, { tools: createClient(ctx).tools });
+        return { content: [] };
+      } catch {
+        // Do not include the underlying callback error: cleanup closures may hold sensitive
+        // material, and their raw messages are persisted by some MCP clients.
+        return {
+          isError: true,
+          content: [{ type: "text" as const, text: "One or more session resource cleanups failed." }],
+        };
+      }
+    },
+  );
   await server.connect(await pickTransport());
+}
+
+/** Drill into the MCP SDK's hidden finalizer invocation for its `_meta.trailblaze` envelope. */
+function extractMeta(extra: unknown): unknown {
+  if (typeof extra !== "object" || extra === null) return undefined;
+  const bag = extra as Record<string, unknown>;
+  const request = bag["request"];
+  if (typeof request === "object" && request !== null) {
+    const params = (request as Record<string, unknown>)["params"];
+    if (typeof params === "object" && params !== null) {
+      return (params as Record<string, unknown>)["_meta"];
+    }
+  }
+  return bag["_meta"];
 }

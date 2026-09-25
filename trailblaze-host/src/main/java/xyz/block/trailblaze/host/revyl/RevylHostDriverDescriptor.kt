@@ -43,6 +43,7 @@ import xyz.block.trailblaze.revyl.RevylSession
 import xyz.block.trailblaze.revyl.tools.RevylToolSetIds
 import xyz.block.trailblaze.rules.TrailblazeRunnerUtil
 import xyz.block.trailblaze.scripting.LaunchedScriptingRuntime
+import xyz.block.trailblaze.scripting.finishScriptingRuntimeCleanup
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
@@ -330,9 +331,10 @@ class RevylHostDriverDescriptor(
         noLogging = runOnHostParams.noLogging,
         cleanup = {
           withContext(NonCancellable) {
-            subprocessRuntimes.forEach { it.shutdownAll() }
+            finishScriptingRuntimeCleanup(subprocessRuntimes) {
+              deviceManager.cancelSessionForDevice(trailblazeDeviceId)
+            }
           }
-          deviceManager.cancelSessionForDevice(trailblazeDeviceId)
         },
       ) { session ->
         TrailblazeHostYamlRunner.launchSubprocessMcpServersIfAny(

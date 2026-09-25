@@ -32,6 +32,21 @@ class CaptureSession internal constructor(
     }
   }
 
+  /**
+   * Tells every [ToolCallAwareCaptureStream] that a top-level tool is about to run / has just
+   * returned. Failures are logged, never propagated: a capture must not fail a tool call.
+   */
+  fun onToolCall(phase: ToolCallPhase, toolName: String, traceId: String? = null) {
+    for (stream in streams) {
+      if (stream !is ToolCallAwareCaptureStream) continue
+      try {
+        stream.onToolCall(phase, toolName, traceId)
+      } catch (e: Exception) {
+        Console.log("Failed to sample ${stream.type} capture ${phase.name.lowercase()} $toolName: ${e.message}")
+      }
+    }
+  }
+
   fun stopAll(): List<CaptureArtifact> {
     val artifacts = mutableListOf<CaptureArtifact>()
     var appScopedDeviceLog: CaptureArtifact? = null
@@ -39,6 +54,16 @@ class CaptureSession internal constructor(
       try {
         Console.log("Stopping ${stream.type} capture...")
         stream.stop(options)?.let { artifact ->
+          // A stream can finalize a file and still have captured nothing — the recorder's output
+          // is created when it is spawned, not when the first byte arrives. Registering an empty
+          // file gives the report a clip it cannot decode and ships a dead artifact in the session
+          // zip, so the file goes and the artifact is never listed. The session keeps its
+          // screenshots, which is what a session with no footage should show.
+          if (!artifact.file.isFile || artifact.file.length() == 0L) {
+            Console.log("${stream.type} captured nothing; discarding empty ${artifact.file.name}")
+            artifact.file.delete()
+            return@let
+          }
           artifacts.add(artifact)
           if (
             artifact.type == xyz.block.trailblaze.capture.model.CaptureType.LOGCAT &&
@@ -107,11 +132,16 @@ class CaptureSession internal constructor(
      *   simctl) when non-null. The host module injects a baguette-stream recorder here — it can't
      *   be built in this module because it depends on host-only baguette plumbing. Ignored on
      *   non-iOS platforms and when video capture is off.
+     * @param androidMemoryProbeOverride Replaces the adb-based memory probe on Android when
+     *   non-null. The host module injects a probe that asks the on-device instrumentation runner
+     *   first (no adb round trips) and falls back to adb — it can't be built here because the RPC
+     *   client lives in the host. Ignored on non-Android platforms and when memory capture is off.
      */
     fun fromOptions(
       options: CaptureOptions,
       platform: TrailblazeDevicePlatform?,
       iosVideoStreamOverride: CaptureStream? = null,
+      androidMemoryProbeOverride: xyz.block.trailblaze.capture.memory.MemoryProbe? = null,
     ): CaptureSession? {
       if (!options.hasAnyCaptureEnabled) return null
       val streams = mutableListOf<CaptureStream>()
@@ -138,6 +168,32 @@ class CaptureSession internal constructor(
       }
       if (options.captureIosLogs && platform == TrailblazeDevicePlatform.IOS) {
         streams.add(xyz.block.trailblaze.capture.logcat.IosLogCapture())
+      }
+      // The environment kill-switch is read here, where memory capture actually starts, so it
+      // covers every route in — see [CaptureOptions.ENV_CAPTURE_MEMORY].
+      val memoryOffInEnv = options.captureMemory && CaptureOptions.memoryCaptureDisabledInEnv()
+      if (memoryOffInEnv) {
+        Console.log("[memory-capture] off: ${CaptureOptions.ENV_CAPTURE_MEMORY} is set to a falsey value")
+      }
+      if (options.captureMemory && !memoryOffInEnv) {
+        when (platform) {
+          TrailblazeDevicePlatform.ANDROID ->
+            streams.add(
+              xyz.block.trailblaze.capture.memory.MemoryCapture(
+                probe = androidMemoryProbeOverride ?: xyz.block.trailblaze.capture.memory.AdbMemoryProbe(),
+                forceGc = options.memoryDiagnostics,
+                synchronousToolSamples = options.memoryDiagnostics,
+              ),
+            )
+          TrailblazeDevicePlatform.IOS ->
+            streams.add(
+              xyz.block.trailblaze.capture.memory.MemoryCapture(
+                probe = xyz.block.trailblaze.capture.memory.IosSimulatorMemoryProbe(),
+                synchronousToolSamples = options.memoryDiagnostics,
+              ),
+            )
+          else -> Unit
+        }
       }
       if (streams.isEmpty()) return null
       return CaptureSession(streams, options, platform)

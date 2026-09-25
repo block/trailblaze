@@ -20,6 +20,7 @@ import xyz.block.trailblaze.exception.TrailblazeSessionCancelledException
 import xyz.block.trailblaze.host.TrailblazeHostYamlRunner
 import xyz.block.trailblaze.host.animations.SessionAnimationDisabler
 import xyz.block.trailblaze.host.devices.DeviceLocaleConfigurator
+import xyz.block.trailblaze.host.dexopt.SessionAppCompileEnsurer
 import xyz.block.trailblaze.host.turbo.SessionTurboAttacher
 import xyz.block.trailblaze.host.networkcapture.AndroidNetworkCaptureRegistry
 import xyz.block.trailblaze.host.capture.finalizeHostSessionResources
@@ -179,6 +180,52 @@ class DesktopYamlRunner(
       status is SessionStatus.Ended.Failed &&
         UiAutomationHandleErrors.isNonRecoverableStaleHandleSignature(status.exceptionMessage)
 
+    /** What a finished run does with the capture of the session it was running in. */
+    internal enum class RunEndCaptureAction {
+      /** Stop capture and finalize the session's downstream evidence — the last run of a session. */
+      FINALIZE,
+
+      /** Stop capture, but leave finalizing to whoever owns the session end. */
+      STOP,
+
+      /** Touch nothing: the session goes on, and so must its capture. */
+      LEAVE_RUNNING,
+    }
+
+    /**
+     * What a finished run should do with its session's capture.
+     *
+     * A run that does not send the session end is one call in a conversation that goes on, so its
+     * capture has to go on with it. Stopping it as each call returned left every stream dark
+     * between calls: a crash or a memory spike in a gap was simply never recorded, and each call
+     * restarted capture from scratch. Those sessions stop their capture exactly once, from
+     * `endSessionForDevice` / `cancelSessionForDevice`.
+     *
+     * Owning the session end is a separate question, and only decides whether the downstream
+     * finalizers run here: a run holding a session id it merely discovered must not tombstone a
+     * concurrent run's capture registries. Its capture still stops, because its session is ending.
+     */
+    internal fun runEndCaptureAction(sendsSessionEndLog: Boolean, ownsSessionEnd: Boolean): RunEndCaptureAction = when {
+      !sendsSessionEndLog -> RunEndCaptureAction.LEAVE_RUNNING
+      ownsSessionEnd -> RunEndCaptureAction.FINALIZE
+      else -> RunEndCaptureAction.STOP
+    }
+
+    /**
+     * The session-wide "the trail's declared target did not resolve" fact, narrowed to ONE device
+     * of the session. Null means the device's app ids are the ones the trail drives.
+     *
+     * A multi-device configuration lets a member declare its own `target:`, and that member's app
+     * ids come from it — not from the workspace fallback the session dropped to when the trail's
+     * `config.target` named nothing this installation carries. So the session-wide fact describes
+     * only the devices that took the fallback. Applying it to every device instead skips one whose
+     * app is exactly the app it runs.
+     */
+    internal fun unresolvedTargetForDevice(
+      sessionUnresolvedTarget: String?,
+      deviceHasOwnTarget: Boolean,
+    ): String? = sessionUnresolvedTarget.takeUnless { deviceHasOwnTarget }
+
     /**
      * Log-scanning variant: true when the session's terminal status matches (above), OR any
      * failed [TrailblazeLog.TrailblazeToolLog] in [logs] carries the non-recoverable wedge
@@ -242,7 +289,10 @@ class DesktopYamlRunner(
           .firstOrNull { it in unknownDriver.decodedDevices || it in unknownDriver.unknownDrivers }
           ?: return CliRunDriverResolution.Resolved(null)
         unknownDriver.decodedDevices[winner]?.let {
-          return CliRunDriverResolution.Resolved(it.driver)
+          // Through the resolver, not straight to Resolved: this entry decoded cleanly, but
+          // "decodes" and "can be run" are different questions — a pin on a retired driver
+          // parses fine and must still be rejected here.
+          return CliRunDriverResolver.resolve(it.driver)
         }
         return CliRunDriverResolver.resolve(unknownDriver.unknownDrivers.getValue(winner))
       }
@@ -484,7 +534,23 @@ class DesktopYamlRunner(
       val appSettingDriverType = appConfig.selectedTrailblazeDriverTypes[
         trailblazeDeviceId.trailblazeDevicePlatform
       ]
-      val trailblazeDriverType = runYamlRequest.driverType ?: run {
+      // A driver that arrives ON the request short-circuits the pin rung below entirely, so it
+      // needs its own check — producers stamp it from a trail's `config.driver`, a `--driver` flag,
+      // and (for MCP's on-device tool requests) a PERSISTED setting that was runnable when it was
+      // saved. Without this, a retired one ships to the device and fails there, where the message
+      // cannot say which trail or setting asked for it. Same resolver as the two rungs below.
+      val requestedDriverType = runYamlRequest.driverType
+      if (requestedDriverType != null) {
+        val requestResolution = CliRunDriverResolver.resolve(requestedDriverType)
+        if (requestResolution is CliRunDriverResolution.Unrecognized) {
+          prefixedProgressMessage("Requested driver rejected: ${requestResolution.message}")
+          Console.log("❌ COROUTINE ENDING (unrecognized requested driver) for device: ${trailblazeDeviceId.instanceId}")
+          executionResult = TrailExecutionResult.Failed(requestResolution.message, misuse = true)
+          onComplete?.invoke(executionResult)
+          return@launch
+        }
+      }
+      val trailblazeDriverType = requestedDriverType ?: run {
         val pinResolution = trailPinnedDriverResolution(
           trailYaml = runYamlRequest.yaml,
           deviceClassifiers = deviceClassifiers,
@@ -500,7 +566,21 @@ class DesktopYamlRunner(
           is CliRunDriverResolution.Resolved -> pinResolution.driverType
         }
       }
-        ?: appSettingDriverType
+        ?: run {
+          // The app setting is PERSISTED, so it can name a driver that was runnable when the
+          // user chose it and has since been retired. Same check as the pin rung, so a stale
+          // setting fails saying what to change instead of resolving to a runtime that is gone.
+          when (val settingResolution = CliRunDriverResolver.resolve(appSettingDriverType)) {
+            is CliRunDriverResolution.Unrecognized -> {
+              prefixedProgressMessage("Configured driver rejected: ${settingResolution.message}")
+              Console.log("❌ COROUTINE ENDING (unrecognized configured driver) for device: ${trailblazeDeviceId.instanceId}")
+              executionResult = TrailExecutionResult.Failed(settingResolution.message, misuse = true)
+              onComplete?.invoke(executionResult)
+              return@launch
+            }
+            is CliRunDriverResolution.Resolved -> settingResolution.driverType
+          }
+        }
         ?: connectedTrailblazeDevice.trailblazeDriverType
 
       // The host runner selects its driver from `RunOnHostParams.trailblazeDriverType`, which
@@ -549,7 +629,7 @@ class DesktopYamlRunner(
         return@launch
       }
 
-      // Per-session video / sprite / logcat capture used to be started here against a
+      // Per-session video / logcat capture used to be started here against a
       // temp dir and moved into the session log dir in the finally block. That worked
       // for the CLI/daemon path but bypassed every MCP-driven session — the `step`,
       // `ask`, `verify`, and individual-tool entry points create sessions through
@@ -560,12 +640,22 @@ class DesktopYamlRunner(
       // directly into the session log dir — no temp-dir + move dance.
       // ALL app ids the target may run under on this platform — capture-peer identity checks
       // must accept any of them (which declared flavor is installed varies by lane, and it is
-      // not always the first-declared one). The single-app-id consumers below keep the first
-      // entry as before.
+      // not always the first-declared one).
       val appIdsForCapture = targetTestApp
         ?.getPossibleAppIdsForPlatform(trailblazeDeviceId.trailblazeDevicePlatform)
         .orEmpty()
-      val appIdForCapture = appIdsForCapture.firstOrNull()
+      // Capture samples ONE app, so the declared list has to be narrowed to the one this device
+      // actually has — taking the first declared id scoped capture to an app that is not there,
+      // and a reading against an absent package is quiet: it just reports the app as not running.
+      // `lazy` because the answer costs a device probe, and a run whose capture never starts
+      // (`--no-logging`) should not pay for it.
+      val appIdForCapture: String? by lazy {
+        trailblazeDeviceManager.resolveCaptureAppId(
+          trailblazeDeviceId = trailblazeDeviceId,
+          target = targetTestApp,
+          candidateAppIds = appIdsForCapture,
+        )
+      }
       // Resolve per-run capture toggles in the same order the pre-coordinator flow did:
       // request-level overrides (CLI `--capture-video` / `--capture-logcat`) > daemon
       // appConfig toggles > built-in defaults. Passed to `coordinator.startForSession`
@@ -577,6 +667,7 @@ class DesktopYamlRunner(
         persistedCaptureVideo = appConfig.captureVideo,
         captureLogcat = desktopAppRunYamlParams.captureLogcat ?: appConfig.captureLogcat,
         captureIosLogs = desktopAppRunYamlParams.captureIosLogs ?: appConfig.captureIosLogs,
+        captureMemory = desktopAppRunYamlParams.captureMemory ?: appConfig.captureMemory,
       )
 
       var sessionId: SessionId? = null
@@ -586,6 +677,9 @@ class DesktopYamlRunner(
       var captureDeviceBindings: List<CaptureDeviceBinding> = emptyList()
       // Snapshot existing session IDs so we can find newly created ones on cancellation
       val preExistingSessionIds = trailblazeDeviceManager.logsRepo.getSessionIds().toSet()
+      // Read before this run's session exists: once it does, the device's pointer moves to it and
+      // the session it replaced (e.g. an interactive CLI session) can no longer be found.
+      val sessionBeforeRun = trailblazeDeviceManager.getCurrentSessionIdForDevice(trailblazeDeviceId)
 
       // Advisories raised while this run was being assembled (see
       // [DesktopAppRunYamlParams.sessionStartAdvisories]) attach to the session log the moment
@@ -601,6 +695,15 @@ class DesktopYamlRunner(
         saveLog = trailblazeDeviceManager.logsRepo::saveLogToDisk,
       )
 
+      val runInFlight = trailblazeDeviceManager.beginRun(trailblazeDeviceId)
+      // Once per run: the Android paths release from `captureSessionStarted`, and the host-driver
+      // paths that never fire it (Playwright, Compose, Revyl) release once their session id is known.
+      val replacedSessionReleased = java.util.concurrent.atomic.AtomicBoolean(false)
+      val releaseReplacedSession: (SessionId) -> Unit = { sid ->
+        if (replacedSessionReleased.compareAndSet(false, true)) {
+          trailblazeDeviceManager.releaseReplacedSession(trailblazeDeviceId, sessionBeforeRun, sid, runInFlight)
+        }
+      }
       try {
         deviceLocale?.let { DeviceLocaleConfigurator.apply(trailblazeDeviceId, it) }
 
@@ -635,6 +738,9 @@ class DesktopYamlRunner(
         // converge on the same activator wiring without duplicating the `runCatching` /
         // `maybeStartAndroidNetworkCapture` plumbing.
         val captureSessionStarted: (SessionId) -> Unit = { sid ->
+          // First, so the replaced session restores the animation settings it changed before this
+          // session records them as the device's defaults.
+          releaseReplacedSession(sid)
           pendingAdvisories.logTo(sid)
           // Every capture writer below lands its artifacts in the session directory, and each
           // creates that directory itself rather than going through the run's LogsRepo — so the
@@ -653,7 +759,11 @@ class DesktopYamlRunner(
               deviceId = trailblazeDeviceId.instanceId,
               platform = trailblazeDeviceId.trailblazeDevicePlatform,
               options = captureOptionsForRun,
-              appId = appIdForCapture,
+              // Asked for only when a stream will use the answer. `appIdForCapture` is lazy
+              // because resolving it can ask the device what is installed, and passing it as a
+              // value forces it — so a run with every stream off still paid for a probe whose
+              // result the coordinator was about to decline.
+              appId = if (captureOptionsForRun.hasAnyCaptureEnabled) appIdForCapture else null,
             )
             maybeStartAndroidNetworkCapture(
               runYamlRequest = runYamlRequest,
@@ -670,6 +780,35 @@ class DesktopYamlRunner(
           // Experimental opt-in (gated internally, idempotent — the MCP path may have already
           // fired it at session-resolution time).
           SessionAnimationDisabler.startForSession(sid, trailblazeDeviceId)
+          // Same placement rationale — the first point that knows both the device AND which app
+          // the session will drive — but on by default (kill switch inside): makes sure the app
+          // has compiled ART artifacts so its cold starts do not re-verify the APK. Idempotent,
+          // so the MCP path having fired it at session resolution costs nothing here.
+          //
+          // One call per resolved device binding, not just the launch device: a multi-device
+          // session's companions are the same kind of Android device and pay the same cold-start
+          // tax, and captureDeviceBindings already carries the launch device (as its first entry)
+          // plus every companion once the multi-device branch has resolved them. Empty for a
+          // single-device run, where the launch device is the only display to check.
+          (
+            captureDeviceBindings.ifEmpty {
+              listOf(CaptureDeviceBinding(name = "", deviceId = trailblazeDeviceId, targetAppIds = appIdsForCapture))
+            }
+          ).forEach { binding ->
+            SessionAppCompileEnsurer.startForSession(
+              sessionId = sid.toString(),
+              deviceId = binding.deviceId,
+              candidateAppIds = binding.targetAppIds,
+              // The fallback app when the trail's declared target did not resolve is not the app
+              // the trail drives; compiling it would be time spent on nothing the run launches.
+              // Asked per device, because a multi-device member that declared its own `target:`
+              // did resolve one.
+              unresolvedDeclaredTarget = unresolvedTargetForDevice(
+                sessionUnresolvedTarget = desktopAppRunYamlParams.unresolvedDeclaredTarget,
+                deviceHasOwnTarget = binding.hasOwnTarget,
+              ),
+            )
+          }
           // Same placement rationale, and the same experimental opt-in shape: this is the first
           // point that knows both the device AND which app the session will drive, which a device
           // connect does not.
@@ -749,6 +888,9 @@ class DesktopYamlRunner(
 
             // Mirror the neighboring branches' session/connection bookkeeping: fire the
             // capture activator for the resolved session and report instrumentation-running.
+            // The run's own cleanup has usually stopped this session's capture by now; the
+            // coordinator refuses to start a stopped session again, so this cannot record a
+            // teardown clip over the real one.
             hostResult.sessionId?.let { captureSessionStarted(it) }
             onConnectionStatus(
               DeviceConnectionStatus.WithTargetDevice.TrailblazeInstrumentationRunning(
@@ -851,11 +993,16 @@ class DesktopYamlRunner(
             }
           }
 
-          // On-device agent: send entire YAML to device, agent loop runs on-device.
-          // Used when preferHostAgent=false or for instrumentation driver fallback. This is the
-          // default for KOOG_STRATEGY_GRAPH on Android on-device drivers: the request (carrying
-          // agentImplementation) goes to the device's RunYamlRequestHandler, which runs the Koog
-          // strategy-graph agent in-process via AndroidTrailblazeRule.
+          // On-device agent: send entire YAML to device, agent loop runs on-device. The request
+          // (carrying agentImplementation) goes to the device's RunYamlRequestHandler, which runs
+          // the agent in-process via AndroidTrailblazeRule.
+          //
+          // Reached when `preferHostAgent = false`, or for a driver that is reachable over the
+          // on-device RPC but not host-agent dispatchable (ANDROID_TEST). NOT the default for the
+          // accessibility / instrumentation drivers: `preferHostAgent` defaults true, so those
+          // route to HOST_AGENT_OVER_ONDEVICE_RPC above. Note for capture: `ToolCallObservers` has
+          // no cross-process transport, so a run on this path produces no tool-boundary memory
+          // events — only the periodic samples and the start/end bookends.
           DispatchPath.ON_DEVICE_AGENT -> {
             val trailblazeOnDeviceInstrumentationTarget = resolveOnDeviceInstrumentationTarget(
               driverType = trailblazeDriverType,
@@ -928,6 +1075,7 @@ class DesktopYamlRunner(
               logsDir = logsDirProvider(),
             )
             lastToolResult = hostResult.lastToolResult
+            hostResult.sessionId?.let(releaseReplacedSession)
 
             onConnectionStatus(
               DeviceConnectionStatus.WithTargetDevice.TrailblazeInstrumentationRunning(
@@ -997,6 +1145,7 @@ class DesktopYamlRunner(
           }
         }
       } finally {
+        trailblazeDeviceManager.endRun(runInFlight)
         // Always stop capture and save artifacts — even on cancel/error, the video
         // recorded up to this point is valuable for debugging.
         // Clear the thread interrupt flag so capture stop methods (which use
@@ -1046,19 +1195,25 @@ class DesktopYamlRunner(
           // sendSessionEndLog=false; finalizing them here would tombstone the live session's
           // capture registries mid-conversation. Those sessions are finalized exactly once, by
           // endSessionForDevice / cancelSessionForDevice.
-          val ownsSessionEnd = sessionId != null || deviceMatched
-          val finalizerFailure =
-            if (runYamlRequest.config.sendSessionEndLog && ownsSessionEnd) {
-              runCatching {
-                finalizeHostSessionResources(
-                  listOf(resolvedSessionId),
-                  trailblazeDeviceManager.sessionCaptureCoordinator::stopForSession,
-                )
-              }.exceptionOrNull()
-            } else {
-              trailblazeDeviceManager.sessionCaptureCoordinator.stopForSession(resolvedSessionId)
+          val captureAction = runEndCaptureAction(
+            sendsSessionEndLog = runYamlRequest.config.sendSessionEndLog,
+            ownsSessionEnd = sessionId != null || deviceMatched,
+          )
+          val finalizerFailure = when (captureAction) {
+            RunEndCaptureAction.FINALIZE -> runCatching {
+              finalizeHostSessionResources(
+                listOf(resolvedSessionId),
+                trailblazeDeviceManager.sessionCaptureCoordinator::stopForSession,
+              )
+            }.exceptionOrNull()
+            RunEndCaptureAction.STOP -> {
+              // Not ours for certain (the bare fallback above), so do not mark it ended: that would
+              // refuse the capture start of a concurrent run whose session this guessed.
+              trailblazeDeviceManager.sessionCaptureCoordinator.stopForSession(resolvedSessionId, markEnded = false)
               null
             }
+            RunEndCaptureAction.LEAVE_RUNNING -> null
+          }
           if (finalizerFailure != null && executionResult is TrailExecutionResult.Success) {
             executionResult =
               TrailExecutionResult.Failed(
@@ -1462,6 +1617,10 @@ class DesktopYamlRunner(
       // capture arms every display's bridge rather than only the launch device's. The launch device
       // is named too: in a session with two displays there is no unlabeled "the" network stream.
       multiDeviceSession?.let { session ->
+        // The DECLARED ids, not the resolved targets: `resolveMemberTargets` hands a member that
+        // declared nothing the session target, so a resolved target being non-null says nothing
+        // about whose it is. Only a declaration makes it this device's own.
+        val declaredMemberTargetIds = resolvedConfiguration?.memberTargetIds.orEmpty()
         onCaptureDeviceBindingsResolved(
           listOf(
             CaptureDeviceBinding(
@@ -1472,6 +1631,7 @@ class DesktopYamlRunner(
                   connectedTrailblazeDevice.trailblazeDeviceId.trailblazeDevicePlatform,
                 )
                 .orEmpty(),
+              hasOwnTarget = declaredMemberTargetIds[session.startDeviceName] != null,
             ),
           ) +
             session.companions.map { (name, companion) ->
@@ -1485,6 +1645,7 @@ class DesktopYamlRunner(
                     companion.trailblazeDeviceId.trailblazeDevicePlatform,
                   )
                   .orEmpty(),
+                hasOwnTarget = declaredMemberTargetIds[name] != null,
               )
             },
         )
@@ -1912,6 +2073,15 @@ class DesktopYamlRunner(
     val name: String,
     val deviceId: TrailblazeDeviceId,
     val targetAppIds: List<String>,
+    /**
+     * True when the configuration DECLARED a `target:` for this device, so [targetAppIds] are its
+     * own rather than the session's. Read by [unresolvedTargetForDevice]: a device with its own
+     * target has the app ids the trail drives even in a session whose `config.target` resolved to
+     * nothing. Must come from the declaration, not from the resolved target being non-null — a
+     * member that declares nothing inherits the session's, which is the fallback app the flag is
+     * supposed to catch.
+     */
+    val hasOwnTarget: Boolean = false,
   )
 
   // `stopCaptureAndMoveArtifacts` lived here. Removed in favor of

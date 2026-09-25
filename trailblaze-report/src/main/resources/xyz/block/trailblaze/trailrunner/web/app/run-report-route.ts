@@ -12,12 +12,15 @@
 // report.
 //
 // `stream`, `organize`, `eventstep`, `place`, `eventq`, and `eventall` preserve the focused event
-// navigator. `filter` is the retired Self-healed index filter and remains only so legacy URLs are
-// canonicalized away. `basesession`/`vssession` name a compare side by session id rather than by
-// index — how one report links into another, whose run order it cannot know. They are inbound
-// only: the viewer resolves them to indices and writes `base`/`vs` back.
+// navigator. Three keys are retired, and are listed only so a link written before their view went
+// away is still canonicalized rather than ignored: `filter` (the Self-healed index filter), plus
+// `mode` and `trail` (the standalone trail page's projection and scope). `dir`, `all` and `align`
+// were that page's too but are NOT retired — they still carry the trail tabs' own layout.
+// `basesession`/`vssession` name a compare side by session id rather than by index — how one
+// report links into another, whose run order it cannot know. They are inbound only: the viewer
+// resolves them to indices and writes `base`/`vs` back.
 export const VIEWER_ROUTE_KEYS = [
   'view', 'runs', 'run', 'tab', 'step', 'kid', 'streams', 'types', 'llm', 'inspect',
   'stream', 'organize', 'eventstep', 'place', 'eventq', 'eventall', 'group', 'sort', 'search',
-  'filter', 'mode', 'dir', 'all', 'trail', 'pick', 'base', 'vs', 'basesession', 'vssession', 'lane',
+  'filter', 'mode', 'dir', 'all', 'align', 'trail', 'pick', 'base', 'vs', 'basesession', 'vssession', 'lane',
 ];

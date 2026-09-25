@@ -53,6 +53,18 @@ internal object PlaywrightReportCapture {
    * on a typical workstation, so 5fps is the realistic ceiling without dropping/sliding
    * frames. It's also a sweet spot for output file size: at 30fps a 60s autoplay would
    * easily blow past 50MB as a GIF.
+   *
+   * **Do not raise this to shrink an artifact.** It is the shutter the export's per-step dwell
+   * floor is sized against (`EXPORT_GAP_MIN_MS` in `run-report-playback.ts`, currently 250ms):
+   * a step held for less than one period here can fall between two captures and appear in no
+   * frame of the exported animation. Raising this past that floor drops steps silently — the
+   * page keeps playing correctly, the encode succeeds, and the missing step is only visible by
+   * watching the artifact. `PlaywrightReportCaptureTest` reads the TypeScript and fails on it,
+   * because nothing in either language's type system spans the two.
+   *
+   * Note this bounds only the *requested* cadence. Under load `page.screenshot()` can overshoot
+   * until the effective interval exceeds the dwell floor on its own; see the comment on
+   * `EXPORT_GAP_MIN_MS` for why a time-sampled loop can't close that and what would.
    */
   internal const val FRAME_INTERVAL_MS: Long = 200L
 
@@ -118,6 +130,11 @@ internal object PlaywrightReportCapture {
         headless = headless,
         deviceId = deviceId,
         onBrowserInstallProgress = onInstallProgress,
+        // Capture at 1x. The frames become an animated artifact people share in a PR rather than
+        // something read pixel-for-pixel. A headed run would otherwise capture at 2x, which
+        // quadruples the bytes to carry detail the format then throws away. Pinning it also makes
+        // a laptop export match what CI produces from the same command.
+        deviceScaleFactorOverride = 1.0,
       )
       val mgr = manager
       runBlocking(mgr.playwrightDispatcher) {

@@ -298,7 +298,7 @@ class PlaywrightInteractionToolFactoryTest {
       <html><body><input type="number" placeholder="Quantity" /></body></html>
       """.trimIndent(),
     )
-    val box = runBlocking(dispatcher) { page.locator("input[type=number]").boundingBox() }
+    val box = assertNotNull(runBlocking(dispatcher) { page.locator("input[type=number]").boundingBox() })
 
     val (tool, _) = factory.createTapTool(
       node = null,

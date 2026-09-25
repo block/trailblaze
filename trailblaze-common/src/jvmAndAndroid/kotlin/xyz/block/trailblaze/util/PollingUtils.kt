@@ -32,7 +32,9 @@ object PollingUtils {
    * one attempt — and for a condition that shells out to the device that second term dominates:
    * each on-device shell command is only bounded at
    * [AndroidShellBounds.SHELL_READ_TIMEOUT_MS][xyz.block.trailblaze.device.AndroidShellBounds.SHELL_READ_TIMEOUT_MS]
-   * (300s), so a `maxWaitMs = 30_000` condition issuing two wedged commands can take ~630s to
+   * (300s) and each host one at
+   * [AndroidShellBounds.HOST_SHELL_TIMEOUT_MS][xyz.block.trailblaze.device.AndroidShellBounds.HOST_SHELL_TIMEOUT_MS]
+   * (330s), so a `maxWaitMs = 30_000` condition issuing two wedged commands can take ~630s to
    * return. Truncating a shell read mid-flight is worse than waiting for it — it leaves the
    * UiAutomation monitor held — so the guarantee here is deliberately the weaker one: no attempt
    * starts after the deadline, and no sleep is issued that the remaining budget cannot cover.

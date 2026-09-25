@@ -376,14 +376,4 @@ function chunkJsonWithoutRuntimeAttachments(json: string): string | null {
   return toInertJson({ ...payload, attachments: stripped.attachments });
 }
 
-// Re-key the hoisted sprite chunk for an exported subset of sessions: #tb-sprites is keyed by
-// session index, and indices shift when a subset is exported (session 3 of 5 becomes session 0 of
-// 1). `spriteFor(video, originalIndex)` resolves one session's sheet URIs in order (inline
-// `video.sprites` first, the hoisted chunk otherwise), so an export of an export round-trips.
-function rekeySprites(exported: SessionPayload[], all: SessionPayload[], spriteFor: (video: VideoInfo | null | undefined, sessionIndex: number) => string[]): Record<string, string[]> {
-  const sprites: Record<string, string[]> = {};
-  exported.forEach((session, i) => { const urls = spriteFor(session.video, all.indexOf(session)); if (urls.some(Boolean)) sprites[String(i)] = urls; });
-  return sprites;
-}
-
-export { parseEventJsonish, eventValueText, normalizeEventPayload, eventPrettyText, rawPrettyText, inflateGzText, deflateGzText, inflateGzJsonArray, inflateEventsGz, inflateLlmMessagesGz, inflateGzJsonRecord, jsonToYaml, transcriptToolCallYaml, transcriptToolResultDisplay, toInertJson, inertScriptBody, tbBootLoaderHtml, rekeySprites, withoutRuntimeAttachments, chunkJsonWithoutRuntimeAttachments };
+export { parseEventJsonish, eventValueText, normalizeEventPayload, eventPrettyText, rawPrettyText, inflateGzText, deflateGzText, inflateGzJsonArray, inflateEventsGz, inflateLlmMessagesGz, inflateGzJsonRecord, jsonToYaml, transcriptToolCallYaml, transcriptToolResultDisplay, toInertJson, inertScriptBody, tbBootLoaderHtml, withoutRuntimeAttachments, chunkJsonWithoutRuntimeAttachments };

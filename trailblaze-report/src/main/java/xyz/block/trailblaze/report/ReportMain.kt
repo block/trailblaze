@@ -4,6 +4,8 @@ import com.github.ajalt.clikt.core.main
 import xyz.block.trailblaze.api.TrailblazeImageFormat
 import xyz.block.trailblaze.llm.LlmLogCostEnricher
 import xyz.block.trailblaze.llm.config.BuiltInLlmModelRegistry
+import xyz.block.trailblaze.logs.client.BoundedLogFileName
+import xyz.block.trailblaze.logs.client.TrailblazeCompactJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.HasScreenshot
@@ -379,7 +381,6 @@ fun moveJsonFilesToSessionDirs(logsDir: File): Map<String, SessionId> {
       val log: TrailblazeLog = TrailblazeJsonInstance.decodeFromString<TrailblazeLog>(
         downloadedJsonFile.readText(),
       )
-      downloadedJsonFile.delete()
 
       val sessionId = log.session
       val sessionDir = File(logsDir, sessionId.value)
@@ -407,13 +408,26 @@ fun moveJsonFilesToSessionDirs(logsDir: File): Map<String, SessionId> {
         }
       }
 
+      // Appending the class name can push a device name that was already at the limit past it,
+      // so a name that starts with the session id goes back through the same bound. Only the
+      // session id is given up, and the session directory already carries it.
+      val baseName = downloadedJsonFile.nameWithoutExtension
+      val classSuffix = "${log::class.java.simpleName}.json"
       val outputFile = File(
         sessionDir,
-        downloadedJsonFile.nameWithoutExtension + "${log::class.java.simpleName}.json",
+        if (baseName.startsWith(sessionId.value)) {
+          BoundedLogFileName.of(sessionId.value, baseName.removePrefix(sessionId.value) + classSuffix)
+        } else {
+          baseName + classSuffix
+        },
       )
 
-      outputFile.writeText(TrailblazeJsonInstance.encodeToString(log))
+      // Compact, like every other session-log write: this rewrites a log pulled off a device into
+      // the session directory, so pretty-printing it here would undo the on-device saving.
+      outputFile.writeText(TrailblazeCompactJsonInstance.encodeToString(log))
+      // Only once the copy exists: deleting first turns any failed write into a lost log.
       Console.log("Deleting ${downloadedJsonFile.canonicalPath}")
+      downloadedJsonFile.delete()
     } catch (e: Exception) {
       Console.log("Error processing ${downloadedJsonFile.absolutePath}: ${e.message}")
     }

@@ -53,7 +53,8 @@ class PlaywrightScreenStateProvider(
     return withContext(pageManager.playwrightDispatcher) {
       try {
         val page = pageManager.currentPage
-        val viewport = page.viewportSize()
+        // Null for a CDP-attached page with no viewport: skip the tick, as the catch below does.
+        val viewport = page.viewportSize() ?: return@withContext null
         val ariaYaml = PlaywrightAriaSnapshot.captureAriaSnapshot(page).yaml
         val viewHierarchy = PlaywrightAriaSnapshot.ariaSnapshotToViewHierarchy(ariaYaml)
         val screenshotBase64: String? = if (includeScreenshot) {

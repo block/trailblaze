@@ -66,7 +66,20 @@ sealed interface SessionStatus {
     @Serializable
     data class Succeeded(
       override val durationMs: Long,
-    ) : Ended
+      /**
+       * Why the session's captured evidence (network capture, video, logs) may be incomplete: a
+       * capture step failed while the session was being closed. A warning on the session, not its
+       * outcome — the work the session did still succeeded. Null when capture closed cleanly, and on
+       * logs written before the field existed.
+       */
+      val captureWarning: String? = null,
+    ) : Ended {
+      /**
+       * Preserves the pre-`captureWarning` binary signature `Succeeded(durationMs)`. Written out
+       * explicitly rather than via `@JvmOverloads`, which commonMain can't use on the wasmJs target.
+       */
+      constructor(durationMs: Long) : this(durationMs, captureWarning = null)
+    }
 
     @Serializable
     data class Failed(

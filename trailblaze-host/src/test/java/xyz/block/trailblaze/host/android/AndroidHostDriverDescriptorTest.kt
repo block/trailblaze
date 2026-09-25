@@ -28,9 +28,9 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 /**
- * The three Android drivers are offered on the same devices under different execution engines, so
- * these cases assert the shape all three share: one device per `adb` serial, keyed on the serial,
- * and no host run body.
+ * The Android drivers are offered on the same devices under different execution engines, so these
+ * cases assert the shape they share: one device per `adb` serial, keyed on the serial, and no host
+ * run body.
  */
 class AndroidHostDriverDescriptorTest {
 
@@ -43,7 +43,6 @@ class AndroidHostDriverDescriptorTest {
 
   private val descriptorsByDriver: Map<TrailblazeDriverType, HostDriverDescriptor> = mapOf(
     TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY to AndroidAccessibilityHostDriverDescriptor(),
-    TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION to AndroidInstrumentationHostDriverDescriptor(),
     TrailblazeDriverType.ANDROID_TEST to AndroidTestHostDriverDescriptor(),
   )
 

@@ -141,6 +141,27 @@ jobs:
         # Without bun on PATH both fail hard rather than skipping.
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
 
+      - name: Install ffmpeg
+        # The trailblaze-capture video tests encode real recordings (VP9 WebM and
+        # H.264 mp4), which is what they prove. The runner image has no ffmpeg, and
+        # Ubuntu 24.04's apt ffmpeg (6.1.1) drops the wall-clock timestamps a live
+        # recording depends on, so this is a pinned static build. A month-end BtbN
+        # build, because BtbN keeps those for over a year and daily ones for ~2 weeks.
+        env:
+          FFMPEG_URL: https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-08-31-13-27/ffmpeg-n8.1.2-50-g1a748fe2cd-linux64-gpl-8.1.tar.xz
+          FFMPEG_SHA256: c733b4b2951e5957e15505f788b2c65a7a41b6da4b289e295852cc38079b4d2b
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/ffmpeg.tar.xz" "$FFMPEG_URL"
+          echo "$FFMPEG_SHA256  $RUNNER_TEMP/ffmpeg.tar.xz" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/ffmpeg"
+          tar xJf "$RUNNER_TEMP/ffmpeg.tar.xz" -C "$RUNNER_TEMP/ffmpeg" --strip-components=1
+          echo "$RUNNER_TEMP/ffmpeg/bin" >> "$GITHUB_PATH"
+          export PATH="$RUNNER_TEMP/ffmpeg/bin:$PATH"
+          ffmpeg -version | head -1
+          for enc in libvpx-vp9 libx264; do
+            ffmpeg -hide_banner -encoders | grep -qw "$enc" || { echo "ffmpeg has no $enc encoder"; exit 1; }
+          done
+
       - name: Test on Ubuntu (excluding scripting-subprocess)
         # `--parallel` lets independent modules compile and test concurrently
         # across the daemon's worker pool; combined with carving out the slow

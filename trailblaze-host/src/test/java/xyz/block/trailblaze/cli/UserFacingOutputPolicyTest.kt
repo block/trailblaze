@@ -1,12 +1,11 @@
 package xyz.block.trailblaze.cli
 
+import org.junit.Rule
 import picocli.CommandLine
 import picocli.CommandLine.Command
 import picocli.CommandLine.Option
 import xyz.block.trailblaze.util.Console
 import java.util.concurrent.Callable
-import kotlin.test.AfterTest
-import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -35,27 +34,9 @@ import kotlin.test.assertTrue
  */
 class UserFacingOutputPolicyTest {
 
-  private var quietModeOnEntry = false
-
-  /**
-   * Two of these tests assert what the policy does to process-global quiet mode, so they have to
-   * own it rather than assume a starting value. Sharing a JVM with the rest of the host suite,
-   * they do not get a loud one: the daemon-connection helpers in [CliInfrastructure] enable quiet
-   * mode and deliberately never restore it — the real CLI exits moments later — so any earlier
-   * test that drove a command through them leaves the process quiet for good. Running this class
-   * alone hides that entirely.
-   */
-  @BeforeTest
-  fun startFromALoudJvm() {
-    quietModeOnEntry = Console.isQuietMode()
-    Console.disableQuietMode()
-  }
-
-  /** Hand the JVM back exactly as found, so this class does not become the next one's surprise. */
-  @AfterTest
-  fun restoreQuietMode() {
-    if (quietModeOnEntry) Console.enableQuietMode() else Console.disableQuietMode()
-  }
+  @Rule
+  @JvmField
+  val quietMode = QuietModeRule()
 
   /**
    * A command whose output shape is the one under test: an internal breadcrumb on [Console.log],

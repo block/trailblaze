@@ -4,6 +4,7 @@ import com.microsoft.playwright.Browser
 import com.microsoft.playwright.BrowserType
 import com.microsoft.playwright.Page
 import com.microsoft.playwright.Playwright
+import com.microsoft.playwright.assertions.PlaywrightAssertions
 import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Clock
 import org.junit.After
@@ -133,21 +134,63 @@ class PlaywrightNativeVerifyListVisibleToolTest {
       """<!DOCTYPE html><html><body><ul id="orders"><li>Latte</li></ul></body></html>""",
     )
 
-    val startMs = System.currentTimeMillis()
-    val tool = PlaywrightNativeVerifyListVisibleTool(
-      ref = "css=#orders",
-      items = listOf("Latte", "Espresso"),
-    )
-    val result = runBlocking { tool.executeWithPlaywright(page, buildContext()) }
-    val elapsedMs = System.currentTimeMillis() - startMs
+    val elapsedMs = withAmbientAssertionTimeout(UNBOUNDED_ASSERTION_TIMEOUT_MS) {
+      val startMs = System.currentTimeMillis()
+      val tool = PlaywrightNativeVerifyListVisibleTool(
+        ref = "css=#orders",
+        items = listOf("Latte", "Espresso"),
+      )
+      val result = runBlocking { tool.executeWithPlaywright(page, buildContext()) }
+      val elapsedMs = System.currentTimeMillis() - startMs
 
-    val error = assertIs<TrailblazeToolResult.Error.ExceptionThrown>(result)
-    assertContains(error.errorMessage, "Espresso")
-    // One missing item = one bounded per-item wait, not the full default assertion
-    // timeout. Generous ceiling to stay CI-stable while still catching an unbounded wait.
+      val error = assertIs<TrailblazeToolResult.Error.ExceptionThrown>(result)
+      assertContains(error.errorMessage, "Espresso")
+      elapsedMs
+    }
+
     assertTrue(
-      elapsedMs < 4_500,
-      "One missing item should report in ~${PlaywrightNativeVerifyListVisibleTool.ITEM_VISIBILITY_TIMEOUT_MS.toLong()}ms, took ${elapsedMs}ms.",
+      elapsedMs < WELL_UNDER_THE_AMBIENT_TIMEOUT_MS,
+      "One missing item should report in about " +
+        "${PlaywrightNativeVerifyListVisibleTool.ITEM_VISIBILITY_TIMEOUT_MS.toLong()}ms, " +
+        "took ${elapsedMs}ms — the per-item budget looks like it was dropped.",
     )
   }
+
+  /**
+   * Runs [block] with Playwright's ambient assertion timeout raised, then restores it.
+   *
+   * The ambient default is what a dropped per-item `setTimeout` falls back to, so raising it is
+   * what separates the two outcomes. Global state, so it is always restored — a leaked 30s
+   * default would silently slow every later assertion in this JVM.
+   */
+  private fun <T> withAmbientAssertionTimeout(timeoutMs: Double, block: () -> T): T = try {
+    PlaywrightAssertions.setDefaultAssertionTimeout(timeoutMs)
+    block()
+  } finally {
+    PlaywrightAssertions.setDefaultAssertionTimeout(PLAYWRIGHT_DEFAULT_ASSERTION_TIMEOUT_MS)
+  }
 }
+
+/** Playwright's own out-of-the-box assertion timeout, restored after each override. */
+private const val PLAYWRIGHT_DEFAULT_ASSERTION_TIMEOUT_MS = 5_000.0
+
+/**
+ * The ambient assertion timeout the test installs while verifying a missing item.
+ *
+ * Deliberately far above `ITEM_VISIBILITY_TIMEOUT_MS`: the regression this test guards is the
+ * per-item `setTimeout` being dropped, and a dropped timeout falls back to whatever the ambient
+ * default is. Against Playwright's real 5s default the two outcomes are only 3s apart, which
+ * leaves no room for a bound that is also safe on a loaded agent. Raising the fallback makes the
+ * gap 28s.
+ */
+private const val UNBOUNDED_ASSERTION_TIMEOUT_MS = 30_000.0
+
+/**
+ * Ceiling proving one missing item costs one per-item wait rather than the ambient default.
+ *
+ * Duration is the only discriminator — the tool names "Espresso" either way — so this one has to
+ * be a clock. Correct code takes about `ITEM_VISIBILITY_TIMEOUT_MS` (2s, which genuinely elapses
+ * because the item is absent); the regression takes [UNBOUNDED_ASSERTION_TIMEOUT_MS]. 10s sits 8s
+ * above the correct path and 20s below the broken one.
+ */
+private const val WELL_UNDER_THE_AMBIENT_TIMEOUT_MS = 10_000L

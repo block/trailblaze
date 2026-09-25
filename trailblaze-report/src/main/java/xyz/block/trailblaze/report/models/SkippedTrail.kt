@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.report.models
 
 import kotlinx.serialization.Serializable
+import xyz.block.trailblaze.yaml.TrailMetadataValue
 
 /**
  * A trail the runner declined to run because its `config.skip:` resolved a reason for this device.
@@ -59,7 +60,7 @@ data class SkippedTrail(
    * `test_key` no longer spells `case_<n>`. Dropping it would give a skipped row a null case id
    * while the same trail's runs carry a real one, splitting one trail's history in two.
    */
-  val metadata: Map<String, String>? = null,
+  val metadata: Map<String, TrailMetadataValue>? = null,
 
   /** The resolved `config.skip:` reason. Never blank - a blank reason means "not skipped". */
   val reason: String,

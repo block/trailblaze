@@ -90,6 +90,8 @@ import java.io.File
 import java.nio.file.Paths
 import javax.swing.JFileChooser
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.yaml.displayText
+import xyz.block.trailblaze.yaml.leaves
 
 /**
  * Available sort options for trails.
@@ -248,7 +250,7 @@ fun TrailsBrowserTabComposable(
         trail.source?.type?.name?.contains(searchQuery, ignoreCase = true) == true ||
         trail.metadata.any { (key, value) ->
           key.contains(searchQuery, ignoreCase = true) ||
-            value.contains(searchQuery, ignoreCase = true)
+            value.leaves.any { it.contains(searchQuery, ignoreCase = true) }
         } ||
         platforms.any { it.name.contains(searchQuery, ignoreCase = true) }
 
@@ -270,7 +272,7 @@ fun TrailsBrowserTabComposable(
 
       // Metadata filter
       val matchesMetadata = selectedMetadataKey == null || metadataFilterValue.isBlank() ||
-        trail.metadata[selectedMetadataKey]?.contains(metadataFilterValue, ignoreCase = true) == true
+        trail.metadata[selectedMetadataKey]?.leaves?.any { it.contains(metadataFilterValue, ignoreCase = true) } == true
 
       matchesSearch && matchesPlatform && matchesClassifier && matchesSourceType && matchesMetadata
     }.let { filtered ->
@@ -289,8 +291,8 @@ fun TrailsBrowserTabComposable(
             aPriority.compareTo(bPriority, ignoreCase = true)
           }
           is TrailSortOption.ByMetadata -> {
-            val aValue = a.metadata[sortOption.key] ?: ""
-            val bValue = b.metadata[sortOption.key] ?: ""
+            val aValue = a.metadata[sortOption.key]?.displayText ?: ""
+            val bValue = b.metadata[sortOption.key]?.displayText ?: ""
             aValue.compareTo(bValue, ignoreCase = true)
           }
         }

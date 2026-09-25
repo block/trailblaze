@@ -14,11 +14,15 @@ import kotlin.test.assertTrue
 import xyz.block.trailblaze.capture.CaptureOptions
 import xyz.block.trailblaze.capture.CaptureSession
 import xyz.block.trailblaze.capture.CaptureStream
+import xyz.block.trailblaze.capture.ToolCallAwareCaptureStream
+import xyz.block.trailblaze.capture.ToolCallPhase
 import xyz.block.trailblaze.capture.model.CaptureArtifact
 import xyz.block.trailblaze.capture.model.CaptureType
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.logs.model.SessionId
+import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.report.utils.LogsRepo
+import xyz.block.trailblaze.toolcalls.ToolCallObservers
 
 /**
  * Unit tests for the per-`SessionId` capture coordinator that #3077 introduced. The
@@ -183,6 +187,82 @@ class SessionCaptureCoordinatorTest {
     assertEquals(1, stream.stopCalls.get(), "stream.stop should only fire once")
   }
 
+  /** A recorder that writes its recording into the session dir the moment it starts, numbered. */
+  private class NumberedRecordingStream : CaptureStream {
+    override val type: CaptureType = CaptureType.VIDEO
+    val starts = AtomicInteger(0)
+    override fun start(sessionDir: File, deviceId: String, appId: String?) {
+      File(sessionDir, "video.webm").writeText("recording #${starts.incrementAndGet()}")
+    }
+    override fun stop(options: CaptureOptions): CaptureArtifact? = null
+  }
+
+  @Test
+  fun `a session whose capture was stopped never records again`() {
+    // A host run's cleanup stops capture as it releases the device, and the runner then fires its
+    // post-run capture start for the same session. Accepting that start recorded a one-second clip
+    // at teardown that replaced the session's real recording.
+    val stream = NumberedRecordingStream()
+    val (coord, _) = coordinatorWith(factory = { opts, _ -> CaptureSession(listOf(stream), opts) })
+    val id = sessionId()
+    assertTrue(coord.startForSession(id, "ios-1", TrailblazeDevicePlatform.IOS, CaptureOptions()))
+    assertTrue(coord.stopForSession(id))
+
+    val lateStart = coord.startForSession(id, "ios-1", TrailblazeDevicePlatform.IOS, CaptureOptions())
+
+    assertFalse(lateStart, "a start after the session's stop is refused")
+    assertFalse(coord.isActive(id), "and leaves nothing recording")
+    assertEquals(
+      "recording #1",
+      File(logsRepo.getSessionDir(id), "video.webm").readText(),
+      "the session keeps the recording it made while it ran",
+    )
+  }
+
+  @Test
+  fun `a session stopped before its capture started never records`() {
+    // The device manager creates a session and only then asks for its capture. A session that ends
+    // in that gap finds nothing to stop, and the start that then arrives would record after it ended.
+    val (coord, stream) = coordinatorWith()
+    val id = sessionId()
+    assertFalse(coord.stopForSession(id), "nothing was recording yet")
+
+    val lateStart = coord.startForSession(id, "ios-1", TrailblazeDevicePlatform.IOS, CaptureOptions())
+
+    assertFalse(lateStart, "a start after the session's stop is refused")
+    assertFalse(coord.isActive(id), "and leaves nothing recording")
+    assertEquals(0, stream.startCalls.get(), "no recorder was started")
+  }
+
+  @Test
+  fun `a stop that only guessed at its session leaves that session free to record`() {
+    // A run that ends without its session id guesses one, and the guess can be a concurrent run's
+    // session on another device whose capture has not started yet. That run must still record.
+    val (coord, stream) = coordinatorWith()
+    val id = sessionId()
+    assertFalse(coord.stopForSession(id, markEnded = false), "nothing was recording yet")
+
+    assertTrue(
+      coord.startForSession(id, "ios-1", TrailblazeDevicePlatform.IOS, CaptureOptions()),
+      "the session's own capture start still records",
+    )
+    assertEquals(1, stream.startCalls.get())
+  }
+
+  @Test
+  fun `a stopped session does not stop other sessions from recording`() {
+    val (coord, stream) = coordinatorWith()
+    val first = sessionId("first")
+    assertTrue(coord.startForSession(first, "ios-1", TrailblazeDevicePlatform.IOS, CaptureOptions()))
+    assertTrue(coord.stopForSession(first))
+
+    assertTrue(
+      coord.startForSession(sessionId("second"), "ios-1", TrailblazeDevicePlatform.IOS, CaptureOptions()),
+      "the next session on the same device records as usual",
+    )
+    assertEquals(2, stream.startCalls.get())
+  }
+
   @Test
   fun `concurrent startForSession calls for the same id result in exactly one start`() {
     // Pins the race fix — two threads calling startForSession with the same id at
@@ -279,4 +359,78 @@ class SessionCaptureCoordinatorTest {
   }
 
   private val coordAlternator = AtomicInteger(0)
+
+  @Test
+  fun `a coordinator with no capture running is not on the tool-dispatch path`() {
+    // The observer registry holds by identity for the life of the JVM, so registering in the
+    // constructor puts every coordinator ever built on the dispatch thread forever — harmless for
+    // one daemon-lifetime instance, a leak the moment one is built per run or per test.
+    // Registration follows the captures instead: with nothing to forward to, nothing listens.
+    // Counted as a delta: this registry is process-global, so being the only registrant is not
+    // something a unit test in a shared JVM can assume.
+    val before = ToolCallObservers.registeredCount
+    val coord = SessionCaptureCoordinator(
+      logsRepo = logsRepo,
+      captureSessionFactory = { opts, _ -> CaptureSession(listOf(FakeStream()), opts) },
+    )
+    assertEquals(before, ToolCallObservers.registeredCount, "constructing a coordinator registers nothing")
+
+    val id = sessionId("observer-lifecycle")
+    coord.startForSession(id, "android-1", TrailblazeDevicePlatform.ANDROID, CaptureOptions())
+    assertEquals(before + 1, ToolCallObservers.registeredCount, "a running capture listens for tool calls")
+
+    coord.stopForSession(id)
+    assertEquals(before, ToolCallObservers.registeredCount, "and stops listening once its last capture ends")
+  }
+
+  // --- Tool-call routing --------------------------------------------------------
+
+  private class ToolCallRecordingStream : CaptureStream, ToolCallAwareCaptureStream {
+    val calls = mutableListOf<String>()
+    override val type: CaptureType = CaptureType.MEMORY
+    override fun start(sessionDir: File, deviceId: String, appId: String?) = Unit
+    override fun stop(options: CaptureOptions): CaptureArtifact? = null
+    override fun onToolCall(phase: ToolCallPhase, toolName: String, traceId: String?) {
+      calls += "${phase.name} $toolName $traceId"
+    }
+  }
+
+  @Test
+  fun `tool calls for a started session reach its capture, and stop after the session ends`() {
+    val stream = ToolCallRecordingStream()
+    val coordinator = SessionCaptureCoordinator(logsRepo) { options, _ -> CaptureSession(listOf(stream), options) }
+    try {
+      val session = SessionId("routed-session")
+      val other = SessionId("some-other-session")
+      val trace = TraceId.generate(TraceId.Companion.TraceOrigin.TOOL)
+      // Before the session's capture starts nothing is routed: the loop may already be dispatching
+      // pre-actions while the capture is still being reserved.
+      ToolCallObservers.notifyBefore(session, "launchApp", trace)
+      assertTrue(coordinator.startForSession(session, "emulator-5554", TrailblazeDevicePlatform.ANDROID, CaptureOptions()))
+      ToolCallObservers.notifyBefore(session, "tapOnElement", trace)
+      ToolCallObservers.notifyAfter(session, "tapOnElement", trace)
+      ToolCallObservers.notifyBefore(other, "tapOnElement", trace)
+      assertTrue(coordinator.stopForSession(session))
+      ToolCallObservers.notifyAfter(session, "tapOnElement", trace)
+      // The trace comes through as the plain id the stream writes into its rows.
+      assertEquals(
+        listOf("BEFORE tapOnElement ${trace.traceId}", "AFTER tapOnElement ${trace.traceId}"),
+        stream.calls,
+      )
+    } finally {
+      coordinator.close()
+    }
+  }
+
+  @Test
+  fun `a closed coordinator no longer listens for tool calls`() {
+    val stream = ToolCallRecordingStream()
+    val coordinator = SessionCaptureCoordinator(logsRepo) { options, _ -> CaptureSession(listOf(stream), options) }
+    val session = SessionId("closed-coordinator")
+    assertTrue(coordinator.startForSession(session, "emulator-5554", TrailblazeDevicePlatform.ANDROID, CaptureOptions()))
+    coordinator.close()
+    ToolCallObservers.notifyBefore(session, "tapOnElement", traceId = null)
+    assertTrue(stream.calls.isEmpty())
+    coordinator.stopForSession(session)
+  }
 }

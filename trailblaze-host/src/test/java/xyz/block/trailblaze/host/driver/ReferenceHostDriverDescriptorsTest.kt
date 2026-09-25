@@ -24,10 +24,12 @@ class ReferenceHostDriverDescriptorsTest {
    * registers it" is not an invariant — "the reference distribution registers all of them" is.
    */
   @Test
-  fun `the reference distribution registers every driver`() {
+  fun `the reference distribution registers every runnable driver`() {
     val registry = HostDriverDescriptorRegistry(ReferenceHostDriverDescriptors.all())
 
-    val unregistered = TrailblazeDriverType.entries.filter { registry.forDriverOrNull(it) == null }
+    val unregistered = TrailblazeDriverType.entries
+      .filter { it !in TrailblazeDriverType.RETIRED_DRIVERS }
+      .filter { registry.forDriverOrNull(it) == null }
 
     assertTrue(
       unregistered.isEmpty(),
@@ -35,6 +37,28 @@ class ReferenceHostDriverDescriptorsTest {
         "is ever discovered and a run of one dies resolving a descriptor: " +
         "${unregistered.map { it.name }}. Write a HostDriverDescriptor for each and add it to " +
         "ReferenceHostDriverDescriptors.",
+    )
+  }
+
+  /**
+   * The inverse, and the half that would otherwise rot silently. Retiring a driver means deleting
+   * its runtime; leaving the descriptor behind would keep listing its devices and routing runs at
+   * a runtime that is gone, and the test above — which now skips retired drivers — could not see
+   * it. `CliRunDriverResolver` rejects the driver before a descriptor is ever asked for, so the
+   * only symptom of a stale descriptor is devices in a listing nobody can run on.
+   */
+  @Test
+  fun `no retired driver has a descriptor`() {
+    val registry = HostDriverDescriptorRegistry(ReferenceHostDriverDescriptors.all())
+
+    val stillRegistered = TrailblazeDriverType.RETIRED_DRIVERS
+      .filter { registry.forDriverOrNull(it) != null }
+
+    assertTrue(
+      stillRegistered.isEmpty(),
+      "these drivers are retired but still plugged in, so their devices are listed and a run of " +
+        "one reaches a deleted runtime: ${stillRegistered.map { it.name }}. Delete the " +
+        "HostDriverDescriptor and drop it from ReferenceHostDriverDescriptors.",
     )
   }
 

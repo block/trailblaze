@@ -280,6 +280,9 @@ and project context to the loop, which the built-in agent can't.
 - **Gating CI on which trails a tool change affects?** See the
   [`usages --json` report contract](usages-json.md) — field semantics, the diagnostic-kind
   registry, exit codes, and the versioning policy.
+- **Asking what features a batch of sessions actually exercised?** See
+  [Session surveys](surveys.md) — small TypeScript surveys that read a session's logs,
+  network capture, and analytics and report findings with the records that prove them.
 - **Customizing the LLM?** See [LLM Configuration](llm_configuration.md) and
   [Built-in Models](generated/LLM_MODELS.md). Using a model that isn't built in — no
   Trailblaze upgrade required — is [Adding a Model](adding_a_model.md).

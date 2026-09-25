@@ -79,7 +79,8 @@ data class TapOnByElementSelector(
     //
     // Cross-driver compatibility: some recordings carry an [androidAccessibility] nodeSelector
     // for forward-portability even though they're replayed under a non-accessibility runtime
-    // agent (e.g. [AndroidMaestroTrailblazeAgent] on the on-device test farm). Those recordings
+    // agent (the host Maestro agent, or the retired on-device UiAutomator agent whose recordings
+    // are still in the corpus). Those recordings
     // fall through to the regular PREFER_NODE_SELECTOR path below, which lowers the nodeSelector
     // to a Maestro selector — the recording's [containsChild]/[textRegex] shape resolves
     // correctly under UiAutomator for cross-driver-recorded trails. Gating on
@@ -108,8 +109,8 @@ data class TapOnByElementSelector(
         Console.log("### tap (accessibility): $message — selector=${nodeSelector.driverMatch?.description() ?: "?"}")
         return TrailblazeToolResult.Error.ExceptionThrown(errorMessage = message)
       }
-      // Non-accessibility runtime agent (e.g. AndroidMaestroTrailblazeAgent on the on-device
-      // test farm under instrumentation/Maestro driver). The recording happens to carry an
+      // Non-accessibility runtime agent (the host Maestro agent, or a recording made on the
+      // retired on-device UiAutomator driver). The recording happens to carry an
       // accessibility-shaped nodeSelector for forward-portability, but at runtime we have no
       // accessibility-native dispatch path. Fall through to PREFER_NODE_SELECTOR below, which
       // either dispatches via the agent's nodeSelector path (returns null here) or falls back

@@ -1071,6 +1071,7 @@ export interface RunRequest {
   captureLogcat?: boolean | null;
   captureNetworkTraffic?: boolean | null;
   captureIosLogs?: boolean | null;
+  captureMemory?: boolean | null;
   captureAnalytics?: boolean | null;
   captureEvents?: boolean | null;
   trailId?: string | null;
@@ -1209,7 +1210,7 @@ export interface SessionSummary {
   error?: string | null;
   trailId?: string | null;
   imported?: boolean;
-  metadata?: Record<string, string> | null;
+  metadata?: Record<string, TrailMetadataValue> | null;
 }
 
 export interface SessionsResponse {
@@ -1226,6 +1227,7 @@ export interface SettingsDto {
   alwaysOnTop: boolean;
   captureLogcat: boolean;
   captureIosLogs: boolean;
+  captureMemory: boolean;
   captureNetworkTraffic: boolean;
   captureAnalytics: boolean;
   showWebBrowser: boolean;
@@ -1254,6 +1256,7 @@ export interface SettingsPatchRequest {
   alwaysOnTop?: boolean | null;
   captureLogcat?: boolean | null;
   captureIosLogs?: boolean | null;
+  captureMemory?: boolean | null;
   captureNetworkTraffic?: boolean | null;
   captureAnalytics?: boolean | null;
   showWebBrowser?: boolean | null;
@@ -1312,6 +1315,7 @@ export interface StopApp {
 export interface Succeeded {
   class: "xyz.block.trailblaze.logs.model.SessionStatus.Ended.Succeeded";
   durationMs: number;
+  captureWarning?: string | null;
 }
 
 export interface SucceededWithSelfHeal {
@@ -1456,7 +1460,7 @@ export interface TrailConfig {
   description?: string | null;
   priority?: string | null;
   source?: TrailSource | null;
-  metadata?: Record<string, string> | null;
+  metadata?: Record<string, TrailMetadataValue> | null;
   target?: string | null;
   platform?: string | null;
   driver?: string | null;
@@ -1503,6 +1507,8 @@ export interface TrailIndexResponse {
   trails: TrailIndexEntry[];
   folders?: string[];
 }
+
+export type TrailMetadataValue = string | TrailMetadataValue[] | { [key: string]: TrailMetadataValue };
 
 export interface TrailOpenRequest {
   id: string;
@@ -1625,7 +1631,9 @@ export interface TrailblazeLlmRequestLog {
   llmMessages: TrailblazeLlmMessage[];
   llmResponse: Assistant[];
   actions: Action[];
-  toolOptions: TrailblazeToolDescriptor[];
+  toolOptions?: TrailblazeToolDescriptor[];
+  toolCatalogId?: string | null;
+  toolNames?: string[];
   llmRequestUsageAndCost?: LlmRequestUsageAndCost | null;
   screenshotFile?: string | null;
   durationMs: number;
@@ -1641,7 +1649,7 @@ export interface TrailblazeLlmRequestLog {
   hostReceivedAt?: string | null;
 }
 
-export type TrailblazeLog = AccessibilityActionLog | DelegatingTrailblazeToolLog | MaestroCommandLog | MaestroDriverLog | McpAgentIterationLog | McpAgentRunLog | McpAgentToolLog | McpAskLog | McpSamplingLog | McpToolCallRequestLog | McpToolCallResponseLog | ObjectiveCompleteLog | ObjectiveStartLog | SelfHealInvokedLog | TrailblazeAgentTaskStatusChangeLog | TrailblazeLlmRequestLog | TrailblazeProgressLog | TrailblazeSessionStatusChangeLog | TrailblazeSnapshotLog | TrailblazeToolLog;
+export type TrailblazeLog = AccessibilityActionLog | DelegatingTrailblazeToolLog | MaestroCommandLog | MaestroDriverLog | McpAgentIterationLog | McpAgentRunLog | McpAgentToolLog | McpAskLog | McpSamplingLog | McpToolCallRequestLog | McpToolCallResponseLog | ObjectiveCompleteLog | ObjectiveStartLog | SelfHealInvokedLog | TrailblazeAgentTaskStatusChangeLog | TrailblazeLlmRequestLog | TrailblazeProgressLog | TrailblazeSessionStatusChangeLog | TrailblazeSnapshotLog | TrailblazeToolCatalogLog | TrailblazeToolLog;
 
 export interface TrailblazeNode {
   nodeId?: number;
@@ -1701,6 +1709,16 @@ export interface TrailblazeTargetAppInfo {
   versionCode?: string | null;
   buildNumber?: string | null;
   metadata?: Record<string, string>;
+}
+
+export interface TrailblazeToolCatalogLog {
+  class: "xyz.block.trailblaze.logs.client.TrailblazeLog.TrailblazeToolCatalogLog";
+  toolCatalogId: string;
+  toolOptions: TrailblazeToolDescriptor[];
+  session: string;
+  timestamp: string;
+  clock?: TrailblazeClockDomain | null;
+  hostReceivedAt?: string | null;
 }
 
 export interface TrailblazeToolDescriptor {

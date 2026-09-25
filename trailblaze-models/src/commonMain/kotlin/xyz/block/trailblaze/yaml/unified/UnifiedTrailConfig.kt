@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.yaml.unified
 
 import kotlinx.serialization.Serializable
+import xyz.block.trailblaze.yaml.TrailMetadataValue
 
 /**
  * Unified-format `config:` block — identity, target, optional per-classifier
@@ -96,7 +97,9 @@ data class UnifiedTrailConfig(
   /** Pre-seeded variables for `{{name}}` interpolation in NL and tool params. */
   val memory: Map<String, String>? = null,
   /**
-   * Informational only — never read at runtime. Used for traceability.
+   * Mostly informational traceability data. Each value is a string, a list, or a map, nested to
+   * any depth ([TrailMetadataValue]); read with `metadata.string(key)` /
+   * `metadata.list(key)` / `metadata.map(key)`.
    *
    * Two keys are **reserved bridge keys** for the v1 field that is metadata by nature but
    * that internal tooling still reads as a first-class `TrailConfig` field:
@@ -104,7 +107,7 @@ data class UnifiedTrailConfig(
    * [METADATA_KEY_SOURCE_REASON] (v1 `source.reason`). Conversion writes them here and lowering
    * lifts them back onto `TrailConfig.source`, so both formats read identically.
    */
-  val metadata: Map<String, String>? = null,
+  val metadata: Map<String, TrailMetadataValue>? = null,
   /**
    * Human-readable test title (e.g. the source test-case title), surfaced as the trail name in
    * reports and session lists. Trail-level like the v1 `TrailConfig.title` it round-trips with.

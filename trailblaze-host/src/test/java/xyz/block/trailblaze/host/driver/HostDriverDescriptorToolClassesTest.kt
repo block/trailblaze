@@ -24,6 +24,14 @@ class HostDriverDescriptorToolClassesTest {
     registry.forDriver(driverType).toolClasses(driverType)
 
   /**
+   * A retired driver has no descriptor to ask — its runtime is gone — so it is not part of any
+   * claim here. Asking anyway throws, which would turn every assertion below into the same
+   * unrelated failure.
+   */
+  private val runnableDrivers = TrailblazeDriverType.entries
+    .filterNot { it in TrailblazeDriverType.RETIRED_DRIVERS }
+
+  /**
    * The whole seam in one assertion: a driver contributes tools exactly when it reaches its device
    * some way other than the platform's own UI automation.
    *
@@ -33,7 +41,7 @@ class HostDriverDescriptorToolClassesTest {
    */
   @Test
   fun `only the drivers that reach their device off-platform contribute tools`() {
-    val contributing = TrailblazeDriverType.entries
+    val contributing = runnableDrivers
       .filter { toolClassesFor(it).isNotEmpty() }
       .toSet()
 
@@ -86,7 +94,7 @@ class HostDriverDescriptorToolClassesTest {
    */
   @Test
   fun `every contributing driver brings tools no other driver brings`() {
-    val contributions = TrailblazeDriverType.entries
+    val contributions = runnableDrivers
       .associateWith { toolClassesFor(it) }
       .filterValues { it.isNotEmpty() }
 
@@ -131,7 +139,7 @@ class HostDriverDescriptorToolClassesTest {
   fun `every driver's tool classes are already in the bundled serialization registry`() {
     val bundled = TrailblazeSerializationInitializer.buildAllTools().values.toSet()
 
-    val notBundled = TrailblazeDriverType.entries.associateWith { toolClassesFor(it) - bundled }
+    val notBundled = runnableDrivers.associateWith { toolClassesFor(it) - bundled }
       .filterValues { it.isNotEmpty() }
 
     assertTrue(

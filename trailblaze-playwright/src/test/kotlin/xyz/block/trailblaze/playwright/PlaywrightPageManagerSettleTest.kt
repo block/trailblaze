@@ -5,7 +5,10 @@ import com.microsoft.playwright.BrowserContext
 import com.microsoft.playwright.BrowserType
 import com.microsoft.playwright.Page
 import com.microsoft.playwright.Playwright
+import com.microsoft.playwright.options.WaitUntilState
 import com.sun.net.httpserver.HttpServer
+import java.util.Base64
+import java.util.concurrent.Executors
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
@@ -23,11 +26,15 @@ import kotlin.test.fail
  * Branch coverage for [PlaywrightPageManager.dispatchAndAwaitSettle] — the request-tracking
  * settle ported from microsoft/playwright `backend/utils.ts`.
  *
- * Each test exercises one path:
+ * Each test covers one path:
  *   - no requests → just the post-action grace window
- *   - navigation request → waitForLoadState(LOAD) path
+ *   - navigation request → waitForLoadState(LOAD) path, proven by the state the page is left in
  *   - XHR/fetch tracked → drain-loop path
  *   - action throws → listeners cleaned up cleanly (no leaked observers)
+ *
+ * There are two navigation tests because they answer different questions. One asserts settle
+ * returns rather than parking on a ceiling, and cannot see which branch ran. The other proves
+ * the branch, and pays a real page-load stall to do it.
  *
  * Uses a live Chromium page with `page.route()` stubs to drive each scenario
  * deterministically. The minimal `StubPageManager` only implements what the
@@ -78,12 +85,13 @@ class PlaywrightPageManagerSettleTest {
   }
 
   /**
-   * Action triggers a navigation request → settle takes the `waitForLoadState(LOAD)` path.
-   * Verifies the navigation completes successfully and we return promptly (not at the
-   * drain-loop ceiling or the navigation-load timeout ceiling).
+   * Action triggers a navigation request, so settle runs the `waitForLoadState(LOAD)` path.
+   *
+   * Verifies the navigation completed and settle returned. It does NOT verify which branch ran
+   * — see the comment on the elapsed-time assertion for the measurement that rules that out.
    */
   @Test
-  fun `navigation request - takes the load-state path, returns on load not drain`() = runBlocking {
+  fun `navigation request - settle returns instead of sitting on a ceiling`() = runBlocking {
     page.setContent("<html><body><h1>start</h1></body></html>")
 
     val start = System.currentTimeMillis()
@@ -96,11 +104,101 @@ class PlaywrightPageManagerSettleTest {
     val elapsed = System.currentTimeMillis() - start
 
     assertEquals("landed", page.locator("h1").textContent())
-    // NAVIGATION_LOAD_TIMEOUT_MS = 10000; RESPONSE_DRAIN_TIMEOUT_MS = 5000. A data-URL
-    // nav + one grace window should be well under either.
+    // This bound does NOT prove which branch ran — forcing settle down the drain branch instead
+    // returns in 513ms against the load branch's ~600ms, because a data-URL document finishes
+    // inside the 500ms grace and leaves the drain loop nothing to wait for. What it does prove
+    // is that settle returns at all, so a `waitForLoadState` that never resolves fails as a 3s
+    // assertion rather than as a 10s ceiling. Keep it as containment; the branch itself is
+    // covered by `settle waits for the load event, not just the tracked requests` below.
     assertTrue(
       elapsed < 3000,
-      "Navigation settle took ${elapsed}ms — should land + return well under 3s.",
+      "Navigation settle took ${elapsed}ms — it should have returned, not sat on a load-state ceiling.",
+    )
+  }
+
+  /**
+   * The navigation branch really is the branch that ran — the thing the test above cannot show.
+   *
+   * No clock. The two branches differ in the state they leave the page in, which is the whole
+   * point of the navigation branch: it exists so the next tool is not handed a half-loaded page.
+   * So the assertion is that `document.readyState` has reached `complete` by the time settle
+   * returns, which is exactly the guarantee, rather than a duration standing in for it.
+   *
+   * Making the branches diverge needs a page whose LOAD event lags everything settle tracks.
+   * An image does that: the browser withholds the load event until it finishes, while
+   * `RESPONSE_DRAIN_RESOURCE_TYPES` deliberately does not track images. The image therefore has
+   * to outlast the drain branch's own worst case, or the drain branch sits long enough for the
+   * image to finish anyway and both branches look alike again — which is what
+   * [SLOW_IMAGE_DELAY_MS] is derived from, and why this test is slow. The alternative is an upper
+   * bound on elapsed time around real browser work, the shape this file's other assertions were
+   * just audited to remove.
+   */
+  @Test
+  fun `navigation request - settle waits for the load event, not just the tracked requests`() = runBlocking {
+    // The image has to finish INSIDE the load-state ceiling as well as outlast the drain
+    // ceiling, and those two pull in opposite directions. Overshoot the top and
+    // `waitForLoadState` times out; settle swallows that in a `runCatching` and returns with
+    // the page still loading, so the assertion below fails with a message blaming the drain
+    // branch for something the drain branch did not do. Fail here instead, where the reason is
+    // legible: whoever widened the drain ceiling needs a different lever, not a bigger number.
+    require(SLOW_IMAGE_DELAY_MS <= NAVIGATION_LOAD_CEILING_LIMIT_MS) {
+      "SLOW_IMAGE_DELAY_MS is ${SLOW_IMAGE_DELAY_MS}ms, which no longer fits inside settle's " +
+        "${PlaywrightPageManager.NAVIGATION_LOAD_TIMEOUT_MS.toLong()}ms navigation load ceiling " +
+        "(limit ${NAVIGATION_LOAD_CEILING_LIMIT_MS.toLong()}ms). It is derived from " +
+        "RESPONSE_DRAIN_TIMEOUT_MS, so raising that has squeezed this test out of the gap it " +
+        "needs between the two ceilings. This test cannot discriminate the branches any more — " +
+        "rework it rather than retuning the constant."
+    }
+
+    val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+    server.createContext("/slow-image.html") { exchange ->
+      val body = "<html><body><h1>landed</h1><img src=\"/slow.png\"></body></html>".toByteArray()
+      exchange.responseHeaders.set("Content-Type", "text/html")
+      exchange.sendResponseHeaders(200, body.size.toLong())
+      exchange.responseBody.use { it.write(body) }
+    }
+    server.createContext("/slow.png") { exchange ->
+      Thread.sleep(SLOW_IMAGE_DELAY_MS)
+      val body = Base64.getDecoder().decode(ONE_PIXEL_PNG_BASE64)
+      exchange.responseHeaders.set("Content-Type", "image/png")
+      exchange.sendResponseHeaders(200, body.size.toLong())
+      exchange.responseBody.use { it.write(body) }
+    }
+    // Pool the handlers: on the default single-threaded executor the image's sleep blocks the
+    // document response from completing, which keeps a tracked "document" entry pending and
+    // parks the drain branch on its ceiling for reasons unrelated to what is being tested.
+    // Daemon threads, so a handler still mid-sleep when the test ends cannot hold the JVM.
+    val serverExecutor = Executors.newFixedThreadPool(2) { runnable ->
+      Thread(runnable, "settle-test-http").apply { isDaemon = true }
+    }
+    server.executor = serverExecutor
+    server.start()
+
+    val readyStateAtReturn: Any?
+    try {
+      manager.dispatchAndAwaitSettle {
+        page.navigate(
+          "http://127.0.0.1:${server.address.port}/slow-image.html",
+          // Must return BEFORE the load event, or the action absorbs the wait under test and
+          // both branches look alike — Page.navigate defaults to waitUntil=LOAD.
+          Page.NavigateOptions().setWaitUntil(WaitUntilState.COMMIT),
+        )
+      }
+      readyStateAtReturn = page.evaluate("() => document.readyState")
+    } finally {
+      server.stop(0)
+      // `stop` does not touch an executor the caller supplied, and these are non-daemon threads —
+      // left running they can hold the Gradle test worker open after the test returns.
+      serverExecutor.shutdown()
+    }
+
+    assertEquals("landed", page.locator("h1").textContent())
+    assertEquals(
+      "complete",
+      readyStateAtReturn,
+      "Settle returned with document.readyState='$readyStateAtReturn', so it did not wait for " +
+        "the load event — it took the drain branch, which does not track the image still in " +
+        "flight, and handed back a page that is still loading.",
     )
   }
 
@@ -245,3 +343,48 @@ class PlaywrightPageManagerSettleTest {
     override fun close() = Unit
   }
 }
+
+/** Headroom over the drain branch's worst case, so scheduling jitter cannot blur the two paths. */
+private const val SLOW_IMAGE_SAFETY_MARGIN_MS = 2_000L
+
+/**
+ * Slack left under settle's load ceiling, covering only browser overhead between the load event
+ * firing and the wait observing it.
+ */
+private const val NAVIGATION_LOAD_HEADROOM_MS = 1_000L
+
+/**
+ * Most the image may stall and still let settle's load wait see the load event.
+ *
+ * [SLOW_IMAGE_DELAY_MS] is squeezed between two of settle's own ceilings: it has to exceed the
+ * drain ceiling to discriminate the branches, and stay under the navigation load ceiling or the
+ * load wait expires. Settle swallows that expiry in a `runCatching`, so overshooting produces a
+ * test failure that reads like a drain-branch bug. The gap between the two ceilings is narrow,
+ * and that is a real constraint of the design rather than a margin to spend — so the test
+ * asserts it holds instead of assuming it.
+ */
+private const val NAVIGATION_LOAD_CEILING_LIMIT_MS =
+  PlaywrightPageManager.NAVIGATION_LOAD_TIMEOUT_MS - NAVIGATION_LOAD_HEADROOM_MS
+
+/**
+ * How long the test's image endpoint stalls before answering.
+ *
+ * Derived, not chosen: it has to outlast the drain branch's worst case, which is the drain
+ * ceiling plus the grace window on either side of it. Fall below that and the drain branch waits
+ * long enough for the image to arrive anyway — `readyState` reaches `complete` on both branches,
+ * and the test goes green while proving nothing. Deriving it means raising the drain ceiling
+ * moves this with it instead of silently disarming the test.
+ *
+ * It is bounded from above too, by [NAVIGATION_LOAD_CEILING_LIMIT_MS] — the test checks that
+ * before it does anything, because the two bounds leave only a narrow gap.
+ *
+ * This is what makes the test slow, and it is not a margin that can be trimmed.
+ */
+private const val SLOW_IMAGE_DELAY_MS =
+  PlaywrightPageManager.RESPONSE_DRAIN_TIMEOUT_MS +
+    (2 * PlaywrightPageManager.POST_ACTION_GRACE_MS) +
+    SLOW_IMAGE_SAFETY_MARGIN_MS
+
+/** Smallest valid PNG, so the image endpoint answers with something a browser will decode. */
+private const val ONE_PIXEL_PNG_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="

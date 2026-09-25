@@ -389,6 +389,10 @@ class TrailblazeMcpBridgeImpl(
                 onBrowserInstallProgress = { percent, message ->
                   job.progressMessage = if (percent > 0) "[$percent%] $message" else message
                 },
+                // The slot key every recorder looks this browser up by, as WebBrowserManager
+                // passes it. Without it the browser publishes no screencast feed and ignores a
+                // published record dir, and every later run that reuses it records nothing.
+                deviceId = webKey,
               ).also { createdBrowser = it }
               // If we just created a new browser, adopt it into WebBrowserManager so it
               // persists across MCP session boundaries. When cancelSessionForDevice is
@@ -1557,6 +1561,7 @@ class TrailblazeMcpBridgeImpl(
               maestroDriver = driver,
               screenshotScalingConfig = scalingConfig,
               skipScreenshot = skipScreenshot,
+              trailblazeDeviceId = deviceId,
             )
           }
         }
@@ -1583,6 +1588,7 @@ class TrailblazeMcpBridgeImpl(
                   maestroDriver = driver,
                   screenshotScalingConfig = scalingConfig,
                   skipScreenshot = skipScreenshot,
+                  trailblazeDeviceId = deviceId,
                 )
               }
             }
@@ -1614,6 +1620,7 @@ class TrailblazeMcpBridgeImpl(
       HostMaestroDriverScreenState(
         maestroDriver = driver,
         screenshotScalingConfig = scalingConfig,
+        trailblazeDeviceId = deviceId,
       )
     }
   }
@@ -2155,7 +2162,9 @@ class TrailblazeMcpBridgeImpl(
         structuredContent = result.structuredContent,
         fallback = "Executed $toolLabel on the host for device ${trailblazeDeviceId.instanceId}",
       )
-      is TrailblazeToolResult.Error -> error("Host-local tool execution failed: ${result.errorMessage}")
+      // The message travels back to a scripted caller as its nested failure and up to the user as
+      // the step result, so it leads with the cause rather than with one more wrapper per level.
+      is TrailblazeToolResult.Error -> error(HostLocalToolFailure.describe(result.errorMessage))
     }
   }
 
@@ -2428,7 +2437,7 @@ class TrailblazeMcpBridgeImpl(
           fallback = "Executed ${tool.advertisedToolName} on device ${deviceId.instanceId}",
         )
       is TrailblazeToolResult.Error ->
-        error("Host-local tool execution failed: ${result.errorMessage}")
+        error(HostLocalToolFailure.describe(result.errorMessage))
     }
   }
 
@@ -3032,6 +3041,12 @@ class TrailblazeMcpBridgeImpl(
     platform: TrailblazeDevicePlatform,
     driverType: TrailblazeDriverType,
   ): String? {
+    // The name still parses so old pins and logs deserialize, but persisting it would select a
+    // driver no run can use and hide every device of this platform from the listing.
+    if (driverType in TrailblazeDriverType.RETIRED_DRIVERS) {
+      val replacement = TrailblazeDriverType.defaultForPlatform(platform)?.name ?: "the platform default"
+      return "Driver ${driverType.name} has been retired and its runtime is gone. Use $replacement instead."
+    }
     trailblazeDeviceManager.settingsRepo.updateAppConfig { config ->
       config.copy(
         selectedTrailblazeDriverTypes = config.selectedTrailblazeDriverTypes + (platform to driverType),

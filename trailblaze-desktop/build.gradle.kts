@@ -291,11 +291,10 @@ afterEvaluate {
     // GraalVM's shaded ICU locale tables (~13 MB, ~4 200 files, no classes) — data for a
     // JavaScript engine that cannot run in the SHRUNK JAR. Maestro drags GraalJS in for `${...}`
     // interpolation and for `evalScript`/`runScript`; Trailblaze evaluates scripted tools on
-    // QuickJS instead, our YAML layer rejects both script commands, and the on-device Orchestra
-    // fork installs a `FakeJsEngine`. What settles it is the shipped artifact: ProGuard leaves
-    // ZERO `com/oracle/truffle/js/**` class files in it (4 886 in the dependency, 0 in the JAR,
-    // on `main` as well), so a `${...}` on the host already fails there today, with or without
-    // these tables.
+    // QuickJS instead, and our YAML layer rejects both script commands. What settles it is the
+    // shipped artifact: ProGuard leaves ZERO `com/oracle/truffle/js/**` class files in it
+    // (4 886 in the dependency, 0 in the JAR, on `main` as well), so a `${...}` on the host
+    // already fails there today, with or without these tables.
     //
     // Gated on the shrinker for exactly that reason: it is only the ProGuard pass that makes this
     // data unreachable. An UNSHRUNK JAR keeps the JS language, and `scripts/install-trailblaze-source.sh`

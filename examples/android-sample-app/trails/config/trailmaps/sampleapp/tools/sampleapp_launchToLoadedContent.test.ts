@@ -13,7 +13,9 @@ import type { MatchDescriptor, TrailblazeTarget } from "@trailblaze/scripting";
 import { sampleapp_launchToLoadedContent } from "./sampleapp_launchToLoadedContent";
 
 const ACCESSIBILITY_DRIVER = "android-ondevice-accessibility";
-const INSTRUMENTATION_DRIVER = "android-ondevice-instrumentation";
+// A live Android driver this trailhead does NOT support — its selector-native taps and wait are
+// accessibility-only, so the in-process driver has to be refused up front rather than half-run.
+const IN_PROCESS_DRIVER = "android-test";
 const APP_ID = "xyz.block.trailblaze.examples.sampleapp";
 const MATCH: MatchDescriptor = { indexPath: [0, 1] };
 
@@ -94,7 +96,7 @@ describe("sampleapp_launchToLoadedContent — driver scope", () => {
     const c = createQueuedFindMatchesClient();
 
     await expect(
-      sampleapp_launchToLoadedContent({}, ctxFor(INSTRUMENTATION_DRIVER), c),
+      sampleapp_launchToLoadedContent({}, ctxFor(IN_PROCESS_DRIVER), c),
     ).rejects.toThrow(/targets android-ondevice-accessibility/);
     // Bailed out up front — no tools dispatched.
     expect(c.calls).toHaveLength(0);

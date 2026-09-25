@@ -2,7 +2,7 @@ package xyz.block.trailblaze.host.devices
 
 import maestro.DeviceInfo
 import maestro.Driver
-import xyz.block.trailblaze.android.maestro.LoggingDriver
+import xyz.block.trailblaze.maestro.LoggingDriver
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TargetTemplateContext
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
@@ -63,6 +63,7 @@ class MaestroConnectedDevice(
     screenStateProvider = {
       HostMaestroDriverScreenState(
         maestroDriver = maestroDriver,
+        trailblazeDeviceId = trailblazeDeviceId,
       )
     },
     trailblazeLogger = trailblazeLogger,

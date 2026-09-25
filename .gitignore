@@ -97,7 +97,7 @@ sdks/typescript/install/
 # inputs so regeneration is byte-deterministic.
 sdks/typescript/dist/
 trailblaze-scripting-bundle/src/jvmAndAndroid/resources/trailblaze/scripting/bundle/trailblaze-sdk-bundle.js
-trailblaze-common/src/commonMain/resources/trails/config/trailmaps/trailblaze/tools/*.bundle.js
+trailblaze-common/src/commonMain/resources/trails/config/trailmaps/*/tools/*.bundle.js
 
 # Trail Runner web RPC client bundle — same story: generated at build time from
 # `app/rpc/daemon.ts` via `bun build` (`:trailblaze-host:bundleTrailRunnerDaemon`), shipped in the

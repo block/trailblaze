@@ -64,6 +64,7 @@ import xyz.block.trailblaze.yaml.toRecordingTrailConfig
 import xyz.block.trailblaze.rules.TrailblazeRunnerUtil
 import xyz.block.trailblaze.scripting.HostScriptedToolLauncher
 import xyz.block.trailblaze.scripting.LaunchedScriptingRuntime
+import xyz.block.trailblaze.scripting.finishScriptingRuntimeCleanup
 import xyz.block.trailblaze.toolcalls.ResolvedAgentToolbox
 import xyz.block.trailblaze.toolcalls.SessionDeviceBindings
 import xyz.block.trailblaze.toolcalls.renderMultiDevicePromptSection
@@ -155,20 +156,16 @@ object TrailblazeHostYamlRunner {
   private fun resolveInstalledAppId(resolved: xyz.block.trailblaze.model.ResolvedTarget): String? =
     runCatching {
       val installed = xyz.block.trailblaze.host.ios.MobileDeviceUtils.getInstalledAppIds(resolved.deviceId)
-      // The .onFailure log below catches throws from `getAppIdIfInstalled` (and from
-      // `getInstalledAppIds` itself on iOS), but Android's `AndroidHostAdbUtils.listInstalledPackages`
-      // catches Exception and returns `emptyList()` — so an adb timeout, dead device, or any other
-      // shell-out failure on Android surfaces here as "0 packages installed" with no throw to log.
-      // Detect that distinguishable case (empty installed set despite the target declaring app-id
-      // candidates) and log it explicitly so operators debugging "ctx.target.resolveAppId returned
-      // undefined" on Android get the same signal that a throw would have produced.
+      // A failed probe throws and reaches the .onFailure log below, on Android as well as iOS. An
+      // EMPTY inventory is the other shape a broken probe can take — a running device always has
+      // packages — so it is logged too, or "ctx.target.resolveAppId returned undefined" would
+      // arrive with no reason attached.
       val candidates = resolved.target.getPossibleAppIdsForPlatform(resolved.platform).orEmpty()
       if (installed.isEmpty() && candidates.isNotEmpty()) {
         Console.log(
           "[TrailblazeHostYamlRunner] getInstalledAppIds returned 0 packages for " +
             "${resolved.deviceId} despite target declaring ${candidates.size} candidate(s) " +
-            "[${candidates.joinToString()}] — likely a silent adb failure swallowed by " +
-            "AndroidHostAdbUtils.listInstalledPackages. appId will be null.",
+            "[${candidates.joinToString()}] — the probe answered but listed nothing. appId will be null.",
         )
       }
       resolved.target.getAppIdIfInstalled(resolved.platform, installed)
@@ -176,9 +173,7 @@ object TrailblazeHostYamlRunner {
       // Soft-fail (caller falls back to `ctx.target?.appIds[0]`) but log the underlying
       // reason — otherwise operators debugging "ctx.target.resolveAppId returned undefined"
       // have no signal whether the cause is a missing target or a device disconnect
-      // mid-call. NOTE: this branch does NOT fire for Android adb errors because
-      // `listInstalledPackages` swallows them upstream — see the empty-list check above
-      // for the Android coverage.
+      // mid-call. Android adb failures and bounded timeouts land here too.
       Console.log(
         "[TrailblazeHostYamlRunner] getInstalledAppIds resolution failed for " +
           "${resolved.deviceId}: ${e::class.simpleName}: ${e.message}",
@@ -320,7 +315,6 @@ object TrailblazeHostYamlRunner {
       exportAndSaveTrace(session.sessionId, loggingRule, noLogging = noLogging)
       // After the export, so the count still reflects this run while its spans are being drained.
       HostRunTraceRecording.end()
-      loggingRule.setSession(null)
       try {
         cleanup()
       } catch (cleanupFailure: Throwable) {
@@ -332,6 +326,11 @@ object TrailblazeHostYamlRunner {
         Console.log(
           "Cleanup also failed for $deviceLabel: ${cleanupFailure.message}; preserving the trail failure"
         )
+      } finally {
+        // Scripted resource finalizers reuse the live execution context and its session provider.
+        // Clear it only after cleanup, otherwise a callback through ctx.tools runs without the
+        // session state that existed when the resource was acquired.
+        loggingRule.setSession(null)
       }
     }
   }
@@ -610,9 +609,8 @@ object TrailblazeHostYamlRunner {
       noLogging = noLogging,
       cleanup = {
         withContext(NonCancellable) {
-          subprocessRuntimes.forEach { it.shutdownAll() }
+          finishScriptingRuntimeCleanup(subprocessRuntimes) { executor.close() }
         }
-        executor.close()
       },
     ) { session ->
       launchSubprocessMcpServersIfAny(
@@ -1481,11 +1479,12 @@ object TrailblazeHostYamlRunner {
       noLogging = noLogging,
       cleanup = {
         withContext(NonCancellable) {
-          subprocessRuntimes.forEach { it.shutdownAll() }
-          // Detach from the shared H.264 tee (no-op unless TRAILBLAZE_ANDROID_STREAM_SCREENSHOT
-          // engaged) so the underlying screenrecord doesn't outlive the session.
-          agent.closeStreamScreenshotSource()
-          companionAgents.values.forEach { it.closeStreamScreenshotSource() }
+          finishScriptingRuntimeCleanup(subprocessRuntimes) {
+            // Detach from the shared H.264 tee (no-op unless TRAILBLAZE_ANDROID_STREAM_SCREENSHOT
+            // engaged) so the underlying screenrecord doesn't outlive the session.
+            agent.closeStreamScreenshotSource()
+            companionAgents.values.forEach { it.closeStreamScreenshotSource() }
+          }
         }
       },
     ) { session ->
@@ -1951,6 +1950,40 @@ object TrailblazeHostYamlRunner {
     }
   }
 
+  /**
+   * Whether [logs]' recording should keep only the objective attempts that succeeded: true for a
+   * session that self-healed a step and did not fail.
+   *
+   * A healed step runs as two objective attempts with the same step text — the recorded replay that
+   * failed, then the AI's retry that succeeded. Recorded as-is, the failed attempt keeps the step's
+   * slot (with the broken tool) and the retry lands as an extra duplicate step, so saving that back
+   * into the trail keeps the break and shifts the step count. Keeping only successful attempts
+   * folds the retry into the step it healed. In a session that did not fail, every failed attempt
+   * was healed, so nothing else is dropped. A failed session is recorded unchanged, so its
+   * recording still shows the attempt that broke.
+   *
+   * "Did not fail" means no end status the session recorded is a failure — a session with no end
+   * status yet counts. Some producers write the recording on their success path BEFORE the session
+   * ends (the Compose driver, and any run with `sendSessionEndLog` off), and those must fold too,
+   * because the CLI keeps the first recording written. Every status is checked by type rather than
+   * by taking the last one: callers read raw log files, whose timestamps are not clock-normalized,
+   * so the last one by timestamp need not be the final one.
+   *
+   * "Self-healed" takes the same evidence the save decision does
+   * ([xyz.block.trailblaze.cli.TrailCommand.sessionSelfHealed]): a self-heal hand-off log, or a
+   * heal-marked end status. Either one alone is enough, so a run the save counts as healed is
+   * always recorded as healed.
+   */
+  internal fun recordHealedStepsOnly(logs: List<TrailblazeLog>): Boolean {
+    val endStatuses = logs.filterIsInstance<TrailblazeLog.TrailblazeSessionStatusChangeLog>()
+      .map { it.sessionStatus }
+      .filterIsInstance<SessionStatus.Ended>()
+    val selfHealed = logs.any { it is TrailblazeLog.SelfHealInvokedLog } ||
+      endStatuses.any { it is SessionStatus.Ended.SucceededWithSelfHeal }
+    return selfHealed &&
+      endStatuses.all { it is SessionStatus.Ended.SucceededWithSelfHeal || it is SessionStatus.Ended.Succeeded }
+  }
+
   internal fun generateAndSaveRecording(
     sessionId: SessionId,
     logsDir: File,
@@ -1996,6 +2029,7 @@ object TrailblazeHostYamlRunner {
         sessionTrailConfig = sessionTrailConfig,
         customToolClasses = customToolClasses,
         selectedDeviceConfiguration = startedStatus?.selectedDeviceConfiguration,
+        successfulObjectivesOnly = recordHealedStepsOnly(logs),
       )
       if (recordingYaml.isBlank()) {
         // info, not log: no recording artifact is written at all for this session, so the line has

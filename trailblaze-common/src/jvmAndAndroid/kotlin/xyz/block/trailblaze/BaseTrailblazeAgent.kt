@@ -19,6 +19,7 @@ import xyz.block.trailblaze.toolcalls.ReadOnlyTrailblazeTool
 import xyz.block.trailblaze.toolcalls.SessionDeviceBindings
 import xyz.block.trailblaze.toolcalls.SnapshotCache
 import xyz.block.trailblaze.toolcalls.ToolBatchScope
+import xyz.block.trailblaze.toolcalls.ToolCallObservers
 import xyz.block.trailblaze.toolcalls.ToolExecutionContextThreadLocal
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
@@ -220,101 +221,118 @@ abstract class BaseTrailblazeAgent(
     var lastSuccessResult: TrailblazeToolResult = TrailblazeToolResult.Success()
     for (tool in tools) {
       val resolved = resolveDynamicTool(tool)
+      val toolName = resolved.resolveToolName()
+      // Tool-call observers (the memory capture's before/after samples) hear about TOP-LEVEL tools
+      // only: a nested dispatch is part of the outer tool's cost. Resolved outside the tracer
+      // because tracing can be OFF, and the observers are a contract, not a diagnostic.
+      val observedSession = if (!ToolCallObservers.isEmpty && context.nestedDispatchDepth.get() == 0) {
+        runCatching { context.sessionProvider.invoke().sessionId }.getOrNull()
+      } else {
+        null
+      }
+      // The dispatch's own trace, so an observer's record joins to this tool's logs instead of
+      // being matched on name and time. One trace covers the whole batch (see `context.traceId`).
+      observedSession?.let { ToolCallObservers.notifyBefore(it, toolName, context.traceId) }
       // The one span every driver shares. Tool dispatch is the boundary between "the agent decided
       // to do something" and the device work that decision costs, and it is the same boundary for
       // the Android RPC, Playwright, Maestro and iOS agents — so instrumenting it here is what
       // stops an agent phase reading as one opaque block of seconds. Recorded at NORMAL: one span
       // per tool call, each wrapping work measured in hundreds of milliseconds.
-      val result = TrailblazeTracer.trace(
-        name = resolved.resolveToolName(),
-        cat = TOOL_TRACE_CAT,
-      ) {
-        when (resolved) {
-          // Memory tools execute in-process wherever this loop runs (host loop for host agents,
-          // device loop for on-device agents) — so this loop IS their memory-interpolation
-          // boundary. `toolsExecuted` keeps the AUTHORED instance (here and on every other
-          // branch): it feeds the LLM chat history and the verify ledger, which must see the
-          // token-bearing form — both for fidelity and so `rememberSensitive` values never
-          // reach the LLM context.
-          is MemoryTrailblazeTool -> {
-            toolsExecuted.add(resolved)
-            val memoryResolvedTool = interpolateMemoryInTool(resolved, memory)
-            try {
-              memoryResolvedTool.execute(memory = memory, elementComparator = elementComparator)
-            } catch (e: TrailblazeToolExecutionException) {
-              // Same authored-identity rule as `withAuthoredFailureContent` below: memory tools
-              // throw with `tool = this`, which is now the RESOLVED instance, and both the
-              // exception's tool and its message (built from the embedded result) render into
-              // LLM-facing error content. Rebuild with the authored instance AND scrub any
-              // rememberSensitive value the resolved prompt spliced into the error message
-              // (e.g. a `rememberText` miss embeds the resolved prompt) so neither the args nor
-              // the message ride the failure metadata.
-              if (e.tool !== memoryResolvedTool || memoryResolvedTool === resolved) throw e
-              throw TrailblazeToolExecutionException(
-                tool = resolved,
-                trailblazeToolResult = e.trailblazeToolResult.withAuthoredFailureContent(resolved, memory),
-                cause = e,
+      val result = try {
+        TrailblazeTracer.trace(
+          name = toolName,
+          cat = TOOL_TRACE_CAT,
+        ) {
+          when (resolved) {
+            // Memory tools execute in-process wherever this loop runs (host loop for host agents,
+            // device loop for on-device agents) — so this loop IS their memory-interpolation
+            // boundary. `toolsExecuted` keeps the AUTHORED instance (here and on every other
+            // branch): it feeds the LLM chat history and the verify ledger, which must see the
+            // token-bearing form — both for fidelity and so `rememberSensitive` values never
+            // reach the LLM context.
+            is MemoryTrailblazeTool -> {
+              toolsExecuted.add(resolved)
+              val memoryResolvedTool = interpolateMemoryInTool(resolved, memory)
+              try {
+                memoryResolvedTool.execute(memory = memory, elementComparator = elementComparator)
+              } catch (e: TrailblazeToolExecutionException) {
+                // Same authored-identity rule as `withAuthoredFailureContent` below: memory tools
+                // throw with `tool = this`, which is now the RESOLVED instance, and both the
+                // exception's tool and its message (built from the embedded result) render into
+                // LLM-facing error content. Rebuild with the authored instance AND scrub any
+                // rememberSensitive value the resolved prompt spliced into the error message
+                // (e.g. a `rememberText` miss embeds the resolved prompt) so neither the args nor
+                // the message ride the failure metadata.
+                if (e.tool !== memoryResolvedTool || memoryResolvedTool === resolved) throw e
+                throw TrailblazeToolExecutionException(
+                  tool = resolved,
+                  trailblazeToolResult = e.trailblazeToolResult.withAuthoredFailureContent(resolved, memory),
+                  cause = e,
+                )
+              }
+            }
+            // Host-local executables (e.g. subprocess MCP tools) bypass driver-specific dispatch
+            // — they round-trip through host-side transport and don't belong to any device /
+            // browser / cloud driver. Done in the base so every agent picks it up uniformly.
+            //
+            // Every host-local dispatch emits a `TrailblazeToolLog`. The advertised tool
+            // name flows through the `HostLocalExecutableTrailblazeTool` marker and the raw
+            // args through `RawArgumentTrailblazeTool` — both already handled by
+            // `toLogPayload()` / `getToolNameFromAnnotation()`, so the log identifies the
+            // tool by its dynamic name without needing a class-level `@TrailblazeToolClass`.
+            // Recording, reports, and downstream debuggers all depend on this entry being
+            // present — gating on a marker interface (the prior shape) left scripted /
+            // subprocess MCP dispatches invisible to recordings and let the recording's
+            // auto-save silently swap them for unrelated fallbacks.
+            is HostLocalExecutableTrailblazeTool -> {
+              toolsExecuted.add(resolved)
+              // Host-locals execute right here, so this loop is their memory boundary too. For
+              // the common concrete types (QuickJS / subprocess scripted tools, both
+              // `RawArgumentTrailblazeTool`) this is a pass-through — they resolve their args
+              // JSON at the engine boundary themselves — but a custom class-backed HostLocal
+              // gets its string fields resolved like every other tool.
+              val memoryResolvedTool = interpolateMemoryInTool(resolved, memory)
+              val timeBeforeExecution = Clock.System.now()
+              // Catch throws so the log emit still fires on the exception path. The contract
+              // is "every dispatch logs" — if `execute` lets an exception escape (custom
+              // HostLocal author, transport bug, etc.), the prior shape would skip the log
+              // and re-open #2924. Convert to a `TrailblazeToolResult.Error.ExceptionThrown`,
+              // log it, then surface it as a result so the early-exit branch downstream
+              // treats it the same as a returned error. `CancellationException` re-throws so
+              // structured concurrency for session teardown / agent abort stays intact.
+              val hostResult: TrailblazeToolResult = try {
+                runBlocking { memoryResolvedTool.execute(context) }
+              } catch (e: CancellationException) {
+                throw e
+              } catch (e: Throwable) {
+                // `resolved` (authored), not `memoryResolvedTool`: the embedded command renders
+                // into LLM-facing error content and must keep the token-bearing form.
+                TrailblazeToolResult.Error.ExceptionThrown.fromThrowable(e, resolved)
+              }
+              logToolExecution(
+                tool = memoryResolvedTool,
+                timeBeforeExecution = timeBeforeExecution,
+                context = context,
+                result = hostResult,
+                // Flag this dispatch as host-side so session viewers / reports can badge it as
+                // such, since the log payload is otherwise indistinguishable from an RPC-routed
+                // tool's device-emitted log.
+                dispatchedHostSide = true,
+                rawTool = resolved.takeIf { it !== memoryResolvedTool },
               )
+              hostResult
             }
-          }
-          // Host-local executables (e.g. subprocess MCP tools) bypass driver-specific dispatch
-          // — they round-trip through host-side transport and don't belong to any device /
-          // browser / cloud driver. Done in the base so every agent picks it up uniformly.
-          //
-          // Every host-local dispatch emits a `TrailblazeToolLog`. The advertised tool
-          // name flows through the `HostLocalExecutableTrailblazeTool` marker and the raw
-          // args through `RawArgumentTrailblazeTool` — both already handled by
-          // `toLogPayload()` / `getToolNameFromAnnotation()`, so the log identifies the
-          // tool by its dynamic name without needing a class-level `@TrailblazeToolClass`.
-          // Recording, reports, and downstream debuggers all depend on this entry being
-          // present — gating on a marker interface (the prior shape) left scripted /
-          // subprocess MCP dispatches invisible to recordings and let the recording's
-          // auto-save silently swap them for unrelated fallbacks.
-          is HostLocalExecutableTrailblazeTool -> {
-            toolsExecuted.add(resolved)
-            // Host-locals execute right here, so this loop is their memory boundary too. For
-            // the common concrete types (QuickJS / subprocess scripted tools, both
-            // `RawArgumentTrailblazeTool`) this is a pass-through — they resolve their args
-            // JSON at the engine boundary themselves — but a custom class-backed HostLocal
-            // gets its string fields resolved like every other tool.
-            val memoryResolvedTool = interpolateMemoryInTool(resolved, memory)
-            val timeBeforeExecution = Clock.System.now()
-            // Catch throws so the log emit still fires on the exception path. The contract
-            // is "every dispatch logs" — if `execute` lets an exception escape (custom
-            // HostLocal author, transport bug, etc.), the prior shape would skip the log
-            // and re-open #2924. Convert to a `TrailblazeToolResult.Error.ExceptionThrown`,
-            // log it, then surface it as a result so the early-exit branch downstream
-            // treats it the same as a returned error. `CancellationException` re-throws so
-            // structured concurrency for session teardown / agent abort stays intact.
-            val hostResult: TrailblazeToolResult = try {
-              runBlocking { memoryResolvedTool.execute(context) }
-            } catch (e: CancellationException) {
-              throw e
-            } catch (e: Throwable) {
-              // `resolved` (authored), not `memoryResolvedTool`: the embedded command renders
-              // into LLM-facing error content and must keep the token-bearing form.
-              TrailblazeToolResult.Error.ExceptionThrown.fromThrowable(e, resolved)
-            }
-            logToolExecution(
-              tool = memoryResolvedTool,
-              timeBeforeExecution = timeBeforeExecution,
-              context = context,
-              result = hostResult,
-              // Flag this dispatch as host-side so session viewers / reports can badge it as
-              // such, since the log payload is otherwise indistinguishable from an RPC-routed
-              // tool's device-emitted log.
-              dispatchedHostSide = true,
-              rawTool = resolved.takeIf { it !== memoryResolvedTool },
-            )
-            hostResult
-          }
-          else -> executeTool(resolved, context, toolsExecuted)
-          // Failure metadata carries the AUTHORED instance, mirroring `toolsExecuted`: a tool
-          // that failed after boundary interpolation stamps `command = this` with the RESOLVED
-          // instance, which would surface resolved memory values (incl. rememberSensitive
-          // secrets) in LLM-facing error content — both in the command and in any resolved value
-          // the tool spliced into its error message, so scrub both.
-        }.withAuthoredFailureContent(resolved, memory)
+            else -> executeTool(resolved, context, toolsExecuted)
+            // Failure metadata carries the AUTHORED instance, mirroring `toolsExecuted`: a tool
+            // that failed after boundary interpolation stamps `command = this` with the RESOLVED
+            // instance, which would surface resolved memory values (incl. rememberSensitive
+            // secrets) in LLM-facing error content — both in the command and in any resolved value
+            // the tool spliced into its error message, so scrub both.
+          }.withAuthoredFailureContent(resolved, memory)
+        }
+      } finally {
+        // In a `finally`, so a tool that throws still closes the pair an observer opened.
+        observedSession?.let { ToolCallObservers.notifyAfter(it, toolName, context.traceId) }
       }
       if (!result.isSuccess()) {
         return RunTrailblazeToolsResult(

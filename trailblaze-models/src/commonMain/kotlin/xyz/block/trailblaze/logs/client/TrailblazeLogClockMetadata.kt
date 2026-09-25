@@ -27,6 +27,7 @@ fun TrailblazeLog.withClockMetadata(
   is TrailblazeLog.TrailblazeAgentTaskStatusChangeLog -> copy(timestamp = timestamp, clock = clock, hostReceivedAt = hostReceivedAt)
   is TrailblazeLog.TrailblazeSessionStatusChangeLog -> copy(timestamp = timestamp, clock = clock, hostReceivedAt = hostReceivedAt)
   is TrailblazeLog.TrailblazeLlmRequestLog -> copy(timestamp = timestamp, clock = clock, hostReceivedAt = hostReceivedAt)
+  is TrailblazeLog.TrailblazeToolCatalogLog -> copy(timestamp = timestamp, clock = clock, hostReceivedAt = hostReceivedAt)
   is TrailblazeLog.MaestroCommandLog -> copy(timestamp = timestamp, clock = clock, hostReceivedAt = hostReceivedAt)
   is TrailblazeLog.AccessibilityActionLog -> copy(timestamp = timestamp, clock = clock, hostReceivedAt = hostReceivedAt)
   is TrailblazeLog.AgentDriverLog -> copy(timestamp = timestamp, clock = clock, hostReceivedAt = hostReceivedAt)

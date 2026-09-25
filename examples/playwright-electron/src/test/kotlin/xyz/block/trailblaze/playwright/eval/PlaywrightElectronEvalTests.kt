@@ -63,6 +63,8 @@ class PlaywrightElectronEvalTests {
             instanceId = "playwright-electron-eval-$cdpPort",
             trailblazeDevicePlatform = TrailblazeDevicePlatform.WEB,
           ),
+        // CI's report plays each session's recording; video is opt-in.
+        captureVideo = true,
       )
 
     try {

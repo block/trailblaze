@@ -573,6 +573,7 @@ class TrailblazeTrailmapManifestLoaderTest {
       assertEquals(
         listOf(
           "android_adbShell",
+          "android_ensureAppCompiled",
           "android_grantAppOpsPermission",
           "android_grantPermissions",
           "android_sendBroadcast",
@@ -585,6 +586,15 @@ class TrailblazeTrailmapManifestLoaderTest {
       // Always-enabled so callback dispatch can resolve these by name even though they're
       // surfaceToLlm = false (the LLM never calls setActiveToolSets for them).
       assertTrue(toolset.alwaysEnabled)
+      // Driver scope is load-bearing, not documentation: `android_ensureAppCompiled` is a
+      // scripted tool, and a scripted tool's QuickJS bundle is only launched on device for the
+      // tools the session's catalog delivers. Dropping a driver here silently withholds it from
+      // that driver. `android-test` is spelled out because the `android` platform shorthand
+      // deliberately excludes the in-process driver.
+      assertEquals(
+        listOf("android-ondevice-accessibility", "android-test"),
+        toolset.drivers,
+      )
     } finally {
       tempDir.deleteRecursively()
     }

@@ -127,6 +127,9 @@ target:
     android:
       app_ids:
         - xyz.block.trailblaze.examples.sampleapp
+    ios:
+      app_ids:
+        - xyz.block.trailblaze.examples.iossampleapp
   # Authoring surface: trailmap scripted tools — flat-schema, one tool per file under tools/.
   # No `bun install` required, no subprocess. The host runner synthesizes a small wrapper at
   # session start.
@@ -170,20 +173,20 @@ Toolsets are declared in `trailmaps/<id>/toolsets/*.yaml`. They are pure YAML gr
 
 | Toolset | Always Enabled | Compatible Drivers | Tool Count |
 | --- | --- | --- | ---: |
-| `android_framework` | Yes | `android-ondevice-accessibility`, `android-ondevice-instrumentation` | 3 |
-| `android_primitives` | Yes | `android-ondevice-accessibility`, `android-ondevice-instrumentation` | 7 |
+| `android_framework` | Yes | `android-ondevice-accessibility` | 3 |
+| `android_primitives` | Yes | `android-ondevice-accessibility`, `android-test` | 8 |
 | `compose_core` | No | `compose` | 6 |
 | `compose_verification` | No | `compose` | 3 |
-| `core_interaction` | Yes | `android-ondevice-accessibility`, `android-ondevice-instrumentation`, `ios-axe`, `ios-host` | 21 |
+| `core_interaction` | Yes | `android-ondevice-accessibility`, `ios-axe`, `ios-host` | 21 |
 | `memory` | No | `all drivers` | 9 |
 | `meta` | Yes | `all drivers` | 1 |
-| `mobile_primitives` | Yes | `android-ondevice-accessibility`, `android-ondevice-instrumentation`, `ios-axe`, `ios-host` | 5 |
+| `mobile_primitives` | Yes | `android-ondevice-accessibility`, `ios-axe`, `ios-host` | 5 |
 | `multi_device` | No | `all drivers` | 1 |
-| `navigation` | No | `android-ondevice-accessibility`, `android-ondevice-instrumentation`, `ios-axe`, `ios-host` | 4 |
-| `observation` | No | `android-ondevice-accessibility`, `android-ondevice-instrumentation`, `ios-axe`, `ios-host` | 1 |
+| `navigation` | No | `android-ondevice-accessibility`, `ios-axe`, `ios-host` | 4 |
+| `observation` | No | `android-ondevice-accessibility`, `ios-axe`, `ios-host` | 1 |
 | `revyl_core` | No | `revyl-android`, `revyl-ios` | 7 |
 | `revyl_verification` | No | `revyl-android`, `revyl-ios` | 1 |
-| `verification` | No | `android-ondevice-accessibility`, `android-ondevice-instrumentation`, `ios-axe`, `ios-host` | 3 |
+| `verification` | No | `android-ondevice-accessibility`, `ios-axe`, `ios-host` | 3 |
 | `web_core` | No | `playwright-electron`, `playwright-native` | 16 |
 | `web_framework` | Yes | `playwright-electron`, `playwright-native` | 5 |
 | `web_verification` | No | `playwright-electron`, `playwright-native` | 7 |

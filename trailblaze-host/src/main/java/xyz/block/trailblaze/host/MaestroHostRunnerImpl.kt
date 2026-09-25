@@ -9,7 +9,7 @@ import maestro.orchestra.util.Env.withDefaultEnvVars
 import maestro.orchestra.util.Env.withEnv
 import maestro.orchestra.util.Env.withInjectedShellEnvVars
 import maestro.orchestra.yaml.YamlCommandReader
-import xyz.block.trailblaze.android.maestro.LoggingDriver
+import xyz.block.trailblaze.maestro.LoggingDriver
 import xyz.block.trailblaze.api.EffectiveScreenshotScalingConfig
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.ScreenshotScalingConfig
@@ -191,6 +191,7 @@ class MaestroHostRunnerImpl(
       screenshotScalingConfig = screenshotScalingConfigProvider(),
       deviceClassifiers = deviceClassifiers,
       skipScreenshot = skipScreenshot,
+      trailblazeDeviceId = trailblazeDeviceId,
     )
 
   /**

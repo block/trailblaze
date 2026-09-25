@@ -64,7 +64,12 @@ class RunYamlRequestFactory(
     ),
     trailFilePath = trailFilePath,
     trailblazeDeviceId = device.trailblazeDeviceId,
-    driverType = device.trailblazeDriverType,
+    // Deliberately no `driverType`: picking a device in the UI is not asking for a driver. That
+    // slot means "the caller asked for THIS driver", and filling it with the device's own default
+    // short-circuited the runner's driver resolution, so a trail's `driver:` pin was never read on
+    // this path — including a pin naming a retired driver, which then ran on the device's driver
+    // instead of being refused. Left empty, the runner resolves pin → app setting → this same
+    // device default, so a run with no pin lands on the identical driver.
     referrer = referrer,
     agentImplementation = agentImplementation,
   )

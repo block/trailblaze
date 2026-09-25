@@ -9,6 +9,7 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import xyz.block.trailblaze.logs.client.TrailblazeJson
 import xyz.block.trailblaze.yaml.TrailblazeYaml
+import xyz.block.trailblaze.yaml.metadataOf
 
 /**
  * Parser-shape tests for Trail YAML (unified format). These pin the singleton-mapping root, the
@@ -138,7 +139,7 @@ class UnifiedTrailParserTest {
       parsed.config.devices,
     )
     assertEquals(mapOf("email" to "tb+test@example.com"), parsed.config.memory)
-    assertEquals(mapOf("jira" to "PROJ-123"), parsed.config.metadata)
+    assertEquals(metadataOf("jira" to "PROJ-123"), parsed.config.metadata)
     assertEquals(3, parsed.trail.size)
 
     val step0 = parsed.trail[0]

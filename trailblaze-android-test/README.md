@@ -171,7 +171,7 @@ live in-process session — will reuse the existing on-device RPC seam rather th
 1. A long-running "harness test" method (a normal `@Test` under the app's own rule chain) starts
    `OnDeviceRpcServer` and then parks in a command pump loop instead of a scripted tool list.
 2. The host connects through the existing adb-forwarded RPC channel
-   (`trailblaze-android-ondevice-mcp`), exactly as `ANDROID_ONDEVICE_INSTRUMENTATION` does today.
+   (`trailblaze-android-ondevice-mcp`), exactly as `ANDROID_ONDEVICE_ACCESSIBILITY` does today.
 3. Each RPC tool batch is enqueued to the pump and executed on the instrumentation thread by this
    module's `AndroidTestTrailblazeAgent` — Espresso and Compose calls must not run on Ktor IO
    threads.

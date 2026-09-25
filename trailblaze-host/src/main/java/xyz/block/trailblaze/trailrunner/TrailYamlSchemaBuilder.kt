@@ -3,6 +3,7 @@ package xyz.block.trailblaze.trailrunner
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonObjectBuilder
 import kotlinx.serialization.json.add
+import kotlinx.serialization.json.addJsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
@@ -66,7 +67,21 @@ object TrailYamlSchemaBuilder {
       add(v1ListSchema(toolCallItem))
       add(unifiedMappingSchema(toolCallItem))
     }
+    // A config.metadata value: any YAML shape but null, at every depth (TrailMetadataValueSerializer
+    // rejects a nested null too). Leaves read as strings, so numbers and booleans are fine.
+    putJsonObject("definitions") {
+      putJsonObject(METADATA_VALUE_DEF) {
+        putJsonArray("anyOf") {
+          addJsonObject { putJsonArray("type") { listOf("string", "number", "boolean").forEach { add(it) } } }
+          addJsonObject { put("type", "array"); putJsonObject("items") { put("\$ref", METADATA_VALUE_REF) } }
+          addJsonObject { put("type", "object"); putJsonObject("additionalProperties") { put("\$ref", METADATA_VALUE_REF) } }
+        }
+      }
+    }
   }
+
+  private const val METADATA_VALUE_DEF = "metadataValue"
+  private const val METADATA_VALUE_REF = "#/definitions/$METADATA_VALUE_DEF"
 
   // ── v1: a YAML list of config / prompts / tools items ─────────────────────────────────────────────
   private fun v1ListSchema(toolCallItem: JsonObject): JsonObject = buildJsonObject {
@@ -120,7 +135,11 @@ object TrailYamlSchemaBuilder {
         stringField("skip", "When set, mark the trail skipped with this reason (empty string = not skipped).")
       }
       putJsonObject("tags") { put("type", "array"); put("description", "Free-form labels for grouping/filtering."); putJsonObject("items") { put("type", "string") } }
-      putJsonObject("metadata") { put("type", "object"); put("description", "Arbitrary string metadata (e.g. external test-case ids), surfaced on the run report's Info tab. The `owner` key also renders as the run's subtitle and powers the report's Owner sort."); put("additionalProperties", true) }
+      putJsonObject("metadata") {
+        put("type", "object")
+        put("description", "Arbitrary metadata (e.g. external test-case ids); each value is a string, a list, or a map, nested to any depth. Surfaced on the run report's Info tab. The `owner` key also renders as the run's subtitle and powers the report's Owner sort.")
+        putJsonObject("additionalProperties") { put("\$ref", METADATA_VALUE_REF) }
+      }
       putJsonObject("memory") { put("type", "object"); put("description", "Pre-seeded AgentMemory variables, visible to {{name}} interpolation."); put("additionalProperties", true) }
     }
   }

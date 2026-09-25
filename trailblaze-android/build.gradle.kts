@@ -40,6 +40,10 @@ dependencies {
   // `:trailblaze-quickjs-tools` README for the runtime overview.
   api(project(":trailblaze-quickjs-tools"))
 
+  // Still needed after the on-device UiAutomator driver was deleted: the accessibility driver's
+  // service setup drives the Settings UI through UiAutomator, `AdbCommandUtil` shells out through
+  // its UiAutomation handle, and the migration-capture screen state still dumps a UiAutomator
+  // hierarchy. `api`, not `implementation`, because consumers' own instrumentation tests use it.
   api(libs.androidx.uiautomator)
   api(libs.ktor.client.okhttp)
   // Folded in from `:trailblaze-accessibility` (api there → preserves the same version
@@ -91,6 +95,10 @@ dependencies {
   // (`useJUnitPlatform` is already enabled above for this module).
   testImplementation(libs.kotlin.test)
   testImplementation(libs.junit5.jupiter.engine)
+  // OrchestraReflectiveContractTest drives ElementMatcherUsingMaestro, which reaches the vendored
+  // Orchestra fork through kotlin-reflect. `:trailblaze-common` declares kotlin-reflect as
+  // `implementation`, so it is not on this module's test compile/runtime classpath by inheritance.
+  testImplementation(libs.kotlin.reflect)
 
   // Connected (on-device) test deps. `androidx.test:core` provides ActivityScenario /
   // InstrumentationRegistry used by HierarchyCoverageOnDeviceTest to bring the fixture Activity

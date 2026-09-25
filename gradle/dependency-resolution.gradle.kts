@@ -14,6 +14,7 @@ val serializationVersion = libsCatalog.findVersion("kotlinx-serialization").get(
 val micrometerVersion = libsCatalog.findVersion("micrometer").get().requiredVersion
 val ktorVersion = libsCatalog.findVersion("ktor").get().requiredVersion
 val kotlinVersion = libsCatalog.findVersion("kotlin").get().requiredVersion
+val opentelemetryVersion = libsCatalog.findVersion("opentelemetry").get().requiredVersion
 
 subprojects {
   // Pin every Kotlin runtime artifact — kotlin-stdlib* (including the empty, post-1.8
@@ -72,6 +73,18 @@ subprojects {
       if (requested.group == "io.micrometer") {
         useVersion(micrometerVersion)
         because("CVE-2026-40984: micrometer-core < 1.15.12 is vulnerable to resource exhaustion")
+      }
+    }
+  }
+
+  // Force the OpenTelemetry BOM to the repository security floor across all configurations. Koog's
+  // OpenTelemetry integration transitively requests the vulnerable 1.61.0 BOM and no available Koog
+  // release supplies the fixed version, so direct OpenTelemetry modules otherwise remain vulnerable.
+  configurations.all {
+    resolutionStrategy.eachDependency {
+      if (requested.group == "io.opentelemetry" && requested.name == "opentelemetry-bom") {
+        useVersion(opentelemetryVersion)
+        because("CVE-2026-45292: OpenTelemetry < 1.62.0 permits unbounded resource allocation")
       }
     }
   }

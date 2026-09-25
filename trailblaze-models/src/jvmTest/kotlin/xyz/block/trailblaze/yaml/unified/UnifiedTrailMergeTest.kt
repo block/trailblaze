@@ -22,6 +22,7 @@ import xyz.block.trailblaze.yaml.PromptStep
 import xyz.block.trailblaze.yaml.TrailblazeYaml
 import xyz.block.trailblaze.yaml.TrailheadDefinition
 import xyz.block.trailblaze.yaml.VerificationStep
+import xyz.block.trailblaze.yaml.string
 
 /**
  * Pins [UnifiedTrailAdapter.mergeRecordedClassifier] — the recorder's write-back primitive that
@@ -441,8 +442,8 @@ class UnifiedTrailMergeTest {
     // bridges it into the reserved metadata keys (lowering lifts it back onto the v1 field
     // internal tooling reads).
     assertEquals("P2", merged.config.priority)
-    assertEquals("HANDWRITTEN", merged.config.metadata?.get(UnifiedTrailConfig.METADATA_KEY_SOURCE))
-    assertEquals("authored by hand", merged.config.metadata?.get(UnifiedTrailConfig.METADATA_KEY_SOURCE_REASON))
+    assertEquals("HANDWRITTEN", merged.config.metadata?.string(UnifiedTrailConfig.METADATA_KEY_SOURCE))
+    assertEquals("authored by hand", merged.config.metadata?.string(UnifiedTrailConfig.METADATA_KEY_SOURCE_REASON))
     // And the carried fields survive the emit → decode round-trip of the saved file.
     val yaml = TrailblazeYaml.Default.encodeUnifiedTrailToString(merged)
     assertEquals(merged, TrailblazeYaml.Default.decodeUnifiedTrail(yaml))

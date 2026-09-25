@@ -34,6 +34,7 @@ internal fun settingsDtoFromConfig(
   alwaysOnTop = config.alwaysOnTop,
   captureLogcat = config.captureLogcat,
   captureIosLogs = config.captureIosLogs,
+  captureMemory = config.captureMemory,
   captureNetworkTraffic = config.captureNetworkTraffic,
   captureAnalytics = config.captureAnalytics,
   showWebBrowser = config.showWebBrowser,
@@ -122,6 +123,7 @@ internal suspend fun buildSettingsPatchResponse(
     request.alwaysOnTop?.let { updated = updated.copy(alwaysOnTop = it) }
     request.captureLogcat?.let { updated = updated.copy(captureLogcat = it) }
     request.captureIosLogs?.let { updated = updated.copy(captureIosLogs = it) }
+    request.captureMemory?.let { updated = updated.copy(captureMemory = it) }
     request.captureNetworkTraffic?.let { updated = updated.copy(captureNetworkTraffic = it) }
     request.captureAnalytics?.let { updated = updated.copy(captureAnalytics = it) }
     request.showWebBrowser?.let { updated = updated.copy(showWebBrowser = it) }

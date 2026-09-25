@@ -73,15 +73,12 @@ import xyz.block.trailblaze.yaml.unified.UnifiedTrailTargets
  * Within a platform this gate is specifically `androidMaestro:` reached by
  * `ANDROID_ONDEVICE_ACCESSIBILITY`. Across platforms — only in a multi-device configuration leg,
  * where a `switchDevice` decides which surface a step drives — ANY dialect belonging to a platform
- * other than the active device's is flagged; see [DIALECT_KEY_PLATFORM]. The
- * inverse — an `androidAccessibility:` selector on `ANDROID_ONDEVICE_INSTRUMENTATION` — is NOT
- * the same failure and is deliberately not gated here: the instrumentation agent doesn't resolve
- * nodeSelectors natively at all (every `executeNodeSelector*` on the base `MaestroTrailblazeAgent`
- * returns null), so those tools lower to Maestro via `lowerToMaestroSelector` and match against
- * the live UiAutomator hierarchy. That lowering succeeds for any selector carrying a `textRegex`
- * or `resourceIdRegex`; it fails loudly (a thrown `IllegalStateException` naming the fix) only for
- * a selector whose predicates are all driver-only fields. Neither outcome is the silent
- * every-run `NoMatch` this gate exists to catch, and the loud one already reports itself.
+ * other than the active device's is flagged; see [DIALECT_KEY_PLATFORM].
+ *
+ * There is no same-platform inverse to gate **on Android on-device**: `ANDROID_ONDEVICE_ACCESSIBILITY`
+ * is the only Android on-device driver left, so an `androidAccessibility:` selector is always on its
+ * own driver. This says nothing about other platforms — the iOS pair needs no gate for the separate
+ * reason that it is bridged, not that it is alone; see [NATIVE_DIALECT_DRIVERS].
  *
  * ## Known false negative: multi-segment device identities
  *

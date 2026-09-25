@@ -11,6 +11,7 @@ Entries tagged as **Decision** record significant architectural or technical cho
 
 | Date | Title | Type |
 | :--- | :--- | :--- |
+| 2026-09-23 | [Trail Metadata Takes Any YAML Shape](2026-09-23-trail-metadata-any-shape.md) | Decision |
 | 2026-08-27 | [Tracing: One Producer, One Timeline](2026-08-27-tracing-one-producer-one-timeline.md) | Devlog |
 | 2026-08-27 | [The Trail View: One Trail, Every Device, One Clock](2026-08-27-multi-run-trail-view.md) | Devlog |
 | 2026-08-12 | [`trailblaze-config/` — a standalone workspace config dir alongside `trails/config/`](2026-08-12-standalone-trailblaze-config-dir.md) | Decision |

@@ -1,7 +1,6 @@
 package xyz.block.trailblaze.capture
 
 import kotlin.test.Test
-import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
@@ -9,11 +8,12 @@ import kotlin.test.assertTrue
 class CaptureOptionsTest {
 
   @Test
-  fun `hasAnyCaptureEnabled is false when video, logcat, and iosLogs all off`() {
+  fun `hasAnyCaptureEnabled is false when video, logcat, iosLogs, and memory all off`() {
     val options = CaptureOptions(
       captureVideo = false,
       captureLogcat = false,
       captureIosLogs = false,
+      captureMemory = false,
     )
     assertFalse(options.hasAnyCaptureEnabled)
   }
@@ -24,6 +24,7 @@ class CaptureOptionsTest {
       captureVideo = true,
       captureLogcat = false,
       captureIosLogs = false,
+      captureMemory = false,
     )
     assertTrue(options.hasAnyCaptureEnabled)
   }
@@ -34,6 +35,7 @@ class CaptureOptionsTest {
       captureVideo = false,
       captureLogcat = true,
       captureIosLogs = false,
+      captureMemory = false,
     )
     assertTrue(options.hasAnyCaptureEnabled)
   }
@@ -44,6 +46,18 @@ class CaptureOptionsTest {
       captureVideo = false,
       captureLogcat = false,
       captureIosLogs = true,
+      captureMemory = false,
+    )
+    assertTrue(options.hasAnyCaptureEnabled)
+  }
+
+  @Test
+  fun `hasAnyCaptureEnabled is true when only memory is on`() {
+    val options = CaptureOptions(
+      captureVideo = false,
+      captureLogcat = false,
+      captureIosLogs = false,
+      captureMemory = true,
     )
     assertTrue(options.hasAnyCaptureEnabled)
   }
@@ -52,11 +66,12 @@ class CaptureOptionsTest {
   fun `default options enable both device-log streams but not video`() {
     // Log capture is always-on by default (per-platform gating in CaptureSession.fromOptions
     // means logcat only acts on Android and iOS logs only on iOS). Video is opt-in — it writes
-    // large files and sprite extraction is expensive, so a run must ask for it explicitly.
+    // large files, so a run must ask for it explicitly.
     val options = CaptureOptions()
     assertFalse(options.captureVideo)
     assertTrue(options.captureLogcat)
     assertTrue(options.captureIosLogs)
+    assertTrue(options.captureMemory)
     assertTrue(options.hasAnyCaptureEnabled)
   }
 
@@ -67,50 +82,23 @@ class CaptureOptionsTest {
     assertFalse(CaptureOptions.NONE.captureVideo)
     assertFalse(CaptureOptions.NONE.captureLogcat)
     assertFalse(CaptureOptions.NONE.captureIosLogs)
+    assertFalse(CaptureOptions.NONE.captureMemory)
     assertFalse(CaptureOptions.NONE.hasAnyCaptureEnabled)
     assertNotEquals(CaptureOptions(), CaptureOptions.NONE)
   }
 
   @Test
-  fun `web sprite tuning substitutes the larger defaults when the user has not overridden them`() {
-    val options = CaptureOptions()
-    assertEquals(CaptureOptions.WEB_SPRITE_HEIGHT, options.webSpriteFrameHeight())
-    assertEquals(CaptureOptions.WEB_SPRITE_QUALITY, options.webSpriteQuality())
-    // sanity: the web sprite is genuinely crisper than the mobile-tuned default
-    assertTrue(CaptureOptions.WEB_SPRITE_HEIGHT > CaptureOptions.DEFAULT_SPRITE_HEIGHT)
-    assertTrue(CaptureOptions.WEB_SPRITE_QUALITY > CaptureOptions.DEFAULT_SPRITE_QUALITY)
-  }
-
-  @Test
-  fun `web sprite tuning honors an explicit user override`() {
-    val options = CaptureOptions(spriteFrameHeight = 480, spriteQuality = 70)
-    assertEquals(480, options.webSpriteFrameHeight())
-    assertEquals(70, options.webSpriteQuality())
-  }
-
-  @Test
-  fun `hostCaptureOptions defaults to the host sprite tuning when no env vars are set`() {
+  fun `hostCaptureOptions leaves video off when nothing asks for it`() {
     val options = CaptureOptions.hostCaptureOptions(env = { null })
-    assertEquals(CaptureOptions.HOST_SPRITE_FPS, options.spriteFrameFps)
-    assertEquals(CaptureOptions.HOST_SPRITE_HEIGHT, options.spriteFrameHeight)
-    assertEquals(CaptureOptions.HOST_SPRITE_QUALITY, options.spriteQuality)
     assertFalse(options.captureVideo)
+    assertTrue(options.captureLogcat)
+    assertTrue(options.captureIosLogs)
   }
 
   @Test
-  fun `hostCaptureOptions reads sprite tuning from the environment`() {
-    val env = mapOf(
-      CaptureOptions.ENV_SPRITE_FPS to "8",
-      CaptureOptions.ENV_SPRITE_FRAME_HEIGHT to "1280",
-      CaptureOptions.ENV_SPRITE_QUALITY to "90",
-    )
-    val options = CaptureOptions.hostCaptureOptions(captureVideo = true, env = env::get)
-    assertEquals(8, options.spriteFrameFps)
-    assertEquals(1280, options.spriteFrameHeight)
-    assertEquals(90, options.spriteQuality)
-    // The explicit opt-in must thread through — video defaults off, so this can only be true
-    // if the caller's value is honored.
-    assertTrue(options.captureVideo)
+  fun `hostCaptureOptions honors an explicit per-run opt-in`() {
+    // Video defaults off, so this can only be true if the caller's value is honored.
+    assertTrue(CaptureOptions.hostCaptureOptions(captureVideo = true, env = { null }).captureVideo)
   }
 
   @Test
@@ -187,16 +175,23 @@ class CaptureOptionsTest {
   }
 
   @Test
-  fun `hostCaptureOptions falls back to defaults on non-numeric, out-of-range, or blank env values`() {
-    // A bad env var must never take down video capture — each variable degrades independently.
-    val env = mapOf(
-      CaptureOptions.ENV_SPRITE_FPS to "fast",
-      CaptureOptions.ENV_SPRITE_FRAME_HEIGHT to "99999",
-      CaptureOptions.ENV_SPRITE_QUALITY to "  ",
-    )
-    val options = CaptureOptions.hostCaptureOptions(env = env::get)
-    assertEquals(CaptureOptions.HOST_SPRITE_FPS, options.spriteFrameFps)
-    assertEquals(CaptureOptions.HOST_SPRITE_HEIGHT, options.spriteFrameHeight)
-    assertEquals(CaptureOptions.HOST_SPRITE_QUALITY, options.spriteQuality)
+  fun `memory diagnostics are off unless TRAILBLAZE_MEMORY_DIAGNOSTICS opts in`() {
+    assertFalse(CaptureOptions().memoryDiagnostics)
+    assertFalse(CaptureOptions.hostCaptureOptions(env = { null }).memoryDiagnostics)
+    for (falsey in listOf("", " ", "0", "false", "yes")) {
+      val env = mapOf(CaptureOptions.ENV_MEMORY_DIAGNOSTICS to falsey)
+      assertFalse(CaptureOptions.hostCaptureOptions(env = env::get).memoryDiagnostics, "value '$falsey'")
+    }
+    for (truthy in listOf("1", "true", "TRUE", " true ")) {
+      val env = mapOf(CaptureOptions.ENV_MEMORY_DIAGNOSTICS to truthy)
+      assertTrue(CaptureOptions.hostCaptureOptions(env = env::get).memoryDiagnostics, "value '$truthy'")
+    }
+  }
+
+  @Test
+  fun `an explicit diagnostics choice beats TRAILBLAZE_MEMORY_DIAGNOSTICS`() {
+    val on = mapOf(CaptureOptions.ENV_MEMORY_DIAGNOSTICS to "true")
+    assertFalse(CaptureOptions.hostCaptureOptions(memoryDiagnostics = false, env = on::get).memoryDiagnostics)
+    assertTrue(CaptureOptions.hostCaptureOptions(memoryDiagnostics = true, env = { null }).memoryDiagnostics)
   }
 }

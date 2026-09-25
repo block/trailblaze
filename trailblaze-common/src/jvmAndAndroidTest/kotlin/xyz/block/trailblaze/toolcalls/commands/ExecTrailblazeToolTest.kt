@@ -23,6 +23,7 @@ import xyz.block.trailblaze.toolcalls.HostLocalExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
+import xyz.block.trailblaze.toolcalls.toLogPayload
 import xyz.block.trailblaze.util.isWindows
 
 /**
@@ -49,6 +50,40 @@ class ExecTrailblazeToolTest {
 
     assertThat(result).isInstanceOf(TrailblazeToolResult.Success::class)
     assertThat((result as TrailblazeToolResult.Success).message).isEqualTo("hello")
+  }
+
+  @Test
+  fun `environment reaches the child but is redacted from results and persisted payloads`() = runBlocking {
+    val secret = "opaque-lease\r\nhandle\r\n"
+    val tool = ExecTrailblazeTool(
+      argv = listOf("sh", "-c", "printf %s \"\$TRAILBLAZE_TEST_SECRET\""),
+      environment = mapOf(
+        "TRAILBLAZE_TEST_SECRET" to secret,
+        "TRAILBLAZE_TEST_SECRET_PREFIX" to "opaque",
+      ),
+    )
+
+    val result = tool.execute(createContext())
+
+    assertThat(result).isInstanceOf(TrailblazeToolResult.Success::class)
+    val success = result as TrailblazeToolResult.Success
+    assertThat(success.message).isEqualTo("[REDACTED]")
+    assertThat(tool.toLogPayload().raw.toString()).doesNotContain(secret)
+  }
+
+  @Test
+  fun `environment is redacted from process setup exceptions`() = runBlocking {
+    val secret = "opaque-invalid-value\u0000suffix"
+    val result = ExecTrailblazeTool(
+      argv = listOf("echo", "unused"),
+      environment = mapOf("TRAILBLAZE_TEST_SECRET" to secret),
+    ).execute(createContext())
+
+    assertThat(result).isInstanceOf(TrailblazeToolResult.Error.ExceptionThrown::class)
+    val error = result as TrailblazeToolResult.Error.ExceptionThrown
+    assertThat(error.errorMessage).contains("[REDACTED]")
+    assertThat(error.errorMessage).doesNotContain(secret)
+    assertThat(error.stackTrace.orEmpty()).doesNotContain(secret)
   }
 
   @Test

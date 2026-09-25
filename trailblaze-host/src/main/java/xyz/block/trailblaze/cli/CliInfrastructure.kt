@@ -1503,11 +1503,10 @@ fun cliOneShotWithDevice(
    */
   verb: String = "Command",
   action: suspend (CliMcpClient) -> Int,
-): Int {
-  if (!verbose) Console.enableQuietMode()
+): Int = quietUnlessVerbose(verbose) {
   val port = CliConfigHelper.resolveEffectiveHttpPort()
 
-  return runBlocking {
+  runBlocking {
     // Three-tier device resolution: explicit --device flag → TRAILBLAZE_DEVICE env
     // → autodetect-single-connected-device. Last tier closes the OOBE gap for
     // single-device users (zero setup needed). On miss, [resolveDeviceWithAutodetect]
@@ -1571,8 +1570,7 @@ fun cliReusableWithDevice(
    */
   verb: String = "Command",
   action: suspend (CliMcpClient) -> Int,
-): Int {
-  if (!verbose) Console.enableQuietMode()
+): Int = quietUnlessVerbose(verbose) {
   val config = CliConfigHelper.getOrCreateConfig()
   val port = CliConfigHelper.resolveEffectiveHttpPort()
   // Single helper resolves the (payload, pin, isClearRequest) shape so this
@@ -1591,7 +1589,7 @@ fun cliReusableWithDevice(
   // anchor on the daemon-wide default since the user is reverting.
   val effectiveTarget = daemonCall.pin ?: config.selectedTargetAppId
 
-  return runBlocking {
+  runBlocking {
     // Three-tier device resolution: explicit --device flag → TRAILBLAZE_DEVICE env →
     // autodetect-single-connected-device. Last tier closes the OOBE gap for
     // single-device users (zero setup needed). On miss, [resolveDeviceWithAutodetect]
@@ -1693,12 +1691,11 @@ fun cliWithDaemon(
   sessionScope: String? = null,
   targetAppId: String? = null,
   action: suspend (CliMcpClient) -> Int,
-): Int {
-  if (!verbose) Console.enableQuietMode()
+): Int = quietUnlessVerbose(verbose) {
   val port = CliConfigHelper.resolveEffectiveHttpPort()
   val effectiveTargetAppId = targetAppId ?: CliConfigHelper.getOrCreateConfig().selectedTargetAppId
 
-  return runBlocking {
+  runBlocking {
     val mcpClient = connectOrStartDaemonReusable(
       port,
       targetAppId = effectiveTargetAppId,

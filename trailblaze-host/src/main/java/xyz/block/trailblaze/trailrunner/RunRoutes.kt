@@ -207,6 +207,7 @@ internal suspend fun buildRunDispatchResult(deps: TrailRunnerDeps, body: RunRequ
       captureVideoOverride = body.captureVideo,
       captureLogcatOverride = body.captureLogcat,
       captureIosLogsOverride = body.captureIosLogs,
+      captureMemoryOverride = body.captureMemory,
     )
     reservedSessionId = resolution.sessionId
     val sessionId = resolution.sessionId.value

@@ -41,11 +41,28 @@ class OnDeviceRpcClient(
    * Which wire this client may use, defaulting to the process-wide rollback switch.
    *
    * Overridden per client because the choice can be a property of the DRIVER, not of the
-   * environment: see [TrailblazeDriverType.protoWireSafe]. `@PublishedApi internal`
-   * for the same inline-visibility reason as [onNonRecoverableWedge].
+   * environment: see [TrailblazeDriverType.protoWireSafe]. Also of the REQUEST — a request the
+   * binary codec has no mapping for cannot ride the protobuf wire at all, so a client built for
+   * one pins this (`OnDeviceRpcMemoryProbe`).
+   *
+   * Public rather than `@PublishedApi internal` like [onNonRecoverableWedge]: it is already in the
+   * ABI for the same inline-visibility reason, and a caller that pins the wire deliberately should
+   * be able to assert it did.
    */
-  @PublishedApi
-  internal val wireTransportMode: AndroidWireTransportMode = AndroidWireTransport.mode,
+  val wireTransportMode: AndroidWireTransportMode = AndroidWireTransport.mode,
+  /**
+   * Whether a network failure on this client may repair the device transport — tear down and
+   * re-establish the adb forward, and evict the shared adb client for the serial.
+   *
+   * On by default, because for a caller the trail is waiting on, a dropped forward means the next
+   * call fails too and healing it is the whole point. Off for a BACKGROUND caller: a diagnostic
+   * nobody is waiting for must not yank the tunnel and the adb client out from under the trail
+   * running on the same device. Such a caller takes the failure, falls back, and lets the
+   * foreground path do the repairing.
+   *
+   * Public for the same inline-visibility reason as [wireTransportMode].
+   */
+  val repairTransportOnNetworkError: Boolean = true,
 ) : AutoCloseable {
 
   /**
@@ -190,8 +207,10 @@ class OnDeviceRpcClient(
       // eats the same IOException when that happens. Diagnose-and-heal here so the next
       // call has a fresh tunnel, and fold a structured port-presence note into details so
       // future triage can tell at a glance whether the silent-drop hypothesis was
-      // load-bearing for this particular failure (PRESENT vs ABSENT).
-      val recoveryNote = recoverFromNetworkError()
+      // load-bearing for this particular failure (PRESENT vs ABSENT). A background caller opts
+      // out: repairing the transport is a device-wide act, and one made on behalf of a call
+      // nobody is waiting for would disrupt the trail that IS waiting on the same device.
+      val recoveryNote = if (repairTransportOnNetworkError) recoverFromNetworkError() else "transport repair skipped"
       RpcResult.Failure(
         errorType = RpcResult.ErrorType.NETWORK_ERROR,
         message = "Network error during RPC call",

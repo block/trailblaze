@@ -84,7 +84,7 @@ class AgentToolboxPrimitivesMatchTest {
   }
 
   @Test
-  fun `report toolbox matches getAgentToolboxForDriver under android-ondevice-instrumentation`() {
+  fun `report toolbox matches getAgentToolboxForDriver under android-ondevice-accessibility`() {
     // Originally the driver-leak bug bit Android-bound tools leaking onto web targets;
     // adding the symmetric Android case here catches the dual failure mode (e.g. web-only
     // tools accidentally appearing under an Android driver).
@@ -92,7 +92,7 @@ class AgentToolboxPrimitivesMatchTest {
       targetId = "primitives_android",
       platformKey = "android",
       toolSets = listOf("core_interaction", "memory"),
-      driverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+      driverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
     )
   }
 
@@ -119,7 +119,7 @@ class AgentToolboxPrimitivesMatchTest {
       targetId = "primitives_scripted_present",
       platformKey = "android",
       toolSets = listOf("core_interaction", "memory"),
-      driverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+      driverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
     )
     assertTrue(
       "baseline fixture must surface the scripted tool `openUrl`, else it can't catch " +
@@ -135,7 +135,7 @@ class AgentToolboxPrimitivesMatchTest {
       targetId = "primitives_scripted_excluded",
       platformKey = "android",
       toolSets = listOf("core_interaction", "memory"),
-      driverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+      driverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
       excludedTools = listOf("openUrl"),
     )
     assertFalse(

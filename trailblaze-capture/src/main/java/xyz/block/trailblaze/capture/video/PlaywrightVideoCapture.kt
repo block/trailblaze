@@ -8,9 +8,8 @@ import xyz.block.trailblaze.capture.model.CaptureType
 import xyz.block.trailblaze.util.Console
 
 /**
- * `CaptureStream` for Playwright-driven web sessions. Mirrors what
- * [AndroidVideoCapture] does for Android: produces a `video.mp4` artifact (plus an
- * optional sprite sheet) that the report viewer can play back.
+ * `CaptureStream` for Playwright-driven web sessions. Mirrors what [AndroidVideoCapture] does for
+ * Android: produces the session recording the report plays back.
  *
  * Unlike Android, the recording is owned by Playwright itself — `Browser.newContext()`
  * is what enables it, and `BrowserContext.close()` is what flushes the resulting WebM
@@ -19,27 +18,51 @@ import xyz.block.trailblaze.util.Console
  *  - [start] publishes the per-session temp directory; the manager picks it up at
  *    `createFreshContextAndPage()` and configures `setRecordVideoDir`.
  *  - [stop] asks the manager (via a registered finalizer) to close the active context
- *    so any in-flight `.webm` is flushed, then transcodes the result to `.mp4` with
- *    `ffmpeg -c:v libx264`. WebM→MP4 is a re-encode (codec mismatch) so this is
- *    slower than the Android `-c copy` path, but the output size is small (Playwright
- *    records VP8/VP9 already-compressed) so a `veryfast` preset finishes in well
- *    under a second for typical trail runs.
+ *    so any in-flight `.webm` is flushed, then delivers it.
  *
- * If `ffmpeg` is unavailable or the transcode fails, the original WebM is returned as
- * the artifact so the run still has *some* video — downstream viewers that don't
- * understand WebM will degrade gracefully (no thumbnail, but the link still resolves).
+ * Playwright already records a WebM (VP8), which is the container every other platform's recording
+ * is in, so with [RecordingFormat.WEBM] — the default here on every host, since no encoder is
+ * involved — the file is delivered untouched as `video.webm`. [RecordingFormat.MP4] transcodes it
+ * to H.264 with `ffmpeg -c:v libx264` for the one consumer that needs an mp4, `trailblaze report
+ * --video`; if that transcode fails the WebM is delivered instead so the run still has its video.
+ *
+ * ### Where this recorder's window comes from
+ * Playwright owns the recording — it starts filming when the *page* is created, long after [start]
+ * (which only publishes the directory the manager will use), and finalizes the file at context
+ * close. So neither bookend can be read off the calls here:
+ *  - **Clip time zero** is reported by the manager as it creates the page
+ *    ([PlaywrightVideoRecordDir.markRecordingStarted]). Measured on a cold browser, [start] ran
+ *    **6.3 s** before the first frame; from the page-creation instant the residual is ~100 ms, which
+ *    is the browser's own first-paint latency and is not observable from the API.
+ *  - **The end** spans the file rather than the stop call, because Playwright writes a stable tail
+ *    of duplicate frames while finalizing — ~910 ms, the same across runs, with or without closing
+ *    the page first. The report *scales* clip time onto the window, so a window shorter than the
+ *    file turns that tail into a proportional error (~500 ms by mid-session on a 10 s recording).
+ *    Taking the duration from the file makes the scale exactly 1.
+ *
+ * Both fall back to the [start]/[stop] instants if the manager never reported (a browser that never
+ * recorded) or the duration can't be probed. A slightly wrong window still lets the report place
+ * steps; no window at all makes it drop the recording.
  */
-class PlaywrightVideoCapture : CaptureStream {
-  override val type = CaptureType.VIDEO
+class PlaywrightVideoCapture(
+  private val format: RecordingFormat = RecordingFormat.WEBM,
+  /** Test seam: the host clock this recorder falls back to when the manager reported nothing. */
+  private val nowMs: () -> Long = System::currentTimeMillis,
+  /** Test seam: how the delivered recording's real duration is read. */
+  private val durationProbeMs: (File) -> Long? = { VideoDuration.probeMs(it) },
+) : CaptureStream {
+  override val type: CaptureType get() = format.captureType
 
   private var sessionDir: File? = null
   private var deviceId: String? = null
-  private var startTimestampMs: Long = 0
+
+  /** Fallback anchor only — the manager reports the real one. See the class doc. */
+  private var startedPublishingAtMs: Long = 0
 
   override fun start(sessionDir: File, deviceId: String, appId: String?) {
     this.sessionDir = sessionDir
     this.deviceId = deviceId
-    this.startTimestampMs = System.currentTimeMillis()
+    this.startedPublishingAtMs = nowMs()
     sessionDir.mkdirs()
     PlaywrightVideoRecordDir.setRecordDir(deviceId, sessionDir)
     Console.log("[PlaywrightVideoCapture] published recordVideoDir=${sessionDir.absolutePath} for deviceId=$deviceId")
@@ -48,12 +71,14 @@ class PlaywrightVideoCapture : CaptureStream {
   override fun stop(options: CaptureOptions): CaptureArtifact? {
     val dev = deviceId ?: return null
     val dir = sessionDir ?: return null
-    val endTimestampMs = System.currentTimeMillis()
+    val stoppedAtMs = nowMs()
 
     // Ask the Playwright manager — if still alive — to close its BrowserContext so the
     // .webm is flushed. No-op when the manager has already torn itself down (the common
     // case in CI runs, where playwrightTest.close() ran before this method was called).
     PlaywrightVideoRecordDir.runFinalizer(dev)
+    val startTimestampMs = PlaywrightVideoRecordDir.recordingStartedAtMs(dev) ?: startedPublishingAtMs
+    PlaywrightVideoRecordDir.clearRecordingStarted(dev)
     PlaywrightVideoRecordDir.clearRecordDir(dev)
 
     val webm = findLatestWebm(dir)
@@ -62,47 +87,32 @@ class PlaywrightVideoCapture : CaptureStream {
       return null
     }
 
-    val mp4 = File(dir, "video.mp4")
-    val mp4Result = transcodeWebmToMp4(webm, mp4)
-    val finalFile = mp4Result ?: webm
-    if (mp4Result != null) {
-      // Free the WebM now that the MP4 is the canonical artifact.
-      runCatching { webm.delete() }
+    val target = File(dir, format.canonicalFilename)
+    val (finalFile, finalFormat) = when (format) {
+      RecordingFormat.WEBM ->
+        (if (webm == target) webm else moveOnto(webm, target) ?: webm) to RecordingFormat.WEBM
+      RecordingFormat.MP4 -> {
+        val mp4 = transcodeWebmToMp4(webm, target)
+        if (mp4 != null) {
+          // Free the WebM now that the MP4 is the artifact.
+          runCatching { webm.delete() }
+          mp4 to RecordingFormat.MP4
+        } else {
+          webm to RecordingFormat.WEBM
+        }
+      }
     }
 
-    val spriteSheet = VideoSpriteExtractor.generateSpriteSheet(
-      finalFile,
-      fps = options.spriteFrameFps,
-      // Web timeline frames render in a large pane — use the web-tuned height/quality so the
-      // scrubber isn't grainy. Mobile keeps the smaller default (see CaptureOptions).
-      frameHeight = options.webSpriteFrameHeight(),
-      webpQuality = options.webSpriteQuality(),
-      isLandscape = true,
-      // Playwright's WebM has real timestamps and the libx264 transcode preserves them, so
-      // the duration sanity-check is normally a no-op here. Pass the wall-clock window so a
-      // future regression in the transcode (or a WebM containing only partial moov data
-      // because the BrowserContext was force-closed) self-corrects.
-      expectedDurationMs = endTimestampMs - startTimestampMs,
-    )
-    if (spriteSheet != null) {
-      return CaptureArtifact(
-        file = spriteSheet,
-        type = CaptureType.VIDEO_FRAMES,
-        startTimestampMs = startTimestampMs,
-        endTimestampMs = endTimestampMs,
-      )
-    }
-
-    // If the sprite extractor flagged the mp4 as broken-beyond-recovery (e.g. a force-closed
-    // BrowserContext left a WebM with partial moov data that survived the transcode), skip
-    // VIDEO fallback so report-generation doesn't re-process the same broken file.
-    if (VideoSpriteExtractor.shouldSkipVideoFallbackForBrokenMp4(finalFile.parentFile, "PlaywrightVideoCapture")) {
-      return null
-    }
+    // Span the window across the file, so the report's clip-time scale is exactly 1 and the
+    // finalization tail stops displacing every step. Falls back to the stop instant when the
+    // duration can't be read — see the class doc.
+    val endTimestampMs = durationProbeMs(finalFile)
+      ?.let { startTimestampMs + it }
+      ?: stoppedAtMs
 
     return CaptureArtifact(
       file = finalFile,
-      type = CaptureType.VIDEO,
+      type = finalFormat.captureType,
       startTimestampMs = startTimestampMs,
       endTimestampMs = endTimestampMs,
     )
@@ -118,26 +128,30 @@ class PlaywrightVideoCapture : CaptureStream {
     dir.listFiles { f -> f.isFile && f.name.endsWith(".webm") }
       ?.maxByOrNull { it.lastModified() }
 
+  /** Renames (or copies) Playwright's randomly named recording onto the canonical name; null when neither works. */
+  private fun moveOnto(source: File, target: File): File? {
+    runCatching { target.delete() }
+    if (source.renameTo(target)) return target
+    return runCatching {
+      source.copyTo(target, overwrite = true)
+      source.delete()
+      target
+    }.getOrElse {
+      Console.log("[PlaywrightVideoCapture] could not place ${source.name} at ${target.name}: ${it.message}")
+      null
+    }
+  }
+
   private fun transcodeWebmToMp4(input: File, output: File): File? {
     if (input.length() == 0L) return null
     // Routed through the shared subprocess helper so the daemon-drain + timeout +
-    // destroyForcibly pattern lives in exactly one place — the open-coded version here was
-    // the model for `VideoSpriteExtractor.probeDurationAndFrameCount`, and reviewer feedback
-    // on PR #3087 caught divergent variants of the same pattern slipping in.
+    // destroyForcibly pattern lives in exactly one place — reviewer feedback on PR #3087 caught
+    // divergent variants of the same pattern slipping in.
     val result =
       runSubprocessWithTimeout(
         command =
-          listOf(
-            FFMPEG_BINARY,
-            "-y",
-            "-i", input.absolutePath,
-            "-c:v", "libx264",
-            "-preset", "veryfast",
-            "-crf", "23",
-            "-pix_fmt", "yuv420p",
-            "-movflags", "+faststart",
-            output.absolutePath,
-          ),
+          listOf(FFMPEG_BINARY, "-y", "-i", input.absolutePath, "-an") +
+            RecordingFormat.MP4.encodeArgs() + output.absolutePath,
         timeoutSeconds = FFMPEG_TIMEOUT_SECONDS,
       )
     if (result == null) {
@@ -147,7 +161,7 @@ class PlaywrightVideoCapture : CaptureStream {
     if (result.exitCode != 0 || output.length() == 0L) {
       Console.log(
         "[PlaywrightVideoCapture] ffmpeg transcode failed: exit=${result.exitCode}\n" +
-          sanitizeSubprocessOutputForLog(result.output)
+          sanitizeSubprocessOutputForLog(result.output),
       )
       return null
     }

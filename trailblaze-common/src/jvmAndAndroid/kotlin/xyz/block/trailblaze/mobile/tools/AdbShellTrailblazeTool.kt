@@ -9,9 +9,15 @@ import kotlinx.serialization.Serializable
 import xyz.block.trailblaze.android.tools.shellEscape
 import xyz.block.trailblaze.device.AndroidDeviceCommandExecutor
 import xyz.block.trailblaze.device.AndroidShellBounds
+import xyz.block.trailblaze.device.DeviceCommandLogSecrets
+import xyz.block.trailblaze.device.redactSecretLiteralsForLog
+import xyz.block.trailblaze.device.secretLogForms
 import xyz.block.trailblaze.device.wrapShellPipelineForTransport
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
+import xyz.block.trailblaze.toolcalls.REDACTED_TOOL_ARG_PLACEHOLDER
+import xyz.block.trailblaze.toolcalls.SensitiveArgsTrailblazeTool
+import xyz.block.trailblaze.toolcalls.SensitiveValuesTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
@@ -60,8 +66,12 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
  * The on-device path therefore bounds each dispatch with [ON_DEVICE_SHELL_TIMEOUT_MS] on an
  * interruptible IO dispatcher, so a wedged command fails fast rather than hanging until the
  * on-device RPC cap ([xyz.block.trailblaze.llm.OnDeviceRpcTimeouts.HANDLER_AWAIT_CAP_MS], 15 min)
- * or the session inactivity watchdog (~13 min). The host path is unbounded here but has its own
- * `TRAILBLAZE_ADB_TIMEOUT_MS` env var (see `CLAUDE.md` "ADB Configuration"). Both transports return
+ * or the session inactivity watchdog (~13 min). The host path has no bound at all: it reaches adb
+ * through the unbounded `execAdbShellCommand`, and `TRAILBLAZE_ADB_TIMEOUT_MS` does not reach it —
+ * that env var sizes the short-call default used by the *bounded* host entry points, which this is
+ * not. A wedged host transport therefore hangs this tool until a watchdog higher up gives up, and
+ * wrapping the call in `withTimeout` would not help: what it would be waiting on is a native
+ * socket read that ignores interruption. Both transports return
  * the full stdout buffered in memory — no streaming — so commands with very large output (e.g.
  * `dumpsys`, `logcat -d`) are bounded by JVM heap on whichever side runs the actual.
  *
@@ -168,7 +178,37 @@ data class AdbShellTrailblazeTool(
    * [xyz.block.trailblaze.device.validateRunAsArgs] for the exact contract.
    */
   val runAs: String? = null,
-) : ExecutableTrailblazeTool {
+  /**
+   * Values in this call that must never appear in a log — a session token, a password, a fetched
+   * auth payload. Purely a logging declaration: it changes nothing about what runs. Put the
+   * credential in [command] where it belongs, then list the same value here.
+   *
+   * Wherever a listed value appears it is replaced with [REDACTED_TOOL_ARG_PLACEHOLDER], and
+   * everything around it stays legible: the persisted log payload (the element inside `command`,
+   * and this list itself), the device output this tool returns, its error messages, and the adb
+   * transport's own command log — which is the one path a tool cannot reach by scrubbing its own
+   * result, since both transports log the command line before running it. The values are registered
+   * with [DeviceCommandLogSecrets] for the duration of the dispatch so those lines mask them too.
+   *
+   * Masking is by value, not by position, so the argv shape is exactly what the device shell sees
+   * and a reader of the log still sees the program, the service and the flags. A value need not
+   * appear in [command] at all — listing one that only shows up in the *output* (a read-back of a
+   * token just written) masks it there.
+   */
+  val secrets: List<String> = emptyList(),
+) : ExecutableTrailblazeTool, SensitiveValuesTrailblazeTool {
+
+  /**
+   * Masks each value in [secrets] wherever it appears in the payload — the element inside
+   * `command`, and the entries of [secrets] itself, which become `["<redacted>"]`.
+   *
+   * Deliberately value-based only, not also [SensitiveArgsTrailblazeTool]: name-based masking
+   * writes a string primitive in place of the whole field, and turning a `List<String>` into a
+   * string means a recording generated from the log no longer decodes as this tool — it dies at
+   * parse instead of failing with a clear re-supply-the-secret error. Element-wise masking keeps
+   * the shape. `get()`-only so it stays out of the serialized form.
+   */
+  override val sensitiveValues: Collection<String> get() = secrets
 
   init {
     // Argv-form is structurally injection-safe but a zero-element list is still
@@ -195,31 +235,41 @@ data class AdbShellTrailblazeTool(
         // pins via test that `execute()` is using the argv-derived string and not
         // some other code path.
         errorMessage = "AndroidDeviceCommandExecutor is not provided " +
-          "(would have run: '${effectiveCommand.take(200)}')",
+          "(would have run: '${redactSecrets(effectiveCommand).take(200)}')",
         command = this,
       )
-    return try {
-      // Pick the path by transport: a shell-backed transport (host/dadb→adbd) can take the
-      // shell-escaped string + `$?` exit sentinel directly; a shell-less transport (on-device
-      // UiAutomation→Runtime.exec) gets the same sentinel-wrapped shell string base64-packed into
-      // a single `sh -c` token (the wrapShellPipelineForTransport trampoline), so both routes end
-      // in a real device-side shell and the exit code is observable either way.
-      if (executor.usesShellInterpreter) {
-        executeViaShellInterpreter(executor, effectiveCommand)
-      } else {
-        executeViaShellTrampoline(executor, effectiveCommand)
+    // Register the secret for the duration of the dispatch. Both transports log the command they
+    // are about to run *before* returning anything this tool could scrub, and neither logger can
+    // know a caller-supplied credential on its own — so scrubbing only the result would leave the
+    // real token in the shell-command log of every normal run. See [DeviceCommandLogSecrets].
+    return DeviceCommandLogSecrets.withSecretsRedacted(secrets) {
+      try {
+        // Pick the path by transport: a shell-backed transport (host/dadb→adbd) can take the
+        // shell-escaped string + `$?` exit sentinel directly; a shell-less transport (on-device
+        // UiAutomation→Runtime.exec) gets the same sentinel-wrapped shell string base64-packed into
+        // a single `sh -c` token (the wrapShellPipelineForTransport trampoline), so both routes end
+        // in a real device-side shell and the exit code is observable either way.
+        if (executor.usesShellInterpreter) {
+          executeViaShellInterpreter(executor, effectiveCommand)
+        } else {
+          executeViaShellTrampoline(executor, effectiveCommand)
+        }
+      } catch (e: CancellationException) {
+        // Propagate cancellation so structured-concurrency teardown isn't silently swallowed.
+        // Precedent: ListInstalledAppsTrailblazeTool.execute and RunCommandTrailblazeTool.execute
+        // catch the same trap explicitly.
+        throw e
+      } catch (e: Exception) {
+        TrailblazeToolResult.Error.ExceptionThrown(
+          // Both halves are scrubbed: the command because it carries the secret by construction,
+          // and the thrown message/stack because a transport that failed mid-dispatch routinely
+          // quotes the command it was given back at us.
+          errorMessage = "Failed to run android_adbShell command " +
+            "'${redactSecrets(effectiveCommand).take(200)}': ${redactSecrets(e.message.orEmpty())}",
+          command = this,
+          stackTrace = redactSecrets(e.stackTraceToString()),
+        )
       }
-    } catch (e: CancellationException) {
-      // Propagate cancellation so structured-concurrency teardown isn't silently swallowed.
-      // Precedent: ListInstalledAppsTrailblazeTool.execute and RunCommandTrailblazeTool.execute
-      // catch the same trap explicitly.
-      throw e
-    } catch (e: Exception) {
-      TrailblazeToolResult.Error.ExceptionThrown(
-        errorMessage = "Failed to run android_adbShell command '${effectiveCommand.take(200)}': ${e.message}",
-        command = this,
-        stackTrace = e.stackTraceToString(),
-      )
     }
   }
 
@@ -247,10 +297,15 @@ data class AdbShellTrailblazeTool(
    * is missing (we can't tell success from failure, so we refuse to report Success).
    */
   private fun resultFromSentinelOutput(
-    effectiveCommand: String,
+    unredactedCommand: String,
     rawOutput: String,
   ): TrailblazeToolResult {
-    val parsed = parseExitSentinel(rawOutput)
+    val rawParsed = parseExitSentinel(rawOutput)
+    // Scrub once, here, so every branch below is secret-free by construction. The device output
+    // is scrubbed too, not just the command: a verify-style read-back (`... get <key>`) returns
+    // the value that was just written, so the secret comes back out in stdout.
+    val parsed = rawParsed.copy(output = redactSecrets(rawParsed.output))
+    val effectiveCommand = redactSecrets(unredactedCommand)
     return when {
       parsed.exitCode == 0 -> TrailblazeToolResult.Success(message = parsed.output)
       parsed.exitCode == EXIT_CODE_SENTINEL_MISSING -> TrailblazeToolResult.Error.ExceptionThrown(
@@ -315,13 +370,16 @@ data class AdbShellTrailblazeTool(
       }
     } ?: return TrailblazeToolResult.Error.ExceptionThrown(
       errorMessage = "android_adbShell command did not return within ${ON_DEVICE_SHELL_TIMEOUT_MS}ms " +
-        "on the on-device transport: '${effectiveCommand.take(200)}'. A wedged command leaves the " +
+        "on the on-device transport: '${redactSecrets(effectiveCommand).take(200)}'. A wedged command leaves the " +
         "UiAutomation result pipe blocked; failing fast instead of hanging until the session " +
         "inactivity watchdog fires.",
       command = this,
     )
     return resultFromSentinelOutput(effectiveCommand, rawOutput)
   }
+
+  /** [redactSecretsIn] bound to this tool's own [secrets]. */
+  private fun redactSecrets(text: String): String = redactSecretsIn(text, secrets)
 
   /**
    * Holder for [parseExitSentinel] — keeps the parsing logic itself a pure function with
@@ -369,6 +427,22 @@ data class AdbShellTrailblazeTool(
       "$command; printf '\\n$EXIT_SENTINEL_TOKEN%s\\n' \$?"
 
     /**
+     * Replaces every value in [secrets] found in [text] with [REDACTED_TOOL_ARG_PLACEHOLDER].
+     *
+     * Delegates to the shared [redactSecretLiteralsForLog] so this tool's result/error scrubbing
+     * and the transport log-line scrubbing are one implementation — the longest-first ordering and
+     * the blank-element skip are subtle enough that a second copy would drift.
+     *
+     * Scrubs [secretLogForms] rather than the raw values because everything this guards has been
+     * through [shellEscape] already: a secret holding a single quote reaches the rendered command
+     * as `pa'\''ss`, which does not contain the literal `pa'ss`.
+     *
+     * Pure function for testability; `internal` for test access only, not part of the public API.
+     */
+    internal fun redactSecretsIn(text: String, secrets: List<String>): String =
+      redactSecretLiteralsForLog(text, secretLogForms(secrets))
+
+    /**
      * Joins [command] into a single shell string by single-quote-wrapping each element via
      * the shared [shellEscape] helper and separating with spaces. The wrapping makes
      * every shell metacharacter inside an element literal (no `$` expansion, no backtick
@@ -401,7 +475,7 @@ data class AdbShellTrailblazeTool(
      * `Runtime.exec` raises an exception in the separate UiAutomation process that cannot cross the
      * Binder, leaving the result-pipe read blocked; without this bound the agent would hang until
      * the session's ~13-minute inactivity watchdog. Does not apply to the host transport, which
-     * has its own `TRAILBLAZE_ADB_TIMEOUT_MS` bound.
+     * has no bound of its own — see the class doc.
      *
      * Sits deliberately ABOVE the read bound the device side puts on the same command, and is
      * derived from it so the two cannot drift out of order — see [AndroidShellBounds]. This bound

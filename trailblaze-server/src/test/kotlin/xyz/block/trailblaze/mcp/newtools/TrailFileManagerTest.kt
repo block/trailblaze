@@ -190,7 +190,7 @@ class TrailFileManagerTest {
 
   @Test
   fun `saveTrail rejects a blank-slug title before writing to disk`() {
-    // Regression for codex PR review on #3629: a title of " - " or "---" used to
+    // Regression: a title of " - " or "---" used to
     // sanitize to "" and then `File(dir, "")` resolved to the trails root, so
     // saveTrail would silently write `<platform>.trail.yaml` at the root,
     // potentially clobbering an unrelated trail file. The empty-slug guard in

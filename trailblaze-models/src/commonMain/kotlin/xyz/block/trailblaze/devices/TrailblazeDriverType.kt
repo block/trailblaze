@@ -78,8 +78,8 @@ enum class TrailblazeDriverType(
    * Maestro's `ScrollUntilVisibleCommand`.
    *
    * Named for the gate it feeds rather than for "has a Maestro driver", because the two are not
-   * the same question. The on-device instrumentation driver runs Maestro ON the device and
-   * delegates fine. The in-process [ANDROID_TEST] driver has no Maestro driver either, but has
+   * the same question. The retired on-device instrumentation driver ran Maestro ON the device and
+   * delegated fine. The in-process [ANDROID_TEST] driver has no Maestro driver either, but has
    * never been on the manual loop — whether it should be is open, and answering it needs a
    * behavioral test, not a rename.
    */
@@ -92,8 +92,8 @@ enum class TrailblazeDriverType(
    * can carry the target off the opposite edge (see `resolveCenterElement`).
    *
    * Named for the gate it feeds rather than "this driver's swipes don't fling", because only the
-   * accessibility driver has been measured. There, both Android drivers synthesize identical swipe
-   * geometry (screen center to 10% of height over 400ms), but instrumentation dispatches it via
+   * accessibility driver has been measured. There, both Android drivers synthesized identical swipe
+   * geometry (screen center to 10% of height over 400ms), but instrumentation dispatched it via
    * `input swipe` — a MotionEvent stream whose lift-off velocity triggers a fling — while
    * `dispatchGesture` produces no meaningful fling, so content travels ~1.4x less per swipe (from
    * byte-identical pre-swipe accessibility trees in CI: 708px vs 1029px on one tablet, 916px vs
@@ -119,16 +119,37 @@ enum class TrailblazeDriverType(
     usesManualScrollLoop = true,
     centersScrollTargetByDefault = true,
   ),
+  /**
+   * RETIRED — see [RETIRED_DRIVERS]. The on-device Maestro/UiAutomator runtime this named is
+   * deleted; every Android trail runs on [ANDROID_ONDEVICE_ACCESSIBILITY] ([DEFAULT_ANDROID]).
+   *
+   * The VALUE survives so archived recordings, session logs and CI configs that name it still
+   * DESERIALIZE — `TrailblazeDriverTypeLenientSerializer` reads years of history, and dropping the
+   * constant would turn every one of those reads into a parse failure. What it no longer does is
+   * select anything: [cliShortName] is null (so `trailblaze config android-driver` doesn't offer
+   * it), [hostAgentDispatchable] is false, no `HostDriverDescriptor` claims it, and both
+   * entrypoints that could still reach a runtime — the host's `CliRunDriverResolver` and the
+   * device's `AndroidTrailblazeRule` — refuse it by name and say what to use instead.
+   *
+   * The remaining properties are left at their historical values rather than zeroed: they describe
+   * what this driver DID, and the tests that pin each property's membership set read better naming
+   * a retired driver than silently losing it.
+   *
+   * Still a member of `DriverTypeKey.resolve("all")`, deliberately. That key means "every driver
+   * type in the enum" and is how a toolset declares no driver restriction at all; excluding the
+   * retired driver would narrow what `all` means to buy nothing, because no run can reach this
+   * driver to be offered a tool in the first place.
+   */
   ANDROID_ONDEVICE_INSTRUMENTATION(
     platform = TrailblazeDevicePlatform.ANDROID,
     requiresHost = false,
     yamlKey = "android-ondevice-instrumentation",
-    cliShortName = "instrumentation",
+    cliShortName = null,
     executesToolsOnDevice = true,
     hostRpcReachable = true,
     protoWireSafe = true,
     hostNativeSimulatorDriver = false,
-    hostAgentDispatchable = true,
+    hostAgentDispatchable = false,
     usesManualScrollLoop = false,
     centersScrollTargetByDefault = false,
   ),
@@ -249,6 +270,51 @@ enum class TrailblazeDriverType(
     val DEFAULT_ANDROID = ANDROID_ONDEVICE_ACCESSIBILITY
     val DEFAULT_IOS = IOS_HOST
     val DEFAULT_DESKTOP = COMPOSE
+
+    /**
+     * Drivers whose runtime is gone. The enum value is kept so old recordings, session logs and
+     * pins still deserialize; nothing can be RUN on one.
+     *
+     * Read by the two places a driver choice becomes a run — `CliRunDriverResolver` on the host and
+     * `AndroidTrailblazeRule`'s agent factory on the device — each of which rejects a retired
+     * driver by name and names the replacement, so an old pin fails saying what to change rather
+     * than falling back to a different driver and reporting green.
+     *
+     * A set rather than a per-entry `retired` flag because retirement is not a trait of the driver
+     * the way "runs on device" is: it is a statement about THIS build, every caller wants the
+     * membership question, and a one-line set is the diff that retires the next one.
+     */
+    val RETIRED_DRIVERS: Set<TrailblazeDriverType> = setOf(ANDROID_ONDEVICE_INSTRUMENTATION)
+
+    /**
+     * What to point someone at when their pin names [driverType] and that driver is gone: the
+     * default for the SAME platform, or `null` when that platform has no runnable default left.
+     *
+     * Platform-scoped on purpose. Retiring the next driver is meant to be a one-line edit to
+     * [RETIRED_DRIVERS], and a replacement that fell back across platforms would quietly turn
+     * that edit into "your iOS pin is dead, use an Android driver".
+     */
+    fun replacementForRetired(driverType: TrailblazeDriverType): TrailblazeDriverType? =
+      defaultForPlatform(driverType.platform)?.takeIf { it !in RETIRED_DRIVERS }
+
+    /**
+     * The one sentence every refusal of a retired driver says: what is gone, what to use instead,
+     * and that a trail pinned to it needs re-recording. Shared so the several places that can be
+     * handed a retired pin (the rule's agent factory, the per-trail pin flips ahead of it, the CLI
+     * and MCP driver setters) cannot drift into telling the same user three different stories
+     * about the same pin.
+     */
+    fun retiredDriverMessage(driverType: TrailblazeDriverType): String {
+      val replacement = replacementForRetired(driverType)
+      val advice = if (replacement != null) {
+        "Use ${replacement.name}, and re-record any trail still pinned to the retired driver."
+      } else {
+        "No driver remains for ${driverType.platform.name} — re-record any trail still pinned " +
+          "to the retired driver against a supported platform."
+      }
+      return "The ${driverType.name} driver has been retired and its on-device runtime is gone. " +
+        advice
+    }
 
     /**
      * The `am instrument -e` key carrying a suite-wide driver FORCE to the on-device runtime, in

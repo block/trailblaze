@@ -242,6 +242,96 @@ describe("session file selection (LogsRepo read slice)", () => {
   });
 });
 
+describe("a session read straight off disk is put on one clock before it is ordered", () => {
+  // A ZIP is the one reader with no Kotlin pass in front of it: the records arrive exactly as the
+  // device wrote them, so a device-stamped tool log still carries the device's clock. On an
+  // emulator that is seconds away from the host's, and the whole report is built on the order
+  // these logs end up in.
+  const TOOL_LOG = "xyz.block.trailblaze.logs.client.TrailblazeLog.TrailblazeToolLog";
+  const deviceToolLog = (overrides: Record<string, unknown> = {}) => ({
+    class: TOOL_LOG,
+    clock: "device",
+    deviceName: "emulator-5554",
+    durationMs: 1_000,
+    // Device clock reads 20:00:00 while the host is at 20:05:00 — five minutes behind.
+    timestamp: "2026-06-30T20:00:00.000Z",
+    hostReceivedAt: "2026-06-30T20:05:01.000Z",
+    ...overrides,
+  });
+  const hostLog = (timestamp: string) => ({ class: TOOL_LOG, clock: "host", timestamp });
+
+  const sessionOf = async (logs: Record<string, unknown>[]) => {
+    const dir = SESSION_ID + "/";
+    const zip = buildZip(logs.map((log, i) => ({ name: `${dir}00${i + 1}_Log.json`, text: JSON.stringify(log) })));
+    const [session] = await Zip.loadZipSessions(zip, { inflateRaw, render: REPORT_DERIVE });
+    return session as { logs: Array<Record<string, unknown>> };
+  };
+
+  test("re-stamps a device-clocked log onto the host timeline, and orders on the re-stamped value", async () => {
+    // Raw, the device log's 20:00 sorts it FIRST; on the host clock it happened at 20:05, after
+    // the 20:02 host log. Sorting before normalizing is what interleaves a device's steps into the
+    // wrong part of the run — and the recording's window is host-clock, so the report would then
+    // place those steps against the wrong moment of the video too.
+    const session = await sessionOf([deviceToolLog(), hostLog("2026-06-30T20:02:00.000Z")]);
+    expect(session.logs.map((log) => log.timestamp)).toEqual([
+      "2026-06-30T20:02:00.000Z",
+      "2026-06-30T20:05:00.000Z",
+    ]);
+    // The shift is recorded, not hidden: the log now claims the host clock, and the anchor it was
+    // derived from survives as provenance.
+    expect(session.logs[1].clock).toBe("host");
+    expect(session.logs[1].hostReceivedAt).toBe("2026-06-30T20:05:01.000Z");
+  });
+
+  test("a session with no anchored device log keeps its raw timestamps", async () => {
+    // No offset is derivable, so nothing is invented. A pre-marker archive must read the same as
+    // it did before this normalization existed.
+    const session = await sessionOf([
+      hostLog("2026-06-30T20:02:00.000Z"),
+      deviceToolLog({ hostReceivedAt: undefined }),
+    ]);
+    expect(session.logs.map((log) => log.timestamp)).toEqual([
+      "2026-06-30T20:00:00.000Z",
+      "2026-06-30T20:02:00.000Z",
+    ]);
+    expect(session.logs[0].clock).toBe("device");
+  });
+
+  test("the shift keeps the digits past the millisecond, which is what orders a same-millisecond pair", async () => {
+    // Trailblaze stamps below the millisecond, and this reader sorts on those digits before it
+    // falls back to feed order. Re-stamping through a Date emits exactly three fractional digits,
+    // so a shift that does not carry the remainder across drops two tool logs of one millisecond
+    // back onto filename order — which is not the order they ran in.
+    const session = await sessionOf([
+      // Written second, arrives first in the feed: only the remainder can tell them apart.
+      // durationMs 500 makes this device's offset exactly five minutes, so the shift is legible.
+      deviceToolLog({ durationMs: 500, timestamp: "2026-06-30T20:00:00.500900Z" }),
+      deviceToolLog({ durationMs: 500, timestamp: "2026-06-30T20:00:00.500120Z" }),
+    ]);
+    expect(session.logs.map((log) => log.timestamp)).toEqual([
+      "2026-06-30T20:05:00.500120Z",
+      "2026-06-30T20:05:00.500900Z",
+    ]);
+  });
+
+  test("each device in a multi-device session is shifted by its own skew", async () => {
+    // One offset for the whole session would drag the second device's steps by the first device's
+    // error. Two devices, opposite skews, and both must land on the host instant they really ran.
+    const session = await sessionOf([
+      deviceToolLog(),
+      deviceToolLog({
+        deviceName: "emulator-5556",
+        timestamp: "2026-06-30T20:10:00.000Z",
+        hostReceivedAt: "2026-06-30T20:07:01.000Z", // this device's clock runs three minutes AHEAD
+      }),
+    ]);
+    expect(session.logs.map((log) => log.timestamp)).toEqual([
+      "2026-06-30T20:05:00.000Z",
+      "2026-06-30T20:07:00.000Z",
+    ]);
+  });
+});
+
 describe("trail names and status labels", () => {
   test("shortTrailName strips the trails/ root and trail.yaml suffixes", () => {
     expect(Zip.shortTrailName("/ci/workspace/trails/suites/suite_1/case_2/android-phone.trail.yaml"))
@@ -600,6 +690,32 @@ describe("session events and the attachments they reference", () => {
     expect(built.sessions[0].events.map((s: { name: string }) => s.name)).toEqual(["a"]);
   });
 
+  // The session's trace.json rides into an archive-built report the way it rides into a CLI-built
+  // one, so its Perfetto export carries the tracer's spans; the slimming is the shared one.
+  test("reads the session's trace.json into the same slim spans the bun driver embeds, and skips one over the cap", async () => {
+    const dir = SESSION_ID + "/";
+    const traceEvents = [
+      { name: "tapOnElementBySelector", cat: "tool", ts: 1_789_705_349_234_251, dur: 981_522, pid: 25484, tid: 92, ph: "X", args: {}, sid: "ec91", trid: "d32d" },
+      { name: "process_name", ph: "M", pid: 25484, tid: 0, args: { name: "host" } },
+    ];
+    const zip = buildZip([
+      { name: dir + "001_Log.json", text: JSON.stringify(startedLog()) },
+      { name: dir + "trace.json", text: JSON.stringify(traceEvents) },
+    ]);
+    const built = await Zip.buildSessionInputsFromZipBytes(zip, { render: derivationOnly, inflateRaw, generatedAt: "T" });
+    expect(built.sessions[0].spans).toEqual([{ name: "tapOnElementBySelector", cat: "tool", ts: 1_789_705_349_234_251, dur: 981_522, tid: 92, pid: 25484 }]);
+    // The single-session document is handed them too (the multi-session one gets the inputs whole).
+    const captured: { input?: any } = {};
+    await Zip.buildReportHtmlFromZipBytes(zip, { render: { ...derivationOnly, buildRunReportHtml: (input: unknown) => { captured.input = input; return ""; } }, inflateRaw, generatedAt: "T" });
+    expect(captured.input.spans).toEqual(built.sessions[0].spans);
+
+    const capped = await Zip.buildSessionInputsFromZipBytes(zip, { render: { ...derivationOnly, MAX_TRACE_BYTES: 10 }, inflateRaw, generatedAt: "T" });
+    expect(capped.sessions[0].spans).toBeNull();
+    // No trace.json: no spans, and the report is otherwise whole.
+    const without = await Zip.buildSessionInputsFromZipBytes(buildZip([{ name: dir + "001_Log.json", text: JSON.stringify(startedLog()) }]), { render: derivationOnly, inflateRaw, generatedAt: "T" });
+    expect(without.sessions[0].spans).toBeNull();
+  });
+
   test("resolves referenced media attachments to object URLs; non-media and missing files stay out", async () => {
     const built = await Zip.buildSessionInputsFromZipBytes(eventsZip(), { render: derivationOnly, inflateRaw, generatedAt: "T" });
     const [session] = built.sessions;
@@ -787,9 +903,17 @@ describe("finding the run's recording in the archive", () => {
       .toEqual({ fileName: "video.mp4", startMs: 200, endMs: 800 });
   });
 
-  test("a VIDEO_FRAMES artifact lends its bookends to the archive's playable file", () => {
-    // This is what a real iOS run writes: the artifact names the sprite SHEET, which no element can
-    // play, but it was cut from the recording and shares its window.
+  test("a VIDEO_WEBM artifact (the live Android encode) is the recording too", () => {
+    const meta = CAPTURE_META([
+      { filename: "video.webm", type: "VIDEO_WEBM", startTimestampMs: 200, endTimestampMs: 800 },
+    ]);
+    expect(Zip.videoArtifactFrom(meta, ["video.webm"]))
+      .toEqual({ fileName: "video.webm", startMs: 200, endMs: 800 });
+  });
+
+  test("a legacy VIDEO_FRAMES artifact lends its bookends to the archive's playable file", () => {
+    // What a run recorded before sprite sheets were retired wrote: the artifact names the sprite
+    // SHEET, which no element can play, but it was cut from the recording and shares its window.
     const meta = CAPTURE_META([
       { filename: "video_sprites.webp", type: "VIDEO_FRAMES", startTimestampMs: 1_000, endTimestampMs: 2_000 },
     ]);

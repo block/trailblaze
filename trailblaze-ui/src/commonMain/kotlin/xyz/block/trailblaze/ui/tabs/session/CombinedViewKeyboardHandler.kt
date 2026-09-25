@@ -17,7 +17,6 @@ internal fun handleCombinedViewKeyEvent(
   currentTimestamp: Long,
   selectedEventKey: String?,
   timelineState: SessionTimelineState,
-  videoMetadata: VideoMetadata?,
   effectiveStartMs: Long,
   effectiveEndMs: Long,
   onUserInteracted: () -> Unit,
@@ -26,7 +25,7 @@ internal fun handleCombinedViewKeyEvent(
   if (event.type != KeyEventType.KeyDown) return false
   return when (event.key) {
     Key.Spacebar -> {
-      handleSpacebar(timelineState, videoMetadata, effectiveStartMs, effectiveEndMs)
+      handleSpacebar(timelineState, effectiveStartMs, effectiveEndMs)
       onSelectedEventKeyChanged(null)
       true
     }
@@ -50,16 +49,14 @@ internal fun handleCombinedViewKeyEvent(
 
 private fun handleSpacebar(
   timelineState: SessionTimelineState,
-  videoMetadata: VideoMetadata?,
   effectiveStartMs: Long,
   effectiveEndMs: Long,
 ) {
   Console.log("[CombinedView] Spacebar: playing=${timelineState.isVideoPlaying}")
   if (!timelineState.isVideoPlaying) {
     val scrub = timelineState.scrubTimestampMs ?: effectiveStartMs
-    val end = videoMetadata?.endTimestampMs ?: effectiveEndMs
-    if (scrub >= end - TimelineConstants.END_OF_VIDEO_THRESHOLD_MS) {
-      timelineState.scrubTimestampMs = videoMetadata?.startTimestampMs ?: effectiveStartMs
+    if (scrub >= effectiveEndMs - TimelineConstants.END_OF_VIDEO_THRESHOLD_MS) {
+      timelineState.scrubTimestampMs = effectiveStartMs
     }
   }
   timelineState.isVideoPlaying = !timelineState.isVideoPlaying

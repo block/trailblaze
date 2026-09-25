@@ -45,7 +45,9 @@ class TrailblazeLogServerClient(
   }
 
   suspend fun postAgentLog(log: TrailblazeLog): HttpResponse {
-    val logJson = TrailblazeJsonInstance.encodeToString<TrailblazeLog>(log)
+    // Compact: pretty-printing is almost all whitespace on these logs, and the host re-encodes
+    // every log it saves anyway, so the indent would only cost upload time.
+    val logJson = TrailblazeCompactJsonInstance.encodeToString<TrailblazeLog>(log)
     return httpClient.post("$baseUrl/agentlog") {
       contentType(ContentType.Application.Json)
       setBody(logJson)

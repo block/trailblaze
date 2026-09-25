@@ -118,6 +118,10 @@ listOf(
 // same versions and dependency-guard baselines stay consistent.
 apply(from = "gradle/dependency-resolution.gradle.kts")
 
+// Shared test-task conventions (full exception output on failure). Also applied by the repo root
+// and by each composite build, which this root's `apply` does not reach.
+apply(from = "gradle/test-conventions.gradle.kts")
+
 // Apply shared git version computation
 apply(from = "gradle/git-version.gradle.kts")
 

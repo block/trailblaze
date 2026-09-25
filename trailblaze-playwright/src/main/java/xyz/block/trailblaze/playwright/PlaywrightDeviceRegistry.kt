@@ -19,7 +19,7 @@ import xyz.block.trailblaze.devices.WebViewportSpec
  * with `name` + `descriptor` keys, the descriptor itself carrying `viewport`,
  * `deviceScaleFactor`, `userAgent`, `isMobile`, `hasTouch` — is undocumented and
  * tied to the Playwright Java version pinned in `libs.versions.toml`
- * (`playwright = "1.59.0"` at time of writing). A version bump that reshapes
+ * (`playwright = "1.63.0"` at time of writing). A version bump that reshapes
  * `deviceDescriptors()` will silently break preset resolution; the
  * `PlaywrightDeviceRegistryTest` integration test pins this behavior so a shape
  * break fails CI immediately.

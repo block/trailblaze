@@ -663,7 +663,7 @@ class AccessibilityDeviceManager(
 
   // --- Links ---
 
-  /** Opens a URL via Intent.ACTION_VIEW, matching MaestroAndroidUiAutomatorDriver.openLink(). */
+  /** Opens a URL via Intent.ACTION_VIEW, matching the retired UiAutomator driver's openLink(). */
   private fun executeOpenLink(action: AccessibilityAction.OpenLink) = dispatchAndAwaitSettleBlocking {
     withInstrumentation {
       val intent = Intent(Intent.ACTION_VIEW, Uri.parse(action.link)).apply {
@@ -677,7 +677,7 @@ class AccessibilityDeviceManager(
   // --- Airplane mode ---
 
   /**
-   * Matches MaestroAndroidUiAutomatorDriver.setAirplaneMode(). The radios and the enable/disable
+   * Matches the retired UiAutomator driver's setAirplaneMode(). The radios and the enable/disable
    * polarity both come from
    * [NetworkConnectionTrailblazeTool.androidMaestroAirplaneModeRadioCommands], so every Android
    * driver switches the same set. That is the radios-off stand-in, not real airplane mode — see

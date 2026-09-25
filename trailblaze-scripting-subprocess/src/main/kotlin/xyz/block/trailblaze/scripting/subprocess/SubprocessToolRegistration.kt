@@ -1,6 +1,12 @@
 package xyz.block.trailblaze.scripting.subprocess
 
+import io.modelcontextprotocol.kotlin.sdk.types.RequestMeta
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+import xyz.block.trailblaze.logs.model.SessionId
+import xyz.block.trailblaze.scripting.callback.JsScriptingInvocationRegistry
+import xyz.block.trailblaze.scripting.mcp.TrailblazeContextEnvelope
 import xyz.block.trailblaze.scripting.mcp.toTrailblazeToolDescriptor
 import xyz.block.trailblaze.toolcalls.DynamicTrailblazeToolRegistration
 import xyz.block.trailblaze.toolcalls.ToolName
@@ -11,6 +17,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolDescriptor
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSourceDescriptor
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * [DynamicTrailblazeToolRegistration] backed by a subprocess-advertised MCP tool.
@@ -36,6 +43,11 @@ class SubprocessToolRegistration(
   private val source: TrailblazeToolSourceDescriptor? = null,
 ) : DynamicTrailblazeToolRegistration {
 
+  // `_meta.trailblaze/surfaceToLlm` is the source of truth for all scripted MCP tools, including
+  // SDK-owned hidden composition/finalizer helpers. Dynamic registrations default to true, so
+  // failing to forward this bit would leak a hidden subprocess tool into the model's menu.
+  override val surfaceToLlm: Boolean get() = registered.meta.surfaceToLlm
+
   /**
    * Bundle of the callback-channel wiring a [SubprocessTrailblazeTool] needs at dispatch time.
    * Grouped so the registration constructor stays manageable and so session-startup code can
@@ -44,6 +56,50 @@ class SubprocessToolRegistration(
   data class JsScriptingCallbackContext(
     val baseUrl: String,
     val toolRepo: TrailblazeToolRepo,
+  ) {
+    private val latestExecutionContext = AtomicReference<TrailblazeToolExecutionContext?>(null)
+
+    /**
+     * Retain only the current session's latest dispatch context. Session finalization needs a
+     * fresh callback invocation after the acquiring tool's own registry handle has closed; any
+     * resource in this subprocess necessarily came from one of these dispatches.
+     */
+    fun recordExecutionContext(context: TrailblazeToolExecutionContext) {
+      latestExecutionContext.set(context)
+    }
+
+    /** Opens a live callback invocation for the hidden session-finalizer MCP call. */
+    fun openFinalizerInvocation(sessionId: SessionId): FinalizerInvocation? {
+      val context = latestExecutionContext.get() ?: return null
+      val handle = JsScriptingInvocationRegistry.register(
+        sessionId = sessionId,
+        toolRepo = toolRepo,
+        executionContext = context,
+        depth = 0,
+      )
+      val meta = TrailblazeContextEnvelope.buildMetaTrailblaze(
+        context = context,
+        baseUrl = baseUrl,
+        sessionId = sessionId,
+        invocationId = handle.invocationId,
+      )
+      return FinalizerInvocation(
+        handle = handle,
+        requestMeta = RequestMeta(json = buildJsonObject {
+          put(TrailblazeContextEnvelope.META_KEY, meta)
+        }),
+      )
+    }
+
+    /** Drops the session-owned context after all subprocess finalizers have run. */
+    fun clearExecutionContext() {
+      latestExecutionContext.set(null)
+    }
+  }
+
+  data class FinalizerInvocation(
+    val handle: JsScriptingInvocationRegistry.Handle,
+    val requestMeta: RequestMeta,
   )
 
   override val name: ToolName get() = registered.advertisedName

@@ -26,6 +26,13 @@ class DesktopDispatchDecisionTest {
   ) = DesktopDispatchDecision.decide(driver, agent, preferHostAgent)
 
   /**
+   * A retired driver has no runtime to dispatch to, so the table below makes no claim about one.
+   * The enum value survives only so old recordings and session logs still deserialize.
+   */
+  private val runnableDrivers = TrailblazeDriverType.entries
+    .filterNot { it in TrailblazeDriverType.RETIRED_DRIVERS }
+
+  /**
    * The full table. Every (driver, agent, preferHostAgent) triple maps to exactly one path, and
    * the map is asserted whole — a new driver has no row until someone writes one, so it cannot
    * quietly inherit a fallthrough.
@@ -33,7 +40,7 @@ class DesktopDispatchDecisionTest {
   @Test
   fun `dispatch path for every driver, agent and host-agent preference`() {
     val actual: Map<String, DispatchPath> = buildMap {
-      TrailblazeDriverType.entries.forEach { driver ->
+      runnableDrivers.forEach { driver ->
         AgentImplementation.entries.forEach { agent ->
           listOf(false, true).forEach { preferHostAgent ->
             put("$driver/$agent/preferHostAgent=$preferHostAgent", decide(driver, agent, preferHostAgent))
@@ -58,14 +65,6 @@ class DesktopDispatchDecisionTest {
         "ANDROID_ONDEVICE_ACCESSIBILITY/MULTI_AGENT_V3/preferHostAgent=true" to v3Host,
         "ANDROID_ONDEVICE_ACCESSIBILITY/KOOG_STRATEGY_GRAPH/preferHostAgent=false" to onDevice,
         "ANDROID_ONDEVICE_ACCESSIBILITY/KOOG_STRATEGY_GRAPH/preferHostAgent=true" to hostRpc,
-
-        // Instrumentation: same as accessibility except V3 has no host path for it.
-        "ANDROID_ONDEVICE_INSTRUMENTATION/TRAILBLAZE_RUNNER/preferHostAgent=false" to onDevice,
-        "ANDROID_ONDEVICE_INSTRUMENTATION/TRAILBLAZE_RUNNER/preferHostAgent=true" to hostRpc,
-        "ANDROID_ONDEVICE_INSTRUMENTATION/MULTI_AGENT_V3/preferHostAgent=false" to onDevice,
-        "ANDROID_ONDEVICE_INSTRUMENTATION/MULTI_AGENT_V3/preferHostAgent=true" to onDevice,
-        "ANDROID_ONDEVICE_INSTRUMENTATION/KOOG_STRATEGY_GRAPH/preferHostAgent=false" to onDevice,
-        "ANDROID_ONDEVICE_INSTRUMENTATION/KOOG_STRATEGY_GRAPH/preferHostAgent=true" to hostRpc,
 
         // ANDROID_TEST: always on-device. `preferHostAgent` cannot pull the merge gate onto a path
         // that would hand an unrecorded step to an LLM.
@@ -138,8 +137,8 @@ class DesktopDispatchDecisionTest {
    * worked). Derived from [decide] rather than restated, so a capability change moves both.
    */
   @Test
-  fun `only accessibility and instrumentation can run multi-device trails`() {
-    val multiDeviceCapable = TrailblazeDriverType.entries.filter { driver ->
+  fun `only the Android on-device driver can run multi-device trails`() {
+    val multiDeviceCapable = runnableDrivers.filter { driver ->
       AgentImplementation.entries.any { agent ->
         listOf(false, true).any { preferHostAgent ->
           DesktopDispatchDecision.supportsMultiDevice(decide(driver, agent, preferHostAgent))
@@ -148,10 +147,7 @@ class DesktopDispatchDecisionTest {
     }.toSet()
 
     assertThat(multiDeviceCapable).isEqualTo(
-      setOf(
-        TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
-        TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
-      ),
+      setOf(TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY),
     )
   }
 

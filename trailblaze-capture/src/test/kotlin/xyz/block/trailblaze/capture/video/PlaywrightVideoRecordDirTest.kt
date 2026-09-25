@@ -24,6 +24,8 @@ class PlaywrightVideoRecordDirTest {
   fun tearDown() {
     PlaywrightVideoRecordDir.clearRecordDir(device1)
     PlaywrightVideoRecordDir.clearRecordDir(device2)
+    PlaywrightVideoRecordDir.clearRecordingStarted(device1)
+    PlaywrightVideoRecordDir.clearRecordingStarted(device2)
     tempDirs.forEach { it.deleteRecursively() }
   }
 
@@ -44,6 +46,23 @@ class PlaywrightVideoRecordDirTest {
     PlaywrightVideoRecordDir.setRecordDir(device1, tmp())
     PlaywrightVideoRecordDir.clearRecordDir(device1)
     assertNull(PlaywrightVideoRecordDir.getRecordDir(device1))
+  }
+
+  @Test
+  fun `a second recording on the same device replaces the first anchor`() {
+    // A kept-alive manager builds a fresh context on resetSession(), which writes a second .webm.
+    // The capture stream delivers the newest file, so the anchor that belongs to it is the newest.
+    PlaywrightVideoRecordDir.markRecordingStarted(device1, 1_000L)
+    PlaywrightVideoRecordDir.markRecordingStarted(device1, 9_000L)
+    assertEquals(9_000L, PlaywrightVideoRecordDir.recordingStartedAtMs(device1))
+  }
+
+  @Test
+  fun `a recording anchor belongs to one device only`() {
+    PlaywrightVideoRecordDir.markRecordingStarted(device1, 1_000L)
+    assertNull(PlaywrightVideoRecordDir.recordingStartedAtMs(device2), "parallel web runs must not share a window")
+    PlaywrightVideoRecordDir.clearRecordingStarted(device2)
+    assertEquals(1_000L, PlaywrightVideoRecordDir.recordingStartedAtMs(device1), "clearing one device leaves the other")
   }
 
   @Test

@@ -53,11 +53,36 @@ fun isArm(): Boolean {
   return arch.contains("aarch64") || arch.contains("arm64")
 }
 
+/** Set to `true` to open the desktop window on Linux; see [canRunDesktopGui]. */
+const val DESKTOP_GUI_ON_LINUX_ENV = "TRAILBLAZE_DESKTOP_GUI"
+
 /**
  * Returns true if the desktop GUI (Compose Desktop) can run on this platform.
- * Currently requires macOS with a display available.
+ *
+ * macOS with a display always can. Linux only when [DESKTOP_GUI_ON_LINUX_ENV] opts in and a display
+ * server is reachable ([hasDisplay]): without the opt-in a Linux host runs the daemon headless even
+ * with `$DISPLAY` set, because a workstation that exports one for an emulator does not want a window.
  */
-fun canRunDesktopGui(): Boolean = isMacOs() && !java.awt.GraphicsEnvironment.isHeadless()
+fun canRunDesktopGui(): Boolean =
+  canRunDesktopGui(
+    os = DesktopOsType.current(),
+    headless = java.awt.GraphicsEnvironment.isHeadless(),
+    linuxOptIn = System.getenv(DESKTOP_GUI_ON_LINUX_ENV),
+    hasDisplay = ::hasDisplay,
+  )
+
+internal fun canRunDesktopGui(
+  os: DesktopOsType,
+  headless: Boolean,
+  linuxOptIn: String?,
+  hasDisplay: () -> Boolean,
+): Boolean =
+  when {
+    headless -> false
+    os == DesktopOsType.MAC_OS -> true
+    os == DesktopOsType.LINUX -> linuxOptIn?.trim()?.lowercase() in setOf("1", "true") && hasDisplay()
+    else -> false
+  }
 
 /**
  * Returns true if a graphical display is available for launching visible (non-headless) UI.

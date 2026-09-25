@@ -1,0 +1,50 @@
+script: ./android_ensureAppCompiled.ts
+name: android_ensureAppCompiled
+description: >-
+  Reads ART's dexopt state for an Android app (`dumpsys package`) and, when the app has no compiled
+  artifacts (`status=run-from-apk`), runs `pm compile` so cold starts stop verifying the whole APK
+  every launch. A healthy app costs one read and nothing else. Call before the first launch of the
+  app under test.
+runtime: inProcess
+supportedPlatforms:
+  - android
+# Author-named rather than agent-picked: a trail lists this as a setup step. Hiding it also keeps
+# it off every target's advertised surface, which discovery is global over.
+surfaceToLlm: false
+# Authoritative: the build-time bundled-config path does not run analyzer enrichment for
+# yaml-backed tools, so the schema has to be spelled out here. Defaults live in the tool body —
+# this schema has no way to express one — and are stated in each description below.
+inputSchema:
+  appId:
+    type: string
+    required: false
+    description: >-
+      The Android package id to check (e.g. `com.example.app`). Defaults to the session's resolved
+      target app.
+  compilerFilter:
+    type: string
+    required: false
+    description: >-
+      ART compiler filter for the compile, when one is needed. `verify` (the default) is the
+      cheapest filter that stops per-launch verification and is all ART allows for a debuggable
+      build; `speed-profile` / `speed` do more work for release builds.
+    enum:
+      - assume-verified
+      - verify
+      - quicken
+      - space-profile
+      - space
+      - speed-profile
+      - speed
+      - everything-profile
+      - everything
+  force:
+    type: boolean
+    required: false
+    description: >-
+      Recompile even when the app already has compiled artifacts — e.g. to move a release build to
+      a different filter. Defaults to false.
+  checkOnly:
+    type: boolean
+    required: false
+    description: Only report the dexopt state; never compile. Defaults to false.

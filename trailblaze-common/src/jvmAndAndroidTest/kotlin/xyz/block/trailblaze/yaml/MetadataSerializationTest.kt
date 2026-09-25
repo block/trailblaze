@@ -34,7 +34,7 @@ class MetadataSerializationTest {
     assertEquals("Appointment checkout flow", trail.config.title)
     assertEquals("Test loyalty points received for purchase workflow", trail.config.description)
     assertEquals("P0", trail.config.priority)
-    assertEquals("staging", trail.config.metadata?.get("environment"))
+    assertEquals("staging", trail.config.metadata?.string("environment"))
 
     assertEquals(2, trail.trail.size)
   }

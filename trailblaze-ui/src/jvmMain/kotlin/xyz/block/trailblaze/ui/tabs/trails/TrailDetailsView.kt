@@ -43,6 +43,7 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.ui.composables.LocalDeviceClassifierIcons
 import xyz.block.trailblaze.ui.composables.getIcon
+import xyz.block.trailblaze.yaml.displayText
 
 /**
  * Details view showing a selected trail and its variants.
@@ -182,7 +183,7 @@ fun TrailDetailsView(
         SelectionContainer {
           Column {
             trail.metadata.forEach { (key, value) ->
-              DetailRow(label = key, value = value, isMonospace = true)
+              DetailRow(label = key, value = value.displayText, isMonospace = true)
             }
           }
         }

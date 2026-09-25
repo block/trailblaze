@@ -4,24 +4,22 @@ import java.io.File
 
 /**
  * Pure planner for stitching the iOS session video from one or more wall-clock-anchored segments
- * into a single `video.mp4` whose playback timeline stays **linear against host wall-clock** — the
- * contract the report timeline relies on (`videoPositionMs = eventEpochMs - startTimestampMs`, see
- * `SessionCombinedView`/`VideoFrameCacheJvm`).
+ * into the session's single recording whose playback timeline stays **linear against host wall-clock** — the
+ * contract the report timeline relies on (`videoPositionMs = eventEpochMs - startTimestampMs`).
  *
  * The primary iOS path is a single baguette segment whose per-frame PTS are already wall-clock
- * (see [WallClockMp4MuxConsumer]); that's a one-entry plan and a no-op passthrough. A second
+ * (see [WallClockMuxConsumer]); that's a one-entry plan and a no-op passthrough. A second
  * segment only appears when the baguette feed dies mid-session and the recorder restarts via
  * `simctl` for the remainder — see the class kdoc on the iOS capture. When that happens the two
  * segments cover disjoint wall-clock spans with a **gap** in between (baguette death →
  * simulator-recording boot), and a naive concat would compress that gap and shift every later
  * frame off its true time. This planner preserves the gap by extending each non-final segment's
- * presented `duration` to cover it, so the next segment starts at its true wall-clock offset.
+ * presented duration to cover it, so the next segment starts at its true wall-clock offset.
  *
- * How the concat demuxer renders a `duration` longer than the segment's real content (whether it
- * holds the last frame across the gap or shows nothing) is **pending on-device validation** on the
- * mid-session-death path; if a held frame is required, the follow-up is an explicit hold filter in
- * [IosVideoStitcher] rather than relying on the demuxer. The wall-clock *offset* of the following
- * segment is correct either way — that's the property the report timeline depends on.
+ * A presented duration is what the segment *occupies*, not how much footage it holds: [IosVideoStitcher]
+ * pads each segment with clones of its own last frame and trims to this length, so the gap shows
+ * the dying screen rather than black, and a segment whose footage overran or fell short of its
+ * window still can't shift the one after it.
  *
  * All timing here is host-epoch millis ([VideoSegment.startEpochMs]/[VideoSegment.endEpochMs]) —
  * the same `System.currentTimeMillis()` clock that stamps every Trailblaze session-log event. The
@@ -30,10 +28,10 @@ import java.io.File
 object IosVideoStitchPlan {
 
   /**
-   * Floor for a non-final entry's presented duration. The concat demuxer drops an entry whose
-   * `duration` rounds to `0.000`, which would silently discard the segment — so clamp up to 1ms
-   * (matching [ScreencastTimeline.MIN_FRAME_DURATION_MS]) when two segments share a start epoch
-   * (clock wobble at the death→simctl-boot boundary).
+   * Floor for a non-final entry's presented duration. A duration that rounds to `0.000` trims the
+   * entry away to nothing, silently discarding the segment — so clamp up to 1ms (matching
+   * [ScreencastTimeline.MIN_FRAME_DURATION_MS]) when two segments share a start epoch (clock wobble
+   * at the death→simctl-boot boundary).
    */
   private const val MIN_FRAME_DURATION_MS = 1L
 
@@ -93,22 +91,9 @@ object IosVideoStitchPlan {
       entries = entries,
       overallStartEpochMs = ordered.first().startEpochMs,
       // Latest end across all segments, not the last-by-start's end: a segment that starts earlier
-      // could still end later, and the overall window feeds the sprite's expectedDurationMs.
+      // could still end later, and the overall window is the artifact's recording window.
       overallEndEpochMs = ordered.maxOf { it.endEpochMs },
       needsConcat = ordered.size > 1,
     )
-  }
-
-  /**
-   * Renders [plan] as an ffconcat v1 script body (the input to `ffmpeg -f concat -safe 0`).
-   * Absolute paths are single-quoted with embedded quotes escaped per the concat demuxer's
-   * `'\''` convention. A `duration` line follows each entry that carries a presented duration.
-   */
-  fun toFfconcatScript(plan: StitchPlan): String = buildString {
-    appendLine("ffconcat version 1.0")
-    for (entry in plan.entries) {
-      appendLine("file '${FfconcatScript.escapeConcatPath(entry.file.absolutePath)}'")
-      entry.presentedDurationMs?.let { appendLine("duration ${FfconcatScript.formatSeconds(it)}") }
-    }
   }
 }

@@ -63,6 +63,7 @@ class TrailblazeSettingsRepo(
   fun load(
     initialConfig: SavedTrailblazeAppConfig,
   ): SavedTrailblazeAppConfig {
+    var replacedARetiredDriver = false
     val config = try {
       Console.log("Loading Settings from: ${settingsFile.absolutePath}")
       trailblazeJson.decodeFromString(
@@ -72,7 +73,18 @@ class TrailblazeSettingsRepo(
         // Clear session-specific state on app restart
         currentSessionId = null,
         currentSessionViewMode = SessionViewMode.DEFAULT.name,
-      )
+      ).withRetiredDriversReplaced { platform, driver, replacement ->
+        replacedARetiredDriver = true
+        Console.log(
+          "Persisted $platform driver ${driver.name} has been retired; " +
+            "using ${replacement?.name ?: "no selection"} instead",
+        )
+      }.also {
+        // Write the replacement back, or the file keeps naming a driver nothing can run and every
+        // later load repeats this migration — until some unrelated `updateAppConfig` happens to
+        // rewrite the file. The error branch below already saves for the same reason.
+        if (replacedARetiredDriver) saveConfig(it)
+      }
     } catch (e: Exception) {
       Console.log("Error loading settings, using default: ${e.message}")
       initialConfig.also {

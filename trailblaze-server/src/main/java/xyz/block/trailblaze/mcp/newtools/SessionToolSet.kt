@@ -11,6 +11,7 @@ import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.compoundClassifier
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.model.SessionId
+import xyz.block.trailblaze.logs.model.SessionInfo
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.logs.model.getSessionStartedInfo
 import xyz.block.trailblaze.mcp.McpToolNames
@@ -274,11 +275,18 @@ class SessionToolSet(
     // Stop capture
     val artifacts = stopCapture()
 
-    // End the session
-    try {
+    // End the session. A failure is reported on the stop rather than failing it; the session's
+    // end status tells whether it was only the capture that failed after the session ended.
+    val endFailure = try {
       mcpBridge.endSession()
+      null
     } catch (e: Exception) {
       Console.error("[session] Failed to end session: ${e.message}")
+      e
+    }
+    val captureWarning = endFailure?.let {
+      val endStatus = sessionId?.let { id -> logsRepo?.getSessionInfoDirect(id)?.latestStatus }
+      (endStatus as? SessionStatus.Ended.Succeeded)?.captureWarning
     }
     sessionContext?.clearRecording()
     sessionContext?.clearAssociatedDevice()
@@ -306,6 +314,11 @@ class SessionToolSet(
           append(" Trail saved.")
         } else if (save && !saveSucceeded) {
           append(" Trail save failed.")
+        }
+        if (captureWarning != null) {
+          append(" Warning: captured data may be incomplete ($captureWarning).")
+        } else if (endFailure != null) {
+          append(" Warning: ending the session failed (${endFailure.message ?: endFailure::class.simpleName}).")
         }
         // Only emit the cleared-override hint when an override actually
         // existed on this session — `hadTargetOverride` is captured above,
@@ -637,7 +650,7 @@ class SessionToolSet(
 
     val info = logsRepo?.getSessionInfoDirect(sessionId)
     val sessionDir = logsRepo?.getSessionDir(sessionId)
-    val statusStr = info?.latestStatus?.let { formatStatus(it) } ?: "unknown"
+    val statusStr = info?.let { formatStatus(it) } ?: "unknown"
     val displayTitle = info?.displayName ?: sessionContext?.sessionTitle
 
     // Include recorded steps for the current session
@@ -698,7 +711,7 @@ class SessionToolSet(
         SessionListEntry(
           id = info.sessionId.value,
           title = info.displayName,
-          status = formatStatus(info.latestStatus),
+          status = formatStatus(info),
           startedAt = info.timestamp.toString(),
           durationMs = info.durationMs,
           device = info.trailblazeDeviceId?.instanceId,
@@ -870,16 +883,20 @@ class SessionToolSet(
     }
   }
 
-  private fun formatStatus(status: SessionStatus): String {
+  // The duration comes from the SessionInfo, not the end status: an interactive session's end
+  // status carries no duration of its own (0), and SessionInfo falls back to the session's span.
+  private fun formatStatus(info: SessionInfo): String {
+    val status = info.latestStatus
     val durationSuffix = if (status is SessionStatus.Ended) {
-      val seconds = status.durationMs / 1000.0
+      val seconds = info.durationMs / 1000.0
       if (seconds < 60) " (%.1fs)".format(seconds)
       else " (%dm %ds)".format((seconds / 60).toLong(), (seconds % 60).toLong())
     } else ""
     return when (status) {
       is SessionStatus.Unknown -> "Unknown"
       is SessionStatus.Started -> "In Progress"
-      is SessionStatus.Ended.Succeeded -> "Succeeded$durationSuffix"
+      is SessionStatus.Ended.Succeeded ->
+        "Succeeded$durationSuffix" + if (status.captureWarning != null) ", captured data incomplete" else ""
       is SessionStatus.Ended.Failed -> "Failed$durationSuffix"
       is SessionStatus.Ended.Cancelled -> "Cancelled$durationSuffix"
       is SessionStatus.Ended.TimeoutReached -> "Timeout$durationSuffix"

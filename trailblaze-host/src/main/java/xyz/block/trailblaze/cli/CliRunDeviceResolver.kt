@@ -78,8 +78,8 @@ object CliRunDeviceResolver {
     }
 
     // Default path: the shared strict policy over the REAL connected devices. The same physical
-    // device can be listed once per driver variant (e.g. one emulator as instrumentation AND
-    // accessibility), so group by fully-qualified id first — the count that matters is physical
+    // device can be listed once per driver variant (e.g. one simulator as both ios-host and
+    // ios-axe), so group by fully-qualified id first — the count that matters is physical
     // devices, and the run request carries only (platform, instanceId), not the variant.
     val realDeviceBySpec = devices
       .filterNot { it.platform.usesVirtualDevice }
@@ -128,10 +128,10 @@ object CliRunDeviceResolver {
    * (exact, then substring). A blank instance id after the slash (`web/`) is treated as
    * platform-only rather than letting `contains("")` silently match the first candidate.
    *
-   * The same physical instanceId is listed once per driver variant (Android exposes
-   * ANDROID_ONDEVICE_INSTRUMENTATION and ANDROID_ONDEVICE_ACCESSIBILITY for one emulator), so
-   * among the instance matches a [requestedDriverType] (the trail's `devices:` pin / `--driver`
-   * / app setting) picks its variant rather than whichever variant happens to be listed first.
+   * The same physical instanceId is listed once per driver variant (iOS exposes IOS_HOST and
+   * IOS_AXE for one simulator), so among the instance matches a [requestedDriverType] (the
+   * trail's `devices:` pin / `--driver` / app setting) picks its variant rather than whichever
+   * variant happens to be listed first.
    */
   private fun resolveExplicit(
     devices: List<TrailblazeConnectedDeviceSummary>,

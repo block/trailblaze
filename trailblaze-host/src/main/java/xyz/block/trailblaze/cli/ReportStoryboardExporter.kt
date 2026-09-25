@@ -40,10 +40,10 @@ import xyz.block.trailblaze.util.Console
  * would mean re-implementing the browser's layout engine for no benefit. The only cost
  * is the same Chromium dependency the timeline-autoplay exporters already pay.
  *
- * **Why CDP over `page.screenshot({ type: "webp" })`.** Playwright Java 1.59's
- * `ScreenshotType` enum only has `PNG` and `JPEG`, so the high-level API can't emit
- * WebP directly. Instead we open a CDP session and call `Page.captureScreenshot` with
- * `format: "webp"` — the same libwebp encoder that ships inside Chromium, returning
+ * **Why CDP over `page.screenshot({ type: "webp" })`.** Playwright Java gained
+ * `ScreenshotType.WEBP` in 1.62, but its `scale` option is only `CSS | DEVICE`, and the
+ * storyboard needs an arbitrary numeric scale. So we open a CDP session and call
+ * `Page.captureScreenshot` with `format: "webp"` — the same libwebp encoder that ships inside Chromium, returning
  * base64 image bytes we decode and write straight to disk. This eliminates the
  * external ffmpeg-with-`libwebp` (or standalone `cwebp`) requirement that an earlier
  * PNG→WebP intermediate encode imposed — Linuxbrew's ffmpeg bottle ships without
@@ -200,10 +200,9 @@ object ReportStoryboardExporter {
    * response payload is base64-decoded straight onto disk. No PNG intermediate, no
    * ffmpeg, no host-side `cwebp` — Chromium ships its own libwebp.
    *
-   * **Why CDP rather than [Page.screenshot].** Playwright Java 1.59's
-   * `ScreenshotType` enum is `PNG | JPEG` only. Driving CDP directly lets us pick
-   * `webp` without waiting on the Java client to expose the underlying CDP capability
-   * (the JS client has had `type: "webp"` for years). The CDP session is opened on
+   * **Why CDP rather than [Page.screenshot].** [Page.screenshot] supports WebP since
+   * Playwright Java 1.62, but only `CSS | DEVICE` scale — CDP's `clip.scale` takes the
+   * numeric CSS-px scale this capture needs. The CDP session is opened on
    * the existing [com.microsoft.playwright.BrowserContext] — same pattern as the
    * `WebAuthn.enable` call in `PlaywrightBrowserManager.disableWebAuthn`.
    *
@@ -240,6 +239,11 @@ object ReportStoryboardExporter {
         headless = headless,
         deviceId = deviceId,
         onBrowserInstallProgress = onInstallProgress,
+        // Capture at 1x. The storyboard is a PR artifact, and its device-pixel size is
+        // `content CSS px x DPR` (see the projection against [LIBWEBP_HARD_DIMENSION_MAX]
+        // below), so a headed 2x run both quadruples the bytes and halves the step count a
+        // session can reach before the grid trips that limit and tells the user to split it.
+        deviceScaleFactorOverride = 1.0,
       )
       val mgr = manager
       runBlocking(mgr.playwrightDispatcher) {

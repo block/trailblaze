@@ -7,6 +7,7 @@ import kotlinx.serialization.json.JsonElement
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcRequest
 import java.io.File
+import xyz.block.trailblaze.yaml.TrailMetadataValue
 
 @Serializable
 data class IntegrationsResponse(val integrations: List<IntegrationDto>)
@@ -546,7 +547,7 @@ data class SessionSummary(
   val trailId: String? = null,
   val imported: Boolean = false,
   /** Consumer-injected key/values from the trail's `config.metadata`, for shared-report parity. */
-  val metadata: Map<String, String>? = null,
+  val metadata: Map<String, TrailMetadataValue>? = null,
 )
 
 @Serializable
@@ -803,6 +804,7 @@ data class RunRequest(
   val captureLogcat: Boolean? = null,
   val captureNetworkTraffic: Boolean? = null,
   val captureIosLogs: Boolean? = null,
+  val captureMemory: Boolean? = null,
   val captureAnalytics: Boolean? = null,
   // Dedicated event-stream capture. Host apps can supply producer-specific capture adapters; the
   // serialized Trail Runner contract stays producer-agnostic for the OSS module.
@@ -951,6 +953,7 @@ data class SettingsDto(
   val alwaysOnTop: Boolean,
   val captureLogcat: Boolean,
   val captureIosLogs: Boolean,
+  val captureMemory: Boolean,
   val captureNetworkTraffic: Boolean,
   val captureAnalytics: Boolean,
   val showWebBrowser: Boolean,
@@ -988,6 +991,7 @@ data class SettingsPatchRequest(
   val alwaysOnTop: Boolean? = null,
   val captureLogcat: Boolean? = null,
   val captureIosLogs: Boolean? = null,
+  val captureMemory: Boolean? = null,
   val captureNetworkTraffic: Boolean? = null,
   val captureAnalytics: Boolean? = null,
   val showWebBrowser: Boolean? = null,
@@ -1340,6 +1344,7 @@ data class RecordTrailRangeRequest(
   val captureLogcat: Boolean? = null,
   val captureNetworkTraffic: Boolean? = null,
   val captureIosLogs: Boolean? = null,
+  val captureMemory: Boolean? = null,
   val captureAnalytics: Boolean? = null,
   val captureEvents: Boolean? = null,
 )

@@ -31,6 +31,7 @@ import xyz.block.trailblaze.agent.model.AgentTaskStatus
 import kotlinx.serialization.json.JsonElement
 import xyz.block.trailblaze.logs.client.TrailblazeJson
 import xyz.block.trailblaze.logs.client.TrailblazeLog
+import xyz.block.trailblaze.logs.client.TrailblazeToolCatalog
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.ui.composables.CodeBlock
 import xyz.block.trailblaze.ui.composables.SelectableText
@@ -60,8 +61,8 @@ fun LlmRequestDetailsFlat(
     }
 
     DetailSection("Available Tools") {
-      log.toolOptions.forEach { toolOption ->
-        CodeBlock(toolOption.name)
+      TrailblazeToolCatalog.toolNames(log).forEach { toolName ->
+        CodeBlock(toolName)
       }
     }
 
@@ -72,6 +73,26 @@ fun LlmRequestDetailsFlat(
 
     DetailSection("View Hierarchy") {
       Text("Use the 'Inspect UI' button", style = MaterialTheme.typography.bodyMedium)
+    }
+  }
+}
+
+/**
+ * The session-level tool catalog that every LLM request in a session points at.
+ *
+ * Shows the id because that is what a request log names — seeing two ids in one session is how a
+ * reader spots a mid-run toolset change.
+ */
+@Composable
+fun ToolCatalogDetailsFlat(log: TrailblazeLog.TrailblazeToolCatalogLog) {
+  Column(modifier = Modifier.padding(horizontal = 16.dp)) {
+    DetailSection("Catalog ID") {
+      SelectableText(text = log.toolCatalogId)
+    }
+    DetailSection("Tools (${log.toolOptions.size})") {
+      log.toolOptions.forEach { toolOption ->
+        CodeBlock(toolOption.name)
+      }
     }
   }
 }

@@ -4,7 +4,11 @@ import assertk.assertThat
 import assertk.assertions.containsExactly
 import assertk.assertions.isEmpty
 import assertk.assertions.isEqualTo
+import assertk.assertions.isFalse
 import assertk.assertions.isNull
+import assertk.assertions.isTrue
+import java.io.IOException
+import java.util.concurrent.ConcurrentHashMap
 import org.junit.Test
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
@@ -560,6 +564,197 @@ class AndroidHostAdbUtilsTest {
     assertThat(
       AndroidHostAdbUtils.mismatchedPackageFromInstallError("Failure [INSTALL_FAILED_UPDATE_INCOMPATIBLE]"),
     ).isNull()
+  }
+
+  // ── evictExactClient ──────────────────────────────────────────────────────
+  //
+  // Timeout/interrupt cleanup runs on the wall clock, not on a caught IOException, so it can't
+  // rely on the transport to say "your client is stale" — it has to compare identities itself. A
+  // concurrent caller sharing the same key can have already evicted-and-reconnected by the time
+  // cleanup runs, and a blind `remove(key)` would tear down that healthy replacement instead of
+  // the one call actually used.
+
+  private class FakeClient : AutoCloseable {
+    var closed = false
+    override fun close() {
+      closed = true
+    }
+  }
+
+  @Test
+  fun evictExactClientRemovesAndClosesTheMatchingInstance() {
+    val client = FakeClient()
+    val clients = ConcurrentHashMap<String, FakeClient>().apply { put("serial", client) }
+    evictExactClient(clients, "serial", client)
+    assertThat(clients.containsKey("serial")).isFalse()
+    assertThat(client.closed).isTrue()
+  }
+
+  @Test
+  fun evictExactClientLeavesAReplacementInPlace() {
+    // A concurrent caller already evicted the stale client and cached a fresh one under the same
+    // key. Cleanup for the stale client must not touch it.
+    val stale = FakeClient()
+    val replacement = FakeClient()
+    val clients = ConcurrentHashMap<String, FakeClient>().apply { put("serial", replacement) }
+    evictExactClient(clients, "serial", stale)
+    assertThat(clients["serial"]).isEqualTo(replacement)
+    assertThat(replacement.closed).isFalse()
+    assertThat(stale.closed).isFalse()
+  }
+
+  @Test
+  fun evictExactClientIsANoOpWhenNoClientWasResolved() {
+    // The interrupted/timeout paths call this even when the worker never got far enough to report
+    // a client (e.g. a test's fake `shellCall` that never invokes `onClientResolved`).
+    val clients = ConcurrentHashMap<String, FakeClient>()
+    evictExactClient(clients, "serial", null)
+    assertThat(clients.isEmpty()).isTrue()
+  }
+
+  @Test
+  fun evictExactClientIsANoOpWhenTheKeyWasAlreadyRemoved() {
+    val client = FakeClient()
+    val clients = ConcurrentHashMap<String, FakeClient>()
+    evictExactClient(clients, "serial", client)
+    assertThat(client.closed).isFalse()
+  }
+
+  // ── runOnResolvedClient ───────────────────────────────────────────────────
+  //
+  // Creating a dadb client opens a socket, so a cold connect fails with the same transient
+  // IOException as the call itself. Resolution has to sit inside the recovery boundary, or a
+  // cold-connect failure skips the retry every other transport error gets.
+
+  @Test
+  fun runOnResolvedClientRecoversFromAFailureWhileResolvingTheClient() {
+    val result = runOnResolvedClient<FakeClient, String>(
+      resolve = { throw IOException("connection refused") },
+      onClientResolved = {},
+      onTransportFailure = { e, usedClient ->
+        assertThat(usedClient).isNull()
+        "recovered from ${e.message}"
+      },
+      block = { "unreachable" },
+    )
+    assertThat(result).isEqualTo("recovered from connection refused")
+  }
+
+  @Test
+  fun runOnResolvedClientHandsTheExactClientTheFailedCallUsed() {
+    val client = FakeClient()
+    val reported = mutableListOf<FakeClient>()
+    var failedWith: FakeClient? = null
+    runOnResolvedClient(
+      resolve = { client },
+      onClientResolved = { reported += it },
+      onTransportFailure = { _, usedClient -> failedWith = usedClient },
+      block = { throw IOException("stream closed") },
+    )
+    assertThat(reported).containsExactly(client)
+    assertThat(failedWith).isEqualTo(client)
+  }
+
+  @Test
+  fun runOnResolvedClientPropagatesASyncFailureWithoutRecovery() {
+    var recovered = false
+    val thrown = runCatching {
+      runOnResolvedClient<FakeClient, Unit>(
+        resolve = { FakeClient() },
+        onClientResolved = {},
+        onTransportFailure = { _, _ -> recovered = true },
+        block = { throw IOException("Sync failed: permission denied") },
+      )
+    }.exceptionOrNull()
+    assertThat(thrown?.message).isEqualTo("Sync failed: permission denied")
+    assertThat(recovered).isFalse()
+  }
+
+  // ── runOnResolvedClientOnce ───────────────────────────────────────────────
+  //
+  // The transport every bounded worker uses. A timed-out worker is abandoned, not stopped, so a
+  // retry inside it would re-run `pm clear` or a force-stop whenever the adb server finally drops
+  // the socket — after the caller threw and the device moved on to the next trail.
+
+  @Test
+  fun runOnResolvedClientOnceRunsTheBlockOnceAndPropagatesTheTransportFailure() {
+    val client = FakeClient()
+    var resolves = 0
+    var blockRuns = 0
+    var evicted: FakeClient? = null
+    val thrown = runCatching {
+      runOnResolvedClientOnce<FakeClient, String>(
+        resolve = { resolves++; client },
+        onClientResolved = {},
+        onTransportFailure = { _, usedClient -> evicted = usedClient },
+        block = { blockRuns++; throw IOException("connection reset by peer") },
+      )
+    }.exceptionOrNull()
+    assertThat(blockRuns).isEqualTo(1)
+    assertThat(resolves).isEqualTo(1)
+    assertThat(evicted).isEqualTo(client)
+    assertThat(thrown?.message).isEqualTo("connection reset by peer")
+  }
+
+  // ── execWithOneTransportRetry ─────────────────────────────────────────────
+  //
+  // The retry execAdbShellCommand always had, moved out of the worker onto the caller's thread and
+  // inside what is left of the bound.
+
+  private fun attemptResult(
+    outcome: AndroidHostAdbUtils.ShellAttemptOutcome,
+    value: String? = null,
+    error: Throwable? = null,
+  ) = AndroidHostAdbUtils.ShellAttemptResult(value, outcome, error)
+
+  @Test
+  fun execWithOneTransportRetryRetriesATransportFailureWithTheBudgetThatIsLeft() {
+    var now = 0L
+    val budgets = mutableListOf<Long>()
+    val result = AndroidHostAdbUtils.execWithOneTransportRetry(timeoutMs = 1_000L, nowMs = { now }) { budget ->
+      budgets += budget
+      if (budgets.size == 1) {
+        now += 400L
+        attemptResult(AndroidHostAdbUtils.ShellAttemptOutcome.FAILED, error = IOException("reset"))
+      } else {
+        attemptResult(AndroidHostAdbUtils.ShellAttemptOutcome.SUCCESS, value = "ok")
+      }
+    }
+    assertThat(budgets).containsExactly(1_000L, 600L)
+    assertThat(result.value).isEqualTo("ok")
+  }
+
+  @Test
+  fun execWithOneTransportRetryDoesNotRetryATimeout() {
+    var calls = 0
+    val result = AndroidHostAdbUtils.execWithOneTransportRetry(timeoutMs = 1_000L, nowMs = { 0L }) {
+      calls++
+      attemptResult(AndroidHostAdbUtils.ShellAttemptOutcome.TIMED_OUT)
+    }
+    assertThat(calls).isEqualTo(1)
+    assertThat(result.outcome).isEqualTo(AndroidHostAdbUtils.ShellAttemptOutcome.TIMED_OUT)
+  }
+
+  @Test
+  fun execWithOneTransportRetryDoesNotRetryAFailureTheDeviceReported() {
+    var calls = 0
+    AndroidHostAdbUtils.execWithOneTransportRetry(timeoutMs = 1_000L, nowMs = { 0L }) {
+      calls++
+      attemptResult(AndroidHostAdbUtils.ShellAttemptOutcome.FAILED, error = IllegalStateException("no"))
+    }
+    assertThat(calls).isEqualTo(1)
+  }
+
+  @Test
+  fun execWithOneTransportRetryDoesNotRetryOnceTheBudgetIsSpent() {
+    var now = 0L
+    var calls = 0
+    AndroidHostAdbUtils.execWithOneTransportRetry(timeoutMs = 1_000L, nowMs = { now }) {
+      calls++
+      now += 1_000L
+      attemptResult(AndroidHostAdbUtils.ShellAttemptOutcome.FAILED, error = IOException("reset"))
+    }
+    assertThat(calls).isEqualTo(1)
   }
 
   // ── helpers ──────────────────────────────────────────────────────────────

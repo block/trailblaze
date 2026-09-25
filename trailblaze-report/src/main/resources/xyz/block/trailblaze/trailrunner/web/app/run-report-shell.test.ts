@@ -7,7 +7,7 @@ import { toSessionPayloads } from "./run-report-extract";
 import { buildMultiReportHtml } from "./run-report-html";
 import { buildViewerShellHtml } from "./run-report-shell-html";
 import { VIEWER_ROUTE_KEYS } from "./run-report-route";
-import { addArchiveUrls, addressWithoutArchive, appendSources, archiveFailure, combineArchives, objectUrlsToRevoke, describeArchive, fetchFailureMessage, focusIndexAfterRemoval, listAnnouncement, loadingMessage, readFailureMessage, removeSourceAt, renderButtonState, renderPlan, sourceKey, sourceListHtml, sourcesPermalink, sourcesShareable, splitArchiveUrls, zipParamsFrom, zipPermalink } from "./run-report-shell";
+import { addArchiveUrls, addressWithoutArchive, analysisParamsFrom, analysisProblemHref, appendSources, archiveFailure, combineArchives, objectUrlsToRevoke, describeArchive, fetchFailureMessage, focusIndexAfterRemoval, listAnnouncement, loadingMessage, readFailureMessage, removeSourceAt, renderAnalysisView, renderButtonState, renderPlan, sourceKey, sourceListHtml, sourcesPermalink, sourcesShareable, splitArchiveUrls, zipParamsFrom, zipPermalink } from "./run-report-shell";
 import type { ArchiveSource } from "./run-report-shell";
 
 describe("buildViewerShellHtml", () => {
@@ -124,6 +124,149 @@ describe("buildViewerShellHtml", () => {
     const panel = /<div id="tb-shell-panel">([\s\S]*?)\n  <\/div>/.exec(shell);
     expect(panel).not.toBeNull();
     expect(panel![1]).toContain("Access-Control-Allow-Origin");
+  });
+});
+
+describe("structured analysis deep links", () => {
+  const payload = {
+    schema_version: 2,
+    summary: {
+      headline: "Two affected runs map to two problem sets.",
+      run_label: "Run 42",
+      affected_subject_count: 2,
+      problem_set_count: 2,
+      coverage_status: "complete",
+    },
+    problem_sets: [
+      {
+        id: "checkout",
+        title: "Checkout <changed>",
+        status: { tone: "critical", label: "Confirmed problem" },
+        confidence: "high",
+        attention_summary: "A shared step changed.",
+        context_summary: "1 affected run · high confidence",
+        affected_subjects: [{ key: "run-a", label: "Affected run 1", context: "phone" }],
+        observations: ["The expected control was absent."],
+        interpretation: "The interface changed.",
+        uncertainty: "The exact interface revision is unknown.",
+        next_action_or_evidence_needed: { kind: "next_action", text: "Inspect the checkout step." },
+        evidence: [
+          { id: "e1", kind: "video", label: "Build evidence", supports: "The control is absent.", source_run: "run-a", source_subject: { label: "Checkout trail", context: "phone" }, affected_run_keys: ["run-a"], locator: "steps[0]", availability: "available", key: true, href: "https://build.example/1", timestamp_or_range: "00:14–00:18", text_description: "The expected control does not appear." },
+          { id: "e2", kind: "log", label: "Raw event log", supports: "The lookup returned no match.", source_run: "run-a", affected_run_keys: ["run-a"], availability: "unavailable", key: false },
+        ],
+        code_findings: [{
+          repository: "example/checkout-app",
+          examined_ref: "a".repeat(40),
+          comparison_ref: "b".repeat(40),
+          kind: "candidate_change",
+          summary: "Checkout method <changed>",
+          source_url: `https://github.com/example/checkout-app/commit/${"a".repeat(40)}`,
+          evidence_basis: "The method removed the checkout control.",
+          relationship: "temporal_correlation",
+          what_would_confirm: "Compare a run before and after this commit.",
+        }],
+        history_summary: "Recurring in the available history; this does not establish the same cause.",
+        related_history: [
+          { id: "h1", relation: "exact", label: "Prior run", source_run: "run-a", occurred_at: "2026-09-21", status: "failed" },
+          { id: "h2", relation: "inferred", label: "Possibly related to settings", reason: "Shared cause is not established." },
+        ],
+      },
+      {
+        id: "settings",
+        title: "Settings delay",
+        status: { tone: "warning", label: "Needs attention" },
+        confidence: "medium",
+        attention_summary: "A response was delayed.",
+        context_summary: "1 affected run · medium confidence",
+        affected_subjects: [{ key: "run-b", label: "Affected run 2", context: "tablet" }],
+        observations: ["The screen loaded late."],
+        interpretation: "The response may be slower.",
+        uncertainty: "No server timing is available.",
+        next_action_or_evidence_needed: { kind: "evidence_needed", text: "Inspect timing evidence." },
+        evidence: [{ id: "e3", kind: "unknown", label: "Local evidence", supports: "The screen loaded late.", source_run: "run-b", affected_run_keys: ["run-b"], availability: "unavailable", key: true }],
+        code_findings: [{
+          repository: "example/checkout-app", examined_ref: null, kind: "no_match",
+          summary: "Code lookup unavailable", source_url: null,
+          evidence_basis: "Source lookup returned no result.",
+          relationship: "hypothesis", what_would_confirm: "Inspect the trail revision.",
+        }],
+        history_summary: "Prior-run context is unavailable for this problem.",
+        related_history: [],
+      },
+    ],
+  };
+
+  test("round-trips the analysis document and selected problem", () => {
+    const document = "https://cdn.example/analysis/a.json?signature=a&key=b";
+    const href = `https://viewer.example/?analysis=${encodeURIComponent(document)}&problem=checkout`;
+    expect(analysisParamsFrom(href)).toEqual({ url: document, problem: "checkout" });
+    expect(analysisParamsFrom("https://viewer.example/?analysis=file:///tmp/a.json")).toBeNull();
+    expect(analysisParamsFrom("https://viewer.example/?analysis=")).toBeNull();
+  });
+
+  test("renders one selected problem with escaped text and safe evidence", () => {
+    const html = renderAnalysisView(payload, "checkout", "https://viewer.example/?analysis=https%3A%2F%2Fcdn.example%2Fa.json&problem=checkout");
+    expect(html).toContain("Checkout &lt;changed&gt;");
+    expect(html).not.toContain("A response was delayed.");
+    expect(html).toContain("The expected control was absent.");
+    expect(html).toContain("Inspect the checkout step.");
+    expect(html).toContain('href="https://build.example/1"');
+    expect(html).toContain("Source: Checkout trail · phone");
+    expect(html).toContain("Location: steps[0]");
+    expect(html).toContain("Observed facts");
+    expect(html).toContain("Interpretation");
+    expect(html).toContain("Uncertainty");
+    expect(html).toContain("Problem 1 of 2");
+    expect(html).toContain("Recent history");
+    expect(html).toContain("does not establish the same cause");
+    expect(html).toContain("Inferred relationship:");
+    expect(html).toContain("Unavailable");
+    expect(html).toContain("More evidence (1)");
+    expect(html).toContain("Copy problem link");
+    expect(html).toContain("Code findings");
+    expect(html).toContain("Checkout method &lt;changed&gt;");
+    expect(html).toContain("temporal correlation");
+    expect(html).toContain("Compare a run before and after this commit.");
+    expect(html).toContain(`href="https://github.com/example/checkout-app/commit/${"a".repeat(40)}"`);
+    expect(html).toContain('data-tb-copy-status class="tb-shell-sr"');
+  });
+
+  test("renders all problem sets and rejects missing or malformed selections", () => {
+    const overview = renderAnalysisView(payload, "all", "https://viewer.example/?analysis=https%3A%2F%2Fcdn.example%2Fa.json");
+    expect(overview).toContain("Triage overview");
+    expect(overview).toContain("Settings delay");
+    expect(overview).toContain("Open problem and evidence");
+    expect(() => renderAnalysisView(payload, "missing")).toThrow("not present");
+    expect(() => renderAnalysisView({ schema_version: 2, summary: {}, problem_sets: [{}] }, "all")).toThrow("malformed");
+    const noMatch = renderAnalysisView(payload, "settings");
+    expect(noMatch).toContain("No source ref inspected");
+    expect(noMatch).not.toContain("Inspect source");
+  });
+
+  test("problem navigation preserves the selected manifest", () => {
+    const href = "https://viewer.example/?analysis=https%3A%2F%2Fcdn.example%2Fa.json&theme=dark&problem=checkout";
+    const next = new URL(analysisProblemHref(href, "settings"));
+    expect(next.searchParams.get("analysis")).toBe("https://cdn.example/a.json");
+    expect(next.searchParams.get("theme")).toBe("dark");
+    expect(next.searchParams.get("problem")).toBe("settings");
+  });
+
+  test("the standalone shell includes the analysis loader and card styles", () => {
+    const shell = buildViewerShellHtml();
+    expect(shell).toContain("Loading analysis");
+    expect(shell).toContain("tb-analysis-critical");
+    expect(shell).toContain(".tb-analysis-critical { --tb-analysis-tone: var(--tb-analysis-red); }");
+    expect(shell).toContain(".tb-analysis-warning { --tb-analysis-tone: var(--tb-analysis-orange); }");
+    expect(shell).toContain(".tb-analysis-notice { --tb-analysis-tone: var(--tb-analysis-yellow); }");
+    expect(shell).toContain("#tb-shell.tb-shell-panel-visible { flex: 1 1 auto; }");
+    expect(shell).toMatch(/classList\.add\(["']tb-shell-panel-visible["']\)/);
+    expect(shell).toMatch(/classList\.remove\(["']tb-shell-panel-visible["']\)/);
+    expect(shell).toContain("overflow-y: auto; overscroll-behavior: contain;");
+    expect(shell).toContain(".tb-analysis { flex: none;");
+    expect(shell).toContain("overflow: visible; text-align: left;");
+    expect(shell).toContain("tb-analysis-copy-error");
+    expect(shell).toContain("Copy is unavailable; use the browser address bar.");
+    expect(shell).toMatch(/classList\.toggle\(["']tb-shell-sr["'],\s*!\w+\)/);
   });
 });
 
@@ -405,7 +548,7 @@ describe("what pressing Render does", () => {
 
 describe("several archives becoming one report", () => {
   test("sessions concatenate in list order, sizes add up, and the first archive stamps the report", () => {
-    // List order IS the lane order the run index, the device matrix, and the Trail view read.
+    // List order IS the lane order the run index, the device matrix, and the trail tabs read.
     const combined = combineArchives([
       { generatedAt: "FIRST-TS", sessions: ["a1", "a2"], zipBytes: 1000 },
       { generatedAt: "SECOND-TS", sessions: ["b1"], zipBytes: 24 },
@@ -440,7 +583,7 @@ describe("the address left behind by a locally-dropped archive", () => {
     expect(next.startsWith("/v/")).toBe(true);
   });
 
-  // Every key the viewer routes on, including the Trail view's layout params. One left behind is
+  // Every key the viewer routes on, including the trail tabs' layout params. One left behind is
   // an instruction from the old report silently applied to the new one — a dropped archive would
   // open on a trail projection that has nothing to do with it. Driven off the set the viewer itself
   // routes on, so a key added there without being stripped here fails rather than going quiet.
@@ -528,8 +671,8 @@ describe("shell / export payload parity", () => {
     }];
 
     const inPlace = toSessionPayloads({ generatedAt: "FIXED-TS", sessions: sessions as never });
-    // No `video` in these inputs on purpose: an exported document hoists sprite data URIs out into a
-    // separate chunk, which is a document-layout concern the in-place payload has no equivalent for.
+    // No `video` in these inputs on purpose: an exported document hoists the recording's data URI out
+    // into a separate chunk, which is a document-layout concern the in-place payload has no equivalent for.
     const exported = buildMultiReportHtml({ generatedAt: "FIXED-TS", sessions: sessions as never });
     const chunk = /<script type="application\/json" id="tb-session-0">([\s\S]*?)<\/script>/.exec(exported);
     expect(chunk).not.toBeNull();
@@ -552,7 +695,7 @@ describe("the archive's recording clip", () => {
     videoClip: { url: "blob:https://example.test/9d1f-clip", durationSec: 12.5, startMs: 1000, endMs: 13500 },
   }];
 
-  test("plays in the page that read the archive, and is dropped from a standalone document", () => {
+  test("plays in the page that read the archive, and is dropped only from a standalone document", () => {
     // In place the clip is the whole point: Replay plays the archive's own mp4 out of this page's
     // bytes rather than flipping through screenshots.
     expect(toSessionPayloads({ generatedAt: "FIXED-TS", sessions: withClip as never })[0].videoClip?.url)
@@ -583,10 +726,11 @@ describe("the archive's recording clip", () => {
 
     // Opted in: the zip viewer renders this HTML as the srcDoc of a same-origin iframe on the very
     // page holding the archive's bytes, so the object URLs still resolve and stripping them is what
-    // would break Open. The clip is NOT covered by the flag — its own rule is unchanged.
+    // would break Open. The recording rides the same exception for the same reason — stripping it
+    // leaves that viewer with no Video tab at all, for a recording it is holding the bytes of.
     const inPage = sessionChunk(buildMultiReportHtml({ generatedAt: "FIXED-TS", sessions: withAttachments as never, keepAttachmentObjectUrls: true }));
     expect(inPage.attachments["attachments/a.wav"]).toBe("blob:https://example.test/att-a");
-    expect(inPage.videoClip).toBeNull();
+    expect(inPage.videoClip?.url).toBe("blob:https://example.test/9d1f-clip");
 
     // Stripping every entry leaves null rather than an empty map, so the viewer's "any attachments?"
     // check reads the same as a session that referenced none.

@@ -3,6 +3,7 @@ package xyz.block.trailblaze.report
 import java.io.File
 import java.nio.file.Files
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlinx.datetime.Instant
@@ -11,6 +12,8 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
+import xyz.block.trailblaze.logs.client.BoundedLogFileName
+import xyz.block.trailblaze.logs.client.OnDeviceLogFileName
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.SessionId
@@ -88,6 +91,69 @@ class MoveJsonFilesToSessionDirsTest {
     } finally {
       logsDir.deleteRecursively()
     }
+  }
+
+  @Test
+  fun `a log from a long session id still lands in its session directory`() {
+    // Real session ids carry a test's full suite/section/case identity and run past 220 bytes.
+    // The device bounds its own file name, but moving the log appends the class name, which is
+    // enough to push a name that was just under the limit back over it.
+    val logsDir = Files.createTempDirectory("trailblaze-move-json-test-long").toFile()
+    try {
+      val session = SessionId("a".repeat(220))
+      val deviceName = OnDeviceLogFileName.forLog(session, 1_758_512_345_678L)
+      File(logsDir, deviceName).writeText(statusLogJson(session))
+
+      moveJsonFilesToSessionDirs(logsDir)
+
+      val moved = File(logsDir, session.value).listFiles().orEmpty().filter { it.extension == "json" }
+      assertEquals(1, moved.size, "the log should have been moved into its session directory")
+      assertTrue(
+        moved.single().name.toByteArray().size <= BoundedLogFileName.NAME_MAX,
+        "moved name must fit the filesystem limit: ${moved.single().name}",
+      )
+    } finally {
+      logsDir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun `a log that cannot be moved is left where it was`() {
+    // Deleting the source before the copy exists turns any failed write into a lost log.
+    val logsDir = Files.createTempDirectory("trailblaze-move-json-test-unwritable").toFile()
+    try {
+      val session = SessionId("2026_09_23_blocked")
+      // A plain file where the session directory should go makes the copy impossible.
+      File(logsDir, session.value).writeText("not a directory")
+      val source = File(logsDir, "${session.value}_1758512345678_000001.json").apply {
+        writeText(statusLogJson(session))
+      }
+
+      moveJsonFilesToSessionDirs(logsDir)
+
+      assertTrue(source.exists(), "a log whose copy failed must not be deleted")
+    } finally {
+      logsDir.deleteRecursively()
+    }
+  }
+
+  private fun statusLogJson(session: SessionId): String {
+    val deviceInfo = webDeviceInfo()
+    val log = TrailblazeLog.TrailblazeSessionStatusChangeLog(
+      sessionStatus = SessionStatus.Started(
+        trailConfig = null,
+        trailFilePath = null,
+        hasRecordedSteps = false,
+        testMethodName = "longTest",
+        testClassName = "LongTest",
+        trailblazeDeviceInfo = deviceInfo,
+        trailblazeDeviceId = deviceInfo.trailblazeDeviceId,
+        rawYaml = null,
+      ),
+      session = session,
+      timestamp = Instant.parse("2026-09-23T18:00:00Z"),
+    )
+    return TrailblazeJsonInstance.encodeToString<TrailblazeLog>(log)
   }
 
   private fun webDeviceInfo(): TrailblazeDeviceInfo {

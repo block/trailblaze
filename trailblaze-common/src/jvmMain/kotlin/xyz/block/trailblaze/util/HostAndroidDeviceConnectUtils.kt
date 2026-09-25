@@ -19,6 +19,9 @@ import xyz.block.trailblaze.model.DeviceConnectionStatus
 import xyz.block.trailblaze.model.TrailblazeOnDeviceInstrumentationTarget
 import xyz.block.trailblaze.util.AndroidHostAdbUtils.adbPortForward
 import xyz.block.trailblaze.util.AndroidHostAdbUtils.adbPortReverse
+import java.io.IOException
+import java.net.InetSocketAddress
+import java.net.Socket
 import java.security.MessageDigest
 import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
@@ -32,6 +35,19 @@ object HostAndroidDeviceConnectUtils {
   private const val INSTRUMENTATION_PROCESS_VERIFY_ATTEMPTS = 5
   private const val INSTRUMENTATION_PROCESS_VERIFY_DELAY_MS = 1_000L
   private const val INSTRUMENTATION_OUTPUT_TAIL_LINES = 20
+
+  /**
+   * The emulator's alias for the machine hosting it — what a network capture points the device's
+   * global HTTP proxy at. The capture activator names the same address in its own constant.
+   */
+  internal const val EMULATOR_HOST_ALIAS = "10.0.2.2"
+  private const val HOST_PORT_PROBE_TIMEOUT_MS = 500
+
+  /** What `adb devices` calls a QEMU emulator: `emulator-<console port>`. */
+  private val EMULATOR_SERIAL_REGEX = Regex("""emulator-\d+""")
+
+  /** The adb server endpoints that mean "the emulator's `10.0.2.2` is this machine". */
+  private val LOOPBACK_ADB_HOSTS = setOf("localhost", "127.0.0.1", "::1")
 
   val ioScope = CoroutineScope(Dispatchers.IO)
 
@@ -257,9 +273,12 @@ object HostAndroidDeviceConnectUtils {
    *
    * ### An unreadable package list is not an absent harness
    *
-   * [AndroidHostAdbUtils.listInstalledPackages] swallows its exception and answers `emptyList()`,
-   * and no live device has zero packages — so an empty [installedPackages] means the probe FAILED,
-   * not that nothing is installed. Dropping the extras there would silently restore the crash this
+   * [AndroidHostAdbUtils.listInstalledPackages] now throws instead of swallowing its exception —
+   * `mobile_listInstalledApps` and other tool-facing callers need a wedged device to fail loud, not
+   * report an empty inventory. This call site is the one place that still wants the old
+   * degrade-to-empty behavior, so it catches locally via [installedPackagesOrEmptyOnFailure]: no
+   * live device has zero packages, so an empty [installedPackages] here means the probe FAILED, not
+   * that nothing is installed. Dropping the extras there would silently restore the crash this
    * union exists to prevent, so an unreadable list keeps every extra and says so. That costs
    * nothing when adb is genuinely broken (the force-stops fail too) and is correct if it recovers.
    */
@@ -308,6 +327,42 @@ object HostAndroidDeviceConnectUtils {
       },
     )
   }
+
+  /**
+   * Reads the installed-package set for [planConnectForceStop]'s force-stop gate, degrading to
+   * `emptySet()` — logged, not propagated — on failure. [AndroidHostAdbUtils.listInstalledPackages]
+   * throws on adb failure (including a wedged-device timeout); every other caller wants that so it
+   * fails loud instead of misreporting, but this one specific gate wants the opposite, since an
+   * empty result here is itself the "the probe failed, force-stop everything unverified" signal
+   * that [planConnectForceStop] is built around — see its KDoc.
+   *
+   * [listInstalledPackages] is an injectable seam purely so the failure path is unit-testable
+   * without a real device.
+   */
+  internal fun installedPackagesOrEmptyOnFailure(
+    deviceId: TrailblazeDeviceId,
+    deviceLabel: String,
+    listInstalledPackages: (TrailblazeDeviceId) -> List<String> = AndroidHostAdbUtils::listInstalledPackages,
+  ): Set<String> = try {
+    listInstalledPackages(deviceId).toSet()
+  } catch (e: Exception) {
+    Console.log("Could not read installed packages on $deviceLabel: ${e.message}")
+    emptySet()
+  }
+
+  /**
+   * Message for the one case [installedPackagesOrEmptyOnFailure] doesn't cover: the fallback probe
+   * in [connectToInstrumentationExclusive] that runs when the shared package list was skipped or
+   * came back empty. A failure here must not be reported as "not installed" — that is actionable
+   * advice ("install it and retry") that is actively wrong for a device that is merely unreachable.
+   *
+   * Pure function for testability — callers don't need a real [AndroidHostAdbUtils] to exercise it.
+   */
+  internal fun installedAppProbeFailureMessage(
+    appId: String,
+    deviceLabel: String,
+    cause: Throwable,
+  ): String = "Could not verify whether $appId is installed on $deviceLabel: ${cause.message}"
 
   private val deviceConnectMutexes = ConcurrentHashMap<TrailblazeDeviceId, Mutex>()
 
@@ -412,7 +467,7 @@ object HostAndroidDeviceConnectUtils {
     val installedPackages: Set<String> = if (additionalForceStopTargets.isEmpty()) {
       emptySet()
     } else {
-      AndroidHostAdbUtils.listInstalledPackages(trailblazeDeviceId).toSet()
+      installedPackagesOrEmptyOnFailure(trailblazeDeviceId, trailblazeDeviceId.instanceId)
     }
     val forceStopPlan = planConnectForceStop(
       trailblazeOnDeviceInstrumentationTarget = trailblazeOnDeviceInstrumentationTarget,
@@ -440,10 +495,22 @@ object HostAndroidDeviceConnectUtils {
       val installed = if (installedPackages.isNotEmpty()) {
         trailblazeOnDeviceInstrumentationTarget.testAppId in installedPackages
       } else {
-        AndroidHostAdbUtils.isAppInstalled(
-          appId = trailblazeOnDeviceInstrumentationTarget.testAppId,
-          deviceId = trailblazeDeviceId,
-        )
+        try {
+          AndroidHostAdbUtils.isAppInstalled(
+            appId = trailblazeOnDeviceInstrumentationTarget.testAppId,
+            deviceId = trailblazeDeviceId,
+          )
+        } catch (e: Exception) {
+          val errorMessage = installedAppProbeFailureMessage(
+            appId = trailblazeOnDeviceInstrumentationTarget.testAppId,
+            deviceLabel = trailblazeDeviceId.instanceId,
+            cause = e,
+          )
+          sendProgressMessage(errorMessage)
+          return DeviceConnectionStatus.DeviceConnectionError.ConnectionFailure(
+            errorMessage = errorMessage,
+          )
+        }
       }
       if (!installed) {
         val errorMessage =
@@ -810,6 +877,7 @@ object HostAndroidDeviceConnectUtils {
     val devicePort = deviceId.getTrailblazeOnDeviceSpecificPort()
     adbPortForward(deviceId, devicePort)
     adbPortReverse(deviceId, httpsPort)
+    clearStaleEmulatorProxy(deviceId, sendProgressMessage)
 
     // Calls [connectToInstrumentationExclusive], not [connectToInstrumentation]: the route pinning
     // below already holds this device's connect lock, and a coroutine Mutex is not reentrant.
@@ -834,6 +902,89 @@ object HostAndroidDeviceConnectUtils {
         additionalForceStopTargets = additionalForceStopTargets,
       )
     }
+  }
+
+  /**
+   * Whether `10.0.2.2` is this machine on this device at all. It is the QEMU emulator's alias for
+   * the machine running it, so it means "this host" only for an emulator this host launched:
+   *
+   * - On a phone, `10.0.2.2` is an ordinary LAN address, and whatever sits there is someone's real
+   *   proxy. Probing our own loopback says nothing about it.
+   * - With `ADB_SERVER_SOCKET` pointed at another machine, even an emulator's `10.0.2.2` is that
+   *   machine, not us — so a live capture there looks dead from here and would be cleared.
+   *
+   * Either way the port probe below is answering a question about the wrong host, so the decision
+   * is made before it runs and the device is left untouched.
+   */
+  internal fun isLocallyHostedEmulator(instanceId: String, adbServerHost: String): Boolean =
+    instanceId.matches(EMULATOR_SERIAL_REGEX) && adbServerHost.lowercase().trim('[', ']') in LOOPBACK_ADB_HOSTS
+
+  /**
+   * Whether the device's global HTTP proxy is a leftover of ours to clear before connecting: it
+   * points at this host, and nothing on this host is listening there.
+   *
+   * A network capture sets `http_proxy` to `10.0.2.2:<proxy port>` and reverts it when it stops —
+   * unless the daemon died first. The emulator then sends every HTTP request, the app under test's
+   * included, into a port nothing listens on: the app reports no network, and the on-device runner's
+   * log uploads to the host fail. `settings get` reports an unset proxy as `null` or `:0`. A proxy
+   * aimed anywhere but this host is something a person configured and is not ours to touch, whether
+   * or not it answers — and on anything but a locally hosted emulator
+   * ([isLocallyHostedEmulator]) that is every proxy, including one at `10.0.2.2`.
+   *
+   * @return the proxy value to clear, or null when nothing should change.
+   */
+  internal fun staleEmulatorProxyToClear(
+    setting: String?,
+    instanceId: String,
+    adbServerHost: String,
+    isHostPortListening: (port: Int) -> Boolean,
+  ): String? {
+    if (!isLocallyHostedEmulator(instanceId, adbServerHost)) return null
+    val value = setting?.trim().orEmpty()
+    val host = value.substringBeforeLast(':', missingDelimiterValue = "")
+    val port = value.substringAfterLast(':', missingDelimiterValue = "").toIntOrNull() ?: return null
+    if (host != EMULATOR_HOST_ALIAS || port !in 1..65535) return null
+    return if (isHostPortListening(port)) null else value
+  }
+
+  /**
+   * See [staleEmulatorProxyToClear]. Runs before the connect so the runner's first log upload and
+   * the app's first request do not go into a dead proxy. Best effort: a device that cannot answer
+   * `settings get` is left as it is. The Wi-Fi bounce is what the capture's own revert does — apps
+   * cache the proxy and re-read it only on a connectivity change.
+   */
+  private fun clearStaleEmulatorProxy(deviceId: TrailblazeDeviceId, sendProgressMessage: (String) -> Unit) {
+    val adbServerHost = AndroidHostAdbUtils.resolveAdbServerEndpoint().first
+    // Checked before the read so a phone or a remote adb server costs no round trip either.
+    if (!isLocallyHostedEmulator(deviceId.instanceId, adbServerHost)) return
+    val setting = AndroidHostAdbUtils.execAdbShellCommandWithTimeout(
+      deviceId = deviceId,
+      args = listOf("settings", "get", "global", "http_proxy"),
+      quiet = true,
+    ) ?: return
+    val stale = staleEmulatorProxyToClear(
+      setting = setting,
+      instanceId = deviceId.instanceId,
+      adbServerHost = adbServerHost,
+      isHostPortListening = ::isHostPortListening,
+    ) ?: return
+    sendProgressMessage(
+      "The device's global HTTP proxy points at $stale — this host, where nothing is listening. " +
+        "A network capture never got to revert it; clearing it so the app and the on-device runner " +
+        "can reach the network again.",
+    )
+    AndroidHostAdbUtils.execAdbShellCommandWithTimeout(deviceId, listOf("settings", "delete", "global", "http_proxy"))
+    AndroidHostAdbUtils.execAdbShellCommandWithTimeout(deviceId, listOf("svc", "wifi", "disable"))
+    AndroidHostAdbUtils.execAdbShellCommandWithTimeout(deviceId, listOf("svc", "wifi", "enable"))
+  }
+
+  private fun isHostPortListening(port: Int): Boolean = try {
+    Socket().use {
+      it.connect(InetSocketAddress("127.0.0.1", port), HOST_PORT_PROBE_TIMEOUT_MS)
+      true
+    }
+  } catch (e: IOException) {
+    false
   }
 
   /**

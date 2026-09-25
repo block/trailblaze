@@ -8,8 +8,10 @@ sealed interface CliRunDriverResolution {
   data class Resolved(val driverType: TrailblazeDriverType?) : CliRunDriverResolution
 
   /**
-   * The requested driver string names no known driver — the caller must fail loud
-   * (never silently run on the default driver). [reason]/[hint] slot into the CLI's
+   * The requested driver string names no RUNNABLE driver — the caller must fail loud
+   * (never silently run on the default driver). Covers both a name that matches nothing and
+   * one that matches a driver whose runtime has been retired
+   * ([TrailblazeDriverType.RETIRED_DRIVERS]). [reason]/[hint] slot into the CLI's
    * `reportCliError` envelope; [message] is the single-line form for HTTP payloads.
    */
   data class Unrecognized(val reason: String, val hint: String) : CliRunDriverResolution {
@@ -30,13 +32,48 @@ sealed interface CliRunDriverResolution {
  */
 object CliRunDriverResolver {
 
+  /**
+   * The drivers a user may still ask for — every enum value whose runtime exists. The retired
+   * ones are excluded so the "valid driver types" hint never advertises a name that this same
+   * function rejects a branch later.
+   */
+  private val runnableDrivers: List<TrailblazeDriverType> =
+    TrailblazeDriverType.entries - TrailblazeDriverType.RETIRED_DRIVERS
+
   fun resolve(driverString: String?): CliRunDriverResolution {
     if (driverString == null) return CliRunDriverResolution.Resolved(null)
     val driverType = TrailblazeDriverType.fromString(driverString)
       ?: return CliRunDriverResolution.Unrecognized(
         reason = "unknown driver type '$driverString'",
-        hint = "valid driver types: ${TrailblazeDriverType.entries.joinToString { it.name }}",
+        hint = "valid driver types: ${runnableDrivers.joinToString { it.name }}",
       )
+    return resolve(driverType)
+  }
+
+  /**
+   * The already-parsed form, for callers whose driver choice never was a string — a trail's
+   * decoded `devices:` pin, a persisted app setting. Same retirement check, so a driver that
+   * bypassed [resolve]'s string parse cannot bypass its rejection.
+   */
+  fun resolve(driverType: TrailblazeDriverType?): CliRunDriverResolution {
+    if (driverType == null) return CliRunDriverResolution.Resolved(null)
+    // A retired driver still PARSES — the enum value is kept so old recordings and session logs
+    // deserialize — but nothing can run on it, so it is rejected here rather than a line later
+    // when a descriptor lookup or an on-device agent factory fails without naming the cause.
+    if (driverType in TrailblazeDriverType.RETIRED_DRIVERS) {
+      // Same platform as the dead pin. Naming a cross-platform default here would answer an iOS
+      // retirement with an Android driver.
+      val replacement = TrailblazeDriverType.replacementForRetired(driverType)
+      return CliRunDriverResolution.Unrecognized(
+        reason = "driver '${driverType.name}' has been retired and its runtime is gone",
+        hint = if (replacement != null) {
+          "use ${replacement.name}, and re-record any trail still pinned to the retired driver"
+        } else {
+          "no driver remains for ${driverType.platform.name}; re-record any trail still pinned " +
+            "to the retired driver against a supported platform"
+        },
+      )
+    }
     return CliRunDriverResolution.Resolved(driverType)
   }
 }

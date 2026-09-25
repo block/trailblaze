@@ -47,6 +47,8 @@ import xyz.block.trailblaze.agent.AgentTier
 import xyz.block.trailblaze.agent.model.AgentTaskStatus
 import xyz.block.trailblaze.ui.composables.SelectableText
 import xyz.block.trailblaze.logs.client.TrailblazeLog
+import xyz.block.trailblaze.toolcalls.TrailblazeToolDescriptor
+import xyz.block.trailblaze.logs.client.TrailblazeToolCatalog
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.mcp.LlmCallStrategy
@@ -241,6 +243,12 @@ fun LogDetailsDialog(
       }
 
       is TrailblazeLog.McpAskLog -> {}
+
+      is TrailblazeLog.TrailblazeToolCatalogLog -> {
+        item {
+          ToolCatalogDetailsFlat(log)
+        }
+      }
     }
 
     // Bottom padding
@@ -253,10 +261,16 @@ fun LogDetailsDialog(
 @Composable
 fun ChatHistoryDialog(
   log: TrailblazeLog.TrailblazeLlmRequestLog,
+  /**
+   * The descriptors [log] was offered, resolved by the caller via
+   * [TrailblazeToolCatalog.resolveToolOptions] — they live in a session-level catalog log rather
+   * than on the request, so this composable cannot get them from [log] alone. Required (not
+   * defaulted to the log's legacy inline field) so a caller that forgets fails to compile instead
+   * of quietly rendering an empty tool list for every current log.
+   */
+  toolDescriptors: List<TrailblazeToolDescriptor>,
   onDismiss: () -> Unit,
 ) {
-  // Tool descriptors are already in the log
-  val toolDescriptors = log.toolOptions
   val lazyListState = rememberLazyListState()
   LazyColumn(
     modifier = Modifier.fillMaxSize().padding(horizontal = 32.dp),
@@ -405,8 +419,14 @@ fun ChatHistoryDialog(
       }
     }
 
-    // Available Tools Section
-    if (toolDescriptors.isNotEmpty()) {
+    // Available Tools Section.
+    //
+    // The names come off the request itself; the definitions need the session's tool catalog,
+    // which a partial view of a session may not have. Show the section either way — hiding it
+    // when only names resolve contradicts the tool count the summary row shows for the same
+    // request, and reads as "this request had no tools".
+    val toolNames = TrailblazeToolCatalog.toolNames(log)
+    if (toolDescriptors.isNotEmpty() || toolNames.isNotEmpty()) {
       item {
         var isToolsSectionExpanded by remember { mutableStateOf(false) }
         
@@ -446,7 +466,7 @@ fun ChatHistoryDialog(
                 )
                 Column {
                   Text(
-                    text = "Available Tools (${log.toolOptions.size})",
+                    text = "Available Tools (${maxOf(toolDescriptors.size, toolNames.size)})",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold
                   )
@@ -481,7 +501,20 @@ fun ChatHistoryDialog(
               Spacer(modifier = Modifier.height(12.dp))
               HorizontalDivider()
               Spacer(modifier = Modifier.height(12.dp))
-            
+
+            if (toolDescriptors.isEmpty()) {
+              Text(
+                text = "This view doesn't include the session's tool catalog, so only the names " +
+                  "each tool was offered under are available here.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+              )
+              Spacer(modifier = Modifier.height(8.dp))
+              toolNames.forEach { toolName ->
+                SelectableText(text = toolName, style = MaterialTheme.typography.bodyMedium)
+              }
+            }
+
             toolDescriptors.forEachIndexed { index, tool ->
               var isExpanded by remember { mutableStateOf(false) }
 

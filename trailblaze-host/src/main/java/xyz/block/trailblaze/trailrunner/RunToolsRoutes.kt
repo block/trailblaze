@@ -436,16 +436,25 @@ internal suspend fun buildRunToolsResponse(
       }
     }
 
-// Prefer the device's exact driver (e.g. ANDROID_ONDEVICE_ACCESSIBILITY); fall back to any
-// driver on the requested platform so the toolset-compatibility filter still resolves when
-// only a platform string is known.
-private fun resolveDriverType(driverParam: String, platformParam: String): TrailblazeDriverType? {
+// Prefer the device's exact driver (e.g. ANDROID_ONDEVICE_ACCESSIBILITY); the platform is the
+// fallback for a caller who knows only a platform string, so the toolset-compatibility filter
+// still resolves.
+//
+// Retired drivers are not candidates. They still parse, so without this the route would answer
+// `resolved = true` with a tool catalog for a driver no run can reach.
+//
+// A driver that was NAMED and did not match ends the lookup — it never falls through to the
+// platform. Falling through answers "which tools does ANDROID_ONDEVICE_INSTRUMENTATION have?"
+// with the accessibility driver's catalog under `resolved = true`, and nothing in the response
+// shows the substitution. That covers a retired name and a typo alike; the platform arm is only
+// for a caller who named no driver at all.
+internal fun resolveDriverType(driverParam: String, platformParam: String): TrailblazeDriverType? {
+  val runnable = TrailblazeDriverType.entries - TrailblazeDriverType.RETIRED_DRIVERS
   if (driverParam.isNotEmpty()) {
-    TrailblazeDriverType.entries.firstOrNull { it.name.equals(driverParam, ignoreCase = true) }
-      ?.let { return it }
+    return runnable.firstOrNull { it.name.equals(driverParam, ignoreCase = true) }
   }
   if (platformParam.isNotEmpty()) {
-    return TrailblazeDriverType.entries.firstOrNull { it.platform.name.equals(platformParam, ignoreCase = true) }
+    return runnable.firstOrNull { it.platform.name.equals(platformParam, ignoreCase = true) }
   }
   return null
 }

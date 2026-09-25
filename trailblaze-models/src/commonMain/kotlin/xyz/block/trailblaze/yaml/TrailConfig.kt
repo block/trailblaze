@@ -10,7 +10,7 @@ data class TrailConfig(
   val description: String? = null,
   val priority: String? = null,
   val source: TrailSource? = null,
-  val metadata: Map<String, String>? = null,
+  val metadata: Map<String, TrailMetadataValue>? = null,
   /**
    * Optional id of a registered target — a trailmap id, or a target surfaced by the host app.
    *

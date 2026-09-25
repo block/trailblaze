@@ -229,7 +229,6 @@ tasks.named<org.gradle.language.jvm.tasks.ProcessResources>("processResources") 
   // Same for the cross-language parity fixture the tests share with the Kotlin suite.
   exclude("**/*.test.ts")
   exclude("**/session-events-parity-fixtures.json")
-  exclude("**/sprite-metadata-parity-fixtures.json")
   exclude("**/web-hierarchy-merge-fixtures.json")
   // TypeScript module sources + ambient types + tsconfig for the run-report renderer: the packaged
   // artifact is the bundled run-report-core.js from `bundleRunReportCore` above (the bun

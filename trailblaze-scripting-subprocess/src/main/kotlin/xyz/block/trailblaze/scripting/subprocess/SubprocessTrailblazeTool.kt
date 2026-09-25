@@ -112,6 +112,7 @@ class SubprocessTrailblazeTool(
     // threw — flagged by the lead-dev review.
     var callbackHandle: JsScriptingInvocationRegistry.Handle? = null
     return try {
+      callbackContext?.recordExecutionContext(toolExecutionContext)
       callbackHandle = callbackContext?.let {
         // Read the reentrance depth from the current coroutine context — present only when this
         // execute() is running inside a `/scripting/callback`-dispatched tool chain. Absent for

@@ -56,6 +56,8 @@ class PlaywrightTrailLoopCompositionTest {
           trailblazeDevicePlatform = TrailblazeDevicePlatform.WEB,
         ),
       customToolClasses = setOf(NestedPlaywrightCompositionProbeTool::class),
+      // CI's report plays each session's recording; video is opt-in.
+      captureVideo = true,
     )
 
   @JvmField

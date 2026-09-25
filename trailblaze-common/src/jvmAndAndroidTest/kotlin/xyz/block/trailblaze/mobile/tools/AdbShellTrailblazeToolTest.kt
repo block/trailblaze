@@ -2,6 +2,7 @@ package xyz.block.trailblaze.mobile.tools
 
 import assertk.assertThat
 import assertk.assertions.contains
+import assertk.assertions.doesNotContain
 import assertk.assertions.hasLength
 import assertk.assertions.isEqualTo
 import assertk.assertions.isGreaterThan
@@ -13,6 +14,8 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Clock
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonPrimitive
 import org.junit.Test
 import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.device.AndroidShellBounds
@@ -22,15 +25,18 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
+import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.client.TrailblazeSession
 import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.HostLocalExecutableTrailblazeTool
+import xyz.block.trailblaze.toolcalls.REDACTED_TOOL_ARG_PLACEHOLDER
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
+import xyz.block.trailblaze.toolcalls.toLogPayload
 import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
 
@@ -528,6 +534,147 @@ class AdbShellTrailblazeToolTest {
     val encoded = yamlInstance.encodeToString(AdbShellTrailblazeTool.serializer(), original)
     val decoded = yamlInstance.decodeFromString(AdbShellTrailblazeTool.serializer(), encoded)
     assertThat(decoded).isEqualTo(original)
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // secrets — values that must never appear in a log. A logging declaration only: the command
+  // runs exactly as written, and every listed value is masked wherever it shows up while the rest
+  // of the payload stays legible. These pin both halves (device gets the real value, logs never do).
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  @Test
+  fun `declaring a secret changes nothing about what runs`() {
+    val argv = listOf("su", "root", "service", "call", "com.vendor.deviceauth", "1", "s16", "tok-abc123")
+
+    val plain = AdbShellTrailblazeTool(command = argv)
+    val declared = AdbShellTrailblazeTool(command = argv, secrets = listOf("tok-abc123"))
+
+    // The rendered shell string — what the device actually receives — is byte-identical.
+    assertThat(AdbShellTrailblazeTool.joinCommandAsShellString(declared.command))
+      .isEqualTo(AdbShellTrailblazeTool.joinCommandAsShellString(plain.command))
+  }
+
+  @Test
+  fun `the log payload masks the secret inside command and keeps the rest readable`() {
+    val tool = AdbShellTrailblazeTool(
+      command = listOf("su", "root", "service", "call", "com.vendor.deviceauth", "1", "s16", "tok-abc123"),
+      secrets = listOf("tok-abc123"),
+    )
+
+    val raw = tool.toLogPayload().raw
+
+    // The element is masked in place — same argv length, same neighbours.
+    assertThat(raw.getValue("command")).isEqualTo(
+      JsonArray(
+        listOf("su", "root", "service", "call", "com.vendor.deviceauth", "1", "s16", REDACTED_TOOL_ARG_PLACEHOLDER)
+          .map(::JsonPrimitive),
+      ),
+    )
+    // The declaration itself is secret material, masked element-wise so the field keeps its shape.
+    assertThat(raw.getValue("secrets")).isEqualTo(JsonArray(listOf(JsonPrimitive(REDACTED_TOOL_ARG_PLACEHOLDER))))
+    assertThat(raw.toString()).doesNotContain("tok-abc123")
+  }
+
+  @Test
+  fun `the masked log payload still decodes as this tool`() {
+    // A recording is generated from the log payload. Whole-field masking would turn `secrets` from
+    // a list into a string and the recording would die at parse; element-wise masking keeps it
+    // decodable, so the failure a replay hits is "re-supply the secret", not a decode error.
+    val tool = AdbShellTrailblazeTool(
+      command = listOf("service", "call", "com.vendor.deviceauth", "1", "s16", "tok-abc123"),
+      secrets = listOf("tok-abc123"),
+    )
+
+    val decoded = TrailblazeJsonInstance.decodeFromJsonElement(AdbShellTrailblazeTool.serializer(), tool.toLogPayload().raw)
+
+    assertThat(decoded.command.last()).isEqualTo(REDACTED_TOOL_ARG_PLACEHOLDER)
+    assertThat(decoded.secrets).isEqualTo(listOf(REDACTED_TOOL_ARG_PLACEHOLDER))
+  }
+
+  @Test
+  fun `a tool with no secret logs exactly as before`() {
+    val tool = AdbShellTrailblazeTool(command = listOf("pm", "list", "packages"))
+
+    val raw = tool.toLogPayload().raw
+
+    // Declaring the sensitive names/values must not start masking an absent arg into the payload.
+    assertThat(raw.containsKey("secrets")).isEqualTo(false)
+    assertThat(raw.getValue("command").toString()).contains("packages")
+  }
+
+  @Test
+  fun `the secret is kept out of the error that names the command`() = runBlocking {
+    val tool = AdbShellTrailblazeTool(
+      command = listOf("su", "root", "service", "call", "com.vendor.deviceauth", "1", "s16", "tok-abc123"),
+      secrets = listOf("tok-abc123"),
+    )
+
+    // No executor in this context, so execute() takes the branch that echoes the would-have-run
+    // command back in its message — the cheapest real path on which a secret could escape.
+    val result = tool.execute(createContext(TrailblazeDevicePlatform.ANDROID))
+
+    assertIs<TrailblazeToolResult.Error.ExceptionThrown>(result)
+    assertThat(result.errorMessage).doesNotContain("tok-abc123")
+    assertThat(result.errorMessage).contains(REDACTED_TOOL_ARG_PLACEHOLDER)
+    // Still diagnostic: the reader can tell which command was about to run.
+    assertThat(result.errorMessage).contains("service")
+  }
+
+  @Test
+  fun `scrubbing replaces every occurrence of each secret`() {
+    // Shaped like a verify-style read-back, where the value written comes straight back in stdout.
+    val output = "Result: Parcel(tok-abc123 tok-abc123) pw=hunter2"
+
+    val scrubbed = AdbShellTrailblazeTool.redactSecretsIn(output, listOf("tok-abc123", "hunter2"))
+
+    assertThat(scrubbed).doesNotContain("tok-abc123")
+    assertThat(scrubbed).doesNotContain("hunter2")
+    assertThat(scrubbed).contains("Result: Parcel(")
+  }
+
+  @Test
+  fun `a secret containing another secret is still fully masked`() {
+    // Replacing the shorter secret first would destroy the longer one's only literal occurrence,
+    // so it could never match and the rest of it would survive into the log.
+    val scrubbed = AdbShellTrailblazeTool.redactSecretsIn(
+      "value=sess-1234-abcd",
+      listOf("1234", "sess-1234-abcd"),
+    )
+
+    assertThat(scrubbed).isEqualTo("value=$REDACTED_TOOL_ARG_PLACEHOLDER")
+  }
+
+  @Test
+  fun `a secret rewritten by shell-escaping is still masked in the command this tool echoes`() = runBlocking {
+    // Everything this tool scrubs has been through `shellEscape` already, so a value holding a
+    // single quote appears quote-doubled. Scrubbing the raw value alone would miss it and print
+    // the credential in the error that names the command.
+    val tool = AdbShellTrailblazeTool(
+      command = listOf("service", "call", "com.vendor.deviceauth", "1", "s16", "pa'ss"),
+      secrets = listOf("pa'ss"),
+    )
+
+    val result = tool.execute(createContext(TrailblazeDevicePlatform.ANDROID))
+
+    assertIs<TrailblazeToolResult.Error.ExceptionThrown>(result)
+    assertThat(result.errorMessage).doesNotContain("pa'\\''ss")
+    assertThat(result.errorMessage).doesNotContain("pa'ss")
+    assertThat(result.errorMessage).contains("com.vendor.deviceauth")
+  }
+
+  @Test
+  fun `scrubbing ignores blank secrets instead of shredding the text`() {
+    // `"".replace()` matches at every index; a blank element must be skipped or the diagnostic is
+    // destroyed rather than redacted.
+    val scrubbed = AdbShellTrailblazeTool.redactSecretsIn("untouched output", listOf("", "   "))
+
+    assertThat(scrubbed).isEqualTo("untouched output")
+  }
+
+  @Test
+  fun `scrubbing is a no-op when there are no secrets`() {
+    assertThat(AdbShellTrailblazeTool.redactSecretsIn("plain output", emptyList()))
+      .isEqualTo("plain output")
   }
 
   private fun createContext(platform: TrailblazeDevicePlatform): TrailblazeToolExecutionContext {

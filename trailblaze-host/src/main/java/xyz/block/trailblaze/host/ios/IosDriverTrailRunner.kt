@@ -28,7 +28,7 @@ import xyz.block.trailblaze.util.Console
  * When [runActions] receives a logger + session provider, every action also emits a
  * [TrailblazeLog.AgentDriverLog] with a persisted screenshot, so IOS_AXE runs render per-action
  * step frames in the report just like IOS_HOST's
- * [xyz.block.trailblaze.android.maestro.LoggingDriver] path does. The screen is captured
+ * [xyz.block.trailblaze.maestro.LoggingDriver] path does. The screen is captured
  * *before* the action executes (so tap coordinates overlay on the target element), while the
  * screenshot file write + log emission run asynchronously off the action loop — the same
  * split the Android accessibility runner uses. Errors short-circuit the run.

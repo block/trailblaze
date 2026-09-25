@@ -6,11 +6,14 @@ app has tabs for Forms, Lists, Loading, Catalog, Swipe, and Settings — enough 
 the common trail-authoring patterns without depending on any external service.
 
 Materialize the workspace once after clone, then drive or replay its trails against a connected
-emulator:
+emulator. `run` picks the workspace up by walking up from your current directory, so run it from
+inside this example and keep trail paths workspace-relative:
 
 ```bash
-trailblaze check --workspace examples/android-sample-app
-trailblaze run --workspace examples/android-sample-app trails/forms/text-input.trail.yaml
+trailblaze check --workspace examples/android-sample-app   # from the repo root, once after clone
+
+cd examples/android-sample-app
+trailblaze run trails/forms/text-input.trail.yaml
 ```
 
 ## How arguments work — `trails/forms/text-input-args.trail.yaml`
@@ -38,14 +41,15 @@ Each arg has a `default:`, so it's **optional** — the trail runs with zero arg
 to the declared defaults. (Omit `default:` to make an arg **required**; the run then fails fast when
 a caller doesn't supply it.) Supported types are `string`, `integer`, and `boolean`.
 
-Supply or override values at run time with `--arg KEY=VAL` (repeatable) or `--args-file <yaml|json>`:
+Supply or override values at run time with `--arg KEY=VAL` (repeatable) or `--args-file <yaml|json>`
+(both from `examples/android-sample-app/`, as above):
 
 ```bash
 # Defaults run — uses "Jane Doe" / "jane@example.com":
-trailblaze run --workspace examples/android-sample-app trails/forms/text-input-args.trail.yaml
+trailblaze run trails/forms/text-input-args.trail.yaml
 
 # Override run — the typed and verified values reflect the passed args:
-trailblaze run --workspace examples/android-sample-app trails/forms/text-input-args.trail.yaml \
+trailblaze run trails/forms/text-input-args.trail.yaml \
   --arg name="Sam Edwards" --arg email="sam@example.com"
 ```
 

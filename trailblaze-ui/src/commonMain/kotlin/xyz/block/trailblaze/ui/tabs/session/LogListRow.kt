@@ -199,6 +199,12 @@ fun LogListRow(
       duration = null,
       elapsedTime = elapsedTimeMs
     )
+
+    is TrailblazeLog.TrailblazeToolCatalogLog -> LogCardData(
+      title = "Tool Catalog: ${log.toolOptions.size} tools",
+      duration = null,
+      elapsedTime = elapsedTimeMs
+    )
   }
 
   val elapsedMs = log.timestamp.toEpochMilliseconds() - sessionStartTime.toEpochMilliseconds()

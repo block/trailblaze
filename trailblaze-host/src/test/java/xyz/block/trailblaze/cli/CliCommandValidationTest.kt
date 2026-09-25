@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.cli
 
 import java.io.File
+import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import picocli.CommandLine
@@ -27,6 +28,14 @@ import kotlin.test.assertTrue
  * before accessing the uninitialized `parent` field) are exercised.
  */
 class CliCommandValidationTest {
+
+  /**
+   * This class drives `call()` on real commands, which is what used to leave quiet mode on for
+   * everything scheduled behind it. The guard keeps that from coming back silently.
+   */
+  @Rule
+  @JvmField
+  val quietMode = QuietModeRule()
 
   @Test
   fun `trail without agent resolves the Koog default`() {

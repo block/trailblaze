@@ -737,8 +737,8 @@ class TapOnTrailblazeToolTest {
   @Test
   fun `TapOnByElementSelector accessibility selector with non-accessibility agent falls back to Maestro`(): Unit = runBlocking {
     // Recording carries an [androidAccessibility] nodeSelector (cross-driver-portable). Under a
-    // non-accessibility runtime agent (e.g. AndroidMaestroTrailblazeAgent on the on-device test
-    // farm), the strict accessibility refusal must NOT fire — the tool falls through to the
+    // non-accessibility runtime agent (the host Maestro agent, or a recording made on the retired
+    // on-device UiAutomator driver), the strict accessibility refusal must NOT fire — the tool falls through to the
     // Maestro path (lowering the nodeSelector) so cross-driver recordings stay runnable.
     // CapturingAgent.executeMaestroCommands captures the resulting tap and returns Success.
     val tap = TapOnByElementSelector(

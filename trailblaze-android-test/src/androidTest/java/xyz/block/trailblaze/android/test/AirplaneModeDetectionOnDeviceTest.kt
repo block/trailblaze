@@ -11,15 +11,14 @@ import kotlin.test.assertNull
 import org.junit.Assume.assumeTrue
 import org.junit.Test
 import xyz.block.trailblaze.AdbCommandUtil
-import xyz.block.trailblaze.android.maestro.MaestroAndroidUiAutomatorDriver
 import xyz.block.trailblaze.toolcalls.commands.NetworkConnectionTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.NetworkConnectionTrailblazeTool.AndroidRadio
 
 /**
- * What the Android drivers answer when asked whether airplane mode is on, checked against a device
+ * What the Android driver answers when asked whether airplane mode is on, checked against a device
  * that is genuinely in airplane mode.
  *
- * Both drivers used to answer this by looking at the radios — wifi off AND mobile data off AND
+ * It used to answer this by looking at the radios — wifi off AND mobile data off AND
  * bluetooth off. That is not airplane mode. `TelephonyManager.isDataEnabled` and the `mobile_data`
  * setting behind it are the user's PREFERENCE for mobile data, which Android never rewrites when
  * airplane mode goes on, and wifi routinely stays up through airplane mode — so a device genuinely
@@ -35,9 +34,8 @@ import xyz.block.trailblaze.toolcalls.commands.NetworkConnectionTrailblazeTool.A
  * read back through the framework's own `Settings.Global` rather than through the shell the driver
  * reads with, so a driver echoing its own write cannot pass.
  *
- * The accessibility driver's read is the same one — both drivers delegate to
- * [AdbCommandUtil.isAirplaneModeEnabled], which is asserted directly here. Only the Maestro
- * driver's public override is exercised through the driver itself; standing up
+ * The assertion is on [AdbCommandUtil.isAirplaneModeEnabled], which is where the driver's read
+ * actually lives. It is asserted directly rather than through the driver because standing up
  * `AccessibilityDeviceManager` needs the accessibility service running, and its own read is
  * private and reachable only by a toggle that mutates the device.
  *
@@ -49,7 +47,7 @@ import xyz.block.trailblaze.toolcalls.commands.NetworkConnectionTrailblazeTool.A
 class AirplaneModeDetectionOnDeviceTest {
 
   @Test
-  fun theDriversReportAirplaneModeOnWhileItIsGenuinelyOnAndWifiIsUp() {
+  fun theDriverReportsAirplaneModeOnWhileItIsGenuinelyOnAndWifiIsUp() {
     // Both modules declare minSdk 26, but setting real airplane mode from a shell needs API 28 —
     // the tool refuses below that rather than pretending. Skipping is right on an older device:
     // this test cannot put it in the state it exists to assert, and nothing here is broken.
@@ -86,11 +84,6 @@ class AirplaneModeDetectionOnDeviceTest {
         AdbCommandUtil.isAirplaneModeEnabled(),
         "the shared driver read must report airplane mode ON while the flag is set, even with wifi up",
       )
-      assertEquals(
-        true,
-        MaestroAndroidUiAutomatorDriver.isAirplaneModeEnabled(),
-        "the Maestro driver override must report airplane mode ON while the flag is set, even with wifi up",
-      )
 
       setAirplaneMode(false)
       awaitAirplaneModeFlag(false)
@@ -98,11 +91,6 @@ class AirplaneModeDetectionOnDeviceTest {
         false,
         AdbCommandUtil.isAirplaneModeEnabled(),
         "clearing airplane mode must be reported as off",
-      )
-      assertEquals(
-        false,
-        MaestroAndroidUiAutomatorDriver.isAirplaneModeEnabled(),
-        "clearing airplane mode must be reported as off by the driver override too",
       )
 
       // The documented direction for an unreadable flag, on a device that really has one: deleting

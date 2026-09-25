@@ -5,6 +5,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 
 /**
@@ -84,6 +85,18 @@ class ScriptedToolImportAnalyzer(
     if (!esbuildBinary.isFile) return@withContext RequiresHostAnalysis(false)
     if (!scriptPath.isFile) return@withContext RequiresHostAnalysis(false)
 
+    val cacheKey = VerdictCacheKey(
+      esbuild = esbuildBinary.absolutePath,
+      script = scriptPath.absolutePath,
+      knownNodeOnlyPackages = knownNodeOnlyPackages,
+    )
+    verdictCache[cacheKey]?.takeIf { it.isCurrent() }?.let { return@withContext it.verdict }
+
+    // esbuild runs from here and writes its metafile paths relative to it. Absolute, because a bare
+    // relative script path (`tool.ts`) has no parent of its own.
+    val workingDir = scriptPath.absoluteFile.parentFile
+    // An input edited after this point may have been read before the edit; see [isStampedAfter].
+    val analysisStartedMs = System.currentTimeMillis()
     val metafile = File.createTempFile("trailblaze-analyzer-meta-", ".json")
     val outFile = File.createTempFile("trailblaze-analyzer-out-", ".js")
     try {
@@ -113,7 +126,7 @@ class ScriptedToolImportAnalyzer(
       val proc = ProcessBuilder(argv)
         // cwd = scriptPath's parent so relative imports resolve the same way the real bundle
         // does. Mirrors [DaemonScriptedToolBundler.runEsbuild]'s `.directory(entry.parentFile)`.
-        .directory(scriptPath.parentFile)
+        .directory(workingDir)
         // Discard stdout/stderr at the OS level. The previous shape was
         // `.redirectErrorStream(true)` followed by a post-`waitFor` drain — which would
         // deadlock if esbuild produced more than ~64KB of warnings: the OS pipe buffer fills,
@@ -145,17 +158,30 @@ class ScriptedToolImportAnalyzer(
       // the documented contract — unexpected analyzer failures collapse to
       // `requiresHost = false` so the real bundle pass surfaces the genuine error path
       // rather than us masking it behind a misleading "marked host-only" log line.
+      val meta = try {
+        parseMetafile(metafile.readText())
+      } catch (_: Throwable) {
+        return@withContext RequiresHostAnalysis(false)
+      }
       val chain = try {
-        val meta = parseMetafile(metafile.readText())
         findHostOnlyChain(meta, scriptPath)
       } catch (_: Throwable) {
-        null
+        return@withContext RequiresHostAnalysis(false)
       }
-      if (chain != null) {
-        return@withContext RequiresHostAnalysis(requiresHost = true, reason = chain)
+      val verdict = chain
+        ?.let { RequiresHostAnalysis(requiresHost = true, reason = it) }
+        ?: RequiresHostAnalysis(false)
+      // Only a verdict esbuild actually produced is cached; every failure path above returns
+      // before this and is retried next session.
+      val bundled = (meta.inputs.keys.map { resolveMetafileInput(it, workingDir) } + scriptPath)
+        .map { it.absoluteFile }
+        .distinct()
+      val stamps = (bundled + resolverConfigFiles(bundled)).map(FileStamp::of)
+      if (stamps.none { it.isStampedAfter(analysisStartedMs) }) {
+        if (verdictCache.size >= MAX_CACHED_VERDICTS) verdictCache.clear()
+        verdictCache[cacheKey] = CachedVerdict(verdict, stamps)
       }
-
-      RequiresHostAnalysis(false)
+      verdict
     } finally {
       metafile.delete()
       outFile.delete()
@@ -301,7 +327,70 @@ class ScriptedToolImportAnalyzer(
     val external: Boolean? = null,
   )
 
+  /** esbuild writes metafile input paths relative to its cwd (the script's directory). */
+  private fun resolveMetafileInput(path: String, cwd: File): File =
+    File(path).takeIf { it.isAbsolute } ?: File(cwd, path)
+
+  /**
+   * The resolver configuration that decides which files an import reaches: `package.json`
+   * (`exports`, `main`, `module`) and `tsconfig.json` / `jsconfig.json` (path mappings) in every
+   * directory above a bundled file. esbuild reads these but does not list them as metafile inputs,
+   * so an edit to one can redirect the tool to a different closure while every bundled file is
+   * unchanged. Stamped whether or not they exist, so one appearing invalidates too.
+   */
+  private fun resolverConfigFiles(bundled: List<File>): List<File> =
+    bundled
+      .flatMap { generateSequence(it.parentFile) { dir -> dir.parentFile } }
+      .distinct()
+      .flatMap { dir -> RESOLVER_CONFIG_FILE_NAMES.map { File(dir, it) } }
+
+  private data class VerdictCacheKey(
+    val esbuild: String,
+    val script: String,
+    val knownNodeOnlyPackages: Set<String>,
+  )
+
+  /** Enough of a file's state to notice an edit, a replacement, or a deletion. */
+  private data class FileStamp(val file: File, val length: Long, val lastModified: Long) {
+    fun isCurrent(): Boolean = file.length() == length && file.lastModified() == lastModified
+
+    /**
+     * Whether the file changed at or after [startedMs], within a coarse filesystem's mtime
+     * resolution. esbuild may have read it before that change, so a verdict paired with this stamp
+     * could describe the old content and would then be reused until the next edit.
+     */
+    fun isStampedAfter(startedMs: Long): Boolean = lastModified >= startedMs - MTIME_RESOLUTION_MS
+
+    companion object {
+      fun of(file: File) = FileStamp(file, file.length(), file.lastModified())
+    }
+  }
+
+  /**
+   * A verdict plus every file that decided it — the tool's whole import closure from the same
+   * metafile the verdict came from, and the resolver configuration above it. The verdict stands for
+   * as long as none of them changes.
+   */
+  private class CachedVerdict(val verdict: RequiresHostAnalysis, private val inputs: List<FileStamp>) {
+    fun isCurrent(): Boolean = inputs.all { it.isCurrent() }
+  }
+
   companion object {
     private val JSON_LENIENT = Json { ignoreUnknownKeys = true }
+
+    /**
+     * Process-wide, because callers build a fresh analyzer for every session start and the daemon
+     * outlives thousands of them. Each analysis forks esbuild — about a quarter second — and a
+     * target like Square declares dozens of tools, so re-analyzing unchanged sources held every
+     * `trailblaze run` for 7–10 seconds before its first step.
+     */
+    private val verdictCache = ConcurrentHashMap<VerdictCacheKey, CachedVerdict>()
+
+    /** Far above any one workspace's tool count; only a daemon cycling many checkouts reaches it. */
+    private const val MAX_CACHED_VERDICTS = 4_096
+
+    private const val MTIME_RESOLUTION_MS = 1_000L
+
+    private val RESOLVER_CONFIG_FILE_NAMES = listOf("package.json", "tsconfig.json", "jsconfig.json")
   }
 }

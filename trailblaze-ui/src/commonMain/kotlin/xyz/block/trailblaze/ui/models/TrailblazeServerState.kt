@@ -157,9 +157,9 @@ trail:
      */
     val webViewport: String? = null,
     /**
-     * Record device screen video for each session. Off by default: recordings are large on disk,
-     * their timing signatures drift on some hosts, and sprite-sheet extraction is expensive — so
-     * video is opt-in rather than a cost every run pays. This is the persistent, discoverable
+     * Record device screen video for each session. Off by default: recordings are large on disk
+     * and their timing signatures drift on some hosts — so video is opt-in rather than a cost
+     * every run pays. This is the persistent, discoverable
      * opt-in (`trailblaze config capture-video true`) that reaches every entry point without a
      * per-run flag, including interactive `trailblaze session start` and MCP sessions, which have
      * no positive video flag of their own. Per-run `--capture-video` / `--no-capture-video` and
@@ -171,6 +171,11 @@ trail:
     // Capture the iOS Simulator system log. On by default: IosLogCapture scopes the stream to
     // the app under test at --level info (logcat-equivalent), not the system-wide firehose.
     val captureIosLogs: Boolean = true,
+    // Sample the app under test's memory for the whole session, on Android and the iOS Simulator,
+    // and record a `memory` event around each tool call and whenever the figure moves. On by
+    // default: every reading runs on a background worker, so nothing waits on one, and a steady
+    // screen writes nothing between tools.
+    val captureMemory: Boolean = true,
     /**
      * When true, every supported session auto-starts the framework network
      * capture engine — events stream to `<session-dir>/network.ndjson` with no
@@ -277,6 +282,36 @@ trail:
      */
     fun screenshotScalingConfigOrNull(): ScreenshotScalingConfig? =
       if (hasAnyScreenshotOverride()) screenshotScalingConfig() else null
+
+    /**
+     * A persisted per-platform driver that has since been retired becomes that platform's default,
+     * or is dropped when the platform has none. Left in place it does worse than fail a run: the
+     * selected-driver map doubles as the set of drivers whose devices the app lists, so a stale
+     * selection makes every device of that platform vanish after the upgrade that retired the
+     * driver — and `trailblaze config show` prints the retired driver as current while no row is
+     * marked selected.
+     *
+     * Lives on the config rather than in either reader because BOTH readers of the settings file
+     * have to apply it: the desktop/daemon repo's load, and the CLI's direct decode when no daemon
+     * is up. [onReplaced] is how a caller with a logger reports the swap — this module has none.
+     */
+    fun withRetiredDriversReplaced(
+      onReplaced: (
+        platform: TrailblazeDevicePlatform,
+        retired: TrailblazeDriverType,
+        replacement: TrailblazeDriverType?,
+      ) -> Unit = { _, _, _ -> },
+    ): SavedTrailblazeAppConfig {
+      val retired = selectedTrailblazeDriverTypes.filterValues { it in TrailblazeDriverType.RETIRED_DRIVERS }
+      if (retired.isEmpty()) return this
+      val replaced = selectedTrailblazeDriverTypes.toMutableMap()
+      retired.forEach { (platform, driver) ->
+        val replacement = TrailblazeDriverType.defaultForPlatform(platform)
+        onReplaced(platform, driver, replacement)
+        if (replacement != null) replaced[platform] = replacement else replaced.remove(platform)
+      }
+      return copy(selectedTrailblazeDriverTypes = replaced)
+    }
   }
 
   @Serializable

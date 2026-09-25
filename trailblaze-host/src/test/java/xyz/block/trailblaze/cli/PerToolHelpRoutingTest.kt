@@ -3,6 +3,7 @@ package xyz.block.trailblaze.cli
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import org.junit.Rule
 import picocli.CommandLine
 import xyz.block.trailblaze.util.Console
 import kotlin.test.Test
@@ -24,6 +25,15 @@ import kotlin.test.assertTrue
  * wart the OSS Trailblaze skill currently teaches agents to navigate.
  */
 class PerToolHelpRoutingTest {
+
+  /**
+   * Guarantees the cleanup that the quiet-mode assertion below cannot do for itself: an assertion
+   * that fires has already returned, so a regressed `renderHelp` would otherwise leave the flag set
+   * and silence every test scheduled behind this one — the cascade this class is watching for.
+   */
+  @Rule
+  @JvmField
+  val quietMode = QuietModeRule()
 
   private fun rootCommandLine(): CommandLine = CommandLine(
     TrailblazeCliCommand(
@@ -406,23 +416,21 @@ class PerToolHelpRoutingTest {
     // The composition, not the halves. Every other test here drives `describeLocally` or
     // `renderResponse` directly, so a `renderHelp` that wired them together wrongly — or that
     // skipped the local path and went straight to the daemon — would still pass all of them.
-    //
-    // Quiet mode is process-global and other suites sharing this JVM leave it set, so set the
-    // ambient state here rather than asserting against whatever ran before.
-    val wasQuiet = Console.isQuietMode()
-    Console.disableQuietMode()
-    try {
-      val captured = captureConsole { ToolHelpRenderer.renderHelp("tap") }
+    val captured = captureConsole { ToolHelpRenderer.renderHelp("tap") }
 
-      assertEquals(TrailblazeExitCode.SUCCESS.code, captured.result)
-      assertTrue("tap" in captured.out, captured.out)
-      // The catalogue scan runs quiet, and has to hand the console back. Leaving quiet mode on
-      // would silence the daemon-bootstrap progress that this same function's fallback prints,
-      // making the one remaining slow path the one that looks hung.
-      assertFalse(Console.isQuietMode(), "the local scan must not leave the rest of the process silenced")
-    } finally {
-      if (wasQuiet) Console.enableQuietMode()
-    }
+    assertEquals(TrailblazeExitCode.SUCCESS.code, captured.result)
+    assertTrue("tap" in captured.out, captured.out)
+    // The catalogue scan runs quiet, and has to hand the console back. Leaving quiet mode on
+    // would silence the daemon-bootstrap progress that this same function's fallback prints,
+    // making the one remaining slow path the one that looks hung.
+    //
+    // Read straight off the global flag rather than through a saved-and-restored copy. This test
+    // used to save and restore it, because CLI commands elsewhere in the suite left quiet mode on
+    // and the assertion was green alone and red in a full run. Those commands restore it now, so
+    // the flag at this point is `renderHelp`'s own doing and nobody else's.
+    //
+    // Restoring is QuietModeRule's job, not this assertion's — see the rule on this class.
+    assertFalse(Console.isQuietMode(), "the local scan must not leave the rest of the process silenced")
   }
 
   @Test

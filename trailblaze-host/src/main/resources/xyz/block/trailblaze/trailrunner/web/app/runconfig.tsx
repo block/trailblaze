@@ -242,6 +242,22 @@ function RunConfigDialog({ trail: initialTrail, seed, pinnedId, go, close, closi
   const [captureLogcat, setCaptureLogcat] = React.useState(false);
   const [captureNetwork, setCaptureNetwork] = React.useState(false);
   const [captureIosLogs, setCaptureIosLogs] = React.useState(false);
+  // Seeded from the daemon's saved setting, not hardcoded off, and `null` until that setting lands
+  // (or the user toggles it). The dialog always sends its value as a per-run override, so a toggle
+  // nobody touched would otherwise turn capture off for every run launched from here even when
+  // Settings has it on — and a `false` seeded before the settings fetch resolves does the same to a
+  // Run clicked in that window. Null is the one value that means "no override, use the saved
+  // setting". Stops seeding once the user touches it.
+  const [captureMemory, setCaptureMemory] = React.useState(null);
+  const captureMemoryTouched = React.useRef(false);
+  const savedCaptureMemory = settingsResult.data?.captureMemory;
+  React.useEffect(() => {
+    setCaptureMemory((current) => seedCaptureMemory(current, savedCaptureMemory, captureMemoryTouched.current));
+  }, [savedCaptureMemory]);
+  const chooseCaptureMemory = (next) => {
+    captureMemoryTouched.current = true;
+    setCaptureMemory(next);
+  };
   const [captureAnalytics, setCaptureAnalytics] = React.useState(false);
   const [captureEvents, setCaptureEvents] = React.useState(true);
   const [saveRecording, setSaveRecording] = React.useState(true);
@@ -258,7 +274,7 @@ function RunConfigDialog({ trail: initialTrail, seed, pinnedId, go, close, closi
     devicePlatform: selectedDevice ? selectedDevice.platform : null,
     deviceId: selectedDevice ? selectedDevice.id : null,
     selfHeal, useRecordedSteps, agent, maxLlmCalls, llm,
-    verbose, headless, captureVideo, captureLogcat, captureNetwork, captureIosLogs, captureAnalytics, captureEvents,
+    verbose, headless, captureVideo, captureLogcat, captureNetwork, captureIosLogs, captureMemory, captureAnalytics, captureEvents,
     saveRecording, noReport, markdown, noLogging, tags,
   };
   // One command per selected device: that IS the run, since each device gets its own run.
@@ -377,6 +393,7 @@ function RunConfigDialog({ trail: initialTrail, seed, pinnedId, go, close, closi
         captureLogcat: cfg.captureLogcat,
         captureNetworkTraffic: cfg.captureNetwork,
         captureIosLogs: cfg.captureIosLogs,
+        captureMemory: cfg.captureMemory,
         captureAnalytics: cfg.captureAnalytics,
         captureEvents: cfg.captureEvents,
       };
@@ -413,6 +430,7 @@ function RunConfigDialog({ trail: initialTrail, seed, pinnedId, go, close, closi
           captureLogcat: opts.captureLogcat,
           captureNetworkTraffic: opts.captureNetworkTraffic,
           captureIosLogs: opts.captureIosLogs,
+          captureMemory: opts.captureMemory,
           captureAnalytics: opts.captureAnalytics,
           captureEvents: opts.captureEvents,
         }), TbRunFanout.RUN_TIMEOUT_MS);
@@ -600,6 +618,7 @@ function RunConfigDialog({ trail: initialTrail, seed, pinnedId, go, close, closi
                 <Section id="capture" title="Capture" ico="clapperboard">
                   <CaptureSection captureVideo={captureVideo} setCaptureVideo={setCaptureVideo} captureLogcat={captureLogcat} setCaptureLogcat={setCaptureLogcat}
                     captureNetwork={captureNetwork} setCaptureNetwork={setCaptureNetwork} captureIosLogs={captureIosLogs} setCaptureIosLogs={setCaptureIosLogs}
+                    captureMemory={!!captureMemory} setCaptureMemory={chooseCaptureMemory}
                     captureAnalytics={captureAnalytics} setCaptureAnalytics={setCaptureAnalytics} captureEvents={captureEvents} setCaptureEvents={setCaptureEvents} saveRecording={saveRecording} setSaveRecording={setSaveRecording}
                     noReport={noReport} setNoReport={setNoReport} markdown={markdown} setMarkdown={setMarkdown} noLogging={noLogging} setNoLogging={setNoLogging}
                     tags={tags} setTags={setTags} />

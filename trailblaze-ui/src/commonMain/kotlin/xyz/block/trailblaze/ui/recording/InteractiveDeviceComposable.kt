@@ -305,10 +305,9 @@ fun InteractiveDeviceComposable(
    * works regardless of typing speed: a fast typist coalesces to one RPC via the debounce; a
    * slow typist sends N cumulative RPCs and the field still shows the correct final string.
    *
-   * Desktop didn't see this bug because its host-side driver uses
-   * `MaestroAndroidUiAutomatorDriver.inputText` → `InstrumentationUtil.inputTextByTyping`,
-   * which synthesizes per-char `KeyEvent`s (append semantics). The on-device runtime only
-   * has the accessibility-service path, which is `ACTION_SET_TEXT`-based.
+   * Desktop didn't see this bug because its host-side driver types through Maestro, which
+   * synthesizes per-char `KeyEvent`s (append semantics). The on-device runtime only has the
+   * accessibility-service path, which is `ACTION_SET_TEXT`-based.
    *
    * Backspace handling: when [pendingLiveText] is non-empty, the Backspace handler pops one
    * char locally and triggers another cumulative flush — the device's field is updated by

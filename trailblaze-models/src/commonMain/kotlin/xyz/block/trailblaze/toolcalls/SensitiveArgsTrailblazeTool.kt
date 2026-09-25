@@ -145,3 +145,79 @@ fun OtherTrailblazeTool.withSensitiveArgsRedacted(sensitiveArgNames: Set<String>
     ),
   )
 }
+
+/**
+ * Marker for [TrailblazeTool]s that know the secret **values** in play for a call, as opposed to
+ * the secret *arg names* [SensitiveArgsTrailblazeTool] declares.
+ *
+ * The two answer different questions. Name-based masking is the right tool when a whole argument
+ * is the secret (`password: "hunter2"`): blank the field. It is the wrong tool when the secret is
+ * one element inside a structured argument — one token in a shell argv, one value in a map —
+ * because blanking the field throws away everything else in it, and a log that reads
+ * `command: <redacted>` cannot say what ran. Value-based masking replaces the secret wherever it
+ * appears and leaves the rest of the payload legible.
+ *
+ * Applied at the same log-encode boundary as name-based masking, in addition to it. Execution and
+ * wire encoding are untouched — the dispatch target still receives the real values.
+ */
+interface SensitiveValuesTrailblazeTool {
+  /**
+   * The literal secret values for this call. Implement as a `get()`-only val over an existing
+   * field so it stays out of the serialized shape. Blank values are ignored.
+   */
+  val sensitiveValues: Collection<String>
+}
+
+/**
+ * Replaces every value in [values] found in [text] with [REDACTED_TOOL_ARG_PLACEHOLDER].
+ *
+ * Matches by literal value, because the strings this guards — a rendered command line, device
+ * stdout, an exception message — are opaque text the holder of the secret did not build, so there
+ * is no structure left to key off. Coarse (a short secret can mask an unintended substring), but
+ * over-masking a diagnostic is the safe direction to fail.
+ *
+ * Blank values are skipped: `replace("", …)` matches at every index and would shred the text.
+ *
+ * Longest value first, which is load-bearing when one secret contains another: replacing the
+ * shorter one first destroys the longer one's only literal occurrence, so it would never match and
+ * the rest of it would survive (`["1234", "sess-1234-abcd"]` against `sess-1234-abcd` leaving
+ * `sess-<redacted>-abcd`). Descending length means the longest match at any position wins.
+ */
+fun redactSensitiveValuesIn(text: String, values: Collection<String>): String {
+  if (values.isEmpty() || text.isEmpty()) return text
+  return values.sortedByDescending { it.length }.fold(text) { acc, value ->
+    if (value.isBlank()) acc else acc.replace(value, REDACTED_TOOL_ARG_PLACEHOLDER)
+  }
+}
+
+/**
+ * Returns a copy of this payload with every occurrence of every value in [sensitiveValues] masked,
+ * at any depth — inside arrays, nested objects, and the string primitives they hold. Keys are
+ * never touched. Returns `this` unchanged when there is nothing to mask.
+ */
+fun OtherTrailblazeTool.withSensitiveValuesRedacted(sensitiveValues: Collection<String>): OtherTrailblazeTool {
+  val values = sensitiveValues.filter { it.isNotBlank() }
+  if (values.isEmpty()) return this
+  val scrubbed = (raw as JsonElement).withStringsScrubbed(values)
+  return if (scrubbed === raw) this else copy(raw = scrubbed as JsonObject)
+}
+
+/** Walks a JSON tree scrubbing string primitives; returns the same instance when nothing changed. */
+private fun JsonElement.withStringsScrubbed(values: List<String>): JsonElement = when (this) {
+  is JsonPrimitive -> {
+    if (!isString) {
+      this
+    } else {
+      val scrubbed = redactSensitiveValuesIn(content, values)
+      if (scrubbed == content) this else JsonPrimitive(scrubbed)
+    }
+  }
+  is JsonArray -> {
+    val scrubbed = map { it.withStringsScrubbed(values) }
+    if (scrubbed.indices.all { scrubbed[it] === this[it] }) this else JsonArray(scrubbed)
+  }
+  is JsonObject -> {
+    val scrubbed = mapValues { (_, value) -> value.withStringsScrubbed(values) }
+    if (scrubbed.all { (key, value) -> value === this[key] }) this else JsonObject(scrubbed)
+  }
+}

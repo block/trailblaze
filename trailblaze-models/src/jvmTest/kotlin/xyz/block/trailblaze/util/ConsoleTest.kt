@@ -151,10 +151,94 @@ class ConsoleTest {
     assertFalse(quietOuter.contains("chatter-b"), "quiet mode must still drop log(), not relocate it")
   }
 
+  @Test fun `leaving quiet mode does not undo a redirect someone else took while it was on`() {
+    // The composition test above always unwinds in order, which is the case that already worked.
+    // This is the interleaved one: json mode starts INSIDE a live quiet scope and outlives it.
+    // Quiet mode saved the pre-quiet stream when it began, so a restore that fires unconditionally
+    // puts `info()` back on stdout underneath a json command that deliberately moved off it — and
+    // prose lands in the middle of the document the caller is piping.
+    val onStdErr = withStdErrCaptured {
+      Console.enableQuietMode()
+      Console.enableJsonMode()
+      Console.disableQuietMode()
+      try {
+        Console.info("note-while-json")
+      } finally {
+        Console.disableJsonMode()
+      }
+    }
+
+    val stdout = captured.toString(Charsets.UTF_8)
+    assertFalse(
+      stdout.contains("note-while-json"),
+      "json mode was still on, so nothing may reach stdout: $stdout",
+    )
+    assertTrue(onStdErr.contains("note-while-json"), "and it belongs on stderr: $onStdErr")
+  }
+
+  @Test fun `a quiet scope that ends inside json mode does not come back when json mode ends`() {
+    // The tail of the interleaved case above. Quiet mode correctly declines to undo json mode's
+    // redirect on its way out — but json mode had snapshotted quiet mode's stream, so restoring
+    // that snapshot would put the log channel back under `info()` after quiet mode was over,
+    // leaking exactly as far as an unconditional restore would have.
+    val logChannel = ByteArrayOutputStream()
+    setPrivateStream("out", PrintStream(logChannel, /* autoFlush = */ true, Charsets.UTF_8))
+
+    withStdErrCaptured {
+      Console.enableQuietMode()
+      Console.enableJsonMode()
+      Console.disableQuietMode()
+      Console.disableJsonMode()
+    }
+
+    Console.info("after-both-scopes")
+
+    assertFalse(
+      logChannel.toString(Charsets.UTF_8).contains("after-both-scopes"),
+      "both scopes are over, so info() must no longer be going to the log channel",
+    )
+    assertTrue(
+      captured.toString(Charsets.UTF_8).contains("after-both-scopes"),
+      "info() belongs back on the stream the caller had before either scope began",
+    )
+  }
+
+  @Test fun `leaving quiet mode still hands the stream back when nothing else moved it`() {
+    // The control for the case above. Dropping the restore entirely would satisfy that test while
+    // reintroducing the leak this whole change is about: `userOut` left pointing at the log
+    // channel for the rest of the process.
+    //
+    // The two channels have to be genuinely different streams for that to be visible at all —
+    // which is the real shape, not a contrivance: the desktop log-file writer tees the log channel
+    // to disk while user-facing output stays terminal-only, and that tee is exactly what quiet
+    // mode points `info()` at.
+    val logChannel = ByteArrayOutputStream()
+    setPrivateStream("out", PrintStream(logChannel, /* autoFlush = */ true, Charsets.UTF_8))
+
+    Console.enableQuietMode()
+    Console.disableQuietMode()
+
+    Console.info("back-on-the-callers-stream")
+
+    assertFalse(
+      logChannel.toString(Charsets.UTF_8).contains("back-on-the-callers-stream"),
+      "the quiet scope is over, so info() must no longer be going to the log channel",
+    )
+    assertTrue(
+      captured.toString(Charsets.UTF_8).contains("back-on-the-callers-stream"),
+      "an ordinary quiet scope must put the user-facing stream back where it found it",
+    )
+  }
+
   @Test fun `disableJsonMode without prior enable is a no-op`() {
     Console.disableJsonMode()
     Console.log("still visible")
     assertTrue(captured.toString(Charsets.UTF_8).contains("still visible"))
+  }
+
+  /** Re-point one of `Console`'s cached streams; see the note in [setUp] on why reflection. */
+  private fun setPrivateStream(name: String, stream: PrintStream) {
+    Console::class.java.getDeclaredField(name).apply { isAccessible = true }.set(Console, stream)
   }
 
   private fun withStdErrCaptured(block: () -> Unit): String {

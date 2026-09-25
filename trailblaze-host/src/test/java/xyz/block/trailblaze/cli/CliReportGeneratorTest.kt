@@ -30,6 +30,8 @@ import xyz.block.trailblaze.report.models.CiSummaryReport
 import xyz.block.trailblaze.report.models.Outcome
 import xyz.block.trailblaze.report.models.SkippedTrail
 import xyz.block.trailblaze.report.utils.LogsRepo
+import xyz.block.trailblaze.yaml.TrailConfig
+import xyz.block.trailblaze.yaml.TrailMetadataValue
 
 /**
  * Tests for [CliReportGenerator.mapStatusToOutcome] — small but load-bearing because the
@@ -214,6 +216,14 @@ class CliReportGeneratorTest {
     try {
       val sessionId = SessionId("2026_09_01_trail_path_session")
       val deviceInfo = androidDeviceInfo()
+      val nestedMetadata = mapOf(
+        "tracker" to TrailMetadataValue.MapValue(
+          mapOf(
+            "id" to TrailMetadataValue.StringValue("4fd3e734-f6d8-4028-bc42-cbc94e6843ae"),
+            "suites" to TrailMetadataValue.ListValue.of("smoke", "nightly"),
+          ),
+        ),
+      )
       val started = Instant.parse("2026-09-01T12:00:00Z")
 
       writeLog(
@@ -221,7 +231,7 @@ class CliReportGeneratorTest {
         fileName = "001_TrailblazeSessionStatusChangeLog.json",
         log = TrailblazeLog.TrailblazeSessionStatusChangeLog(
           sessionStatus = SessionStatus.Started(
-            trailConfig = null,
+            trailConfig = TrailConfig(id = "estate/checkout", metadata = nestedMetadata),
             trailFilePath = "trails/estate/C4242-checkout.trail.yaml",
             hasRecordedSteps = true,
             testMethodName = "payAtCheckout",
@@ -271,6 +281,9 @@ class CliReportGeneratorTest {
         "trails/estate/C4242-checkout.trail.yaml",
         report.results.single { it.session_id == sessionId }.trail_file_path,
       )
+      val trailResult = report.results.single { it.session_id == sessionId }
+      assertEquals("estate/checkout", trailResult.trail_id)
+      assertEquals(nestedMetadata, trailResult.metadata)
       assertNull(report.results.single { it.session_id == harnessId }.trail_file_path)
 
       // Asserted on the encoded document, not the decoded object: a consumer distinguishes "named

@@ -22,6 +22,12 @@ import xyz.block.trailblaze.util.isMacOs
  * ```
  * 2026-03-10 14:23:45.678901-0700  MyApp[12345]: (subsystem) message
  * ```
+ *
+ * ### Which clock
+ * Host, for both bookends — and unlike Android's logcat, that is also the clock the log lines
+ * themselves are stamped with, so the two agree without conversion. A simulator runs on this Mac
+ * and reads this Mac's clock, so there is no device-host skew on this platform at all. A recorder
+ * for a physical iOS device would have to revisit that, the way `AndroidLogcatCapture` does.
  */
 class IosLogCapture : CaptureStream, AppScopedCaptureStream {
   override val type = CaptureType.LOGCAT

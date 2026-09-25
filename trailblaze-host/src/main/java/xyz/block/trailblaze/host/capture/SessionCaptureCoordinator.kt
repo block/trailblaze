@@ -5,9 +5,13 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import xyz.block.trailblaze.capture.CaptureOptions
 import xyz.block.trailblaze.capture.CaptureSession
+import xyz.block.trailblaze.capture.ToolCallPhase
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.logs.model.SessionId
+import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.report.utils.LogsRepo
+import xyz.block.trailblaze.toolcalls.ToolCallObserver
+import xyz.block.trailblaze.toolcalls.ToolCallObservers
 import xyz.block.trailblaze.util.Console
 
 /**
@@ -17,8 +21,8 @@ import xyz.block.trailblaze.util.Console
  * where the `step`/`ask`/`verify`/individual-tool dispatchers each open a Trailblaze
  * session without going through `DesktopYamlRunner`. Prior to this coordinator,
  * `DesktopYamlRunner` was the only place that started a `CaptureSession`, so MCP-driven
- * Android runs landed with no `video.mp4` and no `video_sprites.webp` — the report
- * timeline showed an empty scrubber.
+ * Android runs landed with no session recording — the report timeline showed an empty
+ * scrubber.
  *
  * The coordinator does three things:
  *  1. Maintains a `SessionId -> CaptureSession` registry so a single session can have
@@ -61,7 +65,9 @@ class SessionCaptureCoordinator(
    * unless the experimental baguette-stream recorder ([BaguetteIosVideoCapture]) is opted in via
    * [IosBaguetteVideoGate] (`trailblaze config ios-baguette-video true` or
    * `TRAILBLAZE_IOS_BAGUETTE_VIDEO=1`) — wall-clock-accurate frame timing so the report can overlay
-   * session-log events on the video, with simctl as its automatic fallback.
+   * session-log events on the video, with simctl as its automatic fallback. Android memory is
+   * read through the on-device runner when one is installed ([OnDeviceRpcMemoryProbe]), over adb
+   * otherwise.
    */
   private val captureSessionFactory: (CaptureOptions, TrailblazeDevicePlatform) -> CaptureSession? =
     { options, platform ->
@@ -74,9 +80,57 @@ class SessionCaptureCoordinator(
           } else {
             null
           },
+        androidMemoryProbeOverride =
+          if (platform == TrailblazeDevicePlatform.ANDROID) OnDeviceRpcMemoryProbe() else null,
       )
     },
 ) {
+
+  /**
+   * Routes the agent loop's tool-call boundaries to the session's capture, so streams that sample
+   * around every tool (memory) hear about them. A session whose capture is not (yet / any more)
+   * started is simply not told.
+   */
+  private val toolCallObserver = object : ToolCallObserver {
+    override fun onBeforeToolCall(sessionId: SessionId, toolName: String, traceId: TraceId?) =
+      forwardToolCall(sessionId, ToolCallPhase.BEFORE, toolName, traceId)
+
+    override fun onAfterToolCall(sessionId: SessionId, toolName: String, traceId: TraceId?) =
+      forwardToolCall(sessionId, ToolCallPhase.AFTER, toolName, traceId)
+  }
+
+  /**
+   * Whether [toolCallObserver] is currently in the process-global registry.
+   *
+   * Registration follows the captures, not the coordinator's construction: [ToolCallObservers]
+   * holds observers by identity for the life of the JVM, so a coordinator that registered in its
+   * constructor would stay on the dispatch path forever — harmless for one daemon-lifetime
+   * instance, a genuine leak the moment one is built per run or per test. With no active capture
+   * there is nothing to forward to anyway ([forwardToolCall] returns immediately), so listening
+   * only while captures exist changes no behaviour.
+   */
+  private var observing = false
+
+  private fun forwardToolCall(sessionId: SessionId, phase: ToolCallPhase, toolName: String, traceId: TraceId?) {
+    val capture = synchronized(lock) { active[sessionId]?.takeIf { it.started } } ?: return
+    capture.session.onToolCall(phase, toolName, traceId?.traceId)
+  }
+
+  /** Called with [lock] held, whenever [active] gains or loses an entry. */
+  private fun syncObserverRegistration() {
+    val wanted = active.isNotEmpty()
+    if (wanted == observing) return
+    observing = wanted
+    if (wanted) ToolCallObservers.register(toolCallObserver) else ToolCallObservers.unregister(toolCallObserver)
+  }
+
+  /** Stops listening for tool calls. Captures still running are left to [stopForSession] / [shutdownAll]. */
+  fun close() {
+    synchronized(lock) {
+      observing = false
+      ToolCallObservers.unregister(toolCallObserver)
+    }
+  }
 
   private class ActiveCapture(
     val session: CaptureSession,
@@ -104,6 +158,34 @@ class SessionCaptureCoordinator(
    * place. Sticky on purpose: we don't know what cleanup state the subprocess is in.
    */
   private val tombstoned = mutableSetOf<SessionId>()
+
+  /**
+   * Session ids whose capture has already been stopped. A session records once: a start that
+   * arrives after the stop is refused rather than recording again into the same session dir.
+   *
+   * That late start is not hypothetical. A host run's own cleanup stops capture as it releases the
+   * device, and the runner then fires its post-run capture start for the same session, a fallback
+   * for runners that never report the session starting. Accepting it spawned a fresh recorder at
+   * teardown, which the run's final stop ended about a second later, and that one-second clip
+   * replaced the session's real recording. Seen on CI as an iOS video that starts after the trail
+   * has finished.
+   *
+   * A stop marks the id ended even when nothing was recording yet. The device manager creates a
+   * session and only then asks for its capture, outside its session lock, so an end or cancel can
+   * land in that gap and find nothing to stop; the start that follows must still be refused.
+   *
+   * Insertion-ordered and capped at [MAX_REMEMBERED_ENDED_SESSIONS] so a long-lived daemon does not
+   * grow it forever. The late start comes within seconds of the stop, so forgetting the oldest
+   * costs nothing.
+   */
+  private val ended = LinkedHashSet<SessionId>()
+
+  /** Called with [lock] held. */
+  private fun rememberEnded(sessionId: SessionId) {
+    ended.remove(sessionId)
+    ended.add(sessionId)
+    while (ended.size > MAX_REMEMBERED_ENDED_SESSIONS) ended.remove(ended.first())
+  }
 
   /**
    * Starts capture for [sessionId]. Idempotent for the same session id and safe under
@@ -150,6 +232,13 @@ class SessionCaptureCoordinator(
         )
         return false
       }
+      if (sessionId in ended) {
+        Console.log(
+          "[SessionCaptureCoordinator] not restarting capture for session $sessionId — it was " +
+            "already stopped, and a second recording would replace the first",
+        )
+        return false
+      }
       val sessionDir = logsRepo.getSessionDir(sessionId)
       if (!sessionDir.isDirectory && !sessionDir.mkdirs()) {
         Console.log(
@@ -168,6 +257,7 @@ class SessionCaptureCoordinator(
         }
       ActiveCapture(captureSession, sessionDir, deviceId, platform).also {
         active[sessionId] = it
+        syncObserverRegistration()
       }
     }
 
@@ -207,7 +297,10 @@ class SessionCaptureCoordinator(
       // spawned before throwing (e.g. `screenrecord` started, ffmpeg muxer failed to
       // attach). Without this, every failed start leaks a screenrecord process for the
       // life of the daemon.
-      synchronized(lock) { active.remove(sessionId, reservation) }
+      synchronized(lock) {
+        active.remove(sessionId, reservation)
+        syncObserverRegistration()
+      }
       runCatching { reservation.session.stopAll() }
       Console.log(
         "[SessionCaptureCoordinator] failed to start capture for session=$sessionId: ${e.message}",
@@ -219,15 +312,23 @@ class SessionCaptureCoordinator(
   /**
    * Stops capture for [sessionId] and writes diagnostic metadata. Idempotent. Safe to
    * call multiple times — e.g. from both `endSessionForDevice` (the normal end) and a
-   * later `cancelSessionForDevice` cleanup, only the first wins.
+   * later `cancelSessionForDevice` cleanup, only the first wins. Final: a later
+   * [startForSession] for the same id is refused (see [ended]).
+   *
+   * @param markEnded false only for a caller that is guessing which session is its own. It stops
+   *   whatever is recording but leaves the id free to start, because the guess may be another run's
+   *   session whose capture has not started yet, and marking it ended would leave it with no video.
    *
    * If the entry is in the "reserved but not yet started" state (a concurrent
    * `startForSession` is between Step 1 and Step 3), returning `false` here cooperates
    * with that flow: the started-state guard in [startForSession] sees its reservation
    * has been removed and cleans up its own subprocesses.
    */
-  fun stopForSession(sessionId: SessionId): Boolean {
-    val capture = synchronized(lock) { active.remove(sessionId) } ?: return false
+  fun stopForSession(sessionId: SessionId, markEnded: Boolean = true): Boolean {
+    val capture = synchronized(lock) {
+      if (markEnded) rememberEnded(sessionId)
+      active.remove(sessionId).also { syncObserverRegistration() }
+    } ?: return false
     if (!capture.started) {
       // The matching `startForSession` is still inside `captureSession.startAll`.
       // Removing the entry signals it to clean up on its own (see Step 3 above);
@@ -314,6 +415,9 @@ class SessionCaptureCoordinator(
   }
 
   companion object {
+    /** Cap on [ended]; see there. */
+    private const val MAX_REMEMBERED_ENDED_SESSIONS = 1_024
+
     /**
      * Per-session deadline used by [shutdownAll]. ffmpeg muxer flush + adb `screenrecord`
      * teardown is typically <2s; 3000ms gives slow CI agents headroom without blocking
@@ -325,8 +429,8 @@ class SessionCaptureCoordinator(
      * Documentation baseline showing how production callers resolve `CaptureOptions`
      * (currently `TrailblazeDeviceManager.getOrCreateSessionResolution` and
      * `DesktopYamlRunner.captureSessionStarted`, all through
-     * `CaptureOptions.hostCaptureOptions`, which owns the sprite tuning and its env
-     * overrides). Also used by `SessionCaptureCoordinatorTest` via the injectable
+     * `CaptureOptions.hostCaptureOptions`, which owns the video opt-in and its env
+     * override). Also used by `SessionCaptureCoordinatorTest` via the injectable
      * `captureSessionFactory` seam. Not auto-applied — passing misconfigured options
      * silently records the wrong artifacts, so callers must resolve their own.
      */

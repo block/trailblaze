@@ -35,7 +35,6 @@ import xyz.block.trailblaze.util.Console
 class SessionToolRepoEquivalenceTest {
 
   private val drivers = listOf(
-    TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
     TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
     TrailblazeDriverType.PLAYWRIGHT_NATIVE,
   )
@@ -81,7 +80,7 @@ class SessionToolRepoEquivalenceTest {
       """.trimIndent(),
       toolNameResolver = ToolNameResolver.fromBuiltInAndCustomTools(),
     )
-    val driver = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION
+    val driver = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY
     val scope = target.resolveToolScopeForDriver(driver)
 
     assertTrue(scope.declaredToolSetIds.isEmpty(), "fixture declares no tool_sets")
@@ -114,7 +113,7 @@ class SessionToolRepoEquivalenceTest {
   fun `an unconfigured target resolves the same surface as one with no target at all`() {
     // Both mean "nothing narrowed this session". They are resolved by different code paths — a
     // real scope vs. the nullable-receiver fallback — so pin that they land in the same place.
-    val driver = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION
+    val driver = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY
     val unconfigured = AppTargetYamlLoader.loadFromYaml(
       """
       id: bare2
@@ -159,7 +158,7 @@ class SessionToolRepoEquivalenceTest {
             - com.example.bare3
       """.trimIndent(),
       toolNameResolver = ToolNameResolver.fromBuiltInAndCustomTools(),
-    ).resolveToolScopeForDriver(TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION)
+    ).resolveToolScopeForDriver(TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY)
     assertFalse(
       scope.isScoped,
       "fixture must be unconfigured for this driver, or the fallback isn't under test",
@@ -177,7 +176,7 @@ class SessionToolRepoEquivalenceTest {
     // web classes. Only its negative case (exclusion wins) was pinned, so the seam could have been
     // dropped entirely and the suite would still pass. Dropping the YAML/scripted halves is exactly
     // what made sibling-target tools dispatch as "Unknown tool".
-    val driver = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION
+    val driver = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY
     val extraClass = xyz.block.trailblaze.toolcalls.commands.ObjectiveStatusTrailblazeTool::class
     val extraYaml = ToolName("someRuntimeContributedYamlTool")
     val extraScripted = ToolName("someRuntimeContributedScriptedTool")
@@ -207,7 +206,7 @@ class SessionToolRepoEquivalenceTest {
     // decoder can READ. `registeredAppSpecific*` deliberately skip the subtraction for this reason.
     // Subtracting there turns "declared but not advertised" into "recorded trail fails to parse" —
     // a failure that surfaces far from the target config that caused it.
-    val driver = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION
+    val driver = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY
     val target = multiDriverTarget()
     val excluded = target.resolveToolScopeForDriver(driver).excluded.toolClasses
     assertTrue(excluded.isNotEmpty(), "fixture must exclude at least one class-backed tool")
@@ -238,7 +237,7 @@ class SessionToolRepoEquivalenceTest {
     // property the active target's has: not dispatchable, still decodable. Subtracting it upstream
     // of `additional` instead — which is what the daemon did — drops it from the decoder registry
     // and turns a recorded trail that names it from "not advertised" into "fails to parse".
-    val driver = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION
+    val driver = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY
     val siblingTool = xyz.block.trailblaze.toolcalls.commands.ObjectiveStatusTrailblazeTool::class
 
     val tools = multiDriverTarget().toCustomTrailblazeToolsForDriver(
@@ -261,14 +260,14 @@ class SessionToolRepoEquivalenceTest {
   @Test
   fun `the scope carries its target id`() {
     val scope = multiDriverTarget()
-      .resolveToolScopeForDriver(TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION)
+      .resolveToolScopeForDriver(TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY)
     // The fixture's id and display_name differ, so this catches an id/displayName mix-up.
     assertEquals("equivapp", scope.targetId)
   }
 
   @Test
   fun `a typo'd toolset id is reported, a good one is not`() {
-    val driver = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION
+    val driver = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY
 
     val clean = multiDriverTarget().resolveToolScopeForDriver(driver)
     assertEquals(
@@ -316,7 +315,7 @@ class SessionToolRepoEquivalenceTest {
             - nope_two
       """.trimIndent(),
       toolNameResolver = ToolNameResolver.fromBuiltInAndCustomTools(),
-    ).resolveToolScopeForDriver(TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION)
+    ).resolveToolScopeForDriver(TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY)
 
     assertTrue(scope.isScoped, "precondition: declaring bad ids still counts as scoped")
     assertTrue(
@@ -343,7 +342,7 @@ class SessionToolRepoEquivalenceTest {
             - no_such_toolset_for_warn_once
       """.trimIndent(),
       toolNameResolver = ToolNameResolver.fromBuiltInAndCustomTools(),
-    ).resolveToolScopeForDriver(TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION)
+    ).resolveToolScopeForDriver(TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY)
     resetDeclaredToolSetProblemReporting()
 
     val first = captureConsole { scope.logDeclaredToolSetProblemsOnce() }
@@ -386,7 +385,7 @@ class SessionToolRepoEquivalenceTest {
             - no_such_toolset_for_overlay_rearm
       """.trimIndent(),
       toolNameResolver = ToolNameResolver.fromBuiltInAndCustomTools(),
-    ).resolveToolScopeForDriver(TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION)
+    ).resolveToolScopeForDriver(TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY)
     resetDeclaredToolSetProblemReporting()
 
     try {
@@ -441,7 +440,7 @@ class SessionToolRepoEquivalenceTest {
     // The host JUnit harness suppresses specific classes for its own reasons, on top of whatever
     // the target excludes. Both sources must remove a tool, or routing that harness through the
     // shared entry point would silently re-admit tools it had removed for years.
-    val driver = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION
+    val driver = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY
     val target = multiDriverTarget()
     val harnessExcluded = target.toSessionToolRepo(driver)
       .getRegisteredTrailblazeTools()
@@ -463,7 +462,7 @@ class SessionToolRepoEquivalenceTest {
     // The regression this whole line of work exists to prevent is OVER-inclusion: a session
     // offering every other app's tools and blowing the 128-tool API cap. `missing` above only
     // catches under-inclusion, so this is the direction that matters.
-    val driver = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION
+    val driver = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY
     val scoped = multiDriverTarget().toSessionToolRepo(driver)
     val wholeCatalog = TrailblazeToolRepo.withDynamicToolSets(driverType = driver)
 
@@ -481,7 +480,7 @@ class SessionToolRepoEquivalenceTest {
   fun `a session with no target keeps the whole-catalog surface`() {
     // The one case where whole-catalog is correct: nothing to scope to. Pinned so a future change
     // can't quietly make a target-less `trailblaze run` resolve to nothing.
-    val driver = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION
+    val driver = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY
     val repo = (null as TrailblazeHostAppTarget?).toSessionToolRepo(driver)
     val catalogRepo = TrailblazeToolRepo.withDynamicToolSets(driverType = driver)
 
@@ -509,7 +508,7 @@ class SessionToolRepoEquivalenceTest {
     // The host contributes driver-specific web classes the target's YAML can't name. Exclusion must
     // still win, or `excluded_tools:` means something different on host than on device.
     val target = multiDriverTarget()
-    val driver = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION
+    val driver = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY
     val excluded = target.resolveToolScopeForDriver(driver).excluded.toolClasses
     assertTrue(excluded.isNotEmpty(), "fixture must exclude at least one class-backed tool")
 

@@ -4,12 +4,19 @@ import assertk.assertThat
 import assertk.assertions.contains
 import assertk.assertions.doesNotContain
 import assertk.assertions.isEqualTo
+import assertk.assertions.isFalse
 import assertk.assertions.isNotNull
+import assertk.assertions.isTrue
 import kotlinx.serialization.descriptors.elementNames
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Test
 import xyz.block.trailblaze.yaml.TrailConfig
 import xyz.block.trailblaze.yaml.unified.UnifiedTrailConfig
@@ -128,6 +135,46 @@ class TrailYamlSchemaBuilderTest {
     configKeys.forEach { key ->
       assertThat(trailConfigFields).contains(key)
     }
+  }
+
+  @Test
+  fun `config metadata accepts any nesting but rejects a null at every depth`() {
+    val schema = parse(TrailYamlSchemaBuilder.build(emptyList(), targetToolNames = null))
+    val metadata = unifiedProps(schema)["config"]!!.jsonObject["properties"]!!.jsonObject["metadata"]!!.jsonObject
+    val value = metadata["additionalProperties"]!!.jsonObject
+    fun accepts(yamlValue: String) = matches(schema, value, Json.parseToJsonElement(yamlValue))
+
+    assertThat(accepts("\"PROJ-123\"")).isTrue()
+    assertThat(accepts("1017")).isTrue()
+    assertThat(accepts("""["payments", "checkout"]""")).isTrue()
+    assertThat(accepts("""{"tracker": {"suites": ["smoke"], "ticket": 7}}""")).isTrue()
+    assertThat(accepts("null")).isFalse()
+    assertThat(accepts("""[null]""")).isFalse()
+    assertThat(accepts("""{"tracker": {"team": null}}""")).isFalse()
+  }
+
+  /** Just the JSON Schema subset the metadata value uses: `$ref`, `anyOf`, `type`, `items`, `additionalProperties`. */
+  private fun matches(root: JsonObject, node: JsonObject, value: JsonElement): Boolean {
+    node["\$ref"]?.let { ref ->
+      val target = ref.jsonPrimitive.content.removePrefix("#/").split('/').fold(root) { o, k -> o[k]!!.jsonObject }
+      return matches(root, target, value)
+    }
+    node["anyOf"]?.let { options -> return options.jsonArray.any { matches(root, it.jsonObject, value) } }
+    val types = node["type"]?.let { t -> if (t is JsonArray) t.map { it.jsonPrimitive.content } else listOf(t.jsonPrimitive.content) }
+    val actual = when {
+      value is JsonNull -> "null"
+      value is JsonArray -> "array"
+      value is JsonObject -> "object"
+      value.jsonPrimitive.isString -> "string"
+      value.jsonPrimitive.booleanOrNull != null -> "boolean"
+      else -> "number"
+    }
+    if (types != null && actual !in types) return false
+    node["items"]?.let { items -> if (value is JsonArray && !value.all { matches(root, items.jsonObject, it) }) return false }
+    node["additionalProperties"]?.let { props ->
+      if (value is JsonObject && props is JsonObject && !value.values.all { matches(root, props, it) }) return false
+    }
+    return true
   }
 
   @Test

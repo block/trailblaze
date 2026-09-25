@@ -40,6 +40,7 @@ import xyz.block.trailblaze.mcp.agent.KoogTestAgentRunner
 import xyz.block.trailblaze.recordings.TrailRecordings
 import xyz.block.trailblaze.rules.TrailblazeRunnerUtil
 import xyz.block.trailblaze.scripting.LaunchedScriptingRuntime
+import xyz.block.trailblaze.scripting.finishScriptingRuntimeCleanup
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
@@ -329,10 +330,11 @@ class ComposeHostDriverDescriptor(
       noLogging = runOnHostParams.noLogging,
       cleanup = {
         withContext(NonCancellable) {
-          subprocessRuntimes.forEach { it.shutdownAll() }
+          finishScriptingRuntimeCleanup(subprocessRuntimes) {
+            agent.close()
+            deviceManager.cancelSessionForDevice(trailblazeDeviceId)
+          }
         }
-        agent.close()
-        deviceManager.cancelSessionForDevice(trailblazeDeviceId)
       },
     ) { session ->
       TrailblazeHostYamlRunner.launchSubprocessMcpServersIfAny(

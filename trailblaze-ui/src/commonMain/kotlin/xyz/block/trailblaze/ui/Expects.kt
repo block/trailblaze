@@ -35,15 +35,3 @@ expect suspend fun loadDeviceLogs(sessionId: String): String?
  * write to the same path with the same schema.
  */
 expect suspend fun loadNetworkLogs(sessionId: String): String?
-
-// The pair below let an external screen recorder drive a timeline: ask it to start playing on
-// mount, and find out when it finished. Both are inert on every platform — the only host that
-// answered them was the Compose/WebAssembly report, and `trailblaze report --video` now exports
-// from the TypeScript run-report renderer in `:trailblaze-report`. They survive as the seam a
-// future recorder-driven host would fill in; the consumer lives in `SessionCombinedView`.
-
-/** True when the host wants timeline playback to start on mount rather than on a user click. */
-expect fun isExportAutoplayRequested(): Boolean
-
-/** Tells the host that timeline playback finished and the screen capture can be torn down. */
-expect fun signalExportPlaybackEnded()

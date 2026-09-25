@@ -497,8 +497,8 @@ open class BasePlaywrightNativeTest(
    * directly — see `TrailblazeMcpBridgeImpl.executeHostLocalPlaywrightTool`.
    */
   /**
-   * Owned-by-this-rule `CaptureSession` for the WEB platform — drives `video.mp4` +
-   * `video_sprites.webp` generation when nothing upstream has already started capture
+   * Owned-by-this-rule `CaptureSession` for the WEB platform — drives session-video
+   * recording when nothing upstream has already started capture
    * for this device id. The CLI/daemon path (`DesktopYamlRunner`) registers the record
    * dir before this rule's browser is constructed, so [PlaywrightVideoRecordDir] already
    * has an entry by the time we get here — that path leaves this field null and stops

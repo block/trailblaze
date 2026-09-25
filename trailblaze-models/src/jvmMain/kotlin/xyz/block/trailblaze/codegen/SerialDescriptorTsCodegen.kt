@@ -8,6 +8,7 @@ import kotlinx.serialization.descriptors.SerialKind
 import kotlinx.serialization.descriptors.StructureKind
 import kotlinx.serialization.descriptors.elementDescriptors
 import xyz.block.trailblaze.logs.client.TrailblazeJson
+import xyz.block.trailblaze.yaml.TrailMetadataValueSerializer
 
 /**
  * Reusable Kotlin → TypeScript generator that walks `kotlinx.serialization` [SerialDescriptor]s, so
@@ -113,7 +114,8 @@ object SerialDescriptorTsCodegen {
       // on the wire, so recurse straight into the payload.
       if (desc.isInline) return collect(desc.getElementDescriptor(0), viaSealedBase = false)
       when (desc.kind) {
-        is PrimitiveKind, SerialKind.CONTEXTUAL -> Unit
+        SerialKind.CONTEXTUAL -> if (key in customWireShapes) named.putIfAbsent(key, desc)
+        is PrimitiveKind -> Unit
         SerialKind.ENUM -> named.putIfAbsent(key, desc)
         StructureKind.CLASS, StructureKind.OBJECT -> {
           if (!viaSealedBase) staticallyReferenced.add(key)
@@ -216,6 +218,8 @@ object SerialDescriptorTsCodegen {
     walk: Walk,
     classDiscriminator: String,
   ): String = when {
+    d.serialName.removeSuffix("?") in customWireShapes ->
+      "export type ${tsNameOf(d, names)} = ${customWireShapes.getValue(d.serialName.removeSuffix("?"))};\n"
     d.kind == SerialKind.ENUM -> renderEnum(d, names)
     d.kind == PolymorphicKind.SEALED -> renderSealedUnion(d, names)
     d.serialName.removeSuffix("?") in walk.openPolymorphic -> renderOpenPolymorphic(d, names, classDiscriminator)
@@ -271,8 +275,19 @@ object SerialDescriptorTsCodegen {
     append("}\n")
   }
 
+  /**
+   * Custom-serialized types whose wire shape their descriptor can't express (a `CONTEXTUAL`
+   * descriptor otherwise renders as `unknown`). Each is emitted as a named type alias, so the shape
+   * may refer to itself.
+   */
+  private val customWireShapes: Map<String, String> = mapOf(
+    TrailMetadataValueSerializer.descriptor.serialName to
+      "string | TrailMetadataValue[] | { [key: string]: TrailMetadataValue }",
+  )
+
   /** Render a (possibly nullable) descriptor as a TypeScript type expression. */
   private fun renderType(d: SerialDescriptor, names: Map<String, String>): String = when {
+    d.serialName.removeSuffix("?") in customWireShapes -> tsNameOf(d, names)
     d.serialName.removeSuffix("?").startsWith("kotlinx.serialization.json.") ->
       renderJsonElementType(d.serialName.removeSuffix("?"))
     d.isInline -> renderType(d.getElementDescriptor(0), names)

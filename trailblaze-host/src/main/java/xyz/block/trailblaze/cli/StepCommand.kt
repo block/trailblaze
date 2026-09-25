@@ -294,9 +294,10 @@ class StepCommand : Callable<Int>, QuietUnlessVerbose {
    *
    * If --setup or --no-setup is provided, saves the trail to the specified path.
    */
-  private fun handleSave(): Int {
-    if (!verbose) Console.enableQuietMode()
+  private fun handleSave(): Int = quietUnlessVerbose(verbose) { writeSavedTrail() }
 
+  /** The `--save` flow proper; [handleSave] owns the quiet scope around it. */
+  private fun writeSavedTrail(): Int {
     val port = CliConfigHelper.resolveEffectiveHttpPort()
     val sessionScope = device?.takeIf { it.isNotBlank() }?.let(::cliDeviceSessionScope)
       ?: readLastCliSessionScope(port)

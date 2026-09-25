@@ -1,7 +1,10 @@
 package xyz.block.trailblaze.cli
 
 import org.junit.Test
-import java.net.ServerSocket
+import xyz.block.trailblaze.cli.TestPorts.openPortInCandidateBand
+import xyz.block.trailblaze.cli.TestPorts.withRefusingPort
+import java.net.Socket
+import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
@@ -19,20 +22,15 @@ import kotlin.test.assertTrue
 class McpProxyUnresponsivePortTest {
 
   /**
-   * Above the range the daemon refuses (device ports) so [McpProxy.refuseDeviceAllocatablePort]
-   * cannot pre-empt the probe this test is about.
+   * A listener that accepts every connection and never answers, holding each one open — the shape
+   * of a daemon that wedged after binding its port.
    */
-  private fun unusedPortOutsideDeviceRange(): Int {
-    for (candidate in 59_600..59_699) {
-      runCatching { ServerSocket(candidate) }.getOrNull()?.use { return it.localPort }
-    }
-    error("no free port for the wedged-listener test")
-  }
-
-  /** Accepts every connection and never answers, holding each one open. */
   private fun <T> withWedgedListener(body: (Int) -> T): T {
-    ServerSocket(unusedPortOutsideDeviceRange()).use { server ->
-      val held = mutableListOf<java.net.Socket>()
+    openPortInCandidateBand().use { server ->
+      // Written by the accept thread and read by the test thread, so not a plain list: a
+      // ConcurrentModificationException raised while draining would come out of the `finally` and
+      // replace whatever the test actually found.
+      val held = CopyOnWriteArrayList<Socket>()
       val accepting = Thread {
         runCatching {
           while (true) held += server.accept()
@@ -41,6 +39,9 @@ class McpProxyUnresponsivePortTest {
       try {
         return body(server.localPort)
       } finally {
+        // Close the listener BEFORE draining. `interrupt()` does not unblock a blocking `accept()`,
+        // so a connection arriving between the drain and the end of `use` would be left open.
+        runCatching { server.close() }
         accepting.interrupt()
         held.forEach { runCatching { it.close() } }
       }
@@ -58,9 +59,9 @@ class McpProxyUnresponsivePortTest {
   fun `a port nothing is listening on is reported as free to wait on`() {
     // Closed before probing: a refused connection proves the port is available for a daemon, which
     // is the case that must keep waiting rather than fail fast.
-    val closedPort = unusedPortOutsideDeviceRange()
-
-    assertEquals(DaemonProbe.NO_ANSWER, McpProxy(port = closedPort).probeDaemon())
+    withRefusingPort { closedPort ->
+      assertEquals(DaemonProbe.NO_ANSWER, McpProxy(port = closedPort).probeDaemon())
+    }
   }
 
   /**
@@ -104,8 +105,17 @@ class McpProxyUnresponsivePortTest {
    * port, a held port accepts that POST, and it then goes quiet for the client's whole
    * `requestTimeoutMillis` — five minutes before the client's first response. The
    * `daemonStartupFailed` fast-fail cannot cover it, because that hangs off `ConnectException` and
-   * nothing here refuses the connection. Elapsed time is a fair assertion in this one: no test
-   * harness setting shortens it, only the pre-POST check does.
+   * nothing here refuses the connection.
+   *
+   * What discriminates is the envelope, not the clock: the held-port answer names this port and how
+   * to find its owner, which nothing on the POST path produces. The elapsed-time check below is a
+   * hang guard so a regression fails in a minute instead of parking for the client's full
+   * five-minute request timeout — it is not the assertion, and it is deliberately nowhere near
+   * either outcome.
+   *
+   * The wedged listener's accept count cannot stand in for it. The pre-POST check is itself a
+   * probe, so it opens one connection; removing it removes that connection and adds the POST's.
+   * Both come to one accept.
    */
   @Test
   fun `a held port answers the first request instead of posting into it`() {
@@ -119,7 +129,10 @@ class McpProxyUnresponsivePortTest {
       val response = proxy.forwardRequest("""{"jsonrpc":"2.0","id":7,"method":"tools/list"}""") { logs += it }
       val elapsedMs = System.currentTimeMillis() - startedAt
 
-      assertTrue(elapsedMs < 30_000, "posting into a held port takes 5 minutes; took ${elapsedMs}ms")
+      assertTrue(
+        elapsedMs < HANG_GUARD_MS,
+        "posting into a held port parks for the full request timeout; took ${elapsedMs}ms",
+      )
       val body = response ?: error("a request (not a notification) must get a response")
       assertTrue(body.contains("\"id\":7"), "the client's id has to come back; got: $body")
       assertTrue(body.contains("-32000"), "expected a JSON-RPC error envelope; got: $body")
@@ -137,22 +150,23 @@ class McpProxyUnresponsivePortTest {
   fun `the held verdict is dropped once the port is free again`() {
     // Nothing is listening, so this stands in for "the user killed the wedged process". Short retry
     // budget so the post-recovery path (which now legitimately fails to connect) returns promptly.
-    val freedPort = unusedPortOutsideDeviceRange()
-    val proxy = McpProxy(port = freedPort, retryIntervalMs = 10, maxRetryMs = 100)
-    proxy.daemonPortHeldUnresponsive.set(true)
-    val logs = mutableListOf<String>()
+    withRefusingPort { freedPort ->
+      val proxy = McpProxy(port = freedPort, retryIntervalMs = 10, maxRetryMs = 100)
+      proxy.daemonPortHeldUnresponsive.set(true)
+      val logs = mutableListOf<String>()
 
-    proxy.forwardRequest("""{"jsonrpc":"2.0","id":9,"method":"tools/list"}""") { logs += it }
+      proxy.forwardRequest("""{"jsonrpc":"2.0","id":9,"method":"tools/list"}""") { logs += it }
 
-    assertEquals(
-      false,
-      proxy.daemonPortHeldUnresponsive.get(),
-      "a freed port must clear the verdict, or the session never recovers",
-    )
-    assertTrue(
-      logs.any { it.contains(McpProxy.LOG_PORT_NO_LONGER_HELD) },
-      "the recovery should be stated; got: $logs",
-    )
+      assertEquals(
+        false,
+        proxy.daemonPortHeldUnresponsive.get(),
+        "a freed port must clear the verdict, or the session never recovers",
+      )
+      assertTrue(
+        logs.any { it.contains(McpProxy.LOG_PORT_NO_LONGER_HELD) },
+        "the recovery should be stated; got: $logs",
+      )
+    }
   }
 
   @Test
@@ -166,25 +180,28 @@ class McpProxyUnresponsivePortTest {
     // Asserted on the fast-fail log line rather than on the flag: the ConnectException handler
     // CASes the flag to false on its way out, so both the fixed and the broken code leave it
     // false, and an assertion on the flag alone passes either way.
-    val freedPort = unusedPortOutsideDeviceRange()
-    val proxy = McpProxy(port = freedPort, retryIntervalMs = 10, maxRetryMs = 100)
-    proxy.daemonPortHeldUnresponsive.set(true)
-    proxy.daemonStartupFailed.set(true)
-    val logs = mutableListOf<String>()
+    withRefusingPort { freedPort ->
+      val proxy = McpProxy(port = freedPort, retryIntervalMs = 10, maxRetryMs = 100)
+      proxy.daemonPortHeldUnresponsive.set(true)
+      proxy.daemonStartupFailed.set(true)
+      val logs = mutableListOf<String>()
 
-    proxy.forwardRequest("""{"jsonrpc":"2.0","id":9,"method":"tools/list"}""") { logs += it }
+      proxy.forwardRequest("""{"jsonrpc":"2.0","id":9,"method":"tools/list"}""") { logs += it }
 
-    assertTrue(
-      logs.none { it.contains(McpProxy.LOG_NO_DAEMON_CAN_ANSWER) },
-      "a port that was just observed free must not short-circuit on the old startup failure; got: $logs",
-    )
+      assertTrue(
+        logs.none { it.contains(McpProxy.LOG_NO_DAEMON_CAN_ANSWER) },
+        "a port that was just observed free must not short-circuit on the old startup failure; got: $logs",
+      )
+    }
   }
 
   @Test
   fun `a reachable daemon still proceeds`() {
     // The control: the fast-fail must key on the held verdict, not on any probe that isn't
     // REACHABLE, or every cold start becomes an immediate failure.
-    val proxy = McpProxy(port = unusedPortOutsideDeviceRange(), daemonProbeOverride = { DaemonProbe.REACHABLE })
+    val proxy = openPortInCandidateBand().use {
+      McpProxy(port = it.localPort, daemonProbeOverride = { DaemonProbe.REACHABLE })
+    }
 
     assertTrue(proxy.waitForDaemon {})
     assertEquals(false, proxy.daemonStartupFailed.get())
@@ -203,7 +220,7 @@ class McpProxyUnresponsivePortTest {
   fun `a terminal startup refusal short-circuits transport errors that are not connection refusals`() {
     // Accepts and immediately hangs up, so the POST fails fast with something other than
     // ConnectException — the shape of a wedged port, without a five-minute request timeout.
-    ServerSocket(unusedPortOutsideDeviceRange()).use { server ->
+    openPortInCandidateBand().use { server ->
       Thread {
         runCatching { while (true) server.accept().close() }
       }.apply { isDaemon = true; start() }
@@ -241,13 +258,38 @@ class McpProxyUnresponsivePortTest {
     // window being compared against is `maxRetryMs`, a value this test passes INTO the code under
     // test, and nothing is listening, so every attempt refuses immediately. Only the retry loop can
     // consume the window.
-    val closedPort = unusedPortOutsideDeviceRange()
-    val proxy = McpProxy(port = closedPort, retryIntervalMs = 10, maxRetryMs = 8_000)
+    //
+    // The gap is deliberately wide. The honest answer takes milliseconds and the broken one takes
+    // the full window, so the threshold can sit far from both — a third of the window leaves a
+    // loaded CI agent ten seconds to do nothing in, which is what keeps this from becoming a bet on
+    // how busy the machine is.
+    withRefusingPort { closedPort ->
+      val proxy = McpProxy(port = closedPort, retryIntervalMs = 10, maxRetryMs = RETRY_WINDOW_MS)
 
-    val startedAt = System.currentTimeMillis()
-    proxy.forwardRequest("""{"jsonrpc":"2.0","id":13,"method":"tools/list"}""") {}
-    val elapsedMs = System.currentTimeMillis() - startedAt
+      val startedAt = System.currentTimeMillis()
+      proxy.forwardRequest("""{"jsonrpc":"2.0","id":13,"method":"tools/list"}""") {}
+      val elapsedMs = System.currentTimeMillis() - startedAt
 
-    assertTrue(elapsedMs < 4_000, "a refused start must end the loop; spun for ${elapsedMs}ms")
+      assertTrue(
+        elapsedMs < RETRY_WINDOW_MS / 3,
+        "a refused start must end the loop, not spin out the ${RETRY_WINDOW_MS}ms window; " +
+          "spun for ${elapsedMs}ms",
+      )
+    }
+  }
+
+  private companion object {
+    /**
+     * Long enough that the broken behaviour is unmistakable and the threshold can sit nowhere near
+     * either outcome. A broken loop pays this in full; a fixed one returns at once.
+     */
+    const val RETRY_WINDOW_MS = 30_000L
+
+    /**
+     * Containment, not a budget: the behaviour it guards against parks for the client's whole
+     * five-minute request timeout, so anything far short of that turns a five-minute park into a
+     * prompt red without putting a stopwatch on a loaded CI agent.
+     */
+    const val HANG_GUARD_MS = 60_000L
   }
 }

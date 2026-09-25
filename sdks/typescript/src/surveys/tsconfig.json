@@ -1,0 +1,25 @@
+{
+  // Typecheck from the SDK root: node_modules/.bin/tsc --noEmit -p src/surveys/tsconfig.json
+  //
+  // Separate from the SDK's root tsconfig on purpose. Surveys run on a host with bun and read
+  // session directories, so they need the node types; the rest of the SDK must compile without
+  // them because it also runs inside the in-process QuickJS runtime. Node types are borrowed from
+  // the SDK's own devDependencies, so this adds no install step the SDK check did not have.
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2022"],
+    "types": ["node"],
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "noEmit": true
+  },
+  // `*.ts` is the top level ONLY: each subdirectory is spelled out, or nothing checks it — a
+  // renamed field in `snapshot/` would reach snapshot readers with CI green.
+  "include": ["*.ts", "snapshot/*.ts", "../generated/trailrunner-dtos.ts"],
+  "exclude": ["**/*.test.ts"]
+}

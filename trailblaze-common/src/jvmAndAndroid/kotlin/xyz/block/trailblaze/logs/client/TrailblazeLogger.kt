@@ -26,9 +26,9 @@ import xyz.block.trailblaze.logs.client.TrailblazeLog.TrailblazeLlmRequestLog.Ac
 import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.logs.model.TrailblazeLlmMessage
 import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toTrailblazeToolDescriptor
+import xyz.block.trailblaze.toolcalls.TrailblazeToolDescriptor
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.yaml.PromptStep
-import java.security.MessageDigest
 
 /**
  * Stateless logger that emits log events for a specific session.
@@ -61,6 +61,16 @@ class TrailblazeLogger(
   private val logEmitter: LogEmitter,
   private val screenStateLogger: ScreenStateLogger,
 ) {
+
+  /**
+   * Writes each session's tool descriptors once instead of once per LLM request.
+   *
+   * The MCP sampling producer keeps its own instance of the same type — deliberately, since the
+   * two write through different sinks. Each therefore emits its own copy of a catalog they both
+   * see, which costs a duplicate log and nothing else: readers key catalogs by id, and the id is
+   * a content hash, so both copies resolve identically.
+   */
+  private val toolCatalogEmitter = TrailblazeToolCatalogEmitter()
 
   /**
    * Emits a log event for the given session.
@@ -262,6 +272,8 @@ class TrailblazeLogger(
     val toolOptions = toolDescriptors
       .map { it.toTrailblazeToolDescriptor() }
       .sortedBy { it.name }
+    // Sorted above, so the id tracks the tool SET and not the registry's enumeration order.
+    val toolCatalogId = emitToolCatalogIfNew(session, toolOptions, startTime)
     val endTime = Clock.System.now()
 
     // Use provided token usage, or extract from response metaInfo
@@ -363,11 +375,44 @@ class TrailblazeLogger(
         deviceWidth = stepStatus.currentScreenState.deviceWidth,
         deviceHeight = stepStatus.currentScreenState.deviceHeight,
         session = session.sessionId,
-        toolOptions = toolOptions,
+        // `toolOptions` deliberately left empty — the descriptors live in the catalog log this
+        // request points at. Populating both would reintroduce the per-request copy the split removed.
+        toolCatalogId = toolCatalogId,
+        toolNames = toolOptions.map { it.name },
         requestContext = requestContext,
         llmRequestLabel = llmRequestLabel,
       ),
     )
+  }
+
+  /**
+   * Emits a [TrailblazeLog.TrailblazeToolCatalogLog] the first time [session] uses [toolOptions],
+   * and returns the catalog's id either way.
+   *
+   * Emitted BEFORE the request log that references it, so the catalog always has a lower log
+   * number than its first consumer and a reader streaming the session in order never meets an id
+   * it cannot resolve.
+   */
+  private fun emitToolCatalogIfNew(
+    session: TrailblazeSession,
+    toolOptions: List<TrailblazeToolDescriptor>,
+    timestamp: Instant,
+  ): String? = toolCatalogEmitter.emitIfNew(
+    sessionId = session.sessionId,
+    toolOptions = toolOptions,
+    timestamp = timestamp,
+  ) { catalogLog -> log(session, catalogLog) }
+
+  /**
+   * Tells this logger a catalog it emitted did not reach the place its requests will, so the next
+   * request offering that toolset writes it again.
+   *
+   * A [LogEmitter] reports nothing back, so the sink has to say so: without this, one failed
+   * upload leaves every later request in the session naming a catalog the host never received.
+   * Call it on the emitting thread — see [TrailblazeToolCatalogEmitter.forget].
+   */
+  fun toolCatalogNotDelivered(catalogLog: TrailblazeLog.TrailblazeToolCatalogLog) {
+    toolCatalogEmitter.forget(catalogLog.session, catalogLog.toolCatalogId)
   }
 
   /**
@@ -712,16 +757,6 @@ class TrailblazeLogger(
 
   companion object {
     /**
-     * `NAME_MAX` per POSIX / APFS / ext4 — the per-component filename byte limit.
-     * Screenshot filenames at or below this length round-trip cleanly on host (macOS/Linux)
-     * and on Android external storage; longer names fail with ENAMETOOLONG on host
-     * filesystems, and on Android the MediaStore layer silently renames the on-disk file
-     * (breaking the 1:1 mapping between the `screenshotFile` field in the log JSON and
-     * the actual file on disk).
-     */
-    private const val FILENAME_NAME_MAX = 255
-
-    /**
      * Minimum bytes any real image carries — the magic-number header [ImageFormatDetector]
      * keys on. A byte array shorter than this can't be a valid PNG/JPEG/WEBP, so we treat it
      * as a failed capture rather than writing a 0-byte file.
@@ -732,10 +767,8 @@ class TrailblazeLogger(
      * Builds the screenshot filename for a session at a given timestamp.
      *
      * Default form is `<sessionId>_<epochMs>.<ext>` — preserves all session context in
-     * the filename. If that would exceed [FILENAME_NAME_MAX], fall back to
-     * `<sessionHash8>_<epochMs>.<ext>`, which is bounded well under the limit. The full
-     * session id stays untruncated in the log JSON's `session` field, so consumers that
-     * key off the session id are unaffected — only the on-disk filename shortens.
+     * the filename — falling back to a hashed session prefix when that would not fit. See
+     * [BoundedLogFileName], which the on-device log names share.
      *
      * Shared with [xyz.block.trailblaze.report.utils.LogsRepo.saveScreenshotBytes] (and
      * its MCP/LLM-sampling callers) so every code path that materializes a screenshot
@@ -745,15 +778,7 @@ class TrailblazeLogger(
       sessionId: String,
       epochMs: Long,
       ext: String,
-    ): String {
-      val candidate = "${sessionId}_$epochMs.$ext"
-      if (candidate.toByteArray(Charsets.UTF_8).size <= FILENAME_NAME_MAX) return candidate
-      val hash = MessageDigest.getInstance("SHA-256")
-        .digest(sessionId.toByteArray(Charsets.UTF_8))
-        .joinToString("") { "%02x".format(it) }
-        .take(8)
-      return "${hash}_$epochMs.$ext"
-    }
+    ): String = BoundedLogFileName.of(sessionId = sessionId, suffix = "_$epochMs.$ext")
 
     /**
      * Creates a logger with no-op emitter (for testing).

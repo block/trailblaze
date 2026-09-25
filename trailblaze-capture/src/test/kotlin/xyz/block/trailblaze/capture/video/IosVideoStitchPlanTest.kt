@@ -61,24 +61,6 @@ class IosVideoStitchPlanTest {
   }
 
   @Test
-  fun `ffconcat script emits file and duration directives and escapes single quotes`() {
-    val plan = IosVideoStitchPlan.plan(
-      listOf(
-        IosVideoStitchPlan.VideoSegment(File("/tmp/a b's.mp4"), 0, 2_000),
-        IosVideoStitchPlan.VideoSegment(File("/tmp/second.mp4"), 2_000, 5_000),
-      ),
-    )!!
-    val script = IosVideoStitchPlan.toFfconcatScript(plan)
-    assertTrue(script.startsWith("ffconcat version 1.0"))
-    // First entry carries a duration (2.0s span from 0..2000); path's single quote escaped.
-    assertTrue(script.contains("file '/tmp/a b'\\''s.mp4'"), "expected escaped path, got:\n$script")
-    assertTrue(script.contains("duration 2.000"))
-    // Final entry has no duration directive.
-    assertTrue(script.contains("file '/tmp/second.mp4'"))
-    assertFalse(script.trimEnd().endsWith("duration"), script)
-  }
-
-  @Test
   fun `clock wobble producing an equal or out-of-order next-start floors duration at 1ms`() {
     // Pathological: two segments whose starts are equal (or the sort keeps them adjacent). The
     // presented duration must never go negative, and must not be 0 either — a 0.000 duration

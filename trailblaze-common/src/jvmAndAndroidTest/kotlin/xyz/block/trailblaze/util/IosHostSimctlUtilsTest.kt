@@ -1,8 +1,12 @@
 package xyz.block.trailblaze.util
 
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -12,6 +16,65 @@ import kotlin.test.assertTrue
  * (These cases moved here from `IosHostUtilsTest` when the parser was promoted to trailblaze-common.)
  */
 class IosHostSimctlUtilsTest {
+
+  @Test
+  fun `clipboard command preserves Unicode and trailing whitespace without stderr contamination`() {
+    val text = "usuario@example.com 日本語\n\n"
+    assertEquals(
+      text,
+      IosHostSimctlUtils.runPasteboardCommand(
+        listOf("/bin/sh", "-c", "cat; printf warning >&2"),
+        stdin = text,
+      ),
+    )
+  }
+
+  @Test
+  fun `clipboard timeout releases the lock even when stdin is blocked`() {
+    lateinit var process: Process
+    assertFailsWith<IllegalStateException> {
+      IosHostSimctlUtils.runPasteboardCommand(
+        listOf("/bin/sh", "-c", "exec sleep 30"),
+        stdin = "x".repeat(1024 * 1024),
+        timeoutMillis = 100,
+        startProcess = { it.start().also { started -> process = started } },
+      )
+    }
+    assertTrue(!process.isAlive, "Timed-out clipboard process must exit before the lock is released")
+    val executor = Executors.newSingleThreadExecutor()
+    try {
+      assertEquals("available", executor.submit<String> {
+        IosHostSimctlUtils.withPasteboardLock(1_000, { "unavailable" }, { "available" })
+      }.get(60, TimeUnit.SECONDS))
+    } finally {
+      executor.shutdownNow()
+    }
+  }
+
+  @Test
+  fun `timed pasteboard lock returns timeout instead of waiting for an unbounded holder`() {
+    val held = CountDownLatch(1)
+    val release = CountDownLatch(1)
+    val executor = Executors.newSingleThreadExecutor()
+    val holder = executor.submit {
+      IosHostSimctlUtils.withPasteboardLock {
+        held.countDown()
+        release.await(5, TimeUnit.SECONDS)
+      }
+    }
+
+    assertTrue(held.await(5, TimeUnit.SECONDS))
+    val result = IosHostSimctlUtils.withPasteboardLock(
+      timeoutMillis = 50,
+      onTimeout = { "timed-out" },
+      action = { "acquired" },
+    )
+    release.countDown()
+    holder.get(5, TimeUnit.SECONDS)
+    executor.shutdownNow()
+
+    assertEquals("timed-out", result)
+  }
 
   @Test
   fun `parseInstalledAppIdsFromListApps extracts bundle IDs from typical listapps output`() {

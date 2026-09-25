@@ -79,6 +79,22 @@ class CliMcpClientTimeoutTest {
   }
 
   @Test
+  fun `a ceiling lower than half the budget is the term that binds`() {
+    // The `ceilingMs` parameter exists for a hop with a shorter connect ceiling than this client's
+    // -- the MCP proxy passes its own, because it only ever dials localhost. Every other case here
+    // has the halving as the smaller term, so without this one the parameter could be ignored
+    // outright and they would all still pass.
+    val ceiling = 1_500L
+    val budget = 60_000L
+
+    assertEquals(ceiling, CliMcpClient.connectTimeoutMsFor(budget, ceilingMs = ceiling))
+    assertTrue(
+      ceiling < budget / 2,
+      "this case only tests the ceiling while it is the smaller term",
+    )
+  }
+
+  @Test
   fun `the client installs the clamped connect budget, not the fixed constant`() {
     // Pins the wiring: a client built with a 1s override must not be left holding the 10s
     // connect timeout, or an unreachable daemon reports itself busy.

@@ -427,7 +427,7 @@ category prefixes, not by layering transforms at registration.
   that would collide with reserved prefixes or in-house tools: **fork
   or wrap** the server so the advertised names match Decision 014's
   categories. Don't plug a server with collision-prone names into the
-  registry and hope for the best. Trailblaze is curatorial about tool
+  registry and hope for the best. Trailblaze is deliberate about tool
   sources, not automatic.
 - Renaming a tool is a breaking change for recordings. Decision 014's
   versioning (`_v2` / `_v3` suffix) is the documented path — version

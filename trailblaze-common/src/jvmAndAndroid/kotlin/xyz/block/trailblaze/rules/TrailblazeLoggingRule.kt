@@ -6,6 +6,7 @@ import kotlinx.datetime.Clock
 import org.junit.runner.Description
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.http.TrailblazeHttpClientFactory
+import xyz.block.trailblaze.http.shouldBypassProxyForLogServer
 import xyz.block.trailblaze.logs.client.LogEmitter
 import xyz.block.trailblaze.logs.client.ScreenStateLogger
 import xyz.block.trailblaze.logs.client.TrailblazeLog
@@ -17,6 +18,7 @@ import xyz.block.trailblaze.logs.client.TrailblazeSession
 import xyz.block.trailblaze.logs.client.TrailblazeSessionManager
 import xyz.block.trailblaze.logs.client.withClockMetadata
 import xyz.block.trailblaze.logs.model.SessionId
+import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.logs.model.TrailblazeClockDomain
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.devices.TrailblazeDevicePort
@@ -117,11 +119,76 @@ abstract class TrailblazeLoggingRule(
     isSuccess: Boolean,
     exception: Throwable? = null,
   ) {
+    val ending = liveStateFor(startedSession)
+    exportTracesBeforeEnd(ending.sessionId)
     sessionManager.endSession(
-      session = liveStateFor(startedSession),
+      session = ending,
       isSuccess = isSuccess,
       exception = exception,
     )
+  }
+
+  /**
+   * Ends [startedSession] with an explicit status, exporting the trace first.
+   *
+   * The same wrapper as [endSession] above, for the terminal paths that name their own status
+   * rather than deriving it from a success flag — a run cancelled by a timeout is the one on
+   * device. Without this overload those paths could only reach [sessionManager] directly, which is
+   * how a cancelled run's report came to have no tracer spans at all.
+   */
+  fun endSession(
+    startedSession: TrailblazeSession,
+    endedStatus: SessionStatus.Ended,
+  ) {
+    val ending = liveStateFor(startedSession)
+    exportTracesBeforeEnd(ending.sessionId)
+    sessionManager.endSession(
+      session = ending,
+      endedStatus = endedStatus,
+    )
+  }
+
+  /** The session this rule has already exported a trace for. See [exportTracesBeforeEnd]. */
+  @Volatile
+  private var tracesExportedFor: SessionId? = null
+
+  /**
+   * Writes `trace.json` while the session is still open, so it is on disk before the terminal
+   * status log this precedes.
+   *
+   * The Ended log is what every follower reads as "this run is complete" — the daemon closes its
+   * live stream on it and the live report rebuilds its payload on it. Exporting afterwards means a
+   * follower reads the session's trace while the file is still missing, treats the absence as final
+   * and never looks again, so a run followed to completion has no tracer spans in its report at all.
+   *
+   * **Exports at most once per session**, because the exporter *drains* the tracer: a second export
+   * carries only what was recorded since the first. The host writes trace.json by merging, so
+   * appending a second batch is safe there, but the two Android writers replace the file — so a run
+   * that ends through both of this rule's entry points ([endSession] and [afterTestExecution], which
+   * [InProcessStandaloneServerTest] does) would end up with a file holding only its teardown spans.
+   * The cost of exporting once is the handful of spans recorded after the session ends; the cost of
+   * exporting twice is the whole run's trace, on exactly the on-device path that can least afford it.
+   *
+   * Runners with their own export outside this rule are unaffected — the host runner's `finally`
+   * still merges in whatever its teardown recorded.
+   *
+   * Failure is contained: the terminal status has to be emitted even when the trace cannot be
+   * written, or a run whose export throws never reports an outcome at all and hangs in the session
+   * list as still running.
+   *
+   * A suppressed run reads nothing and touches nothing. The recorder is process-wide and a daemon
+   * runs trails concurrently, so draining here to keep a suppressed run's spans off the next
+   * session would take a *concurrent* run's buffered spans with them — the loss is total and
+   * silent, and it lands on the run that did ask for a trace. Nothing needs the drain either way:
+   * every start already clears the recorder when it is the only run recording, in
+   * [beforeTestExecution] on the JUnit path and in `HostRunTraceRecording.begin` on the host's.
+   */
+  private fun exportTracesBeforeEnd(sessionId: SessionId) {
+    if (tracesExportedFor == sessionId) return
+    tracesExportedFor = sessionId
+    if (noLogging) return
+    runCatching { exportTraces(sessionId) }
+      .onFailure { Console.log("Trace export before session end failed: ${it.message}") }
   }
 
   /**
@@ -191,7 +258,9 @@ abstract class TrailblazeLoggingRule(
 
       // Get session ID from current session
       val sessionId = session?.sessionId ?: SessionId("unknown")
-      runBlocking(Dispatchers.IO) {
+      // False only when the server was reachable and this log missed it: the log then sits on the
+      // device's disk while the logs around it reach the host.
+      val reachedServerIfUp = runBlocking(Dispatchers.IO) {
         if (isServerAvailable) {
           try {
             val sent = trailblazeLogServerClient.sendAgentLog(log)
@@ -206,13 +275,22 @@ abstract class TrailblazeLoggingRule(
               Console.log("Error while uploading agent log; falling back to disk")
               writeLogToDisk(sessionId, log)
             }
+            sent
           } catch (e: Exception) {
             Console.log("Failed to post agent log to server: ${e.message}")
             writeLogToDisk(sessionId, log)
+            false
           }
         } else {
           writeLogToDisk(sessionId, log)
+          true
         }
+      }
+      // A catalog is written once and referenced by every request after it, so one that missed the
+      // host must be written again rather than left for the rest of the session to point at.
+      // Outside runBlocking on purpose: the logger emitting this catalog holds a lock this takes.
+      if (!reachedServerIfUp && log is TrailblazeLog.TrailblazeToolCatalogLog) {
+        logger.toolCatalogNotDelivered(log)
       }
     }
   }
@@ -238,8 +316,13 @@ abstract class TrailblazeLoggingRule(
 
   val trailblazeLogServerClient by lazy {
     TrailblazeLogServerClient(
+      // A device-local log server is the host at the other end of an `adb reverse` (or the
+      // emulator's host loopback) — a control channel, never a destination the device's HTTP proxy
+      // is for, and a network-capture proxy must not be able to take it down. A remote
+      // `trailblaze.logsEndpoint` keeps the proxy: reaching it may be what the proxy is for.
       httpClient = TrailblazeHttpClientFactory.createInsecureTrustAllCertsHttpClient(
         timeoutInSeconds = 2,
+        bypassSystemProxy = shouldBypassProxyForLogServer(logsBaseUrl),
       ),
       baseUrl = logsBaseUrl,
       useBinaryTransport = useBinaryLogTransport,
@@ -248,24 +331,36 @@ abstract class TrailblazeLoggingRule(
 
   private val screenStateLogger by lazy {
     ServerScreenStateLogger(
-      isServerAvailable = isServerAvailable,
+      isServerAvailable = { isServerAvailable },
       trailblazeLogServerClient = trailblazeLogServerClient,
       writeScreenshotToDisk = writeScreenshotToDisk,
     )
   }
 
-  private val isServerAvailable by lazy {
-    if (noLogging) return@lazy false
-    val startTime = Clock.System.now()
-    val isRunning = runBlocking { trailblazeLogServerClient.isServerRunning() }
-    Console.log("isServerAvailable [$isRunning] took ${Clock.System.now() - startTime}ms")
-    if (!isRunning) {
-      Console.log(
-        "Log Server is not available at ${trailblazeLogServerClient.baseUrl}. Run with ./gradlew :trailblaze-server:run",
-      )
-    }
-    isRunning
+  /** How long a failed log-server ping is trusted before the next log asks again. Tests shorten it. */
+  protected open val logServerRetryAfterMs: Long = LogServerAvailability.DEFAULT_INITIAL_RETRY_AFTER_MS
+
+  private val logServerAvailability by lazy {
+    LogServerAvailability(
+      probe = { runBlocking { trailblazeLogServerClient.isServerRunning() } },
+      initialRetryAfterMs = logServerRetryAfterMs,
+      onProbe = { available, tookMs ->
+        Console.log("isServerAvailable [$available] took ${tookMs}ms")
+        if (!available) {
+          Console.log(
+            "Log Server is not available at ${trailblazeLogServerClient.baseUrl}. Run with ./gradlew :trailblaze-server:run",
+          )
+        }
+      },
+    )
   }
+
+  /**
+   * Re-evaluated on every log rather than fixed by the first ping: see [LogServerAvailability] for
+   * what one failed ping used to cost.
+   */
+  private val isServerAvailable: Boolean
+    get() = !noLogging && logServerAvailability.isAvailable()
 
   var description: Description? = null
     private set
@@ -303,6 +398,11 @@ abstract class TrailblazeLoggingRule(
       }
     }
 
+    // Write trace.json BEFORE the terminal status, through the same guarded helper the host paths
+    // use — so this path is equally protected from an export that throws, and a run that ends
+    // through both entry points exports once rather than draining twice. See exportTracesBeforeEnd.
+    exportTracesBeforeEnd(session?.sessionId ?: SessionId("unknown"))
+
     // End session if it exists
     session?.let { currentSession ->
       sessionManager.endSession(
@@ -312,7 +412,6 @@ abstract class TrailblazeLoggingRule(
       )
     }
 
-    exportTraces()
     session = null
   }
 
@@ -392,8 +491,8 @@ abstract class TrailblazeLoggingRule(
     }
   }
 
-  private fun exportTraces() {
-    val sessionId = session?.sessionId ?: SessionId("unknown")
+  private fun exportTraces(explicitSessionId: SessionId? = null) {
+    val sessionId = explicitSessionId ?: session?.sessionId ?: SessionId("unknown")
     runBlocking(Dispatchers.IO) {
       TrailblazeTraceExporter.exportAndSave(
         sessionId = sessionId,
@@ -407,14 +506,14 @@ abstract class TrailblazeLoggingRule(
 }
 
 private class ServerScreenStateLogger(
-  val isServerAvailable: Boolean,
+  val isServerAvailable: () -> Boolean,
   val trailblazeLogServerClient: TrailblazeLogServerClient,
   val writeScreenshotToDisk: ((screenshot: TrailblazeScreenStateLog) -> Unit) = { _ -> },
 ) : ScreenStateLogger {
   override fun logScreenState(screenState: TrailblazeScreenStateLog): String {
     // Send Log
     return runBlocking(Dispatchers.IO) {
-      if (isServerAvailable) {
+      if (isServerAvailable()) {
         try {
           val sent = trailblazeLogServerClient.sendScreenshot(
             screenshotFilename = screenState.fileName,

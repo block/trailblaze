@@ -11,6 +11,7 @@ import xyz.block.trailblaze.http.DynamicLlmClient
 import xyz.block.trailblaze.llm.TrailblazeReferrer
 import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.scripting.LaunchedScriptingRuntime
+import xyz.block.trailblaze.scripting.finishScriptingRuntimeCleanup
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.ui.TrailblazeDeviceManager
 import xyz.block.trailblaze.util.Console
@@ -128,23 +129,24 @@ internal suspend fun runIosSimulatorYaml(
       // would prevent `session.shutdown()` from running and leak the subprocess +
       // stderr-capture file handle.
       withContext(NonCancellable) {
-        subprocessRuntimes.forEach { it.shutdownAll() }
-        // Detach the iOS baguette stream (no-op unless TRAILBLAZE_IOS_STREAM_SCREENSHOT
-        // engaged) so the WebSocket + ffmpeg decoder don't outlive the session. The
-        // if-started guard keeps cleanup from constructing the lazy hostRunner — which
-        // deliberately throws on IOS_AXE and would otherwise fail every AXe run's cleanup.
-        hostTbRunner.closeStreamScreenshotSourceIfStarted()
-        // Let go of the device connection the classifiers fetched for themselves. Unconditional
-        // because it is this run's own hold on the shared iOS driver and nothing else can reach
-        // it — not even the MCP branch below, which deliberately keeps the driver alive by
-        // holding the OTHER one, registered as the device's active driver.
-        hostTbRunner.releaseConnectedDeviceIfOpened()
-      }
-      if (keepDriverAlive) {
-        Console.log("🔗 MCP referrer detected - keeping driver alive for device: ${trailblazeDeviceId.instanceId}")
-        deviceManager.clearCoroutineScopeForDevice(trailblazeDeviceId)
-      } else {
-        deviceManager.cancelSessionForDevice(trailblazeDeviceId)
+        finishScriptingRuntimeCleanup(subprocessRuntimes) {
+          // Detach the iOS baguette stream (no-op unless TRAILBLAZE_IOS_STREAM_SCREENSHOT
+          // engaged) so the WebSocket + ffmpeg decoder don't outlive the session. The
+          // if-started guard keeps cleanup from constructing the lazy hostRunner — which
+          // deliberately throws on IOS_AXE and would otherwise fail every AXe run's cleanup.
+          hostTbRunner.closeStreamScreenshotSourceIfStarted()
+          // Let go of the device connection the classifiers fetched for themselves. Unconditional
+          // because it is this run's own hold on the shared iOS driver and nothing else can reach
+          // it — not even the MCP branch below, which deliberately keeps the driver alive by
+          // holding the OTHER one, registered as the device's active driver.
+          hostTbRunner.releaseConnectedDeviceIfOpened()
+          if (keepDriverAlive) {
+            Console.log("🔗 MCP referrer detected - keeping driver alive for device: ${trailblazeDeviceId.instanceId}")
+            deviceManager.clearCoroutineScopeForDevice(trailblazeDeviceId)
+          } else {
+            deviceManager.cancelSessionForDevice(trailblazeDeviceId)
+          }
+        }
       }
     },
   ) { session ->

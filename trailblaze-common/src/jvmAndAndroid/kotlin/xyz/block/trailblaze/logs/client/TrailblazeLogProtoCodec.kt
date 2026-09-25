@@ -11,7 +11,7 @@ import xyz.block.trailblaze.ondevice.rpc.proto.OnDeviceRpcProtoCodec
 
 /** Keeps persisted log models unchanged while lifting large tree fields onto protobuf. */
 object TrailblazeLogProtoCodec {
-  private val wireJson by lazy { Json(TrailblazeJsonInstance) { prettyPrint = false } }
+  private val wireJson: Json get() = TrailblazeCompactJsonInstance
 
   fun TrailblazeLog.toProto(): AgentLogUpload {
     val trees = trees()

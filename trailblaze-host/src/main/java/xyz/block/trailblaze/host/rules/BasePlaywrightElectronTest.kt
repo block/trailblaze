@@ -119,7 +119,7 @@ class BasePlaywrightElectronTest(
     idlingConfig = idlingConfig,
     analyticsUrlPatterns = analyticsUrlPatterns,
     // Publish a screencast feed so the session-video recorder can attach — this is the only way
-    // Electron gets `video.mp4` at all (setRecordVideoDir can't attach to a CDP-connected context).
+    // Electron gets a session recording at all (setRecordVideoDir can't attach to a CDP-connected context).
     deviceId = webBrowserRecordingKey,
   )
 
@@ -426,7 +426,7 @@ class BasePlaywrightElectronTest(
   private var ownedCaptureSession: CaptureSession? = null
 
   /**
-   * Idempotently starts a [CaptureSession] that records `video.mp4` from the Electron renderer's
+   * Idempotently starts a [CaptureSession] that records the session video from the Electron renderer's
    * screencast into the per-trail session log dir. Subsequent calls within the same session are
    * no-ops. A start failure is logged and never tears the trail down.
    */

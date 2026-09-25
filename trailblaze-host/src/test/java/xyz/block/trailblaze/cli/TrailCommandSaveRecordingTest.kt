@@ -11,6 +11,7 @@ import kotlinx.datetime.Instant
 import kotlinx.serialization.encodeToString
 import xyz.block.trailblaze.agent.model.AgentTaskStatus
 import xyz.block.trailblaze.agent.model.AgentTaskStatusData
+import xyz.block.trailblaze.agent.model.PromptRecordingResult
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
@@ -20,10 +21,12 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
+import xyz.block.trailblaze.host.TrailblazeHostYamlRunner
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.logs.model.TaskId
 import xyz.block.trailblaze.logs.model.TrailblazeClockDomain
+import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.toLogPayload
 import xyz.block.trailblaze.recordings.TrailRecordings
 import xyz.block.trailblaze.yaml.DirectionStep
@@ -137,7 +140,7 @@ class TrailCommandSaveRecordingTest {
     }
     val trail = tempFolder.newFile("foo.trail.yaml")
 
-    assertFalse(cmd.shouldSaveRecording(trail, listOf("android-phone"), selectedDeviceConfiguration = null))
+    assertFalse(cmd.shouldSaveRecording(trail, listOf("android-phone"), selectedDeviceConfiguration = null, selfHealed = false))
   }
 
   @Test
@@ -150,7 +153,7 @@ class TrailCommandSaveRecordingTest {
     val trailDir = tempFolder.newFolder()
     val trail = File(trailDir, "source.trail.yaml").apply { writeText("") }
 
-    assertTrue(cmd.shouldSaveRecording(trail, listOf("android-phone"), selectedDeviceConfiguration = null))
+    assertTrue(cmd.shouldSaveRecording(trail, listOf("android-phone"), selectedDeviceConfiguration = null, selfHealed = false))
   }
 
   @Test
@@ -162,18 +165,42 @@ class TrailCommandSaveRecordingTest {
     val trail = File(trailDir, "android-phone.trail.yaml").apply { writeText("") }
     assertTrue(trail.exists())
 
-    assertFalse(cmd.shouldSaveRecording(trail, listOf("android-phone"), selectedDeviceConfiguration = null))
+    assertFalse(cmd.shouldSaveRecording(trail, listOf("android-phone"), selectedDeviceConfiguration = null, selfHealed = false))
   }
 
   @Test
-  fun `shouldSaveRecording is true when target exists and self-heal is on`() {
-    // Self-heal short-circuits the existence check — the AI may have produced a
-    // genuinely-different tool sequence worth committing over the stale source.
+  fun `shouldSaveRecording is true when target exists and a step self-healed`() {
+    // A heal short-circuits the existence check — the AI produced a different tool sequence for
+    // the step that failed, which is worth committing over the stale source.
     val cmd = TrailCommand().apply { selfHeal = true }
     val trailDir = tempFolder.newFolder()
     val trail = File(trailDir, "android-phone.trail.yaml").apply { writeText("") }
 
-    assertTrue(cmd.shouldSaveRecording(trail, listOf("android-phone"), selectedDeviceConfiguration = null))
+    assertTrue(cmd.shouldSaveRecording(trail, listOf("android-phone"), selectedDeviceConfiguration = null, selfHealed = true))
+  }
+
+  @Test
+  fun `shouldSaveRecording is false when self-heal is on but no step healed`() {
+    // Enabling --self-heal only lets a failing step recover; a run where nothing failed replayed
+    // exactly what is on disk, so there is nothing new to write.
+    val cmd = TrailCommand().apply { selfHeal = true }
+    val trailDir = tempFolder.newFolder()
+    val trail = File(trailDir, "android-phone.trail.yaml").apply { writeText("") }
+
+    assertFalse(cmd.shouldSaveRecording(trail, listOf("android-phone"), selectedDeviceConfiguration = null, selfHealed = false))
+  }
+
+  @Test
+  fun `shouldSaveRecording is true for an explicit AI re-drive of a recorded trail`() {
+    // --no-use-recorded-steps is how a user regenerates a stale recording, so its result is saved.
+    val cmd = TrailCommand().apply {
+      selfHeal = false
+      useRecordedSteps = false
+    }
+    val trailDir = tempFolder.newFolder()
+    val trail = File(trailDir, "android-phone.trail.yaml").apply { writeText("") }
+
+    assertTrue(cmd.shouldSaveRecording(trail, listOf("android-phone"), selectedDeviceConfiguration = null, selfHealed = false))
   }
 
   // ---------------------------------------------------------------------------
@@ -330,7 +357,7 @@ class TrailCommandSaveRecordingTest {
     val cmd = command()
     val dir = tempFolder.newFolder()
     File(dir, "blaze.yaml").writeText("- prompts:\n  - step: s\n")
-    assertTrue(cmd.shouldSaveRecording(dir, listOf("android"), selectedDeviceConfiguration = null))
+    assertTrue(cmd.shouldSaveRecording(dir, listOf("android"), selectedDeviceConfiguration = null, selfHealed = false))
   }
 
   @Test
@@ -338,7 +365,7 @@ class TrailCommandSaveRecordingTest {
     val cmd = command()
     val dir = tempFolder.newFolder()
     writeUnifiedWithAndroidSlot(dir)
-    assertFalse(cmd.shouldSaveRecording(dir, listOf("android"), selectedDeviceConfiguration = null))
+    assertFalse(cmd.shouldSaveRecording(dir, listOf("android"), selectedDeviceConfiguration = null, selfHealed = false))
   }
 
   @Test
@@ -347,30 +374,122 @@ class TrailCommandSaveRecordingTest {
     val cmd = command()
     val dir = tempFolder.newFolder()
     writeUnifiedWithAndroidSlot(dir)
-    assertTrue(cmd.shouldSaveRecording(dir, listOf("ios"), selectedDeviceConfiguration = null))
+    assertTrue(cmd.shouldSaveRecording(dir, listOf("ios"), selectedDeviceConfiguration = null, selfHealed = false))
   }
 
   @Test
-  fun `shouldSaveRecording is true for an already-recorded classifier when self-heal is on`() {
+  fun `shouldSaveRecording is true for an already-recorded classifier when a step self-healed`() {
     val cmd = command(selfHeal = true)
     val dir = tempFolder.newFolder()
     writeUnifiedWithAndroidSlot(dir)
-    assertTrue(cmd.shouldSaveRecording(dir, listOf("android"), selectedDeviceConfiguration = null))
+    assertTrue(cmd.shouldSaveRecording(dir, listOf("android"), selectedDeviceConfiguration = null, selfHealed = true))
+    assertFalse(
+      cmd.shouldSaveRecording(dir, listOf("android"), selectedDeviceConfiguration = null, selfHealed = false),
+      "self-heal enabled but unused leaves the file alone",
+    )
   }
 
   @Test
-  fun `shouldSaveRecording is false when this classifier is recorded only in the trailhead`() {
-    // The classifier's sole recording living in the trailhead (no step slot) still counts as
-    // "already recorded" — guards the trailheadHit branch of unifiedClassifierAlreadyRecorded.
+  fun `shouldSaveRecording counts a broader classifier's recording as this device's`() {
+    // A phone replays a trail recorded under the platform key `android:` — the executor resolves
+    // it through the classifier chain — so the phone is already recorded and a clean pass must not
+    // add an `android-phone` copy of the same leg.
     val cmd = command()
     val dir = tempFolder.newFolder()
-    val unified = UnifiedTrail(
-      config = UnifiedTrailConfig(id = "x", target = "y"),
-      trailhead = UnifiedTrailStep(step = "Sign in", recordings = mapOf("android" to listOf(tool("launch")))),
-      trail = listOf(UnifiedTrailStep(step = "Step 1")),
+    writeUnifiedWithAndroidSlot(dir)
+    assertFalse(cmd.shouldSaveRecording(dir, listOf("android", "phone"), selectedDeviceConfiguration = null, selfHealed = false))
+  }
+
+  @Test
+  fun `shouldSaveRecording is false when the trailhead is the only step that can be recorded`() {
+    // The trailhead's recording counts like any step's: with the only `trail:` step marked
+    // always-AI, the trailhead is everything there is to replay.
+    val cmd = command()
+    val dir = tempFolder.newFolder()
+    writeUnified(
+      dir,
+      UnifiedTrail(
+        config = UnifiedTrailConfig(id = "x", target = "y"),
+        trailhead = UnifiedTrailStep(step = "Sign in", recordings = mapOf("android" to listOf(tool("launch")))),
+        trail = listOf(UnifiedTrailStep(step = "Step 1", recordable = false)),
+      ),
     )
-    File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME).writeText(createTrailblazeYaml().encodeUnifiedTrailToString(unified))
-    assertFalse(cmd.shouldSaveRecording(dir, listOf("android"), selectedDeviceConfiguration = null))
+    assertFalse(cmd.shouldSaveRecording(dir, listOf("android"), selectedDeviceConfiguration = null, selfHealed = false))
+  }
+
+  @Test
+  fun `shouldSaveRecording is true for a hybrid trail whose step had its recording removed`() {
+    // Removing a broken step's recording and re-running is how that one step is re-recorded: the
+    // AI drives it without any heal being logged, and saving is the only way its recording lands.
+    val cmd = command()
+    val dir = tempFolder.newFolder()
+    writeUnified(
+      dir,
+      UnifiedTrail(
+        config = UnifiedTrailConfig(id = "x", target = "y"),
+        trail = listOf(
+          UnifiedTrailStep(step = "Open the cart", recordings = mapOf("android" to listOf(tool("a")))),
+          UnifiedTrailStep(step = "Check out"),
+        ),
+      ),
+    )
+    assertTrue(cmd.shouldSaveRecording(dir, listOf("android", "phone"), selectedDeviceConfiguration = null, selfHealed = false))
+  }
+
+  @Test
+  fun `shouldSaveRecording is false when the only unrecorded step is always-AI`() {
+    // A `recordable: false` step never gains a recording; counting it would rewrite the trail on
+    // every clean pass.
+    val cmd = command()
+    val dir = tempFolder.newFolder()
+    writeUnified(
+      dir,
+      UnifiedTrail(
+        config = UnifiedTrailConfig(id = "x", target = "y"),
+        trail = listOf(
+          UnifiedTrailStep(step = "Open the cart", recordings = mapOf("android" to listOf(tool("a")))),
+          UnifiedTrailStep(step = "Dismiss whatever popup shows", recordable = false),
+        ),
+      ),
+    )
+    assertFalse(cmd.shouldSaveRecording(dir, listOf("android", "phone"), selectedDeviceConfiguration = null, selfHealed = false))
+  }
+
+  @Test
+  fun `shouldSaveRecording is false for a trail whose every step is always-AI`() {
+    // Nothing in it can ever be recorded, so a save could only rewrite it on every pass.
+    val cmd = command()
+    val dir = tempFolder.newFolder()
+    writeUnified(
+      dir,
+      UnifiedTrail(
+        config = UnifiedTrailConfig(id = "x", target = "y"),
+        trail = listOf(
+          UnifiedTrailStep(step = "Dismiss whatever popup shows", recordable = false),
+          UnifiedTrailStep(step = "Explore the settings freely", recordable = false),
+        ),
+      ),
+    )
+    assertFalse(cmd.shouldSaveRecording(dir, listOf("android", "phone"), selectedDeviceConfiguration = null, selfHealed = false))
+  }
+
+  @Test
+  fun `shouldSaveRecording is true when a recordable verify has no recording`() {
+    // The AI's assertion for a verify records its tools like any step, so an unrecorded verify is
+    // a gap the save fills, not an exemption.
+    val cmd = command()
+    val dir = tempFolder.newFolder()
+    writeUnified(
+      dir,
+      UnifiedTrail(
+        config = UnifiedTrailConfig(id = "x", target = "y"),
+        trail = listOf(
+          UnifiedTrailStep(step = "Open the cart", recordings = mapOf("android" to listOf(tool("a")))),
+          UnifiedTrailStep(step = "The cart is empty", verify = true),
+        ),
+      ),
+    )
+    assertTrue(cmd.shouldSaveRecording(dir, listOf("android", "phone"), selectedDeviceConfiguration = null, selfHealed = false))
   }
 
   @Test
@@ -387,9 +506,199 @@ class TrailCommandSaveRecordingTest {
     val unified = createTrailblazeYaml().decodeUnifiedTrail(File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME).readText())
     assertEquals(listOf("tapCart"), unified.trail.single().recordings["android-phone"]?.map { it.name })
     assertFalse(
-      cmd.shouldSaveRecording(dir, listOf("android", "phone"), selectedDeviceConfiguration = null),
+      cmd.shouldSaveRecording(dir, listOf("android", "phone"), selectedDeviceConfiguration = null, selfHealed = false),
       "the same multi-segment device is now recorded, so a plain re-run skips",
     )
+  }
+
+  // ---------------------------------------------------------------------------
+  // saveRecordingAfterPass — a passing run rewrites the trail only when a step healed
+  // ---------------------------------------------------------------------------
+
+  @Test
+  fun `a clean replay on a phone leaves a trail recorded under android byte-identical`() {
+    // The reported case: a trail saved with its recordings under `android:` replays on an
+    // `android-phone` device with no heal. The pass must not fold an `android-phone` copy in.
+    val cmd = command(selfHeal = true)
+    val dir = tempFolder.newFolder()
+    val trail = File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME)
+    writeUnifiedWithSlot(trail, "android")
+    val before = trail.readBytes()
+    val logsDir = tempFolder.newFolder()
+    val sessionId = writePassedSession(logsDir, toolName = "a", healed = false)
+
+    cmd.saveRecordingAfterPass(
+      trail, sessionId, listOf("android", "phone"), selectedDeviceConfiguration = null, logsDir,
+      generateRecording = false,
+    )
+
+    assertTrue(before.contentEquals(trail.readBytes()), "trail file changed:\n${trail.readText()}")
+  }
+
+  @Test
+  fun `a replay where a step self-healed writes the healed recording`() {
+    val cmd = command(selfHeal = true)
+    val dir = tempFolder.newFolder()
+    val trail = File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME)
+    writeUnifiedWithSlot(trail, "android")
+    val logsDir = tempFolder.newFolder()
+    val sessionId = writePassedSession(logsDir, toolName = "tapCartHealed", healed = true)
+
+    cmd.saveRecordingAfterPass(
+      trail, sessionId, listOf("android", "phone"), selectedDeviceConfiguration = null, logsDir,
+      generateRecording = false,
+    )
+
+    val step = createTrailblazeYaml().decodeUnifiedTrail(trail.readText()).trail.single()
+    assertEquals(listOf("tapCartHealed"), step.recordings["android-phone"]?.map { it.name })
+    assertEquals(listOf("a"), step.recordings["android"]?.map { it.name }, "the replayed leg is preserved")
+  }
+
+  @Test
+  fun `sessionSelfHealed reads the heal from the session logs`() {
+    val cmd = command()
+    val logsDir = tempFolder.newFolder()
+    val clean = writePassedSession(logsDir, toolName = "a", healed = false)
+    val healed = writePassedSession(logsDir, toolName = "a", healed = true)
+
+    assertFalse(cmd.sessionSelfHealed(File(logsDir, clean.value)))
+    assertTrue(cmd.sessionSelfHealed(File(logsDir, healed.value)))
+    assertFalse(cmd.sessionSelfHealed(File(logsDir, "no-such-session")), "no logs is not a heal")
+  }
+
+  @Test
+  fun `a self-heal hand-off counts even when the session's end status lost the mark`() {
+    // The runner logs the hand-off before recovering; a dropped mark ends the session plain
+    // Succeeded. The hand-off log alone must still count, as it does for the report.
+    val cmd = command()
+    val logsDir = tempFolder.newFolder()
+    val sessionId = writePassedSession(logsDir, toolName = "a", healed = false)
+    writeLog(File(logsDir, sessionId.value), "003_SelfHealInvokedLog.json", selfHealInvokedLog(sessionId))
+
+    assertTrue(cmd.sessionSelfHealed(File(logsDir, sessionId.value)))
+  }
+
+  @Test
+  fun `sessionSelfHealed finds the heal mark whatever order the timestamps put it in`() {
+    // Raw log timestamps aren't clock-normalized across host and device, so the healed end status
+    // can carry an earlier timestamp than the Started log.
+    val cmd = command()
+    val sessionId = SessionId("skewed-clock")
+    val sessionDir = File(tempFolder.newFolder(), sessionId.value).apply { mkdirs() }
+    writeLog(sessionDir, "001_TrailblazeSessionStatusChangeLog.json", startedLog(sessionId, "android-phone").copy(timestamp = atSecond(9)))
+    writeLog(
+      sessionDir,
+      "004_TrailblazeSessionStatusChangeLog.json",
+      TrailblazeLog.TrailblazeSessionStatusChangeLog(
+        sessionStatus = SessionStatus.Ended.SucceededWithSelfHeal(durationMs = 1_000),
+        session = sessionId,
+        timestamp = atSecond(2),
+      ),
+    )
+
+    assertTrue(cmd.sessionSelfHealed(sessionDir))
+  }
+
+  @Test
+  fun `a healed pass keeps only successful attempts whatever order its logs arrive in`() {
+    val sessionId = SessionId("skewed-clock")
+    val ended = TrailblazeLog.TrailblazeSessionStatusChangeLog(
+      sessionStatus = SessionStatus.Ended.SucceededWithSelfHeal(durationMs = 1_000),
+      session = sessionId,
+      timestamp = atSecond(2),
+    )
+    val failed = ended.copy(sessionStatus = SessionStatus.Ended.FailedWithSelfHeal(durationMs = 1_000, exceptionMessage = "boom"))
+    val started = startedLog(sessionId, "android-phone").copy(timestamp = atSecond(9))
+    val heal = selfHealInvokedLog(sessionId)
+
+    assertTrue(TrailblazeHostYamlRunner.recordHealedStepsOnly(listOf(ended, heal, started)))
+    assertFalse(TrailblazeHostYamlRunner.recordHealedStepsOnly(listOf(failed, heal, started)), "a failed session keeps the attempt that broke")
+    val plainPass = ended.copy(sessionStatus = SessionStatus.Ended.Succeeded(durationMs = 1_000))
+    assertFalse(TrailblazeHostYamlRunner.recordHealedStepsOnly(listOf(plainPass, started)), "a pass with no heal records unchanged")
+  }
+
+  @Test
+  fun `a healed step records as one step carrying the healed tools`() {
+    // A heal runs the step twice under the same text: the recorded replay that failed, then the
+    // AI's retry. The recording must fold them into ONE step with the retry's tools — not keep the
+    // broken tool in the step's slot and append the retry as an extra duplicate step.
+    val cmd = command()
+    val logsDir = tempFolder.newFolder()
+    val sessionId = writeHealedAppsSession(logsDir, SessionStatus.Ended.SucceededWithSelfHeal(durationMs = 8_000))
+
+    cmd.generateRecordingForSession(sessionId, logsDir)
+
+    val unified = createTrailblazeYaml()
+      .decodeUnifiedTrail(File(logsDir, "${sessionId.value}/recording.trail.yaml").readText())
+    assertEquals(listOf("Open Apps"), unified.trail.map { it.step })
+    assertEquals(listOf("tapApps"), unified.trail.single().recordings["android-phone"]?.map { it.name })
+  }
+
+  @Test
+  fun `a healed step folds when only the end status records the heal`() {
+    // The save counts a heal-marked end status as a heal even with no hand-off log, so the
+    // recording must fold on that same evidence or the save writes back the broken attempt.
+    val cmd = command()
+    val logsDir = tempFolder.newFolder()
+    val sessionId = writeHealedAppsSession(
+      logsDir,
+      SessionStatus.Ended.SucceededWithSelfHeal(durationMs = 8_000),
+      logHandOff = false,
+    )
+    assertTrue(cmd.sessionSelfHealed(File(logsDir, sessionId.value)), "the save treats this run as healed")
+
+    cmd.generateRecordingForSession(sessionId, logsDir)
+
+    val unified = createTrailblazeYaml()
+      .decodeUnifiedTrail(File(logsDir, "${sessionId.value}/recording.trail.yaml").readText())
+    assertEquals(listOf("Open Apps"), unified.trail.map { it.step })
+    assertEquals(listOf("tapApps"), unified.trail.single().recordings["android-phone"]?.map { it.name })
+  }
+
+  @Test
+  fun `a healed step folds when the recording is written before the session ends`() {
+    // The Compose driver (and any run with sendSessionEndLog off) writes the recording on its
+    // success path before the end status exists, and the CLI keeps that first file — so it must
+    // already be folded.
+    val logsDir = tempFolder.newFolder()
+    val sessionId = writeHealedAppsSession(logsDir, endStatus = null)
+
+    TrailblazeHostYamlRunner.generateAndSaveRecording(sessionId, logsDir)
+
+    val unified = createTrailblazeYaml()
+      .decodeUnifiedTrail(File(logsDir, "${sessionId.value}/recording.trail.yaml").readText())
+    assertEquals(listOf("Open Apps"), unified.trail.map { it.step })
+    assertEquals(listOf("tapApps"), unified.trail.single().recordings["android-phone"]?.map { it.name })
+  }
+
+  @Test
+  fun `a failed session's recording keeps the attempt that broke`() {
+    val cmd = command()
+    val logsDir = tempFolder.newFolder()
+    val sessionId = writeHealedAppsSession(
+      logsDir,
+      SessionStatus.Ended.FailedWithSelfHeal(durationMs = 8_000, exceptionMessage = "still broken"),
+    )
+
+    cmd.generateRecordingForSession(sessionId, logsDir)
+
+    val unified = createTrailblazeYaml()
+      .decodeUnifiedTrail(File(logsDir, "${sessionId.value}/recording.trail.yaml").readText())
+    assertEquals(
+      listOf("tapAppzMissing"),
+      unified.trail.first().recordings["android-phone"]?.map { it.name },
+      "the failed attempt is still what the recording shows",
+    )
+  }
+
+  @Test
+  fun `the unchanged-trail message names the file and no misleading flag`() {
+    val trail = File(tempFolder.root, "trail.yaml")
+    val message = TrailCommand.skippedRecordingMessage(trail)
+
+    assertTrue(trail.absolutePath in message)
+    assertFalse("--self-heal" in message, "--self-heal doesn't force a write, so it isn't the fix")
+    assertFalse("--use-recorded-steps " in message, "the run already used recorded steps")
   }
 
   @Test
@@ -642,11 +951,11 @@ class TrailCommandSaveRecordingTest {
     writeUnifiedWithSlot(named, "android")
 
     assertFalse(
-      cmd.shouldSaveRecording(named, listOf("android"), selectedDeviceConfiguration = null),
+      cmd.shouldSaveRecording(named, listOf("android"), selectedDeviceConfiguration = null, selfHealed = false),
       "this classifier is already recorded in the named file, so a plain re-run skips",
     )
     assertTrue(
-      cmd.shouldSaveRecording(named, listOf("ios"), selectedDeviceConfiguration = null),
+      cmd.shouldSaveRecording(named, listOf("ios"), selectedDeviceConfiguration = null, selfHealed = false),
       "a classifier without a slot in the named file still saves",
     )
   }
@@ -741,11 +1050,11 @@ class TrailCommandSaveRecordingTest {
     )
 
     assertFalse(
-      cmd.shouldSaveRecording(dir, listOf("lab-a"), selectedDeviceConfiguration = "pos-pair"),
+      cmd.shouldSaveRecording(dir, listOf("lab-a"), selectedDeviceConfiguration = "pos-pair", selfHealed = false),
       "the pos-pair slot is already recorded, so a plain replay of the configuration skips the save",
     )
     assertTrue(
-      cmd.shouldSaveRecording(dir, listOf("lab-a"), selectedDeviceConfiguration = null),
+      cmd.shouldSaveRecording(dir, listOf("lab-a"), selectedDeviceConfiguration = null, selfHealed = false),
       "the launch device's own chain has no leg — the guard reads the configuration slot, not this",
     )
 
@@ -760,7 +1069,7 @@ class TrailCommandSaveRecordingTest {
       ),
     )
     assertTrue(
-      cmd.shouldSaveRecording(unrecorded, listOf("lab-a"), selectedDeviceConfiguration = "pos-pair"),
+      cmd.shouldSaveRecording(unrecorded, listOf("lab-a"), selectedDeviceConfiguration = "pos-pair", selfHealed = false),
       "the configuration has no leg yet, so first authoring saves",
     )
   }
@@ -1291,9 +1600,112 @@ class TrailCommandSaveRecordingTest {
 
   // --- fixtures ---
 
+  /**
+   * Writes a passed session under [logsDir]: the `recording.trail.yaml` intermediate the run
+   * generated (one step whose recording is [toolName], keyed by the phone's classifier chain) and
+   * its status logs, ending [SessionStatus.Ended.SucceededWithSelfHeal] plus a self-heal hand-off
+   * log when [healed]. Returns the session's id.
+   */
+  private fun writePassedSession(logsDir: File, toolName: String, healed: Boolean): SessionId {
+    val sessionId = SessionId("session-${toolName}-$healed-${System.nanoTime()}")
+    val sessionDir = File(logsDir, sessionId.value).apply { mkdirs() }
+    File(sessionDir, "recording.trail.yaml").writeText(
+      unifiedRecordingYaml(driver = "ANDROID_ONDEVICE_INSTRUMENTATION", toolName = toolName, classifier = "android-phone"),
+    )
+    writeLog(sessionDir, "001_TrailblazeSessionStatusChangeLog.json", startedLog(sessionId, "android-phone"))
+    if (healed) writeLog(sessionDir, "002_SelfHealInvokedLog.json", selfHealInvokedLog(sessionId))
+    writeLog(
+      sessionDir,
+      "004_TrailblazeSessionStatusChangeLog.json",
+      TrailblazeLog.TrailblazeSessionStatusChangeLog(
+        sessionStatus = if (healed) {
+          SessionStatus.Ended.SucceededWithSelfHeal(durationMs = 1_000)
+        } else {
+          SessionStatus.Ended.Succeeded(durationMs = 1_000)
+        },
+        session = sessionId,
+        timestamp = atSecond(3),
+      ),
+    )
+    return sessionId
+  }
+
+  /**
+   * Writes a session whose single step "Open Apps" failed its recorded replay (`tapAppzMissing`),
+   * self-healed, and succeeded on the AI's retry (`tapApps`), ending with [endStatus] (`null`: not
+   * ended yet). [logHandOff]
+   * false omits the self-heal hand-off log, leaving the end status as the only evidence of the heal.
+   */
+  private fun writeHealedAppsSession(
+    logsDir: File,
+    endStatus: SessionStatus.Ended?,
+    logHandOff: Boolean = true,
+  ): SessionId {
+    val sessionId = SessionId("healed-apps-${endStatus?.let { it::class.simpleName } ?: "unended"}")
+    val sessionDir = File(logsDir, sessionId.value).apply { mkdirs() }
+    val step = DirectionStep(step = "Open Apps")
+    writeLog(sessionDir, "000_TrailblazeSessionStatusChangeLog.json", startedLog(sessionId, "android-phone"))
+    writeLog(sessionDir, "001_ObjectiveStartLog.json", objectiveStartLog(sessionId, step, timestamp = atSecond(1)))
+    writeLog(
+      sessionDir,
+      "002_TrailblazeToolLog.json",
+      recordableToolLog(sessionId, "tapAppzMissing", timestamp = atSecond(2)).copy(successful = false),
+    )
+    writeLog(
+      sessionDir,
+      "003_ObjectiveCompleteLog.json",
+      TrailblazeLog.ObjectiveCompleteLog(
+        promptStep = step,
+        objectiveResult = AgentTaskStatus.Failure.ObjectiveFailed(
+          statusData = AgentTaskStatusData(
+            taskId = TaskId.generate(),
+            prompt = step.prompt,
+            callCount = 1,
+            taskStartTime = FIXED_NOW,
+            totalDurationMs = 100,
+          ),
+          llmExplanation = "element not found",
+        ),
+        session = sessionId,
+        timestamp = atSecond(3),
+      ),
+    )
+    if (logHandOff) {
+      writeLog(sessionDir, "004_SelfHealInvokedLog.json", selfHealInvokedLog(sessionId).copy(timestamp = atSecond(4)))
+    }
+    writeLog(sessionDir, "005_ObjectiveStartLog.json", objectiveStartLog(sessionId, step, timestamp = atSecond(5)))
+    writeLog(sessionDir, "006_TrailblazeToolLog.json", recordableToolLog(sessionId, "tapApps", timestamp = atSecond(6)))
+    writeLog(sessionDir, "007_ObjectiveCompleteLog.json", objectiveCompleteLog(sessionId, step, timestamp = atSecond(7)))
+    if (endStatus != null) {
+      writeLog(
+        sessionDir,
+        "008_TrailblazeSessionStatusChangeLog.json",
+        TrailblazeLog.TrailblazeSessionStatusChangeLog(sessionStatus = endStatus, session = sessionId, timestamp = atSecond(8)),
+      )
+    }
+    return sessionId
+  }
+
+  private fun selfHealInvokedLog(sessionId: SessionId) =
+    TrailblazeLog.SelfHealInvokedLog(
+      promptStep = DirectionStep(step = "Open the cart"),
+      session = sessionId,
+      timestamp = atSecond(1),
+      recordingResult = PromptRecordingResult.Failure(
+        successfulTools = emptyList(),
+        failedTool = tool("a"),
+        failureResult = TrailblazeToolResult.Error.ExceptionThrown("element not found"),
+      ),
+      stepIndex = 0,
+    )
+
   /** A command with self-heal pinned, so routing tests don't read ambient env/config. */
   private fun command(selfHeal: Boolean = false) = TrailCommand().apply {
     this.selfHeal = selfHeal
+  }
+
+  private fun writeUnified(dir: File, unified: UnifiedTrail) {
+    File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME).writeText(createTrailblazeYaml().encodeUnifiedTrailToString(unified))
   }
 
   /** Writes a unified `trail.yaml` in [dir] whose single step already carries an `android` slot. */

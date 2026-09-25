@@ -49,8 +49,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.ImageBitmap
-import kotlin.time.TimeSource
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -61,7 +59,6 @@ import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.logs.model.isInProgress
 import xyz.block.trailblaze.ui.composables.ScreenshotImage
 import xyz.block.trailblaze.ui.composables.SelectableText
-import xyz.block.trailblaze.ui.composables.createVideoFrameCache
 import xyz.block.trailblaze.ui.images.ImageLoader
 import xyz.block.trailblaze.ui.images.NetworkImageLoader
 import xyz.block.trailblaze.ui.openVideoInSystemPlayer
@@ -116,7 +113,7 @@ internal fun SessionTimelineView(
   val timelineState = rememberSessionTimelineState()
 
   // Constrain timeline to test execution window only (first log to last log).
-  // Video frames outside this window are not useful — they show pre/post-test idle time.
+  // Anything outside this window is pre/post-test idle time.
   val effectiveStartMs = sessionStartMs
   val effectiveEndMs = sessionEndMs
 
@@ -139,16 +136,12 @@ internal fun SessionTimelineView(
   // Screenshot slideshow state — declared early so scrub handler can stop it
   var isSlideshowPlaying by remember { mutableStateOf(false) }
 
-  // Set scrub handler — also sends seek requests to the video player when video is available.
-  // isSnappedToMarker is reset in onScrubStart (before onMarkerSnap can set it back),
-  // so we don't reset it here — that would undo marker snap taps.
+  // Set scrub handler. isSnappedToMarker is reset in onScrubStart (before onMarkerSnap can set it
+  // back), so we don't reset it here — that would undo marker snap taps.
   timelineState.onScrub = { ts ->
     timelineState.scrubTimestampMs = ts
     // Stop playback when user manually scrubs
     isSlideshowPlaying = false
-    if (videoMetadata != null) {
-      timelineState.isVideoPlaying = false
-    }
   }
 
   val currentTimestamp = timelineState.scrubTimestampMs ?: sessionStartMs
@@ -188,19 +181,7 @@ internal fun SessionTimelineView(
         .lastOrNull { it.timestamp.toEpochMilliseconds() <= currentTimestamp }
     }
 
-  // Find the active driver action near the current timestamp for video overlay.
-  // Show the annotation when the scrubber is within OVERLAY_WINDOW_MS after the action.
-  val activeDriverLog =
-    remember(currentTimestamp, logs) {
-      logs
-        .filterIsInstance<TrailblazeLog.AgentDriverLog>()
-        .lastOrNull { log ->
-          val logMs = log.timestamp.toEpochMilliseconds()
-          logMs <= currentTimestamp && (currentTimestamp - logMs) < log.durationMs
-        }
-    }
-
-  // Screenshot slideshow: auto-advance through screenshot timestamps when playing without video
+  // Screenshot slideshow: auto-advance through screenshot timestamps when playing
   LaunchedEffect(isSlideshowPlaying, screenshotItems) {
     if (!isSlideshowPlaying || screenshotItems.isEmpty()) return@LaunchedEffect
     val sorted = screenshotItems.sortedBy { it.timestamp }
@@ -241,19 +222,7 @@ internal fun SessionTimelineView(
         if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
         when (event.key) {
           Key.Spacebar -> {
-            if (videoMetadata != null) {
-              if (!timelineState.isVideoPlaying) {
-                val scrub = timelineState.scrubTimestampMs ?: effectiveStartMs
-                val videoEnd = videoMetadata.endTimestampMs ?: effectiveEndMs
-                if (scrub >= videoEnd - TimelineConstants.END_OF_VIDEO_THRESHOLD_MS) {
-                  timelineState.scrubTimestampMs = videoMetadata.startTimestampMs
-                }
-              }
-              timelineState.isVideoPlaying = !timelineState.isVideoPlaying
-              timelineState.isSnappedToMarker = false
-            } else {
-              isSlideshowPlaying = !isSlideshowPlaying
-            }
+            isSlideshowPlaying = !isSlideshowPlaying
             true
           }
           Key.DirectionRight -> {
@@ -261,7 +230,6 @@ internal fun SessionTimelineView(
             val now = currentTimestamp
             val next = eventMarkers.firstOrNull { it.timestampMs > now + TimelineConstants.MARKER_JUMP_OFFSET_MS }
             if (next != null) {
-              timelineState.isVideoPlaying = false
               isSlideshowPlaying = false
               timelineState.scrubTimestampMs = next.timestampMs
               timelineState.isSnappedToMarker = true
@@ -273,7 +241,6 @@ internal fun SessionTimelineView(
             val now = currentTimestamp
             val prev = eventMarkers.lastOrNull { it.timestampMs < now - TimelineConstants.MARKER_JUMP_OFFSET_MS }
             if (prev != null) {
-              timelineState.isVideoPlaying = false
               isSlideshowPlaying = false
               timelineState.scrubTimestampMs = prev.timestampMs
               timelineState.isSnappedToMarker = true
@@ -294,7 +261,7 @@ internal fun SessionTimelineView(
 
     // Main content: screenshot + details split panel
     Row(modifier = Modifier.fillMaxSize().padding(12.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-      // Left panel: video player (if available) or screenshot with action overlay
+      // Left panel: screenshot slideshow with action overlay
       Column(
         modifier =
           Modifier.weight(1f)
@@ -307,210 +274,87 @@ internal fun SessionTimelineView(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Top,
       ) {
-        if (videoMetadata != null) {
-          // Video frame mode: extract frames via ffmpeg, overlay driver actions
-          val videoDurationMs =
-            ((videoMetadata.endTimestampMs ?: effectiveEndMs) -
-              videoMetadata.startTimestampMs).coerceAtLeast(0L)
-
-          Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.fillMaxWidth(),
-          ) {
-            VideoPlaybackControls(
-              isPlaying = timelineState.isVideoPlaying,
-              onPlayPauseClick = {
-                if (!timelineState.isVideoPlaying) {
-                  val scrub = timelineState.scrubTimestampMs ?: effectiveStartMs
-                  val videoEnd = videoMetadata.endTimestampMs ?: effectiveEndMs
-                  // If at/past the end, restart from beginning
-                  if (scrub >= videoEnd - TimelineConstants.END_OF_VIDEO_THRESHOLD_MS) {
-                    timelineState.scrubTimestampMs = videoMetadata.startTimestampMs
-                  }
-                }
-                timelineState.isVideoPlaying = !timelineState.isVideoPlaying
-                timelineState.isSnappedToMarker = false
-              },
-              currentPositionMs =
-                (currentTimestamp - videoMetadata.startTimestampMs).coerceAtLeast(0L),
-              durationMs = videoDurationMs,
-            )
-            Spacer(modifier = Modifier.weight(1f))
-            val watchVideoPath = videoMetadata.videoFilePath
-              ?: videoMetadata.filePath.takeIf { videoMetadata.spriteInfo == null }
-            if (watchVideoPath != null) {
-              Text(
-                text = "Watch Video \u2197",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.primary,
-                fontWeight = FontWeight.Medium,
-                modifier = Modifier
-                  .padding(end = 4.dp)
-                  .background(
-                    MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f),
-                    RoundedCornerShape(4.dp),
-                  )
-                  .padding(horizontal = 8.dp, vertical = 4.dp)
-                  .clickable { openVideoInSystemPlayer(watchVideoPath) },
-              )
-            }
-          }
-
-          // Create frame cache for sprite sheet cropping during scrubbing/playback
-          val frameCache = remember(videoMetadata.filePath) {
-            createVideoFrameCache(videoMetadata.filePath, VIDEO_CACHE_FPS, videoMetadata.spriteInfo)
-          }
-          DisposableEffect(frameCache) { onDispose { frameCache.dispose() } }
-
-          val videoPositionMs =
-            (currentTimestamp - videoMetadata.startTimestampMs).coerceAtLeast(0L)
-          var currentFrame by remember { mutableStateOf<ImageBitmap?>(null) }
-
-          // Load frame from sprite sheet cache (async on WASM to load embedded frames on demand)
-          LaunchedEffect(videoPositionMs) {
-            val frame = frameCache.getFrameAsync(videoPositionMs)
-            if (frame != null) currentFrame = frame
-          }
-
-          // Auto-play: advance scrubber in real time at 20fps
-          LaunchedEffect(timelineState.isVideoPlaying) {
-            if (!timelineState.isVideoPlaying) return@LaunchedEffect
-            val videoEndAbsMs = videoMetadata.endTimestampMs ?: effectiveEndMs
-            val mark = TimeSource.Monotonic.markNow()
-            val playStartAbsMs = timelineState.scrubTimestampMs ?: effectiveStartMs
-
-            while (timelineState.isVideoPlaying) {
-              val elapsed = mark.elapsedNow().inWholeMilliseconds
-              val targetAbsMs = playStartAbsMs + elapsed
-              if (targetAbsMs >= videoEndAbsMs) {
-                timelineState.scrubTimestampMs = videoEndAbsMs
-                timelineState.isVideoPlaying = false
-                break
-              }
-              timelineState.scrubTimestampMs = targetAbsMs
-              delay(TimelineConstants.PLAYBACK_FRAME_INTERVAL_MS)
-            }
-          }
-
-          // Display: high-res screenshot only when user explicitly snapped to a marker
-          val showScreenshot =
-            timelineState.isSnappedToMarker &&
-              activeDriverLog != null &&
-              activeDriverLog.screenshotFile != null &&
-              !timelineState.isVideoPlaying
-
-          Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
-            if (showScreenshot) {
-              // High-res screenshot constrained to match video frame display area
-              BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-                val dw = activeDriverLog!!.deviceWidth.toFloat()
-                val dh = activeDriverLog.deviceHeight.toFloat()
-                val imageAspect =
-                  if (currentFrame != null) {
-                    currentFrame!!.width.toFloat() / currentFrame!!.height.toFloat()
-                  } else if (dh > 0f) dw / dh else 1f
-                val (renderedWidth, renderedHeight) = computeFitDimensions(imageAspect, maxWidth, maxHeight)
-                val clickCoords = activeDriverLog.action as? HasClickCoordinates
-                ScreenshotImage(
-                  sessionId = sessionId,
-                  screenshotFile = activeDriverLog.screenshotFile,
-                  deviceWidth = activeDriverLog.deviceWidth,
-                  deviceHeight = activeDriverLog.deviceHeight,
-                  clickX = clickCoords?.x,
-                  clickY = clickCoords?.y,
-                  action = activeDriverLog.action,
-                  modifier = Modifier
-                    .size(renderedWidth, renderedHeight)
-                    .align(Alignment.Center),
-                  imageLoader = imageLoader,
-                  onImageClick = { imageModel, dw2, dh2, cx, cy ->
-                    if (imageModel != null && onShowScreenshotModal != null) {
-                      onShowScreenshotModal(imageModel, dw2, dh2, cx, cy, activeDriverLog.action)
-                    }
-                  },
-                )
-              }
-            } else {
-              BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-                val frameAspect = when {
-                  activeDriverLog != null && activeDriverLog.deviceHeight > 0 ->
-                    activeDriverLog.deviceWidth.toFloat() / activeDriverLog.deviceHeight.toFloat()
-                  currentFrame != null ->
-                    currentFrame!!.width.toFloat() / currentFrame!!.height.toFloat()
-                  else -> DEFAULT_PHONE_ASPECT_RATIO
-                }
-                val (renderedWidth, renderedHeight) =
-                  computeFitDimensions(frameAspect, maxWidth, maxHeight)
-                VideoFrameWithOverlay(
-                  currentFrame = currentFrame,
-                  activeDriverLog = activeDriverLog,
-                  modifier = Modifier.size(renderedWidth, renderedHeight).align(Alignment.Center),
-                )
-              }
-            }
-          }
-
-        } else {
-          // Screenshot slideshow mode: play/pause + screenshot display
-          val elapsed = (currentTimestamp - sessionStartMs).coerceAtLeast(0L)
-          val totalDuration = (sessionEndMs - sessionStartMs).coerceAtLeast(0L)
+        // Screenshot slideshow: play/pause + screenshot display. The recording, when one exists,
+        // opens in the system player — Compose has no video decoder.
+        val elapsed = (currentTimestamp - sessionStartMs).coerceAtLeast(0L)
+        val totalDuration = (sessionEndMs - sessionStartMs).coerceAtLeast(0L)
+        Row(
+          verticalAlignment = Alignment.CenterVertically,
+          modifier = Modifier.fillMaxWidth(),
+        ) {
           VideoPlaybackControls(
             isPlaying = isSlideshowPlaying,
             onPlayPauseClick = { isSlideshowPlaying = !isSlideshowPlaying },
             currentPositionMs = elapsed,
             durationMs = totalDuration,
           )
-
-          if (closestScreenshot != null) {
-            val screenshotElapsed =
-              (closestScreenshot.timestamp.toEpochMilliseconds() - sessionStartMs).coerceAtLeast(0L)
-            SelectableText(
-              text = "${closestScreenshot.label} @ ${formatDuration(screenshotElapsed)}",
-              style = MaterialTheme.typography.labelMedium,
-              fontWeight = FontWeight.Medium,
-              modifier = Modifier.padding(bottom = 4.dp),
-            )
-
-            ScreenshotImage(
-              sessionId = sessionId,
-              screenshotFile = closestScreenshot.screenshotFile,
-              deviceWidth = closestScreenshot.deviceWidth,
-              deviceHeight = closestScreenshot.deviceHeight,
-              clickX = closestScreenshot.clickX,
-              clickY = closestScreenshot.clickY,
-              action = closestScreenshot.action,
-              modifier = Modifier.fillMaxWidth(),
-              imageLoader = imageLoader,
-              onImageClick = { imageModel, dw, dh, cx, cy ->
-                if (imageModel != null && onShowScreenshotModal != null) {
-                  onShowScreenshotModal(
-                    imageModel,
-                    dw,
-                    dh,
-                    cx,
-                    cy,
-                    closestScreenshot.action,
-                  )
-                }
-              },
-            )
-
-            closestScreenshot.toolCallName?.let { toolName ->
-              Spacer(modifier = Modifier.height(4.dp))
-              SelectableText(
-                text = toolName,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.primary,
-                fontWeight = FontWeight.Bold,
-              )
-            }
-          } else {
+          Spacer(modifier = Modifier.weight(1f))
+          if (videoMetadata != null) {
             Text(
-              text = "No screenshot at this time",
-              style = MaterialTheme.typography.bodyMedium,
-              color = MaterialTheme.colorScheme.onSurfaceVariant,
+              text = "Watch Video \u2197",
+              style = MaterialTheme.typography.labelSmall,
+              color = MaterialTheme.colorScheme.primary,
+              fontWeight = FontWeight.Medium,
+              modifier = Modifier
+                .padding(end = 4.dp)
+                .background(
+                  MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f),
+                  RoundedCornerShape(4.dp),
+                )
+                .padding(horizontal = 8.dp, vertical = 4.dp)
+                .clickable { openVideoInSystemPlayer(videoMetadata.filePath) },
             )
           }
+        }
+        if (closestScreenshot != null) {
+          val screenshotElapsed =
+            (closestScreenshot.timestamp.toEpochMilliseconds() - sessionStartMs).coerceAtLeast(0L)
+          SelectableText(
+            text = "${closestScreenshot.label} @ ${formatDuration(screenshotElapsed)}",
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.Medium,
+            modifier = Modifier.padding(bottom = 4.dp),
+          )
+
+          ScreenshotImage(
+            sessionId = sessionId,
+            screenshotFile = closestScreenshot.screenshotFile,
+            deviceWidth = closestScreenshot.deviceWidth,
+            deviceHeight = closestScreenshot.deviceHeight,
+            clickX = closestScreenshot.clickX,
+            clickY = closestScreenshot.clickY,
+            action = closestScreenshot.action,
+            modifier = Modifier.fillMaxWidth(),
+            imageLoader = imageLoader,
+            onImageClick = { imageModel, dw, dh, cx, cy ->
+              if (imageModel != null && onShowScreenshotModal != null) {
+                onShowScreenshotModal(
+                  imageModel,
+                  dw,
+                  dh,
+                  cx,
+                  cy,
+                  closestScreenshot.action,
+                )
+              }
+            },
+          )
+
+          closestScreenshot.toolCallName?.let { toolName ->
+            Spacer(modifier = Modifier.height(4.dp))
+            SelectableText(
+              text = toolName,
+              style = MaterialTheme.typography.labelSmall,
+              color = MaterialTheme.colorScheme.primary,
+              fontWeight = FontWeight.Bold,
+            )
+          }
+        } else {
+          Text(
+            text = "No screenshot at this time",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
         }
       }
 
@@ -814,7 +658,4 @@ internal fun buildScreenshotTimeline(logs: List<TrailblazeLog>): List<Screenshot
   }
   return items.sortedBy { it.timestamp }
 }
-
-/** Target frame rate for the pre-extracted video frame cache. */
-internal const val VIDEO_CACHE_FPS = 10
 

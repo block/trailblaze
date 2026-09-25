@@ -114,7 +114,7 @@ class DynamicToolSetTest {
   @Test
   fun `defaultToolClassesForDriver includes core_interaction for mobile drivers`() {
     val androidClasses = TrailblazeToolSetCatalog
-      .defaultToolClassesForDriver(TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION)
+      .defaultToolClassesForDriver(TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY)
       .map { it.toolName().toolName }
       .toSet()
     assertTrue("tap" in androidClasses, "core_interaction 'tap' should be present on Android")
@@ -143,7 +143,7 @@ class DynamicToolSetTest {
     }
 
     val result = fakeTarget.resolveToolScopeForDriver(
-      driverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+      driverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
     ).toolClasses
     val names = result.map { it.toolName().toolName }.toSet()
 
@@ -163,7 +163,7 @@ class DynamicToolSetTest {
     assertTrue(
       TrailblazeToolSetCatalog
         .defaultToolClassesForDriver(
-          driverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+          driverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
           catalog = emptyList(),
         )
         .isEmpty(),
@@ -179,7 +179,7 @@ class DynamicToolSetTest {
         setOf(MaestroTrailblazeTool::class)
     }
     val result = fakeTarget.resolveToolScopeForDriver(
-      driverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+      driverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
       catalog = emptyList(),
     ).toolClasses
     assertEquals(
@@ -212,7 +212,7 @@ class DynamicToolSetTest {
   @Test
   fun `resolveForDriver includes core_interaction for mobile drivers`() {
     val mobileResolved = TrailblazeToolSetCatalog.resolveForDriver(
-      TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+      TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
       requestedIds = emptyList(),
     )
     val mobileNames =
@@ -244,7 +244,7 @@ class DynamicToolSetTest {
     assertFalse("hideKeyboard" in playwright, "Playwright session must not get mobile-only 'hideKeyboard'")
     assertTrue("objectiveStatus" in playwright, "driver-agnostic meta tool is still present")
 
-    val android = classNames(TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION)
+    val android = classNames(TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY)
     assertTrue("tap" in android, "Android session keeps mobile core_interaction 'tap'")
 
     val noDriver = classNames(driver = null)
@@ -400,7 +400,6 @@ class DynamicToolSetTest {
       toolClasses = setOf(AssertVisibleTrailblazeTool::class),
       compatibleDriverTypes = setOf(
         TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
-        TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
         TrailblazeDriverType.IOS_HOST,
       ),
     ),
@@ -585,7 +584,7 @@ class DynamicToolSetTest {
   @Test
   fun `withDynamicToolSets with Android driverType keeps mobile tools`() {
     val androidRepo = TrailblazeToolRepo.withDynamicToolSets(
-      driverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+      driverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
     )
     val androidNames = androidRepo.getRegisteredTrailblazeTools()
       .map { it.toolName().toolName }.toSet()
@@ -600,7 +599,7 @@ class DynamicToolSetTest {
     // Symmetric with defaultToolClassesForDriver. Android sees core_interaction's YAML tools
     // (like `eraseText`); Playwright does not because core_interaction is mobile-only.
     val android = TrailblazeToolSetCatalog
-      .defaultYamlToolNamesForDriver(TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION)
+      .defaultYamlToolNamesForDriver(TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY)
       .map { it.toolName }.toSet()
     assertTrue("eraseText" in android, "core_interaction YAML-defined 'eraseText' should appear for Android")
 
@@ -617,7 +616,7 @@ class DynamicToolSetTest {
     // tools. If the repo drops customYamlToolNames from the forward, this test fails.
     val repo = TrailblazeToolRepo.withDynamicToolSets(
       customYamlToolNames = setOf(ToolName("eraseText")),
-      driverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+      driverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
     )
     val descriptorNames = repo.getCurrentToolDescriptors().map { it.name }.toSet()
     assertTrue(

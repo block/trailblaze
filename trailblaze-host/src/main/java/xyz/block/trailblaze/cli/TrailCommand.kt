@@ -21,6 +21,7 @@ import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
+import xyz.block.trailblaze.host.TrailblazeHostYamlRunner
 import xyz.block.trailblaze.host.driver.HostDriverDescriptorRegistry
 import xyz.block.trailblaze.host.driver.ReferenceHostDriverDescriptors
 import xyz.block.trailblaze.host.yaml.MultiDeviceConfigurationResolver.DEVICE_BINDINGS_ENV_VAR
@@ -28,6 +29,8 @@ import xyz.block.trailblaze.llm.LlmProviderEnvVarUtil
 import xyz.block.trailblaze.llm.RunYamlRequest
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.llm.TrailblazeReferrer
+import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
+import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.temp.YamlJsonBridge
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionStatus
@@ -45,7 +48,9 @@ import xyz.block.trailblaze.model.findById
 import xyz.block.trailblaze.recordings.TrailRecordings
 import xyz.block.trailblaze.recordings.UnifiedRecordingWriter
 import xyz.block.trailblaze.report.SkippedTrails
+import xyz.block.trailblaze.report.models.ExecutionMode
 import xyz.block.trailblaze.report.models.SOURCE_TYPE_GENERATED
+import xyz.block.trailblaze.report.models.SessionRecordingInfo
 import xyz.block.trailblaze.report.models.SkippedTrail
 import xyz.block.trailblaze.report.strings.VisibleStringsLog
 import xyz.block.trailblaze.report.utils.LogsRepo
@@ -70,6 +75,7 @@ import java.nio.file.Paths
 import java.util.concurrent.Callable
 import java.util.concurrent.CountDownLatch
 import kotlin.system.exitProcess
+import xyz.block.trailblaze.yaml.TrailMetadataValue
 
 /**
  * Run one or more trail files (`.trail.yaml` or `blaze.yaml`) on a connected device.
@@ -456,9 +462,9 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
     description = [
       "Save the recording back to the trail source directory after a successful run. " +
         "Default: on. Use --no-save-recording to skip. " +
-        "Even when on, the recording is only saved when --self-heal was enabled OR this device " +
-        "isn't recorded yet — deterministic re-runs no-op the write so they can't clobber a " +
-        "hand-edited source."
+        "Even when on, the trail file is only rewritten when a step self-healed during the run, " +
+        "--no-use-recorded-steps re-drove every step, or this device had no recording yet — a " +
+        "clean replay leaves the file unchanged."
     ],
     negatable = true,
   )
@@ -532,7 +538,7 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
     names = ["--capture-video"],
     description = [
       "Record device screen video for the session. Off by default — video writes large files " +
-        "and sprite extraction is expensive — pass --capture-video to enable it for a run. " +
+        "— pass --capture-video to enable it for a run. " +
         "When neither flag is passed, inherits TRAILBLAZE_CAPTURE_VIDEO and the saved " +
         "`trailblaze config capture-video` setting.",
     ],
@@ -548,6 +554,10 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
         "<session-dir>/events/crash.ndjson. On by default; use --no-capture-logcat to disable.",
     ],
     negatable = true,
+    // Picocli reads the `= true` initializer as "the positive spelling is the negation", so
+    // without this `--capture-x` turned capture OFF and `--no-capture-x` was a no-op.
+    // `fallbackValue` is what the positive spelling assigns.
+    fallbackValue = "true",
   )
   var captureLogcat: Boolean = true
 
@@ -561,8 +571,32 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
         "--no-capture-ios-logs to disable.",
     ],
     negatable = true,
+    // Picocli reads the `= true` initializer as "the positive spelling is the negation", so
+    // without this `--capture-x` turned capture OFF and `--no-capture-x` was a no-op.
+    // `fallbackValue` is what the positive spelling assigns.
+    fallbackValue = "true",
   )
   var captureIosLogs: Boolean = true
+
+  @Option(
+    names = ["--capture-memory"],
+    description = [
+      "Track the app under test's memory for the whole run as `memory` events in " +
+        "<session-dir>/events/memory.ndjson: a sample around every tool call, plus one every " +
+        "5 seconds whenever it changed, all read in the background so the run never waits. " +
+        "Android reports heap used vs. the heap limit, read through the on-device runner when " +
+        "one is installed and over adb otherwise; iOS Simulator reports the app's footprint. " +
+        "For exact before/after figures, start the daemon with TRAILBLAZE_MEMORY_DIAGNOSTICS=true: " +
+        "each tool call then waits for its two readings and Android collects garbage first. " +
+        "On by default; use --no-capture-memory to disable.",
+    ],
+    negatable = true,
+    // Picocli reads the `= true` initializer as "the positive spelling is the negation", so
+    // without this `--capture-x` turned capture OFF and `--no-capture-x` was a no-op.
+    // `fallbackValue` is what the positive spelling assigns.
+    fallbackValue = "true",
+  )
+  var captureMemory: Boolean = true
 
   @Option(
     names = ["--capture-network"],
@@ -579,7 +613,7 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
 
   @Option(
     names = ["--capture-all"],
-    description = ["Enable all capture streams: video, logcat, iOS logs, network (local dev mode)"]
+    description = ["Enable all capture streams: video, logcat, iOS logs, memory, network (local dev mode)"]
   )
   var captureAll: Boolean = false
 
@@ -619,16 +653,14 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
     return CaptureOptions(
       captureLogcat = captureLogcat || captureAll,
       captureIosLogs = captureIosLogs || captureAll,
+      captureMemory = captureMemory || captureAll,
     )
   }
 
-  override fun call(): Int {
-    // Suppress internal debug logs unless --verbose is passed.
-    // Console.info() and Console.error() remain visible for user-facing output.
-    if (!verbose) {
-      Console.enableQuietMode()
-    }
+  override fun call(): Int = quietUnlessVerbose(verbose) { runTrail() }
 
+  /** The command proper; [call] owns the quiet scope around it. */
+  private fun runTrail(): Int {
     // Emit the `trail` → `run` deprecation warning BEFORE the bare-args rejection so a
     // user who fat-fingers `trailblaze trail` (with no args) still sees the deprecation
     // signal. Pre-PR the warning fired on every invocation regardless of arg count;
@@ -1154,12 +1186,15 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
                   val sessionInfo = logsRepo.getSessionInfo(sessionId)
                   val classifiers = sessionInfo
                     ?.trailblazeDeviceInfo?.classifiers?.map { it.classifier } ?: emptyList()
-                  val configurationName = sessionInfo?.selectedDeviceConfiguration
-                  if (shouldSaveRecording(item.file, classifiers, configurationName)) {
-                    saveRecordingToTrailDirectory(item.file, sessionId, classifiers, configurationName, logsRepo.logsDir)
-                  } else {
-                    logSkippedRecording(item.file, classifiers, configurationName)
-                  }
+                  saveRecordingAfterPass(
+                    item.file,
+                    sessionId,
+                    classifiers,
+                    sessionInfo?.selectedDeviceConfiguration,
+                    logsRepo.logsDir,
+                    // runSingleTrailFile already generated this session's recording.
+                    generateRecording = false,
+                  )
                 }
               }
             } else {
@@ -1384,6 +1419,7 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
               turbo = turbo,
               captureLogcat = captureLogcat || captureAll,
               captureIosLogs = captureIosLogs || captureAll,
+              captureMemory = captureMemory || captureAll,
               // Tri-state: forward the explicit flag value when the user passed
               // --capture-network / --no-capture-network, else null so the daemon inherits its
               // saved "Capture Network Traffic" setting (TrailblazeDesktopApp resolves
@@ -1422,16 +1458,14 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
               // the mirror site inside runSingleTrailFile below for the full heuristic.
               val sid = response.sessionId
               if (sid != null) {
-                if (shouldSaveRecording(file, response.deviceClassifiers, response.selectedDeviceConfiguration)) {
-                  val sessionId = SessionId(sid)
-                  val sessionLogsDir = sessionLogsDir(response, daemonLogsDir)
-                  generateRecordingForSession(sessionId, sessionLogsDir)
-                  saveRecordingToTrailDirectory(
-                    file, sessionId, response.deviceClassifiers, response.selectedDeviceConfiguration, sessionLogsDir,
-                  )
-                } else {
-                  logSkippedRecording(file, response.deviceClassifiers, response.selectedDeviceConfiguration)
-                }
+                saveRecordingAfterPass(
+                  file,
+                  SessionId(sid),
+                  response.deviceClassifiers,
+                  response.selectedDeviceConfiguration,
+                  sessionLogsDir(response, daemonLogsDir),
+                  generateRecording = true,
+                )
               }
             } else {
               val err = response.error ?: "Unknown error"
@@ -2067,6 +2101,7 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
       turbo = turbo,
       captureLogcat = captureOptions.captureLogcat,
       captureIosLogs = captureOptions.captureIosLogs,
+      captureMemory = captureOptions.captureMemory,
       // Same reason as the capture flags above: the daemon path carries this on `CliRunRequest`,
       // so without it `trailblaze run --no-daemon --no-logging` built every host driver with
       // logging on and wrote the session files the flag promises to suppress.
@@ -2184,7 +2219,8 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
     val pinnedSessionInfo = app.deviceManager.logsRepo.getSessionInfo(pinnedSessionId)
     val classifiers = pinnedSessionInfo
       ?.trailblazeDeviceInfo?.classifiers?.map { it.classifier } ?: emptyList()
-    if (shouldSaveRecording(file, classifiers, pinnedSessionInfo?.selectedDeviceConfiguration)) {
+    val healed = sessionSelfHealed(File(app.deviceManager.logsRepo.logsDir, pinnedSessionId.value))
+    if (shouldSaveRecording(file, classifiers, pinnedSessionInfo?.selectedDeviceConfiguration, healed)) {
       generateRecordingForSession(pinnedSessionId, app.deviceManager.logsRepo.logsDir)
     }
 
@@ -2329,6 +2365,7 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
         sessionTrailConfig = sessionTrailConfig,
         customToolClasses = customToolClasses,
         selectedDeviceConfiguration = startedStatus?.selectedDeviceConfiguration,
+        successfulObjectivesOnly = TrailblazeHostYamlRunner.recordHealedStepsOnly(logs),
       )
       if (recordingYaml.isBlank()) {
         // "No data" and "the data couldn't be rendered" are different failures, and reporting the
@@ -2416,6 +2453,32 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
     }
 
     return newSessionIds
+  }
+
+  /**
+   * The save-back step of a passing run, shared by the in-process loop and the daemon delegate:
+   * writes the session's recording into the trail when [shouldSaveRecording] says the run produced
+   * something new, and otherwise says the trail file was left unchanged. [generateRecording]
+   * first renders the session's `recording.trail.yaml` from its logs, for a path that hasn't yet.
+   *
+   * `internal` so a temp-directory test can drive a whole save-or-skip decision against a real
+   * session directory without a device.
+   */
+  internal fun saveRecordingAfterPass(
+    trailFile: File,
+    sessionId: SessionId,
+    deviceClassifiers: List<String>,
+    selectedDeviceConfiguration: String?,
+    logsDir: File,
+    generateRecording: Boolean,
+  ) {
+    val healed = sessionSelfHealed(File(logsDir, sessionId.value))
+    if (!shouldSaveRecording(trailFile, deviceClassifiers, selectedDeviceConfiguration, healed)) {
+      logSkippedRecording(trailFile, deviceClassifiers, selectedDeviceConfiguration)
+      return
+    }
+    if (generateRecording) generateRecordingForSession(sessionId, logsDir)
+    saveRecordingToTrailDirectory(trailFile, sessionId, deviceClassifiers, selectedDeviceConfiguration, logsDir)
   }
 
   /**
@@ -2737,19 +2800,29 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
   /**
    * Single source of truth for "should this run write a recording back to the trail source
    * directory?" — used by all three call sites (in-process loop, daemon delegate, and the
-   * in-process generation inside [runSingleTrailFile]) so the heuristic can't drift between
-   * paths. Returns `true` when:
+   * in-process generation inside [runSingleTrailFile]) so the rule can't drift between paths.
    *
-   *  - the user hasn't opted out via `--no-save-recording`, AND
-   *  - either `--self-heal` was enabled (the AI may have changed the recorded tool sequence
-   *    so the new recording is genuinely different from what's on disk) OR no recording
-   *    exists yet next to the source (first-time authoring).
+   * A passing run rewrites the trail only when it has something new to say. Returns `true` when
+   * the user hasn't opted out via `--no-save-recording` AND one of:
    *
-   * Deterministic re-runs where a recording already exists return `false` so the source
-   * isn't silently clobbered. To forcibly regenerate, delete the file first.
+   *  - [selfHealed]: a recorded step failed during this run and the AI repaired it, so the fresh
+   *    recording differs from the one on disk. See [sessionSelfHealed].
+   *  - `--no-use-recorded-steps` was passed: the AI re-drove every step on purpose, which is how a
+   *    user regenerates a stale recording.
+   *  - Some step of this trail had nothing to replay on this device, so the AI drove it: first-time
+   *    authoring for the device, or a hybrid trail whose broken step had its recording removed.
    *
-   * When the existence check is skipped because [trailFile] has no parent (returns
-   * `null` from [computeRecordingTargetFile]), only the self-heal arm of the OR can fire.
+   * Everything else — in particular a clean replay of an existing recording, with or without
+   * `--self-heal` enabled — leaves the file byte-identical.
+   *
+   * "Nothing to replay" follows the executor's own resolution, so it never adds a copy of a leg the
+   * run already used:
+   *  - UNIFIED_MERGE: some recordable step resolves no recording on this session's chain (its
+   *    selected configuration, then the device's classifier lineage, most-specific first)
+   *    ([UnifiedRecordingWriter.unifiedTrailFullyRecordedForDevice]). An `android-phone` run of a
+   *    trail recorded under `android:` has a recording.
+   *  - CLASSIFIER_SIBLING: the `<classifier>.trail.yaml` sibling doesn't exist (a trail file with
+   *    no parent directory resolves no sibling and is treated as recorded).
    *
    * No side effects — callers (the outer save sites) are responsible for any logging.
    * The internal generation site uses this purely to short-circuit work, so it should not
@@ -2759,28 +2832,28 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
     trailFile: File,
     deviceClassifiers: List<String>,
     selectedDeviceConfiguration: String?,
+    selfHealed: Boolean,
   ): Boolean {
     if (!resolveEffectiveSaveRecording()) return false
-    if (resolveEffectiveSelfHeal()) return true
-    // Deterministic re-run guard: skip when this device's recording already exists on disk, so a
-    // plain re-run never clobbers a (possibly hand-edited) source. "Already exists" is per-target:
-    //  - CLASSIFIER_SIBLING: the `<classifier>.trail.yaml` sibling exists (also skip when no target
-    //    resolves — an orphan file with no parent — matching prior behavior).
-    //  - UNIFIED_MERGE: this session's slot (the selected configuration's NAME, or this device's
-    //    classifier chain) already carries a recording in the unified target file
-    //    ([UnifiedRecordingWriter.unifiedRecordingTarget]). A missing file (greenfield) or an absent slot means "not
-    //    recorded yet" → save.
-    return when (recordingSaveTarget(trailFile, deviceClassifiers, selectedDeviceConfiguration)) {
-      RecordingSaveTarget.CLASSIFIER_SIBLING -> {
-        val targetFile = computeRecordingTargetFile(trailFile, deviceClassifiers) ?: return false
-        !targetFile.exists()
-      }
-      RecordingSaveTarget.UNIFIED_MERGE ->
-        !UnifiedRecordingWriter.unifiedClassifierAlreadyRecorded(
-          trailFile,
-          recordingSlotKey(deviceClassifiers, selectedDeviceConfiguration),
-        )
-    }
+    if (selfHealed) return true
+    if (useRecordedSteps == false) return true
+    return !deviceAlreadyRecorded(trailFile, deviceClassifiers, selectedDeviceConfiguration)
+  }
+
+  /** The "this device already has a recording to replay" half of [shouldSaveRecording]. */
+  private fun deviceAlreadyRecorded(
+    trailFile: File,
+    deviceClassifiers: List<String>,
+    selectedDeviceConfiguration: String?,
+  ): Boolean = when (recordingSaveTarget(trailFile, deviceClassifiers, selectedDeviceConfiguration)) {
+    RecordingSaveTarget.CLASSIFIER_SIBLING ->
+      computeRecordingTargetFile(trailFile, deviceClassifiers)?.exists() ?: true
+    RecordingSaveTarget.UNIFIED_MERGE ->
+      UnifiedRecordingWriter.unifiedTrailFullyRecordedForDevice(
+        trailFile,
+        deviceClassifiers,
+        selectedDeviceConfiguration,
+      )
   }
 
   /** Resolves the nullable `--[no-]save-recording` flag to its effective on/off value.
@@ -2788,10 +2861,10 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
   internal fun resolveEffectiveSaveRecording(): Boolean = saveRecording ?: true
 
   /**
-   * Companion of [shouldSaveRecording]. Emits a single user-visible info line when a save
-   * was skipped *because* the target already exists — the only non-explicit skip reason
-   * worth surfacing. The explicit opt-out (`--no-save-recording`) is silent because the
-   * user already knows they asked for it.
+   * Companion of [shouldSaveRecording], called only when it returned `false`. Emits one
+   * user-visible line saying the trail file was left as it was and why, for the one skip reason
+   * worth surfacing: this run replayed an existing recording and no step self-healed. The explicit
+   * opt-out (`--no-save-recording`) is silent because the user already knows they asked for it.
    *
    * Called only from the outer save sites (in-process loop, daemon delegate). The inner
    * generation site inside [runSingleTrailFile] deliberately omits the call so a single
@@ -2803,26 +2876,40 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
     selectedDeviceConfiguration: String?,
   ) {
     if (!resolveEffectiveSaveRecording()) return // user explicitly opted out — silent skip
-    if (resolveEffectiveSelfHeal()) return // shouldSaveRecording would have been true
-    val skippedTarget: String = when (recordingSaveTarget(trailFile, deviceClassifiers, selectedDeviceConfiguration)) {
-      RecordingSaveTarget.CLASSIFIER_SIBLING -> {
-        val targetFile = computeRecordingTargetFile(trailFile, deviceClassifiers) ?: return
-        if (!targetFile.exists()) return // not the "existing target" skip reason
-        targetFile.absolutePath
-      }
-      RecordingSaveTarget.UNIFIED_MERGE -> {
-        val classifier = recordingSlotKey(deviceClassifiers, selectedDeviceConfiguration)
-        if (!UnifiedRecordingWriter.unifiedClassifierAlreadyRecorded(trailFile, classifier)) return
-        val unifiedFile = UnifiedRecordingWriter.unifiedRecordingTarget(trailFile) ?: return
-        "${unifiedFile.absolutePath} (classifier `$classifier`)"
-      }
+    val unchangedFile = when (recordingSaveTarget(trailFile, deviceClassifiers, selectedDeviceConfiguration)) {
+      RecordingSaveTarget.CLASSIFIER_SIBLING -> computeRecordingTargetFile(trailFile, deviceClassifiers)
+      RecordingSaveTarget.UNIFIED_MERGE -> UnifiedRecordingWriter.unifiedRecordingTarget(trailFile)
+    } ?: return
+    Console.info(skippedRecordingMessage(unchangedFile))
+  }
+
+  /**
+   * Whether [sessionDir]'s session self-healed a step: its terminal status says so, or it logged a
+   * self-heal hand-off (which survives even when the status mark was dropped). Asks
+   * [ExecutionMode.selfHealed], the one definition every reporting surface shares, so the save
+   * decision can't disagree with the report about whether a run healed.
+   *
+   * Reads only the status-change and self-heal logs (the log type is in each file's name), so
+   * answering costs a couple of small files rather than a decode of the whole session. A missing
+   * or unreadable directory answers `false`: nothing is written unless a heal is proven.
+   *
+   * Asks whether ANY status the session recorded carries the heal mark, rather than taking the
+   * last one: raw log timestamps are not clock-normalized across host and device, so "last" by
+   * timestamp can land on a status that isn't the session's final one.
+   */
+  internal fun sessionSelfHealed(sessionDir: File): Boolean {
+    val logs = sessionDir.listFiles { f: File ->
+      f.extension == "json" && SELF_HEAL_EVIDENCE_LOG_TYPES.any { f.name.endsWith("_$it.json") }
+    }.orEmpty().mapNotNull { file ->
+      runCatching {
+        TrailblazeJsonInstance.decodeFromString(TrailblazeLog.serializer(), file.readText())
+      }.getOrNull()
     }
-    Console.info(
-      "Recording not overwritten (target exists; pass --self-heal to regenerate, or " +
-        "re-run with --use-recorded-steps to replay the recorded tools instead of " +
-        "re-driving every step via the LLM): " +
-        skippedTarget,
-    )
+    val recordingInfo = SessionRecordingInfo.fromLogs(logs)
+    val statuses = logs.filterIsInstance<TrailblazeLog.TrailblazeSessionStatusChangeLog>()
+      .map { it.sessionStatus }
+      .ifEmpty { listOf(SessionStatus.Unknown) }
+    return statuses.any { ExecutionMode.selfHealed(it, recordingInfo) }
   }
 
   /**
@@ -3168,6 +3255,21 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
   }
 
   companion object {
+    /**
+     * The log types [sessionSelfHealed] reads: the status changes (a `SucceededWithSelfHeal` end)
+     * and the self-heal hand-off. Named from the classes because a session's log files are named
+     * after them.
+     */
+    private val SELF_HEAL_EVIDENCE_LOG_TYPES: List<String> = listOf(
+      TrailblazeLog.TrailblazeSessionStatusChangeLog::class.java.simpleName,
+      TrailblazeLog.SelfHealInvokedLog::class.java.simpleName,
+    )
+
+    /** What a passing run prints when it leaves [trailFile] as it was. */
+    internal fun skippedRecordingMessage(trailFile: File): String =
+      "Trail file unchanged: this run replayed its recording and no step needed self-healing " +
+        "(${trailFile.absolutePath}). To re-record every step, run with --no-use-recorded-steps."
+
     internal fun daemonVersionLine(status: CliStatusResponse?, port: Int): String =
       "Daemon version: ${status?.version ?: if (status == null) "unknown (status unavailable)" else "unknown (not reported by daemon)"} (port $port)"
 
@@ -3807,7 +3909,7 @@ internal sealed class TrailExecutionItem {
     val target: String?,
     val trailSource: String,
     /** `config.metadata`, carried so the skip row keeps the trail's durable TestRail case id. */
-    val metadata: Map<String, String>? = null,
+    val metadata: Map<String, TrailMetadataValue>? = null,
   ) : TrailExecutionItem()
 }
 

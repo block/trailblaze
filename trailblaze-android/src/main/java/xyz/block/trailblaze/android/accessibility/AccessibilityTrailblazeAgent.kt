@@ -196,7 +196,7 @@ class AccessibilityTrailblazeAgent(
       AdbCommandUtil.clearPackageData(appId)
     }
 
-    // Grant permissions — matches MaestroAndroidUiAutomatorDriver.setPermissions() behavior,
+    // Grant permissions — matches the retired UiAutomator driver's setPermissions() behavior,
     // including the short-name → fully-qualified Android permission translation.
     val permissionsToGrant =
       command.permissions?.filterValues { it == "allow" }?.keys ?: emptySet()

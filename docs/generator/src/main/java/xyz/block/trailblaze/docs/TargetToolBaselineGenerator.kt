@@ -179,10 +179,13 @@ class TargetToolBaselineGenerator(
     // matrix with ZERO driver columns rather than bailing to a header-only page.
     val platforms = config.platforms.orEmpty()
 
-    // Collect all driver types this target uses
+    // Collect all driver types this target uses. Retired drivers are dropped: this matrix is read
+    // as "which tools can I use on which driver", and a column for a driver nothing can run on is
+    // an answer to a question no one can act on — worse, it reads as a supported option.
     val allDrivers = platforms.flatMap { (platformKey, platformConfig) ->
       platformConfig.resolveDriverTypes(platformKey)
-    }.toSortedSet(compareBy { it.name })
+    }.filterNot { it in TrailblazeDriverType.RETIRED_DRIVERS }
+      .toSortedSet(compareBy { it.name })
 
     if (allDrivers.isEmpty() && config.tools.isNullOrEmpty()) return@buildString
 

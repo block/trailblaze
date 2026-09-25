@@ -96,7 +96,7 @@ class LiveFrameConsumerTest {
           }
         }
       },
-      sdkLevelProvider = { H264Tee.ANDROID_R_SDK },
+      sdkLevelProvider = { H264Tee.ANDROID_U_SDK },
     )
     val consumer = LiveFrameConsumer(
       tee = tee,
@@ -172,7 +172,7 @@ class LiveFrameConsumerTest {
           }
         }
       },
-      sdkLevelProvider = { H264Tee.ANDROID_R_SDK },
+      sdkLevelProvider = { H264Tee.ANDROID_U_SDK },
     )
     val consumer = LiveFrameConsumer(
       tee = tee,
@@ -249,7 +249,7 @@ class LiveFrameConsumerTest {
           }
         }
       },
-      sdkLevelProvider = { H264Tee.ANDROID_R_SDK },
+      sdkLevelProvider = { H264Tee.ANDROID_U_SDK },
     )
     val consumer = LiveFrameConsumer(
       tee = tee,
@@ -333,7 +333,7 @@ class LiveFrameConsumerTest {
           }
         }
       },
-      sdkLevelProvider = { H264Tee.ANDROID_R_SDK },
+      sdkLevelProvider = { H264Tee.ANDROID_U_SDK },
     )
     val consumer = LiveFrameConsumer(
       tee = tee,
@@ -372,7 +372,7 @@ class LiveFrameConsumerTest {
           }
         }
       },
-      sdkLevelProvider = { H264Tee.ANDROID_R_SDK },
+      sdkLevelProvider = { H264Tee.ANDROID_U_SDK },
     )
     // `true` spawns successfully and exits immediately — the pathological decoder that dies the
     // instant it starts, every time. Covers the startup race (the very first death can be

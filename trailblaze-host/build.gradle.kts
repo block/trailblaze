@@ -275,9 +275,9 @@ configurations.all {
   // Selenium comes transitively from Maestro and we do not use it.
   exclude(group = "org.seleniumhq.selenium")
 
-  // Playwright driver-bundle (~194 MB) contains pre-packaged Node.js + driver binaries for all
-  // platforms. Excluded to reduce uber JAR size; PlaywrightDriverManager downloads the driver
-  // for the current platform on first use and caches it at ~/.cache/trailblaze/playwright-driver/.
+  // Playwright driver-bundle (~194 MB) contains Node.js binaries for all platforms. Excluded to
+  // reduce uber JAR size; PlaywrightDriverManager downloads Node for the current platform on first
+  // use and caches it at ~/.cache/trailblaze/playwright-driver/.
   exclude(group = "com.microsoft.playwright", module = "driver-bundle")
 
   // GraalVM's JS language and its shaded ICU data are excluded in the modules that assemble the

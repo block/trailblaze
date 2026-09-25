@@ -24,6 +24,7 @@ import xyz.block.trailblaze.mcp.McpToolNames
 import xyz.block.trailblaze.mcp.TrailblazeMcpBridge
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.mcp.TrailblazeMcpSessionContext
+import xyz.block.trailblaze.scripting.ScriptedToolCatalog
 import xyz.block.trailblaze.toolcalls.SessionDeviceBindings
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.toolcalls.commands.SwitchDeviceTrailblazeTool
@@ -78,6 +79,13 @@ class DeviceManagerToolSet(
    */
   private val onPinMostRecentUnboundMcpSession:
     (suspend (deviceSpec: String, target: String?, explicitSessionId: String?) -> xyz.block.trailblaze.logs.server.TrailblazeMcpServer.PinResult)? = null,
+  /**
+   * Builds the scripted-tool descriptor index one connect summary reads. The summary describes
+   * every tool group of the bound target, and each group used to walk the whole descriptor tree
+   * again. One catalog per summary means one walk per connect. Injected so a test can count the
+   * walks.
+   */
+  private val scriptedToolCatalogFactory: () -> ScriptedToolCatalog = { ScriptedToolCatalog() },
 ) : ToolSet {
 
   /**
@@ -1206,10 +1214,11 @@ class DeviceManagerToolSet(
     }
     if (groups.isEmpty()) return null
 
+    val catalog = scriptedToolCatalogFactory()
     return buildString {
       appendLine("Available ${target.displayName} tools (${driverType.platform.displayName}):")
       for (group in groups) {
-        val toolNames = group.toMergedDescriptors()
+        val toolNames = group.toMergedDescriptors(catalog)
           .map { it.name }
           .sorted()
         if (toolNames.isNotEmpty()) {

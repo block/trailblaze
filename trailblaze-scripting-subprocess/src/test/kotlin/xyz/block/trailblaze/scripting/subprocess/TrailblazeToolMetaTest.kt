@@ -32,6 +32,7 @@ class TrailblazeToolMetaTest {
       put("trailblaze/isRecordable", false)
       put("trailblaze/requiresHost", true)
       put("trailblaze/requiresContext", true)
+      put("trailblaze/sessionResourceFinalizer", true)
       put("trailblaze/toolset", "auth")
       put("trailblaze/supportedDrivers", buildJsonArray { add("android-ondevice-accessibility"); add("ios-host") })
       put("trailblaze/supportedPlatforms", buildJsonArray { add("ANDROID"); add("IOS") })
@@ -44,6 +45,7 @@ class TrailblazeToolMetaTest {
         isRecordable = false,
         requiresHost = true,
         requiresContext = true,
+        isSessionResourceFinalizer = true,
         toolset = "auth",
         supportedDrivers = listOf("android-ondevice-accessibility", "ios-host"),
         supportedPlatforms = listOf("ANDROID", "IOS"),

@@ -23,7 +23,7 @@ import xyz.block.trailblaze.util.Console
  *     `BrowserContext` so the `.webm` is flushed on demand.
  *  3. `CaptureSession.stopAll()` triggers [PlaywrightVideoCapture.stop], which calls
  *     [runFinalizer] (no-op if the browser was already closed normally), then locates
- *     the `.webm`, transcodes to `video.mp4`, and returns a `CaptureArtifact`.
+ *     the `.webm`, delivers it as the session recording, and returns a `CaptureArtifact`.
  *
  * Keyed by Playwright device id (e.g. the value of
  * `TrailblazeDeviceId.instanceId` for a WEB device) — same key the rest of the
@@ -38,8 +38,39 @@ object PlaywrightVideoRecordDir {
 
   private val entries = ConcurrentHashMap<String, Entry>()
 
+  /**
+   * Host epoch at which Playwright's recorder for a device got the page it is recording — the
+   * closest observable stand-in for the video's first frame.
+   *
+   * Kept out of [Entry] on purpose. The finalizer clears the record dir *before* the capture stream
+   * gets to read its window, so anything living in the entry would be gone by then.
+   */
+  private val recordingStarts = ConcurrentHashMap<String, Long>()
+
   fun setRecordDir(deviceId: String, dir: File) {
     entries[deviceId] = Entry(dir = dir)
+  }
+
+  /**
+   * Called by the Playwright manager once it has created the page a recording context will film.
+   * That instant is the recording's clip-time zero; `PlaywrightVideoCapture.start()` runs long
+   * before it — only publishing the directory — and on a cold browser the gap is **seconds**
+   * (measured at 6.3 s including browser launch).
+   *
+   * **Last one wins**, unlike the iOS equivalent. A kept-alive manager can build a second recording
+   * context for the same device (`resetSession()`), which writes a second `.webm`, and the capture
+   * stream delivers the most recently modified file — so the anchor that matches the delivered file
+   * is the latest, not the first.
+   */
+  fun markRecordingStarted(deviceId: String, atMs: Long = System.currentTimeMillis()) {
+    recordingStarts[deviceId] = atMs
+  }
+
+  /** Clip-time zero for [deviceId]'s recording, or null when the manager never filmed one. */
+  fun recordingStartedAtMs(deviceId: String): Long? = recordingStarts[deviceId]
+
+  fun clearRecordingStarted(deviceId: String) {
+    recordingStarts.remove(deviceId)
   }
 
   fun clearRecordDir(deviceId: String) {

@@ -612,27 +612,10 @@ class ToolboxCommand : Callable<Int>, QuietUnlessVerbose {
     Console.info("Search results for \"$query\":")
     Console.info("")
 
-    // Group by source for readability
-    val grouped = mutableMapOf<String, MutableList<kotlinx.serialization.json.JsonObject>>()
-    for (match in matches) {
-      val obj = match.jsonObject
-      val source = obj["source"]?.jsonPrimitive?.content ?: "Unknown"
-      grouped.getOrPut(source) { mutableListOf() }.add(obj)
-    }
-
-    for ((source, matchList) in grouped) {
-      Console.info("  $source:")
-      for (match in matchList) {
-        val tool = match["tool"]?.jsonObject ?: continue
-        val toolName = tool["name"]?.jsonPrimitive?.content ?: continue
-        val toolDesc = tool["description"]?.jsonPrimitive?.content ?: ""
-        Console.info("    - $toolName: $toolDesc")
-        formatParameters(tool, "        ")
-      }
-    }
+    ToolboxFormatter.renderSearchMatches(matches, detail).forEach { Console.info(it) }
 
     Console.info("")
-    Console.info("Use --name <tool> for full details.")
+    Console.info(ToolboxFormatter.searchFooterHint(detail))
     return ToolboxRenderOutcome.OK
   }
 

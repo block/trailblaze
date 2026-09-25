@@ -1,6 +1,9 @@
 package xyz.block.trailblaze.cli
 
+import java.io.File
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
+import kotlin.test.fail
 import org.junit.Test
 
 /**
@@ -51,5 +54,52 @@ class PlaywrightReportCaptureTest {
     assertEquals(1, PlaywrightReportCapture.computeFps(frameCount = 1, elapsedMs = 60_000))
     // A non-physical spike (clock skew / near-empty capture) -> capped at 4x nominal (20).
     assertEquals(20, PlaywrightReportCapture.computeFps(frameCount = 50, elapsedMs = 100))
+  }
+
+  // The cross-language half of the export-dwell invariant. The floor a step is held for lives in
+  // TypeScript (EXPORT_GAP_MIN_MS in run-report-playback.ts); the cadence it must clear lives here
+  // in Kotlin. Each side's own tests can only pin its own constant, so raising FRAME_INTERVAL_MS
+  // would silently start dropping steps from every export with the TypeScript guard still green.
+  // This reads the other language's source and asserts the ordering from this side.
+
+  /**
+   * The `.ts` is excluded from `processResources`, so it isn't on the test classpath and has to be
+   * found in the source tree. Resolved by walking ancestors for a sibling
+   * `trailblaze-report/src/main/resources/...`, which lands the same way whichever depth the
+   * sibling modules sit at — this test must not care how far down the tree its module lives.
+   */
+  private fun readPlaybackTs(): String {
+    val suffix = "trailblaze-report/src/main/resources/xyz/block/trailblaze/" +
+      "trailrunner/web/app/run-report-playback.ts"
+    var dir: File? = File(System.getProperty("user.dir")).absoluteFile
+    val tried = mutableListOf<String>()
+    while (dir != null) {
+      val candidate = File(dir, suffix)
+      tried += candidate.path
+      if (candidate.isFile) return candidate.readText()
+      dir = dir.parentFile
+    }
+    // Fail loudly rather than skipping: a "can't find it" that passes would retire the invariant
+    // silently, which is the exact failure this test exists to prevent.
+    fail("Could not locate run-report-playback.ts. Looked for:\n" + tried.joinToString("\n"))
+  }
+
+  @Test fun `the export dwell floor clears the capture cadence`() {
+    val ts = readPlaybackTs()
+    val floorMs = Regex("""const\s+EXPORT_GAP_MIN_MS\s*=\s*(\d+)\s*;""")
+      .find(ts)
+      ?.groupValues
+      ?.get(1)
+      ?.toLong()
+      ?: fail("EXPORT_GAP_MIN_MS not found in run-report-playback.ts — was it renamed?")
+
+    assertTrue(
+      PlaywrightReportCapture.FRAME_INTERVAL_MS <= floorMs,
+      "FRAME_INTERVAL_MS (${PlaywrightReportCapture.FRAME_INTERVAL_MS}ms) must stay at or below the " +
+        "export dwell floor EXPORT_GAP_MIN_MS (${floorMs}ms) in run-report-playback.ts. A step held " +
+        "for less than one shutter period can fall between two captures and appear in no frame of " +
+        "the exported animation. Lower the cadence, raise the floor, or switch the capture loop to " +
+        "shooting on step transitions instead of on a timer.",
+    )
   }
 }

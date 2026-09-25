@@ -200,23 +200,29 @@ the viewer script.
   count, so LLM cost and call count come from the results file when it carries them, and tool
   counts and token totals read `—`.
 
-## Comparing runs: the Trail view
+## Comparing runs: Replay, Grid and Map
 
 A report can put several runs on one stage, as lanes side by side — the same trail across devices,
-a retry beside the run it followed, or any two runs you want to look at together. Every projection
-there (Map, Grid, Replay) reads across the lanes rather than down one run. A report holding a single
-run opens it as one lane, or as one lane per device when that one run drove several.
+a retry beside the run it followed, or any two runs you want to look at together. Three projections
+read across those lanes rather than down one run:
 
-There are three ways in:
+- **Replay** plays every lane back on one shared wall clock.
+- **Grid** lays the lanes out as a matrix, one column per run and one row per step.
+- **Map** draws the lanes as a waypoint chain leaving each shared step.
 
-- **A run's own header.** A run page carries a Trail view button whenever there is a stage to open
-  — which excludes a run that was skipped and one whose report is only a link out to another. On a
-  report that holds only one run — the daemon's page for a single session, a loaded recording —
-  this is the only way in.
-- **A trail's own entry point.** A run index row whose trail ran on more than one device opens that
-  trail's runs as lanes, in one click.
-- **Pick the runs yourself.** Each index row and matrix cell carries a checkbox. Tick any set of
-  runs and open them together, whether or not the report groups them.
+They live in two places, depending on what you are looking at:
+
+- **On a run's own report**, as tabs beside Timeline, scoped to that run's trail. A run that ran on
+  three devices shows three lanes there; a run that ran once shows one — its Replay is still the
+  point. The tabs are absent for a run with nothing to stage: one that was skipped, and one whose
+  report is only a link out to another.
+- **In the Compare workspace**, for a set of runs you assembled yourself. Each index row and matrix
+  cell carries a checkbox: tick any runs and open them together, whether or not the report groups
+  them. A run index row whose trail ran on more than one device opens that trail's runs the same
+  way, in one click. Compare's **Screens** tab is the Grid — for a pick of exactly two runs it is
+  the side-by-side screen diff instead — and its **Replay** tab is the same playback. The Map is
+  not offered for a pick: it draws one trail's lanes, and a pick is whatever you ticked, so a
+  `?view=trail&…&mode=map` link for several runs opens their Screens.
 
 What a row of the stage MEANS depends on what you picked:
 
@@ -226,10 +232,11 @@ What a row of the stage MEANS depends on what you picked:
   own k-th step: rows carry no shared label, each cell keeps its own wording, and the Map — which
   draws lanes leaving one shared step — isn't offered.
 
-The stage travels in the URL, so it can be shared or reloaded: `?view=trail&trail=<trail identity>`
-for a trail's own runs, `?view=trail&pick=0,2,5` for a set you picked. The `pick` indices are
-positions in *that* report — a report regenerated with different runs opens on whichever of them it
-still has, or falls back to the run index.
+The stage travels in the URL, so it can be shared or reloaded: `?run=2&tab=replay` (or `tab=steps`
+for the Grid, `tab=map`) for a run's own trail, `?view=compare&pick=0,2,5` for a set you picked.
+The indices are positions in *that* report — a report regenerated with different runs opens on
+whichever of them it still has, or falls back to the run index. Links written when the projections
+were a page of their own (`?view=trail&…`) still land on the same thing.
 
 ### Comparing across reports
 

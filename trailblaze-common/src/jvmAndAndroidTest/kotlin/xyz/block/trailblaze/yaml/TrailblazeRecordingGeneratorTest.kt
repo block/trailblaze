@@ -1789,7 +1789,7 @@ class TrailblazeRecordingGeneratorTest {
       title = "User can log in",
       priority = "P0",
       context = "Account email: test@example.com",
-      metadata = mapOf("caseId" to "456"),
+      metadata = metadataOf("caseId" to "456"),
     )
     val sourceYaml = """
       |trail:
@@ -1843,7 +1843,7 @@ class TrailblazeRecordingGeneratorTest {
     assertThat(decodedConfig.title).isEqualTo("User can log in")
     assertThat(decodedConfig.priority).isEqualTo("P0")
     assertThat(decodedConfig.context).isEqualTo("Account email: test@example.com")
-    assertThat(decodedConfig.metadata).isEqualTo(mapOf("caseId" to "456"))
+    assertThat(decodedConfig.metadata).isEqualTo(metadataOf("caseId" to "456"))
 
     val decodedTools = (decoded[1] as TrailYamlItem.ToolTrailItem).tools
     assertThat(decodedTools.size).isEqualTo(1)

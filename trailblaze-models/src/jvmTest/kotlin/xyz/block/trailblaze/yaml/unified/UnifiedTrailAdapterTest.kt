@@ -22,6 +22,8 @@ import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.TrailblazeToolYamlWrapper
 import xyz.block.trailblaze.yaml.TrailblazeYaml
 import xyz.block.trailblaze.yaml.VerificationStep
+import xyz.block.trailblaze.yaml.metadataOf
+import xyz.block.trailblaze.yaml.string
 
 /**
  * Pins the the unified format → v1 lowering used by the runtime: closest-wins classifier
@@ -304,7 +306,7 @@ class UnifiedTrailAdapterTest {
       ),
       context = "Test context",
       memory = mapOf("email" to "tb+test@example.com"),
-      metadata = mapOf(
+      metadata = metadataOf(
         "jira" to "PROJ-123",
         UnifiedTrailConfig.METADATA_KEY_SOURCE to "HANDWRITTEN",
         UnifiedTrailConfig.METADATA_KEY_SOURCE_REASON to "authored by hand",
@@ -327,7 +329,7 @@ class UnifiedTrailAdapterTest {
     // strips them from the plain metadata map.
     assertEquals("P1", v1.priority)
     assertEquals(TrailSource(type = TrailSourceType.HANDWRITTEN, reason = "authored by hand"), v1.source)
-    assertEquals(mapOf("jira" to "PROJ-123"), v1.metadata)
+    assertEquals(metadataOf("jira" to "PROJ-123"), v1.metadata)
     // driver is resolved per-device at lowerToTrailItems time, not by lowerConfig alone.
     assertNull(v1.driver, "lowerConfig without a resolved driver leaves v1.driver null")
     // platform is the one retired field — derived from the classifier slots, never lowered.
@@ -340,10 +342,10 @@ class UnifiedTrailAdapterTest {
     // marker) or a known TrailSourceType name — anything else is the author's own metadata and
     // must stay in the map untouched instead of being consumed by a failed parse.
     val v1 = UnifiedTrailAdapter.lowerConfig(
-      UnifiedTrailConfig(metadata = mapOf(UnifiedTrailConfig.METADATA_KEY_SOURCE to "some-other-system")),
+      UnifiedTrailConfig(metadata = metadataOf(UnifiedTrailConfig.METADATA_KEY_SOURCE to "some-other-system")),
     )
     assertNull(v1.source)
-    assertEquals(mapOf(UnifiedTrailConfig.METADATA_KEY_SOURCE to "some-other-system"), v1.metadata)
+    assertEquals(metadataOf(UnifiedTrailConfig.METADATA_KEY_SOURCE to "some-other-system"), v1.metadata)
   }
 
   /**
@@ -359,7 +361,7 @@ class UnifiedTrailAdapterTest {
     description = "Open the checkout flow and pay.",
     priority = "P1",
     source = TrailSource(type = TrailSourceType.HANDWRITTEN, reason = "authored by hand"),
-    metadata = mapOf("case" to "C123"),
+    metadata = metadataOf("case" to "C123"),
     target = "app",
     driver = "ANDROID_ONDEVICE_ACCESSIBILITY",
     tags = listOf("smoke"),
@@ -408,8 +410,8 @@ class UnifiedTrailAdapterTest {
     // Pin the unified representation: priority is a top-level unified field; source is NOT — it
     // rides in metadata under the reserved bridge keys.
     assertEquals("P1", unified.priority)
-    assertEquals("HANDWRITTEN", unified.metadata?.get(UnifiedTrailConfig.METADATA_KEY_SOURCE))
-    assertEquals("authored by hand", unified.metadata?.get(UnifiedTrailConfig.METADATA_KEY_SOURCE_REASON))
+    assertEquals("HANDWRITTEN", unified.metadata?.string(UnifiedTrailConfig.METADATA_KEY_SOURCE))
+    assertEquals("authored by hand", unified.metadata?.string(UnifiedTrailConfig.METADATA_KEY_SOURCE_REASON))
 
     // unified → v1 for an android device (chain [android-phone, android]).
     val device = listOf(classifier("android"), classifier("phone"))
@@ -457,15 +459,15 @@ class UnifiedTrailAdapterTest {
     // `source:` and another file's plain metadata both land in the same map, and an atomic
     // first-map-wins would re-drop whichever the first file lacked.
     val base = UnifiedTrailConfig(
-      metadata = mapOf("case" to "C123", "jira" to "PROJ-1"),
+      metadata = metadataOf("case" to "C123", "jira" to "PROJ-1"),
     )
     val fallback = UnifiedTrailConfig(
-      metadata = mapOf(UnifiedTrailConfig.METADATA_KEY_SOURCE to "HANDWRITTEN", "jira" to "PROJ-2"),
+      metadata = metadataOf(UnifiedTrailConfig.METADATA_KEY_SOURCE to "HANDWRITTEN", "jira" to "PROJ-2"),
     )
     val merged = UnifiedTrailAdapter.fillMissingConfigScalars(base, fallback)
-    assertEquals("C123", merged.metadata?.get("case"))
-    assertEquals("HANDWRITTEN", merged.metadata?.get(UnifiedTrailConfig.METADATA_KEY_SOURCE))
-    assertEquals("PROJ-1", merged.metadata?.get("jira"), "base wins a shared key")
+    assertEquals("C123", merged.metadata?.string("case"))
+    assertEquals("HANDWRITTEN", merged.metadata?.string(UnifiedTrailConfig.METADATA_KEY_SOURCE))
+    assertEquals("PROJ-1", merged.metadata?.string("jira"), "base wins a shared key")
   }
 
   @Test

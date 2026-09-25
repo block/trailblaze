@@ -6,8 +6,11 @@
 // The Kotlin object is `TrailblazeNodeSelectorResolver`. We mirror it as a module-level
 // `resolve` function (TypeScript prefers free functions over class-with-static-only-members).
 // The private helpers (`matchesSelector`, `matchesDriverDetail`, seven per-driver matchers,
-// `requirePattern`, `matchesPattern`, and the regex-translation helpers) are all
-// file-local — only `resolve` is exported.
+// `requirePattern`, and the regex-translation helpers) are all file-local. `resolve` and
+// `matchesPattern` are exported: the latter because the regex-or-literal contract it
+// implements is the answer to "does this selector pattern match this string", which
+// consumers that match a single field outside a whole-selector resolve (e.g. a waypoint
+// anchor compiled out of YAML) need to reach without re-deriving it.
 //
 // **`SelectorTemplating.expand` is NOT ported here.** That helper expands `{{target.appId}}`
 // placeholders before resolution and is only used when the caller threads target context
@@ -762,7 +765,7 @@ function requireEqual<T>(
  *   invalid pattern degrades to an escaped literal with the same flags (Maestro's `toRegexSafe`)
  *   — i.e. a case-insensitive literal.
  */
-type MatchDialect = "native" | "maestro";
+export type MatchDialect = "native" | "maestro";
 
 /** Orchestra's `REGEX_OPTIONS` (IGNORE_CASE | DOT_MATCHES_ALL | MULTILINE) as JS flags. */
 const MAESTRO_FLAGS = "ism";
@@ -860,7 +863,7 @@ function matchesAnyPattern(
  * `MatcherParityFixturesTest` on the Kotlin side). Semantics changes must update the
  * fixture and both implementations together.
  */
-function matchesPattern(
+export function matchesPattern(
   pattern: string,
   text: string,
   dialect: MatchDialect = "native",

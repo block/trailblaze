@@ -29,6 +29,17 @@
 # Logs are saved automatically by the JVM to ~/.trailblaze/desktop-logs/
 # (port-specific filenames for parallel instances).
 
+# This script never wants job control, and it can arrive with it already on: bash reads SHELLOPTS
+# from the environment at startup, so a caller that exported it containing `monitor` hands us a
+# shell that `setpgid`s every child we fork. On a long-lived macOS host pids are recycled until one
+# child is born holding the session id — a session leader, which `setpgid` refuses — and bash prints
+# "child setpgid (N to N): Operation not permitted" onto the stderr of whatever command the user
+# forwarded. Never enabling job control is therefore not enough; it has to be turned off.
+#
+# (`bash -m <script>` does NOT reach us — bash drops monitor for a non-interactive shell — so an
+# exported SHELLOPTS is the route that does.)
+set +m
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Capture the parent shell PID so the CLI can resolve "what device is pinned
@@ -79,6 +90,28 @@ else
   JAVA_BIN="java"
 fi
 
+# The JVM options this launcher INHERITED, captured before the headless export below adds its own.
+# Every CDS dump runs under them, so they belong in the key the archive stamp and the failure
+# marker are written with: an inherited option that breaks dumping (a `--patch-module` pointing at
+# a directory the dump cannot use) writes a marker, and removing the option has to retry rather
+# than stay suppressed on an unchanged JAR and JDK. Inherited only, and deliberately so: keying on
+# the `-Djava.awt.headless=true` the next block adds would make `--headless` and windowed starts
+# disagree about every archive, so alternating between them would re-dump every time.
+#
+# Each variable is labelled, because WHICH one an option arrives in changes what the JVM does:
+# `_JAVA_OPTIONS` overrides a flag on the command line and `JAVA_TOOL_OPTIONS` loses to it, so
+# moving `-Xmx1m` from one to the other beats or loses to this launcher's own `-Xmx4g` — joining
+# them would give those two arrangements one key. Each label also carries the value's length, so a
+# value that embeds a newline cannot imitate the other variable's line.
+tb_jto="${JAVA_TOOL_OPTIONS:-}"
+tb_jo="${_JAVA_OPTIONS:-}"
+TB_INHERITED_JVM_OPTIONS=""
+case "${tb_jto}${tb_jo}" in
+  *[![:space:]]*) TB_INHERITED_JVM_OPTIONS="JAVA_TOOL_OPTIONS[${#tb_jto}]=${tb_jto}
+_JAVA_OPTIONS[${#tb_jo}]=${tb_jo}" ;;
+esac
+unset tb_jto tb_jo
+
 # Compose touches AppKit before entering its server-only branch on macOS. Force AWT headless for
 # every headless entrypoint, including the launcher embedded in distribution JARs. JAVA_TOOL_OPTIONS
 # also reaches a Gradle-forked app JVM, unlike a JVM flag passed only to Gradle itself.
@@ -97,6 +130,48 @@ done
 # before the IPC decision was pure hot-path overhead. JVM fallbacks call this immediately
 # before their first tb_run* invocation; the guard keeps auto-start + command execution from
 # probing twice in one wrapper process.
+#
+# Throw away a class-data sharing archive that some other JDK dumped. An archive is usable only by
+# the JDK that built it, and at run time -Xshare:auto ignores a foreign one in silence — so the
+# launcher goes on passing a dead archive on every start, paying full class loading, while an
+# unchanged JAR gives the dump below no reason to run again. Deleting it is enough: a missing
+# archive under -Xshare:auto is silent too, so the flag this process already built can stand, and
+# the next JVM launch dumps a fresh archive for the JDK in hand.
+#
+# This lives up here, in the version gate, rather than beside the dump: the CDS block runs before
+# the daemon-IPC decision, so testing the archive there would put this function's `java -version`
+# on the hot path of every forwarded command — the overhead the gate exists to defer.
+#
+# An archive with no stamp beside it predates the stamp and cannot say which JDK built it, so it
+# goes as well. That costs one dump, once, for an install carrying an archive from before this
+# change, and buys the invariant that every archive the launcher keeps names its own JDK.
+tb_discard_foreign_cds_archive() {
+  [ -n "${TRAILBLAZE_JAR:-}" ] || return 0
+  local jsa="${TRAILBLAZE_JAR%.jar}.jsa"
+  local stamp="${jsa}.jdk"
+  [ -f "$jsa" ] || return 0
+  [ "$(cat "$stamp" 2>/dev/null)" = "$TB_CDS_KEY" ] && return 0
+  rm -f "$jsa" "$stamp"
+  return 0
+}
+
+# A digest of the inherited JVM options, for the CDS key. Only ever compared with another digest of
+# the same function, so the algorithm is free to vary by host: the strongest hash the machine has,
+# and `cksum` — POSIX, always present — when it has none. A collision there would reuse one option
+# set's verdict for another, which is the behaviour before the options were in the key at all.
+tb_cds_options_digest() {
+  local options="$1" digest=""
+  if command -v shasum > /dev/null 2>&1; then
+    digest=$(printf '%s' "$options" | shasum -a 256 2>/dev/null | cut -d' ' -f1)
+  elif command -v sha256sum > /dev/null 2>&1; then
+    digest=$(printf '%s' "$options" | sha256sum 2>/dev/null | cut -d' ' -f1)
+  elif command -v openssl > /dev/null 2>&1; then
+    digest=$(printf '%s' "$options" | openssl dgst -sha256 2>/dev/null | awk '{print $NF}')
+  fi
+  [ -n "$digest" ] || digest=$(printf '%s' "$options" | cksum | tr -d ' ')
+  printf '%s' "$digest"
+}
+
 tb_check_java_version() {
   [ "${TB_JAVA_VERSION_CHECKED:-0}" = "1" ] && return 0
   TB_JAVA_VERSION_CHECKED=1
@@ -110,12 +185,44 @@ tb_check_java_version() {
       JAVA_BIN="$JAVA_HOME/bin/java"
     fi
   fi
+  # Kept as a global: the CDS key is built from it below, and re-probing would pay a second JVM
+  # start for an answer this one already has.
+  #
+  # `java -version` writes to stderr, and a JVM whose JAVA_TOOL_OPTIONS or _JAVA_OPTIONS is set
+  # prefixes a `Picked up ...` notice — which `--headless` guarantees, having exported
+  # JAVA_TOOL_OPTIONS above. Keying on the FIRST line would key CDS state on that notice: identical
+  # text on every JDK, so one JDK's archive or failure verdict reads as this JDK's and the whole
+  # point of the key is lost. Keep the banner minus those notices, which also carries the vendor
+  # build (`Temurin-21.0.5+11`) — two builds reporting the same version number can still disagree
+  # about an archive.
+  local probe
+  probe=$("$JAVA_BIN" -version 2>&1)
+  TB_JAVA_VERSION_ID=$(printf '%s\n' "$probe" | grep -v '^Picked up ' || true)
+  # Never empty: an empty id equals a missing stamp, and a stamp-less archive is exactly the case
+  # tb_discard_foreign_cds_archive must not trust.
+  [ -n "$TB_JAVA_VERSION_ID" ] || TB_JAVA_VERSION_ID="${probe:-unknown JDK}"
   local java_version
-  java_version=$("$JAVA_BIN" -version 2>&1 | head -1 | sed -E 's/.*"([0-9]+).*/\1/')
+  java_version=$(printf '%s\n' "$TB_JAVA_VERSION_ID" | sed -nE 's/.*version "([0-9]+).*/\1/p' | head -1)
   if [ -n "$java_version" ] && [ "$java_version" -lt 17 ] 2>/dev/null; then
     echo "ERROR: Trailblaze requires JDK 17 or later, but found JDK ${java_version}." >&2
     return 1
   fi
+  # What the archive stamp and the failure marker are actually written with: the JDK identity plus
+  # a digest of the JVM options the dump inherits. Both axes decide whether a dump works and whether
+  # its archive loads, and an option nobody sets any more must not keep a verdict alive. With no
+  # inherited options — the common case — the key is the JDK identity alone, so a start that sets
+  # none reads the same key as before this line existed.
+  #
+  # The digest, not the options: these files sit on disk beside the JAR, and JAVA_TOOL_OPTIONS is
+  # a normal place to find a credential (`-Dhttps.proxyPassword=…`, a `-javaagent` token). Nothing
+  # here ever needs to read the options back — the key is only ever compared with itself.
+  TB_CDS_KEY="$TB_JAVA_VERSION_ID"
+  case "${TB_INHERITED_JVM_OPTIONS:-}" in
+    *[![:space:]]*) TB_CDS_KEY="${TB_CDS_KEY}
+JVM options digest: $(tb_cds_options_digest "$TB_INHERITED_JVM_OPTIONS")" ;;
+  esac
+  tb_discard_foreign_cds_archive
+  return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -334,11 +441,23 @@ TRAILBLAZE_JAR="${TRAILBLAZE_JAR:-$SCRIPT_DIR/trailblaze.jar}"
 # is not the one used while building the shared archive file"). Keeping the
 # .jsa outside the JAR preserves the fingerprint.
 #
-# -Xshare:auto (not :on) means fingerprint mismatches — JVM version skew,
-# replaced JAR — silently fall back to standard class loading. Pure upside.
+# The archive is usable only by the JVM that dumped it, and a wrapper around this launcher may pin
+# a different JDK from the one the shell resolved at load time. So the dump goes through
+# tb_check_java_version — the gate every JVM launch passes, which runs the pin first. An archive
+# dumped by the wrong JDK is rejected at every later start, and -Xshare:auto would hide that, so
+# the verification step loads the fresh archive with -Xshare:on: a rejection fails the dump.
 #
-# Escape hatch: set BLAZE_CDS=0 to disable. Regenerated automatically when
-# the JAR is newer than the .jsa (e.g., after a dev rebuild).
+# At run time -Xshare:auto (not :on) means later mismatches — a JDK upgrade, a replaced JAR —
+# fall back to standard class loading rather than failing. Safe, but silent: nothing would notice
+# that the archive had stopped being used, so a successful dump records its JDK in a `<jsa>.jdk`
+# stamp and tb_discard_foreign_cds_archive throws the archive away once that JDK is gone.
+#
+# Escape hatch: set BLAZE_CDS=0 to disable. Regenerated automatically when the JAR is newer than
+# the .jsa (e.g., after a dev rebuild), or when the JDK that dumped it is no longer the one running.
+# A dump that failed leaves a `<jar>.jsa.failed` marker so its three JVM launches are not repeated
+# on every start; the marker records the JDK, and a digest of the inherited JVM options, it failed
+# under — so a newer JAR, a different JDK, changed JAVA_TOOL_OPTIONS / _JAVA_OPTIONS, or deleting
+# the marker retries.
 
 tb_ensure_cds_archive() {
   local jar="$1"
@@ -348,10 +467,22 @@ tb_ensure_cds_archive() {
   case "$jar" in *[[:space:]]*) return 1 ;; esac
 
   local jsa="${jar%.jar}.jsa"
+  local failed_marker="${jsa}.failed"
 
   if [ -f "$jsa" ] && [ ! "$jar" -nt "$jsa" ]; then
     printf '%s' "$jsa"
     return 0
+  fi
+  # Resolving the JDK before consulting the marker, because the marker is keyed on it. What the
+  # marker remembers belongs to a JDK and the options it ran under — a CDS verifier bug in one
+  # build, an archive the pinned JDK cannot load, an inherited option the dump chokes on — so where
+  # the dump would now work, the JAR being unchanged must not keep the old verdict. The probe is
+  # free here: every JVM launch below pays it anyway, and the valid archive above already returned
+  # without it.
+  tb_check_java_version || return 1
+  if [ -f "$failed_marker" ] && [ ! "$jar" -nt "$failed_marker" ] \
+     && [ "$(cat "$failed_marker" 2>/dev/null)" = "$TB_CDS_KEY" ]; then
+    return 1
   fi
   [ -w "$(dirname "$jsa")" ] || return 1
 
@@ -371,22 +502,30 @@ tb_ensure_cds_archive() {
   # with it. Some JDK 17 builds have a CDS verifier bug with Kotlin enums that
   # manifests as `VerifyError: Bad type on operand stack` when TrailCommand.<init>
   # loads — and that bug is JVM-version-specific, so we need to detect it at
-  # generate time rather than pretend it doesn't exist. If the verification
-  # command fails, we discard the broken archive and the caller falls back to
-  # plain JAR mode for that JAR/JDK combination.
+  # generate time rather than pretend it doesn't exist. The verification runs with
+  # -Xshare:on so an archive this JVM cannot load — the verifier bug, or a dump
+  # made by a different JDK — fails here instead of being silently ignored at
+  # every later start. If it fails, we discard the broken archive, leave the
+  # marker, and the caller falls back to plain JAR mode for that JAR/JDK pair.
   if "$JAVA_BIN" $TRAILBLAZE_JVM_ARGS -XX:DumpLoadedClassList="$classlist" \
          -jar "$jar" config show >/dev/null 2>&1 \
      && "$JAVA_BIN" $TRAILBLAZE_JVM_ARGS -XX:SharedClassListFile="$classlist" \
          -XX:SharedArchiveFile="$tmp_jsa" -Xshare:dump \
          -jar "$jar" >/dev/null 2>&1 \
-     && "$JAVA_BIN" $TRAILBLAZE_JVM_ARGS -XX:SharedArchiveFile="$tmp_jsa" -Xshare:auto \
+     && "$JAVA_BIN" $TRAILBLAZE_JVM_ARGS -XX:SharedArchiveFile="$tmp_jsa" -Xshare:on \
          -jar "$jar" trail --help >/dev/null 2>&1 \
      && mv -f "$tmp_jsa" "$jsa"; then
-    rm -f "$classlist"
+    rm -f "$classlist" "$failed_marker"
+    # Name the JDK that built it and the options it was built under, so a later start under either
+    # a different JDK or different inherited JVM options discards it instead of passing an archive
+    # that start will ignore (tb_discard_foreign_cds_archive).
+    printf '%s\n' "$TB_CDS_KEY" > "${jsa}.jdk"
     printf '%s' "$jsa"
     return 0
   fi
   rm -f "$classlist" "$tmp_jsa"
+  printf '%s\n' "$TB_CDS_KEY" > "$failed_marker"
+  printf 'Could not build the class-data sharing archive for this JDK; starting without it. Moving to another JDK, or changing the JVM options in JAVA_TOOL_OPTIONS / _JAVA_OPTIONS, retries on its own; otherwise delete %s to retry.\n' "$failed_marker" >&2
   return 1
 }
 
@@ -972,31 +1111,48 @@ ipc_try_forward() {
     # once, from a watchdog that dies as soon as the response lands, so a healthy
     # fast command still prints nothing extra.
     # Why the fds here matter at all: everything this spawns inherits them, and a
-    # caller capturing output — `out=$(trailblaze config show)` — sees EOF only
-    # once EVERY holder of the pipe's write end closes it. A watchdog left holding
-    # that pipe makes even an instant forward take the full notice threshold. The
-    # group kill below is what guarantees nothing is left holding it; sending
-    # stdout to /dev/null is the narrower guarantee that survives even the
-    # fallback path, where there is no process group to kill.
+    # caller capturing output sees EOF only once EVERY holder of the pipe's write
+    # end closes it. A watchdog left holding that pipe makes even an instant
+    # forward take the full notice threshold. The block's own `> /dev/null` below
+    # already keeps it off the caller's stdout, so the capture at risk is one that
+    # takes stderr too — `out=$(trailblaze config show 2>&1)`, which is where the
+    # notice lands in the first place.
     #
-    # `set -m` for the spawn so the watchdog becomes a process-group leader and
-    # the whole group can be killed at once. Killing just the subshell leaves the
-    # `sleep` it forked alive — and that child is reparented to init the moment
-    # its parent dies, so `pkill -P` no longer finds it either.
+    # Killing the watchdog does not kill the `sleep` it forked: that grandchild is
+    # reparented to init the moment its parent dies. So `sleep` is handed its own
+    # fds rather than the caller's — an orphan holding only /dev/null cannot delay
+    # anyone's EOF, and nothing has to hunt it down. `2>&1` is the load-bearing one
+    # (the block's own `> /dev/null` already covers stdout, and with job control off
+    # bash gives a background job /dev/null stdin); the other two are written out so
+    # this does not read as an accident.
+    #
+    # Doing it this way instead of putting the watchdog in its own process group and
+    # killing the group is what keeps job control off, and that is deliberate:
+    # `set -m` makes bash call `setpgid` on every child, and on a long-lived CI agent
+    # that call eventually fails — macOS recycles pids, so sooner or later a child is
+    # born with the pid that is already the session id, which makes it a session
+    # leader and `setpgid` refuse. Bash prints that refusal on OUR stderr, mixed into
+    # the output of whatever command the user forwarded. `test_ipc_replay.sh` fails
+    # if job control comes back.
     local notice_pid
-    set -m
     {
-        sleep "$TRAILBLAZE_IPC_NOTICE_SECONDS"
+        sleep "$TRAILBLAZE_IPC_NOTICE_SECONDS" < /dev/null > /dev/null 2>&1
         echo "Waiting for the Trailblaze daemon on port ${TRAILBLAZE_PORT} to respond..." >&2
         # No `--no-daemon` hint here: none of the forwardable subcommands accept that flag
         # (only `trail` and `mcp` do), so the old hint sent users to an "Unknown option" error.
-        echo "  It may be busy with another command. 'trailblaze status' shows the daemon; 'trailblaze stop' restarts it fresh on the next command." >&2
+        # Every clause here is bounded by what the daemon actually guarantees. It serializes
+        # /cli/exec behind one lock, so a second forwarded command is queued rather than running.
+        # `blaze` is deliberately absent: the forwardable set is `snapshot ask config tool`, so
+        # this notice can never fire for it. And `status` does not list a forwarded command —
+        # its activeRuns counts async trail runs, not execs — so it is offered as a health check
+        # only. `stop` ends the daemon, after which the failed forward falls through and this
+        # command re-runs locally from the start; it is not aborted.
+        echo "  It may still be running this command, or queued behind an earlier one — 'ask' and launch tools take minutes." >&2
+        echo "  'trailblaze status' checks its health. 'trailblaze stop' ends it, and this command starts over from scratch." >&2
     } > /dev/null &
     notice_pid=$!
-    set +m
     # Off the jobs table, or bash reports "Terminated" on this command's stderr
     # when it reaps the watchdog we killed — noise on every forwarded command.
-    # The process group is unaffected, so the kill below still reaches it.
     disown "$notice_pid" 2> /dev/null || true
 
     # This ceiling has to cover the budget the forwarded command itself waits on:
@@ -1035,12 +1191,10 @@ ipc_try_forward() {
         -H "Content-Type: application/json" \
         -d "$payload" 2>/dev/null)
     rc=$?
-    # The group, not just the leader: a surviving `sleep` holds this command's
-    # stderr, and a caller capturing it waits for every holder of the write end
-    # to close — which would make even an instant forward take the full notice
-    # threshold. `kill "$notice_pid"` as well, for a shell that gave the job no
-    # group of its own.
-    kill -- "-$notice_pid" 2> /dev/null || kill "$notice_pid" 2> /dev/null
+    # Only the watchdog itself. The `sleep` it may still be blocked in outlives it
+    # as an orphan, which is harmless because that sleep holds no fd of ours — see
+    # the spawn above.
+    kill "$notice_pid" 2> /dev/null || true
     if [ "$rc" -eq 28 ]; then
         # curl 28 is curl's own clock running out — `--connect-timeout` or `--max-time`.
         # The daemon answered /ping a moment ago, so this is a daemon that is starved

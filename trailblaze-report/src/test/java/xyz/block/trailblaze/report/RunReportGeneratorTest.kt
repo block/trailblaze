@@ -35,6 +35,8 @@ import xyz.block.trailblaze.report.models.SkippedTrail
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.util.BunBinaryResolver
 import xyz.block.trailblaze.yaml.TrailConfig
+import xyz.block.trailblaze.yaml.metadataOf
+import xyz.block.trailblaze.yaml.TrailMetadataValue
 
 /**
  * Pure-logic tests for the headless report generator's metadata mapping — the contract the viewer's
@@ -92,7 +94,7 @@ class RunReportGeneratorTest {
   private fun skipRecord(
     trailId: String? = "checkout/refund",
     target: String? = "shop",
-    metadata: Map<String, String>? = null,
+    metadata: Map<String, TrailMetadataValue>? = null,
   ) = SkippedTrail(
     trail_path = "trails/checkout/refund.trail.yaml",
     title = "Refund an order",
@@ -130,7 +132,7 @@ class RunReportGeneratorTest {
     // and `owner` gets first-class index treatment. Omitting it here would drop a skipped row out
     // of a search for its own owner while the same trail's runs still matched it.
     val meta = RunReportGenerator.skipSessionJson(
-      skipRecord(metadata = mapOf("owner" to "checkout-team", "testRailCaseId" to "1017")),
+      skipRecord(metadata = metadataOf("owner" to "checkout-team", "testRailCaseId" to "1017")),
     )["meta"]!!.jsonObject
 
     val emitted = meta["metadata"]!!.jsonObject
@@ -424,7 +426,7 @@ class RunReportGeneratorTest {
   fun sessionMetaJson_forwardsTrailConfigMetadataForConsumerInjection() {
     val passed = SessionStatus.Ended.Succeeded(1)
     val meta = RunReportGenerator.sessionMetaJson(
-      info(passed).copy(trailConfig = TrailConfig(metadata = mapOf("owner" to "payments-team", "accountToken" to "AT_123"))),
+      info(passed).copy(trailConfig = TrailConfig(metadata = metadataOf("owner" to "payments-team", "accountToken" to "AT_123"))),
       passed,
       noSelfHeal,
     )

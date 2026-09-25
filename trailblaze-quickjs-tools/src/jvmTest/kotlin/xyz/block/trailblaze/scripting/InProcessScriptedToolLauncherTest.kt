@@ -11,6 +11,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import xyz.block.trailblaze.config.ScriptedToolNameDiscoverer
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.scripting.callback.JsScriptingCallbackArgumentValidator
 import xyz.block.trailblaze.toolcalls.REDACTED_TOOL_ARG_PLACEHOLDER
@@ -367,6 +368,54 @@ class InProcessScriptedToolLauncherTest {
     } finally {
       runCatching { reg.dispose() }
       sessionDir.deleteRecursively()
+    }
+  }
+
+  /**
+   * The descriptor walk is the whole cost of `describe`, and a discovery request describes many
+   * name sets. Every call handed the same [ScriptedToolCatalog] must read that catalog — not walk
+   * on its own — and the catalog must walk once, the first time it is read, never before.
+   */
+  @Test
+  fun `describe reads the catalog it is handed, so many calls share one walk`() {
+    var walks = 0
+    val catalog = ScriptedToolCatalog {
+      walks++
+      ScriptedToolNameDiscoverer.discoverDescriptorsByName()
+    }
+    assertEquals(0, walks, "a catalog nobody has read yet must not have walked the descriptors")
+
+    val first = InProcessScriptedToolLauncher.describe(setOf(openUrl), catalog)
+    InProcessScriptedToolLauncher.describe(setOf(ToolName("definitelyNotARealScriptedTool")), catalog)
+    val again = InProcessScriptedToolLauncher.describe(setOf(openUrl), catalog)
+
+    assertEquals(1, walks, "three describes against one catalog must walk the descriptors exactly once")
+    assertTrue(first.any { it.name == "openUrl" }, "the shared catalog must still resolve openUrl")
+    assertEquals(first.map { it.name }, again.map { it.name }, "re-reading the catalog must give the same answer")
+  }
+
+  /**
+   * A duplicate scripted-tool name makes discovery throw, and callers catch that per description.
+   * The failing walk must still happen once — otherwise the workspace that is already broken is
+   * also the one that pays the full per-target fan-out.
+   */
+  @Test
+  fun `a catalog whose walk throws still walks once, and keeps reporting the failure`() {
+    var walks = 0
+    val catalog = ScriptedToolCatalog {
+      walks++
+      throw IllegalStateException("duplicate scripted tool name 'openUrl'")
+    }
+
+    val failures = (1..3).map { runCatching { catalog.descriptorsByName } }
+
+    assertEquals(1, walks, "a catalog that failed its walk must not re-walk on the next read")
+    failures.forEachIndexed { i, result ->
+      assertEquals(
+        "duplicate scripted tool name 'openUrl'",
+        result.exceptionOrNull()?.message,
+        "read ${i + 1} must report the same discovery failure, not a silently empty index",
+      )
     }
   }
 }

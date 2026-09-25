@@ -14,8 +14,8 @@ package xyz.block.trailblaze.capture.video
  * [ffmpeg concat-demuxer](https://ffmpeg.org/ffmpeg-formats.html#concat-1) script where each
  * frame's `duration` is exactly how long that frame was on screen. Feeding that script through a
  * constant-frame-rate resample (`-vf fps=N`) yields an MP4 whose duration equals the session
- * wall-clock window — the same property Android's `VideoSpriteExtractor.maybeRestamp` recovers
- * after the fact, achieved here up front because we own the timestamps.
+ * wall-clock window — the same property Android's wall-clock mux gets from stamping frames as
+ * they arrive, achieved here up front because we own the timestamps.
  *
  * Split out from [WebScreencastVideoCapture] so the timing arithmetic (the part that's easy to get
  * subtly wrong) is unit-testable without a browser, ffmpeg, or the filesystem.
@@ -60,15 +60,31 @@ internal object ScreencastTimeline {
    * Paths are emitted single-quoted with embedded single-quotes escaped per the concat demuxer's
    * `'\''` convention, so a session directory containing a quote can't break the script.
    */
-  internal fun buildConcatScript(
-    frames: List<Frame>,
-    sessionStartMs: Long,
-    sessionEndMs: Long,
-  ): String? {
+  /**
+   * How long the encoded recording should be: the session window, widened only if a frame somehow
+   * arrived after the session was declared over.
+   *
+   * The caller needs this as well as the script, because the encode has to be **bounded** to it.
+   * The `fps` resample gives the final input frame the same duration as the gap before it — it has
+   * no other way to know how long a last frame lasts — so an unbounded encode runs past the window
+   * by exactly that gap. On a session that ends on a still screen (an agent finishing, a device
+   * left on one page) that gap is most of the session, and the recording comes out close to twice
+   * as long as the run it covers. Since the report places an event by scaling into the window, a
+   * container that overstates its length pushes every event late by the same proportion.
+   *
+   * Null when there are no frames, the same case [buildConcatScript] declines.
+   */
+  internal fun totalMs(frames: List<Frame>, sessionStartMs: Long, sessionEndMs: Long): Long? {
     if (frames.isEmpty()) return null
+    val relMs = relativeOffsets(frames, sessionStartMs)
+    return maxOf(sessionEndMs - sessionStartMs, relMs.last() + MIN_FRAME_DURATION_MS)
+  }
 
-    // Frame i's start offset from session start, forced to 0 for the first frame and clamped
-    // monotonic so a backwards clock step never yields a negative gap.
+  /**
+   * Frame start offsets from session start, the first forced to 0 and the rest clamped monotonic
+   * so a backwards clock step never yields a negative gap.
+   */
+  private fun relativeOffsets(frames: List<Frame>, sessionStartMs: Long): LongArray {
     val relMs = LongArray(frames.size)
     var prev = 0L
     for (i in frames.indices) {
@@ -77,8 +93,18 @@ internal object ScreencastTimeline {
       relMs[i] = clamped
       prev = clamped
     }
+    return relMs
+  }
 
-    val totalMs = maxOf(sessionEndMs - sessionStartMs, relMs.last() + MIN_FRAME_DURATION_MS)
+  internal fun buildConcatScript(
+    frames: List<Frame>,
+    sessionStartMs: Long,
+    sessionEndMs: Long,
+  ): String? {
+    if (frames.isEmpty()) return null
+
+    val relMs = relativeOffsets(frames, sessionStartMs)
+    val totalMs = totalMs(frames, sessionStartMs, sessionEndMs) ?: return null
 
     val sb = StringBuilder()
     sb.append("ffconcat version 1.0\n")

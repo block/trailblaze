@@ -35,7 +35,3 @@ actual suspend fun loadCaptureVideoMetadata(sessionId: String): VideoMetadata? =
 actual suspend fun loadDeviceLogs(sessionId: String): String? = null
 
 actual suspend fun loadNetworkLogs(sessionId: String): String? = null
-
-actual fun isExportAutoplayRequested(): Boolean = false
-
-actual fun signalExportPlaybackEnded() = Unit

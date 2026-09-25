@@ -1,13 +1,11 @@
 package xyz.block.trailblaze.capture
 
-import xyz.block.trailblaze.util.Console
-
 /**
  * Options for capture, controlled by CLI flags or desktop app settings.
  *
- * Video capture is off by default — it writes large files, its timing signatures drift on some
- * hosts, and sprite-sheet extraction is expensive. Opt in per run with `--capture-video` on the
- * CLI (or the desktop app's "Capture video" toggle).
+ * Video capture is off by default — it writes large files and its timing signatures drift on some
+ * hosts. Opt in per run with `--capture-video` on the CLI (or the desktop app's "Capture video"
+ * toggle).
  */
 data class CaptureOptions(
   val captureVideo: Boolean = false,
@@ -23,74 +21,47 @@ data class CaptureOptions(
    * app log — not the system firehose. Disable with `--no-capture-ios-logs`.
    */
   val captureIosLogs: Boolean = true,
-  /** Frames per second for sprite sheet extraction. */
-  val spriteFrameFps: Int = DEFAULT_SPRITE_FPS,
-  /** Height in pixels for each frame in the sprite sheet. Width scales proportionally. */
-  val spriteFrameHeight: Int = DEFAULT_SPRITE_HEIGHT,
-  /** WebP quality for sprite sheet frames (0–100, higher is better). */
-  val spriteQuality: Int = DEFAULT_SPRITE_QUALITY,
+  /**
+   * Track the app under test's memory for the whole session as the `memory` event stream: a
+   * sample around every tool call, plus a periodic one whenever it changed — see
+   * [xyz.block.trailblaze.capture.memory.MemoryCapture]. Each event is just heap used vs. the
+   * heap limit and whether a GC ran first (Android), or the footprint (iOS Simulator). By default
+   * every reading is taken in the background, so the trail never waits for one. On by default;
+   * disable with `--no-capture-memory`.
+   */
+  val captureMemory: Boolean = true,
+  /**
+   * Memory diagnostics mode: each tool call is bracketed by a reading taken synchronously right
+   * before and right after it (an exact per-action delta), and on Android the app is asked to
+   * collect garbage first so `heap used` is live objects only. Off by default because it adds two
+   * readings to every tool call's wall clock; turn it on for a run where you are diagnosing memory
+   * with `TRAILBLAZE_MEMORY_DIAGNOSTICS=true` on the daemon (see [ENV_MEMORY_DIAGNOSTICS]). Each
+   * `memory` event records whether a GC happened (`gcForced`) and how long the reading took
+   * (`readMs`).
+   */
+  val memoryDiagnostics: Boolean = false,
 ) {
   val hasAnyCaptureEnabled: Boolean
-    get() = captureVideo || captureLogcat || captureIosLogs
-
-  /**
-   * Sprite frame height to use for the web/Playwright timeline.
-   *
-   * The timeline scrubber renders these sprite frames in a large pane, so the mobile-tuned
-   * [DEFAULT_SPRITE_HEIGHT] (360) gets upscaled and looks grainy. Web is captured in landscape
-   * at the ~800px-tall CSS viewport, so [WEB_SPRITE_HEIGHT] (720) keeps frames near the source
-   * video's native resolution. Substituted only when the user hasn't overridden
-   * [spriteFrameHeight] from the default via CLI flag / desktop setting — an explicit override
-   * is honored unchanged.
-   */
-  fun webSpriteFrameHeight(): Int =
-    if (spriteFrameHeight == DEFAULT_SPRITE_HEIGHT) WEB_SPRITE_HEIGHT else spriteFrameHeight
-
-  /**
-   * WebP quality to use for web/Playwright timeline sprite frames. Substitutes
-   * [WEB_SPRITE_QUALITY] (90) for the mobile-tuned [DEFAULT_SPRITE_QUALITY] (80) when the user
-   * hasn't overridden [spriteQuality]; an explicit override is honored unchanged.
-   */
-  fun webSpriteQuality(): Int =
-    if (spriteQuality == DEFAULT_SPRITE_QUALITY) WEB_SPRITE_QUALITY else spriteQuality
+    get() = captureVideo || captureLogcat || captureIosLogs || captureMemory
 
   companion object {
     /**
      * No capture at all — every stream off. Explicit (not `CaptureOptions()`) because the
-     * constructor defaults logcat/iOS-logs ON, so `CaptureOptions()` is not "none". Used as
-     * `CaptureStream.stop`'s default arg, where only sprite tuning is read.
+     * constructor defaults logcat/iOS-logs/memory ON, so `CaptureOptions()` is not "none". Used as
+     * `CaptureStream.stop`'s default arg.
      */
-    val NONE = CaptureOptions(captureVideo = false, captureLogcat = false, captureIosLogs = false)
-    const val DEFAULT_SPRITE_FPS = 2
-    const val DEFAULT_SPRITE_HEIGHT = 360
-    const val DEFAULT_SPRITE_QUALITY = 80
-
-    /**
-     * Web/desktop timeline sprite tuning. The recorded web video is ~800px tall (the CSS
-     * viewport), so 720 stays near native — going higher would just upscale the source.
-     */
-    const val WEB_SPRITE_HEIGHT = 720
-    const val WEB_SPRITE_QUALITY = 90
-
-    /**
-     * Host-session sprite tuning (the values [hostCaptureOptions] callers used to hardcode).
-     * Height differs from [DEFAULT_SPRITE_HEIGHT]: host sessions record device-resolution video,
-     * so 720 keeps the timeline scrubber sharp where 360 looks grainy.
-     */
-    const val HOST_SPRITE_FPS = 2
-    const val HOST_SPRITE_HEIGHT = 720
-    const val HOST_SPRITE_QUALITY = 80
-
-    const val ENV_SPRITE_FPS = "TRAILBLAZE_SPRITE_FPS"
-    const val ENV_SPRITE_FRAME_HEIGHT = "TRAILBLAZE_SPRITE_FRAME_HEIGHT"
-    const val ENV_SPRITE_QUALITY = "TRAILBLAZE_SPRITE_QUALITY"
+    val NONE = CaptureOptions(
+      captureVideo = false,
+      captureLogcat = false,
+      captureIosLogs = false,
+      captureMemory = false,
+    )
 
     /**
      * Turns session video back ON for every host-driven run in this process. Video is opt-in
      * (see [captureVideo]), and a CI pipeline has no CLI flag to reach through — its trails are
      * launched by scripts it doesn't own. This is the one-line, no-release lever that gets the
-     * video and sprite timeline back for a lane or a debugging session, the same way the sprite
-     * tuning vars let CI retune sheets without a release.
+     * recording back for a lane or a debugging session.
      *
      * Only a truthy value opts in; a falsey one reads the same as unset. It is outranked by an
      * explicit per-run choice, so `--no-capture-video` still turns video off in a lane that
@@ -99,11 +70,38 @@ data class CaptureOptions(
     const val ENV_CAPTURE_VIDEO = "TRAILBLAZE_CAPTURE_VIDEO"
 
     /**
-     * Capture options for host-driven sessions, with sprite tuning overridable via environment
-     * variables ([ENV_SPRITE_FPS] / [ENV_SPRITE_FRAME_HEIGHT] / [ENV_SPRITE_QUALITY]) so CI
-     * pipelines can trade sprite size against playback fidelity without a release. Absent or
-     * invalid values fall back to the host defaults (2 fps · 720 px · quality 80) — a bad env
-     * var must never take down video capture.
+     * Turns memory capture OFF for every session in this process — the reverse of
+     * [ENV_CAPTURE_VIDEO], because memory is on by default (see [captureMemory]).
+     *
+     * A lane whose trails are launched by scripts it does not own has no CLI flag to reach
+     * through, so without this the only way off a stream misbehaving on some device or emulator
+     * image is a release. Only an explicit falsey value (`0` / `false`) turns it off; anything
+     * else, including a typo, reads as unset and leaves the default alone — a malformed value
+     * must not silently cost a lane its diagnostics.
+     */
+    const val ENV_CAPTURE_MEMORY = "TRAILBLAZE_CAPTURE_MEMORY"
+
+    /**
+     * Whether [ENV_CAPTURE_MEMORY] explicitly switches memory capture off.
+     *
+     * Read where memory capture is STARTED rather than folded into [captureMemory], so it covers
+     * every route in — the CLI builds its own options, the daemon resolves a per-run override
+     * against a persisted setting, and a kill-switch covering only one of them would not be one.
+     */
+    fun memoryCaptureDisabledInEnv(env: (String) -> String? = System::getenv): Boolean {
+      val raw = env(ENV_CAPTURE_MEMORY)?.trim()?.lowercase() ?: return false
+      return raw == "0" || raw == "false"
+    }
+
+    /**
+     * Turns memory diagnostics on for every session in this process — see [memoryDiagnostics].
+     * Read by the daemon, so a running one must be restarted for a change to apply. Only a truthy
+     * value opts in; anything else reads as off.
+     */
+    const val ENV_MEMORY_DIAGNOSTICS = "TRAILBLAZE_MEMORY_DIAGNOSTICS"
+
+    /**
+     * Capture options for host-driven sessions.
      *
      * Video resolves in one place here, in precedence order: an explicit per-run [captureVideo]
      * (the CLI's `--capture-video` / `--no-capture-video`) wins outright; a null one — the user
@@ -118,14 +116,15 @@ data class CaptureOptions(
       persistedCaptureVideo: Boolean = false,
       captureLogcat: Boolean = true,
       captureIosLogs: Boolean = true,
+      captureMemory: Boolean = true,
+      memoryDiagnostics: Boolean? = null,
       env: (String) -> String? = System::getenv,
     ): CaptureOptions = CaptureOptions(
       captureVideo = captureVideo ?: (envFlagOn(env, ENV_CAPTURE_VIDEO) || persistedCaptureVideo),
       captureLogcat = captureLogcat,
       captureIosLogs = captureIosLogs,
-      spriteFrameFps = spriteEnvInt(env, ENV_SPRITE_FPS, HOST_SPRITE_FPS, 1..60),
-      spriteFrameHeight = spriteEnvInt(env, ENV_SPRITE_FRAME_HEIGHT, HOST_SPRITE_HEIGHT, 16..16383),
-      spriteQuality = spriteEnvInt(env, ENV_SPRITE_QUALITY, HOST_SPRITE_QUALITY, 1..100),
+      captureMemory = captureMemory,
+      memoryDiagnostics = memoryDiagnostics ?: envFlagOn(env, ENV_MEMORY_DIAGNOSTICS),
     )
 
     /**
@@ -136,16 +135,6 @@ data class CaptureOptions(
     private fun envFlagOn(env: (String) -> String?, name: String): Boolean {
       val raw = env(name)?.trim()?.lowercase() ?: return false
       return raw == "1" || raw == "true"
-    }
-
-    private fun spriteEnvInt(env: (String) -> String?, name: String, default: Int, valid: IntRange): Int {
-      val raw = env(name)?.trim()?.takeIf { it.isNotEmpty() } ?: return default
-      val value = raw.toIntOrNull()
-      if (value == null || value !in valid) {
-        Console.log("$name='$raw' is not an integer in $valid — using default $default")
-        return default
-      }
-      return value
     }
   }
 }

@@ -50,11 +50,18 @@ class LaunchedScriptingRuntime internal constructor(
    * [LaunchedSubprocessRuntime.shutdownAll] already enforces on its own internals.
    */
   suspend fun shutdownAll() {
-    // Inline registrations first — their QuickJS engines may hold references the
-    // subprocess teardown would invalidate, and the order matches the construction order
-    // in TrailblazeHostYamlRunner (inline registered first via toolRepo.addDynamicTools).
-    // Deregister-then-dispose mirrors `LaunchedSubprocessRuntime.shutdownAll`'s order so
-    // a tool can't be dispatched to mid-teardown after its host is freed.
+    // Subprocess finalizers run first while the complete session tool registry is live. A cleanup
+    // callback may compose an inline helper through ctx.tools; deregistering or disposing inline
+    // tools first would turn a valid release into an unknown-tool failure.
+    var subprocessFailure: Throwable? = null
+    try {
+      subprocessRuntime?.shutdownAll()
+    } catch (failure: Throwable) {
+      // Keep disposing inline engines and deleting scratch files even when a session resource
+      // could not be released. The caller receives this failure after every peer is cleaned up.
+      subprocessFailure = failure
+    }
+    // Deregister before dispose so a tool can't be dispatched mid-teardown after its host is freed.
     for (registration in inlineRegistrations) {
       try {
         toolRepo.removeDynamicTool(registration.name)
@@ -73,12 +80,34 @@ class LaunchedScriptingRuntime internal constructor(
         )
       }
     }
-    subprocessRuntime?.shutdownAll()
     // Last: the subprocesses above run out of this directory, so it can only go once they're gone.
     tempWorkDir?.let { dir ->
       if (!dir.deleteRecursively()) {
         Console.log("[LaunchedScriptingRuntime] SHUTDOWN_FAIL kind=tempdir path=${dir.absolutePath}")
       }
     }
+    subprocessFailure?.let { throw it }
+  }
+}
+
+/**
+ * Completes every runtime teardown and the caller's remaining cleanup before surfacing failures.
+ *
+ * A resource finalizer is allowed to fail without preventing sibling runtimes, drivers, or streams
+ * from closing. Call this from a non-cancellable session cleanup block so a timeout cannot leave a
+ * later peer resource alive.
+ */
+suspend fun finishScriptingRuntimeCleanup(
+  runtimes: Iterable<LaunchedScriptingRuntime>,
+  afterRuntimeShutdown: suspend () -> Unit = {},
+) {
+  val failures = mutableListOf<Throwable>()
+  runtimes.forEach { runtime ->
+    runCatching { runtime.shutdownAll() }.onFailure(failures::add)
+  }
+  runCatching { afterRuntimeShutdown() }.onFailure(failures::add)
+  failures.firstOrNull()?.let { failure ->
+    failures.drop(1).forEach(failure::addSuppressed)
+    throw failure
   }
 }

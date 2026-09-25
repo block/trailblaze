@@ -31,7 +31,6 @@
     "report/perf-report-cli.ts",
     "report/run-report-cli.ts",
     "report/run-report-events.ts",
-    "report/run-report-sprites.ts",
     "trailrunner/web/app/*.ts"
   ],
   "exclude": ["**/*.test.ts"]

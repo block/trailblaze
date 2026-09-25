@@ -10,6 +10,7 @@ import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.host.driver.BrowsableDeviceListing
 import xyz.block.trailblaze.devices.WebInstanceIds
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.util.runQuiet
 import java.util.concurrent.Callable
 import kotlin.system.exitProcess
 
@@ -70,9 +71,18 @@ class DeviceListCommand : Callable<Int> {
   }
 
   companion object {
-    fun listDevices(parent: TrailblazeCliCommand, showAll: Boolean = false): Int {
-      Console.enableQuietMode()
+    fun listDevices(parent: TrailblazeCliCommand, showAll: Boolean = false): Int =
+      Console.runQuiet { collectAndPrintDevices(parent, showAll) }
 
+    /**
+     * The listing proper; [listDevices] owns the quiet scope around it.
+     *
+     * The restore covers the paths that come back rather than the ones that print. Every success
+     * path here ends in `exitProcess`, which takes the JVM with it before any `finally` runs — so
+     * what the wrapper actually protects is the exception paths, and a test that constructs this
+     * command directly in the shared test JVM.
+     */
+    private fun collectAndPrintDevices(parent: TrailblazeCliCommand, showAll: Boolean): Int {
       // Prefer the running daemon as the source of truth — it's the process that
       // actually owns the WebBrowserManager state across CLI invocations, so any
       // browser slots provisioned via `--device web/<id>` only show up there.

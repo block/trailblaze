@@ -40,8 +40,8 @@ export const sampleapp_launchToLoadedContent = trailblaze.tool(
     if (ctx.device?.driverType && ctx.device.driverType !== ACCESSIBILITY_DRIVER_TYPE) {
       throw new Error(
         `sampleapp_launchToLoadedContent targets ${ACCESSIBILITY_DRIVER_TYPE}, but the session ` +
-          `driver is ${ctx.device.driverType}. See the loading/wait-for-content trail for the ` +
-          `instrumentation-driver version of this wait.`,
+          `driver is ${ctx.device.driverType}. On android-test, sampleapp_waitForText does the ` +
+          `same wait through Maestro; otherwise see the pure-YAML loading/wait-for-content trail.`,
       );
     }
     const appId = ctx.target?.resolveAppId({ defaultAppId: APP_ID }) ?? APP_ID;

@@ -3,6 +3,7 @@ package xyz.block.trailblaze.mcp.newtools
 import kotlinx.coroutines.test.runTest
 import kotlinx.datetime.Clock
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Test
@@ -32,6 +33,7 @@ import java.io.File
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -193,6 +195,71 @@ class SessionToolSetTest {
 
     assertContains(json["message"]!!.jsonPrimitive.content, "video.mp4")
     assertContains(json["message"]!!.jsonPrimitive.content, "device.log")
+  }
+
+  @Test
+  fun `session STOP reports incomplete captured data as a warning on a successful stop`() = runTest {
+    // What the release leaves behind when its capture fails: the session ended, with a warning.
+    val logsDir = logsDirWithInteractiveSessionLasting(
+      trailblazeSessionId,
+      durationMs = 12_500L,
+      endStatus = SessionStatus.Ended.Succeeded(
+        durationMs = 12_500L,
+        captureWarning = "Network capture for 'com.example' ended without evidence",
+      ),
+    )
+    try {
+      val toolSet =
+        SessionToolSet(
+          sessionContext = createSessionContext(),
+          mcpBridge = SessionTestBridge(
+            activeSessionId = trailblazeSessionId,
+            endSessionFailure = IllegalStateException(
+              "1 host session finalizer(s) failed for $trailblazeSessionId; artifacts may be incomplete.",
+            ),
+          ),
+          sessionIdProvider = { trailblazeSessionId },
+          logsRepo = LogsRepo(logsDir = logsDir, watchFileSystem = false),
+        )
+
+      val json = Json.parseToJsonElement(toolSet.session(action = SessionToolSet.SessionAction.STOP)).jsonObject
+
+      assertNull(json["error"])
+      assertEquals("stopped", json["status"]!!.jsonPrimitive.content)
+      assertContains(
+        json["message"]!!.jsonPrimitive.content,
+        "Warning: captured data may be incomplete (Network capture for 'com.example' ended without evidence).",
+      )
+    } finally {
+      logsDir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun `session STOP does not blame capture when the session could not be ended at all`() = runTest {
+    // The session is still in progress on disk: the release never got as far as ending it.
+    val logsDir = logsDirWithInteractiveSessionLasting(trailblazeSessionId, durationMs = 0L)
+    File(logsDir, trailblazeSessionId.value).resolve("002_TrailblazeSessionStatusChangeLog.json").delete()
+    try {
+      val toolSet =
+        SessionToolSet(
+          sessionContext = createSessionContext(),
+          mcpBridge = SessionTestBridge(
+            activeSessionId = trailblazeSessionId,
+            endSessionFailure = IllegalStateException("No device selected"),
+          ),
+          sessionIdProvider = { trailblazeSessionId },
+          logsRepo = LogsRepo(logsDir = logsDir, watchFileSystem = false),
+        )
+
+      val message = Json.parseToJsonElement(toolSet.session(action = SessionToolSet.SessionAction.STOP))
+        .jsonObject["message"]!!.jsonPrimitive.content
+
+      assertContains(message, "Warning: ending the session failed (No device selected).")
+      assertFalse(message.contains("captured data"), message)
+    } finally {
+      logsDir.deleteRecursively()
+    }
   }
 
   @Test
@@ -478,6 +545,126 @@ class SessionToolSetTest {
     assertContains(json["error"]!!.jsonPrimitive.content, "not available")
   }
 
+  // ── INFO / LIST — duration ─────────────────────────────────────────────────
+
+  /**
+   * An interactive session is ended by releasing its device, which writes an end status with no
+   * duration of its own (0). Rendering that raw value made every interactive session read "0.0s".
+   * Writes the logs straight to disk before the repo is built, so its first read primes the list.
+   */
+  private fun logsDirWithInteractiveSessionLasting(
+    sessionId: SessionId,
+    durationMs: Long,
+    endStatus: SessionStatus.Ended = SessionStatus.Ended.Succeeded(durationMs = 0L),
+  ): File {
+    val logsDir = java.nio.file.Files.createTempDirectory("session-duration-").toFile()
+    val startedAt = kotlinx.datetime.Instant.parse("2026-09-24T10:00:00Z")
+    val deviceInfo = TrailblazeDeviceInfo(
+      trailblazeDeviceId = TrailblazeDeviceId(
+        instanceId = "emulator-5554",
+        trailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID,
+      ),
+      trailblazeDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+      widthPixels = 1080,
+      heightPixels = 2400,
+      classifiers = emptyList(),
+    )
+    val logs = listOf(
+      TrailblazeLog.TrailblazeSessionStatusChangeLog(
+        sessionStatus = SessionStatus.Started(
+          trailConfig = null,
+          trailFilePath = null,
+          hasRecordedSteps = false,
+          testMethodName = "Tap the login button",
+          testClassName = "MCP",
+          trailblazeDeviceInfo = deviceInfo,
+          trailblazeDeviceId = deviceInfo.trailblazeDeviceId,
+        ),
+        session = sessionId,
+        timestamp = startedAt,
+      ),
+      TrailblazeLog.TrailblazeSessionStatusChangeLog(
+        sessionStatus = endStatus,
+        session = sessionId,
+        timestamp = kotlinx.datetime.Instant.fromEpochMilliseconds(
+          startedAt.toEpochMilliseconds() + durationMs,
+        ),
+      ),
+    )
+    val sessionDir = File(logsDir, sessionId.value).apply { mkdirs() }
+    logs.forEachIndexed { index, log ->
+      sessionDir.resolve("00${index + 1}_TrailblazeSessionStatusChangeLog.json")
+        .writeText(xyz.block.trailblaze.logs.client.TrailblazeJsonInstance.encodeToString<TrailblazeLog>(log))
+    }
+    return logsDir
+  }
+
+  @Test
+  fun `session LIST shows how long an interactive session ran, not the zero its end status carries`() = runTest {
+    val logsDir = logsDirWithInteractiveSessionLasting(trailblazeSessionId, durationMs = 12_500L)
+    try {
+      val toolSet = SessionToolSet(
+        sessionContext = createSessionContext(),
+        mcpBridge = SessionTestBridge(),
+        logsRepo = LogsRepo(logsDir = logsDir, watchFileSystem = false),
+      )
+
+      val result = toolSet.session(action = SessionToolSet.SessionAction.LIST)
+      val session = Json.parseToJsonElement(result).jsonObject["sessions"]!!.jsonArray.single().jsonObject
+
+      assertEquals("Succeeded (12.5s)", session["status"]!!.jsonPrimitive.content)
+    } finally {
+      logsDir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun `session LIST flags a session whose captured data is incomplete without calling it failed`() = runTest {
+    val logsDir = logsDirWithInteractiveSessionLasting(
+      trailblazeSessionId,
+      durationMs = 12_500L,
+      endStatus = SessionStatus.Ended.Succeeded(
+        durationMs = 0L,
+        captureWarning = "Network capture ended without evidence",
+      ),
+    )
+    try {
+      val toolSet = SessionToolSet(
+        sessionContext = createSessionContext(),
+        mcpBridge = SessionTestBridge(),
+        logsRepo = LogsRepo(logsDir = logsDir, watchFileSystem = false),
+      )
+
+      val result = toolSet.session(action = SessionToolSet.SessionAction.LIST)
+      val session = Json.parseToJsonElement(result).jsonObject["sessions"]!!.jsonArray.single().jsonObject
+
+      assertEquals("Succeeded (12.5s), captured data incomplete", session["status"]!!.jsonPrimitive.content)
+    } finally {
+      logsDir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun `session INFO shows how long an interactive session ran, not the zero its end status carries`() = runTest {
+    val logsDir = logsDirWithInteractiveSessionLasting(trailblazeSessionId, durationMs = 95_000L)
+    try {
+      val toolSet = SessionToolSet(
+        sessionContext = createSessionContext(),
+        mcpBridge = SessionTestBridge(),
+        logsRepo = LogsRepo(logsDir = logsDir, watchFileSystem = false),
+      )
+
+      val result = toolSet.session(
+        action = SessionToolSet.SessionAction.INFO,
+        id = trailblazeSessionId.value,
+      )
+
+      assertEquals("Succeeded (1m 35s)", Json.parseToJsonElement(result).jsonObject["status"]!!.jsonPrimitive.content)
+    } finally {
+      logsDir.deleteRecursively()
+    }
+  }
+
   @Test
   fun `session INFO for current session returns error when no active session`() = runTest {
     val bridge = SessionTestBridge()
@@ -626,6 +813,8 @@ class SessionTestBridge(
   private val sessionTargets: MutableMap<SessionId, String> = mutableMapOf(),
   /** Returned by [getCurrentAppTargetId] — the daemon-wide fallback. */
   private val daemonWideTarget: String? = null,
+  /** Thrown by [endSession], as a failed capture finalization does after ending the session. */
+  private val endSessionFailure: Throwable? = null,
 ) : TrailblazeMcpBridge {
   override suspend fun getAvailableDevices(): Set<TrailblazeConnectedDeviceSummary> = emptySet()
 
@@ -656,7 +845,10 @@ class SessionTestBridge(
 
   override fun getDirectScreenStateProvider(skipScreenshot: Boolean): ((ScreenshotScalingConfig) -> ScreenState)? = null
 
-  override suspend fun endSession(): Boolean = true
+  override suspend fun endSession(): Boolean {
+    endSessionFailure?.let { throw it }
+    return true
+  }
 
   override fun isOnDeviceInstrumentation(): Boolean = false
 

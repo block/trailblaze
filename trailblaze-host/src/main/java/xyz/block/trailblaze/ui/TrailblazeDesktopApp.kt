@@ -176,8 +176,19 @@ abstract class TrailblazeDesktopApp(
     // Offloaded to Dispatchers.IO because `executeForDaemon` runs picocli which
     // blocks on `runBlocking` inside the cli*WithDevice helpers — we must not park a Ktor
     // HTTP server thread on that.
+    // Forwarded commands read this daemon's config and live target set. The captured
+    // `configProvider` is a factory: left to it, every forwarded `config show` built a new config
+    // and re-ran app-target discovery, which is most of what made that command slow.
     trailblazeMcpServer.onCliExecRequest = { request ->
-      withContext(Dispatchers.IO) { TrailblazeCli.executeForDaemon(request) }
+      withContext(Dispatchers.IO) {
+        TrailblazeCli.executeForDaemon(
+          request,
+          providers = TrailblazeCli.daemonProviders(
+            config = desktopAppConfig,
+            appTargets = { deviceManager.availableAppTargets },
+          ),
+        )
+      }
     }
     // Forwarded `config` subcommands need to mutate the daemon's in-memory
     // settings — not the on-disk file directly — so the daemon's auto-save
@@ -426,6 +437,7 @@ abstract class TrailblazeDesktopApp(
       turbo = request.turbo,
       captureLogcat = request.captureLogcat,
       captureIosLogs = request.captureIosLogs,
+      captureMemory = request.captureMemory,
       snapshotBaselineRef = request.snapshotBaseline,
       snapshotBaselineThresholdPercent = request.snapshotBaselineThresholdPercent,
       onProgressMessage = { message ->
@@ -480,7 +492,8 @@ abstract class TrailblazeDesktopApp(
     // MaxCallsLimit / Timeout while ours has already cleanly Ended.
     // Read disk-truth (getSessionInfoDirect), not the cached flow: this run's pinned session
     // has no active per-session watcher, so the cache never sees the on-disk Ended log.
-    delay(3000)
+    // The first read happens immediately: a host-driven run has already written Ended by the time
+    // the latch releases, and a session still being created is covered by the guard's grace window.
     val maxWaitMs = 600_000L
     val pollIntervalMs = 500L
     val waitStart = System.currentTimeMillis()
@@ -518,10 +531,10 @@ abstract class TrailblazeDesktopApp(
       }
       delay(pollIntervalMs)
     }
-    // Short buffer after Ended for trailing files (screenshots, etc.). Skipped when the wait was
-    // abandoned: that path is defined by no session ever existing, so there are no trailing files
-    // to wait on and the buffer is three more seconds of the silence this guard is removing.
-    if (!abandonedWithoutSession) delay(3000)
+    // Let trailing files (screenshots, etc.) land after Ended — until the session dir goes quiet,
+    // capped at the three seconds this used to sleep unconditionally. Skipped when the wait was
+    // abandoned: that path is defined by no session ever existing, so there are no trailing files.
+    if (!abandonedWithoutSession) awaitSessionDirQuiet(File(logsRepo.logsDir, pinnedSessionId.value))
 
     // Reconcile against the pinned session's on-disk status (source of truth for pass/fail).
     // Inspect ONLY the pinned session — sibling sessions belong to parallel trail runs and have

@@ -26,6 +26,10 @@
     "./matcher": {
       "types": "./src/matcher/index.ts",
       "default": "./src/matcher/index.ts"
+    },
+    "./surveys": {
+      "types": "./src/surveys/index.ts",
+      "default": "./src/surveys/index.ts"
     }
   },
   "files": [

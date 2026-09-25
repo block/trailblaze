@@ -24,6 +24,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonPrimitive
 import xyz.block.trailblaze.agent.TwoTierAgentConfig
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
+import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.mcp.models.McpSessionId
 import xyz.block.trailblaze.toolcalls.SessionDeviceBindings
 import xyz.block.trailblaze.util.Console
@@ -484,7 +485,62 @@ class TrailblazeMcpSessionContext(
    * Called when connectToDevice succeeds.
    */
   fun setAssociatedDevice(deviceId: TrailblazeDeviceId) {
+    noteRecordingSeenWhileIdle(deviceId)
     associatedDeviceId = deviceId
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Recording ownership
+  //
+  // A recording belongs to the DEVICE, not to the MCP session that happens to be attached, so when
+  // this session closes the server needs to know whether the device's recording is this session's
+  // to end. The rule: a recording this session first sees while it is NOT running one of its own
+  // tool calls — at attach, between its calls, or at close — was started by someone else. The usual
+  // case is the CLI's reusable session, while this one is a one-shot `device list` or a
+  // device-autodetect probe that the server auto-connected because only one device is attached.
+  // Ending it on close would silently throw away the flow the user is about to save.
+  //
+  // Observing between calls, not only at the first attach, is what keeps this right after the
+  // recording on the device changes hands: a detach and re-attach, or the joined recording's owner
+  // stopping it and a third party starting another while this session sits idle.
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  /**
+   * The recording running on a device right now, or null. Wired by the server when it creates the
+   * context; left null (nothing is ever treated as found running) where no server is involved.
+   */
+  var activeRecordingOnDevice: ((TrailblazeDeviceId) -> SessionId?)? = null
+
+  private val recordingOwnershipLock = Any()
+
+  /** The recording on each device the last time this session looked, including "none". */
+  private val lastSeenRecording = mutableMapOf<TrailblazeDeviceId, SessionId?>()
+
+  /** Per device, the latest recording this session found running rather than started. */
+  private val recordingFoundRunning = mutableMapOf<TrailblazeDeviceId, SessionId>()
+
+  /** A recording on [deviceId] that appeared since this session last looked, while it was idle, is not its own. */
+  fun noteRecordingSeenWhileIdle(deviceId: TrailblazeDeviceId) = synchronized(recordingOwnershipLock) {
+    val now = activeRecordingOnDevice?.invoke(deviceId)
+    if (now != null && lastSeenRecording[deviceId] != now) recordingFoundRunning[deviceId] = now
+    lastSeenRecording[deviceId] = now
+  }
+
+  /** Called by the request dispatcher before a tool call runs, including any session it creates. */
+  fun noteRecordingsBeforeOwnToolCall() = addressedDeviceIds().forEach(::noteRecordingSeenWhileIdle)
+
+  /** Called by the request dispatcher once a tool call finishes: whatever it started is this session's. */
+  fun noteRecordingsAfterOwnToolCall() = addressedDeviceIds().forEach { deviceId ->
+    synchronized(recordingOwnershipLock) { lastSeenRecording[deviceId] = activeRecordingOnDevice?.invoke(deviceId) }
+  }
+
+  /**
+   * The recording running on [deviceId] if this session found it running rather than started it, so
+   * it is not this session's to end. Null when there is none, or when it is this session's own.
+   */
+  fun recordingFoundRunningOn(deviceId: TrailblazeDeviceId): SessionId? = synchronized(recordingOwnershipLock) {
+    noteRecordingSeenWhileIdle(deviceId)
+    lastSeenRecording[deviceId]?.takeIf { it == recordingFoundRunning[deviceId] }
   }
 
   /**
@@ -601,8 +657,10 @@ class TrailblazeMcpSessionContext(
    * rebind of the already-active name. The caller owns the device-side consequences (claiming the
    * device, pointing the bridge at it, re-registering the tool surface).
    */
-  fun bindNamedDevice(name: String, device: SessionDeviceBindings.BoundDevice): Boolean =
-    synchronized(namedBindingsLock) {
+  fun bindNamedDevice(name: String, device: SessionDeviceBindings.BoundDevice): Boolean {
+    // Observed outside the bindings lock: it calls into the bridge, which must never run under it.
+    noteRecordingSeenWhileIdle(device.trailblazeDeviceId)
+    return synchronized(namedBindingsLock) {
       val previousActive = namedDeviceBindings?.activeName
       namedDevices[name] = device
       rebuildNamedBindings(activeName = previousActive ?: name)
@@ -613,6 +671,7 @@ class TrailblazeMcpSessionContext(
       )
       becameActive
     }
+  }
 
   /**
    * Removes the binding for [name].

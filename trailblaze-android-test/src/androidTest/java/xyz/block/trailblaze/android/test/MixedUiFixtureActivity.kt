@@ -59,7 +59,7 @@ class MixedUiFixtureActivity : ComponentActivity() {
         id = VIEW_STATUS_ID
         text = VIEW_STATUS_INITIAL
       }
-    val viewInput = EditText(this).apply { id = VIEW_INPUT_ID; hint = "View input" }
+    val viewInput = EditText(this).apply { id = VIEW_INPUT_ID; hint = VIEW_INPUT_HINT }
     val viewButton =
       Button(this).apply {
         id = VIEW_BUTTON_ID
@@ -269,6 +269,7 @@ class MixedUiFixtureActivity : ComponentActivity() {
     // `generateViewId()` produces ids that `Resources.getResourceName` cannot name at all.
     val VIEW_STATUS_ID = xyz.block.trailblaze.android.test.test.R.id.view_status
     val VIEW_INPUT_ID = android.view.View.generateViewId()
+    const val VIEW_INPUT_HINT = "View input"
     val VIEW_BUTTON_ID = android.view.View.generateViewId()
 
     const val VIEW_STATUS_INITIAL = "View status: ready"

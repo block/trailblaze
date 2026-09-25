@@ -257,6 +257,7 @@ function SettingsScreen({ go, initTab }) {
         <Section title="Capture defaults" sub="Defaults for new runs; the Configure-run dialog can still override per run.">
           <Row label="Android logcat"><Switch on={!!s.captureLogcat} onClick={() => toggle('captureLogcat', s.captureLogcat)} /></Row>
           <Row label="iOS simulator logs"><Switch on={!!s.captureIosLogs} onClick={() => toggle('captureIosLogs', s.captureIosLogs)} /></Row>
+          <Row label="App memory"><Switch on={!!s.captureMemory} onClick={() => toggle('captureMemory', s.captureMemory)} /></Row>
           <Row label="Network traffic"><Switch on={!!s.captureNetworkTraffic} onClick={() => toggle('captureNetworkTraffic', s.captureNetworkTraffic)} /></Row>
           <Row label="Analytics"><Switch on={!!s.captureAnalytics} onClick={() => toggle('captureAnalytics', s.captureAnalytics)} /></Row>
         </Section>

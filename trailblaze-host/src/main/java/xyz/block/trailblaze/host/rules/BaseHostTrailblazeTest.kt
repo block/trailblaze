@@ -62,6 +62,7 @@ import xyz.block.trailblaze.rules.TrailblazeLoggingRule
 import xyz.block.trailblaze.rules.TrailblazeRunnerUtil
 import xyz.block.trailblaze.scripting.HostScriptedToolLauncher
 import xyz.block.trailblaze.scripting.LaunchedScriptingRuntime
+import xyz.block.trailblaze.scripting.finishScriptingRuntimeCleanup
 import xyz.block.trailblaze.model.toSessionToolRepo
 import xyz.block.trailblaze.toolcalls.EmptyTrailblazeToolSurface
 import xyz.block.trailblaze.toolcalls.ResolvedAgentToolbox
@@ -331,16 +332,15 @@ abstract class BaseHostTrailblazeTest(
     val resolved = resolvedTargetForSession ?: return@lazy null
     runCatching {
       val installed = MobileDeviceUtils.getInstalledAppIds(resolved.deviceId)
-      // Android's AndroidHostAdbUtils.listInstalledPackages swallows adb failures and returns an
-      // empty set instead of throwing, so the onFailure branch below never fires for them. Detect
-      // the distinguishable "0 installed despite declared candidates" case and log it explicitly,
-      // so a downstream "ctx.target.resolveAppId() === undefined" is debuggable on Android too
-      // (mirrors the V1 resolution site in TrailblazeHostYamlRunner).
+      // A failed probe throws and reaches the onFailure log below. An EMPTY inventory is the other
+      // shape a broken probe can take — a running device always has packages — so it is logged
+      // too, keeping a downstream "ctx.target.resolveAppId() === undefined" debuggable (mirrors
+      // the V1 resolution site in TrailblazeHostYamlRunner).
       if (installed.isEmpty() && resolved.appIds.isNotEmpty()) {
         Console.log(
           "[BaseHostTrailblazeTest] getInstalledAppIds returned 0 packages for ${resolved.deviceId} " +
             "despite target declaring [${resolved.appIds.joinToString()}] — appId will be null " +
-            "(likely a silent adb failure).",
+            "(the probe answered but listed nothing).",
         )
       }
       resolved.target.getAppIdIfInstalled(resolved.platform, installed)
@@ -873,8 +873,9 @@ abstract class BaseHostTrailblazeTest(
     } finally {
       // Free QuickJS engines + deregister the dynamic tools so a reused repo doesn't collide on a
       // later session. NonCancellable so teardown completes even on trail timeout / abort.
-      launchedScripting?.let { runtime -> withContext(NonCancellable) { runtime.shutdownAll() } }
-      currentToolTraceId = null
+      withContext(NonCancellable) {
+        finishScriptingRuntimeCleanup(listOfNotNull(launchedScripting)) { currentToolTraceId = null }
+      }
     }
     return HostYamlRunResult(
       sessionId = loggingRule.session?.sessionId ?: SessionId("unknown"),

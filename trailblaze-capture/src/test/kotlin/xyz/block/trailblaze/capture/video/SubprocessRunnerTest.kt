@@ -31,8 +31,8 @@ class SubprocessRunnerTest {
     assertNotNull(result, "expected a SubprocessResult even on non-zero exit")
     assertEquals(7, result.exitCode)
     // Output is captured even when the subprocess exits non-zero — important because the
-    // failure-diagnostic logs in callers (concatSegments, wrapSingleSegment, frame extraction,
-    // sprite tiling) embed the stdout/stderr to make CI triage possible.
+    // failure-diagnostic logs in callers (concatSegments, wrapSingleSegment, the web mux, the
+    // Playwright transcode) embed the stdout/stderr to make CI triage possible.
     assertEquals("oops", result.output.trim())
   }
 

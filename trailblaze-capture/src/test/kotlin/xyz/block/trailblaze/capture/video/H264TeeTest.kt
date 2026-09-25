@@ -35,6 +35,77 @@ class H264TeeTest {
   }
 
   // ──────────────────────────────────────────────────────────────────────────
+  // Which devices may be asked for an unlimited recording
+  // ──────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Attaches a tee that reports [sdk] and returns the `unlimited` flag its producer was asked for.
+   */
+  private fun unlimitedRequestedAtSdk(sdk: Int): Boolean {
+    val requested = AtomicReference<Boolean>(null)
+    val tee = H264Tee(
+      deviceId = deviceId,
+      videoSize = "720x1280",
+      bitRate = "4000000",
+      producerFactory = H264Tee.ProducerFactory { _, _, _, unlimited ->
+        requested.compareAndSet(null, unlimited)
+        object : H264Tee.ProducerHandle {
+          override val input: InputStream = ByteArrayInputStream(byteArrayOf(1, 2, 3, 4))
+          override fun close() {}
+        }
+      },
+      sdkLevelProvider = { sdk },
+      restartOnUnexpectedExit = false,
+    )
+    tee.attach(ringBufferBytes = 1024).detach()
+    return requested.get() ?: error("producer was never spawned for sdk=$sdk")
+  }
+
+  @Test
+  fun `only Android 14 and later are asked to record without a time limit`() {
+    // `screenrecord --time-limit 0` is rejected before Android 14, and rejected on STDOUT —
+    // the message lands inside the H.264 stream, the process exits at once, and the tee
+    // respawns forever without ever delivering a frame. Measured 2026-09-20: API 33 answers
+    // "Time limit 0s outside acceptable range [1,180]" in 47 bytes; API 34, 35 and 36 stream.
+    for (sdk in listOf(28, 29, 30, 31, 32, 33)) {
+      assertFalse(
+        unlimitedRequestedAtSdk(sdk),
+        "API $sdk rejects --time-limit 0, so it must be recorded on the capped-and-restart path",
+      )
+    }
+    for (sdk in listOf(34, 35, 36)) {
+      assertTrue(
+        unlimitedRequestedAtSdk(sdk),
+        "API $sdk accepts --time-limit 0 and should record in one uninterrupted invocation",
+      )
+    }
+  }
+
+  @Test
+  fun `the capped path spawns a screenrecord with no time limit flag at all`() {
+    // Asserting the real command line, not just the boolean: passing `--time-limit 180` would
+    // also satisfy the flag but is a different (and unnecessary) request.
+    val capped = AdbScreenrecordProducerFactory.screenrecordArgs(
+      deviceId = deviceId,
+      videoSize = "720x1280",
+      bitRate = "4000000",
+      unlimited = false,
+    )
+    assertFalse(capped.contains("--time-limit"), "capped spawn should omit the flag entirely: $capped")
+    assertTrue(capped.containsAll(listOf("screenrecord", "--output-format=h264", "720x1280", "-")), "got $capped")
+
+    val unlimited = AdbScreenrecordProducerFactory.screenrecordArgs(
+      deviceId = deviceId,
+      videoSize = "720x1280",
+      bitRate = "4000000",
+      unlimited = true,
+    )
+    val flagIndex = unlimited.indexOf("--time-limit")
+    assertTrue(flagIndex >= 0, "unlimited spawn should carry the flag: $unlimited")
+    assertEquals("0", unlimited[flagIndex + 1], "the unlimited time limit is zero seconds")
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────
   // Ring buffer
   // ──────────────────────────────────────────────────────────────────────────
 
@@ -85,7 +156,7 @@ class H264TeeTest {
       videoSize = "720x1280",
       bitRate = "4000000",
       producerFactory = singleShotProducer(pipeIn),
-      sdkLevelProvider = { H264Tee.ANDROID_R_SDK },
+      sdkLevelProvider = { H264Tee.ANDROID_U_SDK },
       restartOnUnexpectedExit = false,
     )
 
@@ -125,7 +196,7 @@ class H264TeeTest {
       videoSize = "720x1280",
       bitRate = "4000000",
       producerFactory = singleShotProducer(pipeIn),
-      sdkLevelProvider = { H264Tee.ANDROID_R_SDK },
+      sdkLevelProvider = { H264Tee.ANDROID_U_SDK },
       restartOnUnexpectedExit = false,
     )
 
@@ -202,7 +273,7 @@ class H264TeeTest {
       videoSize = "720x1280",
       bitRate = "4000000",
       producerFactory = singleShotProducer(pipeIn),
-      sdkLevelProvider = { H264Tee.ANDROID_R_SDK },
+      sdkLevelProvider = { H264Tee.ANDROID_U_SDK },
       restartOnUnexpectedExit = false,
     )
 
@@ -253,7 +324,7 @@ class H264TeeTest {
       videoSize = "720x1280",
       bitRate = "4000000",
       producerFactory = singleShotProducer(pipeIn),
-      sdkLevelProvider = { H264Tee.ANDROID_R_SDK },
+      sdkLevelProvider = { H264Tee.ANDROID_U_SDK },
       restartOnUnexpectedExit = false,
     )
 
@@ -305,7 +376,7 @@ class H264TeeTest {
       videoSize = "720x1280",
       bitRate = "4000000",
       producerFactory = factory,
-      sdkLevelProvider = { H264Tee.ANDROID_R_SDK },
+      sdkLevelProvider = { H264Tee.ANDROID_U_SDK },
     )
 
     val early = tee.attach(ringBufferBytes = 64 * 1024)
@@ -357,7 +428,7 @@ class H264TeeTest {
       videoSize = "720x1280",
       bitRate = "4000000",
       producerFactory = factory,
-      sdkLevelProvider = { H264Tee.ANDROID_R_SDK },
+      sdkLevelProvider = { H264Tee.ANDROID_U_SDK },
       restartOnUnexpectedExit = false,
     )
 
@@ -392,14 +463,14 @@ class H264TeeTest {
   // ──────────────────────────────────────────────────────────────────────────
 
   @Test
-  fun `restart signal fires when producer exits on a pre-Android-11 device`() {
+  fun `restart signal fires when producer exits on a pre-Android-14 device`() {
     // Two subprocesses worth of bytes, signaled by the producer factory returning a fresh
     // ByteArrayInputStream on each call.
     val first = byteArrayOf(1, 2, 3, 4)
     val second = byteArrayOf(5, 6, 7, 8)
     val callCount = AtomicInteger(0)
     val factory = H264Tee.ProducerFactory { _, _, _, unlimited ->
-      assertEquals(false, unlimited, "pre-API-30 should not request unlimited time-limit")
+      assertEquals(false, unlimited, "pre-API-34 should not request unlimited time-limit")
       val n = callCount.getAndIncrement()
       val bytes = when (n) {
         0 -> first
@@ -416,7 +487,7 @@ class H264TeeTest {
       videoSize = "720x1280",
       bitRate = "4000000",
       producerFactory = factory,
-      sdkLevelProvider = { 28 }, // < 30, forces restart-on-exit chain
+      sdkLevelProvider = { 28 }, // < 34, forces restart-on-exit chain
     )
     val consumer = tee.attach(ringBufferBytes = 64 * 1024)
 
@@ -439,7 +510,7 @@ class H264TeeTest {
     val pipeIn = PipedInputStream(pipeOut, 64)
     val callCount = AtomicInteger(0)
     val factory = H264Tee.ProducerFactory { _, _, _, unlimited ->
-      assertTrue(unlimited, "API 30+ restarts should preserve the unlimited time limit")
+      assertTrue(unlimited, "API 34+ restarts should preserve the unlimited time limit")
       when (callCount.getAndIncrement()) {
         0 ->
           object : H264Tee.ProducerHandle {
@@ -459,7 +530,7 @@ class H264TeeTest {
         videoSize = "720x1280",
         bitRate = "4000000",
         producerFactory = factory,
-        sdkLevelProvider = { H264Tee.ANDROID_R_SDK },
+        sdkLevelProvider = { H264Tee.ANDROID_U_SDK },
       )
     val consumer = tee.attach(ringBufferBytes = 64 * 1024)
 
@@ -478,6 +549,35 @@ class H264TeeTest {
   // ──────────────────────────────────────────────────────────────────────────
   // Lifecycle — ref-counted start/stop
   // ──────────────────────────────────────────────────────────────────────────
+
+  @Test
+  fun `the tee reports a producer that died as no longer feeding`() {
+    // A recorder stopping reads this to tell a still screen (producer alive, nothing to send) from
+    // a feed that died; only the former may have its last frame held to the stop.
+    val pipeOut = PipedOutputStream()
+    val pipeIn = PipedInputStream(pipeOut, 16)
+    val tee = H264Tee(
+      deviceId = deviceId,
+      videoSize = "720x1280",
+      bitRate = "4000000",
+      producerFactory = H264Tee.ProducerFactory { _, _, _, _ ->
+        object : H264Tee.ProducerHandle {
+          override val input: InputStream = pipeIn
+          override fun close() { runCatching { pipeOut.close() } }
+        }
+      },
+      sdkLevelProvider = { H264Tee.ANDROID_U_SDK },
+      restartOnUnexpectedExit = false,
+    )
+    val consumer = tee.attach(64 * 1024)
+    assertTrue(tee.isFeeding, "a spawned producer with an open stream is feeding")
+
+    pipeOut.close()
+    val deadline = System.currentTimeMillis() + 5_000L
+    while (tee.isFeeding && System.currentTimeMillis() < deadline) Thread.sleep(10)
+    assertFalse(tee.isFeeding, "a producer whose stream ended is not feeding")
+    consumer.detach()
+  }
 
   @Test
   fun `producer is spawned on first attach and stopped on last detach`() {
@@ -505,7 +605,7 @@ class H264TeeTest {
       videoSize = "720x1280",
       bitRate = "4000000",
       producerFactory = factory,
-      sdkLevelProvider = { H264Tee.ANDROID_R_SDK },
+      sdkLevelProvider = { H264Tee.ANDROID_U_SDK },
     )
 
     assertEquals(0, spawns.get())
@@ -562,7 +662,7 @@ class H264TeeTest {
       videoSize = "720x1280",
       bitRate = "4000000",
       producerFactory = factory,
-      sdkLevelProvider = { H264Tee.ANDROID_R_SDK },
+      sdkLevelProvider = { H264Tee.ANDROID_U_SDK },
       restartOnUnexpectedExit = false,
     )
 

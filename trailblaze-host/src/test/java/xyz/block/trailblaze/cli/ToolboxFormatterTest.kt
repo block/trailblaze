@@ -649,6 +649,149 @@ class ToolboxFormatterTest {
   }
 
   // ---------------------------------------------------------------------------------------
+  // renderSearchMatches — `toolbox --search <query>`
+  // ---------------------------------------------------------------------------------------
+
+  /** Two matches whose descriptions run long, one of them carrying parameters. */
+  private fun searchMatches(): JsonArray = jsonArr(
+    """
+    [
+      {
+        "source": "sampleapp (android)",
+        "tool": {
+          "name": "sampleapp_launchAppSignedIn",
+          "description": "Launches the app signed in.\nNOTE for maintainers: prefer the account variant.\nThird line.",
+          "requiredParameters": [{"name": "email", "type": "STRING", "description": "Account email."}],
+          "optionalParameters": [{"name": "locale", "type": "STRING", "description": "BCP-47 locale."}]
+        }
+      },
+      {
+        "source": "sampleapp (android)",
+        "tool": {"name": "sampleapp_androidDeepLink", "description": "Opens a deep link."}
+      },
+      {
+        "source": "core_interaction",
+        "tool": {"name": "launchApp", "description": "Generic launch."}
+      }
+    ]
+    """.trimIndent(),
+  )
+
+  @Test
+  fun `a compact search gives one line per match and no parameters`() {
+    val lines = ToolboxFormatter.renderSearchMatches(searchMatches(), detail = false)
+
+    assertEquals(
+      listOf(
+        "  sampleapp (android):",
+        "    - sampleapp_launchAppSignedIn: Launches the app signed in.…",
+        "    - sampleapp_androidDeepLink: Opens a deep link.",
+        "  core_interaction:",
+        "    - launchApp: Generic launch.",
+      ),
+      lines,
+      "compact search is one line per tool, grouped by source in daemon order",
+    )
+  }
+
+  @Test
+  fun `a compact search keeps a multi-line description off the output but flags there is more`() {
+    val lines = ToolboxFormatter.renderSearchMatches(searchMatches(), detail = false)
+
+    assertFalse(lines.any { "NOTE for maintainers" in it }, "later description lines must not print")
+    assertTrue(
+      lines.any { it.endsWith("Launches the app signed in.…") },
+      "the ellipsis is the cue that --name has more; got: $lines",
+    )
+  }
+
+  @Test
+  fun `--detail restores the full description and the parameter table`() {
+    val lines = ToolboxFormatter.renderSearchMatches(searchMatches(), detail = true)
+
+    assertTrue(lines.any { "NOTE for maintainers" in it }, "detail prints the description verbatim")
+    assertEquals(
+      listOf(
+        "        email (STRING, required): Account email.",
+        "        locale (STRING, optional): BCP-47 locale.",
+      ),
+      lines.filter { it.startsWith("        ") },
+      "detail prints each match's parameters, required first",
+    )
+  }
+
+  @Test
+  fun `a match with no source is grouped rather than dropped`() {
+    val lines = ToolboxFormatter.renderSearchMatches(
+      jsonArr("""[{"tool":{"name":"tap","description":"Taps."}}]"""),
+      detail = false,
+    )
+
+    assertEquals(listOf("  Unknown:", "    - tap: Taps."), lines)
+  }
+
+  @Test
+  fun `a malformed match is skipped without losing its neighbours`() {
+    val lines = ToolboxFormatter.renderSearchMatches(
+      jsonArr(
+        """[{"source":"s","tool":{"description":"No name."}},{"source":"s","tool":{"name":"tap"}},{"source":"s"}]""",
+      ),
+      detail = false,
+    )
+
+    assertEquals(listOf("  s:", "    - tap"), lines, "a nameless tool and a tool-less row drop out")
+  }
+
+  @Test
+  fun `a row whose fields are the wrong shape is skipped, not thrown on`() {
+    // The rows here are the ones a throwing `jsonPrimitive` cast would crash the whole render on:
+    // a `source` that is an object, and a tool `name` that is an array.
+    val lines = ToolboxFormatter.renderSearchMatches(
+      jsonArr(
+        """
+        [
+          {"source":{"unexpected":"object"},"tool":{"name":"tap","description":"Taps."}},
+          {"source":"s","tool":{"name":["not","a","name"]}},
+          {"source":"s","tool":{"name":"swipe","description":"Swipes."}}
+        ]
+        """.trimIndent(),
+      ),
+      detail = false,
+    )
+
+    assertEquals(
+      listOf("  Unknown:", "    - tap: Taps.", "  s:", "    - swipe: Swipes."),
+      lines,
+      "an unreadable source falls back to Unknown and an unreadable name drops just that row",
+    )
+  }
+
+  @Test
+  fun `a source whose every row is malformed prints no heading`() {
+    val lines = ToolboxFormatter.renderSearchMatches(
+      jsonArr("""[{"source":"emptySource"},{"source":"realSource","tool":{"name":"tap"}}]"""),
+      detail = false,
+    )
+
+    assertEquals(
+      listOf("  realSource:", "    - tap"),
+      lines,
+      "a heading with nothing under it tells the reader a source matched when it did not",
+    )
+  }
+
+  @Test
+  fun `only the compact footer names --detail`() {
+    // The reader of a detail view has already seen the descriptions and parameters, so pointing
+    // them at the flag they just used would be noise.
+    assertEquals(
+      "Use --name <tool> for one tool's full details, or --detail for every match's.",
+      ToolboxFormatter.searchFooterHint(detail = false),
+    )
+    assertEquals("Use --name <tool> for full details.", ToolboxFormatter.searchFooterHint(detail = true))
+  }
+
+  // ---------------------------------------------------------------------------------------
   // Helpers
   // ---------------------------------------------------------------------------------------
 

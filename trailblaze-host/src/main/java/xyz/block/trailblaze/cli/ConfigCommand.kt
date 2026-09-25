@@ -52,6 +52,9 @@ class ConfigCommand : Callable<Int> {
 
   fun getConfigProvider(): TrailblazeDesktopAppConfig = parent.configProvider()
 
+  /** The app targets to list and validate against — see [TrailblazeCliCommand.appTargetsProvider]. */
+  fun getAppTargets(): Set<TrailblazeHostAppTarget> = parent.appTargetsProvider()
+
   override fun call(): Int {
     // `config llm` with no value shows the full LLM details (providers + models)
     if (key == "llm" && value == null) {
@@ -108,8 +111,7 @@ class ConfigCommand : Callable<Int> {
     // readable line below) are unaffected by quiet mode and stay visible — discovery-time
     // warnings emitted via `Console.error` from `AppTargetDiscovery` also still surface.
     val (tokenStatuses, targets) = Console.runQuiet {
-      val cfg = getConfigProvider()
-      cfg.getAllLlmTokenStatuses() to cfg.availableAppTargets.sortedBy { it.displayName }
+      getConfigProvider().getAllLlmTokenStatuses() to getAppTargets().sortedBy { it.displayName }
     }
 
     // Show which settings file is in effect — `getSettingsFile()` prefers a
@@ -413,7 +415,7 @@ class ConfigTargetCommand : Callable<Int> {
     // in subsequent device commands. Resolve once against the same target list
     // we'd print in the LIST view, and reject anything that isn't there.
     val availableIds = Console.runQuiet {
-      parent.getConfigProvider().availableAppTargets.map { it.id }.toSet()
+      parent.getAppTargets().map { it.id }.toSet()
     }
     // Case-insensitive resolve so `--target playwrightsample` and `--target playwrightSample`
     // both land on the canonical id stored in the registry. The 2026-05-27 trailmap-scoped
@@ -444,7 +446,7 @@ class ConfigTargetCommand : Callable<Int> {
     // `[BlockAppTargets] Discovered N toolsets …` / `… Registered N toolset(s) …` lines
     // emitted via `Console.log` during discovery don't leak to user-facing stdout.
     val targets = Console.runQuiet {
-      parent.getConfigProvider().availableAppTargets.sortedBy { it.displayName }
+      parent.getAppTargets().sortedBy { it.displayName }
     }
     // Apply the neutral-"default" sentinel (see authoritativeSelectedTargetId): a persisted id
     // equal to the neutral default is legacy auto-persist, not an authoritative selection, so it

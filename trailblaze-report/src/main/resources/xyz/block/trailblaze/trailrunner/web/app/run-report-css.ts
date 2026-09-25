@@ -236,7 +236,7 @@ footer { flex-shrink: 0; padding: var(--space-3) var(--page-x); border-top: 1px 
 .step .lbl { min-width: 0; font-size: 13px; font-weight: var(--font-weight-emphasis); overflow-wrap: anywhere; }
 /* Multi-device timeline lanes (see detailDevices): each device's rows carry its color as a left
    rail and indent to their own column, so the default timeline reads as interleaved device lanes
-   without opening the Trail view. Lane colors ride --lane-color, set inline per row. */
+   without leaving the timeline. Lane colors ride --lane-color, set inline per row. */
 /* Indent scales with the lane index the row carries (--lane-index), so a session with more
    devices than we ever hard-coded still gets one column per device instead of collapsing the
    extras onto lane 0. */
@@ -296,7 +296,11 @@ button.btn.previewinspect:disabled > * { opacity: .45; }
 .previewinspecticon { width: 13px; height: 13px; flex-shrink: 0; }
 .shotwrap { width: fit-content; max-width: 100%; margin: 0; }
 .shot { max-width: 100%; max-height: calc(100vh - 334px); background: #000; border: 0; display: block; cursor: zoom-in; }
-.tlvframe { max-width: 100%; height: calc(100vh - 372px); min-height: 240px; aspect-ratio: 1/2; background-color: #000; background-repeat: no-repeat; display: block; }
+/* The recording in the timeline's preview pane: the box takes the screenshot's height budget and
+   sizes its width from the media's own aspect ratio, so a landscape capture (or a tablet) is not
+   squeezed into a phone rectangle; object-fit keeps the frame whole in the height it does get. */
+.tlvframe { max-width: 100%; height: calc(100vh - 372px); min-height: 240px; background-color: #000; display: block; }
+.tlvclip { width: auto; object-fit: contain; }
 .noshot { width: 100%; aspect-ratio: 1/2; border: 0; display: flex; align-items: center; justify-content: center; color: var(--sub); font-size: 12px; text-align: center; padding: 20px; }
 .scrubtransport { flex-shrink: 0; display: inline-flex; align-items: stretch; overflow: hidden; border: 1px solid var(--line2); border-radius: var(--r-md); background: var(--bg2); }
 .scrubtransport button.timelinecontrol { width: 32px; height: 30px; min-width: 32px; min-height: 30px; display: inline-flex; align-items: center; justify-content: center; padding: 0; border: 0; border-left: 1px solid var(--line2); border-radius: 0; background: transparent; color: var(--sub2); cursor: pointer; }
@@ -384,6 +388,9 @@ button.btn.play { border-color: var(--run); background: var(--accent-surface); c
 /* Secondary report destinations push on as full-page surfaces, using the same motion as opening a
    run from the index. Keeping this shared between transcript and inspector prevents either view
    from drifting back toward centered-modal behavior. */
+/* A message about a click whose control is already gone — see showPageNotice. Above the overlays
+   (z-index 99) because a failure that happens while one is open still has to be readable. */
+.pagenotice { position: fixed; z-index: 120; left: 50%; bottom: 24px; transform: translateX(-50%); max-width: min(520px, calc(100vw - 32px)); border: 1px solid color-mix(in srgb,var(--danger-border) 64%,var(--line2)); border-radius: var(--r-md); padding: 10px 14px; background: var(--danger-surface); color: var(--txt); font-size: 12.5px; line-height: 1.45; box-shadow: var(--shadow-device); }
 .txoverlay, .inspector { position: fixed; inset: 0; z-index: 99; display: flex; align-items: stretch; justify-content: stretch; background: var(--bg); animation: reportPageForward 220ms cubic-bezier(.16,1,.3,1) both; }
 .txpanel { display: flex; flex-direction: column; width: 100%; height: 100%; min-height: 0; background: var(--bg); overflow: hidden; }
 .txpanelhead { display: flex; align-items: center; gap: 12px; min-height: 72px; padding: var(--space-3) var(--page-x); border-bottom: 1px solid var(--line); background: var(--header); flex-shrink: 0; }
@@ -411,7 +418,7 @@ button.btn.txnavbutton { width: 30px; min-width: 30px; min-height: 30px; padding
 .txstepcontext h2 { margin: 0; font-size: 17px; line-height: 1.35; font-weight: var(--font-weight-emphasis); }
 .txscreenframe, .txscreenempty { display: flex; align-items: center; justify-content: center; min-height: 180px; max-height: 52vh; overflow: hidden; border: 1px solid var(--line2); border-radius: var(--r-md); background: var(--bg); }
 .txscreenframe img { display: block; width: auto; max-width: 100%; height: auto; max-height: 52vh; object-fit: contain; }
-.txscreenvideo { width: min(100%, calc(52vh * var(--tx-screen-aspect, .461538))); aspect-ratio: var(--tx-screen-aspect, 9 / 19.5); background-repeat: no-repeat; background-color: var(--bg); }
+.txscreenvideo { display: block; width: auto; max-width: 100%; height: auto; max-height: 52vh; object-fit: contain; background-color: var(--bg); }
 .txscreenempty { flex-direction: column; gap: 5px; color: var(--sub); font-size: 12px; }
 .txscreenempty small { color: var(--sub2); font-size: 10.5px; }
 .txfailure { display: grid; gap: 6px; padding: 11px 12px; border: 1px solid var(--line2); border-radius: var(--r-md); background: var(--bg); }
@@ -484,8 +491,17 @@ pre { margin: 0; font-size: 11px; line-height: 1.5; color: var(--sub2); white-sp
 .infosection + .infosection { margin-top: var(--space-5); }
 .cmd { display: flex; gap: var(--space-2); align-items: flex-start; margin-top: var(--space-2); max-width: var(--content-reading); }
 .cmd pre { flex: 1; }
-.zoom { position: fixed; inset: 0; background: rgba(2,6,12,.9); display: flex; align-items: center; justify-content: center; gap: 32px; cursor: zoom-out; z-index: 99; backdrop-filter: blur(4px); }
+.zoom { position: fixed; inset: 0; background: rgba(2,6,12,.9); display: flex; align-items: center; justify-content: center; gap: 32px; cursor: zoom-out; z-index: 99; backdrop-filter: blur(4px); overflow: hidden; }
 .zoom img { max-width: 92vw; max-height: 92vh; border-radius: 10px; border: 1px solid var(--line2); }
+/* Magnifying past the fitted size overflows .zoomwrap's own (unscaled) box — CSS transforms don't
+   reflow it — so the excess is clipped by .zoom's full-viewport bounds exactly like the trail map's
+   canvas clips its world. */
+.zoomctrls { position: absolute; top: 10px; right: 10px; display: inline-flex; gap: 4px; z-index: 1; }
+.zoomctrlbtn { width: 28px; min-height: 28px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid rgba(255,255,255,.2); border-radius: var(--r-sm); background: rgba(34,40,50,.86); color: #fff; font: inherit; font-size: 14px; font-weight: var(--font-weight-emphasis); line-height: 1; cursor: pointer; }
+.zoomresetbtn { width: auto; padding: 0 10px; font-size: 12px; }
+.zoomctrlbtn:hover:not(:disabled) { border-color: var(--run); background: rgba(34,40,50,.96); }
+.zoomctrlbtn:disabled { opacity: .35; cursor: default; }
+.zoomctrlbtn:focus-visible { outline: 2px solid #6aa6ff; outline-offset: -2px; }
 /* Fixed light-on-dark like the rest of the overlay, not theme vars: the scrim is dark in both
    themes, and a themed foreground turns the glyph invisible against it on one side or the other. */
 .zoomnav { position: fixed; top: 50%; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; border: 1px solid rgba(255,255,255,.2); border-radius: var(--r-md); background: rgba(34,40,50,.86); color: #fff; font-family: ui-rounded, "SF Pro Rounded", -apple-system, BlinkMacSystemFont, sans-serif; font-size: 21px; font-weight: var(--font-weight-emphasis); line-height: 1; cursor: pointer; transform: translateY(-50%); box-shadow: var(--shadow-raised); }
@@ -814,11 +830,13 @@ svg.swipe { position: absolute; inset: 0; width: 100%; height: 100%; pointer-eve
 .streamoptioncheck { width: 16px; height: 16px; color: var(--run); opacity: 0; }
 .streamoption input:checked ~ .streamoptioncheck { opacity: 1; }
 .video { display: flex; flex-direction: column; align-items: center; }
-.vframe { height: min(72vh, 900px); max-width: 100%; aspect-ratio: 1/2; background-repeat: no-repeat; background-color: #000; border: 1px solid var(--line2); border-radius: var(--r-lg); margin-top: 10px; }
+.vframe { height: min(72vh, 900px); max-width: 100%; background-color: #000; border: 1px solid var(--line2); border-radius: var(--r-lg); margin-top: 10px; }
+.vclip { width: auto; object-fit: contain; display: block; }
 .vctl { display: flex; align-items: center; gap: 10px; width: min(100%, 560px); margin-top: 12px; padding: 8px 12px; border: 1px solid var(--line2); border-radius: var(--r-md); background: var(--bg2); }
 .vctl .btn.play { min-width: 84px; }
 .vctl .count { font-variant-numeric: tabular-nums; }
 .vctl input[type=range] { flex: 1; accent-color: var(--run); }
+.vctl .quietlink { white-space: nowrap; }
 .scrub { position: relative; z-index: 20; flex-shrink: 0; display: flex; align-items: center; gap: 12px; padding: 7px var(--page-x); border-top: 1px solid var(--line); background: var(--header); user-select: none; }
 .scrubclock { color: var(--sub); font-size: var(--type-micro); text-align: center; font-variant-numeric: tabular-nums; }
 .scrubtrack { position: relative; flex: 1; height: 28px; cursor: pointer; }
@@ -994,7 +1012,10 @@ svg.swipe { position: absolute; inset: 0; width: 100%; height: 100%; pointer-eve
 .lfilter input:focus { border-color: var(--run); }
 .lfilter .count { font-size: 11px; color: var(--sub); margin-left: auto; font-variant-numeric: tabular-nums; }
 .badge.selfheal { background: var(--warning-surface); color: var(--amber); }
-.zoom .zoomwrap { position: relative; }
+.zoom .zoomwrap { position: relative; touch-action: none; cursor: zoom-in; }
+.zoom .zoomwrap.zoomed { cursor: grab; }
+.zoom .zoomwrap.zoomed.panning { cursor: grabbing; }
+.zoom .zoomwrap .zoomlayer { position: relative; transform-origin: 0 0; }
 .zoom .zoomwrap img { display: block; }
 button:focus-visible, a.btn:focus-visible, [role="button"]:focus-visible, summary:focus-visible, input:focus-visible, .shot:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 @media (pointer: coarse) { nav button, button.btn, a.btn, .evchip, .back, .streamselect summary, .idxsort summary, .exportmenu summary, .exportmenuitem, .phasecontrol, .grphdr { min-height: 44px; } .detailedge { width: 44px; height: 44px; } .back, .exportmenu summary { min-width: 44px; } .step { min-height: 44px; } .scrubtrack { height: 44px; } .scrubtransport button.timelinecontrol { width: 44px; height: 44px; min-width: 44px; min-height: 44px; } .txopenbtn { min-width: 44px; min-height: 44px; } }
@@ -1137,12 +1158,10 @@ html[data-tb-embedded] body { background: transparent; }
 html[data-tb-embedded] { --page-x: 18px; }
 html[data-tb-autoplay] *, html[data-tb-autoplay] *::before, html[data-tb-autoplay] *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 
-/* ── Trail view: the same trail across devices, one vertical lane per run ─────────────────────── */
-.trailheader .indexshell.trailshellwide, .indexfooter .trailshellwide { max-width: none; }
-/* The shell above is full-bleed, but .title-row carries its own content-wide clamp for the pages
-   that ARE clamped — without this override the theme toggle and Back button stop at the clamp
-   while the tools row below reaches the true right edge. */
-.trailheader .title-row { max-width: none; }
+/* ── Trail projections: the same trail across devices, one vertical lane per run ──────────────── */
+/* The toolbar of the Replay / Grid / Map tabs. It rides in the run report's header, under the tab
+   nav, because the stages below own their own layout outright — the Map is a pannable canvas and
+   Replay is a grid, and neither can host a row of controls without the controls scrolling away. */
 .trailcontext { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); flex-wrap: wrap; margin-top: var(--space-3); padding-bottom: var(--space-3); }
 .trailsub { font-size: var(--type-caption); color: var(--sub); }
 .trailkeys { color: var(--sub2); white-space: nowrap; }
@@ -1289,7 +1308,13 @@ html[data-tb-autoplay] *, html[data-tb-autoplay] *::before, html[data-tb-autopla
 /* The whole projection fits the viewport: a transport you have to scroll to reach is a transport
    you can't use while watching, so the stage takes the leftover height and the screens flex. */
 .trailreplaymain { display: grid; min-height: 0; padding: 0 var(--page-x) var(--space-4); }
-.rpwrap { display: grid; grid-template-rows: minmax(0, 1fr) auto auto; gap: var(--space-3); min-height: 0; }
+/* The stage row has a floor: a lane's head, chip and foot take ~120px before its screen gets any, so
+   a stage squeezed below that drew its lanes down over the transport and the strip. The strip is
+   what gives way instead — its rows cap at a share of this box (cqh, hence the size container), and
+   at no more than the stage floor leaves after the transport, the overview and the gaps
+   (--rp-strip-chrome), then scroll. A window too short for even that scrolls the page rather than
+   overlapping. */
+.rpwrap { --rp-stage-min: 200px; --rp-strip-chrome: 112px; display: grid; grid-template-rows: minmax(var(--rp-stage-min), 1fr) auto auto; gap: var(--space-3); min-height: 0; container-type: size; }
 .rpwrap:focus { outline: none; }
 .rpwrap:focus-visible { outline: 2px solid var(--focus); outline-offset: 6px; border-radius: 12px; }
 .rpstage { display: grid; grid-template-columns: repeat(var(--rp-lanes), minmax(0, 1fr)); gap: var(--space-3); align-items: stretch; min-height: 0; }
@@ -1309,7 +1334,7 @@ html[data-tb-autoplay] *, html[data-tb-autoplay] *::before, html[data-tb-autopla
 .rpchip .galchip { flex: none; }
 .rpchip.failed .galchip { color: var(--status-failed-mark); background: var(--danger-surface); }
 .rpchiptxt { font-size: var(--type-caption); color: var(--txt); line-height: 1.35; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
-.rpscreen { position: relative; display: grid; place-items: center; min-height: 80px; background: color-mix(in srgb, var(--txt) 4%, transparent); border: 1px solid var(--line2); border-radius: 10px; overflow: hidden; cursor: zoom-in; }
+.rpscreen { position: relative; display: grid; place-items: center; min-height: 0; background: color-mix(in srgb, var(--txt) 4%, transparent); border: 1px solid var(--line2); border-radius: 10px; overflow: hidden; cursor: zoom-in; }
 /* A definite-size query container so the frame inside it can be fit by calculation. It is absolutely
    positioned so its own size can never depend on its contents — size containment on the pane itself
    would let the row collapse to its floor. */
@@ -1364,16 +1389,113 @@ html[data-tb-autoplay] *, html[data-tb-autoplay] *::before, html[data-tb-autopla
 .rpkeys { margin-left: auto; font-size: var(--type-micro); color: var(--sub); }
 .rpnote { font-size: var(--type-micro); color: var(--sub); padding: 1px 6px; border: 1px solid var(--line2); border-radius: 999px; white-space: nowrap; }
 /* The strip: names in one column so a single playhead can span every rail in the other. */
-.rpstrip { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 10px; }
-.rpstripnames, .rprails { display: grid; grid-auto-rows: 16px; row-gap: 5px; }
-.rprails { position: relative; }
+/* Two sibling grids, names and rails, aligned only because row N of one is as tall as row N of the
+   other. Both heights are stated ONCE here so that stays true: a row class that invents its own
+   height shifts every row below it in one column and nothing in the other, and the misalignment
+   looks like a drawing bug rather than a missing declaration. A lane that captured memory adds a
+   taller second row to both columns, which is why the rows size themselves. */
+.rpstrip { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 10px; --rp-row: 16px; --rp-memrow: 24px; --rp-rows-cap: max(80px, min(40cqh, 100cqh - var(--rp-stage-min) - var(--rp-strip-chrome))); }
+.rpstripnames, .rprails { display: grid; grid-auto-rows: auto; row-gap: 5px; }
+/* Placed explicitly so the more-rows fade below can share row 1 without auto-placement moving
+   the names out from under it. */
+.rpstripnames { grid-area: 1 / 1; }
+.rpscroll { grid-area: 1 / 2; }
+.rpovgap { grid-area: 2 / 1; }
+.rpoverview { grid-area: 2 / 2; }
+/* Many devices: the rows scroll vertically under a ruler that stays put. The rails' viewport is the
+   scroller; the names column is clipped to the same box and follows its scrollTop (wireTrailReplay),
+   so it carries the same padding, margin and cap or row N would drift off its name. */
+.rpstripnames { min-height: 0; max-height: var(--rp-rows-cap); overflow: hidden; padding: 4px 0 2px; margin: -4px 0 -2px; }
+.rpstripaxisgap, .rpaxis { position: sticky; top: 0; z-index: 3; background: var(--bg); box-shadow: 0 -4px 0 var(--bg); }
+.rpstrip.rpmorebelow::after { content: ''; grid-area: 1 / 1 / 2 / 3; align-self: end; height: 14px; margin-bottom: -2px; background: linear-gradient(to bottom, transparent, var(--bg)); pointer-events: none; z-index: 5; }
+.rprails { position: relative; width: calc(var(--rp-zoom, 1) * 100%); }
+/* The strip's viewport: the rails widen with the zoom and scroll sideways inside it. The padding
+   keeps the playhead's knob, the hover readout and the action marks (which sit a few px outside
+   the rails) from being clipped by the overflow. The margin gives that space back so the rows
+   still line up with the device names beside them. */
+.rpscroll { min-width: 0; min-height: 0; max-height: var(--rp-rows-cap); overflow-x: hidden; overflow-y: auto; padding: 4px 0 2px; margin: -4px 0 -2px; scrollbar-width: none; }
+.rpscroll::-webkit-scrollbar { display: none; }
+.rpscroll.rpzoomed { overflow-x: auto; }
+/* More run off either edge: the strip fades out there instead of ending in a hard cut. */
+.rpscroll.fadel { -webkit-mask-image: linear-gradient(to right, transparent, #000 28px); mask-image: linear-gradient(to right, transparent, #000 28px); }
+.rpscroll.fader { -webkit-mask-image: linear-gradient(to left, transparent, #000 28px); mask-image: linear-gradient(to left, transparent, #000 28px); }
+.rpscroll.fadel.fader { -webkit-mask-image: linear-gradient(to right, transparent, #000 28px, #000 calc(100% - 28px), transparent); mask-image: linear-gradient(to right, transparent, #000 28px, #000 calc(100% - 28px), transparent); }
+/* The zoom control: one joined pill — magnifier, −, level, +, Fit — rather than loose buttons. */
+.rpzoom { display: inline-flex; align-items: stretch; height: 30px; border: 1px solid var(--line2); border-radius: var(--r-sm); background: var(--bg2); overflow: hidden; }
+.rpzoomicon { width: 14px; height: 14px; align-self: center; margin: 0 2px 0 9px; color: var(--sub); }
+.rpzoombtn { min-width: 28px; padding: 0 6px; border: 0; background: transparent; color: var(--sub2); font: inherit; font-size: 15px; font-weight: var(--font-weight-emphasis); line-height: 1; cursor: pointer; }
+.rpzoombtn:hover:not(:disabled) { color: var(--txt); background: var(--button-hover); }
+.rpzoombtn:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.rpzoombtn:disabled { opacity: .35; cursor: default; }
+.rpzoomlvl { min-width: 4.5ch; align-self: center; text-align: center; font-size: var(--type-micro); color: var(--txt); font-variant-numeric: tabular-nums; }
+.rpzoomfit { font-size: 12px; padding: 0 10px; border-left: 1px solid var(--line2); }
+/* The navigator under a zoomed strip. Only there when zoomed: at 1× the strip IS the whole run. */
+/* Always there: dragging across it is how a stretch of the run is zoomed to, even from 1×. The
+   window only appears once zoomed — at 1× it would just outline the whole bar. */
+.rpstrip:not(.rpzoomed) .rpovwin { display: none; }
+.rpoverview { position: relative; height: 18px; margin-top: 2px; border-radius: 4px; background: color-mix(in srgb, var(--txt) 4%, transparent); cursor: pointer; touch-action: none; user-select: none; }
+.rpovlanes { position: absolute; inset: 3px 0; display: flex; flex-direction: column; gap: 1px; }
+.rpovlane { position: relative; flex: 1; min-height: 1px; }
+.rpovblock { position: absolute; top: 0; bottom: 0; border-radius: 1px; background: var(--status-passed-mark); opacity: .55; }
+.rpovblock.failed { background: var(--status-failed-mark); }
+.rpovblock.selfheal { background: var(--status-self-healed-mark); }
+.rpovhead { position: absolute; top: 0; bottom: 0; width: 1.5px; margin-left: -.75px; background: var(--run); pointer-events: none; z-index: 1; }
+.rpovwin { position: absolute; top: 0; bottom: 0; min-width: 6px; box-sizing: border-box; border: 1.5px solid var(--run); border-radius: 4px; background: color-mix(in srgb, var(--run) 12%, transparent); cursor: grab; z-index: 2; }
+.rpoverview { cursor: crosshair; }
+.rpoverview.dragging .rpovwin { cursor: grabbing; }
+.rpovgrip { position: absolute; top: -1px; bottom: -1px; width: 8px; cursor: ew-resize; }
+.rpovgrip[data-edge="l"] { left: -5px; }
+.rpovgrip[data-edge="r"] { right: -5px; }
+.rpovgrip::after { content: ''; position: absolute; top: 4px; bottom: 4px; left: 3px; width: 2px; border-radius: 1px; background: var(--run); }
+.rpovsel { position: absolute; top: 0; bottom: 0; background: color-mix(in srgb, var(--run) 22%, transparent); border-left: 1px solid var(--run); border-right: 1px solid var(--run); pointer-events: none; z-index: 3; }
+/* Minor ruler ticks between the labelled ones. */
+.rptick.minor { top: 60%; border-left-color: color-mix(in srgb, var(--txt) 14%, transparent); }
+/* ── The zoomed strip reads like a trace viewer's track: a band per step with its name in it,
+   and beneath it the tool each capture came from, split at the capture ticks. ── */
+.rpstrip.rpzoomed .rprail, .rpstrip.rpzoomed .rpstripname { height: 34px; }
+.rpstrip.rpzoomed .rpblock { top: 2px; bottom: auto; height: 14px; overflow: hidden; }
+.rpblocklabel { position: absolute; left: 0; top: 0; max-width: 100%; box-sizing: border-box; padding: 0 5px; font-style: normal; font-size: var(--type-micro); line-height: 14px; color: #fff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none; }
+.rpblocklabel b { font-weight: var(--font-weight-emphasis); letter-spacing: .04em; opacity: .85; margin-right: 2px; }
+.rpstrip.rpzoomed .rpcap { top: 18px; bottom: 1px; background: color-mix(in srgb, var(--txt) 22%, transparent); }
+.rptool { position: absolute; top: 18px; height: 15px; line-height: 15px; padding-left: 4px; font-size: var(--type-micro); color: var(--sub2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none; font-variant-numeric: tabular-nums; }
+.rpstrip.rpzoomed .rpact { top: 17px; height: 17px; }
+.rpstrip.rpzoomed .rpdone { top: 8px; }
+.rpstrip.rpzoomed .rpfailmark { top: 2px; }
 .rpstripaxisgap, .rpaxis { grid-row: 1; }
+.rpstripaxisgap, .rpaxis, .rprail, .rpstripname { height: var(--rp-row); }
+.rpstripmem, .rpmemrail { height: var(--rp-memrow); }
 .rpstripname { display: flex; align-items: center; font-size: var(--type-micro); color: var(--sub); white-space: nowrap; cursor: pointer; background: transparent; border: 0; padding: 0; }
 .rpstripname:hover { color: var(--txt); }
 .rpstripname.selected { color: var(--txt); font-weight: var(--font-weight-emphasis); }
-.rpaxis { position: relative; }
+/* The memory rail's name: what the line measures and where it topped out — the one figure that
+   compares across devices without reading the line. Deliberately NOT a .rpstripname: it picks no
+   device, so it must not take that class's pointer cursor and hover, which promise a click. */
+.rpstripmem { display: flex; align-items: center; padding-left: 10px; font-size: var(--type-micro); color: var(--sub); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.rpstripmem.nearlimit { color: var(--status-failed-mark); }
+/* The memory rail: the app's heap on the SAME axis as the steps above it. The playhead and hover
+   line span it because they span the rails container. Clicking seeks, like any rail. */
+.rpmemrail { position: relative; background: color-mix(in srgb, var(--txt) 3%, transparent); border-radius: 3px; cursor: pointer; --rp-mem: #5e9bff; }
+.rpmemrail.nearlimit { --rp-mem: var(--status-failed-mark); }
+.rpmemsvg { position: absolute; inset: 0; width: 100%; height: 100%; display: block; overflow: visible; }
+.rpmemarea { fill: color-mix(in srgb, var(--rp-mem) 22%, transparent); }
+.rpmemline { fill: none; stroke: var(--rp-mem); stroke-width: 1.5px; stroke-linejoin: round; }
+/* A spike is a reading that jumped: a pip at its instant, the same shape as an interaction pip
+   above so the eye pairs the jump with the tap that caused it. */
+.rpmemspike { position: absolute; top: -2px; height: 28px; width: 2px; border-radius: 1px; background: var(--amber); z-index: 2; }
+.rpmempeak { position: absolute; width: 7px; height: 7px; border-radius: 50%; transform: translate(-50%, -50%); background: var(--rp-mem); box-shadow: 0 0 0 1.5px var(--bg); z-index: 2; }
+.rpmemdied { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--status-failed-mark); z-index: 2; }
+/* The live figure in a pane head: the app's memory at the playhead. */
+.rpmem { font-size: var(--type-micro); color: var(--sub); font-variant-numeric: tabular-nums; white-space: nowrap; padding: 1px 5px; border-radius: 4px; background: color-mix(in srgb, #5e9bff 12%, transparent); }
+.rpmem:empty { display: none; }
+.rpmem.gone { color: var(--status-failed-mark); background: var(--danger-surface); }
 .rptick { position: absolute; top: 0; bottom: 0; border-left: 1px solid var(--line2); }
 .rptick i { position: absolute; left: 3px; top: 1px; font-size: var(--type-micro); font-style: normal; color: var(--sub); font-variant-numeric: tabular-nums; }
+/* The step-aligned axis: one labelled segment per step instead of second ticks, and a boundary
+   line down through every rail where the devices realign. */
+.rpseg { position: absolute; top: 0; bottom: 0; border-left: 1px solid var(--line2); overflow: hidden; }
+.rpseg i { position: absolute; left: 4px; top: 1px; max-width: calc(100% - 6px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--type-micro); font-style: normal; font-weight: var(--font-weight-emphasis); letter-spacing: .04em; color: var(--sub); }
+.rpsegline { position: absolute; top: var(--rp-row); bottom: 0; border-left: 1px dashed color-mix(in srgb, var(--txt) 28%, transparent); pointer-events: none; z-index: 1; }
+.rpalignnote { color: var(--run); border-color: color-mix(in srgb, var(--run) 50%, transparent); }
 .rprail { position: relative; background: color-mix(in srgb, var(--txt) 5%, transparent); border-radius: 3px; cursor: pointer; }
 .rprail.selected { box-shadow: 0 0 0 1.5px var(--run); }
 /* A hairline on the trailing edge, so back-to-back steps read as steps and not one long bar. */
@@ -1388,7 +1510,10 @@ html[data-tb-autoplay] *, html[data-tb-autoplay] *::before, html[data-tb-autopla
 .rpact.assert { background: var(--pass); }
 .rpact.swipe { background: #5e9bff; }
 .rpdone { position: absolute; top: 6px; height: 2px; border-radius: 2px; background: color-mix(in srgb, var(--txt) 12%, transparent); }
-.rphead { position: absolute; top: 0; bottom: -2px; width: 1.5px; background: var(--run); pointer-events: none; z-index: 3; }
+/* The playhead, the hover line and its readout start at the visible top of the rows (the scroller's
+   scrollTop, set by wireTrailReplay), so they stay on the sticky ruler when the rows scroll, and
+   draw over it. */
+.rphead { position: absolute; top: var(--rp-scroll-y, 0px); bottom: -2px; width: 1.5px; background: var(--run); pointer-events: none; z-index: 4; }
 .rphead::before { content: ''; position: absolute; top: -3px; left: -3.25px; width: 8px; height: 8px; border-radius: 50%; background: var(--run); }
 /* The failure badge: the one instant on a red rail actually worth jumping to. It rides the rail's
    own click-to-seek, so it only has to be findable, not wired. */
@@ -1397,13 +1522,17 @@ html[data-tb-autoplay] *, html[data-tb-autoplay] *::before, html[data-tb-autopla
 .rpfailmark:hover { transform: translateX(-50%) scale(1.25); }
 /* The hover readout. No display rule on either element: the wiring hides them with the bare
    hidden attribute, and an author display would override it. */
-.rphoverline { position: absolute; top: 0; bottom: -2px; border-left: 1px dashed color-mix(in srgb, var(--txt) 40%, transparent); pointer-events: none; z-index: 3; }
-.rphover { position: absolute; top: -4px; transform: translateX(8px); padding: 1px 7px; background: var(--bg); border: 1px solid var(--line2); border-radius: 999px; font-size: var(--type-micro); color: var(--txt); font-variant-numeric: tabular-nums; white-space: nowrap; max-width: 44ch; overflow: hidden; text-overflow: ellipsis; pointer-events: none; z-index: 5; }
+.rphoverline { position: absolute; top: var(--rp-scroll-y, 0px); bottom: -2px; border-left: 1px dashed color-mix(in srgb, var(--txt) 40%, transparent); pointer-events: none; z-index: 4; }
+.rphover { position: absolute; top: calc(var(--rp-scroll-y, 0px) - 4px); transform: translateX(8px); padding: 1px 7px; background: var(--bg); border: 1px solid var(--line2); border-radius: 999px; font-size: var(--type-micro); color: var(--txt); font-variant-numeric: tabular-nums; white-space: nowrap; max-width: 44ch; overflow: hidden; text-overflow: ellipsis; pointer-events: none; z-index: 5; }
 .rphover.flip { transform: translateX(calc(-100% - 8px)); }
 .rpempty { display: grid; gap: 8px; max-width: 46ch; padding: var(--space-6) 0; }
 .rpempty h2 { margin: 0; font-size: var(--type-body); }
 .rpempty p { margin: 0; font-size: var(--type-caption); color: var(--sub); line-height: 1.6; }
-@media (max-width: 900px) { .rpstage { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); } .rpscreen { height: 300px; } .rpkeys { display: none; } }
+/* Narrow: the lanes wrap into rows of fixed-height screens, so the projection takes its content
+   height and the page scrolls — in a grid parent the stage row was squeezed and the wrapped lanes
+   drew over the strip. No size container here, as its height now follows the content, so the
+   strip's cap falls back to the viewport. */
+@media (max-width: 900px) { .trailreplaymain { display: block; } .rpwrap { grid-template-rows: auto auto auto; container-type: normal; } .rpstage { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); } .rpscreen { height: 300px; } .rpkeys { display: none; } }
 
 /* ── Compare view: run-vs-run tool-call and event-stream diffs ──────────────────────────────── */
 .cmpmain { padding: var(--space-2) var(--page-x) var(--space-6); }

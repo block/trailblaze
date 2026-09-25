@@ -15,5 +15,8 @@
   // such resolution unless `@types/bun` is installed (not on our private registry today).
   // Excluding test files from this tsconfig keeps `tsc --noEmit` clean while leaving
   // `bun test` fully functional.
-  "exclude": ["**/*.test.ts"]
+  // `src/surveys/` is a host-side tool (reads session directories with node:fs) and is checked
+  // by its own `src/surveys/tsconfig.json`, which adds the node types this profile must not have:
+  // everything else here has to compile for the in-process QuickJS runtime, where there is no node.
+  "exclude": ["**/*.test.ts", "src/surveys/**"]
 }

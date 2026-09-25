@@ -149,7 +149,7 @@ class HostMaestroTrailblazeAgent(
    *
    * The host node-selector assert paths above resolve entirely from the lightweight tree
    * ([getCurrentTrailblazeNodeTree], no screenshot) and return [TrailblazeToolResult.Success]
-   * without logging anything. Taps/swipes go through [xyz.block.trailblaze.android.maestro.LoggingDriver],
+   * without logging anything. Taps/swipes go through [xyz.block.trailblaze.maestro.LoggingDriver],
    * which always logs an `AgentDriverLog` with a screenshot; the Maestro `Driver` interface has no
    * assert method, so a passing assert produced no screenshot and showed no frame on iOS (while
    * Android's accessibility runner logs one for every action, asserts included). This closes that

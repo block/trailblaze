@@ -101,8 +101,8 @@ out to `bun test` against the mock client + mock context from
   sandbox layout, sessionId sanitization, and the `..`/absolute-path validation errors.
 - `tools/sampleapp_waitForText.test.ts` — exercises the `sampleapp_waitForText` "wait until visible"
   tool with the mock context + queued match client; asserts the dual-driver split
-  (accessibility → `findSelectorMatches`, instrumentation → Maestro `extendedWaitUntil`), the
-  throw-on-timeout,
+  (the on-device accessibility driver → `findSelectorMatches`, the in-process `android-test` driver
+  → Maestro `extendedWaitUntil`), the throw-on-timeout,
   and the anchored/regex-escaped selector — all without a daemon or device.
 - `tools/sampleapp_launchToLoadedContent.test.ts` — exercises the TypeScript trailhead's
   launch → open Loading tab → start load → `findSelectorMatches`-wait orchestration, and that it

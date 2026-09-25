@@ -264,6 +264,13 @@ fun LogCard(
         log.progressPercent?.let { appendLine("Progress: $it%") }
       }
     )
+
+    is TrailblazeLog.TrailblazeToolCatalogLog -> LogCardData(
+      title = "Tool Catalog: ${log.toolOptions.size} tools",
+      duration = null,
+      elapsedTime = elapsedTimeMs,
+      preformattedText = log.toolOptions.joinToString("\n") { it.name },
+    )
   }
 
   Card(

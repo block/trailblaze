@@ -9,7 +9,6 @@ import xyz.block.trailblaze.report.SkippedTrails
 import xyz.block.trailblaze.ui.TrailblazeDesktopApp
 import xyz.block.trailblaze.ui.TrailblazeDesktopUtil
 import xyz.block.trailblaze.util.Console
-import xyz.block.trailblaze.util.runQuiet
 import java.io.File
 import java.util.concurrent.Callable
 import kotlin.system.exitProcess
@@ -402,7 +401,7 @@ class ReportCommand : Callable<Int> {
     }
     // Building the app loads the workspace config and logs every file it read; those lines are
     // daemon-log breadcrumbs, not part of a report the person asked for.
-    val app = if (verbose) parent.appProvider() else Console.runQuiet { parent.appProvider() }
+    val app = quietUnlessVerbose(verbose) { parent.appProvider() }
     val exitCode = generateSessionReport(
       app,
       resolvedId,
@@ -562,10 +561,8 @@ internal fun generateSessionReport(
   // RunReportGenerator reports them on Console.error, which quiet mode does not suppress. `-v`
   // restores them for the case where a report is slow or empty and the breadcrumbs are the only
   // way to see how far the generator got.
-  fun <T> quietUnlessVerbose(block: () -> T): T = if (verbose) block() else Console.runQuiet { block() }
-
-  val reportGenerator = quietUnlessVerbose { app.createCliReportGenerator() }
-  val generatedHtml = quietUnlessVerbose {
+  val reportGenerator = quietUnlessVerbose(verbose) { app.createCliReportGenerator() }
+  val generatedHtml = quietUnlessVerbose(verbose) {
     reportGenerator.generateHtmlReports(
       logsRepo,
       sessionIds,
@@ -579,7 +576,7 @@ internal fun generateSessionReport(
     Console.error("Failed to generate the HTML report.")
     return TrailblazeExitCode.INFRA_FAILED.code
   }
-  val initialJson = quietUnlessVerbose {
+  val initialJson = quietUnlessVerbose(verbose) {
     reportGenerator.generateJsonReport(logsRepo, sessionIds, skips = directorySkips)
   }
   if (initialJson == null) {

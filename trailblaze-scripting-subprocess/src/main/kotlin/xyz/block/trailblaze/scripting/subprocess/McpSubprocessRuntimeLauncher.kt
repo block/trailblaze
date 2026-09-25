@@ -7,9 +7,11 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.model.TrailblazeConfig
+import xyz.block.trailblaze.scripting.mcp.TrailblazeToolMeta
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.trailblazeToolSourceForScript
 import xyz.block.trailblaze.util.Console
+import io.modelcontextprotocol.kotlin.sdk.types.ListToolsRequest
 import java.io.File
 
 /**
@@ -31,6 +33,10 @@ class LaunchedSubprocessRuntime internal constructor(
    * until [shutdownAll], because that is how long the transports park their permits.
    */
   private val ioReservation: SubprocessIoReservation,
+  private val resourceSessionId: SessionId,
+  private val callbackContext: SubprocessToolRegistration.JsScriptingCallbackContext? = null,
+  /** Only SDK-advertised finalizer endpoints; old/third-party MCP servers are untouched. */
+  private val resourceFinalizerSessions: List<McpSubprocessSession> = emptyList(),
 ) {
 
   /**
@@ -57,7 +63,23 @@ class LaunchedSubprocessRuntime internal constructor(
    * named on stderr, since nothing else will ever mention them.
    */
   suspend fun shutdownAll(): Boolean {
+    val failures = mutableListOf<Throwable>()
     withContext(NonCancellable) {
+      // Drain opaque resources before deregistering or closing the MCP process. Every advertised
+      // finalizer is attempted; one target's failed cleanup must not strand another target's lease.
+      for (session in resourceFinalizerSessions) {
+        runCatching {
+          SessionResourceFinalizerProtocol.finalize(session, resourceSessionId, callbackContext)
+        }
+          .onFailure { failure ->
+            failures += failure
+            Console.log(
+              "[LaunchedSubprocessRuntime] session-resource cleanup failed for $resourceSessionId: " +
+                "${failure::class.simpleName}",
+            )
+          }
+      }
+      callbackContext?.clearExecutionContext()
       for (name in registeredNames) {
         runCatching { repo.removeDynamicTool(name) }
       }
@@ -67,7 +89,16 @@ class LaunchedSubprocessRuntime internal constructor(
     }
     // Last, and outside every `runCatching` above: a shutdown that threw still ended the session,
     // and permits withheld from the next launch are indistinguishable from a leak.
-    return releasePermitsOfExitedProcesses(ioReservation, sessions.map { it.spawnedProcess })
+    val allExited = releasePermitsOfExitedProcesses(ioReservation, sessions.map { it.spawnedProcess })
+    if (failures.isNotEmpty()) {
+      val failure = IllegalStateException(
+        "${failures.size} scripted session-resource cleanup(s) failed for $resourceSessionId.",
+        failures.first(),
+      )
+      failures.drop(1).forEach(failure::addSuppressed)
+      throw failure
+    }
+    return allExited
   }
 }
 
@@ -179,6 +210,13 @@ object McpSubprocessRuntimeLauncher {
     deviceInfo: TrailblazeDeviceInfo,
     config: TrailblazeConfig,
     sessionId: SessionId,
+    /**
+     * Session id written into the per-call tool context and therefore used by the SDK cleanup
+     * registry. Normally identical to [sessionId]. Daemon dispatch overrides it because the
+     * subprocess lifetime uses a stable launch id while each host-local tool context uses the
+     * MCP/device synthetic session id.
+     */
+    resourceSessionId: SessionId = sessionId,
     sessionLogDir: File,
     toolRepo: TrailblazeToolRepo,
     /**
@@ -209,6 +247,7 @@ object McpSubprocessRuntimeLauncher {
         repo = toolRepo,
         registeredNames = emptyList(),
         ioReservation = SubprocessIoCapacity.reserve(0),
+        resourceSessionId = resourceSessionId,
       )
     }
     val skipped = mcpServers.size - scriptEntries.size
@@ -244,6 +283,7 @@ object McpSubprocessRuntimeLauncher {
     // accounting has to be done against.
     val spawnedProcesses = mutableListOf<SpawnedProcess>()
     val pendingRegistrations = mutableListOf<SubprocessToolRegistration>()
+    val resourceFinalizerSessions = mutableListOf<McpSubprocessSession>()
     val usedBaseNames = mutableMapOf<String, Int>()
 
     // Each entry becomes one subprocess whose MCP transport parks a Dispatchers.IO permit for the
@@ -277,7 +317,19 @@ object McpSubprocessRuntimeLauncher {
         )
         started += session
 
-        val registered = session.fetchAndFilterTools(
+        // Keep the listing that establishes the finalizer capability: a separate `tools/list`
+        // would create a startup race where a short-lived subprocess could advertise normal tools
+        // but disappear before the host learned whether it owns opaque resources.
+        val advertisedTools = session.client.listTools(ListToolsRequest()).tools
+        if (advertisedTools.any { tool ->
+            tool.name == SessionResourceFinalizerProtocol.TOOL_NAME &&
+              TrailblazeToolMeta.fromTool(tool).isSessionResourceFinalizer
+          }
+        ) {
+          resourceFinalizerSessions += session
+        }
+        val registered = SubprocessToolRegistrar.filterAdvertisedTools(
+          tools = advertisedTools.filterNot { it.name == SessionResourceFinalizerProtocol.TOOL_NAME },
           drivers = listOf(deviceInfo.trailblazeDriverType) + additionalDriverTypes,
           preferHostAgent = config.preferHostAgent,
         )
@@ -299,6 +351,9 @@ object McpSubprocessRuntimeLauncher {
         repo = toolRepo,
         registeredNames = pendingRegistrations.map { it.name },
         ioReservation = ioReservation,
+        resourceSessionId = resourceSessionId,
+        callbackContext = callbackContext,
+        resourceFinalizerSessions = resourceFinalizerSessions.toList(),
       )
     } catch (t: Throwable) {
       // Session startup is aborting: shut down whatever did spawn so we don't leak subprocesses

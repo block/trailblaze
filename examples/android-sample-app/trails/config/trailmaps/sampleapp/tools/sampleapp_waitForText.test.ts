@@ -3,7 +3,7 @@
 // `@trailblaze/scripting/testing`, asserting the dual-driver split:
 //   - accessibility driver  -> findSelectorMatches({ selectors: [^text$], timeoutMs }); an empty
 //                              match list throws
-//   - instrumentation driver -> maestro({ extendedWaitUntil: { visible: { text }, timeout } })
+//   - any other Android driver -> maestro({ extendedWaitUntil: { visible: { text }, timeout } })
 //
 // Run via:  ./trailblaze check sampleapp
 
@@ -14,13 +14,15 @@ import type { MatchDescriptor } from "@trailblaze/scripting";
 import { sampleapp_waitForText } from "./sampleapp_waitForText";
 
 const ACCESSIBILITY_DRIVER = "android-ondevice-accessibility";
-const INSTRUMENTATION_DRIVER = "android-ondevice-instrumentation";
+// The live non-accessibility Android driver: it carries no selector-native wait, and lowers a
+// `mobile_maestro` command list onto its own backends, so the Maestro branch is what runs there.
+const IN_PROCESS_DRIVER = "android-test";
 const MATCH: MatchDescriptor = { indexPath: [0, 1] };
 
 const accessibilityCtx = () =>
   createMockContext({ platform: "android", device: { driverType: ACCESSIBILITY_DRIVER } });
-const instrumentationCtx = () =>
-  createMockContext({ platform: "android", device: { driverType: INSTRUMENTATION_DRIVER } });
+const inProcessCtx = () =>
+  createMockContext({ platform: "android", device: { driverType: IN_PROCESS_DRIVER } });
 
 const callsTo = (c: { calls: Array<{ tool: string }> }, tool: string) =>
   c.calls.filter((x) => x.tool === tool);
@@ -78,13 +80,13 @@ describe("sampleapp_waitForText — accessibility driver", () => {
   });
 });
 
-describe("sampleapp_waitForText — instrumentation driver", () => {
+describe("sampleapp_waitForText — non-accessibility driver", () => {
   test("waits via Maestro extendedWaitUntil rather than findSelectorMatches", async () => {
     const c = createQueuedFindMatchesClient();
 
     const result = await sampleapp_waitForText(
       { text: "Content Loaded", timeoutMs: 4_000 },
-      instrumentationCtx(),
+      inProcessCtx(),
       c,
     );
 

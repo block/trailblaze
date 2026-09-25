@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.cli
 
+import org.junit.Rule
 import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -15,6 +16,10 @@ import kotlin.test.assertTrue
  */
 class TrailCommandDeviceBindMisuseTest {
 
+  @Rule
+  @JvmField
+  val quietMode = QuietModeRule()
+
   private fun trailFile(): File =
     File.createTempFile("trail-bind-misuse-", ".trail.yaml").apply {
       deleteOnExit()
@@ -22,8 +27,9 @@ class TrailCommandDeviceBindMisuseTest {
     }
 
   /**
-   * `verbose = true` short-circuits [Console.enableQuietMode], which flips a JVM-global flag other
-   * CLI tests in this JVM read — same rationale as `TrailCommandBareRunRejectionTest`.
+   * `verbose = true` keeps this class out of the quiet scope entirely, so what it asserts is the
+   * rejection rather than anything about output volume. The scope restores itself either way now
+   * — see `quietUnlessVerbose` — and [QuietModeRule] would catch it if that stopped being true.
    */
   private fun runCommand(configure: TrailCommand.() -> Unit): Pair<Int, String> {
     val cmd = TrailCommand().apply {

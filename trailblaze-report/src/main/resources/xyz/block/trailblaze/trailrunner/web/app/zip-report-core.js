@@ -153,11 +153,12 @@
   // The playable recording in a session directory, from capture_metadata.json's artifact list (the
   // CaptureArtifact records the recorder wrote). Returns { fileName, startMs, endMs } or null.
   //
-  // A VIDEO artifact names its own file. A VIDEO_FRAMES artifact names the sprite SHEET, which is
-  // not playable — but it was derived from the recording and carries the same recorder bookends, so
-  // its timestamps are paired with whatever video file the archive actually holds. Those bookends
-  // are the whole point of reading this file: without them the recording can't be put on the
-  // trace's clock, so an artifact missing them is no better than no artifact at all.
+  // A VIDEO (mp4) or VIDEO_WEBM artifact names its own file. Archives written before sprite sheets
+  // were retired may instead carry a VIDEO_FRAMES artifact naming the sheet, which is not playable —
+  // but it was derived from the recording and carries the same recorder bookends, so its timestamps
+  // are paired with whatever video file the archive actually holds. Those bookends are the whole
+  // point of reading this file: without them the recording can't be put on the trace's clock, so an
+  // artifact missing them is no better than no artifact at all.
   function videoArtifactFrom(metadataText, fileNames) {
     var parsed;
     try { parsed = JSON.parse(metadataText); } catch (e) { return null; }
@@ -170,10 +171,10 @@
       var start = Number(a.startTimestampMs);
       var end = Number(a.endTimestampMs);
       if (!isFinite(start) || !isFinite(end) || end <= start) continue;
-      if (a.type === 'VIDEO' && playable.indexOf(a.filename) >= 0) {
+      if ((a.type === 'VIDEO' || a.type === 'VIDEO_WEBM') && playable.indexOf(a.filename) >= 0) {
         return { fileName: a.filename, startMs: start, endMs: end };
       }
-      // Held rather than returned: a VIDEO artifact later in the list is the better answer.
+      // Held rather than returned: a playable artifact later in the list is the better answer.
       if (a.type === 'VIDEO_FRAMES' && !pick && playable.length) {
         pick = { fileName: playable[0], startMs: start, endMs: end };
       }
@@ -510,7 +511,13 @@
           return readZipEntry(zipBytes, group.byFileName[name], inflateRaw)
             .then(function (data) { return JSON.parse(utf8.decode(data)); });
         })).then(function (parsedLogs) {
-          var logs = sortLogsByTimestamp(parsedLogs);
+          // Put the session on ONE clock before ordering it. These records come straight off disk,
+          // with no Kotlin reader in front of them, so a device-stamped log still carries the
+          // device's clock — seconds off the host's on an emulator. Sorting those against
+          // host-stamped records interleaves them wrongly, and every later consumer (the timeline,
+          // the recording's host-clock window) inherits the error.
+          var normalize = resolveRenderer(options && options.render).normalizedToHostClock;
+          var logs = sortLogsByTimestamp(normalize ? normalize(parsedLogs) : parsedLogs);
           var recordingEntry = group.byFileName[RECORDING_YAML_NAME];
           var yamlPromise = recordingEntry
             ? readZipEntry(zipBytes, recordingEntry, inflateRaw).then(function (data) { return utf8.decode(data); })
@@ -592,6 +599,24 @@
       });
     });
     return chain.then(function () { return streams.length ? streams : null; });
+  }
+
+  // The session's `trace.json` → the same TracerSpan[] the bun driver embeds, through the renderer's
+  // own slimmer (run-report-trace-spans via run-report-core) so a report opened from an archive
+  // exports the tracer's spans to Perfetto exactly as a CLI-built one does. The same size cap as the
+  // driver, checked against the archive's declared size before inflating. An older bundle without
+  // the slimmer leaves the report span-less, exactly as before.
+  function sessionTraceSpans(zipBytes, session, render, inflateRaw) {
+    if (typeof render.slimTracerSpans !== 'function' || !render.MAX_TRACE_BYTES) return Promise.resolve(null);
+    var entry = session.byFileName['trace.json'];
+    if (!entry) return Promise.resolve(null);
+    if (entry.uncompressedSize > render.MAX_TRACE_BYTES) {
+      console.error('trace: skipping trace.json — exceeds the ' + (render.MAX_TRACE_BYTES / 1024 / 1024) + 'MB cap');
+      return Promise.resolve(null);
+    }
+    return readZipEntry(zipBytes, entry, inflateRaw)
+      .then(function (data) { return render.slimTracerSpans(JSON.parse(utf8.decode(data))); })
+      .catch(function () { return null; }); // a broken trace costs the Perfetto spans, not the report
   }
 
   // Attachment refs embedded in event payloads (see AttachmentRef in trailblaze-models), resolved
@@ -705,6 +730,7 @@
     render = render || {};
     return {
       extractTrace: render.extractTrace || g.extractTrace,
+      normalizedToHostClock: render.normalizedToHostClock || g.normalizedToHostClock,
       extractLlmLogs: render.extractLlmLogs || g.extractLlmLogs,
       originalYamlFromLogs: render.originalYamlFromLogs || g.originalYamlFromLogs,
       buildRunReportHtml: render.buildRunReportHtml || g.buildRunReportHtml,
@@ -719,6 +745,8 @@
       MAX_EVENT_STREAM_BYTES: render.MAX_EVENT_STREAM_BYTES || g.MAX_EVENT_STREAM_BYTES,
       MAX_EVENT_STREAMS_TOTAL_CHARS: render.MAX_EVENT_STREAMS_TOTAL_CHARS || g.MAX_EVENT_STREAMS_TOTAL_CHARS,
       isSafeSessionRelativePath: render.isSafeSessionRelativePath || g.isSafeSessionRelativePath,
+      slimTracerSpans: render.slimTracerSpans || g.slimTracerSpans,
+      MAX_TRACE_BYTES: render.MAX_TRACE_BYTES || g.MAX_TRACE_BYTES,
     };
   }
 
@@ -770,11 +798,14 @@
             .then(function (videoClip) {
               return sessionEventStreams(zipBytes, session, render, inflateRaw).then(function (events) {
                 return sessionAttachments(zipBytes, session, events, render, inflateRaw).then(function (attachments) {
-                  inputs.push({
-                    meta: meta, trace: trace, llmLogs: llmLogs, shots: shots,
-                    recordingYaml: session.recordingYaml, originalYaml: originalYaml,
-                    videoClip: videoClip,
-                    events: events, attachments: attachments,
+                  return sessionTraceSpans(zipBytes, session, render, inflateRaw).then(function (spans) {
+                    inputs.push({
+                      meta: meta, trace: trace, llmLogs: llmLogs, shots: shots,
+                      recordingYaml: session.recordingYaml, originalYaml: originalYaml,
+                      videoClip: videoClip,
+                      events: events, attachments: attachments,
+                      spans: spans,
+                    });
                   });
                 });
               });
@@ -818,6 +849,7 @@
             meta: s0.meta, trace: s0.trace, llmLogs: s0.llmLogs, shots: s0.shots,
             events: s0.events || null, attachments: s0.attachments || null,
             hierarchies: s0.hierarchies || null, hierarchiesGz: s0.hierarchiesGz || null,
+            spans: s0.spans || null,
             keepAttachmentObjectUrls: keepAttachmentObjectUrls,
           })
           : render.buildMultiReportHtml({ generatedAt: built.generatedAt, sessions: inputs, keepAttachmentObjectUrls: keepAttachmentObjectUrls });

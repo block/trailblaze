@@ -54,7 +54,11 @@
 // intervals (kept as segments so aggregates can be clipped to a selected time range exactly).
 // By construction Σ selfMs over the whole tree == union coverage of the roots; the tests pin it.
 
-import { logClass, stepText, summarizeToolArgs, truncate } from './run-report-extract';
+// `deviceClockOffsets` lives in run-report-extract rather than here because the run report needs
+// the same derivation to place a step on the recording's host-clock window, and two copies that
+// drift are the exact failure it exists to prevent. Re-exported below for this module's readers.
+import type { DeviceClockOffsets } from './run-report-extract';
+import { deviceClockOffsets, logClass, parseLogTimestamp as parsePerfTimestamp, stepText, summarizeToolArgs, truncate } from './run-report-extract';
 
 /**
  * Containment tolerance, ms, for log-vs-log nesting: a wrapper's child can overhang either edge
@@ -69,70 +73,6 @@ const NEST_EPSILON_MS = 12;
 const GAP_MIN_MS = 250;
 /** spent/budget at or above this ratio counts as burning the whole timeout. */
 const FULL_BURN_RATIO = 0.98;
-
-/**
- * Parse a Trailblaze log timestamp (ISO-8601, possibly with nanosecond precision from
- * kotlinx-datetime) to epoch ms. Fractional digits beyond ms are trimmed before Date.parse —
- * engines differ on >3-digit fractions. Null for absent/unparseable values.
- */
-function parsePerfTimestamp(value: unknown): number | null {
-  if (typeof value !== 'string' || !value) return null;
-  const trimmed = value.replace(/(\.\d{3})\d+/, '$1');
-  const ms = Date.parse(trimmed);
-  return Number.isFinite(ms) ? ms : null;
-}
-
-/**
- * A session's device→host clock offsets in ms, keyed by the tool log's `deviceName`, plus the
- * session-wide value for logs that carry no usable key.
- */
-interface DeviceClockOffsets {
-  byDeviceName: Map<string | null, number>;
-  sessionWideMs: number;
-}
-
-/**
- * This session's device→host clock offsets, derived from tool logs that both carry the
- * device-clock marker and were anchored at host ingestion: each anchored log gives
- * `hostReceivedAt - (timestamp + durationMs)` — the host receives a tool's log just after the tool
- * finishes, so every sample is the true skew PLUS that upload's latency. The MINIMUM across a
- * device's samples is used because latency only ever adds: the least-delayed upload is the closest
- * measurement of pure skew, and a batched upload contributes nothing to a minimum. Per device, not
- * per session, because a multi-device session binds devices with independent clocks.
- *
- * Null when the session has no anchored device-clock tool log — an all-host session, logs written
- * before the marker existed, or device logs pulled off the device's own disk without ever reaching
- * host ingestion. Those keep the old handling: raw timestamps, and device-stamped logs held out of
- * the session window.
- *
- * This MIRRORS `deviceClockOffsets()` in `TrailblazeLogClockNormalization.kt`, which every Kotlin
- * reader shares; the profiler runs in a browser over raw JSON and can't call it. A change to one
- * derivation belongs in both, or a session's profile and its recording start disagreeing about
- * where a device's spans sit.
- */
-function deviceClockOffsets(logs: TrailblazeLogRecord[]): DeviceClockOffsets | null {
-  const samplesByDevice = new Map<string | null, number[]>();
-  for (const log of logs) {
-    if (logClass(log) !== 'TrailblazeToolLog' || log.clock !== 'device') continue;
-    const ts = parsePerfTimestamp(log.timestamp);
-    const receivedAt = parsePerfTimestamp(log.hostReceivedAt);
-    if (ts == null || receivedAt == null) continue;
-    const dur = typeof log.durationMs === 'number' && Number.isFinite(log.durationMs) ? log.durationMs : 0;
-    const key = typeof log.deviceName === 'string' && log.deviceName ? log.deviceName : null;
-    const samples = samplesByDevice.get(key);
-    if (samples) samples.push(receivedAt - (ts + dur));
-    else samplesByDevice.set(key, [receivedAt - (ts + dur)]);
-  }
-  if (!samplesByDevice.size) return null;
-  const byDeviceName = new Map<string | null, number>();
-  let sessionWideMs = Infinity;
-  for (const [key, samples] of samplesByDevice) {
-    const min = Math.min(...samples);
-    byDeviceName.set(key, min);
-    sessionWideMs = Math.min(sessionWideMs, min);
-  }
-  return { byDeviceName, sessionWideMs };
-}
 
 /**
  * Whether this log's `timestamp` is on a device's clock rather than the host's.

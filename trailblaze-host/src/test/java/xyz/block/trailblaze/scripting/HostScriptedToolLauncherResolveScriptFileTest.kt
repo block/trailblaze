@@ -88,6 +88,30 @@ class HostScriptedToolLauncherResolveScriptFileTest {
   }
 
   /**
+   * Every tool resolution re-extracts the trailmap's whole tools tree. Rewriting unchanged files
+   * moved their mtimes, which made the import analyzer treat every installed-JAR tool as edited
+   * and re-analyze it on every run.
+   */
+  @Test
+  fun `re-extracting unchanged sources leaves their modification time alone`() {
+    val toolTs = "$toolsDir/fixtureapp_launch.ts"
+    val classpath = mapOf(toolTs to "export const fixtureapp_launch = 1;\n")
+    fun resolve() = HostScriptedToolLauncher.resolveScriptFile(
+      script = toolTs,
+      loadClasspathResource = { classpath[it] },
+      listClasspathToolScripts = { setOf("fixtureapp_launch.ts") },
+      classpathExtractRoot = extractRoot.root,
+    )
+    val extracted = resolve()
+    val earlier = System.currentTimeMillis() - 60_000
+    extracted.setLastModified(earlier)
+
+    resolve()
+
+    assertEquals(earlier, extracted.lastModified())
+  }
+
+  /**
    * When the script isn't a classpath-bundled trailmap tool (no `trails/config/trailmaps/` anchor),
    * the fallback declines and `resolveScriptFile` returns the direct `File(script)` — a non-existent
    * file, so the bundler surfaces its clear "Scripted-tool source not found" error rather than

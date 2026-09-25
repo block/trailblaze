@@ -2,7 +2,6 @@
 id: verification
 description: "Verifications and assertions that don't change screen state."
 drivers:
-  - android-ondevice-instrumentation
   - android-ondevice-accessibility
   - ios-host
   - ios-axe

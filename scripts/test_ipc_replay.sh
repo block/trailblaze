@@ -203,6 +203,109 @@ _eq "no spurious blank line when both streams are empty" "$(_marked '')" "$empty
 empty_out=$(_replay_marked '{"stdout":"","stderr":"","exitCode":0,"forwarded":true,"transcript":[]}')
 _eq "an empty transcript falls back without inventing output" "$(_marked '')" "$empty_out"
 
+echo "--- the launcher does not enable job control"
+# Job control makes bash `setpgid` every child it forks. On a long-running macOS host pids are
+# recycled until one child is born holding the session id — that child is a session leader,
+# `setpgid` is refused, and bash prints "child setpgid (N to N): Operation not permitted" onto the
+# stderr of whatever command the user forwarded. Observed on a long-running CI host. Whether it
+# fires is a matter of pid luck, so no behavioral assertion can guard it; the source is the only
+# thing that can be pinned. Nothing here needs a process group anyway — the wait-notice watchdog
+# hands its `sleep` private fds instead.
+#
+# This lives beside the launcher so the guard travels with the file it guards.
+# A single regex on the whole line only ever inspects the FIRST option word after `set` — it
+# missed `set -e -m` (the flags as separate words) the first time this shipped. `set` takes any
+# number of short-opt words, and `m` enables job control in any of them, bundled or not, so every
+# word after `set` has to be checked, not just the one immediately following it.
+_job_control_hits=""
+while IFS= read -r _line || [ -n "$_line" ]; do
+  [[ "$_line" =~ ^[[:space:]]*# ]] && continue
+  # Drop a trailing shell comment before tokenizing — otherwise prose like `true # never set -m`
+  # scans as a real `set -m` invocation, even though bash never runs it. Cuts at the first
+  # whitespace-then-`#`, so a `#` inside a quoted string with no space before it survives; that is
+  # the same no-quote-awareness tradeoff the rest of this checker already makes.
+  _code_line="${_line%%[[:space:]]\#*}"
+  # Split into simple commands on the shell separators, so a `set` inside `if …; then set -m; fi`
+  # or `(set -m)` is checked on its own — otherwise `if` or `(` would be mistaken for `set`'s own
+  # first word.
+  # macOS ships bash 3.2, where `"${arr[@]}"` on a zero-element array is itself an unbound
+  # reference under `set -u` (fixed in later bash, but this launcher targets 3.2). The
+  # `${arr[@]+"${arr[@]}"}` form substitutes nothing instead of erroring when `arr` is empty.
+  _segs=()
+  IFS=';&|(){}' read -ra _segs <<<"$_code_line"
+  for _seg in "${_segs[@]+"${_segs[@]}"}"; do
+    _words=()
+    read -ra _words <<<"$_seg"
+    for ((_i = 0; _i < ${#_words[@]}; _i++)); do
+      [ "${_words[$_i]}" = "set" ] || continue
+      for ((_j = _i + 1; _j < ${#_words[@]}; _j++)); do
+        _w="${_words[$_j]}"
+        case "$_w" in
+          --) break ;;
+          -*) : ;;
+          *) continue ;;
+        esac
+        case "$_w" in
+          -o)
+            [ "${_words[$((_j + 1))]:-}" = "monitor" ] && _job_control_hits+="$_line"$'\n'
+            break
+            ;;
+          -*m*)
+            _job_control_hits+="$_line"$'\n'
+            break
+            ;;
+        esac
+      done
+    done
+  done
+done < "$SHIM"
+if [ -n "$_job_control_hits" ]; then
+  _bad "the launcher enables job control nowhere"
+  printf '        %s\n' "$_job_control_hits"
+else
+  _ok "the launcher enables job control nowhere"
+fi
+
+echo "--- the launcher turns OFF job control it was handed"
+# Not enabling it is not enough. Bash reads SHELLOPTS from the environment at startup, so a caller
+# that exported it containing `monitor` hands the launcher a shell already under job control, and
+# every child it forks gets a `setpgid` it may not be allowed to make. (`bash -m <script>` does not
+# do this — bash drops monitor for a non-interactive shell — so SHELLOPTS is the route that
+# reaches us.)
+#
+# This one IS behavioral: the launcher's own line is extracted and run under an inherited monitor,
+# so it fails if the line is deleted OR if it stops working. A copy of `set +m` here would keep
+# passing after the launcher lost it.
+_disable_source=$(sed -n '/^set +m$/p' "$SHIM")
+if [ -z "$_disable_source" ]; then
+  _bad "the launcher disables inherited job control"
+  printf '        no top-level `set +m` found in %s\n' "$SHIM"
+else
+  # `$-` is the authority on whether this shell has job control; `SHELLOPTS` is what children
+  # inherit. Both must come back clean, or a child still forks under monitor.
+  _after=$(env SHELLOPTS=monitor bash -c "
+    case \"\$-\" in *m*) echo 'inherited-on';; esac
+    $_disable_source
+    case \"\$-\" in *m*) echo 'still-on';; esac
+    case \"\$SHELLOPTS\" in *monitor*) echo 'children-still-on';; esac
+  ")
+  case "$_after" in
+    inherited-on)
+      _ok "the launcher disables inherited job control"
+      ;;
+    "")
+      # The precondition never held, so the assertion proved nothing — this bash did not inherit
+      # monitor from SHELLOPTS at all. Fail rather than report a green that tested nothing.
+      _bad "the launcher disables inherited job control"
+      printf '        this bash did not inherit monitor from SHELLOPTS, so nothing was exercised\n'
+      ;;
+    *)
+      _bad "the launcher disables inherited job control"
+      printf '        after the launcher line, monitor is still set: %s\n' "$_after"
+      ;;
+  esac
+fi
+
 echo
 if [ "$_failures" -eq 0 ]; then
   echo "PASS: $_passes assertions"

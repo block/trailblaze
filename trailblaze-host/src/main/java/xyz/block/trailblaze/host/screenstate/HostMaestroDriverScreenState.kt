@@ -15,7 +15,10 @@ import xyz.block.trailblaze.api.ScreenshotScalingConfig
 import xyz.block.trailblaze.api.TrailblazeNode
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode.Companion.relabelWithFreshIds
+import xyz.block.trailblaze.capture.video.IosScreenRotation
+import xyz.block.trailblaze.capture.video.IosScreenRotationRegistry
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
+import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.host.setofmark.HostCanvasSetOfMark
@@ -42,6 +45,14 @@ class HostMaestroDriverScreenState(
   override val deviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList(),
   /** When true, skip device screenshot capture for maximum speed. View hierarchy is still captured. */
   private val skipScreenshot: Boolean = false,
+  /**
+   * The device being read, when the caller knows it. Supplied only so the iOS screen rotation this
+   * capture works out can be published to [IosScreenRotationRegistry] for the session recorder,
+   * which has no view hierarchy of its own to read it from. Null at call sites that don't have a
+   * device id to hand; capture behaves identically, the recording just keeps whatever orientation
+   * it already had.
+   */
+  private val trailblazeDeviceId: TrailblazeDeviceId? = null,
 ) : ScreenState {
 
   private val deviceInfo: DeviceInfo = maestroDriver.deviceInfo()
@@ -89,6 +100,16 @@ class HostMaestroDriverScreenState(
       Platform.IOS -> extractIosBundleId(rawTree)
       Platform.ANDROID -> extractAndroidPackageId(rawTree)
       else -> null
+    }
+
+    // Publish the orientation for the session recorder. Deliberately outside the screenshot branch
+    // below: this is read from the view hierarchy, which fast mode still captures, and a recording
+    // that went sideways only in fast mode would be a miserable thing to track down.
+    if (deviceInfo.platform == Platform.IOS && unfilteredVh != null && trailblazeDeviceId != null) {
+      IosScreenRotationRegistry.observe(
+        deviceInstanceId = trailblazeDeviceId.instanceId,
+        rotation = iosScreenRotation(unfilteredVh, deviceInfo),
+      )
     }
 
     // Take the screenshot (raw, without set of mark).
@@ -294,32 +315,50 @@ class HostMaestroDriverScreenState(
       viewHierarchy: ViewHierarchyTreeNode,
       deviceInfo: DeviceInfo,
     ): BufferedImage {
-      val isDeviceLandscape = deviceInfo.widthGrid > deviceInfo.heightGrid
-      val isScreenshotPortrait = screenshot.height > screenshot.width
+      // A screenshot that already came back landscape has been rotated for us; there is nothing to
+      // infer and nothing to do.
+      if (screenshot.height <= screenshot.width) return screenshot
 
-      // Landscape device with portrait screenshot → needs 90° rotation.
+      return when (iosScreenRotation(viewHierarchy, deviceInfo)) {
+        IosScreenRotation.NONE -> screenshot
+        IosScreenRotation.CLOCKWISE_90 -> screenshot.rotateClockwise90()
+        IosScreenRotation.COUNTER_CLOCKWISE_90 -> screenshot.rotateCounterClockwise90()
+        IosScreenRotation.HALF_TURN -> screenshot.rotate180()
+      }
+    }
+
+    /**
+     * How far this device's portrait framebuffer has to be turned to be shown the right way up,
+     * decided from the status bar's position in the view hierarchy.
+     *
+     * Separated from the screenshot rotation above because the **session video** needs the same
+     * answer and cannot compute it: the baguette H.264 stream and `simctl io enumerate` both report
+     * the fixed portrait framebuffer with no orientation anywhere in them, so the accessibility
+     * tree is the only place this is knowable. Sharing the decision is the point — it means a
+     * recording can't disagree with the screenshots taken alongside it.
+     */
+    internal fun iosScreenRotation(
+      viewHierarchy: ViewHierarchyTreeNode,
+      deviceInfo: DeviceInfo,
+    ): IosScreenRotation {
+      val statusBar = findIosStatusBarPosition(viewHierarchy)
       // CW 90° maps the LEFT column of the portrait buffer to the TOP of landscape output.
       // CCW 90° maps the RIGHT column of the portrait buffer to the TOP of landscape output.
-      if (isDeviceLandscape && isScreenshotPortrait) {
-        return when (val pos = findIosStatusBarPosition(viewHierarchy)) {
+      if (deviceInfo.widthGrid > deviceInfo.heightGrid) {
+        return when (statusBar) {
           is StatusBarPosition.Found ->
-            if (pos.cx < deviceInfo.widthGrid / 2) screenshot.rotateClockwise90()
-            else screenshot.rotateCounterClockwise90()
+            if (statusBar.cx < deviceInfo.widthGrid / 2) IosScreenRotation.CLOCKWISE_90
+            else IosScreenRotation.COUNTER_CLOCKWISE_90
           // No status bar found → default to LANDSCAPE_LEFT (CCW 90°)
-          StatusBarPosition.NOT_FOUND -> screenshot.rotateCounterClockwise90()
+          StatusBarPosition.NOT_FOUND -> IosScreenRotation.COUNTER_CLOCKWISE_90
         }
       }
-
-      // Portrait device with portrait screenshot — check for upside-down
-      if (!isDeviceLandscape && isScreenshotPortrait) {
-        return when (val pos = findIosStatusBarPosition(viewHierarchy)) {
-          is StatusBarPosition.Found ->
-            if (pos.cy > deviceInfo.heightGrid / 2) screenshot.rotate180() else screenshot
-          StatusBarPosition.NOT_FOUND -> screenshot
-        }
+      return when (statusBar) {
+        is StatusBarPosition.Found ->
+          if (statusBar.cy > deviceInfo.heightGrid / 2) IosScreenRotation.HALF_TURN
+          else IosScreenRotation.NONE
+        StatusBarPosition.NOT_FOUND -> IosScreenRotation.NONE
       }
-
-      return screenshot
     }
 
     /**

@@ -170,7 +170,14 @@ class SessionStartCommand : Callable<Int>, QuietUnlessVerbose {
   @CommandLine.Mixin
   val headlessOption: HeadlessOption = HeadlessOption()
 
-  override fun call(): Int {
+  override fun call(): Int = quietUnlessVerbose(verbose) { startSession() }
+
+  /**
+   * The command proper; [call] owns the quiet scope around it. Around the WHOLE body, not partway
+   * through after the config write: that is what a picocli dispatch already does for this command,
+   * so a direct caller and a dispatched one print the same thing.
+   */
+  private fun startSession(): Int {
     // Validate --mode early before touching config.
     val normalizedMode = mode?.lowercase()
     if (normalizedMode != null && normalizedMode !in setOf("trail", "blaze")) {
@@ -229,7 +236,6 @@ class SessionStartCommand : Callable<Int>, QuietUnlessVerbose {
     }
     val currentConfig = CliConfigHelper.getOrCreateConfig()
 
-    if (!verbose) Console.enableQuietMode()
     val port = CliConfigHelper.resolveEffectiveHttpPort()
     // Session-scoped target: prefer the explicit `--target` flag, fall back
     // to `TRAILBLAZE_TARGET` env var (per-shell pin from `eval $(trailblaze

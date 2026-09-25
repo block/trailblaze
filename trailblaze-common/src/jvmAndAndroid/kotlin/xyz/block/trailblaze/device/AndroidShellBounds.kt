@@ -1,15 +1,16 @@
 package xyz.block.trailblaze.device
 
 /**
- * The two wall-clock bounds on an on-device shell command, kept together because their *order*
- * is the load-bearing part and they are enforced from different source sets — the read bound by
- * `AdbCommandUtil` (androidMain, which is the only place that can hold the UiAutomation monitor)
- * and the dispatch bound by `AdbShellTrailblazeTool` (shared). Two independent numbers would drift
- * back out of order without anything failing.
+ * The wall-clock bounds on a shell command, kept together because their *order* is the
+ * load-bearing part and they are enforced from different source sets — the read bound by
+ * `AdbCommandUtil` (androidMain, which is the only place that can hold the UiAutomation monitor),
+ * the on-device dispatch bound by `AdbShellTrailblazeTool` (shared), and the host bound by
+ * `AndroidDeviceCommandExecutor` (jvmMain). Independent numbers would drift back out of order
+ * without anything failing.
  *
- * Both are hang detection, not performance budgets. Nothing issued through this path should come
- * close: the slowest real command on record is a `pm clear` that took 154s on an Android tablet
- * running turbo.
+ * All of them are hang detection, not performance budgets. Nothing issued through these paths
+ * should come close: the slowest real command on record is a `pm clear` that took 154s on an
+ * Android tablet running turbo.
  */
 object AndroidShellBounds {
 
@@ -41,4 +42,43 @@ object AndroidShellBounds {
    * ~13-minute inactivity watchdog, which is the outermost bound of all.
    */
   const val ON_DEVICE_DISPATCH_TIMEOUT_MS: Long = SHELL_READ_TIMEOUT_MS + 30_000L
+
+  /**
+   * When a single shell command on the HOST transport (dadb → `adbd`) gives up.
+   *
+   * dadb's read has no deadline of its own, so without this a wedged device or a stale transport
+   * blocks the calling thread until the session's ~13-minute inactivity watchdog fires — and the
+   * failure then names the watchdog rather than the command that hung. The on-device transport has
+   * been bounded since [ON_DEVICE_DISPATCH_TIMEOUT_MS]; this is the same guarantee for the host.
+   *
+   * Equal to [ON_DEVICE_DISPATCH_TIMEOUT_MS] rather than merely similar, so the same trail step
+   * fails at the same wall clock whichever transport it ran on.
+   *
+   * What it bounds is the CALLER's wait, not the read. The read runs on a daemon worker that is
+   * interrupted and abandoned, and an interrupt does not unblock a thread parked in a native socket
+   * read, so that worker can outlive the bound until the socket faults. What makes this safe on the
+   * host — and is why one bound suffices where the on-device path needs two — is that the abandoned
+   * worker holds no process-wide monitor, unlike an on-device read holding UiAutomation. Nor does
+   * the worker ever retry, so a command cannot land late. The bound does not make the NEXT call
+   * any faster: every dadb command opens its own socket, so a transport that is still wedged makes
+   * that one wait out its own bound too.
+   *
+   * It must also stay ABOVE the longest bound a caller of this transport enforces for itself,
+   * which is [EnsureAppCompiled.COMPILE_TIMEOUT_MS] (300s) for `pm compile`. Equal numbers would
+   * race, and the caller's message is the useful one: it names the app and the compiler filter,
+   * where this one can only name the argv.
+   */
+  const val HOST_SHELL_TIMEOUT_MS: Long = ON_DEVICE_DISPATCH_TIMEOUT_MS
+
+  /**
+   * What is left of a [SHELL_READ_TIMEOUT_MS]-style budget after [elapsedMs] of it has been spent,
+   * never negative.
+   *
+   * One `execShellCommand` can involve two reads — the command, then the liveness probe when it
+   * answered nothing — and both hold the process-wide UiAutomation monitor. Giving the second read
+   * a full bound of its own would let the call run for twice the deadline its caller sized, so the
+   * second read is given this instead. Zero means the caller is out of time and the second read
+   * must not be started at all, rather than being started with a bound of zero.
+   */
+  fun remainingAfter(budgetMs: Long, elapsedMs: Long): Long = (budgetMs - elapsedMs).coerceAtLeast(0L)
 }

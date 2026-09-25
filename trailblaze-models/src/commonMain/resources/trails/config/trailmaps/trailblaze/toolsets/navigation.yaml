@@ -2,7 +2,6 @@
 id: navigation
 description: "Back button, scroll until visible, open URLs, and app launching."
 drivers:
-  - android-ondevice-instrumentation
   - android-ondevice-accessibility
   - ios-host
   - ios-axe

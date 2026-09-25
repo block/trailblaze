@@ -33,6 +33,10 @@
       ATTACHMENT_EMBED_MAX_TOTAL_BYTES: o.ATTACHMENT_EMBED_MAX_TOTAL_BYTES || g.ATTACHMENT_EMBED_MAX_TOTAL_BYTES,
       ATTACHMENT_MIME: o.ATTACHMENT_MIME || g.ATTACHMENT_MIME,
       isSafeSessionRelativePath: o.isSafeSessionRelativePath || g.isSafeSessionRelativePath,
+      // The tracer-span slimmer and its size cap, from run-report-trace-spans.ts by the same route,
+      // so a live or Shared report carries the same `trace.json` spans a CLI-built one does.
+      slimTracerSpans: o.slimTracerSpans || g.slimTracerSpans,
+      MAX_TRACE_BYTES: o.MAX_TRACE_BYTES || g.MAX_TRACE_BYTES,
     };
   }
 
@@ -400,6 +404,26 @@
     } catch (e) { return null; }
   }
 
+  // The session's `trace.json` (what TrailblazeTracer recorded around the run), off the daemon's
+  // /static tree, slimmed to the TracerSpan shape the Perfetto export reads. A session that recorded
+  // no trace 404s, and a run-report-core too old to publish the slimmer leaves the report span-less.
+  // The driver's own size cap applies, read from the response's declared length when it has one.
+  async function fetchTraceSpans(sessionId, d) {
+    try {
+      if (typeof d.slimTracerSpans !== 'function') return null;
+      var res = await d.fetch(staticUrl(sessionId, 'trace.json'));
+      if (!res.ok) return null;
+      var declared = res.headers && typeof res.headers.get === 'function' ? Number(res.headers.get('content-length')) : NaN;
+      if (d.MAX_TRACE_BYTES && declared > d.MAX_TRACE_BYTES) {
+        console.error('trace: skipping trace.json — ' + declared + ' bytes is over the ' + d.MAX_TRACE_BYTES + '-byte cap');
+        return null;
+      }
+      var text = await res.text();
+      if (d.MAX_TRACE_BYTES && text.length > d.MAX_TRACE_BYTES) return null;
+      return d.slimTracerSpans(JSON.parse(text));
+    } catch (e) { return null; }
+  }
+
   // The side channels, in parallel, each failing soft to null. `logs` lets a caller that has already
   // fetched the session's log records (the live document derives its trace from them) reuse them
   // instead of downloading the same — potentially very large — payload a second time.
@@ -415,12 +439,13 @@
       fetchOriginalYaml(sessionId, d, logs),
       fetchReportEvents(sessionId, d),
       fetchAnalyticsStream(sessionId, d),
+      fetchTraceSpans(sessionId, d),
     ]);
     var events = (out[2] || []).concat(out[3] ? [out[3]] : []);
-    return { recordingYaml: out[0], originalYaml: out[1], events: events.length ? events : null };
+    return { recordingYaml: out[0], originalYaml: out[1], events: events.length ? events : null, spans: out[4] || null };
   }
 
-  // The full run-report session input: `{ meta, trace, llmLogs, shots, events }`, ready for
+  // The full run-report session input: `{ meta, trace, llmLogs, shots, events, spans }`, ready for
   // buildRunReportHtml (the exported file) or toSessionPayloads (a served document).
   async function buildSessionInput(args) {
     var a = args || {};
@@ -442,6 +467,7 @@
       shots: shots,
       events: side.events,
       attachments: attachments,
+      spans: side.spans,
     };
     // 'embed' compresses the per-step view hierarchies into the same gz side-channel the CLI-built
     // report carries: inline hierarchies would otherwise dominate the exported file's size AND be

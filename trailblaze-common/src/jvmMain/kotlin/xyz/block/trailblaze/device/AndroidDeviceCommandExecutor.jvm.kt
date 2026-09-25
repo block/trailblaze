@@ -4,6 +4,8 @@ import java.io.File
 import xyz.block.trailblaze.android.tools.shellEscape
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.util.AndroidHostAdbUtils
+import xyz.block.trailblaze.util.TransportFailureTracker
+import xyz.block.trailblaze.util.hostShellOutputOrThrow
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.util.PollingUtils
 
@@ -18,12 +20,7 @@ actual class AndroidDeviceCommandExecutor actual constructor(
   // quoting and `$?` exit sentinels are honored — see the expect-class KDoc.
   actual val usesShellInterpreter: Boolean = true
 
-  actual fun executeShellCommand(command: String): String {
-    return AndroidHostAdbUtils.execAdbShellCommand(
-      deviceId = deviceId,
-      args = command.split(" "),
-    )
-  }
+  actual fun executeShellCommand(command: String): String = boundedShell(command.split(" "))
 
   actual fun executeShellCommandArgs(vararg args: String): String = shellCommand(*args)
 
@@ -48,10 +45,7 @@ actual class AndroidDeviceCommandExecutor actual constructor(
       component = component,
       extras = intent.extras,
     )
-    AndroidHostAdbUtils.execAdbShellCommand(
-      deviceId = deviceId,
-      args = args,
-    )
+    boundedShell(args)
   }
 
   actual fun forceStopApp(appId: String) {
@@ -216,10 +210,32 @@ actual class AndroidDeviceCommandExecutor actual constructor(
     return "_display_name=\\'$fileName\\'"
   }
 
-  private fun shellCommand(vararg args: String): String {
-    return AndroidHostAdbUtils.execAdbShellCommand(
-      deviceId = deviceId,
-      args = args.toList(),
+  private fun shellCommand(vararg args: String): String = boundedShell(args.toList())
+
+  /**
+   * Every host shell call goes through here so none of them can hang forever.
+   *
+   * A timeout throws rather than returning an empty string. Callers here parse the output, and ""
+   * is a legitimate answer from a great many shell commands — returning one would turn a wedged
+   * device into "the app is not in the foreground" or "this package has no dexopt state", a wrong
+   * answer reported as a right one and strictly worse than the hang it replaced.
+   *
+   * Bounded once and never retried: this path carries arbitrary commands, including ones with side
+   * effects (`am broadcast`, `pm disable-user`, whatever a trail hands `android_adbShell`), so a
+   * silent re-run is not safe. The bounded primitive still evicts the cached dadb client on the way
+   * out, which is the part that lets the NEXT call reconnect instead of inheriting the wedge.
+   */
+  private fun boundedShell(args: List<String>): String {
+    val timeoutMs = AndroidShellBounds.HOST_SHELL_TIMEOUT_MS
+    return hostShellOutputOrThrow(
+      attempt = AndroidHostAdbUtils.execAdbShellCommandBoundedOnceDetailed(
+        deviceId = deviceId,
+        args = args,
+        timeoutMs = timeoutMs,
+      ),
+      deviceLabel = deviceId.instanceId,
+      command = args.joinToString(" "),
+      timeoutMs = timeoutMs,
     )
   }
 
@@ -331,17 +347,24 @@ actual class AndroidDeviceCommandExecutor actual constructor(
     appId: String,
     maxWaitMs: Long,
     checkIntervalMs: Long,
-  ): Boolean = PollingUtils.tryUntilSuccessOrTimeout(
-    maxWaitMs = maxWaitMs,
-    intervalMs = checkIntervalMs,
-    conditionDescription = "App $appId should be in foreground",
-  ) {
-    val output = AndroidHostAdbUtils.execAdbShellCommand(
-      deviceId = deviceId,
-      args = listOf("dumpsys", "activity", "activities"),
-    )
-    AndroidForegroundParser.parseResumedActivityComponents(output)
-      .any { AndroidForegroundParser.packageFromComponent(it) == appId }
+  ): Boolean {
+    // PollingUtils counts a throwing attempt as "not yet met", which is right for a device that
+    // answered "no" and wrong for one that never answered. Left alone, a wedged transport would
+    // come back as a plain `false` and the launch tool would helpfully re-launch the app — the
+    // exact wrong-answer-reported-as-right-answer this bound exists to stop, one layer up. So the
+    // transport failure is held aside and rethrown if the poll never succeeded.
+    val transport = TransportFailureTracker()
+    val inForeground = PollingUtils.tryUntilSuccessOrTimeout(
+      maxWaitMs = maxWaitMs,
+      intervalMs = checkIntervalMs,
+      conditionDescription = "App $appId should be in foreground",
+    ) {
+      val output = transport.record { boundedShell(listOf("dumpsys", "activity", "activities")) }
+      AndroidForegroundParser.parseResumedActivityComponents(output)
+        .any { AndroidForegroundParser.packageFromComponent(it) == appId }
+    }
+    transport.rethrowIfUnresolved(inForeground)
+    return inForeground
   }
 
   actual fun copyTestResourceToDevice(resourcePath: String, devicePath: String) {

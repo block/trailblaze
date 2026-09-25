@@ -21,6 +21,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.util.concurrent.Callable
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.Future
 import java.util.concurrent.TimeUnit
@@ -35,6 +36,7 @@ import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.devices.WebInstanceIds
 import xyz.block.trailblaze.capture.CaptureOptions
 import xyz.block.trailblaze.host.animations.SessionAnimationDisabler
+import xyz.block.trailblaze.host.dexopt.SessionAppCompileEnsurer
 import xyz.block.trailblaze.host.turbo.SessionTurboAttacher
 import xyz.block.trailblaze.host.capture.SessionCaptureCoordinator
 import xyz.block.trailblaze.host.capture.finalizeHostSessionResources
@@ -119,6 +121,15 @@ class TrailblazeDeviceManager(
    * device and screen-state capture throws. An app that wants any driver passes its registry.
    */
   val hostDriverDescriptors: HostDriverDescriptorRegistry = HostDriverDescriptorRegistry.EMPTY,
+  /**
+   * Single point of ownership for per-`SessionId` capture across CLI, MCP, and desktop-UI
+   * paths. See [SessionCaptureCoordinator] for why this exists at the device-manager
+   * level (where session lifecycle already lives) rather than scattered across runners.
+   *
+   * A parameter so a test can hand in a coordinator with a fake capture-session factory and see
+   * what capture was actually started with — the app id in particular, which this class resolves.
+   */
+  val sessionCaptureCoordinator: SessionCaptureCoordinator = SessionCaptureCoordinator(logsRepo),
 ) {
 
   /**
@@ -252,13 +263,6 @@ class TrailblazeDeviceManager(
       provider = freshAppTargetsProvider?.let { discover -> { discover(true) } },
       lock = appTargetDiscoveryLock,
     )
-
-  /**
-   * Single point of ownership for per-`SessionId` capture across CLI, MCP, and desktop-UI
-   * paths. See [SessionCaptureCoordinator] for why this exists at the device-manager
-   * level (where session lifecycle already lives) rather than scattered across runners.
-   */
-  val sessionCaptureCoordinator: SessionCaptureCoordinator = SessionCaptureCoordinator(logsRepo)
 
   /**
    * Manages the web browser lifecycle for web testing.
@@ -593,6 +597,23 @@ class TrailblazeDeviceManager(
     val isNewSession: Boolean
   )
 
+  /** A run executing on a device, from [beginRun] until [endRun]. */
+  class RunInFlight internal constructor(val trailblazeDeviceId: TrailblazeDeviceId)
+
+  private val runsInFlight: MutableSet<RunInFlight> = ConcurrentHashMap.newKeySet()
+
+  /**
+   * Registers a run executing on [trailblazeDeviceId] until [endRun]. Runs may share a device, and
+   * the device's session pointer names only the latest, so this is how [releaseReplacedSession]
+   * tells a replaced interactive session from a sibling run that is still executing.
+   */
+  fun beginRun(trailblazeDeviceId: TrailblazeDeviceId): RunInFlight =
+    RunInFlight(trailblazeDeviceId).also(runsInFlight::add)
+
+  fun endRun(run: RunInFlight) {
+    runsInFlight.remove(run)
+  }
+
   /**
    * Gets the current session for a device, or creates a new one if none exists.
    * Automatically tracks the session in the device state.
@@ -612,6 +633,14 @@ class TrailblazeDeviceManager(
     captureVideoOverride: Boolean? = null,
     captureLogcatOverride: Boolean? = null,
     captureIosLogsOverride: Boolean? = null,
+    captureMemoryOverride: Boolean? = null,
+    /**
+     * The target this session is about to be given, for the caller that is creating the session in
+     * order to set one. Capture resolves the app inside the lock below, so a caller that stored the
+     * target only after this returned would have capture bound to the daemon-wide target while the
+     * tools drove a different app. Passed here instead, it is registered before capture reads it.
+     */
+    sessionTargetToApply: String? = null,
   ): DeviceSessionResolution {
     // Two-phase to keep `startForSession` (which can block on adb/ffmpeg/xcrun
     // startup) OUTSIDE `sessionCreationLock` — otherwise every concurrent session
@@ -621,10 +650,13 @@ class TrailblazeDeviceManager(
     val resolution: DeviceSessionResolution
     val startCaptureFor: SessionId?
     val captureDeviceId: String
-    val captureAppId: String?
+    val captureTarget: TrailblazeHostAppTarget?
+    val captureAppIds: List<String>
     val captureOptions: CaptureOptions
+    val replacedSessionId: SessionId?
     synchronized(sessionCreationLock) {
       val existingSessionId = if (forceNewSession) null else getCurrentSessionIdForDevice(trailblazeDeviceId)
+      replacedSessionId = if (forceNewSession) getCurrentSessionIdForDevice(trailblazeDeviceId) else null
       val isNewSession = existingSessionId == null
       val sessionId = existingSessionId ?: TrailblazeSessionManager.generateSessionId(sessionIdPrefix)
       if (isNewSession) {
@@ -632,13 +664,28 @@ class TrailblazeDeviceManager(
       }
       resolution = DeviceSessionResolution(sessionId, isNewSession)
       startCaptureFor = if (isNewSession) sessionId else null
+      // Before the capture resolution below reads the registry. A blank id is a caller clearing the
+      // override, which leaves the daemon-wide target as the answer — the same thing an absent
+      // entry means, so there is nothing to register.
+      if (!sessionTargetToApply.isNullOrBlank()) {
+        sessionTargetRegistry.set(sessionId, sessionTargetToApply)
+      }
       captureDeviceId = trailblazeDeviceId.instanceId
       // Resolve appId outside the lock would race with target updates, so capture both
       // the target-override + effective daemon-wide target (persisted selection → workspace
       // defaults.target) here. Raw selectedTargetAppId would be null under a workspace-default
       // target, dropping app-scoping from the capture.
       val appConfig = settingsRepo.serverStateFlow.value.appConfig
-      captureAppId = sessionTargetRegistry.get(sessionId) ?: getCurrentSelectedTargetApp()?.id
+      val captureTargetId = sessionTargetRegistry.get(sessionId) ?: getCurrentSelectedTargetApp()?.id
+      // A target id (`sampleapp`) is not an installed package, and capture needs the package: a
+      // memory reading resolves the app's pid with `pidof <appId>`, which answers nothing for a
+      // target id and leaves every event device-only. Resolve the target back to the ids it may run
+      // under on this platform — the same resolution the CLI path does in `DesktopYamlRunner`, so
+      // both paths scope capture to the same app.
+      captureTarget = availableAppTargets.find { it.id == captureTargetId }
+      captureAppIds = captureTarget
+        ?.getPossibleAppIdsForPlatform(trailblazeDeviceId.trailblazeDevicePlatform)
+        .orEmpty()
       // Resolve capture options from the daemon's `appConfig` toggles. Per-run CLI
       // flags (--capture-video / --capture-logcat) are layered on by
       // `DesktopYamlRunner` when the CLI path also fires `startForSession`; the
@@ -651,6 +698,7 @@ class TrailblazeDeviceManager(
         persistedCaptureVideo = appConfig.captureVideo,
         captureLogcat = captureLogcatOverride ?: appConfig.captureLogcat,
         captureIosLogs = captureIosLogsOverride ?: appConfig.captureIosLogs,
+        captureMemory = captureMemoryOverride ?: appConfig.captureMemory,
       )
     }
 
@@ -658,28 +706,116 @@ class TrailblazeDeviceManager(
     // CLI path's `DesktopYamlRunner.captureSessionStarted` callback may also fire
     // `startForSession` later, but the coordinator's reserve-then-start protocol
     // ensures only one wins.
+    // Before the new session's capture starts, for the same reason `DesktopYamlRunner` releases
+    // first: the replaced session restores the device settings it changed before the new one reads
+    // them. A run that forces a new session reserves it here, so the runner never sees the old one.
+    replacedSessionId?.let { releaseReplacedSession(trailblazeDeviceId, it, resolution.sessionId) }
     if (startCaptureFor != null) {
       sessionCaptureCoordinator.startForSession(
         sessionId = startCaptureFor,
         deviceId = captureDeviceId,
         platform = trailblazeDeviceId.trailblazeDevicePlatform,
         options = captureOptions,
-        appId = captureAppId,
+        // Resolved out here because it asks the device what is installed, which must not happen
+        // under `sessionCreationLock` — and not asked at all when no stream will use the answer,
+        // so a session that captures nothing does not wait on a device probe first.
+        appId = if (captureOptions.hasAnyCaptureEnabled) {
+          resolveCaptureAppId(trailblazeDeviceId, captureTarget, captureAppIds)
+        } else {
+          null
+        },
       )
       // Experimental opt-in (gated internally, idempotent like the capture start above); restored
       // by the finalization barrier every session-end path runs.
       SessionAnimationDisabler.startForSession(startCaptureFor, trailblazeDeviceId)
-      // Turbo needs real applicationIds, not the target id `captureAppId` carries, so resolve the
-      // target back to the ids it may run under on this platform (declared priority order).
+      // `captureAppIds` is every applicationId the target may run under, in declared priority
+      // order — which flavor is installed varies by lane, and both hooks below pick among them by
+      // what they find on the device.
+      //
+      // On by default (kill switch inside), idempotent per session: makes sure the app has compiled
+      // ART artifacts so its cold starts do not re-verify the APK. Before turbo, whose own compile
+      // is unforced and finds the artifacts already there.
+      SessionAppCompileEnsurer.startForSession(
+        sessionId = startCaptureFor.toString(),
+        deviceId = trailblazeDeviceId,
+        candidateAppIds = captureAppIds,
+      )
       SessionTurboAttacher.startForSession(
         sessionId = startCaptureFor.toString(),
         deviceId = trailblazeDeviceId,
-        candidateAppIds = availableAppTargets.find { it.id == captureAppId }
-          ?.getPossibleAppIdsForPlatform(trailblazeDeviceId.trailblazeDevicePlatform)
-          .orEmpty(),
+        candidateAppIds = captureAppIds,
       )
     }
     return resolution
+  }
+
+  /**
+   * Which of a target's declared applicationIds capture should sample on THIS device.
+   *
+   * A target commonly declares several — a debug id, an internal id, the production id — and only
+   * one of them is installed on any given device. Taking the first declared one binds capture to
+   * an app that is not there, and the failure is quiet: every reading reports the app as not
+   * running, so the session records device memory and nothing else. Ask the device instead, the
+   * same way every other caller does ([TrailblazeHostAppTarget.getAppIdIfInstalled]).
+   *
+   * The probe is skipped when there is nothing to choose between, so the common single-id target
+   * costs no device round trip. When nothing can be learned about the device at all, the probe
+   * answers an empty set and this falls back to the first declared id — no worse than not asking,
+   * and logged so it is diagnosable. See [probeInstalledAppIdsForCapture] for what it tries first.
+   */
+  internal fun resolveCaptureAppId(
+    trailblazeDeviceId: TrailblazeDeviceId,
+    target: TrailblazeHostAppTarget?,
+    candidateAppIds: List<String>,
+    installedAppIdsProvider: (TrailblazeDeviceId) -> Set<String> = { probeInstalledAppIdsForCapture(it) },
+  ): String? {
+    if (target == null || candidateAppIds.size < 2) return candidateAppIds.firstOrNull()
+    val installed = installedAppIdsProvider(trailblazeDeviceId)
+    val resolved = target.getAppIdIfInstalled(trailblazeDeviceId.trailblazeDevicePlatform, installed)
+    if (resolved == null) {
+      Console.log(
+        "[TrailblazeDeviceManager] none of ${target.id}'s app ids [${candidateAppIds.joinToString()}] " +
+          "are installed on ${trailblazeDeviceId.instanceId} (${installed.size} package(s) seen); " +
+          "capture will use ${candidateAppIds.first()}",
+      )
+    }
+    return resolved ?: candidateAppIds.first()
+  }
+
+  /**
+   * What is installed on [deviceId] right now, for the purpose of scoping capture.
+   *
+   * Asks the device rather than reading the cached inventory first. The cache holds whatever the
+   * last probe saw, which can predate a reinstall that swapped one declared flavor for another —
+   * and scoping capture to a package that is no longer there is the exact silent failure
+   * [resolveCaptureAppId] exists to prevent: every reading reports the app as not running.
+   *
+   * Bounded like every other device probe. The previous direct call had no deadline, so an
+   * uncached multi-id target against a wedged transport held up session startup indefinitely.
+   *
+   * An EMPTY answer counts as no answer, not as "nothing is installed". A running device always
+   * has packages, so empty means the probe broke without saying so, and taking it at face value
+   * would throw away a perfectly usable cached inventory. So a probe that times out, throws, or
+   * comes back empty answers with the cached inventory — stale is
+   * still better than nothing — and an empty set when there is no cache either, which
+   * [resolveCaptureAppId] reads as "could not tell" and answers with the first declared id.
+   */
+  internal fun probeInstalledAppIdsForCapture(
+    deviceId: TrailblazeDeviceId,
+    timeoutSeconds: Long = CAPTURE_APP_PROBE_TIMEOUT_SECONDS,
+  ): Set<String> {
+    val fresh = runWithTimeout(timeoutSeconds, deviceId.instanceId, "installed apps for capture") {
+      installedAppIdsProviderBlocking(deviceId)
+    }
+    if (!fresh.isNullOrEmpty()) return fresh
+    val cached = installedAppIdsByDeviceFlow.value[deviceId]?.takeIf { it.isNotEmpty() }
+    Console.log(
+      "[TrailblazeDeviceManager] installed-app probe " +
+        (if (fresh == null) "did not answer" else "found no packages") +
+        " for ${deviceId.instanceId} while scoping capture; " +
+        if (cached != null) "using the last inventory seen (${cached.size} package(s))" else "no inventory cached",
+    )
+    return cached ?: emptySet()
   }
 
   /**
@@ -734,7 +870,12 @@ class TrailblazeDeviceManager(
       forceNewSession = false,
       sessionIdPrefix = sessionIdPrefix,
       deviceSummary = deviceSummary,
+      // When this call is what creates the session, capture has to see the target before it starts.
+      sessionTargetToApply = appTargetId,
     )
+    // Still the authority for an EXISTING session, and for clearing the override. Capture on an
+    // existing session has already bound its app, so changing the target mid-session re-points the
+    // tools but not the memory readings.
     sessionTargetRegistry.set(resolution.sessionId, appTargetId)
     return SessionTargetAssignment(
       sessionId = resolution.sessionId,
@@ -807,20 +948,28 @@ class TrailblazeDeviceManager(
 
     Console.log("Ended session $sessionId for device: ${trailblazeDeviceId.instanceId}")
 
-    // Write session end log. The durable status must tell the same story as the throw below:
-    // a failed finalization means the session's artifacts may be incomplete.
+    // The session ran from its first log to its last, not until this release. Read after
+    // finalization, which flushes log writes still queued (the iOS runner's) but writes no logs of
+    // its own — its capture artifacts are not log files, so the teardown time is not counted.
+    val activityWindow = logsRepo.activityWindowMs(sessionId)
+    val durationMs = activityWindow?.let { it.last - it.first } ?: 0L
+    // Write times are truncated to the millisecond while a log's own timestamp is not, so the last
+    // log can be stamped later within that millisecond. Ending at its start would sort the end
+    // before a Started log written in it, and the session would read as still in progress.
+    val endedAt = activityWindow?.let { kotlinx.datetime.Instant.fromEpochMilliseconds(it.last + 1) }
+      ?: kotlinx.datetime.Clock.System.now()
+
+    // Write session end log. A failed finalization means the session's captured evidence may be
+    // incomplete, which is a warning on the session, not its outcome: releasing the device says
+    // nothing about whether the work done in the session succeeded.
     try {
-      val sessionStatus = if (finalizationFailure == null) {
-        SessionStatus.Ended.Succeeded(durationMs = 0L)
-      } else {
-        SessionStatus.Ended.Failed(
-          durationMs = 0L,
-          exceptionMessage = finalizationFailure.message,
-        )
-      }
+      val sessionStatus = SessionStatus.Ended.Succeeded(
+        durationMs = durationMs,
+        captureWarning = finalizationFailure?.let(::describeCaptureFailure),
+      )
       val sessionEndLog = TrailblazeLog.TrailblazeSessionStatusChangeLog(
         session = sessionId,
-        timestamp = kotlinx.datetime.Clock.System.now(),
+        timestamp = endedAt,
         sessionStatus = sessionStatus,
       )
       logsRepo.saveLogToDisk(sessionEndLog)
@@ -834,6 +983,16 @@ class TrailblazeDeviceManager(
 
     return sessionId
   }
+
+  /**
+   * The finalization barrier's own message only counts the failures ("1 host session finalizer(s)
+   * failed …"), so the first cause — the capture that actually failed — goes with it.
+   */
+  private fun describeCaptureFailure(failure: Throwable): String =
+    listOfNotNull(failure.message, failure.cause?.message)
+      .distinct()
+      .joinToString(": ")
+      .ifBlank { failure::class.simpleName ?: "Session finalization failed" }
 
   suspend fun runTool(
     trailblazeDeviceId: TrailblazeDeviceId,
@@ -1201,9 +1360,9 @@ class TrailblazeDeviceManager(
       sid
     }
     // Best-effort stop of capture for the cancelled session — running outside the
-    // sessionCreationLock so a slow ffmpeg sprite-extract pass on stopAll can't deadlock
-    // a concurrent device-management call (sprite gen is bound by `FFMPEG_TIMEOUT_SECONDS`
-    // but seconds is enough to be felt). Idempotent if endSessionForDevice already ran.
+    // sessionCreationLock so a slow ffmpeg finalize on stopAll can't deadlock a concurrent
+    // device-management call (the mux drain is time-bounded, but seconds is enough to be
+    // felt). Idempotent if endSessionForDevice already ran.
     // The caller-supplied id covers the mapping-already-cleared case (see kdoc).
     // Genuinely best-effort: a cancelled run is already reported as cancelled/failed, and
     // several callers invoke this from their own error paths, so a cleanup failure here is
@@ -1217,6 +1376,49 @@ class TrailblazeDeviceManager(
       Console.log("Session cleanup after cancellation failed: ${it.message}")
     }
     return scopeCancelled || cancelledSessionId != null
+  }
+
+  /**
+   * Releases the host resources of [replacedSessionId], the session [trailblazeDeviceId] was on
+   * before [newSessionId] took the device over without ending it (an interactive CLI session
+   * followed by a `run`). Nothing ends a replaced session, so its capture — memory sampling,
+   * logcat, network capture — would otherwise keep polling the device for the life of the daemon.
+   *
+   * Resources only: no status is written and no driver is closed, since [newSessionId] is now using
+   * the device. Skipped while the replaced session is still the active session of another device,
+   * and while any run other than [callerRun] is executing on this device: runs can share a device,
+   * and the session the pointer named may be a sibling run's, still mid-flight. That also covers a
+   * sibling whose session exists but whose run has not reached the point of registering it.
+   * Best-effort — a cleanup failure is logged, never thrown into the new session.
+   */
+  fun releaseReplacedSession(
+    trailblazeDeviceId: TrailblazeDeviceId,
+    replacedSessionId: SessionId?,
+    newSessionId: SessionId,
+    callerRun: RunInFlight? = null,
+  ) {
+    if (replacedSessionId == null || replacedSessionId == newSessionId) return
+    val stillActiveElsewhere = _activeDeviceSessionsFlow.value.any { (deviceId, sessionId) ->
+      deviceId != trailblazeDeviceId && sessionId == replacedSessionId
+    }
+    if (stillActiveElsewhere) return
+    val siblingRunInFlight = runsInFlight.any { it.trailblazeDeviceId == trailblazeDeviceId && it !== callerRun }
+    if (siblingRunInFlight) {
+      Console.log(
+        "Session $newSessionId replaced $replacedSessionId on ${trailblazeDeviceId.instanceId}, " +
+          "but another run is executing there; leaving its capture running.",
+      )
+      return
+    }
+    Console.log(
+      "Session $newSessionId replaced $replacedSessionId on ${trailblazeDeviceId.instanceId}; " +
+        "releasing the replaced session's capture.",
+    )
+    runCatching {
+      finalizeHostSessionResources(listOf(replacedSessionId), sessionCaptureCoordinator::stopForSession)
+    }.onFailure {
+      Console.log("Releasing replaced session $replacedSessionId failed: ${it.message}")
+    }
   }
 
   /**
@@ -1652,6 +1854,13 @@ class TrailblazeDeviceManager(
     // Cap on concurrent name-resolution threads so a host with many devices attached doesn't spawn an
     // unbounded daemon pool; device counts are normally 1-3.
     private const val MAX_NAME_RESOLUTION_THREADS = 8
+
+    /**
+     * Budget for the installed-app probe that scopes capture to one of a target's declared app ids.
+     * Matches the inventory's own probe budget — it is the same `pm list packages` / `simctl
+     * listapps` call — and bounds session startup, which waits on it.
+     */
+    private const val CAPTURE_APP_PROBE_TIMEOUT_SECONDS = 10L
 
     /**
      * Runs a blocking operation with a timeout. Returns null if it times out or fails.

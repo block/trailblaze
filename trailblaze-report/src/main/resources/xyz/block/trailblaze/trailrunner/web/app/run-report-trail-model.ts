@@ -89,7 +89,8 @@ export interface TrailRow {
  * How a matrix decides which cells share a row.
  *
  * - `step` — by AUTHORED step number. The lanes are runs of one trail, so row 3 is that trail's
- *   step 3 on every device and comparing across a row is meaningful. This is the Trail view.
+ *   step 3 on every device and comparing across a row is meaningful. This is the Grid/Map/Replay
+ *   tabs of a run's own report.
  * - `position` — by nothing more than that number. Used when the picked runs are NOT one trail:
  *   they share no step spine, so the rows carry no shared label and nothing claims that one lane's
  *   third step corresponds to another's. Cells sit side by side and each names itself.
@@ -335,20 +336,6 @@ export interface DeviceLaneTrace {
  * because the failure anchor is matched by identity. Non-header rows appear only in the lane that
  * owns them. Returns [] when the trace names fewer than two devices — nothing to split.
  */
-/**
- * How many device lanes a trace splits into, in first-appearance order. The keying rule lives here
- * and nowhere else: an unattributed row is its own lane (`device ?? null`), so anything describing
- * the split — a header promising "compare this run's devices" — agrees with what actually opens.
- */
-export function traceDeviceLaneCount(trace: TraceStep[]): number {
-  const keys: Array<string | null> = [];
-  for (const row of trace) {
-    const key = row.device ?? null;
-    if (keys.indexOf(key) < 0) keys.push(key);
-  }
-  return keys.length;
-}
-
 export function traceDeviceLanes(trace: TraceStep[]): DeviceLaneTrace[] {
   const keys: Array<string | null> = [];
   for (const row of trace) {
@@ -392,9 +379,9 @@ export function pruneIdleTrailCells(matrix: TrailMatrix): TrailMatrix {
   return { rows, maxEndMs: matrix.maxEndMs, join: matrix.join };
 }
 
-// ── Which trails a document can offer a Trail view for ────────────────────────────────────────
-// The view compares ONE authored trail across runs — one lane per device, joined on the authored
-// step — so it is offered per TRAIL, not per document. A report holding fifty unrelated trails can
+// ── Which trails a document can offer the trail projections for ───────────────────────────────
+// They compare ONE authored trail across runs — one lane per device, joined on the authored
+// step — so they are offered per TRAIL, not per document. A report holding fifty unrelated trails can
 // still offer it for each of them. A trail that ran ONCE is offered too, on one lane: that is the
 // single-run report's own case, where the view is the map/grid/replay of a single run rather than a
 // comparison. The rule below is what decides, and it is here rather than in the viewer so it can be
@@ -414,8 +401,8 @@ export interface TrailCandidate {
 }
 
 /**
- * A run's trail identity, shared by the index's per-trail rows and the Trail view's scope so a
- * button and the view it opens can never disagree about which runs belong together.
+ * A run's trail identity, shared by the index's per-trail rows and the trail tabs' scope so a
+ * control and the stage it opens can never disagree about which runs belong together.
  *
  * `trailId` is the authored trail, qualified by target: the same YAML driven against two apps is
  * two trails, and aligning them would put unrelated steps in one row. Title is the fallback for a

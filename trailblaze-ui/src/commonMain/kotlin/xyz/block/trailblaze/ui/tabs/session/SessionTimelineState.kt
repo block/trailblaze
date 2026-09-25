@@ -50,17 +50,11 @@ class VideoPlaybackState internal constructor() {
   /**
    * Playback speed multiplier. Cycles through 0.25x, 0.5x, 1x, 1.5x, 2x, 4x.
    *
-   * Default is 4x — keeps walkthrough length tight enough to share inline (long sessions
-   * at 2x easily exceed GitHub's comment-attachment size limit). The Compose canvas can
-   * occasionally produce a torn screenshot frame at 4x where the scrubber moves on before
-   * the paint completes, more visible under the headless export pipeline than in the
-   * desktop viewer; users who care about export fidelity over length can drop to 2x via
-   * the speed picker. #3064 originally bumped to 4x, #3083 took it from 2x → 4x after
-   * dogfooding showed the size tradeoff dominates day-to-day.
-   *
-   * Only the desktop app reads this. `trailblaze report --video` exports from the TypeScript
-   * run-report renderer in `:trailblaze-report`, which has its own playback speed — changing
-   * this value does not affect an export.
+   * Default is 4x, so stepping through a long session doesn't take as long as the session did;
+   * the speed picker goes down to 0.25x for a closer look. Chosen back when this timeline also
+   * fed the animated exports and their file size argued for speed (#3064, then #3083 from 2x
+   * → 4x). Those exports now come from the TypeScript run-report renderer, which has its own
+   * speed, so this value only affects the desktop viewer and can be retuned on its own merits.
    */
   internal var playbackSpeed: Float by mutableStateOf(4f)
 

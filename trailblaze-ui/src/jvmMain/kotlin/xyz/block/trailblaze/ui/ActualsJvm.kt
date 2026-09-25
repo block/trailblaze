@@ -7,7 +7,6 @@ import kotlinx.coroutines.withContext
 import xyz.block.trailblaze.capture.logcat.LogcatParser
 import xyz.block.trailblaze.ui.images.ImageLoader
 import xyz.block.trailblaze.ui.tabs.session.CaptureMetadataModel
-import xyz.block.trailblaze.ui.tabs.session.SpriteSheetInfo
 import xyz.block.trailblaze.ui.tabs.session.VideoMetadata
 import xyz.block.trailblaze.ui.utils.JsonDefaults
 
@@ -51,14 +50,6 @@ actual fun getPlatform(): Platform {
   return Platform.JVM
 }
 
-// Nothing requests autoplay-on-load any more: video export runs against the TypeScript
-// run-report renderer, and the desktop app has its own UX for browsing sessions. Kept as a
-// seam rather than deleted — see the declarations in Expects.kt.
-actual fun isExportAutoplayRequested(): Boolean = false
-actual fun signalExportPlaybackEnded() {
-  // no-op on JVM
-}
-
 actual fun openVideoInSystemPlayer(filePath: String) {
   try {
     java.awt.Desktop.getDesktop().open(File(filePath))
@@ -78,36 +69,31 @@ actual suspend fun loadCaptureVideoMetadata(sessionId: String): VideoMetadata? {
       val metadata = JsonDefaults.FORWARD_COMPATIBLE
         .decodeFromString<CaptureMetadataModel>(metadataFile.readText())
 
-      // Require a sprite sheet (VIDEO_FRAMES) for the video-frame timeline mode —
-      // without one the UI has no way to render frames and sticks on "Loading frame...".
-      // When only a raw VIDEO is present (e.g., ffmpeg missing on the CI runner so
-      // sprite extraction was skipped), return null so the timeline falls back to
-      // the screenshot slideshow.
-      val spritesArtifact = metadata.artifacts.firstOrNull { it.type == "VIDEO_FRAMES" }
-        ?: return@withContext null
-
       fun resolveFile(artifact: CaptureMetadataModel.ArtifactEntry?): File? =
         artifact?.let { File(logsDir, "$sessionId/${it.filename}") }?.takeIf { it.exists() }
 
-      val spritesFile = resolveFile(spritesArtifact) ?: return@withContext null
-      val spriteMetaFile = File(logsDir, "$sessionId/video_sprites.txt")
-      // Multi-sheet sprites aren't renderable here (the Compose frame cache loads one image, and
-      // the session views interpret spriteInfo == null as "filePath is a raw video"). Bail to the
-      // screenshot timeline instead; multi-sheet playback in Compose is a follow-up.
-      val sheetCount = spriteMetaFile.takeIf { it.exists() }?.readLines()
-        ?.firstOrNull { it.startsWith("sheets=") }?.substringAfter("=")?.trim()?.toIntOrNull() ?: 1
-      if (sheetCount > 1) return@withContext null
-      val spriteInfo = parseSpriteMetadata(spriteMetaFile)
-      // The original video.mp4 still exists on disk after sprite generation but
-      // isn't listed as a separate artifact. Probe for it so "Watch Video" works.
-      val rawVideoFile = File(logsDir, "$sessionId/video.mp4").takeIf { it.exists() }
+      // The recording itself: the live VP9 encode on Android (VIDEO_WEBM), the muxed mp4 elsewhere
+      // (VIDEO). A session captured before sprite sheets were retired lists only the sheet
+      // (VIDEO_FRAMES), which nothing here can play — but its bookends are the recorder's, so the
+      // video file such a session left on disk is offered under them.
+      val recording = metadata.artifacts.firstOrNull { it.type == "VIDEO_WEBM" }
+        ?: metadata.artifacts.firstOrNull { it.type == "VIDEO" }
+      val recordingFile = resolveFile(recording)
+      if (recording != null && recordingFile != null) {
+        return@withContext VideoMetadata(
+          filePath = recordingFile.absolutePath,
+          startTimestampMs = recording.startTimestampMs,
+          endTimestampMs = recording.endTimestampMs,
+        )
+      }
+      val legacySheet = metadata.artifacts.firstOrNull { it.type == "VIDEO_FRAMES" } ?: return@withContext null
+      val legacyFile = listOf("video.webm", "video.mp4")
+        .map { File(logsDir, "$sessionId/$it") }
+        .firstOrNull { it.exists() } ?: return@withContext null
       VideoMetadata(
-        url = spritesFile.toURI().toString(),
-        filePath = spritesFile.absolutePath,
-        startTimestampMs = spritesArtifact.startTimestampMs,
-        endTimestampMs = spritesArtifact.endTimestampMs,
-        spriteInfo = spriteInfo,
-        videoFilePath = rawVideoFile?.absolutePath,
+        filePath = legacyFile.absolutePath,
+        startTimestampMs = legacySheet.startTimestampMs,
+        endTimestampMs = legacySheet.endTimestampMs,
       )
     } catch (e: Exception) {
       null
@@ -208,28 +194,4 @@ private fun findDeviceLogInCaptureTempDirs(): File? {
   return captureDirs
     .sortedByDescending { it.lastModified() }
     .firstNotNullOfOrNull { LogcatParser.findDeviceLogFile(it) }
-}
-
-private fun parseSpriteMetadata(metaFile: File): SpriteSheetInfo? {
-  if (!metaFile.exists()) return null
-  return try {
-    val props = metaFile.readLines().associate {
-      val (k, v) = it.split("=", limit = 2)
-      k.trim() to v.trim()
-    }
-    val frameCount = props["frames"]?.toIntOrNull() ?: return null
-    val uniqueFrameCount = props["uniqueFrames"]?.toIntOrNull()
-    val frameMap = props["frameMap"]?.split(",")?.map { it.toInt() }?.toIntArray()
-    SpriteSheetInfo(
-      fps = props["fps"]?.toIntOrNull() ?: return null,
-      frameCount = frameCount,
-      frameHeight = props["height"]?.toIntOrNull() ?: return null,
-      columns = props["columns"]?.toIntOrNull() ?: 1,
-      rows = props["rows"]?.toIntOrNull() ?: (uniqueFrameCount ?: frameCount),
-      uniqueFrameCount = uniqueFrameCount,
-      frameMap = frameMap,
-    )
-  } catch (e: Exception) {
-    null
-  }
 }

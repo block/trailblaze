@@ -126,6 +126,7 @@ class FileWatchService(
     if (fileNameLower == CaptureFilenames.DEVICE_LOG ||
       fileNameLower == CaptureFilenames.LEGACY_LOGCAT_TXT ||
       fileNameLower.endsWith(CaptureFilenames.VIDEO_EXTENSION) ||
+      fileNameLower.endsWith(CaptureFilenames.VIDEO_WEBM_EXTENSION) ||
       fileNameLower.endsWith(".${SessionEvents.EXTENSION}")
     ) {
       return true

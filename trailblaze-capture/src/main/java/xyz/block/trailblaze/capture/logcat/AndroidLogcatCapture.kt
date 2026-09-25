@@ -26,6 +26,12 @@ import xyz.block.trailblaze.util.Console
  * ```
  * 1772846521.234  5432  5432 D MyApp   : onCreate called
  * ```
+ *
+ * ### Which clock
+ * This artifact's bookends are on the **device** clock, unlike every video recorder's (which are
+ * host-clock — see `CaptureArtifact`). That is deliberate: `logcat` stamps its own lines with the
+ * device clock, so the window has to be on the same clock as the file it describes. A reader lining
+ * these lines up against session logs owns that conversion.
  */
 class AndroidLogcatCapture : CaptureStream, AppScopedCaptureStream {
   override val type = CaptureType.LOGCAT

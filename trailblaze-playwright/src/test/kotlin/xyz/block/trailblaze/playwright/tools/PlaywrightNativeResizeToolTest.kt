@@ -62,7 +62,7 @@ class PlaywrightNativeResizeToolTest {
 
   @Test
   fun `non-positive width returns Error without touching the page`() = runBlocking {
-    val before = page.viewportSize()
+    val before = assertNotNull(page.viewportSize())
     val tool = PlaywrightNativeResizeTool(width = 0, height = 600)
     val result = tool.executeWithPlaywright(page, buildContext())
     assertIs<TrailblazeToolResult.Error.ExceptionThrown>(result)
@@ -71,13 +71,13 @@ class PlaywrightNativeResizeToolTest {
       "error message should call out positive-width violation and include the bad input, got: ${result.errorMessage}",
     )
     // The page's viewport must remain unchanged because the tool short-circuits.
-    assertEquals(before.width, page.viewportSize().width)
-    assertEquals(before.height, page.viewportSize().height)
+    assertEquals(before.width, page.viewportSize()?.width)
+    assertEquals(before.height, page.viewportSize()?.height)
   }
 
   @Test
   fun `non-positive height returns Error without touching the page`() = runBlocking {
-    val before = page.viewportSize()
+    val before = assertNotNull(page.viewportSize())
     val tool = PlaywrightNativeResizeTool(width = 800, height = -1)
     val result = tool.executeWithPlaywright(page, buildContext())
     assertIs<TrailblazeToolResult.Error.ExceptionThrown>(result)
@@ -85,8 +85,8 @@ class PlaywrightNativeResizeToolTest {
       result.errorMessage.contains("positive") && result.errorMessage.contains("800x-1"),
       "error message should call out positive-height violation: ${result.errorMessage}",
     )
-    assertEquals(before.width, page.viewportSize().width)
-    assertEquals(before.height, page.viewportSize().height)
+    assertEquals(before.width, page.viewportSize()?.width)
+    assertEquals(before.height, page.viewportSize()?.height)
   }
 
   @Test
@@ -99,7 +99,7 @@ class PlaywrightNativeResizeToolTest {
       success.message!!.contains("414x896"),
       "Success message should include the applied dimensions, got: ${success.message}",
     )
-    val applied = page.viewportSize()
+    val applied = assertNotNull(page.viewportSize())
     assertEquals(414, applied.width, "page.viewportSize() must reflect the applied width")
     assertEquals(896, applied.height, "page.viewportSize() must reflect the applied height")
   }

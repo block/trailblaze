@@ -6296,6 +6296,9 @@ public final class xyz/block/trailblaze/devices/TrailblazeDriverType$Companion {
 	public final fun getDEFAULT_ANDROID ()Lxyz/block/trailblaze/devices/TrailblazeDriverType;
 	public final fun getDEFAULT_DESKTOP ()Lxyz/block/trailblaze/devices/TrailblazeDriverType;
 	public final fun getDEFAULT_IOS ()Lxyz/block/trailblaze/devices/TrailblazeDriverType;
+	public final fun getRETIRED_DRIVERS ()Ljava/util/Set;
+	public final fun replacementForRetired (Lxyz/block/trailblaze/devices/TrailblazeDriverType;)Lxyz/block/trailblaze/devices/TrailblazeDriverType;
+	public final fun retiredDriverMessage (Lxyz/block/trailblaze/devices/TrailblazeDriverType;)Ljava/lang/String;
 	public final fun selectableForPlatform (Lxyz/block/trailblaze/devices/TrailblazeDevicePlatform;)Ljava/util/List;
 }
 
@@ -8747,6 +8750,7 @@ public final class xyz/block/trailblaze/logs/client/TrailblazeJson {
 }
 
 public final class xyz/block/trailblaze/logs/client/TrailblazeJsonInstanceKt {
+	public static final fun getTrailblazeCompactJsonInstance ()Lkotlinx/serialization/json/Json;
 	public static final fun getTrailblazeJsonInstance ()Lkotlinx/serialization/json/Json;
 }
 
@@ -9495,25 +9499,27 @@ public final class xyz/block/trailblaze/logs/client/TrailblazeLog$TrailblazeAgen
 
 public final class xyz/block/trailblaze/logs/client/TrailblazeLog$TrailblazeLlmRequestLog : xyz/block/trailblaze/logs/client/TrailblazeLog, xyz/block/trailblaze/logs/model/HasAgentTaskStatus, xyz/block/trailblaze/logs/model/HasDuration, xyz/block/trailblaze/logs/model/HasScreenshot, xyz/block/trailblaze/logs/model/HasTraceId {
 	public static final field Companion Lxyz/block/trailblaze/logs/client/TrailblazeLog$TrailblazeLlmRequestLog$Companion;
-	public synthetic fun <init> (Lxyz/block/trailblaze/agent/model/AgentTaskStatus;Lxyz/block/trailblaze/api/ViewHierarchyTreeNode;Lxyz/block/trailblaze/api/ViewHierarchyTreeNode;Lxyz/block/trailblaze/api/TrailblazeNode;Lxyz/block/trailblaze/api/TrailblazeNode;Ljava/lang/String;Lxyz/block/trailblaze/llm/TrailblazeLlmModel;Ljava/util/List;Ljava/util/List;Ljava/util/List;Ljava/util/List;Lxyz/block/trailblaze/llm/LlmRequestUsageAndCost;Ljava/lang/String;JLjava/lang/String;Lkotlinx/datetime/Instant;Ljava/lang/String;IILxyz/block/trailblaze/logs/client/TrailblazeLog$LlmRequestContext;Ljava/lang/String;Ljava/lang/Boolean;Lxyz/block/trailblaze/logs/model/TrailblazeClockDomain;Lkotlinx/datetime/Instant;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
-	public synthetic fun <init> (Lxyz/block/trailblaze/agent/model/AgentTaskStatus;Lxyz/block/trailblaze/api/ViewHierarchyTreeNode;Lxyz/block/trailblaze/api/ViewHierarchyTreeNode;Lxyz/block/trailblaze/api/TrailblazeNode;Lxyz/block/trailblaze/api/TrailblazeNode;Ljava/lang/String;Lxyz/block/trailblaze/llm/TrailblazeLlmModel;Ljava/util/List;Ljava/util/List;Ljava/util/List;Ljava/util/List;Lxyz/block/trailblaze/llm/LlmRequestUsageAndCost;Ljava/lang/String;JLjava/lang/String;Lkotlinx/datetime/Instant;Ljava/lang/String;IILxyz/block/trailblaze/logs/client/TrailblazeLog$LlmRequestContext;Ljava/lang/String;Ljava/lang/Boolean;Lxyz/block/trailblaze/logs/model/TrailblazeClockDomain;Lkotlinx/datetime/Instant;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun <init> (Lxyz/block/trailblaze/agent/model/AgentTaskStatus;Lxyz/block/trailblaze/api/ViewHierarchyTreeNode;Lxyz/block/trailblaze/api/ViewHierarchyTreeNode;Lxyz/block/trailblaze/api/TrailblazeNode;Lxyz/block/trailblaze/api/TrailblazeNode;Ljava/lang/String;Lxyz/block/trailblaze/llm/TrailblazeLlmModel;Ljava/util/List;Ljava/util/List;Ljava/util/List;Ljava/util/List;Ljava/lang/String;Ljava/util/List;Lxyz/block/trailblaze/llm/LlmRequestUsageAndCost;Ljava/lang/String;JLjava/lang/String;Lkotlinx/datetime/Instant;Ljava/lang/String;IILxyz/block/trailblaze/logs/client/TrailblazeLog$LlmRequestContext;Ljava/lang/String;Ljava/lang/Boolean;Lxyz/block/trailblaze/logs/model/TrailblazeClockDomain;Lkotlinx/datetime/Instant;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun <init> (Lxyz/block/trailblaze/agent/model/AgentTaskStatus;Lxyz/block/trailblaze/api/ViewHierarchyTreeNode;Lxyz/block/trailblaze/api/ViewHierarchyTreeNode;Lxyz/block/trailblaze/api/TrailblazeNode;Lxyz/block/trailblaze/api/TrailblazeNode;Ljava/lang/String;Lxyz/block/trailblaze/llm/TrailblazeLlmModel;Ljava/util/List;Ljava/util/List;Ljava/util/List;Ljava/util/List;Ljava/lang/String;Ljava/util/List;Lxyz/block/trailblaze/llm/LlmRequestUsageAndCost;Ljava/lang/String;JLjava/lang/String;Lkotlinx/datetime/Instant;Ljava/lang/String;IILxyz/block/trailblaze/logs/client/TrailblazeLog$LlmRequestContext;Ljava/lang/String;Ljava/lang/Boolean;Lxyz/block/trailblaze/logs/model/TrailblazeClockDomain;Lkotlinx/datetime/Instant;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun component1 ()Lxyz/block/trailblaze/agent/model/AgentTaskStatus;
 	public final fun component10 ()Ljava/util/List;
 	public final fun component11 ()Ljava/util/List;
-	public final fun component12 ()Lxyz/block/trailblaze/llm/LlmRequestUsageAndCost;
-	public final fun component13 ()Ljava/lang/String;
-	public final fun component14 ()J
-	public final fun component15-OeRlnm0 ()Ljava/lang/String;
-	public final fun component16 ()Lkotlinx/datetime/Instant;
-	public final fun component17-V5Z4Sds ()Ljava/lang/String;
-	public final fun component18 ()I
-	public final fun component19 ()I
+	public final fun component12 ()Ljava/lang/String;
+	public final fun component13 ()Ljava/util/List;
+	public final fun component14 ()Lxyz/block/trailblaze/llm/LlmRequestUsageAndCost;
+	public final fun component15 ()Ljava/lang/String;
+	public final fun component16 ()J
+	public final fun component17-OeRlnm0 ()Ljava/lang/String;
+	public final fun component18 ()Lkotlinx/datetime/Instant;
+	public final fun component19-V5Z4Sds ()Ljava/lang/String;
 	public final fun component2 ()Lxyz/block/trailblaze/api/ViewHierarchyTreeNode;
-	public final fun component20 ()Lxyz/block/trailblaze/logs/client/TrailblazeLog$LlmRequestContext;
-	public final fun component21 ()Ljava/lang/String;
-	public final fun component22 ()Ljava/lang/Boolean;
-	public final fun component23 ()Lxyz/block/trailblaze/logs/model/TrailblazeClockDomain;
-	public final fun component24 ()Lkotlinx/datetime/Instant;
+	public final fun component20 ()I
+	public final fun component21 ()I
+	public final fun component22 ()Lxyz/block/trailblaze/logs/client/TrailblazeLog$LlmRequestContext;
+	public final fun component23 ()Ljava/lang/String;
+	public final fun component24 ()Ljava/lang/Boolean;
+	public final fun component25 ()Lxyz/block/trailblaze/logs/model/TrailblazeClockDomain;
+	public final fun component26 ()Lkotlinx/datetime/Instant;
 	public final fun component3 ()Lxyz/block/trailblaze/api/ViewHierarchyTreeNode;
 	public final fun component4 ()Lxyz/block/trailblaze/api/TrailblazeNode;
 	public final fun component5 ()Lxyz/block/trailblaze/api/TrailblazeNode;
@@ -9521,8 +9527,8 @@ public final class xyz/block/trailblaze/logs/client/TrailblazeLog$TrailblazeLlmR
 	public final fun component7 ()Lxyz/block/trailblaze/llm/TrailblazeLlmModel;
 	public final fun component8 ()Ljava/util/List;
 	public final fun component9 ()Ljava/util/List;
-	public final fun copy-_KHf1bI (Lxyz/block/trailblaze/agent/model/AgentTaskStatus;Lxyz/block/trailblaze/api/ViewHierarchyTreeNode;Lxyz/block/trailblaze/api/ViewHierarchyTreeNode;Lxyz/block/trailblaze/api/TrailblazeNode;Lxyz/block/trailblaze/api/TrailblazeNode;Ljava/lang/String;Lxyz/block/trailblaze/llm/TrailblazeLlmModel;Ljava/util/List;Ljava/util/List;Ljava/util/List;Ljava/util/List;Lxyz/block/trailblaze/llm/LlmRequestUsageAndCost;Ljava/lang/String;JLjava/lang/String;Lkotlinx/datetime/Instant;Ljava/lang/String;IILxyz/block/trailblaze/logs/client/TrailblazeLog$LlmRequestContext;Ljava/lang/String;Ljava/lang/Boolean;Lxyz/block/trailblaze/logs/model/TrailblazeClockDomain;Lkotlinx/datetime/Instant;)Lxyz/block/trailblaze/logs/client/TrailblazeLog$TrailblazeLlmRequestLog;
-	public static synthetic fun copy-_KHf1bI$default (Lxyz/block/trailblaze/logs/client/TrailblazeLog$TrailblazeLlmRequestLog;Lxyz/block/trailblaze/agent/model/AgentTaskStatus;Lxyz/block/trailblaze/api/ViewHierarchyTreeNode;Lxyz/block/trailblaze/api/ViewHierarchyTreeNode;Lxyz/block/trailblaze/api/TrailblazeNode;Lxyz/block/trailblaze/api/TrailblazeNode;Ljava/lang/String;Lxyz/block/trailblaze/llm/TrailblazeLlmModel;Ljava/util/List;Ljava/util/List;Ljava/util/List;Ljava/util/List;Lxyz/block/trailblaze/llm/LlmRequestUsageAndCost;Ljava/lang/String;JLjava/lang/String;Lkotlinx/datetime/Instant;Ljava/lang/String;IILxyz/block/trailblaze/logs/client/TrailblazeLog$LlmRequestContext;Ljava/lang/String;Ljava/lang/Boolean;Lxyz/block/trailblaze/logs/model/TrailblazeClockDomain;Lkotlinx/datetime/Instant;ILjava/lang/Object;)Lxyz/block/trailblaze/logs/client/TrailblazeLog$TrailblazeLlmRequestLog;
+	public final fun copy-pxS41EE (Lxyz/block/trailblaze/agent/model/AgentTaskStatus;Lxyz/block/trailblaze/api/ViewHierarchyTreeNode;Lxyz/block/trailblaze/api/ViewHierarchyTreeNode;Lxyz/block/trailblaze/api/TrailblazeNode;Lxyz/block/trailblaze/api/TrailblazeNode;Ljava/lang/String;Lxyz/block/trailblaze/llm/TrailblazeLlmModel;Ljava/util/List;Ljava/util/List;Ljava/util/List;Ljava/util/List;Ljava/lang/String;Ljava/util/List;Lxyz/block/trailblaze/llm/LlmRequestUsageAndCost;Ljava/lang/String;JLjava/lang/String;Lkotlinx/datetime/Instant;Ljava/lang/String;IILxyz/block/trailblaze/logs/client/TrailblazeLog$LlmRequestContext;Ljava/lang/String;Ljava/lang/Boolean;Lxyz/block/trailblaze/logs/model/TrailblazeClockDomain;Lkotlinx/datetime/Instant;)Lxyz/block/trailblaze/logs/client/TrailblazeLog$TrailblazeLlmRequestLog;
+	public static synthetic fun copy-pxS41EE$default (Lxyz/block/trailblaze/logs/client/TrailblazeLog$TrailblazeLlmRequestLog;Lxyz/block/trailblaze/agent/model/AgentTaskStatus;Lxyz/block/trailblaze/api/ViewHierarchyTreeNode;Lxyz/block/trailblaze/api/ViewHierarchyTreeNode;Lxyz/block/trailblaze/api/TrailblazeNode;Lxyz/block/trailblaze/api/TrailblazeNode;Ljava/lang/String;Lxyz/block/trailblaze/llm/TrailblazeLlmModel;Ljava/util/List;Ljava/util/List;Ljava/util/List;Ljava/util/List;Ljava/lang/String;Ljava/util/List;Lxyz/block/trailblaze/llm/LlmRequestUsageAndCost;Ljava/lang/String;JLjava/lang/String;Lkotlinx/datetime/Instant;Ljava/lang/String;IILxyz/block/trailblaze/logs/client/TrailblazeLog$LlmRequestContext;Ljava/lang/String;Ljava/lang/Boolean;Lxyz/block/trailblaze/logs/model/TrailblazeClockDomain;Lkotlinx/datetime/Instant;ILjava/lang/Object;)Lxyz/block/trailblaze/logs/client/TrailblazeLog$TrailblazeLlmRequestLog;
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getActions ()Ljava/util/List;
 	public fun getAgentTaskStatus ()Lxyz/block/trailblaze/agent/model/AgentTaskStatus;
@@ -9542,6 +9548,8 @@ public final class xyz/block/trailblaze/logs/client/TrailblazeLog$TrailblazeLlmR
 	public final fun getScreenshotIsAnnotated ()Ljava/lang/Boolean;
 	public fun getSession-OeRlnm0 ()Ljava/lang/String;
 	public fun getTimestamp ()Lkotlinx/datetime/Instant;
+	public final fun getToolCatalogId ()Ljava/lang/String;
+	public final fun getToolNames ()Ljava/util/List;
 	public final fun getToolOptions ()Ljava/util/List;
 	public synthetic fun getTraceId-3wr0nlg ()Ljava/lang/String;
 	public fun getTraceId-V5Z4Sds ()Ljava/lang/String;
@@ -9739,6 +9747,44 @@ public final class xyz/block/trailblaze/logs/client/TrailblazeLog$TrailblazeSnap
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
 }
 
+public final class xyz/block/trailblaze/logs/client/TrailblazeLog$TrailblazeToolCatalogLog : xyz/block/trailblaze/logs/client/TrailblazeLog {
+	public static final field Companion Lxyz/block/trailblaze/logs/client/TrailblazeLog$TrailblazeToolCatalogLog$Companion;
+	public synthetic fun <init> (Ljava/lang/String;Ljava/util/List;Ljava/lang/String;Lkotlinx/datetime/Instant;Lxyz/block/trailblaze/logs/model/TrailblazeClockDomain;Lkotlinx/datetime/Instant;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/util/List;Ljava/lang/String;Lkotlinx/datetime/Instant;Lxyz/block/trailblaze/logs/model/TrailblazeClockDomain;Lkotlinx/datetime/Instant;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/util/List;
+	public final fun component3-OeRlnm0 ()Ljava/lang/String;
+	public final fun component4 ()Lkotlinx/datetime/Instant;
+	public final fun component5 ()Lxyz/block/trailblaze/logs/model/TrailblazeClockDomain;
+	public final fun component6 ()Lkotlinx/datetime/Instant;
+	public final fun copy-6VhnRQc (Ljava/lang/String;Ljava/util/List;Ljava/lang/String;Lkotlinx/datetime/Instant;Lxyz/block/trailblaze/logs/model/TrailblazeClockDomain;Lkotlinx/datetime/Instant;)Lxyz/block/trailblaze/logs/client/TrailblazeLog$TrailblazeToolCatalogLog;
+	public static synthetic fun copy-6VhnRQc$default (Lxyz/block/trailblaze/logs/client/TrailblazeLog$TrailblazeToolCatalogLog;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;Lkotlinx/datetime/Instant;Lxyz/block/trailblaze/logs/model/TrailblazeClockDomain;Lkotlinx/datetime/Instant;ILjava/lang/Object;)Lxyz/block/trailblaze/logs/client/TrailblazeLog$TrailblazeToolCatalogLog;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getClock ()Lxyz/block/trailblaze/logs/model/TrailblazeClockDomain;
+	public fun getHostReceivedAt ()Lkotlinx/datetime/Instant;
+	public fun getSession-OeRlnm0 ()Ljava/lang/String;
+	public fun getTimestamp ()Lkotlinx/datetime/Instant;
+	public final fun getToolCatalogId ()Ljava/lang/String;
+	public final fun getToolOptions ()Ljava/util/List;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class xyz/block/trailblaze/logs/client/TrailblazeLog$TrailblazeToolCatalogLog$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lxyz/block/trailblaze/logs/client/TrailblazeLog$TrailblazeToolCatalogLog$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lxyz/block/trailblaze/logs/client/TrailblazeLog$TrailblazeToolCatalogLog;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lxyz/block/trailblaze/logs/client/TrailblazeLog$TrailblazeToolCatalogLog;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class xyz/block/trailblaze/logs/client/TrailblazeLog$TrailblazeToolCatalogLog$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
 public final class xyz/block/trailblaze/logs/client/TrailblazeLog$TrailblazeToolLog : xyz/block/trailblaze/logs/client/TrailblazeLog, xyz/block/trailblaze/logs/model/HasDuration, xyz/block/trailblaze/logs/model/HasTraceId, xyz/block/trailblaze/logs/model/HasTrailblazeTool {
 	public static final field Companion Lxyz/block/trailblaze/logs/client/TrailblazeLog$TrailblazeToolLog$Companion;
 	public synthetic fun <init> (Lxyz/block/trailblaze/logs/client/temp/OtherTrailblazeTool;Ljava/lang/String;ZLjava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;JLjava/lang/String;Lkotlinx/datetime/Instant;ZZZZLxyz/block/trailblaze/logs/client/temp/OtherTrailblazeTool;Ljava/lang/String;Lxyz/block/trailblaze/logs/model/TrailblazeClockDomain;Lkotlinx/datetime/Instant;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
@@ -9861,6 +9907,15 @@ public final class xyz/block/trailblaze/logs/client/TrailblazeSession$Companion 
 
 public abstract interface class xyz/block/trailblaze/logs/client/TrailblazeSessionProvider {
 	public abstract fun invoke ()Lxyz/block/trailblaze/logs/client/TrailblazeSession;
+}
+
+public final class xyz/block/trailblaze/logs/client/TrailblazeToolCatalog {
+	public static final field INSTANCE Lxyz/block/trailblaze/logs/client/TrailblazeToolCatalog;
+	public final fun catalogsIn (Ljava/util/List;)Ljava/util/Map;
+	public final fun idFor (Ljava/util/List;)Ljava/lang/String;
+	public final fun resolveToolOptions (Lxyz/block/trailblaze/logs/client/TrailblazeLog$TrailblazeLlmRequestLog;Ljava/util/Map;)Ljava/util/List;
+	public final fun toolCount (Lxyz/block/trailblaze/logs/client/TrailblazeLog$TrailblazeLlmRequestLog;)I
+	public final fun toolNames (Lxyz/block/trailblaze/logs/client/TrailblazeLog$TrailblazeLlmRequestLog;)Ljava/util/List;
 }
 
 public final class xyz/block/trailblaze/logs/client/temp/JsonElementSerializer : kotlinx/serialization/KSerializer {
@@ -10245,10 +10300,14 @@ public final class xyz/block/trailblaze/logs/model/SessionStatus$Ended$MaxCallsL
 public final class xyz/block/trailblaze/logs/model/SessionStatus$Ended$Succeeded : xyz/block/trailblaze/logs/model/SessionStatus$Ended {
 	public static final field Companion Lxyz/block/trailblaze/logs/model/SessionStatus$Ended$Succeeded$Companion;
 	public fun <init> (J)V
+	public fun <init> (JLjava/lang/String;)V
+	public synthetic fun <init> (JLjava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun component1 ()J
-	public final fun copy (J)Lxyz/block/trailblaze/logs/model/SessionStatus$Ended$Succeeded;
-	public static synthetic fun copy$default (Lxyz/block/trailblaze/logs/model/SessionStatus$Ended$Succeeded;JILjava/lang/Object;)Lxyz/block/trailblaze/logs/model/SessionStatus$Ended$Succeeded;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun copy (JLjava/lang/String;)Lxyz/block/trailblaze/logs/model/SessionStatus$Ended$Succeeded;
+	public static synthetic fun copy$default (Lxyz/block/trailblaze/logs/model/SessionStatus$Ended$Succeeded;JLjava/lang/String;ILjava/lang/Object;)Lxyz/block/trailblaze/logs/model/SessionStatus$Ended$Succeeded;
 	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCaptureWarning ()Ljava/lang/String;
 	public fun getDurationMs ()J
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
@@ -10742,6 +10801,15 @@ public final class xyz/block/trailblaze/mcp/ViewHierarchyVerbosity$Companion {
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
 }
 
+public final class xyz/block/trailblaze/mcp/android/ondevice/rpc/AndroidMemoryReadCommands {
+	public static final field GC_SETTLE_MS J
+	public static final field GC_SIGNAL Ljava/lang/String;
+	public static final field INSTANCE Lxyz/block/trailblaze/mcp/android/ondevice/rpc/AndroidMemoryReadCommands;
+	public final fun firstPid (Ljava/lang/String;)Ljava/lang/Integer;
+	public final fun gcCommand (Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;
+	public final fun getGC_SETTLE_SECONDS ()Ljava/lang/String;
+}
+
 public final class xyz/block/trailblaze/mcp/android/ondevice/rpc/DrainSessionRequest : xyz/block/trailblaze/mcp/android/ondevice/rpc/RpcRequest {
 	public static final field Companion Lxyz/block/trailblaze/mcp/android/ondevice/rpc/DrainSessionRequest$Companion;
 	public static final field DRAIN_TIMEOUT_MS J
@@ -10854,6 +10922,89 @@ public final synthetic class xyz/block/trailblaze/mcp/android/ondevice/rpc/GetEx
 }
 
 public final class xyz/block/trailblaze/mcp/android/ondevice/rpc/GetExecutionStatusResponse$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class xyz/block/trailblaze/mcp/android/ondevice/rpc/GetMemoryInfoRequest : xyz/block/trailblaze/mcp/android/ondevice/rpc/RpcRequest {
+	public static final field Companion Lxyz/block/trailblaze/mcp/android/ondevice/rpc/GetMemoryInfoRequest$Companion;
+	public static final field SHELL_READ_BUDGET_MS J
+	public static final field TIMEOUT_MS J
+	public fun <init> (Ljava/lang/String;Z)V
+	public synthetic fun <init> (Ljava/lang/String;ZILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Z
+	public final fun copy (Ljava/lang/String;Z)Lxyz/block/trailblaze/mcp/android/ondevice/rpc/GetMemoryInfoRequest;
+	public static synthetic fun copy$default (Lxyz/block/trailblaze/mcp/android/ondevice/rpc/GetMemoryInfoRequest;Ljava/lang/String;ZILjava/lang/Object;)Lxyz/block/trailblaze/mcp/android/ondevice/rpc/GetMemoryInfoRequest;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAppId ()Ljava/lang/String;
+	public final fun getForceGc ()Z
+	public fun getRequestTimeoutMs ()Ljava/lang/Long;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class xyz/block/trailblaze/mcp/android/ondevice/rpc/GetMemoryInfoRequest$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lxyz/block/trailblaze/mcp/android/ondevice/rpc/GetMemoryInfoRequest$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lxyz/block/trailblaze/mcp/android/ondevice/rpc/GetMemoryInfoRequest;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lxyz/block/trailblaze/mcp/android/ondevice/rpc/GetMemoryInfoRequest;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class xyz/block/trailblaze/mcp/android/ondevice/rpc/GetMemoryInfoRequest$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class xyz/block/trailblaze/mcp/android/ondevice/rpc/GetMemoryInfoResponse {
+	public static final field Companion Lxyz/block/trailblaze/mcp/android/ondevice/rpc/GetMemoryInfoResponse$Companion;
+	public fun <init> (Ljava/lang/String;Ljava/lang/Integer;ZLjava/lang/Boolean;Ljava/lang/Long;Ljava/lang/Long;Ljava/lang/Long;Ljava/lang/Integer;Ljava/lang/Integer;Ljava/lang/Boolean;Ljava/lang/String;Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/Integer;ZLjava/lang/Boolean;Ljava/lang/Long;Ljava/lang/Long;Ljava/lang/Long;Ljava/lang/Integer;Ljava/lang/Integer;Ljava/lang/Boolean;Ljava/lang/String;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component10 ()Ljava/lang/Boolean;
+	public final fun component11 ()Ljava/lang/String;
+	public final fun component12 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/Integer;
+	public final fun component3 ()Z
+	public final fun component4 ()Ljava/lang/Boolean;
+	public final fun component5 ()Ljava/lang/Long;
+	public final fun component6 ()Ljava/lang/Long;
+	public final fun component7 ()Ljava/lang/Long;
+	public final fun component8 ()Ljava/lang/Integer;
+	public final fun component9 ()Ljava/lang/Integer;
+	public final fun copy (Ljava/lang/String;Ljava/lang/Integer;ZLjava/lang/Boolean;Ljava/lang/Long;Ljava/lang/Long;Ljava/lang/Long;Ljava/lang/Integer;Ljava/lang/Integer;Ljava/lang/Boolean;Ljava/lang/String;Ljava/lang/String;)Lxyz/block/trailblaze/mcp/android/ondevice/rpc/GetMemoryInfoResponse;
+	public static synthetic fun copy$default (Lxyz/block/trailblaze/mcp/android/ondevice/rpc/GetMemoryInfoResponse;Ljava/lang/String;Ljava/lang/Integer;ZLjava/lang/Boolean;Ljava/lang/Long;Ljava/lang/Long;Ljava/lang/Long;Ljava/lang/Integer;Ljava/lang/Integer;Ljava/lang/Boolean;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lxyz/block/trailblaze/mcp/android/ondevice/rpc/GetMemoryInfoResponse;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAppId ()Ljava/lang/String;
+	public final fun getDumpsysMeminfo ()Ljava/lang/String;
+	public final fun getGcForced ()Ljava/lang/Boolean;
+	public final fun getInProcess ()Z
+	public final fun getLargeHeap ()Ljava/lang/Boolean;
+	public final fun getLargeMemoryClassMb ()Ljava/lang/Integer;
+	public final fun getMemoryClassMb ()Ljava/lang/Integer;
+	public final fun getPid ()Ljava/lang/Integer;
+	public final fun getProcMeminfo ()Ljava/lang/String;
+	public final fun getRuntimeFreeKb ()Ljava/lang/Long;
+	public final fun getRuntimeMaxKb ()Ljava/lang/Long;
+	public final fun getRuntimeTotalKb ()Ljava/lang/Long;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class xyz/block/trailblaze/mcp/android/ondevice/rpc/GetMemoryInfoResponse$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lxyz/block/trailblaze/mcp/android/ondevice/rpc/GetMemoryInfoResponse$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lxyz/block/trailblaze/mcp/android/ondevice/rpc/GetMemoryInfoResponse;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lxyz/block/trailblaze/mcp/android/ondevice/rpc/GetMemoryInfoResponse;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class xyz/block/trailblaze/mcp/android/ondevice/rpc/GetMemoryInfoResponse$Companion {
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
 }
 
@@ -11256,11 +11407,12 @@ public final class xyz/block/trailblaze/model/AppVersionInfo$Companion {
 }
 
 public final class xyz/block/trailblaze/model/DesktopAppRunYamlParams {
-	public fun <init> (ZLxyz/block/trailblaze/llm/RunYamlRequest;Lxyz/block/trailblaze/model/TrailblazeHostAppTarget;Lkotlin/jvm/functions/Function1;Lkotlin/jvm/functions/Function1;Ljava/util/Map;Lkotlin/jvm/functions/Function1;IZLjava/lang/Boolean;Ljava/lang/Boolean;Ljava/lang/String;Ljava/lang/Boolean;Ljava/lang/Boolean;Ljava/util/List;Lkotlin/jvm/functions/Function1;Ljava/lang/String;Ljava/lang/Double;)V
-	public synthetic fun <init> (ZLxyz/block/trailblaze/llm/RunYamlRequest;Lxyz/block/trailblaze/model/TrailblazeHostAppTarget;Lkotlin/jvm/functions/Function1;Lkotlin/jvm/functions/Function1;Ljava/util/Map;Lkotlin/jvm/functions/Function1;IZLjava/lang/Boolean;Ljava/lang/Boolean;Ljava/lang/String;Ljava/lang/Boolean;Ljava/lang/Boolean;Ljava/util/List;Lkotlin/jvm/functions/Function1;Ljava/lang/String;Ljava/lang/Double;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun <init> (ZLxyz/block/trailblaze/llm/RunYamlRequest;Lxyz/block/trailblaze/model/TrailblazeHostAppTarget;Lkotlin/jvm/functions/Function1;Lkotlin/jvm/functions/Function1;Ljava/util/Map;Lkotlin/jvm/functions/Function1;IZLjava/lang/Boolean;Ljava/lang/Boolean;Ljava/lang/String;Ljava/lang/Boolean;Ljava/lang/Boolean;Ljava/lang/Boolean;Ljava/util/List;Lkotlin/jvm/functions/Function1;Ljava/lang/String;Ljava/lang/Double;)V
+	public synthetic fun <init> (ZLxyz/block/trailblaze/llm/RunYamlRequest;Lxyz/block/trailblaze/model/TrailblazeHostAppTarget;Lkotlin/jvm/functions/Function1;Lkotlin/jvm/functions/Function1;Ljava/util/Map;Lkotlin/jvm/functions/Function1;IZLjava/lang/Boolean;Ljava/lang/Boolean;Ljava/lang/String;Ljava/lang/Boolean;Ljava/lang/Boolean;Ljava/lang/Boolean;Ljava/util/List;Lkotlin/jvm/functions/Function1;Ljava/lang/String;Ljava/lang/Double;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun getAdditionalInstrumentationArgs ()Ljava/util/Map;
 	public final fun getCaptureIosLogs ()Ljava/lang/Boolean;
 	public final fun getCaptureLogcat ()Ljava/lang/Boolean;
+	public final fun getCaptureMemory ()Ljava/lang/Boolean;
 	public final fun getCaptureVideo ()Ljava/lang/Boolean;
 	public final fun getComposeRpcPort ()I
 	public final fun getFindTargetById ()Lkotlin/jvm/functions/Function1;
@@ -12138,7 +12290,13 @@ public abstract interface class xyz/block/trailblaze/toolcalls/SensitiveArgsTrai
 
 public final class xyz/block/trailblaze/toolcalls/SensitiveArgsTrailblazeToolKt {
 	public static final field REDACTED_TOOL_ARG_PLACEHOLDER Ljava/lang/String;
+	public static final fun redactSensitiveValuesIn (Ljava/lang/String;Ljava/util/Collection;)Ljava/lang/String;
 	public static final fun withSensitiveArgsRedacted (Lxyz/block/trailblaze/logs/client/temp/OtherTrailblazeTool;Ljava/util/Set;)Lxyz/block/trailblaze/logs/client/temp/OtherTrailblazeTool;
+	public static final fun withSensitiveValuesRedacted (Lxyz/block/trailblaze/logs/client/temp/OtherTrailblazeTool;Ljava/util/Collection;)Lxyz/block/trailblaze/logs/client/temp/OtherTrailblazeTool;
+}
+
+public abstract interface class xyz/block/trailblaze/toolcalls/SensitiveValuesTrailblazeTool {
+	public abstract fun getSensitiveValues ()Ljava/util/Collection;
 }
 
 public final class xyz/block/trailblaze/toolcalls/ToolCompatibility {
@@ -13670,6 +13828,73 @@ public final synthetic class xyz/block/trailblaze/yaml/TrailConfig$$serializer :
 
 public final class xyz/block/trailblaze/yaml/TrailConfig$Companion {
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class xyz/block/trailblaze/yaml/TrailMetadataKt {
+	public static final fun getDisplayText (Lxyz/block/trailblaze/yaml/TrailMetadataValue;)Ljava/lang/String;
+	public static final fun getLeaves (Lxyz/block/trailblaze/yaml/TrailMetadataValue;)Ljava/util/List;
+	public static final fun list (Ljava/util/Map;Ljava/lang/String;)Ljava/util/List;
+	public static final fun map (Ljava/util/Map;Ljava/lang/String;)Ljava/util/Map;
+	public static final fun metadataOf ([Lkotlin/Pair;)Ljava/util/Map;
+	public static final fun string (Ljava/util/Map;Ljava/lang/String;)Ljava/lang/String;
+	public static final fun toJsonElement (Lxyz/block/trailblaze/yaml/TrailMetadataValue;)Lkotlinx/serialization/json/JsonElement;
+	public static final fun toJsonObject (Ljava/util/Map;)Lkotlinx/serialization/json/JsonObject;
+	public static final fun toTrailMetadata (Ljava/util/Map;)Ljava/util/Map;
+}
+
+public abstract interface class xyz/block/trailblaze/yaml/TrailMetadataValue {
+	public static final field Companion Lxyz/block/trailblaze/yaml/TrailMetadataValue$Companion;
+}
+
+public final class xyz/block/trailblaze/yaml/TrailMetadataValue$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class xyz/block/trailblaze/yaml/TrailMetadataValue$ListValue : xyz/block/trailblaze/yaml/TrailMetadataValue {
+	public static final field Companion Lxyz/block/trailblaze/yaml/TrailMetadataValue$ListValue$Companion;
+	public fun <init> (Ljava/util/List;)V
+	public final fun component1 ()Ljava/util/List;
+	public final fun copy (Ljava/util/List;)Lxyz/block/trailblaze/yaml/TrailMetadataValue$ListValue;
+	public static synthetic fun copy$default (Lxyz/block/trailblaze/yaml/TrailMetadataValue$ListValue;Ljava/util/List;ILjava/lang/Object;)Lxyz/block/trailblaze/yaml/TrailMetadataValue$ListValue;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getItems ()Ljava/util/List;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class xyz/block/trailblaze/yaml/TrailMetadataValue$ListValue$Companion {
+	public final fun of ([Ljava/lang/String;)Lxyz/block/trailblaze/yaml/TrailMetadataValue$ListValue;
+}
+
+public final class xyz/block/trailblaze/yaml/TrailMetadataValue$MapValue : xyz/block/trailblaze/yaml/TrailMetadataValue {
+	public fun <init> (Ljava/util/Map;)V
+	public final fun component1 ()Ljava/util/Map;
+	public final fun copy (Ljava/util/Map;)Lxyz/block/trailblaze/yaml/TrailMetadataValue$MapValue;
+	public static synthetic fun copy$default (Lxyz/block/trailblaze/yaml/TrailMetadataValue$MapValue;Ljava/util/Map;ILjava/lang/Object;)Lxyz/block/trailblaze/yaml/TrailMetadataValue$MapValue;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getEntries ()Ljava/util/Map;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class xyz/block/trailblaze/yaml/TrailMetadataValue$StringValue : xyz/block/trailblaze/yaml/TrailMetadataValue {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lxyz/block/trailblaze/yaml/TrailMetadataValue$StringValue;
+	public static synthetic fun copy$default (Lxyz/block/trailblaze/yaml/TrailMetadataValue$StringValue;Ljava/lang/String;ILjava/lang/Object;)Lxyz/block/trailblaze/yaml/TrailMetadataValue$StringValue;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getValue ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class xyz/block/trailblaze/yaml/TrailMetadataValueSerializer : kotlinx/serialization/KSerializer {
+	public static final field INSTANCE Lxyz/block/trailblaze/yaml/TrailMetadataValueSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lxyz/block/trailblaze/yaml/TrailMetadataValue;
+	public fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public fun serialize (Lkotlinx/serialization/encoding/Encoder;Lxyz/block/trailblaze/yaml/TrailMetadataValue;)V
 }
 
 public final class xyz/block/trailblaze/yaml/TrailSource {

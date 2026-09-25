@@ -15,7 +15,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
  *
  * Why this needs to be a Kotlin tool rather than a YAML wrapper around `eraseText`:
  * the bare `eraseText` Maestro command, when invoked with no `charactersToErase` value,
- * is clamped to 50 in every driver path — `MaestroAndroidUiAutomatorDriver` (instrumentation)
+ * is clamped to 50 in every driver path — the retired on-device UiAutomator driver
  * literally `repeat(50) { pressDelete() }`, `MaestroCommandConverter` (accessibility) defaults
  * to 50, the iOS axe converter defaults to 50. Anything past 50 characters in the focused
  * field silently survives the erase, which then concatenates onto the next `inputText`.

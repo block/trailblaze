@@ -494,7 +494,7 @@ object DeviceClassifierResolver {
    */
   private fun canonicalDriverTypeFor(platform: TrailblazeDevicePlatform): TrailblazeDriverType? = when (platform) {
     TrailblazeDevicePlatform.IOS -> TrailblazeDriverType.IOS_HOST
-    TrailblazeDevicePlatform.ANDROID -> TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION
+    TrailblazeDevicePlatform.ANDROID -> TrailblazeDriverType.DEFAULT_ANDROID
     else -> null
   }
 

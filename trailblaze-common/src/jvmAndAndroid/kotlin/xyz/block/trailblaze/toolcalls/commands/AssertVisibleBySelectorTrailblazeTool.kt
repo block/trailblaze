@@ -233,16 +233,41 @@ data class AssertVisibleBySelectorTrailblazeTool(
     //   - no structural predicate: the candidate is `matched` itself. The pre-fix
     //     behavior (read the matched node's own text) is preserved when the selector
     //     directly targets a leaf.
+    // A blank EXACT expectation is asking "is this element empty?", which is about the element's
+    // own value — not about the placeholder it displays while that value is empty. Reading it
+    // through [extractText] would answer with the placeholder and make emptiness unassertable
+    // on any field that has one.
+    //
+    // Gated on EXACT because the other two modes do not spell emptiness with a blank value.
+    // PREFIX's `startsWith("")` is vacuously true of anything, so the gate is unobservable
+    // there. It bites on REGEX, where the blank value is an empty PATTERN: ungated, `""` would
+    // read the value slot while the equivalent `^$` read the displayed text, so two spellings
+    // of one assertion would disagree. Both now stay on the normal path.
+    //
+    // The emptiness reading is a claim about the matched element, but it still goes through the
+    // normal candidate set: `containsChild` must keep binding the check to the descendant the
+    // author structurally pointed at, and the textless-container fallback cannot mislead it,
+    // since a blank own value satisfies the assertion on the container itself — which
+    // [aggregate] lists first.
+    val assertsEmptiness = expected.isEmpty() && textMatchMode == TextMatchMode.EXACT
     val candidates = collectTextCandidates(matched, effective)
+    // An absent value slot reads as null, which for an emptiness check is the same answer as "".
+    // Dropping it would fail the assertion BECAUSE the element is as empty as an element gets,
+    // and report "no readable text" while doing it.
+    val readText: (TrailblazeNode) -> String? =
+      if (assertsEmptiness) { node -> node.primaryText() ?: "" } else { node -> node.extractText() }
     val foundText = candidates.asSequence()
-      .mapNotNull { it.extractText()?.trim() }
+      .mapNotNull { readText(it)?.trim() }
       .firstOrNull { matchesExpected(it, expected) }
     return if (foundText != null) {
       TrailblazeToolResult.Success(message = "Verified '$desc' shows text='$expected'")
     } else {
-      val candidateTexts = candidates.mapNotNull { it.extractText()?.trim() }
+      val candidateTexts = candidates.mapNotNull { readText(it)?.trim() }
         .filter { it.isNotBlank() }
       val sample = candidateTexts.take(5).joinToString(", ") { "'$it'" }
+      // The "no readable text" tail can no longer be reached by an emptiness assertion: its
+      // candidate is the matched node alone and a blank reading would have PASSED, so reaching
+      // here means the value is non-blank and `sample` names it.
       TrailblazeToolResult.Error.ExceptionThrown(
         errorMessage = "assertVisible: element matched '$desc' but expected text '$expected' " +
           "not found on the selector-matched element(s). " +
@@ -365,14 +390,21 @@ data class AssertVisibleBySelectorTrailblazeTool(
    *   — the text check binds to those. Resolving each inner against `matched.children`
    *   (not `matched` itself) avoids the matched outer container leaking into the candidate
    *   set if it happens to coincidentally satisfy the inner predicate.
-   * - Otherwise, if the matched element carries its own readable text it is treated as the
-   *   leaf and is the only candidate (original behavior). If it has NO readable text, the
-   *   selector landed on a structural container (e.g. `android.view.View` / a RecyclerView)
-   *   while the asserted text lives on a descendant — fall back to the matched node's subtree
-   *   so the check finds that descendant. Without this, a textless-container match fails with
-   *   "Matched element has no readable text" even though the text is present in the subtree,
-   *   and the runtime LLM (which sees the text as a descendant in the hierarchy) re-issues the
-   *   identical assertion in a zero-progress loop until the per-step call budget is exhausted.
+   * - Otherwise, if the matched element carries its own value it is treated as the leaf and is
+   *   the only candidate (original behavior). If it does not, the selector landed on a structural
+   *   container (e.g. `android.view.View` / a RecyclerView) while the asserted text lives on a
+   *   descendant — fall back to the matched node's subtree so the check finds that descendant.
+   *   Without this, a textless-container match fails with "Matched element has no readable text"
+   *   even though the text is present in the subtree, and the runtime LLM (which sees the text as
+   *   a descendant in the hierarchy) re-issues the identical assertion in a zero-progress loop
+   *   until the per-step call budget is exhausted.
+   *
+   * The container/leaf question deliberately goes through [primaryText], NOT the blank-skipping
+   * [extractText]: a container's own value is empty but it frequently carries an accessibility
+   * label (`{text:"", contentDescription:"Item row"}`), and reading that label here would
+   * reclassify the container as a leaf and drop its subtree from the candidate set — failing
+   * assertions that target a descendant. [aggregate] lists the node itself first, so a leaf whose
+   * only text IS a placeholder still gets read through [extractText] as candidate zero.
    */
   private fun collectTextCandidates(
     matched: TrailblazeNode,
@@ -383,7 +415,7 @@ data class AssertVisibleBySelectorTrailblazeTool(
       selector.containsDescendants?.let { addAll(it) }
     }
     if (innerSelectors.isEmpty()) {
-      return if (matched.extractText()?.isNotBlank() == true) listOf(matched) else matched.aggregate()
+      return if (matched.primaryText()?.isNotBlank() == true) listOf(matched) else matched.aggregate()
     }
     val out = LinkedHashSet<TrailblazeNode>()
     for (inner in innerSelectors) {
@@ -412,22 +444,110 @@ data class AssertVisibleBySelectorTrailblazeTool(
    * what the user typed — checking the label first would fail every assertion on a filled-in value
    * and pass an assertion on the label without ever reading the input.
    *
-   * `hintText` sits behind `text` on every dialect that HAS one, matching each dialect's own
-   * `resolveText()` — which is the same fold the resolver applies to `textRegex`. Reading it here
-   * is what keeps `expectedText` answerable on an EMPTY text field: an unfilled `EditText`
-   * publishes its placeholder as the hint and nothing as its text, so a selector that matched the
-   * field on `textRegex` would then fail the post-pass with "no readable text" — one tool
-   * disagreeing with itself about what the element says (a real trail asserts the item-search
-   * field shows "Search all items", which the field only ever carries as a hint).
+   * `hintText` sits behind `text` on every dialect that HAS one, mirroring the slot ORDER of each
+   * dialect's own `resolveText()` for the slots they share — android accessibility reads one more
+   * (`labeledByText`), and `web` has no `resolveText()` to mirror. Reading it here is what keeps
+   * [expectedText] answerable on an
+   * EMPTY text field: an unfilled `EditText` publishes its placeholder as the hint and nothing as
+   * its text, so a selector that matched the field would otherwise fail the post-pass with "no
+   * readable text" — one tool disagreeing with itself about what the element says (a real trail
+   * asserts the item-search field shows "Search all items", which the field only ever carries as
+   * a hint).
+   *
+   * The fold goes through [firstReadable] rather than `?:` because "nothing" arrives as the EMPTY
+   * STRING at least as often as it arrives as null — an unfilled `EditText` reports `text=""`,
+   * not `text=null` — and `?:` stops on empty, which defeated the hint fallback described above
+   * on exactly the screens it was written for.
+   *
+   * That makes this fold deliberately MORE forgiving than the one the resolver applies to
+   * `textRegex`: `DriverNodeDetail.*.resolveText()` still chains raw `?:` (except `IosAxe`, which
+   * already filters blanks), so `textRegex` does not reach the hint of an empty field. Aligning
+   * those would widen SELECTOR MATCHING for every recorded trail — a node that matches nothing
+   * today could start matching, turning a single match into an ambiguous one — so it is a
+   * separate change that needs device validation, not a drive-by here. The asymmetry is safe in
+   * this direction: it widens which text on an ALREADY-matched element (or its subtree) counts
+   * as that element's text, never which elements match.
    */
   private fun TrailblazeNode.extractText(): String? = when (val d = driverDetail) {
     is DriverNodeDetail.AndroidAccessibility ->
-      d.text ?: d.hintText ?: d.contentDescription ?: d.labeledByText
-    is DriverNodeDetail.AndroidView -> d.text ?: d.hintText ?: d.contentDescription
-    is DriverNodeDetail.AndroidMaestro -> d.text ?: d.hintText ?: d.accessibilityText
-    is DriverNodeDetail.Compose -> d.editableText ?: d.text ?: d.contentDescription
-    is DriverNodeDetail.IosMaestro -> d.text ?: d.hintText ?: d.accessibilityText
-    is DriverNodeDetail.IosAxe -> d.label
+      firstReadable(d.text, d.hintText, d.contentDescription, d.labeledByText)
+    is DriverNodeDetail.AndroidView -> firstReadable(d.text, d.hintText, d.contentDescription)
+    is DriverNodeDetail.AndroidMaestro -> firstReadable(d.text, d.hintText, d.accessibilityText)
+    // `editableText` keeps raw `?:` semantics: on a text field an empty value is an
+    // authoritative "the user typed nothing", so it must NOT fall through to the label — that
+    // would let an assertion naming the label be satisfied by an empty field.
+    is DriverNodeDetail.Compose -> d.editableText ?: firstReadable(d.text, d.contentDescription)
+    is DriverNodeDetail.IosMaestro -> firstReadable(d.text, d.hintText, d.accessibilityText)
+    // label > value > title, the same three slots and order as `IosAxe.resolveText()` — a node
+    // resolved by id can carry a blank label and its text in `value`.
+    is DriverNodeDetail.IosAxe -> firstReadable(d.label, d.value, d.title)
+    is DriverNodeDetail.Web -> firstReadable(d.ariaName)
+  }
+
+  /**
+   * The first of [slots] that actually carries text, treating blank the same as absent — the
+   * distinction a raw `?:` chain misses, because a driver reports an unset slot as `""` as
+   * readily as it reports null.
+   *
+   * Falls back to the first merely non-null slot when every slot is blank, so an element that
+   * genuinely has no text reports `""` rather than null. That preserves the pre-fix reading for
+   * the one caller that can tell the two apart: a REGEX expectation such as `^$` or `.*` matches
+   * `""` and would silently stop matching if this returned null. Everywhere else they are
+   * equivalent — the failure message filters blanks out of its sample either way.
+   *
+   * Asserting emptiness on an element that DOES have a placeholder is served by [primaryText],
+   * not by this fold.
+   */
+  private fun firstReadable(vararg slots: String?): String? =
+    slots.firstOrNull { !it.isNullOrBlank() } ?: slots.firstOrNull { it != null }
+
+  /**
+   * The element's OWN value — the slot the user's input lands in — ignoring anything it falls
+   * back to DISPLAYING when that value is empty. This is what a blank [expectedText] asks about,
+   * and it is also how [collectTextCandidates] decides whether a node is a leaf or a container.
+   *
+   * "Is this field empty?" and "what does this field say?" want different answers out of one
+   * node: a cleared search field publishes `text=""` and `hintText="Search"`, and both answers
+   * are correct for their own question. [extractText] serves the second; this serves the first.
+   * Without the split, treating blank as absent would make emptiness unassertable on any field
+   * that has a placeholder — which is every real one.
+   *
+   * Empty stays authoritative here, so the chain is raw `?:` on purpose: `""` means "the user
+   * typed nothing", and falling through it to a label is precisely the confusion being avoided.
+   *
+   * `web` is the one dialect with no value slot to read — `ariaName` is the accessible NAME, so
+   * emptiness on a labelled web input is not expressible and an assertion spelling it will fail
+   * against the label. There is nothing better to read until the DOM value is captured.
+   */
+  private fun TrailblazeNode.primaryText(): String? = when (val d = driverDetail) {
+    is DriverNodeDetail.AndroidAccessibility -> d.text
+    is DriverNodeDetail.AndroidView -> d.text
+    is DriverNodeDetail.AndroidMaestro -> d.text
+    is DriverNodeDetail.Compose -> d.editableText ?: d.text
+    is DriverNodeDetail.IosMaestro -> d.text
+    // `value` before `label` before `title` — the SAME three slots, in the SAME order, as
+    // `extractText` folds for this dialect below. Two readers of one node must not disagree
+    // about which slot is its own value: `title` is a legitimate leaf value here (a node
+    // resolved by id with a blank label AND value, e.g. `{label:null, value:null,
+    // title:"Search"}`, is exactly what the AXTitle test below covers), so if `extractText`
+    // can read "Search" off it, `primaryText` must not answer "empty" for the same node —
+    // that let `expectedText:"Search"` and `expectedText:""` both pass for one element state.
+    //
+    // `value` still comes first, which INVERTS the display order `extractText` uses for
+    // `label`: on AXe a field's content is AXValue while AXLabel is its caption, and reading
+    // the label first would answer "is it empty?" with the placeholder — the same bug this
+    // split exists to fix, wearing an iOS hat.
+    //
+    // On a text-input type, `label` is not a safe fallback at all: `TrailblazeNodeSelectorResolver`'s
+    // hintTextRegex matching documents that some AXe/iOS runtimes mirror the field's PLACEHOLDER
+    // onto AXLabel while the field is empty, so falling through to it here would read a blank,
+    // placeholder-only field as non-empty. Dropping `label` for these types fixes that shape.
+    // It does NOT fix the other one the same doc describes — older runtimes put that same
+    // placeholder on AXValue itself (`label=null, value="Search"`) — because AXValue is also
+    // where real typed text lives and nothing on this node tags a string as placeholder vs.
+    // user-entered. That half is a genuine AXe capture-data gap, not something this fold can close.
+    is DriverNodeDetail.IosAxe ->
+      if (d.type in IOS_TEXT_INPUT_TYPES) d.value ?: d.title else d.value ?: d.label ?: d.title
     is DriverNodeDetail.Web -> d.ariaName
   }
 
@@ -480,5 +600,13 @@ data class AssertVisibleBySelectorTrailblazeTool(
     private fun escapeLiteralWithSpaceEquivalence(literal: String): String = literal
       .split(zsRegex)
       .joinToString(ZS) { Regex.escape(it) }
+
+    /**
+     * XCUIElementType names whose AXLabel can carry the field's placeholder while it's empty,
+     * on the AXe/iOS runtimes that mirror it there. Mirrors
+     * `TrailblazeNodeSelectorResolver.IOS_TEXT_INPUT_TYPES` (private to that file, in a different
+     * module) — keep the two lists in sync if either changes.
+     */
+    private val IOS_TEXT_INPUT_TYPES = setOf("TextField", "SecureTextField", "SearchField", "TextView")
   }
 }

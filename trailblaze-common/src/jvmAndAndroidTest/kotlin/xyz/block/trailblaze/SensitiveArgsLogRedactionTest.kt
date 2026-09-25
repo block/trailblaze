@@ -4,9 +4,11 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 import kotlinx.datetime.Clock
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonArray
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
@@ -19,9 +21,11 @@ import xyz.block.trailblaze.logs.client.TrailblazeSession
 import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.TraceId
+import xyz.block.trailblaze.mobile.tools.AdbShellTrailblazeTool
 import xyz.block.trailblaze.mobile.tools.AndroidWriteBytesToFileTrailblazeTool
 import xyz.block.trailblaze.toolcalls.REDACTED_TOOL_ARG_PLACEHOLDER
 import xyz.block.trailblaze.toolcalls.RawArgumentTrailblazeTool
+import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.toLogPayload
 
@@ -35,6 +39,9 @@ import xyz.block.trailblaze.toolcalls.toLogPayload
  *  2. `logToolExecution`'s authored `rawTool` payload: the authored form is often a raw-args
  *     wrapper that does NOT implement the marker itself, so the executed instance's declared
  *     args must be applied to it too.
+ *  3. `logToolExecution`'s RESOLVED payload after memory interpolation: a secret that reached
+ *     the tool through an ordinary `{{token}}` is absent from the authored form and written in
+ *     by resolution, so the executed instance's declared values must be masked again after it.
  *
  * Only observable log output is asserted (the emitted [TrailblazeLog.TrailblazeToolLog] / the
  * returned payload), never internals — the execution/wire encode is deliberately NOT redacted
@@ -117,6 +124,82 @@ class SensitiveArgsLogRedactionTest {
       assertEquals(JsonPrimitive("/data/local/tmp/seed.json"), payload.raw["devicePath"])
       // Belt-and-braces: the secret must not survive anywhere in the persisted payload JSON.
       assertTrue(!payload.raw.toString().contains(secretBase64))
+    }
+  }
+
+  /**
+   * The authored form carries `{{token}}`, not the secret, so masking the raw payload finds
+   * nothing. Resolution then writes the real value from ORDINARY (non-sensitive) memory into the
+   * resolved payload — which is the executed tool's `secrets` value and must be masked there too,
+   * after resolution. Ordinary memory is the realistic case: a fetched credential lands via
+   * `remember`, not `rememberSensitive`, unless the author knew to say so.
+   *
+   * Both `logToolExecution` overloads build the resolved payload independently, so both are
+   * driven: the context-carrying one is what the dispatch boundary calls.
+   */
+  @Test
+  fun contextCarryingLogToolExecutionMasksASecretThatArrivedThroughOrdinaryMemory() {
+    assertMemorySuppliedSecretIsMaskedAfterResolution { agent, executed, authored ->
+      agent.logToolExecution(
+        tool = executed,
+        timeBeforeExecution = Clock.System.now(),
+        context = TrailblazeToolExecutionContext(
+          screenState = null,
+          traceId = null,
+          trailblazeDeviceInfo = agent.trailblazeDeviceInfoProvider(),
+          sessionProvider = agent.sessionProvider,
+          trailblazeLogger = agent.trailblazeLogger,
+          memory = agent.memory,
+        ),
+        result = TrailblazeToolResult.Success(message = "Result: Parcel(00000000)"),
+        rawTool = authored,
+      )
+    }
+  }
+
+  @Test
+  fun traceIdLogToolExecutionMasksASecretThatArrivedThroughOrdinaryMemory() {
+    assertMemorySuppliedSecretIsMaskedAfterResolution { agent, executed, authored ->
+      agent.logToolExecution(
+        tool = executed,
+        timeBeforeExecution = Clock.System.now(),
+        traceId = TraceId.generate(TraceId.Companion.TraceOrigin.TOOL),
+        result = TrailblazeToolResult.Success(message = "Result: Parcel(00000000)"),
+        rawTool = authored,
+      )
+    }
+  }
+
+  private fun assertMemorySuppliedSecretIsMaskedAfterResolution(
+    log: (agent: CapturingAgentContext, executed: AdbShellTrailblazeTool, authored: AuthoredRawArgsTool) -> Unit,
+  ) {
+    val context = CapturingAgentContext()
+    context.memory.remember("token", "tok-abc123")
+    val executed = AdbShellTrailblazeTool(
+      command = listOf("service", "call", "com.vendor.deviceauth", "1", "s16", "tok-abc123"),
+      secrets = listOf("tok-abc123"),
+    )
+    val authored = AuthoredRawArgsTool(
+      instanceToolName = "android_adbShell",
+      rawToolArguments = buildJsonObject {
+        putJsonArray("command") {
+          listOf("service", "call", "com.vendor.deviceauth", "1", "s16", "{{token}}").forEach { add(JsonPrimitive(it)) }
+        }
+        putJsonArray("secrets") { add(JsonPrimitive("{{token}}")) }
+      },
+    )
+
+    log(context, executed, authored)
+
+    val toolLog = context.emitted.filterIsInstance<TrailblazeLog.TrailblazeToolLog>().single()
+    val resolvedCommand = toolLog.trailblazeTool.raw["command"] as JsonArray
+    assertEquals(JsonPrimitive("service"), resolvedCommand.first())
+    assertEquals(JsonPrimitive(REDACTED_TOOL_ARG_PLACEHOLDER), resolvedCommand.last())
+    assertEquals(JsonArray(listOf(JsonPrimitive(REDACTED_TOOL_ARG_PLACEHOLDER))), toolLog.trailblazeTool.raw["secrets"])
+    // The authored form keeps its token — that is what a recording is regenerated from.
+    assertEquals(JsonPrimitive("{{token}}"), (toolLog.rawTrailblazeTool!!.raw["command"] as JsonArray).last())
+    listOfNotNull(toolLog.trailblazeTool, toolLog.rawTrailblazeTool).forEach { payload ->
+      assertTrue(!payload.raw.toString().contains("tok-abc123"))
     }
   }
 }

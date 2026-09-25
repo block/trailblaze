@@ -151,13 +151,19 @@ class FileWatchServiceEventStormTest {
     val service = newService(debounceDelayMs = DEBOUNCE_MS)
     service.startWatching()
     service.stopWatching()
-    val threadsAfterStop = watcherThreadCount()
+    // `stopWatching` interrupts the watch thread but never joins it, and an interrupt does nothing
+    // to a thread already inside `take()` — so that thread stays alive for an unbounded moment
+    // after the stop. Waiting for it to actually exit is what makes the assertion below a fact
+    // about the restart. Sampling a "threads after stop" baseline instead reads 1 or 0 depending
+    // only on how loaded the machine is, and then fails in the SAFE direction on a busy agent
+    // (baseline 1, final 0 — fewer threads than before, i.e. no leak at all).
+    awaitWatcherThreadCount(0, "the stopped watcher's own thread has to exit before the restart")
 
     service.startWatching()
     Thread.sleep(DEBOUNCE_MS)
 
     assertEquals(
-      threadsAfterStop,
+      0,
       watcherThreadCount(),
       "restarting a stopped watcher must not leave another watch thread parked in take()",
     )
@@ -166,6 +172,21 @@ class FileWatchServiceEventStormTest {
   /** Live threads this watcher would have named, by the convention in `startWatching`. */
   private fun watcherThreadCount(): Int =
     Thread.getAllStackTraces().keys.count { it.isAlive && it.name == "FileWatcher-${watchDir.name}" }
+
+  /**
+   * Blocks until exactly [expected] watcher threads are live, failing after [THREAD_EXIT_TIMEOUT_MS].
+   *
+   * That bound is hang containment rather than a performance budget: it is there so a thread that
+   * never exits fails the test instead of parking it forever, and is set far longer than the exit
+   * could need so that a loaded agent cannot lose the race.
+   */
+  private fun awaitWatcherThreadCount(expected: Int, message: String) {
+    val deadlineNs = System.nanoTime() + THREAD_EXIT_TIMEOUT_MS * 1_000_000L
+    while (watcherThreadCount() != expected && System.nanoTime() < deadlineNs) {
+      Thread.sleep(10)
+    }
+    assertEquals(expected, watcherThreadCount(), message)
+  }
 
   private fun newService(debounceDelayMs: Long): FileWatchService =
     FileWatchService(watchDir, debounceDelayMs = debounceDelayMs).also { service = it }
@@ -197,5 +218,14 @@ class FileWatchServiceEventStormTest {
      * or descheduled runner reports "the storm never happened" instead of passing vacuously.
      */
     private const val MIN_EVENTS_FOR_A_REAL_STORM = 1_000L
+
+    /**
+     * How long to wait for an interrupted watch thread to leave `take()` and die.
+     *
+     * Hang containment, not a performance budget: the exit takes microseconds once the interrupt
+     * lands, so any value here is generous, and a thread still alive after this long is a real
+     * leak rather than a slow agent.
+     */
+    private const val THREAD_EXIT_TIMEOUT_MS = 60_000L
   }
 }

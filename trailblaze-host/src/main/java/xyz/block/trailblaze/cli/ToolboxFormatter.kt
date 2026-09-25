@@ -275,6 +275,61 @@ internal object ToolboxFormatter {
   }
 
   /**
+   * Renders the body of `toolbox --search <query>`: one `<source>:` heading per source, in the
+   * order the daemon returned them, then that source's matches.
+   *
+   * Compact by default — one line per tool, the same description peek the catalog listing shows.
+   * Every match used to print its whole description plus its full parameter table, so a search
+   * that hit a handful of tools ran to hundreds of lines and buried the names the search was for.
+   * `--detail` still prints both, which is what that flag means for the listing.
+   *
+   * Malformed rows are skipped rather than crashing the render, matching the other parsers here —
+   * including a source whose every row is malformed, which prints no heading rather than a heading
+   * with nothing under it.
+   */
+  fun renderSearchMatches(matches: JsonArray, detail: Boolean): List<String> {
+    val bySource = linkedMapOf<String, MutableList<JsonObject>>()
+    for (match in matches) {
+      val obj = (match as? JsonObject) ?: continue
+      // `as? JsonPrimitive`, not `jsonPrimitive`: that accessor throws on a row whose `source` is
+      // an object or an array, which would take the whole render down with it.
+      val source = (obj["source"] as? JsonPrimitive)?.contentOrNull ?: "Unknown"
+      bySource.getOrPut(source) { mutableListOf() } += obj
+    }
+    val out = mutableListOf<String>()
+    for ((source, sourceMatches) in bySource) {
+      val lines = mutableListOf<String>()
+      for (match in sourceMatches) {
+        val tool = (match["tool"] as? JsonObject) ?: continue
+        val toolName = (tool["name"] as? JsonPrimitive)?.contentOrNull ?: continue
+        val toolDesc = (tool["description"] as? JsonPrimitive)?.contentOrNull ?: ""
+        if (detail) {
+          lines += "    - $toolName: $toolDesc"
+          lines += renderParameterLines(tool, "        ")
+        } else {
+          lines += "    ${compactToolPeekLine(toolName, toolDesc)}"
+        }
+      }
+      // Heading after the rows, so a source that contributed nothing contributes no heading.
+      if (lines.isNotEmpty()) {
+        out += "  $source:"
+        out += lines
+      }
+    }
+    return out
+  }
+
+  /**
+   * The line under a search's results. Names `--detail` only in the compact view, where the
+   * reader has not seen the descriptions and parameters yet.
+   */
+  fun searchFooterHint(detail: Boolean): String = if (detail) {
+    "Use --name <tool> for full details."
+  } else {
+    "Use --name <tool> for one tool's full details, or --detail for every match's."
+  }
+
+  /**
    * Renders the empty-state message for `toolbox <role>` when the daemon's role list
    * is empty for the current target/platform. Distinct from [renderRoleSection]
    * returning `emptyList()` — the headline path silently elides, but the filtered-view

@@ -246,6 +246,11 @@ declare module "@trailblaze/scripting" {
       args: {
         /** Process argv. Element 0 is the executable; the rest are literal arguments (no shell parsing). */
         argv: string[];
+        /**
+         * Extra variables inherited by the child process. Values are redacted in persisted logs;
+         * use this for opaque credentials or request bodies rather than putting them in argv.
+         */
+        environment?: Record<string, string>;
         /** Working directory for the subprocess. Defaults to the daemon's current working directory. */
         workingDir?: string;
         /** Exit code treated as success. Default 0. */
@@ -299,6 +304,14 @@ declare module "@trailblaze/scripting" {
         command: string[];
         /** Optional debuggable-app id to run the command under via `run-as`. */
         runAs?: string;
+        /**
+         * Values in this call that must never appear in a log. Purely a logging declaration —
+         * put the credential in `command` where it belongs, then list the same value here. Every
+         * occurrence is replaced with `<redacted>` in the persisted log payload, this tool's
+         * output and error text, and the adb transport's own command log; everything around it
+         * stays readable.
+         */
+        secrets?: string[];
       };
       result: string;
     };

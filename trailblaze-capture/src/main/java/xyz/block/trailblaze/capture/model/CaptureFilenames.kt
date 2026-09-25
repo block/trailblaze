@@ -18,9 +18,20 @@ object CaptureFilenames {
   /** Legacy filename — older iOS captures wrote to this instead of `device.log`. */
   const val LEGACY_SYSTEM_LOG_TXT = "system_log.txt"
 
-  /** Canonical raw video filename for screen-recording capture. */
+  /**
+   * Basename of the session recording; the extension comes from the format it was written in
+   * (`RecordingFormat.canonicalFilename`): `video.webm`, or `video.mp4` on a host without a VP9
+   * encoder.
+   */
+  const val VIDEO_BASENAME = "video"
+
+  /** The session recording as every host with a VP9 encoder writes it. */
+  const val VIDEO_WEBM = "video.webm"
+
+  /** The session recording on a host whose ffmpeg cannot encode VP9, and in sessions captured before WebM. */
   const val VIDEO = "video.mp4"
 
-  /** File extension for screen-recording video output. */
+  /** File extensions a session recording can carry. */
+  const val VIDEO_WEBM_EXTENSION = ".webm"
   const val VIDEO_EXTENSION = ".mp4"
 }

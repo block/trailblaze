@@ -355,6 +355,62 @@ time; if one somehow reaches a runtime anyway (a hand-written bundle, an externa
 server's advertisement — neither passes through descriptor validation), that tool's log
 masks **every** argument rather than none.
 
+### Passing a credential to `android_adbShell`
+
+`sensitiveArgNames` masks a whole named value, which is the wrong shape for a shell
+command: the credential is one element of `command`, and masking `command` would blank the
+entire argv, leaving a log that can't say what ran. So write the command exactly as you
+would run it, and list the values that must never be logged in `secrets`:
+
+```ts
+await ctx.tools.android_adbShell({
+  command: ["su", "root", "service", "call", "com.vendor.deviceauth", "1", "s16", sessionToken],
+  secrets: [sessionToken],
+});
+```
+
+`secrets` changes nothing about what runs. It is a logging declaration: every occurrence
+of a listed value is replaced with `<redacted>` and everything around it stays readable.
+The log shows the argv with just that one element masked —
+`["su", "root", "service", "call", "com.vendor.deviceauth", "1", "s16", "<redacted>"]` —
+and `"secrets": ["<redacted>"]`. The device receives the real token.
+
+Three things this covers that argument masking alone does not:
+
+- **The tool's output.** A verify-style read-back (`... get <key>`) returns the value that
+  was just written, and a tool's success message is its stdout. Any listed value appearing
+  in that output is masked before it becomes the result — and a value need not appear in
+  `command` at all for this to apply.
+- **Error text.** Every failure path of this tool quotes the command it tried to run, and
+  a transport that fails mid-dispatch often quotes it back too. Those are masked as well.
+- **The transport's own command log.** Both adb transports log the command line they are
+  about to run — before the tool sees any result to scrub — and on the on-device transport
+  that line is a base64-packed copy of the whole command. Those logs are captured CI
+  artifacts. The value is registered for the duration of the dispatch so both of them mask
+  it, including a payload that only carries it once decoded.
+
+Masking is by literal value, in every form the value can reach a log in: as written, and
+as shell-escaping rewrote it (a secret holding a `'` arrives quote-doubled). Where two
+secrets overlap the longer one is masked first, so neither leaves a remainder behind.
+
+Output masking has a consequence worth designing around: **you cannot read a credential
+back and compare it to itself.** A read-back call that lists the same value in `secrets`
+gets `<redacted>` as its result, so a `result.includes(token)` check returns false and
+reports the write as failed even though it succeeded. Issue the read-back with no
+`secrets` — the write is the call that needs masking, and the comparison then runs
+against the real returned value. Better still, verify with a command whose output is a
+status rather than the secret.
+
+One gap remains, and it is the one [listed above](#keeping-a-credential-out-of-the-session-log):
+a direct MCP invocation (`trailblaze tool android_adbShell --args …`) has its arguments
+recorded by the MCP request log before any of this masking runs, because that record is
+written at the protocol boundary rather than by the tool. Pass a credential from inside a
+scripted tool, not on an MCP command line.
+
+Masking is by value, so keep the values distinctive. A one-character or common-word
+"secret" (`"1"`, `"true"`) would mask every innocent occurrence of it in that call's
+output too. Over-masking is the safe direction to fail, but it makes a log harder to read.
+
 ### Where the description comes from
 
 Three places can supply the LLM-facing description for a scripted tool. The framework

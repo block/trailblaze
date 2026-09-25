@@ -539,6 +539,21 @@ object SettingsTabComposables {
           }
         )
 
+        PreferenceToggle(
+          label = "Capture App Memory",
+          description = "Track the app under test's memory for the whole session: a sample around " +
+            "every tool call, plus one every 5 seconds when it changed, all read in the background " +
+            "so the run never waits. Android reports heap used vs. the heap limit; iOS Simulator " +
+            "reports the app's footprint. TRAILBLAZE_MEMORY_DIAGNOSTICS=true on the daemon makes " +
+            "each tool call wait for an exact before/after pair and forces a GC first.",
+          checked = serverState.appConfig.captureMemory,
+          onCheckedChange = { checkedValue ->
+            trailblazeSettingsRepo.updateAppConfig {
+              it.copy(captureMemory = checkedValue)
+            }
+          }
+        )
+
         Spacer(modifier = Modifier.height(8.dp))
 
         PreferenceToggle(

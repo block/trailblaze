@@ -4,6 +4,7 @@ import ai.koog.agents.core.tools.annotations.LLMDescription
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.Serializable
 import xyz.block.trailblaze.toolcalls.HostLocalExecutableTrailblazeTool
+import xyz.block.trailblaze.toolcalls.SensitiveArgsTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
@@ -71,6 +72,13 @@ data class ExecTrailblazeTool(
    */
   val argv: List<String>,
   /**
+   * Additional environment values for the child process. This field is redacted in persisted tool
+   * logs, so it is the safe channel for opaque credentials or request bodies that would otherwise
+   * be exposed in the logged [argv]. Values augment the daemon environment and are redacted from
+   * captured child output as well as process-start and process-failure diagnostics.
+   */
+  val environment: Map<String, String> = emptyMap(),
+  /**
    * Working directory the subprocess starts in, as a filesystem path. When `null` (the
    * default), the subprocess inherits the parent JVM's current working directory — i.e.
    * whatever directory the host entrypoint (the `trailblaze` CLI, the desktop app, a
@@ -100,9 +108,22 @@ data class ExecTrailblazeTool(
    * an agent loop where a hung process would otherwise stall the whole session.
    */
   val timeoutSeconds: Long? = null,
-) : HostLocalExecutableTrailblazeTool {
+) : HostLocalExecutableTrailblazeTool, SensitiveArgsTrailblazeTool {
 
   override val advertisedToolName: String get() = EXEC_TOOL_NAME
+  override val sensitiveArgNames: Set<String> get() = setOf("environment")
+
+  private fun redactEnvironmentValues(text: String): String =
+    environment.values
+      .asSequence()
+      // bufferedReader().readLine() normalizes line separators and omits a terminal separator;
+      // compare secrets in that same representation so CRLF or trailing-newline values cannot
+      // evade redaction after process output has been captured.
+      .map { it.replace("\r\n", "\n").replace('\r', '\n').trimEnd('\n') }
+      .filter(String::isNotEmpty)
+      .distinct()
+      .sortedByDescending(String::length)
+      .fold(text) { redacted, value -> redacted.replace(value, "[REDACTED]") }
 
   override suspend fun execute(toolExecutionContext: TrailblazeToolExecutionContext): TrailblazeToolResult {
     if (argv.isEmpty()) {
@@ -114,17 +135,20 @@ data class ExecTrailblazeTool(
     return try {
       val processBuilder = TrailblazeProcessBuilderUtils
         .createProcessBuilder(argv, workingDir?.let(::File))
+      processBuilder.environment().putAll(environment)
       val (result, timedOut) = with(TrailblazeProcessBuilderUtils) {
         processBuilder.runProcessWithTimeout(timeoutSeconds)
       }
+      val redactedFullOutput = redactEnvironmentValues(result.fullOutput)
+      val redactedOutputLines = if (redactedFullOutput.isEmpty()) emptyList() else redactedFullOutput.lines()
 
       when {
         timedOut -> TrailblazeToolResult.Error.ExceptionThrown(
           errorMessage = buildString {
             append("Command timed out after ${timeoutSeconds}s: ${argv.joinToString(" ")}")
-            if (result.outputLines.isNotEmpty()) {
+            if (redactedOutputLines.isNotEmpty()) {
               append('\n')
-              append(result.fullOutput)
+              append(redactedFullOutput)
             }
           },
           command = this@ExecTrailblazeTool,
@@ -134,9 +158,9 @@ data class ExecTrailblazeTool(
           val filteredOutput = outputFilterRegex
             ?.let { pattern ->
               val regex = Regex(pattern)
-              result.outputLines.filter { regex.containsMatchIn(it) }.joinToString("\n")
+              redactedOutputLines.filter { regex.containsMatchIn(it) }.joinToString("\n")
             }
-            ?: result.fullOutput
+            ?: redactedFullOutput
           TrailblazeToolResult.Success(message = filteredOutput)
         }
 
@@ -145,9 +169,9 @@ data class ExecTrailblazeTool(
           // hide the lines needed to diagnose the failure.
           errorMessage = buildString {
             append("Command exited with ${result.exitCode} (expected $expectedExitCode): ${argv.joinToString(" ")}")
-            if (result.outputLines.isNotEmpty()) {
+            if (redactedOutputLines.isNotEmpty()) {
               append('\n')
-              append(result.fullOutput)
+              append(redactedFullOutput)
             }
           },
           command = this@ExecTrailblazeTool,
@@ -160,7 +184,11 @@ data class ExecTrailblazeTool(
       // both catch this same trap explicitly.
       throw e
     } catch (e: Exception) {
-      TrailblazeToolResult.Error.ExceptionThrown.fromThrowable(e, this)
+      TrailblazeToolResult.Error.ExceptionThrown(
+        errorMessage = redactEnvironmentValues(e.message ?: "Unknown error"),
+        stackTrace = redactEnvironmentValues(e.stackTraceToString()),
+        command = this,
+      )
     }
   }
 

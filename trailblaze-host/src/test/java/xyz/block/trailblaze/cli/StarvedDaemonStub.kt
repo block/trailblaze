@@ -6,7 +6,6 @@ import java.net.InetSocketAddress
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
-import kotlin.random.Random
 
 /**
  * A daemon that is alive but starved: it answers `/ping`, then holds every `device` tool call open
@@ -148,29 +147,29 @@ internal class StarvedDaemonStub private constructor(
      * Retrying port 0 is NOT the fallback, though it reads like the obvious one. macOS hands out
      * ephemeral ports by walking a counter, so consecutive binds are consecutive NUMBERS: once the
      * counter is inside the reserved range, every retry is also inside it, and a bounded retry loop
-     * cannot get out of a ~7000-port window. So the fallback names explicit ports above the range
-     * instead, which leaves the counter alone. The starting point is randomized so two test JVMs
-     * on one machine do not walk the same candidates in the same order.
+     * cannot get out of a ~7000-port window. So the fallback names explicit ports instead, which
+     * leaves the counter alone.
+     *
+     * The named ports come from [TestPorts.CANDIDATE_PORT_RANGE], which sits BELOW the reserved
+     * range. This fallback used to walk upward from the top of it, which clears the CLI's guard but
+     * lands inside the OS ephemeral range on Linux (32768 and up) — where the kernel can hand the
+     * same port to an unrelated outbound connection as its source and the bind fails outright.
+     * Below is the only direction clear of both.
      */
     private fun bindOutsideDeviceRange(): HttpServer {
       HttpServer.create(InetSocketAddress("localhost", 0), 0).let { server ->
         if (server.address.port !in TrailblazeDevicePort.DEVICE_ALLOCATION_PORT_RANGE) return server
         server.stop(0)
       }
-      val firstCandidate = TrailblazeDevicePort.DEVICE_ALLOCATION_PORT_RANGE.last + 1
-      val start = Random.nextInt(CANDIDATE_PORT_SPAN)
-      for (i in 0 until CANDIDATE_PORT_SPAN) {
-        val port = firstCandidate + ((start + i) % CANDIDATE_PORT_SPAN)
+      repeat(TestPorts.PORT_ATTEMPTS) {
+        val port = TestPorts.CANDIDATE_PORT_RANGE.random()
         val bound = runCatching { HttpServer.create(InetSocketAddress("localhost", port), 0) }.getOrNull()
         if (bound != null) return bound
       }
       error(
-        "could not bind any of the $CANDIDATE_PORT_SPAN ports above " +
-          "${TrailblazeDevicePort.DEVICE_ALLOCATION_PORT_RANGE.last}",
+        "could not bind any of ${TestPorts.PORT_ATTEMPTS} ports drawn from " +
+          "${TestPorts.CANDIDATE_PORT_RANGE}",
       )
     }
-
-    /** Enough room above the reserved range that a busy machine still has a free port in it. */
-    private const val CANDIDATE_PORT_SPAN = 2_000
   }
 }

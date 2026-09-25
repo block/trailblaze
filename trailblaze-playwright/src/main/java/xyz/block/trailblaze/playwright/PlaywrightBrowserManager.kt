@@ -124,11 +124,34 @@ class PlaywrightBrowserManager(
    * disabled and `Browser.NewContextOptions` is built without `setRecordVideoDir`.
    */
   private val deviceId: String? = null,
+  /**
+   * Pins `deviceScaleFactor` for callers whose output is a shared artifact rather than something a
+   * person inspects pixel-for-pixel: at 2x every captured frame carries 4x the pixels, which on a
+   * multi-hundred-frame animated export is size with nothing to show for it. Null keeps the default
+   * heuristic, so existing desktop screenshots stay byte-identical. See [resolveDeviceScaleFactor]
+   * for the full precedence.
+   */
+  private val deviceScaleFactorOverride: Double? = null,
 ) : PlaywrightPageManager {
 
   companion object {
     const val DEFAULT_VIEWPORT_WIDTH = 1280
     const val DEFAULT_VIEWPORT_HEIGHT = 800
+
+    /**
+     * Picks the `deviceScaleFactor` a new browser context is created with. Split out of
+     * [createFreshContextAndPage] so the precedence is unit-testable without launching a browser.
+     *
+     * Highest to lowest: a [presetScaleFactor] the named viewport asked for (emulating a specific
+     * device means matching its pixel density, so nothing may override it), then an explicit
+     * [override] from the caller, then the default heuristic — 1x on CI, 2x on a developer machine,
+     * where a screenshot may be read pixel-for-pixel on a retina display.
+     */
+    internal fun resolveDeviceScaleFactor(
+      presetScaleFactor: Double?,
+      override: Double?,
+      isCI: Boolean,
+    ): Double = presetScaleFactor ?: override ?: if (isCI) 1.0 else 2.0
 
     // Settle constants live on PlaywrightPageManager.Companion alongside their consumers
     // (`dispatchAndAwaitSettle`, `waitForPageReady` default param). See that file for definitions.
@@ -839,11 +862,13 @@ class PlaywrightBrowserManager(
     val height = resolvedViewport.height
     val options = Browser.NewContextOptions()
       .setViewportSize(width, height)
-    // Preset-supplied emulation properties take precedence over our defaults; for raw
-    // dimensions (or no spec) we keep the legacy CI=1.0 / dev=2.0 scale heuristic so
-    // existing desktop screenshots stay byte-identical.
-    val effectiveDeviceScaleFactor = resolvedViewport.deviceScaleFactor ?: if (isCI) 1.0 else 2.0
-    options.setDeviceScaleFactor(effectiveDeviceScaleFactor)
+    options.setDeviceScaleFactor(
+      resolveDeviceScaleFactor(
+        presetScaleFactor = resolvedViewport.deviceScaleFactor,
+        override = deviceScaleFactorOverride,
+        isCI = isCI,
+      ),
+    )
     resolvedViewport.userAgent?.let { options.setUserAgent(it) }
     resolvedViewport.isMobile?.let { options.setIsMobile(it) }
     resolvedViewport.hasTouch?.let { options.setHasTouch(it) }
@@ -860,6 +885,12 @@ class PlaywrightBrowserManager(
     browserContext = browser.newContext(options)
     currentRecordingDir = recordVideoDir
     currentPage = browserContext.newPage()
+    // Playwright's video belongs to the page, so this is where it starts — and it is the only
+    // instant either side can observe. Reported straight away, before the automation wiring below,
+    // so the recording's clip-time zero isn't padded with our own setup. See `markRecordingStarted`.
+    if (deviceId != null && recordVideoDir != null) {
+      PlaywrightVideoRecordDir.markRecordingStarted(deviceId)
+    }
     setupPageForAutomation(currentPage)
     disableWebAuthn()
     if (deviceId != null && recordVideoDir != null) {

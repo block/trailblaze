@@ -37,7 +37,7 @@ class RunOnHostParams(
    * `trailblaze config capture-video` > default off). The web / Electron rules self-instrument
    * their own video capture (the capture coordinator skips WEB), so this is how the user's opt-in
    * reaches them — they gate their `ensure*VideoCaptureStarted` on it. Defaults to false: video is
-   * opt-in (large files, expensive sprite extraction).
+   * opt-in (large files).
    */
   val captureVideo: Boolean = false,
   /**

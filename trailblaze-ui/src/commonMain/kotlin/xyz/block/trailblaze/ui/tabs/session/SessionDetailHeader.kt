@@ -54,6 +54,7 @@ import xyz.block.trailblaze.ui.composables.getIcon
 import xyz.block.trailblaze.ui.tabs.session.models.SessionDetail
 import xyz.block.trailblaze.ui.utils.FormattingUtils.formatDuration
 import xyz.block.trailblaze.yaml.TrailConfig
+import xyz.block.trailblaze.yaml.displayText
 
 @Composable
 internal fun SessionDetailHeader(
@@ -434,8 +435,8 @@ private fun buildTrailConfigDetails(config: TrailConfig?): List<Pair<String, Str
   config.driver?.takeIf { it.isNotBlank() }?.let { rows.add("Driver" to it) }
   config.skip?.takeIf { it.isNotBlank() }?.let { rows.add("Skip" to it) }
   config.metadata
-    ?.filter { (k, v) -> k.isNotBlank() && v.isNotBlank() }
-    ?.forEach { (k, v) -> rows.add("metadata.$k" to v) }
+    ?.filter { (k, v) -> k.isNotBlank() && v.displayText.isNotBlank() }
+    ?.forEach { (k, v) -> rows.add("metadata.$k" to v.displayText) }
   return rows
 }
 

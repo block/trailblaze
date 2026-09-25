@@ -25,6 +25,7 @@ import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.playwright.PlaywrightPageManager
 import xyz.block.trailblaze.scripting.LaunchedScriptingRuntime
+import xyz.block.trailblaze.scripting.finishScriptingRuntimeCleanup
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.ui.TrailblazeDeviceManager
 import xyz.block.trailblaze.util.Console
@@ -218,11 +219,12 @@ class PlaywrightNativeHostDriverDescriptor : HostDriverDescriptor {
       noLogging = runOnHostParams.noLogging,
       cleanup = {
         withContext(NonCancellable) {
-          subprocessRuntimes.forEach { it.shutdownAll() }
-        }
-        if (!keepBrowserAlive) {
-          playwrightTest.close()
-          deviceManager.cancelSessionForDevice(trailblazeDeviceId)
+          finishScriptingRuntimeCleanup(subprocessRuntimes) {
+            if (!keepBrowserAlive) {
+              playwrightTest.close()
+              deviceManager.cancelSessionForDevice(trailblazeDeviceId)
+            }
+          }
         }
       },
     ) { session ->

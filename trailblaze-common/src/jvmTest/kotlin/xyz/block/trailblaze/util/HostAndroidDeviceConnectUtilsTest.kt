@@ -7,6 +7,7 @@ import assertk.assertions.doesNotContain
 import assertk.assertions.isEmpty
 import assertk.assertions.isEqualTo
 import assertk.assertions.isLessThan
+import assertk.assertions.isNull
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -108,6 +109,93 @@ class HostAndroidDeviceConnectUtilsTest {
       httpsPort = 52522,
     )
     assertThat(args[TrailblazeDevicePort.HTTPS_PORT_INSTRUMENTATION_ARG_KEY]).isEqualTo("52522")
+  }
+
+  // ── leftover capture proxy ─────────────────────────────────────────────────
+  // A network capture points the emulator's global HTTP proxy at this host and reverts it when it
+  // stops; a daemon that dies mid-capture leaves it behind. Every request the emulator makes then
+  // goes into a dead port — the app under test reports no network and the runner's log uploads
+  // fail. These pin when the connect preflight clears it, and when it keeps its hands off.
+
+  private fun staleProxy(
+    setting: String?,
+    instanceId: String = "emulator-5554",
+    adbServerHost: String = "localhost",
+    isHostPortListening: (Int) -> Boolean = { false },
+  ) = HostAndroidDeviceConnectUtils.staleEmulatorProxyToClear(
+    setting = setting,
+    instanceId = instanceId,
+    adbServerHost = adbServerHost,
+    isHostPortListening = isHostPortListening,
+  )
+
+  @Test
+  fun aProxyAimedAtThisHostWithNothingListeningIsCleared() {
+    assertThat(staleProxy("10.0.2.2:64191")).isEqualTo("10.0.2.2:64191")
+  }
+
+  @Test
+  fun aProxyAimedAtThisHostWithAListenerIsALiveCaptureAndIsKept() {
+    val portsAsked = mutableListOf<Int>()
+    assertThat(staleProxy("10.0.2.2:8080") { portsAsked += it; true }).isNull()
+    assertThat(portsAsked).containsExactly(8080)
+  }
+
+  @Test
+  fun aProxyAimedAnywhereElseIsNotOursToClear() {
+    assertThat(staleProxy("proxy.example.test:3128")).isNull()
+  }
+
+  @Test
+  fun anUnsetOrUnreadableProxyIsLeftAlone() {
+    for (setting in listOf(null, "", "null", ":0", "10.0.2.2:", "10.0.2.2:notaport", "10.0.2.2:70000")) {
+      assertThat(staleProxy(setting), name = setting ?: "<null>").isNull()
+    }
+  }
+
+  // `10.0.2.2` is the QEMU emulator's alias for the machine running it. On a phone it is a LAN
+  // address someone else owns, and with a remote adb server it is a different machine — in both
+  // cases our loopback probe answers a question about the wrong host, so nothing is touched and
+  // the probe never runs.
+
+  @Test
+  fun aProxyOnAPhoneIsNeverClearedAndTheHostIsNotEvenProbed() {
+    val portsAsked = mutableListOf<Int>()
+    assertThat(
+      staleProxy("10.0.2.2:64191", instanceId = "0123456789ABCDEF") { portsAsked += it; false },
+    ).isNull()
+    assertThat(portsAsked).isEmpty()
+  }
+
+  @Test
+  fun anEmulatorOnARemoteAdbServerIsNeverClearedAndTheHostIsNotEvenProbed() {
+    val portsAsked = mutableListOf<Int>()
+    assertThat(
+      staleProxy("10.0.2.2:64191", adbServerHost = "remote-adb-host.example.test") { portsAsked += it; false },
+    ).isNull()
+    assertThat(portsAsked).isEmpty()
+  }
+
+  @Test
+  fun everySpellingOfALocalAdbServerCountsAsLocal() {
+    for (host in listOf("localhost", "LOCALHOST", "127.0.0.1", "::1", "[::1]")) {
+      assertThat(
+        HostAndroidDeviceConnectUtils.isLocallyHostedEmulator("emulator-5554", host),
+        name = host,
+      ).isEqualTo(true)
+    }
+  }
+
+  @Test
+  fun aSerialThatMerelyContainsAnEmulatorNameIsNotAnEmulator() {
+    // Substring-matching the serial would let an `adb connect`ed device named after an emulator
+    // through the gate; the whole serial has to be `emulator-<port>`.
+    for (serial in listOf("emulator-5554.lan:5555", "my-emulator-5554", "emulator-abc", "emulator-")) {
+      assertThat(
+        HostAndroidDeviceConnectUtils.isLocallyHostedEmulator(serial, "localhost"),
+        name = serial,
+      ).isEqualTo(false)
+    }
   }
 
   // ── reuse vs. stale routing ────────────────────────────────────────────────
@@ -617,6 +705,52 @@ class HostAndroidDeviceConnectUtilsTest {
       HostAndroidDeviceConnectUtils.MAESTRO_TEST_APP_ID,
     )
     assertThat(forceStopPlan.diagnostics).isEmpty()
+  }
+
+  // ── installedPackagesOrEmptyOnFailure ──────────────────────────────────────
+  // AndroidHostAdbUtils.listInstalledPackages now throws on adb failure (a bounded timeout
+  // included) instead of swallowing it. This is the one call site that
+  // still wants the old degrade-to-empty behavior, so it catches locally; these tests pin that
+  // it still does, with the real function replaced by an injectable seam.
+
+  @Test
+  fun installedPackagesOrEmptyOnFailureReturnsTheRealSetOnSuccess() {
+    val result = HostAndroidDeviceConnectUtils.installedPackagesOrEmptyOnFailure(
+      deviceId = deviceId,
+      deviceLabel = deviceId.instanceId,
+      listInstalledPackages = { listOf("com.example.app", "com.example.app.uitests") },
+    )
+
+    assertThat(result).isEqualTo(setOf("com.example.app", "com.example.app.uitests"))
+  }
+
+  @Test
+  fun installedPackagesOrEmptyOnFailureDegradesToEmptySetInsteadOfThrowing() {
+    val result = HostAndroidDeviceConnectUtils.installedPackagesOrEmptyOnFailure(
+      deviceId = deviceId,
+      deviceLabel = deviceId.instanceId,
+      listInstalledPackages = { error("adb shell on device 'emulator-5554': timed out") },
+    )
+
+    assertThat(result).isEmpty()
+  }
+
+  // ── installedAppProbeFailureMessage ────────────────────────────────────────
+
+  @Test
+  fun installedAppProbeFailureMessageDoesNotClaimTheAppIsMissing() {
+    val message = HostAndroidDeviceConnectUtils.installedAppProbeFailureMessage(
+      appId = "com.example.app.uitests",
+      deviceLabel = "emulator-5554",
+      cause = IllegalStateException("adb shell timed out"),
+    )
+
+    // "not installed" is the wrong diagnosis for a probe that failed rather than answered —
+    // the same trap the force-stop gate's own diagnostic avoids.
+    assertThat(message).doesNotContain("is not installed")
+    assertThat(message).contains("com.example.app.uitests")
+    assertThat(message).contains("emulator-5554")
+    assertThat(message).contains("adb shell timed out")
   }
 
   // ── forced-driver forwarding ───────────────────────────────────────────────

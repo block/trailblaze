@@ -2,6 +2,7 @@ package xyz.block.trailblaze.cli
 
 import picocli.CommandLine
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.util.runQuiet
 
 /**
  * Marks a subcommand whose terminal output is meant for a person, so [Console.log] must not reach
@@ -37,9 +38,10 @@ import xyz.block.trailblaze.util.Console
  * behavior, because nothing had enabled quiet mode by the time it ran.
  *
  * Applying the policy at dispatch instead fixes every such site at once, including ones not
- * written yet, without touching a single `Console.log` call. The late calls in the connection
- * helpers are left alone: they still cover the internal entry points that pass `verbose = false`
- * directly and never go through a subcommand.
+ * written yet, without touching a single `Console.log` call. The late switches in the connection
+ * helpers stay: they still cover the internal entry points that pass `verbose = false` directly
+ * and never go through a subcommand. Those switches go through [quietUnlessVerbose], so they
+ * restore the channel too.
  */
 internal interface QuietUnlessVerbose {
   /** This command's own `-v`/`--verbose` flag. */
@@ -58,11 +60,6 @@ internal interface QuietUnlessVerbose {
  * run path, and it writes only through [Console.info] / [Console.error], so nothing a reader wants
  * is lost.
  *
- * Quiet mode is process-global, so the restore is the load-bearing half. A command dispatched in a
- * shared JVM — the daemon's `/cli/exec` fast path, or a test suite — must not decide how loud every
- * later command in that JVM is. An already-quiet caller stays quiet: the restore returns the prior
- * state rather than assuming it was off.
- *
  * Picocli's own usage help renders *inside* the dispatch (`RunLast` calls `printHelpIfRequested`
  * from `execute`), so `--help` on a marked command runs with quiet mode on. That is harmless —
  * picocli writes help through the `CommandLine`'s own `PrintWriter`, not [Console]. The one
@@ -71,13 +68,22 @@ internal interface QuietUnlessVerbose {
  */
 internal fun <T> withUserFacingOutputPolicy(parseResult: CommandLine.ParseResult, body: () -> T): T {
   val command = leafParseResult(parseResult).commandSpec().userObject() as? QuietUnlessVerbose
-  if (command == null || command.verboseRequested) return body()
-
-  val wasQuiet = Console.isQuietMode()
-  Console.enableQuietMode()
-  try {
-    return body()
-  } finally {
-    if (!wasQuiet) Console.disableQuietMode()
-  }
+  return if (command == null) body() else quietUnlessVerbose(command.verboseRequested, body)
 }
+
+/**
+ * Runs [body] with the internal [Console.log] channel closed unless [verbose], then puts the
+ * channel back the way it was found.
+ *
+ * The restore is the whole point. Quiet mode is one process-global flag, so an entry point that
+ * only switches it on decides how loud the rest of the JVM will be. That is harmless in a one-shot
+ * CLI process which exits moments later, and wrong wherever the JVM outlives the command — the
+ * daemon, or the shared test JVM, where one command silences `Console.log` for every test scheduled
+ * after it and the failure is charged to whichever class ran next.
+ *
+ * An already-quiet caller stays quiet: [runQuiet] restores the prior state rather than assuming it
+ * was off, so a command that is both marked [QuietUnlessVerbose] and calls a connection helper is
+ * covered twice without the inner scope undoing the outer one.
+ */
+internal inline fun <T> quietUnlessVerbose(verbose: Boolean, body: () -> T): T =
+  if (verbose) body() else Console.runQuiet(body)

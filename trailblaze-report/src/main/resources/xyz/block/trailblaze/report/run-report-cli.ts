@@ -22,7 +22,7 @@ import {
   MAX_EVENT_STREAMS_TOTAL_CHARS, buildEventStream, collectStreamAttachmentRefs,
   isSafeSessionRelativePath, resolveFormatterModule,
 } from "./run-report-events";
-import { parseSpriteMetadata, resolvedFrameMap, spriteRejectionReason, spriteSheetRows } from "./run-report-sprites";
+import { MAX_TRACE_BYTES, parseTraceFileText } from "./run-report-trace-spans";
 
 /** The input JSON RunReportGenerator writes (one entry per session in the report). */
 interface DriverInput {
@@ -48,7 +48,7 @@ interface DriverInput {
    */
   selectorEngine?: string;
   /**
-   * When set, local screenshots and video sprite sheets are REFERENCED at
+   * When set, local screenshots and the session recording are REFERENCED at
    * `<imageBaseUrl><sessionId>/<file>` instead of base64-embedded (see [localShotUrl]). Absent —
    * the default — embeds every image, which is what makes a report a portable single file.
    *
@@ -95,6 +95,79 @@ function dataUri(path: string): string | null {
     const ext = (path.split(".").pop() || "").toLowerCase();
     const mime = MIME[ext] || "image/png";
     return `data:${mime};base64,${bytes.toString("base64")}`;
+  } catch {
+    return null;
+  }
+}
+
+// The session recording the report embeds and plays (capture's VIDEO_WEBM artifact, or the mp4
+// VIDEO artifact iOS and web capture produce). Refuses anything over CLIP_MAX_BYTES: a VP9 encode
+// of a normal session is a few hundred KB, so an oversized one means an unusually long run or a
+// host whose encode came out badly, and silently inlining tens of MB of base64 into a document
+// that has to parse on open is worse than falling back to per-step screenshots.
+const CLIP_MAX_BYTES = 12 * 1024 * 1024;
+
+const CLIP_MIME = { webm: "video/webm", mp4: "video/mp4" };
+
+/**
+ * ONE embed allowance for all of a report's media, spent by every session's recording AND every
+ * session's attachments, charged in the encoded bytes each one adds to the document.
+ *
+ * Per-file caps are not a bound on the file: a report holds as many sessions as the run had, and
+ * six recordings just under the per-recording cap inline over 96 MiB of base64 on their own. Nor
+ * do separate per-feature budgets bound it, which is why recordings and attachments share this
+ * one: two independent 32 MiB allowances is 64 MiB of media before a single byte of trace, log or
+ * screenshot — the whole ceiling the Share route refuses HTML above. The reserved headroom is the
+ * other half of that ceiling, which is why the allowance is half of it rather than all of it.
+ *
+ * Recordings charge before attachments, so a squeeze falls on attachments. Refusing a recording
+ * saves less than it costs, because the per-step screenshots it falls back to are embedded anyway;
+ * refusing an attachment saves all of it, because its fallback is a one-line note.
+ */
+export type MediaBudget = { remaining: number };
+
+export function newMediaBudget(totalBytes: number = ATTACHMENT_EMBED_MAX_TOTAL_BYTES): MediaBudget {
+  return { remaining: totalBytes };
+}
+
+/**
+ * `readVideo`'s embed resolver, charged against a report's media budget. The default resolver
+ * embeds without one, which is right for a caller building a single run; a report holding a batch
+ * has to spend one allowance across all of them.
+ */
+export function budgetedClipValue(budget: MediaBudget): (path: string) => string | null {
+  return (path) => clipDataUri(path, budget)?.uri ?? null;
+}
+
+/** Base64 length of `bytes` raw bytes, which is what the document actually pays. */
+function base64Bytes(bytes: number): number {
+  return Math.ceil(bytes / 3) * 4;
+}
+
+function clipDataUri(path: string, budget?: MediaBudget): { uri: string; mime: string } | null {
+  try {
+    const ext = (path.split(".").pop() || "").toLowerCase();
+    const mime = CLIP_MIME[ext];
+    if (!mime) return null;
+    // Measure before reading: the cap exists so an oversized recording never enters the report,
+    // and reading the file just to learn its size would allocate exactly what the cap refuses.
+    const size = statSync(path).size;
+    if (!size) return null;
+    if (size > CLIP_MAX_BYTES) {
+      console.error(`video: ${path} is ${Math.round(size / 1024)}KB, over the ${CLIP_MAX_BYTES / 1024 / 1024}MB embed cap; report will use per-step screenshots`);
+      return null;
+    }
+    // Charge what the document pays: the whole `data:` URI, on the same meter the attachments of
+    // this same report are charged on, prefix included.
+    const prefix = `data:${mime};base64,`;
+    const encodedSize = prefix.length + base64Bytes(size);
+    if (budget && encodedSize > budget.remaining) {
+      console.error(`video: ${path} does not fit the report's remaining ${Math.round(budget.remaining / 1024)}KB media budget; this run will use per-step screenshots`);
+      return null;
+    }
+    const bytes = readFileSync(path);
+    if (budget) budget.remaining -= encodedSize;
+    return { uri: `${prefix}${bytes.toString("base64")}`, mime };
   } catch {
     return null;
   }
@@ -182,7 +255,7 @@ export function remoteShotValue(url: string): string {
 }
 
 /**
- * What the viewer renders for a LOCAL screenshot or sprite sheet when the report links images
+ * What the viewer renders for a LOCAL screenshot or recording when the report links images
  * instead of embedding them (`imageBaseUrl` in the driver input — see [DriverInput.imageBaseUrl]).
  *
  * The emitted key is `<sessionId>/<file>`, the same key the legacy WASM report hands its
@@ -197,7 +270,7 @@ export function remoteShotValue(url: string): string {
  *   report step uploads.
  *
  * ESCAPING IS LOAD-BEARING, in two different contexts. The viewer interpolates a screenshot into
- * `src="…"` and a sprite sheet into `background-image:url('…')` — both WITHOUT escaping, because
+ * `src="…"` and a recording into a `<video src="…">` — both WITHOUT escaping, because
  * both were only ever fed base64 data URIs before. So the value must be unable to close EITHER
  * delimiter: percent-encoding each path segment handles `"`, and `'` is encoded explicitly because
  * `encodeURIComponent` leaves it intact. Segments are encoded individually rather than encoding the
@@ -266,6 +339,28 @@ function readNetworkLog(sessionDir: string): NetworkEvent[] | null {
       } catch { /* skip malformed line */ }
     }
     return out.length ? out : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The session's `trace.json` — the spans `TrailblazeTracer` recorded (see `SessionTraceFile`) —
+ * as the slim `TracerSpan` shape the Perfetto export reads (the slimming itself is
+ * run-report-trace-spans.ts, shared with the zip viewer and the live document). An absent,
+ * oversized or unparseable file yields null. Exported for tests.
+ */
+export function readTraceFile(sessionDir: string): TracerSpan[] | null {
+  try {
+    const path = join(sessionDir, "trace.json");
+    if (!existsSync(path)) return null;
+    const size = statSync(path).size;
+    if (size === 0) return null;
+    if (size > MAX_TRACE_BYTES) {
+      console.error(`trace: skipping ${path} (${size} bytes is over the ${MAX_TRACE_BYTES}-byte cap)`);
+      return null;
+    }
+    return parseTraceFileText(readFileSync(path, "utf8"));
   } catch {
     return null;
   }
@@ -365,10 +460,11 @@ export function readAttachments(
   sessionId: string,
   imageBaseUrl: string | null,
   inlineMaxBytes: number = ATTACHMENT_INLINE_MAX_BYTES,
-  // Shared by reference across the sessions of ONE report, because the limit it defends is
-  // per-FILE: a standalone report holds every session, so a budget re-seeded per session would let
-  // ten sessions embed ten times the ceiling and fail Share exactly as before.
-  embedBudget: { remaining: number } = { remaining: ATTACHMENT_EMBED_MAX_TOTAL_BYTES },
+  // Shared by reference across the sessions of ONE report, and with that report's recordings,
+  // because the limit it defends is per-FILE: a standalone report holds every session, so a budget
+  // re-seeded per session — or a second budget handed to another kind of media — would let the
+  // file embed several times the ceiling and fail Share exactly as before.
+  embedBudget: MediaBudget = newMediaBudget(),
 ): Record<string, string> | null {
   const refs = collectStreamAttachmentRefs(streams);
   if (!refs.length) return null;
@@ -425,7 +521,7 @@ export function readAttachments(
     } catch { /* unreadable file → present-in-bundle note */ }
   }
   if (skippedForBudget) {
-    console.error(`attachments: ${skippedForBudget} attachment(s) left as bundle-only notes to keep the embedded total under ${ATTACHMENT_EMBED_MAX_TOTAL_BYTES} bytes`);
+    console.error(`attachments: ${skippedForBudget} attachment(s) left as bundle-only notes; ${embedBudget.remaining} bytes of this report's media budget were left`);
   }
   return Object.keys(attachments).length ? attachments : null;
 }
@@ -460,6 +556,12 @@ export function packDeviceLog(text: string | null): { deviceLog: string | null; 
 export function packNetwork(events: NetworkEvent[] | null): { network: NetworkEvent[] | null; networkGz: string | null } {
   const { inline, gz } = packGz(events, (e) => JSON.stringify(e), LOG_INLINE_MAX_CHARS);
   return { network: inline, networkGz: gz };
+}
+
+/** Splits the session's tracer spans into inline `spans` vs compressed `spansGz` at the threshold. */
+export function packSpans(spans: TracerSpan[] | null): { spans: TracerSpan[] | null; spansGz: string | null } {
+  const { inline, gz } = packGz(spans, (s) => JSON.stringify(s), LOG_INLINE_MAX_CHARS);
+  return { spans: inline, spansGz: gz };
 }
 
 /** Splits a session's LLM transcripts into inline `llmMessages` vs compressed `llmMessagesGz` at
@@ -551,89 +653,52 @@ function loadFormatters(names: string[]): EventStreamFormatter[] {
   return formatters;
 }
 
-// Video frames as a CSS sprite scrubber, pure-DOM — no ffmpeg. Reads capture_metadata.json
-// (prefers the VIDEO_FRAMES artifact), the sprite sheet image, and video_sprites.txt layout, then
-// trims the playable logical-frame range to the test window [first log, last log]. The viewer reads
-// the sprite's natural width to derive per-frame width and plays frames via background-position.
-//
-// Metadata parsing and the acceptance rules (degenerate sprite, restamped-and-dominated sprite,
-// multi-sheet) live in run-report-sprites.ts — the contract this driver shares with the Kotlin
-// SpriteSheetMetadata, locked cross-language by sprite-metadata-parity-fixtures.json. A rejected
-// sprite hides the Video tab so the timeline falls back to per-step screenshots.
 /**
- * @param spriteValue what to put in each sheet's `uri` — the base64 data URI by default, or the
- *   linked-image URL when the report references images instead of embedding them. Sheets are
- *   ordinary files in the session dir (`video_sprites*.webp`), served by the same two hosts as the
- *   step screenshots, so they follow the same switch — and they are the largest single blob a
- *   session contributes.
+ * The session recording the report plays, read from capture_metadata.json. Prefers the VIDEO_WEBM
+ * artifact (Android's live VP9 encode) and otherwise takes the VIDEO mp4 (iOS, web, or an Android
+ * host whose ffmpeg can't encode VP9). The artifact must name a file that exists and carry a
+ * capture-start timestamp: without one the timeline cannot map a step onto a position in the
+ * recording, and a recording it can't seek is one the report is better off without. Absent a
+ * usable recording every surface falls back to per-step screenshots.
+ *
+ * `startMs`/`endMs` are the artifact's own capture window on the same clock as the session logs.
+ * They are the viewer's only handle on WHERE in the clip a run instant falls, and it maps by
+ * SCALING onto them (videoClipTimeAt: duration/window), not by subtracting `startMs` — a recorder's
+ * window routinely runs slightly longer than the file it produced, and a plain offset drifts by
+ * that whole difference over a long run. Which is also why the window is deliberately NOT read
+ * back off the container: the viewer needs the recorder's own bookends to scale against.
+ *
+ * The artifact list is producer-written data, so the file it names is held to the boundary
+ * attachments are: a lexically safe session-relative name AND a resolved target still inside the
+ * session directory. Neither a `../` name nor an in-session symlink gets a host file base64-embedded
+ * under a video MIME, or linked out of a published report.
+ *
+ * @param clipValue what to put in the clip's `uri` — the base64 data URI by default (null when the
+ *   file is over the embed cap), or the linked URL when the report references media instead of
+ *   embedding it. The recording is an ordinary file in the session dir, served by the same two
+ *   hosts as the step screenshots, so it follows the same switch — and it is the largest single
+ *   blob a session contributes.
  */
 export function readVideo(
   sessionDir: string,
-  logs: TrailblazeLogRecord[],
-  stepScreenshotCount: number,
-  spriteValue: (path: string) => string | null = dataUri,
+  clipValue: (path: string) => string | null = (path) => clipDataUri(path)?.uri ?? null,
 ): VideoInfo | null {
   try {
     const metaPath = join(sessionDir, "capture_metadata.json");
     if (!existsSync(metaPath)) return null;
     const artifacts: any[] = (JSON.parse(readFileSync(metaPath, "utf8")).artifacts) || [];
-    const framesArt = artifacts.find((a) => a.type === "VIDEO_FRAMES");
-    if (!framesArt) return null; // WASM also prefers VIDEO_FRAMES; raw-MP4-only sessions fall back to the screenshot timeline.
-
-    const txtPath = join(sessionDir, "video_sprites.txt");
-    if (!existsSync(txtPath)) return null;
-
-    const meta = parseSpriteMetadata(readFileSync(txtPath, "utf8"));
-    if (!meta) return null;
-    // This viewer plays multi-sheet sprites (it swaps background-image per sheet), so opt in.
-    const rejection = spriteRejectionReason(meta, stepScreenshotCount, true);
-    if (rejection) {
-      console.error(
-        `video: skipping sprite in ${sessionDir} (${rejection}: ${meta.uniqueFrames} unique of ` +
-          `${meta.frames} total frames, restamped=${meta.restamped}); timeline will use per-step screenshots`,
-      );
-      return null;
-    }
-
-    // A single sheet keeps the plain filename (legacy sheets may be .jpg); multiple sheets are
-    // numbered video_sprites_<k>.webp and every one must be present.
-    const spritePaths: string[] = [];
-    if (meta.sheets <= 1) {
-      let spritePath = join(sessionDir, "video_sprites.webp");
-      if (!existsSync(spritePath)) spritePath = join(sessionDir, "video_sprites.jpg");
-      if (!existsSync(spritePath)) return null;
-      spritePaths.push(spritePath);
-    } else {
-      for (let k = 0; k < meta.sheets; k++) {
-        const spritePath = join(sessionDir, `video_sprites_${k}.webp`);
-        if (!existsSync(spritePath)) return null;
-        spritePaths.push(spritePath);
-      }
-    }
-    const { fps, frames, columns, rows, height: frameHeight, frameWidth } = meta;
-    const frameMap = resolvedFrameMap(meta);
-
-    // Trim playable range to the test window.
-    let startFrame = 0;
-    let endFrame = frames - 1;
-    const startMs = framesArt.startTimestampMs ?? null;
-    const endMs = framesArt.endTimestampMs ?? null;
-    const ts = logs.map((l) => (l.timestamp ? Date.parse(l.timestamp) : NaN)).filter((n) => !Number.isNaN(n)).sort((a, b) => a - b);
-    if (startMs != null && ts.length) {
-      const trimStart = Math.max(startMs, ts[0]);
-      const trimEnd = endMs != null ? Math.min(endMs, ts[ts.length - 1]) : ts[ts.length - 1];
-      const s = Math.max(0, Math.floor(((trimStart - startMs) * fps) / 1000));
-      const e = Math.min(frames - 1, Math.floor(((trimEnd - startMs) * fps) / 1000));
-      if (e >= s) { startFrame = s; endFrame = e; }
-    }
-
-    const sprites: Array<{ uri: string; rows: number }> = [];
-    for (let k = 0; k < spritePaths.length; k++) {
-      const uri = spriteValue(spritePaths[k]);
-      if (!uri) return null;
-      sprites.push({ uri, rows: spriteSheetRows(meta, k) });
-    }
-    return { sprites, fps, frames, columns, rows, frameHeight, frameWidth, frameMap, startFrame, endFrame, startMs };
+    const art = artifacts.find((a) => a.type === "VIDEO_WEBM") ?? artifacts.find((a) => a.type === "VIDEO");
+    if (!art || !art.filename || art.startTimestampMs == null) return null;
+    if (!isSafeSessionRelativePath(art.filename)) return null;
+    const path = join(sessionDir, art.filename);
+    if (!existsSync(path) || !resolvesInsideSession(sessionDir, path)) return null;
+    const mime = CLIP_MIME[(art.filename.split(".").pop() || "").toLowerCase()];
+    if (!mime) return null;
+    const uri = clipValue(path);
+    if (!uri) return null;
+    const startMs: number = art.startTimestampMs;
+    const endMs: number = art.endTimestampMs ?? art.startTimestampMs;
+    return { startMs, endMs, clip: { uri, mime, startMs, endMs } };
   } catch {
     return null;
   }
@@ -651,10 +716,12 @@ function main(): void {
   // Each session's lifted per-step hierarchies, kept for the selector-engine embed gate below.
   const liftedHierarchies: Array<Record<string, unknown> | null> = [];
   const imageBaseUrl = input.imageBaseUrl ?? null;
-  // ONE budget for the whole output file. This report holds every session in `input.sessions`, and
-  // the ceiling exists to keep that FILE shareable — so it is spent across the sessions, not
-  // granted to each of them.
-  const embedBudget = { remaining: ATTACHMENT_EMBED_MAX_TOTAL_BYTES };
+  // ONE media budget for the whole output file, spent by the recordings and the attachments of
+  // every session in `input.sessions`. The ceiling exists to keep that FILE shareable, so it is
+  // spent across the sessions rather than granted to each of them, and across both kinds of media
+  // rather than granted to each of those.
+  const embedBudget = newMediaBudget();
+  const embedClip = budgetedClipValue(embedBudget);
   const sessions: SessionInput[] = (input.sessions || []).map((s) => {
     const logs = s.logs || [];
     const trace = core.extractTrace(logs);
@@ -683,9 +750,13 @@ function main(): void {
     const ctx = formatterContext(s.meta?.status, input.fullEventPayloads === true);
     const streams = readEvents(s.sessionDir, formatters, ctx);
     const { events, eventsGz } = packEvents(streams);
+    // Before the attachments, deliberately: both draw on `embedBudget`, and the recording is the
+    // one whose fallback (per-step screenshots) is embedded anyway.
+    const video = readVideo(s.sessionDir, (path) => linkedShot(basename(path)) ?? embedClip(path));
     const attachments = readAttachments(s.sessionDir, streams, sessionId, imageBaseUrl, input.attachmentInlineMaxBytes ?? ATTACHMENT_INLINE_MAX_BYTES, embedBudget);
     const { deviceLog, deviceLogGz } = packDeviceLog(readDeviceLog(s.sessionDir));
     const { network, networkGz } = packNetwork(readNetworkLog(s.sessionDir));
+    const { spans, spansGz } = packSpans(readTraceFile(s.sessionDir));
     const { llmMessages, llmMessagesGz } = packLlmMessages(core.extractLlmTranscripts(llmLogs));
     const lifted = core.traceHierarchies(trace, ctx.sessionPassed);
     liftedHierarchies.push(lifted);
@@ -706,12 +777,14 @@ function main(): void {
       networkGz,
       events,
       eventsGz,
+      spans,
+      spansGz,
       attachments,
       llmMessages,
       llmMessagesGz,
       hierarchies,
       hierarchiesGz,
-      video: readVideo(s.sessionDir, logs, files.length, (path) => linkedShot(basename(path)) ?? dataUri(path)),
+      video,
     };
   });
 

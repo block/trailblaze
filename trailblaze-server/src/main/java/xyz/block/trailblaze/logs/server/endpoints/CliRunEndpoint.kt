@@ -70,6 +70,8 @@ data class CliRunRequest(
   val captureLogcat: Boolean? = null,
   /** Override capture iOS Simulator system logs setting (null = use app config default). */
   val captureIosLogs: Boolean? = null,
+  /** Override the Android memory sampling setting (null = use app config default). */
+  val captureMemory: Boolean? = null,
   /**
    * Override the daemon's framework network capture setting for this run. Mirrors the
    * desktop-app "Capture Network Traffic" toggle. From the CLI, set via

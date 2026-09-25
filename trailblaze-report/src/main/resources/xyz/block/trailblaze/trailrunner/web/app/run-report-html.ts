@@ -18,10 +18,10 @@ const RUN_REPORT_VIEWER_SCRIPT: string = embeddedViewerScript();
 // contract. Optional generic event streams, the authored/recorded YAML, and pre-packed hierarchies
 // (packSessionInputsHierarchies — the Share path compresses before serializing) ride alongside the
 // trace, LLM calls, and screenshots. Pure: no fetch, no DOM — usable identically in browser and bun.
-function buildRunReportHtml({ meta, trace, llmLogs, shots, events = null, attachments = null, hierarchies = null, hierarchiesGz = null, keepAttachmentObjectUrls = false }: { meta: RunMeta; trace: RawTraceRow[]; llmLogs: RawLlmRow[]; shots: Record<string, string>; events?: EventStream[] | null; attachments?: Record<string, string> | null; hierarchies?: Record<string, unknown> | null; hierarchiesGz?: string | null; keepAttachmentObjectUrls?: boolean }): string {
+function buildRunReportHtml({ meta, trace, llmLogs, shots, events = null, attachments = null, hierarchies = null, hierarchiesGz = null, spans = null, spansGz = null, keepAttachmentObjectUrls = false }: { meta: RunMeta; trace: RawTraceRow[]; llmLogs: RawLlmRow[]; shots: Record<string, string>; events?: EventStream[] | null; attachments?: Record<string, string> | null; hierarchies?: Record<string, unknown> | null; hierarchiesGz?: string | null; spans?: TracerSpan[] | null; spansGz?: string | null; keepAttachmentObjectUrls?: boolean }): string {
   return buildMultiReportHtml({
     generatedAt: (meta || {}).generatedAt || '',
-    sessions: [{ meta, trace, llmLogs, shots, events, attachments, hierarchies, hierarchiesGz }],
+    sessions: [{ meta, trace, llmLogs, shots, events, attachments, hierarchies, hierarchiesGz, spans, spansGz }],
     keepAttachmentObjectUrls,
   });
 }
@@ -42,45 +42,48 @@ function buildRunReportHtml({ meta, trace, llmLogs, shots, events = null, attach
 function buildMultiReportHtml({ generatedAt, shareUrl, allRunsUrl, sessions, selectorEngine, keepAttachmentObjectUrls = false }: { generatedAt?: string; shareUrl?: string; allRunsUrl?: string; sessions: SessionInput[]; selectorEngine?: SelectorEnginePayload | null; keepAttachmentObjectUrls?: boolean }): string {
   // Slimming, the llmLogs → llm rename, and lifting recording/original YAML off meta are shared with
   // the viewer shell's in-place hydration (toSessionPayloads in run-report-extract), so an embedded
-  // payload and a shell-loaded one are the same shape. The sprite hoist below is this path's alone:
-  // it depends on the #tb-sprites-<i> chunks only a document carries.
+  // payload and a shell-loaded one are the same shape. The clip hoist below is this path's alone:
+  // it depends on the #tb-clip-<i> chunks only a document carries.
   const list: SessionPayload[] = toSessionPayloads({ generatedAt, sessions });
   // A clip is an object URL over bytes only the LOADING page holds, so it cannot survive into a
   // standalone document: carrying it would embed a `blob:` reference that resolves to nothing when
   // the file is reopened elsewhere, and Replay would badge the lane REC and then fail to play it.
   // Stripped at the serialization boundary rather than in toSessionPayloads, because the in-place
   // viewer payload it also builds is exactly where the clip belongs.
-  list.forEach((s) => { s.videoClip = null; });
-  // Same rule for attachment object URLs (the zip pipeline's resolution): a `blob:` value is bytes
-  // only the loading page holds, so it must not serialize into a standalone document. Embedded
-  // data:/linked values stay — those are exactly what makes the attachment portable. The one
-  // exception is a document rendered straight back into this same page (see the parameter's note):
-  // there the minting page is still alive and the URLs are the whole point.
+  //
+  // Same rule, and the same exception, for attachment object URLs (the zip pipeline's resolution).
+  // Embedded data:/linked attachment values stay either way — those are exactly what makes an
+  // attachment portable. The exception is a document rendered straight back into this same page
+  // (see the parameter's note): there the minting page is still alive, the URLs resolve, and
+  // stripping the clip is what costs the zip viewer its Video tab entirely.
   if (!keepAttachmentObjectUrls) {
+    list.forEach((s) => { s.videoClip = null; });
     list.forEach((s) => {
       if (!s.attachments) return;
       const kept = Object.fromEntries(Object.entries(s.attachments).filter(([, uri]) => !/^blob:/i.test(String(uri))));
       s.attachments = Object.keys(kept).length ? kept : null;
     });
   }
-  // Hoist each session's sprite-sheet data URIs out of the main payload: they're the largest
-  // blobs in the document and are only needed once a video frame actually renders. Keeping them
-  // out of the payload the viewer JSON.parses at boot means first paint never waits on sprite
-  // bytes; the viewer resolves them lazily from #tb-sprites (keyed by session index, one URI
-  // array per session in sheet order) on first access. Per-sheet row counts stay inline — the
-  // frame math needs them and they're tiny.
-  const sprites: Record<string, string[]> = {};
+  // Hoist each session's recording out of the main payload: it is the single largest blob a
+  // session contributes and is only needed once a surface actually plays it. Keeping it out of the
+  // payload the viewer JSON.parses at boot means first paint never waits on video bytes, and a
+  // reader who never opens a run never pays to parse its video; the viewer resolves it lazily from
+  // #tb-clip-<i> on first access. The clip's timing fields stay inline — they're two numbers and
+  // the playback schedule reads them before anything decides to play. Only embedded bytes move: a
+  // linked recording (a `--link-images` build) is a short URL, and leaving it inline is what lets
+  // the export gate see that the run's frames live on a server without parsing the clip chunk.
+  const clips: Record<string, string> = {};
   list.forEach((s, i) => {
-    if (s.video && s.video.sprites.some((sp) => sp.uri)) {
-      sprites[String(i)] = s.video.sprites.map((sp) => sp.uri);
-      s.video = { ...s.video, sprites: s.video.sprites.map((sp) => ({ ...sp, uri: '' })) };
+    if (s.video && s.video.clip && /^data:/i.test(s.video.clip.uri || '')) {
+      clips[String(i)] = s.video.clip.uri;
+      s.video = { ...s.video, clip: { ...s.video.clip, uri: '' } };
     }
   });
   // Split the document so boot time is independent of report size. The tiny #tb-index chunk (per
   // session: meta + per-call LLM token/cost summaries + the two trace-derived counts the run list
   // shows) and the viewer script come FIRST, so on a streaming multi-megabyte document the browser
   // can boot the viewer and paint the full run index while the heavy per-session chunks
-  // (#tb-session-<i>, #tb-sprites-<i>) are still arriving. The viewer JSON.parses one session
+  // (#tb-session-<i>, #tb-clip-<i>) are still arriving. The viewer JSON.parses one session
   // chunk only when that run is opened, so a 100-session report never parses 100 sessions' bytes
   // to show the list — and no single JSON string ever approaches the JS engine's
   // max-string-length ceiling.
@@ -101,7 +104,7 @@ function buildMultiReportHtml({ generatedAt, shareUrl, allRunsUrl, sessions, sel
   // render time. toInertJson keeps the `</script>`-closes-the-element escape in one place.
   const indexJson = toInertJson({ generatedAt: generatedAt || '', ...(shareUrl ? { shareUrl } : {}), ...(allRunsUrl ? { allRunsUrl } : {}), sessions: indexEntries });
   const sessionChunks = list.map((s, i) => `<script type="application/json" id="tb-session-${i}">${toInertJson(s)}</script>`
-    + (sprites[String(i)] ? `\n<script type="application/json" id="tb-sprites-${i}">${toInertJson(sprites[String(i)])}</script>` : '')).join('\n');
+    + (clips[String(i)] ? `\n<script type="application/json" id="tb-clip-${i}">${toInertJson(clips[String(i)])}</script>` : '')).join('\n');
   // The selector engine rides LAST: it is never on the boot path (evaluated only when an inspector
   // selection commits), so on a streaming document it must not delay the session chunks ahead of it.
   const selectorEngineChunk = selectorEngine && (selectorEngine.js || selectorEngine.gz)

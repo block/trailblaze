@@ -34,6 +34,7 @@ import xyz.block.trailblaze.util.toSnakeCaseIdentifier
 import xyz.block.trailblaze.yaml.TrailArgBinder
 import xyz.block.trailblaze.yaml.TrailblazeYaml
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Whether [yaml] carries recorded steps for the device described by [deviceClassifiers], swallowing
@@ -161,6 +162,13 @@ class RunYamlRequestHandler(
    *  session when a new request arrives and cancels the previous one. */
   @Volatile private var currentRunningSession: TrailblazeSession? = null
 
+  /**
+   * How many requests this handler has entered. A run that has to finish unwinding in the
+   * background compares this against the value it captured to tell whether another run has begun
+   * recording into the process-wide span recorder since — see the timeout cleanup below.
+   */
+  private val requestsEntered = AtomicLong(0)
+
   /** Terminal outcome signalled from inside the launched block to the sync awaiter. */
   private sealed interface Outcome {
     data class Success(
@@ -189,6 +197,9 @@ class RunYamlRequestHandler(
     // recording into the previous run's trace. Those runs trace their own half, as before this
     // field existed.
     ActionTrace.mark(ActionTrace.Boundary.HANDLE_ENTERED)
+    // Counted before this request records anything, so a run still unwinding in the background can
+    // see that it is no longer the only one recording. See the timeout cleanup below.
+    val runGeneration = requestsEntered.incrementAndGet()
     val dispatchTraceContext = TraceContext.parse(request.traceParent)
     if (dispatchTraceContext == null && request.traceParent != null) {
       // A host SENT a traceparent and this device could not place it — version or format skew, not
@@ -296,7 +307,14 @@ class RunYamlRequestHandler(
           backgroundScope.launch {
             job.cancelAndJoin()
           }
-          // Send end log for the interrupted (previous) session with cancellation status
+          // Send end log for the interrupted (previous) session with cancellation status.
+          //
+          // The ONE terminal path here that deliberately does NOT go through the rule's exporting
+          // wrapper: this session's replacement already emitted its start log above, so the
+          // process-wide span recorder no longer holds only the interrupted run's spans. Exporting
+          // now would file whatever is buffered under the OLD session id and drain it, costing the
+          // run that is just starting its whole trace. An interrupted run losing its spans is the
+          // cheaper of the two losses.
           if (previousSession != null) {
             sessionManager.endSession(
               session = previousSession,
@@ -442,10 +460,13 @@ class RunYamlRequestHandler(
 
           if (request.config.sendSessionEndLog) {
             // Terminal frame on success — the JUnit teardown hook that would do this
-            // (TrailblazeLoggingRule.afterTestExecution) never fires on this RPC path.
+            // (TrailblazeLoggingRule.afterTestExecution) never fires on this RPC path. Ending
+            // through the rule rather than the session manager is what writes trace.json before
+            // the terminal status: followers treat that status as "run complete" and rebuild their
+            // payload on it, so a trace exported afterwards is a trace nobody reads.
             loggingRule.captureFinalScreenshot(finalSession)
-            sessionManager.endSession(
-              session = finalSession,
+            loggingRule.endSession(
+              startedSession = finalSession,
               isSuccess = true,
             )
           } else {
@@ -488,8 +509,8 @@ class RunYamlRequestHandler(
             // SessionStatus.Ended.Failed.exceptionMessage keeps the verbatim wedge signature
             // for the host's session-status matcher (PR #4119). The typed tag below is the
             // additive structured signal, not a replacement for that text.
-            sessionManager.endSession(
-              session = session,
+            loggingRule.endSession(
+              startedSession = session,
               isSuccess = false,
               exception = e,
             )
@@ -546,13 +567,28 @@ class RunYamlRequestHandler(
               ),
             )
             if (request.config.sendSessionEndLog) {
-              sessionManager.endSession(
-                session = session,
-                endedStatus = SessionStatus.Ended.Cancelled(
-                  durationMs = timeoutTimeMs - startTimeMs,
-                  cancellationMessage = timeoutMessage,
-                ),
+              val endedStatus = SessionStatus.Ended.Cancelled(
+                durationMs = timeoutTimeMs - startTimeMs,
+                cancellationMessage = timeoutMessage,
               )
+              // This cleanup joins a cancelled job, so it runs after the timeout response has
+              // already gone back and another request can have arrived and begun recording. The
+              // span recorder is process-wide and exporting DRAINS it, so ending through the rule
+              // then would file the live run's buffered spans under this session id and take them
+              // off the run that is still going. Once another request has entered, end without
+              // exporting — the same trade the replacement path above makes, and the same choice:
+              // the run that already timed out loses its spans rather than the live one.
+              if (requestsEntered.get() == runGeneration) {
+                loggingRule.endSession(
+                  startedSession = session,
+                  endedStatus = endedStatus,
+                )
+              } else {
+                sessionManager.endSession(
+                  session = session,
+                  endedStatus = endedStatus,
+                )
+              }
             }
           }
           // Shape #5: a timeout exits via cancellation, so the launched-job catch never
@@ -608,8 +644,8 @@ class RunYamlRequestHandler(
       // cancellation instead of recording a failed session. Mirrors the launched-job catch above.
       throw e
     } catch (e: Exception) {
-      sessionManager.endSession(
-        session = session,
+      loggingRule.endSession(
+        startedSession = session,
         isSuccess = false,
         exception = e,
       )

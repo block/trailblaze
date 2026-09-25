@@ -233,10 +233,13 @@ object UnifiedRecordingWriter {
 
   /**
    * True when the unified trail this save-back would write ([unifiedRecordingTarget]) already
-   * carries a non-empty recording for [classifier]'s slot (in any step or the trailhead) — so a
-   * non-self-heal re-run can skip rather than replace it. False when the file is absent
-   * (greenfield), unreadable, or the slot has no recording yet.
+   * carries a non-empty recording for [classifier]'s exact slot (in any step or the trailhead).
+   * False when the file is absent (greenfield), unreadable, or the slot has no recording yet.
    */
+  @Deprecated(
+    "Checks the exact slot only, so a device replaying a broader key (an android-phone run of an " +
+      "android: recording) reads as unrecorded. Use unifiedTrailFullyRecordedForDevice.",
+  )
   fun unifiedClassifierAlreadyRecorded(trailFileOrDir: File, classifier: String): Boolean {
     val unifiedFile = unifiedRecordingTarget(trailFileOrDir) ?: return false
     if (!unifiedFile.isFile) return false
@@ -245,6 +248,49 @@ object UnifiedRecordingWriter {
     val stepHit = unified.trail.any { it.recordings[classifier]?.isNotEmpty() == true }
     val trailheadHit = unified.trailhead?.recordings?.get(classifier)?.isNotEmpty() == true
     return stepHit || trailheadHit
+  }
+
+  /**
+   * True when a run on this device replays EVERY step of the unified trail this save-back would
+   * write ([unifiedRecordingTarget]) from a recording, so the run had nothing new to record.
+   *
+   * Resolution is closest-wins through the device's classifier chain exactly as the executor
+   * resolves it ([UnifiedTrailAdapter.describeRecordingResolution]), not by the device's exact
+   * slot: an `android-phone` run of a trail recorded under `android:` replayed that leg, and
+   * writing an `android-phone` copy of it would only duplicate it.
+   *
+   * Every step, not any step: a hybrid trail — one whose broken step had its recording removed so
+   * the AI re-drives it — is not recorded yet, and saving is how that step gets its new recording.
+   * `verify:` steps count too: the AI's assertion records its tools like any step's. Only
+   * `recordable: false` steps are exempt — they are always AI and the merge never records them, so
+   * counting them would rewrite the trail on every run.
+   *
+   * [deviceClassifiers] is the broad-first segment list a device reports (`[android, phone]`);
+   * [selectedDeviceConfiguration] is the multi-device configuration the session bound, if any.
+   * False when the file is absent (greenfield), unreadable, doesn't declare
+   * [selectedDeviceConfiguration], or a recordable step still runs on the AI. A trail whose every
+   * step is `recordable: false` answers `true`: there is nothing a save could add.
+   */
+  fun unifiedTrailFullyRecordedForDevice(
+    trailFileOrDir: File,
+    deviceClassifiers: List<String>,
+    selectedDeviceConfiguration: String?,
+  ): Boolean {
+    val unifiedFile = unifiedRecordingTarget(trailFileOrDir) ?: return false
+    if (!unifiedFile.isFile) return false
+    return runCatching {
+      val unified = createTrailblazeYaml().decodeUnifiedTrail(unifiedFile.readText())
+      val resolution = UnifiedTrailAdapter.describeRecordingResolution(
+        unified,
+        deviceClassifiers.map { TrailblazeDeviceClassifier(it) },
+        selectedDeviceConfiguration,
+      )
+      val needsRecording = resolution.steps.filter { step ->
+        step.stepIndex?.let { unified.trail[it].recordable } ?: true
+      }
+      // A trail of only exempt steps has nothing to record, so it is complete.
+      needsRecording.all { it.resolvedClassifier != null }
+    }.getOrDefault(false)
   }
 
   /** Outcome of a [mergeIntoUnified] read-merge-write. */

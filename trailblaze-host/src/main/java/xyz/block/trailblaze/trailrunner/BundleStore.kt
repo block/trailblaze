@@ -8,6 +8,7 @@ import java.io.IOException
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
+import xyz.block.trailblaze.yaml.string
 
 /**
  * On-disk operations for **trail bundles**. A bundle is simply a library folder that contains a
@@ -28,7 +29,7 @@ internal object BundleStore {
     val blaze = File(dir, BLAZE_FILE)
     val base = TrailDetailBuilder.build(root, blaze)
     val config = runCatching { createTrailblazeYaml().extractTrailConfig(blaze.readText()) }.getOrNull()
-    val objective = config?.metadata?.get("objective")
+    val objective = config?.metadata?.string("objective")
     val variants = variantFiles(dir).mapNotNull { f ->
       runCatching {
         val yaml = f.readText()

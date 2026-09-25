@@ -17,6 +17,7 @@ import xyz.block.trailblaze.yaml.createTrailblazeYaml
 import xyz.block.trailblaze.yaml.unified.UnifiedTrailTargets
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
+import xyz.block.trailblaze.yaml.TrailMetadataValue
 
 /**
  * Represents a trail (test case) identified by its directory path.
@@ -82,9 +83,9 @@ data class Trail(
   /**
    * Returns merged metadata from all variants (default variant takes precedence).
    */
-  val metadata: Map<String, String>
+  val metadata: Map<String, TrailMetadataValue>
     get() {
-      val result = mutableMapOf<String, String>()
+      val result = mutableMapOf<String, TrailMetadataValue>()
       // Add metadata from all variants (later ones won't override earlier)
       variants.forEach { variant ->
         variant.config?.metadata?.forEach { (key, value) ->

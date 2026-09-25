@@ -1,4 +1,4 @@
-// Behavioral contracts for the cross-run trail matrix: the Trail view's join of the same authored
+// Behavioral contracts for the cross-run trail matrix: the trail tabs' join of the same authored
 // trail across several devices. Alignment is positional (step number), timing comes from each
 // lane's own clock, and frame selection matches the Lightbox's rules.
 import { describe, expect, test } from "bun:test";
@@ -216,7 +216,7 @@ describe("buildTrailMatrix", () => {
   test("a crashed run's step reads failed even though no objective recorded the failure", () => {
     // A crash logs no Complete bookend, so every objective row stays ok and only the tool row that
     // died is failed. Without the run's failure anchor the step it died in paints green — the run
-    // reads as failed in the index while the Trail view shows nothing wrong anywhere.
+    // reads as failed in the index while the trail tabs show nothing wrong anywhere.
     const trace = [
       row(1, { objective: true, trailhead: true, label: "Prepare" }),
       row(2, {}),
@@ -407,7 +407,7 @@ describe("traceDeviceLanes", () => {
   });
 });
 
-// ── Which trails a document can offer a Trail view for ────────────────────────────────────────
+// ── Which trails a document can offer the trail projections for ───────────────────────────────
 // The view used to be all-or-nothing per DOCUMENT: a report holding more than one trail offered it
 // for none of them, even when a trail inside it had run on several devices. These pin the per-trail
 // rule that replaced it.

@@ -7,7 +7,7 @@ import xyz.block.trailblaze.util.Console
 /**
  * Minimal per-stage wall-clock timing for report generation. Every stage emits one
  * `[report-timing] <stage>: <ms>ms` line via [Console.log] so report wall-clock can be
- * attributed to parsing vs sprite extraction vs image compression vs the bun subprocess.
+ * attributed to parsing vs image compression vs the bun subprocess.
  * Durations come from [TimeSource.Monotonic], so they can't be skewed by wall-clock adjustments.
  */
 object ReportTiming {

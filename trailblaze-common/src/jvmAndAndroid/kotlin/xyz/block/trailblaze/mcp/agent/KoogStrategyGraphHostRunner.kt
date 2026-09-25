@@ -497,8 +497,8 @@ internal fun verifyEvidenceDisabledFromEnv(): Boolean =
  * CI / device, so a regression on one driver can't silently affect another. A driver not listed keeps
  * the full tool surface on verify steps (the pre-scoping behavior).
  *
- * Currently covers the Android on-device drivers (validated on-device) plus the web (Playwright) and
- * Revyl cloud drivers. Compose and the iOS drivers also have driver-aware verify surfaces now; add
+ * Currently covers the Android on-device accessibility driver (validated on-device) plus the web
+ * (Playwright) and Revyl cloud drivers. Compose and the iOS drivers also have driver-aware verify surfaces now; add
  * them here once their verify scoping is validated on the matching pipeline.
  *
  * Deliberately distinct from `TrailblazeToolRepo.KOOG_INSPECTION_DRIVERS` (which gates the read-only
@@ -506,7 +506,6 @@ internal fun verifyEvidenceDisabledFromEnv(): Boolean =
  */
 internal val VERIFY_SCOPE_DRIVERS: Set<TrailblazeDriverType> = setOf(
   TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
-  TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
   TrailblazeDriverType.PLAYWRIGHT_NATIVE,
   TrailblazeDriverType.PLAYWRIGHT_ELECTRON,
   TrailblazeDriverType.REVYL_ANDROID,

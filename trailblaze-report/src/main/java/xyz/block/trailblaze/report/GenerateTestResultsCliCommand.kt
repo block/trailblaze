@@ -367,6 +367,7 @@ open class GenerateTestResultsCliCommand(
             logs_zip_filename = hostCiContext.logs_zip_filename,
             priority = sessionInfo.trailConfig?.priority,
             accessibility_truncation = AccessibilityTruncationSummary.fromLogs(logs),
+            trail_id = sessionInfo.trailConfig?.id,
           )
         )
       } catch (e: Exception) {

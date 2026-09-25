@@ -6,9 +6,55 @@ import picocli.CommandLine.Option
 import xyz.block.trailblaze.devices.TrailblazeDevicePort
 import xyz.block.trailblaze.ui.TrailblazeDesktopUtil
 import xyz.block.trailblaze.ui.TrailblazePortManager
+import xyz.block.trailblaze.ui.DESKTOP_GUI_READY_FILE_ENV_VAR
+import xyz.block.trailblaze.ui.WINNER_SHOW_WINDOW_POLL_MS
+import xyz.block.trailblaze.ui.WINNER_SHOW_WINDOW_WAIT_MS
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.util.canRunDesktopGui
+import java.io.File
+import java.nio.file.Files
 import java.util.concurrent.Callable
 import kotlin.time.Duration.Companion.seconds
+
+internal fun trailRunnerLaunchProcessBuilder(launcher: File, port: Int): ProcessBuilder =
+  ProcessBuilder(launcher.absolutePath, "trailrunner").apply {
+    environment()[TrailblazePortManager.HTTP_PORT_ENV_VAR] = port.toString()
+    inheritIO()
+  }
+
+internal sealed interface DesktopGuiStartupResult {
+  data object Ready : DesktopGuiStartupResult
+
+  data class Exited(val exitCode: Int) : DesktopGuiStartupResult
+
+  data object TimedOut : DesktopGuiStartupResult
+}
+
+internal fun waitForDesktopGuiStartup(
+  isWindowReady: () -> Boolean,
+  isSpawnAlive: () -> Boolean,
+  spawnExitCode: () -> Int,
+  maxWaitMs: Long = WINNER_SHOW_WINDOW_WAIT_MS,
+  pollIntervalMs: Long = WINNER_SHOW_WINDOW_POLL_MS,
+  nowMs: () -> Long = System::currentTimeMillis,
+  sleep: (Long) -> Unit = Thread::sleep,
+): DesktopGuiStartupResult {
+  val deadline = nowMs() + maxWaitMs
+  while (true) {
+    if (isWindowReady()) return DesktopGuiStartupResult.Ready
+    if (!isSpawnAlive()) {
+      return if (isWindowReady()) {
+        DesktopGuiStartupResult.Ready
+      } else {
+        DesktopGuiStartupResult.Exited(spawnExitCode())
+      }
+    }
+
+    val remainingMs = deadline - nowMs()
+    if (remainingMs <= 0) return DesktopGuiStartupResult.TimedOut
+    sleep(minOf(pollIntervalMs, remainingMs))
+  }
+}
 
 /**
  * Launch the legacy desktop app, opt in to Trail Runner, stop the daemon, or check its status.
@@ -108,8 +154,7 @@ open class AppCommand : Callable<Int> {
       return TrailblazeExitCode.INFRA_FAILED.code
     }
     return try {
-      val launcherExitCode = ProcessBuilder(launcher.absolutePath, "trailrunner")
-        .inheritIO()
+      val launcherExitCode = trailRunnerLaunchProcessBuilder(launcher, parent.getEffectivePort())
         .start()
         .waitFor()
       if (launcherExitCode == 0) {
@@ -149,6 +194,7 @@ open class AppCommand : Callable<Int> {
 
     // Single DaemonClient instance for all checks in this method.
     return DaemonClient(port = port).use { daemon ->
+      var attachingDesktopGui = false
       // If already running, show window or report status
       if (daemon.isRunningBlocking()) {
         if (daemon.showWindowBlocking().success) {
@@ -159,6 +205,12 @@ open class AppCommand : Callable<Int> {
         // continue into the normal foreground child launch; launchDesktop will attach the GUI
         // to the existing server instead of attempting to bind a second one.
         Console.log("Trailblaze server is running. Starting desktop GUI...")
+        attachingDesktopGui = true
+      }
+
+      if (attachingDesktopGui && !canRunDesktopGui()) {
+        Console.log("Desktop GUI not available on this platform — Trailblaze daemon remains running on port $port.")
+        return@use TrailblazeExitCode.SUCCESS.code
       }
 
       // Find the launcher script to spawn as a background process
@@ -180,16 +232,75 @@ open class AppCommand : Callable<Int> {
       Console.log("Starting Trailblaze${if (headless) " daemon" else ""}...")
       Console.log("Daemon log: ${daemonLogFile.absolutePath}")
       val spawnArgv = daemonSpawnArgv(launcher, foreground = true, headless = headless)
+      val desktopGuiReadyDir = try {
+        if (attachingDesktopGui) {
+          Files.createTempDirectory("trailblaze-desktop-ready-").toFile()
+        } else {
+          null
+        }
+      } catch (e: Exception) {
+        Console.error("Failed to prepare desktop GUI startup: ${e.message}")
+        return@use TrailblazeExitCode.INFRA_FAILED.code
+      }
+      val desktopGuiReadyFile = desktopGuiReadyDir?.resolve("ready")
       val child = try {
         val pb = ProcessBuilder(spawnArgv)
         if (port != TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTP_PORT) {
           pb.environment()[TrailblazePortManager.HTTP_PORT_ENV_VAR] = port.toString()
         }
+        desktopGuiReadyFile?.let { readyFile ->
+          pb.environment()[DESKTOP_GUI_READY_FILE_ENV_VAR] = readyFile.absolutePath
+        }
         pb.redirectOutput(ProcessBuilder.Redirect.appendTo(daemonLogFile))
         pb.redirectError(ProcessBuilder.Redirect.appendTo(daemonLogFile))
         pb.start()
       } catch (e: Exception) {
+        desktopGuiReadyFile?.delete()
+        desktopGuiReadyDir?.delete()
         Console.error("Failed to start: ${e.message}")
+        return@use TrailblazeExitCode.INFRA_FAILED.code
+      }
+
+      if (attachingDesktopGui) {
+        Console.appendInfo("Waiting for Trailblaze desktop GUI to start")
+        val startupResult = try {
+          waitForDesktopGuiStartup(
+            isWindowReady = {
+              desktopGuiReadyFile?.isFile == true || daemon.showWindowBlocking().success
+            },
+            isSpawnAlive = { child.isAlive },
+            spawnExitCode = { child.exitValue() },
+          )
+        } catch (e: InterruptedException) {
+          Thread.currentThread().interrupt()
+          desktopGuiReadyFile?.delete()
+          desktopGuiReadyDir?.delete()
+          Console.info("")
+          Console.error("Interrupted while waiting for the Trailblaze desktop GUI to start.")
+          return@use TrailblazeExitCode.INFRA_FAILED.code
+        }
+        desktopGuiReadyFile?.delete()
+        desktopGuiReadyDir?.delete()
+        Console.info("")
+        when (startupResult) {
+          DesktopGuiStartupResult.Ready -> {
+            Console.log("Trailblaze desktop GUI started on port $port.")
+            return@use TrailblazeExitCode.SUCCESS.code
+          }
+          is DesktopGuiStartupResult.Exited -> {
+            Console.error(
+              "Trailblaze desktop GUI exited before its window became ready " +
+                "(exit code ${startupResult.exitCode}).",
+            )
+          }
+          DesktopGuiStartupResult.TimedOut -> {
+            Console.error(
+              "Trailblaze desktop GUI did not become ready within " +
+                "${WINNER_SHOW_WINDOW_WAIT_MS / 1000}s.",
+            )
+          }
+        }
+        Console.error("Daemon log: ${daemonLogFile.absolutePath}")
         return@use TrailblazeExitCode.INFRA_FAILED.code
       }
 

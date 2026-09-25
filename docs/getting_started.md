@@ -77,8 +77,9 @@ cd trailblaze
 
 - `esbuild` — needed only when *running* trailmap-defined scripted tools written in
   TypeScript.
-- `ffmpeg` — needed only for trail video capture and sprite extraction. Trails still run
-  without it; only the rendered video and sprite-strip outputs are missing.
+- `ffmpeg` — needed only for trail video capture. Trails still run without it; only the
+  session recording is missing. Homebrew's build includes the VP9 encoder the recording
+  (`video.webm`) uses; a build without one records `video.mp4` instead.
 
 ## Connect a Device
 

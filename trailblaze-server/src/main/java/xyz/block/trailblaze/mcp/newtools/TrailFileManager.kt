@@ -24,6 +24,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
 import java.io.File
+import xyz.block.trailblaze.yaml.toTrailMetadata
 
 /**
  * Convert a human trail title to the per-trail directory name used under
@@ -860,7 +861,7 @@ class TrailFileManager(
     val fullMetadata = buildMap {
       metadata?.let { putAll(it) }
       platform?.let { put("platform", it.name) }
-    }.ifEmpty { null }
+    }.ifEmpty { null }?.toTrailMetadata()
 
     // Add config item
     val config = TrailConfig(

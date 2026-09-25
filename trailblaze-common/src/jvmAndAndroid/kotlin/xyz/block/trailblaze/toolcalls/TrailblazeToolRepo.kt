@@ -707,7 +707,6 @@ class TrailblazeToolRepo(
      */
     private val KOOG_INSPECTION_DRIVERS: Set<TrailblazeDriverType> = setOf(
       TrailblazeDriverType.IOS_HOST,
-      TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
       TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
     )
 

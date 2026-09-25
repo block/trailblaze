@@ -6,8 +6,13 @@ import org.junit.Assert.assertTrue
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
 import org.junit.Test
 import xyz.block.trailblaze.cli.CliRunDriverResolution
+import xyz.block.trailblaze.cli.CliRunDriverResolver
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDriverType
+import xyz.block.trailblaze.llm.TrailblazeLlmModels
+import xyz.block.trailblaze.llm.TrailblazeReferrer
+import xyz.block.trailblaze.ui.model.RunYamlRequestFactory
+import xyz.block.trailblaze.ui.models.TrailblazeServerState.SavedTrailblazeAppConfig
 import xyz.block.trailblaze.yaml.TrailConfig
 
 /**
@@ -17,8 +22,8 @@ import xyz.block.trailblaze.yaml.TrailConfig
  * The daemon's `/cli/run` handler and the desktop Run path extract trail config without a device,
  * so a unified trail's per-classifier `devices:` pin arrives at the runner as
  * `RunYamlRequest.driverType = null`. The runner must resolve the pin itself against the connected
- * device's classifiers — when this regressed, the android-instrumentation CLI smoke trails
- * (pinning `ANDROID_ONDEVICE_INSTRUMENTATION`) silently ran on the accessibility driver.
+ * device's classifiers — when this regressed, CLI smoke trails carrying an explicit Android pin
+ * silently ran on whatever the default driver happened to be.
  *
  * A pin naming an unknown driver must resolve to [CliRunDriverResolution.Unrecognized] — never
  * null — so callers fail loud instead of silently falling back to the default driver.
@@ -60,13 +65,13 @@ class DesktopYamlRunnerDriverPinTest {
     val yaml = """
       config:
         devices:
-          android: ANDROID_ONDEVICE_INSTRUMENTATION
+          android: ANDROID_ONDEVICE_ACCESSIBILITY
       trail:
         - step: "Open the Lists tab"
     """.trimIndent()
 
     assertEquals(
-      TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+      TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
       resolvedDriverType(yaml),
     )
   }
@@ -76,14 +81,14 @@ class DesktopYamlRunnerDriverPinTest {
     val yaml = """
       config:
         devices:
-          android: ANDROID_ONDEVICE_ACCESSIBILITY
-          android-phone: ANDROID_ONDEVICE_INSTRUMENTATION
+          android: ANDROID_TEST
+          android-phone: ANDROID_ONDEVICE_ACCESSIBILITY
       trail:
         - step: "Open the Lists tab"
     """.trimIndent()
 
     assertEquals(
-      TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+      TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
       resolvedDriverType(yaml),
     )
   }
@@ -136,12 +141,130 @@ class DesktopYamlRunnerDriverPinTest {
       "message should name the bad value: $message",
       message.contains("'ANDROID_TYPO_DRIVER'"),
     )
-    for (driver in TrailblazeDriverType.entries) {
+    for (driver in TrailblazeDriverType.entries - TrailblazeDriverType.RETIRED_DRIVERS) {
       assertTrue(
         "message should list valid driver ${driver.name}: $message",
         message.contains(driver.name),
       )
     }
+    for (retired in TrailblazeDriverType.RETIRED_DRIVERS) {
+      assertTrue(
+        "message must not offer the retired driver ${retired.name}: $message",
+        !message.contains(retired.name),
+      )
+    }
+  }
+
+  /**
+   * The recovery path for a typo'd `devices:` entry re-walks the map and picks this device's
+   * winning entry out of the ones that DID decode. A retired driver decodes cleanly, so handing
+   * that winner straight back would smuggle it past the retirement check that every other pin
+   * goes through — the run would then die downstream on a missing on-device agent instead of
+   * saying what to re-record.
+   */
+  @Test
+  fun `a retired pin that wins the typo recovery walk is still rejected`() {
+    val yaml = """
+      config:
+        devices:
+          ios: IOS_TYPO_DRIVER
+          android: ANDROID_ONDEVICE_INSTRUMENTATION
+      trail:
+        - step: "Open the Lists tab"
+    """.trimIndent()
+
+    val resolution = DesktopYamlRunner.trailPinnedDriverResolution(yaml, androidPhone)
+    assertTrue(
+      "expected Unrecognized but was $resolution",
+      resolution is CliRunDriverResolution.Unrecognized,
+    )
+    val message = (resolution as CliRunDriverResolution.Unrecognized).message
+    assertTrue(
+      "message should say the driver is retired, not merely unknown: $message",
+      message.contains("retired"),
+    )
+    assertTrue(
+      "message should name the retired driver: $message",
+      message.contains(TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION.name),
+    )
+    assertTrue(
+      "message should name what to use instead: $message",
+      message.contains(TrailblazeDriverType.DEFAULT_ANDROID.name),
+    )
+  }
+
+  /**
+   * The runner has a rung AHEAD of the pin rung: a `RunYamlRequest` that already carries a driver
+   * (the CLI's `--driver`, an MCP on-device tool request built from a persisted setting) short-
+   * circuits pin resolution entirely. It must refuse a retired driver by the SAME resolver, or a
+   * stale request ships to the device and dies there with no mention of what to re-record.
+   */
+  @Test
+  fun `the request rung refuses a retired driver and passes a runnable one`() {
+    for (retired in TrailblazeDriverType.RETIRED_DRIVERS) {
+      val resolution = CliRunDriverResolver.resolve(retired)
+      assertTrue(
+        "expected Unrecognized but was $resolution",
+        resolution is CliRunDriverResolution.Unrecognized,
+      )
+      val message = (resolution as CliRunDriverResolution.Unrecognized).message
+      assertTrue("message should name the retired driver: $message", message.contains(retired.name))
+      assertTrue(
+        "message should name what to use instead: $message",
+        message.contains(TrailblazeDriverType.DEFAULT_ANDROID.name),
+      )
+    }
+
+    // The other half: this rung only REFUSES. Every runnable driver a request can carry passes
+    // through unchanged, so the new check is a no-op for every run that exists today.
+    for (runnable in TrailblazeDriverType.entries - TrailblazeDriverType.RETIRED_DRIVERS) {
+      val resolution = CliRunDriverResolver.resolve(runnable)
+      assertTrue(
+        "expected Resolved for $runnable but was $resolution",
+        resolution is CliRunDriverResolution.Resolved,
+      )
+      assertEquals(runnable, (resolution as CliRunDriverResolution.Resolved).driverType)
+    }
+  }
+
+  /**
+   * The other side of that short-circuit: the desktop Run path must NOT fill the request rung.
+   * Picking a device in the UI is a device choice, not a driver request — when the factory stamped
+   * the device's own driver in, every desktop run arrived with the rung filled, the pin was never
+   * read, and a trail pinned to a retired driver ran on the device's driver instead of refusing.
+   */
+  @Test
+  fun `a desktop UI run leaves the request rung empty so a retired pin still refuses`() {
+    val yaml = """
+      config:
+        devices:
+          android: ANDROID_ONDEVICE_INSTRUMENTATION
+      trail:
+        - step: "Open the Lists tab"
+    """.trimIndent()
+
+    val request = RunYamlRequestFactory(
+      appConfig = SavedTrailblazeAppConfig(selectedTrailblazeDriverTypes = emptyMap()),
+      llmModel = TrailblazeLlmModels.GPT_4O_MINI,
+      effectiveTargetAppId = { null },
+    ).create(
+      // A runnable driver, differing from the pin — the value that used to win silently.
+      device = TrailblazeConnectedDeviceSummary(
+        trailblazeDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
+        instanceId = "emulator-5554",
+        description = "test emulator",
+      ),
+      yaml = yaml,
+      testName = "test",
+      referrer = TrailblazeReferrer.YAML_TAB,
+    )
+
+    assertNull("the desktop request must not pre-empt driver resolution", request.driverType)
+    val resolution = DesktopYamlRunner.trailPinnedDriverResolution(request.yaml, androidPhone)
+    assertTrue(
+      "expected the retired pin to be refused but was $resolution",
+      resolution is CliRunDriverResolution.Unrecognized,
+    )
   }
 
   @Test
@@ -191,13 +314,13 @@ class DesktopYamlRunnerDriverPinTest {
         devices:
           ios: IOS_TYPO_DRIVER
           android:
-            driver: ANDROID_ONDEVICE_INSTRUMENTATION
+            driver: ANDROID_ONDEVICE_ACCESSIBILITY
       trail:
         - step: "Open the Lists tab"
     """.trimIndent()
 
     assertEquals(
-      TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+      TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
       resolvedDriverType(yaml),
     )
   }

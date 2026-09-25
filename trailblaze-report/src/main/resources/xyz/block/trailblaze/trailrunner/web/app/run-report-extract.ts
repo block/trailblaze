@@ -18,6 +18,111 @@ function truncate(s: unknown, n = 60): string {
   return (lastSpace > n * 0.6 ? head.slice(0, lastSpace).replace(/[\s,;:.\-]+$/, '') : head) + '…';
 }
 
+/**
+ * A session's device→host clock offsets in ms, keyed by the tool log's `deviceName`, plus the
+ * session-wide value for logs that carry no usable key.
+ */
+export interface DeviceClockOffsets {
+  byDeviceName: Map<string | null, number>;
+  sessionWideMs: number;
+}
+
+/**
+ * A log timestamp as epoch ms. Trims sub-millisecond digits, which `Date.parse` does not accept
+ * on every engine.
+ */
+function parseLogTimestamp(value: unknown): number | null {
+  if (typeof value !== 'string' || !value) return null;
+  const ms = Date.parse(value.replace(/(\.\d{3})\d+/, '$1'));
+  return Number.isFinite(ms) ? ms : null;
+}
+
+/**
+ * This session's device→host clock offsets, derived from tool logs that both carry the
+ * device-clock marker and were anchored at host ingestion: each anchored log gives
+ * `hostReceivedAt - (timestamp + durationMs)` — the host receives a tool's log just after the tool
+ * finishes, so every sample is the true skew PLUS that upload's latency. The MINIMUM across a
+ * device's samples is used because latency only ever adds: the least-delayed upload is the closest
+ * measurement of pure skew, and a batched upload contributes nothing to a minimum. Per device, not
+ * per session, because a multi-device session binds devices with independent clocks.
+ *
+ * Null when the session has no anchored device-clock tool log — an all-host session, logs written
+ * before the marker existed, or device logs pulled off the device's own disk without ever reaching
+ * host ingestion. Those keep raw timestamps.
+ *
+ * This MIRRORS `deviceClockOffsets()` in `TrailblazeLogClockNormalization.kt`, which every Kotlin
+ * reader shares; the browser runs over raw JSON and can't call it. A change to one derivation
+ * belongs in both, or a session's report and its recording disagree about where a device's steps
+ * sit. It lives here, not in the profiler, because the profiler and the run report both need it
+ * and one derivation that drifts from another is the bug it exists to prevent.
+ */
+function deviceClockOffsets(logs: TrailblazeLogRecord[]): DeviceClockOffsets | null {
+  const samplesByDevice = new Map<string | null, number[]>();
+  for (const log of logs || []) {
+    if (logClass(log) !== 'TrailblazeToolLog' || log.clock !== 'device') continue;
+    const ts = parseLogTimestamp(log.timestamp);
+    const receivedAt = parseLogTimestamp(log.hostReceivedAt);
+    if (ts == null || receivedAt == null) continue;
+    const dur = typeof log.durationMs === 'number' && Number.isFinite(log.durationMs) ? log.durationMs : 0;
+    const key = typeof log.deviceName === 'string' && log.deviceName ? log.deviceName : null;
+    const samples = samplesByDevice.get(key);
+    if (samples) samples.push(receivedAt - (ts + dur));
+    else samplesByDevice.set(key, [receivedAt - (ts + dur)]);
+  }
+  if (!samplesByDevice.size) return null;
+  const byDeviceName = new Map<string | null, number>();
+  let sessionWideMs = Infinity;
+  for (const [key, samples] of samplesByDevice) {
+    const min = Math.min(...samples);
+    byDeviceName.set(key, min);
+    sessionWideMs = Math.min(sessionWideMs, min);
+  }
+  return { byDeviceName, sessionWideMs };
+}
+
+/**
+ * `shiftedMs` as an ISO stamp that still carries `timestamp`'s digits past the millisecond.
+ *
+ * `Date.toISOString()` emits exactly three fractional digits, so re-stamping through a `Date`
+ * erases any sub-millisecond remainder — and that remainder is load-bearing here: the ZIP reader
+ * sorts on it (`sortLogsByTimestamp`) before falling back to feed order, so two tool logs inside
+ * one millisecond would otherwise be ordered by filename. The Kotlin adds whole milliseconds to an
+ * `Instant` and keeps its nanoseconds for the same reason; an offset in whole milliseconds cannot
+ * change the remainder, so carrying it across is the same arithmetic.
+ */
+function withSubMillis(timestamp: string, shiftedMs: number): string {
+  const iso = new Date(shiftedMs).toISOString();
+  const remainder = /\.\d{3}(\d+)/.exec(timestamp);
+  return remainder ? iso.replace(/(\.\d{3})Z$/, `$1${remainder[1]}Z`) : iso;
+}
+
+/**
+ * This session's logs with every device-stamped `timestamp` re-stamped onto the host timeline —
+ * the browser's `normalizedToHostClock`, and the reason any of this exists here: the recording's
+ * window is host-clock (see `AndroidVideoCapture`'s "Clock alignment"), so a reader that places a
+ * step on the recording without normalizing first is off by the whole device skew, which on an
+ * emulator is seconds. A session opened from a ZIP is exactly that reader — its logs come off disk
+ * raw, with no Kotlin pass in front of them.
+ *
+ * Idempotent, like the Kotlin: a re-stamped log's `clock` becomes `host`, so a second pass finds
+ * no device-clock log to derive an offset from and shifts nothing. That is what makes it safe to
+ * apply here as well as on a payload some other reader already normalized. `hostReceivedAt` stays
+ * as the provenance of the shift.
+ */
+function normalizedToHostClock(logs: TrailblazeLogRecord[]): TrailblazeLogRecord[] {
+  const offsets = deviceClockOffsets(logs);
+  if (!offsets) return logs;
+  return logs.map((log) => {
+    if (!log || log.clock !== 'device') return log;
+    const ts = parseLogTimestamp(log.timestamp);
+    if (ts == null) return log;
+    const key = typeof log.deviceName === 'string' && log.deviceName ? log.deviceName : null;
+    const offset = logClass(log) === 'TrailblazeToolLog' ? offsets.byDeviceName.get(key) : undefined;
+    const shifted = ts + (offset ?? offsets.sessionWideMs);
+    return { ...log, timestamp: withSubMillis(log.timestamp as string, shifted), clock: 'host' };
+  });
+}
+
 function logClass(log: TrailblazeLogRecord): string {
   const cls = log.class || '';
   const last = cls.split('.').pop();
@@ -253,7 +358,11 @@ const sameClockCueTs = (
   return driverTs >= spanStart && driverTs <= spanEnd ? driverTs : null;
 };
 
-function extractTrace(logs: TrailblazeLogRecord[]): RawTraceRow[] {
+function extractTrace(rawLogs: TrailblazeLogRecord[]): RawTraceRow[] {
+  // One timeline, one clock. Every stamp below is compared against another — to fold a batch, to
+  // place a step on the recording's host-clock window — so a device-stamped log has to be shifted
+  // before any of that. Idempotent, so a payload a Kotlin reader already normalized is untouched.
+  const logs = normalizedToHostClock(rawLogs || []);
   // Trailblaze writes several log records per logical step; the timeline collapses
   // them so each user-meaningful step shows once:
   //  - an objective logs both a Start and a Complete carrying the same promptStep —
@@ -501,10 +610,14 @@ function extractTrace(logs: TrailblazeLogRecord[]): RawTraceRow[] {
 
     // An LLM-call log that carries no prompt text (e.g. a standalone MCP sampling call) still
     // surfaces as its own timeline row — every LLM call must be reachable from its step. Also
-    // screenshot-less, for the embedded-bytes reason above.
+    // screenshot-less, for the embedded-bytes reason above. An McpSamplingLog is the one log
+    // stamped AFTER its call (LocalLlmSamplingSource takes the clock once the completion is back),
+    // so its row starts a duration earlier than its timestamp, like every other row starts at its
+    // log's instant.
     if (llmAt != null) {
       asserts = new Map(); closeGroup();
-      out.push({ _trace: traceId, label: log.llmRequestLabel || (log.systemPrompt !== undefined ? 'MCP sampling' : 'LLM Request'), _logs: [log], tool: log.modelName ? `llm · ${log.modelName}` : 'agent step', ms: log.durationMs || 0, ok: !err, err, screenshotFile: null, viewHierarchy, ts, llm: llmAt });
+      const rowTs = cls === 'McpSamplingLog' && ts != null ? ts - (log.durationMs || 0) : ts;
+      out.push({ _trace: traceId, label: log.llmRequestLabel || (log.systemPrompt !== undefined ? 'MCP sampling' : 'LLM Request'), _logs: [log], tool: log.modelName ? `llm · ${log.modelName}` : 'agent step', ms: log.durationMs || 0, ok: !err, err, screenshotFile: null, viewHierarchy, ts: rowTs, llm: llmAt });
       continue;
     }
 
@@ -887,7 +1000,8 @@ function llmCacheSavings(usage: any): number {
   return (cached * fullRate) / 1_000_000 - (cached * cachedRate) / 1_000_000;
 }
 
-function extractLlmLogs(logs: TrailblazeLogRecord[]): RawLlmRow[] {
+function extractLlmLogs(rawLogs: TrailblazeLogRecord[]): RawLlmRow[] {
+  const logs = normalizedToHostClock(rawLogs || []); // same one-clock rule as extractTrace
   const rows: RawLlmRow[] = [];
   // Total cost the usage object reports. The logs carry promptCost + completionCost (per-request),
   // not a precomputed totalCost; sum them so the viewer's cost totals match computeUsageSummary
@@ -906,6 +1020,21 @@ function extractLlmLogs(logs: TrailblazeLogRecord[]): RawLlmRow[] {
   const requestTraceIds = new Set(
     logs.filter((l) => (l.llmMessages || l.llmResponse) && l.traceId).map((l) => l.traceId),
   );
+  // Parity anchor: TrailblazeToolCatalog.resolveToolOptions (trailblaze-models). Tool descriptors
+  // are written once per session as a TrailblazeToolCatalogLog and referenced by toolCatalogId,
+  // so reading log.toolOptions directly reports "no tools offered" on every current session and
+  // estimateLlmComp below would size the tool-definition slice of the prompt at zero.
+  // Requires a non-empty descriptor list, so only a catalog log can populate this — a request log
+  // carries a toolCatalogId too, and its inline field is empty by construction.
+  const toolCatalogs = new Map(
+    logs
+      .filter((l) => l.toolCatalogId && Array.isArray(l.toolOptions) && l.toolOptions.length)
+      .map((l) => [l.toolCatalogId, l.toolOptions]),
+  );
+  // Empty (not the legacy inline field) when a referenced catalog is missing, which is what a
+  // partial session looks like — "unknown", and the same thing the Kotlin resolver returns.
+  const toolOptionsOf = (log) =>
+    (log.toolCatalogId ? toolCatalogs.get(log.toolCatalogId) || [] : log.toolOptions);
   // The provider half of the repo's canonical `<provider id>/<model id>` LLM identity (the form
   // `trailblaze config` prints, TrailCommand's "Using LLM:" line uses, and workspace LLM config
   // keys models under). It rides on the log's TrailblazeLlmModel.trailblazeLlmProvider; a log that
@@ -936,7 +1065,7 @@ function extractLlmLogs(logs: TrailblazeLogRecord[]): RawLlmRow[] {
         promptCost: u?.promptCost ?? null,
         completionCost: u?.completionCost ?? null,
         cacheSavings: llmCacheSavings(u),
-        comp: llmCompOf(u, log.llmMessages, log.toolOptions),
+        comp: llmCompOf(u, log.llmMessages, toolOptionsOf(log)),
         totalCost: costOf(u),
         messages: log.llmMessages || [],
         response: parseLlmResponse(log.llmResponse),
@@ -1351,6 +1480,8 @@ function toSessionPayloads({ generatedAt, sessions }: { generatedAt?: string; se
       networkGz: s.networkGz || null,
       events: s.events || null,
       eventsGz: s.eventsGz || null,
+      spans: s.spans || null,
+      spansGz: s.spansGz || null,
       // The bun driver supplies the transcripts pre-packed (inline or gz — packLlmMessages in
       // run-report-cli.ts); the browser/zip paths hand raw llmLogs, so derive them here.
       llmMessages: s.llmMessages !== undefined ? s.llmMessages : (s.llmMessagesGz ? null : extractLlmTranscripts(s.llmLogs)),
@@ -1370,6 +1501,7 @@ function toSessionPayloads({ generatedAt, sessions }: { generatedAt?: string; se
 
 export {
   truncate, logClass, originalYamlFromLogs, yamlRootSection, declaredTrailSteps, localRunAgentPrompt, extractTrace, mergeWebHierarchyBounds,
+  deviceClockOffsets, normalizedToHostClock, parseLogTimestamp,
   toolChildren, describeAction, parseLlmResponse, extractLlmLogs, estimateLlmComp, stepText, toolDetail,
   summarizeToolArgs, describeSelector, slimTraceForShare, slimLlmForShare, toSessionPayloads, traceScreenshotFiles,
   isLlmTurnRow, traceStepCount, rowToolCallCount, traceToolCallCount, extractLlmTranscripts, transcriptCallMessages,

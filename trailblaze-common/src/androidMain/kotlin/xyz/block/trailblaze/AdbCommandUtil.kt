@@ -63,7 +63,17 @@ object AdbCommandUtil {
    */
   private const val SHELL_COMMAND_SLOW_MS = 10_000L
 
-  fun execShellCommand(shellCommand: String): String {
+  /**
+   * @param timeoutMs the read bound for this whole call — the command and, if it answers nothing,
+   *   the liveness probe after it share the one budget. Defaults to [SHELL_COMMAND_TIMEOUT_MS],
+   *   which is sized for a trail's own commands (a `pm clear` that legitimately takes minutes must
+   *   not red a build). A caller whose own deadline is shorter than that should pass it, because
+   *   the read holds the process-wide UiAutomation monitor: giving up on the OUTSIDE leaves the
+   *   monitor held and queues every later device action behind a result nobody is waiting for. The
+   *   background memory sampler is the case in point — see
+   *   `GetMemoryInfoRequest.SHELL_READ_TIMEOUT_MS`.
+   */
+  fun execShellCommand(shellCommand: String, timeoutMs: Long = SHELL_COMMAND_TIMEOUT_MS): String {
     // Redact once, then pass the redacted copy everywhere it is needed: `writeFileAs` carries a
     // file's bytes base64-encoded inside the command line, and logcat is a captured CI artifact —
     // so an unredacted log of that command line is a log of a seeded auth/session file. Redacting
@@ -71,14 +81,28 @@ object AdbCommandUtil {
     // runs on every device action, so it happens once per command rather than once per use.
     val loggableCommand = redactBulkPayloadsForLog(shellCommand)
     Console.log("adb shell $loggableCommand")
-    val output = runShellCommand(shellCommand, loggableCommand)
+    val startedAtMs = SystemClock.elapsedRealtime()
+    val output = runShellCommand(shellCommand, loggableCommand, timeoutMs)
     // A dead UiAutomation connection makes the shell call return "" instead of throwing, so every
     // command looks successful while doing nothing. Empty output is also normal for many commands
     // (`cp`, `input keyevent`), so double-check with a probe that always prints: if even that comes
     // back empty, the connection is wedged — throw so the standard reconnect-and-retry runs.
-    val livenessProbe = "echo $SHELL_LIVENESS_TOKEN"
-    if (output.isEmpty() && !runShellCommand(livenessProbe, livenessProbe).contains(SHELL_LIVENESS_TOKEN)) {
-      throw IllegalStateException(UiAutomationHandleErrors.silentShellWedgeMessage(loggableCommand))
+    //
+    // The probe gets what is LEFT of [timeoutMs], never a second full one: both reads hold the
+    // process-wide UiAutomation monitor, so two bounds would let one call run for twice the
+    // deadline its caller sized — long enough for the background memory sampler's host RPC to
+    // expire while device actions are still queued behind it. A spent budget skips the probe and
+    // returns the empty answer, which is the honest reading for a caller that is out of time; a
+    // wedge that is really there answers "" on the next command too, and that one has its own
+    // budget to probe with.
+    if (output.isEmpty()) {
+      val remainingMs = AndroidShellBounds.remainingAfter(timeoutMs, SystemClock.elapsedRealtime() - startedAtMs)
+      val livenessProbe = "echo $SHELL_LIVENESS_TOKEN"
+      if (remainingMs <= 0) {
+        Console.log("shell read budget (${timeoutMs}ms) spent by `$loggableCommand`; skipping the liveness probe")
+      } else if (!runShellCommand(livenessProbe, livenessProbe, remainingMs).contains(SHELL_LIVENESS_TOKEN)) {
+        throw IllegalStateException(UiAutomationHandleErrors.silentShellWedgeMessage(loggableCommand))
+      }
     }
     return output
   }

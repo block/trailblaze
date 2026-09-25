@@ -8,9 +8,12 @@ import xyz.block.trailblaze.host.recording.EffectiveIosBaguetteVideoConfig
  * ([BaguetteIosVideoCapture]) is used for a run, resolved once per capture-session construction
  * (a persistent daemon picks up a change on the next trail, not mid-session).
  *
- * **Default off** — when neither source opts in, iOS video recording stays on the shipping
- * `xcrun simctl io recordVideo` path ([xyz.block.trailblaze.capture.video.IosVideoCapture]), so
- * merging the baguette recorder does not change any run's behavior until it's explicitly enabled.
+ * **Default off, by decision** — when neither source opts in, iOS video recording stays on
+ * `xcrun simctl io recordVideo` ([xyz.block.trailblaze.capture.video.IosVideoCapture]). That is
+ * the settled arrangement rather than a staging step: simctl tracks the screen to about 13 ms and
+ * its stop-time transcode costs well under a second on a real session, while baguette is installed
+ * on no CI image. The reasoning and measurements live in [BaguetteIosVideoCapture]'s "Why simctl
+ * stays the default"; do not flip this without new evidence recorded there first.
  *
  * Two sources, env-over-config (mirrors [xyz.block.trailblaze.host.StreamScreenshotMode]):
  * - `trailblaze config ios-baguette-video true` — the discoverable, persistent toggle, read via

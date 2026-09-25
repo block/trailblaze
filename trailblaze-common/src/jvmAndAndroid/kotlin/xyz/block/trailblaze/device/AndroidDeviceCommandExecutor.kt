@@ -4,6 +4,7 @@ import java.util.Base64
 import kotlinx.coroutines.CancellationException
 import xyz.block.trailblaze.android.tools.shellEscape
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
+import xyz.block.trailblaze.toolcalls.redactSensitiveValuesIn
 import xyz.block.trailblaze.util.Console
 
 /**
@@ -880,6 +881,13 @@ internal fun wrapShellPipelineForTransport(
 private const val MAX_LOGGED_BASE64_RUN: Int = 512
 
 /**
+ * How much of a decoded trampoline command to print when it held a secret. Generous enough for the
+ * credential-bearing commands this covers (`service call <iface> <code> s16 …`), bounded so a
+ * pathological one can't flood the log.
+ */
+private const val MAX_LOGGED_DECODED_COMMAND: Int = 300
+
+/**
  * The `printf %s <base64>` head of [buildRunAsFileWriteCommand]. Space-separated on purpose: the
  * `${IFS}` spelling belongs to [wrapShellPipelineForTransport]'s trampoline, which encodes *any*
  * command, so matching it here would redact ordinary on-device shell calls too.
@@ -896,18 +904,121 @@ private val LONG_BASE64_RUN_REGEX = Regex("""[A-Za-z0-9+/]{${MAX_LOGGED_BASE64_R
 private val SHELL_LESS_TRAMPOLINE_REGEX =
   Regex("""(printf\$\{IFS\}%s\$\{IFS\})([A-Za-z0-9+/]+={0,2})""")
 
-/** Whether a trampoline token decodes to a [buildRunAsFileWriteCommand]-shaped write. */
-private fun carriesFileBody(trampolineToken: String): Boolean = try {
-  BASE64_FILE_BODY_REGEX.containsMatchIn(
-    Base64.getDecoder().decode(trampolineToken).toString(Charsets.UTF_8),
-  )
+/**
+ * The inner command a trampoline token carries, or `""` when the token is not decodable — the
+ * regex matches base64's alphabet but not its length/padding rules, so an arbitrary run of those
+ * characters can still fail to decode. Empty means "nothing to judge", which every caller treats
+ * as "leave the token alone".
+ */
+private fun decodeTrampolineToken(trampolineToken: String): String = try {
+  Base64.getDecoder().decode(trampolineToken).toString(Charsets.UTF_8)
 } catch (_: IllegalArgumentException) {
-  false
+  ""
+}
+
+/** Whether a decoded trampoline token is a [buildRunAsFileWriteCommand]-shaped write. */
+private fun carriesFileBody(decodedInnerCommand: String): Boolean =
+  BASE64_FILE_BODY_REGEX.containsMatchIn(decodedInnerCommand)
+
+/**
+ * [redactSensitiveValuesIn], under the name this file's log guards use. One implementation for
+ * the log payload, the transport log line and a tool's own echoes — the longest-first ordering is
+ * subtle enough that a second copy would drift.
+ */
+internal fun redactSecretLiteralsForLog(text: String, secrets: Collection<String>): String =
+  redactSensitiveValuesIn(text, secrets)
+
+/**
+ * Every spelling a secret can wear by the time it reaches a log line, so a raw-literal scrub still
+ * finds it.
+ *
+ * Two forms, because [shellEscape] runs *before* anything is logged: a value with an embedded
+ * single quote reaches the command line as `pa'\''ss`, which does not contain the literal `pa'ss`.
+ * The escaped form registered here is the quote-doubled body *without* [shellEscape]'s surrounding
+ * quotes, so masking it leaves the log's quoting structure intact (`'<redacted>'`).
+ *
+ * For a secret with no single quote the two forms are identical and collapse.
+ */
+internal fun secretLogForms(secrets: Collection<String>): List<String> =
+  secrets.filter { it.isNotBlank() }
+    .flatMap { listOf(it, it.replace("'", "'\\''")) }
+    .distinct()
+
+/**
+ * Literal secret values that must not reach a device shell-command log while a call carrying one is
+ * in flight.
+ *
+ * Both transports log the command they are about to run — [AndroidHostAdbUtils.execAdbShellCommand]
+ * on the host and `AdbCommandUtil.execShellCommand` on device — and both go through
+ * [redactBulkPayloadsForLog] to do it. That guard only models *bulk* payloads (base64 file bodies)
+ * and a fixed set of known auth flags, so a caller-supplied credential passed as an ordinary argv
+ * element is logged verbatim by every normal run, before any tool-level scrubbing of the *result*
+ * gets a chance to run.
+ *
+ * A registry rather than an extra parameter threaded through the executor: the leak is in a logger
+ * several layers below the caller, on both sides of an `expect`/`actual` boundary, and it also
+ * reaches text the caller never renders (a wedge-detection message, an exception that quotes the
+ * command back). Registering the value once, around the dispatch, closes all of those at the single
+ * point they share.
+ *
+ * Scoped to the call, not the process: [withSecretsRedacted] removes what it added in a `finally`,
+ * and registrations are reference-counted so a nested or concurrent dispatch dropping its own
+ * secret never un-masks one that is still in flight.
+ */
+internal object DeviceCommandLogSecrets {
+  private val active = LinkedHashMap<String, Int>()
+
+  /**
+   * Runs [block] with every form of every value in [secrets] masked out of device shell-command
+   * logs. Inline so a `suspend` caller can dispatch from inside the lambda.
+   */
+  internal inline fun <T> withSecretsRedacted(secrets: List<String>, block: () -> T): T {
+    val forms = registerSecretForms(secrets)
+    return try {
+      block()
+    } finally {
+      unregisterSecretForms(forms)
+    }
+  }
+
+  /** Masks any currently-registered secret in [text]. Returns [text] unchanged when none is. */
+  internal fun scrub(text: String): String {
+    val registered = synchronized(active) { if (active.isEmpty()) return text else active.keys.toList() }
+    return redactSecretLiteralsForLog(text, registered)
+  }
+
+  /** Whether [text] holds a currently-registered secret. */
+  internal fun carriesActiveSecret(text: String): Boolean = scrub(text) != text
+
+  /**
+   * Adds the log forms of [secrets] and returns exactly what was added, so the matching
+   * [unregisterSecretForms] removes the same list even if the registry changed meanwhile.
+   *
+   * Public-by-necessity for [withSecretsRedacted]'s inlining; call that instead.
+   */
+  internal fun registerSecretForms(secrets: List<String>): List<String> {
+    val forms = secretLogForms(secrets)
+    if (forms.isNotEmpty()) {
+      synchronized(active) { forms.forEach { active[it] = (active[it] ?: 0) + 1 } }
+    }
+    return forms
+  }
+
+  /** Drops one registration of each form in [forms]. Public-by-necessity, as above. */
+  internal fun unregisterSecretForms(forms: List<String>) {
+    if (forms.isEmpty()) return
+    synchronized(active) {
+      forms.forEach { form ->
+        val remaining = (active[form] ?: 0) - 1
+        if (remaining <= 0) active.remove(form) else active[form] = remaining
+      }
+    }
+  }
 }
 
 /**
- * Strips base64 file bodies out of a device shell command before it is logged or embedded in an
- * error message.
+ * Strips base64 file bodies — and any in-flight [DeviceCommandLogSecrets] value — out of a device
+ * shell command before it is logged or embedded in an error message.
  *
  * [writeFileAs] carries the file's bytes base64-encoded *inside the command line*, so any log of
  * that command line is a log of the file. That matters because the bodies callers seed are exactly
@@ -915,32 +1026,51 @@ private fun carriesFileBody(trampolineToken: String): Boolean = try {
  * logs precisely because seeded auth/session files carry live tokens, and shell-command logs land
  * in the same CI artifacts.
  *
- * Three rules, because the payload takes three shapes:
+ * Four rules, because the secret takes four shapes:
  *  - the `printf %s <b64> | base64 -d > path` body itself, redacted at any length;
  *  - a [wrapShellPipelineForTransport] trampoline token whose *decoded* inner command is one of
- *    those writes. On the shell-less transport the whole inner command — body included — becomes
- *    one opaque token, so the first rule can't see in. Decoding is what makes this size-independent:
- *    a 30-byte secret produces a ~230-character token that no length threshold would catch;
+ *    those writes, or carries a registered secret. On the shell-less transport the whole inner
+ *    command — body included — becomes one opaque token, so the literal rules can't see in.
+ *    Decoding is what makes this size-independent: a 30-byte secret produces a ~230-character
+ *    token that no length threshold would catch;
  *  - a base64 run longer than [MAX_LOGGED_BASE64_RUN], as a backstop for any bulk payload that
- *    reaches a log by a shape the first two rules don't model.
+ *    reaches a log by a shape the other rules don't model;
+ *  - a value registered with [DeviceCommandLogSecrets] — a credential the caller passed as an
+ *    ordinary argv element, which no pattern here could recognize on its own — scrubbed as a plain
+ *    literal while the call carrying it is in flight. Applied LAST, once the base64 shapes above
+ *    are gone, so it can never split a token (see the body).
  *
  * Ordinary trampolined commands stay readable — the point of decoding rather than blanket-redacting
  * is that `am force-stop com.example.app` is still legible in an on-device shell log.
- *
- * This is a bulk-payload guard, not a general secret scrubber: it targets file bodies, not secrets
- * a caller passes as ordinary command arguments.
  */
 internal fun redactBulkPayloadsForLog(command: String): String = command
   .replace(BASE64_FILE_BODY_REGEX) { "${it.groupValues[1]}<redacted ${it.groupValues[2].length}-char base64 payload>" }
   .replace(SHELL_LESS_TRAMPOLINE_REGEX) { match ->
     val token = match.groupValues[2]
-    if (carriesFileBody(token)) {
-      "${match.groupValues[1]}<redacted ${token.length}-char base64 file-write payload>"
-    } else {
-      match.value
+    // Decoded once and judged twice: this runs on every device action, and the original guard
+    // already paid for one decode per token.
+    val innerCommand = decodeTrampolineToken(token)
+    when {
+      carriesFileBody(innerCommand) ->
+        "${match.groupValues[1]}<redacted ${token.length}-char base64 file-write payload>"
+      // The token decodes to a command holding a live credential. Show the decoded command with
+      // just the credential masked, rather than blanking the token: this transport packs EVERY
+      // command, so blanking would cost the reader the whole command — the program, the service,
+      // the flags — on exactly the calls that are hardest to debug. Rendered as plaintext and
+      // labelled, not re-encoded, so nobody mistakes it for a token that would replay.
+      DeviceCommandLogSecrets.carriesActiveSecret(innerCommand) ->
+        "${match.groupValues[1]}<base64 of: ${DeviceCommandLogSecrets.scrub(innerCommand).take(MAX_LOGGED_DECODED_COMMAND)}>"
+      else -> match.value
     }
   }
   .replace(LONG_BASE64_RUN_REGEX) { "<redacted ${it.value.length}-char base64 payload>" }
+  // The literal scrub runs LAST, after every base64 shape has been recognised and replaced. A
+  // registered value — a bare `1` from the same argv, say — can occur by chance inside a token's
+  // base64 alphabet; replacing it there first splits the token, the trampoline rule then matches
+  // only the prefix, and the tail survives as base64 that decodes to the rest of the inner command,
+  // credential included. Scrubbing whole text afterwards still catches a credential that appears
+  // as plaintext, which is the only shape it is meant for.
+  .let { DeviceCommandLogSecrets.scrub(it) }
 
 /**
  * Executes [innerCommand] — a full shell expression (pipes, `&&`, redirection, multi-word

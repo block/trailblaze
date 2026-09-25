@@ -9,14 +9,17 @@ import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
 import xyz.block.trailblaze.logs.model.TraceId
+import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
 import xyz.block.trailblaze.toolcalls.DelegatingTrailblazeTool
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.SensitiveArgsTrailblazeTool
+import xyz.block.trailblaze.toolcalls.SensitiveValuesTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.buildLogSafeResolvedPayload
 import xyz.block.trailblaze.toolcalls.scrubSensitivePayload
 import xyz.block.trailblaze.toolcalls.scrubSensitiveValues
 import xyz.block.trailblaze.toolcalls.withSensitiveArgsRedacted
+import xyz.block.trailblaze.toolcalls.withSensitiveValuesRedacted
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.getIsRecordableFromAnnotation
@@ -94,12 +97,17 @@ fun TrailblazeAgentContext.logToolExecution(
   // [SensitiveArgsTrailblazeTool], so its payload is additionally masked with the EXECUTED
   // instance's declared sensitive args (`toLogPayload()` only self-redacts).
   val rawPayload = if (recordedToolOverride == null) {
-    rawTool?.toLogPayload()?.withSensitiveArgsRedacted(tool.sensitiveArgNamesOrEmpty())
+    rawTool?.toLogPayload()?.withExecutedToolSecretsRedacted(tool)
   } else {
     null
   }
+  // Value masking runs AGAIN after resolution. The raw payload holds the authored `{{token}}`; if
+  // that token names ordinary (non-sensitive) memory, resolution writes the real value into the
+  // resolved payload — after the masking above already ran and found nothing. The executed
+  // instance knows the resolved value, so masking with it here is what keeps a credential that
+  // arrived via memory out of the persisted log.
   val resolvedPayload = if (rawPayload != null) {
-    buildLogSafeResolvedPayload(rawPayload, memory)
+    buildLogSafeResolvedPayload(rawPayload, memory).withSensitiveValuesRedacted(tool.sensitiveValuesOrEmpty())
   } else {
     recordedTool.toLogPayload()
   }
@@ -153,6 +161,18 @@ fun TrailblazeAgentContext.logToolExecution(
  */
 private fun TrailblazeTool.sensitiveArgNamesOrEmpty(): Set<String> =
   (this as? SensitiveArgsTrailblazeTool)?.sensitiveArgNames ?: emptySet()
+
+private fun TrailblazeTool.sensitiveValuesOrEmpty(): Collection<String> =
+  (this as? SensitiveValuesTrailblazeTool)?.sensitiveValues ?: emptyList()
+
+/**
+ * Masks an authored payload with everything the EXECUTED instance declares secret — arg names and
+ * literal values alike. Both kinds, because they close different holes: a name blanks a whole
+ * field, a value scrubs one element out of a structured field and leaves the rest legible.
+ */
+private fun OtherTrailblazeTool.withExecutedToolSecretsRedacted(executed: TrailblazeTool): OtherTrailblazeTool =
+  withSensitiveArgsRedacted(executed.sensitiveArgNamesOrEmpty())
+    .withSensitiveValuesRedacted(executed.sensitiveValuesOrEmpty())
 
 /**
  * Kill-switch for the nested-dispatch recording filter: forces `isRecordable` back to the tool's
@@ -212,9 +232,10 @@ fun TrailblazeAgentContext.logToolExecution(
   val session = sessionProvider.invoke()
   // Same masking rationale as the context-carrying overload: the authored wrapper doesn't
   // implement [SensitiveArgsTrailblazeTool], so apply the executed instance's declared args.
-  val rawPayload = rawTool?.toLogPayload()?.withSensitiveArgsRedacted(tool.sensitiveArgNamesOrEmpty())
+  val rawPayload = rawTool?.toLogPayload()?.withExecutedToolSecretsRedacted(tool)
+  // Same post-resolution value masking as the context-carrying overload, for the same reason.
   val resolvedPayload = if (rawPayload != null) {
-    buildLogSafeResolvedPayload(rawPayload, memory)
+    buildLogSafeResolvedPayload(rawPayload, memory).withSensitiveValuesRedacted(tool.sensitiveValuesOrEmpty())
   } else {
     tool.toLogPayload()
   }

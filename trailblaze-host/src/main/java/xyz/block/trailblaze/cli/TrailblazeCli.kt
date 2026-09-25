@@ -12,6 +12,7 @@ import xyz.block.trailblaze.host.WorkspaceCompileBootstrap
 import xyz.block.trailblaze.logs.server.endpoints.CliExecRequest
 import xyz.block.trailblaze.logs.server.endpoints.CliExecResponse
 import xyz.block.trailblaze.logs.server.endpoints.CliExecStream
+import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.ui.TrailblazeDesktopApp
 import xyz.block.trailblaze.ui.TrailblazeDesktopUtil
 import xyz.block.trailblaze.ui.TrailblazePortManager
@@ -278,13 +279,54 @@ object TrailblazeCli {
   private val execLock = Any()
 
   /**
+   * What a [TrailblazeCliCommand] reads its app, config, and app targets from.
+   *
+   * [run] captures a set from the distribution's factories. A running daemon should not use those
+   * for the commands forwarded to it: its `configProvider` is a factory, so every forwarded
+   * `config show` built a whole new config and ran full app-target discovery — six seconds for a
+   * listing the daemon already held. [daemonProviders] builds the set the daemon passes instead.
+   */
+  class CliProviders(
+    val appProvider: () -> TrailblazeDesktopApp,
+    val configProvider: () -> TrailblazeDesktopAppConfig,
+    /**
+     * Null means "read them off the command's own config" — see
+     * [TrailblazeCliCommand.appTargetsProvider]. Not a `{ configProvider().availableAppTargets }`
+     * default, which would build a second config and run discovery a second time.
+     */
+    val appTargetsProvider: (() -> Set<TrailblazeHostAppTarget>)? = null,
+  )
+
+  /**
+   * The providers a running daemon lends to forwarded subcommands: the app provider [run]
+   * captured, and the daemon's own [config] and live [appTargets] in place of the factories.
+   * `null` when [run] never captured an app provider, which [executeForDaemon] reports the same
+   * way it always has.
+   */
+  fun daemonProviders(
+    config: TrailblazeDesktopAppConfig,
+    appTargets: () -> Set<TrailblazeHostAppTarget>,
+  ): CliProviders? = appProviderRef?.let { appProvider ->
+    CliProviders(appProvider = appProvider, configProvider = { config }, appTargetsProvider = appTargets)
+  }
+
+  private fun capturedProviders(): CliProviders? {
+    val appProvider = appProviderRef ?: return null
+    val configProvider = configProviderRef ?: return null
+    return CliProviders(appProvider, configProvider)
+  }
+
+  /**
    * Entry point for the `/cli/exec` daemon endpoint. Runs [args] through a
    * fresh picocli [TrailblazeCliCommand] with stdout/stderr captured per-thread
    * and returns the captured output plus exit code. Returns `forwarded=false`
    * when the subcommand isn't in [FORWARDABLE_SUBCOMMANDS] so the CLI shim can
    * fall back to its normal JVM path.
+   *
+   * @param providers what the command reads; the daemon passes [daemonProviders]. Defaults to the
+   *   set [run] captured.
    */
-  fun executeForDaemon(request: CliExecRequest): CliExecResponse {
+  fun executeForDaemon(request: CliExecRequest, providers: CliProviders? = null): CliExecResponse {
     val args = request.args
     val first = args.firstOrNull()
     if (first == null || first !in FORWARDABLE_SUBCOMMANDS) {
@@ -296,9 +338,8 @@ object TrailblazeCli {
     // the right argv (e.g. `snapshot -d android`).
     CliMcpClient.captureOrigin(args.toTypedArray())
 
-    val appProvider = appProviderRef
-    val configProvider = configProviderRef
-    if (appProvider == null || configProvider == null) {
+    val resolvedProviders = providers ?: capturedProviders()
+    if (resolvedProviders == null) {
       return CliExecResponse(
         stdout = "",
         stderr = "cli/exec: daemon missing providers (run() not called)\n",
@@ -348,7 +389,11 @@ object TrailblazeCli {
           transcript.sink(CliExecStream.STDOUT),
           transcript.sink(CliExecStream.STDERR),
         ) {
-          val cli = TrailblazeCliCommand(appProvider, configProvider)
+          val cli = TrailblazeCliCommand(
+            resolvedProviders.appProvider,
+            resolvedProviders.configProvider,
+            resolvedProviders.appTargetsProvider,
+          )
           val commandLine = CommandLine(cli).setCaseInsensitiveEnumValuesAllowed(true)
           // Same tree as the JVM-spawn path. No distribution command is in
           // FORWARDABLE_SUBCOMMANDS today, so this registration is currently unreachable — it is
@@ -475,8 +520,29 @@ class TrailblazeVersionProvider : IVersionProvider {
 )
 class TrailblazeCliCommand(
   internal val appProvider: () -> TrailblazeDesktopApp,
-  internal val configProvider: () -> TrailblazeDesktopAppConfig,
+  configProvider: () -> TrailblazeDesktopAppConfig,
+  /**
+   * The app targets `config` lists and validates against. A daemon passes its live set, which
+   * already holds every target it discovered or had registered, so a forwarded command never runs
+   * discovery again. Null reads them off [config] — the same instance the rest of the command
+   * uses, because app-target discovery caches per config instance, not per JVM.
+   */
+  appTargetsProvider: (() -> Set<TrailblazeHostAppTarget>)? = null,
 ) : Callable<Int> {
+
+  /**
+   * The one config this invocation gets. Outside the daemon the caller hands us a real factory
+   * (`{ BlockTrailblazeDesktopAppConfig() }`), and each config it builds runs its own app-target
+   * discovery, so a command that asked twice paid twice — `config show` reading token statuses
+   * off one config and its target listing off another. Lazy, so a command that never needs a
+   * config still never builds one.
+   */
+  private val config: TrailblazeDesktopAppConfig by lazy(configProvider)
+
+  internal val configProvider: () -> TrailblazeDesktopAppConfig = { config }
+
+  internal val appTargetsProvider: () -> Set<TrailblazeHostAppTarget> =
+    appTargetsProvider ?: { config.availableAppTargets }
 
   /**
    * Hidden meta-flag that flips `--help` rendering to include `hidden = true` subcommands

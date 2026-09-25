@@ -374,8 +374,9 @@ object HostScriptedToolLauncher {
       val content = loadClasspathResource("$toolsRoot/$relPath") ?: continue
       val out = File(extractDir, relPath)
       out.parentFile?.mkdirs() // nested names (e.g. host/foo.ts) need their parent dir created first
-      // Overwrite unconditionally: content is immutable for a given JAR, so a re-extract is idempotent.
-      out.writeText(content)
+      // Rewritten only when the bytes differ: an unchanged file keeps its mtime, which is what lets
+      // [ScriptedToolImportAnalyzer] reuse its verdict instead of re-analyzing every run.
+      if (!out.isFile || out.readText() != content) out.writeText(content)
     }
     return File(extractDir, requestedRelPath).takeIf { it.isFile }
   }

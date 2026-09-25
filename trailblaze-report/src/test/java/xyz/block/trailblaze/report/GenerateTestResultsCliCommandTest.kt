@@ -50,6 +50,7 @@ import xyz.block.trailblaze.report.models.TriageReport
 import xyz.block.trailblaze.yaml.DirectionStep
 import xyz.block.trailblaze.yaml.ToolRecording
 import xyz.block.trailblaze.yaml.TrailConfig
+import xyz.block.trailblaze.yaml.TrailMetadataValue
 import xyz.block.trailblaze.yaml.TrailblazeToolYamlWrapper
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.commands.InputTextTrailblazeTool
@@ -2380,6 +2381,7 @@ class GenerateTestResultsCliCommandTest {
     trailFilePath: String,
     startedAt: String,
     ended: SessionStatus.Ended,
+    trailConfig: TrailConfig? = null,
   ) {
     writeLog(
       logsDir = logsDir,
@@ -2387,7 +2389,7 @@ class GenerateTestResultsCliCommandTest {
       fileName = "001_TrailblazeSessionStatusChangeLog.json",
       log = TrailblazeLog.TrailblazeSessionStatusChangeLog(
         sessionStatus = SessionStatus.Started(
-          trailConfig = null,
+          trailConfig = trailConfig,
           trailFilePath = trailFilePath,
           hasRecordedSteps = false,
           testMethodName = "run",
@@ -2470,6 +2472,67 @@ class GenerateTestResultsCliCommandTest {
       )
       val sidecar = json.decodeFromString<SessionResult>(sidecarFile.readText())
       assertEquals(report.results.single(), sidecar)
+    } finally {
+      logsDir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun `session result sidecar carries nested trail metadata as plain JSON`() {
+    // CI publishers read identity fields out of the sidecar with jq (`.metadata.<key>.<field>`),
+    // so nested metadata must land as ordinary JSON objects and arrays, not a tagged encoding.
+    val logsDir = Files.createTempDirectory("trailblaze-report-test").toFile()
+    val outputFile = File(logsDir, "results.json")
+    try {
+      val sessionId = SessionId("2026_09_21_nested_metadata_session")
+      val metadata = mapOf(
+        "tracker" to TrailMetadataValue.MapValue(
+          mapOf(
+            "id" to TrailMetadataValue.StringValue("4fd3e734-f6d8-4028-bc42-cbc94e6843ae"),
+            "refs" to TrailMetadataValue.ListValue(
+              listOf(
+                TrailMetadataValue.MapValue(
+                  mapOf(
+                    "source" to TrailMetadataValue.StringValue("example/trails"),
+                    "id" to TrailMetadataValue.StringValue("checkout"),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      )
+
+      writeTrailRun(
+        logsDir = logsDir,
+        deviceInfo = webDeviceInfo(),
+        sessionId = sessionId,
+        trailFilePath = "trails/example/checkout.trail.yaml",
+        startedAt = "2026-09-21T12:00:00Z",
+        ended = SessionStatus.Ended.Succeeded(durationMs = 5_000),
+        trailConfig = TrailConfig(id = "example-checkout-config", metadata = metadata),
+      )
+
+      captureStdout {
+        GenerateTestResultsCliCommand().main(
+          arrayOf(logsDir.absolutePath, outputFile.absolutePath, "--output-format", "JSON"),
+        )
+      }
+
+      val sidecarText = File(logsDir, sessionId.value)
+        .resolve(GenerateTestResultsCliCommand.SESSION_RESULT_FILENAME)
+        .readText()
+      val tracker = Json.parseToJsonElement(sidecarText).jsonObject
+        .getValue("metadata").jsonObject
+        .getValue("tracker").jsonObject
+      assertEquals("4fd3e734-f6d8-4028-bc42-cbc94e6843ae", tracker.getValue("id").jsonPrimitive.content)
+      assertEquals(
+        Json.parseToJsonElement("""[{"source":"example/trails","id":"checkout"}]"""),
+        tracker.getValue("refs"),
+      )
+      val sidecar = json.decodeFromString<SessionResult>(sidecarText)
+      assertEquals(metadata, sidecar.metadata)
+      assertEquals("example-checkout-config", sidecar.trail_id)
     } finally {
       logsDir.deleteRecursively()
     }

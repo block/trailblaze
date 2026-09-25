@@ -169,15 +169,22 @@ data class PlaywrightNativeVerifyTextAbsentForDurationTool(
   }
 }
 
+/**
+ * The `window` property the absence observer runtime lives on, shared by the install, status and
+ * remove scripts. `internal` so tests can synchronize on an installed observer without mirroring
+ * the literal.
+ */
+internal const val TEXT_ABSENCE_RUNTIME_KEY = "__trailblazeTextAbsenceRuntime"
+
 private val INSTALL_TEXT_ABSENCE_OBSERVER_SCRIPT =
   """
   (readiness, args) => {
-    window.__trailblazeTextAbsenceRuntime ??= {
+    window.$TEXT_ABSENCE_RUNTIME_KEY ??= {
       observations: new Map(),
       originalAttachShadow: Element.prototype.attachShadow,
       patchedAttachShadow: null,
     };
-    const runtime = window.__trailblazeTextAbsenceRuntime;
+    const runtime = window.$TEXT_ABSENCE_RUNTIME_KEY;
     if (!runtime.patchedAttachShadow) {
       runtime.patchedAttachShadow = function(init) {
         const root = runtime.originalAttachShadow.call(this, init);
@@ -283,7 +290,7 @@ private val INSTALL_TEXT_ABSENCE_OBSERVER_SCRIPT =
 private val TEXT_ABSENCE_OBSERVER_STATUS_SCRIPT =
   """
   id => {
-    const state = window.__trailblazeTextAbsenceRuntime?.observations.get(id);
+    const state = window.$TEXT_ABSENCE_RUNTIME_KEY?.observations.get(id);
     if (!state) return 'missing';
     if (
       state.status === 'observing' &&
@@ -299,7 +306,7 @@ private val TEXT_ABSENCE_OBSERVER_STATUS_SCRIPT =
 private val REMOVE_TEXT_ABSENCE_OBSERVER_SCRIPT =
   """
   id => {
-    const runtime = window.__trailblazeTextAbsenceRuntime;
+    const runtime = window.$TEXT_ABSENCE_RUNTIME_KEY;
     const state = runtime?.observations.get(id);
     state?.observer?.disconnect();
     if (state?.frame) cancelAnimationFrame(state.frame);
@@ -307,7 +314,7 @@ private val REMOVE_TEXT_ABSENCE_OBSERVER_SCRIPT =
     runtime?.observations.delete(id);
     if (runtime?.observations.size === 0 && Element.prototype.attachShadow === runtime.patchedAttachShadow) {
       Element.prototype.attachShadow = runtime.originalAttachShadow;
-      delete window.__trailblazeTextAbsenceRuntime;
+      delete window.$TEXT_ABSENCE_RUNTIME_KEY;
     }
   }
   """.trimIndent()

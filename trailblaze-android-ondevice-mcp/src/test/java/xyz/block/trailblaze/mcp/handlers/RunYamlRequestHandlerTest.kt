@@ -3,8 +3,10 @@
 package xyz.block.trailblaze.mcp.handlers
 
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
@@ -26,6 +28,7 @@ import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.llm.TrailblazeLlmProvider
 import xyz.block.trailblaze.llm.TrailblazeReferrer
 import xyz.block.trailblaze.logs.client.TrailblazeSession
+import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcResult
 import xyz.block.trailblaze.mcp.progress.ProgressSessionManager
@@ -787,6 +790,113 @@ class RunYamlRequestHandlerTest {
     )
   }
 
+  // ── trace export on the terminal paths ───────────────────────────────────
+
+  // The JUnit teardown that exports trace.json never fires on this RPC path, so each terminal path
+  // has to end through the logging rule rather than the session manager — the rule is what writes
+  // the trace BEFORE the terminal status, and a follower that reads the status rebuilds its payload
+  // and never looks at trace.json again. Ending straight through the session manager leaves a
+  // completed run's report with no tracer spans in it at all, which is what these three assert
+  // against: one per terminal path, since each was its own bypass.
+
+  @Test
+  fun `a run that succeeds exports its trace`() = runTest {
+    val traces = mutableListOf<SessionId>()
+    val handler = createHandler(
+      runTrailblazeYaml = { _, session, _ -> RunYamlCallbackResult(session = session) },
+      tracesWrittenFor = traces,
+    )
+
+    val result = handler.handle(testRequest.copy(awaitCompletion = true))
+
+    assertTrue(result is RpcResult.Success, "Expected RpcResult.Success, got $result")
+    assertEquals(listOf(result.data.sessionId), traces, "the completed run's own trace")
+  }
+
+  @Test
+  fun `a run that fails exports its trace`() = runTest {
+    val traces = mutableListOf<SessionId>()
+    val handler = createHandler(
+      runTrailblazeYaml = { _, _, _ -> throw RuntimeException("widget not found") },
+      tracesWrittenFor = traces,
+    )
+
+    val result = handler.handle(testRequest.copy(awaitCompletion = true))
+
+    // A failed run is the one whose spans a reader most wants — they are where the run went wrong.
+    assertTrue(result is RpcResult.Success, "Expected RpcResult.Success, got $result")
+    assertEquals(listOf(result.data.sessionId), traces)
+  }
+
+  @Test
+  fun `a run the handler times out exports its trace`() = runTest {
+    val traces = mutableListOf<SessionId>()
+    val handler = createHandler(
+      runTrailblazeYaml = { _, _, _ -> awaitCancellation() },
+      tracesWrittenFor = traces,
+    )
+
+    val dispatch = async { handler.handle(testRequest.copy(awaitCompletion = true)) }
+    advanceTimeBy(OnDeviceRpcTimeouts.HANDLER_AWAIT_CAP_MS + 1_000)
+    advanceUntilIdle()
+    val result = dispatch.await()
+
+    // This path ends with an explicit Ended.Cancelled status rather than a success flag, so it
+    // could only reach the session manager directly until the rule gained the matching overload.
+    assertTrue(result is RpcResult.Success, "Expected RpcResult.Success, got $result")
+    assertEquals(listOf(result.data.sessionId), traces)
+  }
+
+  @Test
+  fun `a timed-out run whose cleanup lands after another run started does not export over it`() = runTest {
+    val traces = mutableListOf<SessionId>()
+    val second = SessionId("second_run")
+    // Holds the timed-out run's job open past its own timeout response, so its cleanup's join is
+    // still pending when the next request arrives — which is the race: the response goes back
+    // immediately, the unwinding does not.
+    val unwind = CompletableDeferred<Unit>()
+    val handler = createHandler(
+      runTrailblazeYaml = { request, session, _ ->
+        if (request.config.overrideSessionId == second) {
+          RunYamlCallbackResult(session = session)
+        } else {
+          try {
+            awaitCancellation()
+          } finally {
+            withContext(NonCancellable) { unwind.await() }
+          }
+        }
+      },
+      tracesWrittenFor = traces,
+    )
+
+    val dispatch = async { handler.handle(testRequest.copy(awaitCompletion = true)) }
+    advanceTimeBy(OnDeviceRpcTimeouts.HANDLER_AWAIT_CAP_MS + 1_000)
+    advanceUntilIdle()
+    val timedOut = dispatch.await()
+    handler.handle(
+      testRequest.copy(
+        config = testRequest.config.copy(overrideSessionId = second),
+        awaitCompletion = false,
+      ),
+    )
+    advanceUntilIdle()
+    unwind.complete(Unit)
+    advanceUntilIdle()
+
+    assertTrue(timedOut is RpcResult.Success, "Expected RpcResult.Success, got $timedOut")
+    // The recorder is process-wide and exporting drains it: filing it under the timed-out session
+    // would have handed that run the live one's spans AND emptied the buffer the live run is
+    // filling. The timed-out run losing its trace is the cheaper of the two.
+    assertFalse(
+      traces.contains(timedOut.data.sessionId),
+      "The timed-out run exported after another run had started: $traces",
+    )
+    // And the export is only withheld from the run that lost its turn — the live one still gets its
+    // own trace, so this is not the whole path going quiet.
+    assertTrue(traces.contains(second), "Expected the live run's own trace, got $traces")
+  }
+
   // ── test infrastructure ──────────────────────────────────────────────────
 
   private fun TestScope.createHandler(
@@ -794,11 +904,13 @@ class RunYamlRequestHandlerTest {
     progressManager: ProgressSessionManager? = null,
     waitForSettled: suspend () -> Unit = { /* no-op */ },
     probeUiAutomationWedge: () -> Boolean = { false },
+    /** Collects the sessions the rule exported a trace for — see the trace-export tests. */
+    tracesWrittenFor: MutableList<SessionId>? = null,
   ): RunYamlRequestHandler {
     // StandardTestDispatcher lets the test control when the launched block runs, which is
     // what makes the virtual-time advanceTimeBy in the timeout test actually trigger the
     // withTimeoutOrNull inside handle().
-    val loggingRule = TestLoggingRule()
+    val loggingRule = TestLoggingRule(tracesWrittenFor = tracesWrittenFor)
     var currentJob: kotlinx.coroutines.Job? = null
     return RunYamlRequestHandler(
       backgroundScope = TestScope(StandardTestDispatcher(testScheduler)),
@@ -826,8 +938,19 @@ class RunYamlRequestHandlerTest {
   /**
    * Minimal [TrailblazeLoggingRule] concrete subclass with `noLogging = true` so none of
    * the HTTP/disk log-emission paths fire during tests.
+   *
+   * A [tracesWrittenFor] list opts into logging (the rule skips trace export entirely when
+   * `noLogging`), with a fast-fail `logsBaseUrl` so the server ping is refused immediately rather
+   * than waiting out its timeout, and disk log writes dropped.
    */
-  private class TestLoggingRule : TrailblazeLoggingRule(noLogging = true) {
+  private class TestLoggingRule(
+    tracesWrittenFor: MutableList<SessionId>? = null,
+  ) : TrailblazeLoggingRule(
+    noLogging = tracesWrittenFor == null,
+    logsBaseUrl = "http://127.0.0.1:1",
+    writeLogToDisk = { _, _ -> },
+    writeTraceToDisk = { sessionId, _ -> tracesWrittenFor?.add(sessionId) },
+  ) {
     override val trailblazeDeviceInfoProvider: () -> TrailblazeDeviceInfo = {
       TrailblazeDeviceInfo(
         trailblazeDeviceId = TrailblazeDeviceId(

@@ -124,8 +124,11 @@ object TrailblazeDriverTypeLenientSerializer : KSerializer<TrailblazeDriverType>
     return TrailblazeDriverType.fromString(driverName)
       ?: throw UnknownDriverException(
         driverName = driverName,
-        message = "unknown driver '$driverName' — " +
-          "valid driver types: ${TrailblazeDriverType.entries.joinToString { it.name }}.",
+        // Retired names are left out: they still parse, so offering one here would answer a typo
+        // with a driver that is refused a rung later.
+        message = "unknown driver '$driverName' — valid driver types: " +
+          (TrailblazeDriverType.entries - TrailblazeDriverType.RETIRED_DRIVERS)
+            .joinToString { it.name } + ".",
       )
   }
 }

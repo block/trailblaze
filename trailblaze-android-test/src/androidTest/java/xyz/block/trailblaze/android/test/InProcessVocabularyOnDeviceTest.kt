@@ -19,6 +19,7 @@ import org.junit.After
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
+import xyz.block.trailblaze.android.test.tools.AndroidTestAssertNotVisibleTool
 import xyz.block.trailblaze.android.test.tools.AndroidTestAssertVisibleTool
 import xyz.block.trailblaze.android.test.tools.AndroidTestTapTool
 import xyz.block.trailblaze.api.DriverNodeMatch
@@ -35,6 +36,7 @@ import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
+import xyz.block.trailblaze.toolcalls.commands.ClearTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.InputTextRandomTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.MaestroTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.NetworkConnectionTrailblazeTool
@@ -206,6 +208,38 @@ class InProcessVocabularyOnDeviceTest {
       "The generated value should follow the prefix/digit shape asked for, got: $remembered",
     )
     run(AndroidTestAssertVisibleTool(composeText(Regex.escape(remembered))))
+  }
+
+  /**
+   * `clearText` erases the focused Compose text input in one action, matching the canonical
+   * tool's "erase what's focused" contract without a selector of its own.
+   */
+  @Test
+  fun clearTextErasesTheFocusedComposeTextInput() {
+    run(AndroidTestTapTool(composeTag(MixedUiFixtureActivity.COMPOSE_INPUT_TAG)))
+    run(InputTextRandomTrailblazeTool(prefix = "TB-", digitCount = 8, variable = "toClear"))
+    val typed = assertNotNull(agent.memory.variables["toClear"])
+    run(AndroidTestAssertVisibleTool(composeText(Regex.escape(typed))))
+
+    run(ClearTextTrailblazeTool)
+
+    run(AndroidTestAssertNotVisibleTool(composeText(Regex.escape(typed))))
+  }
+
+  /**
+   * The View half of the same contract: no focused Compose node, so the adapter falls back to the
+   * focused [android.widget.EditText] and clears it through the same one-action replace.
+   */
+  @Test
+  fun clearTextErasesTheFocusedEditText() {
+    run(AndroidTestTapTool(viewHint(MixedUiFixtureActivity.VIEW_INPUT_HINT)))
+    run(InputTextRandomTrailblazeTool(prefix = "TB-", digitCount = 8, variable = "toClearView"))
+    val typed = assertNotNull(agent.memory.variables["toClearView"])
+    run(AndroidTestAssertVisibleTool(viewText(typed)))
+
+    run(ClearTextTrailblazeTool)
+
+    run(AndroidTestAssertNotVisibleTool(viewText(typed)))
   }
 
   /**
@@ -434,6 +468,9 @@ class InProcessVocabularyOnDeviceTest {
 
   private fun viewText(text: String) =
     TrailblazeNodeSelector(androidView = DriverNodeMatch.AndroidView(textRegex = text))
+
+  private fun viewHint(hint: String) =
+    TrailblazeNodeSelector(androidView = DriverNodeMatch.AndroidView(hintTextRegex = hint))
 
   private fun composeTag(tag: String) =
     TrailblazeNodeSelector(compose = DriverNodeMatch.Compose(testTag = tag))

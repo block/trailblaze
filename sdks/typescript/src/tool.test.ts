@@ -450,9 +450,9 @@ describe("tool() overload — typed authoring surface", () => {
     // from `legacyCtx.device`; undefined when no envelope was set, as here), and
     // `target` (resolved-target descriptor forwarded from `legacyCtx.target`;
     // likewise undefined here). Order matches the order the adapter constructs the
-    // object literal in `defineTypedTool` — the test pins all four keys present
+    // object literal in `defineTypedTool` — the test pins all five keys present
     // (an explicitly-set key is enumerable even when its value is `undefined`).
-    expect(observedCtxShape).toEqual(["tools", "memory", "device", "target"]);
+    expect(observedCtxShape).toEqual(["tools", "memory", "device", "target", "session"]);
 
     // Nothing was queued for MCP registration — the typed form is declarative, not imperative.
     // Verify by running registerPendingTools and asserting the capturing server saw no tools.
@@ -773,7 +773,7 @@ describe("tool() overload — typed authoring surface", () => {
     const result = await definition({ x: "hello" }, undefined, { tools: {} } as never);
     expect(result).toEqual({ y: 5 });
     expect(observed.input).toEqual({ x: "hello" });
-    expect(observed.ctxKeys).toEqual(["tools", "memory", "device", "target"]);
+    expect(observed.ctxKeys).toEqual(["tools", "memory", "device", "target", "session"]);
   });
 
   test("typed tool(handler) with NO type arguments — bare function + defaults", async () => {

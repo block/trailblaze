@@ -5,6 +5,8 @@ import assertk.assertions.isGreaterThan
 import assertk.assertions.isEqualTo
 import assertk.assertions.isLessThan
 import assertk.assertions.isGreaterThanOrEqualTo
+import io.ktor.client.plugins.HttpTimeoutCapability
+import io.ktor.client.request.HttpRequestBuilder
 import org.junit.Test
 import xyz.block.trailblaze.logs.server.TrailblazeMcpServer
 import xyz.block.trailblaze.logs.server.endpoints.ScriptingCallbackEndpoint
@@ -168,6 +170,29 @@ class McpProxyForwardTimeoutOutlastsCallbackBudgetTest {
     CliCallerContext.withCallerEnv(emptyMap()) {
       assertThat(McpProxy().daemonConnectTimeoutMs).isEqualTo(McpProxy.PROXY_CONNECT_TIMEOUT_MS)
     }
+  }
+
+  @Test
+  fun `the ping probe installs a connect budget under its request budget, not equal to it`() {
+    // The same race at the reachability probe, where the two budgets were equal and the winner was
+    // a coin flip. The request side of that flip reports HELD_UNRESPONSIVE, claiming the port has
+    // an owner that went quiet -- which a connect that never completed does not establish, and
+    // which costs the CLI a full startup wait when it is wrong.
+    //
+    // Read off the request the probe configures, not off the two constants: the connect constant is
+    // DEFINED as half the request one, so comparing them holds no matter what the probe does with
+    // them. What can regress is the wiring -- the connect field handed the request budget -- and
+    // only the installed config shows that.
+    val installed = HttpRequestBuilder()
+      .apply { McpProxy.installPingProbeTimeouts(this) }
+      .getCapabilityOrNull(HttpTimeoutCapability)
+      ?: error("the probe has to install a timeout config, or neither budget applies")
+    val connect = installed.connectTimeoutMillis ?: error("no connect budget installed")
+    val request = installed.requestTimeoutMillis ?: error("no request budget installed")
+
+    assertThat(connect).isLessThan(request)
+    assertThat(connect).isGreaterThan(0L)
+    assertThat(request).isEqualTo(McpProxy.PING_PROBE_TIMEOUT_MS)
   }
 
   private companion object {

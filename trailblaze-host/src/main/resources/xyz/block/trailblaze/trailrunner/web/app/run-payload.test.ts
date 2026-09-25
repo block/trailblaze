@@ -496,7 +496,7 @@ describe('fetchSideChannels', () => {
       },
       originalYamlFromLogs: () => null,
     });
-    expect(side).toEqual({ recordingYaml: null, originalYaml: null, events: null });
+    expect(side).toEqual({ recordingYaml: null, originalYaml: null, events: null, spans: null });
   });
 
   test('a thrown request yields nulls rather than rejecting', async () => {
@@ -504,7 +504,7 @@ describe('fetchSideChannels', () => {
       fetch: () => { throw new Error('daemon went away'); },
       originalYamlFromLogs: () => null,
     });
-    expect(side).toEqual({ recordingYaml: null, originalYaml: null, events: null });
+    expect(side).toEqual({ recordingYaml: null, originalYaml: null, events: null, spans: null });
   });
 
   test('flattens the event-stream DTO and derives the original YAML from the logs', async () => {
@@ -563,6 +563,41 @@ describe('fetchSideChannels', () => {
       truncated: false,
       events: [{ t: 40, d: '{"sku":"12","name":"ItemViewed","source":"app"}' }],
     });
+  });
+
+  // The session's trace.json (the tracer's spans) is a side channel of the live report too, so a
+  // Shared or daemon-served report exports the same spans to Perfetto as a CLI-built one.
+  test("reads the session's trace.json off /static through the shared slimmer, and skips it when the daemon says it is over the cap", async () => {
+    const traceEvents = [
+      { name: "tapOnElementBySelector", cat: "tool", ts: 1_789_705_349_234_251, dur: 981_522, pid: 25484, tid: 92, ph: "X", sid: "ec91" },
+      { name: "process_name", ph: "M", pid: 25484, tid: 0, args: { name: "host" } },
+    ];
+    const slimTracerSpans = (parsed: any[]) => parsed.filter((e) => e.ph === 'X').map(({ name, cat, ts, dur, tid, pid }) => ({ name, cat, ts, dur, tid, pid }));
+    const fetchWithTrace = (contentLength: string | null) => async (url: string) => {
+      if (url === '/static/sess_1/trace.json') {
+        return { ok: true, headers: { get: (h: string) => (h === 'content-length' ? contentLength : null) }, text: async () => JSON.stringify(traceEvents) };
+      }
+      if (url.endsWith('/export')) return { ok: false, status: 404 };
+      if (url.endsWith('/events')) return okJson({ streams: [] });
+      return okJson([]);
+    };
+    const side = await Payload.fetchSideChannels('sess_1', { fetch: fetchWithTrace(null), originalYamlFromLogs: () => null, slimTracerSpans, MAX_TRACE_BYTES: 16 * 1024 * 1024 }, []);
+    expect(side.spans).toEqual([{ name: 'tapOnElementBySelector', cat: 'tool', ts: 1_789_705_349_234_251, dur: 981_522, tid: 92, pid: 25484 }]);
+
+    const capped = await Payload.fetchSideChannels('sess_1', { fetch: fetchWithTrace('99999999'), originalYamlFromLogs: () => null, slimTracerSpans, MAX_TRACE_BYTES: 1024 }, []);
+    expect(capped.spans).toBeNull();
+
+    // A session that recorded no trace 404s; a run-report-core without the slimmer never asks.
+    const calls: string[] = [];
+    const missing = await Payload.fetchSideChannels('sess_1', {
+      fetch: async (url: string) => { calls.push(url); return url.endsWith('trace.json') ? { ok: false, status: 404 } : (url.endsWith('/events') ? okJson({ streams: [] }) : okJson([])); },
+      originalYamlFromLogs: () => null, slimTracerSpans,
+    }, []);
+    expect(missing.spans).toBeNull();
+    expect(calls).toContain('/static/sess_1/trace.json');
+    const older = await Payload.fetchSideChannels('sess_1', { fetch: async (url: string) => { calls.length = 0; calls.push(url); return okJson([]); }, originalYamlFromLogs: () => null }, []);
+    expect(older.spans).toBeNull();
+    expect(calls).not.toContain('/static/sess_1/trace.json');
   });
 
   // The app chooses its own property names, so `name` and `source` can collide with the two fields
@@ -688,6 +723,7 @@ describe('buildSessionInput', () => {
     expect(input.llmLogs).toEqual([{ i: 0 }]);
     expect(input.events).toBeNull();
     expect(input.attachments).toBeNull();
+    expect(input.spans).toBeNull();
   });
 
   test('attachments referenced by the event streams land on the input, resolved per the mode', async () => {

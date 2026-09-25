@@ -33,9 +33,10 @@ import xyz.block.trailblaze.util.Console
  * resync) and the rest of the system keeps moving. The reader thread never blocks on a slow
  * consumer.
  *
- * **Restarts.** screenrecord caps invocations at 3 minutes on Android < 11 (API < 30); on
- * Android 11+, `--time-limit 0` lets one invocation run indefinitely. A capped or unexpectedly
- * exited subprocess is restarted. All consumers receive [RestartSignal] *before* the next
+ * **Restarts.** screenrecord caps invocations at 3 minutes before Android 14 (API < 34); from
+ * Android 14, `--time-limit 0` lets one invocation run indefinitely. Earlier versions reject a
+ * zero time limit outright (`Time limit 0s outside acceptable range [1,180]`), so the capped path
+ * is the only one that works there. A capped or unexpectedly exited subprocess is restarted. All consumers receive [RestartSignal] *before* the next
  * subprocess's SPS/PPS arrives. The MP4 consumer rolls to a new segment file on that signal; live
  * consumers reset their parsers and continue with the new SPS/PPS.
  *
@@ -59,8 +60,8 @@ class H264Tee internal constructor(
    */
   private val producerFactory: ProducerFactory = AdbScreenrecordProducerFactory,
   /**
-   * Test seam: lookup of Android SDK level. Default queries the device; tests inject 30+ to
-   * exercise the unlimited-time-limit path and < 30 to exercise the restart-on-exit chain.
+   * Test seam: lookup of Android SDK level. Default queries the device; tests inject 34+ to
+   * exercise the unlimited-time-limit path and < 34 to exercise the restart-on-exit chain.
    */
   private val sdkLevelProvider: () -> Int = { sdkLevelFromDevice(deviceId) },
   /** Test seam for canned finite streams. Production always recovers an unexpected EOF. */
@@ -94,6 +95,15 @@ class H264Tee internal constructor(
   // has observed a keyframe, every later attach is seeded with it (or a fresher one).
   @Volatile private var cachedKeyframe: ByteArray? = null
   private val gopSplitter = AnnexBAccessUnitSplitter()
+
+  // Whether a producer is streaming right now: true from a successful spawn until its stream
+  // ends, false across a respawn gap and after the reader gives up. A recorder stopping reads this
+  // to tell a still screen (the producer is alive, the screen just didn't change) from a feed that
+  // died — only the former may be held to the stop.
+  @Volatile private var feeding = false
+
+  /** True while a producer is streaming; see [feeding]. Read it before detaching. */
+  internal val isFeeding: Boolean get() = feeding
 
   /**
    * Attach a new consumer with the given ring-buffer capacity. If this is the first consumer,
@@ -172,13 +182,14 @@ class H264Tee internal constructor(
     cachedKeyframe = null
     gopSplitter.reset()
     val sdk = runCatching { sdkLevelProvider() }.getOrDefault(0)
-    val unlimited = sdk >= ANDROID_R_SDK
+    val unlimited = sdk >= ANDROID_U_SDK
     Console.log(
       "[H264Tee] starting screenrecord for ${deviceId.instanceId} " +
         "(size=$videoSize bitRate=$bitRate sdk=$sdk unlimited=$unlimited)",
     )
     val handle = producerFactory.spawn(deviceId, videoSize, bitRate, unlimited)
     producerHandle = handle
+    feeding = true
     readerThread = Thread(
       {
         runReaderLoop(handle, unlimited = unlimited)
@@ -232,6 +243,7 @@ class H264Tee internal constructor(
       } catch (e: Exception) {
         Console.log("[H264Tee] reader thread for ${deviceId.instanceId}: ${e.message}")
       }
+      feeding = false
       if (shuttingDown.get() || (unlimited && !restartOnUnexpectedExit)) {
         // Don't close the handle here — stopProducer() (called from the detach path) handles
         // it, and on EOF a second close would be redundant. If we exited because the
@@ -288,6 +300,7 @@ class H264Tee internal constructor(
           return
         }
         producerHandle = handle
+        feeding = true
       }
     }
   }
@@ -582,7 +595,7 @@ class H264Tee internal constructor(
       deviceId: TrailblazeDeviceId,
       videoSize: String,
       bitRate: String,
-      /** If true, request `--time-limit 0` (Android 11+); otherwise default 3-min cap. */
+      /** If true, request `--time-limit 0` (Android 14+); otherwise default 3-min cap. */
       unlimited: Boolean,
     ): ProducerHandle
   }
@@ -594,8 +607,16 @@ class H264Tee internal constructor(
     /** Returned by [Consumer.read] after [Consumer.detach] and the ring buffer is empty. */
     const val READ_RESULT_DETACHED: Int = -1
 
-    /** Android 11. `screenrecord --time-limit 0` works on this and later. */
-    internal const val ANDROID_R_SDK: Int = 30
+    /**
+     * Android 14, the first version whose `screenrecord` accepts `--time-limit 0` (unlimited).
+     *
+     * Measured 2026-09-20 on this repo's emulators: API 33 prints
+     * `Time limit 0s outside acceptable range [1,180]` and exits immediately; API 34, 35 and 36
+     * stream normally. The rejection goes to **stdout**, not stderr, so on an older device it is
+     * written straight into the raw H.264 byte stream this tee is piping — a reader sees a few
+     * dozen bytes of ASCII, then EOF.
+     */
+    internal const val ANDROID_U_SDK: Int = 34
 
     private const val RESPAWN_DELAY_MILLIS: Long = 250L
 
@@ -681,9 +702,11 @@ class H264Tee internal constructor(
       videoSize = videoSize,
       bitRate = bitRate,
       producerFactory = producerFactory,
-      // Report Android 11+ so the reader takes the unlimited path (no 3-min-cap restart chain);
-      // combined with restartOnUnexpectedExit=false, an EOF stops the reader cleanly.
-      sdkLevelProvider = { ANDROID_R_SDK },
+      // Report Android 14+ so the reader takes the unlimited path (no 3-min-cap restart chain);
+      // combined with restartOnUnexpectedExit=false, an EOF stops the reader cleanly. Nothing
+      // here shells out to screenrecord — the caller injects its own producer — so the SDK level
+      // is only selecting a reader policy.
+      sdkLevelProvider = { ANDROID_U_SDK },
       restartOnUnexpectedExit = false,
     )
 
@@ -726,18 +749,20 @@ class H264Tee internal constructor(
  * `adb -L`/`-P` flags before the subcommand. Read once on construction.
  */
 internal object AdbScreenrecordProducerFactory : H264Tee.ProducerFactory {
-  override fun spawn(
+
+  /**
+   * The exact command line spawned for a capture. Split out from [spawn] so the flags can be
+   * asserted without launching a process — `--time-limit 0` is only legal from Android 14, and
+   * an older device answers an illegal one on stdout, inside the video stream.
+   */
+  internal fun screenrecordArgs(
     deviceId: TrailblazeDeviceId,
     videoSize: String,
     bitRate: String,
     unlimited: Boolean,
-  ): H264Tee.ProducerHandle {
-    val args = buildList {
-      add(xyz.block.trailblaze.util.AdbPathResolver.ADB_COMMAND)
-      addAll(resolveServerFlags())
-      add("-s")
-      add(deviceId.instanceId)
-      add("exec-out")
+  ): List<String> = AdbExecOut.command(
+    deviceId,
+    buildList {
       add("screenrecord")
       add("--output-format=h264")
       add("--size")
@@ -749,12 +774,25 @@ internal object AdbScreenrecordProducerFactory : H264Tee.ProducerFactory {
         add("0")
       }
       add("-")
-    }
+    },
+  )
+
+  override fun spawn(
+    deviceId: TrailblazeDeviceId,
+    videoSize: String,
+    bitRate: String,
+    unlimited: Boolean,
+  ): H264Tee.ProducerHandle {
+    val args = screenrecordArgs(deviceId, videoSize, bitRate, unlimited)
     val pb = ProcessBuilder(args)
       // Don't redirect stderr to stdout — stderr carries human-readable diagnostics from
       // screenrecord that would otherwise corrupt the raw H.264 byte stream we're piping
       // back. We drop stderr on the floor; if needed for debugging, wire up a separate
       // drain thread.
+      //
+      // This does not protect us from an argument screenrecord rejects: it prints those to
+      // STDOUT, into the stream itself. Hence [H264Tee.ANDROID_U_SDK] — asking a device that
+      // predates Android 14 for an unlimited time limit puts ASCII where the H.264 should be.
       .redirectErrorStream(false)
     val process = pb.start()
     // Drain stderr in a daemon thread so a wedged stderr pipe can't block the subprocess.
@@ -782,23 +820,4 @@ internal object AdbScreenrecordProducerFactory : H264Tee.ProducerFactory {
     }
   }
 
-  /**
-   * Mirror [xyz.block.trailblaze.util.AndroidHostAdbUtils.resolveAdbServerEndpoint] but emit
-   * the *binary*-form flags (`-H` / `-P` / `-L`) so a child `adb` invocation hits the same
-   * server as the rest of the daemon. Read once.
-   */
-  private val serverFlags: List<String> by lazy {
-    val socket = System.getenv("ADB_SERVER_SOCKET")?.takeIf { it.isNotBlank() }
-    if (socket != null) {
-      // adb binary accepts `-L tcp:host:port` directly.
-      return@lazy listOf("-L", socket)
-    }
-    val port = System.getenv("ANDROID_ADB_SERVER_PORT")?.takeIf { it.isNotBlank() }
-    if (port != null && port.toIntOrNull() != null) {
-      return@lazy listOf("-P", port)
-    }
-    emptyList()
-  }
-
-  private fun resolveServerFlags(): List<String> = serverFlags
 }

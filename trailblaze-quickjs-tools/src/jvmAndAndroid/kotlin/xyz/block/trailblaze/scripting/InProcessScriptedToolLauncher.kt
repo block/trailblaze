@@ -64,16 +64,18 @@ object InProcessScriptedToolLauncher {
    * (those dispatch through the subprocess path, never in-process). [skipNames] are dropped up
    * front — e.g. names already registered as target-declared tools, which win on collision.
    *
-   * Connects no QuickJS engine; pure resolution over the on-disk/classpath descriptors.
+   * Connects no QuickJS engine; pure resolution over the on-disk/classpath descriptors, read
+   * through [catalog] — pass one catalog to many calls to walk those descriptors once.
    */
   fun resolveInProcessScriptedTools(
     toolNames: Set<ToolName>,
     skipNames: Set<ToolName> = emptySet(),
     logPrefix: String = "[InProcessScriptedToolLauncher]",
+    catalog: ScriptedToolCatalog = ScriptedToolCatalog(),
   ): List<ResolvedInProcessScriptedTool> {
     val newNames = toolNames - skipNames
     if (newNames.isEmpty()) return emptyList()
-    val descriptorsByName = ScriptedToolNameDiscoverer.discoverDescriptorsByName()
+    val descriptorsByName = catalog.descriptorsByName
     return newNames.mapNotNull { name ->
       val discovered = descriptorsByName[name]
       if (discovered == null) {
@@ -200,9 +202,15 @@ object InProcessScriptedToolLauncher {
    * `DirectMcpToolExecutor.getAvailableTools()`) and launch lazily on first dispatch. Skips names
    * that have no descriptor and tools that opt into [ScriptedToolRuntime.SUBPROCESS] — those can't
    * dispatch through the in-process path so they must not be advertised on it.
+   *
+   * Reads descriptors through [catalog]. A caller describing many name sets in one request passes
+   * the same catalog to each call so the descriptor tree is walked once, not once per call.
    */
-  fun describe(toolNames: Set<ToolName>): List<TrailblazeToolDescriptor> =
-    resolveInProcessScriptedTools(toolNames).map {
+  fun describe(
+    toolNames: Set<ToolName>,
+    catalog: ScriptedToolCatalog = ScriptedToolCatalog(),
+  ): List<TrailblazeToolDescriptor> =
+    resolveInProcessScriptedTools(toolNames, catalog = catalog).map {
       LazyYamlScriptedToolRegistration.buildScriptedToolDescriptor(it.config)
     }
 }

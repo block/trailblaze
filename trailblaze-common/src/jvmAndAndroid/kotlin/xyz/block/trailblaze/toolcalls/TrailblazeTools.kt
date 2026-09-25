@@ -128,9 +128,9 @@ fun TrailblazeTool.requiresHostInstance(): Boolean {
  * directly. See [toOtherTrailblazeToolPayload]'s kdoc for the full invariant and the indirect
  * ways (`@Contextual TrailblazeTool` fields) the unredacted one gets reached.
  */
-fun TrailblazeTool.toLogPayload(): OtherTrailblazeTool = toLogPayloadUnredacted().let { payload ->
-  if (this is SensitiveArgsTrailblazeTool) payload.withSensitiveArgsRedacted(sensitiveArgNames) else payload
-}
+fun TrailblazeTool.toLogPayload(): OtherTrailblazeTool = toLogPayloadUnredacted()
+  .let { if (this is SensitiveArgsTrailblazeTool) it.withSensitiveArgsRedacted(sensitiveArgNames) else it }
+  .let { if (this is SensitiveValuesTrailblazeTool) it.withSensitiveValuesRedacted(sensitiveValues) else it }
 
 private fun TrailblazeTool.toLogPayloadUnredacted(): OtherTrailblazeTool {
   if (this is OtherTrailblazeTool) return this

@@ -19,6 +19,7 @@ import type { ErrorObject, ValidateFunction } from "ajv/dist/2020.js";
 
 import type { TrailblazeClient, TrailblazeToolMethods } from "./client.js";
 import type { TrailblazeContext, TrailblazeDevice, TrailblazeTarget } from "./context.js";
+import type { TrailblazeSessionResources } from "./session-resources.js";
 import { attachMemoryDeltaToResult, createMemory, type TrailblazeMemory } from "./memory.js";
 
 /**
@@ -51,6 +52,11 @@ export interface ToolContext {
    * (`ctx.target?.resolveAppId()`) when the tool should degrade gracefully.
    */
   target?: TrailblazeTarget;
+  /**
+   * Opaque process-local session resources. Available on host subprocess tools; use it to
+   * register release callbacks for handles that must never enter `ctx.memory` or a tool result.
+   */
+  session?: TrailblazeSessionResources;
 }
 
 /**
@@ -315,6 +321,7 @@ export function defineTypedTool<TInput, TResult>(
       memory,
       device: normalizeDevice(legacyCtx?.device),
       target: legacyCtx?.target,
+      session: legacyCtx?.session,
     };
     const out = await handler(validatedArgs as TInput, toolContext);
     // On the subprocess / MCP path, the surrounding `attachMemoryDelta` (tool.ts) drains

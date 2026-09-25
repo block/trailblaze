@@ -328,14 +328,14 @@ class ConfigToolSet(
         key = KEY_ANDROID_DRIVER,
         description = "Android device driver type",
         validValues = TrailblazeDriverType.entries
-          .filter { it.platform == TrailblazeDevicePlatform.ANDROID }
+          .filter { it.platform == TrailblazeDevicePlatform.ANDROID && it !in TrailblazeDriverType.RETIRED_DRIVERS }
           .map { it.name },
       ),
       ConfigKeyDef(
         key = KEY_IOS_DRIVER,
         description = "iOS device driver type",
         validValues = TrailblazeDriverType.entries
-          .filter { it.platform == TrailblazeDevicePlatform.IOS }
+          .filter { it.platform == TrailblazeDevicePlatform.IOS && it !in TrailblazeDriverType.RETIRED_DRIVERS }
           .map { it.name },
       ),
       ConfigKeyDef(

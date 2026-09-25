@@ -6,12 +6,13 @@
 // Run: `bun test run-report-cli.test.ts` from this directory.
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { basename, join } from "path";
 import { gunzipSync } from "zlib";
 import { isSelectorAnalyzableTree } from "../trailrunner/web/app/run-report-selectors";
 import { MAX_ATTACHMENTS_PER_SESSION } from "./run-report-events";
+import { MAX_TRACE_BYTES } from "./run-report-trace-spans";
 import {
   anyAnalyzableHierarchy,
   formatterContext,
@@ -23,7 +24,11 @@ import {
   packLlmMessages,
   packNetwork,
   packSelectorEngine,
+  packSpans,
+  budgetedClipValue,
+  newMediaBudget,
   readAttachments,
+  readTraceFile,
   readVideo,
   remoteShotValue,
   screenshotDataUri,
@@ -167,10 +172,10 @@ describe("linked image URLs", () => {
       .not.toContain('"');
   });
 
-  test("a linked image URL cannot break out of background-image:url('…')", () => {
-    // Sprite sheets are interpolated into a SINGLE-quoted CSS url(), also unescaped — and
-    // encodeURIComponent leaves ' intact, so it has to be encoded explicitly.
-    const url = localShotUrl("/static/", `s' onload='alert(1)`, `video_sprites'.webp`);
+  test("a linked media URL cannot break out of a single-quoted attribute or CSS url('…')", () => {
+    // encodeURIComponent leaves ' intact, so it has to be encoded explicitly for any consumer that
+    // interpolates the value between single quotes.
+    const url = localShotUrl("/static/", `s' onload='alert(1)`, `video'.webm`);
     expect(url).not.toContain("'");
     expect(url).toContain("%27");
   });
@@ -240,16 +245,19 @@ describe("attachments referenced by event streams", () => {
     expect(readAttachments(attachDir, streams, "sess-2", null, 1024, shared)).toBeNull();
   });
 
-  test("main() hands every session the SAME budget object", () => {
+  test("main() hands every session, and both kinds of media, the SAME budget object", () => {
     // The tests above prove readAttachments spends a budget it is GIVEN across calls; this pins the
     // wiring that gives it one. main() isn't reachable from here — it loads the transpiled renderer
     // artifact, which this suite deliberately does not stage — so the call site is asserted in the
-    // source instead. Passing a fresh `{ remaining: ATTACHMENT_EMBED_MAX_TOTAL_BYTES }` per session
-    // typechecks, passes every other test, and silently restores the per-session budget.
+    // source instead. Seeding a fresh budget per session, or a second one for the recordings,
+    // typechecks, passes every other test, and silently restores the ceiling this defends.
     const src = readFileSync(join(import.meta.dir, "run-report-cli.ts"), "utf8");
     expect(src).toContain("input.attachmentInlineMaxBytes ?? ATTACHMENT_INLINE_MAX_BYTES, embedBudget)");
-    // Declared once, above the per-session map that consumes it.
-    expect(src.split("const embedBudget = { remaining: ATTACHMENT_EMBED_MAX_TOTAL_BYTES }").length - 1).toBe(1);
+    // Declared once, above the per-session map that consumes it...
+    expect(src.split("const embedBudget = newMediaBudget()").length - 1).toBe(1);
+    // ...and the recordings are charged against that same object, not one of their own.
+    expect(src).toContain("budgetedClipValue(embedBudget)");
+    expect(src).not.toContain("newMediaBudget(ATTACHMENT_EMBED_MAX_TOTAL_BYTES)");
   });
 
   test("an attachment that stats but cannot be read spends none of the shared budget", () => {
@@ -376,37 +384,158 @@ describe("attachments referenced by event streams", () => {
   });
 });
 
-// The sprite sheet is the single largest blob a session contributes, and it takes the same
+// The session recording is the single largest blob a session contributes, and it takes the same
 // embedded-vs-linked switch as the step screenshots — but through readVideo's own resolver rather
-// than the shots loop, so it needs its own coverage.
-describe("video sprite sheets", () => {
-  const videoDir = mkdtempSync(join(tmpdir(), "tb-report-sprite-test-"));
-  afterAll(() => rmSync(videoDir, { recursive: true, force: true }));
+// than the shots loop, so it needs its own coverage. The viewer half — the #tb-clip-<i> hoist and
+// the surfaces that play it — lives in ../trailrunner/web/app/run-report-core.test.ts.
+describe("session recording (readVideo)", () => {
+  const WEBM = "video.webm";
+  const MP4 = "video.mp4";
+  const WEBM_BYTES = Buffer.from("PRETEND-WEBM-BYTES");
+  const MP4_BYTES = Buffer.from("PRETEND-MP4-BYTES");
+  const webmArtifact = { filename: WEBM, type: "VIDEO_WEBM", startTimestampMs: 900, endTimestampMs: 3200 };
+  const mp4Artifact = { filename: MP4, type: "VIDEO", startTimestampMs: 1000, endTimestampMs: 3000 };
 
-  const SPRITE = "video_sprites.webp";
-  writeFileSync(join(videoDir, SPRITE), Buffer.alloc(2048, 5));
-  writeFileSync(
-    join(videoDir, "video_sprites.txt"),
-    ["fps=2", "frames=4", "height=720", "frameWidth=332", "columns=2", "rows=2", "uniqueFrames=4",
-      "sheets=1", "frameMap=0,1,2,3", "restamped=false"].join("\n"),
-  );
-  writeFileSync(
-    join(videoDir, "capture_metadata.json"),
-    JSON.stringify({ artifacts: [{ filename: SPRITE, type: "VIDEO_FRAMES", startTimestampMs: 1000, endTimestampMs: 3000 }] }),
-  );
-  const logs = [{ timestamp: new Date(1500).toISOString() }, { timestamp: new Date(2500).toISOString() }] as never;
+  /** A session dir whose capture_metadata.json lists `artifacts`, with `files` on disk. */
+  function sessionWith(artifacts: unknown[], files: Record<string, Buffer> = {}): string {
+    const dir = mkdtempSync(join(tmpdir(), "tb-report-clip-test-"));
+    afterAll(() => rmSync(dir, { recursive: true, force: true }));
+    Object.entries(files).forEach(([name, bytes]) => writeFileSync(join(dir, name), bytes));
+    writeFileSync(join(dir, "capture_metadata.json"), JSON.stringify({ artifacts }));
+    return dir;
+  }
 
-  test("by default the sheet is embedded as a data URI", () => {
-    const video = readVideo(videoDir, logs, 4);
-    expect(video).not.toBeNull();
-    expect(video!.sprites[0].uri).toStartWith("data:image/webp;base64,");
+  test("the recording is embedded as a webm clip carrying its OWN capture window", () => {
+    const video = readVideo(sessionWith([webmArtifact], { [WEBM]: WEBM_BYTES }));
+    expect(video).toEqual({
+      startMs: 900,
+      endMs: 3200,
+      clip: { uri: `data:video/webm;base64,${WEBM_BYTES.toString("base64")}`, mime: "video/webm", startMs: 900, endMs: 3200 },
+    });
   });
 
-  test("with a linked resolver the sheet becomes a URL and no bytes are embedded", () => {
-    const video = readVideo(videoDir, logs, 4, (path) => localShotUrl("/static/", "sess-1", basename(path)));
-    expect(video).not.toBeNull();
-    expect(video!.sprites[0].uri).toBe("/static/sess-1/video_sprites.webp");
-    expect(video!.sprites[0].uri).not.toContain("base64");
+  test("an mp4 recording (iOS, web, or a host that couldn't encode VP9) is played the same way", () => {
+    const video = readVideo(sessionWith([mp4Artifact], { [MP4]: MP4_BYTES }));
+    expect(video!.clip.mime).toBe("video/mp4");
+    expect(video!.clip.uri).toStartWith("data:video/mp4;base64,");
+    expect(video!.startMs).toBe(1000);
+    expect(video!.endMs).toBe(3000);
+  });
+
+  test("the webm is preferred when a session lists both", () => {
+    // Its window, not the mp4's: the two recorders stop at different instants, and a clip positioned
+    // against the other file's start would put every step on the wrong frame.
+    const video = readVideo(sessionWith([mp4Artifact, webmArtifact], { [MP4]: MP4_BYTES, [WEBM]: WEBM_BYTES }));
+    expect(video!.clip.mime).toBe("video/webm");
+    expect(video!.startMs).toBe(900);
+  });
+
+  test("with a linked resolver the clip becomes a URL and no bytes are embedded", () => {
+    const video = readVideo(sessionWith([webmArtifact], { [WEBM]: WEBM_BYTES }), (path) => localShotUrl("/static/", "sess-1", basename(path)));
+    expect(video!.clip.uri).toBe("/static/sess-1/video.webm");
+    expect(video!.clip.uri).not.toContain("base64");
+  });
+
+  test("a recording over the embed cap is declined — the report falls back to screenshots, it does not inline tens of MB", () => {
+    const huge = Buffer.alloc(13 * 1024 * 1024, 7);
+    expect(readVideo(sessionWith([webmArtifact], { [WEBM]: huge }))).toBeNull();
+  });
+
+  test("the whole report has ONE recording budget, spent across its runs rather than granted to each", () => {
+    // The per-file cap bounds one recording; nothing bounded the document. A report holds every
+    // run of the batch, so several runs each just under the per-file cap inline far more base64
+    // than the file can carry and still be openable or shareable.
+    const budget = newMediaBudget();
+    const embed = budgetedClipValue(budget);
+    const big = Buffer.alloc(11 * 1024 * 1024, 9); // under the per-file cap, so not refused for size
+    const run = () => readVideo(sessionWith([webmArtifact], { [WEBM]: big }), embed);
+    expect(run()).not.toBeNull();
+    expect(run()).not.toBeNull();
+    // Two of these encode to ~29 MiB of base64; a third does not fit, and the run falls back to
+    // its per-step screenshots rather than pushing the document past what Share accepts.
+    expect(run()).toBeNull();
+  });
+
+  test("recordings and attachments spend ONE media allowance, so the two together cannot double it", () => {
+    // Two independent allowances are not a limit: the recordings could fill one while the
+    // attachments filled the other, and the file would carry both — the entire ceiling Share
+    // refuses HTML above, before a byte of trace, log or screenshot.
+    const attachmentUri = `data:audio/wav;base64,${Buffer.from([1, 2, 3, 4]).toString("base64")}`;
+    const clipUri = `data:video/webm;base64,${WEBM_BYTES.toString("base64")}`;
+    const sessionDir = sessionWith([webmArtifact], { [WEBM]: WEBM_BYTES });
+    mkdirSync(join(sessionDir, "attachments"));
+    writeFileSync(join(sessionDir, "attachments", "tone.wav"), Buffer.from([1, 2, 3, 4]));
+    const streams: EventStream[] = [{
+      name: "s",
+      total: 1,
+      truncated: false,
+      events: [{ t: 0, d: JSON.stringify({ ref: { $attachment: true, path: "attachments/tone.wav", mimeType: "audio/wav", sizeBytes: 4 } }) }],
+    }];
+    // Room for the recording and the attachment, but not for both.
+    const budget = newMediaBudget(clipUri.length + attachmentUri.length - 1);
+
+    expect(readVideo(sessionDir, budgetedClipValue(budget))).not.toBeNull();
+    expect(readAttachments(sessionDir, streams, "sess", null, 1024, budget)).toBeNull();
+    // ...and with the recording never embedded, the same attachment fits, so the omission above is
+    // the shared budget rather than anything about the attachment.
+    expect(readAttachments(sessionDir, streams, "sess", null, 1024, newMediaBudget(clipUri.length + attachmentUri.length - 1)))
+      .toEqual({ "attachments/tone.wav": attachmentUri });
+  });
+
+  test("a run is charged what the document pays, and a resolver without a budget is unchanged", () => {
+    // The charge is the whole data: URI, not the file length — the document carries the encoded
+    // form, which is a third larger, plus its prefix. Charging raw bytes would let a report
+    // overrun the limit it is checked at, and would also undercount against the attachments it
+    // now shares the allowance with, which are charged on exactly this meter.
+    const budget = newMediaBudget();
+    const before = budget.remaining;
+    readVideo(sessionWith([webmArtifact], { [WEBM]: WEBM_BYTES }), budgetedClipValue(budget));
+    expect(before - budget.remaining).toBe(`data:video/webm;base64,${WEBM_BYTES.toString("base64")}`.length);
+    // The default resolver takes no budget, so a single-run caller is untouched by any of this.
+    expect(readVideo(sessionWith([webmArtifact], { [WEBM]: WEBM_BYTES }))!.clip.uri).toStartWith("data:video/webm;base64,");
+  });
+
+  test("metadata naming a recording that isn't on disk yields no video rather than a broken one", () => {
+    // Exactly what a partially-synced or partially-downloaded session dir looks like: the artifact
+    // is listed, the file never landed. Embedding "" would give the viewer an unplayable <video>.
+    expect(readVideo(sessionWith([webmArtifact]))).toBeNull();
+  });
+
+  test("a recording without a capture-start timestamp cannot be placed on the run clock, so it is not offered", () => {
+    expect(readVideo(sessionWith([{ filename: WEBM, type: "VIDEO_WEBM" }], { [WEBM]: WEBM_BYTES }))).toBeNull();
+  });
+
+  test("a session with no capture metadata, or a legacy sprite-only one, reports no video", () => {
+    const bare = mkdtempSync(join(tmpdir(), "tb-report-novideo-test-"));
+    afterAll(() => rmSync(bare, { recursive: true, force: true }));
+    expect(readVideo(bare)).toBeNull();
+    const spritesOnly = sessionWith(
+      [{ filename: "video_sprites.webp", type: "VIDEO_FRAMES", startTimestampMs: 1000, endTimestampMs: 3000 }],
+      { "video_sprites.webp": Buffer.alloc(64, 5) },
+    );
+    expect(readVideo(spritesOnly)).toBeNull();
+  });
+
+  test("a recording named outside the session directory is refused, whichever way the name escapes", () => {
+    // The artifact list is producer-written. `../` is the lexical escape; a symlink inside the
+    // session pointing out of it is the one a lexical rule can't see. Either would base64-embed a
+    // host file into the report under a video MIME.
+    const outside = join(tmpdir(), `tb-report-clip-outside-${process.pid}-${Date.now()}.webm`);
+    writeFileSync(outside, WEBM_BYTES);
+    afterAll(() => rmSync(outside, { force: true }));
+    const traversal = sessionWith([{ ...webmArtifact, filename: `../${basename(outside)}` }]);
+    expect(readVideo(traversal)).toBeNull();
+    const linked = sessionWith([webmArtifact]);
+    symlinkSync(outside, join(linked, WEBM));
+    expect(readVideo(linked)).toBeNull();
+    // And the spelling rule itself is the attachments' one: a `.` segment resolves inside the
+    // session, but a traversal-shaped name is refused before anything is resolved.
+    const dotted = sessionWith([{ ...webmArtifact, filename: `./${WEBM}` }], { [WEBM]: WEBM_BYTES });
+    expect(readVideo(dotted)).toBeNull();
+    // Linking instead of embedding does not lower the bar — the published report would carry the
+    // escaped path as a URL rather than as bytes, which is the same leak with an extra hop.
+    const linkedOut = sessionWith([{ ...webmArtifact, filename: `../${basename(outside)}` }]);
+    expect(readVideo(linkedOut, (path) => `/static/${basename(path)}`)).toBeNull();
   });
 });
 
@@ -433,6 +562,58 @@ describe("device/network log gzip packing", () => {
     const { network, networkGz } = packNetwork(many);
     expect(network).toBeNull();
     expect(JSON.parse(gunzipSync(Buffer.from(networkGz!, "base64")).toString("utf8"))).toEqual(many);
+  });
+});
+
+describe("the session's trace.json (readTraceFile / packSpans)", () => {
+  const traceDir = mkdtempSync(join(tmpdir(), "tb-report-cli-trace-"));
+  afterAll(() => rmSync(traceDir, { recursive: true, force: true }));
+  const withTrace = (name: string, contents: string) => {
+    const dir = join(traceDir, name);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "trace.json"), contents);
+    return dir;
+  };
+
+  test("keeps the complete events as slim spans — process, thread, clock and kind kept, span ids dropped — and skips everything else", () => {
+    const dir = withTrace("mixed", JSON.stringify([
+      { name: "tapOnElementBySelector", cat: "tool", ts: 1_789_705_349_234_251, dur: 981_522, pid: 25484, tid: 92, ph: "X", args: {}, sid: "ec91", psid: "b819", trid: "d32d" },
+      { name: "POST /agentlog", cat: "http", ts: 1_789_705_348_975_750, dur: 11_475, pid: 25484, tid: 61, ph: "X", args: { async: "true", status: "200" }, kind: "CLIENT", trid: "d32d" },
+      { name: "walk", cat: "driver", ts: 1_789_705_350_000_000, dur: 20, pid: 4, tid: 3, ph: "X", clock: "device" },
+      { name: "process_name", ph: "M", pid: 25484, tid: 0, args: { name: "host" } },
+      { name: "no duration", cat: "tool", ts: 1_789_705_350_000_000, pid: 25484, tid: 92, ph: "X" },
+      "not an event",
+      null,
+    ]));
+    expect(readTraceFile(dir)).toEqual([
+      { name: "tapOnElementBySelector", cat: "tool", ts: 1_789_705_349_234_251, dur: 981_522, tid: 92, pid: 25484 },
+      { name: "POST /agentlog", cat: "http", ts: 1_789_705_348_975_750, dur: 11_475, tid: 61, pid: 25484, args: { async: "true", status: "200" }, kind: "CLIENT" },
+      { name: "walk", cat: "driver", ts: 1_789_705_350_000_000, dur: 20, tid: 3, pid: 4, clock: "device" },
+    ]);
+  });
+
+  test("a file over the size cap is left out whole rather than cut", () => {
+    // A span tree cut at a byte boundary loses children silently, so an oversized trace is skipped.
+    const filler = "x".repeat(MAX_TRACE_BYTES);
+    expect(readTraceFile(withTrace("huge", `[{"name":"${filler}","cat":"tool","ts":1,"dur":1,"tid":1,"ph":"X"}]`))).toBeNull();
+  });
+
+  test("an absent, empty, non-array or unparseable trace yields null rather than a broken report", () => {
+    expect(readTraceFile(join(traceDir, "nowhere"))).toBeNull();
+    expect(readTraceFile(withTrace("empty", ""))).toBeNull();
+    expect(readTraceFile(withTrace("object", JSON.stringify({ traceEvents: [] })))).toBeNull();
+    expect(readTraceFile(withTrace("garbage", "[{not json"))).toBeNull();
+    expect(readTraceFile(withTrace("no-spans", JSON.stringify([{ name: "process_name", ph: "M", pid: 1, tid: 0 }])))).toBeNull();
+  });
+
+  test("a few spans stay inline; a verbose trace is embedded gzipped and round-trips", () => {
+    const few = [{ name: "tap", cat: "tool", ts: 1, dur: 2, tid: 3 }];
+    expect(packSpans(few)).toEqual({ spans: few, spansGz: null });
+    expect(packSpans(null)).toEqual({ spans: null, spansGz: null });
+    const many = Array.from({ length: 3000 }, (_, i) => ({ name: `AccessibilityNodeInfo.child${i}`, cat: "MaestroDriver", ts: 1_789_705_349_000_000 + i * 100, dur: 50, tid: 92 }));
+    const { spans, spansGz } = packSpans(many);
+    expect(spans).toBeNull();
+    expect(JSON.parse(gunzipSync(Buffer.from(spansGz!, "base64")).toString("utf8"))).toEqual(many);
   });
 });
 

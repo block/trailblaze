@@ -30,6 +30,7 @@ import xyz.block.trailblaze.llm.LlmRequestUsageAndCost
 import xyz.block.trailblaze.llm.LlmTokenBreakdownEstimator
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.logs.client.TrailblazeLog
+import xyz.block.trailblaze.logs.client.TrailblazeToolCatalogEmitter
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.TaskId
 import xyz.block.trailblaze.logs.model.TraceId
@@ -75,6 +76,15 @@ class LocalLlmSamplingSource(
    */
   private val saveAnnotatedScreenshotsProvider: () -> Boolean = { true },
 ) : SamplingSource {
+
+  /**
+   * Writes this session's tool descriptors once rather than on every sampled request.
+   *
+   * Sampling logs are written straight to [LogsRepo] instead of through [TrailblazeLogger], so
+   * they need their own emitter instance. It is the same type the runner uses, so both sides agree
+   * on what a catalog id means and a reader resolves inner- and outer-tier requests identically.
+   */
+  private val toolCatalogEmitter = TrailblazeToolCatalogEmitter()
 
   override fun isAvailable(): Boolean = llmClient != null && llmModel != null
 
@@ -568,6 +578,16 @@ class LocalLlmSamplingSource(
         confidence = if (successful) "HIGH" else "LOW",
       )
 
+      // Sorted for the same reason the runner sorts: a catalog id is a hash of the descriptor
+      // list, so a stable order makes the id depend on the tool SET rather than on enumeration
+      // order, and two requests offering the same tools share one catalog.
+      val catalogToolOptions = toolOptions.sortedBy { it.name }
+      val toolCatalogId = toolCatalogEmitter.emitIfNew(
+        sessionId = sessionId,
+        toolOptions = catalogToolOptions,
+        timestamp = startTime,
+      ) { catalogLog -> repo.saveLogToDisk(catalogLog) }
+
       val llmRequestLog = TrailblazeLog.TrailblazeLlmRequestLog(
         agentTaskStatus = agentTaskStatus,
         viewHierarchy = viewHierarchy,
@@ -591,7 +611,10 @@ class LocalLlmSamplingSource(
         ),
         llmResponse = emptyList<Message.Assistant>(), // Raw responses not available at this level
         actions = emptyList(), // Actions parsed at higher level
-        toolOptions = toolOptions,
+        // `toolOptions` deliberately left empty — the descriptors live in the catalog this
+        // request points at. Populating both would reintroduce the per-request copy.
+        toolCatalogId = toolCatalogId,
+        toolNames = catalogToolOptions.map { it.name },
         llmRequestUsageAndCost = usageAndCost,
         screenshotFile = screenshotFile,
         screenshotIsAnnotated = screenshotIsAnnotated,

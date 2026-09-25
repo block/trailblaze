@@ -18,7 +18,7 @@ import xyz.block.trailblaze.utils.ElementComparator
  * tool execution to the MCP bridge, which in turn uses Maestro/ADB to interact
  * with the device.
  *
- * On-device, the agent uses [AndroidMaestroTrailblazeAgent] instead, which
+ * On-device, the agent uses `AccessibilityTrailblazeAgent` instead, which
  * executes tools directly via UI Automator.
  */
 class BridgeTrailblazeAgent(

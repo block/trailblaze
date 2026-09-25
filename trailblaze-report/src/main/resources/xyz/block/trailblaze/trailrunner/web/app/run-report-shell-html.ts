@@ -39,6 +39,16 @@ const VIEWER_SHELL_SCRIPT: string = embeddedShellScript();
 // for both themes) so the loader follows light/dark with the report it renders, instead of pinning
 // its own palette.
 const VIEWER_SHELL_CSS = `
+:root {
+  --tb-analysis-red: #cf222e;
+  --tb-analysis-orange: #bc4c00;
+  --tb-analysis-yellow: #bf8700;
+}
+[data-theme="dark"] {
+  --tb-analysis-red: #f85149;
+  --tb-analysis-orange: #f0883e;
+  --tb-analysis-yellow: #d4a72c;
+}
 html[data-tb-shell] body, body:has(> #tb-shell) { margin: 0; }
 /* The report's #app sizes itself to the full viewport (height: 100dvh) because in an exported
    document it IS the whole page. Here it sits below the shell bar, so that height overflows by
@@ -49,12 +59,15 @@ html[data-tb-shell] body, body:has(> #tb-shell) { margin: 0; }
    Selector note: NOT html[data-tb-shell] — the loader clears that marker when it boots the
    viewer, i.e. precisely when #app becomes visible. #tb-shell is the stable hook. */
 body:has(> #tb-shell) { display: flex; flex-direction: column; height: 100dvh; }
+body:has(> #tb-shell) > #tb-shell { flex: 0 0 auto; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+body:has(> #tb-shell) > #tb-shell.tb-shell-panel-visible { flex: 1 1 auto; }
+body:has(> #tb-shell) > #tb-shell.tb-shell-min { flex: 0 0 auto; }
 body:has(> #tb-shell) > #app { flex: 1 1 auto; height: auto; min-height: 0; }
 /* Wraps rather than overflowing: on a narrow window an unwrapped row pushes the trailing controls
    (Choose files…, Share) off the edge with no way to scroll to them, and the body rule above already
    gives #app whatever height is left over when the bar takes two lines. */
 #tb-shell-bar {
-  display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 10px 14px;
+  flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 10px 14px;
   border-bottom: 1px solid var(--line); background: var(--header);
 }
 #tb-shell-bar .tb-shell-brand { font-weight: var(--font-weight-emphasis); font-size: var(--type-small); white-space: nowrap; display: flex; align-items: center; gap: 8px; }
@@ -84,13 +97,13 @@ body:has(> #tb-shell) > #app { flex: 1 1 auto; height: auto; min-height: 0; }
    past the fold would simply clip its last rows, and those rows carry the buttons for taking them
    back out. */
 #tb-shell-list {
-  display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 14px;
+  flex: none; display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 14px;
   max-height: 33dvh; overflow-y: auto; overscroll-behavior: contain;
   border-bottom: 1px solid var(--line); background: var(--header);
 }
 #tb-shell-list[hidden] { display: none; }
 /* The list's changes are announced through a region of its own rather than by making the list itself
-   live. A live list re-reads every surviving row when one is removed — four signed artifact URLs to
+   live. A live list re-reads every surviving row when one is removed — four artifact links to
    report that a fifth is gone — and it carries [hidden] while empty, which keeps the FIRST archive
    added from being announced at all. This one is always in the tree, and only ever holds the delta.
    Off-screen rather than display:none, which is not announced either. */
@@ -119,15 +132,15 @@ body:has(> #tb-shell) > #app { flex: 1 1 auto; height: auto; min-height: 0; }
    archive. (Dropping a zip anywhere still works while collapsed.) */
 #tb-shell.tb-shell-min #tb-shell-bar { display: none; }
 #tb-shell-handle {
-  display: none; width: 100%; height: 14px; padding: 0; align-items: center; justify-content: center;
+  flex: none; display: none; width: 100%; height: 14px; padding: 0; align-items: center; justify-content: center;
   border: 0; border-bottom: 1px solid var(--line); background: var(--header); color: var(--sub); cursor: pointer;
 }
 #tb-shell.tb-shell-min #tb-shell-handle { display: flex; }
 #tb-shell-handle svg { width: 12px; height: 12px; }
 #tb-shell-handle:hover { color: var(--txt); background: var(--raised); }
 #tb-shell-panel {
-  display: flex; flex-direction: column; align-items: center; justify-content: center;
-  gap: 10px; padding: 48px 24px; text-align: center;
+  flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 10px; padding: 48px 24px; overflow-y: auto; overscroll-behavior: contain; text-align: center;
 }
 #tb-shell-panel .tb-shell-title { font-size: var(--type-small); font-weight: var(--font-weight-emphasis); }
 #tb-shell-panel .tb-shell-sub { font-size: var(--type-caption); color: var(--sub); max-width: 520px; }
@@ -135,6 +148,59 @@ body:has(> #tb-shell) > #app { flex: 1 1 auto; height: auto; min-height: 0; }
 #tb-shell-panel code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: var(--type-micro); color: var(--sub); word-break: break-all; }
 #tb-shell-panel .tb-shell-hint { font-size: var(--type-micro); color: var(--sub); display: flex; align-items: center; gap: 8px; width: 100%; max-width: 520px; }
 #tb-shell-panel .tb-shell-hint .rule { flex: 1; height: 1px; background: var(--line); min-width: 30px; }
+#tb-shell-panel:has(.tb-analysis) { justify-content: flex-start; }
+.tb-analysis { flex: none; width: min(980px, 100%); min-height: auto; display: grid; gap: 18px; margin: 0 auto; overflow: visible; text-align: left; }
+.tb-analysis h1, .tb-analysis h2, .tb-analysis h3, .tb-analysis p { margin: 0; }
+.tb-analysis a { color: var(--focus); }
+.tb-analysis button { color: var(--txt); background: var(--raised); border: 1px solid var(--line); border-radius: var(--r-md); padding: 7px 10px; cursor: pointer; }
+.tb-analysis-heading { display: flex; align-items: end; justify-content: space-between; gap: 20px; }
+.tb-analysis-heading > div { display: grid; gap: 5px; }
+.tb-analysis-heading > p, .tb-analysis-card header, .tb-analysis-meta, .tb-analysis-eyebrow { color: var(--sub); font-size: var(--type-caption); }
+.tb-analysis-eyebrow { text-transform: uppercase; letter-spacing: .06em; }
+.tb-analysis-coverage { width: fit-content; padding: 5px 9px; border-radius: 999px; background: var(--raised); color: var(--sub); font-size: var(--type-caption); }
+.tb-analysis-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr)); gap: 14px; }
+.tb-analysis-card, .tb-analysis-focus { --tb-analysis-tone: var(--focus); }
+.tb-analysis-card { display: grid; align-content: start; gap: 10px; padding: 18px; border: 1px solid var(--line); border-left: 5px solid var(--tb-analysis-tone); border-radius: var(--r-lg); background: var(--raised); }
+.tb-analysis-card header, .tb-analysis-focus > header, .tb-analysis-toolbar, .tb-analysis-siblings { display: flex; justify-content: space-between; gap: 12px; }
+.tb-analysis-card h2 { font-size: var(--type-title); }
+.tb-analysis-card h3, .tb-analysis-kind { font-size: var(--type-micro); text-transform: uppercase; letter-spacing: .05em; color: var(--sub); }
+.tb-analysis-open { margin-top: auto; width: fit-content; font-weight: var(--font-weight-emphasis); }
+.tb-analysis-critical { --tb-analysis-tone: var(--tb-analysis-red); }
+.tb-analysis-warning { --tb-analysis-tone: var(--tb-analysis-orange); }
+.tb-analysis-notice { --tb-analysis-tone: var(--tb-analysis-yellow); }
+.tb-analysis-info, .tb-analysis-neutral { --tb-analysis-tone: var(--focus); }
+.tb-analysis-status { display: inline-flex; align-items: center; gap: 6px; font-weight: var(--font-weight-emphasis); color: var(--txt); }
+.tb-analysis-status::before { width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--tb-analysis-tone); content: ''; }
+.tb-analysis-toolbar { align-items: center; }
+.tb-analysis-copy-error { color: var(--fail); font-size: var(--type-caption); }
+.tb-analysis-focus { display: grid; gap: 22px; padding: 24px; border: 1px solid var(--line); border-left: 5px solid var(--tb-analysis-tone); border-radius: var(--r-lg); background: var(--raised); }
+.tb-analysis-focus > header > div { display: flex; gap: 12px; align-items: baseline; }
+.tb-analysis-focus section { display: grid; gap: 8px; }
+.tb-analysis-focus h2 { font-size: var(--type-small); }
+.tb-analysis-attention { font-size: var(--type-title); line-height: 1.45; }
+.tb-analysis-action { padding: 15px; border-radius: var(--r-md); background: color-mix(in srgb, var(--focus) 10%, var(--bg)); }
+.tb-analysis-priority { display: grid; grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr); gap: 14px; align-items: stretch; }
+.tb-analysis-priority > section { align-content: start; padding: 15px; border-radius: var(--r-md); }
+.tb-analysis-key-evidence { background: color-mix(in srgb, var(--raised) 78%, var(--bg)); border: 1px solid var(--line); }
+.tb-analysis-interpretation { padding: 15px; border-left: 3px solid var(--focus); background: color-mix(in srgb, var(--focus) 6%, transparent); }
+.tb-analysis-uncertainty { padding: 15px; border-left: 3px solid var(--warn); background: color-mix(in srgb, var(--warn) 7%, transparent); }
+.tb-analysis-subjects, .tb-analysis-evidence-list, .tb-analysis-focus ol, .tb-analysis-focus ul { display: grid; gap: 6px; margin: 0; padding-left: 20px; }
+.tb-analysis-subjects li span, .tb-analysis-focus ol li span, .tb-analysis-focus ul li span { margin-left: 8px; color: var(--sub); }
+.tb-analysis-evidence { padding: 10px 0; }
+.tb-analysis-evidence > div { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; }
+.tb-analysis-evidence p { margin-top: 5px; }
+.tb-analysis-unavailable { padding: 2px 6px; border-radius: 999px; background: color-mix(in srgb, var(--warn) 14%, transparent); color: var(--warn); font-size: var(--type-micro); }
+.tb-analysis details { border-top: 1px solid var(--line); padding-top: 14px; }
+.tb-analysis summary { cursor: pointer; font-weight: var(--font-weight-emphasis); }
+.tb-analysis-siblings a:last-child { margin-left: auto; text-align: right; }
+@media (max-width: 480px) {
+  #tb-shell-panel { padding: 24px 12px; }
+  .tb-analysis-heading, .tb-analysis-focus > header, .tb-analysis-toolbar { align-items: flex-start; flex-direction: column; }
+  .tb-analysis-focus { padding: 16px; }
+  .tb-analysis-priority { grid-template-columns: 1fr; }
+  .tb-analysis-siblings { display: grid; grid-template-columns: 1fr; }
+  .tb-analysis-siblings a:last-child { margin-left: 0; text-align: left; }
+}
 .tb-shell-spinner {
   width: 16px; height: 16px; border-radius: 50%; border: 2px solid var(--line);
   border-top-color: var(--focus); animation: tb-shell-spin .8s linear infinite;
@@ -204,7 +270,7 @@ function buildViewerShellHtml(): string {
       To see several runs together, <b>Add</b> them one at a time — each becomes a row you can take back out —
       or drop and pick as many files at once as you like. A list of URLs is also a link:
       <code>?zip=&lt;url-1&gt;&amp;zip=&lt;url-2&gt;</code>. They render as one report, so its run index can compare
-      any runs you pick — and when they are the same trail, lane them up side by side in the <b>Trail view</b>.
+      any runs you pick — and when they are the same trail, lane them up side by side in <b>Replay</b>, <b>Grid</b> and <b>Map</b>.
     </div>
   </div>
 </div>

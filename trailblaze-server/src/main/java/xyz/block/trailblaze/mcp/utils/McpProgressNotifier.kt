@@ -193,6 +193,7 @@ class McpProgressNotifier(
     is TrailblazeLog.McpToolCallRequestLog,
     is TrailblazeLog.McpToolCallResponseLog,
     is TrailblazeLog.TrailblazeProgressLog,
+    is TrailblazeLog.TrailblazeToolCatalogLog,
     -> null
   }
 

@@ -16,6 +16,10 @@ plugins {
 // mistake, since it takes its release version from a `-Pversion` that propagates in from outside.
 apply(from = "../gradle/maven-version-guard.gradle.kts")
 
+// Same reason: a separate build, so the root's apply misses it. Its tests are the TestKit
+// functional ones, where the default one-line failure is least useful.
+apply(from = "../gradle/test-conventions.gradle.kts")
+
 gradlePlugin {
   // The public-facing OSS plugin id. External consumers reach this via:
   //   plugins { id("xyz.block.trailblaze.android-gradle") version "..." }

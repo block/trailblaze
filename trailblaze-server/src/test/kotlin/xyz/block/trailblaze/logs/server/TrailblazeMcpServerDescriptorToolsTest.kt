@@ -792,6 +792,22 @@ class TrailblazeMcpServerDescriptorToolsTest {
   }
 
   @Test
+  fun `a closing session ignores tools refreshes`() {
+    val bridge = RecordingBridge(targets = setOf(eraseTarget), currentTargetId = eraseTarget.id)
+    val server = newServer(bridge)
+    val sessionContext = ctx("closing-session")
+    var refreshCount = 0
+    server.onToolsRefreshedForTest = { refreshCount++ }
+    server.installSessionContextForTest("closing-session", sessionContext)
+    server.installSessionMcpServerForTest("closing-session", server.configureMcpServer())
+    server.markSessionClosing("closing-session")
+
+    server.refreshToolsForSession("closing-session")
+
+    assertEquals(0, refreshCount)
+  }
+
+  @Test
   fun `a failing notification stream does not fail the tools refresh`() {
     // Documented contract: a sender failure (client stream torn down mid-send) is swallowed —
     // the refresh itself (re-registration) must still complete.

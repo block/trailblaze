@@ -11,10 +11,12 @@ import xyz.block.trailblaze.yaml.ToolRecording
 import xyz.block.trailblaze.yaml.TrailConfig
 import xyz.block.trailblaze.yaml.TrailSource
 import xyz.block.trailblaze.yaml.TrailSourceType
+import xyz.block.trailblaze.yaml.TrailMetadataValue
 import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.TrailheadDefinition
 import xyz.block.trailblaze.yaml.TrailblazeToolYamlWrapper
 import xyz.block.trailblaze.yaml.VerificationStep
+import xyz.block.trailblaze.yaml.string
 
 /**
  * Lowers a [UnifiedTrail] document into the legacy v1 shape the runtime
@@ -474,12 +476,12 @@ object UnifiedTrailAdapter {
    * bridges as an empty-string [UnifiedTrailConfig.METADATA_KEY_SOURCE] so it round-trips.
    * On a key collision the first-class v1 field wins (none exist in the corpus).
    */
-  private fun bridgeMetadata(v1: TrailConfig): Map<String, String>? {
-    val bridged = linkedMapOf<String, String>()
+  private fun bridgeMetadata(v1: TrailConfig): Map<String, TrailMetadataValue>? {
+    val bridged = linkedMapOf<String, TrailMetadataValue>()
     v1.metadata?.let { bridged.putAll(it) }
     v1.source?.let { source ->
-      bridged[UnifiedTrailConfig.METADATA_KEY_SOURCE] = source.type?.name.orEmpty()
-      source.reason?.let { bridged[UnifiedTrailConfig.METADATA_KEY_SOURCE_REASON] = it }
+      bridged[UnifiedTrailConfig.METADATA_KEY_SOURCE] = TrailMetadataValue.StringValue(source.type?.name.orEmpty())
+      source.reason?.let { bridged[UnifiedTrailConfig.METADATA_KEY_SOURCE_REASON] = TrailMetadataValue.StringValue(it) }
     }
     return bridged.ifEmpty { null }
   }
@@ -492,22 +494,24 @@ object UnifiedTrailAdapter {
    * stays in metadata untouched rather than being destroyed by a failed parse.
    */
   private fun splitBridgedMetadata(
-    metadata: Map<String, String>?,
-  ): Pair<TrailSource?, Map<String, String>?> {
+    metadata: Map<String, TrailMetadataValue>?,
+  ): Pair<TrailSource?, Map<String, TrailMetadataValue>?> {
     if (metadata == null) return null to null
-    val sourceTypeRaw = metadata[UnifiedTrailConfig.METADATA_KEY_SOURCE]
+    // Only a string value can be a bridge; a list under a reserved key is the author's own metadata.
+    val sourceTypeRaw = metadata.string(UnifiedTrailConfig.METADATA_KEY_SOURCE)
     val parsedSourceType = sourceTypeRaw
       ?.takeIf { it.isNotEmpty() }
       ?.let { raw -> TrailSourceType.entries.firstOrNull { it.name == raw } }
     val sourceBridges = sourceTypeRaw != null && (sourceTypeRaw.isEmpty() || parsedSourceType != null)
-    val source = if (sourceBridges) {
-      TrailSource(type = parsedSourceType, reason = metadata[UnifiedTrailConfig.METADATA_KEY_SOURCE_REASON])
-    } else {
-      null
+    val reason = metadata.string(UnifiedTrailConfig.METADATA_KEY_SOURCE_REASON)
+    val source = if (sourceBridges) TrailSource(type = parsedSourceType, reason = reason) else null
+    // A non-string reason isn't bridged, so it stays in metadata rather than being dropped.
+    val consumed = when {
+      !sourceBridges -> emptySet()
+      reason != null -> setOf(UnifiedTrailConfig.METADATA_KEY_SOURCE, UnifiedTrailConfig.METADATA_KEY_SOURCE_REASON)
+      else -> setOf(UnifiedTrailConfig.METADATA_KEY_SOURCE)
     }
-    val remaining = metadata
-      .let { if (sourceBridges) it - UnifiedTrailConfig.METADATA_KEY_SOURCE - UnifiedTrailConfig.METADATA_KEY_SOURCE_REASON else it }
-      .ifEmpty { null }
+    val remaining = (metadata - consumed).ifEmpty { null }
     return source to remaining
   }
 
@@ -546,18 +550,28 @@ object UnifiedTrailAdapter {
    * Metadata merges per-KEY (union; [base]'s value wins on a shared key), unlike the other
    * fields' whole-value fill: the reserved bridge keys mean one file's `source:` and another
    * file's plain metadata land in the same map, and an atomic first-map-wins would re-drop
-   * whichever the first file lacked. `memory` deliberately stays whole-map — it is
+   * whichever the first file lacked. Map values merge the same way, recursively, so one file's
+   * `tracker: {suites: [...]}` doesn't wipe another's `tracker: {ticket: X}`; a list or string
+   * is a whole value, and [base]'s wins. `memory` deliberately stays whole-map — it is
    * runtime-load-bearing, and unioning two platforms' seeds could fabricate a combination no
    * file declared.
    */
   private fun mergeMetadata(
-    base: Map<String, String>?,
-    fallback: Map<String, String>?,
-  ): Map<String, String>? = when {
+    base: Map<String, TrailMetadataValue>?,
+    fallback: Map<String, TrailMetadataValue>?,
+  ): Map<String, TrailMetadataValue>? = when {
     base.isNullOrEmpty() -> fallback ?: base
     fallback.isNullOrEmpty() -> base
-    else -> fallback + base
+    // A key only in fallback merges with itself, which is a no-op.
+    else -> (fallback + base).mapValues { (key, value) -> mergeMetadataValue(value, fallback[key]) }
   }
+
+  private fun mergeMetadataValue(base: TrailMetadataValue, fallback: TrailMetadataValue?): TrailMetadataValue =
+    if (base is TrailMetadataValue.MapValue && fallback is TrailMetadataValue.MapValue) {
+      TrailMetadataValue.MapValue(mergeMetadata(base.entries, fallback.entries).orEmpty())
+    } else {
+      base
+    }
 
   private fun String?.orIfAbsent(fallback: String?): String? =
     takeUnless { it.isNullOrBlank() } ?: fallback ?: this

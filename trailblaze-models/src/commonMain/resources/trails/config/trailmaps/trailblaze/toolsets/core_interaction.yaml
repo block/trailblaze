@@ -9,7 +9,6 @@ id: core_interaction
 description: "Tap, swipe, type, and other basic device interactions."
 always_enabled: true
 drivers:
-  - android-ondevice-instrumentation
   - android-ondevice-accessibility
   - ios-host
   - ios-axe

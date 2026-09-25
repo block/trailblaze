@@ -65,7 +65,7 @@ class PlaywrightToolRefResolutionTest {
   fun tearDown() {
     browser.close()
     playwright.close()
-    PlaywrightExecutableTool.elementResolutionTimeoutMs = 10_000.0
+    PlaywrightExecutableTool.elementResolutionTimeoutMs = PRODUCTION_RESOLUTION_BUDGET_MS
   }
 
   private val testHtml = """
@@ -135,7 +135,7 @@ class PlaywrightToolRefResolutionTest {
     assertNull(error)
     assertNotNull(locator)
     assertTrue(locator.count() > 0)
-    assertContains(locator.first().textContent(), "Submit")
+    assertContains(assertNotNull(locator.first().textContent()), "Submit")
   }
 
   @Test
@@ -316,9 +316,11 @@ class PlaywrightToolRefResolutionTest {
    */
   @Test
   fun `auto-wait resolves element that appears mid-wait (SPA-render race)`() {
-    // Override the 100ms @Before default — we need a budget large enough to absorb
-    // the 200ms scheduled DOM insert plus locator-poll overhead.
-    PlaywrightExecutableTool.elementResolutionTimeoutMs = 2000.0
+    // Override the 100ms @Before default and run on the production budget. The budget is
+    // also what a broken early-resolve would burn, so making it large is what puts the two
+    // outcomes seconds apart instead of a few hundred milliseconds — see
+    // [WELL_UNDER_THE_RESOLUTION_BUDGET_MS]. Restored by @After.
+    PlaywrightExecutableTool.elementResolutionTimeoutMs = PRODUCTION_RESOLUTION_BUDGET_MS
 
     page.setContent(
       """<!DOCTYPE html><html><body><div id="empty"></div></body></html>""",
@@ -361,13 +363,11 @@ class PlaywrightToolRefResolutionTest {
         "got ${elapsedMs}ms — auto-wait may not be firing.",
     )
 
-    // But we didn't sit on the full 2000ms ceiling — once the element attached,
-    // the call returned promptly. A regression that no-ops the waitFor's "early
-    // resolve on match" behavior would burn the full budget.
+    // But we didn't sit on the full ceiling — once the element attached, the call returned.
     assertTrue(
-      elapsedMs < 1500,
-      "Wait took ${elapsedMs}ms (budget was 2000ms) — auto-wait isn't resolving " +
-        "promptly after the element attaches.",
+      elapsedMs < WELL_UNDER_THE_RESOLUTION_BUDGET_MS,
+      "Wait took ${elapsedMs}ms of a ${PRODUCTION_RESOLUTION_BUDGET_MS.toLong()}ms budget — " +
+        "auto-wait isn't resolving promptly after the element attaches.",
     )
   }
 
@@ -980,3 +980,26 @@ class PlaywrightToolRefResolutionTest {
     )
   }
 }
+
+/**
+ * The auto-wait budget these tests run on, and what `@After` restores. Chosen to match
+ * [PlaywrightExecutableTool.elementResolutionTimeoutMs]'s default rather than to track it: the
+ * tests need a budget far above the ~200ms path they measure, which any plausible production
+ * value satisfies, so reading the live value would only couple the bound below to a tuning knob.
+ */
+private const val PRODUCTION_RESOLUTION_BUDGET_MS = 10_000.0
+
+/**
+ * Ceiling proving the auto-wait returns when the element attaches rather than sitting out its
+ * whole budget.
+ *
+ * Duration is the only discriminator here — both outcomes hand back the same resolved locator —
+ * so the bound has to be a clock, and the way to keep it honest is to put the two outcomes far
+ * apart rather than to tighten it. Correct code returns in ~200ms (when the scheduled insert
+ * lands); a regression that no-ops the waitFor's early resolve burns the full
+ * [PRODUCTION_RESOLUTION_BUDGET_MS]. Half the budget sits ~20x above the correct path and 5s
+ * below the broken one. A bound near the correct path would instead fail on a loaded agent for
+ * reasons that have nothing to do with early resolve, since the wait encloses real CDP round
+ * trips.
+ */
+private const val WELL_UNDER_THE_RESOLUTION_BUDGET_MS = 5_000L

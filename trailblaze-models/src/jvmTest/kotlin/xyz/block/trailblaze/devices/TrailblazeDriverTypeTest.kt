@@ -90,16 +90,13 @@ class TrailblazeDriverTypeTest {
    * self-heal steps to it. ANDROID_TEST opts out as a driver contract: it is a merge-blocking
    * gate whose on-device runner fails an unrecorded step BY NAME, and a gate that can improvise
    * is a gate that can pass for the wrong reason. Pinned both ways — granting it host-agent
-   * dispatch is the regression this guards, and revoking either of the other two would strand
+   * dispatch is the regression this guards, and revoking the accessibility driver's would strand
    * multi-device trails, which run on no other path.
    */
   @Test
   fun `host-agent dispatch membership is pinned`() {
     assertEquals(
-      setOf(
-        TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
-        TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
-      ),
+      setOf(TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY),
       TrailblazeDriverType.entries.filter { it.hostAgentDispatchable }.toSet(),
     )
     assertTrue(
@@ -109,10 +106,10 @@ class TrailblazeDriverTypeTest {
   }
 
   /**
-   * Narrower than "executes on device": the on-device instrumentation driver runs Maestro ON the
-   * device, so `ScrollUntilVisibleCommand` still has an instance to delegate to. Only the
-   * accessibility and AXe drivers must run `scrollUntilTextIsVisible` through the manual loop.
-   * Adding a driver here changes its scroll behavior, so the set is pinned rather than derived.
+   * Narrower than "executes on device": only the accessibility and AXe drivers must run
+   * `scrollUntilTextIsVisible` through the manual loop, because only they lack a Maestro instance
+   * for `ScrollUntilVisibleCommand` to delegate to. Adding a driver here changes its scroll
+   * behavior, so the set is pinned rather than derived.
    */
   @Test
   fun `manual scroll loop membership is pinned`() {
@@ -157,5 +154,87 @@ class TrailblazeDriverTypeTest {
         TrailblazeDriverType.selectableForPlatform(TrailblazeDevicePlatform.ANDROID),
       "ANDROID_TEST must be offered as a CLI driver choice (`in-process`)",
     )
+  }
+
+  /**
+   * Exact-membership tripwire, so retiring a driver stays a deliberate act with the deletions that
+   * go with it. Adding an entry here without deleting its runtime leaves a driver nobody can run
+   * and a runtime nobody can reach; removing one un-retires a driver whose runtime is already gone.
+   *
+   * The value itself is deliberately NOT removed from the enum — archived recordings, session logs
+   * and CI configs name it, and `TrailblazeDriverTypeLenientSerializer` has to keep reading them.
+   */
+  @Test
+  fun `retired driver membership is pinned`() {
+    assertEquals(
+      setOf(TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION),
+      TrailblazeDriverType.RETIRED_DRIVERS,
+    )
+  }
+
+  /**
+   * The user-facing half of retirement: `trailblaze config <platform>-driver` must not offer a
+   * driver whose runtime is deleted. Derived from [TrailblazeDriverType.cliShortName] being null,
+   * so this fails the moment someone hands a retired driver a short name back — and `CliConfigHelper`
+   * dereferences that name with `!!` when rendering the valid values, so a retired driver carrying
+   * one would also have to be genuinely selectable.
+   */
+  @Test
+  fun `a retired driver is not CLI-selectable`() {
+    TrailblazeDriverType.RETIRED_DRIVERS.forEach { driverType ->
+      assertTrue(
+        driverType !in TrailblazeDriverType.selectableForPlatform(driverType.platform),
+        "$driverType is retired but still offered as a CLI driver choice",
+      )
+    }
+  }
+
+  /**
+   * Retiring the next driver is meant to be a one-line edit to [TrailblazeDriverType.RETIRED_DRIVERS].
+   * That only holds if the replacement is derived per-platform — a cross-platform fallback would
+   * answer an iOS retirement with an Android driver, and the operator would follow the advice.
+   *
+   * Asserted over EVERY driver, not only today's retired one, because the bug can only appear on
+   * a retirement the set does not contain yet.
+   */
+  @Test
+  fun `the replacement offered for a retired driver is on that driver's own platform`() {
+    TrailblazeDriverType.entries.forEach { driverType ->
+      val replacement = TrailblazeDriverType.replacementForRetired(driverType) ?: return@forEach
+      assertEquals(
+        driverType.platform,
+        replacement.platform,
+        "retiring $driverType would point users at $replacement, on another platform",
+      )
+      assertTrue(
+        replacement !in TrailblazeDriverType.RETIRED_DRIVERS,
+        "retiring $driverType would point users at $replacement, which is itself retired",
+      )
+    }
+  }
+
+  /**
+   * The one sentence every entrypoint reuses has to carry the two facts the reader needs: which
+   * driver is gone, and what to use instead. A platform with no runnable default must not have
+   * one invented for it — the message says there is none.
+   */
+  @Test
+  fun `the retirement message names the same-platform replacement, or says there is none`() {
+    TrailblazeDriverType.entries.forEach { driverType ->
+      val message = TrailblazeDriverType.retiredDriverMessage(driverType)
+      assertTrue(driverType.name in message, "the message must name the retired driver: $message")
+      val replacement = TrailblazeDriverType.replacementForRetired(driverType)
+      if (replacement != null) {
+        assertTrue(
+          replacement.name in message,
+          "the message must name the replacement $replacement: $message",
+        )
+      } else {
+        assertTrue(
+          driverType.platform.name in message,
+          "with no replacement the message must name the stranded platform: $message",
+        )
+      }
+    }
   }
 }

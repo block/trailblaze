@@ -65,9 +65,10 @@ interface RunMeta {
    * Consumer-injected key/values lifted from the trail's `config.metadata` (account ids, links,
    * team-specific context). Rendered as rows on the Info tab and searchable from the index. The
    * well-known key `owner` additionally renders as the run row's subtitle and powers the index's
-   * "Owner" sort sections.
+   * "Owner" sort sections. A value is a string, a list, or a map, nested to any depth; lists render
+   * comma-joined and maps as `key: value` pairs.
    */
-  metadata?: Record<string, string>;
+  metadata?: Record<string, TrailMetadataValue>;
   /**
    * This run's evidence is NOT in the document carrying it — the session is a stub. Set by the
    * `generate-run-index` command on every row it emits, whether or not [reportUrl] came out with a
@@ -465,44 +466,48 @@ interface EventStream {
   rows?: FormattedRow[] | null;
 }
 
-/** Video sprite-sheet layout + playable logical-frame range (see run-report-cli.ts readVideo). */
+/**
+ * The session recording the report plays, with its capture window (see run-report-cli.ts
+ * readVideo). Present only when capture produced a recording the report could carry; absent, the
+ * timeline, the LLM transcript and the Video tab fall back to per-step screenshots.
+ */
 interface VideoInfo {
   /**
-   * data: URIs of the sprite sheet image(s), in sheet order, each with that sheet's actual row
-   * count (`columns`/`rows` describe one FULL sheet, so physical frame N lives on sheet
-   * `N / (columns*rows)`; only the final sheet may have fewer rows). Usually length 1. Callers
-   * hand full URIs to buildMultiReportHtml; in the emitted document the URIs are hoisted into a
-   * per-session inert `#tb-sprites-<i>` JSON chunk (one URI array per session; older exports use
-   * a single `#tb-sprites` map keyed by session index) and the embedded payload carries
-   * `uri: ''` — the viewer resolves them lazily on first access, so booting never parses sprite
-   * bytes.
+   * Wall-clock epoch ms of the recording's first frame, on the session-log clock. Lets the timeline
+   * map a step's `ts` onto a position in the recording (see videoClipTimeAt).
    */
-  sprites: Array<{ uri: string; rows: number }>;
-  fps: number;
-  frames: number;
-  columns: number;
-  rows: number;
-  frameHeight: number;
-  /**
-   * Per-frame pixel width from `frameWidth=` in video_sprites.txt. Optional: sprite files written
-   * before the key existed lack it (null/undefined), and consumers must keep deriving the width
-   * from the sheet's natural size in that case.
-   */
-  frameWidth?: number | null;
-  /** logical frame index → physical sprite cell (identity when no alias dedup ran). */
-  frameMap: number[];
-  startFrame: number;
-  endFrame: number;
-  /**
-   * Wall-clock epoch ms of logical frame 0 (the VIDEO_FRAMES artifact's capture start). Lets the
-   * timeline map a step's `ts` onto a video frame; when absent (older exports, no capture
-   * timestamps) the timeline preview falls back to per-step screenshots.
-   */
-  startMs?: number | null;
+  startMs: number;
+  /** Wall-clock epoch ms of the recording's last frame, on the same clock. */
+  endMs: number;
+  /** The recording itself; its `startMs`/`endMs` are this same window. */
+  clip: VideoClipSource;
 }
 
 /**
- * A playable recording of the run — the capture video itself, not the sprite sheet. Only the
+ * A playable recording embedded in the report. Unlike {@link VideoClip} — the archive loader's
+ * object URL over bytes held for one page's lifetime — this is carried BY the document, so it
+ * survives export and re-hosting.
+ *
+ * `startMs`/`endMs` are the recorder's wall-clock window on the session-log clock, not the
+ * container's duration; the two differ by a beat or two, so mapping an instant to a media
+ * position scales by duration/window rather than subtracting (see videoClipTimeAt).
+ */
+interface VideoClipSource {
+  /**
+   * `data:` URI of the clip, or the linked URL when the report references media instead of
+   * embedding it. Reads as `''` in the embedded payload once buildMultiReportHtml has hoisted it
+   * into the per-session inert `#tb-clip-<i>` chunk, so opening a report never parses video bytes
+   * it isn't about to play.
+   */
+  uri: string;
+  /** Container MIME (`video/webm` for an Android capture, `video/mp4` for iOS and web). */
+  mime: string;
+  startMs: number;
+  endMs: number;
+}
+
+/**
+ * A playable recording of the run, as the archive loader hands it over. Only the
  * archive loader produces one: `url` is an object URL over bytes held for this page's lifetime, so
  * it is deliberately absent from exported documents (a self-contained report cannot carry tens of
  * megabytes of base64, and an object URL means nothing in another page).
@@ -533,6 +538,38 @@ interface SelectorEnginePayload {
   gz?: string | null;
 }
 
+/**
+ * One span out of the session's `trace.json` — what `TrailblazeTracer` recorded in the host
+ * process (the agent loop, each tool it dispatched, every HTTP call) and, when a device uploaded its
+ * half, the driver's own operations. Chrome Trace "X" events, slimmed to what a timeline needs:
+ * `ts`/`dur` are MICROseconds (epoch / elapsed); `tid` is the recording thread, which is what spans
+ * nest by. Every payload assembler reads the file through run-report-trace-spans.ts (the bun
+ * driver's readTraceFile, the zip viewer, the live document) and the report keeps it only for the
+ * Perfetto export — the page's own timeline is built from the log records.
+ */
+interface TracerSpan {
+  name: string;
+  cat: string;
+  ts: number;
+  dur: number;
+  tid: number;
+  /**
+   * The recording process. A run that starts while another is still recording shares its
+   * `trace.json`, so two processes can both have a thread 92; the export keeps them apart by this.
+   * Absent on payloads written before it was carried.
+   */
+  pid?: number;
+  args?: Record<string, string> | null;
+  /** OpenTelemetry span kind ("CLIENT", "SERVER", ...); absent means in-process work. */
+  kind?: string | null;
+  /**
+   * `"device"` when a device's own wall clock stamped `ts` — that clock drifts from the host's by
+   * whole seconds, so such spans are shown on their own threads and never nested into host spans.
+   * Absent means the host clock.
+   */
+  clock?: string | null;
+}
+
 /** One run inside the embedded payload. */
 interface SessionPayload {
   meta: RunMeta;
@@ -561,6 +598,10 @@ interface SessionPayload {
   /** gzip(JSON.stringify(EventStream[])) as base64 — used instead of `events` past the driver's
    * inline threshold; the viewer inflates it lazily via DecompressionStream. */
   eventsGz?: string | null;
+  /** The session's `trace.json` spans (see TracerSpan), inline below the driver's threshold. */
+  spans?: TracerSpan[] | null;
+  /** gzip(JSON.stringify(TracerSpan[])) as base64 — see deviceLogGz. */
+  spansGz?: string | null;
   /** Per-call LLM chat transcripts (see LlmTranscripts), inline below the driver's threshold. */
   llmMessages?: LlmTranscripts | null;
   /** gzip(JSON.stringify(LlmTranscripts)) as base64 — see deviceLogGz. */
@@ -601,6 +642,9 @@ interface SessionInput {
   events?: EventStream[] | null;
   /** See SessionPayload.eventsGz. */
   eventsGz?: string | null;
+  spans?: TracerSpan[] | null;
+  /** See SessionPayload.spansGz. */
+  spansGz?: string | null;
   /** See SessionPayload.llmMessages. When neither transcript field is supplied, toSessionPayloads
    * derives the transcripts from `llmLogs` (the browser/zip paths); the bun driver supplies them
    * pre-packed instead. */
@@ -693,3 +737,6 @@ interface Window {
   /** Published by zip-report-core.js. */
   TbZipReport?: ZipReportExports;
 }
+
+/** A config.metadata value: a string, an array, or an object, nested to any depth. */
+type TrailMetadataValue = string | TrailMetadataValue[] | { [key: string]: TrailMetadataValue };

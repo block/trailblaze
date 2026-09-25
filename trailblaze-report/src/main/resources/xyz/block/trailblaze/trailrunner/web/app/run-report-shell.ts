@@ -33,10 +33,12 @@
 // Out-of-directory like run-report-core.ts's own import: the events module lives beside the bun
 // driver (report/), and every surface must reach the SAME decode/detection implementation.
 import { ATTACHMENT_MATERIALIZE_MAX_TOTAL_BYTES, ATTACHMENT_MIME, buildEventStream, collectStreamAttachmentRefs, isSafeSessionRelativePath, MAX_ATTACHMENTS_PER_SESSION, MAX_EVENT_STREAM_BYTES, MAX_EVENT_STREAMS_TOTAL_CHARS } from '../../../report/run-report-events';
-import { extractLlmLogs, extractTrace, originalYamlFromLogs, toSessionPayloads, traceScreenshotFiles } from './run-report-extract';
+import { MAX_TRACE_BYTES, slimTracerSpans } from '../../../report/run-report-trace-spans';
+import { extractLlmLogs, extractTrace, normalizedToHostClock, originalYamlFromLogs, toSessionPayloads, traceScreenshotFiles } from './run-report-extract';
 import { VIEWER_ROUTE_KEYS } from './run-report-route';
 
 const ZIP_PARAM = 'zip';
+const ANALYSIS_PARAM = 'analysis';
 
 // The collaborator zip-report-core's resolveRenderer expects; field names match what it looks for.
 // This shell embeds the viewer bundle alone, so a function the zip pipeline consults and this object
@@ -45,7 +47,7 @@ const ZIP_PARAM = 'zip';
 // The two attachment-policy values ride here for exactly that reason: the pipeline defines neither
 // itself (run-report-events.ts is the single home), so an object without them materializes no
 // attachment at all, silently.
-export const REPORT_DERIVE = { extractTrace, extractLlmLogs, originalYamlFromLogs, traceScreenshotFiles, buildEventStream, collectStreamAttachmentRefs, ATTACHMENT_MIME, MAX_ATTACHMENTS_PER_SESSION, ATTACHMENT_MATERIALIZE_MAX_TOTAL_BYTES, isSafeSessionRelativePath, MAX_EVENT_STREAM_BYTES, MAX_EVENT_STREAMS_TOTAL_CHARS };
+export const REPORT_DERIVE = { extractTrace, extractLlmLogs, normalizedToHostClock, originalYamlFromLogs, traceScreenshotFiles, buildEventStream, collectStreamAttachmentRefs, ATTACHMENT_MIME, MAX_ATTACHMENTS_PER_SESSION, ATTACHMENT_MATERIALIZE_MAX_TOTAL_BYTES, isSafeSessionRelativePath, MAX_EVENT_STREAM_BYTES, MAX_EVENT_STREAMS_TOTAL_CHARS, MAX_TRACE_BYTES, slimTracerSpans };
 
 // The permalink for one or more archive URLs — a repeated `zip` param, one per archive, so a link
 // can carry the same trail's runs across several devices and render them as one report. Each value
@@ -237,6 +239,250 @@ export function zipParamsFrom(href: string): string[] {
   try { return new URL(String(href)).searchParams.getAll(ZIP_PARAM).map((url) => url.trim()).filter(Boolean); } catch (e) { return []; }
 }
 
+export type AnalysisParams = { url: string; problem: string };
+
+// A structured-analysis deep link names a public JSON document plus either one problem set or
+// `all`. Only HTTPS is accepted: these links are shared and opened by others and must not turn the
+// hosted viewer into a reader for local files or browser-internal URLs.
+export function analysisParamsFrom(href: string): AnalysisParams | null {
+  try {
+    const params = new URL(String(href)).searchParams;
+    const url = String(params.get(ANALYSIS_PARAM) || '').trim();
+    const problem = String(params.get('problem') || 'all').trim() || 'all';
+    if (!url || new URL(url).protocol !== 'https:') return null;
+    return { url, problem };
+  } catch (e) { return null; }
+}
+
+type AnalysisEvidence = {
+  id: string;
+  kind: string;
+  label: string;
+  supports: string;
+  source_run: string;
+  source_subject?: { label: string; context: string };
+  affected_run_keys: string[];
+  locator?: string;
+  availability: 'available' | 'unavailable';
+  key: boolean;
+  href?: string;
+  preview_href?: string;
+  timestamp_or_range?: string;
+  text_description?: string;
+  captured_at?: string;
+  content_type?: string;
+  source_revision?: string;
+};
+type AnalysisHistory = {
+  id: string;
+  relation: 'exact' | 'inferred';
+  label: string;
+  source_run?: string;
+  occurred_at?: string;
+  status?: string;
+  reason?: string;
+};
+type AnalysisCodeFinding = {
+  repository: string;
+  examined_ref: string | null;
+  comparison_ref?: string;
+  kind: 'source_match' | 'candidate_change' | 'trail_definition' | 'no_match';
+  summary: string;
+  source_url: string | null;
+  evidence_basis: string;
+  relationship: 'direct_source_fact' | 'temporal_correlation' | 'hypothesis';
+  what_would_confirm: string;
+};
+type AnalysisProblem = {
+  id: string;
+  title: string;
+  status: { tone: string; label: string };
+  confidence: string;
+  attention_summary: string;
+  context_summary: string;
+  affected_subjects: Array<{ key: string; label: string; context: string }>;
+  observations: string[];
+  interpretation: string;
+  uncertainty: string;
+  next_action_or_evidence_needed: { kind: string; text: string };
+  evidence: AnalysisEvidence[];
+  code_findings?: AnalysisCodeFinding[];
+  history_summary: string;
+  related_history: AnalysisHistory[];
+};
+type AnalysisManifest = {
+  summary: {
+    headline: string;
+    run_label: string;
+    affected_subject_count: number;
+    problem_set_count: number;
+    coverage_status: string;
+  };
+  problem_sets: AnalysisProblem[];
+};
+
+const nonEmpty = (value: unknown): value is string => typeof value === 'string' && value.trim().length > 0;
+const safeHttpsHref = (value: unknown): string => {
+  try { const url = new URL(String(value || '')); return url.protocol === 'https:' ? url.href : ''; } catch (e) { return ''; }
+};
+
+function analysisProblem(value: unknown): AnalysisProblem | null {
+  if (!value || typeof value !== 'object') return null;
+  const item = value as Partial<AnalysisProblem>;
+  if (!nonEmpty(item.id) || !nonEmpty(item.title) || !nonEmpty(item.attention_summary)
+    || !nonEmpty(item.context_summary) || !nonEmpty(item.confidence) || !nonEmpty(item.interpretation)
+    || !nonEmpty(item.uncertainty)
+    || !item.status || !nonEmpty(item.status.tone) || !nonEmpty(item.status.label)
+    || !item.next_action_or_evidence_needed || !nonEmpty(item.next_action_or_evidence_needed.kind) || !nonEmpty(item.next_action_or_evidence_needed.text)
+    || !Array.isArray(item.affected_subjects) || !Array.isArray(item.observations)
+    || !Array.isArray(item.evidence) || !Array.isArray(item.related_history)) return null;
+  if (!item.affected_subjects.every((subject) => subject && nonEmpty(subject.key) && nonEmpty(subject.label) && nonEmpty(subject.context))
+    || !item.observations.every(nonEmpty)
+    || !item.evidence.every((evidence) => evidence && nonEmpty(evidence.id) && nonEmpty(evidence.kind)
+      && nonEmpty(evidence.label) && nonEmpty(evidence.supports) && nonEmpty(evidence.source_run)
+      && (!evidence.source_subject || (nonEmpty(evidence.source_subject.label) && nonEmpty(evidence.source_subject.context)))
+      && (!evidence.locator || nonEmpty(evidence.locator))
+      && Array.isArray(evidence.affected_run_keys) && evidence.affected_run_keys.every(nonEmpty)
+      && (evidence.availability === 'available' || evidence.availability === 'unavailable')
+      && typeof evidence.key === 'boolean')
+    || !item.related_history.every((entry) => entry && nonEmpty(entry.id) && nonEmpty(entry.label)
+      && (entry.relation === 'exact' || entry.relation === 'inferred'))
+    || (item.code_findings !== undefined && (!Array.isArray(item.code_findings)
+      || !item.code_findings.every((finding) => finding && nonEmpty(finding.repository)
+        && nonEmpty(finding.summary) && nonEmpty(finding.evidence_basis)
+        && nonEmpty(finding.what_would_confirm)
+        && ((finding.kind === 'no_match' && finding.examined_ref === null && finding.source_url === null)
+          || (nonEmpty(finding.examined_ref) && !!safeHttpsHref(finding.source_url)))
+        && (!finding.comparison_ref || nonEmpty(finding.comparison_ref))
+        && ['source_match', 'candidate_change', 'trail_definition', 'no_match'].includes(finding.kind)
+        && ['direct_source_fact', 'temporal_correlation', 'hypothesis'].includes(finding.relationship))))) return null;
+  const keyEvidence = item.evidence.filter((evidence) => evidence.key);
+  if (keyEvidence.length < 1 || keyEvidence.length > 3) return null;
+  return {
+    ...item,
+    history_summary: nonEmpty(item.history_summary)
+      ? item.history_summary
+      : 'Prior-run context is unavailable for this problem.',
+  } as AnalysisProblem;
+}
+
+function analysisManifest(payload: unknown): AnalysisManifest {
+  if (!payload || typeof payload !== 'object') throw new Error('The analysis document is malformed.');
+  const root = payload as { schema_version?: unknown; summary?: Partial<AnalysisManifest['summary']>; problem_sets?: unknown };
+  const summary = root.summary;
+  if (root.schema_version !== 2 || !summary || !nonEmpty(summary.headline) || !nonEmpty(summary.run_label)
+    || typeof summary.affected_subject_count !== 'number' || typeof summary.problem_set_count !== 'number'
+    || !nonEmpty(summary.coverage_status) || !Array.isArray(root.problem_sets)) throw new Error('The analysis document is malformed.');
+  const problems = root.problem_sets.map(analysisProblem);
+  if (problems.some((problem) => problem === null)) throw new Error('The analysis document is malformed.');
+  const all = problems as AnalysisProblem[];
+  if (summary.problem_set_count !== all.length) throw new Error('The analysis document is malformed.');
+  return { summary: summary as AnalysisManifest['summary'], problem_sets: all };
+}
+
+export function analysisProblemHref(href: string, problemId: string): string {
+  const url = new URL(href);
+  url.searchParams.set('problem', problemId);
+  return url.href;
+}
+
+function evidenceHtml(item: AnalysisEvidence): string {
+  const href = safeHttpsHref(item.href);
+  const range = item.timestamp_or_range ? `<span class="tb-analysis-meta">${escapeHtml(item.timestamp_or_range)}</span>` : '';
+  const description = item.text_description ? `<p>${escapeHtml(item.text_description)}</p>` : '';
+  const sourceSubject = item.source_subject
+    ? ` · Source: ${escapeHtml(item.source_subject.label)} · ${escapeHtml(item.source_subject.context)}`
+    : '';
+  const locator = item.locator ? ` · Location: ${escapeHtml(item.locator)}` : '';
+  const source = `<p class="tb-analysis-meta">Supports: ${escapeHtml(item.supports)}${sourceSubject}${locator}</p>`;
+  const title = href && item.availability === 'available'
+    ? `<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.label)}</a>`
+    : `<span>${escapeHtml(item.label)}</span><strong class="tb-analysis-unavailable">Unavailable</strong>`;
+  return `<li class="tb-analysis-evidence"><div><span class="tb-analysis-kind">${escapeHtml(item.kind)}</span>${title}${range}</div>${source}${description}</li>`;
+}
+
+function codeFindingHtml(item: AnalysisCodeFinding): string {
+  const label = item.relationship.replace(/_/g, ' ');
+  const comparison = item.comparison_ref ? ` · Compared with ${escapeHtml(item.comparison_ref)}` : '';
+  const examined = item.examined_ref ? `Examined ${escapeHtml(item.examined_ref)}` : 'No source ref inspected';
+  const source = item.source_url
+    ? `<a href="${escapeHtml(safeHttpsHref(item.source_url))}" target="_blank" rel="noopener noreferrer">Inspect source</a>`
+    : '';
+  return `<li><p><b>${escapeHtml(item.summary)}</b> <span class="tb-analysis-meta">${escapeHtml(label)}</span></p>`
+    + `<p>Evidence basis: ${escapeHtml(item.evidence_basis)}</p>`
+    + `<p class="tb-analysis-meta">${escapeHtml(item.repository)} · ${examined}${comparison}</p>`
+    + `<p>To confirm: ${escapeHtml(item.what_would_confirm)}</p>`
+    + `${source}</li>`;
+}
+
+function overviewHtml(manifest: AnalysisManifest, href: string): string {
+  const cards = manifest.problem_sets.map((problem) => {
+    const tone = /^[a-z][a-z0-9-]{0,31}$/.test(problem.status.tone) ? problem.status.tone : 'info';
+    const actionLabel = problem.next_action_or_evidence_needed.kind === 'evidence_needed' ? 'Evidence needed' : 'Next action';
+    return `<article class="tb-analysis-card tb-analysis-${tone}">`
+      + `<header><span class="tb-analysis-status">${escapeHtml(problem.status.label)}</span><span>${problem.affected_subjects.length} affected run(s)</span></header>`
+      + `<h2><a href="${escapeHtml(analysisProblemHref(href, problem.id))}">${escapeHtml(problem.title)}</a></h2>`
+      + `<p>${escapeHtml(problem.attention_summary)}</p>`
+      + `<p class="tb-analysis-meta">${escapeHtml(problem.context_summary)}</p>`
+      + `<h3>${actionLabel}</h3><p>${escapeHtml(problem.next_action_or_evidence_needed.text)}</p>`
+      + `<a class="tb-analysis-open" href="${escapeHtml(analysisProblemHref(href, problem.id))}">Open problem and evidence</a></article>`;
+  }).join('');
+  return `<main class="tb-analysis" aria-labelledby="tb-analysis-title">`
+    + `<header class="tb-analysis-heading"><div><p class="tb-analysis-eyebrow">${escapeHtml(manifest.summary.run_label)}</p>`
+    + `<h1 id="tb-analysis-title" tabindex="-1">Triage overview</h1><p>${escapeHtml(manifest.summary.headline)}</p></div>`
+    + `<p>${manifest.summary.affected_subject_count} affected run(s) · ${manifest.problem_sets.length} problem set(s)</p></header>`
+    + `<p class="tb-analysis-coverage">Coverage: ${escapeHtml(manifest.summary.coverage_status)}</p>`
+    + `<section class="tb-analysis-list" aria-label="Problem sets">${cards}</section></main>`;
+}
+
+function focusedProblemHtml(manifest: AnalysisManifest, problem: AnalysisProblem, href: string): string {
+  const at = manifest.problem_sets.indexOf(problem);
+  const previous = at > 0 ? manifest.problem_sets[at - 1] : null;
+  const next = at + 1 < manifest.problem_sets.length ? manifest.problem_sets[at + 1] : null;
+  const tone = /^[a-z][a-z0-9-]{0,31}$/.test(problem.status.tone) ? problem.status.tone : 'info';
+  const actionLabel = problem.next_action_or_evidence_needed.kind === 'evidence_needed' ? 'Evidence needed' : 'Next action';
+  const subjects = problem.affected_subjects.map((subject) => `<li><b>${escapeHtml(subject.label)}</b><span>${escapeHtml(subject.context)}</span></li>`).join('');
+  const observations = problem.observations.map((observation) => `<li>${escapeHtml(observation)}</li>`).join('');
+  const keyEvidence = problem.evidence.filter((item) => item.key);
+  const otherEvidence = problem.evidence.filter((item) => !item.key);
+  const exactHistory = problem.related_history.filter((entry) => entry.relation === 'exact');
+  const inferredHistory = problem.related_history.filter((entry) => entry.relation === 'inferred');
+  const chronology = exactHistory.length
+    ? `<ol>${exactHistory.map((entry) => `<li><b>${escapeHtml(entry.label)}</b><span>${escapeHtml(entry.occurred_at || '')} · ${escapeHtml(entry.status || '')}</span></li>`).join('')}</ol>`
+    : '<p>No matching prior run entries are available.</p>';
+  const inferred = inferredHistory.length
+    ? `<ul>${inferredHistory.map((entry) => `<li><b>Inferred relationship:</b> ${escapeHtml(entry.label)}<span>${escapeHtml(entry.reason || '')}</span></li>`).join('')}</ul>`
+    : '<p>No inferred related problems are proposed.</p>';
+  const siblingNav = `<nav class="tb-analysis-siblings" aria-label="Problem navigation">`
+    + (previous ? `<a href="${escapeHtml(analysisProblemHref(href, previous.id))}">← ${escapeHtml(previous.title)}</a>` : '<span></span>')
+    + (next ? `<a href="${escapeHtml(analysisProblemHref(href, next.id))}">${escapeHtml(next.title)} →</a>` : '<span></span>') + '</nav>';
+  return `<main class="tb-analysis" aria-labelledby="tb-analysis-title">`
+    + `<nav class="tb-analysis-toolbar" aria-label="Analysis navigation"><a href="${escapeHtml(analysisProblemHref(href, 'all'))}">← Run overview</a>`
+    + `<button type="button" data-tb-copy-link>Copy problem link</button><span data-tb-copy-status class="tb-shell-sr" role="status" aria-live="polite"></span></nav>`
+    + `<article class="tb-analysis-focus tb-analysis-${tone}"><header><div><span class="tb-analysis-status">${escapeHtml(problem.status.label)}</span>`
+    + `<span class="tb-analysis-meta">Problem ${at + 1} of ${manifest.problem_sets.length}</span></div><p>${escapeHtml(problem.context_summary)}</p></header>`
+    + `<h1 id="tb-analysis-title" tabindex="-1">${escapeHtml(problem.title)}</h1><p class="tb-analysis-attention">${escapeHtml(problem.attention_summary)}</p>`
+    + `<div class="tb-analysis-priority"><section class="tb-analysis-action"><h2>${actionLabel}</h2><p>${escapeHtml(problem.next_action_or_evidence_needed.text)}</p></section>`
+    + `<section class="tb-analysis-key-evidence"><h2>Key evidence</h2><ul class="tb-analysis-evidence-list">${keyEvidence.map(evidenceHtml).join('')}</ul></section></div>`
+    + `<section><h2>Affected runs</h2><ul class="tb-analysis-subjects">${subjects}</ul></section>`
+    + `<section><h2>Observed facts</h2><ul>${observations}</ul></section>`
+    + `<section class="tb-analysis-interpretation"><h2>Interpretation <span class="tb-analysis-meta">· ${escapeHtml(problem.confidence)} confidence</span></h2><p>${escapeHtml(problem.interpretation)}</p></section>`
+    + `<section class="tb-analysis-uncertainty"><h2>Uncertainty</h2><p>${escapeHtml(problem.uncertainty)}</p></section>`
+    + ((problem.code_findings || []).length ? `<section><h2>Code findings</h2><ul class="tb-analysis-evidence-list">${problem.code_findings!.map(codeFindingHtml).join('')}</ul></section>` : '')
+    + (otherEvidence.length ? `<details><summary>More evidence (${otherEvidence.length})</summary><ul class="tb-analysis-evidence-list">${otherEvidence.map(evidenceHtml).join('')}</ul></details>` : '')
+    + `<section><h2>Recent history</h2><p>${escapeHtml(problem.history_summary)}</p>${chronology}</section><section><h2>Related analysis</h2>${inferred}</section></article>${siblingNav}</main>`;
+}
+
+// Render only the intentionally generic public contract. Every string is escaped and evidence links
+// are restricted to HTTPS, so fetched content cannot inject markup or active URL schemes.
+export function renderAnalysisView(payload: unknown, selectedProblem: string, href = 'https://viewer.invalid/?analysis=manifest'): string {
+  const manifest = analysisManifest(payload);
+  if (selectedProblem === 'all') return overviewHtml(manifest, href);
+  const problem = manifest.problem_sets.find((item) => item.id === selectedProblem);
+  if (!problem) throw new Error('That problem set is not present in this analysis.');
+  return focusedProblemHtml(manifest, problem, href);
+}
+
 // The address to leave behind when a report is loaded from a LOCAL file: relative, with the archive
 // param and the viewer's route keys dropped. Content read off the user's disk has no address at all,
 // so keeping either would let the URL describe something it can't reproduce — a stale `tab`/`step`
@@ -292,7 +538,7 @@ export function archiveFailure(error: unknown, label: string, many: boolean): un
 // archives were generated at different moments and the report carries one stamp, so the list's own
 // order — the reader's order — decides which. Pure because the claim that makes the whole feature
 // work is here: the sessions concatenate in list order, which is what the run index, the device
-// matrix, and the Trail view all lane up.
+// matrix, and the trail projections all lane up.
 export function combineArchives(built: Array<{ generatedAt: string; sessions: unknown[]; zipBytes: number }>): { generatedAt: string; sessions: unknown[]; totalBytes: number } {
   return {
     generatedAt: (built[0] && built[0].generatedAt) || '',
@@ -356,12 +602,12 @@ export function RUN_REPORT_SHELL(): void {
   if (collapseBtn) collapseBtn.onclick = () => setCollapsed(true);
   if (handleBtn) handleBtn.onclick = () => { setCollapsed(false); if (collapseBtn) collapseBtn.focus({ preventScroll: true }); };
 
-  const showPanel = (html: string) => { panel.innerHTML = html; panel.style.display = 'flex'; app.style.display = 'none'; };
+  const showPanel = (html: string) => { shell.classList.add('tb-shell-panel-visible'); panel.innerHTML = html; panel.style.display = 'flex'; app.style.display = 'none'; };
   // Clear the inline display rather than setting one: the report stylesheet makes #app a flex
   // column, and an inline `display: block` outranks it, collapsing the viewer's own layout.
-  const showReport = () => { panel.style.display = 'none'; app.style.display = ''; };
+  const showReport = () => { shell.classList.remove('tb-shell-panel-visible'); panel.style.display = 'none'; app.style.display = ''; };
   const spinner = (msg: string) => showPanel(`<div class="tb-shell-spinner"></div><div class="tb-shell-sub">${escapeHtml(msg)}</div>`);
-  const failure = (msg: string) => { setCollapsed(false); showPanel(`<div class="tb-shell-err">${escapeHtml(msg)}</div><div class="tb-shell-sub">${idleHtml}</div>`); };
+  const failure = (msg: string) => { setCollapsed(false); showPanel(`<div class="tb-shell-err" role="alert">${escapeHtml(msg)}</div><div class="tb-shell-sub">${idleHtml}</div>`); };
 
   // `shareable` says whether the CURRENT report came from a URL; the link itself is read at click
   // time, never captured here. The viewer rewrites location.search as the user moves between runs,
@@ -424,7 +670,7 @@ export function RUN_REPORT_SHELL(): void {
       if (!zip) throw new Error('This viewer is missing its ZIP pipeline — rebuild the shell.');
       // Several archives (one per device) become ONE payload: their sessions concatenate in the
       // order the URLs were given, and the viewer's own multi-session surfaces (the run index, the
-      // device matrix, the Trail view) light up exactly as they would for a single multi-session
+      // device matrix, the trail tabs) light up exactly as they would for a single multi-session
       // archive.
       const many = archives.length > 1;
       for (let a = 0; a < archives.length; a++) {
@@ -679,7 +925,52 @@ export function RUN_REPORT_SHELL(): void {
     addFiles(Array.from((e.dataTransfer && e.dataTransfer.files) || []));
   });
 
-  // Boot: a ?zip= address renders immediately (this is the permalink path, and the one whose URL
+  // Boot: structured analysis and archive reports share this generic hosted shell. The analysis
+  // document is fetched and rendered as bounded cards; a failed or malformed fetch stays visibly
+  // failed instead of falling through to the archive loader.
+  const currentHref = String(location.href || '');
+  const analysis = analysisParamsFrom(currentHref);
+  let analysisRequested = false;
+  try { analysisRequested = new URL(currentHref).searchParams.has(ANALYSIS_PARAM); } catch (e) { /* malformed location cannot occur in a browser */ }
+  if (analysisRequested && !analysis) {
+    failure('Could not load analysis. The analysis link is invalid.');
+    return;
+  }
+  if (analysis) {
+    spinner('Loading analysis…');
+    void fetch(analysis.url)
+      .then((response) => {
+        if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+        return response.json();
+      })
+      .then((payload) => {
+        showPanel(renderAnalysisView(payload, analysis.problem, currentHref));
+        const heading = panel.querySelector<HTMLElement>('#tb-analysis-title');
+        if (heading) heading.focus({ preventScroll: true });
+        const copy = panel.querySelector<HTMLButtonElement>('[data-tb-copy-link]');
+        const copyStatus = panel.querySelector<HTMLElement>('[data-tb-copy-status]');
+        const setCopyStatus = (message: string, failed: boolean) => {
+          if (!copyStatus) return;
+          copyStatus.textContent = message;
+          copyStatus.classList.toggle('tb-shell-sr', !failed);
+          copyStatus.classList.toggle('tb-analysis-copy-error', failed);
+        };
+        if (copy) copy.onclick = () => {
+          if (!navigator.clipboard || typeof navigator.clipboard.writeText !== 'function') {
+            setCopyStatus('Copy is unavailable; use the browser address bar.', true);
+            return;
+          }
+          void navigator.clipboard.writeText(String(location.href || currentHref)).then(
+            () => setCopyStatus('Problem link copied.', false),
+            () => setCopyStatus('Could not copy the problem link.', true),
+          );
+        };
+      })
+      .catch((error) => failure(`Could not load analysis. ${errorDetail(error)}`));
+    return;
+  }
+
+  // A ?zip= address renders immediately (this is the permalink path, and the one whose URL
   // already carries any tab/step deep link for the viewer to apply). A repeated `zip` param loads
   // every archive into one report.
   const initial = zipParamsFrom(String(location.href || ''));

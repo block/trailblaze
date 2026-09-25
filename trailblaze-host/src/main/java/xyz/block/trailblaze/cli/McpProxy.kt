@@ -7,6 +7,7 @@ import io.ktor.client.network.sockets.SocketTimeoutException
 import io.ktor.client.plugins.HttpRequestTimeoutException
 import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.plugins.timeout
+import io.ktor.client.request.HttpRequestBuilder
 import io.ktor.client.request.get
 import io.ktor.client.request.headers
 import io.ktor.client.request.post
@@ -545,13 +546,7 @@ class McpProxy(
   private fun probeDaemonOverHttp(): DaemonProbe {
     return try {
       runBlocking {
-        val response = httpClient.get(pingUrl) {
-          timeout {
-            connectTimeoutMillis = PING_PROBE_TIMEOUT_MS
-            requestTimeoutMillis = PING_PROBE_TIMEOUT_MS
-            socketTimeoutMillis = PING_PROBE_TIMEOUT_MS
-          }
-        }
+        val response = httpClient.get(pingUrl) { installPingProbeTimeouts(this) }
         // A non-2xx answer is still an answer, so the port's owner is talking to us and may yet
         // become a daemon (a server that is still installing routes 404s /ping). Keep waiting.
         if (response.status.isSuccess()) DaemonProbe.REACHABLE else DaemonProbe.NO_ANSWER
@@ -1767,7 +1762,40 @@ class McpProxy(
      * only has to outlast a loaded machine — and every second of it is a second the MCP client
      * spends waiting for its first response.
      */
-    private const val PING_PROBE_TIMEOUT_MS = 2_000L
+    internal const val PING_PROBE_TIMEOUT_MS = 2_000L
+
+    /**
+     * How long that probe's connection attempt gets: half [PING_PROBE_TIMEOUT_MS], so it is
+     * strictly under the request budget rather than equal to it.
+     *
+     * Ktor's request deadline covers connection setup, so equal budgets make the two timers a coin
+     * flip. The request side of that flip reports [DaemonProbe.HELD_UNRESPONSIVE], which asserts
+     * the port has an owner that accepted and went quiet — and a connect that never completed
+     * establishes no such thing. It is the expensive verdict to get wrong: a port that is actually
+     * free reads as wedged, and the caller stops waiting for the daemon it should have waited for.
+     *
+     * Halved directly rather than through `CliMcpClient.connectTimeoutMsFor`. That helper takes a
+     * ceiling for a budget an operator can raise, and picks `minOf(ceiling, budget / 2)` — with a
+     * fixed 2s budget the halving always wins, so passing a ceiling here read as a constraint that
+     * could never bind.
+     */
+    internal const val PING_PROBE_CONNECT_TIMEOUT_MS: Long = PING_PROBE_TIMEOUT_MS / 2
+
+    /**
+     * Installs the `/ping` probe's budgets on [builder].
+     *
+     * A named function rather than an inline `timeout { }` block so a test can read back what the
+     * probe installs. The regression to catch is in the wiring — the connect field handed the
+     * request budget — and comparing the two constants to each other cannot see that, since one is
+     * defined as half the other.
+     */
+    internal fun installPingProbeTimeouts(builder: HttpRequestBuilder) {
+      builder.timeout {
+        connectTimeoutMillis = PING_PROBE_CONNECT_TIMEOUT_MS
+        requestTimeoutMillis = PING_PROBE_TIMEOUT_MS
+        socketTimeoutMillis = PING_PROBE_TIMEOUT_MS
+      }
+    }
 
     /**
      * Upper bound on how long the proxy will block waiting for the daemon to become

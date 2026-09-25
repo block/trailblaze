@@ -49,6 +49,7 @@ export {
   type TrailblazeMemory,
   type TrailblazeTarget,
 } from "./context.js";
+export type { TrailblazeSessionCleanup, TrailblazeSessionResources } from "./session-resources.js";
 export type {
   TrailblazeCallToolResult,
   TrailblazeClient,

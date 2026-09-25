@@ -47,6 +47,12 @@ data class TrailblazeToolMeta(
   val toolset: String? = null,
   val requiresContext: Boolean = false,
   /**
+   * Reserved runtime capability: this hidden MCP tool drains process-local opaque session
+   * resources immediately before the host closes the subprocess. It is never registered in the
+   * normal tool repo or exposed to the LLM; see `SessionResourceFinalizerProtocol`.
+   */
+  val isSessionResourceFinalizer: Boolean = false,
+  /**
    * Which args are masked in persisted session logs (which ship as CI artifacts). Not a
    * [shouldRegister] filter — the runtime threads it onto the decoded
    * [xyz.block.trailblaze.toolcalls.TrailblazeTool] so the log-encode boundary redacts those
@@ -107,6 +113,7 @@ data class TrailblazeToolMeta(
     private const val KEY_SUPPORTED_PLATFORMS = "${PREFIX}supportedPlatforms"
     private const val KEY_TOOLSET = "${PREFIX}toolset"
     private const val KEY_REQUIRES_CONTEXT = "${PREFIX}requiresContext"
+    private const val KEY_SESSION_RESOURCE_FINALIZER = "${PREFIX}sessionResourceFinalizer"
 
     /**
      * Parses a [Tool]'s `_meta` object into typed [TrailblazeToolMeta] fields. Missing keys
@@ -131,6 +138,7 @@ data class TrailblazeToolMeta(
       supportedPlatforms = meta.readStringList(KEY_SUPPORTED_PLATFORMS).map { it.uppercase() },
       toolset = meta.readString(KEY_TOOLSET),
       requiresContext = meta.readBoolean(KEY_REQUIRES_CONTEXT, default = false),
+      isSessionResourceFinalizer = meta.readBoolean(KEY_SESSION_RESOURCE_FINALIZER, default = false),
       // NOT `readStringList` — that treats a malformed shape as absent, which for this key means
       // "mask nothing" and silently leaks the credential. See [DeclaredSensitiveArgs].
       sensitiveArgs = DeclaredSensitiveArgs.fromMeta(meta),

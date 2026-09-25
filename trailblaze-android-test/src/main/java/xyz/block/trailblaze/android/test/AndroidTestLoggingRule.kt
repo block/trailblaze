@@ -13,7 +13,8 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDeviceOrientation
 import xyz.block.trailblaze.devices.TrailblazeDriverType
-import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
+import xyz.block.trailblaze.logs.client.OnDeviceLogFileName
+import xyz.block.trailblaze.logs.client.TrailblazeCompactJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeScreenStateLog
 import xyz.block.trailblaze.logs.model.SessionId
@@ -49,8 +50,8 @@ class AndroidTestLoggingRule(
   logsBaseUrl = AndroidTestInstrumentation.logsEndpoint(),
   writeLogToDisk = { sessionId: SessionId, log: TrailblazeLog ->
     writeToLogsDir(
-      fileName = "${sessionId.value}_${log.timestamp.toEpochMilliseconds()}.json",
-      bytes = TrailblazeJsonInstance
+      fileName = OnDeviceLogFileName.forLog(sessionId, log.timestamp.toEpochMilliseconds()),
+      bytes = TrailblazeCompactJsonInstance
         .encodeToString(TrailblazeLog.serializer(), log)
         .toByteArray(),
       what = "log",

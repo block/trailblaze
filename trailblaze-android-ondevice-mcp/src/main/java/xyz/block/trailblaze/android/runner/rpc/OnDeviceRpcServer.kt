@@ -29,6 +29,7 @@ import xyz.block.trailblaze.mcp.android.ondevice.rpc.OnDeviceScreenStateCaptor
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcResult
 import xyz.block.trailblaze.mcp.handlers.DrainSessionRequestHandler
 import xyz.block.trailblaze.mcp.handlers.GetExecutionStatusRequestHandler
+import xyz.block.trailblaze.mcp.handlers.GetMemoryInfoRequestHandler
 import xyz.block.trailblaze.mcp.handlers.GetScreenStateRequestHandler
 import xyz.block.trailblaze.mcp.handlers.ListActiveSessionsRequestHandler
 import xyz.block.trailblaze.mcp.handlers.RunYamlRequestHandler
@@ -149,6 +150,11 @@ class OnDeviceRpcServer(
         // session re-connects. Host-old/APK-new: handler unused. Host-new/APK-old: hits the
         // catch-all 404 below and the host treats it as a no-op.
         registerRpcHandler(drainSessionHandler)
+
+        // GetMemoryInfo lets the host's memory capture read the app under test's heap from the
+        // device (GC forced first) instead of over adb. HTTP/JSON only; the host falls back to adb
+        // on any failure, including the catch-all 404 from an older runner.
+        registerRpcHandler(GetMemoryInfoRequestHandler())
 
         // Register progress-related handlers for MCP clients (Phase 6)
         registerRpcHandler(subscribeToProgressHandler)

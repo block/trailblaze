@@ -578,6 +578,7 @@ open class CliReportGenerator {
       completed_at = completedAt?.toIso8601String(),
       completed_at_epoch_ms = completedAt?.toEpochMilliseconds(),
       accessibility_truncation = AccessibilityTruncationSummary.fromLogs(logs),
+      trail_id = sessionInfo.trailConfig?.id,
     )
   } catch (e: Exception) {
     Console.error("Warning: failed to build result for session ${sessionId.value}: ${e.message}")

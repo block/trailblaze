@@ -125,6 +125,41 @@ dev_jar_needs_fresh_code() {
   return 0
 }
 
+# Whether this invocation comes out right on ANY build of the JAR, so a stale one may answer it
+# and the daemon a rebuild would stop can keep running. True for the usage screens the JVM
+# answers — bare `trailblaze`, `--help`/`-h`, and `<cmd> --help`. The text does come out of the
+# JAR, so one is still needed; but nothing the developer is doing changes with the code, and a
+# multi-minute build plus a killed daemon is the wrong price for a usage screen.
+#
+# Two neighbours are deliberately NOT here. Each answers a question ABOUT the code rather than
+# printing a fixed screen, so a stale JAR answers it wrongly rather than slowly:
+#   * `--version`/`-V` prints the version stamped in at build time, so on a checkout that has
+#     moved past the JAR it reports the commit the developer just left.
+#   * `tool <name> --help` renders the named tool's live schema out of the catalog on the
+#     classpath, so it would document the schema before the edit. Bare `tool --help` is the
+#     static wrapper banner and stays cheap.
+#
+# Complements dev_jar_needs_fresh_code (which covers the commands that need no JAR at all); a
+# launcher test pins both lists.
+dev_jar_runs_on_any_build() {
+  local arg subcommand="${1:-}"
+  case "$subcommand" in
+    "" | -h | --help) return 0 ;;
+  esac
+  local asks_for_help=false
+  for arg in "$@"; do
+    case "$arg" in -h | --help) asks_for_help=true ;; esac
+  done
+  [ "$asks_for_help" = true ] || return 1
+  if [ "$subcommand" = tool ]; then
+    shift
+    for arg in "$@"; do
+      case "$arg" in -*) ;; *) return 1 ;; esac
+    done
+  fi
+  return 0
+}
+
 # Ensure the uber JAR is up-to-date.
 # On success: sets DEV_JAR_PATH and returns 0.
 # On failure: clears DEV_JAR_PATH and returns 1 (caller should fall back to Gradle).
@@ -156,7 +191,16 @@ dev_ensure_jar() {
   # Minutes of build for a command that runs none of the built code is bad enough on its own.
   # Worse: the rebuild below stops the running daemon on its way to the build, so `trailblaze
   # stop` went on to report "Trailblaze is not running" about the daemon it had just killed.
-  if [ "$need_build" = true ] && [ -n "$jar_path" ] && [ "${DEV_JAR_ALLOW_STALE:-0}" = "1" ]; then
+  # So a stale-tolerant caller that already has a JAR on disk skips both: no build, and no stop
+  # of the daemon that JAR matches.
+  #
+  # Both halves flip together, and only here. Sparing the daemon while the build still runs — the
+  # no-JAR case — leaves it serving pre-build code into the new JAR, and the build writes a fresh
+  # source hash on its way out, so no later command sees staleness and that daemon never
+  # restarts.
+  local stop_daemon=true
+  if [ "${DEV_JAR_ALLOW_STALE:-0}" = "1" ] && [ -n "$jar_path" ]; then
+    stop_daemon=false
     need_build=false
     build_reason=""
   fi
@@ -169,8 +213,10 @@ dev_ensure_jar() {
     # the new JAR at its next restart. We confirm the port is free before building only
     # when we actually stopped the daemon.
     local http_port="${TRAILBLAZE_PORT:-52525}"
-    local pids
-    pids=$(lsof -ti "tcp:$http_port" 2>/dev/null || true)
+    local pids=""
+    if [ "$stop_daemon" = true ]; then
+      pids=$(lsof -ti "tcp:$http_port" 2>/dev/null || true)
+    fi
     # NEVER stop a daemon with in-flight runs (unless TRAILBLAZE_FORCE_DAEMON_STOP is set).
     # The daemon on this port may belong to a DIFFERENT checkout/worktree (jar staleness is
     # per-checkout, the port is machine-global), so "stale from here" can mean "mid-run for
@@ -280,10 +326,13 @@ dev_ensure_jar() {
 dev_prune_stale_siblings() {
   local jar_dir="$1"
   local keep_jar="$2"
-  find "$jar_dir" -maxdepth 1 -type f \( -name '*.jar' -o -name '*.jsa' \) 2>/dev/null \
+  find "$jar_dir" -maxdepth 1 -type f \
+      \( -name '*.jar' -o -name '*.jsa' -o -name '*.jsa.failed' -o -name '*.jsa.jdk' \) 2>/dev/null \
     | while IFS= read -r f; do
         case "$f" in
-          "$keep_jar"|"${keep_jar%.jar}.jsa") ;;  # keep the current pair
+          # Keep the current JAR and the whole sibling set that decides its archive's fate: the
+          # archive, the failure verdict, and the stamp naming the JDK that dumped it.
+          "$keep_jar"|"${keep_jar%.jar}.jsa"|"${keep_jar%.jar}.jsa.failed"|"${keep_jar%.jar}.jsa.jdk") ;;
           *) rm -f "$f" ;;
         esac
       done

@@ -30,6 +30,7 @@ import xyz.block.trailblaze.http.DynamicLlmClient
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.scripting.LaunchedScriptingRuntime
+import xyz.block.trailblaze.scripting.finishScriptingRuntimeCleanup
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.ui.TrailblazeDeviceManager
 import xyz.block.trailblaze.util.Console
@@ -194,11 +195,12 @@ class PlaywrightElectronHostDriverDescriptor(
       noLogging = runOnHostParams.noLogging,
       cleanup = {
         withContext(NonCancellable) {
-          subprocessRuntimes.forEach { it.shutdownAll() }
-        }
-        if (!keepAlive) {
-          electronTest.close()
-          deviceManager.cancelSessionForDevice(trailblazeDeviceId)
+          finishScriptingRuntimeCleanup(subprocessRuntimes) {
+            if (!keepAlive) {
+              electronTest.close()
+              deviceManager.cancelSessionForDevice(trailblazeDeviceId)
+            }
+          }
         }
       },
     ) { session ->

@@ -90,6 +90,7 @@ data class SessionSummary(
             is TrailblazeLog.McpToolCallResponseLog,
             is TrailblazeLog.TrailblazeProgressLog,
             is TrailblazeLog.McpAskLog,
+            is TrailblazeLog.TrailblazeToolCatalogLog,
             -> it
           }
         }.sortedBy { log -> log.timestamp }
@@ -245,6 +246,8 @@ data class SessionSummary(
             is TrailblazeLog.McpToolCallResponseLog,
             is TrailblazeLog.TrailblazeProgressLog,
             is TrailblazeLog.McpAskLog,
+            // Session-level metadata, not an event on the timeline.
+            is TrailblazeLog.TrailblazeToolCatalogLog,
             -> null
           }
         }

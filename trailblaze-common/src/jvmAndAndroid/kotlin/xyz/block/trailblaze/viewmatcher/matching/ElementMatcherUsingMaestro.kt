@@ -33,6 +33,14 @@ object ElementMatcherUsingMaestro {
   private val orchestraKClass = androidOnDeviceCustomMaestroOrchestraClass?.kotlin ?: maestro.orchestra.Orchestra::class
 
   /**
+   * Which Orchestra the reflective lookup above actually landed on. Public only so
+   * `OrchestraReflectiveContractTest` can assert it: the fallback to Maestro's own `Orchestra` is
+   * silent, and every other assertion in that test passes on either class — without this, a
+   * renamed or repackaged fork would leave the test green and the on-device matcher broken.
+   */
+  val resolvedOrchestraClassName: String = orchestraKClass.qualifiedName.orEmpty()
+
+  /**
    * Private method in Orchestra used via reflection
    */
   private val buildFilterMethod = orchestraKClass.memberFunctions
@@ -82,19 +90,19 @@ object ElementMatcherUsingMaestro {
       ),
     )
 
-    // Override Orchestra's element-lookup timeouts to 0L. Maestro's `Orchestra.buildFilter`
-    // internally calls `findElement(childSelector, optional = false)` for `containsChild`
-    // clauses (and similar for other relative selectors), which polls the live device for
-    // up to `lookupTimeoutMs = 17_000L` before giving up. We're operating against a static
-    // snapshot — there's nothing to poll for; if the element isn't in the captured tree it
-    // never will be. Without this override, `migrate-trail`'s cursor-scan fallback spends
-    // ~17s per non-matching log, turning a few-hundred-log session into multiple hours.
-    // The matcher logic stays Maestro's (no selector-drift between record and playback);
-    // only the polling behavior changes.
+    // Every lookup below passes an explicit 0L timeout. We're matching against a static snapshot —
+    // there's nothing to poll for; if the element isn't in the captured tree it never will be.
+    // Letting a lookup poll instead would cost ~17s per non-matching log, turning a
+    // few-hundred-log `migrate-trail` cursor scan into multiple hours.
     val constructor = orchestraKClass.constructors.first()
     val paramsByName = constructor.parameters.associateBy { it.name }
     val args = mutableMapOf<kotlin.reflect.KParameter, Any?>()
     paramsByName["maestro"]?.let { args[it] = maestro }
+    // Only the host fallback (upstream maestro.orchestra.Orchestra) has these constructor params;
+    // its defaults are 17s / 7s. Today neither reflected entrypoint polls on them — buildFilter
+    // composes pure filters and findElementViewHierarchy is handed an explicit 0L — so this is
+    // insurance against a Maestro bump moving a lookup behind the constructor default, which
+    // would only ever surface as a migrate-trail scan taking hours. No-ops on the vendored fork.
     paramsByName["lookupTimeoutMs"]?.let { args[it] = 0L }
     paramsByName["optionalLookupTimeoutMs"]?.let { args[it] = 0L }
     val orchestra = constructor.callBy(args)

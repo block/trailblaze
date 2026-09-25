@@ -43,6 +43,17 @@ the web examples). Ignore them — they aren't starting points.
 # Materialize the workspace SDK + per-trailmap typed bindings (run once after clone)
 ./trailblaze check --workspace examples/wikipedia
 
+# Point the daemon at the example's config dir, so ITS trailmap — the nine
+# wikipedia_web_* scripted tools and the system prompt — is what registers
+export TRAILBLAZE_CONFIG_DIR=$PWD/examples/wikipedia/trails/config
+./trailblaze app --stop   # the daemon re-reads the config dir when it next starts
+
 # Then drive or replay its trails against a connected device/browser
-./trailblaze run --workspace examples/wikipedia <trail>
+./trailblaze run trails/wikipedia/test-search-einstein --device web
 ```
+
+`run` has no workspace flag of its own: it uses the daemon's config dir and walks up from your
+current directory. Without the `TRAILBLAZE_CONFIG_DIR` above, a run from the repo root resolves
+`target: wikipedia` to the repo's own demo trailmap, which carries none of the example's tools.
+
+Each example's own README gives its trail paths and `--device` string.

@@ -7,6 +7,7 @@ import xyz.block.trailblaze.api.ImageFormatDetector
 import xyz.block.trailblaze.api.TrailblazeImageFormat
 import xyz.block.trailblaze.logs.TrailblazeLogsDataProvider
 import xyz.block.trailblaze.logs.client.TrailblazeDeviceClockOffsets
+import xyz.block.trailblaze.logs.client.TrailblazeCompactJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
@@ -732,6 +733,21 @@ class LogsRepo(
   }
 
   /**
+   * When [sessionId]'s first and newest logs were written, in epoch millis, read from file times so
+   * no log is parsed. Null when the session has no logs yet.
+   *
+   * For an end status whose writer never saw the session start — an interactive session is ended
+   * by releasing its device, commands after it was minted. Ending at the newest log rather than at
+   * now keeps the idle time before the release out of the session, and a reader that derives the
+   * start as end minus duration still lands on the first log.
+   */
+  fun activityWindowMs(sessionId: SessionId): LongRange? {
+    val writeTimes = readLogFilesFromDisk(sessionId).map { it.lastModified() }
+    if (writeTimes.isEmpty()) return null
+    return writeTimes.min()..writeTimes.max()
+  }
+
+  /**
    * The session-status logs among [logFiles], selected by filename so the large driver logs are
    * never deserialized. Every writer that puts log files in a session directory embeds the log
    * class's simple name: [saveLogToDisk] here, and the CI on-device log reshaper.
@@ -925,7 +941,7 @@ class LogsRepo(
       filename,
     )
     jsonLogFilename.writeText(
-      TrailblazeJsonInstance.encodeToString<TrailblazeLog>(
+      TrailblazeCompactJsonInstance.encodeToString<TrailblazeLog>(
         logEvent,
       ),
     )

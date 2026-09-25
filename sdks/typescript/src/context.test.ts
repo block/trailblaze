@@ -11,6 +11,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { fromMeta } from "./context.js";
+import { releaseSessionResources } from "./session-resources.js";
 
 function envelope(target?: unknown): unknown {
   return {
@@ -83,6 +84,20 @@ describe("fromMeta: device block", () => {
 });
 
 describe("fromMeta: target block", () => {
+  test("provides an opaque session cleanup registry for the host session", async () => {
+    const ctx = fromMeta(envelope());
+    const releases: string[] = [];
+    ctx?.session.registerCleanup(() => { releases.push("released"); });
+
+    // The registry itself is intentionally opaque: no session-resource values are projected into
+    // the envelope, memory snapshot, target block, or tool result. Its only public operation is
+    // registering a callback the hidden host cleanup tool drains later.
+    expect(typeof ctx?.session.registerCleanup).toBe("function");
+    expect(releases).toEqual([]);
+    await releaseSessionResources("session-abc");
+    expect(releases).toEqual(["released"]);
+  });
+
   test("absent target leaves ctx.target undefined (older-daemon backward compat)", () => {
     const ctx = fromMeta(envelope());
     expect(ctx).toBeDefined();

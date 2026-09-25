@@ -1646,13 +1646,13 @@ class PlaywrightScreenState(
      *      If the walk reaches the candidate, it's visible. Otherwise occluded.
      *
      * **Upstream source — pinned to the Playwright version we depend on
-     * (`libs.versions.toml#playwright = "1.59.0"`, commit `01b2b153`):**
+     * (`libs.versions.toml#playwright = "1.63.0"`, commit `1b025d7e`):**
      *   - `expectHitTarget`:
-     *     <https://github.com/microsoft/playwright/blob/v1.59.0/packages/injected/src/injectedScript.ts#L955>
+     *     <https://github.com/microsoft/playwright/blob/v1.63.0/packages/injected/src/injectedScript.ts#L996>
      *   - `parentElementOrShadowHost`:
-     *     <https://github.com/microsoft/playwright/blob/v1.59.0/packages/injected/src/domUtils.ts#L43>
+     *     <https://github.com/microsoft/playwright/blob/v1.63.0/packages/injected/src/domUtils.ts#L43>
      *   - `enclosingShadowRootOrDocument`:
-     *     <https://github.com/microsoft/playwright/blob/v1.59.0/packages/injected/src/domUtils.ts#L52>
+     *     <https://github.com/microsoft/playwright/blob/v1.63.0/packages/injected/src/domUtils.ts#L52>
      *
      * Compare against `main` (line numbers will drift but function names are
      * stable) when bumping the Playwright dependency:
@@ -1677,10 +1677,10 @@ class PlaywrightScreenState(
       const { elements, ids, vw, vh } = args;
 
       // ---- Direct port of Playwright's expectHitTarget composed-tree algorithm ----
-      // Pinned to Playwright v1.59.0 (commit 01b2b153) — the version in libs.versions.toml.
-      //   expectHitTarget                https://github.com/microsoft/playwright/blob/v1.59.0/packages/injected/src/injectedScript.ts#L955
-      //   parentElementOrShadowHost      https://github.com/microsoft/playwright/blob/v1.59.0/packages/injected/src/domUtils.ts#L43
-      //   enclosingShadowRootOrDocument  https://github.com/microsoft/playwright/blob/v1.59.0/packages/injected/src/domUtils.ts#L52
+      // Pinned to Playwright v1.63.0 (commit 1b025d7e) — the version in libs.versions.toml.
+      //   expectHitTarget                https://github.com/microsoft/playwright/blob/v1.63.0/packages/injected/src/injectedScript.ts#L996
+      //   parentElementOrShadowHost      https://github.com/microsoft/playwright/blob/v1.63.0/packages/injected/src/domUtils.ts#L43
+      //   enclosingShadowRootOrDocument  https://github.com/microsoft/playwright/blob/v1.63.0/packages/injected/src/domUtils.ts#L52
       // Kept byte-identical to upstream so our occlusion verdict tracks Playwright's
       // actionability decision. Re-port — don't patch locally — when the Playwright
       // dependency moves.
@@ -1962,7 +1962,7 @@ class PlaywrightScreenState(
 
       // ---- Direct port of Playwright's expectHitTarget composed-tree algorithm ----
       // Kept in sync manually with the identical port in BATCH_VIEWPORT_CHECK_JS —
-      // pinned to Playwright v1.59.0 (commit 01b2b153); see that script's KDoc for
+      // pinned to Playwright v1.63.0 (commit 1b025d7e); see that script's KDoc for
       // upstream source links. Two script blobs can't share JS functions across separate
       // page.evaluate calls, hence the duplication.
 

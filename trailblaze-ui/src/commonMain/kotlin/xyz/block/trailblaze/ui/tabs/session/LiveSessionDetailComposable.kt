@@ -41,6 +41,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
 import xyz.block.trailblaze.logs.client.TrailblazeLog
+import xyz.block.trailblaze.logs.client.TrailblazeToolCatalog
 import xyz.block.trailblaze.logs.client.deviceClockOffsets
 import xyz.block.trailblaze.logs.client.normalizedToHostClock
 import xyz.block.trailblaze.logs.model.SessionInfo
@@ -128,6 +129,11 @@ fun LiveSessionDetailComposable(
 
   // Collect logs reactively from the Flow - so much simpler!
   val rawLogs by sessionDataProvider.getSessionLogsFlow(session.sessionId).collectAsState()
+
+  // Tool descriptors live in session-level catalog logs rather than on each LLM request, so any
+  // view that shows them resolves through this. Built off the raw logs on purpose: clock
+  // normalization only re-stamps timestamps, and a catalog is keyed by content.
+  val toolCatalogs = remember(rawLogs) { TrailblazeToolCatalog.catalogsIn(rawLogs) }
 
   val sessionDetail = remember(rawLogs, session) {
     // Put every log on the host timeline ONCE, here, rather than at each of the dozens of
@@ -457,6 +463,10 @@ fun LiveSessionDetailComposable(
       ) {
         ChatHistoryDialog(
           log = currentChatHistoryLog!!,
+          toolDescriptors = TrailblazeToolCatalog.resolveToolOptions(
+            log = currentChatHistoryLog!!,
+            catalogs = toolCatalogs,
+          ),
           onDismiss = {
             showChatHistoryDialog = false
             currentChatHistoryLog = null

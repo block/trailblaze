@@ -19,6 +19,7 @@ import org.junit.Test
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
 import xyz.block.trailblaze.config.InlineScriptToolConfig
 import xyz.block.trailblaze.config.TrailheadMetadata
+import xyz.block.trailblaze.scripting.ScriptedToolCatalog
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.llm.config.ConfigResourceSource
@@ -259,6 +260,7 @@ class ToolDiscoveryToolSetTest {
      * omits this seam and exercises the real registry instead.
      */
     knownToolClasses: Map<String, KClass<out TrailblazeTool>> = emptyMap(),
+    scriptedToolCatalogFactory: () -> ScriptedToolCatalog = { ScriptedToolCatalog() },
   ): ToolDiscoveryToolSet =
     ToolDiscoveryToolSet(
       sessionContext = null,
@@ -270,6 +272,7 @@ class ToolDiscoveryToolSetTest {
       knownToolClassProvider = { name ->
         knownToolClasses.entries.firstOrNull { it.key.equals(name, ignoreCase = true) }?.value
       },
+      scriptedToolCatalogFactory = scriptedToolCatalogFactory,
     )
 
   // -- 1. Index mode -- no target, no device ----------------------------------
@@ -1352,7 +1355,7 @@ class ToolDiscoveryToolSetTest {
       yamlToolNames = setOf(ToolName("hideKeyboard"), ToolName("pressBack")),
     )
 
-    val descriptors = collidingGroup.toMergedDescriptors()
+    val descriptors = collidingGroup.toMergedDescriptors(ScriptedToolCatalog())
     val names = descriptors.map { it.name }
 
     assertEquals(
@@ -1377,7 +1380,7 @@ class ToolDiscoveryToolSetTest {
       scriptedToolNames = setOf(ToolName("openUrl")),
     )
 
-    val names = scriptedGroup.toMergedDescriptors().map { it.name }
+    val names = scriptedGroup.toMergedDescriptors(ScriptedToolCatalog()).map { it.name }
     assertContains(
       names, "openUrl",
       "toMergedDescriptors must surface scripted tool names (three-way parity). Got: $names",
@@ -1397,7 +1400,7 @@ class ToolDiscoveryToolSetTest {
       yamlToolNames = setOf(ToolName("pressBack")),
       scriptedToolNames = setOf(ToolName("openUrl")),
     )
-    val names = group.toMergedDescriptors().map { it.name }
+    val names = group.toMergedDescriptors(ScriptedToolCatalog()).map { it.name }
     assertEquals(names.size, names.toSet().size, "toMergedDescriptors must dedupe by name. Got: $names")
     assertContains(names, "hideKeyboard")
     assertContains(names, "pressBack")
@@ -2820,5 +2823,66 @@ class ToolDiscoveryToolSetTest {
       toolSet.systemPromptForTarget(promptedTarget),
       "The helper only suppresses the default sentinel — every other target's prompt flows through unchanged.",
     )
+  }
+
+  // -- Scripted descriptor walks ------------------------------------------------
+
+  /** A target that offers [CatalogOnlyScriptedTool] on every platform and driver. */
+  private fun scriptedTarget(id: String) = object : TrailblazeHostAppTarget(id, "Scripted $id") {
+    override fun getPossibleAppIdsForPlatform(platform: TrailblazeDevicePlatform): List<String>? = listOf("com.$id")
+
+    override fun internalGetCustomToolsForDriver(
+      driverType: TrailblazeDriverType,
+    ): Set<KClass<out TrailblazeTool>> = emptySet()
+
+    override fun getCustomScriptedToolNamesForDriver(driverType: TrailblazeDriverType): Set<ToolName> =
+      setOf(CatalogOnlyScriptedTool.name)
+  }
+
+  /**
+   * Describing a scripted tool means walking every trailmap's descriptor YAMLs. A name lookup
+   * describes the scripted tools of every target on every platform, so before the shared catalog
+   * that one call walked the tree once per (target, platform) — about forty times on a daemon with
+   * a dozen targets. The contract: every description in a call reads the call's one catalog, that
+   * catalog is walked once, and the next call gets a fresh one so an edited workspace descriptor is
+   * visible without a daemon restart.
+   *
+   * The catalog holds a tool real discovery does not know, so a description that walked on its own
+   * would come back without it — see [CatalogOnlyScriptedTool].
+   */
+  @Test
+  fun `a toolbox call describes every scripted tool from one catalog, built fresh per call`() = runTest {
+    var catalogs = 0
+    var walks = 0
+    // The connected target is described by driver, the rest by platform; both routes must read
+    // the same catalog, so the connected one is a target the platform sweep does not list.
+    val toolSet = createToolSet(
+      allTargets = setOf(scriptedTarget("alpha"), scriptedTarget("beta"), scriptedTarget("gamma")),
+      currentTarget = scriptedTarget("delta"),
+      currentDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+      scriptedToolCatalogFactory = {
+        catalogs++
+        CatalogOnlyScriptedTool.catalog { walks++ }
+      },
+    )
+
+    val first = json.parseToJsonElement(toolSet.toolbox(name = CatalogOnlyScriptedTool.name.toolName)).jsonObject
+    assertEquals(
+      CatalogOnlyScriptedTool.name.toolName,
+      first["tool"]?.jsonObject?.get("name")?.jsonPrimitive?.content,
+      "a tool only the request's catalog knows must be found through that catalog. Got: $first",
+    )
+    assertEquals(
+      listOf("alpha", "beta", "delta", "gamma"),
+      first["foundInTargets"]?.jsonArray?.map { it.jsonPrimitive.content }?.sorted(),
+      "every target's scripted tools must be described from the request's catalog — a description " +
+        "that walked the descriptors on its own would not know this tool. Got: $first",
+    )
+    assertEquals(1, catalogs, "one call builds one catalog")
+    assertEquals(1, walks, "four targets over every platform and the connected driver must share ONE descriptor walk")
+
+    toolSet.toolbox(name = CatalogOnlyScriptedTool.name.toolName)
+    assertEquals(2, catalogs, "the next call must build its own catalog")
+    assertEquals(2, walks, "the next call must walk again so a workspace edit shows up")
   }
 }

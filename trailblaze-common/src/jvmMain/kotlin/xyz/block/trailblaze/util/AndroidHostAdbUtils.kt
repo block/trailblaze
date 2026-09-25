@@ -2,6 +2,7 @@ package xyz.block.trailblaze.util
 
 import dadb.AdbShellPacket
 import dadb.Dadb
+import xyz.block.trailblaze.device.AndroidShellBounds
 import dadb.adbserver.AdbServer
 import xyz.block.trailblaze.android.tools.shellEscape
 import xyz.block.trailblaze.device.InstalledApp
@@ -24,6 +25,91 @@ import java.io.OutputStream
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.concurrent.thread
+
+/**
+ * Removes [client] from [clients] only if it is still the value mapped to [key], and closes it
+ * only when this call is the one that removed it.
+ *
+ * A concurrent caller sharing the same key can have already evicted-and-reconnected by the time
+ * this runs: the client this call knew about may no longer be cached at all, replaced by a fresh,
+ * healthy one a different caller now depends on. Removing "whatever is currently cached" would
+ * tear that unrelated connection down instead of the one this call actually used; comparing
+ * against the exact instance first means a caller can only ever evict its own client.
+ *
+ * Generic and free of [dadb.Dadb] so it is testable with a fake key/value pair, no device or real
+ * transport required.
+ */
+internal fun <K, T : AutoCloseable> evictExactClient(clients: ConcurrentHashMap<K, T>, key: K, client: T?) {
+  if (client != null && clients.remove(key, client)) {
+    runCatching { client.close() }
+  }
+}
+
+/**
+ * Resolves a client and runs [block] against it, handing a transport-level [IOException] to
+ * [onTransportFailure] together with the exact client the attempt used.
+ *
+ * [resolve] runs inside the `try` on purpose: creating a client opens a socket, so a cold connect
+ * can fail with the same transient [IOException] as the call itself and must reach the same
+ * recovery. The used client is `null` in that case, so the eviction that follows is a no-op
+ * rather than a removal of some other caller's client.
+ *
+ * A device-side sync FAIL (pulling/pushing an unreadable or missing remote path) also arrives as
+ * an [IOException], but the transport is healthy - the device answered, the answer was "no".
+ * Evicting and retrying would run every denied transfer twice and churn the shared client under
+ * concurrent callers (observed: the installed-apps badge fetcher logging an eviction per system
+ * APK it isn't allowed to pull). It propagates as the terminal failure it is.
+ *
+ * Generic and free of [dadb.Dadb] so the retry boundary is testable without a device.
+ */
+internal fun <C, T> runOnResolvedClient(
+  resolve: () -> C,
+  onClientResolved: (C) -> Unit,
+  onTransportFailure: (e: IOException, usedClient: C?) -> T,
+  block: (C) -> T,
+): T {
+  var usedClient: C? = null
+  return try {
+    val client = resolve()
+    usedClient = client
+    onClientResolved(client)
+    block(client)
+  } catch (e: IOException) {
+    if (!isTransportFailure(e)) throw e
+    onTransportFailure(e, usedClient)
+  }
+}
+
+/**
+ * [runOnResolvedClient] that never re-runs [block]: [onTransportFailure] observes the failure (to
+ * evict the client), then the failure propagates.
+ *
+ * This is the transport every bounded worker uses. A worker whose caller timed out is abandoned,
+ * not stopped, so a retry inside it would fire whenever the adb server finally drops its socket —
+ * minutes later, against a device that has moved on to another trail. Named and tested on its own
+ * because "the worker cannot re-run a side effect" rests entirely on it.
+ */
+internal fun <C, T> runOnResolvedClientOnce(
+  resolve: () -> C,
+  onClientResolved: (C) -> Unit,
+  onTransportFailure: (e: IOException, usedClient: C?) -> Unit,
+  block: (C) -> T,
+): T = runOnResolvedClient(
+  resolve = resolve,
+  onClientResolved = onClientResolved,
+  onTransportFailure = { e, usedClient ->
+    onTransportFailure(e, usedClient)
+    throw e
+  },
+  block = block,
+)
+
+/**
+ * Whether [e] means the transport broke, as opposed to the device answering "no". A sync FAIL is
+ * the device refusing a pull/push of an unreadable path over a healthy transport.
+ */
+internal fun isTransportFailure(e: Throwable?): Boolean =
+  e is IOException && !e.message.orEmpty().startsWith("Sync failed")
 
 object AndroidHostAdbUtils {
 
@@ -115,7 +201,7 @@ object AndroidHostAdbUtils {
    * configuration was rejected (vs silently falling back and seeing "device not found"
    * downstream).
    */
-  private fun resolveAdbServerEndpoint(): Pair<String, Int> = resolveAdbServerEndpoint(System::getenv)
+  internal fun resolveAdbServerEndpoint(): Pair<String, Int> = resolveAdbServerEndpoint(System::getenv)
 
   /**
    * Test seam: same as [resolveAdbServerEndpoint] but sources env vars via [getenv]. Pure logic —
@@ -170,23 +256,50 @@ object AndroidHostAdbUtils {
    */
   private fun <T> withDadb(deviceId: TrailblazeDeviceId, block: (Dadb) -> T): T {
     val serial = deviceId.instanceId
-    return try {
-      block(dadbFor(deviceId))
-    } catch (e: IOException) {
-      // A device-side sync FAIL (pulling/pushing an unreadable or missing remote path) also
-      // arrives as an IOException, but the transport is healthy - the device answered, the
-      // answer was "no". Evicting and retrying would run every denied transfer twice and churn
-      // the shared client under concurrent callers (observed: the installed-apps badge fetcher
-      // logging an eviction per system APK it isn't allowed to pull). Propagate it as the
-      // terminal failure it is; only transport-level errors earn the eviction below.
-      if (e.message.orEmpty().startsWith("Sync failed")) throw e
-      Console.log(
-        "[AndroidHostAdbUtils] withDadb evicting cached client for $serial after IOException " +
-          "(${e.javaClass.simpleName}: ${e.message}); retrying once",
-      )
-      dadbClients.remove(serial)?.let { runCatching { it.close() } }
-      block(dadbFor(deviceId))
-    }
+    return runOnResolvedClient(
+      resolve = { dadbFor(deviceId) },
+      onClientResolved = {},
+      onTransportFailure = { e, usedClient ->
+        Console.log(
+          "[AndroidHostAdbUtils] withDadb evicting cached client for $serial after IOException " +
+            "(${e.javaClass.simpleName}: ${e.message}); retrying once",
+        )
+        evictExactClient(dadbClients, serial, usedClient)
+        block(dadbFor(deviceId))
+      },
+      block = block,
+    )
+  }
+
+  /**
+   * [withDadb] without the re-run.
+   *
+   * The retry above is safe for a read, and wrong for anything with a side effect: dadb cannot say
+   * whether an `IOException` arrived before the command reached the device or after it already ran,
+   * so re-running the block can execute an `am broadcast`, a `pm clear` or whatever a trail handed
+   * `android_adbShell` a second time. Paths documented as single-attempt use this instead.
+   *
+   * The eviction is kept. Recovery still happens, one call later: the failure is reported to this
+   * caller, and the NEXT call reconnects rather than inheriting the broken client.
+   */
+  private fun <T> withDadbNoRetry(
+    deviceId: TrailblazeDeviceId,
+    onClientResolved: (Dadb) -> Unit = {},
+    block: (Dadb) -> T,
+  ): T {
+    val serial = deviceId.instanceId
+    return runOnResolvedClientOnce(
+      resolve = { dadbFor(deviceId) },
+      onClientResolved = onClientResolved,
+      onTransportFailure = { e, usedClient ->
+        Console.log(
+          "[AndroidHostAdbUtils] withDadbNoRetry evicting cached client for $serial after " +
+            "IOException (${e.javaClass.simpleName}: ${e.message}); NOT retrying here",
+        )
+        evictExactClient(dadbClients, serial, usedClient)
+      },
+      block = block,
+    )
   }
 
   /**
@@ -508,14 +621,67 @@ object AndroidHostAdbUtils {
    * with spaces and handed to the device's `sh`, matching the legacy `adb shell` argv-joining
    * behavior (which used `redirectErrorStream(true)` so callers saw merged output via
    * `fullOutput`); callers that need shell metacharacters in arg values must [shellEscape] them.
+   *
+   * Bounded at [AndroidShellBounds.HOST_SHELL_TIMEOUT_MS]. The bound lives HERE, on the primitive,
+   * rather than on each caller: this one function backs `pm clear`, `force-stop`, `isAppRunning`,
+   * the package listings and the device clock read, and bounding them one at a time leaves the next
+   * one added unbounded. `pm clear` is the 154s command [AndroidShellBounds] cites as the slowest
+   * on record, so it is exactly the call most likely to wedge.
+   *
+   * A timeout throws. Returning `""` would turn a wedged device into "no packages installed" or
+   * "the app is not running" — a wrong answer delivered as a right one, and worse than the hang.
+   *
+   * A transport `IOException` is still retried once, as it was before the bound, but on THIS
+   * thread and only within what is left of the bound ([execWithOneTransportRetry]). Never inside
+   * the worker: a timed-out worker is abandoned, not stopped, and a retry there would re-run a
+   * `pm clear` or force-stop whenever the adb server finally drops its socket — after this call
+   * has thrown and the device has moved on to the next trail.
    */
   fun execAdbShellCommand(deviceId: TrailblazeDeviceId, args: List<String>): String {
     val command = args.joinToString(" ")
-    Console.log("adb shell ${redactSecretsForLog(command)}")
-    return withDadb(deviceId) { dadb ->
-      val response = dadb.shell(command)
-      if (response.errorOutput.isEmpty()) response.output else response.allOutput
+    val redactedCommand = redactSecretsForLog(command)
+    Console.log("adb shell $redactedCommand")
+    val attempt = execWithOneTransportRetry(AndroidShellBounds.HOST_SHELL_TIMEOUT_MS) { budgetMs ->
+      runSingleAdbShellAttempt(deviceId, command, redactedCommand, budgetMs)
     }
+    return hostShellOutputOrThrow(
+      attempt = attempt,
+      deviceLabel = deviceId.instanceId,
+      command = command,
+      timeoutMs = AndroidShellBounds.HOST_SHELL_TIMEOUT_MS,
+    )
+  }
+
+  /**
+   * Runs [attempt] with the whole [timeoutMs] budget and, if it failed on a transport
+   * `IOException`, once more with whatever budget is left. A timeout is not retried: the budget is
+   * already spent. Neither is a non-transport failure, which the device itself reported.
+   *
+   * The retry runs on the calling thread, after the first attempt's worker has finished (it
+   * threw), so it cannot overlap that worker or outlive the caller. Pure control flow over an
+   * injectable clock, so it is testable without threads or a device.
+   */
+  internal fun execWithOneTransportRetry(
+    timeoutMs: Long,
+    nowMs: () -> Long = { System.nanoTime() / 1_000_000 },
+    attempt: (budgetMs: Long) -> ShellAttemptResult,
+  ): ShellAttemptResult {
+    val deadline = nowMs() + timeoutMs
+    val first = attempt(timeoutMs)
+    if (first.outcome != ShellAttemptOutcome.FAILED || !isTransportFailure(first.error)) return first
+    val remainingMs = deadline - nowMs()
+    if (remainingMs <= 0) return first
+    Console.log(
+      "[AndroidHostAdbUtils] adb shell transport failed (${first.error?.message}) — retrying once " +
+        "with ${remainingMs}ms of the bound left",
+    )
+    return attempt(remainingMs)
+  }
+
+  /** dadb's combined-output convention. */
+  private fun shellOutputOf(dadb: Dadb, command: String): String {
+    val response = dadb.shell(command)
+    return if (response.errorOutput.isEmpty()) response.output else response.allOutput
   }
 
   /**
@@ -526,7 +692,17 @@ object AndroidHostAdbUtils {
    */
   internal enum class ShellAttemptOutcome { SUCCESS, FAILED, TIMED_OUT }
 
-  internal data class ShellAttemptResult(val value: String?, val outcome: ShellAttemptOutcome)
+  internal data class ShellAttemptResult(
+    val value: String?,
+    val outcome: ShellAttemptOutcome,
+    /**
+     * What the worker threw, on a [ShellAttemptOutcome.FAILED] it caught. Carried rather than only
+     * logged so a caller that rethrows can attach the real cause; a bare "adb shell failed" with no
+     * stack is a much worse thing to find in a session log than the IOException underneath it.
+     * Null on the interrupted path, which has no exception of its own to report.
+     */
+    val error: Throwable? = null,
+  )
 
   /**
    * Like [execAdbShellCommand] but bounded by [timeoutMs]. On timeout the cached dadb client is
@@ -544,18 +720,69 @@ object AndroidHostAdbUtils {
    * idempotent shell calls that previously had explicit timeouts (`getprop` during device
    * discovery, `logcat -d` for the MCP logcat tool, port-forward removal) — a retry must not be
    * able to double-execute a side effect.
+   *
+   * [quiet] skips the per-call "adb shell …" debug line. For a caller that polls on a timer (the
+   * memory sampler runs two of these every couple of seconds) the line is pure noise; failures and
+   * timeouts are still logged.
+   *
+   * [evictClientOnTimeout] is the recovery above, and every trail-driving caller wants it. Pass
+   * `false` from a BACKGROUND poller: the cached client is shared per device, so evicting it tears
+   * down the transport the running trail is using mid-step — a heavy price for a sample nobody is
+   * waiting for. With it off a timeout is terminal (there is no fresh transport to retry against)
+   * and the caller simply gets `null` for that reading.
    */
   fun execAdbShellCommandWithTimeout(
     deviceId: TrailblazeDeviceId,
     args: List<String>,
     timeoutMs: Long = DEFAULT_SHORT_CALL_TIMEOUT_MS,
+    quiet: Boolean = false,
+    evictClientOnTimeout: Boolean = true,
   ): String? {
     val command = args.joinToString(" ")
     val redactedCommand = redactSecretsForLog(command)
-    Console.log("adb shell ($timeoutMs ms timeout) $redactedCommand")
+    if (!quiet) Console.log("adb shell ($timeoutMs ms timeout) $redactedCommand")
+    if (!evictClientOnTimeout) {
+      return runSingleAdbShellAttempt(deviceId, command, redactedCommand, timeoutMs, evictClientOnTimeout = false).value
+    }
     return execWithReconnectOnTimeout {
       runSingleAdbShellAttempt(deviceId, command, redactedCommand, timeoutMs)
     }
+  }
+
+  /**
+   * Like [execAdbShellCommandWithTimeout] but exactly one bounded attempt, never retried. A
+   * timeout there only evicts the *cached client*; the worker thread it started can outlive that
+   * eviction (`interrupt()` does not unblock a thread parked in a native socket read), so the
+   * retry's fresh attempt can end up running alongside the first one instead of after it. That is
+   * merely wasted work for a short idempotent read, but not for a command that is already bounded
+   * at minutes and whose caller is relying on that bound — `pm compile`, which callers already wait
+   * up to [xyz.block.trailblaze.device.EnsureAppCompiled.COMPILE_TIMEOUT_MS] for once; a silent
+   * retry would double that wait rather than reconnecting a stale transport.
+   */
+  fun execAdbShellCommandBoundedOnce(
+    deviceId: TrailblazeDeviceId,
+    args: List<String>,
+    timeoutMs: Long,
+  ): String? = execAdbShellCommandBoundedOnceDetailed(deviceId, args, timeoutMs).value
+
+  /**
+   * [execAdbShellCommandBoundedOnce] with the attempt's outcome kept instead of flattened to
+   * `null`.
+   *
+   * Three unrelated conditions all produce a null value — the read timed out, the call threw, and
+   * the block legitimately returned nothing — and a caller that turns "no value" into one error
+   * message necessarily reports two of them wrongly. A disconnected device described as a hang
+   * sends whoever reads the log hunting for a wedge that never happened.
+   */
+  internal fun execAdbShellCommandBoundedOnceDetailed(
+    deviceId: TrailblazeDeviceId,
+    args: List<String>,
+    timeoutMs: Long,
+  ): ShellAttemptResult {
+    val command = args.joinToString(" ")
+    val redactedCommand = redactSecretsForLog(command)
+    Console.log("adb shell ($timeoutMs ms timeout, no retry) $redactedCommand")
+    return runSingleAdbShellAttempt(deviceId, command, redactedCommand, timeoutMs)
   }
 
   /**
@@ -590,23 +817,39 @@ object AndroidHostAdbUtils {
    * cached dadb client is evicted (so the *next* attempt reconnects with a fresh transport) and the
    * worker is interrupted; the outcome is reported so [execWithReconnectOnTimeout] can decide
    * whether to retry.
+   *
+   * [evictClientOnTimeout] `false` leaves the shared client alone — for a background poller whose
+   * timeout says nothing about the transport a running trail is using. The worker is still
+   * abandoned and the outcome still reported.
+   *
+   * [shellCall] is the work the worker does. It defaults to [withDadbNoRetry], and no production
+   * caller overrides it: a timed-out worker is abandoned rather than stopped, so any retry inside it
+   * could re-run a side effect long after the caller gave up. A caller that wants a retry does it
+   * on its own thread ([execWithOneTransportRetry]). It is also the seam a test uses to pin the
+   * three outcomes — returns, throws, never comes back — without a device.
+   *
+   * [shellCall] reports the client it resolved through the callback it is handed, so a timeout or
+   * interruption below can evict that exact instance ([evictExactClient]) instead of whatever
+   * happens to be cached when cleanup runs — a concurrent caller on the same device can have
+   * already reconnected in the meantime, and evicting "whatever is cached" would tear down that
+   * unrelated, healthy client instead of the one this worker actually used.
    */
-  private fun runSingleAdbShellAttempt(
+  internal fun runSingleAdbShellAttempt(
     deviceId: TrailblazeDeviceId,
     command: String,
     redactedCommand: String,
     timeoutMs: Long,
+    evictClientOnTimeout: Boolean = true,
+    shellCall: (onClientResolved: (Dadb) -> Unit) -> String? = { onClientResolved ->
+      withDadbNoRetry(deviceId, onClientResolved) { dadb -> shellOutputOf(dadb, command) }
+    },
   ): ShellAttemptResult {
     val resultRef = AtomicReference<String?>()
     val errorRef = AtomicReference<Throwable?>()
+    val usedClientRef = AtomicReference<Dadb?>()
     val worker = thread(name = "dadb-shell-timed", isDaemon = true) {
       try {
-        resultRef.set(
-          withDadb(deviceId) { dadb ->
-            val response = dadb.shell(command)
-            if (response.errorOutput.isEmpty()) response.output else response.allOutput
-          },
-        )
+        resultRef.set(shellCall { usedClientRef.set(it) })
       } catch (t: Throwable) {
         errorRef.set(t)
       }
@@ -618,7 +861,7 @@ object AndroidHostAdbUtils {
       // shut down after its deadline). Restore the interrupt flag, abandon the wedged worker and its
       // possibly-stale client, and report a terminal failure — interruption means "stop", not "retry".
       Thread.currentThread().interrupt()
-      dadbClients.remove(deviceId.instanceId)?.let { runCatching { it.close() } }
+      evictExactClient(dadbClients, deviceId.instanceId, usedClientRef.get())
       worker.interrupt()
       return ShellAttemptResult(null, ShellAttemptOutcome.FAILED)
     }
@@ -638,14 +881,15 @@ object AndroidHostAdbUtils {
         "[AndroidHostAdbUtils] adb shell failed (${error.javaClass.simpleName}: " +
           "${error.message}) — command: $redactedCommand",
       )
-      return ShellAttemptResult(null, ShellAttemptOutcome.FAILED)
+      return ShellAttemptResult(null, ShellAttemptOutcome.FAILED, error)
     }
     if (worker.isAlive) {
       Console.log(
         "[AndroidHostAdbUtils] adb shell timed out after ${timeoutMs}ms — " +
-          "evicting dadb client: $redactedCommand",
+          (if (evictClientOnTimeout) "evicting dadb client" else "leaving the shared dadb client alone") +
+          ": $redactedCommand",
       )
-      dadbClients.remove(deviceId.instanceId)?.let { runCatching { it.close() } }
+      if (evictClientOnTimeout) evictExactClient(dadbClients, deviceId.instanceId, usedClientRef.get())
       // interrupt() may not unblock a worker parked in a dadb socket read (native I/O ignores the
       // interrupt flag); the daemon thread then lingers until that read returns or errors. Bounded in
       // practice — the device either responds or the socket eventually faults — and the thread is a
@@ -970,15 +1214,28 @@ object AndroidHostAdbUtils {
         deviceId = deviceId,
         args = listOf("am", "force-stop", appId),
       )
-      PollingUtils.tryUntilSuccessOrThrowException(
+      val conditionDescription = "App $appId should be force stopped"
+      // PollingUtils counts a throwing attempt as "not yet met", which is right for a device that
+      // answered "no" and wrong for one that never answered: left alone, a wedged transport would
+      // surface here as a plain 30-second poll timeout instead of the ~330-second host shell bound
+      // that actually elapsed. So the transport failure is held aside and rethrown if the poll
+      // never succeeded — see waitUntilAppInForeground for the same fix on the foreground poll.
+      val transport = TransportFailureTracker()
+      val stopped = PollingUtils.tryUntilSuccessOrTimeout(
         maxWaitMs = 30_000,
         intervalMs = 200,
-        conditionDescription = "App $appId should be force stopped",
+        conditionDescription = conditionDescription,
       ) {
-        execAdbShellCommand(
-          deviceId = deviceId,
-          args = listOf("dumpsys", "package", appId, "|", "grep", "stopped=true"),
-        ).contains("stopped=true")
+        transport.record {
+          execAdbShellCommand(
+            deviceId = deviceId,
+            args = listOf("dumpsys", "package", appId, "|", "grep", "stopped=true"),
+          )
+        }.contains("stopped=true")
+      }
+      transport.rethrowIfUnresolved(stopped)
+      if (!stopped) {
+        error("Timed out (30000ms limit) met [$conditionDescription]")
       }
     } else {
       Console.log("App $appId does not have an active process, no need to force stop")
@@ -1001,11 +1258,21 @@ object AndroidHostAdbUtils {
     )
   }
 
-  fun listInstalledPackages(deviceId: TrailblazeDeviceId): List<String> = try {
+  /**
+   * `pm list packages` via [execAdbShellCommand], which now throws — including on a bounded
+   * timeout — rather than hanging or answering a wedged device with "no packages installed". A
+   * caller that wants the old graceful-degrade-to-empty behavior catches at its own call site and
+   * says so ([xyz.block.trailblaze.util.HostAndroidDeviceConnectUtils]'s force-stop gate does),
+   * rather than this shared primitive silently mis-reporting for everyone — including
+   * `mobile_listInstalledApps`, which used to report an empty inventory for a hung device.
+   *
+   * Run setup's force-stop (`MobileDeviceUtils.ensureAppsAreForceStopped`) deliberately does not
+   * catch: it used to skip the force-stop on a failed probe and start the trail anyway, and now
+   * fails setup instead. A device that cannot list its packages cannot run the trail, and failing
+   * at setup names the cause rather than the step that trips over it later.
+   */
+  fun listInstalledPackages(deviceId: TrailblazeDeviceId): List<String> =
     parsePmListPackages(execAdbShellCommand(deviceId, PM_LIST_PACKAGES_ARGV))
-  } catch (e: Exception) {
-    emptyList()
-  }
 
   /**
    * The device's Android API level via `getprop ro.build.version.sdk`, or null when it can't be read
@@ -1031,17 +1298,13 @@ object AndroidHostAdbUtils {
    * already trust this `dumpsys package` format: [getAppVersionInfo] parses it per-app for version.)
    *
    * Only the human display name is left `null`: dumpsys doesn't carry it (resolving a label needs
-   * `aapt dump badging` on a pulled APK, or the on-device `PackageManager` path). Returns an empty
-   * list on adb failure, matching [listInstalledPackages].
+   * `aapt dump badging` on a pulled APK, or the on-device `PackageManager` path). Throws on adb
+   * failure (including a bounded timeout) rather than answering a wedged device with an empty
+   * inventory — see [listInstalledPackages].
    */
-  fun listInstalledAppsDetailed(deviceId: TrailblazeDeviceId): List<InstalledApp> = try {
+  fun listInstalledAppsDetailed(deviceId: TrailblazeDeviceId): List<InstalledApp> {
     val output = execAdbShellCommand(deviceId, listOf("dumpsys", "package", "packages"))
-    parseInstalledAppsFromDumpsys(output)
-  } catch (e: Exception) {
-    // Log the full stack trace, not just the message: this path swallows the failure and returns an
-    // empty list (parity with listInstalledPackages), so the trace is the only prod breadcrumb.
-    Console.log("Failed to list installed apps with detail: ${e.message}\n${e.stackTraceToString()}")
-    emptyList()
+    return parseInstalledAppsFromDumpsys(output)
   }
 
   /**

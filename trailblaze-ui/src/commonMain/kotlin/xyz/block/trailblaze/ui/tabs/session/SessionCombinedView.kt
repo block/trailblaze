@@ -12,7 +12,6 @@ import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -46,8 +45,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.input.pointer.PointerIcon
@@ -65,6 +62,7 @@ import kotlinx.coroutines.withContext
 import xyz.block.trailblaze.api.AgentDriverAction
 import xyz.block.trailblaze.api.HasClickCoordinates
 import xyz.block.trailblaze.logs.client.TrailblazeLog
+import xyz.block.trailblaze.logs.client.TrailblazeToolCatalog
 import xyz.block.trailblaze.logs.model.HasScreenshot
 import xyz.block.trailblaze.logs.model.HasTraceId
 import xyz.block.trailblaze.logs.model.HasTrailblazeTool
@@ -74,18 +72,14 @@ import xyz.block.trailblaze.logs.model.isInProgress
 import xyz.block.trailblaze.ui.composables.ScreenshotAnnotation
 import xyz.block.trailblaze.ui.composables.ScreenshotImage
 import xyz.block.trailblaze.ui.composables.SelectableText
-import xyz.block.trailblaze.ui.composables.createVideoFrameCache
 import xyz.block.trailblaze.ui.images.ImageLoader
 import xyz.block.trailblaze.ui.images.NetworkImageLoader
-import xyz.block.trailblaze.ui.isExportAutoplayRequested
-import xyz.block.trailblaze.ui.signalExportPlaybackEnded
 import xyz.block.trailblaze.ui.Platform
 import xyz.block.trailblaze.ui.getPlatform
 import xyz.block.trailblaze.ui.loadDeviceLogs
 import xyz.block.trailblaze.ui.loadNetworkLogs
 import xyz.block.trailblaze.ui.openVideoInSystemPlayer
 import xyz.block.trailblaze.ui.utils.FormattingUtils
-import xyz.block.trailblaze.ui.utils.FormattingUtils.formatCompactDuration
 import xyz.block.trailblaze.ui.utils.FormattingUtils.formatDuration
 
 /** Polling interval for refreshing device-log and network capture files during live sessions. */
@@ -98,15 +92,19 @@ private const val SESSION_LOGS_POLL_INTERVAL_MS = 1_000L
 private const val UNFINISHED_EVENT_FALLBACK_DURATION_MS = 1_000L
 
 /**
- * Combined view: step-grouped event hierarchy + video frame + vertical scrub bar.
+ * Combined view: step-grouped event hierarchy + screenshot panel + vertical scrub bar.
  *
  * Layout:
  * ┌──────────────────┬──────────────┬──────────┐
- * │  Step-grouped     │  Video frame │ Vertical │
+ * │  Step-grouped     │  Screenshot  │ Vertical │
  * │  hierarchy with   │  (auto-sized │ scrub    │
  * │  collapsible      │   to phone   │ bar      │
  * │  objectives       │   aspect)    │          │
  * └──────────────────┴──────────────┴──────────┘
+ *
+ * The screenshot panel scrubs the per-step captures. A session recording, when one was captured,
+ * is offered as a "Watch Video" hand-off to the system player: Compose has no video decoder, and
+ * the HTML report is where the recording plays inline.
  */
 @Composable
 internal fun SessionCombinedView(
@@ -204,38 +202,6 @@ internal fun SessionCombinedView(
     }
   }
 
-  // Export autoplay: seek to the start of the session and kick off timeline playback once data
-  // is loaded, then signal the external recorder when `isVideoPlaying` goes back to false (set by
-  // [PlaybackDriverEffect] once the scrubber reaches `effectiveEndMs`). The signal also fires for
-  // empty sessions (sessionEnd == sessionStart) so a recorder doesn't hang waiting on playback
-  // that never starts.
-  //
-  // Inert today: `isExportAutoplayRequested()` is false on every platform, because the only
-  // caller was the Compose/WebAssembly report and `trailblaze report --video` now exports from
-  // the TypeScript run-report renderer instead.
-  LaunchedEffect(effectiveStartMs, effectiveEndMs) {
-    if (!isExportAutoplayRequested()) return@LaunchedEffect
-    if (effectiveEndMs <= effectiveStartMs) {
-      // No timeline to play — fire the end signal immediately so the exporter can finish.
-      signalExportPlaybackEnded()
-      return@LaunchedEffect
-    }
-    timelineState.scrubTimestampMs = effectiveStartMs
-    timelineState.isVideoPlaying = true
-  }
-  // Signal playback-complete back to the exporter when the auto-play loops drop
-  // `isVideoPlaying` after running. Gated on the autoplay flag so an interactive user
-  // pausing playback in a normally-opened report doesn't accidentally trip the signal.
-  var hasAutoplayStarted by remember { mutableStateOf(false) }
-  LaunchedEffect(timelineState.isVideoPlaying) {
-    if (!isExportAutoplayRequested()) return@LaunchedEffect
-    if (timelineState.isVideoPlaying) {
-      hasAutoplayStarted = true
-    } else if (hasAutoplayStarted) {
-      signalExportPlaybackEnded()
-    }
-  }
-
   // Live tracking: keep scrub at latest log timestamp unless user has clicked away
   val isLive = overallStatus?.isInProgress == true
   LaunchedEffect(logs.size, sessionEndMs, isLive, userHasInteracted) {
@@ -264,33 +230,7 @@ internal fun SessionCombinedView(
         }
     }
 
-  // Screenshot-bearing logs ("keyframes"), and the sticky nearest one at/before the scrub
-  // position. Unlike `activeDriverLog` above — which is gated to a driver action's own duration
-  // window and goes null in idle gaps — this stays stuck on the last real keyframe, mirroring
-  // ScreenshotKeyframePanel's `activeScreenshotLog`. It lets a paused VideoFramePanel present a
-  // crisp, clickable, hierarchy-backed screenshot (parity with the no-video platforms) instead of
-  // the low-res sprite frame, and drives the keyframe-count label.
-  //
-  // Collects every `HasScreenshot` log (driver actions, snapshots, and LLM-request logs) — the same
-  // set the no-video ScreenshotKeyframePanel uses — so a video-backed session can pause/click on the
-  // final failure/`TakeSnapshot` screenshot too, not just driver-action screenshots, and the count
-  // matches. Sorted by timestamp to make `lastOrNull { <= scrub }` well-defined regardless of the
-  // order the different log types were appended.
-  val videoKeyframeLogs =
-    remember(logs) {
-      logs
-        .filter { it is HasScreenshot && (it as HasScreenshot).screenshotFile != null }
-        .sortedBy { it.timestamp.toEpochMilliseconds() }
-    }
-  val nearestKeyframeLog =
-    remember(currentTimestamp, videoKeyframeLogs) {
-      videoKeyframeLogs.lastOrNull { it.timestamp.toEpochMilliseconds() <= currentTimestamp }
-    }
-
-  // Current video frame — hoisted so video column width can react to its aspect ratio
-  var currentFrame by remember { mutableStateOf<ImageBitmap?>(null) }
-
-  // Device aspect ratio from first log with dimensions — available before any frame loads
+  // Device aspect ratio from first log with dimensions — available before any screenshot loads
   val deviceAspect =
     remember(logs) {
       logs
@@ -354,27 +294,6 @@ internal fun SessionCombinedView(
       buildEventMarkers(logs, effectiveStartMs, effectiveEndMs)
     }
 
-  // Export-only: a dwell-capped mapping from compressed playback time to absolute session
-  // time, so `--gif/--webp/--video` autoplay scales with step count rather than the
-  // session's real wall-clock (https://github.com/block/trailblaze/issues/173). Null for interactive viewing — only the
-  // `?autoplay=1` export path collapses idle gaps. Anchored on every log timestamp plus
-  // the window bounds so meaningful intra-step activity still plays 1:1.
-  // isExportAutoplayRequested() reads the immutable report URL (constant for the page's
-  // lifetime), so it's a guard inside the block, not a remember key.
-  val exportPlaybackTimeline =
-    remember(logs, effectiveStartMs, effectiveEndMs) {
-      if (!isExportAutoplayRequested()) {
-        null
-      } else {
-        val anchors = exportPlaybackAnchors(
-          logTimestampsMs = logs.map { it.timestamp.toEpochMilliseconds() },
-          startMs = effectiveStartMs,
-          endMs = effectiveEndMs,
-        )
-        PlaybackTimeline.build(anchors, TimelineConstants.MAX_EXPORT_STEP_DWELL_MS)
-      }
-    }
-
   // Flat navigation list built from visible child events — matches exactly what's on screen.
   // No dedup: every child event is navigable, even when sharing a timestamp.
   val navEvents =
@@ -403,14 +322,9 @@ internal fun SessionCombinedView(
   }
 
   // Completed sessions: scroll to the bottom once so the user sees the final step.
-  // Skip when autoplay is requested — that path seeks the scrubber back to
-  // `effectiveStartMs`, so the list should also start at the top and play forward
-  // from the first item rather than starting visually at the end.
   var didInitialScroll by remember { mutableStateOf(false) }
   LaunchedEffect(isLive, logs.size) {
-    if (!isLive && logs.isNotEmpty() && !didInitialScroll && !userHasInteracted &&
-      !isExportAutoplayRequested()
-    ) {
+    if (!isLive && logs.isNotEmpty() && !didInitialScroll && !userHasInteracted) {
       delay(TimelineConstants.ANIMATION_SETTLE_DELAY_MS)
       listScrollState.scrollTo(listScrollState.maxValue)
       didInitialScroll = true
@@ -431,7 +345,6 @@ internal fun SessionCombinedView(
             currentTimestamp = currentTimestamp,
             selectedEventKey = selectedEventKey,
             timelineState = timelineState,
-            videoMetadata = videoMetadata,
             effectiveStartMs = effectiveStartMs,
             effectiveEndMs = effectiveEndMs,
             onUserInteracted = { userHasInteracted = true },
@@ -615,12 +528,9 @@ internal fun SessionCombinedView(
       }
     }
 
-    // Right-center: video/screenshot panel, resizable via drag handle
+    // Right-center: screenshot panel, resizable via drag handle
     BoxWithConstraints(modifier = Modifier.fillMaxHeight()) {
-      val frameAspect = deviceAspect
-        ?: if (currentFrame != null) {
-          currentFrame!!.width.toFloat() / currentFrame!!.height.toFloat()
-        } else DEFAULT_PHONE_ASPECT_RATIO
+      val frameAspect = deviceAspect ?: DEFAULT_PHONE_ASPECT_RATIO
       // Hug the phone's natural width at full available height — anything wider is grey
       // margin that the step list can use instead. User can still drag wider via the handle.
       val aspectWidth = maxHeight * frameAspect
@@ -635,17 +545,8 @@ internal fun SessionCombinedView(
         if (videoPanelWidthPx > 0f) userWidthDp.coerceIn(minColumnWidth, maxAllowedWidth)
         else defaultWidth
 
-      val durationMs = if (videoMetadata != null) {
-        ((videoMetadata.endTimestampMs ?: effectiveEndMs) - videoMetadata.startTimestampMs)
-          .coerceAtLeast(0L)
-      } else {
-        (effectiveEndMs - effectiveStartMs).coerceAtLeast(1L)
-      }
-      val positionMs = if (videoMetadata != null) {
-        (currentTimestamp - videoMetadata.startTimestampMs).coerceAtLeast(0L)
-      } else {
-        (currentTimestamp - effectiveStartMs).coerceAtLeast(0L)
-      }
+      val durationMs = (effectiveEndMs - effectiveStartMs).coerceAtLeast(1L)
+      val positionMs = (currentTimestamp - effectiveStartMs).coerceAtLeast(0L)
 
       Column(
         modifier =
@@ -664,10 +565,8 @@ internal fun SessionCombinedView(
           onPlayPauseClick = {
             if (!timelineState.isVideoPlaying) {
               val scrub = timelineState.scrubTimestampMs ?: effectiveStartMs
-              val end = videoMetadata?.endTimestampMs ?: effectiveEndMs
-              if (scrub >= end - TimelineConstants.END_OF_VIDEO_THRESHOLD_MS) {
-                timelineState.scrubTimestampMs =
-                  videoMetadata?.startTimestampMs ?: effectiveStartMs
+              if (scrub >= effectiveEndMs - TimelineConstants.END_OF_VIDEO_THRESHOLD_MS) {
+                timelineState.scrubTimestampMs = effectiveStartMs
               }
             }
             timelineState.isVideoPlaying = !timelineState.isVideoPlaying
@@ -680,38 +579,36 @@ internal fun SessionCombinedView(
           onSpeedChange = { timelineState.playbackSpeed = it },
         )
 
-        if (videoMetadata != null) {
-          VideoFramePanel(
-            videoMetadata = videoMetadata,
-            timelineState = timelineState,
-            currentTimestamp = currentTimestamp,
-            effectiveStartMs = effectiveStartMs,
-            effectiveEndMs = effectiveEndMs,
-            exportPlaybackTimeline = exportPlaybackTimeline,
-            activeDriverLog = activeDriverLog,
-            nearestKeyframeLog = nearestKeyframeLog,
-            keyframeCount = videoKeyframeLogs.size,
-            sessionId = sessionId,
-            imageLoader = imageLoader,
-            currentFrame = currentFrame,
-            onFrameUpdated = { currentFrame = it },
-            onShowScreenshotModal = onShowScreenshotModal,
-            onShowInspectUI = onShowInspectUI,
-          )
-        } else {
-          ScreenshotKeyframePanel(
-            logs = logs,
-            currentTimestamp = currentTimestamp,
-            sessionId = sessionId,
-            imageLoader = imageLoader,
-            timelineState = timelineState,
-            effectiveStartMs = effectiveStartMs,
-            effectiveEndMs = effectiveEndMs,
-            exportPlaybackTimeline = exportPlaybackTimeline,
-            onShowScreenshotModal = onShowScreenshotModal,
-            onShowInspectUI = onShowInspectUI,
-          )
+        // The recording opens in the system player; the panel below stays on screenshots.
+        if (videoMetadata != null && getPlatform() != Platform.WASM) {
+          Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+            Text(
+              text = "Watch Video ↗",
+              style = MaterialTheme.typography.labelSmall,
+              color = MaterialTheme.colorScheme.primary,
+              fontWeight = FontWeight.Medium,
+              modifier =
+                Modifier.background(
+                  MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f),
+                  RoundedCornerShape(4.dp),
+                )
+                  .padding(horizontal = 8.dp, vertical = 4.dp)
+                  .clickable { openVideoInSystemPlayer(videoMetadata.filePath) },
+            )
+          }
         }
+
+        ScreenshotKeyframePanel(
+          logs = logs,
+          currentTimestamp = currentTimestamp,
+          sessionId = sessionId,
+          imageLoader = imageLoader,
+          timelineState = timelineState,
+          effectiveStartMs = effectiveStartMs,
+          effectiveEndMs = effectiveEndMs,
+          onShowScreenshotModal = onShowScreenshotModal,
+          onShowInspectUI = onShowInspectUI,
+        )
       }
     }
 
@@ -870,7 +767,7 @@ internal fun buildChildEvents(
           val outTok = FormattingUtils.formatCommaNumber(usage.outputTokens)
           detailParts.add("${inTok}in / ${outTok}out")
         }
-        val toolCount = log.toolOptions.size
+        val toolCount = TrailblazeToolCatalog.toolCount(log)
         if (toolCount > 0) detailParts.add("$toolCount tool${if (toolCount != 1) "s" else ""}")
         detailParts.add("${log.durationMs}ms")
         events.add(
@@ -925,218 +822,11 @@ internal fun describeAction(action: AgentDriverAction?): String =
     else -> action?.toString() ?: "Driver action"
   }
 
-// -- Video frame panel --
-
-/** Video frame panel with playback, frame extraction, and action overlays. */
-@Composable
-private fun ColumnScope.VideoFramePanel(
-  videoMetadata: VideoMetadata,
-  timelineState: SessionTimelineState,
-  currentTimestamp: Long,
-  effectiveStartMs: Long,
-  effectiveEndMs: Long,
-  exportPlaybackTimeline: PlaybackTimeline?,
-  activeDriverLog: TrailblazeLog.AgentDriverLog?,
-  /**
-   * Sticky nearest screenshot-bearing driver log at/before the scrub position (see the caller). Backs
-   * the paused full-res screenshot and the click-to-inspect target, so the video panel reaches parity
-   * with [ScreenshotKeyframePanel] on the no-video platforms.
-   */
-  nearestKeyframeLog: TrailblazeLog?,
-  /** Number of screenshot-bearing keyframes, shown as the "N keyframes" label (parity with the no-video panel). */
-  keyframeCount: Int,
-  sessionId: String,
-  imageLoader: ImageLoader,
-  currentFrame: ImageBitmap?,
-  onFrameUpdated: (ImageBitmap) -> Unit,
-  onShowScreenshotModal:
-    ((imageModel: Any?, deviceWidth: Int, deviceHeight: Int, clickX: Int?, clickY: Int?, action: AgentDriverAction?) -> Unit)? =
-    null,
-  onShowInspectUI: ((TrailblazeLog) -> Unit)? = null,
-) {
-  val watchVideoPath = videoMetadata.videoFilePath
-    ?: videoMetadata.filePath.takeIf { videoMetadata.spriteInfo == null }
-  if (watchVideoPath != null && getPlatform() != Platform.WASM) {
-    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-      Text(
-        text = "Watch Video \u2197",
-        style = MaterialTheme.typography.labelSmall,
-        color = MaterialTheme.colorScheme.primary,
-        fontWeight = FontWeight.Medium,
-        modifier =
-          Modifier.background(
-            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f),
-            RoundedCornerShape(4.dp),
-          )
-            .padding(horizontal = 8.dp, vertical = 4.dp)
-            .clickable { openVideoInSystemPlayer(watchVideoPath) },
-      )
-    }
-  }
-
-  // Keyframe count — same label the no-video ScreenshotKeyframePanel shows, so the two panels read
-  // consistently. Counts the clickable, hierarchy-backed screenshot keyframes (not the interpolated
-  // video frames), which is what a reader actually navigates.
-  if (keyframeCount > 0) {
-    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-      SelectableText(
-        text = "$keyframeCount keyframe${if (keyframeCount != 1) "s" else ""}",
-        style = MaterialTheme.typography.labelSmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-      )
-    }
-  }
-
-  // Frame cache for fast scrubbing
-  val frameCache = remember(videoMetadata.filePath) {
-    createVideoFrameCache(videoMetadata.filePath, VIDEO_CACHE_FPS, videoMetadata.spriteInfo)
-  }
-  DisposableEffect(frameCache) { onDispose { frameCache.dispose() } }
-
-  val videoPositionMs =
-    (currentTimestamp - videoMetadata.startTimestampMs).coerceAtLeast(0L)
-
-  // Load frame from sprite sheet cache (async on WASM to load embedded frames on demand)
-  LaunchedEffect(videoPositionMs) {
-    val frame = frameCache.getFrameAsync(videoPositionMs)
-    if (frame != null) onFrameUpdated(frame)
-  }
-
-  // Auto-play: advance scrubber at playback speed
-  LaunchedEffect(timelineState.isVideoPlaying, timelineState.playbackSpeed) {
-    if (!timelineState.isVideoPlaying) return@LaunchedEffect
-    val speed = timelineState.playbackSpeed
-    val videoEndAbsMs = videoMetadata.endTimestampMs ?: effectiveEndMs
-    val mark = TimeSource.Monotonic.markNow()
-    val playStartAbsMs = timelineState.scrubTimestampMs ?: effectiveStartMs
-
-    while (timelineState.isVideoPlaying) {
-      val elapsed = (mark.elapsedNow().inWholeMilliseconds * speed).toLong()
-      val tick = computePlaybackTick(elapsed, playStartAbsMs, videoEndAbsMs, exportPlaybackTimeline)
-      timelineState.scrubTimestampMs = tick.targetAbsMs
-      if (tick.reachedEnd) {
-        timelineState.isVideoPlaying = false
-        break
-      }
-      delay(TimelineConstants.PLAYBACK_FRAME_INTERVAL_MS)
-    }
-  }
-
-  // While paused, present the crisp full-res screenshot of the nearest keyframe (clickable →
-  // inspector, exactly like the no-video ScreenshotKeyframePanel) instead of the low-res sprite
-  // frame; while playing, keep the smooth video frames. This is looser than the old
-  // `isSnappedToMarker` gate — a reader who simply pauses on a step gets the inspectable keyframe
-  // without first having to click a marker — which is what brings the Android-with-video timeline
-  // to parity with every other platform.
-  val screenshotLog = nearestKeyframeLog?.takeIf { !timelineState.isVideoPlaying }
-  val showScreenshot = screenshotLog != null
-
-  // Whether the nearest keyframe can open the hierarchy inspector. Snapshots and LLM-request logs
-  // always carry an inspectable hierarchy; a driver log only when it recorded one. Mirrors the
-  // no-video ScreenshotKeyframePanel's `canInspect`.
-  val nearestKeyframeInspectable =
-    onShowInspectUI != null &&
-      when (val log = nearestKeyframeLog) {
-        is TrailblazeLog.TrailblazeLlmRequestLog -> true
-        is TrailblazeLog.TrailblazeSnapshotLog -> true
-        is TrailblazeLog.AgentDriverLog -> log.viewHierarchy != null
-        else -> false
-      }
-
-  Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
-    if (showScreenshot) {
-      BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-        val hasScreenshot = screenshotLog as HasScreenshot
-        val dw = hasScreenshot.deviceWidth.toFloat()
-        val dh = hasScreenshot.deviceHeight.toFloat()
-        val imageAspect =
-          if (dh > 0f) dw / dh
-          else if (currentFrame != null) currentFrame!!.width.toFloat() / currentFrame!!.height.toFloat()
-          else 1f
-        val (renderedWidth, renderedHeight) = computeFitDimensions(imageAspect, maxWidth, maxHeight)
-        // Only surface the action marker while the scrub position is still inside this keyframe's
-        // own action window, and only for driver logs (snapshot / LLM-request keyframes carry no
-        // action). Once the scrubber sits in a later idle gap — or a screenshot-less event (e.g. a
-        // batch of recording-replay assertVisibleBySelector calls) shares this same keyframe — the
-        // marker would misleadingly point at this earlier action's location, so it's suppressed.
-        // This mirrors the no-video ScreenshotKeyframePanel below. durationMs <= 0 is the "point
-        // event, no real duration" sentinel and always renders at its own keyframe.
-        val action =
-          when {
-            screenshotLog is TrailblazeLog.AgentDriverLog &&
-              (screenshotLog.durationMs <= 0 ||
-                (currentTimestamp - screenshotLog.timestamp.toEpochMilliseconds()) <
-                  screenshotLog.durationMs) -> screenshotLog.action
-            else -> null
-          }
-        val clickCoords = action as? HasClickCoordinates
-        ScreenshotImage(
-          sessionId = sessionId,
-          screenshotFile = hasScreenshot.screenshotFile,
-          deviceWidth = hasScreenshot.deviceWidth,
-          deviceHeight = hasScreenshot.deviceHeight,
-          clickX = clickCoords?.x,
-          clickY = clickCoords?.y,
-          action = action,
-          modifier =
-            Modifier.size(renderedWidth, renderedHeight).align(Alignment.Center),
-          imageLoader = imageLoader,
-          onImageClick = { imageModel, dw2, dh2, cx, cy ->
-            if (nearestKeyframeInspectable) {
-              onShowInspectUI!!.invoke(screenshotLog!!)
-            } else if (imageModel != null && onShowScreenshotModal != null) {
-              onShowScreenshotModal(
-                imageModel,
-                dw2,
-                dh2,
-                cx,
-                cy,
-                action,
-              )
-            }
-          },
-        )
-      }
-    } else {
-      BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-        val frameAspect = when {
-          activeDriverLog != null && activeDriverLog.deviceHeight > 0 ->
-            activeDriverLog.deviceWidth.toFloat() / activeDriverLog.deviceHeight.toFloat()
-          currentFrame != null ->
-            currentFrame!!.width.toFloat() / currentFrame!!.height.toFloat()
-          else -> DEFAULT_PHONE_ASPECT_RATIO
-        }
-        val (renderedWidth, renderedHeight) =
-          computeFitDimensions(frameAspect, maxWidth, maxHeight)
-        // Keep the low-res sprite frame clickable too (e.g. while playing, or paused before the
-        // first keyframe): a click opens the inspector for the nearest keyframe's hierarchy so
-        // "click a frame to inspect the tree" works everywhere, not just on the snapped screenshot.
-        val frameModifier = Modifier.size(renderedWidth, renderedHeight).align(Alignment.Center)
-        VideoFrameWithOverlay(
-          currentFrame = currentFrame,
-          activeDriverLog = activeDriverLog,
-          modifier =
-            if (nearestKeyframeInspectable) {
-              frameModifier.clickable { onShowInspectUI!!.invoke(nearestKeyframeLog!!) }
-            } else {
-              frameModifier
-            },
-        )
-      }
-    }
-    // Export only: caption a fast-forwarded idle gap so the compressed animation doesn't
-    // silently imply two far-apart steps were adjacent (see the review on https://github.com/block/trailblaze/issues/173).
-    exportPlaybackTimeline?.collapsedGapMsAt(currentTimestamp)?.let { gapMs ->
-      CompressedGapBadge(gapMs)
-    }
-  }
-}
-
-// -- Screenshot keyframe panel (no-video fallback) --
+// -- Screenshot keyframe panel --
 
 /**
- * When no video is available, shows the most recent screenshot at the current scrub position.
- * Supports play/pause to step through screenshots as a slideshow.
+ * Shows the most recent screenshot at the current scrub position. Supports play/pause to step
+ * through screenshots as a slideshow.
  */
 @Composable
 private fun ColumnScope.ScreenshotKeyframePanel(
@@ -1147,7 +837,6 @@ private fun ColumnScope.ScreenshotKeyframePanel(
   timelineState: SessionTimelineState,
   effectiveStartMs: Long,
   effectiveEndMs: Long,
-  exportPlaybackTimeline: PlaybackTimeline?,
   onShowScreenshotModal:
     ((imageModel: Any?, deviceWidth: Int, deviceHeight: Int, clickX: Int?, clickY: Int?, action: AgentDriverAction?) -> Unit)? =
     null,
@@ -1183,7 +872,7 @@ private fun ColumnScope.ScreenshotKeyframePanel(
 
     while (timelineState.isVideoPlaying) {
       val elapsed = (mark.elapsedNow().inWholeMilliseconds * speed).toLong()
-      val tick = computePlaybackTick(elapsed, playStartAbsMs, effectiveEndMs, exportPlaybackTimeline)
+      val tick = computePlaybackTick(elapsed, playStartAbsMs, effectiveEndMs)
       timelineState.scrubTimestampMs = tick.targetAbsMs
       if (tick.reachedEnd) {
         timelineState.isVideoPlaying = false
@@ -1288,38 +977,6 @@ private fun ColumnScope.ScreenshotKeyframePanel(
         )
       }
     }
-    // Export only: caption a fast-forwarded idle gap so the compressed animation doesn't
-    // silently imply two far-apart steps were adjacent (see the review on https://github.com/block/trailblaze/issues/173).
-    exportPlaybackTimeline?.collapsedGapMsAt(currentTimestamp)?.let { gapMs ->
-      CompressedGapBadge(gapMs)
-    }
-  }
-}
-
-/**
- * Pill caption shown over the playback frame while export autoplay fast-forwards across a
- * collapsed idle gap, e.g. "» 37m later". Keeps the standalone GIF/WebP/MP4 honest about the
- * real time the compression skips — the duration that all three #173 reviewers said must not
- * silently vanish — without spending it as playback. Export-only: in interactive viewing
- * there's no [PlaybackTimeline], so this never renders there.
- */
-@Composable
-private fun BoxScope.CompressedGapBadge(gapMs: Long) {
-  Box(
-    modifier = Modifier
-      .align(Alignment.TopCenter)
-      .padding(top = 8.dp)
-      .background(Color.Black.copy(alpha = 0.55f), RoundedCornerShape(12.dp))
-      .padding(horizontal = 10.dp, vertical = 4.dp),
-  ) {
-    Text(
-      // Prefix is ASCII ">>", not a ⏩ emoji or "»" — the bundled WASM Compose font renders
-      // neither (both came out as tofu in #173 end-to-end validation), but plain ASCII
-      // renders reliably and ">>" still reads as fast-forward/skip.
-      text = ">> ${formatCompactDuration(gapMs)} later",
-      style = MaterialTheme.typography.labelMedium,
-      color = Color.White,
-    )
   }
 }
 

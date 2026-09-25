@@ -160,7 +160,7 @@ abstract class MaestroTrailblazeAgent : TrailblazeAgent {
 
 **Implementations:**
 
-- `AndroidMaestroTrailblazeAgent` - On-device Android execution
+- `AccessibilityTrailblazeAgent` - On-device Android execution
 - `HostMaestroTrailblazeAgent` - Host-mode execution for Android/iOS
 
 ### Tool System

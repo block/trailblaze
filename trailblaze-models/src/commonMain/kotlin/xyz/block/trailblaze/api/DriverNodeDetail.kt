@@ -402,7 +402,15 @@ sealed interface DriverNodeDetail {
     override val isInteractive: Boolean
       get() = isClickable || isEditable || isCheckable || isFocusable || isScrollable
 
-    /** Resolves text priority: text > hintText > contentDescription (same as Maestro). */
+    /**
+     * Resolves text priority: text > hintText > contentDescription (same as Maestro).
+     *
+     * The raw `?:` is deliberate: it stops on an empty string, so this does NOT reach a later
+     * slot when an earlier one is present-but-empty. Making it blank-skipping would widen
+     * SELECTOR MATCHING for every recorded trail — a node that matches nothing today could start
+     * matching and turn a single match into an ambiguous one. `expectedText` needs the lenient
+     * reading and keeps its own fold for it; see `AssertVisibleBySelectorTrailblazeTool`.
+     */
     fun resolveText(): String? = text ?: hintText ?: contentDescription
 
     @Serializable
@@ -630,7 +638,15 @@ sealed interface DriverNodeDetail {
     override val isInteractive: Boolean
       get() = isClickable || isEditable || isChecked != null || isFocusable || isScrollable
 
-    /** Resolves text priority: text > hintText > contentDescription (same as the a11y shape). */
+    /**
+     * Resolves text priority: text > hintText > contentDescription (same as the a11y shape).
+     *
+     * The raw `?:` is deliberate: it stops on an empty string, so this does NOT reach a later
+     * slot when an earlier one is present-but-empty. Making it blank-skipping would widen
+     * SELECTOR MATCHING for every recorded trail — a node that matches nothing today could start
+     * matching and turn a single match into an ambiguous one. `expectedText` needs the lenient
+     * reading and keeps its own fold for it; see `AssertVisibleBySelectorTrailblazeTool`.
+     */
     fun resolveText(): String? = text ?: hintText ?: contentDescription
 
     companion object {
@@ -704,7 +720,15 @@ sealed interface DriverNodeDetail {
     override val isInteractive: Boolean
       get() = clickable || focusable || scrollable
 
-    /** Resolves text priority: text > hintText > accessibilityText (Maestro convention). */
+    /**
+     * Resolves text priority: text > hintText > accessibilityText (Maestro convention).
+     *
+     * The raw `?:` is deliberate: it stops on an empty string, so this does NOT reach a later
+     * slot when an earlier one is present-but-empty. Making it blank-skipping would widen
+     * SELECTOR MATCHING for every recorded trail — a node that matches nothing today could start
+     * matching and turn a single match into an ambiguous one. `expectedText` needs the lenient
+     * reading and keeps its own fold for it; see `AssertVisibleBySelectorTrailblazeTool`.
+     */
     fun resolveText(): String? = text ?: hintText ?: accessibilityText
 
     companion object {
@@ -834,7 +858,15 @@ sealed interface DriverNodeDetail {
     override val isInteractive: Boolean
       get() = clickable || focusable || scrollable
 
-    /** Resolves text priority: text > hintText > accessibilityText (Maestro convention). */
+    /**
+     * Resolves text priority: text > hintText > accessibilityText (Maestro convention).
+     *
+     * The raw `?:` is deliberate: it stops on an empty string, so this does NOT reach a later
+     * slot when an earlier one is present-but-empty. Making it blank-skipping would widen
+     * SELECTOR MATCHING for every recorded trail — a node that matches nothing today could start
+     * matching and turn a single match into an ambiguous one. `expectedText` needs the lenient
+     * reading and keeps its own fold for it; see `AssertVisibleBySelectorTrailblazeTool`.
+     */
     fun resolveText(): String? = text ?: hintText ?: accessibilityText
 
     companion object {
@@ -1093,7 +1125,15 @@ sealed interface DriverNodeDetail {
     override val isInteractive: Boolean
       get() = hasClickAction || hasScrollAction || hasLongClickAction || hasSetTextAction
 
-    /** Resolves text priority: editableText > text > contentDescription. */
+    /**
+     * Resolves text priority: editableText > text > contentDescription.
+     *
+     * The raw `?:` is deliberate: it stops on an empty string, so this does NOT reach a later
+     * slot when an earlier one is present-but-empty. Making it blank-skipping would widen
+     * SELECTOR MATCHING for every recorded trail — a node that matches nothing today could start
+     * matching and turn a single match into an ambiguous one. `expectedText` needs the lenient
+     * reading and keeps its own fold for it; see `AssertVisibleBySelectorTrailblazeTool`.
+     */
     fun resolveText(): String? = editableText ?: text ?: contentDescription
 
     companion object {

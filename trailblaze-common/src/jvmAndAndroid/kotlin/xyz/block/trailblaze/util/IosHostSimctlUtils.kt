@@ -1,10 +1,54 @@
 package xyz.block.trailblaze.util
 
 import java.io.File
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.locks.ReentrantLock
+import kotlin.concurrent.withLock
 import xyz.block.trailblaze.device.InstalledApp
 import xyz.block.trailblaze.util.TrailblazeProcessBuilderUtils.runProcess
 
 object IosHostSimctlUtils {
+
+  /**
+   * `simctl pbcopy` can synchronize through the host pasteboard, so all pasteboard reads, writes,
+   * and compound stage-and-paste transactions must share one process-wide lock.
+   */
+  private val pasteboardLock = ReentrantLock()
+  // Accessed only under pasteboardLock. A failed kill must not permit another transaction.
+  private val pendingPasteboardProcesses = mutableListOf<Process>()
+
+  private fun requirePasteboardIdle() {
+    pendingPasteboardProcesses.removeAll { !it.isAlive }
+    check(pendingPasteboardProcesses.isEmpty()) {
+      "A previous simulator pasteboard process has not exited; refusing overlapping clipboard access"
+    }
+  }
+
+  /** Runs [action] while excluding every pasteboard operation issued by this process. */
+  fun <T> withPasteboardLock(action: () -> T): T = pasteboardLock.withLock {
+    requirePasteboardIdle()
+    action()
+  }
+
+  /**
+   * Runs [action] under the shared pasteboard lock, returning [onTimeout] if another clipboard
+   * operation keeps the lock longer than [timeoutMillis].
+   */
+  fun <T> withPasteboardLock(
+    timeoutMillis: Long,
+    onTimeout: () -> T,
+    action: () -> T,
+  ): T {
+    require(timeoutMillis >= 0) { "timeoutMillis must not be negative" }
+    if (!pasteboardLock.tryLock(timeoutMillis, TimeUnit.MILLISECONDS)) return onTimeout()
+    return try {
+      requirePasteboardIdle()
+      action()
+    } finally {
+      pasteboardLock.unlock()
+    }
+  }
 
   /**
    * Lists the UDIDs of currently booted iOS simulators via `xcrun simctl list devices booted`.
@@ -61,23 +105,12 @@ object IosHostSimctlUtils {
    * `pbcopy`/`pbpaste`/`pbsync` are the supported pasteboard subcommands.) Used by
    * the cross-platform `mobile_setClipboard` tool's iOS branch.
    *
-   * Both stdout and stderr are inherited from the parent process so we don't have to
-   * drain them on this thread — pre-redirecting either to PIPE without consuming the
-   * stream risks deadlocking the child once the OS pipe buffer fills, even if
-   * `pbcopy` is silent under normal conditions.
+   * Pipe IO and lock acquisition share a bounded deadline. Text stays off process arguments
+   * and diagnostics; stderr is discarded rather than mixing it with clipboard contents.
    */
   fun setPasteboard(deviceId: String, text: String) {
     if (!isMacOs()) error("setPasteboard is only supported on macOS hosts")
-    val process = TrailblazeProcessBuilderUtils.createProcessBuilder(
-      listOf("xcrun", "simctl", "pbcopy", deviceId),
-    ).redirectOutput(ProcessBuilder.Redirect.INHERIT)
-      .redirectError(ProcessBuilder.Redirect.INHERIT)
-      .start()
-    process.outputStream.use { it.write(text.toByteArray()) }
-    val exitCode = process.waitFor()
-    if (exitCode != 0) {
-      error("xcrun simctl pbcopy failed with exit code $exitCode for device $deviceId")
-    }
+    runPasteboardCommand(listOf("xcrun", "simctl", "pbcopy", deviceId), text)
   }
 
   /**
@@ -90,13 +123,78 @@ object IosHostSimctlUtils {
    */
   fun getPasteboard(deviceId: String): String {
     if (!isMacOs()) error("getPasteboard is only supported on macOS hosts")
-    val output = TrailblazeProcessBuilderUtils.createProcessBuilder(
-      listOf("xcrun", "simctl", "pbpaste", deviceId),
-    ).runProcess {}
-    if (output.exitCode != 0) {
-      error("xcrun simctl pbpaste failed with exit code ${output.exitCode} for device $deviceId")
+    return runPasteboardCommand(listOf("xcrun", "simctl", "pbpaste", deviceId))
+  }
+
+  /** One deadline covers lock acquisition, pipe IO, and process completion. */
+  internal fun runPasteboardCommand(
+    args: List<String>,
+    stdin: String = "",
+    timeoutMillis: Long = 30_000,
+    startProcess: (ProcessBuilder) -> Process = { it.start() },
+  ): String {
+    require(timeoutMillis > 0)
+    val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis)
+    fun remaining(): Long = (deadline - System.nanoTime()).coerceAtLeast(0)
+    return withPasteboardLock(
+      timeoutMillis = timeoutMillis,
+      onTimeout = { error("Timed out waiting for the simulator pasteboard lock") },
+    ) {
+      check(remaining() > 0) { "Simulator pasteboard deadline expired before dispatch" }
+      val process = startProcess(TrailblazeProcessBuilderUtils.createProcessBuilder(args)
+        .redirectErrorStream(false)
+        .redirectError(File("/dev/null")))
+      val executor = Executors.newFixedThreadPool(2) { task ->
+        Thread(task, "simulator-pasteboard-io").apply { isDaemon = true }
+      }
+      try {
+        val output = executor.submit<String> {
+          process.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+        }
+        val writer = executor.submit<Unit> {
+          process.outputStream.use { it.write(stdin.toByteArray(Charsets.UTF_8)) }
+        }
+        check(process.waitFor(remaining(), TimeUnit.NANOSECONDS)) {
+          "Simulator pasteboard command timed out"
+        }
+        check(process.exitValue() == 0) {
+          "Simulator pasteboard command failed with exit code ${process.exitValue()}"
+        }
+        writer.get(remaining(), TimeUnit.NANOSECONDS)
+        output.get(remaining(), TimeUnit.NANOSECONDS)
+      } catch (e: InterruptedException) {
+        Thread.currentThread().interrupt()
+        throw e
+      } finally {
+        // Kill before closing pipes: a blocked stdin writer owns the stream monitor.
+        try {
+          awaitPasteboardProcessExit(process)
+        } finally {
+          executor.shutdownNow()
+        }
+      }
     }
-    return output.fullOutput
+  }
+
+  /** Bounded cleanup while locked; cancellation cannot skip termination confirmation. */
+  private fun awaitPasteboardProcessExit(process: Process) {
+    var interrupted = Thread.interrupted()
+    try {
+      if (process.isAlive) process.destroyForcibly()
+      val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(500)
+      while (process.isAlive) {
+        val remaining = deadline - System.nanoTime()
+        if (remaining <= 0) break
+        try {
+          process.waitFor(remaining, TimeUnit.NANOSECONDS)
+        } catch (_: InterruptedException) {
+          interrupted = true
+        }
+      }
+    } finally {
+      if (process.isAlive) pendingPasteboardProcesses += process
+      if (interrupted) Thread.currentThread().interrupt()
+    }
   }
 
   /**

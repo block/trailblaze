@@ -353,8 +353,8 @@ val CONFIG_KEYS: Map<String, ConfigKey> = listOf(
   ),
   ConfigKey(
     // Plain boolean like the sibling capture toggles (`captureLogcat` / `captureIosLogs`), just
-    // defaulting OFF: recordings are large, their timing drifts on some hosts, and sprite
-    // extraction is expensive. This is the persistent opt-in that reaches entry points with no
+    // defaulting OFF: recordings are large and their timing drifts on some hosts. This is the
+    // persistent opt-in that reaches entry points with no
     // positive per-run flag — interactive `session start` and MCP sessions. Per-run
     // `--capture-video` / `--no-capture-video` and `TRAILBLAZE_CAPTURE_VIDEO` both override it.
     name = "capture-video",
@@ -532,7 +532,12 @@ object CliConfigHelper {
     val file = getSettingsFile()
     return try {
       if (file.exists()) {
+        // Same retired-driver replacement the daemon's settings load applies, so a CLI running
+        // without a daemon does not report a driver nobody can run — `trailblaze config show`
+        // printed the retired driver as current while no row was marked selected. The bridge
+        // branch above needs no call: that config came from the repo, which already replaced it.
         json.decodeFromString(SavedTrailblazeAppConfig.serializer(), file.readText())
+          .withRetiredDriversReplaced()
       } else {
         null
       }

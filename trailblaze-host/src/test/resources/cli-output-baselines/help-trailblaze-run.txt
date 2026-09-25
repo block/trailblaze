@@ -7,12 +7,13 @@
 # ----------------------------------------------------------------------
 Usage: trailblaze run [-hvV] [--all-devices] [--capture-all] [--[no-]
                       capture-ios-logs] [--[no-]capture-logcat] [--[no-]
-                      capture-network] [--[no-]capture-video]
-                      [--full-report-payloads] [--[no-]headless] [--markdown]
-                      [--no-daemon] [--no-logging] [--no-report] [--[no-]
-                      save-recording] [--self-heal] [--[no-]turbo] [--[no-]
-                      use-recorded-steps] [-a=<agent>] [--args-file=<file>]
-                      [--compose-port=<composePort>] [--configuration=<name>]
+                      capture-memory] [--[no-]capture-network] [--[no-]
+                      capture-video] [--full-report-payloads] [--[no-]headless]
+                      [--markdown] [--no-daemon] [--no-logging] [--no-report]
+                      [--[no-]save-recording] [--self-heal] [--[no-]turbo] [--
+                      [no-]use-recorded-steps] [-a=<agent>]
+                      [--args-file=<file>] [--compose-port=<composePort>]
+                      [--configuration=<name>]
                       [--device-classifier=<catalog-key>]
                       [--driver=<driverType>] [--llm=<llm>]
                       [--llm-model=<llmModel>] [--llm-provider=<llmProvider>]
@@ -105,7 +106,7 @@ removed in a future release.
                                it needs a daemon restart). Takes precedence
                                over that env var when passed.
       --capture-all          Enable all capture streams: video, logcat, iOS
-                               logs, network (local dev mode)
+                               logs, memory, network (local dev mode)
       --[no-]capture-ios-logs
                              Capture the iOS Simulator system log via `xcrun
                                simctl spawn log stream` to <session-dir>/device.
@@ -121,6 +122,21 @@ removed in a future release.
                                also indexed in <session-dir>/events/crash.
                                ndjson. On by default; use --no-capture-logcat
                                to disable.
+      --[no-]capture-memory  Track the app under test's memory for the whole
+                               run as `memory` events in
+                               <session-dir>/events/memory.ndjson: a sample
+                               around every tool call, plus one every 5 seconds
+                               whenever it changed, all read in the background
+                               so the run never waits. Android reports heap
+                               used vs. the heap limit, read through the
+                               on-device runner when one is installed and over
+                               adb otherwise; iOS Simulator reports the app's
+                               footprint. For exact before/after figures, start
+                               the daemon with
+                               TRAILBLAZE_MEMORY_DIAGNOSTICS=true: each tool
+                               call then waits for its two readings and Android
+                               collects garbage first. On by default; use
+                               --no-capture-memory to disable.
       --[no-]capture-network Auto-capture network requests/responses to
                                <session-dir>/network.ndjson on supported
                                devices (web today; mobile devices added as
@@ -130,12 +146,11 @@ removed in a future release.
                                flag is passed, inherits the desktop app's saved
                                setting.
       --[no-]capture-video   Record device screen video for the session. Off by
-                               default — video writes large files and sprite
-                               extraction is expensive — pass --capture-video
-                               to enable it for a run. When neither flag is
-                               passed, inherits TRAILBLAZE_CAPTURE_VIDEO and
-                               the saved `trailblaze config capture-video`
-                               setting.
+                               default — video writes large files — pass
+                               --capture-video to enable it for a run. When
+                               neither flag is passed, inherits
+                               TRAILBLAZE_CAPTURE_VIDEO and the saved
+                               `trailblaze config capture-video` setting.
       --compose-port=<composePort>
                              RPC port for Compose driver connections (default:
                                52600)
@@ -219,10 +234,11 @@ removed in a future release.
       --[no-]save-recording  Save the recording back to the trail source
                                directory after a successful run. Default: on.
                                Use --no-save-recording to skip. Even when on,
-                               the recording is only saved when --self-heal was
-                               enabled OR this device isn't recorded yet —
-                               deterministic re-runs no-op the write so they
-                               can't clobber a hand-edited source.
+                               the trail file is only rewritten when a step
+                               self-healed during the run,
+                               --no-use-recorded-steps re-drove every step, or
+                               this device had no recording yet — a clean
+                               replay leaves the file unchanged.
       --secret=KEY=VAL       Pre-populate trail memory with a SENSITIVE KEY=VAL
                                before any step runs. Same shape as --memory;
                                the value is redacted in logs (via

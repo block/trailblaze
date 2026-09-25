@@ -38,6 +38,8 @@ import xyz.block.trailblaze.logs.client.ScreenStateLogger
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.toolcalls.HostLocalExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.InstanceNamedTrailblazeTool
+import xyz.block.trailblaze.toolcalls.ToolCallObserver
+import xyz.block.trailblaze.toolcalls.ToolCallObservers
 import xyz.block.trailblaze.toolcalls.ToolExecutionContextThreadLocal
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
@@ -161,6 +163,25 @@ class BaseTrailblazeAgentTest {
     }
   }
 
+  /** A host-local tool that runs another tool the way a scripted tool's `ctx.tools.X()` does. */
+  private class NestingHostLocalTool(
+    override val advertisedToolName: String = "outer_tool",
+    private val inner: TrailblazeTool,
+  ) : HostLocalExecutableTrailblazeTool {
+    override suspend fun execute(
+      toolExecutionContext: TrailblazeToolExecutionContext,
+    ): TrailblazeToolResult {
+      val nested = toolExecutionContext.nestedToolExecutor
+        ?: return TrailblazeToolResult.Error.ExceptionThrown(errorMessage = "nestedToolExecutor not wired")
+      return nested.invoke(inner)
+    }
+  }
+
+  /** Dispatched by [NestingTestAgent.executeTool] into a throw, the way a driver-level tool fails hard. */
+  @Serializable
+  @TrailblazeToolClass("boom_tool")
+  private class BoomTool : TrailblazeTool
+
   // ── Test agent ──
 
   private open class TestAgent : BaseTrailblazeAgent() {
@@ -228,6 +249,37 @@ class BaseTrailblazeAgentTest {
           )
         }
       }
+    }
+  }
+
+  // Agent with the nested executor wired the way every real agent wires it, so a tool can dispatch
+  // another tool through the same context — the path that must stay invisible to observers.
+  private class NestingTestAgent : TestAgent() {
+    override fun buildExecutionContext(
+      traceId: TraceId,
+      screenState: ScreenState?,
+      screenStateProvider: (() -> ScreenState)?,
+    ): TrailblazeToolExecutionContext {
+      lateinit var context: TrailblazeToolExecutionContext
+      context = TrailblazeToolExecutionContext(
+        screenState = null,
+        traceId = traceId,
+        trailblazeDeviceInfo = trailblazeDeviceInfoProvider(),
+        sessionProvider = sessionProvider,
+        trailblazeLogger = trailblazeLogger,
+        memory = memory,
+        nestedToolExecutor = nestedToolExecutorFor { context },
+      )
+      return context
+    }
+
+    override fun executeTool(
+      tool: TrailblazeTool,
+      context: TrailblazeToolExecutionContext,
+      toolsExecuted: MutableList<TrailblazeTool>,
+    ): TrailblazeToolResult = when (tool) {
+      is BoomTool -> throw IllegalStateException("boom")
+      else -> super.executeTool(tool, context, toolsExecuted)
     }
   }
 
@@ -396,6 +448,115 @@ class BaseTrailblazeAgentTest {
 
     val toolLogs = captured.filterIsInstance<TrailblazeLog.TrailblazeToolLog>()
     assertThat(toolLogs.map { it.traceId }).containsExactly(turnTraceId, turnTraceId)
+  }
+
+  @Test
+  fun `a tool-call observer is told the same trace the tool's own logs are stamped with`() = runBlocking {
+    // What makes an observer's record (the memory capture's readings) joinable to the run: it has
+    // to be the dispatch's REAL trace, not one the observer mints or a null it has to work around.
+    val captured = mutableListOf<TrailblazeLog>()
+    val agent = capturingAgent(captured)
+    val turnTraceId = TraceId.generate(TraceId.Companion.TraceOrigin.LLM)
+    val heard = mutableListOf<TraceId?>()
+    val observer = object : ToolCallObserver {
+      override fun onBeforeToolCall(sessionId: SessionId, toolName: String, traceId: TraceId?) {
+        heard += traceId
+      }
+      override fun onAfterToolCall(sessionId: SessionId, toolName: String, traceId: TraceId?) {
+        heard += traceId
+      }
+    }
+    ToolCallObservers.register(observer)
+    try {
+      agent.runTrailblazeTools(
+        tools = listOf(StubHostLocalTool(advertisedToolName = "first_tool")),
+        traceId = turnTraceId,
+        elementComparator = noOpComparator,
+      )
+    } finally {
+      ToolCallObservers.unregister(observer)
+    }
+
+    val loggedTrace = captured.filterIsInstance<TrailblazeLog.TrailblazeToolLog>().single().traceId
+    assertThat(heard).containsExactly(loggedTrace, loggedTrace)
+    assertThat(loggedTrace).isEqualTo(turnTraceId)
+  }
+
+  @Test
+  fun `a tool that runs other tools is one unit of work to an observer, not several`() = runBlocking {
+    // The reader recognises the outer tool from the trail; the sub-calls it makes are its cost, not
+    // separate steps. An observer that heard both would bracket the same work twice and attribute
+    // the outer tool's spend to whatever ran last inside it.
+    val agent = NestingTestAgent()
+    val inner = StubHostLocalTool(advertisedToolName = "inner_tool")
+    val heard = mutableListOf<String>()
+    val observer = recordingObserver(heard)
+    ToolCallObservers.register(observer)
+    try {
+      agent.runTrailblazeTools(
+        tools = listOf(NestingHostLocalTool(inner = inner)),
+        elementComparator = noOpComparator,
+      )
+    } finally {
+      ToolCallObservers.unregister(observer)
+    }
+
+    assertThat(inner.executeCount).isEqualTo(1)
+    assertThat(heard).containsExactly("before outer_tool", "after outer_tool")
+  }
+
+  @Test
+  fun `a tool that fails or throws still closes the pair it opened`() = runBlocking {
+    // An observer brackets work. A tool that errors — or dies with an exception, which escapes the
+    // dispatch loop entirely — must still close its bracket, or the capture is left believing a
+    // tool is running for the rest of the session.
+    val agent = NestingTestAgent()
+    val heardOnError = mutableListOf<String>()
+    val errorObserver = recordingObserver(heardOnError)
+    ToolCallObservers.register(errorObserver)
+    try {
+      agent.runTrailblazeTools(
+        tools = listOf(
+          StubHostLocalTool(
+            advertisedToolName = "failing_tool",
+            result = TrailblazeToolResult.Error.ExceptionThrown(
+              errorMessage = "host-local boom",
+              command = StubTool(),
+              stackTrace = "",
+            ),
+          ),
+        ),
+        elementComparator = noOpComparator,
+      )
+    } finally {
+      ToolCallObservers.unregister(errorObserver)
+    }
+    assertThat(heardOnError).containsExactly("before failing_tool", "after failing_tool")
+
+    val heardOnThrow = mutableListOf<String>()
+    val throwObserver = recordingObserver(heardOnThrow)
+    ToolCallObservers.register(throwObserver)
+    val thrown = try {
+      agent.runTrailblazeTools(tools = listOf(BoomTool()), elementComparator = noOpComparator)
+      null
+    } catch (e: IllegalStateException) {
+      e
+    } finally {
+      ToolCallObservers.unregister(throwObserver)
+    }
+
+    // The throw escapes the dispatch loop, so only the `finally` can close the pair.
+    assertThat(thrown).isNotNull()
+    assertThat(heardOnThrow).containsExactly("before boom_tool", "after boom_tool")
+  }
+
+  private fun recordingObserver(into: MutableList<String>) = object : ToolCallObserver {
+    override fun onBeforeToolCall(sessionId: SessionId, toolName: String, traceId: TraceId?) {
+      into += "before $toolName"
+    }
+    override fun onAfterToolCall(sessionId: SessionId, toolName: String, traceId: TraceId?) {
+      into += "after $toolName"
+    }
   }
 
   @Test

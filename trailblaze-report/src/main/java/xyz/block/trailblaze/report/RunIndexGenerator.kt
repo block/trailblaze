@@ -15,6 +15,7 @@ import kotlinx.serialization.json.put
 import xyz.block.trailblaze.report.models.CiSummaryReport
 import xyz.block.trailblaze.report.models.Outcome
 import xyz.block.trailblaze.report.models.SessionResult
+import xyz.block.trailblaze.yaml.toJsonObject
 
 /**
  * Builds a RUN INDEX: the interactive report's device-classifier matrix over a CI run's results,
@@ -120,7 +121,7 @@ class RunIndexGenerator(
       result.failure_code?.takeIf { it.isNotBlank() }?.let { put("failureCode", it) }
       if (result.self_heal_ran) put("selfHeal", true)
       result.metadata?.takeIf { it.isNotEmpty() }?.let { metadata ->
-        put("metadata", buildJsonObject { metadata.forEach { (key, value) -> put(key, value) } })
+        put("metadata", metadata.toJsonObject())
       }
       // LLM figures the index would otherwise have to derive from a payload it doesn't carry.
       // Omitted rather than zeroed when the row didn't record them: the viewer renders an absent

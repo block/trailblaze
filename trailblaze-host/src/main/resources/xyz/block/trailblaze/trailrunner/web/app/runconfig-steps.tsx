@@ -193,6 +193,7 @@ function CaptureSection(p) {
         <ToggleRow label="Android logs" flag="--capture-logcat" on={p.captureLogcat} set={p.setCaptureLogcat} />
         <ToggleRow label="Network traffic" flag="--capture-network" on={p.captureNetwork} set={p.setCaptureNetwork} />
         <ToggleRow label="iOS system logs" flag="--capture-ios-logs" on={p.captureIosLogs} set={p.setCaptureIosLogs} />
+        <ToggleRow label="App memory" flag="--capture-memory" on={p.captureMemory} set={p.setCaptureMemory} />
         <ToggleRow label="Analytics events" flag="--capture-analytics" on={p.captureAnalytics} set={p.setCaptureAnalytics} />
         <ToggleRow label="Event streams" on={p.captureEvents} set={p.setCaptureEvents} />
         <ToggleRow label="Save recording" flag="--save-recording" on={p.saveRecording} set={p.setSaveRecording} />
