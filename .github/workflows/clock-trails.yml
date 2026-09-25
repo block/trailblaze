@@ -101,6 +101,13 @@ jobs:
           sudo udevadm trigger --name-match=kvm
           ls /dev/kvm
 
+      - name: Keep the daemon's ports out of the ephemeral range
+        # 52525/52526 fall inside Linux's ephemeral range (32768-60999), and the emulator and its
+        # helpers bind random ports from it. One landing on 52525 first makes the daemon exit with
+        # "Address already in use". Reserving them keeps the kernel from handing them out.
+        if: runner.os == 'Linux'
+        run: sudo sysctl -w net.ipv4.ip_local_reserved_ports=52525-52526
+
       - name: Checkout
         uses: actions/checkout@v4
         with:
