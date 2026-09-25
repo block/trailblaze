@@ -20,6 +20,18 @@ class RecordingFormatTest {
   }
 
   @Test
+  fun `an ffmpeg whose re-encode loses wall-clock time records mp4 even with a VP9 encoder`() {
+    fun support(version: String?) = WallClockMuxConsumer.Output.LiveMuxSupport(vp9Encoder = true, ffmpegVersion = version)
+    assertEquals(RecordingFormat.MP4, RecordingFormat.forLiveMux(support("6.1.1-3ubuntu5")))
+    assertEquals(RecordingFormat.WEBM, RecordingFormat.forLiveMux(support("6.1.3")))
+    assertEquals(RecordingFormat.WEBM, RecordingFormat.forLiveMux(support(null)))
+    assertEquals(
+      RecordingFormat.MP4,
+      RecordingFormat.forLiveMux(WallClockMuxConsumer.Output.LiveMuxSupport(vp9Encoder = false, ffmpegVersion = "8.1")),
+    )
+  }
+
+  @Test
   fun `each format names the canonical recording and publishes the matching capture type`() {
     assertEquals("video.webm", RecordingFormat.WEBM.canonicalFilename)
     assertEquals(CaptureType.VIDEO_WEBM, RecordingFormat.WEBM.captureType)

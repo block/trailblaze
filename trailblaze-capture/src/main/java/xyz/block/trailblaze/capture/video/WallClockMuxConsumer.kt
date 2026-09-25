@@ -222,12 +222,50 @@ class WallClockMuxConsumer(
        * few seconds and the mp4 fallback, not hang it. Reading stdout to EOF before waiting would
        * make the timeout unreachable — the drain has to happen on a side thread.
        */
-      fun vp9EncoderAvailable(ffmpegBinary: String = "ffmpeg", timeoutSeconds: Long = 20): Boolean {
+      fun vp9EncoderAvailable(ffmpegBinary: String = "ffmpeg", timeoutSeconds: Long = 20): Boolean =
+        probeLiveMuxSupport(ffmpegBinary, timeoutSeconds).vp9Encoder
+
+      /**
+       * One `ffmpeg -encoders` run, read for both things a live recording depends on: the VP9
+       * encoder, and the version banner (printed because `-hide_banner` is left off) that says
+       * whether this ffmpeg keeps wall-clock timestamps through a re-encode. Same bound as
+       * [vp9EncoderAvailable]; an ffmpeg that cannot be run reports neither.
+       */
+      fun probeLiveMuxSupport(ffmpegBinary: String = "ffmpeg", timeoutSeconds: Long = 20): LiveMuxSupport {
         val result = runSubprocessWithTimeout(
-          listOf(ffmpegBinary, "-hide_banner", "-encoders"),
+          listOf(ffmpegBinary, "-encoders"),
           timeoutSeconds = timeoutSeconds,
-        ) ?: return false
-        return vp9EncoderListed(result.output)
+        ) ?: return LiveMuxSupport(vp9Encoder = false, ffmpegVersion = null)
+        return LiveMuxSupport(vp9EncoderListed(result.output), ffmpegVersionIn(result.output))
+      }
+
+      /** The version token of ffmpeg's banner line (`ffmpeg version 6.1.1-3ubuntu5 Copyright…`). */
+      internal fun ffmpegVersionIn(output: String): String? =
+        Regex("""^ffmpeg version (\S+)""", RegexOption.MULTILINE).find(output)?.groupValues?.get(1)
+
+      /**
+       * Whether this ffmpeg version throws away `-use_wallclock_as_timestamps` stamps when it
+       * DECODES a raw H.264 pipe (FFmpeg ticket #11268). It flags the raw demuxer's timestamps as
+       * unreliable even though the wall clock generated them, and the re-encode then spaces every
+       * frame evenly at the stream's declared rate — so a [WebmVp9] recording stops following the
+       * session. A stream copy never decodes, so [Mp4Copy] keeps the arrival times. The bug came
+       * in with 6.1 and was fixed in 6.1.3, 7.0.3 and 7.1.2; 8.0 and later never had it. Ubuntu
+       * 24.04 ships 6.1.1.
+       *
+       * Read from the version string alone. A version that doesn't parse (a git build like
+       * `N-117000-g…`) counts as unaffected; a distro build that backported the fix is still
+       * reported affected, which only costs it the mp4 fallback.
+       */
+      internal fun dropsWallClockOnDecode(ffmpegVersion: String): Boolean {
+        val match = Regex("""^n?(\d+)\.(\d+)(?:\.(\d+))?""").find(ffmpegVersion) ?: return false
+        val major = match.groupValues[1].toInt()
+        val minor = match.groupValues[2].toInt()
+        val patch = match.groupValues[3].toIntOrNull() ?: 0
+        return when (major to minor) {
+          6 to 1, 7 to 0 -> patch < 3
+          7 to 1 -> patch < 2
+          else -> false
+        }
       }
 
       /** Pure half of [vp9EncoderAvailable]: does an `ffmpeg -encoders` listing include libvpx-vp9. */
@@ -235,6 +273,13 @@ class WallClockMuxConsumer(
         encodersListing.lineSequence().any { line ->
           line.trim().split(Regex("\\s+")).getOrNull(1) == "libvpx-vp9"
         }
+    }
+
+    /** What [probeLiveMuxSupport] found out about this host's ffmpeg. */
+    data class LiveMuxSupport(val vp9Encoder: Boolean, val ffmpegVersion: String?) {
+      /** False when a [WebmVp9] re-encode would lose the recording's timing; see [dropsWallClockOnDecode]. */
+      val reencodeKeepsWallClock: Boolean
+        get() = ffmpegVersion == null || !dropsWallClockOnDecode(ffmpegVersion)
     }
   }
 

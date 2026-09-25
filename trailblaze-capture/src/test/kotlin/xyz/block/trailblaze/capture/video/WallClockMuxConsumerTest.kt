@@ -277,6 +277,27 @@ class WallClockMuxConsumerTest {
   @Test
   fun `frame timestamps keep millisecond resolution instead of snapping to the declared frame rate`() {
     if (!webmToolsAvailable()) return
+    if (!WallClockMuxConsumer.Output.probeLiveMuxSupport().reencodeKeepsWallClock) {
+      // This ffmpeg re-encodes onto the declared grid (FFmpeg #11268). Recording falls back to the
+      // mp4 stream copy on it, which the next test proves keeps arrival time.
+      println("skipping: this ffmpeg loses wall-clock time through a re-encode, so recordings use mp4")
+      return
+    }
+    assertArrivalTimed(WallClockMuxConsumer.Output.WebmVp9(), "video.webm")
+  }
+
+  @Test
+  fun `the mp4 stream copy keeps millisecond arrival time too, on every ffmpeg`() {
+    // The fallback for an ffmpeg whose re-encode loses wall-clock time: a copy never decodes, so
+    // the arrival stamps reach the file. Runs even where the webm case above skips.
+    if (!ffmpegOnPath() || !ffprobeOnPath()) {
+      println("skipping: ffmpeg or ffprobe not on PATH")
+      return
+    }
+    assertArrivalTimed(WallClockMuxConsumer.Output.Mp4Copy, "video.mp4")
+  }
+
+  private fun assertArrivalTimed(output: WallClockMuxConsumer.Output, fileName: String) {
     // The fixture's bitstream DECLARES one frame rate; the feed delivers a frame every ~16ms. That
     // mismatch is the production shape — a damage-driven screen feed's declared rate says nothing
     // about when its frames actually arrived, and Android's `screenrecord` declares no rate at all,
@@ -287,14 +308,14 @@ class WallClockMuxConsumerTest {
     val declaredRate = assertNotNull(readDeclaredFrameRate(h264), "fixture must declare a rate to snap to")
     val feed = burstProducer(h264, bursts = 60, gapMs = 16)
     val tee = H264Tee.standalone(deviceId = deviceId, producerFactory = feed.factory)
-    val out = File(tempDir, "video.webm")
-    val consumer = WallClockMuxConsumer(outputFile = out, tee = tee, output = WallClockMuxConsumer.Output.WebmVp9())
+    val out = File(tempDir, fileName)
+    val consumer = WallClockMuxConsumer(outputFile = out, tee = tee, output = output)
     consumer.start()
     assertTrue(feed.finished.await(20, TimeUnit.SECONDS), "the fixture feed should complete")
 
     val result = assertNotNull(consumer.stop(), "mux should produce a MuxResult")
 
-    val ptsMs = readPacketPtsMs(result.file)
+    val ptsMs = readPacketPtsMs(result.file).sorted()
     assertTrue(ptsMs.size >= 30, "sanity: the feed should have reached the file, got ${ptsMs.size} packets")
     val snapped = ptsMs.count { onFrameRateGrid(it, declaredRate) }
     // Deliberately a proportion, not a count of distinct timestamps: how many frames share a stamp
@@ -324,6 +345,43 @@ class WallClockMuxConsumerTest {
     assertTrue(WallClockMuxConsumer.Output.vp9EncoderListed(withVp9))
     assertFalse(WallClockMuxConsumer.Output.vp9EncoderListed(vp8Only), "a VP8-only libvpx must not count as VP9")
     assertFalse(WallClockMuxConsumer.Output.vp9EncoderListed(""), "no listing at all means no encoder")
+  }
+
+  @Test
+  fun `the ffmpeg version is read off the banner the encoder probe already prints`() {
+    val listing = """
+      ffmpeg version 6.1.1-3ubuntu5 Copyright (c) 2000-2023 the FFmpeg developers
+        built with gcc 13 (Ubuntu 13.2.0-23ubuntu3)
+      Encoders:
+       V..... libvpx-vp9           libvpx VP9 (codec vp9)
+    """.trimIndent()
+
+    assertEquals("6.1.1-3ubuntu5", WallClockMuxConsumer.Output.ffmpegVersionIn(listing))
+    assertTrue(WallClockMuxConsumer.Output.vp9EncoderListed(listing), "the banner must not hide the listing")
+    assertNull(WallClockMuxConsumer.Output.ffmpegVersionIn("Encoders:\n"), "no banner means no version")
+  }
+
+  @Test
+  fun `only the ffmpeg releases that drop wall-clock time on a re-encode are flagged`() {
+    // FFmpeg ticket #11268: introduced in 6.1, fixed in 6.1.3, 7.0.3, 7.1.2 and 8.0.
+    val affected = listOf("6.1", "6.1.1-3ubuntu5", "6.1.2", "7.0", "7.0.2", "7.1", "7.1.1-1+b1", "n7.1.1")
+    val unaffected = listOf(
+      "6.0", "4.4.2-0ubuntu0.22.04.1", "6.1.3", "6.1.6", "7.0.3", "7.1.2", "8.0",
+      "n8.1.2-50-g1a748fe2cd", "9.0.2",
+      // A git snapshot names no release. Treated as unaffected: those builds are recent.
+      "N-117000-gabc1234",
+    )
+
+    affected.forEach { assertTrue(WallClockMuxConsumer.Output.dropsWallClockOnDecode(it), "$it should be flagged") }
+    unaffected.forEach { assertFalse(WallClockMuxConsumer.Output.dropsWallClockOnDecode(it), "$it should not be flagged") }
+  }
+
+  @Test
+  fun `an unknown ffmpeg version keeps webm rather than guessing it is broken`() {
+    assertTrue(WallClockMuxConsumer.Output.LiveMuxSupport(vp9Encoder = true, ffmpegVersion = null).reencodeKeepsWallClock)
+    assertFalse(
+      WallClockMuxConsumer.Output.LiveMuxSupport(vp9Encoder = true, ffmpegVersion = "6.1.1").reencodeKeepsWallClock,
+    )
   }
 
   @Test

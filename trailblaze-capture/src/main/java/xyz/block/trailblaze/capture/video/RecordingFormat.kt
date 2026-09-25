@@ -12,7 +12,8 @@ import xyz.block.trailblaze.util.Console
  * embeds the file and plays it as the session's timeline. Android and iOS (baguette) encode it
  * **live** from the device's H.264 stream ([WallClockMuxConsumer.Output.WebmVp9]); the iOS simctl
  * recorder and the web screencast mux encode it at stop; Playwright's own recorder already writes
- * one. [MP4] exists only for a host whose ffmpeg was built without `libvpx-vp9`: the recording is
+ * one. [MP4] exists only for a host whose ffmpeg was built without `libvpx-vp9`, or whose ffmpeg
+ * loses a live recording's timing when it re-encodes (see [forLiveMux]): the recording is
  * then H.264 in an mp4 (`-c copy` where the source is already H.264, libx264 otherwise) and the
  * report plays that instead. Nothing else about the session changes with the format — the
  * artifact's window, the report's timeline math and the desktop app's "Watch Video" hand-off all
@@ -54,18 +55,35 @@ enum class RecordingFormat(
 
   companion object {
     /**
-     * Probed once per process: [WEBM] when this host's ffmpeg can encode VP9, otherwise [MP4]. The
-     * probe shells out to `ffmpeg -encoders`, so it is not repeated per session.
+     * Probed once per process: [WEBM] when this host's ffmpeg can encode VP9 and keeps a live
+     * recording's timing through that encode, otherwise [MP4]. The probe shells out to
+     * `ffmpeg -encoders`, so it is not repeated per session.
      */
     val preferred: RecordingFormat by lazy {
-      forVp9Encoder(WallClockMuxConsumer.Output.vp9EncoderAvailable()).also {
-        if (it == MP4) {
-          Console.log("[RecordingFormat] ffmpeg has no libvpx-vp9 encoder; session recordings will be mp4 instead of webm")
+      val support = WallClockMuxConsumer.Output.probeLiveMuxSupport()
+      forLiveMux(support).also {
+        when {
+          !support.vp9Encoder ->
+            Console.log("[RecordingFormat] ffmpeg has no libvpx-vp9 encoder; session recordings will be mp4 instead of webm")
+          !support.reencodeKeepsWallClock ->
+            Console.error(
+              "[RecordingFormat] WARNING: ffmpeg ${support.ffmpegVersion} loses a live recording's timing when " +
+                "it re-encodes to webm (FFmpeg ticket #11268, fixed in 6.1.3, 7.0.3, 7.1.2 and 8.0). Session " +
+                "recordings will be mp4, which keeps the timing. Install a newer ffmpeg to record webm.",
+            )
         }
       }
     }
 
     /** Pure half of [preferred]: the format a host with (or without) a VP9 encoder records in. */
     fun forVp9Encoder(available: Boolean): RecordingFormat = if (available) WEBM else MP4
+
+    /**
+     * Pure half of [preferred]: [WEBM] only where the live VP9 encode is both possible and keeps
+     * wall-clock time. Where it wouldn't, [MP4]'s stream copy never decodes, so the recording keeps
+     * the arrival times the webm encode would have thrown away.
+     */
+    fun forLiveMux(support: WallClockMuxConsumer.Output.LiveMuxSupport): RecordingFormat =
+      forVp9Encoder(support.vp9Encoder && support.reencodeKeepsWallClock)
   }
 }
