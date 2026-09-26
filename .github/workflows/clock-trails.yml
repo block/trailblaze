@@ -143,9 +143,15 @@ jobs:
         run: ./scripts/install-trailblaze-from-artifact.sh
 
       - name: Install ffmpeg
-        # Session video and the docs gallery's animated WebP encode through it; see the script
-        # for why it is a pinned build.
+        # Session video encodes through it; see the script for why it is a pinned build.
         run: ./.github/install-ffmpeg.sh
+
+      - name: Install libwebp tools
+        # The docs gallery's animated timeline.webp is assembled by libwebp's CLIs
+        # (img2webp, cwebp, webpmux), which the runner image doesn't ship.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends webp
 
       - name: Create and start emulator and run the clock trail (Linux)
         if: runner.os == 'Linux'

@@ -30,15 +30,18 @@ if [ ! -d "$LOGS_DIR" ]; then
   exit 0
 fi
 
-# ffmpeg with libwebp_anim is required for the animated --webp. The storyboard uses
-# bundled libwebp (no ffmpeg), so generate it in a separate CLI invocation below: if the
-# animated timeline preflight fails, the storyboard and HTML still publish.
-HAS_WEBP_ANIM=0
-if command -v ffmpeg >/dev/null 2>&1 && ffmpeg -hide_banner -encoders 2>/dev/null | grep -q libwebp_anim; then
-  HAS_WEBP_ANIM=1
-  echo "✓ ffmpeg with libwebp_anim found"
+# The animated --webp is assembled by libwebp's CLIs (img2webp, cwebp, webpmux — the
+# `webp` package), not ffmpeg. The storyboard uses bundled libwebp, so generate it in a
+# separate CLI invocation below: if the animated timeline preflight fails, the storyboard
+# and HTML still publish.
+HAS_WEBP_ANIM=1
+for tool in img2webp cwebp webpmux; do
+  command -v "$tool" >/dev/null 2>&1 || HAS_WEBP_ANIM=0
+done
+if [ "$HAS_WEBP_ANIM" = 1 ]; then
+  echo "✓ libwebp tools found"
 else
-  echo "WARNING: ffmpeg with libwebp_anim not found — the animated timeline.webp will be skipped."
+  echo "WARNING: libwebp tools (img2webp, cwebp, webpmux) not found — the animated timeline.webp will be skipped."
 fi
 
 # Resolve the single session this trail produced. Session logs are per-session dirs under
