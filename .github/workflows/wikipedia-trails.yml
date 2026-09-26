@@ -133,14 +133,12 @@ jobs:
         # These packages cover the shared libs that Chromium requires on Ubuntu and
         # are not guaranteed to be present on the runner image.
         #
-        # ffmpeg (with libwebp) is added here too: the docs report-gallery step exports
-        # an animated-timeline WebP via `trailblaze report --webp`, which shells out to
-        # `ffmpeg -c:v libwebp_anim`. The storyboard WebP uses bundled libwebp and does
-        # not need ffmpeg, so a degraded runner still produces the storyboard + HTML.
+        # `webp` is added here too: the docs report-gallery step's animated timeline.webp
+        # is assembled by libwebp's CLIs (img2webp, cwebp, webpmux).
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            ffmpeg \
+            webp \
             libasound2t64 \
             libatk-bridge2.0-0 \
             libatk1.0-0 \
