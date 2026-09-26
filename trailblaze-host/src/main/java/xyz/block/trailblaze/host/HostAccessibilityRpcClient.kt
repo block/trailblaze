@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.host
 
 import kotlinx.coroutines.CancellationException
+import xyz.block.trailblaze.host.util.BufferedImageUtils
 import kotlinx.serialization.json.JsonObject
 import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.agent.ExecutionResult
@@ -411,7 +412,7 @@ class HostAccessibilityRpcClient(
   /** [RpcScreenStateAdapter.from], plus the size report every response carries. */
   private fun adaptScreenState(data: GetScreenStateResponse): ScreenState {
     onScreenStateObserved(data)
-    return RpcScreenStateAdapter.from(data)
+    return RpcScreenStateAdapter.from(data, BufferedImageUtils::encodeLikeCaptures)
   }
 
   override suspend fun captureScreenState(): ScreenState? {

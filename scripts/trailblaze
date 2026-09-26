@@ -40,7 +40,18 @@
 # exported SHELLOPTS is the route that does.)
 set +m
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Parameter expansion instead of `$(cd "$(dirname ...)" && pwd)`, which is three processes on every
+# command. Installed launchers are sourced by absolute path, where the answer is the same string;
+# only a relative path needs `cd` to anchor it.
+case "${BASH_SOURCE[0]}" in
+  */*) SCRIPT_DIR="${BASH_SOURCE[0]%/*}" ;;
+  *) SCRIPT_DIR=. ;;
+esac
+case "$SCRIPT_DIR" in
+  /*) ;;
+  '') SCRIPT_DIR=/ ;;
+  *) SCRIPT_DIR="$(cd "$SCRIPT_DIR" && pwd)" ;;
+esac
 
 # Capture the parent shell PID so the CLI can resolve "what device is pinned
 # for this terminal?" from a file in ~/.trailblaze instead of requiring the
@@ -417,7 +428,13 @@ if [[ -n "${TRAILBLAZE_IO_PARALLELISM:-}" ]]; then
 fi
 TRAILBLAZE_JVM_ARGS="$TRAILBLAZE_JVM_ARGS -Dkotlinx.coroutines.io.parallelism=${TRAILBLAZE_IO_PARALLELISM:-512}"
 
-if [[ "$(uname)" == "Darwin" ]]; then
+# `$OSTYPE` is set by bash itself, so this costs no `uname` process on every command.
+case "${OSTYPE:-}" in
+  darwin*) tb_is_macos=true ;;
+  '') [[ "$(uname)" == "Darwin" ]] && tb_is_macos=true || tb_is_macos=false ;;
+  *) tb_is_macos=false ;;
+esac
+if [ "$tb_is_macos" = true ]; then
   TRAILBLAZE_JVM_ARGS="$TRAILBLAZE_JVM_ARGS --add-opens java.desktop/sun.awt=ALL-UNNAMED --add-opens java.desktop/sun.lwawt=ALL-UNNAMED --add-opens java.desktop/sun.lwawt.macosx=ALL-UNNAMED"
 fi
 
@@ -459,17 +476,26 @@ TRAILBLAZE_JAR="${TRAILBLAZE_JAR:-$SCRIPT_DIR/trailblaze.jar}"
 # under — so a newer JAR, a different JDK, changed JAVA_TOOL_OPTIONS / _JAVA_OPTIONS, or deleting
 # the marker retries.
 
-tb_ensure_cds_archive() {
+# True when the JAR already has an archive at least as new as itself — every start but the first
+# after an install or rebuild.
+tb_cds_archive_is_current() {
   local jar="$1"
   # The CDS archive path gets injected into unquoted $TRAILBLAZE_JVM_ARGS (same
   # pattern as --add-opens). Bail if the JAR path contains whitespace so we
   # don't word-split the JVM arg and break startup; plain JAR mode still works.
   case "$jar" in *[[:space:]]*) return 1 ;; esac
+  local jsa="${jar%.jar}.jsa"
+  [ -f "$jsa" ] && [ ! "$jar" -nt "$jsa" ]
+}
+
+tb_ensure_cds_archive() {
+  local jar="$1"
+  case "$jar" in *[[:space:]]*) return 1 ;; esac
 
   local jsa="${jar%.jar}.jsa"
   local failed_marker="${jsa}.failed"
 
-  if [ -f "$jsa" ] && [ ! "$jar" -nt "$jsa" ]; then
+  if tb_cds_archive_is_current "$jar"; then
     printf '%s' "$jsa"
     return 0
   fi
@@ -530,7 +556,13 @@ tb_ensure_cds_archive() {
 }
 
 if [ "${BLAZE_CDS:-1}" = "1" ] && [ -f "$TRAILBLAZE_JAR" ]; then
-  TRAILBLAZE_CDS_ARCHIVE="$(tb_ensure_cds_archive "$TRAILBLAZE_JAR")"
+  # The current-archive case is answered here, without the subshell the build path runs in: this
+  # line runs before every command, forwarded ones included.
+  if tb_cds_archive_is_current "$TRAILBLAZE_JAR"; then
+    TRAILBLAZE_CDS_ARCHIVE="${TRAILBLAZE_JAR%.jar}.jsa"
+  else
+    TRAILBLAZE_CDS_ARCHIVE="$(tb_ensure_cds_archive "$TRAILBLAZE_JAR")"
+  fi
   if [ -n "$TRAILBLAZE_CDS_ARCHIVE" ]; then
     TRAILBLAZE_JVM_ARGS="$TRAILBLAZE_JVM_ARGS -XX:SharedArchiveFile=$TRAILBLAZE_CDS_ARCHIVE -Xshare:auto"
   fi
@@ -621,7 +653,41 @@ TRAILBLAZE_PING_TIMEOUT_SECONDS=5
 # command whose job is to end whatever is on the port — and the advisory below ends with "running in
 # its own JVM instead", which is simply untrue of `stop`.
 probe_daemon_port() {
-    local rc
+    local rc connected= status_line= probe_pid
+    # Bash's own /dev/tcp first. A curl process costs more than anything else this launcher does
+    # before a forwarded command, and the answer needed is one status line. The connect runs in a
+    # process substitution so the read timeouts here bound it too: a connect to an accept queue
+    # that is full never completes, and bash has no connect timeout of its own. That child's fds
+    # are all its own (a caller capturing our output never waits on it), and its read outlives
+    # ours by a second, so a slow answer reads as silence here rather than as an empty reply.
+    #
+    # The child says `connected` before it asks, because bash 3.2's `read -t` returns 1 on a
+    # timeout, the same as on end of input: without it a daemon that accepted and went quiet looks
+    # exactly like a refused connect. An HTTP status line is an answer; a connect followed by
+    # nothing is a port held by something that does not answer — the same two verdicts curl gives.
+    # No connect at all (refused, a full accept queue, a bash built without /dev/tcp) is left for
+    # curl to decide. A loopback connect is immediate or never, so that wait is one second, the
+    # same bound curl's --connect-timeout puts on it.
+    {
+        IFS= read -r -t 1 connected \
+            && [ "$connected" = connected ] \
+            && IFS= read -r -t "$TRAILBLAZE_PING_TIMEOUT_SECONDS" status_line
+    } < <(
+        {
+            exec 3<> "/dev/tcp/127.0.0.1/${TRAILBLAZE_PORT}" || exit 1
+            printf 'connected\n'
+            printf 'GET /ping HTTP/1.0\r\nHost: localhost\r\n\r\n' >&3
+            IFS= read -r -t $((TRAILBLAZE_PING_TIMEOUT_SECONDS + 1)) status_line <&3 \
+                && printf '%s\n' "$status_line"
+        } < /dev/null 2> /dev/null
+    )
+    # `$!` is the process substitution's child. With no answer it may still be blocked in the
+    # connect — a full accept queue holds it until the kernel gives up — and every command would
+    # leave another one behind, so end it here.
+    probe_pid=$!
+    case "$status_line" in HTTP/*) return 0 ;; esac
+    kill "$probe_pid" 2> /dev/null
+    [ "$connected" = connected ] && return 2
     curl -s --connect-timeout 1 --max-time "$TRAILBLAZE_PING_TIMEOUT_SECONDS" \
         "http://localhost:${TRAILBLAZE_PORT}/ping" > /dev/null 2>&1
     rc=$?
@@ -1025,6 +1091,134 @@ ipc_replay_response() {
     return 0
 }
 
+# Replay a /cli/exec body in the daemon's replay framing (CliExecReplayFormat in
+# CliExecEndpoint.kt), which ipc_try_forward asks for so the forwarded path runs no jq at all.
+# Same contract as ipc_replay_response: returns 1 without printing anything for a body that is not
+# a complete framed response — an older daemon's JSON, or a truncated body — and on success sets
+# IPC_REPLAY_EXIT_CODE.
+#
+# Every run is sliced out and checked before any is printed, for the reason the jq decoder has a
+# terminator: half a replay followed by a fall-through runs the command a second time.
+ipc_replay_framed() {
+    # Byte offsets: the daemon counts UTF-8 bytes, and in a UTF-8 locale bash counts characters.
+    local LC_ALL=C
+    local body="$1" magic=$'trailblaze-replay 1\n'
+    [ "${body:0:${#magic}}" = "$magic" ] || return 1
+    local pos=${#magic} total=${#body} head tag len text exit_code
+    local tags=() texts=()
+
+    head="${body:pos:16}"
+    head="${head%%$'\n'*}"
+    case "$head" in
+        exit\ [0-9] | exit\ [0-9][0-9] | exit\ [0-9][0-9][0-9]) exit_code="${head#exit }" ;;
+        *) return 1 ;;
+    esac
+    [ "$exit_code" -le 255 ] || return 1
+    pos=$((pos + ${#head} + 1))
+
+    while :; do
+        head="${body:pos:32}"
+        head="${head%%$'\n'*}"
+        case "$head" in
+            # Command substitution strips the final newline, so the body ends at `end` or just past it.
+            end) [ $((pos + 3)) -eq "$total" ] || [ $((pos + 4)) -eq "$total" ] || return 1; break ;;
+            [12]\ *) ;;
+            *) return 1 ;;
+        esac
+        tag="${head%% *}"
+        len="${head#* }"
+        # Ten digits at most: bash arithmetic wraps silently past 64 bits, and no reply is that big.
+        case "$len" in '' | *[!0-9]* | ???????????*) return 1 ;; esac
+        pos=$((pos + ${#head} + 1))
+        text="${body:pos:len}"
+        [ "${#text}" -eq "$len" ] || return 1
+        tags+=("$tag")
+        texts+=("$text")
+        pos=$((pos + len))
+    done
+
+    local i=0
+    while [ "$i" -lt "${#tags[@]}" ]; do
+        if [ "${tags[$i]}" = 2 ]; then
+            printf '%s' "${texts[$i]}" >&2
+        else
+            printf '%s' "${texts[$i]}"
+        fi
+        i=$((i + 1))
+    done
+    IPC_REPLAY_EXIT_CODE="$exit_code"
+    return 0
+}
+
+# Sets TB_JSON to "$1" as a JSON string literal. Returns 1, setting nothing, for a control
+# character other than newline, carriage return or tab — rare enough in argv that the caller hands
+# those to jq rather than this growing a \uXXXX encoder.
+tb_json_quote() {
+    local s="$1"
+    s="${s//\\/\\\\}"
+    s="${s//\"/\\\"}"
+    s="${s//$'\n'/\\n}"
+    s="${s//$'\r'/\\r}"
+    s="${s//$'\t'/\\t}"
+    case "$s" in *[[:cntrl:]]*) return 1 ;; esac
+    TB_JSON="\"$s\""
+}
+
+# Sets IPC_PAYLOAD to the /cli/exec request body for argv "$@": argv, the caller's cwd, and the
+# allowlisted env vars that are set (see ipc_try_forward for the allowlist). Built with bash
+# builtins because it runs before every forwarded command, and a jq process was the largest single
+# cost of that path. Returns 1 when a value holds a character tb_json_quote leaves to jq.
+ipc_build_payload() {
+    local body='{"args":[' sep= arg name value
+    for arg in "$@"; do
+        tb_json_quote "$arg" || return 1
+        body+="$sep$TB_JSON"
+        sep=,
+    done
+    tb_json_quote "$PWD" || return 1
+    body+='],"cwd":'"$TB_JSON"',"env":{'
+    sep=
+    for name in TRAILBLAZE_DEVICE TRAILBLAZE_TARGET TRAILBLAZE_SHELL_PID TRAILBLAZE_INTERACTIVE \
+        TRAILBLAZE_MCP_REQUEST_TIMEOUT_MS TRAILBLAZE_MCP_PREFLIGHT_TIMEOUT_MS TRAILBLAZE_TRACE_LEVEL; do
+        value="${!name:-}"
+        [ -n "$value" ] || continue
+        tb_json_quote "$value" || return 1
+        body+="$sep\"$name\":$TB_JSON"
+        sep=,
+    done
+    IPC_PAYLOAD="$body}}"
+}
+
+# The jq build of the same body, for an argument ipc_build_payload leaves to jq. The two must name
+# the same env vars; test_ipc_replay.sh fails if they ever build different bodies.
+ipc_build_payload_jq() {
+    IPC_PAYLOAD=$(jq -cn \
+        --arg cwd "$PWD" \
+        --arg device "${TRAILBLAZE_DEVICE:-}" \
+        --arg target "${TRAILBLAZE_TARGET:-}" \
+        --arg shell_pid "${TRAILBLAZE_SHELL_PID:-}" \
+        --arg interactive "${TRAILBLAZE_INTERACTIVE:-}" \
+        --arg mcp_timeout "${TRAILBLAZE_MCP_REQUEST_TIMEOUT_MS:-}" \
+        --arg preflight_timeout "${TRAILBLAZE_MCP_PREFLIGHT_TIMEOUT_MS:-}" \
+        --arg trace_level "${TRAILBLAZE_TRACE_LEVEL:-}" \
+        --args '
+          {
+            args: $ARGS.positional,
+            cwd: $cwd,
+            env: (
+              {}
+              + (if $device == "" then {} else {TRAILBLAZE_DEVICE: $device} end)
+              + (if $target == "" then {} else {TRAILBLAZE_TARGET: $target} end)
+              + (if $shell_pid == "" then {} else {TRAILBLAZE_SHELL_PID: $shell_pid} end)
+              + (if $interactive == "" then {} else {TRAILBLAZE_INTERACTIVE: $interactive} end)
+              + (if $mcp_timeout == "" then {} else {TRAILBLAZE_MCP_REQUEST_TIMEOUT_MS: $mcp_timeout} end)
+              + (if $preflight_timeout == "" then {} else {TRAILBLAZE_MCP_PREFLIGHT_TIMEOUT_MS: $preflight_timeout} end)
+              + (if $trace_level == "" then {} else {TRAILBLAZE_TRACE_LEVEL: $trace_level} end)
+            )
+          }
+        ' -- "$@") || return 1
+}
+
 # Attempt to run via the daemon's /cli/exec endpoint.
 # On success replays the command's output and exits with the daemon's exit code.
 # On any form of failure, returns 1 so the caller can fall through.
@@ -1069,40 +1263,20 @@ ipc_try_forward() {
     # for `snapshot`, `ask`, `tool` and `config`. Read by
     # `CliMcpClient.resolveRequestTimeoutMs`.
     #
-    # Build argv + cwd + env in ONE jq process. The old implementation appended every
-    # argument and env var with a separate jq invocation, then spawned another jq for the
-    # final payload. A three-argument snapshot with the standard shell metadata paid for six
-    # short-lived jq processes before curl even started. `--args` preserves every argument
-    # byte (including embedded newlines) without an in-band delimiter.
+    # TRAILBLAZE_TRACE_LEVEL is on it for the same reason: the command is recorded in the daemon, so
+    # `TRAILBLAZE_TRACE_LEVEL=verbose trailblaze tool ...` only records detail if the value crosses.
+    # Read by `CliCommandTrace`.
+    #
+    # ipc_build_payload builds the body with bash builtins; ipc_build_payload_jq takes the rare
+    # argument it cannot encode. `--args` there preserves every argument byte without an in-band
+    # delimiter.
     # Send the user's interactive cwd alongside argv so commands that walk relative
     # paths (e.g. `waypoint --target` resolving the workspace anchor) anchor at the
     # user's shell directory rather than the daemon's launch directory. Older daemons
     # ignore unknown fields (kotlinx.serialization with ignoreUnknownKeys=true);
     # newer daemons fall back to their own cwd/env if absent. See [CliCallerContext].
-    local payload
-    payload=$(jq -cn \
-        --arg cwd "$PWD" \
-        --arg device "${TRAILBLAZE_DEVICE:-}" \
-        --arg target "${TRAILBLAZE_TARGET:-}" \
-        --arg shell_pid "${TRAILBLAZE_SHELL_PID:-}" \
-        --arg interactive "${TRAILBLAZE_INTERACTIVE:-}" \
-        --arg mcp_timeout "${TRAILBLAZE_MCP_REQUEST_TIMEOUT_MS:-}" \
-        --arg preflight_timeout "${TRAILBLAZE_MCP_PREFLIGHT_TIMEOUT_MS:-}" \
-        --args '
-          {
-            args: $ARGS.positional,
-            cwd: $cwd,
-            env: (
-              {}
-              + (if $device == "" then {} else {TRAILBLAZE_DEVICE: $device} end)
-              + (if $target == "" then {} else {TRAILBLAZE_TARGET: $target} end)
-              + (if $shell_pid == "" then {} else {TRAILBLAZE_SHELL_PID: $shell_pid} end)
-              + (if $interactive == "" then {} else {TRAILBLAZE_INTERACTIVE: $interactive} end)
-              + (if $mcp_timeout == "" then {} else {TRAILBLAZE_MCP_REQUEST_TIMEOUT_MS: $mcp_timeout} end)
-              + (if $preflight_timeout == "" then {} else {TRAILBLAZE_MCP_PREFLIGHT_TIMEOUT_MS: $preflight_timeout} end)
-            )
-          }
-        ' -- "$@") || return 1
+    ipc_build_payload "$@" || ipc_build_payload_jq "$@" || return 1
+    local payload="$IPC_PAYLOAD"
 
     # The daemon can hold this request open for minutes on purpose — `ask` runs a
     # whole agent in there — so the timeout stays generous. What isn't acceptable
@@ -1189,6 +1363,7 @@ ipc_try_forward() {
     response=$(curl -sS --connect-timeout 2 --max-time "$ipc_max_time" \
         -X POST "http://localhost:${TRAILBLAZE_PORT}/cli/exec" \
         -H "Content-Type: application/json" \
+        -H "Accept: application/vnd.trailblaze.cli-replay, application/json" \
         -d "$payload" 2>/dev/null)
     rc=$?
     # Only the watchdog itself. The `sleep` it may still be blocked in outlives it
@@ -1211,7 +1386,7 @@ ipc_try_forward() {
     fi
     [ "$rc" -eq 0 ] || return 1
 
-    ipc_replay_response "$response" || return 1
+    ipc_replay_framed "$response" || ipc_replay_response "$response" || return 1
     exit "$IPC_REPLAY_EXIT_CODE"
 }
 
@@ -1691,7 +1866,10 @@ for arg in "$@"; do
             resolved_arg="$arg"
             [ "$arg" = "--trails-dir" ] && companion_expect_trails_dir=true
         fi
-    elif [[ "$arg" == */* ]] || [[ "$arg" == *.* ]]; then
+    elif { [[ "$arg" == */* ]] || [[ "$arg" == *.* ]]; } && { [ -f "$arg" ] || [ -d "$arg" ]; }; then
+        # Existence is tested here, before the subshell: to_absolute_path returns anything else
+        # unchanged, and most such arguments are not paths (`-d android/emulator-5554`, a step
+        # sentence ending in a period).
         resolved_arg=$(to_absolute_path "$arg")
     else
         resolved_arg="$arg"

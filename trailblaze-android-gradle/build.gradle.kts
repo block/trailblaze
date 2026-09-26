@@ -126,6 +126,31 @@ tasks.named<Test>("test") {
   // end-to-end behavior can be exercised without shipping a separate fixture esbuild + SDK in
   // this repo.
   systemProperty("trailblaze.sdkDir", file("../sdks/typescript").absolutePath)
+
+  // `systemProperty` above registers only the path STRING as a task input, so an edit to the SDK
+  // content these tests actually read left the task UP-TO-DATE and the tests unrun — a green leg
+  // on exactly the PR that changed what they guard. Declare the content-bearing SDK files so the
+  // up-to-date decision reflects them: `tools/` (the wrapper template), `src/` (what esbuild
+  // pulls in when a fixture tool imports the SDK), and `package.json`.
+  //
+  // Plus two files that decide what the end-to-end stage test actually DOES. `bun.lock`, because
+  // that test runs the esbuild from `node_modules/.bin` — a dependency bump changes the bundler
+  // while every other input stays byte-identical. And that esbuild binary itself, because the test
+  // `assumeTrue`-SKIPS when it is absent: without it declared, a result recorded while the SDK was
+  // uninstalled replays as UP-TO-DATE after the install, so the one case that exercises a real
+  // bundle stays skipped and the build still reports it green.
+  //
+  // The installed tree (`node_modules/`) and the build output (`dist/`) stay out — two files are a
+  // cheap proxy, whereas snapshotting thousands of installed ones costs more than it can catch.
+  inputs.files(
+    fileTree("../sdks/typescript/tools"),
+    fileTree("../sdks/typescript/src"),
+    file("../sdks/typescript/package.json"),
+    file("../sdks/typescript/bun.lock"),
+    file("../sdks/typescript/node_modules/.bin/esbuild"),
+  )
+    .withPropertyName("trailblazeSdkSources")
+    .withPathSensitivity(PathSensitivity.RELATIVE)
 }
 
 // Match the parent build's bytecode level so consumers on JDK 17 can load the plugin jar. Carried

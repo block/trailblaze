@@ -54,6 +54,16 @@ interface PlaywrightExecutableTool : ExecutableTrailblazeTool {
   fun withNodeSelector(selector: TrailblazeNodeSelector): PlaywrightExecutableTool = this
 
   /**
+   * Whether the agent wraps this tool in the post-action settle
+   * ([xyz.block.trailblaze.playwright.PlaywrightPageManager.dispatchAndAwaitSettle]) and captures
+   * a pre-action screenshot for it. The settle costs at least 500ms per call, which is right for a
+   * gesture but pure overhead for a page script that reads or polls — and scripted tools issue
+   * those in loops. A tool returning false gets neither, so it must not start a navigation or
+   * a request the next tool depends on: nothing waits for it.
+   */
+  val awaitsSettle: Boolean get() = true
+
+  /**
    * Executes this tool against the given Playwright page.
    *
    * @param page The current Playwright page to execute actions against.

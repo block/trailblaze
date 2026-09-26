@@ -64,8 +64,9 @@ object MitmproxyAndroidNetworkCaptureActivator : AndroidNetworkCaptureActivator 
     sessionId: String,
     sessionDir: File,
     deviceId: TrailblazeDeviceId,
-    targetAppIds: List<String>,
+    targetAppIds: List<String>?,
     deviceLabel: String?,
+    requireTraffic: Boolean,
   ) {
     installShutdownHookOnce()
     sessions.compute(sessionId) { id, existing ->

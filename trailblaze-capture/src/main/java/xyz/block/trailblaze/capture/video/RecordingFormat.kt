@@ -29,7 +29,10 @@ enum class RecordingFormat(
   ;
 
   /** `video.webm` / `video.mp4` — the session's canonical recording filename. */
-  val canonicalFilename: String get() = "${CaptureFilenames.VIDEO_BASENAME}.$fileExtension"
+  val canonicalFilename: String get() = filename(CaptureFilenames.VIDEO_BASENAME)
+
+  /** A recording in this container under [basename] — `video-buyer.webm` for a companion device. */
+  fun filename(basename: String): String = "$basename.$fileExtension"
 
   /** The live wall-clock mux output that writes this container from a raw H.264 feed. */
   fun liveMuxOutput(): WallClockMuxConsumer.Output = when (this) {
@@ -51,6 +54,22 @@ enum class RecordingFormat(
       "-pix_fmt", "yuv420p",
       "-movflags", "+faststart",
     )
+  }
+
+  /**
+   * [encodeArgs] for the web screencast recording ([WebScreencastVideoCapture]). A browser page is
+   * mostly small text on flat color, which the shared setting smears. This one spends the bits
+   * [quality] asks for and turns on libvpx's screen-content mode, which came out both sharper and
+   * smaller than the default mode at the same CRF. Web-only on purpose: Android and iOS keep the
+   * shared setting, so their recordings don't grow.
+   *
+   * The deadline stays realtime, so the stop-time encode costs what it did before: about 14
+   * CPU-seconds, 3 s wall, for a 6-minute session on a laptop.
+   */
+  fun webScreencastEncodeArgs(quality: WebVideoQuality = WebVideoQuality.STANDARD): List<String> = when (this) {
+    WEBM -> WallClockMuxConsumer.Output.vp9CodecArgs(crf = quality.crf) +
+      listOf("-tune-content", "screen", "-fps_mode", "passthrough")
+    MP4 -> encodeArgs()
   }
 
   companion object {

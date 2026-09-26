@@ -25,16 +25,23 @@ class CompositeAndroidNetworkCaptureActivatorTest {
     /** Every (device, label) pair this delegate was asked to capture, in call order. */
     val startedDevices = mutableListOf<Pair<String, String?>>()
     val stopped = mutableListOf<String>()
+    /** The `targetAppIds` of every start, in call order. */
+    val startedTargetAppIds = mutableListOf<List<String>?>()
+    /** The `requireTraffic` of every start, in call order. */
+    val startedRequireTraffic = mutableListOf<Boolean>()
 
     override fun start(
       sessionId: String,
       sessionDir: File,
       deviceId: TrailblazeDeviceId,
-      targetAppIds: List<String>,
+      targetAppIds: List<String>?,
       deviceLabel: String?,
+      requireTraffic: Boolean,
     ) {
       started += sessionId
       startedDevices += deviceId.instanceId to deviceLabel
+      startedTargetAppIds += targetAppIds
+      startedRequireTraffic += requireTraffic
     }
 
     override fun stop(sessionId: String) {
@@ -47,6 +54,19 @@ class CompositeAndroidNetworkCaptureActivatorTest {
 
   private val deviceId = TrailblazeDeviceId("emulator-5554", TrailblazeDevicePlatform.ANDROID)
   private val dir = File(System.getProperty("java.io.tmpdir"))
+
+  @Test
+  fun `forwards no-target and unresolved-target starts to the delegate unchanged`() {
+    val fallback = RecordingActivator()
+    val composite = CompositeAndroidNetworkCaptureActivator(RecordingActivator(), fallback) { false }
+
+    composite.start("no-target", dir, deviceId, null)
+    composite.start("unresolved", dir, deviceId, emptyList())
+
+    // The delegate tells "skip" from "refuse" by null vs empty, so the composite must not
+    // normalize one into the other.
+    assertEquals(listOf(null, emptyList()), fallback.startedTargetAppIds)
+  }
 
   @Test
   fun `routes to proxy when the opt-in is on`() {
@@ -117,6 +137,18 @@ class CompositeAndroidNetworkCaptureActivatorTest {
     assertTrue(fallback.startedDevices.isEmpty())
     // One session-scoped stop — the delegate fans out over its own devices.
     assertEquals(listOf("s1"), proxy.stopped)
+  }
+
+  @Test
+  fun `whether a session requires traffic reaches the delegate`() {
+    // Dropping it would make an interactive session's empty capture fail its end again.
+    val fallback = RecordingActivator()
+    val composite = CompositeAndroidNetworkCaptureActivator(RecordingActivator(), fallback) { false }
+
+    composite.start("interactive", dir, deviceId, listOf("com.example"), requireTraffic = false)
+    composite.start("run", dir, deviceId, listOf("com.example"))
+
+    assertEquals(listOf(false, true), fallback.startedRequireTraffic.toList())
   }
 
   @Test

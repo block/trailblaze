@@ -14,6 +14,8 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.mcp.TrailblazeMcpBridge
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetScreenStateResponse
+import xyz.block.trailblaze.setofmark.SetOfMarkAnnotator
+import java.awt.image.BufferedImage
 
 /**
  * Adapter that wraps [GetScreenStateResponse] from RPC to the [ScreenState] interface.
@@ -29,6 +31,7 @@ import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetScreenStateResponse
  */
 class RpcScreenStateAdapter(
   private val response: GetScreenStateResponse,
+  private val encodeAnnotated: ((BufferedImage) -> ByteArray)? = null,
 ) : ScreenState {
 
   companion object {
@@ -37,9 +40,15 @@ class RpcScreenStateAdapter(
      * [GetScreenStateResponse.driverMigrationTreeNode] is non-null. The wrap only
      * exposes the extra tree to call sites that opt in via `is MigrationScreenState`
      * — runtime tools and reports see the same plain [ScreenState] they always have.
+     *
+     * @param encodeAnnotated Writes the annotated screenshot this adapter draws when the device
+     *   sent none. Pass one for the capture's own format; without it the drawing is a PNG.
      */
-    fun from(response: GetScreenStateResponse): ScreenState {
-      val base = RpcScreenStateAdapter(response)
+    fun from(
+      response: GetScreenStateResponse,
+      encodeAnnotated: ((BufferedImage) -> ByteArray)? = null,
+    ): ScreenState {
+      val base = RpcScreenStateAdapter(response, encodeAnnotated)
       return response.driverMigrationTreeNode?.let { MigrationScreenState.wrap(base, it) }
         ?: base
     }
@@ -52,21 +61,32 @@ class RpcScreenStateAdapter(
   private val _annotatedScreenshotBytes: ByteArray? by lazy {
     response.annotatedScreenshotBytes
       ?: response.annotatedScreenshotBase64?.decodeBase64Bytes()
-      ?: _screenshotBytes
+      ?: drawAnnotations()
+  }
+
+  private fun drawAnnotations(): ByteArray? {
+    val elements = annotationElements
+    // Nothing to mark: the screenshot is the answer, without a decode and re-encode.
+    if (elements.isNullOrEmpty()) return _screenshotBytes
+    return SetOfMarkAnnotator.annotate(
+      screenshotBytes = _screenshotBytes,
+      screenWidth = response.deviceWidth,
+      screenHeight = response.deviceHeight,
+      platform = TrailblazeDevicePlatform.ANDROID,
+      annotationElements = elements,
+      encode = encodeAnnotated ?: SetOfMarkAnnotator::encodePng,
+    )
   }
 
   override val screenshotBytes: ByteArray?
     get() = _screenshotBytes
 
   /**
-   * Annotated (set-of-mark) screenshot bytes. When the caller requested
-   * `includeAnnotatedScreenshot = false`, the daemon does not render
-   * annotation — this getter then falls back to the clean screenshot so the
-   * non-null [ScreenState] contract still holds. LLM consumers that depend on
-   * actually seeing the set-of-mark overlay must gate on their own
-   * `includeAnnotatedScreenshot` flag rather than inspecting these bytes;
-   * there is no runtime signal distinguishing "annotation rendered" from
-   * "annotation was skipped and we're returning the clean image."
+   * Annotated (set-of-mark) screenshot bytes: the device's rendering when the request asked for
+   * one, otherwise drawn here on first read from the screenshot and [annotationElements].
+   *
+   * Only an LLM prompt (and the log of that request) reads these, so a capture that never reaches
+   * the LLM — a recorded replay, a CLI `tool` call — never pays to render them.
    */
   override val annotatedScreenshotBytes: ByteArray
     get() = _annotatedScreenshotBytes ?: ByteArray(0)
@@ -152,7 +172,7 @@ object ScreenStateCaptureUtil {
     timeoutMs: Long = CAPTURE_TIMEOUT_MS,
     screenshotScalingConfig: ScreenshotScalingConfig = EffectiveScreenshotScalingConfig.effective,
     fast: Boolean = false,
-    includeAnnotatedScreenshot: Boolean = true,
+    includeAnnotatedScreenshot: Boolean = false,
     includeAllElements: Boolean = false,
   ): ScreenState? {
     return withTimeoutOrNull(timeoutMs) {

@@ -1,6 +1,10 @@
 package xyz.block.trailblaze.host.networkcapture
 
+import xyz.block.trailblaze.config.project.TrailblazeWorkspaceConfigResolver
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
+import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
+import xyz.block.trailblaze.llm.TrailblazeReferrer
+import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import java.io.File
 
 /**
@@ -33,12 +37,19 @@ interface AndroidNetworkCaptureActivator {
    * `com.example.app`, … — and which one is installed varies by lane). An activator that
    * validates the capture peer's identity must accept any of them.
    *
-   * An empty list means the caller could not resolve a target, NOT "skip validation". An
-   * activator that validates identity must refuse to start rather than attach to an unverified
-   * peer — attaching would capture another instrumented app's traffic and report it as this
-   * session's. Because callers log arming failures instead of propagating them (above), that
-   * refusal surfaces when the session is torn down, not here. An activator that does not check
-   * peer identity at all (e.g. a proxy) can ignore the list.
+   * `null` means the session has NO target (none set, or the neutral `default` target, which names
+   * no app): there is no app under test, so there is nothing to verify a peer against. An activator
+   * that validates identity must not attach, and must not report this as a failure either — the
+   * session did not ask for an app's traffic. Callers build this value with
+   * [androidCaptureTargetAppIds].
+   *
+   * An empty list means the session NAMED a target the caller could not resolve, NOT "skip
+   * validation". An activator that validates identity must refuse to start rather than attach to an
+   * unverified peer — attaching would capture another instrumented app's traffic and report it as
+   * this session's. Because callers log arming failures instead of propagating them (above), that
+   * refusal surfaces when the session is torn down, not here.
+   *
+   * An activator that does not check peer identity at all (e.g. a proxy) can ignore the value.
    *
    * [deviceLabel] is the name a multi-device session's configuration declares for this device
    * (`seller`, `buyer`, …) and is what makes a session's captured artifacts attributable to the
@@ -48,13 +59,20 @@ interface AndroidNetworkCaptureActivator {
    * two displays there is no "the" network stream, and an unsuffixed file would silently mean
    * "whichever display happened to arm first", which is precisely the unattributed evidence a
    * label exists to remove.
+   *
+   * [requireTraffic] is false for an interactive session, which may legitimately never exercise
+   * the app its target names. An activator that fails a session for capturing nothing must not do
+   * so when it is false; it should still record the empty capture. True (a run) keeps whatever
+   * rule the activator has: it does not oblige one that has no empty-capture check to add one. It
+   * never relaxes the identity check above.
    */
   fun start(
     sessionId: String,
     sessionDir: File,
     deviceId: TrailblazeDeviceId,
-    targetAppIds: List<String>,
+    targetAppIds: List<String>?,
     deviceLabel: String? = null,
+    requireTraffic: Boolean = true,
   )
 
   /**
@@ -92,4 +110,45 @@ interface AndroidNetworkCaptureActivator {
 object AndroidNetworkCaptureRegistry {
   @Volatile
   var activator: AndroidNetworkCaptureActivator? = null
+}
+
+/**
+ * The `requireTraffic` to pass [AndroidNetworkCaptureActivator.start] for work from [referrer].
+ * MCP work is interactive, in a session whose target is often only the workspace default, which
+ * the session may never open. Anything else is a run, where an empty capture is missing evidence.
+ *
+ * One rule for every MCP path — its on-device tools and the work it routes through `runYaml` share
+ * one session, and a strict start from either would bring back the failure the other avoids.
+ */
+internal fun androidCaptureRequiresTraffic(referrer: TrailblazeReferrer): Boolean =
+  referrer.id != TrailblazeReferrer.MCP.id
+
+/**
+ * The `targetAppIds` to pass [AndroidNetworkCaptureActivator.start] for a session whose target id
+ * is [targetId]: `null` when the session has no target, the target's app ids for [platform] when
+ * [findTarget] resolves it, and an empty list when it names a target [findTarget] does not know.
+ *
+ * The neutral default target counts as no target. It is what a session with nothing selected
+ * resolves to, and it declares no app ids, so treating it as a named target would make every
+ * targetless session report a capture failure for an app it never asked to capture. The sentinel
+ * check is [TrailblazeWorkspaceConfigResolver.authoritativeSelectedTargetId], shared with target
+ * selection so the two cannot disagree about what "no target" means.
+ *
+ * A named target that declares no app ids for [platform] also yields an empty list: the session
+ * asked for that target, so capture refuses rather than skipping, the same as an unknown id.
+ *
+ * Never collapse the result with `.orEmpty()` — that turns "no target" into "refuse", which is the
+ * failure this distinction exists to prevent.
+ */
+internal fun androidCaptureTargetAppIds(
+  targetId: String?,
+  platform: TrailblazeDevicePlatform,
+  findTarget: (String) -> TrailblazeHostAppTarget?,
+): List<String>? {
+  val namedTargetId =
+    TrailblazeWorkspaceConfigResolver.authoritativeSelectedTargetId(
+      selectedTargetAppId = targetId,
+      neutralDefaultId = TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget.id,
+    ) ?: return null
+  return findTarget(namedTargetId)?.getPossibleAppIdsForPlatform(platform).orEmpty()
 }

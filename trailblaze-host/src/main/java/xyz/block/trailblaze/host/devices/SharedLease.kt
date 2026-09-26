@@ -3,9 +3,9 @@ package xyz.block.trailblaze.host.devices
 /**
  * A resource several owners hold at once, closed when the last of them lets go.
  *
- * Written for the one iOS driver [HostIosDriverFactory] caches: an agent session driving a device
- * through the MCP bridge and a Trail Runner viewer streaming its screen are handed the same driver
- * whenever their target wrappers agree, and each tears down on its own schedule. Handing every
+ * Written for the iOS driver [HostIosDriverFactory] caches per device: an agent session driving a
+ * device through the MCP bridge and a Trail Runner viewer streaming its screen are handed the same
+ * driver whenever their target wrappers agree, and each tears down on its own schedule. Handing every
  * owner the right to close it meant whichever finished first left the other holding a dead
  * connection.
  *

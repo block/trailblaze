@@ -40,6 +40,15 @@ data class CaptureArtifact(
   val type: CaptureType,
   val startTimestampMs: Long,
   val endTimestampMs: Long? = null,
+  /**
+   * The configuration name of the device this was captured on (`seller`, `buyer`, …) in a session
+   * that bound several devices. Null in a single-device session, where there is nothing to tell
+   * apart. Stamped by the session's capture coordinator, which is the one party that knows the
+   * roster; a recorder only knows the device it was pointed at.
+   */
+  val deviceName: String? = null,
+  /** The device this was captured on (`emulator-5554`, a simulator UDID), when the stamping party knows it. */
+  val deviceId: String? = null,
 )
 
 enum class CaptureType {

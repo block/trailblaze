@@ -23,8 +23,11 @@ import xyz.block.trailblaze.host.devices.DeviceLocaleConfigurator
 import xyz.block.trailblaze.host.dexopt.SessionAppCompileEnsurer
 import xyz.block.trailblaze.host.turbo.SessionTurboAttacher
 import xyz.block.trailblaze.host.networkcapture.AndroidNetworkCaptureRegistry
+import xyz.block.trailblaze.host.capture.SessionCaptureCoordinator
 import xyz.block.trailblaze.host.capture.finalizeHostSessionResources
 import xyz.block.trailblaze.host.networkcapture.CompositeAndroidNetworkCaptureActivator
+import xyz.block.trailblaze.host.networkcapture.androidCaptureRequiresTraffic
+import xyz.block.trailblaze.host.networkcapture.androidCaptureTargetAppIds
 import xyz.block.trailblaze.host.ios.MobileDeviceUtils
 import xyz.block.trailblaze.http.DynamicLlmClient
 import xyz.block.trailblaze.llm.RunYamlRequest
@@ -225,6 +228,27 @@ class DesktopYamlRunner(
       sessionUnresolvedTarget: String?,
       deviceHasOwnTarget: Boolean,
     ): String? = sessionUnresolvedTarget.takeUnless { deviceHasOwnTarget }
+
+    /**
+     * Network capture's `targetAppIds` for one device of a run: null for a device with no target,
+     * so identity-checking capture skips it rather than failing the session.
+     *
+     * A declared target that did not resolve stays a NAMED target (an empty list, which capture
+     * refuses), even though [targetTestApp] is then the workspace fallback. Taking the fallback's
+     * ids would verify capture against an app the trail did not name; and when the fallback is the
+     * neutral default it would read as no target at all, silently skipping a capture the trail
+     * asked for.
+     */
+    internal fun deviceCaptureTargetAppIds(
+      targetTestApp: TrailblazeHostAppTarget?,
+      unresolvedDeclaredTarget: String?,
+      platform: TrailblazeDevicePlatform,
+    ): List<String>? =
+      androidCaptureTargetAppIds(
+        targetId = unresolvedDeclaredTarget?.takeIf { it.isNotBlank() } ?: targetTestApp?.id,
+        platform = platform,
+        findTarget = { id -> targetTestApp?.takeIf { it.id.equals(id, ignoreCase = true) } },
+      )
 
     /**
      * Log-scanning variant: true when the session's terminal status matches (above), OR any
@@ -437,6 +461,10 @@ class DesktopYamlRunner(
       trailblazeDeviceManager.createNewCoroutineScopeForDevice(trailblazeDeviceId)
     }
 
+    // Registered before launching, not once the coroutine gets going: a caller that resolved this
+    // run's session has already handed it over, and until the run is registered a cast member
+    // forcing a new session would take the device off that session and stop its capture.
+    val runInFlight = trailblazeDeviceManager.beginRun(trailblazeDeviceId)
     coroutineScope.launch {
       Console.log("🚀 COROUTINE STARTED for device: ${trailblazeDeviceId.instanceId}")
       
@@ -695,7 +723,6 @@ class DesktopYamlRunner(
         saveLog = trailblazeDeviceManager.logsRepo::saveLogToDisk,
       )
 
-      val runInFlight = trailblazeDeviceManager.beginRun(trailblazeDeviceId)
       // Once per run: the Android paths release from `captureSessionStarted`, and the host-driver
       // paths that never fire it (Playwright, Compose, Revyl) release once their session id is known.
       val replacedSessionReleased = java.util.concurrent.atomic.AtomicBoolean(false)
@@ -765,11 +792,29 @@ class DesktopYamlRunner(
               // result the coordinator was about to decline.
               appId = if (captureOptionsForRun.hasAnyCaptureEnabled) appIdForCapture else null,
             )
+            // Every display a multi-device configuration bound gets its own recording, so a step
+            // that ran on a companion is shown on that companion's screen rather than on the
+            // start device sitting still. Whole roster, start device included: the coordinator
+            // names the recording it already runs from the entry that matches its device and
+            // records the rest. Empty for a single-device run.
+            if (captureDeviceBindings.isNotEmpty()) {
+              trailblazeDeviceManager.sessionCaptureCoordinator.bindDevices(
+                sessionId = sid,
+                devices = captureDeviceBindings.map { binding ->
+                  SessionCaptureCoordinator.BoundDevice(
+                    name = binding.name,
+                    deviceId = binding.deviceId,
+                    appId = binding.targetAppIds.firstOrNull(),
+                  )
+                },
+              )
+            }
             maybeStartAndroidNetworkCapture(
               runYamlRequest = runYamlRequest,
               deviceId = trailblazeDeviceId,
               sessionIdOverride = sid,
-              targetAppIds = appIdsForCapture,
+              targetTestApp = targetTestApp,
+              unresolvedDeclaredTarget = desktopAppRunYamlParams.unresolvedDeclaredTarget,
               onProgressMessage = prefixedProgressMessage,
               deviceBindings = captureDeviceBindings,
             )
@@ -1145,7 +1190,6 @@ class DesktopYamlRunner(
           }
         }
       } finally {
-        trailblazeDeviceManager.endRun(runInFlight)
         // Always stop capture and save artifacts — even on cancel/error, the video
         // recorded up to this point is valuable for debugging.
         // Clear the thread interrupt flag so capture stop methods (which use
@@ -1221,6 +1265,9 @@ class DesktopYamlRunner(
               )
           }
         }
+        // After this run's own capture stop: ending the device's last run releases the sessions a
+        // new session replaced while this one ran, which may include this run's own.
+        trailblazeDeviceManager.endRun(runInFlight)
         Console.log("🏁 COROUTINE FINISHED (finally block) for device: ${trailblazeDeviceId.instanceId}")
         val fatalFailure = processFatalFailure
         if (fatalFailure == null) {
@@ -1238,6 +1285,9 @@ class DesktopYamlRunner(
           throw CancellationException("Test cancelled for device ${trailblazeDeviceId.instanceId}")
         }
       }
+    }.invokeOnCompletion {
+      // A coroutine cancelled before it started, or a `finally` that threw before its end, never ends the run.
+      trailblazeDeviceManager.endRun(runInFlight)
     }
   }
 
@@ -1626,6 +1676,7 @@ class DesktopYamlRunner(
             CaptureDeviceBinding(
               name = session.startDeviceName,
               deviceId = connectedTrailblazeDevice.trailblazeDeviceId,
+              target = session.startDeviceTarget ?: targetTestApp,
               targetAppIds = (session.startDeviceTarget ?: targetTestApp)
                 ?.getPossibleAppIdsForPlatform(
                   connectedTrailblazeDevice.trailblazeDeviceId.trailblazeDevicePlatform,
@@ -1640,6 +1691,7 @@ class DesktopYamlRunner(
                 deviceId = companion.trailblazeDeviceId,
                 // This device's OWN target: capture verifies the app identity of the client that
                 // dials in, so the launch device's app ids would make it reject the right client.
+                target = companion.targetTestApp ?: targetTestApp,
                 targetAppIds = (companion.targetTestApp ?: targetTestApp)
                   ?.getPossibleAppIdsForPlatform(
                     companion.trailblazeDeviceId.trailblazeDevicePlatform,
@@ -1935,7 +1987,8 @@ class DesktopYamlRunner(
     runYamlRequest: RunYamlRequest,
     deviceId: TrailblazeDeviceId,
     sessionIdOverride: SessionId,
-    targetAppIds: List<String>,
+    targetTestApp: TrailblazeHostAppTarget?,
+    unresolvedDeclaredTarget: String?,
     onProgressMessage: (String) -> Unit,
     deviceBindings: List<CaptureDeviceBinding> = emptyList(),
   ): String? {
@@ -1944,6 +1997,7 @@ class DesktopYamlRunner(
         runYamlRequest = runYamlRequest,
         sessionIdOverride = sessionIdOverride,
         deviceBindings = deviceBindings,
+        unresolvedDeclaredTarget = unresolvedDeclaredTarget,
         onProgressMessage = onProgressMessage,
       )
     }
@@ -1966,7 +2020,12 @@ class DesktopYamlRunner(
           sessionId = sessionIdOverride.value,
           sessionDir = sessionDir,
           deviceId = deviceId,
-          targetAppIds = targetAppIds,
+          targetAppIds = deviceCaptureTargetAppIds(
+            targetTestApp = targetTestApp,
+            unresolvedDeclaredTarget = unresolvedDeclaredTarget,
+            platform = deviceId.trailblazeDevicePlatform,
+          ),
+          requireTraffic = androidCaptureRequiresTraffic(runYamlRequest.referrer),
         )
         onProgressMessage(
           "Android network capture bridge started for session ${sessionIdOverride.value}",
@@ -1995,6 +2054,7 @@ class DesktopYamlRunner(
     runYamlRequest: RunYamlRequest,
     sessionIdOverride: SessionId,
     deviceBindings: List<CaptureDeviceBinding>,
+    unresolvedDeclaredTarget: String?,
     onProgressMessage: (String) -> Unit,
   ): String? {
     val activator = AndroidNetworkCaptureRegistry.activator ?: return null
@@ -2043,8 +2103,16 @@ class DesktopYamlRunner(
           sessionId = sessionIdOverride.value,
           sessionDir = sessionDir,
           deviceId = binding.deviceId,
-          targetAppIds = binding.targetAppIds,
+          targetAppIds = deviceCaptureTargetAppIds(
+            targetTestApp = binding.target,
+            unresolvedDeclaredTarget = unresolvedTargetForDevice(
+              sessionUnresolvedTarget = unresolvedDeclaredTarget,
+              deviceHasOwnTarget = binding.hasOwnTarget,
+            ),
+            platform = binding.deviceId.trailblazeDevicePlatform,
+          ),
           deviceLabel = binding.name,
+          requireTraffic = androidCaptureRequiresTraffic(runYamlRequest.referrer),
         )
         anyStarted = true
         onProgressMessage(
@@ -2073,6 +2141,13 @@ class DesktopYamlRunner(
     val name: String,
     val deviceId: TrailblazeDeviceId,
     val targetAppIds: List<String>,
+    /**
+     * The target this device runs: its own declared one, else the session's. Network capture
+     * derives its peer-identity ids from this with [deviceCaptureTargetAppIds] rather than reading
+     * [targetAppIds], because that list cannot tell a device with no target (nothing to capture)
+     * from one whose target did not resolve (capture must refuse).
+     */
+    val target: TrailblazeHostAppTarget? = null,
     /**
      * True when the configuration DECLARED a `target:` for this device, so [targetAppIds] are its
      * own rather than the session's. Read by [unresolvedTargetForDevice]: a device with its own

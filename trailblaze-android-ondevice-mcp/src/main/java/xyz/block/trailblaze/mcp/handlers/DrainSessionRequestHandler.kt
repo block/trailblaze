@@ -31,10 +31,22 @@ import xyz.block.trailblaze.util.Console
  * `uiAutomationCleared=false` so the host can see the breakage in its logs without itself
  * failing.
  */
-class DrainSessionRequestHandler : RpcHandler<DrainSessionRequest, DrainSessionResponse> {
+class DrainSessionRequestHandler(
+  /**
+   * The driver's own teardown for a drained device — the accessibility runner releases the
+   * scripted-tool bundles it keeps alive across a session's dispatches. Failures are logged and
+   * never fail the drain.
+   */
+  private val onDrain: () -> Unit = {},
+) : RpcHandler<DrainSessionRequest, DrainSessionResponse> {
 
   override suspend fun handle(request: DrainSessionRequest): RpcResult<DrainSessionResponse> {
     Console.log("🔌 DrainSessionRequestHandler: draining (reason=${request.reason})")
+    try {
+      onDrain()
+    } catch (t: Throwable) {
+      Console.log("❌ DrainSessionRequestHandler: onDrain threw ${t::class.java.simpleName}: ${t.message}")
+    }
     val cleared = try {
       InstrumentationUtil.clearInstrumentationUiAutomationCache()
     } catch (t: Throwable) {

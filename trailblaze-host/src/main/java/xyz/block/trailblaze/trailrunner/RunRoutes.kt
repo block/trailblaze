@@ -199,6 +199,9 @@ internal suspend fun buildRunDispatchResult(deps: TrailRunnerDeps, body: RunRequ
   // The reservation this dispatch made (see releaseUnstartedRun) - tracked outside the runCatching
   // so the failure path below can hand the device back even when runYaml threw.
   var reservedSessionId: SessionId? = null
+  // Held from before the session resolves until the runner has registered the run itself, so a cast
+  // member forcing a new session meanwhile leaves this device on the session it runs in.
+  val dispatching = deviceManager.beginRun(id)
   val result = runCatching {
     val resolution = deviceManager.getOrCreateSessionResolution(
       trailblazeDeviceId = id,
@@ -208,6 +211,7 @@ internal suspend fun buildRunDispatchResult(deps: TrailRunnerDeps, body: RunRequ
       captureLogcatOverride = body.captureLogcat,
       captureIosLogsOverride = body.captureIosLogs,
       captureMemoryOverride = body.captureMemory,
+      callerRun = dispatching,
     )
     reservedSessionId = resolution.sessionId
     val sessionId = resolution.sessionId.value
@@ -277,6 +281,7 @@ internal suspend fun buildRunDispatchResult(deps: TrailRunnerDeps, body: RunRequ
     Console.log("[TrailRunnerEndpoint] POST /api/run error: ${e.message}")
     RunResponse(success = false, sessionId = null, error = e.message ?: "internal error")
   }
+  deviceManager.endRun(dispatching)
   return RunDispatchResult.Ok(result)
 }
 

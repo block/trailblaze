@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.mcp
 
 import kotlinx.coroutines.CancellationException
+import xyz.block.trailblaze.host.util.BufferedImageUtils
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -26,7 +27,6 @@ import xyz.block.trailblaze.host.ios.IosDriverTrailblazeAgent
 import xyz.block.trailblaze.host.ios.IosDeviceManager
 import xyz.block.trailblaze.host.ios.MobileDeviceUtils
 import xyz.block.trailblaze.host.devices.IosNativeConnectedDevice
-import xyz.block.trailblaze.host.devices.HostIosDriverFactory
 import xyz.block.trailblaze.host.devices.MaestroConnectedDevice
 import xyz.block.trailblaze.host.devices.TrailblazeConnectedDevice
 import xyz.block.trailblaze.host.devices.TrailblazeDeviceService
@@ -78,6 +78,8 @@ import xyz.block.trailblaze.compose.driver.rpc.GetScreenStateResponse as Compose
 import xyz.block.trailblaze.devices.TrailblazeDevicePort
 import xyz.block.trailblaze.host.OnDeviceRpcClientPool
 import xyz.block.trailblaze.host.networkcapture.AndroidNetworkCaptureRegistry
+import xyz.block.trailblaze.host.networkcapture.androidCaptureRequiresTraffic
+import xyz.block.trailblaze.host.networkcapture.androidCaptureTargetAppIds
 import xyz.block.trailblaze.host.networkcapture.CompositeAndroidNetworkCaptureActivator
 import xyz.block.trailblaze.host.recording.DeviceConnectionService
 import xyz.block.trailblaze.host.rules.BasePlaywrightNativeTest
@@ -308,6 +310,9 @@ class TrailblazeMcpBridgeImpl(
    */
   private val onDeviceRunnerProcessIds = ConcurrentHashMap<String, String>()
 
+  /** Runners found dead under a ready agent, reported until the agent is ready again. */
+  private val stoppedOnDeviceRunners = StoppedOnDeviceRunners()
+
   /**
    * Tracks devices whose driver creation failed. Keyed by device instanceId,
    * value is the error message. Cleared when a new connection attempt starts.
@@ -509,6 +514,7 @@ class TrailblazeMcpBridgeImpl(
         // Clear on-device agent ready flag
         Console.log("[MCP Bridge] Clearing on-device agent ready flag for $key (switching to $configuredDriverType)")
         onDeviceAgentReady.remove(key)
+        stoppedOnDeviceRunners.clear(key)
         // The pooled RPC client pinned its wire transport from the driver it was created for, so
         // a client cached under the previous driver would keep talking protobuf to (or JSON to)
         // the wrong one. Evicting reconstructs it against $configuredDriverType.
@@ -571,8 +577,11 @@ class TrailblazeMcpBridgeImpl(
           }
         }
       }
-    } else if (!needsPersistentDriver && !onDeviceAgentReady.contains(key) &&
-      trailblazeDeviceId.trailblazeDevicePlatform == TrailblazeDevicePlatform.ANDROID) {
+    } else if (!needsPersistentDriver &&
+      trailblazeDeviceId.trailblazeDevicePlatform == TrailblazeDevicePlatform.ANDROID &&
+      // A ready flag can outlive its runner; trusting it here would make this connect a no-op.
+      (forgetOnDeviceRunnerIfGone(trailblazeDeviceId) != null || !onDeviceAgentReady.contains(key))
+    ) {
       // On-device driver (ACCESSIBILITY, INSTRUMENTATION) — ensure the on-device agent is running.
       // This installs the test APK, starts instrumentation, and enables the accessibility service.
       // Analogous to creating a persistent Maestro driver for HOST mode above.
@@ -639,6 +648,38 @@ class TrailblazeMcpBridgeImpl(
   }
 
   companion object {
+    /**
+     * [deviceId]'s driver from the [remembered] scan, running a fresh [scan] when that one didn't
+     * see the device under its configured driver — a scan where that driver's discovery failed
+     * still lists the device under the others, and answering from it would pick one of those.
+     * The [configuredDriverType] is read on every call, so a changed driver setting still takes
+     * effect on the next one.
+     */
+    internal suspend fun rememberedDriverType(
+      deviceId: TrailblazeDeviceId,
+      remembered: List<TrailblazeConnectedDeviceSummary>,
+      scan: suspend () -> List<TrailblazeConnectedDeviceSummary>,
+      configuredDriverType: (TrailblazeDevicePlatform) -> TrailblazeDriverType?,
+    ): TrailblazeDriverType? {
+      fun variantsIn(devices: List<TrailblazeConnectedDeviceSummary>) =
+        devices.filter { it.trailblazeDeviceId == deviceId }
+      val configured = configuredDriverType(deviceId.trailblazeDevicePlatform)
+      val variants = variantsIn(remembered)
+        .takeIf { found -> found.isNotEmpty() && (configured == null || found.any { it.trailblazeDriverType == configured }) }
+        ?: variantsIn(scan())
+      if (variants.isEmpty()) return null
+      return configuredVariant(variants, configuredDriverType).trailblazeDriverType
+    }
+
+    /** Of one device's per-driver variants, the one for its platform's configured driver. */
+    private fun configuredVariant(
+      variants: List<TrailblazeConnectedDeviceSummary>,
+      configuredDriverType: (TrailblazeDevicePlatform) -> TrailblazeDriverType?,
+    ): TrailblazeConnectedDeviceSummary {
+      val configured = configuredDriverType(variants.first().platform) ?: return variants.first()
+      return variants.find { it.trailblazeDriverType == configured } ?: variants.first()
+    }
+
     /**
      * Builds the [RunYamlRequest] a single on-device MCP tool dispatch puts on the wire.
      * Pure — no bridge instance required, so the wire contract is testable in isolation.
@@ -720,6 +761,21 @@ class TrailblazeMcpBridgeImpl(
       } else {
         runnerProcessIds.remove(key)
       }
+    }
+
+    /**
+     * The runner package of [key]'s ready agent when its process has exited, or null when there is
+     * no ready agent with a recorded runner (so [isRunning] is not consulted) or the runner is alive.
+     */
+    internal fun deadRunnerUnderReadyAgent(
+      key: String,
+      readyAgents: Set<String>,
+      runnerProcessIds: Map<String, String>,
+      isRunning: (String) -> Boolean,
+    ): String? {
+      if (key !in readyAgents) return null
+      val runnerAppId = runnerProcessIds[key] ?: return null
+      return runnerAppId.takeUnless(isRunning)
     }
 
     /**
@@ -1158,12 +1214,12 @@ class TrailblazeMcpBridgeImpl(
           refusal.explain(trailblazeDeviceId, binding, action = "driving"),
         )
       }
-      // Claimed BEFORE the connect, not after it. `HostIosDriverFactory.createIOS` is
-      // `@Synchronized`, so a viewer connect that has already passed its own refusal check queues on
-      // that monitor for however long this build takes - tens of seconds for a fresh XCUITest driver
-      // - and then closes and rebuilds the driver this call just made, without ever rechecking. A
-      // claim published after the connect leaves that whole build unprotected; reserving first cuts
-      // the window back to the gap between the two checks.
+      // Claimed BEFORE the connect, not after it. `HostIosDriverFactory.createIOS` serializes
+      // connects to one device, so a viewer connect that has already passed its own refusal check
+      // queues on that device's lock for however long this build takes - tens of seconds for a
+      // fresh XCUITest driver - and then closes and rebuilds the driver this call just made, without
+      // ever rechecking. A claim published after the connect leaves that whole build unprotected;
+      // reserving first cuts the window back to the gap between the two checks.
       //
       // Claimed rather than attached: this driver is driven straight from `persistentDevices` with
       // no mutex, so publishing a `MaestroDeviceScreenStream` over it would put a frame loop in a
@@ -1414,12 +1470,14 @@ class TrailblazeMcpBridgeImpl(
 
         recordRunnerProcessForReadyAgent(onDeviceRunnerProcessIds, key, target)
         onDeviceAgentReady.add(key)
+        stoppedOnDeviceRunners.clear(key)
         if (recoverFromPriorWedge) {
           onDeviceRunnerRecovery.markRecovered(trailblazeDeviceId)
         }
         Console.log("[MCP Bridge] On-device agent ready for $key")
       } catch (e: Exception) {
         Console.log("[MCP Bridge] On-device agent setup failed for $key: ${e.message}")
+        stoppedOnDeviceRunners.relaunchFailed(key, e.message ?: e::class.java.simpleName)
       } finally {
         latch.countDown()
         driverCreationLatches.remove(key)
@@ -1444,18 +1502,35 @@ class TrailblazeMcpBridgeImpl(
    * runner that no longer exists. The pooled RPC client is evicted with it: its socket points at
    * the dead process.
    */
-  private fun markOnDeviceRunnerStopped(deviceId: TrailblazeDeviceId) {
+  private fun markOnDeviceRunnerStopped(deviceId: TrailblazeDeviceId, runnerAppId: String) {
     val key = deviceId.instanceId
     onDeviceAgentReady.remove(key)
     onDeviceRunnerProcessIds.remove(key)
+    stoppedOnDeviceRunners.markStopped(key, runnerAppId)
     cachedScreenStates.remove(key)
     onDeviceRpcClients.evict(deviceId)
+  }
+
+  /**
+   * Forgets a ready on-device agent whose runner process has exited, returning the runner package,
+   * or null when there is no ready agent to vouch for or its runner is still alive. One `pidof`
+   * round-trip, and only when there is a ready self-instrumenting runner to check.
+   */
+  private fun forgetOnDeviceRunnerIfGone(deviceId: TrailblazeDeviceId): String? {
+    val key = deviceId.instanceId
+    val runnerAppId = deadRunnerUnderReadyAgent(key, onDeviceAgentReady, onDeviceRunnerProcessIds) {
+      AndroidHostAdbUtils.isAppRunning(deviceId, it)
+    } ?: return null
+    Console.log("[MCP Bridge] On-device runner $runnerAppId is gone on $key; the next connect relaunches it")
+    markOnDeviceRunnerStopped(deviceId, runnerAppId)
+    return runnerAppId
   }
 
   override fun releasePersistentDeviceConnection(deviceId: TrailblazeDeviceId) {
     cachedScreenStates.remove(deviceId.instanceId)
     onDeviceAgentReady.remove(deviceId.instanceId)
     onDeviceRunnerProcessIds.remove(deviceId.instanceId)
+    stoppedOnDeviceRunners.clear(deviceId.instanceId)
     driverCreationFailures.remove(deviceId.instanceId)
     // Per-session target overrides clean up on session end / cancel via
     // TrailblazeDeviceManager, so no extra cleanup needed here.
@@ -1482,24 +1557,32 @@ class TrailblazeMcpBridgeImpl(
   ): String {
     val deviceId = assertDeviceIsSelected()
 
-    val sessionResolution = trailblazeDeviceManager.getOrCreateSessionResolution(
-      trailblazeDeviceId = deviceId,
-      forceNewSession = startNewSession,
-      sessionIdPrefix = "yaml"
-    )
-
-    trailblazeDeviceManager.runYaml(
-      yamlToRun = yaml,
-      trailblazeDeviceId = deviceId,
-      forceStopTargetApp = false,
-      sendSessionStartLog = sessionResolution.isNewSession,
-      sendSessionEndLog = false,
-      existingSessionId = sessionResolution.sessionId,
-      referrer = TrailblazeReferrer.MCP,
-      agentImplementation = agentImplementation,
-      traceId = traceId,
-      onComplete = onComplete,
-    )
+    // Held from before the session resolves until the runner has registered the run itself, so a
+    // cast member forcing a new session meanwhile leaves this device on the session it runs in.
+    val dispatching = trailblazeDeviceManager.beginRun(deviceId)
+    val sessionResolution = try {
+      trailblazeDeviceManager.getOrCreateSessionResolution(
+        trailblazeDeviceId = deviceId,
+        forceNewSession = startNewSession,
+        sessionIdPrefix = "yaml",
+        callerRun = dispatching,
+      ).also { resolution ->
+        trailblazeDeviceManager.runYaml(
+          yamlToRun = yaml,
+          trailblazeDeviceId = deviceId,
+          forceStopTargetApp = false,
+          sendSessionStartLog = resolution.isNewSession,
+          sendSessionEndLog = false,
+          existingSessionId = resolution.sessionId,
+          referrer = TrailblazeReferrer.MCP,
+          agentImplementation = agentImplementation,
+          traceId = traceId,
+          onComplete = onComplete,
+        )
+      }
+    } finally {
+      trailblazeDeviceManager.endRun(dispatching)
+    }
 
     // Return the session ID used for this run so callers can monitor progress
     return sessionResolution.sessionId.value
@@ -1666,18 +1749,14 @@ class TrailblazeMcpBridgeImpl(
     // outlive a disconnected emulator, so they are not sufficient as a liveness signal.
     if (id.trailblazeDevicePlatform == TrailblazeDevicePlatform.ANDROID) {
       androidDisconnectStatus(id, AndroidHostAdbUtils.listConnectedAdbDevices())?.let { return it }
-      // The serial is attached, but the agent process the ready flag stands for may be gone. One
-      // `pidof` round-trip settles it; without it a dead runner reads as "ready", every screen
-      // read fails, and the tools fall back to the generic "No device connected" text while the
-      // stale flag keeps the next connect from ever relaunching the runner. Only populated for a
-      // self-instrumenting runner — see [onDeviceRunnerProcessIds].
-      val runnerAppId = onDeviceRunnerProcessIds[key]
-      if (runnerAppId != null && onDeviceAgentReady.contains(key) &&
-        !AndroidHostAdbUtils.isAppRunning(id, runnerAppId)
-      ) {
-        Console.log("[MCP Bridge] On-device runner $runnerAppId is gone on $key; the next connect relaunches it")
-        markOnDeviceRunnerStopped(id)
-        return onDeviceRunnerStoppedStatus(id, runnerAppId)
+      // The serial is attached, but the agent process the ready flag stands for may be gone.
+      // Without this a dead runner reads as "ready", every screen read fails, and the tools fall
+      // back to the generic "No device connected" text. Reported until the runner is back, so the
+      // CLI's reuse probe keeps sending it down the reconnect path.
+      forgetOnDeviceRunnerIfGone(id)
+      // While a relaunch is running, the in-progress status below is the accurate one.
+      if (!driverCreationLatches.containsKey(key)) {
+        stoppedOnDeviceRunners.status(id)?.let { return it }
       }
     }
 
@@ -1831,17 +1910,21 @@ class TrailblazeMcpBridgeImpl(
     val allDevices = trailblazeDeviceManager.loadDevicesSuspend(applyDriverFilter = false)
     return allDevices
       .groupBy { it.instanceId to it.platform }
-      .map { (_, variants) ->
-        val platform = variants.first().platform
-        val configuredType = getConfiguredDriverType(platform)
-        if (configuredType != null) {
-          variants.find { it.trailblazeDriverType == configuredType } ?: variants.first()
-        } else {
-          variants.first()
-        }
-      }
+      .map { (_, variants) -> configuredVariant(variants, ::getConfiguredDriverType) }
       .toSet()
   }
+
+  /**
+   * Answered from the last device scan when it saw the device, so a tool call on a bound device
+   * doesn't rescan every attached device to learn a driver it already knows.
+   */
+  override suspend fun getDeviceDriverType(trailblazeDeviceId: TrailblazeDeviceId): TrailblazeDriverType? =
+    rememberedDriverType(
+      trailblazeDeviceId,
+      remembered = trailblazeDeviceManager.lastScannedDevices(),
+      scan = { trailblazeDeviceManager.loadDevicesSuspend(applyDriverFilter = false) },
+      configuredDriverType = ::getConfiguredDriverType,
+    )
 
   override suspend fun getInstalledAppIds(): Set<String> {
     val trailblazeDeviceId = assertDeviceIsSelected()
@@ -1890,7 +1973,23 @@ class TrailblazeMcpBridgeImpl(
     traceId: TraceId?,
   ): TrailblazeToolResult {
     val trailblazeDeviceId = assertDeviceIsSelected()
+    // Registered as a run for the length of the call: most routes below act on the device without
+    // going through the runner, and a cast member forcing a new session meanwhile must not take
+    // this device off the session the call is logging into (see TrailblazeDeviceManager.beginRun).
+    val call = trailblazeDeviceManager.beginRun(trailblazeDeviceId)
+    return try {
+      executeTrailblazeToolOnDevice(tool, trailblazeDeviceId, blocking, traceId)
+    } finally {
+      trailblazeDeviceManager.endRun(call)
+    }
+  }
 
+  private suspend fun executeTrailblazeToolOnDevice(
+    tool: TrailblazeTool,
+    trailblazeDeviceId: TrailblazeDeviceId,
+    blocking: Boolean,
+    traceId: TraceId?,
+  ): TrailblazeToolResult {
     // Host-only `DelegatingTrailblazeTool` (e.g. `YamlDefinedTrailblazeTool` — the
     // composed-tools-mode YAML body) with per-instance `requires_host = true` MUST expand
     // host-side before any per-child dispatch. The default RPC path below ships the whole
@@ -2227,6 +2326,7 @@ class TrailblazeMcpBridgeImpl(
           RpcScreenStateAdapter.from(
             response
               ?: error("Failed to capture screen state from ${deviceId.instanceId} over the on-device RPC"),
+            BufferedImageUtils::encodeLikeCaptures,
           )
         }
       }
@@ -2547,13 +2647,14 @@ class TrailblazeMcpBridgeImpl(
       val resolvedTargetAppId = getSessionTargetAppIdForDevice(trailblazeDeviceId)
       // The value above is a TARGET id (e.g. "square"), not an application id — the capture
       // activator validates its peer against APPLICATION ids, so resolve the target's full
-      // platform app-id list for it. An unknown target yields an empty list, which an
-      // identity-validating activator refuses to start on rather than attaching to an
-      // unverified peer; see the contract on AndroidNetworkCaptureActivator.start.
-      val captureTargetAppIds = resolvedTargetAppId
-        ?.let { trailblazeDeviceManager.availableAppTargets.findById(it) }
-        ?.getPossibleAppIdsForPlatform(trailblazeDeviceId.trailblazeDevicePlatform)
-        .orEmpty()
+      // platform app-id list for it. No target yields null (nothing to capture); an unknown
+      // target yields an empty list, which an identity-validating activator refuses to start on
+      // rather than attaching to an unverified peer; see AndroidNetworkCaptureActivator.start.
+      val captureTargetAppIds = androidCaptureTargetAppIds(
+        targetId = resolvedTargetAppId,
+        platform = trailblazeDeviceId.trailblazeDevicePlatform,
+        findTarget = trailblazeDeviceManager.availableAppTargets::findById,
+      )
       // TRAILBLAZE_ANDROID_PROXY_CAPTURE and the activator's own per-session opt-in are
       // self-contained — each enables Android capture on its own, without also needing the
       // daemon's captureNetworkTraffic toggle. See the twin gate in
@@ -2578,6 +2679,7 @@ class TrailblazeMcpBridgeImpl(
               sessionDir = resolvedLogsRepoForAndroid.getSessionDir(sessionResolution.sessionId),
               deviceId = trailblazeDeviceId,
               targetAppIds = captureTargetAppIds,
+              requireTraffic = androidCaptureRequiresTraffic(TrailblazeReferrer.MCP),
             )
           }
             .onFailure {
@@ -2867,13 +2969,12 @@ class TrailblazeMcpBridgeImpl(
     if (previousTarget?.id != appTargetId) {
       val iosDriverChanged = previousTarget?.hasCustomIosDriver == true || matchingTarget.hasCustomIosDriver
       if (iosDriverChanged) {
-        // Always clear the HostIosDriverFactory singleton cache when iOS drivers change,
-        // regardless of current device selection. A stale cached driver could be reused
-        // later if an iOS device is selected after the app target switch.
-        HostIosDriverFactory.clearCachedDriver()
-
         val deviceId = getEffectiveDeviceId()
         if (deviceId != null && deviceId.trailblazeDevicePlatform == TrailblazeDevicePlatform.IOS) {
+          // Releasing makes the next connect go through createIOS, which replaces a cached driver
+          // whose wrapper no longer matches. Only the selected device is released: another
+          // simulator's entry in persistentDevices is reused without calling createIOS, so it keeps
+          // its old wrapper after this daemon-wide target switch.
           Console.log("[MCP Bridge] App target changed from ${previousTarget?.id} to $appTargetId (custom iOS driver involved) — releasing iOS persistent device for ${deviceId.instanceId}")
           releasePersistentDeviceConnection(deviceId)
         }
@@ -2957,6 +3058,9 @@ class TrailblazeMcpBridgeImpl(
 
   override fun getTargetForSession(sessionId: SessionId): String? =
     trailblazeDeviceManager.getTargetForSession(sessionId)
+
+  override fun setBoundDeviceRoster(rosterId: String, members: List<BoundDeviceRosterMember>): SessionId? =
+    trailblazeDeviceManager.setDeviceRoster(rosterId, members)
 
   /**
    * Resolver used by tool dispatch paths and per-device tool-availability

@@ -281,7 +281,8 @@ class SessionToolSetTest {
       )
     val json = Json.parseToJsonElement(result).jsonObject
 
-    assertContains(json["message"]!!.jsonPrimitive.content, "save failed")
+    // The reason, not just the verdict: without it the caller can't tell what to fix.
+    assertContains(json["message"]!!.jsonPrimitive.content, "Trail save failed: No steps recorded yet.")
   }
 
   @Test
@@ -346,78 +347,10 @@ class SessionToolSetTest {
     try {
       val logsRepo = LogsRepo(logsDir = logsDir, watchFileSystem = false)
 
-      // Persist a SessionStarted log for an iOS session. This is the source of
-      // truth `saveFromLogs` should consult — not the live sessionContext.
+      // Persist a SessionStarted log for an iOS session (the source of truth `saveFromLogs` should
+      // consult — not the live sessionContext) and one recorded step.
       val iosSessionId = SessionId("2026_05_31_21_22_12_yaml_ios")
-      val iosDeviceInfo = TrailblazeDeviceInfo(
-        trailblazeDeviceId = TrailblazeDeviceId(
-          instanceId = "E5BDD6FB-1C7C-46B7-A479-E8A772C3922D",
-          trailblazeDevicePlatform = TrailblazeDevicePlatform.IOS,
-        ),
-        trailblazeDriverType = TrailblazeDriverType.IOS_HOST,
-        widthPixels = 1170,
-        heightPixels = 2532,
-        classifiers = emptyList(),
-      )
-      val sessionStartedLog = TrailblazeLog.TrailblazeSessionStatusChangeLog(
-        sessionStatus =
-          SessionStatus.Started(
-            trailConfig = null,
-            trailFilePath = null,
-            hasRecordedSteps = false,
-            testMethodName = "Pause the splash video",
-            testClassName = "MCP",
-            trailblazeDeviceInfo = iosDeviceInfo,
-            trailblazeDeviceId = iosDeviceInfo.trailblazeDeviceId,
-            rawYaml = null,
-          ),
-        session = iosSessionId,
-        timestamp = Clock.System.now(),
-      )
-      logsRepo.saveLogToDisk(sessionStartedLog)
-
-      // Need at least one recordable step in the session log for
-      // `saveFromLogs` to clear its "no recordable steps" guard: an ObjectiveStart /
-      // ObjectiveComplete pair around one recordable tool, which becomes the step's recording.
-      val pauseStep = xyz.block.trailblaze.yaml.DirectionStep(step = "Tap the pause button")
-      logsRepo.saveLogToDisk(
-        TrailblazeLog.ObjectiveStartLog(
-          promptStep = pauseStep,
-          session = iosSessionId,
-          timestamp = Clock.System.now(),
-        ),
-      )
-      logsRepo.saveLogToDisk(
-        TrailblazeLog.TrailblazeToolLog(
-          trailblazeTool = TapOnPointTrailblazeTool(x = 10, y = 20).toLogPayload(),
-          toolName = "tapOnPoint",
-          successful = true,
-          traceId = null,
-          durationMs = 1L,
-          session = iosSessionId,
-          timestamp = Clock.System.now(),
-          isRecordable = true,
-        ),
-      )
-      logsRepo.saveLogToDisk(
-        TrailblazeLog.ObjectiveCompleteLog(
-          promptStep = pauseStep,
-          objectiveResult =
-            xyz.block.trailblaze.agent.model.AgentTaskStatus.Success.ObjectiveComplete(
-              llmExplanation = "Tapped pause",
-              statusData =
-                xyz.block.trailblaze.agent.model.AgentTaskStatusData(
-                  taskId = xyz.block.trailblaze.logs.model.TaskId.generate(),
-                  prompt = pauseStep.prompt,
-                  callCount = 1,
-                  taskStartTime = Clock.System.now(),
-                  totalDurationMs = 50,
-                ),
-            ),
-          session = iosSessionId,
-          timestamp = Clock.System.now(),
-        ),
-      )
+      seedIosSessionWithOneStep(logsRepo, iosSessionId)
 
       // Live context points at an ANDROID device — this is the "last-touched
       // device" state that the buggy code path keyed off. The mock bridge
@@ -469,6 +402,149 @@ class SessionToolSetTest {
       logsDir.deleteRecursively()
       trailsDir.deleteRecursively()
     }
+  }
+
+  @Test
+  fun `session STOP with save says where the trail was written`() = runTest {
+    val logsDir = java.nio.file.Files.createTempDirectory("session-stop-save-logs-").toFile()
+    val trailsRoot = java.nio.file.Files.createTempDirectory("session-stop-save-trails-").toFile()
+    try {
+      val logsRepo = LogsRepo(logsDir = logsDir, watchFileSystem = false)
+      val iosSessionId = SessionId("2026_09_24_22_00_00_stop_save_ios")
+      seedIosSessionWithOneStep(logsRepo, iosSessionId)
+      val toolSet = SessionToolSet(
+        sessionContext = createSessionContext(),
+        mcpBridge = SessionTestBridge(activeSessionId = iosSessionId),
+        logsRepo = logsRepo,
+        sessionIdProvider = { iosSessionId },
+        // A trails directory spelled with `.` (the default is `./trails`) must still print clean.
+        trailsDirectory = "${trailsRoot.absolutePath}/./trails",
+      )
+
+      val result = toolSet.session(
+        action = SessionToolSet.SessionAction.STOP,
+        save = true,
+        title = "iOS pause test",
+      )
+      val message = Json.parseToJsonElement(result).jsonObject["message"]!!.jsonPrimitive.content
+
+      val savedPath = Regex("Trail saved: (\\S+)").find(message)?.groupValues?.get(1)
+      assertNotNull(savedPath, "the stop message must name the saved trail file, got: $message")
+      assertTrue(File(savedPath).isFile, "the named file must be the trail on disk: $savedPath")
+      assertEquals(
+        File(trailsRoot, "trails/ios-pause-test").absolutePath,
+        File(savedPath).parent,
+        "the path must be normalized, with no `/./`",
+      )
+    } finally {
+      logsDir.deleteRecursively()
+      trailsRoot.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun `session RECORDING for a session with no device classifiers keys it on the platform like SAVE`() = runTest {
+    val logsDir = java.nio.file.Files.createTempDirectory("session-recording-logs-").toFile()
+    try {
+      val logsRepo = LogsRepo(logsDir = logsDir, watchFileSystem = false)
+      val iosSessionId = SessionId("2026_09_24_22_00_00_recording_ios")
+      seedIosSessionWithOneStep(logsRepo, iosSessionId)
+      val toolSet = SessionToolSet(
+        sessionContext = createSessionContext(),
+        mcpBridge = SessionTestBridge(activeSessionId = null),
+        logsRepo = logsRepo,
+        sessionIdProvider = { null },
+      )
+
+      val result = toolSet.session(action = SessionToolSet.SessionAction.RECORDING, id = iosSessionId.value)
+      val json = Json.parseToJsonElement(result).jsonObject
+
+      assertNull(json["error"]?.jsonPrimitive?.content, "recording should render, got: $result")
+      val yaml = json["yaml"]!!.jsonPrimitive.content
+      assertEquals(
+        setOf("ios"),
+        createTrailblazeYaml().decodeUnifiedTrail(yaml).trail.flatMap { it.recordings.keys }.toSet(),
+        yaml,
+      )
+    } finally {
+      logsDir.deleteRecursively()
+    }
+  }
+
+  /**
+   * An iOS session whose device logged no classifiers (as the IOS_HOST driver does), with one
+   * recorded step: a `Started` log plus an objective around one recordable tool.
+   */
+  private fun seedIosSessionWithOneStep(logsRepo: LogsRepo, iosSessionId: SessionId) {
+    val iosDeviceInfo = TrailblazeDeviceInfo(
+      trailblazeDeviceId = TrailblazeDeviceId(
+        instanceId = "E5BDD6FB-1C7C-46B7-A479-E8A772C3922D",
+        trailblazeDevicePlatform = TrailblazeDevicePlatform.IOS,
+      ),
+      trailblazeDriverType = TrailblazeDriverType.IOS_HOST,
+      widthPixels = 1170,
+      heightPixels = 2532,
+      classifiers = emptyList(),
+    )
+    val sessionStartedLog = TrailblazeLog.TrailblazeSessionStatusChangeLog(
+      sessionStatus =
+        SessionStatus.Started(
+          trailConfig = null,
+          trailFilePath = null,
+          hasRecordedSteps = false,
+          testMethodName = "Pause the splash video",
+          testClassName = "MCP",
+          trailblazeDeviceInfo = iosDeviceInfo,
+          trailblazeDeviceId = iosDeviceInfo.trailblazeDeviceId,
+          rawYaml = null,
+        ),
+      session = iosSessionId,
+      timestamp = Clock.System.now(),
+    )
+    logsRepo.saveLogToDisk(sessionStartedLog)
+
+    // Need at least one recordable step in the session log for
+    // `saveFromLogs` to clear its "no recordable steps" guard: an ObjectiveStart /
+    // ObjectiveComplete pair around one recordable tool, which becomes the step's recording.
+    val pauseStep = xyz.block.trailblaze.yaml.DirectionStep(step = "Tap the pause button")
+    logsRepo.saveLogToDisk(
+      TrailblazeLog.ObjectiveStartLog(
+        promptStep = pauseStep,
+        session = iosSessionId,
+        timestamp = Clock.System.now(),
+      ),
+    )
+    logsRepo.saveLogToDisk(
+      TrailblazeLog.TrailblazeToolLog(
+        trailblazeTool = TapOnPointTrailblazeTool(x = 10, y = 20).toLogPayload(),
+        toolName = "tapOnPoint",
+        successful = true,
+        traceId = null,
+        durationMs = 1L,
+        session = iosSessionId,
+        timestamp = Clock.System.now(),
+        isRecordable = true,
+      ),
+    )
+    logsRepo.saveLogToDisk(
+      TrailblazeLog.ObjectiveCompleteLog(
+        promptStep = pauseStep,
+        objectiveResult =
+          xyz.block.trailblaze.agent.model.AgentTaskStatus.Success.ObjectiveComplete(
+            llmExplanation = "Tapped pause",
+            statusData =
+              xyz.block.trailblaze.agent.model.AgentTaskStatusData(
+                taskId = xyz.block.trailblaze.logs.model.TaskId.generate(),
+                prompt = pauseStep.prompt,
+                callCount = 1,
+                taskStartTime = Clock.System.now(),
+                totalDurationMs = 50,
+              ),
+          ),
+        session = iosSessionId,
+        timestamp = Clock.System.now(),
+      ),
+    )
   }
 
   @Test

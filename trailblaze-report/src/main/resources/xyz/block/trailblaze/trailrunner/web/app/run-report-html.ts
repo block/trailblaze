@@ -18,10 +18,10 @@ const RUN_REPORT_VIEWER_SCRIPT: string = embeddedViewerScript();
 // contract. Optional generic event streams, the authored/recorded YAML, and pre-packed hierarchies
 // (packSessionInputsHierarchies — the Share path compresses before serializing) ride alongside the
 // trace, LLM calls, and screenshots. Pure: no fetch, no DOM — usable identically in browser and bun.
-function buildRunReportHtml({ meta, trace, llmLogs, shots, events = null, attachments = null, hierarchies = null, hierarchiesGz = null, spans = null, spansGz = null, keepAttachmentObjectUrls = false }: { meta: RunMeta; trace: RawTraceRow[]; llmLogs: RawLlmRow[]; shots: Record<string, string>; events?: EventStream[] | null; attachments?: Record<string, string> | null; hierarchies?: Record<string, unknown> | null; hierarchiesGz?: string | null; spans?: TracerSpan[] | null; spansGz?: string | null; keepAttachmentObjectUrls?: boolean }): string {
+function buildRunReportHtml({ meta, trace, llmLogs, shots, events = null, attachments = null, hierarchies = null, hierarchiesGz = null, spans = null, spansGz = null, videoClip = null, videoClips = null, keepAttachmentObjectUrls = false }: { meta: RunMeta; trace: RawTraceRow[]; llmLogs: RawLlmRow[]; shots: Record<string, string>; events?: EventStream[] | null; attachments?: Record<string, string> | null; hierarchies?: Record<string, unknown> | null; hierarchiesGz?: string | null; spans?: TracerSpan[] | null; spansGz?: string | null; videoClip?: VideoClip | null; videoClips?: VideoClip[] | null; keepAttachmentObjectUrls?: boolean }): string {
   return buildMultiReportHtml({
     generatedAt: (meta || {}).generatedAt || '',
-    sessions: [{ meta, trace, llmLogs, shots, events, attachments, hierarchies, hierarchiesGz, spans, spansGz }],
+    sessions: [{ meta, trace, llmLogs, shots, events, attachments, hierarchies, hierarchiesGz, spans, spansGz, videoClip, videoClips }],
     keepAttachmentObjectUrls,
   });
 }
@@ -57,7 +57,7 @@ function buildMultiReportHtml({ generatedAt, shareUrl, allRunsUrl, sessions, sel
   // (see the parameter's note): there the minting page is still alive, the URLs resolve, and
   // stripping the clip is what costs the zip viewer its Video tab entirely.
   if (!keepAttachmentObjectUrls) {
-    list.forEach((s) => { s.videoClip = null; });
+    list.forEach((s) => { s.videoClip = null; s.videoClips = null; });
     list.forEach((s) => {
       if (!s.attachments) return;
       const kept = Object.fromEntries(Object.entries(s.attachments).filter(([, uri]) => !/^blob:/i.test(String(uri))));
@@ -72,12 +72,22 @@ function buildMultiReportHtml({ generatedAt, shareUrl, allRunsUrl, sessions, sel
   // the playback schedule reads them before anything decides to play. Only embedded bytes move: a
   // linked recording (a `--link-images` build) is a short URL, and leaving it inline is what lets
   // the export gate see that the run's frames live on a server without parsing the clip chunk.
+  //
+  // A multi-device session carries one recording per device, the start device's first: recording 0
+  // in #tb-clip-<i> as ever, recording k ≥ 1 (companion k−1) in #tb-clip-<i>-<k> — the same key the
+  // viewer's clip cache uses (see sessionClipAt), so a reader who only ever watches the seller never
+  // parses the buyer's bytes either.
   const clips: Record<string, string> = {};
+  const hoistClip = (video: VideoInfo, key: string): VideoInfo => {
+    if (!(video.clip && /^data:/i.test(video.clip.uri || ''))) return video;
+    clips[key] = video.clip.uri;
+    return { ...video, clip: { ...video.clip, uri: '' } };
+  };
   list.forEach((s, i) => {
-    if (s.video && s.video.clip && /^data:/i.test(s.video.clip.uri || '')) {
-      clips[String(i)] = s.video.clip.uri;
-      s.video = { ...s.video, clip: { ...s.video.clip, uri: '' } };
-    }
+    if (!s.video) return;
+    const primary = hoistClip(s.video, String(i));
+    const companions = (s.video.companions || []).map((c, k) => hoistClip(c, `${i}-${k + 1}`));
+    s.video = companions.length ? { ...primary, companions } : primary;
   });
   // Split the document so boot time is independent of report size. The tiny #tb-index chunk (per
   // session: meta + per-call LLM token/cost summaries + the two trace-derived counts the run list
@@ -103,8 +113,9 @@ function buildMultiReportHtml({ generatedAt, shareUrl, allRunsUrl, sessions, sel
   // (nothing is reinterpreted as markup), and every user-supplied field is still escaped at
   // render time. toInertJson keeps the `</script>`-closes-the-element escape in one place.
   const indexJson = toInertJson({ generatedAt: generatedAt || '', ...(shareUrl ? { shareUrl } : {}), ...(allRunsUrl ? { allRunsUrl } : {}), sessions: indexEntries });
-  const sessionChunks = list.map((s, i) => `<script type="application/json" id="tb-session-${i}">${toInertJson(s)}</script>`
-    + (clips[String(i)] ? `\n<script type="application/json" id="tb-clip-${i}">${toInertJson(clips[String(i)])}</script>` : '')).join('\n');
+  const clipChunks = (i: number) => Object.keys(clips).filter((key) => key === String(i) || key.indexOf(`${i}-`) === 0)
+    .map((key) => `\n<script type="application/json" id="tb-clip-${key}">${toInertJson(clips[key])}</script>`).join('');
+  const sessionChunks = list.map((s, i) => `<script type="application/json" id="tb-session-${i}">${toInertJson(s)}</script>` + clipChunks(i)).join('\n');
   // The selector engine rides LAST: it is never on the boot path (evaluated only when an inspector
   // selection commits), so on a streaming document it must not delay the session chunks ahead of it.
   const selectorEngineChunk = selectorEngine && (selectorEngine.js || selectorEngine.gz)

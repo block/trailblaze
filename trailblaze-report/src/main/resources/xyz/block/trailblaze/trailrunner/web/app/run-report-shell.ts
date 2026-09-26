@@ -391,10 +391,11 @@ function evidenceHtml(item: AnalysisEvidence): string {
   const range = item.timestamp_or_range ? `<span class="tb-analysis-meta">${escapeHtml(item.timestamp_or_range)}</span>` : '';
   const description = item.text_description ? `<p>${escapeHtml(item.text_description)}</p>` : '';
   const sourceSubject = item.source_subject
-    ? ` · Source: ${escapeHtml(item.source_subject.label)} · ${escapeHtml(item.source_subject.context)}`
+    ? `Source: ${escapeHtml(item.source_subject.label)} · ${escapeHtml(item.source_subject.context)}`
     : '';
-  const locator = item.locator ? ` · Location: ${escapeHtml(item.locator)}` : '';
-  const source = `<p class="tb-analysis-meta">Supports: ${escapeHtml(item.supports)}${sourceSubject}${locator}</p>`;
+  const locator = item.locator ? `Location: ${escapeHtml(item.locator)}` : '';
+  const source = `<p class="tb-analysis-evidence-support">Supports: ${escapeHtml(item.supports)}</p>`
+    + (sourceSubject || locator ? `<p class="tb-analysis-meta">${[sourceSubject, locator].filter(Boolean).join(' · ')}</p>` : '');
   const title = href && item.availability === 'available'
     ? `<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.label)}</a>`
     : `<span>${escapeHtml(item.label)}</span><strong class="tb-analysis-unavailable">Unavailable</strong>`;
@@ -422,16 +423,16 @@ function overviewHtml(manifest: AnalysisManifest, href: string): string {
     return `<article class="tb-analysis-card tb-analysis-${tone}">`
       + `<header><span class="tb-analysis-status">${escapeHtml(problem.status.label)}</span><span>${problem.affected_subjects.length} affected run(s)</span></header>`
       + `<h2><a href="${escapeHtml(analysisProblemHref(href, problem.id))}">${escapeHtml(problem.title)}</a></h2>`
-      + `<p>${escapeHtml(problem.attention_summary)}</p>`
+      + `<p class="tb-analysis-card-summary">${escapeHtml(problem.attention_summary)}</p>`
       + `<p class="tb-analysis-meta">${escapeHtml(problem.context_summary)}</p>`
-      + `<h3>${actionLabel}</h3><p>${escapeHtml(problem.next_action_or_evidence_needed.text)}</p>`
-      + `<a class="tb-analysis-open" href="${escapeHtml(analysisProblemHref(href, problem.id))}">Open problem and evidence</a></article>`;
+      + `<div class="tb-analysis-card-action"><h3>${actionLabel}</h3><p>${escapeHtml(problem.next_action_or_evidence_needed.text)}</p></div>`
+      + `<a class="tb-analysis-open" href="${escapeHtml(analysisProblemHref(href, problem.id))}">Open problem and evidence <span aria-hidden="true">↗</span></a></article>`;
   }).join('');
   return `<main class="tb-analysis" aria-labelledby="tb-analysis-title">`
-    + `<header class="tb-analysis-heading"><div><p class="tb-analysis-eyebrow">${escapeHtml(manifest.summary.run_label)}</p>`
-    + `<h1 id="tb-analysis-title" tabindex="-1">Triage overview</h1><p>${escapeHtml(manifest.summary.headline)}</p></div>`
-    + `<p>${manifest.summary.affected_subject_count} affected run(s) · ${manifest.problem_sets.length} problem set(s)</p></header>`
-    + `<p class="tb-analysis-coverage">Coverage: ${escapeHtml(manifest.summary.coverage_status)}</p>`
+    + `<header class="tb-analysis-heading"><p class="tb-analysis-eyebrow">Trailblaze <span aria-hidden="true">/</span> ${escapeHtml(manifest.summary.run_label)}</p>`
+    + `<h1 id="tb-analysis-title" tabindex="-1">Triage overview<span class="tb-analysis-period" aria-hidden="true">.</span></h1>`
+    + `<p class="tb-analysis-deck">${escapeHtml(manifest.summary.headline)}</p>`
+    + `<div class="tb-analysis-overview-meta"><span>${manifest.summary.affected_subject_count} affected run(s)</span><span>${manifest.problem_sets.length} problem set(s)</span><span>Coverage: ${escapeHtml(manifest.summary.coverage_status)}</span></div></header>`
     + `<section class="tb-analysis-list" aria-label="Problem sets">${cards}</section></main>`;
 }
 
@@ -441,6 +442,7 @@ function focusedProblemHtml(manifest: AnalysisManifest, problem: AnalysisProblem
   const next = at + 1 < manifest.problem_sets.length ? manifest.problem_sets[at + 1] : null;
   const tone = /^[a-z][a-z0-9-]{0,31}$/.test(problem.status.tone) ? problem.status.tone : 'info';
   const actionLabel = problem.next_action_or_evidence_needed.kind === 'evidence_needed' ? 'Evidence needed' : 'Next action';
+  const titlePeriod = /[.!?…]$/.test(problem.title.trimEnd()) ? '' : '<span class="tb-analysis-period" aria-hidden="true">.</span>';
   const subjects = problem.affected_subjects.map((subject) => `<li><b>${escapeHtml(subject.label)}</b><span>${escapeHtml(subject.context)}</span></li>`).join('');
   const observations = problem.observations.map((observation) => `<li>${escapeHtml(observation)}</li>`).join('');
   const keyEvidence = problem.evidence.filter((item) => item.key);
@@ -459,18 +461,20 @@ function focusedProblemHtml(manifest: AnalysisManifest, problem: AnalysisProblem
   return `<main class="tb-analysis" aria-labelledby="tb-analysis-title">`
     + `<nav class="tb-analysis-toolbar" aria-label="Analysis navigation"><a href="${escapeHtml(analysisProblemHref(href, 'all'))}">← Run overview</a>`
     + `<button type="button" data-tb-copy-link>Copy problem link</button><span data-tb-copy-status class="tb-shell-sr" role="status" aria-live="polite"></span></nav>`
-    + `<article class="tb-analysis-focus tb-analysis-${tone}"><header><div><span class="tb-analysis-status">${escapeHtml(problem.status.label)}</span>`
-    + `<span class="tb-analysis-meta">Problem ${at + 1} of ${manifest.problem_sets.length}</span></div><p>${escapeHtml(problem.context_summary)}</p></header>`
-    + `<h1 id="tb-analysis-title" tabindex="-1">${escapeHtml(problem.title)}</h1><p class="tb-analysis-attention">${escapeHtml(problem.attention_summary)}</p>`
+    + `<article class="tb-analysis-focus tb-analysis-${tone}"><header class="tb-analysis-hero"><div class="tb-analysis-hero-meta"><span class="tb-analysis-status">${escapeHtml(problem.status.label)}</span>`
+    + `<span class="tb-analysis-meta">Problem ${at + 1} of ${manifest.problem_sets.length}</span><span class="tb-analysis-meta">${escapeHtml(problem.context_summary)}</span></div>`
+    + `<p class="tb-analysis-eyebrow">Analysis / ${escapeHtml(manifest.summary.run_label)}</p>`
+    + `<h1 id="tb-analysis-title" tabindex="-1">${escapeHtml(problem.title)}${titlePeriod}</h1>`
+    + `<p class="tb-analysis-attention">${escapeHtml(problem.attention_summary)}</p></header>`
     + `<div class="tb-analysis-priority"><section class="tb-analysis-action"><h2>${actionLabel}</h2><p>${escapeHtml(problem.next_action_or_evidence_needed.text)}</p></section>`
     + `<section class="tb-analysis-key-evidence"><h2>Key evidence</h2><ul class="tb-analysis-evidence-list">${keyEvidence.map(evidenceHtml).join('')}</ul></section></div>`
-    + `<section><h2>Affected runs</h2><ul class="tb-analysis-subjects">${subjects}</ul></section>`
+    + `<div class="tb-analysis-detail-grid"><section><h2>Affected runs</h2><ul class="tb-analysis-subjects">${subjects}</ul></section>`
     + `<section><h2>Observed facts</h2><ul>${observations}</ul></section>`
     + `<section class="tb-analysis-interpretation"><h2>Interpretation <span class="tb-analysis-meta">· ${escapeHtml(problem.confidence)} confidence</span></h2><p>${escapeHtml(problem.interpretation)}</p></section>`
-    + `<section class="tb-analysis-uncertainty"><h2>Uncertainty</h2><p>${escapeHtml(problem.uncertainty)}</p></section>`
-    + ((problem.code_findings || []).length ? `<section><h2>Code findings</h2><ul class="tb-analysis-evidence-list">${problem.code_findings!.map(codeFindingHtml).join('')}</ul></section>` : '')
-    + (otherEvidence.length ? `<details><summary>More evidence (${otherEvidence.length})</summary><ul class="tb-analysis-evidence-list">${otherEvidence.map(evidenceHtml).join('')}</ul></details>` : '')
-    + `<section><h2>Recent history</h2><p>${escapeHtml(problem.history_summary)}</p>${chronology}</section><section><h2>Related analysis</h2>${inferred}</section></article>${siblingNav}</main>`;
+    + `<section class="tb-analysis-uncertainty"><h2>Uncertainty</h2><p>${escapeHtml(problem.uncertainty)}</p></section></div>`
+    + ((problem.code_findings || []).length ? `<section class="tb-analysis-lower"><h2>Code findings</h2><ul class="tb-analysis-evidence-list">${problem.code_findings!.map(codeFindingHtml).join('')}</ul></section>` : '')
+    + (otherEvidence.length ? `<details class="tb-analysis-lower"><summary>More evidence (${otherEvidence.length})</summary><ul class="tb-analysis-evidence-list">${otherEvidence.map(evidenceHtml).join('')}</ul></details>` : '')
+    + `<div class="tb-analysis-detail-grid tb-analysis-history"><section><h2>Recent history</h2><p>${escapeHtml(problem.history_summary)}</p>${chronology}</section><section><h2>Related analysis</h2>${inferred}</section></div></article>${siblingNav}</main>`;
 }
 
 // Render only the intentionally generic public contract. Every string is escaped and evidence links
@@ -562,8 +566,9 @@ export function objectUrlsToRevoke(data: unknown): string[] {
   const add = (value: unknown) => { const url = String(value || ''); if (url.startsWith('blob:')) urls.add(url); };
   sessions.forEach((session) => {
     if (!session || typeof session !== 'object') return;
-    const s = session as { videoClip?: { url?: unknown }; attachments?: unknown };
+    const s = session as { videoClip?: { url?: unknown }; videoClips?: unknown; attachments?: unknown };
     add(s.videoClip && s.videoClip.url);
+    if (Array.isArray(s.videoClips)) s.videoClips.forEach((clip) => add(clip && (clip as { url?: unknown }).url));
     if (s.attachments && typeof s.attachments === 'object') Object.values(s.attachments).forEach(add);
   });
   return [...urls];

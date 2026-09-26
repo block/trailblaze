@@ -1,7 +1,6 @@
 package xyz.block.trailblaze.host
 
 import xyz.block.trailblaze.tracing.TrailblazeTracer
-import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Decides when a host run may start a fresh trace recording.
@@ -22,26 +21,59 @@ import java.util.concurrent.atomic.AtomicInteger
  */
 object HostRunTraceRecording {
 
-  private val inFlight = AtomicInteger(0)
+  // A lock, not an atomic counter: [endAndDrainIfLast] must decide "last one out" and drain in one
+  // step, or a run beginning in between would clear the spans being drained, or have its own first
+  // spans drained into someone else's file.
+  private val lock = Any()
+  private var inFlight = 0
 
   /**
    * Registers a starting run, clearing the recorder when it is the only one.
    *
    * @return true when this run got a fresh recording, false when it joined one already in progress.
    */
-  fun begin(): Boolean {
-    val alone = inFlight.incrementAndGet() == 1
+  fun begin(): Boolean = synchronized(lock) {
+    inFlight++
+    val alone = inFlight == 1
     if (alone) TrailblazeTracer.clear()
-    return alone
+    alone
   }
 
-  /** Registers a finished run. Never goes below zero, so an unpaired call cannot wedge the count. */
-  fun end() {
-    inFlight.updateAndGet { if (it > 0) it - 1 else 0 }
+  /**
+   * Registers a finished run. Never goes below zero, so an unpaired call cannot wedge the count.
+   *
+   * @return true when no run is left recording.
+   */
+  fun end(): Boolean = synchronized(lock) {
+    if (inFlight > 0) inFlight--
+    inFlight == 0
+  }
+
+  /**
+   * [end], draining the recorder in the same step whether or not another run is still recording.
+   *
+   * For a trail run, which exports everything recorded when it ends. As two steps, a CLI command
+   * finishing between them would find the run still counted, leave its tail for the run, and then
+   * the run — having already drained — would leave it in the recorder for the next run to clear.
+   */
+  fun endAndDrain(): String = synchronized(lock) {
+    if (inFlight > 0) inFlight--
+    TrailblazeTracer.traceRecorder.drain()
+  }
+
+  /**
+   * [end], and when this was the last run recording, drains the recorder in the same step.
+   *
+   * @return the drained trace JSON, or null when another run is still recording and needs the
+   *   spans left where they are.
+   */
+  fun endAndDrainIfLast(): String? = synchronized(lock) {
+    if (inFlight > 0) inFlight--
+    if (inFlight == 0) TrailblazeTracer.traceRecorder.drain() else null
   }
 
   /** Test seam: forget any runs a previous test left counted. */
   internal fun resetForTest() {
-    inFlight.set(0)
+    synchronized(lock) { inFlight = 0 }
   }
 }

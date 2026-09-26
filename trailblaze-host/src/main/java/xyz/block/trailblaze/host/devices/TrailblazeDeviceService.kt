@@ -60,7 +60,7 @@ object TrailblazeDeviceService {
     } ?: return null
     // One owner's lease on the shared cached driver, not the driver itself: closing it releases this
     // connection's hold and the XCUITest connection survives for whoever else is still driving the
-    // device - see [HostIosDriverFactory.Cached].
+    // device - see [HostIosDriverFactory.createIOS].
     val iosDriver: Driver = HostIosDriverFactory.createIOS(
       deviceId = connectedDevice.instanceId,
       openDriver = true,

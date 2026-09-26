@@ -4,6 +4,7 @@ import java.io.File
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import xyz.block.trailblaze.capture.model.CaptureArtifact
+import xyz.block.trailblaze.capture.model.CaptureFilenames
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.util.Console
 
@@ -47,7 +48,16 @@ class CaptureSession internal constructor(
     }
   }
 
-  fun stopAll(): List<CaptureArtifact> {
+  /**
+   * Stops every stream and returns what they captured.
+   *
+   * @param writeMetadata whether to publish the artifacts in `capture_metadata.json` here. The
+   *   default is what a session with one capture wants. A coordinator that runs several capture
+   *   sessions into ONE session directory — one per device of a multi-device session — passes
+   *   `false` and writes the merged list itself with [CaptureMetadata.write], because each session
+   *   writing its own would leave whichever stopped last as the only one on record.
+   */
+  fun stopAll(writeMetadata: Boolean = true): List<CaptureArtifact> {
     val artifacts = mutableListOf<CaptureArtifact>()
     var appScopedDeviceLog: CaptureArtifact? = null
     for (stream in streams) {
@@ -82,7 +92,9 @@ class CaptureSession internal constructor(
     }
     // Write metadata for timeline integration
     if (artifacts.isNotEmpty()) {
-      writeCaptureMetadata(artifacts)
+      if (writeMetadata) {
+        artifacts.first().file.parentFile?.let { CaptureMetadata.write(it, artifacts) }
+      }
       writeCrashEvents(appScopedDeviceLog)
     }
     return artifacts
@@ -102,25 +114,6 @@ class CaptureSession internal constructor(
     )
   }
 
-  private fun writeCaptureMetadata(artifacts: List<CaptureArtifact>) {
-    val sessionDir = artifacts.first().file.parentFile ?: return
-    val metadata =
-      CaptureMetadata(
-        artifacts =
-          artifacts.map { artifact ->
-            CaptureMetadata.ArtifactEntry(
-              filename = artifact.file.name,
-              type = artifact.type.name,
-              startTimestampMs = artifact.startTimestampMs,
-              endTimestampMs = artifact.endTimestampMs,
-            )
-          }
-      )
-    val metadataFile = File(sessionDir, "capture_metadata.json")
-    val json = Json { prettyPrint = true }
-    metadataFile.writeText(json.encodeToString(CaptureMetadata.serializer(), metadata))
-  }
-
   companion object {
     /**
      * Creates a [CaptureSession] from [CaptureOptions], building the appropriate platform-specific
@@ -136,28 +129,45 @@ class CaptureSession internal constructor(
      *   non-null. The host module injects a probe that asks the on-device instrumentation runner
      *   first (no adb round trips) and falls back to adb — it can't be built here because the RPC
      *   client lives in the host. Ignored on non-Android platforms and when memory capture is off.
+     * @param videoBasename Basename of the recording this session writes — `video` for a session's
+     *   own device, `video-<name>` ([CaptureFilenames.companionVideoBasename]) for a companion
+     *   device recorded into the same session directory. Honoured by the Android, iOS (simctl) and
+     *   web screencast recorders; an [iosVideoStreamOverride] names its own file.
+     * @param webPlaywrightFallback whether a web recorder that finds no live screencast for its
+     *   browser falls back to Playwright's own recorder. Pass false for a browser already in use —
+     *   a companion of a multi-device session: that recorder is a context-creation option, so it
+     *   would rebuild the context mid-run. Without it the recorder follows the browser's screencast
+     *   instead, however late the browser comes up.
      */
     fun fromOptions(
       options: CaptureOptions,
       platform: TrailblazeDevicePlatform?,
       iosVideoStreamOverride: CaptureStream? = null,
       androidMemoryProbeOverride: xyz.block.trailblaze.capture.memory.MemoryProbe? = null,
+      videoBasename: String = CaptureFilenames.VIDEO_BASENAME,
+      webPlaywrightFallback: Boolean = true,
     ): CaptureSession? {
       if (!options.hasAnyCaptureEnabled) return null
       val streams = mutableListOf<CaptureStream>()
       if (options.captureVideo) {
         when (platform) {
           TrailblazeDevicePlatform.ANDROID ->
-            streams.add(xyz.block.trailblaze.capture.video.AndroidVideoCapture())
+            streams.add(xyz.block.trailblaze.capture.video.AndroidVideoCapture(basename = videoBasename))
           TrailblazeDevicePlatform.IOS ->
-            streams.add(iosVideoStreamOverride ?: xyz.block.trailblaze.capture.video.IosVideoCapture())
+            streams.add(
+              iosVideoStreamOverride
+                ?: xyz.block.trailblaze.capture.video.IosVideoCapture(
+                  outputFileName = xyz.block.trailblaze.capture.video.RecordingFormat.preferred.filename(videoBasename),
+                ),
+            )
           TrailblazeDevicePlatform.WEB ->
             // Record from the live CDP screencast (Android's one-encoder model), falling back to
             // Playwright's setRecordVideoDir recorder when no screencast feed is registered for the
-            // device (e.g. the report-export path).
+            // device (e.g. the report-export path) and the caller allows it.
             streams.add(
               xyz.block.trailblaze.capture.video.WebScreencastVideoCapture(
-                fallback = xyz.block.trailblaze.capture.video.PlaywrightVideoCapture(),
+                fallback = if (webPlaywrightFallback) xyz.block.trailblaze.capture.video.PlaywrightVideoCapture() else null,
+                basename = videoBasename,
               ),
             )
           else -> Unit
@@ -201,6 +211,10 @@ class CaptureSession internal constructor(
   }
 }
 
+/**
+ * `capture_metadata.json`: what a session directory's capture artifacts are and the wall-clock
+ * window each covers, which is how the report puts a recording on the session's clock.
+ */
 @Serializable
 data class CaptureMetadata(val artifacts: List<ArtifactEntry>) {
   @Serializable
@@ -209,5 +223,36 @@ data class CaptureMetadata(val artifacts: List<ArtifactEntry>) {
     val type: String,
     val startTimestampMs: Long,
     val endTimestampMs: Long?,
+    /**
+     * Which named device of a multi-device session this came from (`seller`, `buyer`, …). Absent
+     * or null in a single-device session and in files written before the field existed — readers
+     * treat that as "the session's device", never as a particular name.
+     */
+    val deviceName: String? = null,
+    /** The device itself (`emulator-5554`, a simulator UDID), when known. */
+    val deviceId: String? = null,
   )
+
+  companion object {
+    const val FILENAME = "capture_metadata.json"
+
+    /** Publishes [artifacts] as [sessionDir]'s `capture_metadata.json`, replacing any earlier list. */
+    fun write(sessionDir: File, artifacts: List<CaptureArtifact>) {
+      val metadata = CaptureMetadata(
+        artifacts = artifacts.map { artifact ->
+          ArtifactEntry(
+            filename = artifact.file.name,
+            type = artifact.type.name,
+            startTimestampMs = artifact.startTimestampMs,
+            endTimestampMs = artifact.endTimestampMs,
+            deviceName = artifact.deviceName,
+            deviceId = artifact.deviceId,
+          )
+        },
+      )
+      File(sessionDir, FILENAME).writeText(JSON.encodeToString(serializer(), metadata))
+    }
+
+    private val JSON = Json { prettyPrint = true }
+  }
 }

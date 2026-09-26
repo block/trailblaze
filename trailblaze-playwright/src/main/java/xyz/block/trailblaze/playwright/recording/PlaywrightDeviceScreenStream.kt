@@ -202,6 +202,17 @@ open class PlaywrightDeviceScreenStream(
      */
     onPumpAlive: (() -> Unit)? = null,
     onFrame: suspend (ByteArray) -> Unit,
+  ): Nothing = streamScreencastJpegFrames(PlaywrightScreencast.DEFAULT_QUALITY, onPumpAlive, onFrame)
+
+  /**
+   * [streamScreencastJpegFrames] at an explicit [jpegQuality] — the session recording asks for
+   * [PlaywrightScreencast.RECORDING_QUALITY]. A separate overload, with the quality required, so
+   * the original signature stays as it was.
+   */
+  suspend fun streamScreencastJpegFrames(
+    jpegQuality: Int,
+    onPumpAlive: (() -> Unit)? = null,
+    onFrame: suspend (ByteArray) -> Unit,
   ): Nothing =
     coroutineScope {
       val outbound =
@@ -241,7 +252,7 @@ open class PlaywrightDeviceScreenStream(
           session.on("Page.screencastFrame", handler)
           session.send(
             "Page.startScreencast",
-            PlaywrightScreencast.startScreencastParams(deviceWidth, deviceHeight),
+            PlaywrightScreencast.startScreencastParams(deviceWidth, deviceHeight, jpegQuality),
           )
         }
         while (isActive) {

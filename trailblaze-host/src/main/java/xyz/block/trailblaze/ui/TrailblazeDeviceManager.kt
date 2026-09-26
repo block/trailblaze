@@ -57,6 +57,7 @@ import xyz.block.trailblaze.llm.TrailblazeReferrer
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeSessionManager
 import xyz.block.trailblaze.logs.model.SessionId
+import xyz.block.trailblaze.mcp.BoundDeviceRosterMember
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.model.AppVersionInfo
@@ -387,6 +388,36 @@ class TrailblazeDeviceManager(
   /** Guards [getOrCreateSessionResolution] against concurrent session creation for the same device. */
   private val sessionCreationLock = Any()
 
+  /**
+   * Sessions whose capture is still starting, completed once it has (or has failed to). Every
+   * member of a named cast is on the session as soon as it is opened, but its recorders start only
+   * after [sessionCreationLock] is released — so a call on the session in that window waits here,
+   * or its first action would run before its device's recording does. Guarded by
+   * [sessionCreationLock] for insertion; completed and removed by the call that opened the session.
+   */
+  private val captureStarting = mutableMapOf<SessionId, CompletableFuture<Unit>>()
+
+  /**
+   * The session each device was brought onto by a cast (see [joinSessionLocked]), as opposed to one
+   * it opened itself. A dissolved cast lets go of these, so a session another client was running
+   * goes on without the devices the cast added. Guarded by [sessionCreationLock].
+   */
+  private val joinedThroughCast = mutableMapOf<TrailblazeDeviceId, SessionId>()
+
+  /**
+   * Sessions a cast member opened while in its cast. Any other session a cast shares was running
+   * before the cast adopted it — another client's, typically — and the device it runs on is not the
+   * cast's to take off it. Guarded by [sessionCreationLock].
+   */
+  private val openedByCast = mutableSetOf<SessionId>()
+
+  /**
+   * The named casts MCP sessions have bound, keyed by the MCP session that bound them — see
+   * [setDeviceRoster]. Guarded by [sessionCreationLock], because a roster decides which devices a
+   * new Trailblaze session is tracked on.
+   */
+  private val deviceRosters = LinkedHashMap<String, List<BoundDeviceRosterMember>>()
+
   // SupervisorJob: children of this scope include long-lived collectors, fire-and-forget
   // discovery refreshes (which rethrow on discovery failure), and every [DeviceAppInventory]
   // probe. Without a supervisor, one failed child would cancel the scope's Job and every future
@@ -605,14 +636,49 @@ class TrailblazeDeviceManager(
   /**
    * Registers a run executing on [trailblazeDeviceId] until [endRun]. Runs may share a device, and
    * the device's session pointer names only the latest, so this is how [releaseReplacedSession]
-   * tells a replaced interactive session from a sibling run that is still executing.
+   * tells a replaced interactive session from a sibling run that is still executing — and how a
+   * cast member forcing a new session tells a companion it must not take off its session yet.
+   *
+   * A caller that resolves a session and then dispatches a run on it begins the run BEFORE
+   * resolving and ends it once the runner has registered its own, so the run is never unregistered
+   * while it holds a session. Such a caller passes it as `callerRun` to [getOrCreateSessionResolution].
    */
   fun beginRun(trailblazeDeviceId: TrailblazeDeviceId): RunInFlight =
     RunInFlight(trailblazeDeviceId).also(runsInFlight::add)
 
+  /**
+   * Ends [run]. Idempotent. The device's last run ending releases the sessions replaced while it ran
+   * (see [releaseReplacedSession]) and lets the device follow its cast (see [followCastAfterRun]).
+   */
   fun endRun(run: RunInFlight) {
-    runsInFlight.remove(run)
+    if (!runsInFlight.remove(run)) return
+    val device = run.trailblazeDeviceId
+    if (runsInFlight.any { it.trailblazeDeviceId == device }) return
+    // Unbinds first: they mark a session this device still logged into, which holds its release.
+    unbindPendingAfterRuns(device)
+    releasePendingAfterRuns(device)
+    runCatching { followCastAfterRun(device) }.onFailure {
+      Console.log("Moving ${device.instanceId} onto its cast's session failed: ${it.message}")
+    }
   }
+
+  /**
+   * Replaced sessions whose release [releaseReplacedSession] skipped because a sibling run was
+   * executing on the device, performed once its last run ends. Guarded by [sessionCreationLock].
+   */
+  private val pendingReleases = mutableMapOf<TrailblazeDeviceId, MutableSet<SessionId>>()
+
+  /**
+   * Recordings of a device, as (session, name), that a session it left keeps making, stopped once
+   * its last run ends (see [stopRecordingLeftBehindAfterRuns]). Guarded by [sessionCreationLock].
+   */
+  private val pendingUnbinds = mutableMapOf<TrailblazeDeviceId, MutableSet<Pair<SessionId, String>>>()
+
+  /**
+   * Cast members left on a replaced session because a run was executing on them, and the session
+   * each moves to once its last run ends: device → (replaced, new). Guarded by [sessionCreationLock].
+   */
+  private val pendingCastMoves = mutableMapOf<TrailblazeDeviceId, Pair<SessionId, SessionId>>()
 
   /**
    * Gets the current session for a device, or creates a new one if none exists.
@@ -641,6 +707,8 @@ class TrailblazeDeviceManager(
      * tools drove a different app. Passed here instead, it is registered before capture reads it.
      */
     sessionTargetToApply: String? = null,
+    /** The run this session is resolved for, begun before this call (see [beginRun]); not a sibling of itself. */
+    callerRun: RunInFlight? = null,
   ): DeviceSessionResolution {
     // Two-phase to keep `startForSession` (which can block on adb/ffmpeg/xcrun
     // startup) OUTSIDE `sessionCreationLock` — otherwise every concurrent session
@@ -654,6 +722,10 @@ class TrailblazeDeviceManager(
     val captureAppIds: List<String>
     val captureOptions: CaptureOptions
     val replacedSessionId: SessionId?
+    // What the cast left when a member forced this session (see moveCastOffReplacedSessionLocked).
+    var castMove = CastMove.NONE
+    // The opener's own capture start, for a call that joins the session while it is still running.
+    var awaitCaptureOf: CompletableFuture<Unit>? = null
     synchronized(sessionCreationLock) {
       val existingSessionId = if (forceNewSession) null else getCurrentSessionIdForDevice(trailblazeDeviceId)
       replacedSessionId = if (forceNewSession) getCurrentSessionIdForDevice(trailblazeDeviceId) else null
@@ -661,6 +733,15 @@ class TrailblazeDeviceManager(
       val sessionId = existingSessionId ?: TrailblazeSessionManager.generateSessionId(sessionIdPrefix)
       if (isNewSession) {
         trackActiveSession(trailblazeDeviceId, sessionId, deviceSummary)
+        // Every member of this device's named cast is on the session from the start; each is
+        // recorded once capture has started (one running a session of its own is not, see joinSessionLocked).
+        val roster = rosterContaining(trailblazeDeviceId)
+        castMove = replacedSessionId?.let { moveCastOffReplacedSessionLocked(trailblazeDeviceId, roster, it, sessionId) } ?: CastMove.NONE
+        if (roster.isNotEmpty()) openedByCast += sessionId
+        roster.forEach { member -> joinSessionLocked(member.trailblazeDeviceId, sessionId) }
+        captureStarting[sessionId] = CompletableFuture()
+      } else {
+        awaitCaptureOf = captureStarting[sessionId]
       }
       resolution = DeviceSessionResolution(sessionId, isNewSession)
       startCaptureFor = if (isNewSession) sessionId else null
@@ -668,7 +749,7 @@ class TrailblazeDeviceManager(
       // override, which leaves the daemon-wide target as the answer — the same thing an absent
       // entry means, so there is nothing to register.
       if (!sessionTargetToApply.isNullOrBlank()) {
-        sessionTargetRegistry.set(sessionId, sessionTargetToApply)
+        sessionTargetRegistry.set(sessionId, trailblazeDeviceId, sessionTargetToApply)
       }
       captureDeviceId = trailblazeDeviceId.instanceId
       // Resolve appId outside the lock would race with target updates, so capture both
@@ -676,7 +757,7 @@ class TrailblazeDeviceManager(
       // defaults.target) here. Raw selectedTargetAppId would be null under a workspace-default
       // target, dropping app-scoping from the capture.
       val appConfig = settingsRepo.serverStateFlow.value.appConfig
-      val captureTargetId = sessionTargetRegistry.get(sessionId) ?: getCurrentSelectedTargetApp()?.id
+      val captureTargetId = sessionTargetRegistry.get(sessionId, trailblazeDeviceId) ?: getCurrentSelectedTargetApp()?.id
       // A target id (`sampleapp`) is not an installed package, and capture needs the package: a
       // memory reading resolves the app's pid with `pidof <appId>`, which answers nothing for a
       // target id and leaves every event device-only. Resolve the target back to the ids it may run
@@ -702,6 +783,8 @@ class TrailblazeDeviceManager(
       )
     }
 
+    // A call that joined a session still starting its capture waits for it (see [captureStarting]).
+    awaitCaptureOf?.let { awaitCaptureStart(it, resolution.sessionId, trailblazeDeviceId.instanceId) }
     // Phase 2 (outside the lock): start capture for the new session. Idempotent — the
     // CLI path's `DesktopYamlRunner.captureSessionStarted` callback may also fire
     // `startForSession` later, but the coordinator's reserve-then-start protocol
@@ -709,22 +792,37 @@ class TrailblazeDeviceManager(
     // Before the new session's capture starts, for the same reason `DesktopYamlRunner` releases
     // first: the replaced session restores the device settings it changed before the new one reads
     // them. A run that forces a new session reserves it here, so the runner never sees the old one.
-    replacedSessionId?.let { releaseReplacedSession(trailblazeDeviceId, it, resolution.sessionId) }
+    (listOfNotNull(replacedSessionId) + castMove.alsoLeft).forEach {
+      releaseReplacedSession(trailblazeDeviceId, it, resolution.sessionId, callerRun)
+    }
+    stopRecordingLeftBehind(castMove.stillRecording)
+    stopRecordingLeftBehindAfterRuns(trailblazeDeviceId, castMove.openerStillRecording, callerRun)
     if (startCaptureFor != null) {
-      sessionCaptureCoordinator.startForSession(
-        sessionId = startCaptureFor,
-        deviceId = captureDeviceId,
-        platform = trailblazeDeviceId.trailblazeDevicePlatform,
-        options = captureOptions,
-        // Resolved out here because it asks the device what is installed, which must not happen
-        // under `sessionCreationLock` — and not asked at all when no stream will use the answer,
-        // so a session that captures nothing does not wait on a device probe first.
-        appId = if (captureOptions.hasAnyCaptureEnabled) {
-          resolveCaptureAppId(trailblazeDeviceId, captureTarget, captureAppIds)
-        } else {
-          null
-        },
-      )
+      try {
+        sessionCaptureCoordinator.startForSession(
+          sessionId = startCaptureFor,
+          deviceId = captureDeviceId,
+          platform = trailblazeDeviceId.trailblazeDevicePlatform,
+          options = captureOptions,
+          // Resolved out here because it asks the device what is installed, which must not happen
+          // under `sessionCreationLock` — and not asked at all when no stream will use the answer,
+          // so a session that captures nothing does not wait on a device probe first.
+          appId = if (captureOptions.hasAnyCaptureEnabled) {
+            resolveCaptureAppId(trailblazeDeviceId, captureTarget, captureAppIds)
+          } else {
+            null
+          },
+        )
+        // The cast as it stands now, not as it was at open: a member removed while capture was
+        // starting is not started here (its removal waits on this start, see setDeviceRoster).
+        val castNow = synchronized(sessionCreationLock) {
+          membersOnSessionLocked(rosterContaining(trailblazeDeviceId), startCaptureFor)
+        }
+        if (castNow.isNotEmpty()) recordRoster(startCaptureFor, castNow)
+      } finally {
+        // Every recorder is running (or failed to start): calls that joined meanwhile may act now.
+        synchronized(sessionCreationLock) { captureStarting.remove(startCaptureFor) }?.complete(Unit)
+      }
       // Experimental opt-in (gated internally, idempotent like the capture start above); restored
       // by the finalization barrier every session-end path runs.
       SessionAnimationDisabler.startForSession(startCaptureFor, trailblazeDeviceId)
@@ -876,7 +974,7 @@ class TrailblazeDeviceManager(
     // Still the authority for an EXISTING session, and for clearing the override. Capture on an
     // existing session has already bound its app, so changing the target mid-session re-points the
     // tools but not the memory readings.
-    sessionTargetRegistry.set(resolution.sessionId, appTargetId)
+    sessionTargetRegistry.set(resolution.sessionId, trailblazeDeviceId, appTargetId)
     return SessionTargetAssignment(
       sessionId = resolution.sessionId,
       appTargetId = appTargetId?.takeIf { it.isNotBlank() },
@@ -892,7 +990,7 @@ class TrailblazeDeviceManager(
    */
   fun getTargetForActiveSession(trailblazeDeviceId: TrailblazeDeviceId): String? {
     val sessionId = getCurrentSessionIdForDevice(trailblazeDeviceId) ?: return null
-    return sessionTargetRegistry.get(sessionId)
+    return sessionTargetRegistry.get(sessionId, trailblazeDeviceId)
   }
 
   /**
@@ -919,19 +1017,18 @@ class TrailblazeDeviceManager(
     // clear the OLD session id while the NEW session's override sits
     // orphaned (the device's active id has moved on but our clear targets
     // the wrong id).
-    val sessionId = synchronized(sessionCreationLock) {
+    val (sessionId, sessionDevices) = synchronized(sessionCreationLock) {
       val current = getCurrentSessionIdForDevice(trailblazeDeviceId) ?: return null
-      _activeDeviceSessionsFlow.value -= trailblazeDeviceId
+      val devices = forgetSessionLocked(current)
       sessionTargetRegistry.clear(current)
-      current
+      current to devices
     }
     // The device's registered driver goes with the session, gracefully rather than forcefully.
     // Usually a run's own cleanup already closed it and there is nothing here, but an MCP-referrer
     // run deliberately leaves its driver registered between tool calls, and this is where an MCP
     // session ending finally lets go of it - the only other release is a later run displacing it.
-    closeAndRemoveMaestroDriverForDevice(trailblazeDeviceId)
-    closeAndRemovePlaywrightNativeTestForDevice(trailblazeDeviceId)
-    closeAndRemovePlaywrightElectronTestForDevice(trailblazeDeviceId)
+    // A named cast's session is every member's, so every member's driver goes with it.
+    (sessionDevices + trailblazeDeviceId).forEach(::releaseDriversForDevice)
     // Web browser intentionally NOT closed here. The browser is the "device" — durable
     // across sessions just like an Android emulator or iOS simulator. Per-session state
     // isolation (cookies, localStorage, IndexedDB, tabs) is the job of
@@ -1133,6 +1230,24 @@ class TrailblazeDeviceManager(
   }
 
   /**
+   * The last scan's devices, unfiltered, without scanning again — empty if nothing has scanned yet.
+   *
+   * Republishes [deviceStateFlow] against the current driver config, as a cache hit in
+   * [loadDevicesSuspend] does. Tool dispatch routes on [deviceStateFlow], so a caller that answers
+   * from the last scan instead of loading devices must not skip that, or a changed driver setting
+   * would reach the tool list but not the dispatch.
+   */
+  fun lastScannedDevices(): List<TrailblazeConnectedDeviceSummary> {
+    if (_allDiscoveredDevicesFlow.value.isEmpty()) return emptyList()
+    return cachedDevices(applyDriverFilter = false)
+  }
+
+  /** Stands in for a finished scan, for tests that need a device list without a device. */
+  internal fun rememberScanForTest(devices: List<TrailblazeConnectedDeviceSummary>) {
+    _allDiscoveredDevicesFlow.value = devices
+  }
+
+  /**
    * Publish [filtered] (an already driver-filtered device list) as the current [deviceStateFlow]
    * device set, marking discovery complete. Shared by a real discovery pass and by a filtered
    * cache hit so both leave the state flow reflecting the current config.
@@ -1256,6 +1371,330 @@ class TrailblazeDeviceManager(
    * Updates activeDeviceSessionsFlow. If deviceSummary is provided and device isn't
    * already tracked, also adds the device to the devices map.
    */
+  /**
+   * Declares the named cast the MCP session [rosterId] has bound, in bind order — the interactive
+   * counterpart of a trail's `config.devices:`.
+   *
+   * One Trailblaze session for the whole cast: a session any member opens (or is already running)
+   * is tracked on every member, so a `switchDevice` handover keeps logging into the same session
+   * instead of opening a second one on the other device, and [SessionCaptureCoordinator.bindDevices]
+   * records every display of it. Called again whenever the cast changes: a member added to a cast
+   * whose session is live joins it and starts recording from that moment; a member removed leaves
+   * the session and its recording stops (what it captured stays in the session); an empty
+   * [members] dissolves the cast. A member already running a session of its own is left on it and
+   * reported, rather than torn out of live work.
+   *
+   * The session itself is never opened here — it starts, as always, on the first action a member
+   * takes. That keeps a bind cheap and means a cast that never acts records nothing.
+   *
+   * @return the session the cast shares right now, or null when no member has one yet.
+   */
+  fun setDeviceRoster(rosterId: String, members: List<BoundDeviceRosterMember>): SessionId? {
+    var captureStillStarting: List<Pair<SessionId, CompletableFuture<Unit>>> = emptyList()
+    val (sessionId, stopRecording, toRecord) = synchronized(sessionCreationLock) {
+      val previous = deviceRosters[rosterId].orEmpty()
+      if (members.isEmpty()) deviceRosters.remove(rosterId) else deviceRosters[rosterId] = members
+      // The cast's session is one a CURRENT member holds. A member that left may be on a session
+      // of its own (it was refused the cast's, see joinSessionLocked); that is not the cast's.
+      val sessionId = members.firstNotNullOfOrNull { getCurrentSessionIdForDevice(it.trailblazeDeviceId) }
+      val removed = previous.filter { was ->
+        members.none { it.name == was.name && it.trailblazeDeviceId == was.trailblazeDeviceId }
+      }
+      // A removed name's recording lives in the session its device is on NOW — read before it leaves.
+      val stopRecording = removed.mapNotNull { was ->
+        getCurrentSessionIdForDevice(was.trailblazeDeviceId)?.let { it to was.name }
+      }
+      if (members.isEmpty()) {
+        // A dissolved cast lets go of the devices it brought onto a session. Its own session is
+        // normally ended by then (an MCP close ends it before forgetting the cast); a session another
+        // client was running goes on without them, and stops recording them (the stops below).
+        previous.forEach { was -> joinedThroughCast[was.trailblazeDeviceId]?.let { leaveSessionLocked(was.trailblazeDeviceId, it) } }
+      }
+      if (sessionId != null) {
+        // A device no longer in the cast leaves; a device that only changed name stays. So does the
+        // device a session the cast adopted runs on: that session is its own, not the cast's.
+        removed
+          .filter { was -> members.none { it.trailblazeDeviceId == was.trailblazeDeviceId } }
+          .filter { was -> sessionId in openedByCast || joinedThroughCast[was.trailblazeDeviceId] == sessionId }
+          .forEach { leaveSessionLocked(it.trailblazeDeviceId, sessionId) }
+        members.forEach { joinSessionLocked(it.trailblazeDeviceId, sessionId) }
+      }
+      captureStillStarting = (stopRecording.map { it.first } + listOfNotNull(sessionId)).distinct()
+        .mapNotNull { touched -> captureStarting[touched]?.let { touched to it } }
+      Triple(sessionId, stopRecording, sessionId?.let { membersOnSessionLocked(members, it) }.orEmpty())
+    }
+    // Recorders start and stop outside the lock: they talk to adb / xcrun, and the coordinator has
+    // its own reserve-then-start protocol against a session that ends meanwhile.
+    //
+    // A session whose capture is still starting records no companion yet, and its opener records
+    // the cast once that start finishes — so a change touching it waits the start out first. A stop
+    // before then finds nothing to stop, and the opener could still start the member it removed.
+    captureStillStarting.forEach { (starting, future) -> awaitCaptureStart(future, starting, "roster $rosterId") }
+    // Stops first, so a name that moved to another device is free before its new holder starts
+    // recording under it.
+    stopRecording.forEach { (recordedIn, name) -> sessionCaptureCoordinator.unbindDevice(recordedIn, name) }
+    if (sessionId == null) return null
+    // After a wait, the cast as it stands by then (a later change may have moved it on).
+    val recordNow = if (captureStillStarting.any { it.first == sessionId }) {
+      synchronized(sessionCreationLock) { membersOnSessionLocked(deviceRosters[rosterId].orEmpty(), sessionId) }
+    } else {
+      toRecord
+    }
+    if (recordNow.isNotEmpty()) recordRoster(sessionId, recordNow)
+    return sessionId
+  }
+
+  /** Waits, bounded, for [sessionId]'s capture to finish starting (see [captureStarting]). */
+  private fun awaitCaptureStart(starting: CompletableFuture<Unit>, sessionId: SessionId, waiter: String) {
+    try {
+      starting.get(CAPTURE_START_WAIT_SECONDS, TimeUnit.SECONDS)
+    } catch (e: TimeoutException) {
+      Console.log(
+        "Session $sessionId capture still starting after ${CAPTURE_START_WAIT_SECONDS}s; " +
+          "$waiter proceeds without waiting further",
+      )
+    }
+  }
+
+  /** The members of [roster] tracked on [sessionId] — the ones its capture may record. Call under [sessionCreationLock]. */
+  private fun membersOnSessionLocked(roster: List<BoundDeviceRosterMember>, sessionId: SessionId): List<BoundDeviceRosterMember> =
+    roster.filter { _activeDeviceSessionsFlow.value[it.trailblazeDeviceId] == sessionId }
+
+  /** The cast [trailblazeDeviceId] belongs to, or empty when no MCP session has bound it. Call under [sessionCreationLock]. */
+  private fun rosterContaining(trailblazeDeviceId: TrailblazeDeviceId): List<BoundDeviceRosterMember> =
+    deviceRosters.values.firstOrNull { roster -> roster.any { it.trailblazeDeviceId == trailblazeDeviceId } }.orEmpty()
+
+  /**
+   * Tracks [trailblazeDeviceId] on [sessionId] unless it is already on a session. Call under
+   * [sessionCreationLock]. A device on a different session is running its own work; it is not
+   * moved, and the log line is the only trace, so the report of a cast missing a member has a cause.
+   */
+  private fun joinSessionLocked(trailblazeDeviceId: TrailblazeDeviceId, sessionId: SessionId) {
+    val current = _activeDeviceSessionsFlow.value[trailblazeDeviceId]
+    when {
+      current == sessionId -> Unit
+      current == null -> {
+        _activeDeviceSessionsFlow.value += (trailblazeDeviceId to sessionId)
+        joinedThroughCast[trailblazeDeviceId] = sessionId
+      }
+      else -> Console.log(
+        "[TrailblazeDeviceManager] ${trailblazeDeviceId.instanceId} is running session $current, " +
+          "so it is not joining the cast's session $sessionId",
+      )
+    }
+  }
+
+  /**
+   * Takes the cast off [replacedSessionId] when [opener] forces a new session, so the join that
+   * follows moves every member onto the new one and the replaced session, left with no device, is
+   * released. Call under [sessionCreationLock], after [opener] is tracked on its new session.
+   *
+   * A cast shares one session: left on the replaced one, the other members would keep it (and its
+   * recordings) running until the MCP session closes. The device a session the cast adopted runs
+   * on stays: that session is another client's, and still has its device. A member with a run
+   * executing (or dispatched, see [beginRun]) stays until its last run ends, then follows the cast
+   * (see [pendingCastMoves]).
+   *
+   * An [opener] that was itself waiting to follow the cast takes the cast off the session it was
+   * waiting to move to as well: that is where the rest of the cast went, so leaving them there
+   * would split the cast across two new sessions.
+   *
+   * A session the cast left that still has a device (another client's, or one a busy member is
+   * on) is not released, so each member that left it must stop being recorded there instead.
+   */
+  private fun moveCastOffReplacedSessionLocked(
+    opener: TrailblazeDeviceId,
+    roster: List<BoundDeviceRosterMember>,
+    replacedSessionId: SessionId,
+    newSessionId: SessionId,
+  ): CastMove {
+    // The opener is on a session it opened now, not one the cast brought it onto.
+    if (joinedThroughCast[opener] == replacedSessionId) joinedThroughCast.remove(opener)
+    val castSessions = listOfNotNull(replacedSessionId, pendingCastMoves.remove(opener)?.second).distinct()
+    val left = castSessions.flatMap { from -> moveCastOffLocked(opener, roster, from, newSessionId).map { from to it } }
+    val openerLeft = roster.filter { it.trailblazeDeviceId == opener }.map { replacedSessionId to it }
+    fun goingOn(moves: List<Pair<SessionId, BoundDeviceRosterMember>>) = moves
+      .filter { (from, _) -> from in _activeDeviceSessionsFlow.value.values }
+      .map { (from, member) -> from to member.name }
+    return CastMove(
+      alsoLeft = castSessions - replacedSessionId,
+      stillRecording = goingOn(left),
+      openerStillRecording = goingOn(openerLeft),
+    )
+  }
+
+  /**
+   * What a forced session took the cast off: other sessions to release, and recordings to stop in
+   * sessions that go on — the opener's apart, since another call on its device may still be logging
+   * into the session it left (a moved member had none, or it would not have moved).
+   */
+  private class CastMove(
+    val alsoLeft: List<SessionId>,
+    val stillRecording: List<Pair<SessionId, String>>,
+    val openerStillRecording: List<Pair<SessionId, String>>,
+  ) {
+    companion object {
+      val NONE = CastMove(emptyList(), emptyList(), emptyList())
+    }
+  }
+
+  /**
+   * Stops recording [trailblazeDeviceId] as each name in [left], or, while a run other than
+   * [callerRun] is on the device and may still be logging there, once its last run ends (see [endRun]).
+   */
+  private fun stopRecordingLeftBehindAfterRuns(
+    trailblazeDeviceId: TrailblazeDeviceId,
+    left: List<Pair<SessionId, String>>,
+    callerRun: RunInFlight?,
+  ) {
+    if (left.isEmpty()) return
+    // Queued before the sibling check, so a sibling ending in between still finds them.
+    synchronized(sessionCreationLock) { pendingUnbinds.getOrPut(trailblazeDeviceId, ::mutableSetOf) += left }
+    if (runsInFlight.any { it.trailblazeDeviceId == trailblazeDeviceId && it !== callerRun }) return
+    val taken = synchronized(sessionCreationLock) { left.filter { pendingUnbinds[trailblazeDeviceId]?.remove(it) == true } }
+    stopRecordingLeftBehind(taken)
+  }
+
+  /** Performs the stops [stopRecordingLeftBehindAfterRuns] held back, once [trailblazeDeviceId] has no run left. */
+  private fun unbindPendingAfterRuns(trailblazeDeviceId: TrailblazeDeviceId) {
+    val due = synchronized(sessionCreationLock) {
+      // A session the device has been put back on records it again.
+      pendingUnbinds.remove(trailblazeDeviceId).orEmpty()
+        .filter { (sessionId, _) -> _activeDeviceSessionsFlow.value[trailblazeDeviceId] != sessionId }
+    }
+    stopRecordingLeftBehind(due)
+  }
+
+  /** Stops recording each member named in a session it left that goes on without it. Outside [sessionCreationLock]. */
+  private fun stopRecordingLeftBehind(left: List<Pair<SessionId, String>>) {
+    left.forEach { (sessionId, name) ->
+      // A companion still starting is recorded by its opener once it has; stopping before then finds nothing.
+      synchronized(sessionCreationLock) { captureStarting[sessionId] }?.let { awaitCaptureStart(it, sessionId, name) }
+      sessionCaptureCoordinator.unbindDevice(sessionId, name)
+    }
+  }
+
+  /** One session's share of [moveCastOffReplacedSessionLocked]; returns the members it moved. Call under [sessionCreationLock]. */
+  private fun moveCastOffLocked(
+    opener: TrailblazeDeviceId,
+    roster: List<BoundDeviceRosterMember>,
+    from: SessionId,
+    newSessionId: SessionId,
+  ): List<BoundDeviceRosterMember> {
+    // A member already waiting to follow the cast follows it here instead.
+    pendingCastMoves.entries.forEach { entry ->
+      if (entry.value.second == from) entry.setValue(entry.value.first to newSessionId)
+    }
+    val castOwned = from in openedByCast
+    val (busy, moved) = roster
+      .filter { it.trailblazeDeviceId != opener && _activeDeviceSessionsFlow.value[it.trailblazeDeviceId] == from }
+      .filter { castOwned || joinedThroughCast[it.trailblazeDeviceId] == from }
+      .partition { member -> runsInFlight.any { it.trailblazeDeviceId == member.trailblazeDeviceId } }
+    busy.forEach { pendingCastMoves[it.trailblazeDeviceId] = from to newSessionId }
+    moved.forEach {
+      _activeDeviceSessionsFlow.value -= it.trailblazeDeviceId
+      joinedThroughCast.remove(it.trailblazeDeviceId)
+    }
+    if (_activeDeviceSessionsFlow.value.values.none { it == from }) openedByCast -= from
+    return moved
+  }
+
+  /**
+   * Moves [trailblazeDeviceId] onto its cast's session once its last run has ended, if a new
+   * session left it behind (see [moveCastOffReplacedSessionLocked]), and releases the session it
+   * leaves. Nothing moves if the device, the cast or either session changed meanwhile.
+   */
+  private fun followCastAfterRun(trailblazeDeviceId: TrailblazeDeviceId) {
+    var stillRecording: List<Pair<SessionId, String>> = emptyList()
+    // Held from the join until the device is recorded: a call resolving [to] meanwhile waits on it
+    // the way it waits on a session still opening (see [captureStarting]), so it cannot act unrecorded.
+    var recordingGate: CompletableFuture<Unit>? = null
+    val (from, to, captureStillStarting) = synchronized(sessionCreationLock) {
+      if (runsInFlight.any { it.trailblazeDeviceId == trailblazeDeviceId }) return
+      val (from, to) = pendingCastMoves.remove(trailblazeDeviceId) ?: return
+      val sessions = _activeDeviceSessionsFlow.value
+      val stillOwed = sessions[trailblazeDeviceId] == from &&
+        (from in openedByCast || joinedThroughCast[trailblazeDeviceId] == from) &&
+        rosterContaining(trailblazeDeviceId).any { it.trailblazeDeviceId != trailblazeDeviceId && sessions[it.trailblazeDeviceId] == to }
+      if (!stillOwed) return
+      _activeDeviceSessionsFlow.value -= trailblazeDeviceId
+      joinedThroughCast.remove(trailblazeDeviceId)
+      joinSessionLocked(trailblazeDeviceId, to)
+      if (_activeDeviceSessionsFlow.value.values.none { it == from }) {
+        openedByCast -= from
+      } else {
+        // Not released, so it would go on recording the device under its cast name as well.
+        stillRecording = rosterContaining(trailblazeDeviceId).filter { it.trailblazeDeviceId == trailblazeDeviceId }.map { from to it.name }
+      }
+      // A session still opening records every member on it once its capture is up, this one included.
+      val stillStarting = captureStarting[to]
+      if (stillStarting == null) recordingGate = CompletableFuture<Unit>().also { captureStarting[to] = it }
+      Triple(from, to, stillStarting)
+    }
+    try {
+      // Released (or unrecorded) before the new session records the device, so it never has two recorders at once.
+      releaseReplacedSession(trailblazeDeviceId, from, to)
+      stopRecordingLeftBehind(stillRecording)
+      captureStillStarting?.let { awaitCaptureStart(it, to, trailblazeDeviceId.instanceId) }
+      val onSession = synchronized(sessionCreationLock) { membersOnSessionLocked(rosterContaining(trailblazeDeviceId), to) }
+      if (onSession.isNotEmpty()) recordRoster(to, onSession)
+    } finally {
+      recordingGate?.let { gate ->
+        synchronized(sessionCreationLock) { captureStarting.remove(to, gate) }
+        gate.complete(Unit)
+      }
+    }
+  }
+
+  /**
+   * Stops tracking [trailblazeDeviceId] on [sessionId], as long as another device still holds the
+   * session — the last holder stays, so the session still has a device to be ended from. Call
+   * under [sessionCreationLock].
+   */
+  private fun leaveSessionLocked(trailblazeDeviceId: TrailblazeDeviceId, sessionId: SessionId) {
+    val sessions = _activeDeviceSessionsFlow.value
+    if (sessions[trailblazeDeviceId] != sessionId) return
+    if (sessions.count { it.value == sessionId } < 2) return
+    _activeDeviceSessionsFlow.value = sessions - trailblazeDeviceId
+    joinedThroughCast.remove(trailblazeDeviceId)
+  }
+
+  /** Drops every device tracked on [sessionId] and returns them. Call under [sessionCreationLock]. */
+  private fun forgetSessionLocked(sessionId: SessionId): Set<TrailblazeDeviceId> {
+    val (ended, kept) = _activeDeviceSessionsFlow.value.entries.partition { it.value == sessionId }
+    _activeDeviceSessionsFlow.value = kept.associate { it.key to it.value }
+    ended.forEach { joinedThroughCast.remove(it.key) }
+    openedByCast -= sessionId
+    return ended.mapTo(mutableSetOf()) { it.key }
+  }
+
+  /** Closes the drivers a device holds between runs. The browser is the device, so it stays. */
+  private fun releaseDriversForDevice(trailblazeDeviceId: TrailblazeDeviceId) {
+    closeAndRemoveMaestroDriverForDevice(trailblazeDeviceId)
+    closeAndRemovePlaywrightNativeTestForDevice(trailblazeDeviceId)
+    closeAndRemovePlaywrightElectronTestForDevice(trailblazeDeviceId)
+  }
+
+  /**
+   * Hands the cast to the session's capture so each display is recorded. The whole roster, start
+   * device included — the coordinator names the recording it already runs from the member whose
+   * device matches and records the rest; a member already recording is left alone.
+   */
+  private fun recordRoster(sessionId: SessionId, members: List<BoundDeviceRosterMember>) {
+    sessionCaptureCoordinator.bindDevices(
+      sessionId = sessionId,
+      devices = members.map { member ->
+        val platform = member.trailblazeDeviceId.trailblazeDevicePlatform
+        val targetId = member.targetId ?: getCurrentSelectedTargetApp()?.id
+        SessionCaptureCoordinator.BoundDevice(
+          name = member.name,
+          deviceId = member.trailblazeDeviceId,
+          appId = availableAppTargets.find { it.id == targetId }?.getPossibleAppIdsForPlatform(platform)?.firstOrNull(),
+        )
+      },
+    )
+  }
+
   fun trackActiveSession(
     trailblazeDeviceId: TrailblazeDeviceId,
     sessionId: SessionId,
@@ -1283,9 +1722,13 @@ class TrailblazeDeviceManager(
     trailblazeDeviceId: TrailblazeDeviceId,
     endedSessionId: SessionId
   ) {
-    // Only clear if this is the current session for the device
-    if (_activeDeviceSessionsFlow.value[trailblazeDeviceId] == endedSessionId) {
-      _activeDeviceSessionsFlow.value -= trailblazeDeviceId
+    // Only clear if this is the current session for the device. Every device on the session goes
+    // with it: a named cast shares one session, and a companion left pointing at an ended id would
+    // log its next tool call into a session that is already closed.
+    synchronized(sessionCreationLock) {
+      if (_activeDeviceSessionsFlow.value[trailblazeDeviceId] == endedSessionId) {
+        forgetSessionLocked(endedSessionId)
+      }
     }
     // Always drop the per-session target override for the ended session id —
     // even if a newer session has already taken over for the device, the
@@ -1353,12 +1796,17 @@ class TrailblazeDeviceManager(
     // under [sessionCreationLock] so a concurrent setTargetForActiveSession
     // can't synthesize a new session between the read and the clear (same
     // race condition addressed in [endSessionForDevice]).
+    var otherMembers: Set<TrailblazeDeviceId> = emptySet()
     val cancelledSessionId = synchronized(sessionCreationLock) {
       val sid = _activeDeviceSessionsFlow.value[trailblazeDeviceId]
-      _activeDeviceSessionsFlow.value = _activeDeviceSessionsFlow.value - trailblazeDeviceId
-      sid?.let { sessionTargetRegistry.clear(it) }
+      if (sid != null) {
+        otherMembers = forgetSessionLocked(sid) - trailblazeDeviceId
+        sessionTargetRegistry.clear(sid)
+      }
       sid
     }
+    // A named cast's other members leave the session too; their drivers go with it.
+    otherMembers.forEach(::releaseDriversForDevice)
     // Best-effort stop of capture for the cancelled session — running outside the
     // sessionCreationLock so a slow ffmpeg finalize on stopAll can't deadlock a concurrent
     // device-management call (the mux drain is time-bounded, but seconds is enough to be
@@ -1388,7 +1836,8 @@ class TrailblazeDeviceManager(
    * the device. Skipped while the replaced session is still the active session of another device,
    * and while any run other than [callerRun] is executing on this device: runs can share a device,
    * and the session the pointer named may be a sibling run's, still mid-flight. That also covers a
-   * sibling whose session exists but whose run has not reached the point of registering it.
+   * sibling whose session exists but whose run has not reached the point of registering it. A
+   * release skipped for a sibling is retried when the device's last run ends (see [endRun]).
    * Best-effort — a cleanup failure is logged, never thrown into the new session.
    */
   fun releaseReplacedSession(
@@ -1402,22 +1851,66 @@ class TrailblazeDeviceManager(
       deviceId != trailblazeDeviceId && sessionId == replacedSessionId
     }
     if (stillActiveElsewhere) return
+    // A device that left it with a call still logging there (see pendingUnbinds) holds it until that call ends.
+    val loggingThere = synchronized(sessionCreationLock) {
+      deviceStillLoggingIntoLocked(replacedSessionId, except = trailblazeDeviceId)
+        ?.also { pendingReleases.getOrPut(it, ::mutableSetOf) += replacedSessionId }
+    }
+    if (loggingThere != null) {
+      Console.log(
+        "Session $newSessionId replaced $replacedSessionId on ${trailblazeDeviceId.instanceId}, " +
+          "but a call on ${loggingThere.instanceId} is still logging there; releasing it once that call ends.",
+      )
+      return
+    }
+    // Queued before the sibling check, so a sibling ending in between still finds it (see [endRun]).
+    synchronized(sessionCreationLock) { pendingReleases.getOrPut(trailblazeDeviceId, ::mutableSetOf) += replacedSessionId }
     val siblingRunInFlight = runsInFlight.any { it.trailblazeDeviceId == trailblazeDeviceId && it !== callerRun }
     if (siblingRunInFlight) {
       Console.log(
         "Session $newSessionId replaced $replacedSessionId on ${trailblazeDeviceId.instanceId}, " +
-          "but another run is executing there; leaving its capture running.",
+          "but another run is executing there; releasing its capture once that run ends.",
       )
       return
     }
+    // Whoever takes the queued release performs it, so a sibling ending meanwhile does not release it twice.
+    val taken = synchronized(sessionCreationLock) { pendingReleases[trailblazeDeviceId]?.remove(replacedSessionId) == true }
+    if (!taken) return
     Console.log(
       "Session $newSessionId replaced $replacedSessionId on ${trailblazeDeviceId.instanceId}; " +
         "releasing the replaced session's capture.",
     )
+    releaseSessionResources(replacedSessionId)
+  }
+
+  /** Performs the releases [releaseReplacedSession] skipped for a sibling run, once [trailblazeDeviceId] has no run left. */
+  private fun releasePendingAfterRuns(trailblazeDeviceId: TrailblazeDeviceId) {
+    val due = synchronized(sessionCreationLock) {
+      // A session a device has been put back on is live again, not replaced.
+      pendingReleases.remove(trailblazeDeviceId).orEmpty()
+        .filter { it !in _activeDeviceSessionsFlow.value.values }
+        .filter { replaced ->
+          // Still logged into from another device: that device's last call releases it instead.
+          val holder = deviceStillLoggingIntoLocked(replaced, except = trailblazeDeviceId) ?: return@filter true
+          pendingReleases.getOrPut(holder, ::mutableSetOf) += replaced
+          false
+        }
+    }
+    due.forEach { replaced ->
+      Console.log("The last run on ${trailblazeDeviceId.instanceId} ended; releasing replaced session $replaced's capture.")
+      releaseSessionResources(replaced)
+    }
+  }
+
+  /** A device other than [except] whose calls still log into [sessionId] after leaving it (see [pendingUnbinds]). Call under [sessionCreationLock]. */
+  private fun deviceStillLoggingIntoLocked(sessionId: SessionId, except: TrailblazeDeviceId): TrailblazeDeviceId? =
+    pendingUnbinds.entries.firstOrNull { (device, left) -> device != except && left.any { it.first == sessionId } }?.key
+
+  private fun releaseSessionResources(sessionId: SessionId) {
     runCatching {
-      finalizeHostSessionResources(listOf(replacedSessionId), sessionCaptureCoordinator::stopForSession)
+      finalizeHostSessionResources(listOf(sessionId), sessionCaptureCoordinator::stopForSession)
     }.onFailure {
-      Console.log("Releasing replaced session $replacedSessionId failed: ${it.message}")
+      Console.log("Releasing replaced session $sessionId failed: ${it.message}")
     }
   }
 
@@ -1439,7 +1932,7 @@ class TrailblazeDeviceManager(
   fun releaseUnstartedSession(trailblazeDeviceId: TrailblazeDeviceId, sessionId: SessionId): Boolean {
     synchronized(sessionCreationLock) {
       if (_activeDeviceSessionsFlow.value[trailblazeDeviceId] != sessionId) return false
-      _activeDeviceSessionsFlow.value -= trailblazeDeviceId
+      forgetSessionLocked(sessionId)
       sessionTargetRegistry.clear(sessionId)
     }
     // Best-effort, outside the lock for the same reason cancelSessionForDevice finalizes outside
@@ -1690,6 +2183,8 @@ class TrailblazeDeviceManager(
   }
 
   companion object {
+    /** How long a call joining a session waits for that session's recorders to start. */
+    private const val CAPTURE_START_WAIT_SECONDS = 30L
 
     /**
      * Pure decision for live registration. Total function (no null): returns

@@ -544,6 +544,22 @@ class TrailblazeMcpSessionContext(
   }
 
   /**
+   * The device the current call was dispatched to — pinned in [McpDeviceContext] at dispatch, so a
+   * `switchDevice` landing mid-call does not move it — else this session's [associatedDeviceId].
+   */
+  fun dispatchedDeviceId(): TrailblazeDeviceId? = McpDeviceContext.currentDeviceId.get() ?: associatedDeviceId
+
+  /**
+   * The recording on [deviceId] if this session found it running on ANY device — a cast member the
+   * host put on the session another member was already running. Not this session's to end, nor to
+   * cancel (a cancel ends the whole session the device is on); the member's connection still is.
+   */
+  fun recordingFoundRunningOnAnyDevice(deviceId: TrailblazeDeviceId): SessionId? = synchronized(recordingOwnershipLock) {
+    noteRecordingSeenWhileIdle(deviceId)
+    lastSeenRecording[deviceId]?.takeIf { it in recordingFoundRunning.values }
+  }
+
+  /**
    * Clears the device association.
    * Called when endSession is called or when the session is closed.
    */
@@ -647,6 +663,11 @@ class TrailblazeMcpSessionContext(
 
   /** The active name, or null when no name has been bound. */
   fun activeDeviceName(): String? = namedDeviceBindings?.activeName
+
+  /** The name [deviceId] is bound under, or null when it isn't one of the session's named devices. */
+  fun boundDeviceName(deviceId: TrailblazeDeviceId): String? = synchronized(namedBindingsLock) {
+    namedDevices.entries.firstOrNull { it.value.trailblazeDeviceId == deviceId }?.key
+  }
 
   /**
    * Binds [device] under [name], keeping every already-bound name. Rebinding an existing name

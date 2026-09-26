@@ -266,6 +266,129 @@ else
   _ok "the launcher enables job control nowhere"
 fi
 
+echo "--- the framed reply replays with no jq"
+# The daemon sends this framing when the launcher asks for it, so a forwarded command runs no
+# decoder process (CliExecReplayFormat in CliExecEndpoint.kt). Counts are UTF-8 BYTES, which is
+# what the multibyte text here checks: a decoder counting characters slices it in the wrong place.
+_framed_source=$(sed -n '/^ipc_replay_framed() {$/,/^}$/p' "$SHIM")
+if [ -z "$_framed_source" ]; then
+  _bad "ipc_replay_framed is defined in the launcher"
+else
+  eval "$_framed_source"
+  _framed_marked() {
+    ipc_replay_framed "$1" 2>&1
+    printf '%s' "$_END_MARKER"
+  }
+  # Appends one run to _body. Not `$(…)`: that would strip the run's trailing newline.
+  _run() {
+    local bytes
+    bytes=$(LC_ALL=C; printf '%s' "${#2}")
+    _body+="$1 $bytes"$'\n'"$2"
+  }
+  _dev=$'Connecting to Android device (emulator-5556)...\n'
+  _err=$'✗ tool failed — ünïcödé\n'
+  _tip=$'  hint: see `trailblaze status`\n'
+  _body="trailblaze-replay 1"$'\n'"exit 3"$'\n'
+  _run 1 "$_dev"
+  _run 2 "$_err"
+  _run 1 "$_tip"
+  _body+="end"
+
+  # Under a UTF-8 locale when this host has one, which is where bash counts characters: in C it
+  # counts bytes anyway, and a decoder that forgot to switch would pass.
+  _utf8=$(locale -a 2> /dev/null | grep -iE '^(c|en_us)\.utf-?8$' | head -1)
+  IPC_REPLAY_EXIT_CODE=
+  _got=$([ -n "$_utf8" ] && export LC_ALL="$_utf8"; _framed_marked "$_body")
+  _eq "runs replay in write order, trailing newlines intact" "$(_marked "${_dev}${_err}${_tip}")" "$_got"
+  ipc_replay_framed "$_body" > /dev/null 2>&1
+  _eq "the exit code comes from the body" "3" "$IPC_REPLAY_EXIT_CODE"
+  _out=$(ipc_replay_framed "$_body" 2> /dev/null; printf '%s' "$_END_MARKER")
+  _eq "stdout runs go to stdout only" "$(_marked "${_dev}${_tip}")" "$_out"
+
+  # A body cut short must print NOTHING: the caller falls through and runs the command itself.
+  for _case in "no end:${_body%end}" "long count:${_body/$'\n'2 /$'\n'2 9}" \
+    "count past 64 bits:${_body/$'\n'2 /$'\n'2 99999999999999999999}" \
+    'json:{"stdout":"x","exitCode":0,"forwarded":true}' "bad exit:trailblaze-replay 1"$'\n'"exit 999"$'\n'"end"; do
+    _label="${_case%%:*}"
+    _out=$(ipc_replay_framed "${_case#*:}" 2>&1)
+    _rc=$?
+    if [ "$_rc" -eq 1 ] && [ -z "$_out" ]; then
+      _ok "an undecodable body ($_label) prints nothing and is refused"
+    else
+      _bad "an undecodable body ($_label) prints nothing and is refused"
+      printf '        rc=%s output=%q\n' "$_rc" "$_out"
+    fi
+  done
+fi
+
+echo "--- the bash request body matches the jq one"
+# ipc_build_payload runs before every forwarded command; ipc_build_payload_jq is its fallback. They
+# carry the allowlist separately, so a var added to one only is caught here.
+_payload_source=$(sed -n '/^tb_json_quote() {$/,/^}$/p; /^ipc_build_payload() {$/,/^}$/p; /^ipc_build_payload_jq() {$/,/^}$/p' "$SHIM")
+eval "$_payload_source"
+if ! declare -f ipc_build_payload > /dev/null || ! declare -f ipc_build_payload_jq > /dev/null; then
+  _bad "ipc_build_payload and ipc_build_payload_jq are defined in the launcher"
+else
+  _payload_pair() {
+    local bash_body jq_body
+    ipc_build_payload "$@" || { printf 'BASH REFUSED'; return; }
+    bash_body=$(printf '%s' "$IPC_PAYLOAD" | jq -S . 2>&1)
+    ipc_build_payload_jq "$@"
+    jq_body=$(printf '%s' "$IPC_PAYLOAD" | jq -S .)
+    [ "$bash_body" = "$jq_body" ] && printf 'same' || printf 'bash=%s\njq=%s' "$bash_body" "$jq_body"
+  }
+  _got=$(
+    export TRAILBLAZE_DEVICE='android/emulator-5554' TRAILBLAZE_TARGET='t' TRAILBLAZE_SHELL_PID=42 \
+      TRAILBLAZE_INTERACTIVE=0 TRAILBLAZE_MCP_REQUEST_TIMEOUT_MS=900000 \
+      TRAILBLAZE_MCP_PREFLIGHT_TIMEOUT_MS=20000 TRAILBLAZE_TRACE_LEVEL=verbose
+    _payload_pair tool tap 'say "hi"' 'back\slash\\n' $'two\nlines\tand\rreturn' 'héllo ✓ 日本' 'a&b' '$(x) `y`' ''
+  )
+  _eq "every allowlisted var and awkward argument encodes the same" "same" "$_got"
+  _got=$(unset TRAILBLAZE_DEVICE TRAILBLAZE_TARGET TRAILBLAZE_SHELL_PID TRAILBLAZE_INTERACTIVE \
+    TRAILBLAZE_MCP_REQUEST_TIMEOUT_MS TRAILBLAZE_MCP_PREFLIGHT_TIMEOUT_MS TRAILBLAZE_TRACE_LEVEL
+    _payload_pair snapshot)
+  _eq "unset vars are left out of both" "same" "$_got"
+  if ipc_build_payload tool $'esc\033[0m'; then
+    _bad "a control character bash does not escape is left to jq"
+  else
+    _ok "a control character bash does not escape is left to jq"
+  fi
+fi
+
+echo "--- the /ping probe leaves no child behind on a silent port"
+# probe_daemon_port connects from a process substitution so its own read timeouts bound the
+# connect. The child is not bounded by them: silent here, or blocked in a connect a full accept
+# queue never completes, it outlives the probe unless the probe ends it — one more process per
+# command for as long as the port stays that way.
+_probe_source=$(sed -n '/^probe_daemon_port() {$/,/^}$/p' "$SHIM")
+if ! command -v python3 > /dev/null 2>&1; then
+  echo "  skip  python3 not on PATH to hold a silent port"
+elif [ -z "$_probe_source" ]; then
+  _bad "probe_daemon_port is defined in the launcher"
+else
+  # Listens and never accepts or answers; writes its port to a file, then holds it until killed.
+  _probe_dir=$(mktemp -d)
+  python3 -c 'import socket,sys,time
+s=socket.socket(); s.bind(("127.0.0.1",0)); s.listen(8)
+open(sys.argv[1],"w").write(str(s.getsockname()[1])); time.sleep(60)' "$_probe_dir/port" &
+  _listener=$!
+  for _ in 1 2 3 4 5 6 7 8 9 10; do [ -s "$_probe_dir/port" ] && break; sleep 0.5; done
+  # A shell of its own, so its children are exactly the ones the probe left.
+  _probe_out=$(TRAILBLAZE_PORT="$(cat "$_probe_dir/port")" bash -c "$_probe_source"'
+    curl() { return 28; }
+    TRAILBLAZE_PING_TIMEOUT_SECONDS=1
+    probe_daemon_port
+    printf "rc=%s\n" "$?"
+    sleep 0.3
+    ps -A -o ppid=,pid=,comm= | awk -v me="$$" '\''$1 == me && $3 !~ /(^|\/)(ps|awk)$/ { n++ } END { printf "children=%d\n", n + 0 }'\''
+  ')
+  kill "$_listener" 2> /dev/null
+  wait "$_listener" 2> /dev/null
+  rm -rf "$_probe_dir"
+  _eq "a port that accepts and never answers reads as held (2)" "rc=2" "$(printf '%s\n' "$_probe_out" | grep '^rc=')"
+  _eq "no probe child survives the probe" "children=0" "$(printf '%s\n' "$_probe_out" | grep '^children=')"
+fi
+
 echo "--- the launcher turns OFF job control it was handed"
 # Not enabling it is not enough. Bash reads SHELLOPTS from the environment at startup, so a caller
 # that exported it containing `monitor` hands the launcher a shell already under job control, and

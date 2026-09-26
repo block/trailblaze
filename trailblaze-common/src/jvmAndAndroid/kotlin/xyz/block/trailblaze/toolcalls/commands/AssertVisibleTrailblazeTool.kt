@@ -24,9 +24,15 @@ import xyz.block.trailblaze.viewmatcher.TapSelectorV2.findBestTrailblazeElementS
  * pre-applied [TrailblazeNode.ref] field, then delegates to
  * [AssertVisibleBySelectorTrailblazeTool] which handles the node-selector-vs-Maestro
  * dispatch mode switching internally.
+ *
+ * Not recordable, like [TapTrailblazeTool]: a ref only means something on the screen that produced
+ * it, so a trail must record the [AssertVisibleBySelectorTrailblazeTool] this expands into. When a
+ * direct `trailblaze tool assertVisible ref=…` call's top-level log was recordable it won the
+ * recorder's top-level filter, the saved trail held `assertVisible: {ref: …}`, and the replay
+ * failed with "Element ref not found".
  */
 @Serializable
-@TrailblazeToolClass("assertVisible", isVerification = true)
+@TrailblazeToolClass("assertVisible", isVerification = true, isRecordable = false)
 @LLMDescription(
   "Assert an element is visible on screen by its ref ID from the snapshot. Use the " +
     "short hash ref shown in square brackets (e.g., y778 from [y778] \"Network & internet\"). " +

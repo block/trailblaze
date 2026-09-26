@@ -73,7 +73,17 @@ internal fun newFixtureProject(buildScript: String, tempDirs: MutableList<File>)
 internal fun gradleRunner(projectDir: File, vararg args: String): GradleRunner =
   GradleRunner.create()
     .withProjectDir(projectDir)
-    .withArguments(*args)
+    // `--no-watch-fs` on every fixture build. Several tests here write a file BETWEEN two
+    // invocations and assert the second one re-runs; with file-system watching on, that second
+    // build can answer from the reused TestKit daemon's cached VFS state, miss the new file and
+    // report UP-TO-DATE, turning a `buildAndFail()` into `UnexpectedBuildSuccess`. Observed once
+    // as a 1-in-5 failure of the misplaced-bare-trail test on a loaded machine. Disabling the
+    // watcher makes each build re-stat the tree, which is what these assertions assume.
+    //
+    // This does NOT weaken the one test that asserts UP-TO-DATE: nothing changes between its two
+    // builds, so a fresh stat reaches the same answer. The flag only removes a cache that can be
+    // stale, never a real up-to-date signal.
+    .withArguments(*args, "--no-watch-fs")
     .withPluginClasspath()
     .forwardOutput()
 

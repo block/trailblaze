@@ -325,8 +325,15 @@ object TrailblazeCli {
    *
    * @param providers what the command reads; the daemon passes [daemonProviders]. Defaults to the
    *   set [run] captured.
+   * @param servingPort the port of the daemon running the command, so a connection back to it skips
+   *   asking the daemon about itself over HTTP. Null runs those checks as a separate process would.
    */
-  fun executeForDaemon(request: CliExecRequest, providers: CliProviders? = null): CliExecResponse {
+  fun executeForDaemon(
+    request: CliExecRequest,
+    providers: CliProviders? = null,
+    traceFileFor: ((sessionId: String) -> java.io.File)? = null,
+    servingPort: Int? = null,
+  ): CliExecResponse {
     val args = request.args
     val first = args.firstOrNull()
     if (first == null || first !in FORWARDABLE_SUBCOMMANDS) {
@@ -361,6 +368,15 @@ object TrailblazeCli {
     }
 
     val exitCode = synchronized(execLock) {
+      CliCommandTrace.record(
+        name = first,
+        // No arguments: they carry typed text and selectors, and the tool span inside names the tool.
+        args = emptyMap(),
+        level = CliCommandTrace.levelFor(request.env?.get(CliCommandTrace.TRACE_LEVEL_ENV)) { warning ->
+          transcript.sink(CliExecStream.STDERR).write("$warning\n".toByteArray())
+        },
+        traceFileFor = traceFileFor,
+      ) {
       // Save/restore the global `Console.quietMode` flag. cli*WithDevice(verbose=false)
       // flips it for the duration of the CLI command, but there's no reset path in
       // the CLI itself; without this wrapper the long-lived daemon would go silent
@@ -385,6 +401,7 @@ object TrailblazeCli {
       // `System.getenv` which is the prior behavior for shims that don't forward.
       CliCallerContext.withCallerEnv(request.env) {
         CliCallerContext.withCallerCwd(callerCwd) {
+        CliCallerContext.withServingPort(servingPort) {
         CliOutCapture.withCapture(
           transcript.sink(CliExecStream.STDOUT),
           transcript.sink(CliExecStream.STDERR),
@@ -431,6 +448,8 @@ object TrailblazeCli {
           }
         }
         }
+        }
+      }
       }
     }
 

@@ -1,10 +1,15 @@
 package xyz.block.trailblaze.host.devices
 
+import java.io.File
 import java.net.InetAddress
+import java.net.InetSocketAddress
 import java.net.ServerSocket
+import java.net.Socket
+import java.util.concurrent.TimeUnit
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import org.junit.Assume.assumeTrue
 import org.junit.Test
 
 class HostDriverPortUtilsTest {
@@ -110,5 +115,52 @@ class HostDriverPortUtilsTest {
         HostDriverPortUtils.isPortBindable(listener.localPort, loopbackProbeAddresses = emptyList())
       }
     }
+  }
+
+  @Test
+  fun `killing a port's processes kills its listener and spares a process only connected to it`() {
+    // This JVM holding a client socket is the case the listener-only filter exists for: the daemon
+    // connects to a runner's port, and killing everything on it would kill the daemon.
+    val path = System.getenv("PATH").orEmpty().split(File.pathSeparator)
+    assumeTrue(
+      "needs lsof and nc on PATH",
+      listOf("lsof", "nc").all { command -> path.any { File(it, command).canExecute() } },
+    )
+    val port = ServerSocket(0, 1, InetAddress.getLoopbackAddress()).use { it.localPort }
+    // -k keeps the listening socket open while a connection is up, as an XCTest runner does.
+    val listener = ProcessBuilder("nc", "-lk", "$port").start()
+    try {
+      val client = connectWithin(port, timeoutMs = 5_000)
+      assumeTrue("nc -lk did not start listening on $port", client != null)
+      client!!.use {
+        val pids = HostDriverPortUtils.listeningPids(port)
+        assertTrue(listener.pid().toString() in pids, "the listener must be found; got $pids")
+        assertFalse(
+          ProcessHandle.current().pid().toString() in pids,
+          "a process only connected to $port must not be a kill target; got $pids",
+        )
+
+        HostDriverPortUtils.killProcessesUsingPort(port)
+
+        assertTrue(listener.waitFor(5, TimeUnit.SECONDS), "the listener on $port must be killed")
+      }
+    } finally {
+      listener.destroyForcibly()
+    }
+  }
+
+  private fun connectWithin(port: Int, timeoutMs: Long): Socket? {
+    val deadline = System.currentTimeMillis() + timeoutMs
+    while (System.currentTimeMillis() < deadline) {
+      val socket = Socket()
+      try {
+        socket.connect(InetSocketAddress(InetAddress.getLoopbackAddress(), port), 500)
+        return socket
+      } catch (e: Exception) {
+        socket.close()
+        Thread.sleep(100)
+      }
+    }
+    return null
   }
 }

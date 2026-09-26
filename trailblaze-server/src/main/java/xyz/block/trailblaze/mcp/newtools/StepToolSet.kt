@@ -6,6 +6,7 @@ import ai.koog.agents.core.tools.reflect.ToolSet
 import kotlinx.coroutines.delay
 import kotlinx.datetime.Clock
 import kotlinx.serialization.Serializable
+import xyz.block.trailblaze.mcp.McpDeviceContext
 import xyz.block.trailblaze.mcp.McpToolNames
 import xyz.block.trailblaze.mcp.ViewHierarchyVerbosity
 import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
@@ -49,6 +50,7 @@ import xyz.block.trailblaze.toolcalls.isVerification
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import kotlin.reflect.full.findAnnotation
 import kotlin.reflect.KClass
+import xyz.block.trailblaze.tracing.TrailblazeTracer
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.yaml.DirectionStep
 import xyz.block.trailblaze.yaml.TrailYamlItem
@@ -74,6 +76,11 @@ class StepToolSet(
   private val sessionIdProvider: (() -> SessionId?)? = null,
   /** Returns driver connection status when the driver is still initializing. */
   private val driverStatusProvider: (() -> String?)? = null,
+  /**
+   * Whether a device is connected. A null driver status reads as a ready driver, and the bridge
+   * answers null when no device is connected at all, so the two have to be told apart here.
+   */
+  private val deviceConnectedProvider: (() -> Boolean)? = null,
   /**
    * Optional override for the tool classes used by the inner agent.
    *
@@ -109,6 +116,10 @@ class StepToolSet(
     /** Shorter timeout for transient capture failures (driver ready but session warming up). */
     internal const val SCREEN_CAPTURE_RETRY_MS = 5_000L
     private const val POLL_INTERVAL_MS = 1_000L
+
+    /** What a step reports when no device is connected. */
+    const val NO_DEVICE_MESSAGE =
+      "No device connected. Use device(action=ANDROID), device(action=IOS), or device(action=WEB) first."
 
     /**
      * How a failed direct tool call reads back to the caller.
@@ -207,6 +218,10 @@ class StepToolSet(
     return null
   }
 
+  /** The driver's status, or null when it is ready. */
+  private fun driverStatus(): String? =
+    if (deviceConnectedProvider?.invoke() == false) NO_DEVICE_MESSAGE else driverStatusProvider?.invoke()
+
   /**
    * Waits for [screenStateProvider] to return a non-null [ScreenState].
    *
@@ -218,13 +233,13 @@ class StepToolSet(
    */
   private suspend fun awaitScreenState(
     fast: Boolean = false,
-    includeAnnotated: Boolean = true,
+    includeAnnotated: Boolean = false,
     includeAllElements: Boolean = false,
   ): ScreenState? {
     // Fast path — already ready
     screenStateProvider(fast, includeAnnotated, includeAllElements)?.let { return it }
 
-    val status = driverStatusProvider?.invoke()
+    val status = driverStatus()
     val timeoutMs = resolveAwaitTimeoutMs(status) ?: return null
 
     val deadline = System.currentTimeMillis() + timeoutMs
@@ -286,6 +301,9 @@ class StepToolSet(
   ): String {
     val traceOrigin = if (tools != null) TraceId.Companion.TraceOrigin.MCP else TraceId.Companion.TraceOrigin.LLM
     val traceId = TraceId.generate(traceOrigin)
+    // Resolved before anything suspends: a `switchDevice` on an overlapping call can move the
+    // active name while this one runs, and its tool rows must stay on the device they ran on.
+    val deviceName = dispatchedDeviceName()
     val isVerify = BlazeHint.from(hint) == BlazeHint.VERIFY
     val isFast = fast
     val wantsScreenshot = screenshot
@@ -324,15 +342,33 @@ class StepToolSet(
     // the tree arrives unfiltered — the downstream compact-list bypass alone is not
     // enough once filterImportantForAccessibility runs on-device.
     val wantsAllElements = SnapshotDetail.ALL_ELEMENTS in parsedSnapshotDetails
-    val screenState = awaitScreenState(
-      fast = skipScreenshot,
-      includeAnnotated = needsAnnotation,
-      includeAllElements = wantsAllElements,
+
+    suspend fun runDirectTools(validated: DirectToolsValidation.Valid) = executeDirectTools(
+      objective = objective,
+      validated = validated,
+      traceId = traceId,
+      deviceName = deviceName,
+      fast = isFast,
+      snapshotDetails = parsedSnapshotDetails,
     )
+
+    // Direct tools capture the screen themselves when they need it, so for them the capture below
+    // only waits out a driver that isn't ready. A ready driver goes straight to the tools.
+    if (preValidatedDirectTools != null && driverStatusProvider != null && driverStatus() == null) {
+      return runDirectTools(preValidatedDirectTools)
+    }
+
+    val screenState = TrailblazeTracer.traceSuspend("preActionCapture", "capture") {
+      awaitScreenState(
+        fast = skipScreenshot,
+        includeAnnotated = needsAnnotation,
+        includeAllElements = wantsAllElements,
+      )
+    }
       ?: return StepResult(
         executed = false,
-        error = driverStatusProvider?.invoke()
-          ?: "No device connected. Use device(action=ANDROID), device(action=IOS), or device(action=WEB) first.",
+        error = driverStatus()
+          ?: NO_DEVICE_MESSAGE,
       ).toMarkdown()
 
     // Snapshot short-circuit: skip tool execution entirely and return the
@@ -374,16 +410,9 @@ class StepToolSet(
     }
 
     // Direct tool execution mode — bypass the AI agent, execute provided tools as-is.
-    // parseAndValidateDirectTools already produced the validated wrappers above; this
-    // call performs the actual tool execution against the now-captured screen state.
+    // parseAndValidateDirectTools already produced the validated wrappers above.
     if (tools != null && preValidatedDirectTools != null) {
-      return executeDirectTools(
-        objective = objective,
-        validated = preValidatedDirectTools,
-        traceId = traceId,
-        fast = isFast,
-        snapshotDetails = parsedSnapshotDetails,
-      )
+      return runDirectTools(preValidatedDirectTools)
     }
 
     // AI agent mode requires an LLM — fail clearly if not configured
@@ -775,6 +804,7 @@ class StepToolSet(
     objective: String,
     validated: DirectToolsValidation.Valid,
     traceId: TraceId,
+    deviceName: String?,
     fast: Boolean = false,
     snapshotDetails: Set<SnapshotDetail> = emptySet(),
   ): String {
@@ -807,13 +837,16 @@ class StepToolSet(
     for (wrapper in resolvedToolWrappers) {
       val toolStartTime = Clock.System.now()
       try {
-        val output = toolExecutor(wrapper.trailblazeTool, traceId)
+        val output = TrailblazeTracer.traceSuspend("executeTool", "tool", mapOf("tool" to wrapper.name)) {
+          toolExecutor(wrapper.trailblazeTool, traceId)
+        }
         toolOutputs.add(wrapper.name to output)
         emitDirectToolLog(
           tool = wrapper.trailblazeTool,
           toolName = wrapper.name,
           traceId = traceId,
           startTime = toolStartTime,
+          deviceName = deviceName,
           successful = true,
         )
         recordedToolCalls.add(RecordedToolCall(toolName = wrapper.name, args = emptyMap()))
@@ -824,6 +857,7 @@ class StepToolSet(
           toolName = wrapper.name,
           traceId = traceId,
           startTime = toolStartTime,
+          deviceName = deviceName,
           successful = false,
           exceptionMessage = e.message,
         )
@@ -848,7 +882,9 @@ class StepToolSet(
       null
     } else {
       try {
-        screenSummaryProvider?.invoke(snapshotDetails)
+        TrailblazeTracer.traceSuspend("screenSummary", "capture") {
+          screenSummaryProvider?.invoke(snapshotDetails)
+        }
       } catch (e: Exception) {
         Console.log("│ Screen summary capture failed: ${e.message}")
         null
@@ -936,8 +972,8 @@ class StepToolSet(
     // screenshot; the no-LLM fallback path just returns raw screen state.
     val screenState = awaitScreenState(includeAnnotated = screenAnalyzer != null)
     if (screenState == null) {
-      val driverStatus = driverStatusProvider?.invoke()
-        ?: "No device connected. Use device(action=ANDROID), device(action=IOS), or device(action=WEB) first."
+      val driverStatus = driverStatus()
+        ?: NO_DEVICE_MESSAGE
       Console.error("[ask] Screen state is null — driverStatus=$driverStatus")
       return AskResult(
         answer = null,
@@ -1166,6 +1202,7 @@ class StepToolSet(
     toolName: String,
     traceId: TraceId,
     startTime: kotlinx.datetime.Instant,
+    deviceName: String?,
     successful: Boolean,
     exceptionMessage: String? = null,
   ) {
@@ -1185,8 +1222,22 @@ class StepToolSet(
         isRecordable = tool.getIsRecordableFromAnnotation(),
         isVerification = tool.isVerificationToolInstance(),
         isTopLevelToolCall = true,
+        // The device the tool ran on, by binding name: in a named cast the report reads this to put
+        // the row, and its recording, on the right display. Null outside a cast, as before.
+        deviceName = deviceName,
       ),
     )
+  }
+
+  /**
+   * The binding name of the device this call was dispatched to: the server pins the call's device
+   * in [McpDeviceContext] at dispatch, so that id — not whichever name is active by the time a tool
+   * finishes — says where the tools ran. Falls back to the active name when no device was pinned.
+   */
+  private fun dispatchedDeviceName(): String? {
+    val context = sessionContext ?: return null
+    val dispatched = McpDeviceContext.currentDeviceId.get() ?: return context.activeDeviceName()
+    return context.boundDeviceName(dispatched)
   }
 }
 

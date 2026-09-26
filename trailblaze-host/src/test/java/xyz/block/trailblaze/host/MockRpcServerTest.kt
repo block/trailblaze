@@ -1,8 +1,10 @@
 package xyz.block.trailblaze.host
 
 import assertk.assertThat
+import assertk.assertions.contains
 import assertk.assertions.isEqualTo
 import assertk.assertions.isFalse
+import assertk.assertions.isNotEqualTo
 import assertk.assertions.isTrue
 import io.ktor.http.HttpStatusCode
 import java.io.IOException
@@ -13,11 +15,16 @@ import java.net.ServerSocket
 import java.net.URI
 import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
+import kotlinx.coroutines.runBlocking
 import org.junit.Rule
 import org.junit.rules.Timeout
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
+import xyz.block.trailblaze.devices.TrailblazeDevicePort.getTrailblazeOnDeviceSpecificPort
+import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetScreenStateRequest
+import xyz.block.trailblaze.mcp.android.ondevice.rpc.OnDeviceRpcClient
 import kotlin.test.Test
+import kotlin.test.assertFailsWith
 
 /**
  * Lifecycle guards for the [MockRpcServer] test fixture itself.
@@ -43,7 +50,16 @@ import kotlin.test.Test
  *    narrows it to connections whose *destination* is also loopback, which keep 127.0.0.1 as their
  *    source. See the loopback-host constant in [MockRpcServer] for the measurement.
  *
- * Neither is a socket-option problem. The first isn't fixed by waiting longer; the loopback
+ * A third arrived later and is not a race at all: **another JVM running this same test class**.
+ * A hardcoded device id hashes to one port machine-wide, so two builds at once (two worktrees, or
+ * one CI agent running two modules) simply own the same port, and the loser waits out the whole
+ * bindability bound and fails. Waiting cannot fix that one, because the other listener is not
+ * going away — see [JVM_TEST_DEVICE_SCOPE], which is why every device id here comes from
+ * [jvmScopedDeviceId]. Scoping re-rolls the port every run, so it also has to skip ports this
+ * machine already owns outright ([resolveScopedDeviceId]); those produce the same symptom with no
+ * second JVM anywhere.
+ *
+ * Neither of the first two is a socket-option problem. The first isn't fixed by waiting longer; the loopback
  * remainder of the second is — the squatting socket is unrelated to this fixture and goes away on
  * its own — which is why `start()` waits for the port to be bindable before handing it to Ktor
  * rather than letting the engine take the `BindException`. Doing it in that order also keeps the
@@ -255,17 +271,115 @@ class MockRpcServerTest {
     }
   }
 
+  /**
+   * The agreement half of the isolation fix: scoping the device id must not cost the fixture the
+   * property it exists for — a client built from the same id finds the server with nothing wired
+   * between them, because both run the same production hash over the same string.
+   *
+   * Asserted through a real [OnDeviceRpcClient] round trip rather than by recomputing the port,
+   * which would only restate the fixture's own arithmetic. This is what fails if isolation is ever
+   * re-done by pointing the *server* at a test port namespace: the client derives its port with
+   * the default namespace, so the request would go somewhere else and never arrive here.
+   */
+  @Test fun `a client built from the same device id still reaches the fixture`() {
+    val deviceId = deviceId("mock-rpc-client-agreement")
+    val server = MockRpcServer(deviceId)
+    server.start()
+    try {
+      OnDeviceRpcClient(deviceId).use { client ->
+        // The default 500 answer is enough: the assertion is arrival, not the reply. A reply the
+        // client can't reach would be an IOException, which sends it into adb-forward recovery.
+        runBlocking { client.rpcCall(GetScreenStateRequest(includeScreenshot = false)) }
+      }
+      assertThat(server.requestLog["/rpc/GetScreenStateRequest"]?.size).isEqualTo(1)
+    } finally {
+      server.stop()
+    }
+  }
+
+  /**
+   * The isolation half: a hardcoded device id is refused outright, because the fixture cannot
+   * detect the collision it causes — it looks like a 60s bind wait against an unattributable
+   * socket, which is how it was first diagnosed as a product bug rather than a fixture one.
+   */
+  @Test fun `a device id that is not scoped to this JVM is refused`() {
+    val unscoped =
+      TrailblazeDeviceId(
+        instanceId = "mock-rpc-unscoped",
+        trailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID,
+      )
+
+    val thrown = assertFailsWith<IllegalArgumentException> { MockRpcServer(unscoped) }
+
+    assertThat(thrown.message.orEmpty()).contains("jvmScopedDeviceId")
+  }
+
+  /**
+   * What makes the scope isolating, stated directly: it names THIS process, so a second JVM
+   * running this same class hashes a different string. And one name resolves to one id for the
+   * whole JVM — resolving twice to different ids would leave the client and the server on
+   * different ports, which is the property the whole fixture rests on.
+   *
+   * Not asserted by comparing against another process's port: the range is 7000 wide, so any
+   * "these two differ" assertion over hashes is a 1-in-7000 flake in the file whose whole subject
+   * is removing flakes.
+   */
+  @Test fun `the device scope names this process and one name resolves once`() {
+    val pid = ProcessHandle.current().pid().toString()
+
+    assertThat(JVM_TEST_DEVICE_SCOPE).contains(pid)
+    assertThat(deviceId("mock-rpc-scope").instanceId).contains(JVM_TEST_DEVICE_SCOPE)
+    assertThat(deviceId("mock-rpc-scope")).isEqualTo(deviceId("mock-rpc-scope"))
+  }
+
+  /**
+   * Scoping per process re-rolls the port on every run, so a run can land on a port this machine
+   * permanently owns — and then every test in the class waits out the bind bound and fails, with
+   * no second JVM involved. Measured once in 28 JVMs on a developer Mac. So the choice checks.
+   *
+   * The answer is handed in rather than staged with a real socket: a test that has to own the
+   * exact port a hash lands on would have to reverse the hash, and asserting over machine state is
+   * what this file spends its length avoiding.
+   */
+  @Test fun `a scoped device id skips a port something else already owns`() {
+    val probed = mutableListOf<Int>()
+    val firstChoice = resolveScopedDeviceId("mock-rpc-occupied", TrailblazeDevicePlatform.ANDROID) {
+      probed += it
+      true
+    }
+    val firstChoicePort = firstChoice.getTrailblazeOnDeviceSpecificPort()
+
+    val whenOccupied =
+      resolveScopedDeviceId("mock-rpc-occupied", TrailblazeDevicePlatform.ANDROID) {
+        probed += it
+        it != firstChoicePort
+      }
+
+    assertThat(whenOccupied.getTrailblazeOnDeviceSpecificPort()).isNotEqualTo(firstChoicePort)
+    assertThat(probed).contains(firstChoicePort)
+  }
+
+  /**
+   * The give-up case names the same port a first-choice resolution would, so a run on a machine
+   * that somehow answers "taken" to everything still fails against a stable, recognizable port
+   * instead of the tail of a search.
+   */
+  @Test fun `a scoped device id falls back to its first choice when every port looks taken`() {
+    val platform = TrailblazeDevicePlatform.ANDROID
+
+    val firstChoice = resolveScopedDeviceId("mock-rpc-all-taken", platform) { true }
+    val allTaken = resolveScopedDeviceId("mock-rpc-all-taken", platform) { false }
+
+    assertThat(allTaken).isEqualTo(firstChoice)
+  }
+
   private fun awaitListeningWithin(port: Int, isListening: Boolean): Boolean =
     MockRpcServer.awaitListening(port, isListening = isListening, timeoutMs = SHORT_BOUND_MS)
 
   private fun awaitBindableWithin(port: Int): Boolean =
     MockRpcServer.awaitBindable(port, timeoutMs = SHORT_BOUND_MS)
 
-  private fun deviceId(instanceId: String) =
-    TrailblazeDeviceId(
-      instanceId = instanceId,
-      trailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID,
-    )
+  private fun deviceId(instanceId: String) = jvmScopedDeviceId(instanceId)
 
   /** Minimal POST so the assertion is on the fixture's own behavior, not on an HTTP client. */
   private fun post(port: Int, path: String): Int {

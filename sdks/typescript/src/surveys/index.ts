@@ -16,8 +16,8 @@
 // sessions with the CLI in `cli.ts` or `runSurveys()` from code. Each session yields the list of
 // features it exercised, each backed by the records that prove it.
 
-export { survey, isSurvey, matchFootprint, surveyFeatures, withId } from "./survey.js";
-export type { SurveyContext, SurveyDefinition, SurveyHandler, SurveyResult, FootprintSpec, FootprintQueries } from "./survey.js";
+export { DIAGNOSIS_KINDS, survey, isSurvey, matchFootprint, purposeOf, surveyFeatures, withId } from "./survey.js";
+export type { SurveyPurpose, SurveyContext, SurveyDefinition, SurveyHandler, SurveyResult, FootprintSpec, FootprintQueries } from "./survey.js";
 export { SurveySession, isSessionDirectory, parseIsoMs } from "./session.js";
 export type { LogQuery } from "./session.js";
 export { Records } from "./match.js";

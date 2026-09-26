@@ -35,11 +35,19 @@ object DesktopLogFileWriter {
   /**
    * Installs a tee on System.out and System.err that also writes to a log file.
    *
+   * Does nothing when `TRAILBLAZE_DISABLE_DESKTOP_LOG_FILE` is `1`/`true`: a caller that already
+   * captures the process's output, and filters it before it touches disk, needs no unfiltered
+   * second copy that outlives the job.
+   *
    * @param httpPort The HTTP port this instance is running on. Used to choose the
    *   log filename so parallel instances don't clobber each other.
    */
-  fun install(httpPort: Int = TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTP_PORT) {
-    val logDir = File(TrailblazeDesktopUtil.getDefaultAppDataDirectory(), LOG_DIR_NAME)
+  fun install(
+    httpPort: Int = TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTP_PORT,
+    disableFlag: String? = System.getenv("TRAILBLAZE_DISABLE_DESKTOP_LOG_FILE"),
+    logDir: File = File(TrailblazeDesktopUtil.getDefaultAppDataDirectory(), LOG_DIR_NAME),
+  ) {
+    if (disableFlag != null && (disableFlag == "1" || disableFlag.equals("true", ignoreCase = true))) return
     logDir.mkdirs()
 
     val logFileName = if (httpPort == TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTP_PORT) {

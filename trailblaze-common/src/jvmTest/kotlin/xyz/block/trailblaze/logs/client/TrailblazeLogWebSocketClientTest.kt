@@ -10,7 +10,6 @@ import io.ktor.server.websocket.webSocket
 import io.ktor.websocket.Frame
 import io.ktor.websocket.readBytes
 import io.ktor.websocket.send
-import java.net.ServerSocket
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
@@ -41,12 +40,13 @@ class TrailblazeLogWebSocketClientTest {
    */
   @Test
   fun `each overlapping upload reports the size of its own frame`() {
-    val port = ServerSocket(0).use { it.localPort }
     val frameSizesByUploadId = ConcurrentHashMap<Long, Long>()
     val framesArrived = AtomicInteger()
     val bothFramesArrived = CompletableDeferred<Unit>()
 
-    val server = embeddedServer(CIO, port = port) {
+    // Port 0, read back after the bind: probing a free port and handing Ktor the number leaves it
+    // unowned between the probe's close and Ktor's bind, and a busy CI agent fills that gap.
+    val server = embeddedServer(CIO, port = 0) {
       install(ServerWebSockets)
       routing {
         webSocket("/logs-ws") {
@@ -73,6 +73,8 @@ class TrailblazeLogWebSocketClientTest {
         }
       }
     }.start(wait = false)
+    // start() throws on a failed bind, so this only waits on one that landed.
+    val port = runBlocking { server.engine.resolvedConnectors() }.first().port
 
     val httpClient = HttpClient(OkHttp) { install(ClientWebSockets) }
     val client = TrailblazeLogWebSocketClient(httpClient, "http://localhost:$port")

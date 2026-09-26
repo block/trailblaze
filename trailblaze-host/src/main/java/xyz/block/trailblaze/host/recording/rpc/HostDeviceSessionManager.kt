@@ -334,10 +334,10 @@ class HostDeviceSessionManager {
    *
    * Claim **before** you connect, as a reservation, and release it if the connect fails - not after,
    * once you have a driver to protect. The connect itself is the long part and the part that rebuilds
-   * a mismatched driver, so claiming afterwards leaves exactly that stretch unguarded: `createIOS` is
-   * `@Synchronized`, so another connect that already passed its own check waits out this whole build
-   * on the factory monitor and then rebuilds the driver it produced, never rechecking. Drop the claim
-   * with [releaseClaim] once the driver is closed.
+   * a mismatched driver, so claiming afterwards leaves exactly that stretch unguarded: `createIOS`
+   * serializes connects to one device, so another connect to it that already passed its own check
+   * waits out this whole build on that device's lock and then rebuilds the driver it produced, never
+   * rechecking. Drop the claim with [releaseClaim] once the driver is closed.
    *
    * Even so, ask-then-claim is not atomic against a concurrent [connectIfAbsent] - the claiming owner
    * connects on its own thread, outside the per-device [Mutex]. Two connects that check at the same

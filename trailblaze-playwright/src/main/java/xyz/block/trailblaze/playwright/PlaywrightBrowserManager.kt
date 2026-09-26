@@ -16,6 +16,7 @@ import kotlinx.datetime.Instant
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.capture.video.PlaywrightVideoRecordDir
 import xyz.block.trailblaze.capture.video.WebScreencastFeedRegistry
+import xyz.block.trailblaze.playwright.recording.PlaywrightScreencast
 import xyz.block.trailblaze.playwright.recording.PlaywrightScreencastFeed
 import xyz.block.trailblaze.tracing.CompleteEvent
 import xyz.block.trailblaze.tracing.PlatformIds
@@ -250,6 +251,9 @@ class PlaywrightBrowserManager(
       put("DBUS_SESSION_BUS_ADDRESS", "")
       put("DBUS_SYSTEM_BUS_ADDRESS", "")
       System.getenv("PLAYWRIGHT_BROWSERS_PATH")?.let { put("PLAYWRIGHT_BROWSERS_PATH", it) }
+      // This map REPLACES the browser's environment, so without this line the browser ignores the
+      // host's TZ and always falls back to the system zone.
+      System.getenv("TZ")?.let { put("TZ", it) }
     }
 
   private val launchOptions =
@@ -462,7 +466,8 @@ class PlaywrightBrowserManager(
    * subscribes. Constructed eagerly (cheap; it holds no resources until subscribed) so the init
    * block can register it.
    */
-  private val screencastFeed: PlaywrightScreencastFeed = PlaywrightScreencastFeed(this)
+  private val screencastFeed: PlaywrightScreencastFeed =
+    PlaywrightScreencastFeed(this, jpegQuality = PlaywrightScreencast.RECORDING_QUALITY)
 
   override lateinit var currentPage: Page
     private set
@@ -738,6 +743,19 @@ class PlaywrightBrowserManager(
         resolvedViewport.width,
         resolvedViewport.height,
         browserEngine = browserEngine,
+      )
+    }
+  }
+
+  override fun captureScreenStateForRecord(): ScreenState = onPlaywrightThread {
+    TrailblazeTracer.trace("captureScreenStateForRecord", "browser") {
+      PlaywrightRecordScreenState(
+        PlaywrightScreenState(
+          currentPage,
+          resolvedViewport.width,
+          resolvedViewport.height,
+          browserEngine = browserEngine,
+        ),
       )
     }
   }

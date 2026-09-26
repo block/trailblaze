@@ -41,4 +41,19 @@ class DrainSessionRequestHandlerTest {
     }
     assertTrue(result is RpcResult.Success)
   }
+
+  @Test
+  fun `drain runs the driver teardown even though clearing UiAutomation fails on JVM`() {
+    var drained = 0
+    val handler = DrainSessionRequestHandler(onDrain = { drained++ })
+    runBlocking { handler.handle(DrainSessionRequest(reason = "unit_test")) }
+    assertEquals(1, drained)
+  }
+
+  @Test
+  fun `a failing driver teardown does not fail the drain`() {
+    val handler = DrainSessionRequestHandler(onDrain = { error("teardown failed") })
+    val result = runBlocking { handler.handle(DrainSessionRequest(reason = "unit_test")) }
+    assertTrue(result is RpcResult.Success)
+  }
 }

@@ -1,5 +1,7 @@
 package xyz.block.trailblaze.mcp.android.ondevice.rpc
 
+import kotlinx.serialization.EncodeDefault
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.Transient
 import xyz.block.trailblaze.api.TrailblazeImageFormat
@@ -25,11 +27,10 @@ import xyz.block.trailblaze.api.ViewHierarchyTreeNode
  *   Default is WEBP. See [screenshotMaxDimension1] for the user-override path.
  * @param screenshotCompressionQuality Compression quality (0.0 to 1.0) for lossy formats
  *   (JPEG, WEBP). Default 0.80. See [screenshotMaxDimension1] for the user-override path.
- * @param includeAnnotatedScreenshot Whether to render and include the set-of-mark annotated
- *                                   screenshot. Annotation costs CPU, memory, and transfer bytes,
- *                                   so callers that only need the clean screenshot (e.g. CLI
- *                                   snapshots, disk logging) should pass false. Default is true
- *                                   to preserve the LLM-oriented screen-capture path.
+ * @param includeAnnotatedScreenshot Whether the device should render and ship the set-of-mark
+ *                                   annotated screenshot. Default false: only an LLM prompt reads
+ *                                   it, and the host draws it from the screenshot on first read
+ *                                   when the device didn't.
  * @param includeAllElements Whether to return every node in the accessibility tree, including
  *                           nodes whose `isImportantForAccessibility` flag is false. Default is
  *                           false — we pre-filter on-device so the default response stays small.
@@ -43,7 +44,14 @@ data class GetScreenStateRequest(
   val screenshotMaxDimension2: Int = 768,
   val screenshotImageFormat: TrailblazeImageFormat = TrailblazeImageFormat.WEBP,
   val screenshotCompressionQuality: Float = 0.80f,
-  val includeAnnotatedScreenshot: Boolean = true,
+  /**
+   * Always written, even at its default. The JSON transport omits default-valued fields and the
+   * receiver fills them from its own default, which was `true` before this default flipped — so an
+   * omitted `false` reached an older runner as "render the annotation" and it did the work anyway.
+   */
+  @OptIn(ExperimentalSerializationApi::class)
+  @EncodeDefault(EncodeDefault.Mode.ALWAYS)
+  val includeAnnotatedScreenshot: Boolean = false,
   val includeAllElements: Boolean = false,
   /**
    * If true, the handler must return `Failure` when the accessibility service is not bound

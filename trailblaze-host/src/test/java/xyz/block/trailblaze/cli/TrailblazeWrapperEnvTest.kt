@@ -1,6 +1,10 @@
 package xyz.block.trailblaze.cli
 
 import java.io.File
+import xyz.block.trailblaze.logs.server.endpoints.CliExecChunk
+import xyz.block.trailblaze.logs.server.endpoints.CliExecReplayFormat
+import xyz.block.trailblaze.logs.server.endpoints.CliExecResponse
+import xyz.block.trailblaze.logs.server.endpoints.CliExecStream
 import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -363,6 +367,27 @@ class TrailblazeWrapperEnvTest {
     )
   }
 
+  /** The command is recorded in the daemon, so the caller's trace level has to travel with it. */
+  @Test
+  fun `ipc_try_forward forwards the caller's trace level`() {
+    assumeTrue("bash required for wrapper tests", File("/bin/bash").exists())
+    assumeTrue(
+      "jq required for wrapper IPC test",
+      ProcessBuilder("bash", "-c", "command -v jq >/dev/null 2>&1").start().waitFor() == 0,
+    )
+
+    val (exitCode, stdout, stderr) = forwardSnapshotCapturing(
+      jqFilter = ".env.TRAILBLAZE_TRACE_LEVEL",
+      extraEnv = mapOf("TRAILBLAZE_TRACE_LEVEL" to "verbose"),
+    )
+
+    assertEquals(0, exitCode, "bash harness must exit cleanly; stderr=\n$stderr")
+    assertTrue(
+      stdout.lineSequence().any { it.trim() == "verbose" },
+      "the trace level must reach the daemon in the /cli/exec env; payload read:\n$stdout",
+    )
+  }
+
   @Test
   fun `ipc_try_forward keeps the standard ceiling for a lowered request timeout`() {
     assumeTrue("bash required for wrapper tests", File("/bin/bash").exists())
@@ -470,6 +495,71 @@ class TrailblazeWrapperEnvTest {
     assertFalse(stdout.contains("JVM_RAN"), "a timed-out forward must not re-run the command in a JVM; stdout:\n$stdout")
     assertTrue(stdout.lineSequence().any { it.trim() == "RC=2" }, "expected the infra exit code 2; stdout:\n$stdout")
     assertTrue(stderr.contains("NOT re-run"), "the user must be told the command was not re-run; stderr:\n$stderr")
+  }
+
+  /**
+   * The daemon's encoder and the launcher's bash decoder live in two languages; this is the one
+   * place they meet. Output crosses in write order with its exact bytes, the exit code survives,
+   * and nothing re-runs in a JVM.
+   */
+  @Test
+  fun `ipc_try_forward replays the daemon's framed reply exactly, with no JVM`() {
+    assumeTrue("bash required for wrapper tests", File("/bin/bash").exists())
+    assumeTrue(
+      "jq required for wrapper IPC test",
+      ProcessBuilder("bash", "-c", "command -v jq >/dev/null 2>&1").start().waitFor() == 0,
+    )
+    val wrapper = locateWrapperScript()
+    val reply = File.createTempFile("trailblaze-cli-exec-reply", ".bin")
+    val capturedArgs = File.createTempFile("trailblaze-cli-exec-args", ".txt")
+    try {
+      reply.writeBytes(
+        CliExecReplayFormat.encode(
+          CliExecResponse(
+            stdout = "",
+            stderr = "",
+            exitCode = 3,
+            transcript = listOf(
+              CliExecChunk(CliExecStream.STDOUT, "Connecting to Android device...\n"),
+              CliExecChunk(CliExecStream.STDERR, "✗ tool failed — ünïcödé\n"),
+              CliExecChunk(CliExecStream.STDOUT, "  hint: \$(not run) `trailblaze status`\n\n"),
+            ),
+          ),
+        ),
+      )
+      val script = """
+        tb_run() { printf 'JVM_RAN\\n'; }
+        tb_run_quiet() { printf 'JVM_RAN\\n'; }
+        tb_run_background() { printf 'JVM_RAN\\n'; }
+        tb_run_background_quiet() { printf 'JVM_RAN\\n'; }
+        tb_run_exec_quiet() { printf 'JVM_RAN\\n'; }
+        tb_check_java_version() { :; }
+        curl() {
+          case "${'$'}*" in
+            *"/ping"*) return 0 ;;
+          esac
+          printf '%s' "${'$'}*" > '${capturedArgs.absolutePath}'
+          cat '${reply.absolutePath}'
+        }
+        # A UTF-8 locale, where bash counts characters rather than the bytes the framing counts.
+        utf8=${'$'}(locale -a 2> /dev/null | grep -iE '^(c|en_us)\.utf-?8${'$'}' | head -1)
+        [ -n "${'$'}utf8" ] && export LC_ALL="${'$'}utf8"
+        ( source '${wrapper.absolutePath}' tool tap )
+      """.trimIndent()
+
+      val (exitCode, stdout, stderr) = runBash(script, extraEnv = emptyMap())
+
+      assertEquals(3, exitCode, "the daemon's exit code must be the launcher's; stderr=\n$stderr")
+      assertEquals("Connecting to Android device...\n  hint: \$(not run) `trailblaze status`\n\n", stdout)
+      assertEquals("✗ tool failed — ünïcödé\n", stderr)
+      assertTrue(
+        capturedArgs.readText().contains(CliExecReplayFormat.CONTENT_TYPE),
+        "the launcher must ask for the framing; curl got:\n${capturedArgs.readText()}",
+      )
+    } finally {
+      reply.delete()
+      capturedArgs.delete()
+    }
   }
 
   @Test

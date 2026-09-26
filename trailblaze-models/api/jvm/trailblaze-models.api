@@ -10596,6 +10596,21 @@ public final class xyz/block/trailblaze/mcp/AgentToolTransport$Companion {
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
 }
 
+public final class xyz/block/trailblaze/mcp/BoundDeviceRosterMember {
+	public fun <init> (Ljava/lang/String;Lxyz/block/trailblaze/devices/TrailblazeDeviceId;Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Lxyz/block/trailblaze/devices/TrailblazeDeviceId;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Lxyz/block/trailblaze/devices/TrailblazeDeviceId;Ljava/lang/String;)Lxyz/block/trailblaze/mcp/BoundDeviceRosterMember;
+	public static synthetic fun copy$default (Lxyz/block/trailblaze/mcp/BoundDeviceRosterMember;Ljava/lang/String;Lxyz/block/trailblaze/devices/TrailblazeDeviceId;Ljava/lang/String;ILjava/lang/Object;)Lxyz/block/trailblaze/mcp/BoundDeviceRosterMember;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getName ()Ljava/lang/String;
+	public final fun getTargetId ()Ljava/lang/String;
+	public final fun getTrailblazeDeviceId ()Lxyz/block/trailblaze/devices/TrailblazeDeviceId;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
 public final class xyz/block/trailblaze/mcp/DeviceAppProbeFailedException : java/lang/Exception {
 	public fun <init> (Lxyz/block/trailblaze/devices/TrailblazeDeviceId;)V
 }
@@ -10704,6 +10719,7 @@ public abstract interface class xyz/block/trailblaze/mcp/TrailblazeMcpBridge {
 	public abstract fun getCurrentAppTargetId ()Ljava/lang/String;
 	public abstract fun getCurrentScreenState (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public abstract fun getCurrentlySelectedDeviceId ()Lxyz/block/trailblaze/devices/TrailblazeDeviceId;
+	public fun getDeviceDriverType (Lxyz/block/trailblaze/devices/TrailblazeDeviceId;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun getDirectScreenStateProvider (Z)Lkotlin/jvm/functions/Function1;
 	public static synthetic fun getDirectScreenStateProvider$default (Lxyz/block/trailblaze/mcp/TrailblazeMcpBridge;ZILjava/lang/Object;)Lkotlin/jvm/functions/Function1;
 	public fun getDriverConnectionStatus (Lxyz/block/trailblaze/devices/TrailblazeDeviceId;)Ljava/lang/String;
@@ -10729,6 +10745,7 @@ public abstract interface class xyz/block/trailblaze/mcp/TrailblazeMcpBridge {
 	public abstract fun selectDevice (Lxyz/block/trailblaze/devices/TrailblazeDeviceId;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun selectDeviceForSession (Lxyz/block/trailblaze/devices/TrailblazeDeviceId;)V
 	public fun setAgentImplementation (Lxyz/block/trailblaze/mcp/AgentImplementation;)Ljava/lang/String;
+	public fun setBoundDeviceRoster-VMxRres (Ljava/lang/String;Ljava/util/List;)Ljava/lang/String;
 	public fun setConfiguredDriverType (Lxyz/block/trailblaze/devices/TrailblazeDevicePlatform;Lxyz/block/trailblaze/devices/TrailblazeDriverType;)Ljava/lang/String;
 	public fun setLlmConfig (Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;
 	public fun setSessionTargetForDevice (Lxyz/block/trailblaze/devices/TrailblazeDeviceId;Ljava/lang/String;)Ljava/lang/String;
@@ -10746,6 +10763,7 @@ public final class xyz/block/trailblaze/mcp/TrailblazeMcpBridge$DefaultImpls {
 	public static fun getActiveSessionId-37nZJyo (Lxyz/block/trailblaze/mcp/TrailblazeMcpBridge;)Ljava/lang/String;
 	public static fun getAgentImplementation (Lxyz/block/trailblaze/mcp/TrailblazeMcpBridge;)Lxyz/block/trailblaze/mcp/AgentImplementation;
 	public static fun getConfiguredDriverType (Lxyz/block/trailblaze/mcp/TrailblazeMcpBridge;Lxyz/block/trailblaze/devices/TrailblazeDevicePlatform;)Lxyz/block/trailblaze/devices/TrailblazeDriverType;
+	public static fun getDeviceDriverType (Lxyz/block/trailblaze/mcp/TrailblazeMcpBridge;Lxyz/block/trailblaze/devices/TrailblazeDeviceId;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public static fun getDirectScreenStateProvider (Lxyz/block/trailblaze/mcp/TrailblazeMcpBridge;Z)Lkotlin/jvm/functions/Function1;
 	public static synthetic fun getDirectScreenStateProvider$default (Lxyz/block/trailblaze/mcp/TrailblazeMcpBridge;ZILjava/lang/Object;)Lkotlin/jvm/functions/Function1;
 	public static fun getDriverConnectionStatus (Lxyz/block/trailblaze/mcp/TrailblazeMcpBridge;Lxyz/block/trailblaze/devices/TrailblazeDeviceId;)Ljava/lang/String;
@@ -10767,6 +10785,7 @@ public final class xyz/block/trailblaze/mcp/TrailblazeMcpBridge$DefaultImpls {
 	public static synthetic fun runYamlBlocking-gwCluXo$default (Lxyz/block/trailblaze/mcp/TrailblazeMcpBridge;Ljava/lang/String;Ljava/util/List;Lkotlin/jvm/functions/Function1;JLxyz/block/trailblaze/mcp/AgentImplementation;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 	public static fun selectDeviceForSession (Lxyz/block/trailblaze/mcp/TrailblazeMcpBridge;Lxyz/block/trailblaze/devices/TrailblazeDeviceId;)V
 	public static fun setAgentImplementation (Lxyz/block/trailblaze/mcp/TrailblazeMcpBridge;Lxyz/block/trailblaze/mcp/AgentImplementation;)Ljava/lang/String;
+	public static fun setBoundDeviceRoster-VMxRres (Lxyz/block/trailblaze/mcp/TrailblazeMcpBridge;Ljava/lang/String;Ljava/util/List;)Ljava/lang/String;
 	public static fun setConfiguredDriverType (Lxyz/block/trailblaze/mcp/TrailblazeMcpBridge;Lxyz/block/trailblaze/devices/TrailblazeDevicePlatform;Lxyz/block/trailblaze/devices/TrailblazeDriverType;)Ljava/lang/String;
 	public static fun setLlmConfig (Lxyz/block/trailblaze/mcp/TrailblazeMcpBridge;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;
 	public static fun setSessionTargetForDevice (Lxyz/block/trailblaze/mcp/TrailblazeMcpBridge;Lxyz/block/trailblaze/devices/TrailblazeDeviceId;Ljava/lang/String;)Ljava/lang/String;

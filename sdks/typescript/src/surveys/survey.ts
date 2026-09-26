@@ -178,6 +178,21 @@ function footprintsHandler(spec: SurveySpec, footprints: Readonly<Record<string,
   };
 }
 
+/**
+ * What a survey is for. A **coverage** survey says what a run exercised: the product features it
+ * used, the screens it passed, the gaps a catalog has no row for. A **diagnosis** survey says how
+ * the run went: why it failed (`diagnosis`), what happened to it along the way (`signal`: a crash,
+ * server errors, the LLM stepping in), and where its time went (`measure`). Every other kind,
+ * including one a survey invents, is coverage.
+ */
+export type SurveyPurpose = "coverage" | "diagnosis";
+
+/** The finding kinds that are about how a run went rather than what it exercised. */
+export const DIAGNOSIS_KINDS: ReadonlySet<string> = new Set(["diagnosis", "signal", "measure"]);
+
+/** Which purpose a finding (or a survey, by its default kind) serves. */
+export const purposeOf = (kind: string | undefined): SurveyPurpose => (kind !== undefined && DIAGNOSIS_KINDS.has(kind) ? "diagnosis" : "coverage");
+
 /** The feature ids a survey declares it can report: its `footprints` keys, else `features`, else `feature`. */
 export function surveyFeatures(spec: SurveySpec): string[] {
   if (spec.footprints) return Object.keys(spec.footprints);

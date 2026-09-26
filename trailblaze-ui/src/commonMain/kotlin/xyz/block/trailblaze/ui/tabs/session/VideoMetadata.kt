@@ -31,5 +31,7 @@ internal data class CaptureMetadataModel(
     val type: String,
     val startTimestampMs: Long,
     val endTimestampMs: Long? = null,
+    /** The configuration name of the device the recording shows, in a multi-device session. */
+    val deviceName: String? = null,
   )
 }

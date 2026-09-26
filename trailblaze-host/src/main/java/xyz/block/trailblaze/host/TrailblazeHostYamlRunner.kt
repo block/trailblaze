@@ -125,10 +125,15 @@ object TrailblazeHostYamlRunner {
     loggingRule: HostTrailblazeLoggingRule,
     noLogging: Boolean = false,
   ) {
-    if (noLogging) return
+    if (noLogging) {
+      HostRunTraceRecording.end()
+      return
+    }
     withContext(kotlinx.coroutines.NonCancellable) {
       TrailblazeTraceExporter.exportAndSave(
         sessionId = sessionId,
+        // Ends this run in the same step as taking its spans; see [HostRunTraceRecording.endAndDrain].
+        drain = HostRunTraceRecording::endAndDrain,
         client = loggingRule.trailblazeLogServerClient,
         isServerAvailable = true, // Host runner always has a server running
         writeToDisk = { traceJson ->
@@ -312,9 +317,8 @@ object TrailblazeHostYamlRunner {
       // while the page was actually blank.
       throw t
     } finally {
+      // Also ends this run's share of the trace recording.
       exportAndSaveTrace(session.sessionId, loggingRule, noLogging = noLogging)
-      // After the export, so the count still reflects this run while its spans are being drained.
-      HostRunTraceRecording.end()
       try {
         cleanup()
       } catch (cleanupFailure: Throwable) {

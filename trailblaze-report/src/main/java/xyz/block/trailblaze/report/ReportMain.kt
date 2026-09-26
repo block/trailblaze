@@ -386,25 +386,11 @@ fun moveJsonFilesToSessionDirs(logsDir: File): Map<String, SessionId> {
       val sessionDir = File(logsDir, sessionId.value)
       sessionDir.mkdirs()
 
+      // Only record where the screenshot belongs; [moveScreenshotsToSessionDirs] moves it. The
+      // persisted `screenshotFile` stays a bare name, which readers resolve against the session dir.
       if (log is HasScreenshot) {
         log.screenshotFile?.let { screenshotFile ->
           sessionByScreenshotName[screenshotFile.substringAfterLast('/')] = sessionId
-          val currentScreenshotFileBytes = File(logsDir, screenshotFile).readBytes()
-          sessionDir.delete()
-          val destScreenshotFile = File(sessionDir, screenshotFile)
-          destScreenshotFile.writeBytes(currentScreenshotFileBytes)
-        }
-        val screenshotFileInSessionDirPath = "${sessionId.value}/${log.screenshotFile}"
-        when (log) {
-          is TrailblazeLog.AgentDriverLog -> log.copy(
-            screenshotFile = screenshotFileInSessionDirPath,
-          )
-
-          is TrailblazeLog.TrailblazeLlmRequestLog -> log.copy(
-            screenshotFile = screenshotFileInSessionDirPath,
-          )
-
-          else -> {}
         }
       }
 
@@ -492,7 +478,7 @@ private fun buildSessionByScreenshotNameMap(logsDir: File): Map<String, SessionI
         val log = TrailblazeJsonInstance.decodeFromString<TrailblazeLog>(jsonFile.readText())
         if (log is HasScreenshot) {
           log.screenshotFile?.let { screenshotFile ->
-            // Strip the `<sessionId>/` prefix that moveJsonFilesToSessionDirs may have rewritten in.
+            // Key by bare file name, the form the loose images this map routes carry.
             val justName = screenshotFile.substringAfterLast('/')
             result[justName] = log.session
           }

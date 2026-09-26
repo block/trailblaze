@@ -7,7 +7,7 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
-import { SurveySession, survey, discoverSessions, loadSurveys, loadTargetCatalog, matchFootprint, runSurveys, renderMarkdown, targetsOf } from "./index.js";
+import { SurveySession, purposeOf, survey, discoverSessions, loadSurveys, loadTargetCatalog, matchFootprint, runSurveys, renderMarkdown, targetsOf } from "./index.js";
 import { redactUrl } from "./session.js";
 
 const LOG = "xyz.block.trailblaze.logs.client.TrailblazeLog";
@@ -367,6 +367,20 @@ describe("analytics and other streams", () => {
     expect(s.events.has({ stream: "crash", data: { reason: "SIGSEGV" } })).toBe(true);
     expect(s.screenText.has({ text: /^Total \$/ })).toBe(true);
     expect(s.deviceLog.has({ text: "fatal signal" })).toBe(true);
+  });
+
+  test("a capture written as a repeat of an earlier screen still shows that screen, at its own time", () => {
+    // The strings file collapses a screen seen again into a pointer at the step that first showed
+    // it, so after A, B, A the third capture has no strings of its own.
+    const dir = join(root, "repeated-screen");
+    mkdirSync(dir, { recursive: true });
+    const t0 = 1_700_000_300_000;
+    writeFileSync(join(dir, "001_TrailblazeToolLog.json"), JSON.stringify(toolLog(t0, "tapOn", {})));
+    const screen = (stepIndex: number, ms: number, strings: string[], repeatOfStepIndex?: number) =>
+      ({ kind: "screen", stepIndex, captureId: `shot-${stepIndex}.webp`, timestamp: iso(t0 + ms), repeatOfStepIndex, strings: strings.map((text) => ({ text, source: "text" })) });
+    writeFileSync(join(dir, "visible-strings.ndjson"), ndjson([{ kind: "run", session: "r" }, screen(0, 1000, ["Home"]), screen(1, 2000, ["Settings"]), screen(2, 3000, [], 0)]));
+    const last = SurveySession.load(dir).screenText.all().filter((t) => t.stepIndex === 2);
+    expect(last.map((t) => [t.text, t.captureId, t.timeMs, t.line])).toEqual([["Home", "shot-2.webp", t0 + 3000, 4]]);
   });
 
   test("objectives pair start and completion and carry the verdict", () => {
@@ -790,4 +804,10 @@ describe("the blob a captured body points at", () => {
     expect(request?.bodyFiles).toEqual(["blobs/body.json"]);
     expect(request?.detail).toMatchObject({ at: expect.arrayContaining(["blobs/body.json"]) });
   });
+});
+
+test("a finding is diagnosis when it is about how the run went, and coverage otherwise", () => {
+  expect(["diagnosis", "signal", "measure"].map(purposeOf)).toEqual(["diagnosis", "diagnosis", "diagnosis"]);
+  // The default kind, the kinds this repo's surveys use, one a survey invents, and none at all.
+  expect(["feature", "waypoint", "gap", "job", undefined].map(purposeOf)).toEqual(["coverage", "coverage", "coverage", "coverage", "coverage"]);
 });

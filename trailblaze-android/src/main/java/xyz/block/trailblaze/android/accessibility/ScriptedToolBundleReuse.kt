@@ -21,7 +21,7 @@ import xyz.block.trailblaze.util.Console
  * tools missing and fail "Unknown tool" at dispatch. When a claim misses, the caller launches
  * normally, which is exactly today's behaviour.
  *
- * On under turbo; see [ReplayCaptureOptions.REUSE_TOOL_BUNDLES_SYSPROP].
+ * On unless the session may load host-pushed bundles; see [ReplayCaptureOptions.REUSE_TOOL_BUNDLES_SYSPROP].
  */
 object ScriptedToolBundleReuse {
 
@@ -103,10 +103,8 @@ object ScriptedToolBundleReuse {
   /**
    * Releases [sessionId]'s retained launch, if the retained launch is still that session's.
    *
-   * Called by the dispatch that owns an end of the session — `AndroidTrailblazeRule.runSuspend`'s
-   * `finally`, when this dispatch sent the session-start or session-end log. A retained launch
-   * belongs to a session, so without that call the last session's QuickJS context would stay alive
-   * until some unrelated later dispatch happened to displace it.
+   * Called from `AndroidTrailblazeRule.runSuspend`'s `finally` when [releasesAfterDispatch] says
+   * so, and for every session at once by [releaseAll] when the host drains the device.
    *
    * Scoped to the caller's own session, not "whatever is retained". Starting a session while one
    * is running only *launches* the previous job's cancellation and then starts the replacement
@@ -119,6 +117,31 @@ object ScriptedToolBundleReuse {
   fun release(sessionId: SessionId) {
     val current = retained ?: return
     if (current.sessionId != sessionId) return
+    shutdown(current)
+    retained = null
+  }
+
+  /**
+   * True when a dispatch's `finally` should [release] its session's retained launch.
+   *
+   * - [ownsSessionEnd]: the dispatch sent the session-start or session-end log. A retained launch
+   *   belongs to a session, so the dispatch that owns an end of it closes it; otherwise the last
+   *   session's QuickJS context stays alive until an unrelated later dispatch displaces it.
+   * - [endedInException]: the dispatch threw or was cancelled rather than finishing or getting an
+   *   error back from a tool. Its engine may be left mid-eval, so the next dispatch relaunches
+   *   instead of inheriting that state.
+   */
+  internal fun releasesAfterDispatch(ownsSessionEnd: Boolean, endedInException: Boolean): Boolean =
+    ownsSessionEnd || endedInException
+
+  /**
+   * Releases whatever launch is retained, for any session. For the host draining the device: it
+   * is tearing its connection down, so no session on it will dispatch again, and a per-tool RPC
+   * never sends the session-end log that would otherwise trigger [release].
+   */
+  @Synchronized
+  fun releaseAll() {
+    val current = retained ?: return
     shutdown(current)
     retained = null
   }

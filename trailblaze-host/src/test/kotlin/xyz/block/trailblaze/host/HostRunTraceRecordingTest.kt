@@ -6,6 +6,7 @@ import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 /**
@@ -67,6 +68,43 @@ class HostRunTraceRecordingTest {
 
     assertTrue(HostRunTraceRecording.begin())
     assertEquals(0, recordedCount())
+  }
+
+  @Test
+  fun `end reports whether any run is still recording`() {
+    // The CLI exports a command's spans only when this says it was the last one out; a wrong
+    // answer either never writes the trace or drains a concurrent run's spans into it.
+    HostRunTraceRecording.begin()
+    HostRunTraceRecording.begin()
+
+    assertFalse(HostRunTraceRecording.end())
+    assertTrue(HostRunTraceRecording.end())
+  }
+
+  @Test
+  fun `only the last run out drains, and it takes everything left`() {
+    HostRunTraceRecording.begin()
+    HostRunTraceRecording.begin()
+    TrailblazeTracer.trace("shared") { }
+
+    assertEquals(null, HostRunTraceRecording.endAndDrainIfLast())
+    assertEquals(1, recordedCount(), "a run still recording keeps the spans")
+
+    val drained = assertNotNull(HostRunTraceRecording.endAndDrainIfLast())
+    assertTrue("shared" in drained, drained)
+    assertEquals(0, recordedCount())
+  }
+
+  @Test
+  fun `a trail run takes everything recorded and stops counting itself in one step`() {
+    HostRunTraceRecording.begin()
+    HostRunTraceRecording.begin()
+    TrailblazeTracer.trace("shared") { }
+
+    assertTrue("shared" in HostRunTraceRecording.endAndDrain())
+    assertEquals(0, recordedCount())
+    // The other run is now the only one left, so it is the one that drains next.
+    assertNotNull(HostRunTraceRecording.endAndDrainIfLast())
   }
 
   @Test

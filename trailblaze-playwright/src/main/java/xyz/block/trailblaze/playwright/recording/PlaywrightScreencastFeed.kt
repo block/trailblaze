@@ -38,9 +38,17 @@ import xyz.block.trailblaze.util.Console
  * Frames are delivered to subscribers on this feed's own IO scope — off the Playwright pump thread
  * — so a slow subscriber (a disk write in the recorder) can't stall the screencast or contend with
  * taps/navigation on the single Playwright dispatcher thread.
+ *
+ * ### Frame quality
+ * One pump means one JPEG quality for every subscriber: [jpegQuality], chosen where the feed is
+ * registered. Today that is the recording's [PlaywrightScreencast.RECORDING_QUALITY] (~75 KB
+ * frames); a live viewer moved onto this feed would get those frames too, not the lighter
+ * [PlaywrightScreencast.DEFAULT_QUALITY] its own screencast is tuned for.
  */
 class PlaywrightScreencastFeed(
   private val pageManager: PlaywrightPageManager,
+  /** JPEG quality the pump asks Chrome for; every subscriber receives frames at this quality. */
+  private val jpegQuality: Int,
 ) : WebScreencastFeedRegistry.Feed {
 
   private val subscribers = CopyOnWriteArrayList<(ByteArray, Long) -> Unit>()
@@ -71,7 +79,7 @@ class PlaywrightScreencastFeed(
       while (isActive) {
         val stream = PlaywrightDeviceScreenStream(pageManager)
         try {
-          stream.streamScreencastJpegFrames { jpeg ->
+          stream.streamScreencastJpegFrames(jpegQuality) { jpeg ->
             val ts = System.currentTimeMillis()
             // trySend-style fan-out: a subscriber's failure never kills the pump or its peers.
             subscribers.forEach { runCatching { it(jpeg, ts) } }

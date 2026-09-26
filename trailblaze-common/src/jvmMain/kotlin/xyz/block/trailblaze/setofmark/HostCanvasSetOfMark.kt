@@ -258,8 +258,13 @@ class HostCanvasSetOfMark(
    * 60-element cap + smaller labels on phones, exactly the regression we promised
    * not to ship. The logical-coords path keeps mobile portrait at 329k regardless
    * of DPR.
+   *
+   * Android is never compact: its grid is device pixels, so a phone (1080 × 2400) reads as
+   * desktop-sized, and the 60-mark cap would leave most of a busy screen's element list with no
+   * mark on the image. The on-device renderer marks every element too.
    */
   private fun isCompactMode(): Boolean {
+    if (deviceInfo?.platform == Platform.ANDROID) return false
     val area = if (deviceInfo != null && deviceInfo.widthGrid > 0 && deviceInfo.heightGrid > 0) {
       deviceInfo.widthGrid.toLong() * deviceInfo.heightGrid
     } else {

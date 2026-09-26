@@ -430,6 +430,77 @@ describe("session recording (readVideo)", () => {
     expect(video!.startMs).toBe(900);
   });
 
+  test("the mp4 is used when the webm it would be preferred over fails a check", () => {
+    const video = readVideo(sessionWith([webmArtifact, mp4Artifact], { [MP4]: MP4_BYTES }));
+    expect(video!.clip.mime).toBe("video/mp4");
+    expect(video!.startMs).toBe(1000);
+  });
+
+  test("a multi-device session's recordings come back start device first, each naming its device", () => {
+    // Capture lists the start device's artifact first and stamps every recording with the device's
+    // configuration name. The start device's is the session's `video` — what every single-recording
+    // reader already expects — and the others ride as `companions`, so a device-aware surface can
+    // pick the buyer's screen for the buyer's lane.
+    const BUYER = "video-buyer.webm";
+    const BUYER_BYTES = Buffer.from("PRETEND-BUYER-BYTES");
+    const seller = { ...webmArtifact, deviceName: "seller", deviceId: "emulator-5560" };
+    const buyer = { filename: BUYER, type: "VIDEO_WEBM", startTimestampMs: 950, endTimestampMs: 3200, deviceName: "buyer", deviceId: "emulator-5562" };
+    const video = readVideo(sessionWith([seller, buyer], { [WEBM]: WEBM_BYTES, [BUYER]: BUYER_BYTES }));
+    expect(video).toEqual({
+      startMs: 900,
+      endMs: 3200,
+      device: "seller",
+      deviceId: "emulator-5560",
+      clip: { uri: `data:video/webm;base64,${WEBM_BYTES.toString("base64")}`, mime: "video/webm", startMs: 900, endMs: 3200 },
+      companions: [{
+        startMs: 950,
+        endMs: 3200,
+        device: "buyer",
+        deviceId: "emulator-5562",
+        clip: { uri: `data:video/webm;base64,${BUYER_BYTES.toString("base64")}`, mime: "video/webm", startMs: 950, endMs: 3200 },
+      }],
+    });
+    // A single-device recording is untouched by this: no device, no companions key at all.
+    expect(readVideo(sessionWith([webmArtifact], { [WEBM]: WEBM_BYTES }))).not.toHaveProperty("companions");
+  });
+
+  test("a device unbound and bound again keeps both of its recordings", () => {
+    // Each bind records a new file (video-buyer, then video-buyer-2). Capture lists the one still
+    // recording at stop before the one that finished early; both are footage the viewer can place.
+    const BUYER = "video-buyer.webm";
+    const BUYER_2 = "video-buyer-2.webm";
+    const seller = { ...webmArtifact, deviceName: "seller" };
+    const buyerLater = { filename: BUYER_2, type: "VIDEO_WEBM", startTimestampMs: 2400, endTimestampMs: 3200, deviceName: "buyer" };
+    const buyerEarlier = { filename: BUYER, type: "VIDEO_WEBM", startTimestampMs: 950, endTimestampMs: 1800, deviceName: "buyer" };
+    const video = readVideo(sessionWith([seller, buyerLater, buyerEarlier], {
+      [WEBM]: WEBM_BYTES, [BUYER]: Buffer.from("FIRST-BIND"), [BUYER_2]: Buffer.from("SECOND-BIND"),
+    }));
+    expect(video!.device).toBe("seller");
+    expect(video!.companions!.map((c) => [c.device, c.startMs, c.endMs, c.clip.uri])).toEqual([
+      ["buyer", 2400, 3200, `data:video/webm;base64,${Buffer.from("SECOND-BIND").toString("base64")}`],
+      ["buyer", 950, 1800, `data:video/webm;base64,${Buffer.from("FIRST-BIND").toString("base64")}`],
+    ]);
+  });
+
+  test("a recording that fails a check is dropped on its own, whichever device it belongs to", () => {
+    const BUYER = "video-buyer.webm";
+    const seller = { ...webmArtifact, deviceName: "seller" };
+    const buyer = { filename: BUYER, type: "VIDEO_WEBM", startTimestampMs: 950, endTimestampMs: 3200, deviceName: "buyer" };
+    // The buyer's file is missing from the session directory.
+    const missing = readVideo(sessionWith([seller, buyer], { [WEBM]: WEBM_BYTES }));
+    expect(missing!.device).toBe("seller");
+    expect(missing).not.toHaveProperty("companions");
+    // The buyer's recording is over the embed cap: the seller's still embeds.
+    const huge = readVideo(sessionWith([seller, buyer], { [WEBM]: WEBM_BYTES, [BUYER]: Buffer.alloc(13 * 1024 * 1024, 7) }));
+    expect(huge!.clip.uri).toStartWith("data:video/webm;base64,");
+    expect(huge).not.toHaveProperty("companions");
+    // The START device's file is missing: the buyer's recording is still footage of the run, and
+    // it says whose — a device-aware surface keeps it off the seller's lane by that name.
+    const buyerOnly = readVideo(sessionWith([seller, buyer], { [BUYER]: WEBM_BYTES }));
+    expect(buyerOnly!.device).toBe("buyer");
+    expect(buyerOnly).not.toHaveProperty("companions");
+  });
+
   test("with a linked resolver the clip becomes a URL and no bytes are embedded", () => {
     const video = readVideo(sessionWith([webmArtifact], { [WEBM]: WEBM_BYTES }), (path) => localShotUrl("/static/", "sess-1", basename(path)));
     expect(video!.clip.uri).toBe("/static/sess-1/video.webm");

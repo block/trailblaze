@@ -9,6 +9,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNotSame
+import kotlin.test.assertNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import kotlin.test.fail
@@ -113,6 +114,35 @@ class TrailblazeMcpBridgeImplTest {
     // device that never left and hides that a relaunch is what fixes it.
     assertFalse(status.contains("No device connected"), status)
     assertTrue(status.contains("Reconnect the device"), status)
+  }
+
+  @Test
+  fun `a ready agent whose runner process exited is reported dead`() {
+    val runner = "xyz.block.trailblaze.runner"
+    val ready = setOf("emulator-5560")
+    val runners = mapOf("emulator-5560" to runner)
+
+    assertEquals(runner, TrailblazeMcpBridgeImpl.deadRunnerUnderReadyAgent("emulator-5560", ready, runners) { false })
+    assertNull(TrailblazeMcpBridgeImpl.deadRunnerUnderReadyAgent("emulator-5560", ready, runners) { true })
+  }
+
+  /**
+   * Only a ready agent has a runner to vouch for. An unready one is already headed for a relaunch,
+   * and an in-process harness records no runner process, so neither may cost a device round-trip.
+   */
+  @Test
+  fun `no ready agent or no recorded runner means nothing to probe`() {
+    val runner = "xyz.block.trailblaze.runner"
+    val probed = mutableListOf<String>()
+    val probe: (String) -> Boolean = { probed += it; false }
+
+    assertNull(
+      TrailblazeMcpBridgeImpl.deadRunnerUnderReadyAgent("emulator-5560", emptySet(), mapOf("emulator-5560" to runner), probe),
+    )
+    assertNull(
+      TrailblazeMcpBridgeImpl.deadRunnerUnderReadyAgent("emulator-5560", setOf("emulator-5560"), emptyMap(), probe),
+    )
+    assertEquals(emptyList(), probed)
   }
 
   /**

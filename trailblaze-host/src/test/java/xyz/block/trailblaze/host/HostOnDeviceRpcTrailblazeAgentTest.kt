@@ -71,11 +71,7 @@ import kotlin.test.Test
  */
 class HostOnDeviceRpcTrailblazeAgentTest {
 
-  private val testDeviceId =
-    TrailblazeDeviceId(
-      instanceId = "test-device-rpc-agent",
-      trailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID,
-    )
+  private val testDeviceId = jvmScopedDeviceId("test-device-rpc-agent")
 
   private val testRunYamlRequest =
     RunYamlRequest(

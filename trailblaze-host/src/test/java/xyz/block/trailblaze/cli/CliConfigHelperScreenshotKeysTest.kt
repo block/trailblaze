@@ -197,8 +197,9 @@ class CliConfigHelperScreenshotKeysTest {
       imageFormat = TrailblazeImageFormat.PNG,
       compressionQuality = 1.0f,
     )
-    val request = xyz.block.trailblaze.mcp.android.ondevice.rpc.GetScreenStateRequest()
-      .withScreenshotScalingConfig(userConfig)
+    val request = xyz.block.trailblaze.mcp.android.ondevice.rpc.GetScreenStateRequest(
+      includeAnnotatedScreenshot = true,
+    ).withScreenshotScalingConfig(userConfig)
     assertEquals(2048, request.screenshotMaxDimension1)
     assertEquals(1024, request.screenshotMaxDimension2)
     assertEquals(TrailblazeImageFormat.PNG, request.screenshotImageFormat)

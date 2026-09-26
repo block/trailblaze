@@ -1658,7 +1658,8 @@ internal object ExternalAgentSupervisor {
     if (demo.captureStarted) return
     val activator = AndroidNetworkCaptureRegistry.activator ?: return
     if (demo.device.trailblazeDevicePlatform != TrailblazeDevicePlatform.ANDROID) return
-    // The activator refuses a null target app id loudly (incomplete marker + retained failure);
+    // No app id means nothing to capture. Skipped here rather than started with an empty list,
+    // which an identity-checking activator refuses loudly (incomplete marker + retained failure);
     // for this capture-optional flow an unknown target just means "no capture", not failure.
     if (targetAppId.isNullOrBlank()) {
       Console.log("[demo] network capture skipped: target app id unknown")
@@ -1672,6 +1673,8 @@ internal object ExternalAgentSupervisor {
         sessionDir = dir,
         deviceId = demo.device,
         targetAppIds = listOf(targetAppId),
+        // Capture-optional: an app that sends nothing must not fail the demo's teardown.
+        requireTraffic = false,
       )
       demo.captureStarted = true
     }.onFailure { Console.log("[demo] network capture start failed: ${it.message}") }

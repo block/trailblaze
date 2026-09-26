@@ -31,8 +31,9 @@ class CompositeAndroidNetworkCaptureActivator(
     sessionId: String,
     sessionDir: File,
     deviceId: TrailblazeDeviceId,
-    targetAppIds: List<String>,
+    targetAppIds: List<String>?,
     deviceLabel: String?,
+    requireTraffic: Boolean,
   ) {
     // Idempotent per the SPI (the MCP bridge calls start() per-tool until the session ends): the
     // FIRST call for a sessionId picks the delegate and records it; later calls route to that SAME
@@ -49,7 +50,7 @@ class CompositeAndroidNetworkCaptureActivator(
       routed[sessionId] = chosen
       chosen
     }
-    delegate.start(sessionId, sessionDir, deviceId, targetAppIds, deviceLabel)
+    delegate.start(sessionId, sessionDir, deviceId, targetAppIds, deviceLabel, requireTraffic)
   }
 
   override fun stop(sessionId: String) {

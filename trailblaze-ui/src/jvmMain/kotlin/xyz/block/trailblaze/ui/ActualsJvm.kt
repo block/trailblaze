@@ -75,9 +75,13 @@ actual suspend fun loadCaptureVideoMetadata(sessionId: String): VideoMetadata? {
       // The recording itself: the live VP9 encode on Android (VIDEO_WEBM), the muxed mp4 elsewhere
       // (VIDEO). A session captured before sprite sheets were retired lists only the sheet
       // (VIDEO_FRAMES), which nothing here can play — but its bookends are the recorder's, so the
-      // video file such a session left on disk is offered under them.
-      val recording = metadata.artifacts.firstOrNull { it.type == "VIDEO_WEBM" }
-        ?: metadata.artifacts.firstOrNull { it.type == "VIDEO" }
+      // video file such a session left on disk is offered under them. A multi-device session lists
+      // one recording per device, the start device's first: that device's is the session's video,
+      // even when a companion's was encoded in the preferred format and its own was not.
+      val videos = metadata.artifacts.filter { it.type == "VIDEO_WEBM" || it.type == "VIDEO" }
+      val startDevice = videos.firstOrNull()?.deviceName
+      val startDeviceVideos = videos.filter { it.deviceName == startDevice }
+      val recording = startDeviceVideos.firstOrNull { it.type == "VIDEO_WEBM" } ?: startDeviceVideos.firstOrNull()
       val recordingFile = resolveFile(recording)
       if (recording != null && recordingFile != null) {
         return@withContext VideoMetadata(

@@ -3,6 +3,7 @@ package xyz.block.trailblaze.host.util
 import org.jetbrains.skia.ColorAlphaType
 import org.jetbrains.skia.EncodedImageFormat
 import org.jetbrains.skia.ImageInfo
+import xyz.block.trailblaze.api.EffectiveScreenshotScalingConfig
 import xyz.block.trailblaze.api.TrailblazeImageFormat
 import java.awt.Image
 import java.awt.image.BufferedImage
@@ -13,6 +14,15 @@ import javax.imageio.ImageWriteParam
 import org.jetbrains.skia.Image as SkiaImage
 
 object BufferedImageUtils {
+
+  /**
+   * Encodes [image] in the configured capture format and quality, so a set-of-mark overlay the
+   * host draws on an on-device screenshot is no larger than the screenshot it was drawn on.
+   */
+  fun encodeLikeCaptures(image: BufferedImage): ByteArray {
+    val config = EffectiveScreenshotScalingConfig.effective
+    return image.toByteArray(config.imageFormat, config.compressionQuality)
+  }
 
   /**
    * Converts a BufferedImage to a byte array with the specified format and quality.

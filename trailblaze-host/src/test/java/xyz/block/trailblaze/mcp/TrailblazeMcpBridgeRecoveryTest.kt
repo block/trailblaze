@@ -8,10 +8,9 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNotSame
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
-import xyz.block.trailblaze.devices.TrailblazeDeviceId
-import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.host.MockRpcServer
 import xyz.block.trailblaze.host.OnDeviceRpcClientPool
+import xyz.block.trailblaze.host.jvmScopedDeviceId
 import xyz.block.trailblaze.llm.RunYamlResponse
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.model.SessionId
@@ -22,15 +21,9 @@ import xyz.block.trailblaze.util.UiAutomationHandleErrors
 
 class TrailblazeMcpBridgeRecoveryTest {
 
-  private val affectedDevice = TrailblazeDeviceId(
-    instanceId = "test-direct-mcp-wedged-device",
-    trailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID,
-  )
+  private val affectedDevice = jvmScopedDeviceId("test-direct-mcp-wedged-device")
 
-  private val unaffectedDevice = TrailblazeDeviceId(
-    instanceId = "test-direct-mcp-healthy-device",
-    trailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID,
-  )
+  private val unaffectedDevice = jvmScopedDeviceId("test-direct-mcp-healthy-device")
 
   private val legacyWedgeMessage =
     "${UiAutomationHandleErrors.NON_RECOVERABLE_RETRY_FAILED_PHRASE}. The on-device server's " +

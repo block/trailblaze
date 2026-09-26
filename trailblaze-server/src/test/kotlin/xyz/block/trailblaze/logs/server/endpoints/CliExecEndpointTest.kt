@@ -1,9 +1,12 @@
 package xyz.block.trailblaze.logs.server.endpoints
 
+import io.ktor.client.request.header
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
+import io.ktor.client.statement.bodyAsBytes
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
+import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
 import io.ktor.server.routing.routing
@@ -117,6 +120,66 @@ class CliExecEndpointTest {
       setBody("""{"args":["config","show"]}""")
     }
     assertEquals(HttpStatusCode.OK, response.status)
+    val body = json.decodeFromString(CliExecResponse.serializer(), response.bodyAsText())
+    assertFalse(body.forwarded)
+  }
+
+  /**
+   * The launcher's decoder is bash builtins over byte counts, so every byte of the framing is the
+   * contract: consecutive runs on one stream arrive as one, counts are UTF-8 bytes, NUL is dropped
+   * (bash cannot hold it), and the exit code is the one a shell would see.
+   */
+  @Test fun `a caller that accepts the replay framing gets it`() = testApplication {
+    application {
+      routing {
+        CliExecEndpoint.register(this) {
+          CliExecResponse(
+            stdout = "ignored when a transcript is present",
+            stderr = "",
+            exitCode = -1,
+            transcript = listOf(
+              CliExecChunk(CliExecStream.STDOUT, "Connecting...\n"),
+              CliExecChunk(CliExecStream.STDERR, "✗ failed"),
+              CliExecChunk(CliExecStream.STDERR, "\u0000\n"),
+              CliExecChunk(CliExecStream.STDOUT, ""),
+              CliExecChunk(CliExecStream.STDOUT, "tip\n"),
+            ),
+          )
+        }
+      }
+    }
+    val response = client.post(CliEndpoints.EXEC) {
+      contentType(ContentType.Application.Json)
+      header(HttpHeaders.Accept, "${CliExecReplayFormat.CONTENT_TYPE}, application/json")
+      setBody("""{"args":["tool","tap"]}""")
+    }
+    assertEquals(HttpStatusCode.OK, response.status)
+    assertEquals(
+      "trailblaze-replay 1\nexit 255\n1 14\nConnecting...\n2 11\n✗ failed\n1 4\ntip\nend\n",
+      response.bodyAsBytes().decodeToString(),
+    )
+  }
+
+  /** An older daemon's transcript-less reply replays stdout, then stderr, as the JSON decoder does. */
+  @Test fun `the replay framing falls back to the flattened streams`() {
+    val framed = CliExecReplayFormat.encode(CliExecResponse(stdout = "out\n", stderr = "err\n", exitCode = 2))
+    assertEquals("trailblaze-replay 1\nexit 2\n1 4\nout\n2 4\nerr\nend\n", framed.decodeToString())
+  }
+
+  /** The launcher decides whether to run the command itself from the JSON `forwarded` flag. */
+  @Test fun `a declined command is answered in JSON even to a caller that accepts the framing`() = testApplication {
+    application {
+      routing {
+        CliExecEndpoint.register(this) {
+          CliExecResponse(stdout = "", stderr = "", exitCode = 0, forwarded = false)
+        }
+      }
+    }
+    val response = client.post(CliEndpoints.EXEC) {
+      contentType(ContentType.Application.Json)
+      header(HttpHeaders.Accept, CliExecReplayFormat.CONTENT_TYPE)
+      setBody("""{"args":["config","show"]}""")
+    }
     val body = json.decodeFromString(CliExecResponse.serializer(), response.bodyAsText())
     assertFalse(body.forwarded)
   }

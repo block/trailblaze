@@ -159,27 +159,59 @@
   // are paired with whatever video file the archive actually holds. Those bookends are the whole
   // point of reading this file: without them the recording can't be put on the trace's clock, so an
   // artifact missing them is no better than no artifact at all.
-  function videoArtifactFrom(metadataText, fileNames) {
+  //
+  // A multi-device session lists one recording per device, each stamped with the device's name
+  // (`deviceName`); videoArtifactsFrom returns them all, start device first (capture lists it
+  // first). A device unbound and bound again records a new file each time (`video-buyer`, then
+  // `video-buyer-2`), and every one is kept: the viewer picks between them by capture window.
+  // videoArtifactFrom is that list's head — the start device's recording, which is what every
+  // single-recording consumer means by "the session's video".
+  function videoArtifactsFrom(metadataText, fileNames) {
     var parsed;
-    try { parsed = JSON.parse(metadataText); } catch (e) { return null; }
+    try { parsed = JSON.parse(metadataText); } catch (e) { return []; }
     var artifacts = (parsed && parsed.artifacts) || [];
-    if (!artifacts.length) return null;
+    if (!artifacts.length) return [];
     var playable = fileNames.filter(function (name) { return videoMimeType(name); });
-    var pick = null;
+    var found = [];
+    var seenRecordings = Object.create(null); // a device may be named `__proto__` or `toString`
+    var legacyPick = null;
     for (var i = 0; i < artifacts.length; i++) {
       var a = artifacts[i] || {};
       var start = Number(a.startTimestampMs);
       var end = Number(a.endTimestampMs);
       if (!isFinite(start) || !isFinite(end) || end <= start) continue;
       if ((a.type === 'VIDEO' || a.type === 'VIDEO_WEBM') && playable.indexOf(a.filename) >= 0) {
-        return { fileName: a.filename, startMs: start, endMs: end };
+        // One entry per recording (a file stem). An mp4 beside the same recording's webm is the
+        // same footage, and the webm (the live VP9 encode) wins whichever was listed first.
+        var recordingKey = (a.deviceName == null ? '' : String(a.deviceName)) + '\u0000'
+          + String(a.filename).replace(/\.[^./]*$/, '');
+        var artifact = { fileName: a.filename, startMs: start, endMs: end };
+        if (a.deviceName != null) artifact.device = String(a.deviceName);
+        if (a.deviceId != null) artifact.deviceId = String(a.deviceId);
+        var seen = seenRecordings[recordingKey];
+        if (seen) {
+          if (a.type === 'VIDEO_WEBM' && seen.type !== 'VIDEO_WEBM') {
+            // The mp4 stays on as the fallback: the webm may still fail to read out of the archive.
+            artifact.fallback = found[seen.index];
+            found[seen.index] = artifact;
+            seen.type = a.type;
+          }
+          continue;
+        }
+        seenRecordings[recordingKey] = { index: found.length, type: a.type };
+        found.push(artifact);
       }
       // Held rather than returned: a playable artifact later in the list is the better answer.
-      if (a.type === 'VIDEO_FRAMES' && !pick && playable.length) {
-        pick = { fileName: playable[0], startMs: start, endMs: end };
+      if (a.type === 'VIDEO_FRAMES' && !legacyPick && playable.length) {
+        legacyPick = { fileName: playable[0], startMs: start, endMs: end };
       }
     }
-    return pick;
+    return found.length ? found : (legacyPick ? [legacyPick] : []);
+  }
+
+  function videoArtifactFrom(metadataText, fileNames) {
+    var all = videoArtifactsFrom(metadataText, fileNames);
+    return all.length ? all[0] : null;
   }
 
   // The recording as something an element can play: an object URL over the archive's own bytes. No
@@ -187,26 +219,50 @@
   // NOT a data URI: these run to tens of megabytes, and base64 of that is neither cheap to build nor
   // safe to embed. Yields null where object URLs don't exist (a non-browser host), which just leaves
   // the consumer on screenshots.
-  function sessionVideoClip(zipBytes, session, options) {
+  //
+  // sessionVideoClips is every recording the session made, start device first (see
+  // videoArtifactsFrom); a device whose file is missing from the archive costs that device's clip
+  // and nothing else. sessionVideoClip is the start device's alone.
+  function sessionVideoClips(zipBytes, session, options) {
     var metaEntry = session.byFileName[CAPTURE_METADATA_NAME];
     var canObjectUrl = typeof URL !== 'undefined' && URL && typeof URL.createObjectURL === 'function'
       && typeof Blob !== 'undefined';
-    if (!metaEntry || !canObjectUrl) return Promise.resolve(null);
+    if (!metaEntry || !canObjectUrl) return Promise.resolve([]);
     var inflateRaw = (options && options.inflateRaw) || null;
     return readZipEntry(zipBytes, metaEntry, inflateRaw).then(function (data) {
-      var artifact = videoArtifactFrom(utf8.decode(data), flatFileNames(session.byFileName));
-      var entry = artifact && session.byFileName[artifact.fileName];
-      if (!entry) return null;
-      return readZipEntry(zipBytes, entry, inflateRaw).then(function (bytes) {
-        var mime = videoMimeType(artifact.fileName) || 'video/mp4';
-        return {
-          url: URL.createObjectURL(new Blob([bytes], { type: mime })),
-          startMs: artifact.startMs,
-          endMs: artifact.endMs,
-          mime: mime,
-        };
+      var artifacts = videoArtifactsFrom(utf8.decode(data), flatFileNames(session.byFileName));
+      var clips = [];
+      var chain = Promise.resolve();
+      function readClip(artifact) {
+        var entry = session.byFileName[artifact.fileName];
+        if (!entry) return Promise.reject(new Error('not in the archive: ' + artifact.fileName));
+        return readZipEntry(zipBytes, entry, inflateRaw).then(function (bytes) {
+          var mime = videoMimeType(artifact.fileName) || 'video/mp4';
+          var clip = {
+            url: URL.createObjectURL(new Blob([bytes], { type: mime })),
+            startMs: artifact.startMs,
+            endMs: artifact.endMs,
+            mime: mime,
+          };
+          if (artifact.device != null) clip.device = artifact.device;
+          return clip;
+        });
+      }
+      artifacts.forEach(function (artifact) {
+        if (!session.byFileName[artifact.fileName]) return;
+        chain = chain.then(function () {
+          return readClip(artifact)
+            .catch(function (e) { if (artifact.fallback) return readClip(artifact.fallback); throw e; })
+            .then(function (clip) { clips.push(clip); })
+            .catch(function () {}); // an unreadable entry costs that recording's clip, not the others
+        });
       });
-    }).catch(function () { return null; }); // a broken/renamed artifact costs the video, not the report
+      return chain.then(function () { return clips; });
+    }).catch(function () { return []; }); // a broken/renamed artifact costs the video, not the report
+  }
+
+  function sessionVideoClip(zipBytes, session, options) {
+    return sessionVideoClips(zipBytes, session, options).then(function (clips) { return clips.length ? clips[0] : null; });
   }
 
   // Group archive entries by top-level directory — one group per session, mirroring LogsRepo's
@@ -620,7 +676,7 @@
   }
 
   // Attachment refs embedded in event payloads (see AttachmentRef in trailblaze-models), resolved
-  // to object URLs over the archive's own bytes — the same choice as sessionVideoClip: no base64
+  // to object URLs over the archive's own bytes — the same choice as sessionVideoClips: no base64
   // blow-up and no second download. A blob: value is bytes only this page holds, so it is stripped
   // again at every standalone-document serialization boundary (buildMultiReportHtml, the viewer's
   // export). Media types only: a hostile zip must not become a same-origin blob:text/html document.
@@ -713,6 +769,9 @@
     Array.prototype.forEach.call(sessions, function (session) {
       if (!session || typeof session !== 'object') return;
       if (session.videoClip && typeof session.videoClip === 'object') add(session.videoClip.url);
+      if (session.videoClips && session.videoClips.length) {
+        Array.prototype.forEach.call(session.videoClips, function (clip) { if (clip && typeof clip === 'object') add(clip.url); });
+      }
       if (session.attachments && typeof session.attachments === 'object') {
         Object.keys(session.attachments).forEach(function (path) { add(session.attachments[path]); });
       }
@@ -794,15 +853,16 @@
             });
           });
           return shotChain
-            .then(function () { return sessionVideoClip(zipBytes, session, { inflateRaw: inflateRaw }); })
-            .then(function (videoClip) {
+            .then(function () { return sessionVideoClips(zipBytes, session, { inflateRaw: inflateRaw }); })
+            .then(function (videoClips) {
               return sessionEventStreams(zipBytes, session, render, inflateRaw).then(function (events) {
                 return sessionAttachments(zipBytes, session, events, render, inflateRaw).then(function (attachments) {
                   return sessionTraceSpans(zipBytes, session, render, inflateRaw).then(function (spans) {
                     inputs.push({
                       meta: meta, trace: trace, llmLogs: llmLogs, shots: shots,
                       recordingYaml: session.recordingYaml, originalYaml: originalYaml,
-                      videoClip: videoClip,
+                      videoClip: videoClips.length ? videoClips[0] : null,
+                      videoClips: videoClips.length ? videoClips : null,
                       events: events, attachments: attachments,
                       spans: spans,
                     });
@@ -840,8 +900,8 @@
       return Promise.resolve(pack).then(function () {
         var s0 = inputs[0];
         // Both branches must carry the SAME session data: the one-session path used to drop
-        // `events` and `attachments`, so a single-session archive rendered with no event streams
-        // and no attachment rows at all while a two-session one rendered both.
+        // `events` and `attachments` (and later the recordings), so a single-session archive
+        // rendered with no event streams, attachment rows or Video tab while a two-session one did.
         // `keepAttachmentObjectUrls` rides along because this HTML is rendered back into the
         // loading page (iframe srcDoc), where the archive's object URLs still resolve.
         var html = inputs.length === 1
@@ -850,6 +910,7 @@
             events: s0.events || null, attachments: s0.attachments || null,
             hierarchies: s0.hierarchies || null, hierarchiesGz: s0.hierarchiesGz || null,
             spans: s0.spans || null,
+            videoClip: s0.videoClip || null, videoClips: s0.videoClips || null,
             keepAttachmentObjectUrls: keepAttachmentObjectUrls,
           })
           : render.buildMultiReportHtml({ generatedAt: built.generatedAt, sessions: inputs, keepAttachmentObjectUrls: keepAttachmentObjectUrls });
@@ -868,6 +929,7 @@
     imageMimeType: imageMimeType,
     videoMimeType: videoMimeType,
     videoArtifactFrom: videoArtifactFrom,
+    videoArtifactsFrom: videoArtifactsFrom,
     groupEntriesBySession: groupEntriesBySession,
     sortLogsByTimestamp: sortLogsByTimestamp,
     // session meta
@@ -883,6 +945,7 @@
     loadZipSessions: loadZipSessions,
     sessionImageDataUri: sessionImageDataUri,
     sessionVideoClip: sessionVideoClip,
+    sessionVideoClips: sessionVideoClips,
     sessionEventStreams: sessionEventStreams,
     sessionAttachments: sessionAttachments,
     sessionObjectUrls: sessionObjectUrls,

@@ -669,13 +669,21 @@ function loadScreenText(dir: string): ScreenText[] {
   const path = join(dir, VISIBLE_STRINGS_FILE);
   if (!existsSync(path)) return [];
   const out: ScreenText[] = [];
+  // A capture that showed the same screen as an earlier step is written with no strings and a
+  // `repeatOfStepIndex` naming that step. It is still a capture of those strings at its own time,
+  // so it gets them back: without them, a screen the run returned to reads as never shown again.
+  const stringsByStep = new Map<number, unknown[]>();
   for (const { line, row } of readNdjson(path)) {
     const rec = asRecord(row);
     if (!rec || rec.kind !== "screen" || !Array.isArray(rec.strings)) continue;
     const captureId = asString(rec.captureId) ?? "";
     const stepIndex = asNumber(rec.stepIndex) ?? -1;
     const timeMs = parseIsoMs(asString(rec.timestamp));
-    for (const s of rec.strings as unknown[]) {
+    const repeatOf = asNumber(rec.repeatOfStepIndex);
+    const own = rec.strings as unknown[];
+    if (own.length > 0) stringsByStep.set(stepIndex, own);
+    const strings = own.length === 0 && repeatOf !== undefined ? (stringsByStep.get(repeatOf) ?? []) : own;
+    for (const s of strings) {
       const str = asRecord(s);
       const text = asString(str?.text);
       if (!text) continue;

@@ -288,14 +288,19 @@ open class BasePlaywrightNativeTest(
   // the wrapped brain differs — so build one per runner. Recordings replay the same either way.
   private fun runnerUtilFor(runner: TestAgentRunner): TrailblazeRunnerUtil = TrailblazeRunnerUtil(
     trailblazeRunner = runner,
+    // Only recorded tools and `tools:` blocks come through here — LLM steps dispatch through the
+    // runner's own agent call — so they run as a Playwright test would (see runScripted). The
+    // screen state is captured only if a tool reads it.
     runTrailblazeTool = { trailblazeTools: List<TrailblazeTool> ->
-      playwrightAgent.runTrailblazeTools(
-        tools = trailblazeTools,
-        traceId = currentToolTraceId,
-        screenState = browserManager.getScreenState(),
-        elementComparator = elementComparator,
-        screenStateProvider = browserManager::getScreenState,
-      ).result
+      playwrightAgent.runScripted {
+        playwrightAgent.runTrailblazeTools(
+          tools = trailblazeTools,
+          traceId = currentToolTraceId,
+          screenState = null,
+          elementComparator = elementComparator,
+          screenStateProvider = browserManager::getScreenState,
+        ).result
+      }
     },
     trailblazeLogger = loggingRule.logger,
     sessionProvider = { loggingRule.session ?: error("Session not available - ensure test is running") },
@@ -313,9 +318,9 @@ open class BasePlaywrightNativeTest(
   private suspend fun runTrail(
     trailItems: List<TrailYamlItem>,
     // `useRecordedSteps` is forwarded to `runPromptSuspend` to switch the agent loop
-    // between recording-replay and live-LLM mode. As of the playwright-mcp settle
-    // adoption, Playwright-layer settling (PlaywrightPageManager.dispatchAndAwaitSettle)
-    // no longer branches on this flag — both modes settle via request-tracking.
+    // between recording-replay and live-LLM mode. Only LLM-driven tools settle
+    // (PlaywrightPageManager.dispatchAndAwaitSettle); recorded ones run as a Playwright
+    // test would — see runnerUtilFor.
     useRecordedSteps: Boolean,
     agentImplementation: AgentImplementation,
     onStepProgress: ((stepIndex: Int, totalSteps: Int, stepText: String) -> Unit)? = null,

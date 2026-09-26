@@ -21,8 +21,6 @@ import org.junit.After
 import org.junit.Before
 import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.agent.ExecutionResult
-import xyz.block.trailblaze.devices.TrailblazeDeviceId
-import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.llm.RunYamlRequest
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.llm.TrailblazeLlmProvider
@@ -47,11 +45,7 @@ import kotlin.test.Test
  */
 class HostAccessibilityRpcClientTest {
 
-  private val testDeviceId =
-    TrailblazeDeviceId(
-      instanceId = "test-device-accessibility-rpc",
-      trailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID,
-    )
+  private val testDeviceId = jvmScopedDeviceId("test-device-accessibility-rpc")
 
   private val testRunYamlRequest =
     RunYamlRequest(

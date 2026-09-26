@@ -22,6 +22,7 @@ import kotlinx.serialization.json.JsonObjectBuilder
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -34,6 +35,8 @@ import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDevicePort
 import xyz.block.trailblaze.devices.WebInstanceIds
 import xyz.block.trailblaze.mcp.newtools.DeviceManagerToolSet
+import xyz.block.trailblaze.tracing.SpanKind
+import xyz.block.trailblaze.tracing.TrailblazeTracer
 import xyz.block.trailblaze.util.Console
 import java.io.File
 import java.util.concurrent.atomic.AtomicInteger
@@ -386,13 +389,20 @@ class CliMcpClient(
    * Calls an MCP tool by name with JSON arguments.
    */
   suspend fun callTool(name: String, arguments: JsonObject): ToolResult {
-    val response = sendRequest(
-      method = "tools/call",
-      params = buildJsonObject {
-        put("name", name)
-        put("arguments", arguments)
-      },
-    )
+    // The action only: other arguments carry objectives, typed text and selectors.
+    val spanArgs = buildMap {
+      put("tool", name)
+      (arguments[ACTION_KEY] as? JsonPrimitive)?.contentOrNull?.let { put("action", it) }
+    }
+    val response = TrailblazeTracer.traceSuspend("mcpCall", CliCommandTrace.CATEGORY, spanArgs, SpanKind.CLIENT) {
+      sendRequest(
+        method = "tools/call",
+        params = buildJsonObject {
+          put("name", name)
+          put("arguments", arguments)
+        },
+      )
+    }
 
     response["error"]?.jsonObject?.let { error ->
       val errorMessage = error["message"]?.jsonPrimitive?.content ?: "Unknown error"
@@ -930,7 +940,7 @@ class CliMcpClient(
       val result = callTool(SESSION_TOOL_NAME, mapOf(ACTION_KEY to SESSION_ACTION_INFO))
       if (result.isError) return null
       val parsed = Json.parseToJsonElement(result.content).jsonObject
-      parsed["sessionId"]?.jsonPrimitive?.content
+      parsed["sessionId"]?.jsonPrimitive?.content?.also(CliCommandTrace::noteSession)
     } catch (_: Exception) {
       null
     }

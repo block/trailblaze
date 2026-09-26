@@ -226,7 +226,8 @@ class TrailFileManager(
         )
       }
 
-      val dir = File(trailsDirectory)
+      // Normalized so a relative trails directory reports `/repo/trails/x`, not `/repo/./trails/x`.
+      val dir = File(trailsDirectory).absoluteFile.normalize()
       if (!dir.exists()) dir.mkdirs()
       val trailDir = File(dir, sanitizedName)
       if (!trailDir.exists()) trailDir.mkdirs()

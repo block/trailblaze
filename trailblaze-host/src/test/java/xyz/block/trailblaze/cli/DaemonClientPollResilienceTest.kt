@@ -32,6 +32,7 @@ import xyz.block.trailblaze.llm.TrailblazeReferrer
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.server.endpoints.CliEndpoints
 import xyz.block.trailblaze.logs.server.endpoints.CliRunRequest
+import xyz.block.trailblaze.logs.server.endpoints.CliRunResponse
 import xyz.block.trailblaze.model.TrailblazeConfig
 
 /**
@@ -138,6 +139,7 @@ class DaemonClientPollResilienceTest {
     assertThat(response.success).isFalse()
     assertThat(response.error).isNotNull().contains("404")
     assertThat(response.error).isNotNull().contains("Unknown runId: ghost")
+    assertThat(response.errorKind).isEqualTo(CliRunResponse.ERROR_KIND_INFRA)
     // 4xx should bail immediately — counter never reaches the ping-fallback threshold.
     assertThat(pingCalled).isFalse()
     // And exactly one status call, not 30.
@@ -179,6 +181,7 @@ class DaemonClientPollResilienceTest {
 
     assertThat(response.success).isFalse()
     assertThat(response.error).isNotNull().contains("ping also failed")
+    assertThat(response.errorKind).isEqualTo(CliRunResponse.ERROR_KIND_INFRA)
   }
 
   /**
@@ -239,6 +242,7 @@ class DaemonClientPollResilienceTest {
     // (a) ping was reachable mid-flight then died → "ping also failed"
     // (b) submit succeeded but every subsequent call threw → same outcome.
     assertThat(response.error).isNotNull().contains("ping also failed")
+    assertThat(response.errorKind).isEqualTo(CliRunResponse.ERROR_KIND_INFRA)
   }
 
   /**
@@ -282,6 +286,7 @@ class DaemonClientPollResilienceTest {
       val response = client.runSync(CliRunRequest(runYamlRequest = sampleRequest()))
       assertThat(response.success).isFalse()
       assertThat(response.error).isNotNull().contains("no progress")
+      assertThat(response.errorKind).isEqualTo(CliRunResponse.ERROR_KIND_INFRA)
     }
   }
 
@@ -312,6 +317,7 @@ class DaemonClientPollResilienceTest {
       assertThat(response.success).isFalse()
       // Watchdog fired — not a hang, and not an early "ping also failed" bail.
       assertThat(response.error).isNotNull().contains("no progress")
+      assertThat(response.errorKind).isEqualTo(CliRunResponse.ERROR_KIND_INFRA)
     }
   }
 

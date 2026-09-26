@@ -835,6 +835,8 @@ svg.swipe { position: absolute; inset: 0; width: 100%; height: 100%; pointer-eve
 .vctl { display: flex; align-items: center; gap: 10px; width: min(100%, 560px); margin-top: 12px; padding: 8px 12px; border: 1px solid var(--line2); border-radius: var(--r-md); background: var(--bg2); }
 .vctl .btn.play { min-width: 84px; }
 .vctl .count { font-variant-numeric: tabular-nums; }
+.vdevs { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+.vdevs .btn.on { border-color: var(--focus); color: var(--txt); box-shadow: inset 0 0 0 1px var(--focus); }
 .vctl input[type=range] { flex: 1; accent-color: var(--run); }
 .vctl .quietlink { white-space: nowrap; }
 .scrub { position: relative; z-index: 20; flex-shrink: 0; display: flex; align-items: center; gap: 12px; padding: 7px var(--page-x); border-top: 1px solid var(--line); background: var(--header); user-select: none; }
@@ -1320,7 +1322,6 @@ html[data-tb-autoplay] *, html[data-tb-autoplay] *::before, html[data-tb-autopla
 .rpstage { display: grid; grid-template-columns: repeat(var(--rp-lanes), minmax(0, 1fr)); gap: var(--space-3); align-items: stretch; min-height: 0; }
 .rplane { display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; gap: 8px; min-width: 0; min-height: 0; padding: 12px; background: var(--raised); border: 1px solid var(--line); border-radius: 14px; }
 .rplane.selected { border-color: var(--run); box-shadow: 0 0 0 1px var(--run); }
-.rplane.pending { opacity: .6; }
 .rplanehead { display: flex; align-items: center; gap: 7px; min-width: 0; padding: 0; border: 0; background: transparent; cursor: pointer; }
 .rplanehead:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: var(--r-sm); }
 .rplanehead .idxstatusdot { flex: none; }

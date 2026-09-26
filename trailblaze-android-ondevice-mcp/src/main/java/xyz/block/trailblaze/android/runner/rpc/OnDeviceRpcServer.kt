@@ -82,6 +82,8 @@ class OnDeviceRpcServer(
   private val waitForSettled: suspend () -> Unit,
   private val progressManager: ProgressSessionManager = ProgressSessionManager(),
   private val deviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList(),
+  /** Runs when the host drains this device before tearing its connection down. */
+  private val onDrain: () -> Unit = {},
 ) {
 
   // Use a dedicated coroutine scope for background jobs
@@ -109,7 +111,7 @@ class OnDeviceRpcServer(
         waitForSettled = waitForSettled,
       )
       val screenStateHandler = GetScreenStateRequestHandler(deviceClassifiers, screenStateCaptor)
-      val drainSessionHandler = DrainSessionRequestHandler()
+      val drainSessionHandler = DrainSessionRequestHandler(onDrain)
       val subscribeToProgressHandler = SubscribeToProgressRequestHandler(progressManager)
       val getExecutionStatusHandler = GetExecutionStatusRequestHandler(progressManager)
       val listActiveSessionsHandler = ListActiveSessionsRequestHandler(progressManager)

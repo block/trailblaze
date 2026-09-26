@@ -814,6 +814,28 @@ describe("session events and the attachments they reference", () => {
     expect(Object.keys(captured.input.attachments)).toEqual(["attachments/utterance_1.wav"]);
   });
 
+  test("a single-session archive hands the renderer every device's recording", async () => {
+    const dir = SESSION_ID + "/";
+    const zip = buildZip([
+      { name: dir + "001_TrailblazeSessionStatusChangeLog.json", text: JSON.stringify(startedLog()) },
+      { name: dir + "capture_metadata.json", text: JSON.stringify({ artifacts: [
+        { filename: "video.webm", type: "VIDEO_WEBM", startTimestampMs: 200, endTimestampMs: 800, deviceName: "seller" },
+        { filename: "video-buyer.webm", type: "VIDEO_WEBM", startTimestampMs: 250, endTimestampMs: 800, deviceName: "buyer" },
+      ] }) },
+      { name: dir + "video.webm", data: new Uint8Array([1, 1]) },
+      { name: dir + "video-buyer.webm", data: new Uint8Array([2, 2]) },
+    ]);
+    const captured: { input?: any } = {};
+    await Zip.buildReportHtmlFromZipBytes(zip, {
+      render: { ...derivationOnly, buildRunReportHtml: (input: unknown) => { captured.input = input; return ""; } },
+      inflateRaw,
+      generatedAt: "T",
+      keepAttachmentObjectUrls: true,
+    });
+    expect(captured.input.videoClips.map((c: any) => c.device)).toEqual(["seller", "buyer"]);
+    expect(captured.input.videoClip.device).toBe("seller");
+  });
+
   test("only the zip viewer keeps attachment object URLs; every other document strips them", async () => {
     // The HTML the zip viewer builds goes straight into a same-origin iframe on the page that minted
     // these blob: URLs, so they resolve. A downloaded document outlives that page, so the default
@@ -948,6 +970,115 @@ describe("finding the run's recording in the archive", () => {
     expect(Zip.videoArtifactFrom(CAPTURE_META([
       { filename: "device.log", type: "LOGCAT", startTimestampMs: 1, endTimestampMs: 2 },
     ]), ["device.log"])).toBeNull();
+  });
+
+  test("a multi-device session lists one recording per device, the start device's first", () => {
+    // Capture writes the start device's artifact first and stamps every recording with its device;
+    // the head of the list is what every single-recording consumer means by "the session's video".
+    const meta = CAPTURE_META([
+      { filename: "video.webm", type: "VIDEO_WEBM", startTimestampMs: 200, endTimestampMs: 800, deviceName: "seller", deviceId: "emulator-5560" },
+      { filename: "video-buyer.webm", type: "VIDEO_WEBM", startTimestampMs: 250, endTimestampMs: 800, deviceName: "buyer", deviceId: "emulator-5562" },
+    ]);
+    const files = ["video.webm", "video-buyer.webm", "device.log"];
+    expect(Zip.videoArtifactsFrom(meta, files)).toEqual([
+      { fileName: "video.webm", startMs: 200, endMs: 800, device: "seller", deviceId: "emulator-5560" },
+      { fileName: "video-buyer.webm", startMs: 250, endMs: 800, device: "buyer", deviceId: "emulator-5562" },
+    ]);
+    expect(Zip.videoArtifactFrom(meta, files)).toEqual({ fileName: "video.webm", startMs: 200, endMs: 800, device: "seller", deviceId: "emulator-5560" });
+    // A companion whose file did not make it into the archive is simply not a recording.
+    expect(Zip.videoArtifactsFrom(meta, ["video.webm"])).toHaveLength(1);
+  });
+
+  test("a device unbound and bound again keeps both of its recordings", () => {
+    // Each bind records a new file; capture lists the one still recording at stop first.
+    const meta = CAPTURE_META([
+      { filename: "video.webm", type: "VIDEO_WEBM", startTimestampMs: 200, endTimestampMs: 900, deviceName: "seller" },
+      { filename: "video-buyer-2.webm", type: "VIDEO_WEBM", startTimestampMs: 600, endTimestampMs: 900, deviceName: "buyer" },
+      { filename: "video-buyer.webm", type: "VIDEO_WEBM", startTimestampMs: 250, endTimestampMs: 450, deviceName: "buyer" },
+    ]);
+    expect(Zip.videoArtifactsFrom(meta, ["video.webm", "video-buyer.webm", "video-buyer-2.webm"])).toEqual([
+      { fileName: "video.webm", startMs: 200, endMs: 900, device: "seller" },
+      { fileName: "video-buyer-2.webm", startMs: 600, endMs: 900, device: "buyer" },
+      { fileName: "video-buyer.webm", startMs: 250, endMs: 450, device: "buyer" },
+    ]);
+  });
+
+  test("a recording's webm is preferred over its mp4 whichever is listed first", () => {
+    const meta = CAPTURE_META([
+      { filename: "video.mp4", type: "VIDEO", startTimestampMs: 200, endTimestampMs: 900 },
+      { filename: "video.webm", type: "VIDEO_WEBM", startTimestampMs: 210, endTimestampMs: 890 },
+    ]);
+    expect(Zip.videoArtifactsFrom(meta, ["video.mp4", "video.webm"])).toEqual([
+      { fileName: "video.webm", startMs: 210, endMs: 890, fallback: { fileName: "video.mp4", startMs: 200, endMs: 900 } },
+    ]);
+    // Without the webm in the archive, the mp4 still plays.
+    expect(Zip.videoArtifactsFrom(meta, ["video.mp4"])).toEqual([{ fileName: "video.mp4", startMs: 200, endMs: 900 }]);
+  });
+
+  test("the archive loader mints one clip per recorded device", async () => {
+    const dir = SESSION_ID + "/";
+    const zip = buildZip([
+      { name: dir + "001_TrailblazeSessionStatusChangeLog.json", text: JSON.stringify(startedLog()) },
+      { name: dir + "capture_metadata.json", text: CAPTURE_META([
+        { filename: "video.webm", type: "VIDEO_WEBM", startTimestampMs: 200, endTimestampMs: 800, deviceName: "seller" },
+        { filename: "video-buyer.mp4", type: "VIDEO", startTimestampMs: 250, endTimestampMs: 800, deviceName: "buyer" },
+      ]) },
+      { name: dir + "video.webm", data: new Uint8Array([1, 1]) },
+      { name: dir + "video-buyer.mp4", data: new Uint8Array([2, 2]) },
+    ]);
+    const [session] = await Zip.loadZipSessions(zip, { inflateRaw });
+    const clips = await Zip.sessionVideoClips(zip, session, { inflateRaw });
+    expect(clips.map((c: any) => [c.device, c.mime, c.startMs, c.endMs])).toEqual([["seller", "video/webm", 200, 800], ["buyer", "video/mp4", 250, 800]]);
+    clips.forEach((c: any) => expect(c.url).toStartWith("blob:"));
+    expect(await Zip.sessionVideoClip(zip, session, { inflateRaw })).toMatchObject({ device: "seller", mime: "video/webm" });
+    // Every minted URL is on the sweep list, so the next archive can hand the bytes back.
+    expect(Zip.sessionObjectUrls([{ videoClip: clips[0], videoClips: clips }])).toEqual(clips.map((c: any) => c.url));
+  });
+
+  test("a webm that fails to read falls back to the same recording's mp4", async () => {
+    const dir = SESSION_ID + "/";
+    const zip = buildZip([
+      { name: dir + "001_TrailblazeSessionStatusChangeLog.json", text: JSON.stringify(startedLog()) },
+      { name: dir + "capture_metadata.json", text: CAPTURE_META([
+        { filename: "video.mp4", type: "VIDEO", startTimestampMs: 200, endTimestampMs: 800 },
+        { filename: "video.webm", type: "VIDEO_WEBM", startTimestampMs: 210, endTimestampMs: 790 },
+      ]) },
+      { name: dir + "video.mp4", data: new Uint8Array([1, 1]) },
+      { name: dir + "video.webm", data: new Uint8Array([2, 2]) },
+    ]);
+    const [session] = await Zip.loadZipSessions(zip, { inflateRaw });
+    session.byFileName["video.webm"] = { ...session.byFileName["video.webm"], method: 99 };
+    const clips = await Zip.sessionVideoClips(zip, session, { inflateRaw });
+    expect(clips.map((c: any) => [c.mime, c.startMs, c.endMs])).toEqual([["video/mp4", 200, 800]]);
+  });
+
+  test("an unreadable recording costs only its own device's clip", async () => {
+    const dir = SESSION_ID + "/";
+    const zip = buildZip([
+      { name: dir + "001_TrailblazeSessionStatusChangeLog.json", text: JSON.stringify(startedLog()) },
+      { name: dir + "capture_metadata.json", text: CAPTURE_META([
+        { filename: "video.webm", type: "VIDEO_WEBM", startTimestampMs: 200, endTimestampMs: 800, deviceName: "seller" },
+        { filename: "video-buyer.mp4", type: "VIDEO", startTimestampMs: 250, endTimestampMs: 800, deviceName: "buyer" },
+        { filename: "video-kiosk.mp4", type: "VIDEO", startTimestampMs: 260, endTimestampMs: 800, deviceName: "kiosk" },
+      ]) },
+      { name: dir + "video.webm", data: new Uint8Array([1, 1]) },
+      { name: dir + "video-buyer.mp4", data: new Uint8Array([2, 2]) },
+      { name: dir + "video-kiosk.mp4", data: new Uint8Array([3, 3]) },
+    ]);
+    const [session] = await Zip.loadZipSessions(zip, { inflateRaw });
+    // An entry the reader cannot decode, between two it can.
+    session.byFileName["video-buyer.mp4"] = { ...session.byFileName["video-buyer.mp4"], method: 99 };
+    const clips = await Zip.sessionVideoClips(zip, session, { inflateRaw });
+    expect(clips.map((c: any) => c.device)).toEqual(["seller", "kiosk"]);
+  });
+
+  test("a device may be named after an Object.prototype member", () => {
+    const meta = CAPTURE_META([
+      { filename: "video.webm", type: "VIDEO_WEBM", startTimestampMs: 200, endTimestampMs: 800, deviceName: "__proto__" },
+      { filename: "video-toString.webm", type: "VIDEO_WEBM", startTimestampMs: 250, endTimestampMs: 800, deviceName: "toString" },
+    ]);
+    expect(Zip.videoArtifactsFrom(meta, ["video.webm", "video-toString.webm"]).map((a: any) => a.device))
+      .toEqual(["__proto__", "toString"]);
   });
 
   test("only known container extensions count as playable", () => {

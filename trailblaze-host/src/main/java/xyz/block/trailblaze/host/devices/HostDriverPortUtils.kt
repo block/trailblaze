@@ -192,36 +192,41 @@ internal object HostDriverPortUtils {
   }
 
   /**
-   * Force-kills any local processes bound to the given port.
+   * Force-kills any local processes listening on the given port.
    * Uses `lsof` and `kill -9` — safe to call even if no process is using the port.
+   *
+   * Listeners only: without `-sTCP:LISTEN`, `lsof` also reports every process with a connection to
+   * the port, and the caller's own JVM is one of them whenever it still holds a client socket there.
    */
   fun killProcessesUsingPort(port: Int) {
     try {
-      val lsofProcess =
-        ProcessBuilder(listOf("lsof", "-ti:$port")).redirectErrorStream(true).start()
-
-      val lsofCompleted = lsofProcess.waitFor(5, TimeUnit.SECONDS)
-      if (!lsofCompleted) {
-        lsofProcess.destroyForcibly()
-        return
-      }
-
-      val pids = lsofProcess.inputStream.bufferedReader().readText().trim()
-
-      if (pids.isNotEmpty()) {
-        pids.split("\n").filter { it.isNotBlank() }.forEach { pid ->
-          try {
-            ProcessBuilder(listOf("kill", "-9", pid.trim()))
-              .start()
-              .waitFor(2, TimeUnit.SECONDS)
-          } catch (e: Exception) {
-            // Ignore individual process kill failures
-          }
+      listeningPids(port).forEach { pid ->
+        try {
+          ProcessBuilder(listOf("kill", "-9", pid))
+            .start()
+            .waitFor(2, TimeUnit.SECONDS)
+        } catch (e: Exception) {
+          // Ignore individual process kill failures
         }
       }
     } catch (e: Exception) {
       // Ignore cleanup failures — don't prevent new connections
     }
+  }
+
+  /** The pids [killProcessesUsingPort] kills for [port]; empty if `lsof` does not answer in time. */
+  internal fun listeningPids(port: Int): List<String> {
+    val lsofProcess =
+      ProcessBuilder(listOf("lsof", "-ti", "tcp:$port", "-sTCP:LISTEN")).redirectErrorStream(true).start()
+
+    val lsofCompleted = lsofProcess.waitFor(5, TimeUnit.SECONDS)
+    if (!lsofCompleted) {
+      lsofProcess.destroyForcibly()
+      return emptyList()
+    }
+
+    return lsofProcess.inputStream.bufferedReader().readText()
+      .split("\n").map { it.trim() }.filter { it.isNotBlank() }
   }
 
   /**

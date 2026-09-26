@@ -46,7 +46,7 @@ import xyz.block.trailblaze.util.toLowerHex
  * Files are streamed in fixed-size chunks rather than loaded whole into memory, so a
  * workspace with a multi-MB binary under `tools/` (a recording, a lockfile, a screenshot)
  * doesn't allocate a proportional buffer per CLI invocation. The walk runs on the hot
- * path of every CLI command via `warnIfWorkspaceMismatch` so this matters.
+ * path of every CLI command via `findWorkspaceMismatch` so this matters.
  *
  * ## Version coupling
  *

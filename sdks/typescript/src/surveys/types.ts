@@ -203,7 +203,9 @@ export interface FindingInput {
   feature?: string;
   /**
    * What kind of thing `feature` names. Defaults to the survey's `kind`, then `"feature"`. A
-   * survey can also place a session on another axis, such as `"job"` or `"gap"`.
+   * survey can also place a session on another axis, such as `"job"` or `"gap"`. `diagnosis`,
+   * `signal` and `measure` mark a finding about how the run went rather than what it exercised
+   * (see `purposeOf`).
    */
   kind?: string;
   /** One line: what happened in this session. */

@@ -4,6 +4,8 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import org.junit.Test
+import xyz.block.trailblaze.api.ScreenState
+import xyz.block.trailblaze.api.ScreenshotScalingConfig
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
 import xyz.block.trailblaze.mcp.agent.BridgeUiActionExecutor.Companion.ELEMENT_TYPE_BUTTON
@@ -14,6 +16,8 @@ import xyz.block.trailblaze.mcp.agent.BridgeUiActionExecutor.Companion.ELEMENT_T
 import xyz.block.trailblaze.mcp.agent.BridgeUiActionExecutor.Companion.ELEMENT_TYPE_SCROLL
 import xyz.block.trailblaze.mcp.agent.BridgeUiActionExecutor.Companion.ELEMENT_TYPE_TAB
 import xyz.block.trailblaze.mcp.agent.BridgeUiActionExecutor.Companion.ELEMENT_TYPE_TOGGLE
+import xyz.block.trailblaze.mcp.TrailblazeMcpBridge
+import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetScreenStateResponse
 import xyz.block.trailblaze.mcp.executor.ConfigurableMockBridge
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.test.assertEquals
@@ -322,5 +326,43 @@ class BridgeUiActionExecutorTest {
     assertFailsWith<CancellationException> {
       launchApp("com.example.app") { installedAppIdsException = CancellationException("run stopped") }
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // getScreenSummary
+  // ---------------------------------------------------------------------------
+
+  /**
+   * The summary is text from the element tree — the screen every `trailblaze tool` call prints.
+   * Asking for screenshots made the device render, encode and ship two images per call only for
+   * them to be discarded.
+   */
+  @Test
+  fun `the screen summary asks the device for no screenshots`() = runBlocking {
+    val requests = mutableListOf<String>()
+    val bridge = object : TrailblazeMcpBridge by ConfigurableMockBridge() {
+      override fun isOnDeviceInstrumentation(): Boolean = true
+
+      override suspend fun getScreenStateViaRpc(
+        includeScreenshot: Boolean,
+        screenshotScalingConfig: ScreenshotScalingConfig,
+        includeAnnotatedScreenshot: Boolean,
+        includeAllElements: Boolean,
+      ): GetScreenStateResponse? {
+        requests += "rpc screenshot=$includeScreenshot annotated=$includeAnnotatedScreenshot"
+        return null
+      }
+
+      override fun getDirectScreenStateProvider(
+        skipScreenshot: Boolean,
+      ): ((ScreenshotScalingConfig) -> ScreenState)? {
+        requests += "direct skipScreenshot=$skipScreenshot"
+        return null
+      }
+    }
+
+    BridgeUiActionExecutor(mcpBridge = bridge).getScreenSummary()
+
+    assertEquals(listOf("rpc screenshot=false annotated=false", "direct skipScreenshot=true"), requests)
   }
 }

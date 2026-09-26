@@ -395,15 +395,24 @@ class WallClockMuxConsumerTest {
       setExecutable(true)
     }
     val prompt = shim("prompt-ffmpeg", "")
-    val wedged = shim("wedged-ffmpeg", "sleep 60\n")
+    // `exec` so the process the probe kills on timeout is the sleeper itself, not a shell that
+    // would leave an orphaned `sleep` on the agent.
+    val wedged = shim("wedged-ffmpeg", "exec sleep 120\n")
 
-    assertTrue(WallClockMuxConsumer.Output.vp9EncoderAvailable(prompt.absolutePath, timeoutSeconds = 5))
+    // The positive control only proves a prompt listing is read, so its budget is hang containment,
+    // not a timing claim. The first exec of a just-written script can take seconds on a loaded CI
+    // Mac, which is what made a 5s budget here flaky.
+    assertTrue(
+      WallClockMuxConsumer.Output.vp9EncoderAvailable(prompt.absolutePath, timeoutSeconds = 60),
+      "a shim that prints the listing and exits must report the encoder",
+    )
 
     val startedAt = System.nanoTime()
     val available = WallClockMuxConsumer.Output.vp9EncoderAvailable(wedged.absolutePath, timeoutSeconds = 1)
     val elapsedMs = (System.nanoTime() - startedAt) / 1_000_000
     assertFalse(available, "a probe that timed out must not report an encoder")
-    assertTrue(elapsedMs < 10_000, "the probe must return on its timeout, took ${elapsedMs}ms")
+    // Hang containment, not a speed budget: an ignored timeout waits out the shim's 120s sleep.
+    assertTrue(elapsedMs < 60_000, "the probe must return on its timeout, took ${elapsedMs}ms")
   }
 
   // ──────────────────────────────────────────────────────────────────────────

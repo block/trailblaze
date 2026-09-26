@@ -45,6 +45,7 @@ import xyz.block.trailblaze.toolcalls.interpolateMemoryInTool
 import xyz.block.trailblaze.toolcalls.isSuccess
 import xyz.block.trailblaze.tracing.TrailblazeTracer
 import xyz.block.trailblaze.util.Console
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Playwright-native implementation of [TrailblazeAgent].
@@ -98,6 +99,28 @@ class PlaywrightTrailblazeAgent(
    * Set to the trail file's parent directory before running a trail.
    */
   var workingDirectory: java.io.File? = null
+
+  // A depth, not a thread-local: a scripted tool's nested `ctx.tools.web_*` calls arrive on other
+  // threads, and they belong to the same replay.
+  private val scriptedRunDepth = AtomicInteger(0)
+
+  /**
+   * Runs [block] the way a Playwright test runs: each tool returns as soon as Playwright's own
+   * call does, with no post-action settle and no per-action screenshot or element tree. The
+   * next action's auto-wait (a locator click, an `isVisible` assertion) does the waiting instead.
+   *
+   * For recorded replays and `tools:` blocks — nothing reads the per-action captures there,
+   * and the session video shows the run. LLM steps stay outside it: the model reads the tree,
+   * and a settled page is what it should read.
+   */
+  fun <T> runScripted(block: () -> T): T {
+    scriptedRunDepth.incrementAndGet()
+    try {
+      return block()
+    } finally {
+      scriptedRunDepth.decrementAndGet()
+    }
+  }
 
   // The default capture self-bridges onto the Playwright thread: multi-device sessions invoke
   // the provider from the session's routing thread, where a raw getScreenState() would violate
@@ -209,11 +232,22 @@ class PlaywrightTrailblazeAgent(
     TrailblazeTracer.traceSuspend("executePlaywrightTool", "tool", mapOf("tool" to toolName)) {
       // Pre-action screenshot for the agent-driver overlay. captureScreenStateForLogging
       // does NOT trigger settling — that's the job of the previous tool's dispatchAndAwaitSettle.
-      val preScreenState = try { browserManager.captureScreenStateForLogging() } catch (_: Exception) { null }
+      // Tools that skip the settle skip this too: a page script has no target to overlay, and
+      // scripted tools poll with them, so a screenshot per call adds up. A scripted run (see
+      // [runScripted]) skips both for every tool.
+      val scripted = scriptedRunDepth.get() > 0
+      val awaitsSettle = memoryResolvedTool.awaitsSettle && !scripted
+      val preScreenState = if (awaitsSettle) {
+        try { browserManager.captureScreenStateForLogging() } catch (_: Exception) { null }
+      } else {
+        null
+      }
 
       // Resolve element coordinates BEFORE execution for logging. Clicks may navigate
-      // away, after which the element no longer exists on the page.
-      val preResolvedCenter = resolveToolCenter(memoryResolvedTool, context)
+      // away, after which the element no longer exists on the page. Only the overlay on the
+      // pre-action screenshot uses them, so there is nothing to resolve without one.
+      val preResolvedCenter =
+        if (preScreenState != null) resolveToolCenter(memoryResolvedTool, context) else 0 to 0
 
       // Log AgentDriverLog with pre-action screenshot BEFORE execution so the
       // timeline shows the tap coordinates on the pre-click screenshot. Deliberately the
@@ -226,11 +260,12 @@ class PlaywrightTrailblazeAgent(
       // checks (visible/stable/enabled/editable) inside locator.fill/click/hover/...
       // gate per-tool readiness; dispatchAndAwaitSettle handles the post-action settle
       // — see PlaywrightPageManager.dispatchAndAwaitSettle for the strategy.
-      val result = browserManager.dispatchAndAwaitSettle {
+      val execute: suspend () -> TrailblazeToolResult = {
         TrailblazeTracer.traceSuspend("executeWithPlaywright:$toolName", "tool") {
           memoryResolvedTool.executeWithPlaywright(browserManager.currentPage, context)
         }
       }
+      val result = if (awaitsSettle) browserManager.dispatchAndAwaitSettle(execute) else execute()
 
       // Enrich tool with TrailblazeNodeSelector before logging so recordings capture
       // rich selectors (ARIA role+name, CSS selector, data-testid, nth-index).
@@ -241,11 +276,12 @@ class PlaywrightTrailblazeAgent(
       // 1-2s after a login navigation's `load` event. Fall back to the pre-action context
       // for clicks that navigate away (the clicked element is gone from the new page).
       //
-      // Gate the post-action capture on the tool having something to enrich — `web_navigate`,
-      // `web_wait`, `web_snapshot`, and other no-element tools shouldn't pay the ARIA-snapshot
-      // cost twice per execution.
+      // Gate the post-action capture on the tool having a ref to enrich: the enrichment maps a
+      // ref to a selector, so a tool that already carries only a selector (every recorded tool)
+      // or no target at all gains nothing from a second capture. A scripted run keeps its
+      // tools' recorded form.
       val enrichedTool = if (result.isSuccess()) {
-        val needsEnrichment = memoryResolvedTool.targetRef != null || memoryResolvedTool.targetNodeSelector != null
+        val needsEnrichment = memoryResolvedTool.targetRef != null && !scripted
         if (needsEnrichment) {
           val postScreenState = try { browserManager.captureScreenStateForLogging() } catch (_: Exception) { null }
           val postEnriched = postScreenState?.let { enrichToolWithNodeSelector(memoryResolvedTool, context, it) }
