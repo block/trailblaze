@@ -4,6 +4,7 @@ import java.io.File
 import xyz.block.trailblaze.capture.CaptureOptions
 import xyz.block.trailblaze.capture.CaptureStream
 import xyz.block.trailblaze.capture.model.CaptureArtifact
+import xyz.block.trailblaze.capture.model.CaptureFilenames
 import xyz.block.trailblaze.capture.model.CaptureType
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
@@ -79,8 +80,14 @@ class AndroidVideoCapture(
     tee: H264Tee,
     output: WallClockMuxConsumer.Output,
   ) -> WallClockVideoMux = { outputFile, tee, output -> WallClockMuxConsumer(outputFile, tee, output) },
+  /**
+   * Basename of the recording written into the session directory: `video` for the session's own
+   * device, `video-<name>` for a companion in a multi-device session, so two displays recorded into
+   * one session directory do not write over each other.
+   */
+  private val basename: String = CaptureFilenames.VIDEO_BASENAME,
   /** Records the session when the device's firmware has no `screenrecord` to stream from. */
-  private val fallback: CaptureStream = AndroidScreencapVideoCapture(),
+  private val fallback: CaptureStream = AndroidScreencapVideoCapture(basename = basename),
   /** Test seam: whether this device can stream its screen at all. */
   private val screenrecordAvailable: (TrailblazeDeviceId) -> Boolean = {
     AndroidScreenrecordSupport.isAvailable(it)
@@ -132,7 +139,7 @@ class AndroidVideoCapture(
 
     val tee = H264Tee.forDevice(trailblazeDeviceId, videoSize = videoSize, bitRate = BIT_RATE)
     mux = muxFactory(
-      File(sessionDir, format.canonicalFilename),
+      File(sessionDir, format.filename(basename)),
       tee,
       format.liveMuxOutput(),
     ).also { it.start() }
@@ -158,7 +165,7 @@ class AndroidVideoCapture(
       // session's log zip, where it reads as a recording that will not play. Measured on an
       // OEM image that ships no `screenrecord` binary: the shell's "not found" lands on
       // STDOUT, inside the H.264 pipe, and the command still exits 0 — nothing upstream notices.
-      deleteEmptyRecording(File(dir, format.canonicalFilename))
+      deleteEmptyRecording(File(dir, format.filename(basename)))
       return null
     }
     val videoFile = result.file

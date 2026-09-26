@@ -3,9 +3,13 @@ package xyz.block.trailblaze.host.capture
 import java.io.File
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import xyz.block.trailblaze.capture.CaptureMetadata
 import xyz.block.trailblaze.capture.CaptureOptions
 import xyz.block.trailblaze.capture.CaptureSession
 import xyz.block.trailblaze.capture.ToolCallPhase
+import xyz.block.trailblaze.capture.model.CaptureArtifact
+import xyz.block.trailblaze.capture.model.CaptureFilenames
+import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.TraceId
@@ -54,9 +58,38 @@ import xyz.block.trailblaze.util.Console
  * `stopForSession` removes under `lock`, then checks `started`: a `started=false` entry
  * means a start is mid-flight and will clean itself up via the post-start check; a
  * `started=true` entry runs the normal `stopAll` + `capture_debug.txt` write.
+ *
+ * ### Multi-device sessions
+ *
+ * A session that binds several devices (a trail's `config.devices:` configuration, or an MCP
+ * session's named roster) is recorded on EVERY display, not just the one it started on: the
+ * step that ran on the buyer display is otherwise a step whose recording shows the seller's screen
+ * sitting still. [bindDevices] starts one video-only capture per companion into the same session
+ * directory — under `video-<name>.webm` ([CaptureFilenames.companionVideoBasename]) so the files
+ * cannot collide, while the start device keeps `video.webm` so every reader that knows only one
+ * recording per session still finds the display the trail began on. [stopForSession] stops them
+ * all and publishes ONE `capture_metadata.json` whose entries name their device
+ * ([CaptureArtifact.deviceName]); the report matches each entry to the steps that ran there.
+ *
+ * Companions record video only. Their logs and memory would need their own filenames and their
+ * own readers, and nothing asks for them yet. A web companion is recorded from its browser's live
+ * screencast, never by Playwright's own recorder — see [bindDevices].
  */
 class SessionCaptureCoordinator(
   private val logsRepo: LogsRepo,
+  /**
+   * Builds the capture for one companion device of a multi-device session (see [bindDevices]):
+   * video only, written under the given basename so it lands beside the start device's recording
+   * instead of over it. Its own seam because the primary factory is what every existing test drives
+   * and a companion has a narrower contract — no logs, no memory, a filename that is not the
+   * canonical one. The default records the way the primary does, minus the streams a companion
+   * does not keep; a baguette-stream companion is not offered because that recorder names its own
+   * file. A web companion gets no Playwright-recorder fallback; see [bindDevices].
+   */
+  private val companionCaptureFactory: (CaptureOptions, TrailblazeDevicePlatform, String) -> CaptureSession? =
+    { options, platform, videoBasename ->
+      CaptureSession.fromOptions(options, platform, videoBasename = videoBasename, webPlaywrightFallback = false)
+    },
   /**
    * Test seam — swap the real `CaptureSession.fromOptions` for a factory that returns
    * fake `CaptureSession` instances so unit tests can drive idempotency / race /
@@ -85,6 +118,30 @@ class SessionCaptureCoordinator(
       )
     },
 ) {
+
+  /** One device of a multi-device session, as [bindDevices] needs to see it. */
+  data class BoundDevice(
+    /** The name the trail's configuration (or the MCP roster) gave the device — `seller`, `buyer`. */
+    val name: String,
+    val deviceId: TrailblazeDeviceId,
+    /**
+     * The app the session drives on this device, when known — the target's first app id for the
+     * device's platform. Handed to the companion's recorders as `startAll`'s appId; companions record
+     * video only, and no video recorder reads it.
+     */
+    val appId: String? = null,
+  )
+
+  /** A companion display's running capture, keyed in [ActiveCapture.companions] by its name. */
+  private class CompanionCapture(
+    val name: String,
+    val deviceId: TrailblazeDeviceId,
+    val session: CaptureSession,
+    /** The file basename this recording owns in the session directory; see [ActiveCapture.claimBasename]. */
+    val basename: String,
+    /** False while [bindDevices] is still inside `startAll`; see the reserve-then-start note there. */
+    @Volatile var started: Boolean = false,
+  )
 
   /**
    * Routes the agent loop's tool-call boundaries to the session's capture, so streams that sample
@@ -137,8 +194,46 @@ class SessionCaptureCoordinator(
     val sessionDir: File,
     val deviceId: String,
     val platform: TrailblazeDevicePlatform,
+    val options: CaptureOptions,
     var started: Boolean = false,
-  )
+  ) {
+    /** The configuration name of the device [session] records, once [bindDevices] has said. */
+    @Volatile var deviceName: String? = null
+
+    /** Companion displays being recorded alongside, by configuration name. Guarded by the coordinator's `lock`. */
+    val companions = LinkedHashMap<String, CompanionCapture>()
+
+    /** What companions unbound before the session ended captured; published with everything else at stop. */
+    val finishedCompanionArtifacts = mutableListOf<CaptureArtifact>()
+
+    /**
+     * Every recording basename this session has handed out, the start device's included, lowercased.
+     * Never released: a basename names a file on disk, so a companion unbound and bound again, or two
+     * device names that sanitize to one basename, must each write a file of their own rather than
+     * truncate one another's footage. Lowercased because the default macOS and Windows filesystems
+     * treat `video-Buyer` and `video-buyer` as one file. Guarded by the coordinator's `lock`.
+     */
+    private val claimedBasenames = mutableSetOf(CaptureFilenames.VIDEO_BASENAME.lowercase())
+
+    /** Claims [wanted], or `wanted-2`, `wanted-3`, … when an earlier recording already owns it. Call with `lock` held. */
+    fun claimBasename(wanted: String): String {
+      var candidate = wanted
+      var n = 2
+      while (!claimedBasenames.add(candidate.lowercase())) candidate = "$wanted-${n++}"
+      return candidate
+    }
+
+    /**
+     * The artifact list `capture_metadata.json` was last written with, or null before the session's
+     * stop has written it. A companion whose unbind finishes stopping after that write adds its
+     * artifacts here and rewrites the file, so footage that finished late is still on record.
+     * Guarded by the coordinator's `lock`.
+     */
+    var publishedArtifacts: List<CaptureArtifact>? = null
+
+    /** Serializes `capture_metadata.json` writes for this session; each write takes the newest list. */
+    val metadataWriteLock = Any()
+  }
 
   private val lock = Any()
   private val active = mutableMapOf<SessionId, ActiveCapture>()
@@ -215,8 +310,9 @@ class SessionCaptureCoordinator(
     // `PlaywrightVideoRecordDir` lifecycle. If the coordinator also publishes a record
     // dir, the manager's `syncRecordingWithRegistry` tears down + recreates the
     // BrowserContext at exactly the moment the trail is trying to navigate, wedging
-    // the runBlocking call on the Playwright dispatcher thread. Web MCP capture is a
-    // separate follow-up; this coordinator drives Android and iOS capture.
+    // the runBlocking call on the Playwright dispatcher thread. A session that starts on a
+    // browser therefore has no capture here — and so no companion recordings either (see
+    // [bindDevices]); web companions of an Android or iOS session are recorded.
     if (platform == TrailblazeDevicePlatform.WEB) return false
 
     // Step 1: reserve the slot atomically under `lock`. Bail if another caller already
@@ -255,7 +351,7 @@ class SessionCaptureCoordinator(
           )
           return false
         }
-      ActiveCapture(captureSession, sessionDir, deviceId, platform).also {
+      ActiveCapture(captureSession, sessionDir, deviceId, platform, options).also {
         active[sessionId] = it
         syncObserverRegistration()
       }
@@ -310,6 +406,152 @@ class SessionCaptureCoordinator(
   }
 
   /**
+   * Tells the capture for [sessionId] which devices the session binds, and records every companion.
+   *
+   * [devices] is the whole roster, start device included: the entry whose device is the one
+   * capture already runs on names that recording, and every other entry becomes a companion
+   * recording. Call it after [startForSession] has committed — from the same thread, as the trail
+   * runner does — and as often as the roster changes: a name already recorded is left alone, so
+   * re-sending the roster is free, and a companion bound mid-session (an MCP `device(action=BIND)`)
+   * starts recording from that moment.
+   *
+   * Companions record only when the session's own capture records video: a session that opted out
+   * of video has not asked for footage of any display — and a session that started on a browser has
+   * no capture here at all ([startForSession] skips WEB), so none of its devices are recorded. A companion records video only: the session
+   * has one `device.log` and one memory series, and they are the start device's.
+   *
+   * A web companion is recorded from its browser's live screencast, which it follows for the whole
+   * session — a browser that comes up after the bind is picked up when it does. It never falls back
+   * to Playwright's own recorder the way a web session's own capture can: that recorder is a
+   * context-creation option, and turning it on for a browser the session is already driving
+   * rebuilds its context mid-navigation (the wedge [startForSession]'s WEB skip avoids).
+   *
+   * Companion starts follow the same reserve-then-start protocol as the primary: the name is
+   * reserved under `lock` before the recorder is started outside it, and a start that finds its
+   * session already stopped tears itself down instead of leaking a recorder.
+   *
+   * @return how many companion recordings this call started.
+   */
+  fun bindDevices(sessionId: SessionId, devices: List<BoundDevice>): Int {
+    val capture = synchronized(lock) { active[sessionId]?.takeIf { it.started } }
+    if (capture == null) {
+      Console.log(
+        "[SessionCaptureCoordinator] no committed capture for session=$sessionId — " +
+          "not recording its ${devices.size} bound device(s)",
+      )
+      return 0
+    }
+    val (self, others) = devices.partition { it.deviceId.instanceId == capture.deviceId }
+    self.firstOrNull()?.let { capture.deviceName = it.name }
+    if (others.isEmpty()) return 0
+    if (!capture.options.captureVideo) {
+      Console.log(
+        "[SessionCaptureCoordinator] video capture is off for session=$sessionId, so its companion " +
+          "device(s) ${others.map { it.name }} are not recorded either",
+      )
+      return 0
+    }
+    val companionOptions = capture.options.copy(captureLogcat = false, captureIosLogs = false, captureMemory = false)
+    var started = 0
+    for (device in others) {
+      val reservation = synchronized(lock) {
+        if (active[sessionId] !== capture || capture.companions.containsKey(device.name)) return@synchronized null
+        val basename = capture.claimBasename(CaptureFilenames.companionVideoBasename(device.name))
+        val session = companionCaptureFactory(companionOptions, device.deviceId.trailblazeDevicePlatform, basename)
+          ?: run {
+            Console.log(
+              "[SessionCaptureCoordinator] no capture wired for companion '${device.name}' " +
+                "(${device.deviceId.trailblazeDevicePlatform}) in session=$sessionId",
+            )
+            return@synchronized null
+          }
+        CompanionCapture(device.name, device.deviceId, session, basename).also { capture.companions[device.name] = it }
+      } ?: continue
+      try {
+        reservation.session.startAll(capture.sessionDir, device.deviceId.instanceId, device.appId)
+        val committed = synchronized(lock) {
+          val live = active[sessionId] === capture && capture.companions[device.name] === reservation
+          if (live) reservation.started = true
+          live
+        }
+        if (!committed) {
+          runCatching { reservation.session.stopAll(writeMetadata = false) }
+          Console.log(
+            "[SessionCaptureCoordinator] companion '${device.name}' start raced with stop for " +
+              "session=$sessionId — cleaned up its recorder",
+          )
+          continue
+        }
+        started++
+        Console.log(
+          "[SessionCaptureCoordinator] recording companion '${device.name}' " +
+            "(${device.deviceId.instanceId}) for session=$sessionId as ${reservation.basename}",
+        )
+      } catch (e: Exception) {
+        synchronized(lock) { capture.companions.remove(device.name, reservation) }
+        runCatching { reservation.session.stopAll(writeMetadata = false) }
+        Console.log(
+          "[SessionCaptureCoordinator] failed to record companion '${device.name}' " +
+            "(${device.deviceId.instanceId}) for session=$sessionId: ${e.message}",
+        )
+      }
+    }
+    return started
+  }
+
+  /**
+   * Stops recording the companion bound as [name] — an MCP `device(action=UNBIND)` — keeping what
+   * it captured so far for the session's `capture_metadata.json`. The session's own capture is
+   * not a companion and is left alone. Returns false when no such companion is recording.
+   *
+   * A companion still starting is let go too: its start then finds the name no longer reserved and
+   * stops its own recorder, so nothing is left filming a device the session no longer binds.
+   */
+  fun unbindDevice(sessionId: SessionId, name: String): Boolean {
+    val (capture, companion) = synchronized(lock) {
+      val capture = active[sessionId] ?: return false
+      val companion = capture.companions.remove(name) ?: return false
+      if (!companion.started) return false
+      capture to companion
+    }
+    val artifacts = stopCompanion(sessionId, companion)
+    val publishedAlready = synchronized(lock) {
+      capture.finishedCompanionArtifacts += artifacts
+      val published = capture.publishedArtifacts ?: return@synchronized false
+      // The session stopped while this companion was still stopping, and its metadata went out
+      // without this recording. Add it and write again, or the file on disk is invisible to readers.
+      capture.publishedArtifacts = published + artifacts
+      artifacts.isNotEmpty()
+    }
+    if (publishedAlready) {
+      runCatching { writeCaptureMetadata(capture) }.onFailure {
+        Console.log("[SessionCaptureCoordinator] rewriting ${CaptureMetadata.FILENAME} for session=$sessionId failed: ${it.message}")
+      }
+    }
+    return true
+  }
+
+  /** Writes the newest [ActiveCapture.publishedArtifacts]; writers queue on the session's own lock, so the last write is the fullest. */
+  private fun writeCaptureMetadata(capture: ActiveCapture) {
+    synchronized(capture.metadataWriteLock) {
+      val artifacts = synchronized(lock) { capture.publishedArtifacts } ?: return
+      if (artifacts.isNotEmpty()) CaptureMetadata.write(capture.sessionDir, artifacts)
+    }
+  }
+
+  /** Stops one companion's recorder and tags what it produced with the device it filmed. */
+  private fun stopCompanion(sessionId: SessionId, companion: CompanionCapture): List<CaptureArtifact> = try {
+    companion.session.stopAll(writeMetadata = false)
+      .map { it.copy(deviceName = companion.name, deviceId = companion.deviceId.instanceId) }
+  } catch (e: Exception) {
+    Console.log(
+      "[SessionCaptureCoordinator] stopping companion '${companion.name}' for session=$sessionId " +
+        "threw: ${e.message}",
+    )
+    emptyList()
+  }
+
+  /**
    * Stops capture for [sessionId] and writes diagnostic metadata. Idempotent. Safe to
    * call multiple times — e.g. from both `endSessionForDevice` (the normal end) and a
    * later `cancelSessionForDevice` cleanup, only the first wins. Final: a later
@@ -342,10 +584,20 @@ class SessionCaptureCoordinator(
     val debug = StringBuilder()
     debug.appendLine("sessionDir=${capture.sessionDir.absolutePath}")
     debug.appendLine("deviceId=${capture.deviceId}")
+    debug.appendLine("deviceName=${capture.deviceName}")
     debug.appendLine("platform=${capture.platform}")
+    // Snapshot under lock; the entry is already out of `active`, so no bind can add to it after
+    // this — a bind mid-start sees the session gone and tears its own recorder down.
+    val companions = synchronized(lock) { capture.companions.values.toList() }
+    debug.appendLine(
+      "companions=" + companions.joinToString(",") { "${it.name}:${it.deviceId.instanceId}:${it.started}" },
+    )
     debug.appendLine("filesBeforeStop=${capture.sessionDir.list()?.toList() ?: emptyList<String>()}")
-    val artifacts = try {
-      capture.session.stopAll()
+    val primaryArtifacts = try {
+      // The merged list is written below, once, with every device's entries — each capture writing
+      // its own would leave whichever stopped last as the only one on record.
+      capture.session.stopAll(writeMetadata = false)
+        .map { it.copy(deviceName = capture.deviceName, deviceId = capture.deviceId) }
     } catch (e: Exception) {
       // Tombstone the session id — `stopAll` partially failed and we may have leaked a
       // subprocess we couldn't kill. Refuse to re-reserve this id so a later caller
@@ -359,6 +611,14 @@ class SessionCaptureCoordinator(
       )
       emptyList()
     }
+    val companionArtifacts = companions.filter { it.started }.flatMap { stopCompanion(sessionId, it) }
+    // Taking the finished list and publishing happen under one lock hold, so an unbind still
+    // stopping its companion either lands in this list or sees it published and writes again.
+    val artifacts = synchronized(lock) {
+      (primaryArtifacts + companionArtifacts + capture.finishedCompanionArtifacts).also { capture.publishedArtifacts = it }
+    }
+    runCatching { writeCaptureMetadata(capture) }
+      .onFailure { debug.appendLine("EXCEPTION writing ${CaptureMetadata.FILENAME}: ${it.message}") }
     debug.appendLine("artifacts=${artifacts.size}")
     debug.appendLine(
       "artifactTypes=" + artifacts.joinToString(",") {

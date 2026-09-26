@@ -84,6 +84,20 @@ Not every match is a feature. A finding's `kind` (defaulting to the survey's, th
 jobs-to-be-done or gaps a catalog has no row for; the report shows the kind wherever it is not
 `feature`.
 
+### Coverage and diagnosis
+
+A survey is for one of two things, and its kind says which (`purposeOf(kind)`):
+
+- **Coverage** says what a run exercised: the features it used, the screens it passed, the gaps a
+  catalog has no row for. These answer "which features does this trail use?" and "which trails
+  use this feature?". Kinds `feature`, `waypoint`, `gap`, and any kind a survey invents.
+- **Diagnosis** says how the run went: why it failed (`diagnosis`), something that happened to it
+  such as a crash, server errors or the LLM stepping in (`signal`), and where its time went
+  (`measure`).
+
+Give a survey about the run itself one of the diagnosis kinds, so its findings are not listed as
+features the trail covers.
+
 ### Scoping
 
 `platforms`, `appIds`, and `targets` on the spec skip sessions the survey was never meant for,

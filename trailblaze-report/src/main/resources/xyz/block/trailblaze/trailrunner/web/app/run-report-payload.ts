@@ -363,17 +363,24 @@ function withoutRuntimeAttachments(attachments: Record<string, string> | null | 
 
 // The same rule for one embedded `#tb-session-<i>` chunk, as the viewer's chunked export needs it:
 // that path ships the cloned chunks verbatim, and a document rendered with the object URLs kept
-// (the zip viewer's in-page iframe) carries them inside those chunks. Returns null when there is
-// nothing to rewrite — no blob: values, an unparseable chunk — so the caller leaves the node alone
-// and a megabyte chunk is never reserialized for nothing.
+// (the zip viewer's in-page iframe) carries them inside those chunks — its attachments, and the
+// archive's recordings (`videoClip` / `videoClips`), which the saved file then falls back to
+// screenshots for. Returns null when there is nothing to rewrite — no blob: values, an unparseable
+// chunk — so the caller leaves the node alone and a megabyte chunk is never reserialized for nothing.
 function chunkJsonWithoutRuntimeAttachments(json: string): string | null {
   if (!/blob:/i.test(String(json == null ? '' : json))) return null;
   let payload: SessionPayload | null = null;
   try { payload = JSON.parse(json); } catch (e) { return null; }
   if (!payload || typeof payload !== 'object') return null;
   const stripped = withoutRuntimeAttachments(payload.attachments);
-  if (!stripped.changed) return null;
-  return toInertJson({ ...payload, attachments: stripped.attachments });
+  const isRuntime = (clip: VideoClip | null | undefined) => !!clip && /^blob:/i.test(String(clip.url));
+  const clips = isRuntime(payload.videoClip) || (payload.videoClips || []).some(isRuntime);
+  if (!stripped.changed && !clips) return null;
+  return toInertJson({
+    ...payload,
+    attachments: stripped.attachments,
+    ...(clips ? { videoClip: null, videoClips: null } : {}),
+  });
 }
 
 export { parseEventJsonish, eventValueText, normalizeEventPayload, eventPrettyText, rawPrettyText, inflateGzText, deflateGzText, inflateGzJsonArray, inflateEventsGz, inflateLlmMessagesGz, inflateGzJsonRecord, jsonToYaml, transcriptToolCallYaml, transcriptToolResultDisplay, toInertJson, inertScriptBody, tbBootLoaderHtml, withoutRuntimeAttachments, chunkJsonWithoutRuntimeAttachments };

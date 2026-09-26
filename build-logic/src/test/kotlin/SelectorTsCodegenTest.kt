@@ -50,6 +50,7 @@ class SelectorTsCodegenTest {
     // `({ <key>: args })` so the literal form copy-pastes to YAML cleanly.
     val expectedKeys = listOf(
       "androidAccessibility",
+      "androidView",
       "androidMaestro",
       "web",
       "compose",
@@ -440,6 +441,7 @@ class SelectorTsCodegenTest {
     @Serializable
     data class TrailblazeNodeSelector(
       val androidAccessibility: DriverNodeMatch.AndroidAccessibility? = null,
+      val androidView: DriverNodeMatch.AndroidView? = null,
       val androidMaestro: DriverNodeMatch.AndroidMaestro? = null,
       val web: DriverNodeMatch.Web? = null,
       val compose: DriverNodeMatch.Compose? = null,
@@ -458,6 +460,14 @@ class SelectorTsCodegenTest {
       data class AndroidAccessibility(
         val textRegex: String? = null,
         val isEnabled: Boolean? = null,
+      ) : DriverNodeMatch
+
+      @Serializable
+      @SerialName("androidView")
+      data class AndroidView(
+        // `tagRegex` rather than a field any other branch also declares: several tests below
+        // mutate the fixture with a whole-string `replace`, which would otherwise hit two branches.
+        val tagRegex: String? = null,
       ) : DriverNodeMatch
 
       @Serializable

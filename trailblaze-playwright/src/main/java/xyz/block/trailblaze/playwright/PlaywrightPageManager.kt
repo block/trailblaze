@@ -30,6 +30,12 @@ interface PlaywrightPageManager : AutoCloseable, DriverDispatch {
   fun requestDetails(details: Set<ViewHierarchyDetail>)
   fun getScreenState(): ScreenState
   fun captureScreenStateForLogging(): ScreenState
+
+  /**
+   * A capture that only records what the page looked like, such as a passing trail's final
+   * screenshot: no settle wait, and none of the element detail only the LLM reads.
+   */
+  fun captureScreenStateForRecord(): ScreenState = captureScreenStateForLogging()
   fun waitForPageReady(
     domStabilityTimeoutMs: Double = DEFAULT_DOM_STABILITY_TIMEOUT_MS,
   )
@@ -143,13 +149,18 @@ interface PlaywrightPageManager : AutoCloseable, DriverDispatch {
             delay(POST_ACTION_GRACE_MS)
           }
 
-          val pendingTypes = pending.keys
-            .map { it.resourceType() }
-            .filter { RESPONSE_DRAIN_RESOURCE_TYPES.contains(it) }
+          val pendingRelevant = pending.keys
+            .filter { RESPONSE_DRAIN_RESOURCE_TYPES.contains(it.resourceType()) }
           if (drainTimedOut) {
+            // The URLs name what held the action up — usually a long-poll or streaming endpoint.
+            // Query strings are dropped: they can carry tokens.
+            val pendingUrls = pendingRelevant
+              .map { it.url().substringBefore('?') }
+              .distinct()
+              .take(MAX_LOGGED_PENDING_URLS)
             Console.log(
               "  [dispatchAndAwaitSettle] drain TIMEOUT after ${RESPONSE_DRAIN_TIMEOUT_MS}ms — " +
-                "${pendingTypes.size} requests still pending (types: ${pendingTypes.distinct()})",
+                "${pendingRelevant.size} requests still pending: $pendingUrls",
             )
           } else {
             Console.log(
@@ -180,6 +191,9 @@ interface PlaywrightPageManager : AutoCloseable, DriverDispatch {
 
     /** Polling interval while waiting for tracked requests to complete. */
     internal const val POLL_INTERVAL_MS = 50L
+
+    /** How many still-pending URLs a drain timeout names in its log line. */
+    internal const val MAX_LOGGED_PENDING_URLS = 5
 
     /** Resource types we treat as load-blocking for the response-drain phase. */
     internal val RESPONSE_DRAIN_RESOURCE_TYPES =

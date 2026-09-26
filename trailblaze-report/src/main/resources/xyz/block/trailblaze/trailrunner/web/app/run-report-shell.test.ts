@@ -243,6 +243,16 @@ describe("structured analysis deep links", () => {
     expect(noMatch).not.toContain("Inspect source");
   });
 
+  test("adds a decorative period only when the problem title needs one", () => {
+    const unpunctuated = renderAnalysisView(payload, "checkout");
+    expect(unpunctuated).toContain('Checkout &lt;changed&gt;<span class="tb-analysis-period" aria-hidden="true">.</span></h1>');
+
+    for (const title of ["What changed?", "The run failed!", "Known issue."]) {
+      const withPunctuation = { ...payload, problem_sets: [{ ...payload.problem_sets[0], title }, payload.problem_sets[1]] };
+      expect(renderAnalysisView(withPunctuation, "checkout")).toContain(`${title}</h1>`);
+    }
+  });
+
   test("problem navigation preserves the selected manifest", () => {
     const href = "https://viewer.example/?analysis=https%3A%2F%2Fcdn.example%2Fa.json&theme=dark&problem=checkout";
     const next = new URL(analysisProblemHref(href, "settings"));
@@ -262,7 +272,7 @@ describe("structured analysis deep links", () => {
     expect(shell).toMatch(/classList\.add\(["']tb-shell-panel-visible["']\)/);
     expect(shell).toMatch(/classList\.remove\(["']tb-shell-panel-visible["']\)/);
     expect(shell).toContain("overflow-y: auto; overscroll-behavior: contain;");
-    expect(shell).toContain(".tb-analysis { flex: none;");
+    expect(shell).toMatch(/\.tb-analysis\s*\{[^}]*flex: none;/);
     expect(shell).toContain("overflow: visible; text-align: left;");
     expect(shell).toContain("tb-analysis-copy-error");
     expect(shell).toContain("Copy is unavailable; use the browser address bar.");
@@ -752,6 +762,12 @@ describe("the archive's recording clip", () => {
     expect(objectUrlsToRevoke(undefined)).toEqual([]);
     expect(objectUrlsToRevoke({ sessions: [{ videoClip: null }, {}] })).toEqual([]);
     expect(objectUrlsToRevoke({ sessions: "not a list" })).toEqual([]);
+    // A multi-device archive minted one URL per device; the start device's is listed twice (as
+    // videoClip and as videoClips[0]) and is swept once.
+    expect(objectUrlsToRevoke({ sessions: [{
+      videoClip: { url: "blob:https://example.test/seller" },
+      videoClips: [{ url: "blob:https://example.test/seller" }, { url: "blob:https://example.test/buyer" }],
+    }] })).toEqual(["blob:https://example.test/seller", "blob:https://example.test/buyer"]);
   });
 
   test("sweeps attachment object URLs too, not just the recording clip", () => {

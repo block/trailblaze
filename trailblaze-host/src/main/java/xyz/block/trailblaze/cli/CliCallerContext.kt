@@ -90,6 +90,10 @@ internal object CliCallerContext {
    *    `app start` froze. An older shim that does not send the key leaves the
    *    default in force — the slow-box escape hatch is unavailable until the
    *    launcher is upgraded, which is no worse than before it existed.
+   *  - `TRAILBLAZE_TRACE_LEVEL` — read by [CliCommandTrace], which records a
+   *    forwarded command at the caller's level. The daemon's own level is the
+   *    one it started with, so without it `verbose` on the command line would
+   *    record nothing extra.
    *
    * Adding a new key requires three coordinated edits: this kdoc, the bash
    * shim's allowlist, and a `resolveCli*`/`env*` consumer in
@@ -172,4 +176,25 @@ internal object CliCallerContext {
     val pinned = callerEnvLocal.get()
     return if (pinned != null) pinned[name] else System.getenv(name)
   }
+
+  /** The HTTP port of the daemon running this command, when it arrived through `/cli/exec`. */
+  private val servingPortLocal = ThreadLocal<Int?>()
+
+  /** Run [block] as a command forwarded to the daemon listening on [port]. Null leaves it unmarked. */
+  fun <T> withServingPort(port: Int?, block: () -> T): T {
+    val prev = servingPortLocal.get()
+    servingPortLocal.set(port)
+    try {
+      return block()
+    } finally {
+      servingPortLocal.set(prev)
+    }
+  }
+
+  /**
+   * True when this command runs inside the daemon on [port]. A connection to that port is then a
+   * connection to this same process, so anything it would ask that daemon about itself — its
+   * version, its workspace — can be read here without the round trip.
+   */
+  fun isServedBy(port: Int): Boolean = servingPortLocal.get() == port
 }

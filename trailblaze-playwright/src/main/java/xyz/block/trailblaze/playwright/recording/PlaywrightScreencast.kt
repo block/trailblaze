@@ -66,4 +66,13 @@ internal object PlaywrightScreencast {
 
   /** Balances frame smoothness against per-frame size for a local-daemon WebSocket. */
   const val DEFAULT_QUALITY = 60
+
+  /**
+   * Quality for the frames that become the session recording ([PlaywrightScreencastFeed]). They are
+   * re-encoded to VP9, so JPEG loss here is baked into the video: at [DEFAULT_QUALITY] the ringing
+   * around small text survives every VP9 setting (39 dB PSNR against lossless frames, vs 50 dB at
+   * 95) and the video comes out no smaller, because VP9 spends bits reproducing the artifacts.
+   * Frames grow from ~40 KB to ~75 KB at 1280x800, held on local disk until the session ends.
+   */
+  const val RECORDING_QUALITY = 95
 }

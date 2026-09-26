@@ -115,6 +115,55 @@ class CaptureSessionTest {
     }
   }
 
+  @Test
+  fun `a caller that will merge the metadata itself can stop the streams without writing it`() {
+    // In a multi-device session the coordinator stops every device's streams and writes ONE
+    // capture_metadata.json for all of them; a per-device write here would be overwritten by, or
+    // race, that merged file.
+    val sessionDir = Files.createTempDirectory("capture-session-test").toFile()
+    try {
+      val session = CaptureSession(
+        streams = listOf(FakeRecordingStream(sessionDir)),
+        options = CaptureOptions.NONE,
+        platform = TrailblazeDevicePlatform.ANDROID,
+      )
+      session.startAll(sessionDir, "emulator-5554", "com.example.store")
+
+      val artifacts = session.stopAll(writeMetadata = false)
+
+      assertEquals(listOf(CaptureType.VIDEO_WEBM), artifacts.map { it.type }, "the artifacts still come back to the caller")
+      assertFalse(File(sessionDir, "capture_metadata.json").exists())
+    } finally {
+      sessionDir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun `capture_metadata names the device each recording came from`() {
+    // The report picks the recording for a device lane by this name; without it two recordings in
+    // one session are indistinguishable.
+    val sessionDir = Files.createTempDirectory("capture-session-test").toFile()
+    try {
+      val seller = File(sessionDir, "video.webm").apply { writeBytes(ByteArray(8)) }
+      val buyer = File(sessionDir, "video-buyer.webm").apply { writeBytes(ByteArray(8)) }
+      CaptureMetadata.write(
+        sessionDir,
+        listOf(
+          CaptureArtifact(seller, CaptureType.VIDEO_WEBM, 1_000, 2_000, deviceName = "seller", deviceId = "emulator-5560"),
+          CaptureArtifact(buyer, CaptureType.VIDEO_WEBM, 1_100, 2_000, deviceName = "buyer", deviceId = "emulator-5562"),
+        ),
+      )
+
+      val metadata = File(sessionDir, CaptureMetadata.FILENAME).readText()
+      assertContains(metadata, "\"filename\": \"video-buyer.webm\"")
+      assertContains(metadata, "\"deviceName\": \"buyer\"")
+      assertContains(metadata, "\"deviceId\": \"emulator-5562\"")
+      assertContains(metadata, "\"deviceName\": \"seller\"")
+    } finally {
+      sessionDir.deleteRecursively()
+    }
+  }
+
   private fun streamsOf(session: CaptureSession): List<CaptureStream> {
     val field = CaptureSession::class.java.getDeclaredField("streams").apply { isAccessible = true }
     @Suppress("UNCHECKED_CAST")

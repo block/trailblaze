@@ -919,6 +919,9 @@ open class AndroidTrailblazeRule(
     // Hoisted out of the `try` so the `finally` can release a retained bundle launch by session
     // rather than releasing whatever happens to be retained — see [ScriptedToolBundleReuse.release].
     var thisDispatchSessionId: xyz.block.trailblaze.logs.model.SessionId? = null
+    // Cleared when the dispatch finishes or a tool reports an error; still set when anything threw
+    // or the dispatch was cancelled, which may leave a retained bundle engine mid-eval.
+    var endedInException = true
     try {
       val sessionId = (trailblazeLoggingRule.session
         ?: error("Session not available for QuickJS bundle launch")).sessionId
@@ -945,7 +948,7 @@ open class AndroidTrailblazeRule(
       // and tears the whole lot down again a few hundred milliseconds later — for a recorded tool
       // that calls none of them. Reuse keys on the tool repo instance: the launch registers INTO a
       // repo, so a launch can only be reused by a dispatch that resolves against the same one.
-      if (ReplayCaptureOptions.reuseToolBundlesEnabled()) {
+      if (ReplayCaptureOptions.reuseToolBundlesEnabled(target)) {
         // Claim-or-launch in one step, and the cache keeps the launch instead of this run's
         // `finally`. Deciding and launching separately would let two overlapping dispatches of one
         // session both launch into the repo they now share, and the second would die on the tool
@@ -988,6 +991,9 @@ open class AndroidTrailblazeRule(
           is TrailYamlItem.ConfigTrailItem -> handleConfig(item.config)
         }
         if (itemResult is TrailblazeToolResult.Error) {
+          // A tool that reported an error left its engine in a known state, so the session's
+          // bundles stay reusable.
+          endedInException = false
           throw TrailblazeException(itemResult.errorMessage)
         }
         // Only adopt a Success as the trail's last-tool payload if it actually carries data —
@@ -1000,15 +1006,18 @@ open class AndroidTrailblazeRule(
           lastToolSuccess = itemResult
         }
       }
+      endedInException = false
     } finally {
       ActionTrace.mark(ActionTrace.Boundary.ITEMS_DONE)
       withContext(NonCancellable) {
         launchedQuickjsRuntime?.let { runCatching { it.shutdownAll() } }
         toolsetQuickjsRuntime?.let { runCatching { it.shutdownAll() } }
-        if (sendSessionStartLog || sendSessionEndLog) {
-          // A retained launch belongs to a SESSION, not to a dispatch, so the dispatch that owns
-          // an end of the session is what closes it. Without this the last session's QuickJS
-          // context stays alive until some unrelated later dispatch happens to displace it.
+        if (
+          ScriptedToolBundleReuse.releasesAfterDispatch(
+            ownsSessionEnd = sendSessionStartLog || sendSessionEndLog,
+            endedInException = endedInException,
+          )
+        ) {
           // By session, because this teardown is NonCancellable and an interrupted session can
           // reach it after its replacement has already retained a launch of its own.
           thisDispatchSessionId?.let { ScriptedToolBundleReuse.release(it) }

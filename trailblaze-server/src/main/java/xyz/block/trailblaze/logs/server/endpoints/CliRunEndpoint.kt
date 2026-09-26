@@ -218,5 +218,12 @@ data class CliRunResponse(
      * (bad flags / malformed input). CLI callers map it to their misuse exit code (3).
      */
     const val ERROR_KIND_MISUSE = "misuse"
+
+    /**
+     * [errorKind] value for a failure where the client lost sight of the run (polling timed out,
+     * daemon unreachable, run state gone), so the run may still be driving its device. CLI callers
+     * map it to their infra exit code (2) so a scheduler does not hand that device another run.
+     */
+    const val ERROR_KIND_INFRA = "infra"
   }
 }

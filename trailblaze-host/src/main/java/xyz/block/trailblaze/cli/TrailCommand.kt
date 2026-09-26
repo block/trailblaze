@@ -1317,7 +1317,8 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
     val delegatedSessions = mutableListOf<Pair<SessionId, File>>()
     // Same per-file worst-code tracking as the in-process path above. The daemon
     // RPC signals a partial failure class (`response.errorKind`): a daemon-side
-    // MISUSE rejection maps to MISUSE via daemonRunFailureExitCode, but attempted
+    // MISUSE rejection maps to MISUSE via daemonRunFailureExitCode, and a run the
+    // client lost sight of (poll timeout, daemon unreachable) maps to INFRA. Other attempted
     // runs don't yet carry an ASSERTION-vs-INFRA distinction from this side; those
     // map to ASSERTION_FAILED so a real trail-assertion failure stays
     // distinguishable from a daemon outage (which surfaces as an exception from

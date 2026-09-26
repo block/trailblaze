@@ -2,6 +2,7 @@ package xyz.block.trailblaze.mcp.android.ondevice.rpc
 
 import io.ktor.server.application.install
 import io.ktor.server.cio.CIO
+import io.ktor.server.engine.EmbeddedServer
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.routing.routing
 import io.ktor.server.websocket.WebSockets
@@ -9,7 +10,6 @@ import io.ktor.server.websocket.webSocket
 import io.ktor.websocket.Frame
 import io.ktor.websocket.readBytes
 import io.ktor.websocket.send
-import java.net.ServerSocket
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.runBlocking
 import org.junit.Test
@@ -29,17 +29,17 @@ class OnDeviceRpcWebSocketClientTest {
 
   @Test
   fun `unmapped requests fall back before connecting`() {
-    val port = ServerSocket(0).use { it.localPort }
     val connectionCount = AtomicInteger()
     // Reachable server: a connect failure can no longer masquerade as the unmapped fallback.
-    val server = embeddedServer(CIO, port = port) {
+    val server = embeddedServer(CIO, port = EPHEMERAL_PORT) {
       install(WebSockets)
       routing {
         webSocket("/rpc-ws") {
           connectionCount.incrementAndGet()
         }
       }
-    }.start(wait = false)
+    }
+    val port = server.startOnEphemeralPort()
 
     try {
       val client = OnDeviceRpcWebSocketClient("http://localhost:$port")
@@ -60,7 +60,6 @@ class OnDeviceRpcWebSocketClientTest {
 
   @Test
   fun `typed RPC calls share one binary socket`() {
-    val port = ServerSocket(0).use { it.localPort }
     val connectionCount = AtomicInteger()
     val screenResponse = GetScreenStateResponse(
       viewHierarchy = ViewHierarchyTreeNode(text = "Home"),
@@ -72,7 +71,7 @@ class OnDeviceRpcWebSocketClientTest {
         driverDetail = DriverNodeDetail.AndroidAccessibility(text = "Home"),
       ),
     ).apply { screenshotBytes = byteArrayOf(1, 2, 3) }
-    val server = embeddedServer(CIO, port = port) {
+    val server = embeddedServer(CIO, port = EPHEMERAL_PORT) {
       install(WebSockets)
       routing {
         webSocket("/rpc-ws") {
@@ -97,7 +96,8 @@ class OnDeviceRpcWebSocketClientTest {
           }
         }
       }
-    }.start(wait = false)
+    }
+    val port = server.startOnEphemeralPort()
 
     try {
       val client = OnDeviceRpcWebSocketClient("http://localhost:$port")
@@ -128,9 +128,8 @@ class OnDeviceRpcWebSocketClientTest {
 
   @Test
   fun `timed out socket is replaced before the next call`() {
-    val port = ServerSocket(0).use { it.localPort }
     val connectionCount = AtomicInteger()
-    val server = embeddedServer(CIO, port = port) {
+    val server = embeddedServer(CIO, port = EPHEMERAL_PORT) {
       install(WebSockets)
       routing {
         webSocket("/rpc-ws") {
@@ -155,7 +154,8 @@ class OnDeviceRpcWebSocketClientTest {
           }
         }
       }
-    }.start(wait = false)
+    }
+    val port = server.startOnEphemeralPort()
 
     try {
       val client = OnDeviceRpcWebSocketClient("http://localhost:$port")
@@ -178,6 +178,22 @@ class OnDeviceRpcWebSocketClientTest {
       }
     } finally {
       server.stop(gracePeriodMillis = 0, timeoutMillis = 500)
+    }
+  }
+
+  private companion object {
+    /** Ktor's "bind whatever the OS gives you"; the real port comes from [startOnEphemeralPort]. */
+    const val EPHEMERAL_PORT = 0
+
+    /**
+     * Binds port 0 and returns the port Ktor actually took. Probing a free port with a throwaway
+     * `ServerSocket(0)` and handing Ktor the number leaves the port unowned between the close and
+     * the bind, and a busy CI agent fills that gap — a `BindException` unrelated to the code under
+     * test. `start()` throws on a failed bind, so the resolve only ever waits on one that landed.
+     */
+    fun EmbeddedServer<*, *>.startOnEphemeralPort(): Int {
+      start(wait = false)
+      return runBlocking { engine.resolvedConnectors() }.first().port
     }
   }
 }

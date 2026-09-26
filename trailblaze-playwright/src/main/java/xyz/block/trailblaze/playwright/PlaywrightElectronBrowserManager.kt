@@ -12,6 +12,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Instant
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.capture.video.WebScreencastFeedRegistry
+import xyz.block.trailblaze.playwright.recording.PlaywrightScreencast
 import xyz.block.trailblaze.playwright.recording.PlaywrightScreencastFeed
 import xyz.block.trailblaze.tracing.CompleteEvent
 import xyz.block.trailblaze.tracing.PlatformIds
@@ -56,7 +57,8 @@ class PlaywrightElectronBrowserManager(
    * [WebScreencastFeedRegistry] under [deviceId]. Lazy — no screencast opens until the recorder
    * subscribes.
    */
-  private val screencastFeed: PlaywrightScreencastFeed = PlaywrightScreencastFeed(this)
+  private val screencastFeed: PlaywrightScreencastFeed =
+    PlaywrightScreencastFeed(this, jpegQuality = PlaywrightScreencast.RECORDING_QUALITY)
 
   // Settle constants live on PlaywrightPageManager.Companion alongside their consumers.
 

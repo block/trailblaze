@@ -9,7 +9,7 @@ import kotlin.test.assertTrue
  *
  * The claim these switches ship on is "on under turbo, and the non-turbo path is byte-for-byte what
  * it was". That claim lives entirely in [ReplayCaptureOptions.resolve], so it is tested here rather
- * than argued from the call sites.
+ * than argued from the call sites. The bundle-reuse switch is the exception: it defaults on.
  */
 class ReplayCaptureOptionsDefaultsTest {
 
@@ -39,5 +39,23 @@ class ReplayCaptureOptionsDefaultsTest {
     // default, which is what an operator who set nothing would have got.
     assertTrue(ReplayCaptureOptions.resolve("yes", turboOn = true))
     assertFalse(ReplayCaptureOptions.resolve("yes", turboOn = false))
+  }
+
+  /** A `trailblaze tool` call is one dispatch, and relaunching every bundle cost it ~200 ms on Square. */
+  @Test
+  fun `bundles read from the APK are reused without turbo`() {
+    assertTrue(ReplayCaptureOptions.resolveToolBundleReuse("", readsPushedBundles = false))
+  }
+
+  /** A host can push a new bundle between two dispatches, and the next one must load it. */
+  @Test
+  fun `a session that may load pushed bundles relaunches them on every dispatch`() {
+    assertFalse(ReplayCaptureOptions.resolveToolBundleReuse("", readsPushedBundles = true))
+    assertFalse(ReplayCaptureOptions.resolveToolBundleReuse("1", readsPushedBundles = true))
+  }
+
+  @Test
+  fun `bundle reuse keeps its kill switch`() {
+    assertFalse(ReplayCaptureOptions.resolveToolBundleReuse("0", readsPushedBundles = false))
   }
 }

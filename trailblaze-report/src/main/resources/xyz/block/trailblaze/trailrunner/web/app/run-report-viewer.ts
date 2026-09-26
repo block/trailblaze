@@ -17,7 +17,7 @@ import { buildReportTraceModel, createReportTraceModelResolver, failureAnchorInd
 import { fitCamera, focusCamera, hubCounterScale, tweenCamera, unionBox, wirePlan, zoomedCamera, type TrailCamera, type WireBox, type WireHub } from './run-report-trail-camera';
 import { buildTrailMatrix, pruneIdleTrailCells, traceDeviceLanes, trailIdentity, trailJoinFor, trailViewScopes, type DeviceLaneTrace, type TrailCell, type TrailJoin, type TrailMatrix, type TrailRow } from './run-report-trail-model';
 import { buildPerfettoTrace, handToPerfetto, openPerfettoWindow, perfettoBuffer, perfettoMemoryFrom, perfettoTraceJson, type PerfettoHost, type PerfettoLane, type PerfettoMemory, type PerfettoStream } from './run-report-perfetto';
-import { alignReplayByStep, aspectHeld, buildReplayMemorySeries, buildReplayTimeline, clampMemorySeries, clampTime, describeMemorySample, fmtMemoryKb, fmtReplayClock, heldClipTimeAt, laneMarksAt, laneStateAt, laneStops, markWindowMs, memoryEntriesFromStream, MEMORY_SERIES_FIELDS, memoryNearLimit, memoryPoints, memoryPointsAttr, memorySampleAt, memoryStreamName, memoryY, nextStop, remapMemorySeries, replayMemoryScaleKb, replayable, replayStripZoomMax, replayTickSeconds, replayToolLabelRoom, REPLAY_STRIP_MIN_LABEL_PX, segmentAt, followReplayHead, revealReplayRow, fmtReplaySpan, fmtRulerClock, rangeReplayStrip, replayRulerStep, zoomReplayStrip, type ReplayStripZoom, videoClipRate, videoClipTimeAt, type ReplayAlignment, type ReplayLane, type ReplayLaneFailure, type ReplayMemorySeries, type ReplayTimeline } from './run-report-trail-replay';
+import { alignReplayByStep, aspectHeld, buildReplayMemorySeries, buildReplayTimeline, clampMemorySeries, clampTime, describeMemorySample, fmtMemoryKb, fmtReplayClock, heldClipsTimeAt, laneMarksAt, laneStateAt, laneStops, markWindowMs, memoryEntriesFromStream, MEMORY_SERIES_FIELDS, memoryNearLimit, memoryPoints, memoryPointsAttr, memorySampleAt, memoryStreamName, memoryY, nextStop, remapMemorySeries, replayMemoryScaleKb, replayable, replayChipFor, replayStripZoomMax, replayTickSeconds, replayToolLabelRoom, REPLAY_STRIP_MIN_LABEL_PX, segmentAt, followReplayHead, revealReplayRow, fmtReplaySpan, fmtRulerClock, rangeReplayStrip, replayRulerStep, zoomReplayStrip, type ReplayStripZoom, videoClipRate, videoClipTimeAt, type ReplayAlignment, type ReplayLane, type ReplayLaneFailure, type ReplayMemorySeries, type ReplayTimeline } from './run-report-trail-replay';
 import { installClipFallback, registerClipBytes, unregisterClipBytes, watchClipElement } from './run-report-clip-player';
 import { formatUsd } from './report-format';
 import { findAttachmentRefs } from '../../../report/run-report-events';
@@ -441,8 +441,10 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       // before it closes would find no clip and settle on per-step screenshots with nothing to
       // repaint it once the chunk lands. Hold while the document is still streaming; a completed
       // document without one is the truncated-download case — open degraded, as below.
-      const awaitingClip = !docComplete && full.video && full.video.clip && !full.video.clip.uri
-        && !readStreamedJsonScript(`tb-clip-${i}`);
+      // A multi-device run's other recordings ride in #tb-clip-<i>-<k> after it, held for alike.
+      const videos = full.video ? [full.video, ...(full.video.companions || [])] : [];
+      const awaitingClip = !docComplete && videos.some((video, k) => video.clip && !video.clip.uri
+        && !readStreamedJsonScript(k === 0 ? `tb-clip-${i}` : `tb-clip-${i}-${k}`));
       if (awaitingClip) return false;
       Object.assign(SESSIONS[i], full);
       const patch = livePatched.get(i);
@@ -510,18 +512,118 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
    * quality, the embedded one is the report-sized re-encode — and it is what lets every existing
    * `videoClip` consumer light up in an exported report without knowing this exists.
    */
-  const sessionClip = (sessionIndex: number): VideoClip | null => {
+  //
+  // A multi-device session has one recording per device, start device first — `video` and its
+  // `companions` in a document, `videoClips` from the archive loader. Recording k is cached under
+  // `<session>` for k = 0 and `<session>-<k>` otherwise, the same key the document hoists its
+  // bytes under (#tb-clip-<key>), so every per-recording table here (clipUrlCache, clipUnplayable,
+  // clipDurations) is keyed alike. Recording 0 is the start device's.
+  const sessionClipKey = (sessionIndex: number, k: number) => (k === 0 ? String(sessionIndex) : `${sessionIndex}-${k}`);
+  const sessionZipClips = (session: SessionPayload): VideoClip[] | null => (
+    session.videoClips && session.videoClips.length ? session.videoClips : session.videoClip ? [session.videoClip] : null
+  );
+  const sessionVideos = (session: SessionPayload): VideoInfo[] => (session.video ? [session.video, ...(session.video.companions || [])] : []);
+  const sessionClipAt = (sessionIndex: number, k: number): VideoClip | null => {
     const session = SESSIONS[sessionIndex];
     if (!session) return null;
-    if (session.videoClip) return session.videoClip;
-    const clip = session.video && session.video.clip;
-    if (!clip) return null;
-    const key = String(sessionIndex);
+    const key = sessionClipKey(sessionIndex, k);
     if (clipUnplayable[key]) return null;
+    const zipClips = sessionZipClips(session);
+    if (zipClips) return zipClips[k] || null;
+    const video = sessionVideos(session)[k];
+    const clip = video && video.clip;
+    if (!clip) return null;
     const uri = clip.uri || readStreamedJsonScript(`tb-clip-${key}`);
     if (!uri || typeof uri !== 'string') return null;
     const url = clipObjectUrl(uri, clip.mime || 'video/webm', key);
-    return url ? { url, startMs: clip.startMs, endMs: clip.endMs, mime: clip.mime || 'video/webm' } : null;
+    return url ? { url, startMs: clip.startMs, endMs: clip.endMs, mime: clip.mime || 'video/webm', device: video.device ?? null } : null;
+  };
+  // The first of a session's recordings that still plays, or -1: one that failed to decode must not
+  // hide another device's that plays.
+  const firstPlayableClipIndex = (sessionIndex: number): number =>
+    sessionRecordingDevices(sessionIndex).findIndex((_, k) => sessionClipAt(sessionIndex, k) != null);
+  /** The first device a trace names, or null when it names none. */
+  const firstTracedDevice = (trace: TraceStep[] | undefined): string | null => {
+    for (const t of trace || []) if (t.device) return t.device;
+    return null;
+  };
+  // The device each of a session's recordings shows and the capture window it covers, in recording
+  // order; a null device for a recording that names none. Empty for a session with no recording.
+  // One device can own several: a companion unbound and bound again records a new file each time.
+  const sessionRecordings = (sessionIndex: number): Array<{ device: string | null; startMs: number; endMs: number }> => {
+    const session = SESSIONS[sessionIndex];
+    if (!session) return [];
+    const zipClips = sessionZipClips(session);
+    const of = (r: { device?: string | null; startMs: number; endMs: number }) => ({ device: r.device ?? null, startMs: r.startMs, endMs: r.endMs });
+    return zipClips ? zipClips.map(of) : sessionVideos(session).map(of);
+  };
+  const sessionRecordingDevices = (sessionIndex: number): Array<string | null> => sessionRecordings(sessionIndex).map((r) => r.device);
+  // Each recording's place among its device's, in capture order (1 for the first), and how many
+  // that device made — so the Video tab can number a device's repeat recordings.
+  const sessionRecordingOrdinals = (sessionIndex: number): Array<{ n: number; of: number }> => {
+    const recordings = sessionRecordings(sessionIndex);
+    return recordings.map((r, k) => {
+      const same = recordings.filter((o) => o.device === r.device);
+      const n = same.filter((o) => o.startMs < r.startMs || (o.startMs === r.startMs && recordings.indexOf(o) < k)).length + 1;
+      return { n, of: same.length };
+    });
+  };
+  // What the Video tab calls each recording: its device, numbered in capture order when that device
+  // recorded more than once ("buyer", "buyer (2)"), so every recording gets a button of its own.
+  const sessionRecordingLabels = (sessionIndex: number): Array<string | null> => {
+    const ordinals = sessionRecordingOrdinals(sessionIndex);
+    return sessionRecordingDevices(sessionIndex).map((device, k) =>
+      device == null || ordinals[k].n === 1 ? device : `${device} (${ordinals[k].n})`);
+  };
+  // What the Video tab REMEMBERS a pick as: device and ordinal, never the label — a device may
+  // literally be named `buyer (2)`, and the label alone would send its button to another recording.
+  const sessionRecordingKeys = (sessionIndex: number): string[] => {
+    const ordinals = sessionRecordingOrdinals(sessionIndex);
+    return sessionRecordingDevices(sessionIndex).map((device, k) => JSON.stringify([device, ordinals[k].n]));
+  };
+  // Every recording of the device recording `k` shows, as clips in capture order: the clips a
+  // one-device surface (a Trail Replay lane) switches between as the playhead crosses a rebind.
+  const sessionClipsLike = (sessionIndex: number, k: number): VideoClip[] => {
+    if (k < 0) return [];
+    const recordings = sessionRecordings(sessionIndex);
+    return recordings
+      .map((r, i) => (r.device === recordings[k].device ? sessionClipAt(sessionIndex, i) : null))
+      .filter((clip): clip is VideoClip => clip != null)
+      .sort((a, b) => a.startMs - b.startMs);
+  };
+  // Of the recordings showing `device`, the one whose window covers `atMs`, else the one whose
+  // window is nearest it; the first listed when there is no instant to go by. -1 when none shows it.
+  const recordingIndexAt = (sessionIndex: number, device: string | null, atMs: number | null): number => {
+    let best = -1;
+    let bestGap = Infinity;
+    sessionRecordings(sessionIndex).forEach((r, k) => {
+      if (r.device !== device) return;
+      const gap = atMs == null ? 0 : atMs < r.startMs ? r.startMs - atMs : atMs > r.endMs ? atMs - r.endMs : 0;
+      if (gap < bestGap) { best = k; bestGap = gap; }
+    });
+    return best;
+  };
+  // Which of a session's recordings shows `device`: -1 when none does, so that device's surface
+  // steps screenshots instead of playing another device's screen. Only the FIRST lane falls back to
+  // recording 0, the start device's: when that recording names no device (it predates per-device
+  // capture, or ran on a host that bound none, and filmed the device the trail started on), and for
+  // a `device` of null (a single-device run, or the rows a trail ran before it chose a device). For
+  // null, only while recording 0 is the start device's: when the start device's file was unusable a
+  // companion's leads instead, and the one sign of it here is a named recording 0 the trace does not
+  // act on first. A session that switched devices before the start device acted looks the same, so
+  // its early rows show screenshots — never another display's recording.
+  // A device that recorded more than once plays the recording whose window covers `atMs`, the
+  // instant being shown (see recordingIndexAt); without one, its first.
+  const sessionClipIndexFor = (sessionIndex: number, device: string | null, firstLane: boolean, atMs: number | null = null): number => {
+    const devices = sessionRecordingDevices(sessionIndex);
+    if (!devices.length) return -1;
+    const k = device == null ? -1 : recordingIndexAt(sessionIndex, device, atMs);
+    if (k >= 0) return k;
+    if (!firstLane) return -1;
+    if (devices[0] == null) return recordingIndexAt(sessionIndex, null, atMs);
+    if (device != null) return -1;
+    const first = firstTracedDevice((SESSIONS[sessionIndex] || {}).trace);
+    return first == null || first === devices[0] ? recordingIndexAt(sessionIndex, devices[0], atMs) : -1;
   };
   const generatedAt = RAW.generatedAt || (SESSIONS[0] && SESSIONS[0].meta && SESSIONS[0].meta.generatedAt) || '';
   // `?chrome=none` — the report is embedded in a host that already renders a run header of its own
@@ -614,9 +716,12 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
         const exportSession = SESSIONS.indexOf(sessions[0]);
         const entries = (readJsonScript('tb-index') || {}).sessions || [];
         index.textContent = toInertJson({ generatedAt, sessions: [entries[exportSession] || { meta: sessions[0].meta, llm: sessions[0].llm }] });
+        // A multi-device run's other recordings ride in #tb-clip-<i>-<k>; they move with it.
+        const companionClip = `tb-clip-${exportSession}-`;
         clone.querySelectorAll('[id^="tb-session-"], [id^="tb-clip-"]').forEach((el) => {
           if (el.id === `tb-session-${exportSession}`) el.id = 'tb-session-0';
           else if (el.id === `tb-clip-${exportSession}`) el.id = 'tb-clip-0';
+          else if (el.id.startsWith(companionClip) && /^\d+$/.test(el.id.slice(companionClip.length))) el.id = `tb-clip-0-${el.id.slice(companionClip.length)}`;
           else el.remove();
         });
       } else {
@@ -661,7 +766,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     // above has to delete it explicitly. Keep it that way: spreading the source would ship it.
     const exported = sessions.map((s) => {
       const att = withoutRuntimeAttachments(s.attachments);
-      return (s.videoClip || att.changed) ? { ...s, videoClip: null, attachments: att.attachments } : s;
+      return (s.videoClip || s.videoClips || att.changed) ? { ...s, videoClip: null, videoClips: null, attachments: att.attachments } : s;
     });
     data.textContent = toInertJson({ generatedAt, ...(SHARE_URL && sessions.length === SESSIONS.length ? { shareUrl: SHARE_URL } : {}), sessions: exported });
     downloadBlob(['<!doctype html>\n' + clone.outerHTML], 'text/html;charset=utf-8', filename);
@@ -844,7 +949,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   // `kid` narrows the step selection to one folded child dispatch (index into the row's children):
   // the preview pane shows that dispatch's own frame and its args panel expands — how a batched
   // step's every interaction is reachable (WASM-report parity). Null selects the row itself.
-  const st = { view: MULTI ? 'index' : 'detail', session: 0, tab: 'timeline', step: 0, kid: null, llmSel: 0, tlStreams: [], tlEventKinds: allTimelineEventKinds(), tlMenuOpen: false, tlEventMenuOpen: false, trailheadOpen: true, trailOpen: true, stepsOpen: {}, kidsOpen: {}, lightboxAll: false, lightboxZoom: 1, runGroup: 'status', runSort: 'original', runSearch: '', idxOpen: [], compareMode: false, playing: false, vSpeed: 1, pageTransition: '', trailMode: 'map', trailDir: 'v', trailAll: false, trailAlign: 'clock' as 'clock' | 'step', trailRowsOpen: {}, trailCam: null, trailStripZoom: null as ReplayStripZoom | null, trailT: -1, trailLane: null, trailSpeed: 10, trailLanesOff: {}, trailPick: null as number[] | null, pick: [] as number[], backTo: '', backToTrail: null as { session: number; tab: string; lanesOff: Record<string, boolean> } | null, cmpBase: defaultComparePair()[0] || 0, cmpVs: defaultComparePair()[1] || 1, cmpGapsOpen: {}, cmpEventsOpen: {} as Record<string, boolean>, cmpStreamsOpen: {} as Record<string, boolean>, cmpJumpAt: {} as Record<string, number>, cmpTab: 'screens', cmpStream: null as string | null, cmpEventGroup: 'stream' as 'stream' | 'step', cmpEventStep: null as string | null, cmpEventPlace: 0, cmpEventSearch: '', cmpEventDiffOnly: true, cmpMissing: null as { missingIds: string[]; wantedIds: { base: string | null; vs: string | null }; shownBase: number; shownVs: number; widenable: boolean } | null };
+  const st = { view: MULTI ? 'index' : 'detail', session: 0, tab: 'timeline', step: 0, kid: null, llmSel: 0, tlStreams: [], tlEventKinds: allTimelineEventKinds(), tlMenuOpen: false, tlEventMenuOpen: false, trailheadOpen: true, trailOpen: true, stepsOpen: {}, kidsOpen: {}, lightboxAll: false, lightboxZoom: 1, runGroup: 'status', runSort: 'original', runSearch: '', idxOpen: [], compareMode: false, playing: false, vSpeed: 1, vDevice: null as string | null, pageTransition: '', trailMode: 'map', trailDir: 'v', trailAll: false, trailAlign: 'clock' as 'clock' | 'step', trailRowsOpen: {}, trailCam: null, trailStripZoom: null as ReplayStripZoom | null, trailT: -1, trailLane: null, trailSpeed: 10, trailLanesOff: {}, trailPick: null as number[] | null, pick: [] as number[], backTo: '', backToTrail: null as { session: number; tab: string; lanesOff: Record<string, boolean> } | null, cmpBase: defaultComparePair()[0] || 0, cmpVs: defaultComparePair()[1] || 1, cmpGapsOpen: {}, cmpEventsOpen: {} as Record<string, boolean>, cmpStreamsOpen: {} as Record<string, boolean>, cmpJumpAt: {} as Record<string, number>, cmpTab: 'screens', cmpStream: null as string | null, cmpEventGroup: 'stream' as 'stream' | 'step', cmpEventStep: null as string | null, cmpEventPlace: 0, cmpEventSearch: '', cmpEventDiffOnly: true, cmpMissing: null as { missingIds: string[]; wantedIds: { base: string | null; vs: string | null }; shownBase: number; shownVs: number; widenable: boolean } | null };
   const resetEventNavigator = () => {
     st.cmpStream = null;
     st.cmpEventGroup = 'stream';
@@ -1865,7 +1970,40 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   // The same recording as a real, seekable video element source. Present, the timeline's preview
   // pane and its playback engine show every frame at the capture's own rate; absent (the clip chunk
   // still streaming in, or a host with no object URLs), both stay on per-step screenshots.
-  const tlClip = () => (tlVideo() ? sessionClip(st.session) : null);
+  // In a multi-device session the pane shows the recording of the device the selected step ran on:
+  // execution is sequential and a step without a device of its own ran on the last one named, so
+  // the device is the last `device` at or before the step (the same carry-forward the timeline's
+  // lane strip uses). A hovered step is the pane's subject while it is previewed, so it is the
+  // one whose device counts. Read from the raw attribution, not [detailDevices] — that hides a
+  // one-name trace from the row dressing, but a session that switched to a companion before its
+  // start device acted has only the companion's rows, and must still play the companion's clip.
+  // `subject` defaults to the pane's; a surface showing another step's screen (a transcript's
+  // call row) passes that step, so it plays the device that step ran on.
+  const tlSubject = () => (timelinePreview ? timelinePreview.step : st.step);
+  const tlDevice = (subject: number = tlSubject()): string | null => {
+    let device: string | null = null;
+    for (const t of D.trace) {
+      if (t.device) device = t.device;
+      if (t.i === subject) break;
+    }
+    return device;
+  };
+  // The instant a device that recorded more than once picks its recording by: the pane's own — a
+  // folded dispatch's clock when one is selected or previewed on `subject`, else the step's.
+  const tlSubjectClockMs = (subject: number) => {
+    const selection = timelinePreview || { step: st.step, kid: st.kid };
+    return clockMsFor(subject, selection.step === subject ? selection.kid : null);
+  };
+  const tlClipIndex = (subject: number = tlSubject()) => {
+    const device = tlDevice(subject);
+    return sessionClipIndexFor(st.session, device, device == null || firstTracedDevice(D.trace) === device, tlSubjectClockMs(subject));
+  };
+  const tlClipKey = (subject: number = tlSubject()) => sessionClipKey(st.session, Math.max(0, tlClipIndex(subject)));
+  const tlClip = (subject: number = tlSubject()) => {
+    if (!tlVideo()) return null;
+    const k = tlClipIndex(subject);
+    return k >= 0 ? sessionClipAt(st.session, k) : null;
+  };
   // Media duration is only readable once the browser has parsed the container — and mapping a run
   // instant onto the clip needs it (videoClipTimeAt scales by duration/window). So it is read from
   // a DETACHED element the moment a surface first asks, rather than from the on-screen one: the
@@ -1878,19 +2016,19 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     const d = clipDurations[key];
     return d != null && d > 0 ? d : null;
   };
-  const tlClipDuration = () => {
-    const key = String(st.session);
+  const tlClipDuration = (subject: number = tlSubject()) => {
+    const key = tlClipKey(subject);
     const known = knownClipDuration(key);
     if (known != null) return known;
-    primeClipDuration(key);
+    primeClipDuration(key, subject);
     // Re-read rather than returning null outright: a host that already holds the container can
     // answer inside the src assignment, and the surface that asked is about to paint with it.
     return knownClipDuration(key);
   };
   let primingClip = false;
-  const primeClipDuration = (key: string) => {
+  const primeClipDuration = (key: string, subject: number = tlSubject()) => {
     if (clipPrimed[key]) return;
-    const clip = tlClip();
+    const clip = tlClip(subject);
     if (!clip || typeof document === 'undefined') return;
     clipPrimed[key] = true;
     const probe = document.createElement('video');
@@ -1905,7 +2043,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       // Only repaint the run that asked: a duration arriving after the reader moved on must not
       // yank the view back. And not from inside the priming call itself — that caller is mid-paint
       // and reads the duration on its way out (tlClipDuration), so a repaint here would nest.
-      if (!primingClip && String(st.session) === key) repaintForClip();
+      if (!primingClip && tlClipKey() === key) repaintForClip();
     };
     probe.onloadedmetadata = done;
     probe.onerror = () => {
@@ -1921,9 +2059,9 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   // cover it or its duration isn't known yet. Scaled rather than offset: the recorder's window and
   // the file's duration differ by a beat, and subtracting drifts by that whole difference over a
   // long run (see videoClipTimeAt).
-  const tlClipTimeAt = (clockMs: number | null): number | null => {
-    const clip = tlClip();
-    return clip && clockMs != null ? videoClipTimeAt(clip, clockMs, 0, tlClipDuration()) : null;
+  const tlClipTimeAt = (clockMs: number | null, subject: number = tlSubject()): number | null => {
+    const clip = tlClip(subject);
+    return clip && clockMs != null ? videoClipTimeAt(clip, clockMs, 0, tlClipDuration(subject)) : null;
   };
   // Seek the pane's clip element to a position the view already resolved. Paused and exact: this
   // surface is a still of one step, not playback (the playback engine below drives the element
@@ -2033,6 +2171,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       kid: subject.kid,
       shot,
       clipAt: mode === 'clip' ? clipAt : null,
+      clipUrl: mode === 'clip' ? clipUrl : null,
       pane,
       paneLabel,
       paneMark: mode === 'clip' ? (captureMark ?? markHtml(cur)) : paneMark,
@@ -2952,8 +3091,9 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     // rather than an older fallback screenshot (or an empty rail).
     const video = row ? tlVideo() : null;
     const clock = video && row ? stepClockMs(row.i) : null;
-    const clipAt = clock != null ? tlClipTimeAt(clock) : null;
-    const clip = clipAt != null ? tlClip() : null;
+    // The call's own row picks the recording: the timeline selection may sit on another device's step.
+    const clipAt = clock != null ? tlClipTimeAt(clock, row.i) : null;
+    const clip = clipAt != null ? tlClip(row.i) : null;
     return {
       map, group, row, stepAt, status, statusLabel, stepToken,
       title: group && group.header ? group.header.label : 'LLM call',
@@ -3357,32 +3497,62 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   // Browser-only: the desktop shell's webview drops `<a download>` and blob: saves (see the
   // share-html route comment in SessionRoutes.kt). There the run page's Files list opens the
   // recording from the session folder, where it already sits as video.webm.
-  const clipDownloadName = (clip: VideoClip) => {
+  // A multi-device session passes the recording's device name, so saving every display's clip
+  // gives distinct files instead of one name that each save overwrites.
+  const clipDownloadName = (clip: VideoClip, device?: string | null) => {
     const ext = String(clip.mime || '').indexOf('mp4') >= 0 ? 'mp4' : 'webm';
-    const base = String((D.meta && D.meta.title) || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60);
-    return `${base || 'recording'}.${ext}`;
+    const slug = (v: unknown, max: number) => String(v || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, max);
+    const base = slug(D.meta && D.meta.title, 60) || 'recording';
+    const suffix = slug(device, 30);
+    return `${base}${suffix ? `-${suffix}` : ''}.${ext}`;
   };
   // The Video tab: the session recording itself in a <video> — every captured frame at the
   // capture's own rate, seekable, with a transport (play, scrubber, elapsed/total, speed, and a
   // Download of the file itself) that wireVideo() drives. Controls sit ABOVE the frame (the frame
   // is device-tall; controls below it would sit under the fold), frame height-capped to the viewport. The tab only exists when
-  // sessionClip resolves, so the empty state here is the clip chunk not having streamed in yet.
+  // some recording resolves, so the empty state here is the clip chunk not having streamed in yet
+  // (or a failed recording picked beside one that plays).
+  //
+  // A multi-device session recorded every display, so the tab grows a device picker (st.vDevice,
+  // a recording's key — see sessionRecordingKeys: a device that recorded twice has a button per
+  // recording); an unknown or
+  // unset pick is the start device's recording, which is also the only one a single-device run has.
+  const videoTabIndex = () => {
+    const keys = sessionRecordingKeys(st.session);
+    const k = st.vDevice != null ? keys.indexOf(st.vDevice) : -1;
+    return k >= 0 ? k : Math.max(0, firstPlayableClipIndex(st.session));
+  };
+  const videoTabKey = () => sessionClipKey(st.session, videoTabIndex());
   const renderVideo = () => {
-    const clip = sessionClip(st.session);
+    const k = videoTabIndex();
+    const key = videoTabKey();
+    const clip = sessionClipAt(st.session, k);
+    const devices = sessionRecordingLabels(st.session);
+    // Buttons by device, and a device's recordings in capture order: capture lists the one still
+    // recording at stop first, which would otherwise put `buyer (2)` before `buyer`.
+    const ordinals = sessionRecordingOrdinals(st.session);
+    const byDevice = sessionRecordingDevices(st.session);
+    const order = devices.map((_, i) => i)
+      .sort((a, b) => byDevice.indexOf(byDevice[a]) - byDevice.indexOf(byDevice[b]) || ordinals[a].n - ordinals[b].n);
+    const picker = devices.length > 1
+      ? `<div class="vdevs" role="tablist" aria-label="Recorded device">${order.map((i) => [devices[i], i] as const).map(([device, i]) => `<button class="btn vdev${i === k ? ' on' : ''}" role="tab" aria-selected="${i === k}" data-vdev="${i}" title="Show the ${esc(device || `device ${i + 1}`)} recording">${esc(device || `Device ${i + 1}`)}</button>`).join('')}</div>`
+      : '';
     // Two different absences read differently to a reader: a run that never recorded, and a
     // recording this browser refused to decode (a truncated mux, or VP9 the engine lacks). The
     // second is not "nothing was captured" — say which one it is, so nobody hunts for a capture
     // setting that was on the whole time. The step screenshots on the timeline are still there.
     if (!clip) {
-      const message = clipUnplayable[String(st.session)]
+      const message = clipUnplayable[key]
         ? 'This browser could not play the screen recording for this run. The timeline still has every step screenshot.'
         : 'No screen recording captured for this run.';
-      return viewPage('Video', '', `<div class="empty" id="vframe">${message}</div>`);
+      return viewPage('Video', '', `${picker}<div class="empty" id="vframe">${message}</div>`);
     }
-    const known = clipDurations[String(st.session)];
-    const downloadName = clipDownloadName(clip);
+    const known = clipDurations[key];
+    const downloadName = clipDownloadName(clip, devices.length > 1 ? devices[k] : null);
     const downloadHref = attachmentDownloadHref(clip.url);
-    return viewPage('Video', known ? `${known.toFixed(1)}s screen recording` : 'Screen recording', `<div class="video">
+    const subtitle = `${known ? `${known.toFixed(1)}s screen recording` : 'Screen recording'}${devices.length > 1 && devices[k] ? ` · ${devices[k]}` : ''}`;
+    return viewPage('Video', subtitle, `<div class="video">
+      ${picker}
       <div class="vctl">
         <button class="btn play" id="vplay">▶ Play</button>
         <input type="range" id="vseek" min="0" max="${VCLIP_SEEK_STEPS}" value="0" aria-label="Seek recording" />
@@ -3390,7 +3560,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
         <button class="btn" id="vspeed" title="Playback speed">${st.vSpeed}×</button>
         ${downloadHref ? `<a class="quietlink" id="vdownload" href="${esc(downloadHref)}" download="${esc(downloadName)}" rel="noopener" title="Save the screen recording as ${esc(downloadName)}">Download ↓</a>` : ''}
       </div>
-      <video class="vframe vclip" id="vclip" src="${esc(clip.url)}" muted playsinline loop preload="auto" disablepictureinpicture aria-label="Screen recording of this run"></video>
+      <video class="vframe vclip" id="vclip" src="${esc(clip.url)}" muted playsinline loop preload="auto" disablepictureinpicture aria-label="Screen recording of this run${devices.length > 1 && devices[k] ? ` on the ${esc(devices[k])} device` : ''}"></video>
     </div>`);
   };
 
@@ -4145,13 +4315,25 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   // A lane's playable recording, and the epoch origin its clock is measured from. A session may
   // have none (no capture, or a host that produced no embeddable re-encode), so every consumer
   // needs the no-clip path and falls back to stepping that lane's screenshots.
-  // In device mode only lane 0 gets the clip: recording runs on the session's launch device — the
-  // first lane by construction (traceDeviceLanes orders by first appearance) — and handing the
-  // same video to a companion lane would show the wrong device's screen. Companions step stills.
-  const trailClip = (lane: number) => {
-    if (trailDeviceMode()) return lane === 0 ? sessionClip(trailScopeSessions()[0]) : null;
-    return sessionClip(trailSel()[lane]);
+  // In device mode each lane plays ITS device's recording (sessionClipIndexFor): a session that
+  // recorded every display has one per lane; one that recorded only the launch device — the first
+  // lane by construction (traceDeviceLanes orders by first appearance) — lights that lane alone,
+  // because handing the same video to a companion lane would show the wrong device's screen. A
+  // lane with no recording of its own steps stills.
+  // A device unbound and bound again recorded once per bind: its lane gets every one of those, in
+  // capture order, and plays whichever covers the playhead (heldClipsTimeAt).
+  const trailClips = (lane: number): VideoClip[] => {
+    if (!trailDeviceMode()) {
+      // One lane per run, playing its traced device's recordings. Usually the start device's, but a
+      // session whose only rows are a companion's (it switched before the start device acted) plays
+      // the companion's — the start device's would show the wrong display.
+      const session = trailSel()[lane];
+      return sessionClipsLike(session, sessionClipIndexFor(session, firstTracedDevice((SESSIONS[session] || {}).trace), true));
+    }
+    const session = trailScopeSessions()[0];
+    return sessionClipsLike(session, sessionClipIndexFor(session, (trailDeviceLanes()[lane] || {}).device ?? null, lane === 0));
   };
+  const trailClip = (lane: number): VideoClip | null => trailClips(lane)[0] || null;
   const trailLaneT0 = (lane: number) => SESSIONS[trailLaneSession(lane)] ? resolveTraceModel(SESSIONS[trailLaneSession(lane)]).traceT0 : null;
   // The app-memory readings a lane's device produced (events/memory.ndjson), on that lane's clock —
   // or null when the run captured none, which is what makes the memory rail appear only for runs
@@ -4588,11 +4770,11 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
           ${memory[lane.index] ? `<span class="rpmem" data-rp-mem="${lane.index}" title="The app's ${memory[lane.index].kind} at the playhead"></span>` : ''}
           <span class="rpstatus" data-rp-status="${lane.index}"></span>
         </div>
-        <div class="rpchip" data-rp-chip="${lane.index}"><span class="galchip rpchipnum">—</span><span class="rpchiptxt"></span></div>
+        <div class="rpchip" data-rp-chip="${lane.index}"><span class="galchip rpchipnum">${replayChipFor(null).num}</span><span class="rpchiptxt"></span></div>
         <div class="rpscreen" data-rp-screen="${lane.index}">
           <div class="rpbox">
             <div class="rpframe" data-rp-frame="${lane.index}">
-              ${trailClip(lane.index) ? `<video class="rpvid" data-rp-vid="${lane.index}" src="${esc(trailClip(lane.index).url)}" muted playsinline preload="auto" disablepictureinpicture tabindex="-1" aria-label="${esc(lane.label)} screen recording"></video>` : ''}
+              ${trailClips(lane.index).map((clip, n) => `<video class="rpvid" data-rp-vid="${lane.index}" src="${esc(clip.url)}" data-rp-seg="${n}" muted playsinline preload="auto" disablepictureinpicture tabindex="-1" aria-label="${esc(lane.label)} screen recording"></video>`).join('')}
               <img class="rpimg" data-rp-img="${lane.index}:0" alt="" draggable="false" />
               <img class="rpimg" data-rp-img="${lane.index}:1" alt="" draggable="false" />
               <div class="rpmarks" data-rp-marks="${lane.index}" aria-hidden="true"></div>
@@ -5340,7 +5522,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     }));
     // Per-lane paint memo: which of the two stacked images is showing, and what it is showing, so
     // an unchanged lane is left completely alone.
-    const shown = timeline.lanes.map(() => ({ layer: 0, file: '', step: NaN, phase: '', marks: '', video: false, aspect: '', mem: '' }));
+    const shown = timeline.lanes.map(() => ({ layer: 0, file: '', step: NaN, phase: '', marks: '', video: -1, aspect: '', mem: '' }));
     // The same series the shell drew its rails from — literally the same helper, so the two cannot
     // disagree about the axis; the live readout in each pane head follows the playhead through them.
     const memory = timeline.lanes.map((lane) => trailLaneMemoryOnAxis(lane.index, timeline.totalMs, alignment));
@@ -5359,28 +5541,36 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       const frame = el(`[data-rp-frame="${lane}"]`);
       if (frame) frame.style.setProperty('--rp-ar', memo.aspect);
     };
-    // One media element per lane that recorded, plus the duration its clock needs. Duration only
-    // exists once the browser has read the container, so until then videoClipTimeAt declines and
-    // the lane shows screenshots — the pane is never blank waiting on metadata.
-    const media = timeline.lanes.map((lane) => {
-      const vid = el<HTMLVideoElement>(`[data-rp-vid="${lane.index}"]`);
-      const clip = trailClip(lane.index);
-      if (!vid || !clip) return null;
-      const entry = { vid, clip, t0: trailLaneT0(lane.index), duration: null as number | null };
-      const readDuration = () => {
-        if (Number.isFinite(vid.duration) && vid.duration > 0) entry.duration = vid.duration;
-        // Sizing the frame from the video's own pixels keeps the pane's aspect honest even before
-        // a single screenshot has loaded.
-        setAspect(lane.index, vid.videoWidth, vid.videoHeight);
-      };
-      vid.onloadedmetadata = readDuration;
-      vid.ondurationchange = readDuration;
-      readDuration();
-      return entry;
+    // One media element per recording a lane has (usually one; one per bind for a device bound
+    // again), plus the duration its clock needs. Duration only exists once the browser has read the
+    // container, so until then videoClipTimeAt declines and the lane shows screenshots — the pane
+    // is never blank waiting on metadata.
+    type ReplayMedia = { vid: HTMLVideoElement; clip: VideoClip; t0: number | null; duration: number | null };
+    const media: Array<ReplayMedia[] | null> = timeline.lanes.map((lane) => {
+      const entries = trailClips(lane.index).map((clip, n): ReplayMedia | null => {
+        const vid = el<HTMLVideoElement>(`[data-rp-vid="${lane.index}"][data-rp-seg="${n}"]`);
+        if (!vid) return null;
+        const entry: ReplayMedia = { vid, clip, t0: trailLaneT0(lane.index), duration: null };
+        const readDuration = () => {
+          if (Number.isFinite(vid.duration) && vid.duration > 0) entry.duration = vid.duration;
+          // Sizing the frame from the video's own pixels keeps the pane's aspect honest even before
+          // a single screenshot has loaded — from the recording on screen, or the first before any is.
+          const memo = shown[lane.index];
+          if (memo && (memo.video < 0 ? n === 0 : memo.video === n)) setAspect(lane.index, vid.videoWidth, vid.videoHeight);
+        };
+        vid.onloadedmetadata = readDuration;
+        vid.ondurationchange = readDuration;
+        readDuration();
+        return entry;
+      }).filter((entry): entry is ReplayMedia => entry != null);
+      return entries.length ? entries : null;
     });
+    const liveClip = (lane: number, t: number) => {
+      const entries = media[lane];
+      return entries ? heldClipsTimeAt(entries, entries[0].t0, laneClock(lane, t), laneHeldAtStart(lane)) : null;
+    };
     stopTrailReplayMedia();
-    trailReplayMediaStop = () => media.forEach((entry) => {
-      if (!entry) return;
+    trailReplayMediaStop = () => media.flatMap((entries) => entries || []).forEach((entry) => {
       entry.vid.onloadedmetadata = null;
       entry.vid.ondurationchange = null;
       entry.vid.pause();
@@ -5408,17 +5598,24 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       const state = laneStateAt(lane, t);
       const memo = shown[lane.index];
       const chip = el(`[data-rp-chip="${lane.index}"]`);
-      if (state.step && memo.step !== state.step.num) {
-        memo.step = state.step.num;
+      // NaN before the lane's first step, which is also what the memo starts at: the pane's initial
+      // markup is already the blank chip, and only a lane that has shown a step needs resetting.
+      const stepNum = state.step ? state.step.num : NaN;
+      if (!Object.is(memo.step, stepNum)) {
+        memo.step = stepNum;
+        const view = replayChipFor(state.step);
         const num = chip?.querySelector('.rpchipnum');
         const txt = chip?.querySelector('.rpchiptxt');
-        if (num) num.textContent = state.step.num === 0 ? 'TRAILHEAD' : `STEP ${state.step.num}`;
-        if (txt) txt.textContent = state.step.label;
-        if (chip) chip.className = `rpchip ${state.step.outcome}`;
+        if (num) num.textContent = view.num;
+        if (txt) txt.textContent = view.label;
+        if (chip) chip.className = view.outcome ? `rpchip ${view.outcome}` : 'rpchip';
         const open = el(`[data-rp-open="${lane.index}"]`) as HTMLButtonElement | null;
         // The Open→ target follows the playhead: it opens whatever step this device is on now.
         // Keyed by SESSION — openSession's index — where everything else here is lane-positional.
-        if (open) { open.dataset.trailOpen = `${(lanes[lane.index] || {}).session}:${state.step.headerId}`; open.disabled = false; }
+        if (open) {
+          if (view.openHeaderId != null) open.dataset.trailOpen = `${(lanes[lane.index] || {}).session}:${view.openHeaderId}`;
+          open.disabled = view.openHeaderId == null;
+        }
       }
       if (state.phase !== memo.phase) {
         memo.phase = state.phase;
@@ -5455,12 +5652,18 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       // A lane that recorded plays its recording wherever the recording reaches; outside that span
       // (before it started rolling, past where it stopped) it falls back to captures, which may
       // well be fresher than the video's last frame.
-      const clip = media[lane.index];
-      const videoAt = clip ? heldClipTimeAt(clip.clip, clip.t0, laneClock(lane.index, t), clip.duration, laneHeldAtStart(lane.index)) : null;
-      const onVideo = videoAt != null;
-      if (onVideo !== memo.video) {
-        memo.video = onVideo;
-        if (clip) clip.vid.classList.toggle('on', onVideo);
+      // A device bound twice has a recording per bind, and the playhead picks which one is on.
+      const entries = media[lane.index];
+      const live = liveClip(lane.index, t);
+      const active = live ? live.index : -1;
+      const onVideo = active >= 0;
+      const clip = onVideo && entries ? entries[active] : null;
+      if (active !== memo.video) {
+        memo.video = active;
+        (entries || []).forEach((entry, n) => {
+          entry.vid.classList.toggle('on', n === active);
+          if (n !== active && !entry.vid.paused) entry.vid.pause();
+        });
         // Handing the frame's shape over with the picture. A recording and a capture of the same
         // device need not agree — a rotated capture is a different rectangle — and the marks belong
         // to whichever one is actually on screen.
@@ -5472,7 +5675,6 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
         wrap.querySelectorAll<HTMLElement>(`[data-rp-img^="${lane.index}:"]`).forEach((img) => {
           img.classList.toggle('under', onVideo);
         });
-        if (!onVideo && clip && !clip.vid.paused) clip.vid.pause();
       }
       const file = state.capture ? state.capture.file : '';
       const waiting = el(`[data-rp-waiting="${lane.index}"]`);
@@ -5502,7 +5704,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       const flip = () => {
         // A later capture may have overtaken this one while it decoded; the memo is the referee.
         if (memo.file !== file) return;
-        if (!memo.video) setAspect(lane.index, incoming.naturalWidth, incoming.naturalHeight);
+        if (memo.video < 0) setAspect(lane.index, incoming.naturalWidth, incoming.naturalHeight);
         incoming.classList.add('on');
         if (outgoing) outgoing.classList.remove('on');
         memo.layer = next;
@@ -5518,10 +5720,14 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     // position is authoritative and set exactly.
     const DRIFT_TOLERANCE_SEC = 0.25;
     const syncMedia = (t: number) => {
-      media.forEach((entry, index) => {
-        if (!entry) return;
-        const want = heldClipTimeAt(entry.clip, entry.t0, laneClock(index, t), entry.duration, laneHeldAtStart(index));
-        if (want == null) return;
+      media.forEach((entries, index) => {
+        if (!entries) return;
+        const live = liveClip(index, t);
+        // Only the recording on screen rolls; a lane's other binds wait paused for their stretch.
+        entries.forEach((other, n) => { if ((!live || n !== live.index) && !other.vid.paused) other.vid.pause(); });
+        if (!live) return;
+        const entry = entries[live.index];
+        const want = live.at;
         // A lane waiting at the end of an aligned segment has a clock that isn't moving: its
         // recording holds the frame it ended the step on, exactly as if the replay were paused.
         if (!playing || (alignment && alignment.frozenAt(index, t))) {
@@ -5568,7 +5774,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     // video with it and no path can leave a lane playing on underneath a paused replay.
     const setPlaying = (on: boolean) => {
       playing = on;
-      if (!on) media.forEach((entry) => { if (entry && !entry.vid.paused) entry.vid.pause(); });
+      if (!on) media.flatMap((entries) => entries || []).forEach((entry) => { if (!entry.vid.paused) entry.vid.pause(); });
       if (!playBtn) return;
       playBtn.innerHTML = on
         ? '<span class="transporticon stopicon" aria-hidden="true"></span>'
@@ -6873,7 +7079,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       ['timeline', 'Timeline'],
       ...trailTabs,
       ...(hasShots ? [['lightbox', `Lightbox <span class="counttoken">${lightboxStepFrameCount}</span>`]] : []),
-      ...(sessionClip(st.session) ? [['video', 'Video']] : []),
+      ...(firstPlayableClipIndex(st.session) >= 0 ? [['video', 'Video']] : []),
       ...(D.llm.length ? [['llm', `LLM <span class="counttoken">${D.llm.length}</span>`]] : []),
       ...(yamlRootSection(D.recordingYaml, 'config') || yamlRootSection(D.originalYaml, 'config') ? [['config', 'Config']] : []),
       ...(D.recordingYaml || D.originalYaml ? [['recording', 'YAML']] : []),
@@ -7974,12 +8180,15 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       player.classList.toggle('empty', !(view.clipAt != null || view.shot));
     }
     const hasShotEl = !!document.getElementById('shot');
-    const hasClipEl = !!document.getElementById('tlvclip');
+    const clipEl = document.getElementById('tlvclip');
+    const hasClipEl = !!clipEl;
     const hasNoShotEl = !!(player && player.querySelector && player.querySelector('.noshot'));
     // The pane's markup is only rebuilt when the KIND of surface changes; within a kind, the
     // element is updated in place (a rebuild would restart the video's decode on every step).
     const replacePane = !!player && ((view.mode === 'shot' && !hasShotEl)
       || (view.mode === 'clip' && !hasClipEl)
+      // A step on another device plays that device's recording: a different file, so a new element.
+      || (view.mode === 'clip' && !!clipEl && clipEl.getAttribute('src') !== view.clipUrl)
       || (view.mode === 'none' && !hasNoShotEl)
       || (view.mode !== 'shot' && hasShotEl)
       || (view.mode !== 'clip' && hasClipEl));
@@ -9021,7 +9230,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   // The Video tab's transport over the recording. The <video> element is the clock — it plays
   // itself, the scrubber and readout follow it — so there is no frame engine here. Speed
   // multiplies playbackRate in place, so an in-flight playback changes speed without restarting.
-  const wireVideoClip = (vid: HTMLVideoElement) => {
+  const wireVideoClip = (vid: HTMLVideoElement, key: string) => {
     const seek = document.getElementById('vseek') as HTMLInputElement | null;
     const posEl = document.getElementById('vpos');
     const playBtn = document.getElementById('vplay');
@@ -9042,17 +9251,17 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     vid.playbackRate = st.vSpeed;
     vid.onloadedmetadata = () => {
       const d = duration();
-      if (d) clipDurations[String(st.session)] = d;
+      if (d) clipDurations[key] = d;
       paint();
     };
     vid.ontimeupdate = paint;
     vid.onplay = paint;
     vid.onpause = paint;
     // A recording the browser can't decode must not leave a dead Play button under a "…" total.
-    // Mark it and re-render: sessionClip then answers null for this session, so the tab falls back
-    // to the same player a run without a recording gets, and the timeline pane agrees with it.
+    // Mark it and re-render: sessionClipAt then answers null for this recording, so the tab says it
+    // could not play it (and drops out once no recording plays), and the timeline pane agrees.
     vid.onerror = () => {
-      clipUnplayable[String(st.session)] = true;
+      clipUnplayable[key] = true;
       render();
     };
     if (seek) seek.oninput = () => {
@@ -9078,7 +9287,14 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   // Drive the Video tab's transport when the tab rendered the recording.
   const wireVideo = () => {
     const vid = document.getElementById('vclip') as HTMLVideoElement | null;
-    if (vid) wireVideoClip(vid);
+    if (vid) wireVideoClip(vid, videoTabKey());
+    const keys = sessionRecordingKeys(st.session);
+    root.querySelectorAll<HTMLElement>('[data-vdev]').forEach((b) => {
+      b.onclick = () => {
+        st.vDevice = keys[Number(b.dataset.vdev)] ?? null;
+        render();
+      };
+    });
   };
 
   // Global listeners are torn down before this run registers its own, so booting a second time into

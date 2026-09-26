@@ -8,6 +8,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlinx.datetime.Instant
 import kotlinx.serialization.encodeToString
+import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
@@ -132,6 +133,54 @@ class MoveJsonFilesToSessionDirsTest {
       moveJsonFilesToSessionDirs(logsDir)
 
       assertTrue(source.exists(), "a log whose copy failed must not be deleted")
+    } finally {
+      logsDir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun `a session whose only log carries a screenshot keeps both the log and the image`() {
+    // The first log a session sees creates its directory. When that log carries a screenshot,
+    // both files must end up there, or LogsRepo never reads the log.
+    val logsDir = Files.createTempDirectory("trailblaze-move-json-test-screenshot").toFile()
+    try {
+      val session = SessionId("sess_one")
+      val screenshotName = "sess_one_1.png"
+      val screenshotBytes = byteArrayOf(1, 2, 3)
+      File(logsDir, screenshotName).writeBytes(screenshotBytes)
+      val snapshot = TrailblazeLog.TrailblazeSnapshotLog(
+        displayName = null,
+        screenshotFile = screenshotName,
+        viewHierarchy = ViewHierarchyTreeNode(),
+        deviceWidth = 1280,
+        deviceHeight = 720,
+        session = session,
+        timestamp = Instant.parse("2026-09-24T18:00:00Z"),
+      )
+      File(logsDir, "sess_one_1_1.json").writeText(
+        TrailblazeJsonInstance.encodeToString<TrailblazeLog>(snapshot),
+      )
+
+      // Both passes, in the order ReportMain.run runs them.
+      moveScreenshotsToSessionDirs(logsDir, moveJsonFilesToSessionDirs(logsDir))
+
+      assertEquals(
+        setOf(session.value),
+        logsDir.listFiles().orEmpty().map { it.name }.toSet(),
+        "everything should have moved into the session directory",
+      )
+      val sessionDir = File(logsDir, session.value)
+      val movedLog = sessionDir.listFiles().orEmpty().single { it.extension == "json" }
+      val decoded = TrailblazeJsonInstance.decodeFromString<TrailblazeLog>(movedLog.readText())
+      assertEquals(
+        screenshotName,
+        (decoded as TrailblazeLog.TrailblazeSnapshotLog).screenshotFile,
+        "readers resolve screenshotFile against the session directory, so it stays a bare name",
+      )
+      assertTrue(
+        File(sessionDir, screenshotName).readBytes().contentEquals(screenshotBytes),
+        "the screenshot should sit beside its log",
+      )
     } finally {
       logsDir.deleteRecursively()
     }

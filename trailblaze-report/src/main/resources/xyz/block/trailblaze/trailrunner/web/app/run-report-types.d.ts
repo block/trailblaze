@@ -481,6 +481,21 @@ interface VideoInfo {
   endMs: number;
   /** The recording itself; its `startMs`/`endMs` are this same window. */
   clip: VideoClipSource;
+  /**
+   * The configuration name of the device this recording shows (`seller`, `buyer`) when the session
+   * drove more than one; absent for a single-device run, and for recordings made before capture
+   * stamped it — which the viewer reads as "the device the trail started on".
+   */
+  device?: string | null;
+  /** The device's instance id (`emulator-5560`), for readers that key on it rather than the name. */
+  deviceId?: string | null;
+  /**
+   * The other displays' recordings in a multi-device session, one per companion device, in the
+   * order capture listed them. The session's own `video` is the START device's recording, so
+   * every single-recording reader keeps working; a device-aware surface (Trail Replay's device
+   * lanes, the Video tab's picker) looks its lane up here by `device`.
+   */
+  companions?: VideoInfo[] | null;
 }
 
 /**
@@ -524,6 +539,8 @@ interface VideoClip {
   endMs: number;
   /** Container MIME type for the <source> element (video/mp4, video/webm). */
   mime: string;
+  /** See VideoInfo.device. */
+  device?: string | null;
 }
 
 /**
@@ -615,6 +632,12 @@ interface SessionPayload {
   video?: VideoInfo | null;
   videoClip?: VideoClip | null;
   /**
+   * Every recording the archive loader read for the session, start device first — `videoClip` is
+   * `videoClips[0]`. Only a multi-device session has more than one. Runtime-only like `videoClip`,
+   * and stripped from exported documents with it.
+   */
+  videoClips?: VideoClip[] | null;
+  /**
    * Attachment bytes resolution: session-relative attachment path (AttachmentRef.path) → a URI the
    * lightbox can load. Producers fill it per surface: the bun driver embeds `data:` URIs under its
    * inline cap, the live daemon document links `/static/<sessionId>/<path>`, and the zip pipeline
@@ -658,6 +681,8 @@ interface SessionInput {
   hierarchiesGz?: string | null;
   video?: VideoInfo | null;
   videoClip?: VideoClip | null;
+  /** See SessionPayload.videoClips. */
+  videoClips?: VideoClip[] | null;
   /** See SessionPayload.attachments. */
   attachments?: Record<string, string> | null;
 }

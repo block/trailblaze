@@ -393,7 +393,7 @@ dependencies {
   // Without the explicit declarations below, the only contributor would be
   // `compose.desktop.currentOs` (transitively), which resolves to *just* the
   // build host's variant. That's how the uber JAR built on macOS-arm64
-  // Runway agents historically shipped only `libskiko-macos-arm64.dylib` —
+  // CI agents historically shipped only `libskiko-macos-arm64.dylib` —
   // running it on Linux CI failed with:
   //   `LibraryLoadException: Cannot find libskiko-linux-x64.so.sha256`
   // the first time anything touched WebP encoding (the default screenshot

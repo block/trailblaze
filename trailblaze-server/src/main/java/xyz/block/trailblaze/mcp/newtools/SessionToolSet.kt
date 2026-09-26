@@ -256,15 +256,18 @@ class SessionToolSet(
       handleSave(title, configuration = configuration)
     } else null
 
-    // Check if save actually succeeded by parsing the JSON result
-    val saveSucceeded = if (saveResult != null) {
+    // Check if save actually succeeded by parsing the JSON result. Keep the saved path and the
+    // error so the stop message can say where the trail went, or why it didn't.
+    val saveJson = saveResult?.let {
       try {
-        val json = TrailblazeJsonInstance.parseToJsonElement(saveResult).jsonObject
-        json["error"] == null || json["error"]?.jsonPrimitive?.content.isNullOrBlank()
+        TrailblazeJsonInstance.parseToJsonElement(it).jsonObject
       } catch (_: Exception) {
-        false
+        null
       }
-    } else false
+    }
+    val saveError = saveJson?.get("error")?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
+    val saveSucceeded = saveJson != null && saveError == null
+    val savedFile = saveJson?.get("file")?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
 
     // Capture whether this session had a per-session target override BEFORE
     // `endSession` clears the registry entry. Used below to gate the cleared-
@@ -311,9 +314,9 @@ class SessionToolSet(
           )
         }
         if (save && saveSucceeded) {
-          append(" Trail saved.")
+          append(if (savedFile != null) " Trail saved: $savedFile" else " Trail saved.")
         } else if (save && !saveSucceeded) {
-          append(" Trail save failed.")
+          append(if (saveError != null) " Trail save failed: $saveError" else " Trail save failed.")
         }
         if (captureWarning != null) {
           append(" Warning: captured data may be incomplete ($captureWarning).")
@@ -426,7 +429,7 @@ class SessionToolSet(
     val logs = logsRepo!!.getLogsForSession(sessionId)
     if (logs.isEmpty()) {
       return SessionResult(
-        error = "No logs found for session. Use blaze() or ask() first.",
+        error = "No logs found for session. Run a step first: the `step` MCP tool, or `trailblaze step` / `trailblaze tool <name> -s \"<step>\"` from the CLI.",
       ).toJson()
     }
 
@@ -442,7 +445,7 @@ class SessionToolSet(
 
     if (recordedItems.none { it is TrailYamlItem.PromptsTrailItem }) {
       return SessionResult(
-        error = "No recordable steps found. Use blaze() or ask() first.",
+        error = "No recordable steps found. Run a step first: the `step` MCP tool, or `trailblaze step` / `trailblaze tool <name> -s \"<step>\"` from the CLI.",
       ).toJson()
     }
 
@@ -530,7 +533,7 @@ class SessionToolSet(
     val steps = sessionContext?.getRecordedSteps() ?: emptyList()
     if (steps.isEmpty()) {
       return SessionResult(
-        error = "No steps recorded yet. Use blaze() or ask() first.",
+        error = "No steps recorded yet. Run a step first: the `step` MCP tool, or `trailblaze step` / `trailblaze tool <name> -s \"<step>\"` from the CLI.",
       ).toJson()
     }
 
@@ -578,8 +581,14 @@ class SessionToolSet(
       )
     }
 
+    // A device that logged no classifiers still has a platform. Key the preview on it — the same
+    // slot `session save` writes — instead of rendering nothing.
+    val platformSlot = startedStatus?.trailblazeDeviceInfo
+      ?.takeIf { it.classifiers.isEmpty() }
+      ?.platform?.name?.lowercase()
+
     val yamlContent = try {
-      logs.generateUnifiedRecordedYaml(sessionTrailConfig = sessionTrailConfig)
+      logs.generateUnifiedRecordedYaml(sessionTrailConfig = sessionTrailConfig, classifierOverride = platformSlot)
     } catch (e: Exception) {
       return SessionResult(error = "Failed to generate recording: ${e.message}").toJson()
     }

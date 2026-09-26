@@ -19,6 +19,7 @@ import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.mcp.AgentImplementation
+import xyz.block.trailblaze.mcp.BoundDeviceRosterMember
 import xyz.block.trailblaze.mcp.DeviceClaimRegistry
 import xyz.block.trailblaze.mcp.McpDeviceContext
 import xyz.block.trailblaze.mcp.TrailblazeMcpBridge
@@ -405,6 +406,23 @@ class DeviceManagerToolSetNamedBindingsTest {
    * the session was already connected to, which displaces the unnamed association onto a device
    * that is now in the roster.
    */
+  /** Another client's session on a device this session bound is that client's to end, not an unbind's. */
+  @Test
+  fun `unbinding a device whose session was found running leaves that session running`() = runBlocking {
+    val f = fixture()
+    f.sessionContext.activeRecordingOnDevice = { id ->
+      if (id in f.bridge.devicesRunningASession) SessionId("session-on-${id.instanceId}") else null
+    }
+    f.bridge.devicesRunningASession += seller.trailblazeDeviceId // the other client's session
+    f.bind("seller", seller.instanceId)
+    f.bind("buyer", buyer.instanceId)
+
+    f.unbind("seller")
+
+    assertFalse(seller.trailblazeDeviceId in f.bridge.endedSessionsOn, "${f.bridge.endedSessionsOn}")
+    assertNull(f.claims.getClaim(seller.trailblazeDeviceId), "the claim is still released")
+  }
+
   @Test
   fun `a device that keeps a name through a bind keeps its session`() = runBlocking {
     val f = fixture()
@@ -466,6 +484,25 @@ class DeviceManagerToolSetNamedBindingsTest {
 
     assertTrue(response.contains("seller: android/${seller.instanceId} (target: otherApp)"), response)
     assertFalse(response.contains("target: myApp"), response)
+  }
+
+  /**
+   * Dispatch pins each call to the device it arrived for. A `switchDevice` landing between dispatch
+   * and execution moves the session's active device, not the call — so the override is the
+   * dispatched device's, not whichever device is active by the time the tool runs.
+   */
+  @Test
+  fun `a session target is set on the device the call was dispatched for`() = runBlocking {
+    val f = fixture()
+    f.bind("seller", seller.instanceId)
+    f.bind("buyer", buyer.instanceId)
+    f.sessionContext.setAssociatedDevice(buyer.trailblazeDeviceId) // the handover won the race
+
+    withContext(McpDeviceContext.currentDeviceId.asContextElement(seller.trailblazeDeviceId)) {
+      f.toolSet.setSessionTargetForBoundDevice("myApp")
+    }
+
+    assertEquals<List<Pair<TrailblazeDeviceId, String?>>>(listOf(seller.trailblazeDeviceId to "myApp"), f.bridge.sessionTargetsSet)
   }
 
   /** FULL is documented as SUMMARY plus apps, so the roster belongs in it too. */
@@ -561,6 +598,88 @@ class DeviceManagerToolSetNamedBindingsTest {
     )
   }
 
+  // ---- the cast the host records -----------------------------------------------------------------
+
+  /**
+   * The host runs ONE Trailblaze session for a cast and records every member into it, so it has to
+   * be told who the cast is — in bind order, the start device first, under this MCP session's id.
+   */
+  @Test
+  fun `every bind hands the host the whole cast in bind order`() = runBlocking {
+    val f = fixture()
+    f.bind("seller", seller.instanceId)
+
+    val response = f.bind("buyer", buyer.instanceId)
+
+    val (rosterId, members) = f.bridge.rosters.last()
+    assertEquals(SESSION_ID, rosterId)
+    assertEquals(listOf("seller" to seller.trailblazeDeviceId, "buyer" to buyer.trailblazeDeviceId), members.map { it.name to it.trailblazeDeviceId })
+    assertTrue(response.contains("Session shared-session covers the whole cast"), response)
+  }
+
+  @Test
+  fun `the cast carries the target each device resolves against`() = runBlocking {
+    val f = fixture()
+    f.bridge.currentTarget = "pos"
+    f.bind("seller", seller.instanceId)
+
+    f.bind("buyer", buyer.instanceId)
+
+    assertEquals(listOf("pos", "pos"), f.bridge.rosters.last().second.map { it.targetId })
+  }
+
+  @Test
+  fun `an unbind hands the host the cast without that name, before the device is released`() = runBlocking {
+    val f = fixture()
+    f.bind("seller", seller.instanceId)
+    f.bind("buyer", buyer.instanceId)
+    f.bridge.devicesRunningASession += buyer.trailblazeDeviceId
+    // A host that has taken the buyer out of the shared session reports no session on it.
+    f.bridge.rostersSeenBeforeEnd = mutableListOf()
+
+    f.unbind("buyer")
+
+    assertEquals(listOf("seller"), f.bridge.rosters.last().second.map { it.name })
+    assertEquals(
+      listOf("seller"),
+      f.bridge.rostersSeenBeforeEnd?.lastOrNull()?.map { it.name },
+      "the host must know the buyer left BEFORE its session is ended, or the end would take the shared session down",
+    )
+  }
+
+  @Test
+  fun `a rename hands the host the cast under the new name`() = runBlocking {
+    val f = fixture()
+    f.bind("seller", seller.instanceId)
+    f.bind("buyer", buyer.instanceId)
+
+    f.bind("customer", buyer.instanceId)
+
+    assertEquals(listOf("seller", "customer"), f.bridge.rosters.last().second.map { it.name })
+  }
+
+  @Test
+  fun `a replacing connect dissolves the cast on the host`() = runBlocking {
+    val f = fixture()
+    f.bind("seller", seller.instanceId)
+    f.bind("buyer", buyer.instanceId)
+
+    f.device(DeviceManagerToolSet.DeviceAction.CONNECT, deviceId = kitchen.instanceId)
+
+    assertEquals(emptyList(), f.bridge.rosters.last().second)
+  }
+
+  /** A single bind is not a cast yet, but the host is still told — a later bind grows what it holds. */
+  @Test
+  fun `a first bind declares a cast of one without claiming a shared session`() = runBlocking {
+    val f = fixture()
+
+    val response = f.bind("seller", seller.instanceId)
+
+    assertEquals(listOf("seller"), f.bridge.rosters.last().second.map { it.name })
+    assertFalse(response.contains("covers the whole cast"), response)
+  }
+
   // ---- helpers ---------------------------------------------------------------------------------
 
   private fun androidDevice(instanceId: String) = TrailblazeConnectedDeviceSummary(
@@ -625,6 +744,8 @@ class DeviceManagerToolSetNamedBindingsTest {
     val sessionSelected = mutableListOf<TrailblazeDeviceId>()
     val devicesRunningASession = mutableSetOf<TrailblazeDeviceId>()
     val endedSessionsOn = mutableListOf<TrailblazeDeviceId>()
+    /** Every cast the toolset declared to the host, in order — the last one is what the host holds now. */
+    val rosters = mutableListOf<Pair<String, List<BoundDeviceRosterMember>>>()
     var currentTarget: String? = null
     var cancelEndSessionOn: TrailblazeDeviceId? = null
 
@@ -664,8 +785,12 @@ class DeviceManagerToolSetNamedBindingsTest {
       ?.takeIf { it in devicesRunningASession }
       ?.let { SessionId("session-on-${it.instanceId}") }
 
+    /** When non-null, records the cast the host held at each endSession — see the unbind ordering test. */
+    var rostersSeenBeforeEnd: MutableList<List<BoundDeviceRosterMember>>? = null
+
     override suspend fun endSession(): Boolean {
       val deviceId = McpDeviceContext.currentDeviceId.get() ?: return false
+      rostersSeenBeforeEnd?.add(rosters.lastOrNull()?.second.orEmpty())
       endedSessionsOn += deviceId
       if (deviceId == cancelEndSessionOn) throw CancellationException("request cancelled")
       return devicesRunningASession.remove(deviceId)
@@ -681,6 +806,17 @@ class DeviceManagerToolSetNamedBindingsTest {
       includeAllElements: Boolean,
     ): GetScreenStateResponse? = null
     override suspend fun ensureSessionAndGetId(testName: String?): SessionId? = null
+
+    val sessionTargetsSet = mutableListOf<Pair<TrailblazeDeviceId, String?>>()
+    override fun setSessionTargetForDevice(deviceId: TrailblazeDeviceId, appTargetId: String?): String? {
+      sessionTargetsSet += deviceId to appTargetId
+      return appTargetId
+    }
+
+    override fun setBoundDeviceRoster(rosterId: String, members: List<BoundDeviceRosterMember>): SessionId? {
+      rosters += rosterId to members
+      return if (members.isEmpty()) null else SessionId("shared-session")
+    }
   }
 
   private companion object {

@@ -31,8 +31,19 @@ import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
  * behavior (e.g., different responses for `/rpc/RunYamlRequest` vs `/rpc/GetExecutionStatusRequest`)
  * can register a handler via [onPost]; unmatched paths fall back to the default. Every incoming
  * request body is appended to [requestLog] keyed by its `/rpc/<Name>` path.
+ *
+ * The device ID must come from [jvmScopedDeviceId], so the port is this JVM's and a second build
+ * running the same test class does not fight this one for it — see [JVM_TEST_DEVICE_SCOPE].
  */
 class MockRpcServer(deviceId: TrailblazeDeviceId) {
+
+  init {
+    require(deviceId.isScopedToThisJvm()) {
+      "MockRpcServer's port is a hash of the device id, so the id '${deviceId.instanceId}' gives" +
+        " every JVM running this test the same port and two concurrent builds fight over it." +
+        " Build the id with jvmScopedDeviceId(\"${deviceId.instanceId}\") instead."
+    }
+  }
 
   val port: Int = deviceId.getTrailblazeOnDeviceSpecificPort()
 

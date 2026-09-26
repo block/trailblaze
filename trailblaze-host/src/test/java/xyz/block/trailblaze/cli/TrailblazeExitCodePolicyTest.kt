@@ -122,6 +122,17 @@ class TrailblazeExitCodePolicyTest {
   }
 
   @Test
+  fun `a run the client lost sight of maps to INFRA_FAILED`() {
+    // The run may still be driving its device, so a scheduler must not treat the device as free.
+    val response = CliRunResponse(
+      success = false,
+      error = "Timed out waiting for run to complete: no progress for 600s",
+      errorKind = CliRunResponse.ERROR_KIND_INFRA,
+    )
+    assertEquals(TrailblazeExitCode.INFRA_FAILED, daemonRunFailureExitCode(response))
+  }
+
+  @Test
   fun `daemon failure without an errorKind maps to ASSERTION_FAILED`() {
     // Covers ordinary attempted-run failures AND responses from older daemons
     // that don't send the field.

@@ -52,8 +52,9 @@ class DemoRunTest {
           sessionId: String,
           sessionDir: File,
           deviceId: TrailblazeDeviceId,
-          targetAppIds: List<String>,
+          targetAppIds: List<String>?,
           deviceLabel: String?,
+          requireTraffic: Boolean,
         ) {
           capturedAppIds = targetAppIds
         }

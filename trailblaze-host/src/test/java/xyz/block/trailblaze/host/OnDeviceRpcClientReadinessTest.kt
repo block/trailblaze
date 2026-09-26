@@ -11,8 +11,6 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.After
 import org.junit.Before
-import xyz.block.trailblaze.devices.TrailblazeDeviceId
-import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.DrainSessionRequest
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.DrainSessionResponse
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.OnDeviceRpcClient
@@ -35,11 +33,7 @@ import kotlin.test.assertTrue
  */
 class OnDeviceRpcClientReadinessTest {
 
-  private val testDeviceId =
-    TrailblazeDeviceId(
-      instanceId = "test-device-readiness",
-      trailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID,
-    )
+  private val testDeviceId = jvmScopedDeviceId("test-device-readiness")
 
   private val mockServer = MockRpcServer(testDeviceId)
   private lateinit var rpcClient: OnDeviceRpcClient

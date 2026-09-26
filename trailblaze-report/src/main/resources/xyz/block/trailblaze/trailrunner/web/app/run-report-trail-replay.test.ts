@@ -4,6 +4,7 @@ import { describe, expect, test } from "bun:test";
 import memoryFormatter, { formatDeltaKb, formatKb } from "../../../report/event-formatters/memory.formatter";
 import type { ReplayMemorySeries } from "./run-report-trail-replay";
 import {
+  replayChipFor,
   alignReplayByStep,
   aspectHeld,
   buildReplayMemorySeries,
@@ -35,6 +36,7 @@ import {
   segmentAt,
   videoClipRate,
   heldClipTimeAt,
+  heldClipsTimeAt,
   videoClipTimeAt,
   followReplayHead,
   revealReplayRow,
@@ -222,6 +224,21 @@ describe("what a device shows at an instant", () => {
     expect(state.phase).toBe("pending");
     expect(state.step).toBeNull();
     expect(state.capture).toBeNull();
+  });
+
+  test("scrubbing back before a device's first step blanks its step chip, and scrubbing on restores it", () => {
+    // A companion device that joins late: its pane is not faded before it starts, so a chip still
+    // naming the step it was last scrubbed to would read as the device being on that step.
+    const late = buildReplayTimeline({
+      rows: [{ num: 1, label: "Sign in", cells: [cell(4000, 500, [frame(4200, "z1")], { headerId: 7 })] }],
+      maxEndMs: 4500,
+    } as unknown as TrailMatrix);
+    const chipAt = (t: number) => replayChipFor(laneStateAt(late.lanes[0], t).step);
+    const onStep = { num: "STEP 1", label: "Sign in", outcome: "passed", openHeaderId: 7 };
+    const blank = { num: "—", label: "", outcome: null, openHeaderId: null };
+    expect(chipAt(4200)).toEqual(onStep);
+    expect(chipAt(1000)).toEqual(blank);
+    expect(chipAt(4200)).toEqual(onStep);
   });
 
   test("the step is held through the gap after it ends, so a lane is never nowhere", () => {
@@ -415,6 +432,22 @@ describe("putting a recording on the shared clock", () => {
     expect(videoClipTimeAt(clip, laneT0, 10_000, 0)).toBeNull();
     // An untimed run has no epoch origin to measure the recording against.
     expect(videoClipTimeAt(clip, null, 10_000, duration)).toBeNull();
+  });
+
+  test("a device bound twice plays whichever of its recordings covers the lane's instant", () => {
+    // Two binds, 10s each, with a 10s unbound gap between them; each file is 10s long.
+    const binds = [
+      { clip: { startMs: laneT0, endMs: laneT0 + 10_000 }, duration: 10 },
+      { clip: { startMs: laneT0 + 20_000, endMs: laneT0 + 30_000 }, duration: 10 },
+    ];
+    expect(heldClipsTimeAt(binds, laneT0, 4_000, false)).toEqual({ index: 0, at: 4 });
+    // After the rebind, the SECOND recording, measured from its own start.
+    expect(heldClipsTimeAt(binds, laneT0, 25_000, false)).toEqual({ index: 1, at: 5 });
+    // Unbound in between: no recording reaches it, so the lane shows its captures.
+    expect(heldClipsTimeAt(binds, laneT0, 15_000, false)).toBeNull();
+    // A lane held at its start holds the first recording's opening frame.
+    expect(heldClipsTimeAt([binds[1]], laneT0, 0, true)).toEqual({ index: 0, at: 0 });
+    expect(heldClipsTimeAt([], laneT0, 0, true)).toBeNull();
   });
 
   test("a lane held at its start shows its first frame instead of an empty pane", () => {

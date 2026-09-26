@@ -46,7 +46,7 @@ class BunBinaryResolverTest {
   @Test
   fun `resolveBunBinary returns the bun binary when bun is on PATH`() {
     // Happy path — bun installed (via `brew install bun` in setup.sh on
-    // Runway CI agents, the equivalent on any other host). Pre-fix this
+    // macOS CI agents, the equivalent on any other host). Pre-fix this
     // case made `AnalyzerScriptedToolEnrichment.resolveFromEnvironment()`
     // return null and every meta-only / partial-descriptor trailmap failed
     // to load.

@@ -14,7 +14,7 @@ Assert an element is visible on screen by its ref ID from the snapshot. Use the 
 ## Contract
 
 - Visible to LLM: yes (`surface_to_llm: true`)
-- Recordable: yes (`is_recordable: true`)
+- Recordable: no (`is_recordable: false`)
 - Host-only: no (`requires_host: false`)
 
 ## Input schema

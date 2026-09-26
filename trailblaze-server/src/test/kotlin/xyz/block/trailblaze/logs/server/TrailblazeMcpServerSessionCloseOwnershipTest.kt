@@ -12,6 +12,7 @@ import xyz.block.trailblaze.mcp.TrailblazeMcpSessionContext
 import xyz.block.trailblaze.mcp.models.McpSessionId
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.report.utils.LogsRepo
+import xyz.block.trailblaze.toolcalls.SessionDeviceBindings
 import kotlin.test.assertEquals
 
 /**
@@ -201,5 +202,75 @@ class TrailblazeMcpServerSessionCloseOwnershipTest {
     server.terminateSession(displaced.mcpSessionId.sessionId)
 
     assertEquals(listOf(device), bridge.cancelled)
+  }
+
+  @Test
+  fun `a cast member that joined a recording found running on another device leaves it running`() {
+    // The host shares the session a cast member is on with the rest of the cast, a session another
+    // client started included. Ending it from the member that joined would end the other client's work.
+    val buyer = TrailblazeDeviceId(instanceId = "emulator-5556", trailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID)
+    val userRecording = SessionId("2026_09_24_10_17_30_yaml_6258")
+    bridge.recordings[device] = userRecording
+    val cast = newContext("cast")
+    fun bind(name: String, id: TrailblazeDeviceId) =
+      cast.bindNamedDevice(name, SessionDeviceBindings.BoundDevice(id, trailblazeDeviceInfo = null, description = null, targetId = null))
+
+    ownToolCall(cast) { bind("seller", device) }
+    ownToolCall(cast) {
+      bind("buyer", buyer)
+      bridge.recordings[buyer] = userRecording // the bind put the buyer on the seller's session
+    }
+    for (member in listOf(buyer, device)) {
+      server.cleanupDeviceOnSessionClose(member, "test closure", cast.mcpSessionId.sessionId, cast)
+    }
+
+    assertEquals(emptyList(), bridge.ended, "the other client's recording must still be running")
+    assertEquals(userRecording, bridge.recordings[device])
+    // The host cancels a device by cancelling the whole session it is on.
+    assertEquals(emptyList(), bridge.cancelled, "cancelling the member would end the other client's session too")
+    assertEquals(listOf(buyer), bridge.connectionsReleased, "the member's own connection is still let go")
+  }
+
+  @Test
+  fun `a displaced cast does not cancel a member that joined a recording found running on another device`() {
+    val buyer = TrailblazeDeviceId(instanceId = "emulator-5556", trailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID)
+    val userRecording = SessionId("2026_09_24_10_17_30_yaml_6258")
+    bridge.recordings[device] = userRecording
+    val cast = newContext("displaced-cast-on-found-recording")
+    fun bind(name: String, id: TrailblazeDeviceId) =
+      cast.bindNamedDevice(name, SessionDeviceBindings.BoundDevice(id, trailblazeDeviceInfo = null, description = null, targetId = null))
+    ownToolCall(cast) {
+      bind("seller", device)
+      cast.setAssociatedDevice(device)
+    }
+    ownToolCall(cast) {
+      bind("buyer", buyer)
+      bridge.recordings[buyer] = userRecording
+    }
+    server.installSessionContextForTest(cast.mcpSessionId.sessionId, cast)
+
+    server.terminateSession(cast.mcpSessionId.sessionId)
+
+    assertEquals(emptyList(), bridge.cancelled, "cancelling either member would end the other client's session")
+  }
+
+  @Test
+  fun `a displaced session cleans up every device it bound, not only the active one`() {
+    val buyer = TrailblazeDeviceId(instanceId = "iphone-sim", trailblazeDevicePlatform = TrailblazeDevicePlatform.IOS)
+    val iosSeller = TrailblazeDeviceId(instanceId = "ipad-sim", trailblazeDevicePlatform = TrailblazeDevicePlatform.IOS)
+    val cast = newContext("displaced-cast")
+    fun bind(name: String, id: TrailblazeDeviceId) =
+      cast.bindNamedDevice(name, SessionDeviceBindings.BoundDevice(id, trailblazeDeviceInfo = null, description = null, targetId = null))
+    ownToolCall(cast) {
+      bind("seller", iosSeller)
+      cast.setAssociatedDevice(iosSeller)
+      bind("buyer", buyer) // bound and warmed, never made active
+    }
+    server.installSessionContextForTest(cast.mcpSessionId.sessionId, cast)
+
+    server.terminateSession(cast.mcpSessionId.sessionId)
+
+    assertEquals(setOf(iosSeller, buyer), bridge.cancelled.toSet())
+    assertEquals(setOf(iosSeller, buyer), bridge.connectionsReleased.toSet(), "no stale XCTest connection is left for the next owner")
   }
 }

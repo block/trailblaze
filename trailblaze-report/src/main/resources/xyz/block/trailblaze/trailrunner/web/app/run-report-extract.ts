@@ -1494,6 +1494,7 @@ function toSessionPayloads({ generatedAt, sessions }: { generatedAt?: string; se
       // blob: URL means nothing in a reopened file — which is why nothing may depend on a clip
       // being present.
       videoClip: s.videoClip || null,
+      videoClips: s.videoClips && s.videoClips.length ? s.videoClips : null,
       attachments: s.attachments || null,
     };
   });

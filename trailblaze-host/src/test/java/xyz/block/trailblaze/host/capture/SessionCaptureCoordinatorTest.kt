@@ -10,6 +10,8 @@ import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import xyz.block.trailblaze.capture.CaptureOptions
 import xyz.block.trailblaze.capture.CaptureSession
@@ -18,11 +20,17 @@ import xyz.block.trailblaze.capture.ToolCallAwareCaptureStream
 import xyz.block.trailblaze.capture.ToolCallPhase
 import xyz.block.trailblaze.capture.model.CaptureArtifact
 import xyz.block.trailblaze.capture.model.CaptureType
+import xyz.block.trailblaze.capture.video.PlaywrightVideoRecordDir
+import xyz.block.trailblaze.capture.video.WebScreencastFeedRegistry
+import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.toolcalls.ToolCallObservers
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
 
 /**
  * Unit tests for the per-`SessionId` capture coordinator that #3077 introduced. The
@@ -432,5 +440,342 @@ class SessionCaptureCoordinatorTest {
     ToolCallObservers.notifyBefore(session, "tapOnElement", traceId = null)
     assertTrue(stream.calls.isEmpty())
     coordinator.stopForSession(session)
+  }
+
+  // --- Multi-device sessions ----------------------------------------------------
+
+  /**
+   * A recorder that leaves a real, non-empty file under [basename] and reports it, so the merged
+   * `capture_metadata.json` the coordinator writes can be read back and checked device by device.
+   */
+  private class RecordingStream(private val basename: String) : CaptureStream {
+    override val type: CaptureType = CaptureType.VIDEO_WEBM
+    val devicesStarted = mutableListOf<String>()
+    val stopCalls = AtomicInteger(0)
+    private var file: File? = null
+    override fun start(sessionDir: File, deviceId: String, appId: String?) {
+      devicesStarted += deviceId
+      file = File(sessionDir, "$basename.webm").apply { writeBytes(byteArrayOf(1, 2, 3)) }
+    }
+    override fun stop(options: CaptureOptions): CaptureArtifact? {
+      stopCalls.incrementAndGet()
+      return file?.let { CaptureArtifact(it, type, startTimestampMs = 1_000, endTimestampMs = 2_000) }
+    }
+  }
+
+  private val videoOn = CaptureOptions(captureVideo = true)
+  private val seller = SessionCaptureCoordinator.BoundDevice("seller", TrailblazeDeviceId("emulator-5560", TrailblazeDevicePlatform.ANDROID))
+  private val buyer = SessionCaptureCoordinator.BoundDevice("buyer", TrailblazeDeviceId("emulator-5562", TrailblazeDevicePlatform.ANDROID))
+
+  /** A coordinator whose primary records `video.webm` and whose companions each record under the basename they are given. */
+  private fun multiDeviceCoordinator(
+    primary: RecordingStream = RecordingStream("video"),
+    companions: MutableMap<String, RecordingStream> = linkedMapOf(),
+    companionFactory: (CaptureOptions, TrailblazeDevicePlatform, String) -> CaptureSession? = { options, _, basename ->
+      CaptureSession(listOf(RecordingStream(basename).also { companions[basename] = it }), options)
+    },
+  ): SessionCaptureCoordinator = SessionCaptureCoordinator(
+    logsRepo = logsRepo,
+    captureSessionFactory = { options, _ -> CaptureSession(listOf(primary), options) },
+    companionCaptureFactory = companionFactory,
+  )
+
+  private fun metadataEntries(id: SessionId): List<Map<String, String?>> {
+    val text = File(logsRepo.getSessionDir(id), "capture_metadata.json").readText()
+    val artifacts = kotlinx.serialization.json.Json.parseToJsonElement(text)
+      .jsonObject.getValue("artifacts").jsonArray
+    return artifacts.map { entry ->
+      entry.jsonObject.mapValues { (_, v) -> (v as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull }
+    }
+  }
+
+  @Test
+  fun `every companion display of a multi-device session is recorded into its own file`() {
+    val companions = linkedMapOf<String, RecordingStream>()
+    val coord = multiDeviceCoordinator(companions = companions)
+    val id = sessionId("x2-pair")
+    assertTrue(coord.startForSession(id, seller.deviceId.instanceId, TrailblazeDevicePlatform.ANDROID, videoOn))
+
+    assertEquals(1, coord.bindDevices(id, listOf(seller, buyer)), "the start device is already recording; only the buyer starts")
+
+    val buyerRecorder = assertNotNull(companions["video-buyer"], "the companion records under its own basename")
+    assertEquals(listOf("emulator-5562"), buyerRecorder.devicesStarted, "and it is pointed at the companion's device")
+    assertTrue(coord.stopForSession(id))
+    assertEquals(1, buyerRecorder.stopCalls.get(), "ending the session stops the companion too")
+
+    val entries = metadataEntries(id)
+    assertEquals<Map<String?, String?>>(
+      mapOf("video.webm" to "seller", "video-buyer.webm" to "buyer"),
+      entries.associate { it.getValue("filename") to it["deviceName"] },
+      "one metadata file names every recording's device, the start device's included",
+    )
+    assertEquals<Map<String?, String?>>(
+      mapOf("video.webm" to "emulator-5560", "video-buyer.webm" to "emulator-5562"),
+      entries.associate { it.getValue("filename") to it["deviceId"] },
+    )
+  }
+
+  @Test
+  fun `re-sending the roster does not start a second recording of a companion`() {
+    val companions = linkedMapOf<String, RecordingStream>()
+    val coord = multiDeviceCoordinator(companions = companions)
+    val id = sessionId("rebind")
+    coord.startForSession(id, seller.deviceId.instanceId, TrailblazeDevicePlatform.ANDROID, videoOn)
+    assertEquals(1, coord.bindDevices(id, listOf(seller, buyer)))
+    assertEquals(0, coord.bindDevices(id, listOf(seller, buyer)), "the buyer is already recording")
+    assertEquals(1, companions.size)
+    assertEquals(1, companions.getValue("video-buyer").devicesStarted.size)
+    coord.stopForSession(id)
+  }
+
+  @Test
+  fun `companions are not recorded when the session itself records no video`() {
+    val companions = linkedMapOf<String, RecordingStream>()
+    val coord = multiDeviceCoordinator(companions = companions)
+    val id = sessionId("video-off")
+    coord.startForSession(id, seller.deviceId.instanceId, TrailblazeDevicePlatform.ANDROID, CaptureOptions(captureVideo = false))
+    assertEquals(0, coord.bindDevices(id, listOf(seller, buyer)))
+    assertTrue(companions.isEmpty(), "a session that opted out of video has not asked for footage of any display")
+    coord.stopForSession(id)
+  }
+
+  private val dashboard =
+    SessionCaptureCoordinator.BoundDevice("dashboard", TrailblazeDeviceId("web-dashboard", TrailblazeDevicePlatform.WEB))
+
+  @Test
+  fun `a web companion is recorded under its own name`() {
+    val companions = linkedMapOf<String, RecordingStream>()
+    val platforms = mutableListOf<TrailblazeDevicePlatform>()
+    val coord = multiDeviceCoordinator(
+      companions = companions,
+      companionFactory = { options, platform, basename ->
+        platforms += platform
+        CaptureSession(listOf(RecordingStream(basename).also { companions[basename] = it }), options)
+      },
+    )
+    val id = sessionId("web-companion")
+    coord.startForSession(id, seller.deviceId.instanceId, TrailblazeDevicePlatform.ANDROID, videoOn)
+    assertEquals(1, coord.bindDevices(id, listOf(seller, dashboard)))
+    assertEquals(listOf(TrailblazeDevicePlatform.WEB), platforms, "the browser gets a recorder of its own platform")
+    assertEquals(listOf("web-dashboard"), companions.getValue("video-dashboard").devicesStarted)
+    assertTrue(coord.stopForSession(id))
+
+    assertEquals<Map<String?, String?>>(
+      mapOf("video.webm" to "seller", "video-dashboard.webm" to "dashboard"),
+      metadataEntries(id).associate { it.getValue("filename") to it["deviceName"] },
+      "the report finds the browser's recording by the name the configuration gave it",
+    )
+  }
+
+  /** A browser's screencast as the Playwright manager publishes it, counting who is attached. */
+  private class FakeScreencastFeed : WebScreencastFeedRegistry.Feed {
+    val subscribers = AtomicInteger(0)
+    override fun subscribe(onFrame: (jpeg: ByteArray, hostTimestampMs: Long) -> Unit): AutoCloseable {
+      subscribers.incrementAndGet()
+      return AutoCloseable { subscribers.decrementAndGet() }
+    }
+  }
+
+  @Test
+  fun `a web companion records its browser's screencast and never asks Playwright to record`() {
+    // The shipped companion recorder, not a fake. Playwright's own recorder is switched on by
+    // publishing a record dir, which makes the browser manager rebuild the context the trail is
+    // driving — the wedge a web session's own capture is skipped to avoid. A companion whose
+    // browser is not up yet at bind is exactly when a web recorder would reach for it.
+    val browser = dashboard.deviceId.instanceId
+    val coord = SessionCaptureCoordinator(
+      logsRepo = logsRepo,
+      captureSessionFactory = { options, _ -> CaptureSession(listOf(RecordingStream("video")), options) },
+    )
+    val id = sessionId("web-companion-default")
+    val feed = FakeScreencastFeed()
+    try {
+      coord.startForSession(id, seller.deviceId.instanceId, TrailblazeDevicePlatform.ANDROID, videoOn)
+      assertEquals(1, coord.bindDevices(id, listOf(seller, dashboard)))
+      assertNull(PlaywrightVideoRecordDir.getRecordDir(browser), "binding must not turn on Playwright's recorder")
+
+      WebScreencastFeedRegistry.register(browser, feed)
+      assertEquals(1, feed.subscribers.get(), "the browser is recorded from its screencast once it comes up")
+
+      assertTrue(coord.stopForSession(id))
+      assertEquals(0, feed.subscribers.get(), "ending the session detaches from the screencast")
+      assertNull(PlaywrightVideoRecordDir.getRecordDir(browser))
+    } finally {
+      // A failed assertion above must not leave the companion watching this id for later tests.
+      runCatching { coord.stopForSession(id) }
+      WebScreencastFeedRegistry.unregister(browser, feed)
+      PlaywrightVideoRecordDir.clearRecordDir(browser)
+    }
+  }
+
+  @Test
+  fun `a roster sent to a session with no capture records nothing`() {
+    val coord = multiDeviceCoordinator()
+    assertEquals(0, coord.bindDevices(sessionId("never-started"), listOf(seller, buyer)))
+  }
+
+  @Test
+  fun `unbinding a companion stops its recording and keeps what it captured`() {
+    val companions = linkedMapOf<String, RecordingStream>()
+    val coord = multiDeviceCoordinator(companions = companions)
+    val id = sessionId("unbind")
+    coord.startForSession(id, seller.deviceId.instanceId, TrailblazeDevicePlatform.ANDROID, videoOn)
+    coord.bindDevices(id, listOf(seller, buyer))
+
+    assertTrue(coord.unbindDevice(id, "buyer"))
+    assertEquals(1, companions.getValue("video-buyer").stopCalls.get(), "unbinding stops the recorder then")
+    assertFalse(coord.unbindDevice(id, "buyer"), "and a second unbind finds nothing recording")
+    assertFalse(coord.unbindDevice(id, "seller"), "the start device is not a companion")
+
+    coord.stopForSession(id)
+    assertEquals(1, companions.getValue("video-buyer").stopCalls.get(), "session end does not stop it again")
+    assertEquals(
+      setOf("video.webm", "video-buyer.webm"),
+      metadataEntries(id).map { it.getValue("filename") }.toSet(),
+      "the footage a companion captured before it was unbound is still on record",
+    )
+  }
+
+  @Test
+  fun `two device names that reduce to one filename each keep their own recording`() {
+    val companions = linkedMapOf<String, RecordingStream>()
+    val coord = multiDeviceCoordinator(companions = companions)
+    val id = sessionId("colliding-names")
+    coord.startForSession(id, seller.deviceId.instanceId, TrailblazeDevicePlatform.ANDROID, videoOn)
+    val front = SessionCaptureCoordinator.BoundDevice("kiosk/front", TrailblazeDeviceId("emulator-5564", TrailblazeDevicePlatform.ANDROID))
+    val front2 = SessionCaptureCoordinator.BoundDevice("kiosk:front", TrailblazeDeviceId("emulator-5566", TrailblazeDevicePlatform.ANDROID))
+
+    assertEquals(2, coord.bindDevices(id, listOf(seller, front, front2)))
+    assertEquals(setOf("video-kiosk_front", "video-kiosk_front-2"), companions.keys, "the second device must not write the first one's file")
+    coord.stopForSession(id)
+
+    assertEquals<Map<String?, String?>>(
+      mapOf("video.webm" to "seller", "video-kiosk_front.webm" to "kiosk/front", "video-kiosk_front-2.webm" to "kiosk:front"),
+      metadataEntries(id).associate { it.getValue("filename") to it["deviceName"] },
+    )
+  }
+
+  @Test
+  fun `two device names that differ only in case each keep their own recording`() {
+    // The default macOS filesystem is case-insensitive: `video-Buyer.webm` would overwrite `video-buyer.webm`.
+    val companions = linkedMapOf<String, RecordingStream>()
+    val coord = multiDeviceCoordinator(companions = companions)
+    val id = sessionId("case-only-names")
+    coord.startForSession(id, seller.deviceId.instanceId, TrailblazeDevicePlatform.ANDROID, videoOn)
+    val upper = SessionCaptureCoordinator.BoundDevice("Buyer", TrailblazeDeviceId("emulator-5564", TrailblazeDevicePlatform.ANDROID))
+
+    assertEquals(2, coord.bindDevices(id, listOf(seller, buyer, upper)))
+    assertEquals(setOf("video-buyer", "video-Buyer-2"), companions.keys)
+    coord.stopForSession(id)
+  }
+
+  @Test
+  fun `a companion unbound while its recorder is starting is not left recording`() {
+    val startEntered = CountDownLatch(1)
+    val releaseStart = CountDownLatch(1)
+    val companions = linkedMapOf<String, RecordingStream>()
+    val coord = multiDeviceCoordinator(companionFactory = { options, _, basename ->
+      val recording = RecordingStream(basename).also { companions[basename] = it }
+      val slowStart = object : CaptureStream by recording {
+        override fun start(sessionDir: File, deviceId: String, appId: String?) {
+          startEntered.countDown()
+          check(releaseStart.await(10, TimeUnit.SECONDS)) { "the test never released the companion's start" }
+          recording.start(sessionDir, deviceId, appId)
+        }
+      }
+      CaptureSession(listOf(slowStart), options)
+    })
+    val id = sessionId("unbind-mid-start")
+    coord.startForSession(id, seller.deviceId.instanceId, TrailblazeDevicePlatform.ANDROID, videoOn)
+
+    val binding = Executors.newSingleThreadExecutor()
+    try {
+      val bound = binding.submit<Int> { coord.bindDevices(id, listOf(seller, buyer)) }
+      assertTrue(startEntered.await(10, TimeUnit.SECONDS), "the bind is inside the companion's start")
+      coord.unbindDevice(id, "buyer")
+      releaseStart.countDown()
+      assertEquals(0, bound.get(10, TimeUnit.SECONDS), "the start finds the buyer unbound")
+    } finally {
+      releaseStart.countDown()
+      binding.shutdownNow()
+    }
+    assertEquals(1, companions.getValue("video-buyer").stopCalls.get(), "its recorder was stopped as soon as it started")
+    coord.stopForSession(id)
+    assertEquals(1, companions.getValue("video-buyer").stopCalls.get(), "and is not stopped a second time at session end")
+  }
+
+  @Test
+  fun `a companion bound again after an unbind records into a new file`() {
+    val companions = linkedMapOf<String, RecordingStream>()
+    val coord = multiDeviceCoordinator(companions = companions)
+    val id = sessionId("rebind-after-unbind")
+    coord.startForSession(id, seller.deviceId.instanceId, TrailblazeDevicePlatform.ANDROID, videoOn)
+    coord.bindDevices(id, listOf(seller, buyer))
+    coord.unbindDevice(id, "buyer")
+
+    assertEquals(1, coord.bindDevices(id, listOf(seller, buyer)))
+    assertEquals(listOf("video-buyer", "video-buyer-2"), companions.keys.toList(), "the first stretch of footage is not truncated by the second")
+    coord.stopForSession(id)
+
+    assertEquals(
+      setOf("video-buyer.webm", "video-buyer-2.webm"),
+      metadataEntries(id).filter { it["deviceName"] == "buyer" }.mapNotNull { it["filename"] }.toSet(),
+      "both stretches of the buyer's footage are on record",
+    )
+  }
+
+  @Test
+  fun `a companion whose unbind finishes after the session ended is still on record`() {
+    val stopEntered = CountDownLatch(1)
+    val releaseStop = CountDownLatch(1)
+    val coord = multiDeviceCoordinator(companionFactory = { options, _, basename ->
+      val recording = RecordingStream(basename)
+      val slowStop = object : CaptureStream by recording {
+        override fun stop(options: CaptureOptions): CaptureArtifact? {
+          stopEntered.countDown()
+          check(releaseStop.await(10, TimeUnit.SECONDS)) { "the test never released the companion's stop" }
+          return recording.stop(options)
+        }
+      }
+      CaptureSession(listOf(slowStop), options)
+    })
+    val id = sessionId("late-unbind")
+    coord.startForSession(id, seller.deviceId.instanceId, TrailblazeDevicePlatform.ANDROID, videoOn)
+    coord.bindDevices(id, listOf(seller, buyer))
+
+    val unbinding = Executors.newSingleThreadExecutor()
+    try {
+      val unbound = unbinding.submit<Boolean> { coord.unbindDevice(id, "buyer") }
+      assertTrue(stopEntered.await(10, TimeUnit.SECONDS), "the unbind is inside the companion's stop")
+      // The session ends while the buyer is still stopping: the metadata goes out without it.
+      assertTrue(coord.stopForSession(id))
+      assertEquals(listOf("video.webm"), metadataEntries(id).map { it.getValue("filename") })
+
+      releaseStop.countDown()
+      assertTrue(unbound.get(10, TimeUnit.SECONDS))
+    } finally {
+      releaseStop.countDown()
+      unbinding.shutdownNow()
+    }
+    assertEquals(
+      setOf("video.webm", "video-buyer.webm"),
+      metadataEntries(id).map { it.getValue("filename") }.toSet(),
+      "the late recording is added once its stop finishes",
+    )
+  }
+
+  @Test
+  fun `a companion whose recorder fails to start is dropped without taking the session down`() {
+    val coord = multiDeviceCoordinator(companionFactory = { options, _, _ ->
+      CaptureSession(listOf(FakeStream(throwOnStart = true)), options)
+    })
+    val id = sessionId("companion-start-fails")
+    coord.startForSession(id, seller.deviceId.instanceId, TrailblazeDevicePlatform.ANDROID, videoOn)
+    // CaptureSession.startAll swallows per-stream failures, so this exercises the path where the
+    // companion starts "successfully" but records nothing; the session still ends cleanly with
+    // only the start device on record.
+    coord.bindDevices(id, listOf(seller, buyer))
+    assertTrue(coord.stopForSession(id))
+    assertEquals(listOf("video.webm"), metadataEntries(id).map { it.getValue("filename") })
   }
 }

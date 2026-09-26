@@ -260,7 +260,7 @@ class PlaywrightNativeHostDriverDescriptor : HostDriverDescriptor {
       onProgressMessage("Test execution completed successfully")
 
       if (runYamlRequest.config.sendSessionEndLog) {
-        playwrightTest.loggingRule.captureFinalScreenshot(session, playwrightTest.browserManager::getScreenState)
+        playwrightTest.loggingRule.captureFinalScreenshot(session, playwrightTest.browserManager::captureScreenStateForRecord)
         playwrightTest.loggingRule.endSession(session, isSuccess = true)
       }
 

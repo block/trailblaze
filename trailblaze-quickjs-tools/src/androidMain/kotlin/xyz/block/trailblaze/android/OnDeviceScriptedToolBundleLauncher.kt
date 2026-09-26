@@ -74,10 +74,7 @@ object OnDeviceScriptedToolBundleLauncher {
     // Assets, or a directory a host pushed bundles into? Decided once per session start, from the
     // signed target config and whether this process is instrumented at all. The reason is logged
     // either way — "which tools did this run actually load" is otherwise unanswerable from a report.
-    val runtimeSource = RuntimeToolSource.resolve(
-      underInstrumentation = isUnderInstrumentation(),
-      targetOptedIn = target?.allowsRuntimeToolSource == true,
-    )
+    val runtimeSource = runtimeSourceFor(target)
     when (runtimeSource) {
       is RuntimeToolSource.Decision.Honored -> Console.log(
         "[ondevice-scripted] runtime tool source ENABLED at '${runtimeSource.directory}' — a bundle " +
@@ -150,6 +147,24 @@ object OnDeviceScriptedToolBundleLauncher {
       engineExtension = engineExtension,
     )
   }
+
+  /**
+   * True when [target]'s sessions may load bundles a host pushed onto the device. Those can be
+   * replaced between two dispatches of one session; bundles read from this APK's assets cannot.
+   */
+  fun readsPushedBundles(target: TrailblazeHostAppTarget?): Boolean =
+    runtimeSourceFor(target) is RuntimeToolSource.Decision.Honored
+
+  /**
+   * The one decision on whether [target]'s bundles may come from the pushed directory. [launchAll]
+   * and [readsPushedBundles] must never disagree: if the launch read pushed bundles while the reuse
+   * gate believed it read assets, a session would keep one pushed bundle for its whole life.
+   */
+  private fun runtimeSourceFor(target: TrailblazeHostAppTarget?): RuntimeToolSource.Decision =
+    RuntimeToolSource.resolve(
+      underInstrumentation = isUnderInstrumentation(),
+      targetOptedIn = target?.allowsRuntimeToolSource == true,
+    )
 
   /** Probe an asset's presence without reading it fully — open + immediately close. */
   private fun assetExists(assetManager: AssetManager, assetPath: String): Boolean {

@@ -96,6 +96,27 @@ A run that starts while another is still going shares its recording, so both ses
 hold both runs' spans. The alternative was worse: a second run clearing the recorder would delete
 what the first had buffered.
 
+## Profiling CLI commands
+
+A `trailblaze tool`, `snapshot` or `ask` call that the daemon runs records into its session's
+`trace.json` too. Each command is one span named after it (`tool`, `snapshot`, `ask`) in the `cli`
+category — `trailblaze profile` labels it `cli.tool` — containing the phases the CLI spends
+before and around the device work: connecting to the daemon, binding the device, the MCP call,
+and inside it the pre-action capture, the tool and the settled-screen summary. A session
+never ends on its own, so each command merges its spans into the file as it returns, and a run of
+calls builds up one timeline:
+
+```bash
+trailblaze tool tapOnElementBySelector -s "Open Settings" ...
+trailblaze session info        # Path: the session's log directory
+trailblaze profile --open      # or load that directory's trace.json into Perfetto
+```
+
+The time before the daemon receives the command — the launcher and its HTTP forward — is not
+in the trace, so compare the command's span with its wall time to see it. A command that runs
+while a trail run is recording shares that run's recording: what it records before the run ends
+goes into the run's `trace.json`, and the rest into the CLI session's.
+
 ## Choosing how much to record
 
 A run records at one of three levels, set by `TRAILBLAZE_TRACE_LEVEL` (or

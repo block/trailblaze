@@ -25,7 +25,7 @@ dependencies {
   // Cross-host Compose Desktop bundling
   // --------------------------------------------------------------------------
   // `compose.desktop.currentOs` above resolves to whatever the *build* host is
-  // (`desktop-jvm-macos-arm64` on a Mac Runway agent, `desktop-jvm-linux-x64`
+  // (`desktop-jvm-macos-arm64` on a Mac CI agent, `desktop-jvm-linux-x64`
   // on a Linux CI worker, etc.). That's fine for compiling Compose code, but
   // it means the uber JAR built on host A is only runnable on host A —
   // which broke real downstream consumers when the macOS-built JAR was run on

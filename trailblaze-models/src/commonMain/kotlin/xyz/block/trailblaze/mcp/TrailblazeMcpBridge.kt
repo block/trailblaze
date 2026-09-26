@@ -33,12 +33,31 @@ sealed interface RunYamlBlockingResult {
   data object NotImplemented : RunYamlBlockingResult
 }
 
+/** One device of an MCP session's named cast, for [TrailblazeMcpBridge.setBoundDeviceRoster]. */
+data class BoundDeviceRosterMember(
+  /** The name the cast bound the device under — `seller`, `buyer`. */
+  val name: String,
+  val trailblazeDeviceId: TrailblazeDeviceId,
+  /** The target id the device resolves against, when one is known; recorders that scope to an app read it. */
+  val targetId: String?,
+)
+
 /**
  * Bridges functions between the Trailblaze Device Manager and the MCP Server
  */
 interface TrailblazeMcpBridge {
   suspend fun selectDevice(trailblazeDeviceId: TrailblazeDeviceId): TrailblazeConnectedDeviceSummary
   suspend fun getAvailableDevices(): Set<TrailblazeConnectedDeviceSummary>
+
+  /**
+   * The driver [trailblazeDeviceId] runs with, as [getAvailableDevices] reports it, or null when the
+   * device isn't among them. An implementation that remembers its last device scan may answer from
+   * it: a bound device's driver doesn't change between calls, and a fresh scan costs a round trip to
+   * every attached device. A device that has since disconnected may then still get an answer; the
+   * call that uses it fails on the device instead.
+   */
+  suspend fun getDeviceDriverType(trailblazeDeviceId: TrailblazeDeviceId): TrailblazeDriverType? =
+    getAvailableDevices().firstOrNull { it.trailblazeDeviceId == trailblazeDeviceId }?.trailblazeDriverType
 
   /**
    * The app IDs installed on the connected device, probed on demand.
@@ -177,10 +196,9 @@ interface TrailblazeMcpBridge {
    * @param includeScreenshot Whether to include screenshot bytes
    * @param screenshotScalingConfig Configuration for scaling/compressing screenshots on-device
    *                                before transfer. Scaling on-device saves bandwidth and tokens.
-   * @param includeAnnotatedScreenshot Whether to render and include the set-of-mark annotated
-   *                                   screenshot. Defaults to true for backward compatibility;
-   *                                   non-LLM callers should explicitly pass false to save CPU,
-   *                                   memory, and bandwidth.
+   * @param includeAnnotatedScreenshot Whether the device should render the set-of-mark annotated
+   *                                   screenshot. Default false: only an LLM prompt reads it, and
+   *                                   the host draws it on first read when the device didn't.
    * @param includeAllElements Whether the on-device agent should skip its accessibility
    *                           importance filter and return every node. Defaults to false to
    *                           keep the default response small; set true for `--all` /
@@ -190,7 +208,7 @@ interface TrailblazeMcpBridge {
   suspend fun getScreenStateViaRpc(
     includeScreenshot: Boolean = true,
     screenshotScalingConfig: ScreenshotScalingConfig = EffectiveScreenshotScalingConfig.effective,
-    includeAnnotatedScreenshot: Boolean = true,
+    includeAnnotatedScreenshot: Boolean = false,
     includeAllElements: Boolean = false,
   ): GetScreenStateResponse? = null
 
@@ -309,6 +327,17 @@ interface TrailblazeMcpBridge {
    * Default impl returns null for test stubs.
    */
   fun getTargetForSession(sessionId: SessionId): String? = null
+
+  /**
+   * Declares the named cast the MCP session [rosterId] has bound — every `device(action=BIND)`
+   * name in bind order, with the target each resolves against — so the host runs ONE Trailblaze
+   * session for the whole cast and records every device in it. Called again whenever the cast
+   * changes (bind, unbind, rename, a replacing connect); an empty [members] dissolves it.
+   *
+   * @return the Trailblaze session the cast shares right now, or null when no member has opened
+   *   one yet. Default impl is a no-op so test stubs don't need to override.
+   */
+  fun setBoundDeviceRoster(rosterId: String, members: List<BoundDeviceRosterMember>): SessionId? = null
 
   /**
    * Returns the configured driver type for the given platform from the app settings.

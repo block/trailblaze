@@ -2771,6 +2771,65 @@ class ToolDiscoveryToolSetTest {
   }
 
   @Test
+  fun `INDEX mode with target=default reports the default target and lists the selected one as another target`() = runTest {
+    // `trailblaze toolbox --target default` printed the daemon's selected target ("prompted
+    // (Android)") under a "default (android)" banner, and left the selected target out of
+    // "Other targets" — so the listing looked like the selected target's tools.
+    val promptedTarget =
+      PromptedTestTarget(id = "prompted", displayName = "Prompted", prompt = "Test prompt.")
+    val toolSet = createToolSet(
+      allTargets = setOf(promptedTarget),
+      currentTarget = promptedTarget,
+      currentDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+    )
+
+    val obj = json.parseToJsonElement(toolSet.toolbox(target = "default")).jsonObject
+
+    assertEquals("default", obj["currentTarget"]?.jsonPrimitive?.contentOrNull)
+    val others = obj["otherTargets"]?.jsonArray?.map { it.jsonObject["name"]?.jsonPrimitive?.contentOrNull }
+    assertEquals(listOf("prompted"), others)
+  }
+
+  @Test
+  fun `INDEX mode with target=default ignores the selected target's excluded tools`() = runTest {
+    // The listing is labeled `default`, so it must not be filtered by what the selected target hides.
+    val defaultTarget = MixedNoneTarget(classTools = emptySet(), yamlNames = setOf(ToolName("pressBack")))
+    val selected = TargetWithYamlExclusion()
+    val toolSet = createToolSet(
+      allTargets = setOf(defaultTarget, selected),
+      currentTarget = selected,
+      currentDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+    )
+
+    val obj = json.parseToJsonElement(toolSet.toolbox(target = "default")).jsonObject
+    val tools = obj["platformToolsets"]!!.jsonArray.flatMap { group ->
+      group.jsonObject["tools"]!!.jsonArray.map { it.jsonPrimitive.content }
+    }
+
+    assertContains(tools, "pressBack", "The selected target excludes pressBack; the default listing must not. Got: $tools")
+  }
+
+  @Test
+  fun `INDEX mode with target=default applies the loaded default target's own excluded tools`() = runTest {
+    // A YAML-backed `default` target that declares `excluded_tools` must have them honored.
+    val defaultTarget = YamlExcludingNoneTarget()
+    val selected = PromptedTestTarget(id = "prompted", displayName = "Prompted", prompt = "Test prompt.")
+    val toolSet = createToolSet(
+      allTargets = setOf(defaultTarget, selected),
+      currentTarget = selected,
+      currentDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+    )
+
+    val obj = json.parseToJsonElement(toolSet.toolbox(target = "default")).jsonObject
+    val tools = obj["platformToolsets"]!!.jsonArray.flatMap { group ->
+      group.jsonObject["tools"]!!.jsonArray.map { it.jsonPrimitive.content }
+    }
+
+    assertContains(tools, "eraseText", "Expected the default target's other tools. Got: $tools")
+    assertFalse("pressBack" in tools, "The default target excludes pressBack. Got: $tools")
+  }
+
+  @Test
   fun `TARGET mode populates systemPrompt for non-default target`() = runTest {
     val promptedTarget =
       PromptedTestTarget(id = "prompted", displayName = "Prompted", prompt = "Target-mode prompt.")

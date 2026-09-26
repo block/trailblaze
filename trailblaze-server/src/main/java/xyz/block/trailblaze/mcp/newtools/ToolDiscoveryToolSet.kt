@@ -212,7 +212,15 @@ class ToolDiscoveryToolSet(
     logIfDriverWasOverridden(currentDriverType, platformFilter, effectiveDriverType)
     val allTargets = allTargetAppsProvider()
 
-    val excludedToolNames = getExcludedToolNames(currentTarget, effectiveDriverType)
+    // A platform-only listing (explicit `target="default"`) is scoped to the default target, not the
+    // daemon's selected one: filter and report it that way, and list the selected target among the others.
+    // Prefer the loaded default target (e.g. `default.yaml`) so its own `excluded_tools` apply.
+    val listedTarget = if (suppressTargetTools) {
+      allTargets.find { it.id == DefaultTrailblazeHostAppTarget.id } ?: DefaultTrailblazeHostAppTarget
+    } else {
+      currentTarget
+    }
+    val excludedToolNames = getExcludedToolNames(listedTarget, effectiveDriverType)
     val platformToolsets = buildPlatformToolsets(detail, excludedToolNames, effectiveDriverType, catalog)
     val targetToolsets =
       if (suppressTargetTools) null else buildTargetToolsets(currentTarget, effectiveDriverType, detail, catalog)
@@ -221,7 +229,7 @@ class ToolDiscoveryToolSet(
     // Detail mode lists every target's tools inline, so the hint is only needed when that
     // listing came back empty (legacy behavior).
     val otherTargets = if (targetToolsets == null || !includeAllTargetsInIndex(detail)) {
-      buildOtherTargets(currentTarget, allTargets)
+      buildOtherTargets(listedTarget, allTargets)
     } else {
       null
     }
@@ -235,7 +243,7 @@ class ToolDiscoveryToolSet(
       computeRoleNames(platformToolsets, targetToolsets, target = currentTarget)
 
     val result = ToolDiscoveryIndexResult(
-      currentTarget = currentTarget?.id,
+      currentTarget = listedTarget?.id,
       currentPlatform = effectivePlatform?.displayName,
       currentDriverType = effectiveDriverType?.yamlKey,
       // Skip the system prompt when the caller explicitly asked for the "default" sentinel

@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.host
 
 import java.io.File
+import xyz.block.trailblaze.host.util.BufferedImageUtils
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
@@ -294,7 +295,7 @@ class HostOnDeviceRpcTrailblazeAgent(
     // Before any of the screenshot-source branching below, which can return early.
     onScreenStateObserved(data)
     val base = TrailblazeTracer.traceDetail("adaptScreenState", SCREEN_STATE_TRACE_CAT) {
-      RpcScreenStateAdapter.from(data)
+      RpcScreenStateAdapter.from(data, BufferedImageUtils::encodeLikeCaptures)
     }
     if (!includeScreenshot || streamScreenshotMode == StreamScreenshotMode.OFF) return base
 
@@ -369,7 +370,7 @@ class HostOnDeviceRpcTrailblazeAgent(
     val request = GetScreenStateRequest(includeScreenshot = true)
       .withScreenshotScalingConfig(EffectiveScreenshotScalingConfig.effective)
     return when (val result = rpcClient.rpcCall(request)) {
-      is RpcResult.Success -> RpcScreenStateAdapter.from(result.data)
+      is RpcResult.Success -> RpcScreenStateAdapter.from(result.data, BufferedImageUtils::encodeLikeCaptures)
       is RpcResult.Failure -> {
         Console.log("[stream-screenshot] fallback re-capture failed: ${result.message}")
         null

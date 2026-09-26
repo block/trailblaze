@@ -15,7 +15,9 @@ import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDevicePort
 import xyz.block.trailblaze.devices.WebInstanceIds
 import xyz.block.trailblaze.host.devices.HostDriverPortUtils
+import xyz.block.trailblaze.logs.server.endpoints.CliStatusResponse
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
+import xyz.block.trailblaze.tracing.TrailblazeTracer
 import xyz.block.trailblaze.util.Console
 import java.io.File
 import java.nio.file.Path
@@ -1571,7 +1573,7 @@ fun cliReusableWithDevice(
   verb: String = "Command",
   action: suspend (CliMcpClient) -> Int,
 ): Int = quietUnlessVerbose(verbose) {
-  val config = CliConfigHelper.getOrCreateConfig()
+  val config = TrailblazeTracer.trace("config", CliCommandTrace.CATEGORY) { CliConfigHelper.getOrCreateConfig() }
   val port = CliConfigHelper.resolveEffectiveHttpPort()
   // Single helper resolves the (payload, pin, isClearRequest) shape so this
   // wrapper and SessionStartCommand stay in lockstep. The helper covers:
@@ -1596,20 +1598,27 @@ fun cliReusableWithDevice(
     // has already emitted the appropriate envelope; we exit with the right code
     // per [TrailblazeExitCode] policy (MISUSE for 0/multiple-devices,
     // INFRA_FAILED for daemon-unreachable / list-call-threw).
-    val resolvedDevice = when (val r = resolveDeviceWithAutodetect(flag = device, port = port, verb = verb)) {
+    val resolution = TrailblazeTracer.traceSuspend("resolveDevice", CliCommandTrace.CATEGORY) {
+      resolveDeviceWithAutodetect(flag = device, port = port, verb = verb)
+    }
+    val resolvedDevice = when (val r = resolution) {
       is DeviceResolution.Resolved -> r.deviceSpec
       else -> return@runBlocking r.exitCodeFallback()
     }
     val sessionScope = cliDeviceSessionScope(resolvedDevice)
 
-    val mcpClient = connectOrStartDaemonReusable(
-      port,
-      targetAppId = effectiveTarget,
-      sessionScope = sessionScope,
-    ) ?: return@runBlocking INFRA_FAILED.code
+    val mcpClient = TrailblazeTracer.traceSuspend("connect", CliCommandTrace.CATEGORY) {
+      connectOrStartDaemonReusable(
+        port,
+        targetAppId = effectiveTarget,
+        sessionScope = sessionScope,
+      )
+    } ?: return@runBlocking INFRA_FAILED.code
 
     mcpClient.use { client ->
-      val deviceError = client.ensureDevice(resolvedDevice, webHeadless = webHeadless)
+      val deviceError = TrailblazeTracer.traceSuspend("ensureDevice", CliCommandTrace.CATEGORY) {
+        client.ensureDevice(resolvedDevice, webHeadless = webHeadless)
+      }
       if (deviceError != null) {
         reportCliError(
           verb = "Device bind",
@@ -1675,7 +1684,9 @@ fun cliReusableWithDevice(
       // action fails partway — the recorded steps still belong to this
       // session.
       writeLastCliSessionScope(port, sessionScope)
-      runActionWithIoEnvelope(target = resolvedDevice, verb = verb, action = { action(client) })
+      TrailblazeTracer.traceSuspend("action", CliCommandTrace.CATEGORY) {
+        runActionWithIoEnvelope(target = resolvedDevice, verb = verb, action = { action(client) })
+      }
     }
   }
 }
@@ -1764,13 +1775,12 @@ internal suspend fun connectOrStartDaemonOneShot(
   onStarved: (String) -> Unit = ::reportDaemonStarved,
 ): CliMcpClient? {
   requireConnectablePort(port)
-  if (!checkAndRestartStaleDaemon(port)) {
+  if (!checkDaemonBeforeConnect(port)) {
     reportDaemonUnreachable(
       "stale daemon (wrong version) did not stop on shutdown request",
     )
     return null
   }
-  warnIfWorkspaceMismatch(port)
 
   return try {
     CliMcpClient.connectOneShot(port)
@@ -1817,20 +1827,21 @@ internal suspend fun connectOrStartDaemonReusable(
   sessionScope: String? = null,
 ): CliMcpClient? {
   requireConnectablePort(port)
-  if (!checkAndRestartStaleDaemon(port)) {
+  if (!checkDaemonBeforeConnect(port)) {
     reportDaemonUnreachable(
       "stale daemon (wrong version) did not stop on shutdown request",
     )
     return null
   }
-  warnIfWorkspaceMismatch(port)
 
   return try {
-    CliMcpClient.connectReusable(
-      port = port,
-      targetAppId = targetAppId,
-      sessionScope = sessionScope,
-    )
+    TrailblazeTracer.traceSuspend("mcpSession", CliCommandTrace.CATEGORY) {
+      CliMcpClient.connectReusable(
+        port = port,
+        targetAppId = targetAppId,
+        sessionScope = sessionScope,
+      )
+    }
   } catch (e: CliMcpClient.DaemonStarvedException) {
     // The daemon is up and holding the saved session; it just did not answer the liveness probe
     // in time. The recovery below (clear the scope, auto-start, reconnect) would orphan that
@@ -1870,7 +1881,78 @@ internal suspend fun connectOrStartDaemonReusable(
 }
 
 /**
- * Warn if the running daemon's workspace anchor differs from the cwd-resolved one.
+ * The checks a command makes on the daemon at [port] before opening its MCP session: restart it if
+ * it runs another version, then warn if it serves another workspace than the caller's.
+ *
+ * A command forwarded through `/cli/exec` runs inside the daemon it connects to. Its version is this
+ * process's version, and its workspace is what this process loaded, so both are read here: over HTTP,
+ * each status request also scans every attached device. A separate process fetches the status once
+ * and uses it for both checks.
+ *
+ * @return false if a stale daemon would not stop, so the caller must not connect.
+ */
+internal fun checkDaemonBeforeConnect(
+  port: Int,
+  fetchStatus: (Int) -> CliStatusResponse? = ::fetchDaemonStatus,
+  thisDaemon: () -> DaemonWorkspace = DaemonWorkspace::ofThisProcess,
+  warn: (WorkspaceMismatch) -> Unit = ::warnWorkspaceMismatch,
+): Boolean {
+  if (CliCallerContext.isServedBy(port)) {
+    TrailblazeTracer.trace("workspaceCheck", CliCommandTrace.CATEGORY) {
+      findWorkspaceMismatch(thisDaemon(), CliCallerContext.callerCwd())?.let(warn)
+    }
+    return true
+  }
+  val status = TrailblazeTracer.trace("daemonStatus", CliCommandTrace.CATEGORY) { fetchStatus(port) }
+  when (TrailblazeTracer.trace("versionCheck", CliCommandTrace.CATEGORY) { restartIfStale(port, status) }) {
+    StaleDaemonOutcome.STUCK -> return false
+    // The next connect starts a fresh daemon from the caller's directory, so there is nothing to compare.
+    StaleDaemonOutcome.RESTARTED -> return true
+    StaleDaemonOutcome.KEPT -> Unit
+  }
+  // No status means no daemon: the caller is about to start one from its own directory.
+  status ?: return true
+  TrailblazeTracer.trace("workspaceCheck", CliCommandTrace.CATEGORY) {
+    findWorkspaceMismatch(
+      DaemonWorkspace(status.workspaceAnchor, status.workspaceContentHash),
+      CliCallerContext.callerCwd(),
+    )?.let(warn)
+  }
+  return true
+}
+
+private fun fetchDaemonStatus(port: Int): CliStatusResponse? = try {
+  DaemonClient(port = port).use { it.getStatusBlocking() }
+} catch (_: Exception) {
+  null
+}
+
+/** The workspace a daemon loaded: its anchor file and the content hash captured at startup. */
+internal data class DaemonWorkspace(val anchor: String?, val contentHash: String?) {
+  companion object {
+    /** This process's workspace, read the way the status endpoint reports it. */
+    fun ofThisProcess(): DaemonWorkspace = DaemonWorkspace(
+      anchor = try {
+        TrailblazeWorkspaceConfigResolver.resolveConfigFile(Paths.get(""))?.absolutePath
+      } catch (_: Exception) {
+        null
+      },
+      contentHash = WorkspaceContentHasher.lastCapturedHash,
+    )
+  }
+}
+
+/** Why a daemon's workspace is not the one the caller is standing in. */
+internal sealed interface WorkspaceMismatch {
+  /** The daemon loaded another workspace. */
+  data class Anchor(val daemonAnchor: String, val callerAnchor: String) : WorkspaceMismatch
+
+  /** Same workspace, edited since the daemon loaded it. */
+  data class Drift(val anchor: String) : WorkspaceMismatch
+}
+
+/**
+ * Compares the [daemon]'s workspace with the one [callerDir] resolves to.
  *
  * The daemon resolves its workspace once at startup based on the cwd it was launched
  * from. Subsequent CLI invocations connect to that same daemon regardless of where
@@ -1879,45 +1961,41 @@ internal suspend fun connectOrStartDaemonReusable(
  * results that look correct but reference a different workspace.
  *
  * Auto-restarting on mismatch would be worse — it'd kill any in-flight runs another
- * shell started in project A. So we surface the mismatch as a prominent banner and
- * let the user decide. The diff (targets only-in-cwd vs only-in-daemon) tells them
+ * shell started in project A. So the mismatch is surfaced as a prominent banner and
+ * the user decides. The diff (targets only-in-cwd vs only-in-daemon) tells them
  * exactly what they'd gain or lose by restarting.
  *
- * Silently no-ops in two scenarios:
- *  - Daemon isn't running: caller is about to auto-start it with the current cwd, so
- *    by definition no mismatch can exist.
- *  - Either side is in scratch mode (no `trails/config/trailblaze.yaml` discovered):
- *    workspace mismatch is undefined when there's no workspace.
+ * Null when either side is in scratch mode (no `trails/config/trailblaze.yaml` discovered):
+ * workspace mismatch is undefined when there's no workspace.
  */
-private fun warnIfWorkspaceMismatch(port: Int) {
-  val status = try {
-    DaemonClient(port = port).use { it.getStatusBlocking() }
+internal fun findWorkspaceMismatch(
+  daemon: DaemonWorkspace,
+  callerDir: Path,
+  contentHashOf: (File) -> String? = ::computeCwdContentHash,
+): WorkspaceMismatch? {
+  val daemonAnchor = daemon.anchor ?: return null
+  val callerAnchor = try {
+    TrailblazeWorkspaceConfigResolver.resolveConfigFile(callerDir)?.absolutePath
   } catch (_: Exception) {
-    return
-  } ?: return
-  val daemonAnchor = status.workspaceAnchor ?: return // daemon scratch mode
-
-  val cwdAnchor = try {
-    TrailblazeWorkspaceConfigResolver.resolveConfigFile(Paths.get(""))?.absolutePath
-  } catch (_: Exception) {
-    return
-  } ?: return // cwd scratch mode
+    null
+  } ?: return null
 
   // Canonicalize both sides so symlinked clones don't trigger spurious warnings.
-  val daemonReal = canonicalize(daemonAnchor)
-  val cwdReal = canonicalize(cwdAnchor)
-
-  if (daemonReal != cwdReal) {
-    warnAnchorMismatch(daemonAnchor, cwdAnchor)
-    return
+  if (canonicalize(daemonAnchor) != canonicalize(callerAnchor)) {
+    return WorkspaceMismatch.Anchor(daemonAnchor, callerAnchor)
   }
 
   // Same anchor — check for content drift (user edited a trailmap.yaml since the daemon
   // started, daemon still running on stale dist output).
-  val daemonHash = status.workspaceContentHash ?: return
-  val cwdHash = computeCwdContentHash(File(cwdAnchor)) ?: return
-  if (daemonHash != cwdHash) {
-    warnContentDrift(cwdAnchor)
+  val daemonHash = daemon.contentHash ?: return null
+  val callerHash = contentHashOf(File(callerAnchor)) ?: return null
+  return if (daemonHash != callerHash) WorkspaceMismatch.Drift(callerAnchor) else null
+}
+
+private fun warnWorkspaceMismatch(mismatch: WorkspaceMismatch) {
+  when (mismatch) {
+    is WorkspaceMismatch.Anchor -> warnAnchorMismatch(mismatch.daemonAnchor, mismatch.callerAnchor)
+    is WorkspaceMismatch.Drift -> warnContentDrift(mismatch.anchor)
   }
 }
 
@@ -2082,6 +2160,18 @@ internal fun staleDaemonAction(
   return if (activeRuns > 0) StaleDaemonAction.KEEP_BUSY else StaleDaemonAction.RESTART
 }
 
+/** What [restartIfStale] did about the daemon's version. */
+internal enum class StaleDaemonOutcome {
+  /** Nothing to restart, or a busy daemon left running. */
+  KEPT,
+
+  /** The daemon ran another version and has stopped. */
+  RESTARTED,
+
+  /** The daemon ran another version and did not stop, so the port is still held by it. */
+  STUCK,
+}
+
 /**
  * Check if the running daemon has a different version than the CLI.
  * If so, stop it so it gets restarted with the current version.
@@ -2090,45 +2180,51 @@ internal fun staleDaemonAction(
  *         false if a stale daemon could not be stopped.
  */
 private fun checkAndRestartStaleDaemon(port: Int): Boolean {
-  val cliVersion = TrailblazeVersion.displayVersion
-  if (cliVersion == "Developer Build") return true // Can't compare dev builds
+  if (TrailblazeVersion.displayVersion == "Developer Build") return true // Can't compare dev builds
+  return restartIfStale(port, fetchDaemonStatus(port)) != StaleDaemonOutcome.STUCK
+}
 
-  try {
-    DaemonClient(port = port).use { daemon ->
-      val status = daemon.getStatusBlocking() ?: return true
-      val daemonVersion = status.version
-      when (staleDaemonAction(cliVersion, daemonVersion, status.activeRuns)) {
-        StaleDaemonAction.KEEP_OK -> return true
-        StaleDaemonAction.KEEP_BUSY -> {
-          // Console.info (not Console.log) so the developer actually sees WHY their newer
-          // CLI is talking to an older daemon — this line is the only explanation, and
-          // Console.log is suppressed in CLI quiet mode.
-          Console.info(
-            "Daemon version mismatch (daemon=$daemonVersion, cli=$cliVersion) but it has " +
-              "${status.activeRuns} in-flight run(s) — leaving it running; it restarts once idle:" +
-              status.activeRunSummaries.joinToString("") { "\n  - $it" },
-          )
-          return true
-        }
-        StaleDaemonAction.RESTART -> {
-          Console.log(
-            "Restarting daemon (version mismatch: daemon=$daemonVersion, cli=$cliVersion)..."
-          )
+/** Stops the daemon on [port] if [status] says it runs another version than the CLI. */
+private fun restartIfStale(port: Int, status: CliStatusResponse?): StaleDaemonOutcome {
+  val cliVersion = TrailblazeVersion.displayVersion
+  if (cliVersion == "Developer Build") return StaleDaemonOutcome.KEPT // Can't compare dev builds
+  status ?: return StaleDaemonOutcome.KEPT // Not running: the connect-or-start helpers handle it
+
+  val daemonVersion = status.version
+  return when (staleDaemonAction(cliVersion, daemonVersion, status.activeRuns)) {
+    StaleDaemonAction.KEEP_OK -> StaleDaemonOutcome.KEPT
+    StaleDaemonAction.KEEP_BUSY -> {
+      // Console.info (not Console.log) so the developer actually sees WHY their newer
+      // CLI is talking to an older daemon — this line is the only explanation, and
+      // Console.log is suppressed in CLI quiet mode.
+      Console.info(
+        "Daemon version mismatch (daemon=$daemonVersion, cli=$cliVersion) but it has " +
+          "${status.activeRuns} in-flight run(s) — leaving it running; it restarts once idle:" +
+          status.activeRunSummaries.joinToString("") { "\n  - $it" },
+      )
+      StaleDaemonOutcome.KEPT
+    }
+    StaleDaemonAction.RESTART -> {
+      Console.log(
+        "Restarting daemon (version mismatch: daemon=$daemonVersion, cli=$cliVersion)..."
+      )
+      try {
+        DaemonClient(port = port).use { daemon ->
           daemon.shutdownBlocking()
           // Wait for daemon to stop
           repeat(20) {
-            if (!daemon.isRunningBlocking()) return true
+            if (!daemon.isRunningBlocking()) return StaleDaemonOutcome.RESTARTED
             Thread.sleep(500)
           }
-          // Timed out — stale daemon is still running
-          return false
         }
+        // Timed out — stale daemon is still running
+        StaleDaemonOutcome.STUCK
+      } catch (_: Exception) {
+        // It went away mid-request, which is what the shutdown asked for.
+        StaleDaemonOutcome.RESTARTED
       }
     }
-  } catch (_: Exception) {
-    // Daemon not running or status check failed — will be handled by the connect-or-start helpers
   }
-  return true
 }
 
 /** What [cliTryStartDaemon] did, so the caller knows whether a (re)connect is worth attempting. */

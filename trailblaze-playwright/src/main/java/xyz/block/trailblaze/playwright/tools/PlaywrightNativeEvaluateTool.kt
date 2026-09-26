@@ -46,6 +46,11 @@ data class PlaywrightNativeEvaluateTool(
   val script: String,
 ) : PlaywrightExecutableTool {
 
+  // Callers read, tag or poll the page with this, often in a loop; the gesture settle would add
+  // at least 500ms to every call. So a script must not navigate — nothing would wait for the
+  // new page. Navigate with `web_navigate`, or click with `web_click`, which both settle.
+  override val awaitsSettle: Boolean get() = false
+
   override suspend fun executeWithPlaywright(
     page: Page,
     context: TrailblazeToolExecutionContext,

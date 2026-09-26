@@ -1,6 +1,6 @@
 // Runtime tests for the `client.tools` Proxy + the reserved-property guard. Run via
 // `bun test` from this directory. The test runner is `bun:test` (built into Bun) rather
-// than a separate framework — the SDK is consumed via Bun in production and the runway CI
+// than a separate framework — the SDK is consumed via Bun in production and the CI
 // step already has Bun on the path, so adding a third-party test runner would just bloat
 // the dependency tree.
 //

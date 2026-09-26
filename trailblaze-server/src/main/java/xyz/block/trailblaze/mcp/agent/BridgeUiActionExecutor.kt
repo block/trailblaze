@@ -290,20 +290,28 @@ class BridgeUiActionExecutor(
   }
 
   /**
-   * Creates a compact screen summary of interactive elements only.
+   * Captures the current screen state and returns a compact summary of its interactive elements,
+   * or null on failure.
    *
    * When the accessibility driver's [TrailblazeNode] tree is available, uses it for
    * richer filtering: `isImportantForAccessibility`, `packageName` (skip system UI),
-   * and precise `isClickable`/`isEditable`/`isScrollable` flags.
+   * and precise `isClickable`/`isEditable`/`isScrollable` flags. Falls back to
+   * [ViewHierarchyTreeNode] for Maestro-based drivers.
    *
-   * Falls back to [ViewHierarchyTreeNode] for Maestro-based drivers.
+   * The summary is built from the element tree alone, so the capture asks for no screenshots.
+   * This is the screen every `trailblaze tool` call returns; asking for the plain and annotated
+   * screenshots made the device render, encode and ship both on every call, only to discard them.
    */
-  /** Captures the current screen state and returns a text summary, or null on failure. */
   internal suspend fun getScreenSummary(
     details: Set<SnapshotDetail> = emptySet(),
   ): String? {
     return try {
-      val screenState = captureScreenState() ?: return null
+      val screenState = ScreenStateCaptureUtil.captureScreenState(
+        mcpBridge = mcpBridge,
+        screenshotScalingConfig = screenshotScalingConfigProvider(),
+        fast = true,
+        includeAnnotatedScreenshot = false,
+      ) ?: return null
       describeScreen(screenState, details)
     } catch (e: Exception) {
       null

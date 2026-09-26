@@ -3,6 +3,7 @@ package xyz.block.trailblaze.setofmark
 import maestro.DeviceInfo
 import maestro.device.Platform
 import xyz.block.trailblaze.api.AnnotationElement
+import xyz.block.trailblaze.api.TrailblazeNode
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import java.awt.image.BufferedImage
 import java.io.ByteArrayInputStream
@@ -34,6 +35,9 @@ object SetOfMarkAnnotator {
    *   null/empty, the screenshot is returned without annotations — callers that
    *   used to rely on a `viewHierarchy` -> nodeId fallback must now produce
    *   `[refLabel]`-based annotation elements themselves.
+   * @param encode Writes the annotated image. PNG by default; a caller whose screenshot arrived
+   *   compressed passes an encoder for that format, since a PNG of the same image is several
+   *   times larger and it travels in every LLM request that carries it.
    */
   fun annotate(
     screenshotBytes: ByteArray?,
@@ -42,6 +46,7 @@ object SetOfMarkAnnotator {
     platform: TrailblazeDevicePlatform,
     deviceInfo: DeviceInfo? = null,
     annotationElements: List<AnnotationElement>? = null,
+    encode: (BufferedImage) -> ByteArray = ::encodePng,
   ): ByteArray? {
     screenshotBytes ?: return null
     if (screenshotBytes.isEmpty()) return screenshotBytes
@@ -73,19 +78,53 @@ object SetOfMarkAnnotator {
       // and the LLM contract is fully ref-based. Callers that don't supply
       // annotationElements get back the unannotated screenshot.
       if (!annotationElements.isNullOrEmpty()) {
+        val elements = if (platform == TrailblazeDevicePlatform.ANDROID && deviceInfo == null) {
+          annotationElements.scaledOnto(original.width, original.height, screenWidth, screenHeight)
+        } else {
+          annotationElements
+        }
         HostCanvasSetOfMark(imageForAnnotation, effectiveDeviceInfo)
-          .drawAnnotations(annotationElements)
+          .drawAnnotations(elements)
       }
 
-      imageForAnnotation.toPngBytes()
+      encode(imageForAnnotation)
     } catch (_: Exception) {
       screenshotBytes
     }
   }
 
-  private fun BufferedImage.toPngBytes(): ByteArray {
+  /**
+   * Android bounds are device pixels, but the screenshot may be downscaled — the on-device
+   * capture's size cap, or a stream frame — and the canvas only rescales iOS and Web. A no-op at
+   * full resolution.
+   */
+  private fun List<AnnotationElement>.scaledOnto(
+    imageWidth: Int,
+    imageHeight: Int,
+    screenWidth: Int,
+    screenHeight: Int,
+  ): List<AnnotationElement> {
+    if (screenWidth <= 0 || screenHeight <= 0) return this
+    if (imageWidth == screenWidth && imageHeight == screenHeight) return this
+    val sx = imageWidth.toDouble() / screenWidth
+    val sy = imageHeight.toDouble() / screenHeight
+    return map { element ->
+      val b = element.bounds
+      element.copy(
+        bounds = TrailblazeNode.Bounds(
+          left = (b.left * sx).toInt(),
+          top = (b.top * sy).toInt(),
+          right = (b.right * sx).toInt(),
+          bottom = (b.bottom * sy).toInt(),
+        ),
+      )
+    }
+  }
+
+  /** The default encoder for [annotate]. */
+  fun encodePng(image: BufferedImage): ByteArray {
     val baos = java.io.ByteArrayOutputStream()
-    ImageIO.write(this, "PNG", baos)
+    ImageIO.write(image, "PNG", baos)
     return baos.toByteArray()
   }
 

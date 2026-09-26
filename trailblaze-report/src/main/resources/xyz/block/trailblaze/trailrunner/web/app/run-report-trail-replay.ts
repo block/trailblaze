@@ -199,6 +199,22 @@ export function laneStateAt(lane: ReplayLane, t: number): ReplayLaneState {
   return { phase, step, capture };
 }
 
+/** What a pane's step chip reads, and which step its Open → button lands on (null: disabled). */
+export interface ReplayChip {
+  num: string;
+  label: string;
+  outcome: ReplayOutcome | null;
+  openHeaderId: number | null;
+}
+
+/**
+ * The chip for the step a lane is on. Before the lane's first step it is blank rather than holding
+ * whatever step was last shown — scrubbing back must not name a step the device had not reached.
+ */
+export const replayChipFor = (step: ReplayStep | null): ReplayChip => step
+  ? { num: step.num === 0 ? 'TRAILHEAD' : `STEP ${step.num}`, label: step.label, outcome: step.outcome, openHeaderId: step.headerId }
+  : { num: '—', label: '', outcome: null, openHeaderId: null };
+
 /**
  * Interactions still worth drawing at instant t: those that fired within `windowMs` before it. A
  * mark is an event, not a state — it has to linger to be seen at all, and linger for a span the
@@ -376,6 +392,29 @@ export function heldClipTimeAt(
   // The duration gate is the one videoClipTimeAt applies: until the browser has read the container
   // there is no frame to hold, and forcing the video on top of nothing is worse than the still.
   return heldAtStart && laneT0 != null && durationSec != null && durationSec > 0 ? 0 : null;
+}
+
+/**
+ * Which of a lane's recordings is on screen at `t`, and where in it — or null when none reaches
+ * that instant and the lane shows its captures instead.
+ *
+ * A device unbound and bound again records once per bind, so a lane can own several recordings,
+ * `clips` in capture order. The pane plays whichever one covers the lane's instant; a lane the axis
+ * holds at its start holds the FIRST recording's opening frame (see [heldClipTimeAt]).
+ */
+export function heldClipsTimeAt(
+  clips: ReadonlyArray<{ clip: { startMs: number; endMs: number }; duration: number | null }>,
+  laneT0: number | null,
+  t: number,
+  heldAtStart: boolean,
+): { index: number; at: number } | null {
+  for (let index = 0; index < clips.length; index++) {
+    const at = videoClipTimeAt(clips[index].clip, laneT0, t, clips[index].duration);
+    if (at != null) return { index, at };
+  }
+  if (!clips.length) return null;
+  const held = heldClipTimeAt(clips[0].clip, laneT0, t, clips[0].duration, heldAtStart);
+  return held != null ? { index: 0, at: held } : null;
 }
 
 // ── Aligning the clock by step ─────────────────────────────────────────────────────────────────

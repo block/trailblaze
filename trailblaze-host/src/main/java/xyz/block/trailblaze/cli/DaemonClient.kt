@@ -301,6 +301,7 @@ class DaemonClient(
             success = false,
             error =
               "Timed out waiting for run to complete: no progress for ${runPollTimeoutMs / 1000}s",
+            errorKind = CliRunResponse.ERROR_KIND_INFRA,
           )
         }
 
@@ -343,7 +344,7 @@ class DaemonClient(
                 } else {
                   "run-status returned HTTP $statusCode"
                 }
-                return CliRunResponse(success = false, error = errorMsg)
+                return CliRunResponse(success = false, error = errorMsg, errorKind = CliRunResponse.ERROR_KIND_INFRA)
               }
               if (consecutiveErrors == 0) {
                 Console.error(
@@ -356,6 +357,7 @@ class DaemonClient(
                     success = false,
                     error =
                       "Daemon unreachable after $MAX_CONSECUTIVE_POLL_ERRORS consecutive poll failures (ping also failed)",
+                    errorKind = CliRunResponse.ERROR_KIND_INFRA,
                   )
               continue // Transient 5xx, keep polling
             }
@@ -373,6 +375,7 @@ class DaemonClient(
                   success = false,
                   error =
                     "Daemon unreachable after $MAX_CONSECUTIVE_POLL_ERRORS consecutive poll failures (ping also failed)",
+                  errorKind = CliRunResponse.ERROR_KIND_INFRA,
                 )
             continue // Transient network error, keep polling
           }

@@ -148,4 +148,27 @@ class ScriptedToolBundleReuseTest {
     assertTrue(second.await(), "the second dispatch should have reused the first launch")
     assertEquals(1, launches.get(), "the session's bundles were launched more than once")
   }
+
+  @Test
+  fun `draining the device releases the retained launch whichever session holds it`() {
+    val repo = newRepo()
+    ScriptedToolBundleReuse.retain(sessionB, repo, runtime = null)
+    ScriptedToolBundleReuse.releaseAll()
+    assertFalse(ScriptedToolBundleReuse.claim(sessionB, repo))
+  }
+
+  @Test
+  fun `a dispatch that threw releases its session's launch so the next one relaunches`() {
+    assertTrue(ScriptedToolBundleReuse.releasesAfterDispatch(ownsSessionEnd = false, endedInException = true))
+  }
+
+  @Test
+  fun `a mid-session dispatch that finished or got a tool error keeps the launch`() {
+    assertFalse(ScriptedToolBundleReuse.releasesAfterDispatch(ownsSessionEnd = false, endedInException = false))
+  }
+
+  @Test
+  fun `the dispatch that owns an end of the session releases its launch`() {
+    assertTrue(ScriptedToolBundleReuse.releasesAfterDispatch(ownsSessionEnd = true, endedInException = false))
+  }
 }

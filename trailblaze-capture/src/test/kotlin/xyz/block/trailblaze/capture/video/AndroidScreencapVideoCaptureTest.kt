@@ -210,4 +210,34 @@ class AndroidScreencapVideoCaptureTest {
     const val GRID_TOLERANCE_MS = 150L
     const val DEVICE_ID = "emulator-5560"
   }
+
+  @Test
+  fun `a companion device's recording lands under its own name with its own frame scratch`() {
+    // Two screencap recorders share one session directory in a multi-device session. Each needs
+    // its own frame scratch — or the second's frames would be encoded into the first's clip — and
+    // its own output file, or the companion would overwrite the start device's recording.
+    val shade = AtomicInteger(0)
+    val capture = AndroidScreencapVideoCapture(
+      format = RecordingFormat.preferred,
+      intervalMs = 20L,
+      grabFrame = { png(shade.addAndGet(40) % 250) },
+      basename = "video-buyer",
+    )
+
+    capture.start(sessionDir, DEVICE_ID, appId = null)
+    // Read the scratch while it records: the stop clears it, so an empty directory afterwards
+    // proves nothing about where the frames went.
+    val ownScratch = File(sessionDir, ".trailblaze-screencap-frames-video-buyer")
+    assertTrue(awaitAtLeast(3) { ownScratch.listFiles()?.size ?: 0 } >= 3, "the companion's frames land in its own scratch")
+    assertEquals(0, framesOnDisk().size, "the companion never touched the start device's frame scratch")
+    val artifact = assertNotNull(capture.stop(CaptureOptions(captureVideo = true)))
+
+    assertEquals(RecordingFormat.preferred.filename("video-buyer"), artifact.file.name)
+    assertEquals(sessionDir, artifact.file.parentFile, "the companion's recording sits beside the start device's")
+    assertTrue(artifact.file.length() > 0)
+    assertTrue(
+      !File(sessionDir, RecordingFormat.preferred.canonicalFilename).exists(),
+      "the start device's recording is not the companion's to write",
+    )
+  }
 }

@@ -12,8 +12,9 @@ import io.ktor.server.routing.post
 import io.ktor.server.routing.routing
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.builtins.serializer
-import org.junit.After
-import org.junit.Before
+import java.io.IOException
+import java.net.InetAddress
+import java.net.ServerSocket
 import org.junit.Test
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
@@ -47,6 +48,7 @@ import kotlin.test.assertTrue
  */
 class OnDeviceRpcClientWedgeTest {
 
+  /** For the predicate cases, which never open a connection. See [withRpcServer] for the rest. */
   private val testDeviceId =
     TrailblazeDeviceId(
       instanceId = "test-device-ondevice-rpc-wedge",
@@ -65,34 +67,63 @@ class OnDeviceRpcClientWedgeTest {
       "inaccessible — Android internal API may have changed). Recover by restarting the " +
       "Trailblaze on-device server. Original error: UiAutomation not connected"
 
-  private val port = testDeviceId.getTrailblazeOnDeviceSpecificPort()
-
   @Volatile
   private var responseBody: String = ""
 
-  private val server =
-    embeddedServer(CIO, port = port) {
-      install(ContentNegotiation) { json(TrailblazeJsonInstance) }
-      routing {
-        post("/rpc/{path...}") {
-          // Always a 5xx so the failure routes through the HTTP-error catch arm (the raw body
-          // becomes RpcResult.Failure.details). Driving the IOException arm instead would invoke
-          // the adb-subprocess recovery, which has no device under a JVM unit test.
-          call.respondText(responseBody, ContentType.Application.Json, HttpStatusCode.InternalServerError)
+  /**
+   * Runs [block] against a server that answers every RPC with [responseBody] as a 500, passing the
+   * device id an [OnDeviceRpcClient] needs to reach it. Only the end-to-end cases start one; the
+   * predicate cases never touch the network.
+   */
+  private fun <T> withRpcServer(block: (TrailblazeDeviceId) -> T): T {
+    val deviceId = jvmScopedDeviceId()
+    val server =
+      embeddedServer(CIO, host = LOOPBACK_HOST, port = deviceId.getTrailblazeOnDeviceSpecificPort()) {
+        install(ContentNegotiation) { json(TrailblazeJsonInstance) }
+        routing {
+          post("/rpc/{path...}") {
+            // Always a 5xx so the failure routes through the HTTP-error catch arm (the raw body
+            // becomes RpcResult.Failure.details). Driving the IOException arm instead would invoke
+            // the adb-subprocess recovery, which has no device under a JVM unit test.
+            call.respondText(responseBody, ContentType.Application.Json, HttpStatusCode.InternalServerError)
+          }
         }
       }
-    }
-
-  @Before
-  fun setUp() {
+    // start() throws on a failed bind, so the resolve only waits for a bind that landed.
     server.start(wait = false)
-    Thread.sleep(300)
+    return try {
+      runBlocking { server.engine.resolvedConnectors() }
+      block(deviceId)
+    } finally {
+      server.stop(gracePeriodMillis = 0, timeoutMillis = 500)
+    }
   }
 
-  @After
-  fun tearDown() {
-    server.stop(gracePeriodMillis = 0, timeoutMillis = 500)
+  /**
+   * The client derives its port by hashing the device id, so a hardcoded id is one port for every
+   * JVM on the machine and two builds running this class collide on it. Scoping the id to this
+   * process makes the port this JVM's; the id is re-rolled until its port is free, because the
+   * device port range overlaps ports the host may already own. Same scheme as `jvmScopedDeviceId`
+   * in trailblaze-host's tests, which this module cannot see.
+   */
+  private fun jvmScopedDeviceId(): TrailblazeDeviceId {
+    val candidates = (0 until FREE_PORT_ATTEMPTS).map { attempt ->
+      TrailblazeDeviceId(
+        instanceId = "test-device-ondevice-rpc-wedge-jvm${ProcessHandle.current().pid()}-$attempt",
+        trailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID,
+      )
+    }
+    return candidates.firstOrNull { isLoopbackPortFree(it.getTrailblazeOnDeviceSpecificPort()) }
+      ?: candidates.first()
   }
+
+  private fun isLoopbackPortFree(port: Int): Boolean =
+    try {
+      ServerSocket(port, 0, InetAddress.getByName(LOOPBACK_HOST)).close()
+      true
+    } catch (_: IOException) {
+      false
+    }
 
   @Test
   fun `rpcCall arms the breaker when the failure details carry the wedge signature`() {
@@ -102,8 +133,10 @@ class OnDeviceRpcClientWedgeTest {
       }}"""
 
     var armed = false
-    val client = OnDeviceRpcClient(testDeviceId, onNonRecoverableWedge = { armed = true })
-    val result = runBlocking { client.rpcCall(GetScreenStateRequest(includeScreenshot = false)) }
+    val result = withRpcServer { deviceId ->
+      val client = OnDeviceRpcClient(deviceId, onNonRecoverableWedge = { armed = true })
+      runBlocking { client.rpcCall(GetScreenStateRequest(includeScreenshot = false)) }
+    }
 
     assertTrue(result is RpcResult.Failure, "expected an RPC failure")
     assertTrue(armed, "breaker must fire when the wedge signature is in details")
@@ -117,8 +150,10 @@ class OnDeviceRpcClientWedgeTest {
       }}"""
 
     var armed = false
-    val client = OnDeviceRpcClient(testDeviceId, onNonRecoverableWedge = { armed = true })
-    val result = runBlocking { client.rpcCall(GetScreenStateRequest(includeScreenshot = false)) }
+    val result = withRpcServer { deviceId ->
+      val client = OnDeviceRpcClient(deviceId, onNonRecoverableWedge = { armed = true })
+      runBlocking { client.rpcCall(GetScreenStateRequest(includeScreenshot = false)) }
+    }
 
     assertTrue(result is RpcResult.Failure, "expected an RPC failure")
     assertTrue(armed, "blocked reflective recovery must arm the runner restart")
@@ -129,8 +164,10 @@ class OnDeviceRpcClientWedgeTest {
     responseBody = """{"errorType":"UNKNOWN_ERROR","message":"Element not found","details":"Element not found"}"""
 
     var armed = false
-    val client = OnDeviceRpcClient(testDeviceId, onNonRecoverableWedge = { armed = true })
-    val result = runBlocking { client.rpcCall(GetScreenStateRequest(includeScreenshot = false)) }
+    val result = withRpcServer { deviceId ->
+      val client = OnDeviceRpcClient(deviceId, onNonRecoverableWedge = { armed = true })
+      runBlocking { client.rpcCall(GetScreenStateRequest(includeScreenshot = false)) }
+    }
 
     assertTrue(result is RpcResult.Failure, "expected an RPC failure")
     assertFalse(armed, "ordinary failures must never arm the breaker")
@@ -250,5 +287,16 @@ class OnDeviceRpcClientWedgeTest {
     )
     assertFalse(noted, "an untagged inline failure must report not-armed")
     assertFalse(armed, "an untagged inline failure must never arm the breaker")
+  }
+
+  private companion object {
+    /**
+     * The device port range sits inside the OS ephemeral range, so a wildcard bind can collide with
+     * any outbound connection's source port; a loopback one only with loopback traffic.
+     */
+    const val LOOPBACK_HOST = "127.0.0.1"
+
+    /** Each candidate is an independent hash over a 7000-port range, so five misses is not a real case. */
+    const val FREE_PORT_ATTEMPTS = 5
   }
 }

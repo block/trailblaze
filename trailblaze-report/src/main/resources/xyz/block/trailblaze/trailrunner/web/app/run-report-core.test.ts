@@ -237,6 +237,8 @@ type PlaybackDriveContext = {
   /** The detached duration probes minted so far (see clipProbes) — fire one mid-drive to promote the pane. */
   clipProbes: () => Array<{ src: string; fireMetadata: (duration: number) => void; fireError: () => void }>;
   html: () => string;
+  /** The preview pane's own markup (rebuilt only when its surface changes; see paintTimelinePane). */
+  paneHtml: () => string;
   /** The mark overlay currently painted over the preview pane (playback repaints it in place). */
   paneMark: () => string;
   selectedSteps: () => string[];
@@ -261,7 +263,7 @@ type PlaybackDriveContext = {
   scrubHoverState: () => { tooltipVisible: boolean; rangeVisible: boolean; step: string; kind: string; ariaHidden: string | undefined };
 };
 
-type ViewerOptions = { session?: number; step?: number; clickGroup?: number; toggleKids?: number; clickKid?: string; routeStep?: number; query?: string; legacyHash?: string; protocol?: string; copyLink?: boolean; clipboardRejects?: boolean; clipPlayRejects?: boolean; tab?: string; toggleCell?: string; lightboxAll?: boolean; galZoom?: number[]; zoomShot?: string; zoomKey?: "ArrowLeft" | "ArrowRight"; timelineKey?: "ArrowLeft" | "ArrowRight" | "ArrowUp" | "ArrowDown"; timelineKeyTarget?: string; tlStream?: number; tlStreamBeforeTab?: number; spaceOnStep?: number; timelineScrollTop?: number; focusedStep?: number; focusedGroup?: number; focusedTlStream?: number; llmEnter?: number; llmClick?: number; openTx?: number; txEscape?: boolean; inspect?: number; inspectEscape?: boolean; popstate?: string; deferHistoryBack?: boolean; transport?: "prev" | "next"; stackedTimeline?: boolean; shotLayoutShift?: boolean; copyLocalPrompt?: boolean; exportLogs?: boolean; exportRun?: boolean; exportAll?: boolean; pointerDown?: "outside" | "insideTimelineMenu"; gotoTrail?: boolean | string; gotoCompareTrail?: boolean | string; gotoCompare?: boolean; toggleCompare?: boolean; toggleCompareAfterPick?: boolean; pick?: number[]; openRetries?: number[]; pickClear?: boolean; pickOpen?: boolean; pickDiff?: boolean; cmpOpen?: string; cmpGap?: number; cmpTab?: string; cmpStream?: string; cmpEvent?: string; cmpSide?: { side: "base" | "vs"; value: number }; cmpOrganize?: "stream" | "step"; cmpEventStep?: string; cmpPlace?: "prev" | "next" | Array<"prev" | "next">; cmpFull?: string; cmpEventAll?: boolean; cmpEventSearch?: string; cmpStepStream?: string; trailOpen?: string; toggleLanes?: number[]; back?: boolean; viewer?: () => void; drive?: (ctx: PlaybackDriveContext) => void; payloadViaGlobal?: boolean; deferBoot?: boolean; rebootViewer?: boolean; shellDocument?: boolean; chunks?: { index: string; sessions: Record<string, string>; clips?: Record<string, string> }; holdChunks?: number[]; holdClipChunks?: number[]; streamingChunks?: number[]; loadingDocument?: boolean; baseURI?: string; pageUrl?: string; clipDuration?: number };
+type ViewerOptions = { session?: number; step?: number; clickGroup?: number; toggleKids?: number; clickKid?: string; routeStep?: number; query?: string; legacyHash?: string; protocol?: string; copyLink?: boolean; clipboardRejects?: boolean; clipPlayRejects?: boolean; tab?: string; toggleCell?: string; lightboxAll?: boolean; galZoom?: number[]; zoomShot?: string; zoomKey?: "ArrowLeft" | "ArrowRight"; timelineKey?: "ArrowLeft" | "ArrowRight" | "ArrowUp" | "ArrowDown"; timelineKeyTarget?: string; tlStream?: number; tlStreamBeforeTab?: number; spaceOnStep?: number; timelineScrollTop?: number; focusedStep?: number; focusedGroup?: number; focusedTlStream?: number; llmEnter?: number; llmClick?: number; openTx?: number; txEscape?: boolean; inspect?: number; inspectEscape?: boolean; popstate?: string; deferHistoryBack?: boolean; transport?: "prev" | "next"; stackedTimeline?: boolean; shotLayoutShift?: boolean; copyLocalPrompt?: boolean; exportLogs?: boolean; exportRun?: boolean; exportAll?: boolean; pointerDown?: "outside" | "insideTimelineMenu"; gotoTrail?: boolean | string; gotoCompareTrail?: boolean | string; gotoCompare?: boolean; toggleCompare?: boolean; toggleCompareAfterPick?: boolean; pick?: number[]; openRetries?: number[]; pickClear?: boolean; pickOpen?: boolean; pickDiff?: boolean; cmpOpen?: string; cmpGap?: number; cmpTab?: string; cmpStream?: string; cmpEvent?: string; cmpSide?: { side: "base" | "vs"; value: number }; cmpOrganize?: "stream" | "step"; cmpEventStep?: string; cmpPlace?: "prev" | "next" | Array<"prev" | "next">; cmpFull?: string; cmpEventAll?: boolean; cmpEventSearch?: string; cmpStepStream?: string; trailOpen?: string; toggleLanes?: number[]; back?: boolean; viewer?: () => void; drive?: (ctx: PlaybackDriveContext) => void; payloadViaGlobal?: boolean; deferBoot?: boolean; rebootViewer?: boolean; shellDocument?: boolean; chunks?: { index: string; sessions: Record<string, string>; clips?: Record<string, string> }; holdChunks?: number[]; holdClipChunks?: Array<number | string>; streamingChunks?: number[]; loadingDocument?: boolean; baseURI?: string; pageUrl?: string; clipDuration?: number };
 
 // One viewer at a time. A viewer whose session chunk never lands keeps a 50ms hydration poll
 // running after its test returns, and `document` is a global the harness swaps per call — so that
@@ -294,7 +296,7 @@ afterAll(() => {
 
 function renderViewerState(payload: unknown, opts: ViewerOptions = {}): { html: string; htmlBeforeBoot: string; liveHtml: () => string; readHtml: () => string; timelineScrollTop: number; mainScrollTop: number; restoredFocus: string | null; route: string; readRoute: () => string; routeWrites: () => Array<{ method: string; next: string }>; historyBack: () => void; historyForward: () => void; flushHistoryBack: () => void; escapeOverlay: () => void; liveZoomRoot: () => any; zoomSrc: string | null; zoomRoot: any; copiedText: string | null; copyBtnText: () => string; timelineMenuOpen: boolean; clipProbes: Array<{ src: string; fireMetadata: (duration: number) => void; fireError: () => void }>; clipEl: any; videoClipEl: any; videoControls: any; releaseChunks: () => void; partialChunkReads: () => number; loadingProgressWrites: () => number; settleDocument: () => void; documentKeyListeners: Array<(e: any) => void>; autoplayMarker: () => string | undefined; embeddedMarker: () => string | undefined; llmScrolledTo: string | null; cmpScrolledTo: () => string | null; llmRow: (i: number) => any; readRestoredFocus: () => string | null; pageClass: () => string; pageClassWrites: () => string[]; readActiveElement: () => any; live: () => { update: (i: number, payload: Record<string, unknown>) => void; destroy: () => void } | undefined; readTimelineScrollTop: () => number; readMainScrollTop: () => number; expandTimelineEvent: (key: string) => void; timelineEvent: (key: string) => { open: boolean; body: string } | undefined; openAttachment: (key: string) => void; pickClicksStopped: () => string[]; pickLabelClicksStopped: () => number; pickLabels: () => number; firePopstate: (next?: string) => void } {
   retireEarlierViewers();
-  const handlers: { session: Record<string, () => void>; tab: Record<string, () => void>; step: Map<string, () => void>; group: Record<string, () => void>; groupEnter: Record<string, (e: any) => void>; groupLeave: Record<string, (e: any) => void>; kids: Record<string, (e: any) => void>; kidsel: Record<string, (e: any) => void>; stepKey: Map<string, (e: any) => void>; shot: Record<string, () => void>; tlStream: Record<string, () => void>; cellToggle: Record<string, (e: any) => void>; retryToggle: Record<string, (open: boolean) => void>; galZoom: Record<string, () => void>; llmKey: Record<string, (e: any) => void>; llmClick: Record<string, () => void>; txOpen: Record<string, () => void>; inspect: Record<string, () => void>; trailOpen: Record<string, () => void>; trailLane: Record<string, () => void>; attach: Record<string, () => void>; gotoTrail: Record<string, () => void>; gotoCompareTrail: Record<string, () => void>; gotoCompare?: () => void; compareToggle?: () => void; pick: Record<string, (e: any) => void>; pickClick: Record<string, (e: any) => void>; pickClear?: () => void; pickOpen?: () => void; pickDiff?: () => void; cmpOpen: Record<string, () => void>; cmpGap: Record<string, () => void>; cmpTab: Record<string, () => void>; cmpStream: Record<string, () => void>; cmpEvent: Record<string, () => void>; cmpSide: Record<string, () => void>; cmpOrganize: Record<string, () => void>; cmpEventStep: Record<string, () => void>; cmpPlace: Record<string, () => void>; cmpFull: Record<string, () => void>; cmpEventAll?: () => void; cmpEventSearch?: (value: string) => void; cmpStepStream?: (value: string) => void; back?: () => void; documentKey?: (e: any) => void; timelinePlay?: () => void; gridMode?: () => void; prev?: () => void; next?: () => void; shotLoad?: () => void; copyLocalPrompt?: () => void; copyLink?: () => void; exportLogs?: () => void; exportRun?: () => void; exportAll?: () => void } = { session: {}, tab: {}, step: new Map(), group: {}, groupEnter: {}, groupLeave: {}, kids: {}, kidsel: {}, stepKey: new Map(), shot: {}, tlStream: {}, cellToggle: {}, retryToggle: {}, galZoom: {}, llmKey: {}, llmClick: {}, txOpen: {}, inspect: {}, trailOpen: {}, trailLane: {}, attach: {}, gotoTrail: {}, gotoCompareTrail: {}, pick: {}, pickClick: {}, cmpOpen: {}, cmpGap: {}, cmpTab: {}, cmpStream: {}, cmpEvent: {}, cmpSide: {}, cmpOrganize: {}, cmpEventStep: {}, cmpPlace: {}, cmpFull: {} };
+  const handlers: { session: Record<string, () => void>; tab: Record<string, () => void>; step: Map<string, () => void>; group: Record<string, () => void>; groupEnter: Record<string, (e: any) => void>; groupLeave: Record<string, (e: any) => void>; kids: Record<string, (e: any) => void>; kidsel: Record<string, (e: any) => void>; stepKey: Map<string, (e: any) => void>; shot: Record<string, () => void>; tlStream: Record<string, () => void>; cellToggle: Record<string, (e: any) => void>; retryToggle: Record<string, (open: boolean) => void>; galZoom: Record<string, () => void>; llmKey: Record<string, (e: any) => void>; llmClick: Record<string, () => void>; txOpen: Record<string, () => void>; inspect: Record<string, () => void>; trailOpen: Record<string, () => void>; trailLane: Record<string, () => void>; attach: Record<string, () => void>; vdev: Record<string, () => void>; gotoTrail: Record<string, () => void>; gotoCompareTrail: Record<string, () => void>; gotoCompare?: () => void; compareToggle?: () => void; pick: Record<string, (e: any) => void>; pickClick: Record<string, (e: any) => void>; pickClear?: () => void; pickOpen?: () => void; pickDiff?: () => void; cmpOpen: Record<string, () => void>; cmpGap: Record<string, () => void>; cmpTab: Record<string, () => void>; cmpStream: Record<string, () => void>; cmpEvent: Record<string, () => void>; cmpSide: Record<string, () => void>; cmpOrganize: Record<string, () => void>; cmpEventStep: Record<string, () => void>; cmpPlace: Record<string, () => void>; cmpFull: Record<string, () => void>; cmpEventAll?: () => void; cmpEventSearch?: (value: string) => void; cmpStepStream?: (value: string) => void; back?: () => void; documentKey?: (e: any) => void; timelinePlay?: () => void; gridMode?: () => void; prev?: () => void; next?: () => void; shotLoad?: () => void; copyLocalPrompt?: () => void; copyLink?: () => void; exportLogs?: () => void; exportRun?: () => void; exportAll?: () => void } = { session: {}, tab: {}, step: new Map(), group: {}, groupEnter: {}, groupLeave: {}, kids: {}, kidsel: {}, stepKey: new Map(), shot: {}, tlStream: {}, cellToggle: {}, retryToggle: {}, galZoom: {}, llmKey: {}, llmClick: {}, txOpen: {}, inspect: {}, trailOpen: {}, trailLane: {}, attach: {}, vdev: {}, gotoTrail: {}, gotoCompareTrail: {}, pick: {}, pickClick: {}, cmpOpen: {}, cmpGap: {}, cmpTab: {}, cmpStream: {}, cmpEvent: {}, cmpSide: {}, cmpOrganize: {}, cmpEventStep: {}, cmpPlace: {}, cmpFull: {} };
   let shotLoaded = !opts.shotLayoutShift;
   const mainScroller: any = { scrollTop: 0, clientHeight: 400, get scrollHeight() { return opts.shotLayoutShift && !shotLoaded ? 800 : 1200; }, parentElement: null, getBoundingClientRect: () => ({ top: 0 }), scrollTo({ top }: { top: number }) { this.scrollTop = top; } };
   const timelineList: any = { scrollTop: 0, clientHeight: 400, scrollHeight: opts.stackedTimeline ? 400 : 1200, parentElement: opts.stackedTimeline ? mainScroller : null, getBoundingClientRect: () => ({ top: 0 }), scrollTo({ top }: { top: number }) { this.scrollTop = top; } };
@@ -451,7 +453,7 @@ function renderViewerState(payload: unknown, opts: ViewerOptions = {}): { html: 
   const shotImg: any = { src: "", alt: "", get complete() { return shotLoaded; }, addEventListener(_name: string, fn: () => void) { handlers.shotLoad = fn; } };
   const previewPaneSeed = (html: string) => html.includes('id="shot"') || html.includes('class="shot ')
     ? '<div class="shotwrap"><img id="shot" class="shot"></div>'
-    : html.includes('id="tlvclip"') ? '<div class="shotwrap"><video id="tlvclip"></video></div>'
+    : html.includes('id="tlvclip"') ? `<div class="shotwrap"><video id="tlvclip" src="${(html.match(/id="tlvclip"[^>]*? src="([^"]*)"/) || [])[1] || ""}"></video></div>`
     : html.includes('class="noshot"') ? '<div class="noshot"></div>'
     : "";
   const devicePlayer: any = {
@@ -493,6 +495,7 @@ function renderViewerState(payload: unknown, opts: ViewerOptions = {}): { html: 
     querySelectorAll(sel: string) {
       if (sel === "[data-session]") return [...this._h.matchAll(/data-session="(\d+)"/g)].map((m: any) => ({ dataset: { session: m[1] }, set onclick(fn: () => void) { handlers.session[m[1]] = fn; } }));
       if (sel === "[data-tab]") return [...this._h.matchAll(/data-tab="([a-z]+)"/g)].map((m: any) => ({ dataset: { tab: m[1] }, set onclick(fn: () => void) { handlers.tab[m[1]] = fn; } }));
+      if (sel === "[data-vdev]") return [...this._h.matchAll(/data-vdev="(\d+)"/g)].map((m: any) => ({ dataset: { vdev: m[1] }, set onclick(fn: () => void) { handlers.vdev[m[1]] = fn; } }));
       if (sel === "[data-step]") return [...this._h.matchAll(/data-step="(\d+)"/g)].map((m: any) => {
         const el = stepEl(m[1]);
         Object.defineProperty(el, "onclick", { configurable: true, set(fn: () => void) { handlers.step.set(m[1], fn); el.click = fn; } });
@@ -691,6 +694,8 @@ function renderViewerState(payload: unknown, opts: ViewerOptions = {}): { html: 
     set currentTime(v: number) { this._t = v; this.seeks.push(v); },
     get isConnected() { return devicePlayer._h.includes('id="tlvclip"'); },
     setAttribute(name: string, value: string) { this.attrs[name] = value; },
+    // The markup's own attribute: the pane is rebuilt as HTML, so that is where `src` lives.
+    getAttribute(name: string) { return name in this.attrs ? this.attrs[name] : (devicePlayer._h.match(new RegExp(`id="tlvclip"[^>]*? ${name}="([^"]*)"`)) || [])[1] ?? null; },
     // opts.clipPlayRejects models an embedding whose autoplay policy refuses even a muted play():
     // the promise rejects and the element stays paused, exactly what a browser reports.
     play() { this.plays++; if (opts.clipPlayRejects) return Promise.reject(new Error("NotAllowedError")); this.paused = false; return Promise.resolve(); },
@@ -986,7 +991,7 @@ function renderViewerState(payload: unknown, opts: ViewerOptions = {}): { html: 
       if (!streamingChunks.has(session[1])) return closedChunk(text);
       return { get textContent() { partialChunkReads++; return text.slice(0, Math.floor(text.length / 2)); }, nextSibling: null };
     }
-    const clip = id.match(/^tb-clip-(\d+)$/);
+    const clip = id.match(/^tb-clip-(\d+(?:-\d+)?)$/);
     if (clip) { const text = (opts.chunks.clips || {})[clip[1]]; return text != null && !heldClipChunks.has(clip[1]) ? closedChunk(text) : null; }
     return null;
   };
@@ -1217,6 +1222,7 @@ function renderViewerState(payload: unknown, opts: ViewerOptions = {}): { html: 
         renders: () => renders,
         clipProbes: () => clipProbes,
         html: () => app._h,
+        paneHtml: () => devicePlayer._h,
         paneMark: () => shotWrap.marks.join(""),
         selectedSteps: () => [...stepEls.entries()].filter(([, el]) => el.classes.has("sel")).map(([id]) => id),
         selectedKids: () => [...kidEls.entries()].filter(([, el]) => el.classes.has("sel")).map(([id]) => id),
@@ -1254,7 +1260,7 @@ function renderViewerState(payload: unknown, opts: ViewerOptions = {}): { html: 
   bootTimeouts.forEach((cb) => cb());
   // readHtml re-reads the rendered html after the synchronous pass — for asserting on renders
   // triggered by async work (e.g. the lazy gz inflation re-render).
-  return { html: app._h, htmlBeforeBoot, liveHtml: () => app._h as string, readHtml: () => app._h as string, timelineScrollTop: timelineList.scrollTop, mainScrollTop: mainScroller.scrollTop, restoredFocus, route, readRoute: () => route, routeWrites: () => routeWrites.slice(), historyBack: () => historyApi.back(), historyForward: () => historyApi.forward(), flushHistoryBack: () => { const pending = pendingHistoryBack; pendingHistoryBack = null; if (pending) pending(); }, escapeOverlay: () => { if (zoomRoot && zoomRoot.onkeydown) zoomRoot.onkeydown({ key: "Escape", preventDefault() {}, stopPropagation() {} }); }, liveZoomRoot: () => zoomRoot, zoomSrc, zoomRoot, copiedText, copyBtnText: () => copyBtn.textContent as string, timelineMenuOpen: timelineMenu.open, clipProbes, clipEl: tlvclipNode, videoClipEl: vclipNode, videoControls, shotImg, releaseChunks: () => { heldChunks.clear(); heldClipChunks.clear(); streamingChunks.clear(); }, partialChunkReads: () => partialChunkReads, loadingProgressWrites: () => progressWrites, settleDocument: () => { documentLoading = false; }, documentKeyListeners, autoplayMarker: () => documentElement.dataset.tbAutoplay, embeddedMarker: () => documentElement.dataset.tbEmbedded, llmScrolledTo, cmpScrolledTo: () => cmpScrolledTo, llmRow: (i: number) => llmRowEl(String(i)), readRestoredFocus: () => restoredFocus, pageClass: () => app.className || "", pageClassWrites: () => pageClassWrites.slice(), readActiveElement: () => (globalThis as any).document.activeElement, live: () => (globalThis as Record<string, any>).__TB_REPORT_LIVE__, openSession: (i: number) => handlers.session[String(i)]?.(), clickTab: (id: string) => handlers.tab[id]?.(), clickGotoTrail: (key: string) => handlers.gotoTrail[key]?.(), clickGotoCompare: () => handlers.gotoCompare?.(), clickGotoCompareTrail: (key?: string) => handlers.gotoCompareTrail[key ?? Object.keys(handlers.gotoCompareTrail)[0]]?.(), toggleIndexCompare: () => handlers.compareToggle?.(), tickPick: (i: number) => { handlers.pickClick[String(i)]?.({ stopPropagation() {} }); handlers.pick[String(i)]?.({ stopPropagation() {} }); }, clickPickOpen: () => handlers.pickOpen?.(), clickBack: () => handlers.back?.(), readTimelineScrollTop: () => timelineList.scrollTop, readMainScrollTop: () => mainScroller.scrollTop, expandTimelineEvent, timelineEvent: (key: string) => tlEventEls.get(key), openAttachment: (key: string) => handlers.attach[key]?.(), pickClicksStopped: () => pickClicksStopped.slice(), pickLabelClicksStopped: () => pickLabelClicksStopped, pickLabels: () => pickLabelClicks.length, firePopstate: (next?: string) => { if (next != null) navigate(`/report.html${next}`); firePopstate(); } };
+  return { html: app._h, htmlBeforeBoot, liveHtml: () => app._h as string, readHtml: () => app._h as string, timelineScrollTop: timelineList.scrollTop, mainScrollTop: mainScroller.scrollTop, restoredFocus, route, readRoute: () => route, routeWrites: () => routeWrites.slice(), historyBack: () => historyApi.back(), historyForward: () => historyApi.forward(), flushHistoryBack: () => { const pending = pendingHistoryBack; pendingHistoryBack = null; if (pending) pending(); }, escapeOverlay: () => { if (zoomRoot && zoomRoot.onkeydown) zoomRoot.onkeydown({ key: "Escape", preventDefault() {}, stopPropagation() {} }); }, liveZoomRoot: () => zoomRoot, zoomSrc, zoomRoot, copiedText, copyBtnText: () => copyBtn.textContent as string, timelineMenuOpen: timelineMenu.open, clipProbes, clipEl: tlvclipNode, videoClipEl: vclipNode, videoControls, shotImg, releaseChunks: () => { heldChunks.clear(); heldClipChunks.clear(); streamingChunks.clear(); }, partialChunkReads: () => partialChunkReads, loadingProgressWrites: () => progressWrites, settleDocument: () => { documentLoading = false; }, documentKeyListeners, autoplayMarker: () => documentElement.dataset.tbAutoplay, embeddedMarker: () => documentElement.dataset.tbEmbedded, llmScrolledTo, cmpScrolledTo: () => cmpScrolledTo, llmRow: (i: number) => llmRowEl(String(i)), readRestoredFocus: () => restoredFocus, pageClass: () => app.className || "", pageClassWrites: () => pageClassWrites.slice(), readActiveElement: () => (globalThis as any).document.activeElement, live: () => (globalThis as Record<string, any>).__TB_REPORT_LIVE__, openSession: (i: number) => handlers.session[String(i)]?.(), clickTab: (id: string) => handlers.tab[id]?.(), clickVideoDevice: (k: number) => handlers.vdev[String(k)]?.(), clickGotoTrail: (key: string) => handlers.gotoTrail[key]?.(), clickGotoCompare: () => handlers.gotoCompare?.(), clickGotoCompareTrail: (key?: string) => handlers.gotoCompareTrail[key ?? Object.keys(handlers.gotoCompareTrail)[0]]?.(), toggleIndexCompare: () => handlers.compareToggle?.(), tickPick: (i: number) => { handlers.pickClick[String(i)]?.({ stopPropagation() {} }); handlers.pick[String(i)]?.({ stopPropagation() {} }); }, clickPickOpen: () => handlers.pickOpen?.(), clickBack: () => handlers.back?.(), readTimelineScrollTop: () => timelineList.scrollTop, readMainScrollTop: () => mainScroller.scrollTop, expandTimelineEvent, timelineEvent: (key: string) => tlEventEls.get(key), openAttachment: (key: string) => handlers.attach[key]?.(), pickClicksStopped: () => pickClicksStopped.slice(), pickLabelClicksStopped: () => pickLabelClicksStopped, pickLabels: () => pickLabelClicks.length, firePopstate: (next?: string) => { if (next != null) navigate(`/report.html${next}`); firePopstate(); } };
 }
 
 function renderViewer(payload: unknown, opts: ViewerOptions = {}): string {
@@ -1312,7 +1318,7 @@ function chunksOf(html: string): { index: string; sessions: Record<string, strin
   if (!index) throw new Error("no tb-index block in report HTML");
   const sessions: Record<string, string> = {};
   const clips: Record<string, string> = {};
-  for (const m of html.matchAll(/<script type="application\/json" id="tb-(session|clip)-(\d+)">([\s\S]*?)<\/script>/g)) {
+  for (const m of html.matchAll(/<script type="application\/json" id="tb-(session|clip)-(\d+(?:-\d+)?)">([\s\S]*?)<\/script>/g)) {
     (m[1] === "session" ? sessions : clips)[m[2]] = m[3];
   }
   return { index: index[1], sessions, clips };
@@ -3387,6 +3393,25 @@ describe("embedded chrome (?chrome=none)", () => {
       .not.toContain("blob:https://app.test/clip-webm");
   });
 
+  test("the one-run wrapper carries every device's recording, like the multi-run document", () => {
+    // A single-session archive renders through buildRunReportHtml; a field it doesn't forward is
+    // lost for one-session zips only.
+    const html = core.buildRunReportHtml({
+      meta: { title: "Zip run", status: "passed" },
+      trace: [{ i: 1, label: "Open app", objective: true, ok: true }],
+      llmLogs: [],
+      shots: {},
+      videoClip: { url: "blob:https://app.test/seller", mime: "video/webm", startMs: 10, endMs: 20, device: "seller" },
+      videoClips: [
+        { url: "blob:https://app.test/seller", mime: "video/webm", startMs: 10, endMs: 20, device: "seller" },
+        { url: "blob:https://app.test/buyer", mime: "video/webm", startMs: 12, endMs: 20, device: "buyer" },
+      ],
+      keepAttachmentObjectUrls: true,
+    } as never);
+    expect(html).toContain("blob:https://app.test/seller");
+    expect(html).toContain("blob:https://app.test/buyer");
+  });
+
   test("a downloaded report drops the attachment object URLs only the page holding the archive can resolve", async () => {
     const html = core.buildMultiReportHtml({
       generatedAt: "now",
@@ -3740,9 +3765,10 @@ describe("chunked session hydration (lazy #tb-session parsing)", () => {
 });
 
 // The session recording the report embeds and plays (capture's VIDEO_WEBM or VIDEO artifact, read
-// by readVideo → VideoInfo). It is the only video artifact a session has; without one every surface
-// falls back to per-step screenshots. The CLI half — reading the artifact and capping its size —
-// lives in ../../../report/run-report-cli.test.ts.
+// by readVideo → VideoInfo). A single-device run has one; a multi-device run has one per device,
+// the start device's as `video` and the rest as its `companions`. Without one every surface falls
+// back to per-step screenshots. The CLI half — reading the artifacts and capping their size — lives
+// in ../../../report/run-report-cli.test.ts.
 describe("session recording (the playable clip)", () => {
   const trace = core.extractTrace(sampleLogs);
   const T0 = Date.parse("2024-01-01T00:00:00Z");
@@ -3813,6 +3839,386 @@ describe("session recording (the playable clip)", () => {
       // No recording, no tab: a Video tab that opens on "nothing to play" is worse than none.
       const withoutRecording = renderViewerState(null, { chunks: chunksOf(html), session: 0 });
       expect(withoutRecording.html).not.toContain('data-tab="video"');
+    });
+  });
+
+  // ---- Multi-device sessions: one recording per device ----------------------------------------
+  // Two devices, `seller` first (the trail started there) and `buyer`. Steps 1-2 ran on the seller,
+  // 3-4 on the buyer; step 4 names no device and so ran on the last one named.
+  const SELLER_B64 = Buffer.from("SELLERBYTES").toString("base64");
+  const BUYER_B64 = Buffer.from("BUYERBYTES").toString("base64");
+  const deviceTrace = [
+    { i: 1, label: "Open register", objective: true, ok: true, ts: T0, device: "seller" },
+    { i: 2, label: "Tap Sale", tool: "tapOn", ok: true, ts: T0 + 1000, ms: 100, device: "seller" },
+    { i: 3, label: "Present card", objective: true, ok: true, ts: T0 + 2000, device: "buyer" },
+    { i: 4, label: "Tap Sign", tool: "tapOn", ok: true, ts: T0 + 3000, ms: 100 },
+  ];
+  const deviceVideo = {
+    ...recordingAt(T0 - 1000, T0 + 3000, SELLER_B64), device: "seller", deviceId: "emulator-5560",
+    companions: [{ ...recordingAt(T0 - 500, T0 + 3500, BUYER_B64), device: "buyer", deviceId: "emulator-5562" }],
+  };
+  const deviceHtml = core.buildMultiReportHtml({
+    generatedAt: "now",
+    sessions: [{ meta: { title: "Sale", status: "passed" }, trace: deviceTrace, llmLogs: [], shots: {}, video: deviceVideo }],
+  });
+
+  test("each device's recording is hoisted into its own chunk, and the payload keeps only the windows", () => {
+    // The buyer's bytes ride in #tb-clip-0-1 (the session's second recording), the seller's in
+    // #tb-clip-0 as ever; a reader who only ever watches the seller never parses the buyer's video.
+    // Both windows and both device names stay inline: they are what a surface reads to decide
+    // WHICH recording to ask for.
+    const chunks = chunksOf(deviceHtml);
+    expect(clipsOf(deviceHtml)).toEqual({ "0": `data:video/webm;base64,${SELLER_B64}`, "0-1": `data:video/webm;base64,${BUYER_B64}` });
+    expect(chunks.sessions["0"]).not.toContain(SELLER_B64);
+    expect(chunks.sessions["0"]).not.toContain(BUYER_B64);
+    const video = payloadOf(deviceHtml).sessions[0].video;
+    expect(video.device).toBe("seller");
+    expect(video.clip.uri).toBe("");
+    expect(video.companions).toEqual([{ startMs: T0 - 500, endMs: T0 + 3500, device: "buyer", deviceId: "emulator-5562", clip: { uri: "", mime: "video/webm", startMs: T0 - 500, endMs: T0 + 3500 } }]);
+  });
+
+  test("the timeline pane plays the recording of the device the selected step ran on", async () => {
+    const minted = withObjectUrls((minted) => {
+      // The run opens on step 1 (the seller's), so the seller's recording is the first one asked
+      // for. Step 4 names no device: it ran on the buyer, the last device named before it. Selecting
+      // it asks for the buyer's recording — the seller's covers the same clock and would play, but
+      // it is the wrong display.
+      const state = renderViewerState(null, { chunks: chunksOf(deviceHtml), session: 0, step: 4 });
+      expect(state.clipProbes.map((p) => p.src)).toEqual(["blob:https://report.example/clip-1", "blob:https://report.example/clip-2"]);
+      // The pane is painted in place once the buyer's duration is known (the harness's clipEl is
+      // that element): 3.5s into a 4s window carrying a 4s file — the position is mapped against
+      // the BUYER's window (which opened half a second after the seller's), not the session's,
+      // which would have put it at 4s.
+      state.clipProbes[1].fireMetadata(4);
+      expect(state.clipEl.seeks.at(-1)).toBeCloseTo(3.5, 5);
+      expect(state.clipEl.paused).toBe(true);
+
+      // A seller step asks for the seller's recording alone — one probe, no buyer bytes decoded.
+      const seller = renderViewerState(null, { chunks: chunksOf(deviceHtml), session: 0, step: 2 });
+      expect(seller.clipProbes.map((p) => p.src)).toEqual(["blob:https://report.example/clip-3"]);
+      seller.clipProbes[0].fireMetadata(4);
+      expect(seller.clipEl.seeks.at(-1)).toBeCloseTo(2, 5);
+      return minted;
+    });
+    expect(await Promise.all(minted.map((b) => b.text()))).toEqual(["SELLERBYTES", "BUYERBYTES", "SELLERBYTES"]);
+  });
+
+  test("a session whose only rows are a companion's plays the companion's recording", async () => {
+    // The trail switched to the buyer before the seller acted: one device name in the trace, so no
+    // lane dressing — but the seller's recording (the session's first) is still the wrong display.
+    const buyerOnlyHtml = core.buildMultiReportHtml({
+      generatedAt: "now",
+      sessions: [{
+        meta: { title: "Sale", status: "passed" },
+        trace: [{ i: 1, label: "Present card", objective: true, ok: true, ts: T0 + 2000, device: "buyer" }],
+        llmLogs: [], shots: {}, video: deviceVideo,
+      }],
+    });
+    const minted = withObjectUrls((minted) => {
+      const state = renderViewerState(null, { chunks: chunksOf(buyerOnlyHtml), session: 0, step: 1 });
+      // The pane's probe is the buyer's (the first URL is the Video tab's check that a clip exists).
+      expect(state.clipProbes.map((p) => p.src)).toEqual(["blob:https://report.example/clip-2"]);
+      return minted;
+    });
+    expect(await Promise.all(minted.map((b) => b.text()))).toEqual(["SELLERBYTES", "BUYERBYTES"]);
+  });
+
+  test("a companion's recording standing in for the start device's is not played for the rows before a device was chosen", () => {
+    // The seller's file was unusable, so the buyer's recording leads. Step 1 names no device and
+    // ran on the start device (the seller), whose display that recording does not show.
+    const standInHtml = core.buildMultiReportHtml({
+      generatedAt: "now",
+      sessions: [{
+        meta: { title: "Sale", status: "passed" },
+        trace: [
+          { i: 1, label: "Launch", tool: "launchApp", ok: true, ts: T0, ms: 100 },
+          { i: 2, label: "Tap Sale", tool: "tapOn", ok: true, ts: T0 + 1000, ms: 100, device: "seller" },
+          { i: 3, label: "Present card", objective: true, ok: true, ts: T0 + 2000, device: "buyer" },
+          { i: 4, label: "Tap Sign", tool: "tapOn", ok: true, ts: T0 + 3000, ms: 100 },
+        ],
+        llmLogs: [], shots: {}, video: { ...recordingAt(T0 - 500, T0 + 3500, BUYER_B64), device: "buyer" },
+      }],
+    });
+    withObjectUrls(() => {
+      expect(renderViewerState(null, { chunks: chunksOf(standInHtml), session: 0, step: 1 }).clipProbes).toEqual([]);
+      expect(renderViewerState(null, { chunks: chunksOf(standInHtml), session: 0, step: 4 }).clipProbes).toHaveLength(1);
+    });
+  });
+
+  test("a start-device recording that names no device still plays for the start device beside a named companion", async () => {
+    // Capture never learned the start device's name, so its recording is unnamed; the buyer's is not.
+    const unnamedStartHtml = core.buildMultiReportHtml({
+      generatedAt: "now",
+      sessions: [{
+        meta: { title: "Sale", status: "passed" }, trace: deviceTrace, llmLogs: [], shots: {},
+        video: { ...recordingAt(T0 - 1000, T0 + 3000, SELLER_B64), companions: deviceVideo.companions },
+      }],
+    });
+    const minted = withObjectUrls((minted) => {
+      expect(renderViewerState(null, { chunks: chunksOf(unnamedStartHtml), session: 0, step: 2 }).clipProbes).toHaveLength(1);
+      return minted;
+    });
+    expect(await Promise.all(minted.map((b) => b.text()))).toEqual(["SELLERBYTES"]);
+  });
+
+  // The buyer was unbound between steps 2 and 4 and bound again, so it recorded twice: two files,
+  // two windows. Capture lists the later one (still recording at stop) first.
+  const FIRST_BIND_B64 = Buffer.from("FIRSTBIND").toString("base64");
+  const SECOND_BIND_B64 = Buffer.from("SECONDBIND").toString("base64");
+  const rebindHtml = core.buildMultiReportHtml({
+    generatedAt: "now",
+    sessions: [{
+      meta: { title: "Sale", status: "passed" },
+      trace: [
+        { i: 1, label: "Open register", objective: true, ok: true, ts: T0, device: "seller" },
+        { i: 2, label: "Present card", tool: "tapOn", ok: true, ts: T0 + 1000, ms: 100, device: "buyer" },
+        { i: 3, label: "Tap Sale", tool: "tapOn", ok: true, ts: T0 + 2000, ms: 100, device: "seller" },
+        { i: 4, label: "Tap Sign", tool: "tapOn", ok: true, ts: T0 + 3000, ms: 100, device: "buyer" },
+      ],
+      llmLogs: [], shots: {},
+      video: {
+        ...recordingAt(T0 - 1000, T0 + 3500, SELLER_B64), device: "seller",
+        companions: [
+          { ...recordingAt(T0 + 2500, T0 + 3500, SECOND_BIND_B64), device: "buyer" },
+          { ...recordingAt(T0 + 500, T0 + 1500, FIRST_BIND_B64), device: "buyer" },
+        ],
+      },
+    }],
+  });
+
+  test("a device that recorded twice plays the recording whose window covers the step", async () => {
+    // The bytes behind the clip the pane probed and then seeked, read off its blob URL.
+    const played: string[] = [];
+    const minted = withObjectUrls((minted) => {
+      for (const step of [2, 4]) {
+        const state = renderViewerState(null, { chunks: chunksOf(rebindHtml), session: 0, step });
+        const probe = state.clipProbes.at(-1)!;
+        probe.fireMetadata(1);
+        // Half a second into the recording's OWN window: T0+1000 into the first, T0+3000 into the second.
+        expect(state.clipEl.seeks.at(-1)).toBeCloseTo(0.5, 5);
+        played.push(probe.src);
+      }
+      return minted;
+    });
+    const bytes = await Promise.all(played.map((src) => minted[Number(src.split("clip-").at(-1)) - 1].text()));
+    // Step 2 ran before the unbind, step 4 after the rebind.
+    expect(bytes).toEqual(["FIRSTBIND", "SECONDBIND"]);
+  });
+
+  test("a folded dispatch after the rebind plays the later recording, though its row began before", async () => {
+    // Step 2's row is timed inside the buyer's first bind; its folded dispatch ran after the rebind.
+    const foldHtml = core.buildMultiReportHtml({
+      generatedAt: "now",
+      sessions: [{
+        meta: { title: "Sale", status: "passed" },
+        trace: [
+          { i: 1, label: "Open register", objective: true, ok: true, ts: T0, device: "seller" },
+          { i: 2, label: "Present card", tool: "tapOn", ok: true, ts: T0 + 1000, ms: 2500, device: "buyer",
+            children: [{ label: "tapOn", tool: "tapOn", ok: true, ms: 100, ts: T0 + 3000 }] },
+        ],
+        llmLogs: [], shots: {},
+        video: {
+          ...recordingAt(T0 - 1000, T0 + 3500, SELLER_B64), device: "seller",
+          companions: [
+            { ...recordingAt(T0 + 2500, T0 + 3500, SECOND_BIND_B64), device: "buyer" },
+            { ...recordingAt(T0 + 500, T0 + 1500, FIRST_BIND_B64), device: "buyer" },
+          ],
+        },
+      }],
+    });
+    let src = "";
+    const minted = withObjectUrls((minted) => {
+      const state = renderViewerState(null, { chunks: chunksOf(foldHtml), query: "?run=0&tab=timeline&step=2&kid=0" });
+      const probe = state.clipProbes.at(-1)!;
+      probe.fireMetadata(1);
+      expect(state.clipEl.seeks.at(-1)).toBeCloseTo(0.5, 5);
+      src = probe.src;
+      return minted;
+    });
+    expect(await minted[Number(src.split("clip-").at(-1)) - 1].text()).toBe("SECONDBIND");
+  });
+
+  test("the Video tab gives each of a device's recordings its own button, in capture order", () => {
+    withObjectUrls(() => {
+      const state = renderViewerState(null, { chunks: chunksOf(rebindHtml), session: 0, tab: "video" });
+      const html = state.readHtml();
+      expect(html).toMatch(/data-vdev="1"[^>]*>buyer \(2\)<\/button>/);
+      expect(html).toMatch(/data-vdev="2"[^>]*>buyer<\/button>/);
+      // Capture listed the later recording first; the buttons still read in capture order.
+      expect(html.indexOf(">buyer</button>")).toBeLessThan(html.indexOf(">buyer (2)</button>"));
+      state.clickVideoDevice(1);
+      const second = state.readHtml();
+      expect(second).toMatch(/<button class="btn vdev on"[^>]*>buyer \(2\)<\/button>/);
+      expect(second).toMatch(/id="vdownload"[^>]* download="[a-z0-9-]+-buyer-2\.webm"/);
+    });
+  });
+
+  test("a device literally named like a repeat label keeps its own Video tab button", () => {
+    // `buyer (2)` is a device of its own here, AND the label the buyer's second recording gets. The
+    // pick is remembered by recording, not label, so each button opens the recording it names.
+    const clashHtml = core.buildMultiReportHtml({
+      generatedAt: "now",
+      sessions: [{
+        meta: { title: "Sale", status: "passed" }, trace: deviceTrace, llmLogs: [], shots: {},
+        video: {
+          ...recordingAt(T0 - 1000, T0 + 3500, SELLER_B64), device: "seller",
+          companions: [
+            { ...recordingAt(T0, T0 + 3500, BUYER_B64), device: "buyer (2)" },
+            { ...recordingAt(T0 + 500, T0 + 1500, FIRST_BIND_B64), device: "buyer" },
+            { ...recordingAt(T0 + 2500, T0 + 3500, SECOND_BIND_B64), device: "buyer" },
+          ],
+        },
+      }],
+    });
+    withObjectUrls(() => {
+      for (const k of [1, 3]) {
+        const state = renderViewerState(null, { chunks: chunksOf(clashHtml), session: 0, tab: "video" });
+        state.clickVideoDevice(k);
+        expect(state.readHtml()).toMatch(new RegExp(`<button class="btn vdev on"[^>]*data-vdev="${k}"`));
+      }
+    });
+  });
+
+  test("moving the pane onto another device's step swaps in that device's recording", () => {
+    // The pane keeps its <video> across steps so the decode stays warm — but a step on the other
+    // display is a different file, and seeking the seller's recording to a buyer step's instant
+    // shows the wrong screen.
+    withObjectUrls(() => {
+      renderViewerState(null, { chunks: chunksOf(deviceHtml), session: 0, step: 2, drive: (ctx) => {
+        ctx.clipProbes()[0].fireMetadata(4);
+        expect(ctx.paneHtml()).toContain('src="blob:https://report.example/clip-1"');
+        ctx.hoverStep(4);
+        ctx.clipProbes()[1].fireMetadata(4);
+        expect(ctx.paneHtml()).toContain('src="blob:https://report.example/clip-2"');
+        ctx.leaveStep(4);
+        expect(ctx.paneHtml()).toContain('src="blob:https://report.example/clip-1"');
+      } });
+    });
+  });
+
+  test("the Video tab offers every recorded device and opens on the one the trail started on", () => {
+    withObjectUrls(() => {
+      const state = renderViewerState(null, { chunks: chunksOf(deviceHtml), session: 0, tab: "video" });
+      const html = state.readHtml();
+      expect(html).toContain('data-vdev="0"');
+      expect(html).toContain('data-vdev="1"');
+      expect(html).toMatch(/<button class="btn vdev on"[^>]*>seller<\/button>/);
+      expect(html).toMatch(/<button class="btn vdev"[^>]*>buyer<\/button>/);
+      expect(html).toContain('aria-label="Screen recording of this run on the seller device"');
+      expect(html).toMatch(/id="vdownload"[^>]* download="[a-z0-9-]+-seller\.webm"/);
+      state.clickVideoDevice(1);
+      const buyer = state.readHtml();
+      expect(buyer).toMatch(/<button class="btn vdev on"[^>]*>buyer<\/button>/);
+      expect(buyer).toContain('aria-label="Screen recording of this run on the buyer device"');
+      expect(buyer).toContain("Screen recording · buyer");
+      // Each display saves under its own name, so downloading both keeps both.
+      expect(buyer).toMatch(/id="vdownload"[^>]* download="[a-z0-9-]+-buyer\.webm"/);
+    });
+  });
+
+  test("a single-run export of a multi-device run keeps every device's recording", () => {
+    // The exported run becomes run 0, so its companion chunk #tb-clip-1-1 must become #tb-clip-0-1
+    // — dropped, the reopened file would find no recording for the buyer.
+    const two = core.buildMultiReportHtml({
+      generatedAt: "now",
+      sessions: [
+        { meta: { title: "Other", status: "passed" }, trace: deviceTrace, llmLogs: [], shots: {}, video: { ...deviceVideo, clip: { ...deviceVideo.clip, uri: "data:video/webm;base64,QUFB" }, companions: [] } },
+        { meta: { title: "Sale", status: "passed" }, trace: deviceTrace, llmLogs: [], shots: {}, video: deviceVideo },
+      ],
+    });
+    const downloaded = withObjectUrls(() => {
+      const urlAny = URL as any;
+      let parts: string[] | null = null;
+      const create = urlAny.createObjectURL;
+      urlAny.createObjectURL = (blob: any) => { if (blob && blob.__parts) parts = blob.__parts; return create(blob); };
+      const RealBlob = globalThis.Blob;
+      (globalThis as any).Blob = class extends RealBlob { __parts: any; constructor(p: any, o: any) { super(p, o); this.__parts = p; } };
+      try {
+        renderViewerState(null, { chunks: chunksOf(two), session: 1, exportRun: true });
+      } finally {
+        (globalThis as any).Blob = RealBlob;
+      }
+      return parts;
+    });
+    const out = (downloaded || []).join("");
+    expect(out).toContain('id="tb-clip-0"');
+    expect(out).toContain('id="tb-clip-0-1"');
+    expect(out).toContain(SELLER_B64);
+    expect(out).toContain(BUYER_B64);
+    expect(out).not.toContain("QUFB"); // the other run's recording stayed behind
+    expect(out).not.toContain('id="tb-clip-1');
+  });
+
+  test("a streaming document holds the run until EVERY device's recording chunk lands", async () => {
+    // The buyer's chunk closes after the seller's. Opening in between would settle the buyer on
+    // "No screen recording" with nothing to repaint it once its bytes arrive.
+    const urlAny = URL as any;
+    const original = urlAny.createObjectURL;
+    urlAny.createObjectURL = () => "blob:https://report.example/clip-held";
+    try {
+      const state = renderViewerState(null, { chunks: chunksOf(deviceHtml), holdClipChunks: ["0-1"], session: 0 });
+      expect(state.html).toContain("Loading run");
+      state.releaseChunks();
+      for (let i = 0; i < 100 && state.readHtml().includes("Loading run"); i++) await new Promise((resolve) => setTimeout(resolve, 10));
+      state.clickTab("video");
+      state.clickVideoDevice(1);
+      expect(state.readHtml()).toContain('aria-label="Screen recording of this run on the buyer device"');
+    } finally {
+      urlAny.createObjectURL = original;
+    }
+  });
+
+  test("a single-device run's Video tab has no device picker", () => {
+    withObjectUrls(() => {
+      const html = renderViewerState(null, { chunks: chunksOf(html_single()), session: 1, tab: "video" }).readHtml();
+      expect(html).not.toContain("data-vdev");
+      expect(html).toContain('aria-label="Screen recording of this run"');
+    });
+  });
+  const html_single = () => html;
+
+  test("a recording one device's browser can't decode is reported for THAT device only", () => {
+    withObjectUrls(() => {
+      const state = renderViewerState(null, { chunks: chunksOf(deviceHtml), session: 0, tab: "video" });
+      state.clickVideoDevice(1);
+      state.videoClipEl.fireError();
+      expect(state.readHtml()).toContain("could not play the screen recording");
+      // The seller's recording is untouched by the buyer's failure.
+      state.clickVideoDevice(0);
+      expect(state.readHtml()).toContain('id="vclip"');
+      expect(state.readHtml()).not.toContain("could not play");
+    });
+  });
+
+  test("the start device's recording failing to decode keeps the Video tab for the other device's", () => {
+    withObjectUrls(() => {
+      const state = renderViewerState(null, { chunks: chunksOf(deviceHtml), session: 0, tab: "video" });
+      state.videoClipEl.fireError();
+      state.clickTab("timeline");
+      expect(state.readHtml()).toContain('data-tab="video"');
+      // Reopened, the tab shows the recording that still plays rather than the failed one.
+      state.clickTab("video");
+      expect(state.readHtml()).toMatch(/<button class="btn vdev on"[^>]*>buyer<\/button>/);
+      expect(state.readHtml()).toContain('id="vclip"');
+    });
+  });
+
+  test("an archive recording the browser can't decode is reported for that device too", () => {
+    // The archive loader's clips (object URLs over the zip's own bytes) take a different path to
+    // the player than the document's embedded ones; a decode failure must still land on the notice.
+    withObjectUrls(() => {
+      const archive = payloadOf(deviceHtml);
+      const { video: _embedded, ...session } = archive.sessions[0];
+      archive.sessions[0] = { ...session, videoClips: [
+        { url: "blob:tb-seller", startMs: T0 - 1000, endMs: T0 + 3000, mime: "video/webm", device: "seller" },
+        { url: "blob:tb-buyer", startMs: T0 - 500, endMs: T0 + 3500, mime: "video/webm", device: "buyer" },
+      ] };
+      const state = renderViewerState(archive, { session: 0, tab: "video" });
+      state.clickVideoDevice(1);
+      state.videoClipEl.fireError();
+      expect(state.readHtml()).toContain("could not play the screen recording");
+      state.clickVideoDevice(0);
+      expect(state.readHtml()).toContain('id="vclip"');
     });
   });
 
@@ -4045,6 +4451,19 @@ describe("chunkJsonWithoutRuntimeAttachments (export sanitizing of an embedded s
     // Stripping every entry leaves null rather than an empty map, so the viewer's "any attachments?"
     // check reads the same as a session that referenced none.
     expect(JSON.parse(chunkJsonWithoutRuntimeAttachments(chunk({ "a.wav": "blob:x" }))!).attachments).toBeNull();
+  });
+
+  test("drops the archive's recordings, which resolve only on the page that read the archive", () => {
+    const clip = (url: string) => ({ url, mime: "video/webm", startMs: 10, endMs: 20 });
+    const withClips = JSON.stringify({
+      meta: { title: "Run" },
+      videoClip: clip("blob:https://app.test/seller"),
+      videoClips: [clip("blob:https://app.test/seller"), clip("blob:https://app.test/buyer")],
+    });
+    const out = chunkJsonWithoutRuntimeAttachments(withClips)!;
+    expect(out).not.toContain("blob:");
+    expect(JSON.parse(out).videoClips).toBeNull();
+    expect(JSON.parse(out).meta.title).toBe("Run");
   });
 });
 
@@ -8601,6 +9020,31 @@ describe("LLM chat transcripts (SessionPayload.llmMessages / llmMessagesGz)", ()
     });
   });
 
+  test("a transcript shows the recording of the device its call ran on, not the selected step's", async () => {
+    // Step 1 ran on the seller, step 2 (and its call) on the buyer. The selection stays on the
+    // seller's step while the dialog opens the buyer's call.
+    const payload: any = contextualTimelinePayload();
+    const trace = payload.sessions[0].trace;
+    const buyerFrom = trace.findIndex((row: any) => row.objective && row.label === "Confirm the purchase");
+    trace.forEach((row: any, k: number) => { row.device = k < buyerFrom ? "seller" : "buyer"; });
+    payload.sessions[0].shots = {};
+    payload.sessions[0].video = {
+      ...recordingAt(1704067200000, 1704067204000, Buffer.from("SELLERBYTES").toString("base64")), device: "seller",
+      companions: [{ ...recordingAt(1704067200000, 1704067204000, Buffer.from("BUYERBYTES").toString("base64")), device: "buyer" }],
+    };
+
+    let src = "";
+    const minted = withObjectUrls((minted) => {
+      const state = renderViewerState(payload, { routeStep: trace[1].i, openTx: 1, clipDuration: 4 });
+      expect(state.readHtml()).toMatch(new RegExp(`data-step="${trace[1].i}"[^>]*aria-current="step"`)); // a seller step
+      const body = state.zoomRoot.children[0].children[0];
+      src = /<video class="txscreenvideo"[^>]* src="blob:https:\/\/report\.example\/clip-(\d+)"/.exec(body.innerHTML)?.[1] || "";
+      return minted;
+    });
+    expect(src).not.toBe("");
+    expect(await minted[Number(src) - 1].text()).toBe("BUYERBYTES");
+  });
+
   test("stepping the transcript into another step opens that step underneath the dialog", () => {
     // Transcript navigation moves the timeline selection too, and closing the dialog returns the
     // reader to that row. Without a reveal it lands inside a collapsed step it cannot see.
@@ -11415,6 +11859,93 @@ describe("Trail projections — Replay, Grid and Map (the same trail across devi
     expect(plain).not.toContain('class="rpsource"');
   });
 
+  test("in device mode each lane plays its own device's recording", () => {
+    // One session drove two devices and recorded both. The seller lane (first by appearance) plays
+    // the seller's file, the buyer lane the buyer's — never the same video twice.
+    const twoDevices = run("android-phone", [
+      trailRow(1, { objective: true, trailhead: true, label: "Open register", ts: 1000, device: "seller" }),
+      trailRow(2, { ts: 1000, ms: 500, screenshotFile: "a-prep.webp", device: "seller" }),
+      trailRow(3, { objective: true, label: "Present card", ts: 2000, device: "buyer" }),
+      trailRow(4, { ts: 2000, ms: 3000, screenshotFile: "a-signin-1.webp", device: "buyer" }),
+    ]);
+    const both = { generatedAt: "now", sessions: [{ ...twoDevices, videoClips: [
+      { url: "blob:tb-seller", startMs: 0, endMs: 6000, mime: "video/webm", device: "seller" },
+      { url: "blob:tb-buyer", startMs: 0, endMs: 6000, mime: "video/webm", device: "buyer" },
+    ] }] };
+    const out = renderViewer(both, { query: "?view=trail&mode=replay" });
+    expect(out).toContain('data-rp-vid="0" src="blob:tb-seller"');
+    expect(out).toContain('data-rp-vid="1" src="blob:tb-buyer"');
+
+    // Only the buyer recorded: the seller lane steps its screenshots rather than borrowing the
+    // buyer's screen, and the buyer lane plays.
+    const buyerOnly = { generatedAt: "now", sessions: [{ ...twoDevices, videoClips: [
+      { url: "blob:tb-buyer", startMs: 0, endMs: 6000, mime: "video/webm", device: "buyer" },
+    ] }] };
+    const one = renderViewer(buyerOnly, { query: "?view=trail&mode=replay" });
+    expect(one).not.toContain('data-rp-vid="0"');
+    expect(one).toContain('data-rp-vid="1" src="blob:tb-buyer"');
+
+    // A session that switched to the buyer before the seller acted names one device, so it is not
+    // in device mode — but its one lane is the buyer's display, and plays the buyer's recording.
+    const buyerRows = run("android-phone", [
+      trailRow(1, { objective: true, trailhead: true, label: "Present card", ts: 2000, device: "buyer" }),
+      trailRow(2, { ts: 2000, ms: 3000, screenshotFile: "a-signin-1.webp", device: "buyer" }),
+    ]);
+    const switchedFirst = renderViewer({ generatedAt: "now", sessions: [{ ...buyerRows, videoClips: [
+      { url: "blob:tb-seller", startMs: 0, endMs: 6000, mime: "video/webm", device: "seller" },
+      { url: "blob:tb-buyer", startMs: 0, endMs: 6000, mime: "video/webm", device: "buyer" },
+    ] }] }, { query: "?view=trail&mode=replay" });
+    expect(switchedFirst).toContain('data-rp-vid="0" src="blob:tb-buyer"');
+    expect(switchedFirst).not.toContain("blob:tb-seller");
+
+    // Rows that name no device get a lane of their own (see the partly-attributed test above).
+    // That lane is nobody's display, so it borrows no recording — not even the start device's,
+    // which is only ever the FIRST lane's.
+    const unattributedTail = run("android-phone", [
+      trailRow(1, { objective: true, trailhead: true, label: "Open register", ts: 1000, device: "seller" }),
+      trailRow(2, { ts: 1000, ms: 500, screenshotFile: "a-prep.webp", device: "seller" }),
+      trailRow(3, { objective: true, label: "Present card", ts: 2000, device: "buyer" }),
+      trailRow(4, { ts: 2000, ms: 3000, screenshotFile: "a-signin-1.webp", device: "buyer" }),
+      trailRow(5, { objective: true, label: "Wrap up", ts: 5000 }),
+      trailRow(6, { ts: 5000, ms: 500, screenshotFile: "a-prep.webp" }),
+    ]);
+    const tail = renderViewer({ generatedAt: "now", sessions: [{ ...unattributedTail, videoClips: [
+      { url: "blob:tb-seller", startMs: 0, endMs: 6000, mime: "video/webm", device: "seller" },
+      { url: "blob:tb-buyer", startMs: 0, endMs: 6000, mime: "video/webm", device: "buyer" },
+    ] }] }, { query: "?view=trail&mode=replay" });
+    expect(tail).toContain('data-rp-vid="0" src="blob:tb-seller"');
+    expect(tail).toContain('data-rp-vid="1" src="blob:tb-buyer"');
+    expect(tail).not.toContain('data-rp-vid="2"');
+
+    // The buyer was unbound and bound again, so it recorded twice. Its lane carries both, in
+    // capture order, whatever order the archive listed them in; the seller's lane only its own.
+    const rebound = renderViewer({ generatedAt: "now", sessions: [{ ...twoDevices, videoClips: [
+      { url: "blob:tb-seller", startMs: 0, endMs: 6000, mime: "video/webm", device: "seller" },
+      { url: "blob:tb-buyer-2", startMs: 4000, endMs: 6000, mime: "video/webm", device: "buyer" },
+      { url: "blob:tb-buyer", startMs: 1500, endMs: 3000, mime: "video/webm", device: "buyer" },
+    ] }] }, { query: "?view=trail&mode=replay" });
+    expect(rebound).toContain('data-rp-vid="0" src="blob:tb-seller" data-rp-seg="0"');
+    expect(rebound).toContain('data-rp-vid="1" src="blob:tb-buyer" data-rp-seg="0"');
+    expect(rebound).toContain('data-rp-vid="1" src="blob:tb-buyer-2" data-rp-seg="1"');
+    expect(rebound.split('data-rp-vid="0"').length - 1).toBe(1);
+    // A run whose rows name only the buyer is one lane, not device mode — and it still switches.
+    const reboundBuyerOnly = renderViewer({ generatedAt: "now", sessions: [{ ...buyerRows, videoClips: [
+      { url: "blob:tb-seller", startMs: 0, endMs: 6000, mime: "video/webm", device: "seller" },
+      { url: "blob:tb-buyer-2", startMs: 4000, endMs: 6000, mime: "video/webm", device: "buyer" },
+      { url: "blob:tb-buyer", startMs: 1500, endMs: 3000, mime: "video/webm", device: "buyer" },
+    ] }] }, { query: "?view=trail&mode=replay" });
+    expect(reboundBuyerOnly).toContain('data-rp-vid="0" src="blob:tb-buyer" data-rp-seg="0"');
+    expect(reboundBuyerOnly).toContain('data-rp-vid="0" src="blob:tb-buyer-2" data-rp-seg="1"');
+    expect(reboundBuyerOnly).not.toContain("blob:tb-seller");
+
+    // A recording that names no device predates per-device capture: it was taken on the device
+    // the trail STARTED on, so it belongs to the first lane and to no other.
+    const legacy = { generatedAt: "now", sessions: [{ ...twoDevices, videoClip: { url: "blob:tb-legacy", startMs: 0, endMs: 6000, mime: "video/webm" } }] };
+    const old = renderViewer(legacy, { query: "?view=trail&mode=replay" });
+    expect(old).toContain('data-rp-vid="0" src="blob:tb-legacy"');
+    expect(old).not.toContain('data-rp-vid="1"');
+  });
+
   test("every pane has a mark overlay, and the strip pips each interaction at its own instant", () => {
     // Lane A taps at ts 2000 and asserts at ts 5000 — 1000ms and 4000ms into its own run, on a
     // 5000ms shared axis, so a fifth and four fifths along.
@@ -11471,6 +12002,13 @@ describe("Trail projections — Replay, Grid and Map (the same trail across devi
     // kill. Nothing in a pane may MOVE when only its content changes.
     expect(core.RUN_REPORT_CSS).toContain(".rpimg { opacity: 0; transition: opacity 200ms ease; }");
     expect(core.RUN_REPORT_CSS).not.toContain("translateY(6px)");
+  });
+
+  test("a pane is never faded for where its device is in the run", () => {
+    // A device's screen before or after its own steps is still its real screen — a companion device
+    // waiting its turn, or the slower of two runs being compared. Washing the pane out made a live
+    // recording look disabled.
+    expect(core.RUN_REPORT_CSS).not.toMatch(/\.rplane\.[a-z]+\s*\{[^}]*opacity/);
   });
 
   test("the speed ring stops at 10x, where a played recording can still keep up", () => {

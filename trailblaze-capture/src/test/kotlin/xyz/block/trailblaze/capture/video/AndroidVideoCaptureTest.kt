@@ -248,6 +248,30 @@ class AndroidVideoCaptureTest {
     assertEquals(first + 2_000L, artifact.endTimestampMs, "claiming footage the file lacks would misplace every step")
   }
 
+  @Test
+  fun `a companion device records under its own basename and its empty-file guard watches that file`() {
+    // In a multi-device session two of these recorders share one session directory; the companion
+    // must write `video-<name>` and, when its device fed the pipe nothing, remove ITS empty file
+    // rather than the start device's recording.
+    val startDeviceRecording = File(tempDir, RecordingFormat.preferred.canonicalFilename).apply { createNewFile() }
+    var muxOutput: File? = null
+    val capture = AndroidVideoCapture(
+      muxFactory = { outputFile, _, _ -> muxOutput = outputFile; FakeMux(result = null) },
+      basename = "video-buyer",
+      screenrecordAvailable = { true },
+    )
+
+    capture.start(tempDir, DEVICE_ID, appId = null)
+    val output = assertNotNull(muxOutput, "start must build the mux")
+    assertEquals(RecordingFormat.preferred.filename("video-buyer"), output.name)
+    assertEquals(tempDir, output.parentFile, "the companion records into the same session directory")
+
+    output.createNewFile()
+    assertNull(capture.stop(CaptureOptions(captureVideo = true)))
+    assertFalse(output.exists(), "the companion's own empty recording is removed")
+    assertTrue(startDeviceRecording.exists(), "the start device's file is not the companion's to delete")
+  }
+
   /** Stands in for the screencap recorder, recording whether it was asked to do the work. */
   private class RecordingFallback(val artifact: CaptureArtifact?) : CaptureStream {
     override val type = CaptureType.VIDEO_WEBM

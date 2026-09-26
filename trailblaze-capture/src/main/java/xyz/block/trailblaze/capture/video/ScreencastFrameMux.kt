@@ -22,9 +22,8 @@ internal object ScreencastFrameMux {
 
   /**
    * Constant output frame rate for the muxed recording. The report timeline aligns by wall-clock,
-   * so a modest rate is enough for smooth scrubbing; the encoder collapses static runs (the
-   * majority of most sessions) to near-zero bytes, so 10fps keeps even a 10-minute session's
-   * recording well under a megabyte.
+   * so a modest rate is enough for smooth scrubbing, and the encoder collapses static runs
+   * (the majority of most sessions) to near-zero bytes.
    */
   const val DEFAULT_MUX_FPS = 10
 
@@ -40,7 +39,8 @@ internal object ScreencastFrameMux {
     output: File,
     sessionStartMs: Long,
     sessionEndMs: Long,
-    format: RecordingFormat,
+    /** Codec args from the calling recorder's [RecordingFormat] — the timing args are this object's. */
+    encodeArgs: List<String>,
     ffmpegBinary: String,
     logTag: String,
     muxFps: Int = DEFAULT_MUX_FPS,
@@ -48,7 +48,8 @@ internal object ScreencastFrameMux {
     val script = ScreencastTimeline.buildConcatScript(frames, sessionStartMs, sessionEndMs) ?: return null
     val totalMs = ScreencastTimeline.totalMs(frames, sessionStartMs, sessionEndMs) ?: return null
     val dir = output.parentFile ?: return null
-    val listFile = File(dir, "video.screencast.concat.txt")
+    // Named after the output: a companion's recording muxes into the same session directory.
+    val listFile = File(dir, "${output.nameWithoutExtension}.screencast.concat.txt")
     try {
       listFile.writeText(script)
     } catch (e: Exception) {
@@ -72,7 +73,7 @@ internal object ScreencastFrameMux {
         // `-t` (an input-side one would move the seek instead) cuts it back to the truth.
         "-t", FfconcatScript.formatSeconds(totalMs),
         "-an",
-      ) + format.encodeArgs() + output.absolutePath,
+      ) + encodeArgs + output.absolutePath,
       timeoutSeconds = FFMPEG_TIMEOUT_SECONDS,
     )
     runCatching { listFile.delete() }

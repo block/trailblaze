@@ -5,6 +5,7 @@ import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.request.receive
 import io.ktor.server.response.respond
+import io.ktor.server.response.respondBytes
 import io.ktor.server.response.respondText
 import io.ktor.server.routing.Routing
 import io.ktor.server.routing.post
@@ -98,6 +99,65 @@ data class CliExecResponse(
   val forwarded: Boolean = true,
   val transcript: List<CliExecChunk> = emptyList(),
 )
+
+/**
+ * A forwarded [CliExecResponse] in a framing the bash shim replays with builtins alone, so the
+ * forwarded path needs no JSON decoder process. The shim asks for it with an `Accept` header of
+ * [CONTENT_TYPE] and keeps its JSON decoder for daemons that predate it.
+ *
+ * UTF-8 bytes, in this order:
+ * ```
+ * trailblaze-replay 1\n
+ * exit <0-255>\n
+ * <1|2> <byte count>\n<bytes>      one per run of output: 1 = stdout, 2 = stderr, in write order
+ * end\n
+ * ```
+ * Byte counts rather than delimiters, because output can contain any delimiter. NUL characters are
+ * dropped: bash cannot hold them in a variable, so a count that included them would never match.
+ * The trailing `end` is what tells a complete body from a truncated one.
+ */
+object CliExecReplayFormat {
+
+  const val CONTENT_TYPE: String = "application/vnd.trailblaze.cli-replay"
+
+  private const val HEADER = "trailblaze-replay 1\n"
+
+  fun encode(response: CliExecResponse): ByteArray {
+    val chunks = response.transcript.ifEmpty {
+      listOf(
+        CliExecChunk(CliExecStream.STDOUT, response.stdout),
+        CliExecChunk(CliExecStream.STDERR, response.stderr),
+      )
+    }
+    val out = java.io.ByteArrayOutputStream()
+    out.write(HEADER.encodeToByteArray())
+    out.write("exit ${Math.floorMod(response.exitCode, 256)}\n".encodeToByteArray())
+    var pendingStream: CliExecStream? = null
+    val pending = StringBuilder()
+    fun flush() {
+      val stream = pendingStream ?: return
+      val bytes = pending.toString().encodeToByteArray()
+      if (bytes.isNotEmpty()) {
+        val tag = if (stream == CliExecStream.STDERR) 2 else 1
+        out.write("$tag ${bytes.size}\n".encodeToByteArray())
+        out.write(bytes)
+      }
+      pending.setLength(0)
+    }
+    for (chunk in chunks) {
+      // Consecutive writes to one stream replay as one: the shim slices each run out of the body
+      // separately, so fewer runs is less work there.
+      if (chunk.stream != pendingStream) {
+        flush()
+        pendingStream = chunk.stream
+      }
+      pending.append(chunk.text.replace("\u0000", ""))
+    }
+    flush()
+    out.write("end\n".encodeToByteArray())
+    return out.toByteArray()
+  }
+}
 
 /**
  * Endpoint for the CLI-via-daemon IPC fast path.
@@ -207,8 +267,21 @@ object CliExecEndpoint {
         return@post
       }
 
+      val wantsReplay = call.request.headers.getAll(HttpHeaders.Accept).orEmpty()
+        .any { it.contains(CliExecReplayFormat.CONTENT_TYPE) }
       try {
-        respondJson(HttpStatusCode.OK, onExec(request))
+        val response = onExec(request)
+        // Only a forwarded result is framed. Anything else sends the shim back to its own JVM,
+        // which it decides from the JSON as it always has.
+        if (wantsReplay && response.forwarded) {
+          call.respondBytes(
+            CliExecReplayFormat.encode(response),
+            ContentType.parse(CliExecReplayFormat.CONTENT_TYPE),
+            HttpStatusCode.OK,
+          )
+        } else {
+          respondJson(HttpStatusCode.OK, response)
+        }
       } catch (e: CancellationException) {
         // Structured concurrency: cancellation must propagate, not be swallowed
         // into a 500 response.

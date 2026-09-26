@@ -7,7 +7,7 @@ import java.io.File
  * scripted-tool analyzer, the LSP routes, and the interactive report renderer. Shared so every
  * caller agrees on the same PATH-then-repo-walk-up contract instead of drifting copies.
  *
- * **Bun is the only JS runtime Trailblaze uses.** `setup.sh` installs bun on every Runway CI
+ * **Bun is the only JS runtime Trailblaze uses.** `setup.sh` installs bun on every CI
  * agent, so there's no behavior incentive to keep a Node fallback.
  *
  * `bun.exe` is tried alongside `bun` for Windows-checkout walk-ups.

@@ -21,6 +21,7 @@ dependencies {
   implementation(project(":trailblaze-common"))
   implementation(project(":trailblaze-capture"))
   implementation(project(":trailblaze-report"))
+  implementation(project(":trailblaze-tracing"))
   implementation(project(":trailblaze-scripting-mcp-common"))
   implementation(project(":trailblaze-scripting-subprocess"))
   // In-process QuickJS launcher for catalog/framework scripted tools (e.g. openUrl). The daemon

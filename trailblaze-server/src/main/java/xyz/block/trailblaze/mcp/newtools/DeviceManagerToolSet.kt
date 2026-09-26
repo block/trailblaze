@@ -16,7 +16,9 @@ import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.devices.WebInstanceIds
 import xyz.block.trailblaze.devices.WebViewportSpec
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
+import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.mcp.AgentImplementation
+import xyz.block.trailblaze.mcp.BoundDeviceRosterMember
 import xyz.block.trailblaze.mcp.DeviceBusyException
 import xyz.block.trailblaze.mcp.DeviceClaimRegistry
 import xyz.block.trailblaze.mcp.McpDeviceContext
@@ -127,7 +129,9 @@ class DeviceManagerToolSet(
      * Unlike [CONNECT] / [ANDROID] / [IOS] / [WEB], which replace the session's single
      * device, BIND accumulates: bind `seller` then `buyer` and the session holds both,
      * with `switchDevice(name=…)` handing it between them. The first name bound is the
-     * active one, mirroring "the first declared entry is the start device".
+     * active one, mirroring "the first declared entry is the start device". The bound
+     * devices share ONE Trailblaze session and each is recorded into it: every roster
+     * change is handed to the host as the session's cast ([syncBoundDeviceRoster]).
      */
     BIND,
 
@@ -176,6 +180,7 @@ class DeviceManagerToolSet(
     switchDevice(name="buyer") → subsequent screens and tools act on the buyer device
     device(action=UNBIND, name="buyer")
 
+    Bound devices share one session; each one's screen is recorded into it.
     Your session is recorded automatically.
     Save it anytime as a reusable test: trail(action=SAVE, name="my_test")
     """
@@ -538,6 +543,10 @@ class DeviceManagerToolSet(
         ?.let { sessionContext.boundDevice(it) }
         ?.let { mcpBridge.selectDeviceForSession(it.trailblazeDeviceId) }
     }
+    // The host learns the cast before any release below: a device this bind displaced leaves the
+    // cast's shared session first, so releasing it finds no session of its own to end — ending
+    // the shared one would take the rest of the cast down with it.
+    val sharedSession = syncBoundDeviceRoster(sessionContext)
     // Both releases run after the roster and the associated device are settled, so the
     // still-addressed check below sees the state a subsequent tool call will dispatch against.
     if (previous != null && previous.trailblazeDeviceId != device.trailblazeDeviceId) {
@@ -565,10 +574,42 @@ class DeviceManagerToolSet(
       }
       appendLine()
       append(describeNamedBindings(sessionContext))
+      if (sharedSession != null && sessionContext.boundDeviceNames().size > 1) {
+        appendLine()
+        append("Session $sharedSession covers the whole cast; every bound device is recorded in it.")
+      }
       if (testName != null) {
         appendLine()
         append("(testName is ignored by BIND — name the session with session(action=START, title=…).)")
       }
+    }
+  }
+
+  /**
+   * Tells the host which devices this session's cast holds right now, so they share one Trailblaze
+   * session and each is recorded in it. Called after every change to the roster. Best-effort: the
+   * roster is already updated, and a host that could not act on it must not fail the bind that
+   * did — the report just shows fewer devices than the cast had.
+   *
+   * Blocks while the host starts or stops the members' recorders, and for up to the host's bounded
+   * wait when the session's own capture is still starting. Tool calls already run on the IO
+   * dispatcher, so that wait holds this call only.
+   */
+  private fun syncBoundDeviceRoster(sessionContext: TrailblazeMcpSessionContext): SessionId? {
+    val members = sessionContext.boundDeviceNames().mapNotNull { name ->
+      sessionContext.boundDevice(name)?.let { bound ->
+        BoundDeviceRosterMember(
+          name = name,
+          trailblazeDeviceId = bound.trailblazeDeviceId,
+          targetId = mcpBridge.getSessionTargetAppIdForDevice(bound.trailblazeDeviceId),
+        )
+      }
+    }
+    return try {
+      mcpBridge.setBoundDeviceRoster(sessionContext.mcpSessionId.sessionId, members)
+    } catch (e: Exception) {
+      Console.error("[MCP Bindings] host could not take the cast ${members.map { it.name }}: ${e.message}")
+      null
     }
   }
 
@@ -587,6 +628,9 @@ class DeviceManagerToolSet(
   ): String {
     val renamed = sessionContext.renameNamedDevice(from, to)
       ?: return "Error: '$from' is no longer bound, so there was nothing to rename to '$to'."
+    // The recording keyed by the old name stops and one under the new name starts; both stay in
+    // the session's metadata, each naming the device it filmed.
+    syncBoundDeviceRoster(sessionContext)
     return buildString {
       append(
         "Renamed '$from' to '$to' (${renamed.trailblazeDeviceId.instanceId}) — the same device, " +
@@ -642,6 +686,9 @@ class DeviceManagerToolSet(
         // decides whether switchDevice is advertised, so dropping an inactive name from two to one
         // has to retract it.
         refreshToolsForActiveDevice()
+        // Before the release: the unbound device leaves the cast's shared session (its recording
+        // stops, what it filmed stays), so the release finds no session of its own to end.
+        syncBoundDeviceRoster(sessionContext)
         // After the handover, so a device that was active and is still bound under another name
         // keeps its claim.
         releaseDeviceNoLongerAddressed(result.unbound.trailblazeDeviceId)
@@ -792,7 +839,9 @@ class DeviceManagerToolSet(
     // the device back in this session's reach, and an unreleased claim would keep it away from
     // every other session for good.
     try {
-      endSessionOnDevice(deviceId)
+      // A recording this session found running (on this device or, through the cast, another) is
+      // its owner's to end, the same rule session close follows.
+      if (sessionContext.recordingFoundRunningOnAnyDevice(deviceId) == null) endSessionOnDevice(deviceId)
     } finally {
       releaseClaimForSession(deviceId)
     }
@@ -955,6 +1004,9 @@ class DeviceManagerToolSet(
     // Clear first so the release below sees the roster a subsequent tool call dispatches
     // against — the device just connected is still addressed and must keep its claim.
     sessionContext.clearNamedDeviceBindings()
+    // The host forgets the cast too; the first dropped device to be released ends the session
+    // they shared, and every companion recording with it.
+    syncBoundDeviceRoster(sessionContext)
     dropped.forEach { releaseDeviceNoLongerAddressed(it) }
     return droppedBindings
   }
@@ -1049,7 +1101,7 @@ class DeviceManagerToolSet(
     @LLMDescription("Target app ID, or '' / 'clear' to remove the per-device override.")
     appTargetId: String,
   ): String {
-    val deviceId = sessionContext?.associatedDeviceId
+    val deviceId = sessionContext?.dispatchedDeviceId()
       ?: throw IllegalStateException(
         "No device is bound to this session. Connect a device first via $TOOL_CONNECT_DEVICE."
       )
@@ -1058,7 +1110,7 @@ class DeviceManagerToolSet(
       mcpBridge.setSessionTargetForDevice(deviceId = deviceId, appTargetId = null)
       // Fire list_changed so the MCP client refetches and drops any
       // target-specific tools that just disappeared.
-      sessionContext.mcpSessionId.sessionId.let { onSessionTargetChanged?.invoke(it) }
+      sessionContext?.mcpSessionId?.sessionId?.let { onSessionTargetChanged?.invoke(it) }
       return "Cleared session target override for ${deviceId.toFullyQualifiedDeviceId()}."
     }
     val resolvedDisplayName = mcpBridge.setSessionTargetForDevice(
@@ -1075,7 +1127,7 @@ class DeviceManagerToolSet(
     // `notifications/tools/list_changed` and the MCP client picks up
     // target-specific tools (e.g. `myapp_launchSignedIn`) that weren't in
     // the initialize-time tool list.
-    sessionContext.mcpSessionId.sessionId.let { onSessionTargetChanged?.invoke(it) }
+    sessionContext?.mcpSessionId?.sessionId?.let { onSessionTargetChanged?.invoke(it) }
     return "Set session target to $resolvedDisplayName ($appTargetId) for ${deviceId.toFullyQualifiedDeviceId()}."
   }
 

@@ -256,6 +256,8 @@ A few first-call messages aren't errors — don't treat them as such:
 trailblaze --help
 ```
 
-This is the canonical source for the current command surface. Hidden
-commands (like the built-in agent loop) are intentionally not in the
-default `--help` listing — don't reach for them.
+This is the canonical source for the current command surface. The
+`Built-in agent` group (`step`, `ask`, `verify`) runs Trailblaze's own
+LLM loop and needs `trailblaze config llm` set up. You are already the
+agent: drive with `snapshot` + `tool` instead, so every action is
+recorded with the selector you chose.

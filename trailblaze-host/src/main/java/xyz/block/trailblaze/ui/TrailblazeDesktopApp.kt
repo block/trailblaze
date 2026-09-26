@@ -21,6 +21,7 @@ import xyz.block.trailblaze.llm.RunYamlRequest
 import xyz.block.trailblaze.llm.TrailblazeReferrer
 import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.logs.model.SessionId
+import xyz.block.trailblaze.report.trace.SessionTraceFile
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.logs.server.TrailblazeMcpServer
 import xyz.block.trailblaze.logs.server.endpoints.CliRunRequest
@@ -187,6 +188,10 @@ abstract class TrailblazeDesktopApp(
             config = desktopAppConfig,
             appTargets = { deviceManager.availableAppTargets },
           ),
+          traceFileFor = { sessionId ->
+            File(deviceManager.logsRepo.getSessionDir(SessionId(sessionId)), SessionTraceFile.FILE_NAME)
+          },
+          servingPort = portManager.httpPort,
         )
       }
     }

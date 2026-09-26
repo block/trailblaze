@@ -5,10 +5,9 @@ import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Before
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
-import xyz.block.trailblaze.devices.TrailblazeDeviceId
-import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.exception.TrailblazeException
 import xyz.block.trailblaze.host.MockRpcServer
+import xyz.block.trailblaze.host.jvmScopedDeviceId
 import xyz.block.trailblaze.llm.RunYamlRequest
 import xyz.block.trailblaze.llm.TrailblazeLlmModels
 import xyz.block.trailblaze.llm.TrailblazeReferrer
@@ -36,10 +35,7 @@ import kotlin.test.assertTrue
  */
 class DesktopYamlRunnerLaunchGateTest {
 
-  private val deviceId = TrailblazeDeviceId(
-    instanceId = "test-device-launch-gate",
-    trailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID,
-  )
+  private val deviceId = jvmScopedDeviceId("test-device-launch-gate")
 
   private val mockServer = MockRpcServer(deviceId)
   private lateinit var rpcClient: OnDeviceRpcClient

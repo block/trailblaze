@@ -673,6 +673,16 @@ function loadFormatters(names: string[]): EventStreamFormatter[] {
  * session directory. Neither a `../` name nor an in-session symlink gets a host file base64-embedded
  * under a video MIME, or linked out of a published report.
  *
+ * A multi-device session lists one recording per device — more for a device unbound and bound
+ * again, which records a new file each time — each stamped with the device's configuration name
+ * (`deviceName`). The session's video is normally the START device's — capture lists it first, and
+ * it is the one every single-recording reader already expects — and the other recordings ride
+ * along as `companions`, in list order, each charged against the same
+ * budget. A recording that fails any check above is dropped on its own and the first one left
+ * leads, so when the start device's file is unusable a companion becomes `video`. Each keeps its
+ * `device`, which is what the viewer matches a step against, so the promoted one still plays only
+ * for its own display.
+ *
  * @param clipValue what to put in the clip's `uri` — the base64 data URI by default (null when the
  *   file is over the embed cap), or the linked URL when the report references media instead of
  *   embedding it. The recording is an ordinary file in the session dir, served by the same two
@@ -687,21 +697,51 @@ export function readVideo(
     const metaPath = join(sessionDir, "capture_metadata.json");
     if (!existsSync(metaPath)) return null;
     const artifacts: any[] = (JSON.parse(readFileSync(metaPath, "utf8")).artifacts) || [];
-    const art = artifacts.find((a) => a.type === "VIDEO_WEBM") ?? artifacts.find((a) => a.type === "VIDEO");
-    if (!art || !art.filename || art.startTimestampMs == null) return null;
-    if (!isSafeSessionRelativePath(art.filename)) return null;
-    const path = join(sessionDir, art.filename);
-    if (!existsSync(path) || !resolvesInsideSession(sessionDir, path)) return null;
-    const mime = CLIP_MIME[(art.filename.split(".").pop() || "").toLowerCase()];
-    if (!mime) return null;
-    const uri = clipValue(path);
-    if (!uri) return null;
-    const startMs: number = art.startTimestampMs;
-    const endMs: number = art.endTimestampMs ?? art.startTimestampMs;
-    return { startMs, endMs, clip: { uri, mime, startMs, endMs } };
+    // One entry per recording, in the order capture listed them. A recording is a file stem — a
+    // device unbound and bound again records `video-buyer` and then `video-buyer-2`, and each is
+    // kept — and within one the webm (the live VP9 encode) wins over the mp4, falling to the next
+    // when that fails a check.
+    const byRecording = new Map<string, any[]>();
+    for (const a of artifacts) {
+      if (a.type !== "VIDEO_WEBM" && a.type !== "VIDEO") continue;
+      const device = a.deviceName == null ? "" : String(a.deviceName);
+      const key = `${device}\u0000${String(a.filename ?? "").replace(/\.[^./]*$/, "")}`;
+      byRecording.set(key, [...(byRecording.get(key) ?? []), a]);
+    }
+    const videos = [...byRecording.values()]
+      .map((group) => {
+        const preferred = [...group.filter((a) => a.type === "VIDEO_WEBM"), ...group.filter((a) => a.type !== "VIDEO_WEBM")];
+        for (const art of preferred) {
+          const video = readVideoArtifact(sessionDir, art, clipValue);
+          if (video) return video;
+        }
+        return null;
+      })
+      .filter((video): video is VideoInfo => video != null);
+    const [primary, ...companions] = videos;
+    if (!primary) return null;
+    return companions.length ? { ...primary, companions } : primary;
   } catch {
     return null;
   }
+}
+
+/** One recording as [readVideo] describes it, or null when the artifact fails any of its checks. */
+function readVideoArtifact(sessionDir: string, art: any, clipValue: (path: string) => string | null): VideoInfo | null {
+  if (!art || !art.filename || art.startTimestampMs == null) return null;
+  if (!isSafeSessionRelativePath(art.filename)) return null;
+  const path = join(sessionDir, art.filename);
+  if (!existsSync(path) || !resolvesInsideSession(sessionDir, path)) return null;
+  const mime = CLIP_MIME[(art.filename.split(".").pop() || "").toLowerCase()];
+  if (!mime) return null;
+  const uri = clipValue(path);
+  if (!uri) return null;
+  const startMs: number = art.startTimestampMs;
+  const endMs: number = art.endTimestampMs ?? art.startTimestampMs;
+  const video: VideoInfo = { startMs, endMs, clip: { uri, mime, startMs, endMs } };
+  if (art.deviceName != null) video.device = String(art.deviceName);
+  if (art.deviceId != null) video.deviceId = String(art.deviceId);
+  return video;
 }
 
 function main(): void {

@@ -15,6 +15,7 @@ import xyz.block.trailblaze.android.BaseAndroidStandaloneServerTest
 import xyz.block.trailblaze.android.InstrumentationArgUtil
 import xyz.block.trailblaze.android.OnDeviceOpenAICompatibleLlmClientFactory
 import xyz.block.trailblaze.android.accessibility.OnDeviceAccessibilityServiceSetup
+import xyz.block.trailblaze.android.accessibility.ScriptedToolBundleReuse
 import xyz.block.trailblaze.android.devices.TrailblazeAndroidOnDeviceClassifier
 import xyz.block.trailblaze.android.rpc.AccessibilityScreenStateCaptor
 import xyz.block.trailblaze.android.rpc.AccessibilitySettleGate
@@ -163,6 +164,8 @@ class AndroidStandaloneServerTest : BaseAndroidStandaloneServerTest() {
       screenStateCaptor = AccessibilityScreenStateCaptor,
       waitForSettled = AccessibilitySettleGate::waitForSettled,
       deviceClassifiers = getDeviceClassifiers(),
+      // The host is tearing the connection down, so no session on it dispatches again.
+      onDrain = { ScriptedToolBundleReuse.releaseAll() },
     )
     onDeviceRpcServer.startServer(port = onDeviceRpcPort, wait = true)
   }

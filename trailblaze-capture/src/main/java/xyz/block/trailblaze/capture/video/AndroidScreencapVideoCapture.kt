@@ -6,6 +6,7 @@ import java.util.zip.CRC32
 import xyz.block.trailblaze.capture.CaptureOptions
 import xyz.block.trailblaze.capture.CaptureStream
 import xyz.block.trailblaze.capture.model.CaptureArtifact
+import xyz.block.trailblaze.capture.model.CaptureFilenames
 import xyz.block.trailblaze.capture.model.CaptureType
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
@@ -42,6 +43,8 @@ class AndroidScreencapVideoCapture(
   private val intervalMs: Long = DEFAULT_INTERVAL_MS,
   /** Test seam: returns one PNG for the device, or null when the grab failed. */
   private val grabFrame: (TrailblazeDeviceId) -> ByteArray? = ::screencapPng,
+  /** See [AndroidVideoCapture]'s `basename`; the frame scratch directory is suffixed the same way. */
+  private val basename: String = CaptureFilenames.VIDEO_BASENAME,
 ) : CaptureStream {
 
   override val type: CaptureType get() = format.captureType
@@ -64,7 +67,9 @@ class AndroidScreencapVideoCapture(
     this.sessionDir = sessionDir
     this.startTimestampMs = System.currentTimeMillis()
     sessionDir.mkdirs()
-    val dir = File(sessionDir, FRAMES_SUBDIR).apply { mkdirs() }
+    // Two devices sampled into one session directory each need their own scratch space, or one
+    // recorder's cleanup deletes the other's frames mid-session.
+    val dir = File(sessionDir, framesSubdir()).apply { mkdirs() }
     framesDir = dir
 
     val trailblazeDeviceId = TrailblazeDeviceId(deviceId, TrailblazeDevicePlatform.ANDROID)
@@ -163,13 +168,13 @@ class AndroidScreencapVideoCapture(
       return null
     }
 
-    val output = File(dir, format.canonicalFilename)
+    val output = File(dir, format.filename(basename))
     val muxed = ScreencastFrameMux.mux(
       frames = frameSnapshot,
       output = output,
       sessionStartMs = startTimestampMs,
       sessionEndMs = endTimestampMs,
-      format = format,
+      encodeArgs = format.encodeArgs(),
       ffmpegBinary = ffmpegBinary,
       logTag = "AndroidScreencapVideoCapture",
     )
@@ -188,6 +193,8 @@ class AndroidScreencapVideoCapture(
     framesDir?.let { dir -> runCatching { dir.deleteRecursively() } }
     framesDir = null
   }
+
+  private fun framesSubdir(): String = CaptureFilenames.framesScratchDir(FRAMES_SUBDIR, basename)
 
   companion object {
     private const val FRAMES_SUBDIR = ".trailblaze-screencap-frames"

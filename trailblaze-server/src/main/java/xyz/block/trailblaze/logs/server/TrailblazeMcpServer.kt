@@ -142,6 +142,7 @@ import xyz.block.trailblaze.scripting.subprocess.InlineScriptToolServerSynthesiz
 import xyz.block.trailblaze.scripting.subprocess.LaunchedSubprocessRuntime
 import xyz.block.trailblaze.scripting.subprocess.McpSubprocessRuntimeLauncher
 import xyz.block.trailblaze.scripting.subprocess.SubprocessToolRegistrar
+import xyz.block.trailblaze.tracing.TrailblazeTracer
 import xyz.block.trailblaze.util.Console
 import java.io.File
 import kotlin.reflect.KClass
@@ -478,8 +479,7 @@ class TrailblazeMcpServer(
    */
   private fun activeDeviceId(
     sessionContext: TrailblazeMcpSessionContext,
-  ): TrailblazeDeviceId? =
-    McpDeviceContext.currentDeviceId.get() ?: sessionContext.associatedDeviceId
+  ): TrailblazeDeviceId? = sessionContext.dispatchedDeviceId()
 
   /**
    * Resolves the effective target app for the bound device. Prefers the
@@ -953,8 +953,7 @@ class TrailblazeMcpServer(
    * [executeHostLocalToolInline]) so the resolution chain can't drift between them.
    */
   private suspend fun resolveDriverTypeForDevice(deviceId: TrailblazeDeviceId): TrailblazeDriverType? =
-    mcpBridge.getAvailableDevices().firstOrNull { it.trailblazeDeviceId == deviceId }?.trailblazeDriverType
-      ?: mcpBridge.getDriverType()
+    mcpBridge.getDeviceDriverType(deviceId) ?: mcpBridge.getDriverType()
 
 
   /**
@@ -1453,14 +1452,18 @@ class TrailblazeMcpServer(
     // before cancelling automation, releasing devices, or closing/removing session state.
     runBlocking { clearSessionScriptToolRuntime(sessionId) }
 
-    // Cancel any running automation on the associated device — unless the recording there is one
-    // this session found running, whose automation is its owner's (see "Recording ownership" on
-    // TrailblazeMcpSessionContext).
-    sessionContext.associatedDeviceId?.takeIf { sessionContext.recordingFoundRunningOn(it) == null }?.let { deviceId ->
-      try {
-        mcpBridge.cancelAutomation(deviceId)
-      } catch (e: Exception) {
-        Console.error("Error cancelling automation during session termination: ${e.message}")
+    // Cancel any running automation on every device the session addresses — a named bind warms each
+    // one, not just the active one — unless the recording there is one this session found running,
+    // whose automation is its owner's (see "Recording ownership" on TrailblazeMcpSessionContext).
+    sessionContext.addressedDeviceIds().filter { sessionContext.recordingFoundRunningOn(it) == null }.forEach { deviceId ->
+      // Cancelling ends the whole session the device is on, so a cast member on a recording found
+      // running on another device is not cancelled: the dissolved cast below takes it off instead.
+      if (sessionContext.recordingFoundRunningOnAnyDevice(deviceId) == null) {
+        try {
+          mcpBridge.cancelAutomation(deviceId)
+        } catch (e: Exception) {
+          Console.error("Error cancelling automation during session termination: ${e.message}")
+        }
       }
       // Match the platform-aware policy from
       // [DeviceManagerToolSet.connectToDeviceUnified]: only iOS Maestro drivers
@@ -1473,6 +1476,10 @@ class TrailblazeMcpServer(
         mcpBridge.releasePersistentDeviceConnection(deviceId)
       }
     }
+
+    // The transport's close callback short-circuits once this removes the context, so the cast
+    // is forgotten here too — left behind, it pulls the next session on any member onto it.
+    forgetBoundDeviceRoster(sessionId)
 
     // Release device claims
     deviceClaimRegistry.releaseAllForSession(sessionId)
@@ -1904,10 +1911,17 @@ class TrailblazeMcpServer(
           // Timeout prevents indefinite hangs when a device session crashes mid-execution
           // (e.g., device driver dies, Maestro session fails). Without this, a broken device
           // connection can leave the MCP call blocked forever, confusing the MCP client.
-          val toolResponse = withTimeout(resolveMcpToolExecutionTimeoutMs()) {
-            withContext(Dispatchers.IO + deviceIdContext) {
-              @OptIn(InternalAgentToolsApi::class)
-              koogTool.executeUnsafe(args = koogToolArgs)
+          // The action only: other arguments carry objectives, typed text and selectors.
+          val spanArgs = buildMap {
+            put("tool", toolName)
+            (argumentsJsonObject["action"] as? JsonPrimitive)?.contentOrNull?.let { put("action", it) }
+          }
+          val toolResponse = TrailblazeTracer.traceSuspend("handleToolCall", "mcp", spanArgs) {
+            withTimeout(resolveMcpToolExecutionTimeoutMs()) {
+              withContext(Dispatchers.IO + deviceIdContext) {
+                @OptIn(InternalAgentToolsApi::class)
+                koogTool.executeUnsafe(args = koogToolArgs)
+              }
             }
           }
 
@@ -2191,6 +2205,7 @@ class TrailblazeMcpServer(
         sessionContext.addressedDeviceIds().forEach { deviceId ->
           cleanupDeviceOnSessionClose(deviceId, "MCP session closure", closedSessionId, sessionContext)
         }
+        forgetBoundDeviceRoster(closedSessionId)
 
         // Release device claims for this session
         deviceClaimRegistry.releaseAllForSession(closedSessionId)
@@ -2847,6 +2862,7 @@ class TrailblazeMcpServer(
           logEmitter = trailLogEmitter,
           sessionIdProvider = activeSessionIdProvider,
           driverStatusProvider = { mcpBridge.getDriverConnectionStatus() },
+          deviceConnectedProvider = { mcpBridge.getCurrentlySelectedDeviceId() != null },
           toolClassesOverrideProvider = { mcpBridge.getInnerAgentToolClasses() },
           rawToolExecutor = { tool, traceId ->
             val dynamicRepo = dynamicToolRepoProvider()
@@ -3238,6 +3254,7 @@ class TrailblazeMcpServer(
       sessionContext.addressedDeviceIds().forEach { deviceId ->
         cleanupDeviceOnSessionClose(deviceId, "STDIO session closure", mcpSessionId.sessionId, sessionContext)
       }
+      forgetBoundDeviceRoster(mcpSessionId.sessionId)
       deviceClaimRegistry.releaseAllForSession(mcpSessionId.sessionId)
 
       sessionContext.onSessionClosed?.invoke()
@@ -3281,6 +3298,19 @@ class TrailblazeMcpServer(
     }
   }
 
+  /**
+   * Drops the named cast [mcpSessionId] declared to the host. After the devices' sessions are
+   * ended, so it only forgets bookkeeping — left behind, the cast would pull the next session
+   * opened on any of its devices, by any MCP session, onto the whole roster.
+   */
+  private fun forgetBoundDeviceRoster(mcpSessionId: String) {
+    try {
+      mcpBridge.setBoundDeviceRoster(mcpSessionId, emptyList())
+    } catch (e: Exception) {
+      Console.error("Error forgetting the device roster of $mcpSessionId: ${e.message}")
+    }
+  }
+
   internal fun cleanupDeviceOnSessionClose(
     deviceId: TrailblazeDeviceId,
     closeReason: String,
@@ -3299,27 +3329,36 @@ class TrailblazeMcpServer(
       return
     }
 
-    Console.log("Ending session and cancelling automation on device ${deviceId.instanceId} due to $closeReason")
-
-    // End the Trailblaze session first so it gets a clean Ended status in the report.
-    // Bind the per-session device ID so getActiveSessionId/endSession target the right device.
-    val deviceContextElement = McpDeviceContext.currentDeviceId.asContextElement(deviceId)
-    try {
-      runBlocking(deviceContextElement) {
-        // Only end the session if one was actually created (session creation is deferred
-        // to the first blaze/ask call, so a connect-then-disconnect has no session to end).
-        if (mcpBridge.getActiveSessionId() != null) {
-          withTimeout(SESSION_END_TIMEOUT_MS) { mcpBridge.endSession() }
+    // A cast member on the recording another member was found running joined it through the cast.
+    // Ending it — or cancelling its automation, which ends the whole session it is on — would end the
+    // other client's work. The dissolved cast takes the member off it; its connection is still ours.
+    val joinedFoundRunning = closingSessionContext.recordingFoundRunningOnAnyDevice(deviceId)
+    if (joinedFoundRunning != null) {
+      Console.log(
+        "Leaving session ${joinedFoundRunning.value} running: device ${deviceId.instanceId} joined it " +
+          "through MCP session $closingMcpSessionId's cast, which found it running ($closeReason)",
+      )
+    } else {
+      Console.log("Ending session and cancelling automation on device ${deviceId.instanceId} due to $closeReason")
+      // End the Trailblaze session first so it gets a clean Ended status in the report.
+      // Bind the per-session device ID so getActiveSessionId/endSession target the right device.
+      val deviceContextElement = McpDeviceContext.currentDeviceId.asContextElement(deviceId)
+      try {
+        runBlocking(deviceContextElement) {
+          // Only end the session if one was actually created (session creation is deferred
+          // to the first blaze/ask call, so a connect-then-disconnect has no session to end).
+          if (mcpBridge.getActiveSessionId() != null) {
+            withTimeout(SESSION_END_TIMEOUT_MS) { mcpBridge.endSession() }
+          }
         }
+      } catch (e: Exception) {
+        Console.error("Error ending session: ${e.message}")
       }
-    } catch (e: Exception) {
-      Console.error("Error ending session: ${e.message}")
-    }
-
-    try {
-      mcpBridge.cancelAutomation(deviceId)
-    } catch (e: Exception) {
-      Console.error("Error cancelling automation: ${e.message}")
+      try {
+        mcpBridge.cancelAutomation(deviceId)
+      } catch (e: Exception) {
+        Console.error("Error cancelling automation: ${e.message}")
+      }
     }
 
     if (shouldReleasePersistentDeviceConnectionOnSessionClose(deviceId, closingMcpSessionId)) {

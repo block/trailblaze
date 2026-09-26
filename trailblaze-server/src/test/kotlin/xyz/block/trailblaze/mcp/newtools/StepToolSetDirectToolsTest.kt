@@ -1,5 +1,8 @@
 package xyz.block.trailblaze.mcp.newtools
 
+import xyz.block.trailblaze.mcp.McpDeviceContext
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.asContextElement
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonObject
 import xyz.block.trailblaze.logs.client.LogEmitter
@@ -16,6 +19,7 @@ import xyz.block.trailblaze.agent.UiActionExecutor
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
+import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.mcp.RecordedStepType
@@ -24,6 +28,7 @@ import xyz.block.trailblaze.mcp.ViewHierarchyVerbosity
 import xyz.block.trailblaze.mcp.TrailblazeMcpSessionContext
 import xyz.block.trailblaze.mcp.models.McpSessionId
 import xyz.block.trailblaze.toolcalls.DynamicTrailblazeToolRegistration
+import xyz.block.trailblaze.toolcalls.SessionDeviceBindings
 import xyz.block.trailblaze.toolcalls.ToolName
 import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
@@ -33,6 +38,15 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolParameterDescriptor
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
 import xyz.block.trailblaze.toolcalls.commands.TapOnPointTrailblazeTool
+import kotlinx.datetime.Clock
+import xyz.block.trailblaze.api.DriverNodeMatch
+import xyz.block.trailblaze.api.TrailblazeNodeSelector
+import xyz.block.trailblaze.toolcalls.commands.AssertVisibleBySelectorTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.AssertVisibleTrailblazeTool
+import xyz.block.trailblaze.toolcalls.toLogPayload
+import xyz.block.trailblaze.yaml.TrailYamlItem
+import xyz.block.trailblaze.yaml.createTrailblazeYaml
+import xyz.block.trailblaze.yaml.generateRecordedTrailItems
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -329,6 +343,123 @@ class StepToolSetDirectToolsTest {
     assertTrue(toolLogs.single().isRecordable)
     assertContains(result, "OK")
   }
+
+  @Test
+  fun `a direct assertVisible by ref saves the selector it resolved to, not the ref`() = runTest {
+    // `trailblaze tool assertVisible ref=k138` expands, inside the executor, into an
+    // assertVisibleBySelector that the agent logs; StepToolSet then logs the raw call as the
+    // top-level entry. A ref is only valid on the screen that produced it, so the saved trail
+    // must carry the selector or its replay fails with "Element ref 'k138' not found".
+    val sessionId = SessionId("assert-ref-session")
+    val emittedLogs = mutableListOf<TrailblazeLog>()
+    val emitter = LogEmitter { emittedLogs += it }
+    val toolSet =
+      StepToolSet(
+        screenAnalyzer = throwingScreenAnalyzer,
+        executor = throwingExecutor,
+        screenStateProvider = { _, _, _ -> dummyScreenState },
+        rawToolExecutor = { tool, traceId ->
+          assertTrue(tool is AssertVisibleTrailblazeTool, "expected assertVisible, got $tool")
+          emitter.emit(
+            TrailblazeLog.TrailblazeToolLog(
+              trailblazeTool = AssertVisibleBySelectorTrailblazeTool(
+                nodeSelector = TrailblazeNodeSelector.withMatch(
+                  DriverNodeMatch.AndroidAccessibility(textRegex = "Battery percentage"),
+                ),
+              ).toLogPayload(),
+              toolName = "assertVisibleBySelector",
+              successful = true,
+              traceId = traceId,
+              durationMs = 1L,
+              session = sessionId,
+              timestamp = Clock.System.now(),
+              isRecordable = true,
+            ),
+          )
+          "Verified visible"
+        },
+        logEmitter = emitter,
+        sessionIdProvider = { sessionId },
+      )
+
+    toolSet.step(
+      objective = "Verify the Battery percentage setting is shown",
+      tools = "- assertVisible:\n    ref: k138",
+    )
+
+    val recording = emittedLogs.generateRecordedTrailItems(createTrailblazeYaml())
+      .filterIsInstance<TrailYamlItem.PromptsTrailItem>()
+      .single()
+      .promptSteps
+      .single()
+      .recording
+    assertEquals(listOf("assertVisibleBySelector"), recording?.tools?.map { it.name })
+  }
+
+  @Test
+  fun `direct tools in a named cast are stamped with the device they ran on`() = runTest {
+    val emittedLogs = mutableListOf<TrailblazeLog>()
+    val context = createSessionContext()
+    context.bindNamedDevice("seller", boundDevice("emulator-5554"))
+    context.bindNamedDevice("buyer", boundDevice("emulator-5556"))
+    val toolSet =
+      StepToolSet(
+        screenAnalyzer = throwingScreenAnalyzer,
+        executor = throwingExecutor,
+        screenStateProvider = { _, _, _ -> dummyScreenState },
+        sessionContext = context,
+        rawToolExecutor = { _, _ -> "OK" },
+        logEmitter = LogEmitter { emittedLogs += it },
+        sessionIdProvider = { SessionId("cast-session") },
+      )
+
+    toolSet.step(objective = "Ring up", tools = "- tapOnPoint:\n    x: 100\n    y: 200")
+    context.switchActiveNamedDevice("buyer")
+    toolSet.step(objective = "Pay", tools = "- tapOnPoint:\n    x: 300\n    y: 400")
+
+    assertEquals(
+      listOf("seller", "buyer"),
+      emittedLogs.filterIsInstance<TrailblazeLog.TrailblazeToolLog>().map { it.deviceName },
+    )
+  }
+
+  @Test
+  fun `a direct tool is stamped with the device it was dispatched to, not the one active when it runs`() = runTest {
+    val emittedLogs = mutableListOf<TrailblazeLog>()
+    val context = createSessionContext()
+    val seller = boundDevice("emulator-5554")
+    context.bindNamedDevice("seller", seller)
+    context.bindNamedDevice("buyer", boundDevice("emulator-5556"))
+    val toolSet =
+      StepToolSet(
+        screenAnalyzer = throwingScreenAnalyzer,
+        executor = throwingExecutor,
+        screenStateProvider = { _, _, _ -> dummyScreenState },
+        sessionContext = context,
+        rawToolExecutor = { _, _ -> "OK" },
+        logEmitter = LogEmitter { emittedLogs += it },
+        sessionIdProvider = { SessionId("cast-session") },
+      )
+
+    // The server pinned this call to the seller at dispatch; an overlapping call's
+    // `switchDevice(buyer)` then finished before the seller's tool got to run.
+    context.switchActiveNamedDevice("buyer")
+    withContext(McpDeviceContext.currentDeviceId.asContextElement(seller.trailblazeDeviceId)) {
+      toolSet.step(objective = "Ring up", tools = "- tapOnPoint:\n    x: 100\n    y: 200")
+    }
+
+    assertEquals(
+      listOf("seller"),
+      emittedLogs.filterIsInstance<TrailblazeLog.TrailblazeToolLog>().map { it.deviceName },
+    )
+  }
+
+  private fun boundDevice(instanceId: String) = SessionDeviceBindings.BoundDevice(
+    trailblazeDeviceId = TrailblazeDeviceId(instanceId, TrailblazeDevicePlatform.ANDROID),
+    trailblazeDeviceInfo = null,
+    description = null,
+    targetId = null,
+  )
 
   @Test
   fun `direct tools reuse one MCP trace across executor and top level tool log`() = runTest {
@@ -1452,6 +1583,80 @@ class StepToolSetDirectToolsTest {
     assertTrue(callCount >= 3, "screenStateProvider should have been called multiple times")
     assertEquals(1, executedTools.size, "Tool should execute after screen state becomes available")
     assertContains(result, "OK")
+  }
+
+  // -- 13.5 A ready driver runs direct tools without a pre-action capture ------
+
+  /** The capture's result is unused by direct tools, and it cost every `trailblaze tool` call a device read. */
+  @Test
+  fun `direct tools on a ready driver run without capturing the screen first`() = runTest {
+    var captures = 0
+    val executedTools = mutableListOf<TrailblazeTool>()
+    val toolSet =
+      StepToolSet(
+        screenAnalyzer = throwingScreenAnalyzer,
+        executor = throwingExecutor,
+        screenStateProvider = { _, _, _ -> captures++; dummyScreenState },
+        driverStatusProvider = { null },
+        rawToolExecutor = { tool, _ ->
+          executedTools.add(tool)
+          "OK"
+        },
+      )
+
+    toolSet.step(objective = "Tap a point", tools = "- tapOnPoint:\n    x: 100\n    y: 200", fast = true)
+
+    assertEquals(1, executedTools.size)
+    assertEquals(0, captures)
+  }
+
+  /** The bridge's status is null both for a ready driver and for no device at all. */
+  @Test
+  fun `direct tools with no device connected report it instead of running`() = runTest {
+    var executorCalled = false
+    val toolSet =
+      StepToolSet(
+        screenAnalyzer = throwingScreenAnalyzer,
+        executor = throwingExecutor,
+        screenStateProvider = { _, _, _ -> null },
+        driverStatusProvider = { null },
+        deviceConnectedProvider = { false },
+        rawToolExecutor = { _, _ ->
+          executorCalled = true
+          "OK"
+        },
+      )
+
+    val result = toolSet.step(objective = "Tap a point", tools = "- tapOnPoint:\n    x: 100\n    y: 200")
+
+    assertFalse(executorCalled, "a tool ran with no device connected")
+    assertContains(result, StepToolSet.NO_DEVICE_MESSAGE)
+  }
+
+  @Test
+  fun `direct tools wait for an initializing driver before running`() = runTest {
+    var captures = 0
+    var ready = false
+    val executedTools = mutableListOf<TrailblazeTool>()
+    val toolSet =
+      StepToolSet(
+        screenAnalyzer = throwingScreenAnalyzer,
+        executor = throwingExecutor,
+        screenStateProvider = { _, _, _ ->
+          captures++
+          if (captures < 3) null else dummyScreenState.also { ready = true }
+        },
+        driverStatusProvider = { if (ready) null else "Device driver is still initializing (2s elapsed)." },
+        rawToolExecutor = { tool, _ ->
+          assertTrue(ready, "a tool ran before the driver was ready")
+          executedTools.add(tool)
+          "OK"
+        },
+      )
+
+    toolSet.step(objective = "Tap a point", tools = "- tapOnPoint:\n    x: 100\n    y: 200", fast = true)
+
+    assertEquals(1, executedTools.size)
   }
 
   // -- 14. Screen summary included after direct tool execution -----------------

@@ -22,6 +22,8 @@ object TrailblazeTraceExporter {
    *   host's. Only the producer knows: every process that records part of a run uploads through the
    *   same route, so the receiver would otherwise have to guess, and guessing wrong takes a whole
    *   process's spans off the timeline.
+   * @param drain Takes the recorded spans. A host run passes one that also marks it finished in the
+   *   same step, so a CLI command finishing during this upload knows it is the last one recording.
    */
   suspend fun exportAndSave(
     sessionId: SessionId,
@@ -29,11 +31,12 @@ object TrailblazeTraceExporter {
     isServerAvailable: Boolean,
     writeToDisk: ((traceJson: String) -> Unit)? = null,
     onDeviceClock: Boolean = false,
+    drain: () -> String = { TrailblazeTracer.traceRecorder.drain() },
   ) {
     // Drains rather than exporting-then-clearing: a flush keeps the recording's trace id, so a
     // session that exports more than once files both halves under one trace instead of two
     // unrelated ones.
-    val traceJson = TrailblazeTracer.traceRecorder.drain()
+    val traceJson = drain()
     try {
       if (isServerAvailable) {
         val sent = client.sendTrace(sessionId, traceJson, onDeviceClock)

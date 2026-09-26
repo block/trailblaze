@@ -1,9 +1,12 @@
 package xyz.block.trailblaze.android.accessibility
 
+import xyz.block.trailblaze.android.OnDeviceScriptedToolBundleLauncher
+import xyz.block.trailblaze.model.TrailblazeHostAppTarget
+
 /**
  * Device-side switches for the dispatch work that surrounds a replayed action.
  *
- * Every switch here defaults to **whatever turbo is doing**: on when the in-process idle helper is
+ * Every switch here but [REUSE_TOOL_BUNDLES_SYSPROP] defaults to **whatever turbo is doing**: on when the in-process idle helper is
  * attached ([InProcessIdleSettleClient.isEnabled], which turbo sets on the device when it attaches),
  * and off when it is not. Turbo is already opt-in, and each of these was measured under it with the
  * screenshot/hierarchy pairing unchanged; with turbo off the replay path stays exactly what it was.
@@ -65,6 +68,14 @@ object ReplayCaptureOptions {
    *
    * The reuse is keyed on (session, tool repo instance) — see [ScriptedToolBundleReuse] — so a
    * dispatch that builds its own repo simply misses the cache and launches as before.
+   *
+   * On by default, with or without turbo: a `trailblaze tool` call from the CLI is one dispatch
+   * too, and paid the same ~200 ms on Square for a `pressKey`. The exception is a session that may
+   * load bundles a host pushed onto the device, which can be replaced between two of its dispatches;
+   * that session relaunches on every dispatch so a newly pushed bundle takes effect.
+   *
+   * Covers the catalog/toolset-delivered launch only. The rule's caller-supplied
+   * `quickjsToolBundles` still launch per dispatch; no RPC runner supplies any.
    */
   const val REUSE_TOOL_BUNDLES_SYSPROP: String = "debug.trailblaze.replay.reuseToolBundles"
 
@@ -136,6 +147,25 @@ object ReplayCaptureOptions {
     sendSessionEndLog: Boolean,
   ): Boolean = gateOn && !sendSessionStartLog && !sendSessionEndLog
 
-  /** True when the session's scripted-tool bundle launch should be reused across dispatches. */
-  fun reuseToolBundlesEnabled(): Boolean = enabled(REUSE_TOOL_BUNDLES_SYSPROP)
+  /**
+   * True when a session of [target] should reuse its scripted-tool bundle launch across
+   * dispatches. Off when the session may load bundles a host pushed, which can change between
+   * dispatches — see [REUSE_TOOL_BUNDLES_SYSPROP].
+   *
+   * The one gate for both halves of reuse: the launch and the tool repo it registered into are
+   * cached together, so every caller must ask this with the same target.
+   */
+  fun reuseToolBundlesEnabled(target: TrailblazeHostAppTarget?): Boolean =
+    resolveToolBundleReuse(
+      raw = sysprop(REUSE_TOOL_BUNDLES_SYSPROP),
+      readsPushedBundles = OnDeviceScriptedToolBundleLauncher.readsPushedBundles(target),
+    )
+
+  /**
+   * [resolve] for the bundle-reuse switch, whose default does not follow turbo. A session that may
+   * load pushed bundles never reuses, even when the sysprop forces reuse on: the next dispatch has
+   * to see a bundle the host replaced.
+   */
+  internal fun resolveToolBundleReuse(raw: String, readsPushedBundles: Boolean): Boolean =
+    !readsPushedBundles && resolve(raw, turboOn = true)
 }
