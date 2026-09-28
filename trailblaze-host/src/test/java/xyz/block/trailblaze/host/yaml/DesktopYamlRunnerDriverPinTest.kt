@@ -55,6 +55,17 @@ class DesktopYamlRunnerDriverPinTest {
   }
 
   @Test
+  fun `a Playwright native trail's locale goes to its browser, not to a device setting`() {
+    // DeviceLocaleConfigurator refuses WEB outright, so handing it a native web locale fails the run.
+    assertNull(DesktopYamlRunner.systemLocaleToApply(TrailblazeDriverType.PLAYWRIGHT_NATIVE, "es-US"))
+    // Electron has no browser-locale path, so its locale still reaches the configurator and is
+    // refused there instead of the trail running in the default language.
+    assertEquals("es-US", DesktopYamlRunner.systemLocaleToApply(TrailblazeDriverType.PLAYWRIGHT_ELECTRON, "es-US"))
+    assertEquals("es", DesktopYamlRunner.systemLocaleToApply(TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY, "es"))
+    assertEquals("es", DesktopYamlRunner.systemLocaleToApply(TrailblazeDriverType.IOS_HOST, "es"))
+  }
+
+  @Test
   fun `device locale forces a fresh target process`() {
     assertTrue(DesktopYamlRunner.shouldForceStopTargetApp(requested = false, locale = "es"))
     assertTrue(DesktopYamlRunner.shouldForceStopTargetApp(requested = true, locale = null))

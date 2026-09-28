@@ -315,6 +315,7 @@ The accessibility-driver switches below are read inside the Android app/service 
 
 | Variable | Default | Applied | Purpose |
 |---|---|---|---|
+| `TRAILBLAZE_WEB_LOCALE` | unset | session | BCP-47 language (`es`, `es-US`) every Playwright browser session opens in: `navigator.language`, date and number formatting, and `Accept-Language`. A trail's own `config.locale` (or its device entry's `locale:`) wins over it. Set by a locale CI lane such as `web-browser-es`, alongside `--device-classifier`. Read by the daemon, so restart it (`trailblaze --stop`) if it was started without the variable. |
 | `TRAILBLAZE_ELECTRON_COMMAND` | unset | session | Launch command for an Electron app under test (fallback when the target declares no Electron config). |
 | `TRAILBLAZE_ELECTRON_ARGS` | empty | session | Space-separated launch args. |
 | `TRAILBLAZE_ELECTRON_CDP_URL` | unset | session | Attach to an already-running Electron app via this CDP endpoint. |

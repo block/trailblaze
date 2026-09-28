@@ -1,0 +1,21 @@
+# iOS framework-primitive tools owned by the `ios` library trailmap (see trailmaps/ios/trailmap.yaml).
+# The iOS counterpart of `android_primitives`.
+#
+# Every tool here is `surfaceToLlm = false`, so this toolset adds nothing to the LLM's catalog.
+# Membership registers them in the session's tool repo so a trailhead's `ctx.tools.ios_*(...)`
+# callback resolves them by name, and gives them typed bindings in consumers' `client.d.ts`.
+#
+# `always_enabled: true` is load-bearing for the same reason as `android_primitives`: nothing
+# ever activates a toolset the LLM cannot see, so these must be active from session start or a
+# trailhead's first callback fails.
+#
+# Both iOS drivers run on the macOS host, which is where `xcrun simctl` runs. Simulators only.
+id: ios_primitives
+description: "iOS simulator framework-primitive tools (terminate, grant privacy services) used by trailheads via `ctx.tools`. Not LLM-facing — registered so callback dispatch can resolve them by name."
+always_enabled: true
+drivers:
+  - ios-host
+  - ios-axe
+tools:
+  - ios_grantPrivacy
+  - ios_terminate

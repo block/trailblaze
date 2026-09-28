@@ -92,6 +92,15 @@ class TrailblazeMcpBridgeOnDeviceDispatchTest {
   }
 
   /**
+   * The bridge ends its sessions itself, draining the runner first, and says so on every dispatch.
+   * Without it the runner waits for each tool call's log uploads before replying.
+   */
+  @Test
+  fun `on-device tool dispatch tells the runner the host drains before ending the session`() {
+    assertTrue(buildRequest(isNewSession = false).config.hostDrainsBeforeSessionEnd)
+  }
+
+  /**
    * End of the chain: given the awaited response above, a terminal wedge — tagged (#219's typed
    * field) or untagged (an older runner returning only the signature text) — arms the pooled
    * client's recovery callback. This is the branch a `blocking = false` dispatch could not reach

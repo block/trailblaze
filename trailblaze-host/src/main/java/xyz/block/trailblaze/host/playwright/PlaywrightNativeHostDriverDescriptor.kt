@@ -6,6 +6,7 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
+import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
@@ -109,6 +110,8 @@ class PlaywrightNativeHostDriverDescriptor : HostDriverDescriptor {
     // otherwise the cached model/client/logs-repo sticks around for the daemon's lifetime and
     // silently runs every web tool with the wrong provider, files every session in the wrong
     // directory, or writes session files a `--no-logging` run asked it not to.
+    val requestedDeviceClassifiers =
+      runYamlRequest.deviceClassifierOverride.map(::TrailblazeDeviceClassifier)
     val cachedTest =
       if (keepBrowserAlive) deviceManager.getActivePlaywrightNativeTest(requestDeviceId) else null
     val cacheResolution = resolvePlaywrightCacheReuse(
@@ -117,10 +120,12 @@ class PlaywrightNativeHostDriverDescriptor : HostDriverDescriptor {
       cachedMaxLlmCalls = cachedTest?.maxLlmCalls,
       cachedLogsDir = cachedTest?.loggingRule?.logsRepo?.logsDir,
       cachedNoLogging = cachedTest?.loggingRule?.logsRepo?.readOnly ?: false,
+      cachedDeviceClassifiers = cachedTest?.deviceClassifierOverride.orEmpty(),
       requestedModel = runYamlRequest.trailblazeLlmModel,
       requestedMaxLlmCalls = runYamlRequest.maxLlmCalls,
       requestedLogsDir = logsDir,
       requestedNoLogging = runOnHostParams.noLogging,
+      requestedDeviceClassifiers = requestedDeviceClassifiers,
     )
     val existingTest =
       if (cacheResolution is PlaywrightCacheResolution.ReuseCachedTest) cachedTest else null
@@ -187,6 +192,7 @@ class PlaywrightNativeHostDriverDescriptor : HostDriverDescriptor {
       captureVideo = runOnHostParams.captureVideo,
       logsDir = logsDir,
       noLogging = runOnHostParams.noLogging,
+      deviceClassifierOverride = requestedDeviceClassifiers,
     )
 
     // Reset the browser session only when starting a new Trailblaze session.
@@ -326,17 +332,21 @@ class PlaywrightNativeHostDriverDescriptor : HostDriverDescriptor {
       requestedMaxLlmCalls: Int?,
       requestedLogsDir: File?,
       requestedNoLogging: Boolean,
+      cachedDeviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList(),
+      requestedDeviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList(),
     ): PlaywrightCacheResolution = when {
       cachedModel == null -> PlaywrightCacheResolution.NoCachedTest
       cachedModel == requestedModel &&
         cachedMaxLlmCalls == requestedMaxLlmCalls &&
         cachedNoLogging == requestedNoLogging &&
+        cachedDeviceClassifiers == requestedDeviceClassifiers &&
         logsDirIsAcceptable(cachedLogsDir = cachedLogsDir, requestedLogsDir = requestedLogsDir) ->
         PlaywrightCacheResolution.ReuseCachedTest
       cachedBrowserManager != null ->
-        // The model, the max-llm-calls cap, the logs directory, or the no-logging stance changed.
-        // All four are baked into the cached test (the first two into its lazy TrailblazeRunner, the
-        // last two into its logging rule's LogsRepo), so the test instance has to be rebuilt; we keep
+        // The model, the max-llm-calls cap, the logs directory, the no-logging stance, or the
+        // device classifier changed. All five are baked into the cached test (the first two into
+        // its lazy TrailblazeRunner, the next two into its logging rule's LogsRepo, the last into
+        // the device info its sessions report), so the test instance has to be rebuilt; we keep
         // the cached browser to avoid relaunching Chromium every time.
         PlaywrightCacheResolution.RebuildWithCachedBrowser(cachedBrowserManager)
       // Defensive: cached model exists but no browser to reuse — treat as no cache.

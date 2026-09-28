@@ -8,6 +8,7 @@ import kotlin.test.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
+import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.host.playwright.PlaywrightNativeHostDriverDescriptor.Companion.PlaywrightCacheResolution
 import xyz.block.trailblaze.host.playwright.PlaywrightNativeHostDriverDescriptor.Companion.resolvePlaywrightCacheReuse
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
@@ -152,6 +153,27 @@ class PlaywrightCacheReuseTest {
     )
     val rebuild = assertIs<PlaywrightCacheResolution.RebuildWithCachedBrowser>(resolution)
     assertSame(fakeBrowserManager, rebuild.browser)
+  }
+
+  @Test
+  fun `a different device classifier means rebuild around the cached browser`() {
+    // The classifier is the device identity a session reports and the leg it replays, so a test
+    // built for `web` must not serve a `web-browser-es` run (or the reverse).
+    val resolution = resolvePlaywrightCacheReuse(
+      cachedModel = openaiGpt4,
+      cachedBrowserManager = fakeBrowserManager,
+      cachedMaxLlmCalls = null,
+      cachedLogsDir = null,
+      cachedNoLogging = false,
+      cachedDeviceClassifiers = emptyList(),
+      requestedModel = openaiGpt4,
+      requestedMaxLlmCalls = null,
+      requestedLogsDir = null,
+      requestedNoLogging = false,
+      requestedDeviceClassifiers = listOf("web", "browser", "es").map(::TrailblazeDeviceClassifier),
+    )
+    assertIs<PlaywrightCacheResolution.RebuildWithCachedBrowser>(resolution)
+    assertSame(fakeBrowserManager, resolution.browser)
   }
 
   @Test

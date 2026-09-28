@@ -61,7 +61,7 @@ providers:
       # Override specific fields (e.g., enterprise pricing)
       - id: gpt-5-mini
         cost:
-          input_per_million: 0.20   # Negotiated enterprise rate
+          input_per_million: 0.20   # Example override
           output_per_million: 10.00
 
   anthropic:
@@ -109,7 +109,7 @@ providers:
 
   azure_openai:
     type: openai_compatible
-    base_url: "https://my-resource.openai.azure.com/openai/deployments"
+    base_url: "https://<your-resource>.openai.azure.com/openai/deployments"
     headers:
       api-version: "2024-02-15-preview"
     auth:
@@ -353,7 +353,7 @@ defaults:
 providers:
   azure_openai:
     type: openai_compatible
-    base_url: "https://contoso.openai.azure.com/openai/deployments"
+    base_url: "https://<your-resource>.openai.azure.com/openai/deployments"
     auth:
       env_var: AZURE_OPENAI_API_KEY
       headers:

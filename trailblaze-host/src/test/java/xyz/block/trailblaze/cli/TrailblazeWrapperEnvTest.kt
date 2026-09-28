@@ -261,9 +261,9 @@ class TrailblazeWrapperEnvTest {
             *"/ping"*) return 0 ;;
           esac
           while [ "${'$'}#" -gt 0 ]; do
-            if [ "${'$'}1" = "-d" ]; then
-              shift
-              printf '%s' "${'$'}1" > '${capturedPayload.absolutePath}'
+            # The launcher pipes the body in (`--data-binary @-`) so it never sits in curl's argv.
+            if [ "${'$'}1" = "--data-binary" ] && [ "${'$'}2" = "@-" ]; then
+              cat > '${capturedPayload.absolutePath}'
             fi
             shift
           done
@@ -314,9 +314,9 @@ class TrailblazeWrapperEnvTest {
           esac
           printf '%s' "${'$'}*" > '${capturedArgs.absolutePath}'
           while [ "${'$'}#" -gt 0 ]; do
-            if [ "${'$'}1" = "-d" ]; then
-              shift
-              printf '%s' "${'$'}1" > '${capturedPayload.absolutePath}'
+            # The launcher pipes the body in (`--data-binary @-`) so it never sits in curl's argv.
+            if [ "${'$'}1" = "--data-binary" ] && [ "${'$'}2" = "@-" ]; then
+              cat > '${capturedPayload.absolutePath}'
             fi
             shift
           done

@@ -55,8 +55,8 @@ The `trailhead` is everything about the starting point: what this trail is, how 
 ```yaml
 # ── Trailhead: identity, configuration, and setup ──────────────────
 trailhead:
-  id: regression/suite_101/section_201/case_1006
-  title: Verify user cannot load more than $2,000 onto a Gift Card within 24 hours
+  id: regression/suite_1/section_1/case_1
+  title: Verify gift card load limit
   priority: P0
 
   # Optional — unlocks app-specific custom tools (e.g. launchAppSignedIn, deeplinks)
@@ -71,14 +71,14 @@ trailhead:
 
   # Pre-seeded runtime variables — available as {{varName}} in objectives and tool params
   memory:
-    giftCardNumber: "7783 3224 0646 3436"
+    giftCardNumber: "0000 0000 0000 0000"
     email: testuser+giftcards@example.com
     password: "12345678"
 
   # Informational — never used at runtime, only for reporting/traceability
   metadata:
-    caseId: "1006"
-    sectionId: "201"
+    caseId: "1"
+    sectionId: "1"
     sourceUrl: https://tracker.example.com/cases/view/12345
 
   # Setup objectives (checkpoint for recording iteration)
@@ -144,10 +144,10 @@ The blaze file is purely NL objectives — no tool recordings. Platform-specific
 
 ```yaml
 trailhead:
-  id: suite/101/section/201/case/1006
+  id: suite/1/section/1/case/1
   title: Verify gift card load limit
   memory:
-    giftCardNumber: "7783 3224 0646 3436"
+    giftCardNumber: "0000 0000 0000 0000"
     email: testuser+giftcards@example.com
   setup:
     - objective: Launch the app and sign in with {{email}}

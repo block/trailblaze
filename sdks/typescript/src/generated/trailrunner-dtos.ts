@@ -344,6 +344,7 @@ export interface EmptyToolCall {
 export interface EnterText {
   class: "xyz.block.trailblaze.api.AgentDriverAction.EnterText";
   text: string;
+  hideKeyboardAfter?: boolean;
   type?: AgentActionType;
 }
 

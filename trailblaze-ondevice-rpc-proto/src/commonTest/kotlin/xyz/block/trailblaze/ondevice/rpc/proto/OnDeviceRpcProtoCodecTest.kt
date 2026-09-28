@@ -27,6 +27,7 @@ import xyz.block.trailblaze.llm.TrailblazeReferrer
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.mcp.AgentImplementation
+import xyz.block.trailblaze.mcp.android.ondevice.rpc.DrainSessionResponse
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetExecutionStatusResponse
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetScreenStateRequest
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetScreenStateResponse
@@ -74,6 +75,7 @@ class OnDeviceRpcProtoCodecTest {
         nodeSelectorMode = NodeSelectorMode.FORCE_NODE_SELECTOR,
         preferHostAgent = false,
         captureNetworkTraffic = false,
+        hostDrainsBeforeSessionEnd = true,
       ),
       referrer = TrailblazeReferrer("test", "Test"),
       traceId = traceId,
@@ -157,6 +159,13 @@ class OnDeviceRpcProtoCodecTest {
 
     assertEquals(progress, OnDeviceRpcProtoCodec.run { progress.toProto().toModel() })
     assertEquals(status, OnDeviceRpcProtoCodec.run { status.toProto().toModel() })
+  }
+
+  @Test
+  fun `drain response carries the log uploads it left pending`() {
+    val original = DrainSessionResponse(uiAutomationCleared = true, logUploadsLeftPending = 3)
+
+    assertEquals(original, OnDeviceRpcProtoCodec.run { original.toProto().toModel() })
   }
 
   @Test

@@ -52,6 +52,13 @@ data class TrailblazeConfig(
    * set on this config directly.
    */
   val captureNetworkTraffic: Boolean = true,
+  /**
+   * True when the host sends a `DrainSessionRequest` to the on-device runner before it ends this
+   * session. An Android accessibility dispatch may then reply while its log uploads are still in
+   * flight, because the drain waits for them before the session's report can be written. Only a
+   * caller that really does drain first may set this.
+   */
+  val hostDrainsBeforeSessionEnd: Boolean = false,
 ) {
   companion object {
     val DEFAULT = TrailblazeConfig()

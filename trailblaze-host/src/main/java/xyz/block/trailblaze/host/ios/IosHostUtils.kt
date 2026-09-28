@@ -9,15 +9,14 @@ import xyz.block.trailblaze.util.TrailblazeProcessBuilderUtils.runProcess
 import java.io.File
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.util.isMacOs
+import xyz.block.trailblaze.util.SimctlCommand
 
 object IosHostUtils {
 
   fun killAppOnSimulator(deviceId: String, appId: String) {
     if (!isMacOs()) return
     TrailblazeProcessBuilderUtils.createProcessBuilder(
-      listOf(
-        "xcrun",
-        "simctl",
+      SimctlCommand.argv(
         "terminate",
         deviceId,
         appId,
@@ -46,9 +45,7 @@ object IosHostUtils {
   fun getInstalledAppsWithDisplayNames(deviceId: String): Map<String, String> {
     if (!isMacOs()) return emptyMap()
     val output: CommandProcessResult = TrailblazeProcessBuilderUtils.createProcessBuilder(
-      listOf(
-        "xcrun",
-        "simctl",
+      SimctlCommand.argv(
         "listapps",
         deviceId,
       ),
@@ -114,7 +111,7 @@ object IosHostUtils {
   fun dismissPasskeyDialogIfPresent(deviceId: String) {
     if (!isMacOs()) return
     TrailblazeProcessBuilderUtils.createProcessBuilder(
-        listOf("xcrun", "simctl", "terminate", deviceId, "com.apple.AuthenticationServicesUI"),
+        SimctlCommand.argv("terminate", deviceId, "com.apple.AuthenticationServicesUI"),
       )
       .runProcess {}
   }
@@ -145,9 +142,7 @@ object IosHostUtils {
     return try {
       // Get the app path from listapps output
       val listAppsOutput = TrailblazeProcessBuilderUtils.createProcessBuilder(
-        listOf(
-          "xcrun",
-          "simctl",
+        SimctlCommand.argv(
           "listapps",
           deviceId,
         ),
@@ -193,7 +188,7 @@ object IosHostUtils {
     if (!isMacOs()) return null
     return try {
       val listAppsOutput = TrailblazeProcessBuilderUtils.createProcessBuilder(
-        listOf("xcrun", "simctl", "listapps", deviceId),
+        SimctlCommand.argv("listapps", deviceId),
       ).runProcess {}
       parseAppPathFromListApps(listAppsOutput.fullOutput, appId)
     } catch (e: Exception) {

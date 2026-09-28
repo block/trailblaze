@@ -15,6 +15,7 @@ import java.io.File
 import java.io.FileOutputStream
 import java.net.URL
 import java.nio.file.Files
+import xyz.block.trailblaze.util.SimctlCommand
 
 object MobileDeviceUtils {
   /**
@@ -143,6 +144,24 @@ object MobileDeviceUtils {
   }
 
   /**
+   * Which of [target]'s declared app ids for the device's platform is installed, or null.
+   *
+   * Lists the device's apps only when the target declares one for this platform. The listing is a
+   * device round trip (`simctl listapps` takes about a second), and with nothing to look for the
+   * answer is null anyway — which is the default target on every CLI tool call.
+   */
+  fun installedAppIdForTarget(
+    target: TrailblazeHostAppTarget?,
+    trailblazeDeviceId: TrailblazeDeviceId,
+    listInstalledAppIds: (TrailblazeDeviceId) -> Set<String> = ::getInstalledAppIds,
+  ): String? {
+    target ?: return null
+    val platform = trailblazeDeviceId.trailblazeDevicePlatform
+    if (target.getPossibleAppIdsForPlatform(platform).isNullOrEmpty()) return null
+    return target.getAppIdIfInstalled(platform, listInstalledAppIds(trailblazeDeviceId))
+  }
+
+  /**
    * Best-effort snapshot of the app under test for the session-start log: resolves which of
    * [target]'s declared app ids is installed on [trailblazeDeviceId] (unless the caller already
    * resolved one and passes [resolvedAppId]), then probes its version via [getAppVersionInfo].
@@ -154,12 +173,10 @@ object MobileDeviceUtils {
     target: TrailblazeHostAppTarget?,
     trailblazeDeviceId: TrailblazeDeviceId,
     resolvedAppId: String? = null,
+    listInstalledAppIds: (TrailblazeDeviceId) -> Set<String> = ::getInstalledAppIds,
   ): TrailblazeTargetAppInfo? {
     val appId = resolvedAppId ?: runCatching {
-      target?.getAppIdIfInstalled(
-        platform = trailblazeDeviceId.trailblazeDevicePlatform,
-        installedAppIds = getInstalledAppIds(trailblazeDeviceId),
-      )
+      installedAppIdForTarget(target, trailblazeDeviceId, listInstalledAppIds)
     }.getOrNull() ?: return null
     val version = runCatching { getAppVersionInfo(trailblazeDeviceId, appId) }.getOrNull()
     return TrailblazeTargetAppInfo(
@@ -308,9 +325,7 @@ object MobileDeviceUtils {
 
       val installResult = withContext(Dispatchers.IO) {
         TrailblazeProcessBuilderUtils.createProcessBuilder(
-          listOf(
-            "xcrun",
-            "simctl",
+          SimctlCommand.argv(
             "install",
             trailblazeDeviceId.instanceId,
             appBundle.absolutePath,

@@ -174,15 +174,16 @@ Toolsets are declared in `trailmaps/<id>/toolsets/*.yaml`. They are pure YAML gr
 | Toolset | Always Enabled | Compatible Drivers | Tool Count |
 | --- | --- | --- | ---: |
 | `android_framework` | Yes | `android-ondevice-accessibility` | 3 |
-| `android_primitives` | Yes | `android-ondevice-accessibility`, `android-test` | 8 |
+| `android_primitives` | Yes | `android-ondevice-accessibility`, `android-test` | 9 |
 | `compose_core` | No | `compose` | 6 |
 | `compose_verification` | No | `compose` | 3 |
-| `core_interaction` | Yes | `android-ondevice-accessibility`, `ios-axe`, `ios-host` | 21 |
+| `core_interaction` | Yes | `android-ondevice-accessibility`, `ios-axe`, `ios-host` | 22 |
+| `ios_primitives` | Yes | `ios-axe`, `ios-host` | 2 |
 | `memory` | No | `all drivers` | 9 |
 | `meta` | Yes | `all drivers` | 1 |
 | `mobile_primitives` | Yes | `android-ondevice-accessibility`, `ios-axe`, `ios-host` | 5 |
 | `multi_device` | No | `all drivers` | 1 |
-| `navigation` | No | `android-ondevice-accessibility`, `ios-axe`, `ios-host` | 4 |
+| `navigation` | No | `android-ondevice-accessibility`, `ios-axe`, `ios-host` | 5 |
 | `observation` | No | `android-ondevice-accessibility`, `ios-axe`, `ios-host` | 1 |
 | `revyl_core` | No | `revyl-android`, `revyl-ios` | 7 |
 | `revyl_verification` | No | `revyl-android`, `revyl-ios` | 1 |

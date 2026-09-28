@@ -145,6 +145,28 @@ object MaestroCommandConverter {
       )
   }
 
+  /**
+   * Folds a keyboard hide into the [AccessibilityAction.InputText] right before it, so the pair
+   * runs as one action. Run as two, the hide starts with its own settle wait and pre-action screen
+   * capture, and nothing reads that screen. `inputText` lowers to exactly this pair unless told to
+   * leave the keyboard up.
+   */
+  fun foldKeyboardHideIntoInputText(actions: List<AccessibilityAction>): List<AccessibilityAction> {
+    val folded = mutableListOf<AccessibilityAction>()
+    for (action in actions) {
+      val previous = folded.lastOrNull()
+      if (action is AccessibilityAction.HideKeyboard &&
+        previous is AccessibilityAction.InputText &&
+        !previous.hideKeyboardAfter
+      ) {
+        folded[folded.lastIndex] = previous.copy(hideKeyboardAfter = true)
+      } else {
+        folded += action
+      }
+    }
+    return folded
+  }
+
   private fun convertTapOnPointV2(command: TapOnPointV2Command): AccessibilityAction {
     val point = command.point
     // Point format is "x, y" or "x,y" or could be a percentage "50%,50%"

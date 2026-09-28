@@ -6,16 +6,17 @@ import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 /**
  * Device-side switches for the dispatch work that surrounds a replayed action.
  *
- * Every switch here but [REUSE_TOOL_BUNDLES_SYSPROP] defaults to **whatever turbo is doing**: on when the in-process idle helper is
- * attached ([InProcessIdleSettleClient.isEnabled], which turbo sets on the device when it attaches),
- * and off when it is not. Turbo is already opt-in, and each of these was measured under it with the
- * screenshot/hierarchy pairing unchanged; with turbo off the replay path stays exactly what it was.
+ * [DEFER_LOG_FLUSH_SYSPROP] defaults to **whatever turbo is doing**: on when the in-process idle
+ * helper is attached ([InProcessIdleSettleClient.isEnabled], which turbo sets on the device when it
+ * attaches), and off when it is not — unless the dispatch's host promises to drain the runner
+ * before ending the session, which turns it on. [ASYNC_SCREENSHOT_SYSPROP] and
+ * [REUSE_TOOL_BUNDLES_SYSPROP] default on with or without turbo.
  *
  * Each switch is also an explicit kill switch, read per call so it can be flipped against a runner
  * that stays up. `0`/`false` forces the behaviour off even under turbo; `1`/`true` forces it on even
  * without turbo:
  *
- *     adb shell setprop debug.trailblaze.replay.asyncScreenshot  0   # off under turbo
+ *     adb shell setprop debug.trailblaze.replay.asyncScreenshot  0   # off
  *     adb shell setprop debug.trailblaze.replay.deferLogFlush    0
  *     adb shell setprop debug.trailblaze.replay.reuseToolBundles 0
  *
@@ -33,6 +34,9 @@ object ReplayCaptureOptions {
    * thread instead of the capture constructor. Measured on a turbo replay this takes ~40 ms off a
    * sample-app capture and leaves pairing skew unchanged (30 ms median sample app, 27 ms Square,
    * against 33 ms and 27 ms before). `[pair-skew]` is the line that proves it per capture.
+   *
+   * On by default, with or without turbo: nothing about the pairing depends on turbo, and a
+   * `trailblaze tool` call from the CLI pays the same wait (~35 ms per call on an emulator).
    */
   const val ASYNC_SCREENSHOT_SYSPROP: String = "debug.trailblaze.replay.asyncScreenshot"
 
@@ -54,6 +58,13 @@ object ReplayCaptureOptions {
    * [shouldDeferDispatchLogJoin]. What this gives up is nothing at the session boundary: the
    * dispatch that carries the session-end log joins before emitting it, so a report is never
    * generated with uploads in flight.
+   *
+   * A host that ends the session itself, with no dispatch carrying the session-end log, gets the
+   * same guarantee only if it drains the runner first: the drain joins the lane
+   * ([AccessibilityTrailRunner.flushLogsBeforeSessionEnd]). Such a host says so with
+   * `TrailblazeConfig.hostDrainsBeforeSessionEnd`, and that turns this on for its dispatches with
+   * or without turbo. The MCP bridge — every `trailblaze tool` call from the CLI — is one; measured
+   * at ~95 ms per call on an emulator.
    */
   const val DEFER_LOG_FLUSH_SYSPROP: String = "debug.trailblaze.replay.deferLogFlush"
 
@@ -106,20 +117,32 @@ object ReplayCaptureOptions {
     else -> turboOn
   }
 
-  private fun enabled(name: String): Boolean =
-    resolve(sysprop(name), turboOn = InProcessIdleSettleClient.isEnabled())
-
   /**
    * True when the capture should hand the screenshot thread to the first reader of
    * `screenshotBytes` instead of joining it before the constructor returns.
    */
-  fun asyncLoggingScreenshot(): Boolean = enabled(ASYNC_SCREENSHOT_SYSPROP)
+  fun asyncLoggingScreenshot(): Boolean = resolveAsyncScreenshot(sysprop(ASYNC_SCREENSHOT_SYSPROP))
+
+  /** [resolve] for the async-screenshot switch, whose default does not follow turbo. */
+  internal fun resolveAsyncScreenshot(raw: String): Boolean = resolve(raw, turboOn = true)
 
   /**
    * True when the driver's log lane should be joined after the next action instead of before this
    * action's reply. See [DEFER_LOG_FLUSH_SYSPROP] for what that trades away.
    */
-  fun deferLogFlushEnabled(): Boolean = enabled(DEFER_LOG_FLUSH_SYSPROP)
+  fun deferLogFlushEnabled(hostDrainsBeforeSessionEnd: Boolean = false): Boolean =
+    resolveDeferLogFlush(
+      raw = sysprop(DEFER_LOG_FLUSH_SYSPROP),
+      turboOn = InProcessIdleSettleClient.isEnabled(),
+      hostDrainsBeforeSessionEnd = hostDrainsBeforeSessionEnd,
+    )
+
+  /**
+   * [resolve] for the deferred-flush switch: on under turbo, or when the host will drain before it
+   * ends the session. An explicit sysprop still wins either way.
+   */
+  internal fun resolveDeferLogFlush(raw: String, turboOn: Boolean, hostDrainsBeforeSessionEnd: Boolean): Boolean =
+    resolve(raw, turboOn = turboOn || hostDrainsBeforeSessionEnd)
 
   /**
    * Whether THIS dispatch may skip the end-of-run join of the driver's log lane.

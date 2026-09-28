@@ -123,9 +123,9 @@ class AndroidVideoCaptureTest {
   }
 
   @Test
-  fun `a device with no screenrecord is recorded by the fallback instead`() {
-    // Some firmware ships no screen recorder. Sampling screenshots is slower and coarser, but the
-    // alternative is a session with no footage at all, so the recording still happens.
+  fun `a device nothing can stream is recorded by the fallback instead`() {
+    // Some firmware ships no screen recorder, and scrcpy cannot always run either. Sampling
+    // screenshots is slower and coarser, but the alternative is a session with no footage at all.
     val fallback = RecordingFallback(
       artifact = CaptureArtifact(
         file = File(tempDir, "video.webm").apply { writeBytes(ByteArray(8)) },
@@ -135,7 +135,7 @@ class AndroidVideoCaptureTest {
       ),
     )
     val capture = AndroidVideoCapture(
-      muxFactory = { _, _, _ -> error("the streaming recorder must not be started on this device") },
+      muxFactory = { _, _, _ -> FakeMux(result = null, startFailure = IllegalStateException("no screen stream")) },
       fallback = fallback,
       screenrecordAvailable = { false },
     )
@@ -145,6 +145,24 @@ class AndroidVideoCaptureTest {
 
     assertTrue(fallback.started, "the fallback must record the session")
     assertEquals(fallback.artifact, artifact, "the session's recording is the fallback's")
+  }
+
+  @Test
+  fun `a device with no screenrecord still streams when scrcpy can`() {
+    val fallback = RecordingFallback(artifact = null)
+    val recording = File(tempDir, "video.webm").apply { writeBytes(ByteArray(64)) }
+    val mux = FakeMux(MuxResult(file = recording, 1_700_000_000_000L, 1_700_000_001_000L))
+    val capture = AndroidVideoCapture(
+      muxFactory = { _, _, _ -> mux },
+      fallback = fallback,
+      screenrecordAvailable = { false },
+    )
+
+    capture.start(tempDir, DEVICE_ID, appId = null)
+    assertNotNull(capture.stop(CaptureOptions(captureVideo = true)))
+
+    assertEquals(1, mux.startCount, "scrcpy does not need screenrecord, so the stream is tried first")
+    assertFalse(fallback.started, "and the screenshot path is left alone when it works")
   }
 
   @Test
@@ -289,7 +307,11 @@ class AndroidVideoCaptureTest {
   }
 
 
-  private class FakeMux(private val result: MuxResult?) : WallClockVideoMux {
+  private class FakeMux(
+    private val result: MuxResult?,
+    /** Thrown from [start], as a mux whose tee could not spawn a producer does. */
+    private val startFailure: Exception? = null,
+  ) : WallClockVideoMux {
     var startCount = 0
       private set
     var stopCount = 0
@@ -297,6 +319,7 @@ class AndroidVideoCaptureTest {
 
     override fun start() {
       startCount++
+      startFailure?.let { throw it }
     }
 
     override fun hasContent(): Boolean = startCount > 0

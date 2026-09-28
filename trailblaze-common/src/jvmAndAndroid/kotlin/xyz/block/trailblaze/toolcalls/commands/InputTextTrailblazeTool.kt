@@ -26,25 +26,16 @@ data class InputTextTrailblazeTool(
   @param:LLMDescription(REQUIRED_TEXT_DESCRIPTION) val text: String,
   override val reasoning: String? = null,
   /**
-   * Whether to dismiss the soft keyboard after typing. Default `true` preserves the
-   * batch-trail-run / LLM-driven behavior: each `inputText` step is self-contained and
-   * leaves the device ready for the next step (next tap can land cleanly without the
-   * keyboard occluding the target).
+   * Whether to dismiss the soft keyboard after typing. Default `true`: each `inputText` step
+   * leaves the device ready for the next one, with no keyboard covering the next tap's target.
+   * Recorded trails omit this field, so they replay with the dismissal.
    *
-   * **Pass `false` from interactive / live-forwarding paths** (the wasm `/devices` viewer's
-   * per-keystroke flush). The user is still typing — they don't want the keyboard
-   * dismissed after every word. And on the accessibility driver the daemon's `inputText`
-   * routes through `ACTION_SET_TEXT` directly on the focused node, which sidesteps the
-   * soft IME entirely on the happy path (no synthesized key events ever bring up a
-   * keyboard window). With no soft keyboard up, `HideKeyboardCommand` falls through to
-   * a `BACK` keycode that navigates the current activity backwards instead. That's how
-   * "typing 'sam' navigated away from the screen" reproduced — Sam's repro on PR #3021
-   * caught it.
-   *
-   * Recorded trail YAMLs continue to omit this field, so replay keeps the existing
-   * dismiss-keyboard behavior intact. Only direct in-process callers that pass `false`
-   * see the change.
+   * The wasm `/devices` viewer passes `false` on its per-keystroke flush, because the user is
+   * still typing.
    */
+  @param:LLMDescription(
+    "Close the soft keyboard after typing. Defaults to true; pass false to keep typing into the same field.",
+  )
   val hideKeyboardAfter: Boolean = true,
 ) : ExecutableTrailblazeTool, ReasoningTrailblazeTool {
 

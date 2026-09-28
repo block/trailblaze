@@ -239,7 +239,7 @@ trailblaze tool [OPTIONS] [<<toolName>>] [<<argPairs>>]
 | Option | Description | Default |
 |--------|-------------|---------|
 | `-s`, `--step`, `--objective`, `-o` | Natural language step — describe what, not how. If the UI changes, Trailblaze uses this to retry the step with AI. 'Navigate to Settings' survives a redesign; 'tap button at 200,400' does not. Optional by default; required when `trailblaze config require-steps true` is set. (`--objective` / `-o` are deprecated aliases of `--step` / `-s`.) | - |
-| `--yaml` | Raw YAML tool sequence (multiple tools in one call) | - |
+| `--yaml` | YAML list of tools to run in one call, settling between each: inline, a file path, or `-` to read standard input. Only the last tool's screen is returned. | - |
 | `-d`, `--device` | Device: platform (android, ios, web) or platform/id. Defaults to `$TRAILBLAZE_DEVICE` if set (manual override; rare), otherwise this terminal's pin (set by `trailblaze device connect`). In a fresh-shell harness (Claude Code, Cursor, Codex, CI), pass --device on every call. | - |
 | `-v`, `--verbose` | Enable verbose output | - |
 | `--no-screenshots`, `--text-only` | Skip screenshots — the LLM only sees the textual view hierarchy, no vision tokens, and disk logging of screenshots is skipped too. Faster and cheaper for short objectives where the visual layout doesn't matter; some tasks need vision and will degrade without it. | - |

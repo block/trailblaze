@@ -53,6 +53,7 @@ class CliStatusCapabilitiesTest {
     // make every capable daemon look incapable.
     assertTrue(CliDaemonCapabilities.PER_RUN_DEVICE_BINDINGS in CliDaemonCapabilities.ALL)
     assertTrue(CliDaemonCapabilities.DEVICE_CLASSIFIER in CliDaemonCapabilities.ALL)
+    assertTrue(CliDaemonCapabilities.WEB_LOCALE in CliDaemonCapabilities.ALL)
     assertTrue(CliDaemonCapabilities.COMPANION in CliDaemonCapabilities.ALL)
   }
 }

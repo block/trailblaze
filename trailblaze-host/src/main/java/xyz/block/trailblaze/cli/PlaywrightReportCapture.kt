@@ -1,11 +1,12 @@
 package xyz.block.trailblaze.cli
 
 import com.microsoft.playwright.Page
+import com.microsoft.playwright.TimeoutError
 import com.microsoft.playwright.options.LoadState
 import com.microsoft.playwright.options.ScreenshotAnimations
 import java.io.File
 import java.util.UUID
-import kotlinx.coroutines.delay
+import kotlin.math.ceil
 import kotlinx.coroutines.runBlocking
 import xyz.block.trailblaze.playwright.PlaywrightBrowserManager
 import xyz.block.trailblaze.util.Console
@@ -18,8 +19,8 @@ import xyz.block.trailblaze.util.Console
  * URL / install-progress helpers here.
  *
  * Keeping the capture loop in one place is the practical mitigation for the lead-dev-review
- * comment on PR #3083: with three exporters in the tree, the screenshot cadence + playback
- * end detection + measured-fps computation only need to be right once.
+ * comment on PR #3083: with three exporters in the tree, the frame stepping and playback end
+ * detection only need to be right once.
  */
 internal object PlaywrightReportCapture {
 
@@ -49,26 +50,21 @@ internal object PlaywrightReportCapture {
     raw?.trim()?.toLongOrNull()?.takeIf { it > 0 } ?: DEFAULT_MAX_PLAYBACK_WAIT_MS
 
   /**
-   * Capture cadence — `page.screenshot()` synchronously costs roughly 50–150ms per frame
-   * on a typical workstation, so 5fps is the realistic ceiling without dropping/sliding
-   * frames. It's also a sweet spot for output file size: at 30fps a 60s autoplay would
-   * easily blow past 50MB as a GIF.
-   *
-   * **Do not raise this to shrink an artifact.** It is the shutter the export's per-step dwell
-   * floor is sized against (`EXPORT_GAP_MIN_MS` in `run-report-playback.ts`, currently 250ms):
-   * a step held for less than one period here can fall between two captures and appear in no
-   * frame of the exported animation. Raising this past that floor drops steps silently — the
-   * page keeps playing correctly, the encode succeeds, and the missing step is only visible by
-   * watching the artifact. `PlaywrightReportCaptureTest` reads the TypeScript and fails on it,
-   * because nothing in either language's type system spans the two.
-   *
-   * Note this bounds only the *requested* cadence. Under load `page.screenshot()` can overshoot
-   * until the effective interval exceeds the dwell floor on its own; see the comment on
-   * `EXPORT_GAP_MIN_MS` for why a time-sampled loop can't close that and what would.
+   * The longest playback time one captured frame covers (so at least 5fps). Frames are stepped,
+   * not sampled: each shows the timeline at an exact instant however long the page took to draw
+   * it, so the artifact's timing never depends on how loaded the machine was. See
+   * [frameTimesFor] for where the instants fall. 5fps is a sweet spot for output size: at 30fps
+   * a 60s autoplay would easily blow past 50MB as a GIF.
    */
   internal const val FRAME_INTERVAL_MS: Long = 200L
 
-  data class CaptureResult(val frameCount: Int, val measuredFps: Int)
+  /**
+   * [frameDurationsMs] is how long each captured `frame_NNNNN.png` is held, in order. Frames
+   * are not evenly spaced — see [frameTimesFor] — so the encoders take a duration per frame.
+   */
+  data class CaptureResult(val frameDurationsMs: List<Int>) {
+    val frameCount: Int get() = frameDurationsMs.size
+  }
 
   /**
    * Per-export filesystem workspace for the GIF / WebP path: a unique `deviceId` (avoids
@@ -96,16 +92,15 @@ internal object PlaywrightReportCapture {
   }
 
   /**
-   * Loads [reportHtml] with `?autoplay=1` in a headless Playwright tab, screenshots the
-   * viewport at [FRAME_INTERVAL_MS] cadence until the timeline's
-   * `__tbPlaybackEnded` global flips true, and returns counts the caller needs to feed
-   * the downstream ffmpeg encoder.
+   * Loads [reportHtml] with `?autoplay=step` in a headless Playwright tab and steps its timeline
+   * through [frameTimesFor], screenshotting each instant once the report says it is drawn
+   * (`__tbExport.renderAt`, which waits for the session recording to finish seeking). Returns
+   * what the caller needs to feed the downstream encoder.
    *
    * Throws (via `error`) on capture failure — timeout or zero frames — so the caller
    * doesn't silently produce a truncated artifact and exit 0.
    *
-   * @param reportHtml Single-session report HTML — either generated artifact (the
-   *   interactive report or the legacy WASM one).
+   * @param reportHtml Single-session interactive report HTML.
    * @param framesDir Directory to write `frame_NNNNN.png` files into. Created by caller.
    * @param tag Log-line prefix, e.g. `ReportGifExporter` / `ReportWebpExporter`. Used so
    *   each exporter's logs stay grep-distinguishable.
@@ -123,8 +118,7 @@ internal object PlaywrightReportCapture {
     var manager: PlaywrightBrowserManager? = null
     var capturedFrames = 0
     var playbackEnded = false
-    var captureStartMs = 0L
-    var captureEndMs = 0L
+    var frameTimes = emptyList<Long>()
     try {
       manager = PlaywrightBrowserManager(
         headless = headless,
@@ -139,34 +133,49 @@ internal object PlaywrightReportCapture {
       val mgr = manager
       runBlocking(mgr.playwrightDispatcher) {
         val page = mgr.currentPage
-        val url = buildReportUrl(reportHtml)
+        val url = buildReportUrl(reportHtml, stepped = true)
         Console.log("[$tag] navigating to $url")
         page.navigate(url)
         page.waitForLoadState(LoadState.DOMCONTENTLOADED)
 
-        Console.log("[$tag] capturing frames until timeline playback ends...")
+        val deadline = System.currentTimeMillis() + waitMs
+        // The hook appears once the report's payload has fully loaded (a chunked report streams
+        // its sessions in after DOMCONTENTLOADED), so wait for it rather than for the load state.
+        try {
+          page.waitForFunction(
+            "() => !!globalThis.__tbExport",
+            null,
+            Page.WaitForFunctionOptions().setTimeout(waitMs.toDouble()),
+          )
+        } catch (_: TimeoutError) {
+          error("The report never exposed its frame-export hook (__tbExport) within ${waitMs / 1000}s.")
+        }
+        // Rounded up: scaled dwells put the end and events mid-millisecond, and a frame truncated
+        // to before one still shows the prior step (or, at the end, never reports done).
+        val totalMs = wholeMsAtOrAfter(page.evaluate("() => globalThis.__tbExport.totalMs") as Number)
+        val eventMs = (page.evaluate("() => globalThis.__tbExport.eventMs") as? List<*>)
+          .orEmpty()
+          .mapNotNull { (it as? Number)?.let(::wholeMsAtOrAfter) }
+        frameTimes = frameTimesFor(totalMs, eventMs)
+        Console.log(
+          "[$tag] capturing ${frameTimes.size} frames of a ${totalMs}ms timeline " +
+            "(${eventMs.size} events)...",
+        )
         val screenshotOptions = Page.ScreenshotOptions()
           .setFullPage(false)
           .setAnimations(ScreenshotAnimations.DISABLED)
-        captureStartMs = System.currentTimeMillis()
-        val deadline = captureStartMs + waitMs
-        var nextFrameTime = captureStartMs
-        while (System.currentTimeMillis() < deadline) {
-          val now = System.currentTimeMillis()
-          if (now < nextFrameTime) delay(nextFrameTime - now)
-          val png = page.screenshot(screenshotOptions)
+        for (atMs in frameTimes) {
+          if (System.currentTimeMillis() >= deadline) break
+          // As an Int: Playwright's argument serializer rejects a Long.
+          val ended = page.evaluate("(ms) => globalThis.__tbExport.renderAt(ms)", atMs.toInt()) as? Boolean ?: false
           val frame = File(framesDir, String.format("frame_%05d.png", capturedFrames))
-          frame.writeBytes(png)
+          frame.writeBytes(page.screenshot(screenshotOptions))
           capturedFrames++
-
-          val ended = page.evaluate("() => globalThis.__tbPlaybackEnded === true") as? Boolean ?: false
           if (ended) {
             playbackEnded = true
             break
           }
-          nextFrameTime += FRAME_INTERVAL_MS
         }
-        captureEndMs = System.currentTimeMillis()
         Console.log("[$tag] captured $capturedFrames frames")
       }
     } finally {
@@ -189,9 +198,41 @@ internal object PlaywrightReportCapture {
       )
     }
 
-    val measuredFps = computeFps(capturedFrames, captureEndMs - captureStartMs)
-    return CaptureResult(frameCount = capturedFrames, measuredFps = measuredFps)
+    return CaptureResult(frameDurationsMs = frameDurationsFor(frameTimes.take(capturedFrames)))
   }
+
+  /** The first whole millisecond at or after [ms], so a frame there shows that instant. */
+  internal fun wholeMsAtOrAfter(ms: Number): Long = ceil(ms.toDouble()).toLong()
+
+  /**
+   * The playback instants a [totalMs] timeline is captured at. Every event in [eventMs] (the
+   * instant a timeline entry starts — the rail's tick marks) gets a frame of its own, so a tap
+   * appears in the artifact at exactly the moment it happened; a fixed grid lands up to a whole
+   * interval late, and in a compressed idle gap that interval is seconds of recording. The span
+   * between two events is split evenly into frames no more than [FRAME_INTERVAL_MS] apart, and
+   * the last frame sits at [totalMs], where the report shows its landed end state.
+   */
+  internal fun frameTimesFor(totalMs: Long, eventMs: List<Long>): List<Long> {
+    val end = maxOf(0L, totalMs)
+    val bounds = (listOf(0L) + eventMs.filter { it in 0 until end }).distinct().sorted() + end
+    return bounds.zipWithNext().flatMap { (from, to) ->
+      val span = to - from
+      if (span <= 0) return@flatMap emptyList()
+      val count = ((span + FRAME_INTERVAL_MS - 1) / FRAME_INTERVAL_MS).toInt()
+      (0 until count).map { from + span * it / count }
+    } + end
+  }
+
+  /**
+   * How long each frame at [frameTimes] is held: until the next frame's instant, and
+   * [FRAME_INTERVAL_MS] for the last one. Never below 1ms, which some decoders read as "use the
+   * default".
+   */
+  internal fun frameDurationsFor(frameTimes: List<Long>): List<Int> =
+    frameTimes.mapIndexed { i, at ->
+      val next = frameTimes.getOrNull(i + 1)
+      (if (next != null) next - at else FRAME_INTERVAL_MS).toInt().coerceAtLeast(1)
+    }
 
   /**
    * Throttled install-progress callback for [PlaywrightBrowserManager]. The underlying
@@ -210,42 +251,16 @@ internal object PlaywrightReportCapture {
   }
 
   /**
-   * Turns an absolute filesystem path into a `file://` URL with the autoplay query
-   * parameter both report artifacts read at startup — the legacy WASM app and the
-   * interactive viewer implement the same contract. We let `File.toURI().toASCIIString()` do
+   * Turns an absolute filesystem path into a `file://` URL with the autoplay query parameter the
+   * report reads at startup: `autoplay=step` for the frame-stepped capture here, `autoplay=1`
+   * for [ReportVideoExporter]'s real-time screen recording. We let `File.toURI().toASCIIString()` do
    * the percent-encoding (generated report paths in `logs/reports/` don't realistically
    * contain `?`, but the `contains("?")` guard keeps the URL well-formed for the edge
    * case where they do).
    */
-  fun buildReportUrl(reportHtml: File): String {
+  fun buildReportUrl(reportHtml: File, stepped: Boolean = false): String {
     val base = reportHtml.toURI().toASCIIString()
     val separator = if (base.contains("?")) "&" else "?"
-    return "$base${separator}autoplay=1"
-  }
-
-  /** Nominal capture rate from the fixed [FRAME_INTERVAL_MS] cadence (5fps at 200ms). */
-  private val NOMINAL_FPS: Int get() = (1000 / FRAME_INTERVAL_MS).toInt().coerceAtLeast(1)
-
-  /**
-   * Convert measured frame count + elapsed wall time into a whole-number fps for ffmpeg.
-   * Encoding at the *measured* rate (rather than the nominal [NOMINAL_FPS]) makes the
-   * artifact play back at real-time speed even when `page.screenshot()` ran slower than the
-   * interval — common on a cold CI runner, where it honestly under-reports and the clip
-   * plays at the slower true rate rather than fast-forwarding.
-   *
-   * The bounds only catch values that aren't physically meaningful, so a legitimate
-   * measurement is never distorted:
-   *  - `coerceAtLeast(1)` floors the degenerate "one frame in <1s" case (ffmpeg needs a
-   *    positive integer fps).
-   *  - the upper bound catches a non-physical spike — e.g. a near-empty capture or clock
-   *    skew making `elapsedMs` ~0 — which would otherwise yield a hundreds-of-fps blur.
-   *    It sits at `4 * NOMINAL_FPS` (20fps at the 200ms cadence), comfortably above the
-   *    real ceiling: each screenshot costs ~50ms+, so a genuine capture can't sustain past
-   *    ~20fps, and a fast tail passes through unclamped. Independent of the truncated-capture
-   *    fail-soft path — `frames / elapsed` is the right rate either way.
-   */
-  internal fun computeFps(frameCount: Int, elapsedMs: Long): Int {
-    if (elapsedMs <= 0) return NOMINAL_FPS
-    return (frameCount * 1000.0 / elapsedMs).toInt().coerceIn(1, 4 * NOMINAL_FPS)
+    return "$base${separator}autoplay=${if (stepped) "step" else "1"}"
   }
 }

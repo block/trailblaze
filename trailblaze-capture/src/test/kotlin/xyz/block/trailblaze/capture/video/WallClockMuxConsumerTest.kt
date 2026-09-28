@@ -329,6 +329,84 @@ class WallClockMuxConsumerTest {
   }
 
   @Test
+  fun `a feed carrying device frame times is recorded at those times, in both containers`() {
+    if (!ffmpegOnPath() || !ffprobeOnPath()) {
+      println("skipping: ffmpeg or ffprobe not on PATH")
+      return
+    }
+    assertDeviceTimed(WallClockMuxConsumer.Output.Mp4Copy, "video.mp4")
+    H264Tee.resetRegistryForTests()
+    // Only where a webm recording would be made: an ffmpeg that loses time through a re-encode
+    // records mp4 instead (see the arrival-timed webm test above).
+    if (webmToolsAvailable() && WallClockMuxConsumer.Output.probeLiveMuxSupport().reencodeKeepsWallClock) {
+      assertDeviceTimed(WallClockMuxConsumer.Output.WebmVp9(), "video.webm")
+    }
+  }
+
+  private fun assertDeviceTimed(output: WallClockMuxConsumer.Output, fileName: String) {
+    // The whole feed arrives in one burst, as it does after an adb stall, so arrival order is all
+    // it says about timing. The recording has to take its spacing from the device times instead.
+    val gapsMs = listOf(16L, 33L, 250L, 16L, 700L, 50L)
+    val frames = 30
+    val deviceMs = (0 until frames).runningFold(0L) { t, i -> t + gapsMs[i % gapsMs.size] }.take(frames)
+    val feed = deviceTimedProducer(generateH264Fixture(File(tempDir, "src.h264"), frames), deviceMs)
+    val tee = H264Tee.standalone(deviceId = deviceId, producerFactory = feed.factory)
+    val out = File(tempDir, fileName)
+    val consumer = WallClockMuxConsumer(outputFile = out, tee = tee, output = output)
+    consumer.start()
+    assertTrue(feed.finished.await(20, TimeUnit.SECONDS), "the fixture feed should complete")
+    waitForContentStable(consumer, out, stableMs = 300, timeoutMs = 10_000)
+
+    val result = assertNotNull(consumer.stop(), "mux should produce a MuxResult")
+    val ptsMs = readPacketPtsMs(result.file).sorted().let { all -> all.map { it - all.first() } }
+    // The last frame may be cut by stop, which closes the pipe; every one before it must be exact.
+    assertTrue(ptsMs.size >= frames - 1, "$fileName: expected ~$frames packets, got ${ptsMs.size}")
+    ptsMs.forEachIndexed { i, pts ->
+      assertTrue(kotlin.math.abs(pts - deviceMs[i]) <= 1, "$fileName frame $i at ${pts}ms, device drew it at ${deviceMs[i]}ms: $ptsMs")
+    }
+    assertEquals(
+      deviceMs[ptsMs.size - 1],
+      result.lastFrameEpochMs - result.firstFrameEpochMs,
+      "$fileName: the artifact window should span the device times too",
+    )
+  }
+
+  /**
+   * Replays [file] frame by frame the way [ScrcpyAnnexBInputStream] presents a scrcpy feed: each
+   * picture preceded by a [FrameTimeSei] saying the device drew it [deviceMs] after the first.
+   */
+  private fun deviceTimedProducer(file: File, deviceMs: List<Long>): BurstFeed {
+    val units = mutableListOf<H264AccessUnit>()
+    AnnexBAccessUnitSplitter().run {
+      val bytes = file.readBytes()
+      feed(bytes, 0, bytes.size) { units += it }
+      finish { units += it }
+    }
+    assertEquals(deviceMs.size, units.size, "sanity: one access unit per fixture frame")
+    var consumed = false
+    val finished = CountDownLatch(1)
+    val factory = H264Tee.ProducerFactory { _, _, _, _ ->
+      if (consumed) throw IllegalStateException("only one fixture available")
+      consumed = true
+      // Every frame "arrived" at spawn, which is after the recording started, so none is clamped.
+      val arrivalMs = System.currentTimeMillis()
+      val stream = units.flatMapIndexed { i, unit ->
+        (FrameTimeSei(devicePtsUs = 5_000_000_000L + deviceMs[i] * 1000, hostArrivalMs = arrivalMs + deviceMs[i]).toAnnexBNal() + unit.bytes).asList()
+      }.toByteArray().inputStream()
+      object : H264Tee.ProducerHandle {
+        override val input: InputStream = object : InputStream() {
+          override fun read(): Int = stream.read().also { if (it < 0) finished.countDown() }
+          override fun read(b: ByteArray, off: Int, len: Int): Int =
+            stream.read(b, off, len).also { if (it < 0) finished.countDown() }
+        }
+        override val carriesDeviceFrameTimes = true
+        override fun close() {}
+      }
+    }
+    return BurstFeed(factory, finished)
+  }
+
+  @Test
   fun `vp9 availability is read off the encoder listing not the binary's presence`() {
     val withVp9 = """
       Encoders:

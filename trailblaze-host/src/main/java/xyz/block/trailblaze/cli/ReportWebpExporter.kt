@@ -2,7 +2,6 @@ package xyz.block.trailblaze.cli
 
 import java.io.File
 import java.util.UUID
-import kotlin.math.roundToInt
 import xyz.block.trailblaze.util.Console
 
 /**
@@ -29,9 +28,9 @@ import xyz.block.trailblaze.util.Console
  *     default), then `webpmux` muxes the resized frames into one animation. cwebp's own
  *     rescaler does the scaling rather than asking ffmpeg to scale stills.
  *
- * Frame timing is uniform: every frame is held for `1000 / measuredFps` ms (`-d` for
- * img2webp, the `+<ms>` frame-duration suffix for webpmux) and `-loop 0` loops forever,
- * matching the GIF default.
+ * Each frame is held for its own captured duration (a `-d` before each frame for img2webp,
+ * the `+<ms>` frame-duration suffix for webpmux) — frames land on the timeline's events, so
+ * they are not evenly spaced — and `-loop 0` loops forever, matching the GIF default.
  *
  * The only production caller is the orchestrator in `ReportCommand.kt`, which runs a
  * single shared capture and then calls [encode] on each requested exporter — mirroring
@@ -63,7 +62,7 @@ object ReportWebpExporter {
    * @param framesDir Directory containing `frame_NNNNN.png` files written by
    *   [PlaywrightReportCapture.captureFrames].
    * @param capture The [PlaywrightReportCapture.CaptureResult] from that same call,
-   *   needed for the measured-fps value.
+   *   needed for each frame's duration.
    * @param outputWebp Destination path for the final WebP. Parents are created if
    *   needed and an existing file at the path is overwritten.
    * @param maxBytes When non-null, iteratively re-assemble at smaller widths until the
@@ -83,10 +82,10 @@ object ReportWebpExporter {
     outputWebp.parentFile?.mkdirs()
     if (outputWebp.exists()) outputWebp.delete()
 
-    assembleWebp(framesDir, outputWebp, capture.measuredFps, targetWidthPx = null)
+    assembleWebp(framesDir, outputWebp, capture.frameDurationsMs, targetWidthPx = null)
     Console.log(
       "[ReportWebpExporter] wrote ${outputWebp.absolutePath} " +
-        "(${outputWebp.length() / 1024}KB, ${capture.measuredFps}fps)",
+        "(${outputWebp.length() / 1024}KB, ${capture.frameCount} frames)",
     )
 
     if (maxBytes != null) {
@@ -97,7 +96,7 @@ object ReportWebpExporter {
       val rescaleStartMs = System.currentTimeMillis()
       val result = MaxArtifactSize.enforce(outputWebp, maxBytes) { w ->
         Console.log("[ReportWebpExporter] over ${maxBytes}B — re-assembling at ${w}px width")
-        assembleWebp(framesDir, outputWebp, capture.measuredFps, targetWidthPx = w)
+        assembleWebp(framesDir, outputWebp, capture.frameDurationsMs, targetWidthPx = w)
         Console.log(
           "[ReportWebpExporter] after ${w}px: ${outputWebp.length() / 1024}KB " +
             "(cap: ${maxBytes / 1024}KB)",
@@ -151,20 +150,23 @@ object ReportWebpExporter {
    * Assemble an animated WebP from the captured PNG frames. Marked `internal` so the smoke
    * test can drive it directly without going through Playwright.
    *
+   * @param frameDurationsMs How long to hold each captured frame, in order.
    * @param targetWidthPx When non-null, each frame is downscaled to that pixel width
    *   (height auto from aspect) via `cwebp -resize` and the result muxed with `webpmux`;
    *   when null, the native-resolution frames are assembled in a single `img2webp` call.
    */
-  internal fun assembleWebp(framesDir: File, outputWebp: File, fps: Int, targetWidthPx: Int?) {
+  internal fun assembleWebp(framesDir: File, outputWebp: File, frameDurationsMs: List<Int>, targetWidthPx: Int?) {
     val frames = framePngs(framesDir)
     check(frames.isNotEmpty()) {
       "no frame_NNNNN.png files found in ${framesDir.absolutePath} to assemble a WebP from"
     }
-    val durationMs = frameDurationMs(fps)
+    check(frames.size == frameDurationsMs.size) {
+      "${frames.size} frames in ${framesDir.absolutePath} but ${frameDurationsMs.size} durations"
+    }
     if (targetWidthPx == null) {
-      runToTemp(outputWebp, "img2webp assembly") { temp -> img2webpArgs(frames, temp, durationMs) }
+      runToTemp(outputWebp, "img2webp assembly") { temp -> img2webpArgs(frames, temp, frameDurationsMs) }
     } else {
-      assembleScaledWebp(frames, outputWebp, durationMs, targetWidthPx)
+      assembleScaledWebp(frames, outputWebp, frameDurationsMs, targetWidthPx)
     }
   }
 
@@ -183,7 +185,7 @@ object ReportWebpExporter {
   private fun assembleScaledWebp(
     frames: List<File>,
     outputWebp: File,
-    durationMs: Int,
+    frameDurationsMs: List<Int>,
     widthPx: Int,
   ) {
     val workDir = File(
@@ -203,7 +205,7 @@ object ReportWebpExporter {
         }
       }
       runToTemp(outputWebp, "webpmux assembly at ${widthPx}px") { temp ->
-        webpmuxArgs(scaledFrames, temp, durationMs)
+        webpmuxArgs(scaledFrames, temp, frameDurationsMs)
       }
     } finally {
       runCatching { workDir.deleteRecursively() }
@@ -213,27 +215,32 @@ object ReportWebpExporter {
   // ---- pure argv builders (unit-tested in ReportWebpExporterTest) ----
 
   /**
-   * Per-frame display duration in ms for the measured fps. Clamped to at least 1ms: a very
-   * high fps would otherwise round to 0, which some decoders treat as "use the default
-   * duration" and play back at the wrong speed.
+   * `img2webp` argv: native-resolution PNG frames → one lossy, infinite-loop animated WebP, each
+   * frame preceded by its own `-d` (a per-frame option: it applies to the frames after it).
    */
-  internal fun frameDurationMs(fps: Int): Int {
-    require(fps > 0) { "fps must be positive, got $fps" }
-    return (1000.0 / fps).roundToInt().coerceAtLeast(1)
-  }
-
-  /** `img2webp` argv: native-resolution PNG frames → one lossy, infinite-loop animated WebP. */
-  internal fun img2webpArgs(frames: List<File>, output: File, durationMs: Int): List<String> =
-    buildList {
+  internal fun img2webpArgs(frames: List<File>, output: File, frameDurationsMs: List<Int>): List<String> {
+    requireDurations(frames, frameDurationsMs)
+    return buildList {
       add("img2webp")
       add("-loop"); add("0") // 0 = infinite loop
       add("-lossy") // img2webp defaults to lossless; force lossy to match the GIF/video sizing
       add("-q"); add(QUALITY)
       add("-m"); add(METHOD)
-      add("-d"); add(durationMs.toString()) // applies to the frames that follow it
-      frames.forEach { add(it.absolutePath) }
+      frames.zip(frameDurationsMs).forEach { (frame, ms) ->
+        add("-d"); add(ms.toString())
+        add(frame.absolutePath)
+      }
       add("-o"); add(output.absolutePath)
     }
+  }
+
+  /** One positive duration per frame: a 0ms frame reads as "use the default" to some decoders. */
+  private fun requireDurations(frames: List<File>, frameDurationsMs: List<Int>) {
+    require(frames.size == frameDurationsMs.size) {
+      "${frames.size} frames but ${frameDurationsMs.size} durations"
+    }
+    require(frameDurationsMs.all { it > 0 }) { "frame durations must be positive: $frameDurationsMs" }
+  }
 
   /** `cwebp` argv: one PNG frame → one lossy WebP, downscaled to [widthPx] (aspect preserved). */
   internal fun cwebpResizeArgs(source: File, output: File, widthPx: Int): List<String> {
@@ -249,16 +256,18 @@ object ReportWebpExporter {
     )
   }
 
-  /** `webpmux` argv: per-frame WebPs → one animated WebP, each frame held for [durationMs]. */
-  internal fun webpmuxArgs(frames: List<File>, output: File, durationMs: Int): List<String> =
-    buildList {
+  /** `webpmux` argv: per-frame WebPs → one animated WebP, each held for its [frameDurationsMs] entry. */
+  internal fun webpmuxArgs(frames: List<File>, output: File, frameDurationsMs: List<Int>): List<String> {
+    requireDurations(frames, frameDurationsMs)
+    return buildList {
       add("webpmux")
-      frames.forEach { frame ->
-        add("-frame"); add(frame.absolutePath); add("+$durationMs") // +<ms> = frame display duration
+      frames.zip(frameDurationsMs).forEach { (frame, ms) ->
+        add("-frame"); add(frame.absolutePath); add("+$ms") // +<ms> = frame display duration
       }
       add("-loop"); add("0")
       add("-o"); add(output.absolutePath)
     }
+  }
 
   // ---- subprocess plumbing ----
 

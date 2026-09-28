@@ -65,6 +65,7 @@ drivers:
 tools:
   - android_adbShell
   - android_ensureAppCompiled
+  - android_forceStop
   - android_grantAppOpsPermission
   - android_grantPermissions
   - android_sendBroadcast

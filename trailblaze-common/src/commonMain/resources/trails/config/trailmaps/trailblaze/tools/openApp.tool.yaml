@@ -1,0 +1,2 @@
+id: openApp
+class: xyz.block.trailblaze.toolcalls.commands.OpenAppTrailblazeTool

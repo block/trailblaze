@@ -5,7 +5,7 @@
 #
 # Mixed LLM surfacing — `mobile_pasteClipboard` / `mobile_setClipboard` / `mobile_listInstalledApps`
 # are LLM-facing (the clipboard tools are recordable interaction primitives; `listInstalledApps`
-# lets an agent discover installed apps before `launchApp`), while `mobile_clearAppData` is declared
+# lets an agent discover installed apps before `openApp`), while `mobile_clearAppData` is declared
 # `surfaceToLlm = false` (a callback-only composition primitive). The toolset groups them together
 # because they share the same `mobile_*` prefix and live behind the same library trailmap; the
 # per-tool `surfaceToLlm` flag still controls catalog visibility, so a consumer that pulls in this

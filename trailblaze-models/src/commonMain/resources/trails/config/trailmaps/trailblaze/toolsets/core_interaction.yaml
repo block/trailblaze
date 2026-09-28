@@ -19,6 +19,7 @@ tools:
   - inputText
   - inputTextRandom
   - launchApp
+  - openApp
   - networkConnection
   - openUrl
   - mobile_pasteClipboard

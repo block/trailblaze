@@ -331,19 +331,21 @@ abstract class BaseHostTrailblazeTest(
   private val resolvedAppIdForSession: String? by lazy {
     val resolved = resolvedTargetForSession ?: return@lazy null
     runCatching {
-      val installed = MobileDeviceUtils.getInstalledAppIds(resolved.deviceId)
-      // A failed probe throws and reaches the onFailure log below. An EMPTY inventory is the other
-      // shape a broken probe can take — a running device always has packages — so it is logged
-      // too, keeping a downstream "ctx.target.resolveAppId() === undefined" debuggable (mirrors
-      // the V1 resolution site in TrailblazeHostYamlRunner).
-      if (installed.isEmpty() && resolved.appIds.isNotEmpty()) {
-        Console.log(
-          "[BaseHostTrailblazeTest] getInstalledAppIds returned 0 packages for ${resolved.deviceId} " +
-            "despite target declaring [${resolved.appIds.joinToString()}] — appId will be null " +
-            "(the probe answered but listed nothing).",
-        )
+      MobileDeviceUtils.installedAppIdForTarget(resolved.target, resolved.deviceId) { deviceId ->
+        // A failed probe throws and reaches the onFailure log below. An EMPTY inventory is the
+        // other shape a broken probe can take — a running device always has packages — so it is
+        // logged too, keeping a downstream "ctx.target.resolveAppId() === undefined" debuggable
+        // (mirrors the V1 resolution site in TrailblazeHostYamlRunner).
+        MobileDeviceUtils.getInstalledAppIds(deviceId).also { installed ->
+          if (installed.isEmpty()) {
+            Console.log(
+              "[BaseHostTrailblazeTest] getInstalledAppIds returned 0 packages for ${resolved.deviceId} " +
+                "despite target declaring [${resolved.appIds.joinToString()}] — appId will be null " +
+                "(the probe answered but listed nothing).",
+            )
+          }
+        }
       }
-      resolved.target.getAppIdIfInstalled(resolved.platform, installed)
     }.onFailure { e ->
       Console.log(
         "[BaseHostTrailblazeTest] appId resolution failed for ${resolved.deviceId} " +
@@ -560,7 +562,11 @@ abstract class BaseHostTrailblazeTest(
         trailblazeAgent.runTrailblazeTools(
           trailblazeTools,
           currentToolTraceId,
-          screenState = screenStateProvider(),
+          // Null defers to the context's capture-on-read: a tool that reads the screen (`tap ref=`)
+          // captures it then, and one that doesn't (`inputText`, `pressKey`) skips a hierarchy +
+          // screenshot it would never use. iOS `openApp` takes its own before/after captures
+          // through the provider, so this one was unused there too.
+          screenState = null,
           elementComparator = elementComparator,
           screenStateProvider = screenStateProvider,
         ).result

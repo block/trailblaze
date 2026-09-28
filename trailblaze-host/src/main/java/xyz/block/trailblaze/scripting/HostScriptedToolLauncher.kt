@@ -305,22 +305,49 @@ object HostScriptedToolLauncher {
       CLASSPATH_EXTRACT_SUBDIR,
     ),
   ): File {
-    val direct = File(script)
-    if (direct.isFile) return direct
-    // An absolute path that isn't a file can still be recovered from the classpath below (the
-    // anchor segment survives absolutization), but it can't be joined onto CWD ancestors — that
-    // would just re-derive the same path.
-    if (!direct.isAbsolute) {
-      var dir: File? = File(System.getProperty("user.dir") ?: ".").absoluteFile
-      while (dir != null) {
-        val candidate = File(dir, script)
-        if (candidate.isFile) return candidate
-        dir = dir.parentFile
-      }
-    }
+    resolveWorkspaceScriptFile(script)?.let { return it }
     resolveFromClasspath(script, loadClasspathResource, listClasspathToolScripts, classpathExtractRoot)
       ?.let { return it }
-    return direct
+    return File(script)
+  }
+
+  /**
+   * [script] as a file on disk — as given, or joined onto the working directory or one of its
+   * ancestors — or null when it exists only inside the JAR.
+   */
+  internal fun resolveWorkspaceScriptFile(script: String): File? {
+    val direct = File(script)
+    if (direct.isFile) return direct
+    // An absolute path that isn't a file can still be recovered from the classpath (the anchor
+    // segment survives absolutization), but it can't be joined onto CWD ancestors — that would just
+    // re-derive the same path.
+    if (direct.isAbsolute) return null
+    var dir: File? = File(System.getProperty("user.dir") ?: ".").absoluteFile
+    while (dir != null) {
+      val candidate = File(dir, script)
+      if (candidate.isFile) return candidate
+      dir = dir.parentFile
+    }
+    return null
+  }
+
+  /**
+   * The tools among [tools] that ship inside the JAR, each with the bundle precompiled from its
+   * source at build time. A tool counts when its source is not on disk ([resolveWorkspaceSource]
+   * is null) and a precompiled bundle exists. Live-bundling such a tool cannot succeed: its source
+   * is extracted to a temp dir with no `node_modules` to resolve `@trailblaze/scripting` from, so
+   * esbuild fails and the tool falls back to this same bundle — after two esbuild runs per tool, on
+   * every session start.
+   */
+  internal fun shippedPrecompiledBundles(
+    tools: List<InlineScriptToolConfig>,
+    resolveWorkspaceSource: (String) -> File? = ::resolveWorkspaceScriptFile,
+    resolvePrecompiled: (String) -> File? = { resolvePrecompiledBundle(it) },
+  ): Map<InlineScriptToolConfig, File> = buildMap {
+    for (tool in tools) {
+      if (resolveWorkspaceSource(tool.script) != null) continue
+      resolvePrecompiled(tool.script)?.let { put(tool, it) }
+    }
   }
 
   /**
@@ -516,83 +543,111 @@ object HostScriptedToolLauncher {
       is InlineToolRoute.LiveBundle -> {
         // Route selected because esbuild resolved, so it is non-null here by construction.
         val binary = checkNotNull(esbuildBinary) { "LiveBundle route requires a resolved esbuild binary" }
-        // Supplying the SDK entry (may be null) keeps the slim on-device profile when present and lets
-        // the bundler fall back to `node_modules` resolution when absent.
-        // No walk-up: this caller resolved the entry itself, so a null is a decision — the tree was
-        // rejected for unusable deps — and the bundler's walk-up from esbuild would land right back
-        // on it (esbuild is normally that tree's own devDependency).
-        val bundler = DaemonScriptedToolBundler(
-          binary,
-          inProcessSdkEntryOverride = inProcessSdkEntry,
-          allowLegacyEsbuildWalkup = false,
-        )
-        // Static-analysis pre-pass (#3190): a tool whose import closure reaches `node:*` builtins or
-        // Node-only npm deps would fail the real bundle pass and tank session start for every sibling
-        // tool. The analyzer skips such tools cleanly and registers the on-device-viable siblings.
-        val analyzer = ScriptedToolImportAnalyzer(binary)
-        // Resolve each tool's source ONCE, here, and hand the same file to both the analyzer and
-        // the bundler. A bundled trailmap's `.ts` lives in the JAR, not at its workspace-relative
-        // path, so the raw path would leave the analyzer reading nothing while the bundler reads
-        // the real extracted source — the two silently disagreeing about the same tool.
-        val sources = route.tools.associateWith { resolveScriptFile(it.script) }
-        val partition = partitionByImportClosure(route.tools, analyzer, resolveSource = { sources.getValue(it) })
-        if (!route.allowPrecompiledFallback) {
-          // Real SDK-source checkout: live-bundle every tool; a bundle failure PROPAGATES (rolls the
-          // registration back) so a broken live edit surfaces its esbuild error instead of being
-          // silently masked by a staged precompiled bundle.
-          partition.toBundle.map { tool ->
-            tool to bundler.bundleOne(sources.getValue(tool), tool.name)
-          }
-        } else {
-          // Binary user (esbuild but no SDK source): live-bundle each tool — `@trailblaze/scripting`
-          // resolves from the user's node_modules. On a live-bundle failure, fall back to a precompiled
-          // classpath bundle when one exists; otherwise skip JUST that tool — never abort its siblings
-          // or the session (per-tool degradation, matching the no-esbuild route) — while surfacing the
-          // ORIGINAL esbuild error in the skip report so a real author bug (syntax / unresolved import)
-          // is diagnosable at startup rather than only later as an "unknown tool".
-          val liveBundleErrors = linkedMapOf<InlineScriptToolConfig, Throwable>()
-          val liveBundled =
-            partition.toBundle.associateWith { tool ->
-              try {
-                bundler.bundleOne(sources.getValue(tool), tool.name)
-              } catch (cancellation: CancellationException) {
-                throw cancellation
-              } catch (bundleFailure: Throwable) {
-                liveBundleErrors[tool] = bundleFailure
-                null
-              }
-            }
-          val plan =
-            planInlineToolBundles(partition.toBundle) { tool ->
-              liveBundled[tool] ?: resolvePrecompiledBundle(tool.script)
-            }
-          reportUnregisteredInlineTools(plan.unresolved, onProgressMessage, liveBundleErrors)
-          // A tool whose live-bundle failed but whose precompiled bundle covered it still REGISTERED;
-          // surface its original error as a breadcrumb (not an error — the tool works) so no live-bundle
-          // failure is ever fully hidden. From a source checkout this flags an edit that didn't take
-          // effect; on an installed JAR it's the expected SDK-absent fallback.
-          //
-          // Mirrored to onProgressMessage, not just Console.log, because a source checkout can now
-          // reach this branch: LazyYamlScriptedToolRegistration.resolveInProcessSdkEntry returns null
-          // for a checkout whose SDK deps aren't installed, which reads as "no SDK source" here. In
-          // that state the developer's live `.ts` edit is silently NOT what runs, and Console.log is
-          // suppressed under quiet mode — exactly where they'd be staring at stale tool behavior with
-          // no explanation.
-          val unresolvedSet = plan.unresolved.toSet()
-          liveBundleErrors.filterKeys { it !in unresolvedSet }.forEach { (tool, failure) ->
-            val breadcrumb =
-              "[scripted-tools] '${tool.name}' fell back to its precompiled bundle after its live-bundle " +
-                "failed: ${failure.message ?: failure.toString()}"
-            Console.log(breadcrumb)
-            onProgressMessage(breadcrumb)
-          }
-          plan.resolved.map { it.config to it.bundleFile }
-        }
+        liveBundleRoute(route) { liveTools -> liveBundle(route, liveTools, binary, inProcessSdkEntry, onProgressMessage) }
       }
       is InlineToolRoute.PrecompiledOnly -> {
         reportUnregisteredInlineTools(route.plan.unresolved, onProgressMessage)
         route.plan.resolved.map { it.config to it.bundleFile }
       }
+    }
+  }
+
+  /**
+   * The (tool -> bundle) pairs for a [InlineToolRoute.LiveBundle] route, in the route's tool order.
+   * A binary user's JAR-shipped tools ([shippedPrecompiledBundles]) take their precompiled bundle
+   * directly; only the rest go to [bundleLive], which is not called when nothing is left. A source
+   * checkout sends every tool to [bundleLive] so an edit always takes effect.
+   */
+  internal suspend fun liveBundleRoute(
+    route: InlineToolRoute.LiveBundle,
+    shippedBundles: (List<InlineScriptToolConfig>) -> Map<InlineScriptToolConfig, File> = { shippedPrecompiledBundles(it) },
+    bundleLive: suspend (List<InlineScriptToolConfig>) -> List<Pair<InlineScriptToolConfig, File>>,
+  ): List<Pair<InlineScriptToolConfig, File>> {
+    val shipped = if (route.allowPrecompiledFallback) shippedBundles(route.tools) else emptyMap()
+    val liveTools = route.tools.filter { it !in shipped }
+    val bundles = shipped + if (liveTools.isEmpty()) emptyList() else bundleLive(liveTools)
+    return route.tools.mapNotNull { tool -> bundles[tool]?.let { tool to it } }
+  }
+
+  /** Live-bundles [liveTools] for [route]; see [resolveInlineToolBundlesToRegister] for the policy. */
+  private suspend fun liveBundle(
+    route: InlineToolRoute.LiveBundle,
+    liveTools: List<InlineScriptToolConfig>,
+    binary: File,
+    inProcessSdkEntry: File?,
+    onProgressMessage: (String) -> Unit,
+  ): List<Pair<InlineScriptToolConfig, File>> {
+    // Supplying the SDK entry (may be null) keeps the slim on-device profile when present and lets
+    // the bundler fall back to `node_modules` resolution when absent.
+    // No walk-up: this caller resolved the entry itself, so a null is a decision — the tree was
+    // rejected for unusable deps — and the bundler's walk-up from esbuild would land right back
+    // on it (esbuild is normally that tree's own devDependency).
+    val bundler = DaemonScriptedToolBundler(
+      binary,
+      inProcessSdkEntryOverride = inProcessSdkEntry,
+      allowLegacyEsbuildWalkup = false,
+    )
+    // Static-analysis pre-pass (#3190): a tool whose import closure reaches `node:*` builtins or
+    // Node-only npm deps would fail the real bundle pass and tank session start for every sibling
+    // tool. The analyzer skips such tools cleanly and registers the on-device-viable siblings.
+    val analyzer = ScriptedToolImportAnalyzer(binary)
+    // Resolve each tool's source ONCE, here, and hand the same file to both the analyzer and
+    // the bundler. A bundled trailmap's `.ts` lives in the JAR, not at its workspace-relative
+    // path, so the raw path would leave the analyzer reading nothing while the bundler reads
+    // the real extracted source — the two silently disagreeing about the same tool.
+    val sources = liveTools.associateWith { resolveScriptFile(it.script) }
+    val partition = partitionByImportClosure(liveTools, analyzer, resolveSource = { sources.getValue(it) })
+    return if (!route.allowPrecompiledFallback) {
+      // Real SDK-source checkout: live-bundle every tool; a bundle failure PROPAGATES (rolls the
+      // registration back) so a broken live edit surfaces its esbuild error instead of being
+      // silently masked by a staged precompiled bundle.
+      partition.toBundle.map { tool ->
+        tool to bundler.bundleOne(sources.getValue(tool), tool.name)
+      }
+    } else {
+      // Binary user (esbuild but no SDK source): live-bundle each tool — `@trailblaze/scripting`
+      // resolves from the user's node_modules. On a live-bundle failure, fall back to a precompiled
+      // classpath bundle when one exists; otherwise skip JUST that tool — never abort its siblings
+      // or the session (per-tool degradation, matching the no-esbuild route) — while surfacing the
+      // ORIGINAL esbuild error in the skip report so a real author bug (syntax / unresolved import)
+      // is diagnosable at startup rather than only later as an "unknown tool".
+      val liveBundleErrors = linkedMapOf<InlineScriptToolConfig, Throwable>()
+      val liveBundled =
+        partition.toBundle.associateWith { tool ->
+          try {
+            bundler.bundleOne(sources.getValue(tool), tool.name)
+          } catch (cancellation: CancellationException) {
+            throw cancellation
+          } catch (bundleFailure: Throwable) {
+            liveBundleErrors[tool] = bundleFailure
+            null
+          }
+        }
+      val plan =
+        planInlineToolBundles(partition.toBundle) { tool ->
+          liveBundled[tool] ?: resolvePrecompiledBundle(tool.script)
+        }
+      reportUnregisteredInlineTools(plan.unresolved, onProgressMessage, liveBundleErrors)
+      // A tool whose live-bundle failed but whose precompiled bundle covered it still REGISTERED;
+      // surface its original error as a breadcrumb (not an error — the tool works) so no live-bundle
+      // failure is ever fully hidden. From a source checkout this flags an edit that didn't take
+      // effect; on an installed JAR it's the expected SDK-absent fallback.
+      //
+      // Mirrored to onProgressMessage, not just Console.log, because a source checkout can now
+      // reach this branch: LazyYamlScriptedToolRegistration.resolveInProcessSdkEntry returns null
+      // for a checkout whose SDK deps aren't installed, which reads as "no SDK source" here. In
+      // that state the developer's live `.ts` edit is silently NOT what runs, and Console.log is
+      // suppressed under quiet mode — exactly where they'd be staring at stale tool behavior with
+      // no explanation.
+      val unresolvedSet = plan.unresolved.toSet()
+      liveBundleErrors.filterKeys { it !in unresolvedSet }.forEach { (tool, failure) ->
+        val breadcrumb =
+          "[scripted-tools] '${tool.name}' fell back to its precompiled bundle after its live-bundle " +
+            "failed: ${failure.message ?: failure.toString()}"
+        Console.log(breadcrumb)
+        onProgressMessage(breadcrumb)
+      }
+      plan.resolved.map { it.config to it.bundleFile }
     }
   }
 

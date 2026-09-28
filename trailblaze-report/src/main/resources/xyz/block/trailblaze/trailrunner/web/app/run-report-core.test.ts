@@ -263,7 +263,7 @@ type PlaybackDriveContext = {
   scrubHoverState: () => { tooltipVisible: boolean; rangeVisible: boolean; step: string; kind: string; ariaHidden: string | undefined };
 };
 
-type ViewerOptions = { session?: number; step?: number; clickGroup?: number; toggleKids?: number; clickKid?: string; routeStep?: number; query?: string; legacyHash?: string; protocol?: string; copyLink?: boolean; clipboardRejects?: boolean; clipPlayRejects?: boolean; tab?: string; toggleCell?: string; lightboxAll?: boolean; galZoom?: number[]; zoomShot?: string; zoomKey?: "ArrowLeft" | "ArrowRight"; timelineKey?: "ArrowLeft" | "ArrowRight" | "ArrowUp" | "ArrowDown"; timelineKeyTarget?: string; tlStream?: number; tlStreamBeforeTab?: number; spaceOnStep?: number; timelineScrollTop?: number; focusedStep?: number; focusedGroup?: number; focusedTlStream?: number; llmEnter?: number; llmClick?: number; openTx?: number; txEscape?: boolean; inspect?: number; inspectEscape?: boolean; popstate?: string; deferHistoryBack?: boolean; transport?: "prev" | "next"; stackedTimeline?: boolean; shotLayoutShift?: boolean; copyLocalPrompt?: boolean; exportLogs?: boolean; exportRun?: boolean; exportAll?: boolean; pointerDown?: "outside" | "insideTimelineMenu"; gotoTrail?: boolean | string; gotoCompareTrail?: boolean | string; gotoCompare?: boolean; toggleCompare?: boolean; toggleCompareAfterPick?: boolean; pick?: number[]; openRetries?: number[]; pickClear?: boolean; pickOpen?: boolean; pickDiff?: boolean; cmpOpen?: string; cmpGap?: number; cmpTab?: string; cmpStream?: string; cmpEvent?: string; cmpSide?: { side: "base" | "vs"; value: number }; cmpOrganize?: "stream" | "step"; cmpEventStep?: string; cmpPlace?: "prev" | "next" | Array<"prev" | "next">; cmpFull?: string; cmpEventAll?: boolean; cmpEventSearch?: string; cmpStepStream?: string; trailOpen?: string; toggleLanes?: number[]; back?: boolean; viewer?: () => void; drive?: (ctx: PlaybackDriveContext) => void; payloadViaGlobal?: boolean; deferBoot?: boolean; rebootViewer?: boolean; shellDocument?: boolean; chunks?: { index: string; sessions: Record<string, string>; clips?: Record<string, string> }; holdChunks?: number[]; holdClipChunks?: Array<number | string>; streamingChunks?: number[]; loadingDocument?: boolean; baseURI?: string; pageUrl?: string; clipDuration?: number };
+type ViewerOptions = { session?: number; step?: number; clickGroup?: number; toggleKids?: number; clickKid?: string; routeStep?: number; query?: string; legacyHash?: string; protocol?: string; copyLink?: boolean; clipboardRejects?: boolean; clipPlayRejects?: boolean; tab?: string; toggleCell?: string; lightboxAll?: boolean; galZoom?: number[]; zoomShot?: string; zoomKey?: "ArrowLeft" | "ArrowRight"; timelineKey?: "ArrowLeft" | "ArrowRight" | "ArrowUp" | "ArrowDown"; timelineKeyTarget?: string; tlStream?: number; tlStreamBeforeTab?: number; spaceOnStep?: number; timelineScrollTop?: number; focusedStep?: number; focusedGroup?: number; focusedTlStream?: number; llmEnter?: number; llmClick?: number; openTx?: number; txEscape?: boolean; inspect?: number; inspectEscape?: boolean; popstate?: string; deferHistoryBack?: boolean; transport?: "prev" | "next"; stackedTimeline?: boolean; shotLayoutShift?: boolean; copyLocalPrompt?: boolean; exportLogs?: boolean; exportRun?: boolean; exportAll?: boolean; pointerDown?: "outside" | "insideTimelineMenu"; gotoTrail?: boolean | string; gotoCompareTrail?: boolean | string; gotoCompare?: boolean; toggleCompare?: boolean; toggleCompareAfterPick?: boolean; pick?: number[]; openRetries?: number[]; pickClear?: boolean; pickOpen?: boolean; pickDiff?: boolean; cmpOpen?: string; cmpGap?: number; cmpTab?: string; cmpStream?: string; cmpEvent?: string; cmpSide?: { side: "base" | "vs"; value: number }; cmpOrganize?: "stream" | "step"; cmpEventStep?: string; cmpPlace?: "prev" | "next" | Array<"prev" | "next">; cmpFull?: string; cmpEventAll?: boolean; cmpEventSearch?: string; cmpStepStream?: string; trailOpen?: string; toggleLanes?: number[]; back?: boolean; viewer?: () => void; drive?: (ctx: PlaybackDriveContext) => void; payloadViaGlobal?: boolean; deferBoot?: boolean; rebootViewer?: boolean; shellDocument?: boolean; chunks?: { index: string; sessions: Record<string, string>; clips?: Record<string, string> }; holdChunks?: number[]; holdClipChunks?: Array<number | string>; streamingChunks?: number[]; loadingDocument?: boolean; baseURI?: string; pageUrl?: string; clipDuration?: number; clipSeekAsync?: boolean };
 
 // One viewer at a time. A viewer whose session chunk never lands keeps a 50ms hydration poll
 // running after its test returns, and `document` is a global the harness swaps per call — so that
@@ -466,7 +466,7 @@ function renderViewerState(payload: unknown, opts: ViewerOptions = {}): { html: 
         return on;
       },
     },
-    set innerHTML(v: string) { this._h = v; },
+    set innerHTML(v: string) { this._h = v; syncClipNode(v); },
     get innerHTML() { return this._h; },
     querySelector: (sel: string) => (sel === ".noshot" && devicePlayer._h.includes('class="noshot"') ? {} : null),
   };
@@ -688,11 +688,21 @@ function renderViewerState(payload: unknown, opts: ViewerOptions = {}): { html: 
   const clipProbes: Array<{ src: string; fireMetadata: (duration: number) => void; fireError: () => void }> = [];
   // The pane's on-screen <video id="tlvclip">: what the viewer seeks and plays. Records every seek
   // and play so a test can see WHERE playback put the recording, not just that it rendered one.
-  const tlvclipNode: any = {
+  // opts.clipSeekAsync makes a seek take time, as a real decoder's does: `seeking` stays true
+  // until the test fires `seeked` (see fire), which is what a frame-stepped export waits on.
+  //
+  // A pane rebuilt around a DIFFERENT recording gets a new element, as the browser's would: the
+  // old one disconnects and keeps whatever was done to it, so a seek aimed at it is visibly lost.
+  // (A rebuild around the same recording keeps the one node, as tests written against it expect.)
+  const makeClipNode = (): any => ({
     style: {}, attrs: {} as Record<string, string>, _t: 0, paused: true, playbackRate: 1, seeks: [] as number[], plays: 0, pauses: 0,
+    seeking: false, listeners: {} as Record<string, Array<() => void>>,
     get currentTime() { return this._t; },
-    set currentTime(v: number) { this._t = v; this.seeks.push(v); },
-    get isConnected() { return devicePlayer._h.includes('id="tlvclip"'); },
+    set currentTime(v: number) { this._t = v; this.seeks.push(v); if (opts.clipSeekAsync) this.seeking = true; },
+    addEventListener(type: string, fn: () => void) { (this.listeners[type] ||= []).push(fn); },
+    removeEventListener(type: string, fn: () => void) { this.listeners[type] = (this.listeners[type] || []).filter((f: () => void) => f !== fn); },
+    fire(type: string) { if (type === "seeked") this.seeking = false; [...(this.listeners[type] || [])].forEach((fn: () => void) => fn()); },
+    get isConnected() { return this === tlvclipNode && devicePlayer._h.includes('id="tlvclip"'); },
     setAttribute(name: string, value: string) { this.attrs[name] = value; },
     // The markup's own attribute: the pane is rebuilt as HTML, so that is where `src` lives.
     getAttribute(name: string) { return name in this.attrs ? this.attrs[name] : (devicePlayer._h.match(new RegExp(`id="tlvclip"[^>]*? ${name}="([^"]*)"`)) || [])[1] ?? null; },
@@ -700,6 +710,15 @@ function renderViewerState(payload: unknown, opts: ViewerOptions = {}): { html: 
     // the promise rejects and the element stays paused, exactly what a browser reports.
     play() { this.plays++; if (opts.clipPlayRejects) return Promise.reject(new Error("NotAllowedError")); this.paused = false; return Promise.resolve(); },
     pause() { this.paused = true; this.pauses++; },
+  });
+  let tlvclipNode: any = makeClipNode();
+  let tlvclipSrc: string | null = null;
+  const clipNodes: any[] = [tlvclipNode];
+  const syncClipNode = (paneHtml: string) => {
+    const src = (paneHtml.match(/id="tlvclip"[^>]*? src="([^"]*)"/) || [])[1] ?? null;
+    if (src == null) return;
+    if (tlvclipSrc != null && src !== tlvclipSrc) { tlvclipNode = makeClipNode(); clipNodes.push(tlvclipNode); }
+    tlvclipSrc = src;
   };
   // The Video tab's <video id="vclip"> and its transport. The element is the clock there (it plays
   // itself; the controls follow it), so a test drives it by firing the media events a browser
@@ -1260,7 +1279,7 @@ function renderViewerState(payload: unknown, opts: ViewerOptions = {}): { html: 
   bootTimeouts.forEach((cb) => cb());
   // readHtml re-reads the rendered html after the synchronous pass — for asserting on renders
   // triggered by async work (e.g. the lazy gz inflation re-render).
-  return { html: app._h, htmlBeforeBoot, liveHtml: () => app._h as string, readHtml: () => app._h as string, timelineScrollTop: timelineList.scrollTop, mainScrollTop: mainScroller.scrollTop, restoredFocus, route, readRoute: () => route, routeWrites: () => routeWrites.slice(), historyBack: () => historyApi.back(), historyForward: () => historyApi.forward(), flushHistoryBack: () => { const pending = pendingHistoryBack; pendingHistoryBack = null; if (pending) pending(); }, escapeOverlay: () => { if (zoomRoot && zoomRoot.onkeydown) zoomRoot.onkeydown({ key: "Escape", preventDefault() {}, stopPropagation() {} }); }, liveZoomRoot: () => zoomRoot, zoomSrc, zoomRoot, copiedText, copyBtnText: () => copyBtn.textContent as string, timelineMenuOpen: timelineMenu.open, clipProbes, clipEl: tlvclipNode, videoClipEl: vclipNode, videoControls, shotImg, releaseChunks: () => { heldChunks.clear(); heldClipChunks.clear(); streamingChunks.clear(); }, partialChunkReads: () => partialChunkReads, loadingProgressWrites: () => progressWrites, settleDocument: () => { documentLoading = false; }, documentKeyListeners, autoplayMarker: () => documentElement.dataset.tbAutoplay, embeddedMarker: () => documentElement.dataset.tbEmbedded, llmScrolledTo, cmpScrolledTo: () => cmpScrolledTo, llmRow: (i: number) => llmRowEl(String(i)), readRestoredFocus: () => restoredFocus, pageClass: () => app.className || "", pageClassWrites: () => pageClassWrites.slice(), readActiveElement: () => (globalThis as any).document.activeElement, live: () => (globalThis as Record<string, any>).__TB_REPORT_LIVE__, openSession: (i: number) => handlers.session[String(i)]?.(), clickTab: (id: string) => handlers.tab[id]?.(), clickVideoDevice: (k: number) => handlers.vdev[String(k)]?.(), clickGotoTrail: (key: string) => handlers.gotoTrail[key]?.(), clickGotoCompare: () => handlers.gotoCompare?.(), clickGotoCompareTrail: (key?: string) => handlers.gotoCompareTrail[key ?? Object.keys(handlers.gotoCompareTrail)[0]]?.(), toggleIndexCompare: () => handlers.compareToggle?.(), tickPick: (i: number) => { handlers.pickClick[String(i)]?.({ stopPropagation() {} }); handlers.pick[String(i)]?.({ stopPropagation() {} }); }, clickPickOpen: () => handlers.pickOpen?.(), clickBack: () => handlers.back?.(), readTimelineScrollTop: () => timelineList.scrollTop, readMainScrollTop: () => mainScroller.scrollTop, expandTimelineEvent, timelineEvent: (key: string) => tlEventEls.get(key), openAttachment: (key: string) => handlers.attach[key]?.(), pickClicksStopped: () => pickClicksStopped.slice(), pickLabelClicksStopped: () => pickLabelClicksStopped, pickLabels: () => pickLabelClicks.length, firePopstate: (next?: string) => { if (next != null) navigate(`/report.html${next}`); firePopstate(); } };
+  return { html: app._h, htmlBeforeBoot, liveHtml: () => app._h as string, readHtml: () => app._h as string, timelineScrollTop: timelineList.scrollTop, mainScrollTop: mainScroller.scrollTop, restoredFocus, route, readRoute: () => route, routeWrites: () => routeWrites.slice(), historyBack: () => historyApi.back(), historyForward: () => historyApi.forward(), flushHistoryBack: () => { const pending = pendingHistoryBack; pendingHistoryBack = null; if (pending) pending(); }, escapeOverlay: () => { if (zoomRoot && zoomRoot.onkeydown) zoomRoot.onkeydown({ key: "Escape", preventDefault() {}, stopPropagation() {} }); }, liveZoomRoot: () => zoomRoot, zoomSrc, zoomRoot, copiedText, copyBtnText: () => copyBtn.textContent as string, timelineMenuOpen: timelineMenu.open, clipProbes, get clipEl() { return tlvclipNode; }, clipEls: () => clipNodes.slice(), videoClipEl: vclipNode, videoControls, shotImg, releaseChunks: () => { heldChunks.clear(); heldClipChunks.clear(); streamingChunks.clear(); }, partialChunkReads: () => partialChunkReads, loadingProgressWrites: () => progressWrites, settleDocument: () => { documentLoading = false; }, documentKeyListeners, autoplayMarker: () => documentElement.dataset.tbAutoplay, embeddedMarker: () => documentElement.dataset.tbEmbedded, llmScrolledTo, cmpScrolledTo: () => cmpScrolledTo, llmRow: (i: number) => llmRowEl(String(i)), readRestoredFocus: () => restoredFocus, pageClass: () => app.className || "", pageClassWrites: () => pageClassWrites.slice(), readActiveElement: () => (globalThis as any).document.activeElement, live: () => (globalThis as Record<string, any>).__TB_REPORT_LIVE__, openSession: (i: number) => handlers.session[String(i)]?.(), clickTab: (id: string) => handlers.tab[id]?.(), clickVideoDevice: (k: number) => handlers.vdev[String(k)]?.(), clickGotoTrail: (key: string) => handlers.gotoTrail[key]?.(), clickGotoCompare: () => handlers.gotoCompare?.(), clickGotoCompareTrail: (key?: string) => handlers.gotoCompareTrail[key ?? Object.keys(handlers.gotoCompareTrail)[0]]?.(), toggleIndexCompare: () => handlers.compareToggle?.(), tickPick: (i: number) => { handlers.pickClick[String(i)]?.({ stopPropagation() {} }); handlers.pick[String(i)]?.({ stopPropagation() {} }); }, clickPickOpen: () => handlers.pickOpen?.(), clickBack: () => handlers.back?.(), readTimelineScrollTop: () => timelineList.scrollTop, readMainScrollTop: () => mainScroller.scrollTop, expandTimelineEvent, timelineEvent: (key: string) => tlEventEls.get(key), openAttachment: (key: string) => handlers.attach[key]?.(), pickClicksStopped: () => pickClicksStopped.slice(), pickLabelClicksStopped: () => pickLabelClicksStopped, pickLabels: () => pickLabelClicks.length, firePopstate: (next?: string) => { if (next != null) navigate(`/report.html${next}`); firePopstate(); } };
 }
 
 function renderViewer(payload: unknown, opts: ViewerOptions = {}): string {
@@ -8564,6 +8583,119 @@ describe("autoplay-capture contract (?autoplay=1)", () => {
     }
   });
 
+  // `?autoplay=step` — what --gif/--webp load. Nothing plays; the exporter asks for each frame's
+  // instant through `__tbExport.renderAt` and screenshots once it resolves.
+  const exportHook = () => (globalThis as Record<string, any>).__tbExport as { totalMs: number; eventMs: number[]; renderAt: (ms: number) => Promise<boolean> } | undefined;
+  const disposeExportHook = () => { delete (globalThis as Record<string, unknown>).__tbExport; };
+
+  test("the stepped variant plays nothing itself and draws exactly the instant it is asked for", async () => {
+    const flag = trackEndFlag();
+    try {
+      const state = renderViewerState(capturePayload(), { query: "?autoplay=step" }) as any;
+      const hook = exportHook()!;
+      expect(hook.totalMs).toBe(1750); // the same compressed schedule the real-time export plays
+      // Where each step starts — the rail's ticks — so the exporter can shoot a frame on every one.
+      expect(hook.eventMs).toEqual([0, 250, 500, 1500]);
+      expect(state.autoplayMarker()).toBe("1");
+      expect(state.shotImg.src).toBe("data:image/png;base64,S1"); // parked on the first step
+      expect(await hook.renderAt(300)).toBe(false);
+      expect(state.shotImg.src).toBe("data:image/png;base64,S2");
+      // Instants can be asked for in any order; each one paints its own position, not "the next".
+      expect(await hook.renderAt(1600)).toBe(false);
+      expect(state.shotImg.src).toBe("data:image/png;base64,S4");
+      expect(await hook.renderAt(0)).toBe(false);
+      expect(state.shotImg.src).toBe("data:image/png;base64,S1");
+      expect(flag.writes).toEqual([]);
+      expect(await hook.renderAt(1750)).toBe(true); // the end: the landed, non-playing state
+      expect(state.readHtml()).toContain('aria-label="Play timeline"');
+      expect(flag.writes).toEqual([true]); // and the same end signal the real-time exporters stop on
+    } finally {
+      flag.dispose();
+      disposeExportHook();
+    }
+  });
+
+  test("a stepped frame waits for the recording to finish seeking before it resolves", async () => {
+    try {
+      const payload: any = capturePayload();
+      // One run-clock second is one media second, from the first step.
+      payload.sessions[0].video = recordingAt(100000, 642000);
+      const state = renderViewerState(payload, { query: "?autoplay=step", clipDuration: 542, clipSeekAsync: true });
+      const hook = exportHook()!;
+      let resolved = false;
+      const frame = hook.renderAt(300).then((done) => { resolved = true; return done; });
+      // 300ms of playback is a fifth of the way from the 250ms row to the 500ms one: 100.6s on the
+      // run clock, 0.6s into the file.
+      expect(state.clipEl.seeks.at(-1)).toBeCloseTo(0.6, 5);
+      await new Promise((r) => setTimeout(r, 50));
+      expect(resolved).toBe(false); // the decoder hasn't produced the frame; a screenshot now is stale
+      state.clipEl.fire("seeked");
+      expect(await frame).toBe(false);
+    } finally {
+      disposeExportHook();
+    }
+  });
+
+  test("a stepped frame on another device's recording seeks that recording's new element", async () => {
+    try {
+      // Steps 1-2 on the seller, 3-4 on the buyer; both recorded the same two seconds, so a media
+      // second is a run-clock second in either file.
+      const payload: any = capturePayload();
+      payload.sessions[0].trace = [
+        { i: 1, label: "Open register", ts: 100000, ms: 100, ok: true, device: "seller" },
+        { i: 2, label: "Tap Sale", ts: 100500, ms: 100, ok: true, device: "seller" },
+        { i: 3, label: "Present card", ts: 101000, ms: 100, ok: true, device: "buyer" },
+        { i: 4, label: "Tap Sign", ts: 101500, ms: 100, ok: true, device: "buyer" },
+      ];
+      payload.sessions[0].video = {
+        ...recordingAt(100000, 102000, Buffer.from("SELLER").toString("base64")), device: "seller",
+        companions: [{ ...recordingAt(100000, 102000, Buffer.from("BUYER").toString("base64")), device: "buyer" }],
+      };
+      const state = withObjectUrls(() => renderViewerState(payload, { query: "?autoplay=step", clipDuration: 2 }));
+      const hook = exportHook()!;
+      expect(await hook.renderAt(0)).toBe(false);
+      const seller = state.clipEl;
+      // 600ms of playback: step 3's 500ms offset plus 100 of its 250ms segment toward step 4, so
+      // 101.2s on the run clock — 1.2s into the buyer's file. The buyer's recording is already known
+      // (its duration answered at once), so nothing waits and nothing repaints: this one paint has
+      // to put the new element there.
+      expect(await hook.renderAt(600)).toBe(false);
+      expect(state.clipEls()).toHaveLength(2);
+      expect(state.clipEl).not.toBe(seller);
+      expect(state.clipEl.seeks.at(-1)).toBeCloseTo(1.2, 5);
+      expect(seller.seeks.every((t: number) => Math.abs(t - 1.2) > 0.01)).toBe(true); // not lost on the old one
+    } finally {
+      disposeExportHook();
+    }
+  });
+
+  test("a seek that never settles still yields its frame, so a broken recording can't hang the export", async () => {
+    try {
+      const payload: any = capturePayload();
+      payload.sessions[0].video = recordingAt(100000, 642000);
+      renderViewerState(payload, { query: "?autoplay=step", clipDuration: 542, clipSeekAsync: true });
+      const started = Date.now();
+      expect(await exportHook()!.renderAt(300)).toBe(false);
+      expect(Date.now() - started).toBeLessThan(3000);
+    } finally {
+      disposeExportHook();
+    }
+  });
+
+  test("a stepped run with nothing to play reports its end on the first frame", async () => {
+    try {
+      renderViewerState(
+        { generatedAt: "now", sessions: [{ meta: { title: "Nothing ran", status: "failed" }, trace: [], llm: [], shots: {}, recordingYaml: null }] },
+        { query: "?autoplay=step" },
+      );
+      expect(exportHook()!.totalMs).toBe(0);
+      expect(exportHook()!.eventMs).toEqual([]);
+      expect(await exportHook()!.renderAt(0)).toBe(true);
+    } finally {
+      disposeExportHook();
+    }
+  });
+
   test("a report opened without the flag never plays itself and never signals", () => {
     const flag = trackEndFlag();
     try {
@@ -8576,6 +8708,7 @@ describe("autoplay-capture contract (?autoplay=1)", () => {
         },
       });
       expect(state.autoplayMarker()).toBeUndefined();
+      expect(exportHook()).toBeUndefined();
     } finally {
       flag.dispose();
     }
@@ -8590,21 +8723,14 @@ describe("export playback schedule (idle-gap compression)", () => {
 
   test("exportGapMs plays at 4x, caps an idle at 1s, and floors a fast burst at one captured frame", () => {
     expect(pure.exportGapMs(2000)).toBe(500); // real activity plays through at 4x
-    expect(pure.exportGapMs(20)).toBe(250); // a sub-frame burst still survives the 5fps shutter
+    expect(pure.exportGapMs(20)).toBe(250); // a burst of instant steps still gets a readable dwell
     expect(pure.exportGapMs(600000)).toBe(1000); // a 10-minute idle costs one second of animation
   });
 
-  test("the floor stays above one nominal shutter period, or steps drop out of the artifact", () => {
-    // The export's whole length on a dense trail is (row count x this floor), so it is the number
-    // that gets retuned when an export comes out too long. It must not go below the exporter's
-    // nominal 200ms cadence: a dwell shorter than one shutter period can fall between two captures,
-    // and the step then appears in no frame of the exported animation at all.
-    //
-    // Half the invariant only. This side pins the floor; the 200ms it is compared against lives in
-    // Kotlin as PlaywrightReportCapture.FRAME_INTERVAL_MS, and raising THAT would break the
-    // ordering with this test still green. `PlaywrightReportCaptureTest` reads this file and
-    // asserts the same ordering from the Kotlin side, which is the half that catches a cadence bump.
-    expect(pure.exportGapMs(0)).toBeGreaterThanOrEqual(200);
+  test("the floor keeps a burst of instant steps on screen long enough to read", () => {
+    // Every step gets its own exported frame regardless; the floor is how long it stays there.
+    // It is also the whole length of a dense export (row count x floor), so it gets retuned.
+    expect(pure.exportGapMs(0)).toBe(250);
   });
 
   test("a long idle collapses to the same second an hour of dead air would", () => {

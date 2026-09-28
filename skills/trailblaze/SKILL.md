@@ -139,6 +139,13 @@ load whichever matches the task at hand.
    `--self-heal` / `--memory` / `--secret` flags), `report`, `app`,
    and `results show`.
 
+   → **Load [`references/trailheads.md`](references/trailheads.md)**
+   when a trail needs a starting point — every re-runnable trail
+   opens with a trailhead that puts the app in a known state. Covers
+   picking one, writing one cross-platform trailhead for your target,
+   and the building blocks (`openApp`, clear data, stop, grant
+   permissions) it is made of.
+
 3. **Compose your own agent surface.** Give your agent first-class
    commands like `login` or `addToCart`, named waypoints for your
    screens, and trailmaps from other teams. Curate exactly what your

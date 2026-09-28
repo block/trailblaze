@@ -41,13 +41,14 @@ class TrailblazeContextEnvelopeTest {
     assertThat(envelope.keys).isEqualTo(setOf("memory", "device"))
   }
 
-  @Test fun `device block carries platform driver and dimensions`() {
+  @Test fun `device block carries platform driver dimensions and instance id`() {
     val envelope = TrailblazeContextEnvelope.buildLegacyArgEnvelope(AgentMemory(), deviceInfo)
     val device = envelope["device"]!!.jsonObject
     assertThat(device["platform"]!!.jsonPrimitive.content).isEqualTo("android")
     assertThat(device["driverType"]!!.jsonPrimitive.content).isEqualTo("android-ondevice-accessibility")
     assertThat(device["widthPixels"]!!.jsonPrimitive.int).isEqualTo(1080)
     assertThat(device["heightPixels"]!!.jsonPrimitive.int).isEqualTo(2400)
+    assertThat(device["instanceId"]!!.jsonPrimitive.content).isEqualTo("emulator-5554")
   }
 
   @Test fun `memory block mirrors AgentMemory variables as JSON string primitives`() {
@@ -98,6 +99,7 @@ class TrailblazeContextEnvelopeTest {
     assertThat(device["driverType"]!!.jsonPrimitive.content).isEqualTo("android-ondevice-accessibility")
     assertThat(device["widthPixels"]!!.jsonPrimitive.int).isEqualTo(1080)
     assertThat(device["heightPixels"]!!.jsonPrimitive.int).isEqualTo(2400)
+    assertThat(device["instanceId"]!!.jsonPrimitive.content).isEqualTo("emulator-5554")
   }
 
   @Test fun `meta key is literal trailblaze`() {

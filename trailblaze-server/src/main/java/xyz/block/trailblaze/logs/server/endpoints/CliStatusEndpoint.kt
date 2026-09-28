@@ -130,6 +130,14 @@ object CliDaemonCapabilities {
   /** The daemon honors the run-scoped locale/variant device classifier override. */
   const val DEVICE_CLASSIFIER = "run.device-classifier"
 
+  /**
+   * A web run honors the classifier override (it picks the recording leg and labels the session)
+   * and opens its browser in `TRAILBLAZE_WEB_LOCALE` when the trail declares no `locale:`. A daemon
+   * without this replays a Spanish web lane's English leg in an English browser and passes, so a
+   * locale lane checks for it before running.
+   */
+  const val WEB_LOCALE = "run.web-locale"
+
   /** The daemon exposes Trail Runner's Companion authoring routes. */
   const val COMPANION = "companion"
 
@@ -139,6 +147,7 @@ object CliDaemonCapabilities {
     SESSION_SAVE_CONFIGURATION,
     SNAPSHOT_BASELINE,
     DEVICE_CLASSIFIER,
+    WEB_LOCALE,
     COMPANION,
   )
 }

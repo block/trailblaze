@@ -1,0 +1,17 @@
+# Library trailmap that owns the iOS framework-primitive tools (`ios_*`), so the
+# prefix-equals-trailmap-id rule holds for them. The iOS counterpart of the `android` library
+# trailmap: no `target:` block, so it is not a runnable target — it only declares the
+# `ios_primitives` toolset.
+#
+# These are trailhead building blocks, not agent tools: each runs one `xcrun simctl` command and is
+# declared `surfaceToLlm = false`. A trailhead composes them (terminate, grant privacy services,
+# clear data) and ends with `openApp`, so what its launch does is written out step by step.
+#
+# The `platforms:` block feeds the runtime registry only (what `client.callTool(...)` can
+# dispatch for a consumer that adds `dependencies: [ios]`); what reaches the LLM is still each
+# consumer's own `target.platforms.tool_sets:`. iOS-only by construction — no other platform keys.
+id: ios
+platforms:
+  ios:
+    tool_sets:
+      - ios_primitives

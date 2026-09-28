@@ -19,6 +19,7 @@ import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetScreenStateResponse
 import xyz.block.trailblaze.mcp.models.McpSessionId
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget.ToolGroup
+import xyz.block.trailblaze.scripting.ScriptedToolCatalog
 import xyz.block.trailblaze.toolcalls.ToolName
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import kotlin.reflect.full.valueParameters
@@ -480,6 +481,57 @@ class DeviceManagerToolSetTest {
     assertContains(result, "Available ${perDeviceTarget.displayName} tools")
     assertContains(result, "pressBack")
     assertContains(result, "eraseText")
+  }
+
+  /**
+   * The CLI sends a session-only INFO before every command it runs to check that its saved
+   * session still holds a device. It reads the header, driver status and roster, never the tool
+   * list, and building that list walks the target's tool catalog on every call.
+   */
+  @Test
+  fun `session-only device INFO reports the device without building the tool list`() = runTest {
+    val androidDeviceId = TrailblazeDeviceId(
+      instanceId = androidDevice.instanceId,
+      trailblazeDevicePlatform = androidDevice.platform,
+    )
+    val target = object : TrailblazeHostAppTarget(id = "probedapp", displayName = "Probed App") {
+      override fun getPossibleAppIdsForPlatform(platform: TrailblazeDevicePlatform): List<String>? =
+        if (platform == TrailblazeDevicePlatform.ANDROID) listOf("com.example.probed") else null
+
+      override fun internalGetCustomToolsForDriver(
+        driverType: TrailblazeDriverType,
+      ): Set<kotlin.reflect.KClass<out TrailblazeTool>> = emptySet()
+
+      override fun getCustomYamlToolNamesForDriver(driverType: TrailblazeDriverType): Set<ToolName> =
+        setOf(ToolName("pressBack"))
+    }
+    val bridge = DeviceTestBridge(
+      devices = setOf(androidDevice),
+      driverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+      availableAppTargets = setOf(TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget, target),
+      currentAppTargetId = target.id,
+      sessionTargetsByDevice = mapOf(androidDeviceId to target.id),
+    )
+    var catalogs = 0
+    val toolSet = DeviceManagerToolSet(
+      sessionContext = createSessionContext(),
+      mcpBridge = bridge,
+      scriptedToolCatalogFactory = {
+        catalogs++
+        ScriptedToolCatalog { emptyMap() }
+      },
+    )
+    toolSet.device(action = DeviceManagerToolSet.DeviceAction.ANDROID)
+    // The same session's ordinary INFO lists the tools, so their absence below is the flag's doing.
+    assertContains(toolSet.device(action = DeviceManagerToolSet.DeviceAction.INFO), "Available ${target.displayName} tools")
+    val catalogsBefore = catalogs
+
+    val probe = toolSet.device(action = DeviceManagerToolSet.DeviceAction.INFO, sessionOnly = true)
+
+    assertContains(probe, "Instance ID: ${androidDevice.instanceId}")
+    assertContains(probe, "Platform: ${androidDevice.platform.displayName}")
+    assertTrue("Available ${target.displayName} tools" !in probe, "Probe must not carry the tool list. Got:\n$probe")
+    assertEquals(catalogsBefore, catalogs, "the probe must not build a tool catalog")
   }
 
   @Test

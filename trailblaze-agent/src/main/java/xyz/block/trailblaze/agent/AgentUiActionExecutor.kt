@@ -147,7 +147,9 @@ class AgentUiActionExecutor(
     val normalized = args.toMutableMap()
 
     when (toolName) {
-      "launchApp" -> {
+      "launchApp",
+      "openApp",
+      -> {
         if (!normalized.containsKey("appId")) {
           val packageName = normalized["packageName"]
           if (packageName is JsonPrimitive) {

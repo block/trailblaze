@@ -160,20 +160,22 @@ object TrailblazeHostYamlRunner {
    */
   private fun resolveInstalledAppId(resolved: xyz.block.trailblaze.model.ResolvedTarget): String? =
     runCatching {
-      val installed = xyz.block.trailblaze.host.ios.MobileDeviceUtils.getInstalledAppIds(resolved.deviceId)
-      // A failed probe throws and reaches the .onFailure log below, on Android as well as iOS. An
-      // EMPTY inventory is the other shape a broken probe can take — a running device always has
-      // packages — so it is logged too, or "ctx.target.resolveAppId returned undefined" would
-      // arrive with no reason attached.
-      val candidates = resolved.target.getPossibleAppIdsForPlatform(resolved.platform).orEmpty()
-      if (installed.isEmpty() && candidates.isNotEmpty()) {
-        Console.log(
-          "[TrailblazeHostYamlRunner] getInstalledAppIds returned 0 packages for " +
-            "${resolved.deviceId} despite target declaring ${candidates.size} candidate(s) " +
-            "[${candidates.joinToString()}] — the probe answered but listed nothing. appId will be null.",
-        )
+      MobileDeviceUtils.installedAppIdForTarget(resolved.target, resolved.deviceId) { deviceId ->
+        // A failed probe throws and reaches the .onFailure log below, on Android as well as iOS. An
+        // EMPTY inventory is the other shape a broken probe can take — a running device always has
+        // packages — so it is logged too, or "ctx.target.resolveAppId returned undefined" would
+        // arrive with no reason attached.
+        MobileDeviceUtils.getInstalledAppIds(deviceId).also { installed ->
+          if (installed.isEmpty()) {
+            val candidates = resolved.appIds
+            Console.log(
+              "[TrailblazeHostYamlRunner] getInstalledAppIds returned 0 packages for " +
+                "${resolved.deviceId} despite target declaring ${candidates.size} candidate(s) " +
+                "[${candidates.joinToString()}] — the probe answered but listed nothing. appId will be null.",
+            )
+          }
+        }
       }
-      resolved.target.getAppIdIfInstalled(resolved.platform, installed)
     }.onFailure { e ->
       // Soft-fail (caller falls back to `ctx.target?.appIds[0]`) but log the underlying
       // reason — otherwise operators debugging "ctx.target.resolveAppId returned undefined"
@@ -551,8 +553,7 @@ object TrailblazeHostYamlRunner {
       // need a hard error; here we want a soft signal so authors can fall back to
       // `ctx.target.appIds[0]` and let the launch fail downstream with a clearer message.
       runCatching {
-        val installed = MobileDeviceUtils.getInstalledAppIds(resolved.deviceId)
-        resolved.target.getAppIdIfInstalled(resolved.platform, installed)
+        MobileDeviceUtils.installedAppIdForTarget(resolved.target, resolved.deviceId)
       }.getOrNull()
     }
     // Forward-declared so the context provider's screen-state lambda can reach the executor's

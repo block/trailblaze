@@ -45,8 +45,12 @@ data class DrainSessionRequest(
  *   `mUiAutomation` field fallback). False when both reflection paths failed — the
  *   handler still returns Success because there is no recovery the host can do; an
  *   on-device error counter would just have to log it anyway.
+ * @param logUploadsLeftPending How many of the session's log uploads were still in flight when
+ *   the drain stopped waiting for them. Non-zero means the report written next may be missing the
+ *   last action's screenshot or hierarchy; the uploads themselves still land afterwards.
  */
 @Serializable
 data class DrainSessionResponse(
   val uiAutomationCleared: Boolean,
+  val logUploadsLeftPending: Int = 0,
 )

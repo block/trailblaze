@@ -34,14 +34,29 @@ internal object AdbExecOut {
     emptyList()
   }
 
+  /**
+   * Host the adb server runs on, which is where an `adb forward` listens: the machine named by a
+   * `tcp:` `ADB_SERVER_SOCKET`, otherwise this one.
+   */
+  val serverHost: String by lazy { serverHostOf(System.getenv("ADB_SERVER_SOCKET")) }
+
+  // A port-only `tcp:5037` has no host before the port, and adb reads it as this machine.
+  internal fun serverHostOf(socket: String?): String =
+    socket?.trim()?.takeIf { it.startsWith("tcp:") }?.removePrefix("tcp:")?.substringBeforeLast(':', "")
+      ?.removeSurrounding("[", "]")?.takeIf { it.isNotBlank() && it != "localhost" }
+      ?: "127.0.0.1"
+
   /** The full argv for running [deviceArgs] on [deviceId] through `adb exec-out`. */
-  fun command(deviceId: TrailblazeDeviceId, deviceArgs: List<String>): List<String> = buildList {
+  fun command(deviceId: TrailblazeDeviceId, deviceArgs: List<String>): List<String> =
+    adb(deviceId, listOf("exec-out") + deviceArgs)
+
+  /** The full argv for any adb subcommand ([args], e.g. `forward …`) against [deviceId]. */
+  fun adb(deviceId: TrailblazeDeviceId, args: List<String>): List<String> = buildList {
     add(AdbPathResolver.ADB_COMMAND)
     addAll(serverFlags)
     add("-s")
     add(deviceId.instanceId)
-    add("exec-out")
-    addAll(deviceArgs)
+    addAll(args)
   }
 
   /**

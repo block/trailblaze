@@ -64,9 +64,8 @@ export interface TrailblazeDevice {
    * need to target this specific device, e.g.
    * `ctx.tools.exec({ argv: ["xcrun","simctl","terminate", ctx.device.instanceId, "<bundleId>"] })`.
    *
-   * Present on the **in-process QuickJS** path (the one mobile tools run under). Optional because
-   * older daemons, web-only sessions, and the MCP/subprocess envelope don't (yet) carry it — guard
-   * before use if your tool can run on those paths.
+   * Present on every scripted-tool path. Optional because older daemons don't carry it — guard
+   * before use.
    */
   instanceId?: string;
 }

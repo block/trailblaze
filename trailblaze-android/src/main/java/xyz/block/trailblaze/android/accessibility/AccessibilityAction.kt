@@ -79,17 +79,21 @@ sealed interface AccessibilityAction {
    * means. This driver needs that escape hatch because it cannot reliably focus an editable node
    * by tapping: `planActionClickRoute` sends editables to the coordinate gesture path, and a
    * synthetic touch does not always turn into input focus.
+   *
+   * With [hideKeyboardAfter] set, the keyboard is closed in the same action, once typing has
+   * settled. See [MaestroCommandConverter.foldKeyboardHideIntoInputText].
    */
   data class InputText(
     val text: String,
     val nodeSelector: TrailblazeNodeSelector? = null,
     val timeoutMs: Long = DEFAULT_ELEMENT_TIMEOUT_MS,
+    val hideKeyboardAfter: Boolean = false,
   ) : AccessibilityAction {
     override val description
-      get() = if (nodeSelector == null) {
-        "Input text \"$text\""
-      } else {
-        "Input text \"$text\" into ${nodeSelector.description()}"
+      get() = buildString {
+        append("Input text \"$text\"")
+        if (nodeSelector != null) append(" into ${nodeSelector.description()}")
+        if (hideKeyboardAfter) append(" and hide keyboard")
       }
   }
 

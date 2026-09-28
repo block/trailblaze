@@ -207,11 +207,11 @@ object ReportStoryboardExporter {
    * `WebAuthn.enable` call in `PlaywrightBrowserManager.disableWebAuthn`.
    *
    * **Why this doesn't reuse [PlaywrightReportCapture] like `--gif` / `--webp`.** The
-   * timeline exporters all share a frame-capture loop that loads the WASM timeline
-   * report and screenshots every ~200ms until autoplay ends — a multi-frame sequence.
+   * timeline exporters all share a frame-capture loop that steps the timeline report
+   * 200ms at a time and screenshots each instant — a multi-frame sequence.
    * The storyboard pipeline loads a purpose-built grid HTML (no WASM, no autoplay) and
    * takes one or more single-frame full-page captures, so it has no use for the
-   * timeline frame cadence, the `__tbPlaybackEnded` signal, or the fps measurement.
+   * timeline frame stepping or the playback-end signal.
    * Inlining its own `PlaywrightBrowserManager` lifecycle keeps the storyboard path
    * independent and lets the two capture styles evolve separately.
    *

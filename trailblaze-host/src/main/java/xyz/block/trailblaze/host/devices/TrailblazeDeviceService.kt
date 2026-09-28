@@ -14,34 +14,22 @@ import xyz.block.trailblaze.host.axe.AxeCli
 import xyz.block.trailblaze.host.axe.AxeJsonMapper
 import xyz.block.trailblaze.host.toTrailblazeDevicePlatform
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
+import xyz.block.trailblaze.util.IosHostSimctlUtils
 
 object TrailblazeDeviceService {
 
   /**
-   * Cached connected devices list with time-bounded staleness.
-   * Device discovery (`xcrun simctl list`) is expensive (~300-500ms) and serializes
-   * on the CoreSimulator database lock, so we cache results for [CACHE_TTL_MS].
+   * Device discovery (`xcrun simctl list`) is expensive and serializes on the CoreSimulator
+   * database lock, so a listing is reused for [CACHE_TTL_MS], and a known simulator is confirmed
+   * more cheaply after that — see [ConnectedDeviceLookup].
    */
   private const val CACHE_TTL_MS = 30_000L
 
-  private data class DeviceCache(
-    val devices: List<Device.Connected>,
-    val timestamp: Long,
+  private val connectedDevices = ConnectedDeviceLookup(
+    ttlMs = CACHE_TTL_MS,
+    listAll = { DeviceService.listConnectedDevices() },
+    bootedSimulatorIds = { IosHostSimctlUtils.listBootedDeviceIds() },
   )
-
-  @Volatile private var cache: DeviceCache? = null
-
-  private val cachedConnectedDevices: List<Device.Connected>
-    get() {
-      val now = System.currentTimeMillis()
-      val current = cache
-      if (current == null || now - current.timestamp > CACHE_TTL_MS) {
-        return DeviceService.listConnectedDevices().also {
-          cache = DeviceCache(it, now)
-        }
-      }
-      return current.devices
-    }
 
   /**
    * Gets the first connected iOS Device backed by the Maestro/XCUITest driver.
@@ -52,11 +40,8 @@ object TrailblazeDeviceService {
     trailblazeDeviceId: TrailblazeDeviceId,
     appTarget: TrailblazeHostAppTarget? = null,
   ): TrailblazeConnectedDevice? {
-    val connectedDevice: Device.Connected = cachedConnectedDevices.firstOrNull {
-      TrailblazeDeviceId(
-        instanceId = it.instanceId,
-        trailblazeDevicePlatform = it.platform.toTrailblazeDevicePlatform(),
-      ) == trailblazeDeviceId
+    val connectedDevice: Device.Connected = connectedDevices.find(trailblazeDeviceId.instanceId) {
+      it.platform.toTrailblazeDevicePlatform() == trailblazeDeviceId.trailblazeDevicePlatform
     } ?: return null
     // One owner's lease on the shared cached driver, not the driver itself: closing it releases this
     // connection's hold and the XCUITest connection survives for whoever else is still driving the
@@ -154,7 +139,7 @@ object TrailblazeDeviceService {
   }
 
   fun listConnectedTrailblazeDevices(): Set<TrailblazeDeviceId> {
-    return cachedConnectedDevices.map {
+    return connectedDevices.all().map {
       TrailblazeDeviceId(
         instanceId = it.instanceId,
         trailblazeDevicePlatform = it.platform.toTrailblazeDevicePlatform(),

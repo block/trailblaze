@@ -9,7 +9,8 @@ import kotlin.test.assertTrue
  *
  * The claim these switches ship on is "on under turbo, and the non-turbo path is byte-for-byte what
  * it was". That claim lives entirely in [ReplayCaptureOptions.resolve], so it is tested here rather
- * than argued from the call sites. The bundle-reuse switch is the exception: it defaults on.
+ * than argued from the call sites. The async-screenshot and bundle-reuse switches are the
+ * exceptions: they default on.
  */
 class ReplayCaptureOptionsDefaultsTest {
 
@@ -39,6 +40,18 @@ class ReplayCaptureOptionsDefaultsTest {
     // default, which is what an operator who set nothing would have got.
     assertTrue(ReplayCaptureOptions.resolve("yes", turboOn = true))
     assertFalse(ReplayCaptureOptions.resolve("yes", turboOn = false))
+  }
+
+  /** The frame is requested before the gesture either way, so turbo has no bearing on the pairing. */
+  @Test
+  fun `the logging screenshot is joined off the capture path without turbo`() {
+    assertTrue(ReplayCaptureOptions.resolveAsyncScreenshot(""))
+  }
+
+  @Test
+  fun `the async screenshot keeps its kill switch`() {
+    assertFalse(ReplayCaptureOptions.resolveAsyncScreenshot("0"))
+    assertFalse(ReplayCaptureOptions.resolveAsyncScreenshot("false"))
   }
 
   /** A `trailblaze tool` call is one dispatch, and relaunching every bundle cost it ~200 ms on Square. */

@@ -6,7 +6,7 @@
 #
 # `android_sendBroadcast` / `android_adbShell` are declared `surfaceToLlm = false` at the class
 # level, so they do NOT pollute the LLM's tool catalog. `mobile_listInstalledApps` is LLM-facing
-# (so an agent can discover installed apps before `launchApp`) but is grouped here because the same
+# (so an agent can discover installed apps before `openApp`) but is grouped here because the same
 # Square card-reader handlers compose it via the callback channel. The point of being a toolset
 # (rather than discoverable only via `ToolYamlLoader`) is to land these tools in the runtime
 # `TrailblazeToolRepo` so the daemon's `/scripting/callback` dispatcher can resolve them by name.

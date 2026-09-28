@@ -184,6 +184,29 @@ class WorkspaceContentHasherTest {
     assertEquals(withLink, withoutLink, "Symlinks must not contribute to the hash.")
   }
 
+  /**
+   * A trailmap directory linked in from elsewhere (a shared trailmap checked out once) is part
+   * of the workspace, so an edit inside it must still read as drift. Only a link that is itself
+   * the file is skipped.
+   */
+  @Test
+  fun `compute hashes files inside a symlinked directory`() {
+    val outside = Files.createTempDirectory("workspace-hash-linked").toFile()
+    try {
+      File(outside, "trailmap.yaml").writeText("id: linked\n")
+      try {
+        File(workspace, "trailmaps/linked").toPath().createSymbolicLinkPointingTo(outside.toPath())
+      } catch (_: Exception) {
+        return // Same allowance as the symlinked-file test above.
+      }
+      val before = WorkspaceContentHasher.compute(workspace, version = "v1")
+      File(outside, "trailmap.yaml").writeText("id: linked\n# edited\n")
+      assertNotEquals(before, WorkspaceContentHasher.compute(workspace, version = "v1"))
+    } finally {
+      outside.deleteRecursively()
+    }
+  }
+
   // ---------------------------------------------------------------------------------------
   // Robustness — empty / non-existent / large
   // ---------------------------------------------------------------------------------------
@@ -210,6 +233,86 @@ class WorkspaceContentHasherTest {
     val hash = WorkspaceContentHasher.compute(workspace, version = "v1")
     assertNotNull(hash)
     assertEquals(64, hash.length, "SHA-256 hex must be 64 chars.")
+  }
+
+  // ---------------------------------------------------------------------------------------
+  // Reusing — same answer as compute, without re-reading an unchanged workspace
+  // ---------------------------------------------------------------------------------------
+
+  @Test
+  fun `Reusing matches compute before and after an edit`() {
+    val reusing = WorkspaceContentHasher.Reusing()
+    val before = reusing.compute(workspace, version = "v1")
+    assertEquals(WorkspaceContentHasher.compute(workspace, version = "v1"), before)
+
+    // Same size, so only the modification time can tell the two versions apart.
+    val trailmap = File(workspace, "trailmaps/foo/trailmap.yaml")
+    trailmap.writeText("id: bar\n")
+    bumpModifiedTime(trailmap)
+    val after = reusing.compute(workspace, version = "v1")
+
+    assertNotEquals(before, after, "An edit must flip the reused hash.")
+    assertEquals(WorkspaceContentHasher.compute(workspace, version = "v1"), after)
+  }
+
+  @Test
+  fun `Reusing sees added and deleted files`() {
+    val reusing = WorkspaceContentHasher.Reusing()
+    val original = reusing.compute(workspace, version = "v1")
+
+    File(workspace, "tools/new_tool.js").writeText("export function newOne() {}\n")
+    val added = reusing.compute(workspace, version = "v1")
+    assertEquals(WorkspaceContentHasher.compute(workspace, version = "v1"), added)
+    assertNotEquals(original, added)
+
+    File(workspace, "tools/new_tool.js").delete()
+    assertEquals(original, reusing.compute(workspace, version = "v1"))
+  }
+
+  @Test
+  fun `Reusing recomputes for a different version`() {
+    val reusing = WorkspaceContentHasher.Reusing()
+    reusing.compute(workspace, version = "v1")
+    assertEquals(WorkspaceContentHasher.compute(workspace, version = "v2"), reusing.compute(workspace, version = "v2"))
+  }
+
+  /**
+   * The saving and its documented blind spot are the same fact: while every file's size and
+   * modification time are unchanged, the contents are not read again. A same-size rewrite with
+   * its time put back is the one edit that shows it.
+   */
+  @Test
+  fun `Reusing does not re-read files whose size and modification time are unchanged`() {
+    val reusing = WorkspaceContentHasher.Reusing()
+    val trailmap = File(workspace, "trailmaps/foo/trailmap.yaml")
+    val before = reusing.compute(workspace, version = "v1")
+    val modified = Files.getLastModifiedTime(trailmap.toPath())
+
+    trailmap.writeText("id: bar\n")
+    Files.setLastModifiedTime(trailmap.toPath(), modified)
+
+    assertNotEquals(before, WorkspaceContentHasher.compute(workspace, version = "v1"), "control: the bytes did change")
+    assertEquals(before, reusing.compute(workspace, version = "v1"))
+  }
+
+  @Test
+  fun `Reusing reads again after a file it could not read becomes readable`() {
+    val reusing = WorkspaceContentHasher.Reusing()
+    val trailmap = File(workspace, "trailmaps/foo/trailmap.yaml")
+    trailmap.setReadable(false)
+    try {
+      if (trailmap.canRead()) return // running as root: permissions can't block the read
+      reusing.compute(workspace, version = "v1")
+    } finally {
+      trailmap.setReadable(true)
+    }
+
+    assertEquals(WorkspaceContentHasher.compute(workspace, version = "v1"), reusing.compute(workspace, version = "v1"))
+  }
+
+  private fun bumpModifiedTime(file: File) {
+    val current = Files.getLastModifiedTime(file.toPath()).toMillis()
+    Files.setLastModifiedTime(file.toPath(), java.nio.file.attribute.FileTime.fromMillis(current + 2_000))
   }
 
   // ---------------------------------------------------------------------------------------

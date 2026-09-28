@@ -10,11 +10,13 @@ import xyz.block.trailblaze.mcp.agent.KoogStrategyGraphAgent
 import xyz.block.trailblaze.capture.CaptureOptions
 import xyz.block.trailblaze.capture.CaptureSession
 import xyz.block.trailblaze.capture.video.PlaywrightVideoRecordDir
+import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.exception.TrailblazeException
+import xyz.block.trailblaze.host.devices.DeviceLocaleConfigurator
 import xyz.block.trailblaze.host.recording.WebStreamScreenshotSupport
 import xyz.block.trailblaze.host.rules.TrailblazeHostLlmConfig.DEFAULT_TRAILBLAZE_LLM_MODEL
 import xyz.block.trailblaze.mcp.agent.KoogTestAgentRunner
@@ -134,6 +136,17 @@ open class BasePlaywrightNativeTest(
    * runner passes the run's `--no-logging` flag.
    */
   noLogging: Boolean = false,
+  /**
+   * The run's `--device-classifier`, already validated by the runner as a refinement of `web`
+   * (e.g. `[web, browser, es]`). It selects the trail's recording leg and labels the session, so
+   * the same trail run in two languages reports as two devices. Empty reports plain `web`.
+   */
+  val deviceClassifierOverride: List<TrailblazeDeviceClassifier> = emptyList(),
+  /**
+   * The language this browser opens in when the trail declares none — the web counterpart of a
+   * phone booted in its lane's language. CI sets it per lane through [WEB_LOCALE_ENV].
+   */
+  private val laneLocale: String? = System.getenv(WEB_LOCALE_ENV)?.takeIf { it.isNotBlank() },
 ) {
 
   // When an existing browser is provided, the caller owns its lifecycle — close() will not
@@ -187,7 +200,10 @@ open class BasePlaywrightNativeTest(
         trailblazeDriverType = TrailblazeDriverType.PLAYWRIGHT_NATIVE,
         widthPixels = viewport.width,
         heightPixels = viewport.height,
-        classifiers = listOf(TrailblazeDevicePlatform.WEB.asTrailblazeDeviceClassifier()),
+        classifiers = deviceClassifierOverride.ifEmpty {
+          listOf(TrailblazeDevicePlatform.WEB.asTrailblazeDeviceClassifier())
+        },
+        locale = (browserManager as? PlaywrightBrowserManager)?.contextLocale,
         advertisedInstanceId = advertisedDeviceInstanceId,
       )
     }
@@ -393,20 +409,6 @@ open class BasePlaywrightNativeTest(
     // in tools (e.g., navigate) resolve from the trail file's location.
     playwrightAgent.workingDirectory = trailFilePath?.let { java.io.File(it).absoluteFile.parentFile }
 
-    // Self-instrument the video capture when nothing else has — the CLI/daemon path
-    // (DesktopYamlRunner) publishes its own record dir before this rule's browser is
-    // constructed, but the JUnit eval path drives this class directly and would
-    // otherwise leave the WEB platform branch of `CaptureSession.fromOptions` cold.
-    // No-op when capture is already registered for this device by an outer runner.
-    ensurePlaywrightVideoCaptureStarted()
-
-    // Capture publishes its per-session video dir before this rule's browser manager
-    // is constructed, but the daemon's cache-reuse path keeps a long-lived manager
-    // around across trails — its already-created BrowserContext won't have picked up
-    // the freshly published recordVideoDir. Reconciling once at trail start picks
-    // up the new dir (or drops recording on the next trail if capture is disabled).
-    (browserManager as? PlaywrightBrowserManager)?.syncRecordingWithRegistry()
-
     // decodeTrailOrToolEnvelope (superset of decodeTrail): a trail document decodes identically; a
     // bare `- <toolName>:` envelope (single-tool MCP/CLI dispatch, e.g. `trailblaze tool`) additionally
     // decodes to one ToolTrailItem. Required because host-runner single-tool dispatch now sends the
@@ -427,6 +429,30 @@ open class BasePlaywrightNativeTest(
       )
       return@withContext loggingRule.session?.sessionId ?: SessionId("unknown")
     }
+
+    // A context's language is fixed when it is created, so it is set before the recording sync
+    // below (which may rebuild the context too) and before the first navigation. Only when a
+    // session starts: an interactive step continues the session's page, and rebuilding the context
+    // would throw that page away.
+    if (sendSessionStartLog) {
+      (browserManager as? PlaywrightBrowserManager)?.applyContextLocale(
+        resolveBrowserLocale(trailLocale = trailConfig?.locale, laneLocale = laneLocale),
+      )
+    }
+
+    // Self-instrument the video capture when nothing else has — the CLI/daemon path
+    // (DesktopYamlRunner) publishes its own record dir before this rule's browser is
+    // constructed, but the JUnit eval path drives this class directly and would
+    // otherwise leave the WEB platform branch of `CaptureSession.fromOptions` cold.
+    // No-op when capture is already registered for this device by an outer runner.
+    ensurePlaywrightVideoCaptureStarted()
+
+    // Capture publishes its per-session video dir before this rule's browser manager
+    // is constructed, but the daemon's cache-reuse path keeps a long-lived manager
+    // around across trails — its already-created BrowserContext won't have picked up
+    // the freshly published recordVideoDir. Reconciling once at trail start picks
+    // up the new dir (or drops recording on the next trail if capture is disabled).
+    (browserManager as? PlaywrightBrowserManager)?.syncRecordingWithRegistry()
 
     // Seed the agent's memory before any tool runs — same [AgentMemory.seedFrom] composition
     // as every other host runner path. The agent threads this memory into every tool execution
@@ -633,6 +659,17 @@ open class BasePlaywrightNativeTest(
   }
 
   companion object {
+    /** Env var naming the browser language for trails that declare no `locale:`, e.g. `es`. */
+    const val WEB_LOCALE_ENV = "TRAILBLAZE_WEB_LOCALE"
+
+    /**
+     * The language a session's browser context opens in: the trail's resolved `locale:` for this
+     * device, else the lane's, else null (the browser default). The trail wins for the same reason
+     * a trail's locale wins over the language a phone booted in: it is the more specific request.
+     */
+    internal fun resolveBrowserLocale(trailLocale: String?, laneLocale: String?): String? =
+      (trailLocale ?: laneLocale)?.let(DeviceLocaleConfigurator::normalizedLocale)
+
     internal val PLAYWRIGHT_NATIVE_SYSTEM_PROMPT = """
 **You are managing a {{device_description}} using Playwright.**
 

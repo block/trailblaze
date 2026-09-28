@@ -104,7 +104,6 @@ if [ ! -d "$BIN_DIR" ]; then
   exit 1
 fi
 ln -sf "${INSTALL_DIR}/trailblaze" "${BIN_DIR}/trailblaze"
-ln -sf "${INSTALL_DIR}/trailblaze" "${BIN_DIR}/tb"
 
 # ── Verify ──────────────────────────────────────────────────────────────────
 RESOLVED_TRAILBLAZE="$(command -v trailblaze 2>/dev/null || true)"
@@ -118,5 +117,5 @@ fi
 echo ""
 echo "Installed trailblaze (from upstream artifact):"
 echo "  JAR:      ${INSTALL_DIR}/trailblaze.jar"
-echo "  Symlinks: ${BIN_DIR}/trailblaze, ${BIN_DIR}/tb"
+echo "  Symlink:  ${BIN_DIR}/trailblaze"
 echo "  Resolves: ${RESOLVED_TRAILBLAZE}"

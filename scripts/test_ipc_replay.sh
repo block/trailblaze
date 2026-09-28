@@ -429,6 +429,66 @@ else
   esac
 fi
 
+# A forwarded `tool` runs in the daemon, which never sees the caller's standard input, so the
+# launcher reads `--yaml -` itself. The YAML may hold a password, so it must reach the daemon in
+# the request body and never sit in a process's argv, where any local user can read it.
+printf -- '--- tool --yaml - forwards standard input in the request body, never in argv\n'
+eval "$(sed -n '/^tb_inline_stdin_yaml() {$/,/^}$/p' "$SHIM")"
+if ! declare -f tb_inline_stdin_yaml > /dev/null; then
+  _bad "tb_inline_stdin_yaml is defined in the launcher"
+else
+  # No trailing newline, so the `$(…)` captures below have none to strip.
+  _yaml=$'- tap:\n    ref: k973\n- pressKey:\n    keyCode: HOME'
+  # Prints the return code, IPC_ARGS, ARGS_ARRAY (one %q line each), then whatever stdin now holds.
+  # Each call runs in its own `$(…)` because the function replaces its shell's stdin.
+  _stdin_run() {
+    ARGS_ARRAY=("$@")
+    tb_inline_stdin_yaml
+    printf 'rc=%s\n%s\n%s\n' "$?" "$(printf '%q ' "${IPC_ARGS[@]}")" "$(printf '%q ' "${ARGS_ARRAY[@]}")"
+    cat
+  }
+  _got=$(_stdin_run tool -d android --yaml - -s "Go home" < <(printf '%s' "$_yaml"))
+  _eq "the forwarded args carry the piped YAML after --yaml" \
+    "$(printf '%q ' tool -d android --yaml "$_yaml" -s "Go home")" "$(sed -n 2p <<< "$_got")"
+  _eq "the JVM's args keep the -" "$(printf '%q ' tool -d android --yaml - -s "Go home")" "$(sed -n 3p <<< "$_got")"
+  _eq "the JVM reads the same YAML from stdin" "$_yaml" "$(sed -n '4,$p' <<< "$_got")"
+  _got=$(_stdin_run tool --yaml=- < <(printf '%s' "$_yaml"))
+  _eq "--yaml=- keeps its flag and takes the piped YAML" \
+    "$(printf '%q ' tool "--yaml=$_yaml")" "$(sed -n 2p <<< "$_got")"
+  # Forwarded as `--yaml ""`, a blank list would fail as a missing tool name; the JVM names stdin.
+  _got=$(_stdin_run tool --yaml - < <(printf '\n  \n'))
+  _eq "a blank list is not forwarded" "rc=1" "$(sed -n 1p <<< "$_got")"
+  # `-s -` is an objective, and only `tool` has --yaml; neither may swallow the caller's stdin.
+  _got=$(_stdin_run tool tap ref=k973 -s - < <(printf '%s' "$_yaml"))
+  _eq "a lone - that does not follow --yaml is left alone, and stdin unread" \
+    "$(printf 'rc=0\n%s\n%s\n%s' "$(printf '%q ' tool tap ref=k973 -s -)" "$(printf '%q ' tool tap ref=k973 -s -)" "$_yaml")" "$_got"
+  _got=$(_stdin_run snapshot --yaml - < <(printf '%s' "$_yaml"))
+  _eq "another command's --yaml - is left alone, and stdin unread" \
+    "$(printf 'rc=0\n%s\n%s\n%s' "$(printf '%q ' snapshot --yaml -)" "$(printf '%q ' snapshot --yaml -)" "$_yaml")" "$_got"
+
+  # The forward itself: curl stubbed to record its argv and stdin, then fail to connect (7), which
+  # sends ipc_try_forward back to the JVM path.
+  _fwd_dir=$(mktemp -d)
+  _fwd_source=$(sed -n '/^tb_json_quote() {$/,/^}$/p; /^ipc_build_payload() {$/,/^}$/p; /^ipc_build_payload_jq() {$/,/^}$/p; /^ipc_try_forward() {$/,/^}$/p' "$SHIM")
+  _fwd_rc=$(FWD_DIR="$_fwd_dir" YAML="$_yaml" bash -c "$_fwd_source"'
+    curl() { printf "%s\n" "$@" > "$FWD_DIR/argv"; cat > "$FWD_DIR/stdin"; return 7; }
+    TRAILBLAZE_IPC_FORWARDABLE_SUBCOMMANDS=tool TRAILBLAZE_IPC_NOTICE_SECONDS=60 TRAILBLAZE_PORT=1
+    ipc_try_forward tool --yaml "$YAML" -s "Go home"
+    printf "%s" "$?"
+  ')
+  _eq "a failed forward falls back to the JVM" "1" "$_fwd_rc"
+  if grep -q 'k973' "$_fwd_dir/argv" 2> /dev/null; then
+    _bad "curl's argv leaves out the forwarded arguments"
+  else
+    _ok "curl's argv leaves out the forwarded arguments"
+  fi
+  if grep -q 'ref: k973' "$_fwd_dir/stdin" 2> /dev/null; then
+    _ok "curl reads the request body, YAML included, from stdin"
+  else
+    _bad "curl reads the request body, YAML included, from stdin"
+  fi
+  rm -rf "$_fwd_dir"
+fi
 echo
 if [ "$_failures" -eq 0 ]; then
   echo "PASS: $_passes assertions"

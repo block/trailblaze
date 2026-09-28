@@ -3,14 +3,20 @@ package xyz.block.trailblaze.ui
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.withContext
+import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
+import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionInfo
 import xyz.block.trailblaze.logs.model.SessionStatus
+import xyz.block.trailblaze.mcp.android.ondevice.rpc.DrainSessionRequest
+import xyz.block.trailblaze.mcp.android.ondevice.rpc.OnDeviceRpcClient
 import xyz.block.trailblaze.model.TrailblazeOnDeviceInstrumentationTarget
 import xyz.block.trailblaze.report.utils.LogsRepo
+import xyz.block.trailblaze.transport.AndroidWireTransport
 import xyz.block.trailblaze.ui.tabs.session.LiveSessionDataProvider
+import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.util.HostAndroidDeviceConnectUtils
 
 
@@ -63,12 +69,17 @@ class JvmLiveSessionDataProvider(
             // path, where a connect is not supposed to destroy app state; see
             // HostAndroidDeviceConnectUtils.planConnectForceStop for that trade-off. The default
             // stays in unconditionally so a target that declares nothing cancels as it did before.
-            HostAndroidDeviceConnectUtils.forceStopAllAndroidInstrumentationProcesses(
-              trailblazeOnDeviceInstrumentationTargetTestApps = buildSet {
-                add(TrailblazeOnDeviceInstrumentationTarget.DEFAULT_ANDROID_ON_DEVICE)
-                addAll(deviceManager.getCurrentSelectedTargetApp()?.allInstrumentationTargets().orEmpty())
+            stopOnDeviceRunner(
+              drain = { drainBeforeStop(trailblazeDeviceId, driverType) },
+              forceStop = {
+                HostAndroidDeviceConnectUtils.forceStopAllAndroidInstrumentationProcesses(
+                  trailblazeOnDeviceInstrumentationTargetTestApps = buildSet {
+                    add(TrailblazeOnDeviceInstrumentationTarget.DEFAULT_ANDROID_ON_DEVICE)
+                    addAll(deviceManager.getCurrentSelectedTargetApp()?.allInstrumentationTargets().orEmpty())
+                  },
+                  deviceId = trailblazeDeviceId
+                )
               },
-              deviceId = trailblazeDeviceId
             )
 
             // Write cancellation log IMMEDIATELY so UI updates right away
@@ -123,6 +134,24 @@ class JvmLiveSessionDataProvider(
   }
 
   /**
+   * Best-effort drain so the runner finishes its pending log uploads before Stop kills it. A
+   * dispatch from the MCP bridge replies before its last action's uploads land and leaves them for
+   * a drain. Bounded by the drain request's own timeout; a wedged runner just fails it.
+   */
+  private suspend fun drainBeforeStop(deviceId: TrailblazeDeviceId, driverType: TrailblazeDriverType) {
+    try {
+      OnDeviceRpcClient(
+        trailblazeDeviceId = deviceId,
+        wireTransportMode = AndroidWireTransport.modeFor(driverType),
+        // The runner is about to be killed; a failed drain must not rebuild the adb forward first.
+        repairTransportOnNetworkError = false,
+      ).use { it.rpcCall(DrainSessionRequest(reason = "host_cancel_session")) }
+    } catch (e: Exception) {
+      Console.log("[Cancel] Drain before stop failed for ${deviceId.instanceId}: ${e.message}")
+    }
+  }
+
+  /**
    * Writes a cancellation log directly to the session log file.
    * This allows the UI to immediately show the session as cancelled
    * without waiting for the CancellationException to propagate through the test execution.
@@ -147,5 +176,13 @@ class JvmLiveSessionDataProvider(
 
   override suspend fun getLogsForSession(sessionId: SessionId): List<TrailblazeLog> {
     return logsRepo.getLogsForSession(sessionId)
+  }
+
+  companion object {
+    /** Drains before killing, because a killed runner can't finish the uploads the drain waits for. */
+    internal suspend fun stopOnDeviceRunner(drain: suspend () -> Unit, forceStop: () -> Unit) {
+      drain()
+      forceStop()
+    }
   }
 }

@@ -116,7 +116,7 @@ class DirectMcpAgent(
 You MUST respond with a tool call. Available tools include:
 - Tap: tap (use the ref ID from the snapshot, shown in square brackets e.g. [y778])
 - Other UI: swipe, inputText, pressBack, pressKey (for HOME/ENTER), hideKeyboard, eraseText
-- Navigation: launchApp, openUrl, scrollUntilTextIsVisible
+- Navigation: openApp, openUrl, scrollUntilTextIsVisible
 - Verification: assertVisible (assert an element IS visible by ref from the snapshot), assertNotVisibleWithText (assert text is NOT visible)
 - Control flow: objectiveStatus (to report COMPLETED, IN_PROGRESS, or FAILED status)
 

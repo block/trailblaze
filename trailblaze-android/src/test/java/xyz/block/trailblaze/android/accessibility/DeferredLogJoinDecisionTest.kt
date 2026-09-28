@@ -48,6 +48,28 @@ class DeferredLogJoinDecisionTest {
     )
   }
 
+  /**
+   * The MCP bridge ends its sessions itself, so no dispatch carries the session-end log. It drains
+   * the runner first, and the drain joins the lane, so its dispatches may defer without turbo.
+   */
+  @Test
+  fun `the gate opens without turbo for a host that drains before ending the session`() {
+    assertTrue(ReplayCaptureOptions.resolveDeferLogFlush("", turboOn = false, hostDrainsBeforeSessionEnd = true))
+  }
+
+  /** Every other host-driven path ends the session with no drain, and must keep joining per reply. */
+  @Test
+  fun `the gate stays closed without turbo for a host that does not drain`() {
+    assertFalse(ReplayCaptureOptions.resolveDeferLogFlush("", turboOn = false, hostDrainsBeforeSessionEnd = false))
+    assertTrue(ReplayCaptureOptions.resolveDeferLogFlush("", turboOn = true, hostDrainsBeforeSessionEnd = false))
+  }
+
+  @Test
+  fun `the kill switch closes the gate even for a host that drains`() {
+    assertFalse(ReplayCaptureOptions.resolveDeferLogFlush("0", turboOn = false, hostDrainsBeforeSessionEnd = true))
+    assertFalse(ReplayCaptureOptions.resolveDeferLogFlush("0", turboOn = true, hostDrainsBeforeSessionEnd = true))
+  }
+
   @Test
   fun `nothing defers while the gate is off`() {
     assertFalse(

@@ -16,12 +16,16 @@ data class ReconciledRunOutcome(
  * - A session that ended Succeeded(WithSelfHeal) is a pass even when a post-run connect/teardown
  *   error set [latchError] — on the V1 on-device-RPC path a dead instrumentation server can emit a
  *   terminal code that a later connect reads as a ConnectionFailure AFTER the trail already passed.
+ * - A run that passed but whose session could not then be finalized ([finalizationError]) fails
+ *   whatever the disk says: its session is failed on disk too, but that write may not have landed.
  * - A session that ended in any other terminal status stays/falls to failure; one that never
  *   reached Ended keeps the in-memory outcome.
  *
  * @param latchSuccess the run's success flag from the completion latch (`onComplete` Success).
  * @param latchError any error recorded by the latch (`onConnectionStatus` ConnectionFailure or
  *   `onComplete` Failed/Cancelled), null when none.
+ * @param finalizationError the error of an `onComplete` Failed marked
+ *   `sessionFinalizationFailed`, null when none. Unlike [latchError], disk never overrides it.
  * @param diskStatus the pinned session's latest on-disk status, null when unavailable.
  * @param sessionDescription identifies the pinned session in a demotion error message.
  */
@@ -30,7 +34,12 @@ internal fun reconcileRunOutcome(
   latchError: String?,
   diskStatus: SessionStatus?,
   sessionDescription: String,
+  finalizationError: String? = null,
 ): ReconciledRunOutcome {
+  if (finalizationError != null) {
+    return ReconciledRunOutcome(success = false, error = finalizationError)
+  }
+
   val endedSucceeded = diskStatus is SessionStatus.Ended.Succeeded ||
     diskStatus is SessionStatus.Ended.SucceededWithSelfHeal
   if (endedSucceeded) {

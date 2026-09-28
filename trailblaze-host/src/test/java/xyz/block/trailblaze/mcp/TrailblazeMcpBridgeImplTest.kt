@@ -116,6 +116,110 @@ class TrailblazeMcpBridgeImplTest {
     assertTrue(status.contains("Reconnect the device"), status)
   }
 
+  /**
+   * A fake on-device agent for [TrailblazeMcpBridgeImpl.startOnDeviceAgentIfNotReady]: [start]
+   * counts launches and applies [onStart], which decides what a launch leaves behind.
+   */
+  private class FakeAgent(var ready: Boolean, var wedged: Boolean = false) {
+    var starts = 0
+    var onStart: FakeAgent.() -> String? = { ready = true; wedged = false; null }
+
+    fun check(): String? = TrailblazeMcpBridgeImpl.startOnDeviceAgentIfNotReady(
+      key = "emulator-5554",
+      isReady = { ready },
+      awaitingWedgeRestart = { wedged },
+      start = { starts++; onStart() },
+    )
+  }
+
+  @Test
+  fun `an RPC to a ready agent goes out without starting it again`() {
+    val agent = FakeAgent(ready = true)
+
+    assertNull(agent.check())
+    assertEquals(0, agent.starts, "a launch per RPC would reinstall the runner on every command")
+  }
+
+  /**
+   * The wedge: a session reused on Android skips the device connect, so an agent whose ready flag
+   * was dropped was never started again, and every RPC failed with a network error.
+   */
+  @Test
+  fun `an RPC to an agent that is not ready starts it first`() {
+    val agent = FakeAgent(ready = false)
+
+    assertNull(agent.check())
+    assertEquals(1, agent.starts)
+  }
+
+  @Test
+  fun `an RPC to an agent armed for a wedge restart restarts it even while flagged ready`() {
+    val agent = FakeAgent(ready = true, wedged = true)
+
+    assertNull(agent.check())
+    assertEquals(1, agent.starts)
+  }
+
+  @Test
+  fun `an agent that does not become ready blocks the RPC and says why`() {
+    val failed = FakeAgent(ready = false).apply { onStart = { "INSTALL_FAILED_INSUFFICIENT_STORAGE" } }
+    val failure = failed.check()
+    assertNotNull(failure, "an RPC after a failed launch reaches nothing and fails as a network error")
+    assertTrue(failure.contains("emulator-5554") && failure.contains("INSTALL_FAILED_INSUFFICIENT_STORAGE"), failure)
+
+    // Still starting after the wait, or another caller's launch failed: nothing to quote, but the
+    // RPC must still not go out.
+    assertNotNull(FakeAgent(ready = false).apply { onStart = { null } }.check())
+
+    val stillWedged = FakeAgent(ready = true, wedged = true).apply { onStart = { ready = true; null } }
+    assertNotNull(stillWedged.check(), "a wedged runner that was not restarted cannot take the RPC")
+  }
+
+  @Test
+  fun `a failed wedge restart reports the setup's error rather than the wedge`() {
+    val failedRestart = FakeAgent(ready = true, wedged = true).apply { onStart = { "INSTALL_FAILED_INSUFFICIENT_STORAGE" } }
+
+    val failure = failedRestart.check()
+
+    assertNotNull(failure)
+    assertTrue(failure.contains("INSTALL_FAILED_INSUFFICIENT_STORAGE"), failure)
+  }
+
+  @Test
+  fun `an agent start uses the session's own target over the daemon default`() {
+    val sessionTarget = object : TrailblazeHostAppTarget(id = "session-target", displayName = "Session") {
+      override fun getPossibleAppIdsForPlatform(platform: TrailblazeDevicePlatform): List<String>? = null
+      override fun internalGetCustomToolsForDriver(driverType: TrailblazeDriverType) =
+        emptySet<KClass<out TrailblazeTool>>()
+    }
+    val targets = mapOf(sessionTarget.id to sessionTarget, FakeAppTarget.id to FakeAppTarget)
+
+    fun resolve(sessionTargetId: String?) =
+      TrailblazeMcpBridgeImpl.onDeviceAgentTargetApp(sessionTargetId, targets::get) { FakeAppTarget }
+
+    assertSame(sessionTarget, resolve("session-target"), "ANDROID_TEST would start the wrong app's harness")
+    assertSame(FakeAppTarget, resolve(null))
+    assertSame(FakeAppTarget, resolve("no-longer-loaded"))
+  }
+
+  @Test
+  fun `a driver switch drains the old runner before force-stopping it`() {
+    fun clear(isDriverTypeSwitch: Boolean, isAndroid: Boolean): List<String> {
+      val steps = mutableListOf<String>()
+      TrailblazeMcpBridgeImpl.clearInstrumentationSlot(
+        isDriverTypeSwitch = isDriverTypeSwitch,
+        isAndroid = isAndroid,
+        closeOldDriver = { steps += "close" },
+        forceStopInstrumentation = { steps += "forceStop" },
+      )
+      return steps
+    }
+
+    assertEquals(listOf("close", "forceStop"), clear(isDriverTypeSwitch = true, isAndroid = true), "a killed runner can't finish its deferred log uploads")
+    assertEquals(listOf("forceStop"), clear(isDriverTypeSwitch = false, isAndroid = true))
+    assertEquals(listOf("close"), clear(isDriverTypeSwitch = true, isAndroid = false))
+  }
+
   @Test
   fun `a ready agent whose runner process exited is reported dead`() {
     val runner = "xyz.block.trailblaze.runner"

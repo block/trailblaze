@@ -361,6 +361,71 @@ class DeviceClassifierResolverTest {
   }
 
   @Test
+  fun `an override scoped to Android leaves iOS answers cached - the simulator is probed once`() {
+    // An override that only recognizes Android hardware declines every iOS device, and a decline
+    // is never cached. Unscoped, every iOS tool call re-ran the screen-size probe (a
+    // `simctl io screenshot`, ~0.4s).
+    val overrideCalls = AtomicInteger(0)
+    DeviceClassifierResolver.installOverride(
+      platforms = setOf(TrailblazeDevicePlatform.ANDROID),
+      override = { _, _ -> overrideCalls.incrementAndGet(); null },
+    )
+    val probes = AtomicInteger(0)
+    val probe = DeviceClassifierResolver.DimensionsProbe { _, _ ->
+      probes.incrementAndGet()
+      DeviceClassifierResolver.DeviceProbe(1206, 2622)
+    }
+    repeat(3) {
+      assertEquals(
+        listOf("ios", "iphone"),
+        DeviceClassifierResolver.classifiersFor(TrailblazeDevicePlatform.IOS, "SCOPED-UDID-2222", probe).map { it.classifier },
+      )
+    }
+    assertEquals(1, probes.get(), "the iOS answer should be cached after the first probe")
+    assertEquals(0, overrideCalls.get(), "an Android-only override is not asked about an iOS device")
+  }
+
+  @Test
+  fun `an override scoped to Android still claims Android devices`() {
+    val asked = mutableListOf<TrailblazeDevicePlatform>()
+    DeviceClassifierResolver.installOverride(
+      platforms = setOf(TrailblazeDevicePlatform.ANDROID),
+      override = { platform, _ -> asked += platform; listOf(TrailblazeDeviceClassifier("kiosk")) },
+    )
+    val phoneProbe = DeviceClassifierResolver.DimensionsProbe { _, _ ->
+      DeviceClassifierResolver.DeviceProbe(1080, 2340, densityDpi = 400)
+    }
+    assertEquals(
+      listOf("kiosk"),
+      DeviceClassifierResolver.classifiersFor(TrailblazeDevicePlatform.ANDROID, "scoped-android-1", phoneProbe).map { it.classifier },
+    )
+    assertEquals(listOf(TrailblazeDevicePlatform.ANDROID), asked)
+  }
+
+  @Test
+  fun `reinstalling an override without a scope consults it on every platform again`() {
+    DeviceClassifierResolver.installOverride(platforms = setOf(TrailblazeDevicePlatform.ANDROID)) { _, _ -> null }
+    val overrideCalls = AtomicInteger(0)
+    DeviceClassifierResolver.installOverride { _, _ -> overrideCalls.incrementAndGet(); null }
+    val probe = DeviceClassifierResolver.DimensionsProbe { _, _ -> DeviceClassifierResolver.DeviceProbe(1206, 2622) }
+    DeviceClassifierResolver.classifiersFor(TrailblazeDevicePlatform.IOS, "UNSCOPED-UDID-3333", probe)
+    assertEquals(1, overrideCalls.get(), "the earlier Android-only scope must not outlive its override")
+  }
+
+  @Test
+  fun `replacing an override re-decides a device already cached under the old one`() {
+    DeviceClassifierResolver.installOverride(platforms = setOf(TrailblazeDevicePlatform.ANDROID)) { _, _ -> null }
+    val probe = DeviceClassifierResolver.DimensionsProbe { _, _ -> DeviceClassifierResolver.DeviceProbe(1206, 2622) }
+    DeviceClassifierResolver.classifiersFor(TrailblazeDevicePlatform.IOS, "REPLACED-UDID-4444", probe)
+
+    DeviceClassifierResolver.installOverride { _, _ -> listOf(TrailblazeDeviceClassifier("kiosk")) }
+    assertEquals(
+      listOf("kiosk"),
+      DeviceClassifierResolver.classifiersFor(TrailblazeDevicePlatform.IOS, "REPLACED-UDID-4444", probe).map { it.classifier },
+    )
+  }
+
+  @Test
   fun `override that declines once is not cached - a later probe lets the override reclaim the device`() {
     // A distribution installs an override to recognize custom hardware a dimension probe can't tell
     // apart from a phone. The override declines on its first call — modeling a blank/raced shell probe

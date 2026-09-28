@@ -75,6 +75,14 @@ interface WallClockVideoMux {
  * assumes. The pipe read latency (our write → ffmpeg's read) is the only skew between a frame's
  * true arrival and its stamped PTS, well under a single frame.
  *
+ * ### Device frame times
+ * When the tee's producer knows when the device drew each frame (scrcpy, see
+ * [H264Tee.carriesDeviceFrameTimes]), arrival time is the wrong stamp: it adds the device's encode
+ * and adb's transport delay, which swings from tens of milliseconds to over half a second under
+ * load. Then the stream is rewrapped as FLV stamped with those device times ([DeviceTimedFlvMuxer])
+ * and ffmpeg keeps them, and [MuxResult]'s epochs are the device times mapped onto the host clock.
+ * The ffmpeg outputs are the same either way.
+ *
  * Not registry-shared: one consumer per recording. The tee it drains may be shared with other
  * consumers (the live-viewer / screenshot path) — that's the tee's job, not this class's.
  */
@@ -285,6 +293,12 @@ class WallClockMuxConsumer(
 
   private var consumer: H264Tee.Consumer? = null
   private var process: Process? = null
+
+  /** Whether this recording is stamped with device frame times; settled in [start]. */
+  @Volatile private var deviceTimed = false
+
+  /** Rewraps the feed for ffmpeg when [deviceTimed]; touched by the drain thread, read after it ends. */
+  @Volatile private var timedMuxer: DeviceTimedFlvMuxer? = null
   private var drainThread: Thread? = null
   private val stopped = AtomicBoolean(false)
 
@@ -305,7 +319,11 @@ class WallClockMuxConsumer(
 
   /** Starts the ffmpeg mux and the tee-drain thread. Must be called once. */
   override fun start() {
+    val startedAtMs = System.currentTimeMillis()
     consumer = tee.attach(ringBufferBytes)
+    // The first attach starts the producer, so what it carries is known now.
+    deviceTimed = tee.carriesDeviceFrameTimes
+    if (deviceTimed) timedMuxer = DeviceTimedFlvMuxer(startedAtHostMs = startedAtMs)
     try {
       process = spawnFfmpeg()
     } catch (e: Exception) {
@@ -363,18 +381,28 @@ class WallClockMuxConsumer(
       }
     }
 
-    val first = firstFrameEpochMs.get()
-    if (first < 0L || !outputFile.exists() || outputFile.length() == 0L) {
+    val arrivalFirst = firstFrameEpochMs.get()
+    if (arrivalFirst < 0L || !outputFile.exists() || outputFile.length() == 0L) {
       Console.log(
         "[WallClockMuxConsumer] no video captured for ${outputFile.name} " +
-          "(firstFrameEpoch=$first exists=${outputFile.exists()} len=${if (outputFile.exists()) outputFile.length() else -1})",
+          "(firstFrameEpoch=$arrivalFirst exists=${outputFile.exists()} len=${if (outputFile.exists()) outputFile.length() else -1})",
       )
       return null
+    }
+    // The device-timed window, when the drain finished and wrote frames; arrival time otherwise.
+    val timed = timedMuxer?.takeIf { drained && it.frameCount > 0 }
+    val first = timed?.firstFrameEpochMs ?: arrivalFirst
+    val last = timed?.lastFrameEpochMs ?: lastFrameEpochMs.get()
+    if (timed != null) {
+      Console.log(
+        "[WallClockMuxConsumer] ${outputFile.name}: ${timed.frameCount} frames, " +
+          "${timed.timedFrameCount} with device times; first frame ${first - arrivalFirst}ms from its arrival",
+      )
     }
     return MuxResult(
       file = outputFile,
       firstFrameEpochMs = first,
-      lastFrameEpochMs = lastFrameEpochMs.get(),
+      lastFrameEpochMs = last,
       feedAlive = feedAlive,
     )
   }
@@ -398,7 +426,8 @@ class WallClockMuxConsumer(
     ).apply { isDaemon = true; start() }
     Console.log(
       "[WallClockMuxConsumer] spawned ffmpeg pid=${proc.pid()} → ${outputFile.name} " +
-        "(${output::class.simpleName}, rotation=$rotation)",
+        "(${output::class.simpleName}, rotation=$rotation, " +
+        "timing=${if (deviceTimed) "device" else "arrival"})",
     )
     return proc
   }
@@ -409,19 +438,27 @@ class WallClockMuxConsumer(
    * to the encode. Getting either on the wrong side of `-i` is accepted silently by ffmpeg and
    * produces an unrotated recording, so the order is asserted rather than assumed.
    */
-  internal fun buildFfmpegCommand(): List<String> = listOf(
+  internal fun buildFfmpegCommand(deviceTimed: Boolean = this.deviceTimed): List<String> = listOf(
     ffmpegBinary,
     "-y",
-    // Stamp every input packet with the host wall clock at read time. This is the whole point:
-    // it turns the timing-less raw H.264 pipe into a wall-clock-PTS stream.
-    "-use_wallclock_as_timestamps", "1",
-    // Start immediately — raw H.264 has no container to probe, and the SPS/PPS at the head of
-    // the stream is enough to identify it. Mirrors LiveFrameConsumer.
-    "-flags", "+low_delay",
-    "-probesize", "32",
-    "-analyzeduration", "0",
-    "-f", "h264",
-  ) + output.rotationInputArgs(rotation) + listOf(
+  ) + (
+    if (deviceTimed) {
+      // FLV already carries each frame's timestamp; ffmpeg must keep it, not replace it.
+      listOf("-flags", "+low_delay", "-probesize", "32", "-analyzeduration", "0", "-f", "flv")
+    } else {
+      listOf(
+        // Stamp every input packet with the host wall clock at read time. This is the whole point:
+        // it turns the timing-less raw H.264 pipe into a wall-clock-PTS stream.
+        "-use_wallclock_as_timestamps", "1",
+        // Start immediately — raw H.264 has no container to probe, and the SPS/PPS at the head of
+        // the stream is enough to identify it. Mirrors LiveFrameConsumer.
+        "-flags", "+low_delay",
+        "-probesize", "32",
+        "-analyzeduration", "0",
+        "-f", "h264",
+      )
+    }
+    ) + output.rotationInputArgs(rotation) + listOf(
     "-i", "pipe:0",
     "-an",
   ) + output.rotationOutputArgs(rotation) + output.ffmpegArgs() + outputFile.absolutePath
@@ -430,22 +467,44 @@ class WallClockMuxConsumer(
     val cons = consumer ?: return
     val proc = process ?: return
     val sink: OutputStream = proc.outputStream
+    val muxer = timedMuxer
     val buf = ByteArray(DRAIN_CHUNK_BYTES)
+    var lastInputMs = 0L
+    var flushed = true
     try {
       while (true) {
         when (val n = cons.read(buf)) {
-          H264Tee.READ_RESULT_DETACHED -> return
+          H264Tee.READ_RESULT_DETACHED -> {
+            // The last frame has no successor to delimit it; write it before ffmpeg sees EOF.
+            runCatching { muxer?.finish(System.currentTimeMillis(), sink) }
+            return
+          }
           H264Tee.READ_RESULT_RESTART -> {
             // A new producer generation began (screenrecord's 3-minute cap on Android < 11). ffmpeg
-            // parses the new SPS/PPS inline on both paths, so nothing to do here.
+            // parses the new SPS/PPS inline on the raw path; the FLV path re-parses from the new head.
+            runCatching { muxer?.restart(System.currentTimeMillis(), sink) }
           }
-          0 -> Thread.sleep(IDLE_SLEEP_MS)
+          0 -> {
+            // A frame ends where the next begins, so the last one of a burst waits for the next
+            // burst unless it is let out once the feed goes quiet — as H264AccessUnitConsumer does.
+            if (muxer != null && !flushed && System.currentTimeMillis() - lastInputMs >= IDLE_FLUSH_MS) {
+              runCatching {
+                muxer.flushIdle(lastInputMs, sink)
+                sink.flush()
+              }
+              flushed = true
+            }
+            Thread.sleep(IDLE_SLEEP_MS)
+          }
           else -> {
             try {
-              sink.write(buf, 0, n)
+              val receivedAtMs = System.currentTimeMillis()
+              if (muxer != null) muxer.feed(buf, n, receivedAtMs, sink) else sink.write(buf, 0, n)
               sink.flush()
               drainedBytes.addAndGet(n.toLong())
               val now = System.currentTimeMillis()
+              lastInputMs = receivedAtMs
+              flushed = false
               firstFrameEpochMs.compareAndSet(-1L, now)
               lastFrameEpochMs.set(now)
             } catch (_: Exception) {
@@ -473,6 +532,9 @@ class WallClockMuxConsumer(
     private const val DEFAULT_RING_BUFFER_BYTES: Int = 50 * 1024 * 1024
     private const val DRAIN_CHUNK_BYTES: Int = 64 * 1024
     private const val IDLE_SLEEP_MS: Long = 5L
+
+    /** Quiet long enough to mark the end of a frame; see H264AccessUnitConsumer's 20 ms. */
+    private const val IDLE_FLUSH_MS: Long = 20L
 
     /**
      * How long the drain may move NO bytes at all before stop gives up on it. This is the wedge

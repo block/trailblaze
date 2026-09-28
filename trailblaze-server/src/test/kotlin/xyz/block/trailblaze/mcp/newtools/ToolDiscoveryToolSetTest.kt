@@ -1712,7 +1712,7 @@ class ToolDiscoveryToolSetTest {
       driverType: TrailblazeDriverType,
     ): Set<KClass<out TrailblazeTool>> = when (driverType.platform) {
       TrailblazeDevicePlatform.ANDROID ->
-        setOf(xyz.block.trailblaze.toolcalls.commands.LaunchAppTrailblazeTool::class)
+        setOf(xyz.block.trailblaze.toolcalls.commands.OpenAppTrailblazeTool::class)
       TrailblazeDevicePlatform.IOS ->
         setOf(xyz.block.trailblaze.toolcalls.commands.TapTrailblazeTool::class)
       TrailblazeDevicePlatform.WEB ->
@@ -1749,7 +1749,7 @@ class ToolDiscoveryToolSetTest {
     val allTools = toolGroups.flatMap {
       it.jsonObject["tools"]?.jsonArray?.map { tn -> tn.jsonPrimitive.content } ?: emptyList()
     }
-    assertContains(allTools, "launchApp", "Android tool must appear. Got: $allTools")
+    assertContains(allTools, "openApp", "Android tool must appear. Got: $allTools")
     assertTrue(
       "hideKeyboard" !in allTools,
       "This fixture's web-platform sentinel tool (hideKeyboard) must NOT appear under the " +
@@ -1780,7 +1780,7 @@ class ToolDiscoveryToolSetTest {
       "This fixture's web-platform sentinel tool (hideKeyboard) must appear under the web filter. " +
         "Got: $allTools",
     )
-    assertTrue("launchApp" !in allTools, "Android-only tool must NOT appear. Got: $allTools")
+    assertTrue("openApp" !in allTools, "Android-only tool must NOT appear. Got: $allTools")
   }
 
   @Test
@@ -1800,7 +1800,7 @@ class ToolDiscoveryToolSetTest {
     val allTools = toolGroups.flatMap {
       it.jsonObject["tools"]?.jsonArray?.map { tn -> tn.jsonPrimitive.content } ?: emptyList()
     }
-    assertContains(allTools, "launchApp")
+    assertContains(allTools, "openApp")
     assertTrue("tap" !in allTools, "iOS-only tool must NOT appear. Got: $allTools")
   }
 
@@ -1828,7 +1828,7 @@ class ToolDiscoveryToolSetTest {
     val allTools = toolGroups.flatMap {
       it.jsonObject["tools"]?.jsonArray?.map { tn -> tn.jsonPrimitive.content } ?: emptyList()
     }
-    assertContains(allTools, "launchApp")
+    assertContains(allTools, "openApp")
     // The TARGET-mode result type doesn't surface `currentDriverType`; the listing-content
     // assertion plus the platform header are the contractually-observable handles. INDEX mode
     // (which DOES surface `currentDriverType`) carries the driver-key assertion in its own
@@ -2013,7 +2013,7 @@ class ToolDiscoveryToolSetTest {
         driverType: TrailblazeDriverType,
       ): Set<KClass<out TrailblazeTool>> =
         if (driverType == TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION) {
-          setOf(xyz.block.trailblaze.toolcalls.commands.LaunchAppTrailblazeTool::class)
+          setOf(xyz.block.trailblaze.toolcalls.commands.OpenAppTrailblazeTool::class)
         } else {
           emptySet()
         }
@@ -2023,14 +2023,14 @@ class ToolDiscoveryToolSetTest {
       currentDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
     )
 
-    val result = toolSet.toolbox(search = "launchApp", platform = "android")
+    val result = toolSet.toolbox(search = "openApp", platform = "android")
     val obj = json.parseToJsonElement(result).jsonObject
 
     val matches = obj["matches"]?.jsonArray ?: JsonArray(emptyList())
     val toolNames =
       matches.map { it.jsonObject["tool"]!!.jsonObject["name"]!!.jsonPrimitive.content }
     assertContains(
-      toolNames, "launchApp",
+      toolNames, "openApp",
       "SEARCH must use the specific connected driver (ANDROID_ONDEVICE_INSTRUMENTATION), not " +
         "flatten to the platform default (ANDROID_ONDEVICE_ACCESSIBILITY) which would yield no tools. Got: $toolNames",
     )
@@ -2049,14 +2049,14 @@ class ToolDiscoveryToolSetTest {
       currentDriverType = null,
     )
 
-    val result = toolSet.toolbox(search = "launchApp", platform = "android")
+    val result = toolSet.toolbox(search = "openApp", platform = "android")
     val obj = json.parseToJsonElement(result).jsonObject
 
     val matches = obj["matches"]?.jsonArray ?: JsonArray(emptyList())
     val toolNames =
       matches.map { it.jsonObject["tool"]!!.jsonObject["name"]!!.jsonPrimitive.content }
     assertContains(
-      toolNames, "launchApp",
+      toolNames, "openApp",
       "SEARCH with idle daemon must honor --device=android. Got: $toolNames",
     )
   }
@@ -2072,14 +2072,14 @@ class ToolDiscoveryToolSetTest {
       currentDriverType = TrailblazeDriverType.PLAYWRIGHT_NATIVE,
     )
 
-    val result = toolSet.toolbox(search = "launchApp", platform = "android")
+    val result = toolSet.toolbox(search = "openApp", platform = "android")
     val obj = json.parseToJsonElement(result).jsonObject
 
     val matches = obj["matches"]?.jsonArray ?: JsonArray(emptyList())
     val toolNames =
       matches.map { it.jsonObject["tool"]!!.jsonObject["name"]!!.jsonPrimitive.content }
     assertContains(
-      toolNames, "launchApp",
+      toolNames, "openApp",
       "SEARCH must honor --device=android even when daemon holds a web driver. Got: $toolNames",
     )
   }

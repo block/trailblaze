@@ -56,7 +56,7 @@ uninstall() {
         local target
         target="$(readlink "$f" 2>/dev/null || true)"
         case "$target" in
-          "${INSTALL_DIR}"*)
+          "${INSTALL_DIR}/"*)
             echo "Removing symlink ${f} -> ${target}"
             rm -f "$f"
             removed_any=1
@@ -210,7 +210,6 @@ if ! (touch "$WRITE_PROBE" 2>/dev/null && rm -f "$WRITE_PROBE"); then
   exit 1
 fi
 ln -sf "${INSTALL_DIR}/trailblaze" "${BIN_DIR}/trailblaze"
-ln -sf "${INSTALL_DIR}/trailblaze" "${BIN_DIR}/tb"
 
 # ── Verify the install resolves to OUR binary ───────────────────────────────
 RESOLVED_TRAILBLAZE="$(command -v trailblaze 2>/dev/null || true)"
@@ -259,5 +258,5 @@ fi
 echo ""
 echo "Installed trailblaze (built from open-source):"
 echo "  JAR:      ${INSTALL_DIR}/trailblaze.jar ($(du -h "${INSTALL_DIR}/trailblaze.jar" | cut -f1))"
-echo "  Symlinks: ${BIN_DIR}/trailblaze, ${BIN_DIR}/tb"
+echo "  Symlink:  ${BIN_DIR}/trailblaze"
 echo "  Resolves: ${RESOLVED_TRAILBLAZE}"

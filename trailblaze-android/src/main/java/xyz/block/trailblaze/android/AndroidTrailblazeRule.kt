@@ -922,6 +922,7 @@ open class AndroidTrailblazeRule(
     // Cleared when the dispatch finishes or a tool reports an error; still set when anything threw
     // or the dispatch was cancelled, which may leave a retained bundle engine mid-eval.
     var endedInException = true
+    AccessibilityTrailRunner.beginDispatch(config.hostDrainsBeforeSessionEnd)
     try {
       val sessionId = (trailblazeLoggingRule.session
         ?: error("Session not available for QuickJS bundle launch")).sessionId
@@ -1039,12 +1040,13 @@ open class AndroidTrailblazeRule(
         // SessionEnded as soon as this returns) still joins here, because for it this boundary
         // really is the run's completion and the host acts on it.
         val deferFlush = ReplayCaptureOptions.shouldDeferDispatchLogJoin(
-          gateOn = ReplayCaptureOptions.deferLogFlushEnabled(),
+          gateOn = ReplayCaptureOptions.deferLogFlushEnabled(config.hostDrainsBeforeSessionEnd),
           sendSessionStartLog = sendSessionStartLog,
           sendSessionEndLog = sendSessionEndLog,
         )
         if (deferFlush) {
           Console.log("[deferred-log-flush] skipped end-of-dispatch join")
+          AccessibilityTrailRunner.noteDispatchLeftLogsInFlight()
         } else {
           runCatching { AccessibilityTrailRunner.flushLogsSuspend() }
         }

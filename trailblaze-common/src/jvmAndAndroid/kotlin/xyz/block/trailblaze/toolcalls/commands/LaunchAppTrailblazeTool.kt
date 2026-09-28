@@ -147,10 +147,26 @@ internal sealed interface ForegroundVerdict {
   data class Fatal(val result: TrailblazeToolResult.Error.FatalError) : ForegroundVerdict
 }
 
+/**
+ * **Deprecated.** Kept working, unchanged, for recorded trails and scripted tools that already call
+ * it; hidden from the LLM so nothing new starts depending on it.
+ *
+ * It hides too much behind [launchMode]: the default `REINSTALL` is not a reinstall but a data
+ * clear plus a cold start, every mode on iOS also grants every permission (Maestro's `all: allow`
+ * default), and a caller cannot see which of those a given call will do. Its replacements say it
+ * in the call:
+ * - To open an app as-is: `openApp` ([OpenAppTrailblazeTool]).
+ * - To start a test from a known state: the target's trailhead, composing `mobile_clearAppData`,
+ *   `android_forceStop` / `ios_terminate`, `android_grantPermissions` / `ios_grantPrivacy`, then
+ *   `openApp`. Mode by mode: `RESUME` → `openApp`; `FORCE_RESTART` → force-stop/terminate, then
+ *   `openApp`; `REINSTALL` → `mobile_clearAppData`, then `openApp` (plus whatever grants the app
+ *   needs, which this tool used to apply on iOS without saying so).
+ */
 @Serializable
-@TrailblazeToolClass("launchApp")
+@TrailblazeToolClass(name = "launchApp", surfaceToLlm = false)
 @LLMDescription(
-  "Open an app on the device as if a user tapped on its icon in the launcher.",
+  "Deprecated: use `openApp` to open an app as-is, or the target's trailhead tool to start from a " +
+    "known state. Launches an app with a launch mode (default REINSTALL clears the app's data first).",
 )
 data class LaunchAppTrailblazeTool(
   @LLMDescription("The package name of the app to launch. Example: 'com.example.app'")
@@ -219,12 +235,13 @@ Available App Launch Modes:
         // Say so in the result rather than only in a console line, which quiet mode drops — a
         // launch that needed a second attempt is the flake signal worth keeping in the report.
         ForegroundVerdict.Relaunched -> return TrailblazeToolResult.Success(
-          message = "Launched $appId ($effectiveLaunchMode) after re-issuing a dropped launch",
+          message = "Launched $appId ($effectiveLaunchMode) after re-issuing a dropped launch. " +
+            DEPRECATION_NOTE,
         )
         ForegroundVerdict.InForeground -> Unit
       }
     }
-    return TrailblazeToolResult.Success(message = "Launched $appId ($effectiveLaunchMode)")
+    return TrailblazeToolResult.Success(message = "Launched $appId ($effectiveLaunchMode). $DEPRECATION_NOTE")
   }
 
   /**
@@ -252,6 +269,12 @@ Available App Launch Modes:
       },
     ),
   )
+
+  internal companion object {
+    /** Appended to every successful result, so a CLI user sees it where they read the outcome. */
+    const val DEPRECATION_NOTE =
+      "(launchApp is deprecated: use openApp, or the target's trailhead to start from a known state.)"
+  }
 
   @Serializable(with = LaunchMode.Serializer::class)
   enum class LaunchMode {

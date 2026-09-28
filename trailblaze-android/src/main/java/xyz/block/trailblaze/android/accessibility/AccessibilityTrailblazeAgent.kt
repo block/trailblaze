@@ -4,6 +4,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import maestro.orchestra.ApplyConfigurationCommand
 import maestro.orchestra.Command
+import maestro.orchestra.HideKeyboardCommand
+import maestro.orchestra.InputRandomCommand
+import maestro.orchestra.InputTextCommand
 import maestro.orchestra.LaunchAppCommand
 import xyz.block.trailblaze.AdbCommandUtil
 import xyz.block.trailblaze.AgentMemory
@@ -21,6 +24,7 @@ import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.model.ResolvedTarget
 import xyz.block.trailblaze.model.TapRouteOverride
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
+import xyz.block.trailblaze.toolcalls.isSuccess
 import xyz.block.trailblaze.util.Console
 
 /**
@@ -95,14 +99,19 @@ class AccessibilityTrailblazeAgent(
    * whole batch up front (conversion is pure), then keep the base per-command dispatch: unlike
    * the iOS twin's delegate-the-whole-batch approach, this preserves recorded ordering —
    * [executeMaestroCommands] hoists launch commands within a batch, which would reorder a
-   * recording that launches an app after UI commands.
+   * recording that launches an app after UI commands. The one exception is [dispatchUnits]'s
+   * typing-then-hide pair.
    */
   override suspend fun runMaestroCommands(
     maestroCommands: List<Command>,
     traceId: TraceId?,
   ): TrailblazeToolResult {
     convertBatchOrError(maestroCommands)?.let { return it }
-    return super.runMaestroCommands(maestroCommands, traceId)
+    for (unit in dispatchUnits(maestroCommands)) {
+      val result = executeMaestroCommands(unit, traceId)
+      if (!result.isSuccess()) return result
+    }
+    return TrailblazeToolResult.Success()
   }
 
   /**
@@ -110,8 +119,8 @@ class AccessibilityTrailblazeAgent(
    * - [LaunchAppCommand] → ADB shell commands (app lifecycle is test setup, not UI interaction)
    * - All other commands → accessibility actions via [MaestroCommandConverter]
    *
-   * Reached through [runMaestroCommands] above (whole-batch validation, then the base
-   * per-command loop lands here one command at a time).
+   * Reached through [runMaestroCommands] above (whole-batch validation, then its loop lands here
+   * one [dispatchUnits] unit at a time: a single command, or a typing command plus its hide).
    */
   override suspend fun executeMaestroCommands(
     commands: List<Command>,
@@ -123,7 +132,9 @@ class AccessibilityTrailblazeAgent(
     // (IosDriverTrailblazeAgent.executeMaestroCommands).
     val actions: List<AccessibilityAction>
     try {
-      actions = MaestroCommandConverter.convertAll(uiCommandsOf(commands))
+      actions = MaestroCommandConverter.foldKeyboardHideIntoInputText(
+        MaestroCommandConverter.convertAll(uiCommandsOf(commands)),
+      )
     } catch (e: TrailblazeException) {
       return conversionError(e)
     }
@@ -357,4 +368,28 @@ class AccessibilityTrailblazeAgent(
   /** Provides the screen state using the accessibility service (no Maestro driver). */
   fun getScreenState() = deviceManager.getScreenState()
 
+  companion object {
+    /**
+     * Splits a batch into dispatches of one command each, except that a typing command and the
+     * keyboard hide right after it go together, so [executeMaestroCommands] can fold them into one
+     * action ([MaestroCommandConverter.foldKeyboardHideIntoInputText]). `inputText` lowers to that
+     * pair by default.
+     */
+    internal fun dispatchUnits(commands: List<Command>): List<List<Command>> {
+      val units = mutableListOf<List<Command>>()
+      var i = 0
+      while (i < commands.size) {
+        val command = commands[i]
+        val next = commands.getOrNull(i + 1)
+        if ((command is InputTextCommand || command is InputRandomCommand) && next is HideKeyboardCommand) {
+          units += listOf(command, next)
+          i += 2
+        } else {
+          units += listOf(command)
+          i += 1
+        }
+      }
+      return units
+    }
+  }
 }

@@ -1360,11 +1360,14 @@ ipc_try_forward() {
     esac
 
     local response rc
-    response=$(curl -sS --connect-timeout 2 --max-time "$ipc_max_time" \
+    # The body goes through curl's stdin, not `-d`: it carries every argument, including a
+    # `--yaml` list that may hold a password, and curl's argv is visible in `ps` for as long as
+    # the command runs. printf is a builtin, so no process argv ever holds it.
+    response=$(printf '%s' "$payload" | curl -sS --connect-timeout 2 --max-time "$ipc_max_time" \
         -X POST "http://localhost:${TRAILBLAZE_PORT}/cli/exec" \
         -H "Content-Type: application/json" \
         -H "Accept: application/vnd.trailblaze.cli-replay, application/json" \
-        -d "$payload" 2>/dev/null)
+        --data-binary @- 2>/dev/null)
     rc=$?
     # Only the watchdog itself. The `sleep` it may still be blocked in outlives it
     # as an orphan, which is harmless because that sleep holds no fd of ours — see
@@ -1832,6 +1835,33 @@ to_absolute_companion_root() {
     fi
 }
 
+# `tool --yaml -` reads the tool list from standard input, which the daemon running a forwarded
+# command never sees. Sets IPC_ARGS to ARGS_ARRAY with that `-` replaced by the piped YAML, then
+# hands the same bytes back as this shell's stdin so a JVM fallback reads them as if untouched.
+# ARGS_ARRAY keeps the `-`: the YAML may hold a secret, and argv is readable by every local user,
+# so it travels only in the /cli/exec request body (curl reads that from stdin) or a JVM's stdin.
+# Returns 1 for a blank list, which is left to the JVM, whose error names standard input.
+tb_inline_stdin_yaml() {
+    IPC_ARGS=("${ARGS_ARRAY[@]}")
+    [ "${ARGS_ARRAY[0]:-}" = "tool" ] || return 0
+    local i arg prefix yaml
+    for i in "${!ARGS_ARRAY[@]}"; do
+        arg="${ARGS_ARRAY[$i]}"
+        if [ "$arg" = "--yaml=-" ]; then
+            prefix="--yaml="
+        elif [ "$arg" = "-" ] && [ "$i" -gt 0 ] && [ "${ARGS_ARRAY[$((i - 1))]}" = "--yaml" ]; then
+            prefix=
+        else
+            continue
+        fi
+        IFS= read -r -d '' yaml || true
+        exec 0< <(printf '%s' "$yaml")
+        [[ "$yaml" = *[![:space:]]* ]] || return 1
+        IPC_ARGS[$i]="$prefix$yaml"
+        return 0
+    done
+}
+
 # ---------------------------------------------------------------------------
 # Argument parsing
 # ---------------------------------------------------------------------------
@@ -1928,7 +1958,7 @@ elif [ "${TRAILBLAZE_IPC:-1}" = "1" ] \
     # Fast path: forward to the already-running daemon instead of spawning a JVM.
     # ipc_try_forward either exits (success) or returns nonzero so we fall through
     # to the normal JVM path below.
-    ipc_try_forward "${ARGS_ARRAY[@]}" || {
+    { tb_inline_stdin_yaml && ipc_try_forward "${IPC_ARGS[@]}"; } || {
         tb_check_java_version || exit 1
         tb_run_quiet "${ARGS_ARRAY[@]}"
     }

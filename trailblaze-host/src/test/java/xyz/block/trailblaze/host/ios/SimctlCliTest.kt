@@ -9,6 +9,7 @@ import org.junit.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import xyz.block.trailblaze.util.SimctlCommand
 
 /**
  * Unit tests for [SimctlCli]'s pure helpers: the permission-preserving bundle copy backing
@@ -156,8 +157,8 @@ class SimctlCliTest {
   @Test
   fun `launchCommand appends launch arguments after the bundle id`() {
     assertEquals(
-      listOf(
-        "xcrun", "simctl", "launch", "UDID-123", "com.example.app",
+      SimctlCommand.argv(
+        "launch", "UDID-123", "com.example.app",
         "-E2ETestLaunchSessionToken", "session-token-value",
       ),
       SimctlCli.launchCommand(
@@ -171,7 +172,7 @@ class SimctlCliTest {
   @Test
   fun `launchCommand without launch arguments is the bare simctl launch command`() {
     assertEquals(
-      listOf("xcrun", "simctl", "launch", "UDID-123", "com.example.app"),
+      SimctlCommand.argv("launch", "UDID-123", "com.example.app"),
       SimctlCli.launchCommand(
         udid = "UDID-123",
         bundleId = "com.example.app",

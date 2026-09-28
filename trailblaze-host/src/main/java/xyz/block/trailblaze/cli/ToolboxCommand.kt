@@ -728,9 +728,9 @@ class ToolboxCommand : Callable<Int>, QuietUnlessVerbose {
           objective = "Enter email address",
         ),
         ToolExample(
-          tool = "launchApp appId=com.example.app",
+          tool = "openApp appId=com.example.app",
           objective = "Open the app",
-          yamlSnippet = "- launchApp:\\n    appId: com.example.app",
+          yamlSnippet = "- openApp:\\n    appId: com.example.app",
         ),
       )
     }

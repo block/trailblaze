@@ -605,7 +605,8 @@ internal fun generateSessionReport(
   if (jsonFile != null) Console.info("JSON: file://${jsonFile.absolutePath}")
 
   // The animated timeline exports (--video/--gif/--webp) drive headless Playwright over the
-  // report's autoplay timeline (`?autoplay=1` plays it through and raises `__tbPlaybackEnded`).
+  // report's autoplay timeline: --video screen-records `?autoplay=1` playing in real time, and
+  // --gif/--webp step `?autoplay=step` one frame at a time (see PlaywrightReportCapture).
   // (--storyboard builds its own grid HTML from logs and only needs a path anchor.)
   if (videoSpec != null || gifSpec != null || webpSpec != null) {
     Console.log("Recording the report's timeline: file://${htmlFile.absolutePath}")

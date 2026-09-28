@@ -15,6 +15,7 @@ import kotlin.io.path.ExperimentalPathApi
 import kotlin.io.path.copyToRecursively
 import kotlin.io.path.deleteRecursively
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.util.SimctlCommand
 
 /**
  * Thin wrapper around `xcrun simctl` for iOS Simulator app-lifecycle operations that AXe
@@ -31,27 +32,27 @@ object SimctlCli {
 
   /** Pure argv build for [launch], extracted so tests can pin that [launchArguments] reach the command. */
   internal fun launchCommand(udid: String, bundleId: String, launchArguments: List<String>): List<String> =
-    listOf("xcrun", "simctl", "launch", udid, bundleId) + launchArguments
+    SimctlCommand.argv("launch", udid, bundleId) + launchArguments
 
   fun launch(udid: String, bundleId: String, launchArguments: List<String> = emptyList(), timeoutSeconds: Long = 15): Result =
     run(launchCommand(udid, bundleId, launchArguments), timeoutSeconds)
 
   fun terminate(udid: String, bundleId: String, timeoutSeconds: Long = 10): Result =
-    run(listOf("xcrun", "simctl", "terminate", udid, bundleId), timeoutSeconds)
+    run(SimctlCommand.argv("terminate", udid, bundleId), timeoutSeconds)
 
   fun uninstall(udid: String, bundleId: String, timeoutSeconds: Long = 20): Result =
-    run(listOf("xcrun", "simctl", "uninstall", udid, bundleId), timeoutSeconds)
+    run(SimctlCommand.argv("uninstall", udid, bundleId), timeoutSeconds)
 
   // 60s default: 30s proved tight for large (GB-plus) production app bundles.
   fun install(udid: String, appBundlePath: String, timeoutSeconds: Long = 60): Result =
-    run(listOf("xcrun", "simctl", "install", udid, appBundlePath), timeoutSeconds)
+    run(SimctlCommand.argv("install", udid, appBundlePath), timeoutSeconds)
 
   /** Path of the installed .app bundle — the explicit `app` container arg (also simctl's default). */
   fun getAppContainer(udid: String, bundleId: String, timeoutSeconds: Long = 10): Result =
-    run(listOf("xcrun", "simctl", "get_app_container", udid, bundleId, "app"), timeoutSeconds)
+    run(SimctlCommand.argv("get_app_container", udid, bundleId, "app"), timeoutSeconds)
 
   fun openUrl(udid: String, url: String, timeoutSeconds: Long = 10): Result =
-    run(listOf("xcrun", "simctl", "openurl", udid, url), timeoutSeconds)
+    run(SimctlCommand.argv("openurl", udid, url), timeoutSeconds)
 
   /**
    * `simctl privacy` — grants/revokes/resets a TCC service for an app without prompting
@@ -60,11 +61,11 @@ object SimctlCli {
    * driver uses it for every service simctl supports (see [IosSimulatorPermissions]).
    */
   fun privacy(udid: String, action: String, service: String, bundleId: String, timeoutSeconds: Long = 10): Result =
-    run(listOf("xcrun", "simctl", "privacy", udid, action, service, bundleId), timeoutSeconds)
+    run(SimctlCommand.argv("privacy", udid, action, service, bundleId), timeoutSeconds)
 
   /** Runs an arbitrary command inside the simulator via `simctl spawn` (e.g. `defaults write`). */
   fun spawn(udid: String, command: List<String>, timeoutSeconds: Long = 10): Result =
-    run(listOf("xcrun", "simctl", "spawn", udid) + command, timeoutSeconds)
+    run(SimctlCommand.argv("spawn", udid) + command, timeoutSeconds)
 
   /**
    * Resets the simulator's keychain — the whole device keychain, same as Maestro's
@@ -72,7 +73,7 @@ object SimctlCli {
    * [clearAppState] alone can leave an app "signed in" after a wipe; this is the missing half.
    */
   fun keychainReset(udid: String, timeoutSeconds: Long = 10): Result =
-    run(listOf("xcrun", "simctl", "keychain", udid, "reset"), timeoutSeconds)
+    run(SimctlCommand.argv("keychain", udid, "reset"), timeoutSeconds)
 
   /**
    * Cheap clearState: terminate, then delete the *children* of the app's data container AND of
@@ -92,7 +93,7 @@ object SimctlCli {
     // still-dying process can flush state back to disk after the wipe. That matters MORE here —
     // there is no reinstall behind this wipe to overwrite whatever got flushed.
     ensureStopped(udid, bundleId)
-    val container = run(listOf("xcrun", "simctl", "get_app_container", udid, bundleId, "data"), 10)
+    val container = run(SimctlCommand.argv("get_app_container", udid, bundleId, "data"), 10)
     if (!container.success) return container
     val dataPath = Paths.get(container.stdout.trim())
     if (!Files.isDirectory(dataPath)) {
@@ -102,7 +103,7 @@ object SimctlCli {
     // stdout when the app declares none (verified against simctl on a live device), so a
     // nonzero exit is always a real failure (unknown bundle, timeout) — propagate it rather
     // than silently skip a load-bearing wipe.
-    val groups = run(listOf("xcrun", "simctl", "get_app_container", udid, bundleId, "groups"), 10)
+    val groups = run(SimctlCommand.argv("get_app_container", udid, bundleId, "groups"), 10)
     if (!groups.success) return groups
     val wipeRoots = listOf(dataPath) +
       groups.stdout.lineSequence()
@@ -119,7 +120,7 @@ object SimctlCli {
     // Uninstall implicitly drops the app's TCC privacy grants (location, camera, ...), so flows
     // that expect a fresh permission prompt would silently keep a prior trail's grant under an
     // in-place wipe. Reset them explicitly to keep [clearAppState]'s fresh-install semantics.
-    return run(listOf("xcrun", "simctl", "privacy", udid, "reset", "all", bundleId), 10)
+    return run(SimctlCommand.argv("privacy", udid, "reset", "all", bundleId), 10)
   }
 
   /**

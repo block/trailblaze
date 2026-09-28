@@ -3,6 +3,7 @@ package xyz.block.trailblaze.report.utils
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import kotlinx.datetime.Clock
+import kotlinx.datetime.Instant
 import xyz.block.trailblaze.api.ImageFormatDetector
 import xyz.block.trailblaze.api.TrailblazeImageFormat
 import xyz.block.trailblaze.logs.TrailblazeLogsDataProvider
@@ -912,20 +913,93 @@ class LogsRepo(
     // A terminal status is immutable: once any Ended.* is on disk for a session, later Ended.*
     // appends are dropped. Without this, cancelling a run lets the killed runner's async failure
     // land an Ended.Failed on top of the user's Ended.Cancelled, and the run reads as Failed.
+    // The one exception, failing a succeeded end, is [failSucceededEnd].
     // Read disk (not the cached flow) — the cache can lag the just-written status.
     // Status logs only: deserializing the whole session here exhausted a 512 MB trail-driver heap
     // at session end, when the heap is already at its fullest.
-    if (logEvent is TrailblazeLog.TrailblazeSessionStatusChangeLog && logEvent.sessionStatus is SessionStatus.Ended) {
-      val alreadyEnded = readSessionStatusLogs(readLogFilesFromDisk(logEvent.session))
-        .any { it.sessionStatus is SessionStatus.Ended }
-      if (alreadyEnded) {
-        Console.log(
-          "[LogsRepo] Ignoring ${logEvent.sessionStatus::class.simpleName} for session " +
-            "${logEvent.session.value}: a terminal status is already recorded (first Ended wins)",
-        )
-        return File(getSessionDir(logEvent.session), "noop")
+    val endStatus = (logEvent as? TrailblazeLog.TrailblazeSessionStatusChangeLog)?.sessionStatus as? SessionStatus.Ended
+    if (endStatus != null) {
+      synchronized(terminalStatusLock) {
+        val alreadyEnded = readSessionStatusLogs(readLogFilesFromDisk(logEvent.session))
+          .any { it.sessionStatus is SessionStatus.Ended }
+        if (alreadyEnded) {
+          Console.log(
+            "[LogsRepo] Ignoring ${endStatus::class.simpleName} for session " +
+              "${logEvent.session.value}: a terminal status is already recorded (first Ended wins)",
+          )
+          return File(getSessionDir(logEvent.session), "noop")
+        }
+        val written = writeLogToDisk(logEvent)
+        // A finalization failure that came before this end fails it now that it has landed.
+        pendingEndFailures.remove(logEvent.session)?.let { failure ->
+          failureReplacing(endStatus, failure)?.let { failed ->
+            writeLogToDisk(failureLog(logEvent.session, failed, after = logEvent.timestamp))
+          }
+        }
+        return written
       }
     }
+    return writeLogToDisk(logEvent)
+  }
+
+  /** Makes each end-status check and the write it permits one step, so two ends can't both land. */
+  private val terminalStatusLock = Any()
+
+  /** Failures recorded by [failSucceededEnd] for sessions whose end had not landed yet. */
+  private val pendingEndFailures = mutableMapOf<SessionId, EndFailure>()
+
+  private data class EndFailure(val exceptionMessage: String, val exceptionStackTrace: String?)
+
+  /**
+   * Fails a session that ended succeeded, by writing a failure after that end: the one exception
+   * to first Ended wins. A run finalizes its session's capture only after writing its end, and a
+   * failed finalization fails the run. A self-healed success becomes a self-healed failure. Any
+   * other end is kept, and nothing is written.
+   *
+   * An end still on its way (a device's) is failed when it lands. The failure is stamped just after
+   * the session's latest status, which may carry a device's clock running ahead of this host's: the
+   * latest status is the one every reader takes as the session's outcome.
+   *
+   * @return whether the failure was written now; false when it waits for the end, or never applies.
+   */
+  fun failSucceededEnd(sessionId: SessionId, exceptionMessage: String, exceptionStackTrace: String?): Boolean {
+    if (readOnly) return false
+    val failure = EndFailure(exceptionMessage, exceptionStackTrace)
+    synchronized(terminalStatusLock) {
+      val statusLogs = readSessionStatusLogs(readLogFilesFromDisk(sessionId))
+      val ends = statusLogs.map { it.sessionStatus }.filterIsInstance<SessionStatus.Ended>()
+      if (ends.isEmpty()) {
+        pendingEndFailures[sessionId] = failure
+        return false
+      }
+      val failed = ends.singleOrNull()?.let { failureReplacing(it, failure) } ?: return false
+      writeLogToDisk(failureLog(sessionId, failed, after = statusLogs.maxOf { it.timestamp }))
+      return true
+    }
+  }
+
+  private fun failureReplacing(end: SessionStatus.Ended, failure: EndFailure): SessionStatus.Ended? = when (end) {
+    is SessionStatus.Ended.Succeeded -> SessionStatus.Ended.Failed(
+      durationMs = end.durationMs,
+      exceptionMessage = failure.exceptionMessage,
+      exceptionStackTrace = failure.exceptionStackTrace,
+    )
+    is SessionStatus.Ended.SucceededWithSelfHeal -> SessionStatus.Ended.FailedWithSelfHeal(
+      durationMs = end.durationMs,
+      exceptionMessage = failure.exceptionMessage,
+      exceptionStackTrace = failure.exceptionStackTrace,
+    )
+    else -> null
+  }
+
+  private fun failureLog(sessionId: SessionId, failed: SessionStatus.Ended, after: Instant) =
+    TrailblazeLog.TrailblazeSessionStatusChangeLog(
+      sessionStatus = failed,
+      session = sessionId,
+      timestamp = maxOf(Clock.System.now(), after + 1.milliseconds),
+    )
+
+  private fun writeLogToDisk(logEvent: TrailblazeLog): File {
     @Suppress("NAME_SHADOWING")
     val logEvent = costEnricher(logEvent)
     val logCount = getNextLogCountForSession(logEvent.session)

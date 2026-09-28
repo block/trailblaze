@@ -18,6 +18,7 @@ import xyz.block.trailblaze.ui.TrailblazeDeviceManager
 import xyz.block.trailblaze.util.AndroidHostAdbUtils
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.util.CoreSimulatorTempFiles
+import xyz.block.trailblaze.util.SimctlCommand
 
 /**
  * Resolves the full classifier list (e.g. `[ios, iphone]`) for a `--device` spec or a
@@ -225,22 +226,42 @@ object DeviceClassifierResolver {
     fun classify(platform: TrailblazeDevicePlatform, instanceId: String): List<TrailblazeDeviceClassifier>?
   }
 
+  /**
+   * An installed override and the platforms it can recognize hardware on (null means every
+   * platform). One holder, so a lookup never pairs one install's override with another's scope.
+   */
+  private class InstalledOverride(
+    val override: HostClassifierOverride,
+    val platforms: Set<TrailblazeDevicePlatform>?,
+  )
+
   @Volatile
-  private var hostClassifierOverride: HostClassifierOverride? = null
+  private var installedOverride: InstalledOverride? = null
 
   /**
    * Install (or remove, with `null`) the distribution-specific override. Called once at
    * startup from the distribution's entry point (e.g. `TrailblazeBlock.main`) — before any
    * CLI command runs, so every plan-time / `device list` lookup sees the override.
    *
-   * Idempotent and thread-safe. Subsequent calls replace the override; tests that exercise
-   * override behavior reset to null in their teardown.
+   * Idempotent and thread-safe. Subsequent calls replace the override and drop every cached
+   * answer, since each was decided under the previous one; tests that exercise override behavior
+   * reset to null in their teardown.
    */
   fun installOverride(override: HostClassifierOverride?) {
-    hostClassifierOverride = override
+    installedOverride = override?.let { InstalledOverride(it, platforms = null) }
+    classifierCache.clear()
   }
 
-  internal fun currentOverrideForTesting(): HostClassifierOverride? = hostClassifierOverride
+  /**
+   * [installOverride] for an override that only recognizes hardware on [platforms]. Devices on any
+   * other platform skip it and get a cached dimension-based answer.
+   */
+  fun installOverride(platforms: Set<TrailblazeDevicePlatform>, override: HostClassifierOverride) {
+    installedOverride = InstalledOverride(override, platforms.toSet())
+    classifierCache.clear()
+  }
+
+  internal fun currentOverrideForTesting(): HostClassifierOverride? = installedOverride?.override
 
   /**
    * Max simultaneous device probes when warming the cache from a batch. iOS `simctl
@@ -412,9 +433,14 @@ object DeviceClassifierResolver {
     // result for that device) or out of `classifiersFor` (crashing the caller); catch
     // it, log, and fall through to the dim-based path so a buggy override degrades
     // gracefully instead of breaking `device list` / plan-time.
-    val installedOverride = hostClassifierOverride
+    // An override is only consulted on the platforms it can recognize hardware on. Elsewhere it would
+    // decline every time, and a decline is never cached (below), so the dimension probe — a
+    // `simctl io screenshot` on iOS — would re-run on every call.
+    val applicableOverride = installedOverride
+      ?.takeIf { it.platforms?.contains(platform) ?: true }
+      ?.override
     val overrideResult = try {
-      installedOverride?.classify(platform, instanceId)
+      applicableOverride?.classify(platform, instanceId)
     } catch (e: Exception) {
       Console.log("[DeviceClassifierResolver] override threw for $platform/$instanceId: ${e.message}")
       null
@@ -480,7 +506,7 @@ object DeviceClassifierResolver {
     // from every device an installed override doesn't claim, which for an override that recognizes
     // only its own hardware is nearly all of them, handing back a bare platform in place of a real
     // measurement.
-    if (installedOverride != null) {
+    if (applicableOverride != null) {
       return ProbeOutcome(Classification(classifiers, definitive = true), cacheable = false)
     }
     // No override installed: the dim answer is the final word.
@@ -615,12 +641,14 @@ object DeviceClassifierResolver {
       Console.log("[DeviceClassifierResolver] ios temp file create failed for $instanceId: ${e.message}")
       return null
     }
+    // Taken before the argv is built, so a process's one-time simctl lookup is charged to these 5s.
+    val deadlineNanos = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
     val process = try {
       // Redirect both stdout and stderr to DISCARD. We never read either (the screenshot
       // goes to `tempFile`), and the previous `redirectErrorStream(true)` left the merged
       // pipe undrained — if simctl ever emitted enough output, the child would block on
       // pipe backpressure and we'd hit the 5s timeout for no reason.
-      ProcessBuilder("xcrun", "simctl", "io", instanceId, "screenshot", tempFile.absolutePath, "--type=PNG")
+      ProcessBuilder(SimctlCommand.argv("io", instanceId, "screenshot", tempFile.absolutePath, "--type=PNG"))
         .redirectOutput(ProcessBuilder.Redirect.DISCARD)
         .redirectError(ProcessBuilder.Redirect.DISCARD)
         .start()
@@ -630,7 +658,7 @@ object DeviceClassifierResolver {
       return null
     }
     return try {
-      val finished = process.waitFor(5, TimeUnit.SECONDS)
+      val finished = process.waitFor(deadlineNanos - System.nanoTime(), TimeUnit.NANOSECONDS)
       if (!finished) {
         Console.log("[DeviceClassifierResolver] ios screenshot timed out for $instanceId")
         return null

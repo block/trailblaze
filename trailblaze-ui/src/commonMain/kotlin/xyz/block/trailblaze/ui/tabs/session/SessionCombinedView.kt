@@ -809,7 +809,8 @@ internal fun describeAction(action: AgentDriverAction?): String =
   when (action) {
     is AgentDriverAction.TapPoint -> "Tap (${action.x}, ${action.y})"
     is AgentDriverAction.Swipe -> "Swipe ${action.direction}"
-    is AgentDriverAction.EnterText -> "Input: ${action.text}"
+    is AgentDriverAction.EnterText ->
+      "Input: ${action.text}" + if (action.hideKeyboardAfter) " (then hide keyboard)" else ""
     is AgentDriverAction.AssertCondition -> "Assert: ${action.conditionDescription}"
     is AgentDriverAction.LaunchApp -> "Launch: ${action.appId}"
     is AgentDriverAction.Scroll -> "Scroll ${if (action.forward) "down" else "up"}"

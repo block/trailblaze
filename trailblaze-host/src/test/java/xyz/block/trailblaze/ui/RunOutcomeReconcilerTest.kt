@@ -100,4 +100,20 @@ class RunOutcomeReconcilerTest {
     assertFalse(outcome.success)
     assertEquals(connectFailure, outcome.error)
   }
+
+  @Test
+  fun `a finalization failure fails the run even when disk says succeeded`() {
+    val finalizationFailure = "Network capture for 'com.example' ended without evidence"
+    val outcome = reconcileRunOutcome(
+      latchSuccess = false,
+      latchError = finalizationFailure,
+      diskStatus = SessionStatus.Ended.Succeeded(durationMs = 1000),
+      sessionDescription = sessionDesc,
+      finalizationError = finalizationFailure,
+    )
+    // Same disk status and latch error as the connect-teardown case above, which passes: only the
+    // kind of error differs.
+    assertFalse(outcome.success)
+    assertEquals(finalizationFailure, outcome.error)
+  }
 }

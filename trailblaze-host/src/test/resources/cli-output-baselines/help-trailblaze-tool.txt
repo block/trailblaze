@@ -59,4 +59,7 @@ Run a Trailblaze tool by name (e.g., tap, inputText)
                             without it.
   -v, --verbose           Enable verbose output
   -V, --version           Print version information and exit.
-      --yaml=<yaml>       Raw YAML tool sequence (multiple tools in one call)
+      --yaml=<yaml>       YAML list of tools to run in one call, settling
+                            between each: inline, a file path, or `-` to read
+                            standard input. Only the last tool's screen is
+                            returned.

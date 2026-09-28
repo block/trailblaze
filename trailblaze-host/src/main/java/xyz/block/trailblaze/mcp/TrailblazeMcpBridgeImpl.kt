@@ -497,20 +497,25 @@ class TrailblazeMcpBridgeImpl(
       // drivers use the Trailblaze runner. Only one can be active at a time, so we
       // must kill everything when first connecting or switching driver types.
       // Only applies to Android devices — iOS and Web don't use Android instrumentation.
-      if (trailblazeDeviceId.trailblazeDevicePlatform == TrailblazeDevicePlatform.ANDROID) {
-        HostAndroidDeviceConnectUtils.forceStopAllAndroidInstrumentationProcesses(
-          trailblazeOnDeviceInstrumentationTargetTestApps = trailblazeDeviceManager.availableAppTargets
-            // A declared in-process harness is an instrumentation process like the bundled
-            // runner — a stale one holds the instrumentation slot just the same.
-            .flatMap { it.allInstrumentationTargets() }
-            .toSet(),
-          deviceId = trailblazeDeviceId,
-        )
-      }
+      clearInstrumentationSlot(
+        isDriverTypeSwitch = isDriverTypeSwitch,
+        isAndroid = trailblazeDeviceId.trailblazeDevicePlatform == TrailblazeDevicePlatform.ANDROID,
+        closeOldDriver = {
+          Console.log("[MCP Bridge] Closing persistent driver for $key (switching to $configuredDriverType)")
+          closePersistentDevice(trailblazeDeviceId)
+        },
+        forceStopInstrumentation = {
+          HostAndroidDeviceConnectUtils.forceStopAllAndroidInstrumentationProcesses(
+            trailblazeOnDeviceInstrumentationTargetTestApps = trailblazeDeviceManager.availableAppTargets
+              // A declared in-process harness is an instrumentation process like the bundled
+              // runner — a stale one holds the instrumentation slot just the same.
+              .flatMap { it.allInstrumentationTargets() }
+              .toSet(),
+            deviceId = trailblazeDeviceId,
+          )
+        },
+      )
       if (isDriverTypeSwitch) {
-        // Close the old persistent Maestro driver if present
-        Console.log("[MCP Bridge] Closing persistent HOST driver for $key (switching to $configuredDriverType)")
-        closePersistentDevice(trailblazeDeviceId)
         // Clear on-device agent ready flag
         Console.log("[MCP Bridge] Clearing on-device agent ready flag for $key (switching to $configuredDriverType)")
         onDeviceAgentReady.remove(key)
@@ -728,6 +733,10 @@ class TrailblazeMcpBridgeImpl(
         // consumer. Wired here so the next iteration can flip launch-tool behavior off this
         // signal without another hop.
         captureNetworkTraffic = captureNetworkTraffic,
+        // True because [endSession] drains the runner (via `closePersistentDevice`) before it
+        // ends the session, and the drain waits for this dispatch's log uploads. So the reply
+        // need not wait for them.
+        hostDrainsBeforeSessionEnd = true,
       ),
     )
 
@@ -761,6 +770,65 @@ class TrailblazeMcpBridgeImpl(
       } else {
         runnerProcessIds.remove(key)
       }
+    }
+
+    /**
+     * Starts [key]'s on-device agent when it is not ready to take an RPC, returning why the RPC
+     * must not be sent, or null once it can be.
+     *
+     * Every RPC checks, not only a device connect. The ready flag is dropped without a connect
+     * following it — `endSession`, a target change, a UiAutomation wedge — and a CLI command
+     * reusing an Android session skips the connect entirely. An RPC sent anyway goes to whatever
+     * the pooled client's port forward reaches; with the runner gone, every command failed with
+     * "Network error during RPC call" until the daemon restarted.
+     *
+     * [start] returns the setup's failure reason when it ran and threw.
+     */
+    internal fun startOnDeviceAgentIfNotReady(
+      key: String,
+      isReady: () -> Boolean,
+      awaitingWedgeRestart: () -> Boolean,
+      start: () -> String?,
+    ): String? {
+      if (isReady() && !awaitingWedgeRestart()) return null
+      val setupFailure = start()
+      return when {
+        isReady() && !awaitingWedgeRestart() -> null
+        // A failed wedge restart also leaves the wedge flag set; the setup's own error says why.
+        setupFailure != null -> "The Trailblaze on-device agent on '$key' could not be started: $setupFailure"
+        awaitingWedgeRestart() ->
+          "On-device runner recovery failed for $key; the runner will be restarted before the next MCP action."
+        else -> "The Trailblaze on-device agent on '$key' is not ready yet. Retry the command, or reconnect " +
+          "the device to see why it has not started."
+      }
+    }
+
+    /**
+     * The app whose on-device agent a start uses: the device's active session's own target when it
+     * set one, else the daemon's selected target. A session that sets a target sends its RPCs with
+     * that target, and under ANDROID_TEST the harness IS that app's build, so starting the daemon
+     * default's harness would run the session's tools inside the wrong app.
+     */
+    internal fun onDeviceAgentTargetApp(
+      sessionTargetId: String?,
+      findTarget: (String) -> TrailblazeHostAppTarget?,
+      selectedTarget: () -> TrailblazeHostAppTarget?,
+    ): TrailblazeHostAppTarget? = sessionTargetId?.let(findTarget) ?: selectedTarget()
+
+    /**
+     * Clears the instrumentation slot for a first connection or a driver switch. On a switch the
+     * old driver is closed first, because closing drains the old runner, and a dispatch sent with
+     * `hostDrainsBeforeSessionEnd` left its last action's log uploads for that drain to wait on.
+     * A runner killed before its drain loses them.
+     */
+    internal fun clearInstrumentationSlot(
+      isDriverTypeSwitch: Boolean,
+      isAndroid: Boolean,
+      closeOldDriver: () -> Unit,
+      forceStopInstrumentation: () -> Unit,
+    ) {
+      if (isDriverTypeSwitch) closeOldDriver()
+      if (isAndroid) forceStopInstrumentation()
     }
 
     /**
@@ -1311,11 +1379,19 @@ class TrailblazeMcpBridgeImpl(
     try {
       runBlocking {
         when (val result = rpcClient.rpcCall(DrainSessionRequest(reason = "host_close_persistent_device"))) {
-          is RpcResult.Success ->
+          is RpcResult.Success -> {
             Console.log(
               "[MCP Bridge] Drain RPC succeeded for ${deviceId.instanceId} " +
                 "(uiAutomationCleared=${result.data.uiAutomationCleared})",
             )
+            val leftPending = result.data.logUploadsLeftPending
+            if (leftPending > 0) {
+              Console.log(
+                "⚠️ [MCP Bridge] ${deviceId.instanceId} was still uploading $leftPending log(s) when its session " +
+                  "ended; the report may be missing the last action's screenshot or hierarchy.",
+              )
+            }
+          }
           is RpcResult.Failure ->
             Console.log(
               "[MCP Bridge] Drain RPC failed for ${deviceId.instanceId} " +
@@ -1342,11 +1418,14 @@ class TrailblazeMcpBridgeImpl(
    * - Background thread does the setup
    * - Waits up to [ON_DEVICE_AGENT_TIMEOUT_SECONDS] for completion
    * - If still initializing, [getDriverConnectionStatus] reports progress
+   *
+   * Returns why the setup failed when this call ran it and it threw, else null. A null does not
+   * mean ready: another caller's setup may still be running, or have failed.
    */
   private fun ensureOnDeviceAgentRunning(
     trailblazeDeviceId: TrailblazeDeviceId,
     driverType: TrailblazeDriverType?,
-  ) {
+  ): String? {
     val key = trailblazeDeviceId.instanceId
 
     // Reuse existing latch if setup is already in progress
@@ -1358,7 +1437,7 @@ class TrailblazeMcpBridgeImpl(
               "after ${ON_DEVICE_AGENT_TIMEOUT_SECONDS}s — continuing without it"
         )
       }
-      return
+      return null
     }
 
     val latch = CountDownLatch(1)
@@ -1370,13 +1449,18 @@ class TrailblazeMcpBridgeImpl(
               "after ${ON_DEVICE_AGENT_TIMEOUT_SECONDS}s — continuing without it"
         )
       }
-      return
+      return null
     }
 
     driverCreationStartTimes[key] = System.currentTimeMillis()
+    var setupFailure: String? = null
     val agentThread = Thread {
       try {
-        val appTarget = trailblazeDeviceManager.getCurrentSelectedTargetApp()
+        val appTarget = onDeviceAgentTargetApp(
+          sessionTargetId = trailblazeDeviceManager.getTargetForActiveSession(trailblazeDeviceId),
+          findTarget = trailblazeDeviceManager.availableAppTargets::findById,
+          selectedTarget = trailblazeDeviceManager::getCurrentSelectedTargetApp,
+        )
         // Through the shared resolver rather than a local ANDROID_TEST branch, so a driver added
         // to the RPC set later cannot silently land on the bundled runner here.
         val resolved =
@@ -1477,7 +1561,10 @@ class TrailblazeMcpBridgeImpl(
         Console.log("[MCP Bridge] On-device agent ready for $key")
       } catch (e: Exception) {
         Console.log("[MCP Bridge] On-device agent setup failed for $key: ${e.message}")
-        stoppedOnDeviceRunners.relaunchFailed(key, e.message ?: e::class.java.simpleName)
+        val reason = e.message ?: e::class.java.simpleName
+        // Read by this function's caller after the latch: countDown/await orders the write.
+        setupFailure = reason
+        stoppedOnDeviceRunners.relaunchFailed(key, reason)
       } finally {
         latch.countDown()
         driverCreationLatches.remove(key)
@@ -1494,6 +1581,7 @@ class TrailblazeMcpBridgeImpl(
             "after ${ON_DEVICE_AGENT_TIMEOUT_SECONDS}s — continuing without it"
       )
     }
+    return setupFailure
   }
 
   /**
@@ -1510,6 +1598,15 @@ class TrailblazeMcpBridgeImpl(
     cachedScreenStates.remove(key)
     onDeviceRpcClients.evict(deviceId)
   }
+
+  /** [startOnDeviceAgentIfNotReady] against this bridge's state for [deviceId]. */
+  private fun startOnDeviceAgentBeforeRpc(deviceId: TrailblazeDeviceId, driverType: TrailblazeDriverType?): String? =
+    startOnDeviceAgentIfNotReady(
+      key = deviceId.instanceId,
+      isReady = { deviceId.instanceId in onDeviceAgentReady },
+      awaitingWedgeRestart = { onDeviceRunnerRecovery.requiresRestart(deviceId) },
+      start = { ensureOnDeviceAgentRunning(deviceId, driverType) },
+    )
 
   /**
    * Forgets a ready on-device agent whose runner process has exited, returning the runner package,
@@ -1877,10 +1974,29 @@ class TrailblazeMcpBridgeImpl(
     screenshotScalingConfig: ScreenshotScalingConfig,
     includeAnnotatedScreenshot: Boolean,
     includeAllElements: Boolean,
+  ): GetScreenStateResponse? = getScreenStateViaRpc(
+    includeScreenshot = includeScreenshot,
+    screenshotScalingConfig = screenshotScalingConfig,
+    includeAnnotatedScreenshot = includeAnnotatedScreenshot,
+    includeAllElements = includeAllElements,
+    onFailure = { Console.log("[getScreenStateViaRpc] $it") },
+  )
+
+  /** [getScreenStateViaRpc], passing why it returned null to [onFailure] when the device was reachable. */
+  private suspend fun getScreenStateViaRpc(
+    includeScreenshot: Boolean,
+    screenshotScalingConfig: ScreenshotScalingConfig,
+    includeAnnotatedScreenshot: Boolean,
+    includeAllElements: Boolean,
+    onFailure: (String) -> Unit,
   ): GetScreenStateResponse? {
     val deviceId = getEffectiveDeviceId() ?: return null
 
     if (!isOnDeviceInstrumentation()) {
+      return null
+    }
+    startOnDeviceAgentBeforeRpc(deviceId, getConfiguredDriverType(deviceId.trailblazeDevicePlatform))?.let {
+      onFailure(it)
       return null
     }
 
@@ -1899,7 +2015,10 @@ class TrailblazeMcpBridgeImpl(
         onDeviceRpcClients.get(deviceId).rpcCall(request)
     ) {
       is RpcResult.Success -> result.data
-      is RpcResult.Failure -> null
+      is RpcResult.Failure -> {
+        onFailure(result.message)
+        null
+      }
     }
   }
 
@@ -2315,17 +2434,22 @@ class TrailblazeMcpBridgeImpl(
       }
       HostLocalScreenStateSource.ON_DEVICE_RPC -> {
         {
+          var failure: String? = null
           val response = runBlocking {
             getScreenStateViaRpc(
               includeScreenshot = true,
               screenshotScalingConfig = EffectiveScreenshotScalingConfig.effective,
               includeAnnotatedScreenshot = false,
               includeAllElements = false,
+              onFailure = { failure = it },
             )
           }
           RpcScreenStateAdapter.from(
             response
-              ?: error("Failed to capture screen state from ${deviceId.instanceId} over the on-device RPC"),
+              ?: error(
+                "Failed to capture screen state from ${deviceId.instanceId} over the on-device RPC" +
+                  (failure?.let { ": $it" } ?: ""),
+              ),
             BufferedImageUtils::encodeLikeCaptures,
           )
         }
@@ -2616,13 +2740,7 @@ class TrailblazeMcpBridgeImpl(
     traceId: TraceId? = null,
   ): TrailblazeToolResult.Success {
     val driverType = getConfiguredDriverType(trailblazeDeviceId.trailblazeDevicePlatform)
-    if (onDeviceRunnerRecovery.requiresRestart(trailblazeDeviceId)) {
-      ensureOnDeviceAgentRunning(trailblazeDeviceId, driverType)
-      check(!onDeviceRunnerRecovery.requiresRestart(trailblazeDeviceId)) {
-        "On-device runner recovery failed for ${trailblazeDeviceId.instanceId}; " +
-          "the runner will be restarted before the next MCP action."
-      }
-    }
+    startOnDeviceAgentBeforeRpc(trailblazeDeviceId, driverType)?.let { error(it) }
     val rpcClient = onDeviceRpcClients.get(trailblazeDeviceId)
 
     return run {

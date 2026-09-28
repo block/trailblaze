@@ -218,10 +218,10 @@ object OnDeviceRpcProtoCodec {
     ModelDrainSessionRequest(reason = reason)
 
   fun ModelDrainSessionResponse.toProto(): DrainSessionResponse =
-    DrainSessionResponse(ui_automation_cleared = uiAutomationCleared)
+    DrainSessionResponse(ui_automation_cleared = uiAutomationCleared, log_uploads_left_pending = logUploadsLeftPending)
 
   fun DrainSessionResponse.toModel(): ModelDrainSessionResponse =
-    ModelDrainSessionResponse(uiAutomationCleared = ui_automation_cleared)
+    ModelDrainSessionResponse(uiAutomationCleared = ui_automation_cleared, logUploadsLeftPending = log_uploads_left_pending)
 
   fun ModelSubscribeToProgressRequest.toProto(): SubscribeToProgressRequest =
     SubscribeToProgressRequest(session_id = sessionId, include_history = includeHistory)
@@ -340,6 +340,7 @@ object OnDeviceRpcProtoCodec {
       node_selector_mode = nodeSelectorMode.name,
       prefer_host_agent = preferHostAgent,
       capture_network_traffic = captureNetworkTraffic,
+      host_drains_before_session_end = hostDrainsBeforeSessionEnd,
     )
 
   private fun TrailblazeConfig.toModel(): ModelTrailblazeConfig =
@@ -352,6 +353,7 @@ object OnDeviceRpcProtoCodec {
       nodeSelectorMode = NodeSelectorMode.valueOf(node_selector_mode),
       preferHostAgent = prefer_host_agent,
       captureNetworkTraffic = capture_network_traffic,
+      hostDrainsBeforeSessionEnd = host_drains_before_session_end,
     )
 
   private fun ModelReferrer.toProto(): Referrer = Referrer(id = id, display = display)

@@ -540,7 +540,8 @@ object StoryboardHtmlBuilder {
       val detail = when (action) {
         is AgentDriverAction.TapPoint -> "(${action.x}, ${action.y})"
         is AgentDriverAction.LongPressPoint -> "(${action.x}, ${action.y})"
-        is AgentDriverAction.EnterText -> "\"${action.text.truncateMid(40)}\""
+        is AgentDriverAction.EnterText ->
+          "\"${action.text.truncateMid(40)}\"" + if (action.hideKeyboardAfter) ", then hide keyboard" else ""
         is AgentDriverAction.AssertCondition -> action.conditionDescription.truncateMid(60)
         is AgentDriverAction.LaunchApp -> action.appId
         is AgentDriverAction.StopApp -> action.appId

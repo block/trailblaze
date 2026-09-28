@@ -114,9 +114,15 @@ object CoreTools {
   // =========================================================================
 
   /**
-   * Launch an app by package ID / bundle ID.
+   * Launch an app by package ID / bundle ID, with a launch mode. Deprecated in favor of
+   * [OPEN_APP] plus a target's trailhead; kept for recorded trails.
    */
   const val LAUNCH_APP = "launchApp"
+
+  /**
+   * Open an app, or bring it to the front, without changing its state; returns once it is on screen.
+   */
+  const val OPEN_APP = "openApp"
 
   /**
    * Stop/kill an app.
@@ -502,7 +508,8 @@ class ToolCompatibilityRegistry {
       ToolCompatibility.builtinMobile(CoreTools.PRESS_KEY, "Press a specific key"),
 
       // App lifecycle
-      ToolCompatibility.builtinMobile(CoreTools.LAUNCH_APP, "Launch app by package/bundle ID"),
+      ToolCompatibility.builtinMobile(CoreTools.LAUNCH_APP, "Deprecated: launch app with a launch mode"),
+      ToolCompatibility.builtinMobile(CoreTools.OPEN_APP, "Open app as-is and wait until it is on screen"),
       ToolCompatibility.builtinMobile(CoreTools.STOP_APP, "Stop/kill app"),
       ToolCompatibility.builtinMobile(CoreTools.OPEN_URL, "Open URL in browser or app"),
 

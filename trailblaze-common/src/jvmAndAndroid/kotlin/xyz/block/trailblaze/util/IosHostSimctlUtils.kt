@@ -61,7 +61,7 @@ object IosHostSimctlUtils {
   fun listBootedDeviceIds(): List<String> {
     if (!isMacOs()) return emptyList()
     val output = TrailblazeProcessBuilderUtils.createProcessBuilder(
-      listOf("xcrun", "simctl", "list", "devices", "booted"),
+      SimctlCommand.argv("list", "devices", "booted"),
     ).runProcess {}
     val udidRegex = Regex("\\(([0-9A-Fa-f-]{36})\\)\\s*\\(Booted\\)")
     return output.outputLines.mapNotNull { udidRegex.find(it)?.groupValues?.get(1) }
@@ -76,17 +76,77 @@ object IosHostSimctlUtils {
   fun getAppBundlePath(deviceId: String, appId: String): File? {
     if (!isMacOs()) return null
     val output = TrailblazeProcessBuilderUtils.createProcessBuilder(
-      listOf("xcrun", "simctl", "get_app_container", deviceId, appId, "app"),
+      SimctlCommand.argv("get_app_container", deviceId, appId, "app"),
     ).runProcess {}
     if (output.exitCode != 0) return null
     val path = output.outputLines.firstOrNull()?.trim()?.takeIf { it.isNotEmpty() } ?: return null
     return File(path).takeIf { it.isDirectory }
   }
 
+  /**
+   * `xcrun simctl launch <deviceId> <appId>`: starts the app, or brings it to the front if it is
+   * already running (same pid, nothing restarted). Throws with simctl's output on failure, which for
+   * an app that is not installed names the bundle id it could not open.
+   */
+  fun launchApp(deviceId: String, appId: String) {
+    requireMacOs("simctl launch")
+    val output = TrailblazeProcessBuilderUtils.createProcessBuilder(
+      listOf("xcrun", "simctl", "launch", deviceId, appId),
+    ).runProcess {}
+    check(output.exitCode == 0) {
+      "simctl launch $appId failed (exit ${output.exitCode}): ${output.outputLines.joinToString("\n").trim()}"
+    }
+  }
+
+  /**
+   * `xcrun simctl terminate <deviceId> <appId>`. Returns false when the app was not running
+   * (simctl exits nonzero with "found nothing to terminate" — the state the caller wanted anyway);
+   * throws on any other failure.
+   */
+  fun terminateApp(deviceId: String, appId: String): Boolean {
+    requireMacOs("simctl terminate")
+    val output = TrailblazeProcessBuilderUtils.createProcessBuilder(
+      listOf("xcrun", "simctl", "terminate", deviceId, appId),
+    ).runProcess {}
+    if (output.exitCode == 0) return true
+    val text = output.outputLines.joinToString("\n").trim()
+    if (isNotRunningTerminateOutput(text)) return false
+    error("simctl terminate $appId failed (exit ${output.exitCode}): $text")
+  }
+
+  /**
+   * `xcrun simctl privacy <deviceId> grant <service> <appId>`. simctl terminates the app if it is
+   * running when a grant changes, so grant before launching. Throws with simctl's output on failure
+   * (e.g. an unknown service name).
+   */
+  fun grantPrivacy(deviceId: String, appId: String, service: String) {
+    requireMacOs("simctl privacy")
+    val output = TrailblazeProcessBuilderUtils.createProcessBuilder(
+      listOf("xcrun", "simctl", "privacy", deviceId, "grant", service, appId),
+    ).runProcess {}
+    check(output.exitCode == 0) {
+      "simctl privacy grant $service $appId failed (exit ${output.exitCode}): " +
+        output.outputLines.joinToString("\n").trim()
+    }
+  }
+
+  /** simctl's wording for "that app is not running" varies across Xcode versions. */
+  internal fun isNotRunningTerminateOutput(output: String): Boolean {
+    val text = output.lowercase()
+    return NOT_RUNNING_TERMINATE_MARKERS.any { it in text }
+  }
+
+  private val NOT_RUNNING_TERMINATE_MARKERS =
+    listOf("found nothing to terminate", "no such process", "not running")
+
+  private fun requireMacOs(what: String) {
+    check(isMacOs()) { "$what needs a macOS host with Xcode" }
+  }
+
   fun clearAppDataContainer(deviceId: String, appId: String) {
     if (!isMacOs()) return
     val output = TrailblazeProcessBuilderUtils.createProcessBuilder(
-      listOf("xcrun", "simctl", "get_app_container", deviceId, appId, "data"),
+      SimctlCommand.argv("get_app_container", deviceId, appId, "data"),
     ).runProcess {}
 
     output.outputLines.firstOrNull()?.let { dataContainerPath ->
@@ -110,7 +170,7 @@ object IosHostSimctlUtils {
    */
   fun setPasteboard(deviceId: String, text: String) {
     if (!isMacOs()) error("setPasteboard is only supported on macOS hosts")
-    runPasteboardCommand(listOf("xcrun", "simctl", "pbcopy", deviceId), text)
+    runPasteboardCommand(SimctlCommand.argv("pbcopy", deviceId), text)
   }
 
   /**
@@ -123,7 +183,7 @@ object IosHostSimctlUtils {
    */
   fun getPasteboard(deviceId: String): String {
     if (!isMacOs()) error("getPasteboard is only supported on macOS hosts")
-    return runPasteboardCommand(listOf("xcrun", "simctl", "pbpaste", deviceId))
+    return runPasteboardCommand(SimctlCommand.argv("pbpaste", deviceId))
   }
 
   /** One deadline covers lock acquisition, pipe IO, and process completion. */
@@ -209,7 +269,7 @@ object IosHostSimctlUtils {
   fun listInstalledAppIds(deviceId: String): List<String> {
     if (!isMacOs()) return emptyList()
     val output = TrailblazeProcessBuilderUtils.createProcessBuilder(
-      listOf("xcrun", "simctl", "listapps", deviceId),
+      SimctlCommand.argv("listapps", deviceId),
     ).runProcess {}
     return parseInstalledAppIdsFromListApps(output.outputLines)
   }
@@ -259,7 +319,7 @@ object IosHostSimctlUtils {
   fun listInstalledAppsDetailed(deviceId: String): List<InstalledApp> {
     if (!isMacOs()) return emptyList()
     val output = TrailblazeProcessBuilderUtils.createProcessBuilder(
-      listOf("xcrun", "simctl", "listapps", deviceId),
+      SimctlCommand.argv("listapps", deviceId),
     ).runProcess {}
     return parseInstalledAppsFromListApps(output.outputLines)
   }

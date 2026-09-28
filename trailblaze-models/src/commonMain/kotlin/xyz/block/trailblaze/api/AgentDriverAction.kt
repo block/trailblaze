@@ -177,9 +177,16 @@ sealed interface AgentDriverAction {
     override val type = AgentActionType.SWIPE
   }
 
+  /**
+   * [hideKeyboardAfter] is true when the same action also closed the keyboard once typing settled,
+   * so a report can show the hide that no longer gets its own [HideKeyboard] entry.
+   */
   @Serializable
-  data class EnterText(val text: String) : AgentDriverAction {
+  data class EnterText(val text: String, val hideKeyboardAfter: Boolean = false) : AgentDriverAction {
     override val type = AgentActionType.ENTER_TEXT
+
+    /** Preserves the pre-`hideKeyboardAfter` `EnterText(text)` constructor; see [TapPoint]. */
+    constructor(text: String) : this(text, hideKeyboardAfter = false)
   }
 
   @Serializable

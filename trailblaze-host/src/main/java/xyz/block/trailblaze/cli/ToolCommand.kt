@@ -21,6 +21,8 @@ import java.util.concurrent.Callable
  *   trailblaze tool -d android/emulator-5554 tap ref=p386 -s "Tap the Sign In button"
  *   trailblaze tool -d ios/SIM-UUID inputText text="hello" -s "Type hello"
  *   trailblaze tool -d android tap --yaml "- tap:\n    ref: p386" -s "Tap sign in"
+ *   trailblaze tool --yaml steps.yaml -s "Turn on battery percentage"
+ *   trailblaze tool --yaml - < steps.yaml
  */
 @Command(
   name = "tool",
@@ -57,7 +59,10 @@ class ToolCommand : Callable<Int>, QuietUnlessVerbose {
 
   @Option(
     names = ["--yaml"],
-    description = ["Raw YAML tool sequence (multiple tools in one call)"],
+    description = [
+      "YAML list of tools to run in one call, settling between each: inline, a file path, " +
+        "or `-` to read standard input. Only the last tool's screen is returned.",
+    ],
   )
   var yaml: String? = null
 
@@ -100,12 +105,18 @@ class ToolCommand : Callable<Int>, QuietUnlessVerbose {
   val headlessOption: HeadlessOption = HeadlessOption()
 
   override fun call(): Int {
+    val yamlBody = try {
+      yaml?.let { readToolsYaml(it, CliCallerContext.callerCwd()) { System.`in`.readBytes().decodeToString() } }
+    } catch (e: IllegalArgumentException) {
+      Console.error("Error: ${e.message}")
+      return TrailblazeExitCode.MISUSE.code
+    }
     // Single source of truth for "did the user supply a --yaml body" — both the
     // fast-path gate and the downstream YAML builder consult this. Using one
     // expression at the top of `call()` prevents the two sites from drifting
     // (one staying `isNullOrBlank()`, the other becoming e.g. `!= null`) and
     // emitting subtly different rejection verdicts.
-    val yamlIsProvided = !yaml.isNullOrBlank()
+    val yamlIsProvided = !yamlBody.isNullOrBlank()
 
     // Local argument validation runs BEFORE the device wrapper so a syntactically
     // invalid `trailblaze tool` (no toolName, no --yaml) doesn't trigger daemon
@@ -177,7 +188,7 @@ class ToolCommand : Callable<Int>, QuietUnlessVerbose {
       // `yamlIsProvided` mirrors the top-of-call gate so a blank `--yaml` value
       // falls through to the `tap`-style toolName builder and the two input
       // paths agree on what counts as "yaml was provided."
-      val toolsYaml = if (yamlIsProvided) yaml!! else ToolYamlBuilder.build(toolName!!, parsedToolArgs!!)
+      val toolsYaml = if (yamlIsProvided) yamlBody!! else ToolYamlBuilder.build(toolName!!, parsedToolArgs!!)
       // Wire key stays `"objective"` even though the user-facing flag is now `-s`/`--step`
       // and the wire tool is now named `"step"`. The daemon's `step` MCP tool defines
       // `objective` as the input contract — renaming the wire field would break recorded
@@ -330,6 +341,31 @@ class ToolCommand : Callable<Int>, QuietUnlessVerbose {
       resolver?.let { ToolNameSuggestions.didYouMeanSuffix(name, it.allKnownNames()) }.orEmpty()
   }
 }
+
+/**
+ * The YAML body `--yaml` [value] names: standard input for `-`, the file's contents when [value] is
+ * a file (relative paths resolve against [callerCwd]), otherwise [value] itself.
+ *
+ * A one-line value ending in `.yaml`/`.yml` that names no file is rejected rather than sent as
+ * YAML: it is a mistyped path, and as YAML it parses to a bare string that fails far from the typo.
+ * A blank file or standard input is rejected by name too: read as no `--yaml` at all, it failed with
+ * a missing-tool-name usage error that hid the empty pipe or file behind it.
+ */
+internal fun readToolsYaml(value: String, callerCwd: Path, readStdin: () -> String): String {
+  if (value == STDIN_YAML) return readStdin().also { require(it.isNotBlank()) { "No tools on standard input" } }
+  if ('\n' in value) return value
+  val file = try {
+    callerCwd.resolve(value)
+  } catch (_: java.nio.file.InvalidPathException) {
+    return value
+  }
+  if (Files.isRegularFile(file)) return Files.readString(file).also { require(it.isNotBlank()) { "$value is empty" } }
+  require(!value.trimEnd().endsWith(".yaml") && !value.trimEnd().endsWith(".yml")) { "No such file: $value" }
+  return value
+}
+
+/** The `--yaml` value that means "read standard input". */
+internal const val STDIN_YAML = "-"
 
 /**
  * Returns true if a Configured workspace ([WorkspaceRoot.Configured], discovered by

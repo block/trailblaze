@@ -8,6 +8,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.util.IosHostSimctlUtils
+import xyz.block.trailblaze.util.SimctlCommand
 
 /**
  * Thin wrapper around the [AXe CLI](https://github.com/cameroncooke/AXe).
@@ -300,8 +301,11 @@ object AxeCli {
         udid = udid,
         text = text,
         writePasteboard = { deviceId, value ->
+          // Built before the budget hands out what is left, so a process's one-time simctl lookup is
+          // charged to this call's timeout instead of running on top of it.
+          val args = writePasteboardArgs(deviceId)
           budget.run("simctl pbcopy", safetyReserveMillis) { remaining ->
-            writePasteboard(deviceId, value, remaining)
+            writePasteboard(args, value, remaining)
           }
         },
         paste = { deviceId ->
@@ -397,16 +401,16 @@ object AxeCli {
     return pasteAttempt.getOrThrow()
   }
 
-  private fun writePasteboard(udid: String, text: String, timeoutMillis: Long): Result =
+  private fun writePasteboard(args: List<String>, text: String, timeoutMillis: Long): Result =
     runWithTimeoutMillis(
-      writePasteboardArgs(udid),
+      args,
       timeoutMillis,
       stdin = text,
       timeoutDescription = "simctl pbcopy",
     )
 
   internal fun writePasteboardArgs(udid: String): List<String> =
-    listOf("xcrun", "simctl", "pbcopy", udid)
+    SimctlCommand.argv("pbcopy", udid)
 
   private fun pasteFromPasteboard(udid: String, timeoutMillis: Long): Result = runWithTimeoutMillis(
     pasteFromPasteboardArgs(udid),

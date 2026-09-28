@@ -268,6 +268,12 @@ object TrailblazeCli {
    */
   private val FORWARDABLE_SUBCOMMANDS = setOf("snapshot", "ask", "config", "tool")
 
+  internal fun readsCallerStdin(args: List<String>): Boolean =
+    args.firstOrNull() == "tool" &&
+      args.withIndex().any { (i, arg) ->
+        arg == "--yaml=$STDIN_YAML" || (arg == "--yaml" && args.getOrNull(i + 1) == STDIN_YAML)
+      }
+
   /**
    * Serializes in-process CLI executions on the daemon. The thread-local
    * capture in [CliOutCapture] is per-thread, but commands still share picocli's
@@ -336,7 +342,9 @@ object TrailblazeCli {
   ): CliExecResponse {
     val args = request.args
     val first = args.firstOrNull()
-    if (first == null || first !in FORWARDABLE_SUBCOMMANDS) {
+    // `--yaml -` means the caller's standard input, which never reaches the daemon. Current shims
+    // inline it before forwarding; declining here sends an older shim to the JVM path, which reads it.
+    if (first == null || first !in FORWARDABLE_SUBCOMMANDS || readsCallerStdin(args)) {
       return CliExecResponse(stdout = "", stderr = "", exitCode = 0, forwarded = false)
     }
 

@@ -441,6 +441,14 @@ class PlaywrightBrowserManager(
   @Volatile private var currentRecordingDir: File? = null
 
   /**
+   * BCP-47 language every new context opens in (`navigator.language`, `Accept-Language`, date and
+   * number formats), or null for the browser's own default. A browser has no system language to
+   * set, so this is where a web lane's or a trail's `locale:` lands. See [applyContextLocale].
+   */
+  @Volatile var contextLocale: String? = null
+    private set
+
+  /**
    * Details requested by the LLM for the next view hierarchy snapshot.
    *
    * When the LLM calls [PlaywrightNativeRequestDetailsTool], the requested detail types
@@ -868,6 +876,31 @@ class PlaywrightBrowserManager(
   }
 
   /**
+   * Opens contexts in [locale] from now on (null restores the browser default). Playwright fixes a
+   * context's locale when the context is created, so a change closes the current context and opens
+   * a fresh one, dropping its cookies, storage and page. No-op when [locale] is already in effect.
+   *
+   * Trail runners call this when a session starts, never mid-session, so a cached manager can serve
+   * an English trail after a Spanish one without reusing the Spanish context.
+   */
+  fun applyContextLocale(locale: String?) {
+    if (locale == contextLocale) return
+    if (closed.get()) return
+    Console.log("[PlaywrightBrowserManager] context locale: ${contextLocale ?: "default"} -> ${locale ?: "default"}")
+    contextLocale = locale
+    PlaywrightThreadBridge.runOnPlaywrightThread(
+      currentThread = Thread.currentThread(),
+      playwrightThread = if (::playwrightThread.isInitialized) playwrightThread else null,
+      dispatcher = playwrightDispatcher,
+    ) {
+      try {
+        browserContext.close()
+      } catch (_: Exception) {}
+      createFreshContextAndPage()
+    }
+  }
+
+  /**
    * Creates a new [BrowserContext] on the long-lived [browser] and opens an initial
    * page wired up for automation (init scripts, timeouts, popup tracking, WebAuthn
    * suppression). Assigns the new context/page to the manager's lateinit fields.
@@ -890,6 +923,8 @@ class PlaywrightBrowserManager(
     resolvedViewport.userAgent?.let { options.setUserAgent(it) }
     resolvedViewport.isMobile?.let { options.setIsMobile(it) }
     resolvedViewport.hasTouch?.let { options.setHasTouch(it) }
+    // Sets navigator.language, date/number formatting, and the Accept-Language header together.
+    contextLocale?.let { options.setLocale(it) }
     if (recordVideoDir != null) {
       // Playwright finalizes the `.webm` only when the context closes — wire a finalizer
       // so PlaywrightVideoCapture.stop() can force-flush in the kept-alive case, where

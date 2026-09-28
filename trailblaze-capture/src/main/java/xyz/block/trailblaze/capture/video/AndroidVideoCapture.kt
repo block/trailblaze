@@ -15,10 +15,10 @@ import xyz.block.trailblaze.util.Console
  * Records the device screen by attaching a [WallClockMuxConsumer] to the shared per-device
  * [H264Tee].
  *
- * The tee owns a single `adb exec-out screenrecord --output-format=h264` invocation, shared
- * with whatever else (e.g. the live `/devices` viewer) is also watching the device. This
- * avoids the encoder contention that two concurrent `screenrecord` invocations would cause
- * on most Android devices.
+ * The tee owns a single screen stream per device — the bundled scrcpy server, or `adb exec-out
+ * screenrecord --output-format=h264` where scrcpy cannot run (see [AndroidScreenProducerFactory]) —
+ * shared with whatever else (e.g. the live `/devices` viewer) is also watching the device. This
+ * avoids the encoder contention that two concurrent encoders would cause on most Android devices.
  *
  * ### What it writes
  * The session recording in the process-wide [RecordingFormat]: `video.webm`, a VP9 WebM encoded
@@ -27,48 +27,44 @@ import xyz.block.trailblaze.util.Console
  * host whose ffmpeg has no VP9 encoder the recording is `video.mp4` instead (`-c copy`, no encode);
  * the report plays that too.
  *
- * ### Why the wall-clock mux (vs [MuxToMp4Consumer])
- * `screenrecord` emits a raw H.264 elementary stream with **no per-frame timing**. The old
- * [MuxToMp4Consumer] wrote it to `.h264` segments and `-c copy`-concatenated them at stop; the
- * resulting mp4 got synthetic constant-rate PTS (ffmpeg's default 25fps) that a later pass had to
- * *guess back* into wall-clock by spreading frames uniformly. Uniform spreading is wrong whenever
- * the real screen activity isn't uniform (idle stretches, bursts of taps), so the report's Timeline
- * showed frames that didn't match the step at a given timestamp — most visibly on a long-running CI
- * trail where one frozen frame ended up covering ~43% of the timeline.
+ * ### Why the live mux (vs [MuxToMp4Consumer])
+ * The old [MuxToMp4Consumer] wrote the raw H.264 to `.h264` segments and `-c copy`-concatenated them
+ * at stop; the resulting mp4 got synthetic constant-rate PTS (ffmpeg's default 25fps) that a later
+ * pass had to *guess back* into wall-clock by spreading frames uniformly. Uniform spreading is wrong
+ * whenever the real screen activity isn't uniform (idle stretches, bursts of taps), so the report's
+ * Timeline showed frames that didn't match the step at a given timestamp.
  *
- * [WallClockMuxConsumer] instead pipes the live tee through `ffmpeg -use_wallclock_as_timestamps 1`,
- * stamping each access unit with the host wall clock as it arrives — the same technique the iOS
- * baguette capture uses. The file's PTS are then genuinely wall-clock-spaced and a session-log event
- * lands on its true frame. See that class's kdoc for the continuous-encode / monotonic-DTS
- * assumption.
+ * [WallClockMuxConsumer] instead gives every frame a real time as it is recorded. From scrcpy that
+ * is the time the **device** drew it, which scrcpy reports per frame. `screenrecord` reports none,
+ * so its frames are stamped with the host clock on arrival — the same technique the iOS baguette
+ * capture uses — and land as late as the encode and the adb hop made them.
  *
  * ### Clock alignment
- * The recording window is the **host** clock epochs the mux stamped its first and last frames with,
- * unconverted. An Android session mixes clocks — host-stamped runner logs beside device-stamped tool
- * logs, and the device's clock can sit seconds off on an emulator — so every consumer that places an
- * event on the recording (the HTML report, the desktop app) first puts the whole session on the host
- * clock via `normalizedToHostClock`, which derives each device's offset from the `hostReceivedAt`
- * ingestion anchors. The event's epoch and the window it is placed against are therefore both
- * host-clock. (The report maps an event onto the recording by SCALING clip time onto that window
- * — `videoClipTimeAt`, duration/window — not by subtracting its start.) Converting the window to the device clock here would re-introduce exactly the skew the
- * readers just removed.
+ * The recording window is **host**-clock epochs: arrival times for `screenrecord`, and for scrcpy the
+ * device times moved onto the host clock by the smallest arrival delay seen (see
+ * [DeviceTimedFlvMuxer]). An Android session mixes clocks — host-stamped runner logs beside
+ * device-stamped tool logs, and the device's clock can sit seconds off on an emulator — so every
+ * consumer that places an event on the recording (the HTML report, the desktop app) first puts the
+ * whole session on the host clock via `normalizedToHostClock`, which derives each device's offset
+ * from the `hostReceivedAt` ingestion anchors. The event's epoch and the window it is placed against
+ * are therefore both host-clock. (The report maps an event onto the recording by SCALING clip time
+ * onto that window — `videoClipTimeAt`, duration/window — not by subtracting its start.)
  *
  * ### How closely the recording tracks the screen
- * Measured on an emulator against a page painting its own millisecond clock: a frame stamped at
- * host time `T` shows the screen as it was **60–100 ms earlier** — the device's encode plus the adb
- * hop — and that offset wanders within a session by roughly one 17 ms frame interval. Elapsed time
- * *inside* the recording tracks real elapsed time to within a few ms, so a step lands on the right
- * frame; do not expect accuracy to the individual frame.
+ * With scrcpy, frame spacing is the device's own, so a loaded host no longer drags frames later
+ * than the taps that caused them; what remains is the smallest delay any frame had, a constant a
+ * few ms to tens of ms. With `screenrecord`, a frame stamped at host time `T` shows the screen as it
+ * was 60–100 ms earlier on an idle machine, and up to a second earlier under CI load.
  *
  * ### Limitations
  *  - Some images have no `screenrecord` binary at all, and some emulator / GPU configurations
- *    refuse it outright. The first case is detected before recording starts
- *    ([AndroidScreenrecordSupport]) and handed to [AndroidScreencapVideoCapture]; the second is
- *    not distinguished here — the mux just reports no bytes captured and the empty file is
- *    discarded.
- *  - `screenrecord`'s AVC encoder is assumed to emit monotonic DTS (no B-frames), which both mux
- *    outputs require; this holds for stock `screenrecord` but is worth validating on unusual OEM
- *    encoders.
+ *    refuse it outright. Without the binary ([AndroidScreenrecordSupport]) the session still
+ *    streams from scrcpy when it can, and is handed to [AndroidScreencapVideoCapture] when it
+ *    cannot. A refusing encoder is not distinguished here — the mux just reports no bytes captured
+ *    and the empty file is discarded.
+ *  - The device's AVC encoder is assumed to emit monotonic DTS (no B-frames), which both mux
+ *    outputs require; this holds for scrcpy and stock `screenrecord` but is worth validating on
+ *    unusual OEM encoders.
  */
 class AndroidVideoCapture(
   /**
@@ -105,7 +101,7 @@ class AndroidVideoCapture(
   private var mux: WallClockVideoMux? = null
   private var format: RecordingFormat = RecordingFormat.MP4
 
-  /** True when the device had no `screenrecord` and [fallback] owns this session's recording. */
+  /** True when nothing could stream the device and [fallback] owns this session's recording. */
   private var usingFallback = false
 
   override fun start(sessionDir: File, deviceId: String, appId: String?) {
@@ -113,14 +109,6 @@ class AndroidVideoCapture(
     this.deviceId = deviceId
 
     val trailblazeDeviceId = TrailblazeDeviceId(deviceId, TrailblazeDevicePlatform.ANDROID)
-
-    if (!screenrecordAvailable(trailblazeDeviceId)) {
-      // Nothing to stream from. Sampling screenshots is slower and coarser, but it produces the
-      // same artifact, so the session is recorded rather than silently left without footage.
-      usingFallback = true
-      fallback.start(sessionDir, deviceId, appId)
-      return
-    }
 
     // Query actual device dimensions for accurate recording size. Scales to ~720p on the
     // short side while preserving aspect ratio so tablets, foldables, and non-16:9 devices
@@ -138,11 +126,20 @@ class AndroidVideoCapture(
     )
 
     val tee = H264Tee.forDevice(trailblazeDeviceId, videoSize = videoSize, bitRate = BIT_RATE)
-    mux = muxFactory(
-      File(sessionDir, format.filename(basename)),
-      tee,
-      format.liveMuxOutput(),
-    ).also { it.start() }
+    val streaming = muxFactory(File(sessionDir, format.filename(basename)), tee, format.liveMuxOutput())
+    try {
+      streaming.start()
+    } catch (e: Exception) {
+      if (screenrecordAvailable(trailblazeDeviceId)) throw e
+      // Neither scrcpy nor screenrecord can stream this device. Sampling screenshots is slower and
+      // coarser, but it produces the same artifact, so the session is recorded rather than left
+      // without footage.
+      Console.log("[AndroidVideoCapture] cannot stream $deviceId (${e.message}); recording from screenshots")
+      usingFallback = true
+      fallback.start(sessionDir, deviceId, appId)
+      return
+    }
+    mux = streaming
   }
 
   override fun stop(options: CaptureOptions): CaptureArtifact? {

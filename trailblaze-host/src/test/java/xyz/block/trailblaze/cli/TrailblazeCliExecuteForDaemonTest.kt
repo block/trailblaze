@@ -224,6 +224,16 @@ class TrailblazeCliExecuteForDaemonTest {
     )
   }
 
+  @Test fun `a tool reading the caller's standard input is sent back to run outside the daemon`() {
+    // The caller's stdin never reaches the daemon. A launcher that inlines it never sends `-`;
+    // one that predates that must fall back to its own JVM, which can read it.
+    for (args in listOf(listOf("tool", "--yaml", "-"), listOf("tool", "-s", "Go home", "--yaml=-"))) {
+      assertFalse(TrailblazeCli.executeForDaemon(CliExecRequest(args = args)).forwarded, "$args must not be forwarded")
+    }
+    // A lone `-` anywhere else is an ordinary value, and the command still runs in the daemon.
+    assertTrue(TrailblazeCli.executeForDaemon(CliExecRequest(args = listOf("tool", "tap", "ref=p1", "-s", "-"))).forwarded)
+  }
+
   @Test fun `allowlisted subcommand without providers returns exit 1 and diagnostic stderr`() {
     // `TrailblazeCli.run()` is never called in this unit test, so the
     // `appProviderRef` / `configProviderRef` remain null. `executeForDaemon`

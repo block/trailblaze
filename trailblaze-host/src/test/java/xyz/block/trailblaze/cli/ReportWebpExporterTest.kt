@@ -14,8 +14,7 @@ import org.junit.rules.TemporaryFolder
 /**
  * Coverage for [ReportWebpExporter] at two levels:
  *
- *  - **Pure argv builders** ([ReportWebpExporter.frameDurationMs], [img2webpArgs],
- *    [cwebpResizeArgs], [webpmuxArgs]) — the observable contract of this exporter is the
+ *  - **Pure argv builders** ([img2webpArgs], [cwebpResizeArgs], [webpmuxArgs]) — the observable contract of this exporter is the
  *    command lines it hands to libwebp. These run with no subprocess and no device, so
  *    they pin the flags (lossy vs lossless, loop, per-frame duration, resize) that a
  *    behavior-preserving refactor must keep.
@@ -32,28 +31,20 @@ class ReportWebpExporterTest {
 
   // ---- pure argv-builder contracts (no subprocess) ----
 
-  @Test fun `frameDurationMs is the per-frame ms for the fps, clamped to at least 1`() {
-    assertEquals(200, ReportWebpExporter.frameDurationMs(5))
-    assertEquals(83, ReportWebpExporter.frameDurationMs(12))
-    // A very high fps rounds toward 0; clamp keeps it a valid (non-default) 1ms hold.
-    assertEquals(1, ReportWebpExporter.frameDurationMs(5000))
-  }
-
   @Test fun `img2webpArgs builds a lossy infinite-loop animation with per-frame duration`() {
     val frames = listOf(File("/frames/frame_00000.png"), File("/frames/frame_00001.png"))
-    val args = ReportWebpExporter.img2webpArgs(frames, File("/out/anim.webp"), durationMs = 83)
+    val args = ReportWebpExporter.img2webpArgs(frames, File("/out/anim.webp"), listOf(83, 250))
 
     assertEquals("img2webp", args.first())
     // img2webp defaults to LOSSLESS — the explicit -lossy is the regression guard.
     assertTrue(args.containsInOrder("-lossy"), "must force lossy: $args")
     assertTrue(args.containsInOrder("-loop", "0"), "must loop forever: $args")
-    assertTrue(args.containsInOrder("-d", "83"), "must set per-frame duration: $args")
+    // Each frame carries its own -d, since frames land on the timeline's events, not a grid.
+    assertTrue(args.containsInOrder("-d", "83", "/frames/frame_00000.png"), "frame 0's duration: $args")
+    assertTrue(args.containsInOrder("-d", "250", "/frames/frame_00001.png"), "frame 1's duration: $args")
     assertTrue(args.containsInOrder("-q", "75"), "must pin quality: $args")
     // Frames appear in order, before the -o output.
-    assertTrue(
-      args.containsInOrder("/frames/frame_00000.png", "/frames/frame_00001.png", "-o", "/out/anim.webp"),
-      "frames must precede -o output, in order: $args",
-    )
+    assertTrue(args.containsInOrder("/frames/frame_00001.png", "-o", "/out/anim.webp"), "frames precede -o output: $args")
   }
 
   @Test fun `cwebpResizeArgs resizes to the target width preserving aspect`() {
@@ -67,16 +58,17 @@ class ReportWebpExporterTest {
 
   @Test fun `webpmuxArgs muxes each frame with its duration into an infinite loop`() {
     val frames = listOf(File("/w/f_00000.webp"), File("/w/f_00001.webp"))
-    val args = ReportWebpExporter.webpmuxArgs(frames, File("/out/anim.webp"), durationMs = 100)
+    val args = ReportWebpExporter.webpmuxArgs(frames, File("/out/anim.webp"), listOf(100, 375))
     assertEquals("webpmux", args.first())
     assertTrue(args.containsInOrder("-frame", "/w/f_00000.webp", "+100"), "frame 0 with duration: $args")
-    assertTrue(args.containsInOrder("-frame", "/w/f_00001.webp", "+100"), "frame 1 with duration: $args")
+    assertTrue(args.containsInOrder("-frame", "/w/f_00001.webp", "+375"), "frame 1 with duration: $args")
     assertTrue(args.containsInOrder("-loop", "0", "-o", "/out/anim.webp"), "loop + output: $args")
   }
 
-  @Test fun `frameDurationMs rejects a non-positive fps`() {
-    assertFailsWith<IllegalArgumentException> { ReportWebpExporter.frameDurationMs(0) }
-    assertFailsWith<IllegalArgumentException> { ReportWebpExporter.frameDurationMs(-5) }
+  @Test fun `the argv builders reject a duration count that doesn't match the frames, or a zero hold`() {
+    val frames = listOf(File("/f/a.png"), File("/f/b.png"))
+    assertFailsWith<IllegalArgumentException> { ReportWebpExporter.img2webpArgs(frames, File("/o.webp"), listOf(200)) }
+    assertFailsWith<IllegalArgumentException> { ReportWebpExporter.webpmuxArgs(frames, File("/o.webp"), listOf(200, 0)) }
   }
 
   @Test fun `requireWebpTools throws naming every missing tool`() {
@@ -96,7 +88,7 @@ class ReportWebpExporterTest {
   @Test fun `assembleWebp fails fast when the frames directory has no frames`() {
     val emptyDir = tempFolder.newFolder("empty")
     val ex = assertFailsWith<IllegalStateException> {
-      ReportWebpExporter.assembleWebp(emptyDir, File(tempFolder.root, "out.webp"), fps = 5, targetWidthPx = null)
+      ReportWebpExporter.assembleWebp(emptyDir, File(tempFolder.root, "out.webp"), emptyList(), targetWidthPx = null)
     }
     assertTrue(ex.message!!.contains("no frame"), "must explain the empty-frames cause: ${ex.message}")
   }
@@ -110,7 +102,7 @@ class ReportWebpExporterTest {
     writeSentinelFrames(framesDir, frameCount = 6, widthPx = 64, heightPx = 48)
     val out = File(tempFolder.root, "out.webp")
 
-    ReportWebpExporter.assembleWebp(framesDir, out, fps = 5, targetWidthPx = null)
+    ReportWebpExporter.assembleWebp(framesDir, out, listOf(120, 500, 250, 200, 200, 200), targetWidthPx = null)
 
     assertTrue(out.exists() && out.length() > 0, "WebP file is missing or empty")
     val bytes = out.readBytes()
@@ -129,6 +121,8 @@ class ReportWebpExporterTest {
     )
     assertTrue(bytes.containsAscii("ANIM"), "Missing ANIM chunk — output is not animated")
     assertTrue(bytes.containsAscii("ANMF"), "Missing ANMF frame chunk — no frames encoded")
+    // Every frame keeps its own hold (img2webp may merge identical neighbours, but these differ).
+    assertEquals(listOf(120, 500, 250, 200, 200, 200), anmfDurationsMs(bytes))
   }
 
   @Test fun `assembleWebp with a targetWidthPx scales the output smaller than the unscaled run`() {
@@ -145,9 +139,10 @@ class ReportWebpExporterTest {
     writeSentinelFrames(framesDir, frameCount = 6, widthPx = 320, heightPx = 240)
 
     val fullSize = File(tempFolder.root, "full.webp")
-    ReportWebpExporter.assembleWebp(framesDir, fullSize, fps = 5, targetWidthPx = null)
+    val durations = listOf(120, 500, 250, 200, 200, 200)
+    ReportWebpExporter.assembleWebp(framesDir, fullSize, durations, targetWidthPx = null)
     val rescaled = File(tempFolder.root, "rescaled.webp")
-    ReportWebpExporter.assembleWebp(framesDir, rescaled, fps = 5, targetWidthPx = 64)
+    ReportWebpExporter.assembleWebp(framesDir, rescaled, durations, targetWidthPx = 64)
 
     assertTrue(fullSize.exists() && fullSize.length() > 0, "full-resolution WebP missing")
     assertTrue(rescaled.exists() && rescaled.length() > 0, "rescaled WebP missing")
@@ -159,6 +154,23 @@ class ReportWebpExporterTest {
       rescaled.readBytes().containsAscii("ANMF"),
       "Rescaled WebP is missing ANMF frames — assembly produced a still",
     )
+    assertEquals(durations, anmfDurationsMs(rescaled.readBytes()), "the webpmux path keeps each frame's hold too")
+  }
+
+  /** Each ANMF frame's duration: the 24-bit little-endian field 12 bytes into its payload. */
+  private fun anmfDurationsMs(bytes: ByteArray): List<Int> {
+    val out = mutableListOf<Int>()
+    var i = 12 // past "RIFF" + size + "WEBP"
+    while (i + 8 <= bytes.size) {
+      val id = bytes.sliceArray(i until i + 4).decodeToString()
+      val size = (0 until 4).sumOf { (bytes[i + 4 + it].toInt() and 0xFF) shl (8 * it) }
+      if (id == "ANMF") {
+        val d = i + 8 + 12
+        out += (bytes[d].toInt() and 0xFF) or ((bytes[d + 1].toInt() and 0xFF) shl 8) or ((bytes[d + 2].toInt() and 0xFF) shl 16)
+      }
+      i += 8 + size + (size and 1) // chunks are padded to an even size
+    }
+    return out
   }
 
   private fun writeSentinelFrames(dir: File, frameCount: Int, widthPx: Int = 64, heightPx: Int = 48) {

@@ -42,7 +42,7 @@ private fun List<String>.toSuccessResult(): TrailblazeToolResult.Success = Trail
  * Returns the list of installed app ids on the current device as a JSON object
  * (`{"appIds":[...]}`, sorted) — the lean, common-case companion to the richer
  * [ListInstalledAppsDetailedTrailblazeTool] (`mobile_listInstalledAppsDetailed`). Reach for this when
- * a flat id list is enough (e.g. discovering which apps are installed before `launchApp`, or
+ * a flat id list is enough (e.g. discovering which apps are installed before `openApp`, or
  * asserting an app is / isn't present); reach for the detailed tool when you need each app's display
  * name, system-vs-user classification, version, etc.
  *

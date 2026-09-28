@@ -5,7 +5,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.datetime.Clock
+import java.util.concurrent.atomic.AtomicInteger
 import xyz.block.trailblaze.api.AgentActionType
 import xyz.block.trailblaze.api.AgentDriverAction
 import xyz.block.trailblaze.api.ScreenState
@@ -64,6 +66,75 @@ object AccessibilityTrailRunner {
   }
 
   /**
+   * Set when a dispatch replied without joining the lane, so the next action joins what it left
+   * even when [ReplayCaptureOptions.deferLogFlushEnabled] is off for the device as a whole — the
+   * deferral can come from the dispatch's host rather than the sysprop or turbo. Dispatches run
+   * one at a time, so a volatile flag is enough.
+   */
+  @Volatile
+  private var previousDispatchLeftLogsInFlight = false
+
+  /** Called by the rule when it skips the end-of-dispatch join. */
+  fun noteDispatchLeftLogsInFlight() {
+    previousDispatchLeftLogsInFlight = true
+  }
+
+  /**
+   * Whether the dispatch now running is from a host that drains before ending the session, so
+   * [runActions] defers each action's join to the next action inside a multi-action batch too.
+   */
+  @Volatile
+  private var dispatchHostDrainsBeforeSessionEnd = false
+
+  /** Called by the rule before each dispatch runs its tools. */
+  fun beginDispatch(hostDrainsBeforeSessionEnd: Boolean) {
+    dispatchHostDrainsBeforeSessionEnd = hostDrainsBeforeSessionEnd
+  }
+
+  /**
+   * Joins the lane for a host that is about to end the session, so its report is written with the
+   * last action's screenshot and hierarchy in it. Called from the drain the host sends first.
+   *
+   * Bounded below the host's drain timeout so a stuck upload can't make the host give up on the
+   * drain. That bound is shorter than one upload's own timeout, so a slow upload can outlast it;
+   * it still lands, but after the report. Returns how many were left pending so the host can say
+   * so.
+   */
+  fun flushLogsBeforeSessionEnd(): Int {
+    val pending = logUploadsInFlight.get()
+    val startNs = System.nanoTime()
+    val joined = runBlocking { withTimeoutOrNull(SESSION_END_FLUSH_TIMEOUT_MS) { flushLogsSuspend() } } != null
+    previousDispatchLeftLogsInFlight = false
+    val leftPending = if (joined) 0 else logUploadsInFlight.get()
+    Console.log(
+      "[deferred-log-flush] drain join pending=$pending joined=$joined leftPending=$leftPending " +
+        "joinedMs=${(System.nanoTime() - startNs) / 1_000_000}",
+    )
+    return leftPending
+  }
+
+  /**
+   * Actions whose log upload has not finished. Counted apart from the lane's jobs because each
+   * action also queues a screenshot encode, which is not an upload.
+   */
+  private val logUploadsInFlight = AtomicInteger(0)
+
+  internal fun logUploadsInFlight(): Int = logUploadsInFlight.get()
+
+  /**
+   * Queues one action's logging: [encode] off the lane, [upload] on it. Both are children of the
+   * logging job, so [flushLogs] joins them; only [upload] counts toward [logUploadsInFlight].
+   */
+  internal fun queueActionLogs(encode: suspend () -> Unit, upload: suspend () -> Unit) {
+    loggingScope.launch(Dispatchers.Default) { encode() }
+    logUploadsInFlight.incrementAndGet()
+    loggingScope.launch { upload() }.invokeOnCompletion { logUploadsInFlight.decrementAndGet() }
+  }
+
+  /** Under [xyz.block.trailblaze.mcp.android.ondevice.rpc.DrainSessionRequest.DRAIN_TIMEOUT_MS]. */
+  private const val SESSION_END_FLUSH_TIMEOUT_MS = 1_500L
+
+  /**
    * Joins whatever the PREVIOUS action left in the log lane, from inside the current action.
    *
    * The deferred-flush gate ([ReplayCaptureOptions.DEFER_LOG_FLUSH_SYSPROP]) takes the join out of
@@ -74,6 +145,7 @@ object AccessibilityTrailRunner {
    * measured claim per run rather than an assumption.
    */
   private fun joinPreviousActionLogs() {
+    previousDispatchLeftLogsInFlight = false
     val pending = loggingJob.children.count()
     if (pending == 0) {
       Console.log("[deferred-log-flush] join pending=0 joinedMs=0")
@@ -136,7 +208,9 @@ object AccessibilityTrailRunner {
       // action's gesture, where they have already had a full action to finish — instead of in
       // front of this action's reply. Before this action queues its own logs, so the lane never
       // holds more than one action's worth.
-      if (ReplayCaptureOptions.deferLogFlushEnabled()) {
+      if (ReplayCaptureOptions.deferLogFlushEnabled(dispatchHostDrainsBeforeSessionEnd) ||
+        previousDispatchLeftLogsInFlight
+      ) {
         joinPreviousActionLogs()
       }
 
@@ -176,48 +250,60 @@ object AccessibilityTrailRunner {
     // the logging job (so `flushLogs` joins it) but runs off the lane, which bounds the bitmap's
     // life to the encode itself. `screenshotBytes` is `lazy`, so the encode still happens exactly
     // once no matter which of the two coroutines reaches it first.
-    loggingScope.launch(Dispatchers.Default) {
-      try {
-        val encoded = screenState.screenshotBytes
-        ActionTrace.markWith(ActionTrace.Boundary.SHOT_ENCODED, (encoded?.size ?: 0).toLong())
-      } catch (e: Exception) {
-        Console.log("Eager screenshot encode failed: ${e.message}")
-      }
-    }
-    loggingScope.launch {
-      try {
-        val screenshotFilename = if (screenState.screenshotBytes?.isNotEmpty() == true) {
-          trailblazeLogger.logScreenState(session, screenState)
-        } else {
-          null
+    queueActionLogs(
+      encode = {
+        try {
+          val encoded = screenState.screenshotBytes
+          ActionTrace.markWith(ActionTrace.Boundary.SHOT_ENCODED, (encoded?.size ?: 0).toLong())
+        } catch (e: Exception) {
+          Console.log("Eager screenshot encode failed: ${e.message}")
         }
-        ActionTrace.mark(ActionTrace.Boundary.SHOT_UPLOADED)
+      },
+      upload = { uploadActionLogs(trailblazeLogger, session, screenState, driverAction, durationMs, timestamp, traceId) },
+    )
+  }
 
-        val log =
-          TrailblazeLog.AgentDriverLog(
-            viewHierarchy = screenState.viewHierarchy,
-            trailblazeNodeTree = screenState.trailblazeNodeTree,
-            // Migration-mode side tree (see MigrationScreenState). Carried on every log
-            // type with `trailblazeNodeTree` so migrate-trail's cursor-scan fallback
-            // produces accessibility-shape selectors regardless of which log it lands on.
-            driverMigrationTreeNode =
-              (screenState as? xyz.block.trailblaze.api.MigrationScreenState)
-                ?.driverMigrationTreeNode,
-            screenshotFile = screenshotFilename,
-            action = driverAction,
-            captureCoverage = screenState.captureCoverage,
-            durationMs = durationMs,
-            timestamp = timestamp,
-            session = session.sessionId,
-            deviceWidth = screenState.deviceWidth,
-            deviceHeight = screenState.deviceHeight,
-            traceId = traceId,
-          )
-        trailblazeLogger.log(session, log)
-        ActionTrace.mark(ActionTrace.Boundary.DRIVER_LOG_UPLOADED)
-      } catch (e: Exception) {
-        Console.log("Async logging failed: ${e.message}")
+  private suspend fun uploadActionLogs(
+    trailblazeLogger: TrailblazeLogger,
+    session: TrailblazeSession,
+    screenState: ScreenState,
+    driverAction: AgentDriverAction,
+    durationMs: Long,
+    timestamp: kotlinx.datetime.Instant,
+    traceId: TraceId?,
+  ) {
+    try {
+      val screenshotFilename = if (screenState.screenshotBytes?.isNotEmpty() == true) {
+        trailblazeLogger.logScreenState(session, screenState)
+      } else {
+        null
       }
+      ActionTrace.mark(ActionTrace.Boundary.SHOT_UPLOADED)
+
+      val log =
+        TrailblazeLog.AgentDriverLog(
+          viewHierarchy = screenState.viewHierarchy,
+          trailblazeNodeTree = screenState.trailblazeNodeTree,
+          // Migration-mode side tree (see MigrationScreenState). Carried on every log
+          // type with `trailblazeNodeTree` so migrate-trail's cursor-scan fallback
+          // produces accessibility-shape selectors regardless of which log it lands on.
+          driverMigrationTreeNode =
+            (screenState as? xyz.block.trailblaze.api.MigrationScreenState)
+              ?.driverMigrationTreeNode,
+          screenshotFile = screenshotFilename,
+          action = driverAction,
+          captureCoverage = screenState.captureCoverage,
+          durationMs = durationMs,
+          timestamp = timestamp,
+          session = session.sessionId,
+          deviceWidth = screenState.deviceWidth,
+          deviceHeight = screenState.deviceHeight,
+          traceId = traceId,
+        )
+      trailblazeLogger.log(session, log)
+      ActionTrace.mark(ActionTrace.Boundary.DRIVER_LOG_UPLOADED)
+    } catch (e: Exception) {
+      Console.log("Async logging failed: ${e.message}")
     }
   }
 
@@ -266,7 +352,7 @@ object AccessibilityTrailRunner {
         AgentDriverAction.Scroll(forward = false)
 
       is AccessibilityAction.InputText ->
-        AgentDriverAction.EnterText(text = action.text)
+        AgentDriverAction.EnterText(text = action.text, hideKeyboardAfter = action.hideKeyboardAfter)
 
       is AccessibilityAction.EraseText ->
         AgentDriverAction.EraseText(characters = action.characters)

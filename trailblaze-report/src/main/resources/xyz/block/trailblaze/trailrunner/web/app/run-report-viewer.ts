@@ -1244,6 +1244,12 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     // Lenient about the value like the legacy report was — `?autoplay` and `?autoplay=1` both fire.
     return !!search && search.split('&').some((pair) => pair === 'autoplay' || pair.indexOf('autoplay=') === 0);
   })();
+  // `?autoplay=step` is the frame-stepped variant `--gif/--webp` drive: nothing plays on its own.
+  // The document exposes `globalThis.__tbExport = { totalMs, eventMs, renderAt(ms) }` instead, and
+  // the exporter asks for each frame's instant in turn, screenshotting once renderAt's promise settles.
+  // A real-time recorder samples whatever the page happens to show, so a recording that seeks
+  // slower than the shutter froze in the artifact; stepping waits for every frame to be decoded.
+  const AUTOPLAY_STEPPED = AUTOPLAY && String(location.search || '').replace(/^\?/, '').split('&').includes('autoplay=step');
   let playbackEndSignaled = false;
   const signalPlaybackEnded = () => {
     if (playbackEndSignaled) return; // the recorder stops on the first true; a second is a no-op anyway
@@ -8274,6 +8280,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     if (!playbackEntries.length) {
       st.playing = false;
       render(true);
+      if (AUTOPLAY_STEPPED) exposeExportStepper(0, [], () => ({ done: true }));
       if (AUTOPLAY) signalPlaybackEnded();
       return;
     }
@@ -8314,7 +8321,9 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     let playInFlight = false;
     let playRefused = false;
     const detached = (el: Element | null) => !!el && !el.isConnected;
-    timelinePlaybackStop = startPlaybackLoop(() => 1, (elapsed) => {
+    // Paints playback position `playMs` in place and returns it. Shared by the real-time loop below
+    // and the frame-stepped export (exposeExportStepper), so both draw a given instant identically.
+    const paintAt = (playMs: number) => {
       // The held paint targets can go stale two ways: a stray mid-playback re-render replaces the
       // whole DOM, and the clip's duration arriving swaps just the pane from screenshots onto the
       // recording (repaintForClip) while the scrub head stays connected. Re-grab on either, or
@@ -8322,7 +8331,6 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       if (detached(els.head) || detached(els.clip) || (!els.clip && document.getElementById('tlvclip'))) {
         els = grab();
       }
-      const playMs = startMs + elapsed;
       const pos = playbackPositionAt(schedule, playMs);
       if (pos.stepIndex !== lastIndex) {
         lastIndex = pos.stepIndex;
@@ -8348,6 +8356,10 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
           if (els.next) els.next.disabled = pos.stepIndex >= playbackEntries.length - 1;
         }
       }
+      // A step on another device's recording just rebuilt the pane (paintTimelinePane) around a
+      // new <video>. Re-grab before syncing, or this paint seeks the detached element and the new
+      // one sits at time zero until the next tick — which a stepped export never gets.
+      if (els.clip !== document.getElementById('tlvclip')) els = grab();
       // On the real run clock the recording plays ITSELF and is only corrected when it drifts.
       // Seeking every animation frame is what makes scrubbed video stutter — each seek throws away
       // the decode pipeline — so the element runs free and this only intervenes past the tolerance.
@@ -8355,7 +8367,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       //
       // The EXPORT schedule is the exception: it compresses idle gaps, so its clock jumps and there
       // is no rate the element could play at to follow it. There the position is set outright, once
-      // per tick, which is also what the ~5fps export shutter wants.
+      // per tick, which is also what the frame-stepped exporter needs.
       if (els.clip && pos.clockMs != null) {
         const clip = tlClip();
         const want = tlClipTimeAt(pos.clockMs);
@@ -8386,9 +8398,95 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
         const f = pos.clockMs != null ? axis.tsFrac(pos.clockMs) : axis.stepFrac[selectedEntryIndex()];
         if (f != null) els.head.style.left = `${f * 100}%`;
       }
+      return pos;
+    };
+    if (AUTOPLAY_STEPPED) {
+      exposeExportStepper(schedule.totalMs, schedule.offsets, (playMs) => {
+        const pos = paintAt(playMs);
+        if (pos.done) endTimelinePlayback();
+        return pos;
+      });
+      return;
+    }
+    timelinePlaybackStop = startPlaybackLoop(() => 1, (elapsed) => {
+      const pos = paintAt(startMs + elapsed);
       if (pos.done) { endTimelinePlayback(); if (AUTOPLAY) signalPlaybackEnded(); return false; }
       return true;
     });
+  };
+  // How long a frame-stepped export waits on the recording before shooting the frame anyway. A seek
+  // on a healthy clip settles in tens of ms; this only bounds a broken file, so one bad seek costs
+  // the export a second instead of hanging it.
+  const EXPORT_FRAME_SETTLE_MAX_MS = 1000;
+  // Calls `done(waited)` once the recording the pane wants has a known duration. Until the probe
+  // answers, the pane shows a screenshot where the recording belongs (repaintForClip swaps it in
+  // later), so a frame shot now would show the wrong surface. An unreadable file never gets a
+  // duration; its screenshot is the right frame, so that settles at once.
+  const whenExportClipKnown = (done: (waited: boolean) => void, deadline: number, waited = false) => {
+    if (tlClip() && tlClipDuration() == null && !clipUnplayable[tlClipKey()] && performance.now() < deadline) {
+      setTimeout(() => whenExportClipKnown(done, deadline, true), 20);
+      return;
+    }
+    done(waited);
+  };
+  // Calls `done` once the pane's recording element has the frame at the position it was seeked to:
+  // the seek has completed and that frame is decoded. Capped at `deadline`, and a pane with no
+  // recording settles at once. Compositing is left to the two animation frames renderAt waits
+  // after this: headless Chromium draws a seeked frame by then, while requestVideoFrameCallback
+  // often never fires for a paused seek, so waiting on it only burned the deadline on most frames.
+  // That is observed Chromium behavior, not a guarantee: after a Playwright/Chromium upgrade,
+  // re-check that a stepped export's frames match one captured with a requestVideoFrameCallback wait.
+  const whenExportClipSettled = (done: () => void, deadline: number) => {
+    const vid = document.getElementById('tlvclip') as HTMLVideoElement | null;
+    // `readyState`/`seeking` are the element's own account of whether the frame at currentTime is
+    // decoded; HAVE_CURRENT_DATA (2) is the first state that has one.
+    const ready = () => !vid || (!vid.seeking && (typeof vid.readyState !== 'number' || vid.readyState >= 2));
+    if (ready()) { done(); return; }
+    const events = ['seeked', 'loadeddata', 'canplay', 'error'];
+    let finished = false;
+    let timer = null;
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      if (timer != null) clearTimeout(timer);
+      events.forEach((type) => vid.removeEventListener(type, check));
+      done();
+    };
+    const check = () => { if (ready()) finish(); };
+    events.forEach((type) => vid.addEventListener(type, check));
+    timer = setTimeout(finish, Math.max(0, deadline - performance.now()));
+  };
+  // Publishes the frame-stepped export hook (see AUTOPLAY_STEPPED). `eventMs` is the playback
+  // instant each timeline entry starts at — the rail's tick marks — so the exporter can put a
+  // frame exactly on every one: a frame taken off a fixed grid lands up to a whole interval after
+  // the step it is meant to show, and in a compressed gap that interval is seconds of recording.
+  // renderAt paints the instant, waits for the recording to present it, then two animation frames
+  // so the compositor has drawn everything the paint changed, and resolves with whether playback
+  // has reached its end. The end also raises `__tbPlaybackEnded`, the same signal the real-time
+  // exporters stop on.
+  const exposeExportStepper = (totalMs: number, eventMs: number[], paint: (playMs: number) => { done: boolean }) => {
+    const afterPaint = (cb: () => void) => {
+      if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => requestAnimationFrame(() => cb()));
+      else cb();
+    };
+    (globalThis as Record<string, unknown>).__tbExport = {
+      totalMs,
+      eventMs: eventMs.slice(),
+      renderAt: (playMs: number) => new Promise<boolean>((resolve) => {
+        const at = Math.max(0, Number(playMs) || 0);
+        const deadline = performance.now() + EXPORT_FRAME_SETTLE_MAX_MS;
+        let { done } = paint(at);
+        whenExportClipKnown((waited) => {
+          // The pane only just moved onto the recording, and that element was never seeked: paint
+          // the same instant again so it is. (The end render has already landed; leave it be.)
+          if (waited && !done) done = paint(at).done;
+          whenExportClipSettled(() => afterPaint(() => {
+            if (done) signalPlaybackEnded();
+            resolve(done);
+          }), deadline);
+        }, deadline);
+      }),
+    };
   };
   // The `?autoplay=1` entry point: land on the timeline of the first run, at its first step, and
   // play through to the end without a click. Runs once the document is COMPLETE — a chunked report
@@ -8398,7 +8496,12 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   const startExportAutoplay = () => {
     if (st.view !== 'detail') openSession(0); // multi-run documents land on the index; capture is per-run
     st.tab = 'timeline';
-    if (!D.trace.length) { render(true); signalPlaybackEnded(); return; }
+    if (!D.trace.length) {
+      render(true);
+      if (AUTOPLAY_STEPPED) exposeExportStepper(0, [], () => ({ done: true }));
+      signalPlaybackEnded();
+      return;
+    }
     st.step = D.trace[0].i;
     revealTimelineStep(st.step);
     st.playing = true;

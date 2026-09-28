@@ -68,6 +68,7 @@ class TrailblazeAccessibilityService : AccessibilityService() {
     // a debug session where someone disables and re-enables the service would never see
     // the fallback warning twice — even if the second bind is also broken.
     windowsFallbackLogged.set(false)
+    lastStableTree = null
     val intent = Intent().apply { action = ACTION_SERVICE_READY }
     applicationContext.sendBroadcast(intent)
   }
@@ -83,6 +84,7 @@ class TrailblazeAccessibilityService : AccessibilityService() {
     when (event.eventType) {
       AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
         lastUiEventTimestampMs = Clock.System.now().toEpochMilliseconds()
+        uiEventCount.incrementAndGet()
         // Track the foreground activity class from window state changes — but ONLY when the
         // event is confirmed to come from a TYPE_APPLICATION window. IMEs, System UI,
         // toasts, and accessibility overlays all fire TYPE_WINDOW_STATE_CHANGED with their
@@ -101,6 +103,13 @@ class TrailblazeAccessibilityService : AccessibilityService() {
         // TYPE_VIEW_CLICKED is the only settle signal canvas widgets emit on the ACTION_CLICK
         // route (ExploreByTouchHelper virtual views) — gesture-path clicks emit nothing.
         lastUiEventTimestampMs = Clock.System.now().toEpochMilliseconds()
+        uiEventCount.incrementAndGet()
+      }
+      AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED -> {
+        // Not a settle signal, but the stability signature reads only a text's length, so an
+        // equal-length edit is invisible to it. Counting it keeps [StableTreeMemo] from reusing
+        // a verdict across the edit.
+        uiEventCount.incrementAndGet()
       }
     }
   }
@@ -156,6 +165,25 @@ class TrailblazeAccessibilityService : AccessibilityService() {
      * threads (settle detection).
      */
     @Volatile internal var lastUiEventTimestampMs: Long = 0L
+
+    /**
+     * How many events have moved [lastUiEventTimestampMs]. A count rather than the timestamp,
+     * because two events in the same millisecond must still read as a change.
+     */
+    private val uiEventCount = AtomicLong(0)
+
+    /** See [StableTreeMemo]. Cleared on every service bind and by [forgetStableTree]. */
+    @Volatile private var lastStableTree: StableTreeMemo<CaptureCoverage>? = null
+
+    /**
+     * Drops the remembered stable tree, so the next capture waits out the full quiet window. Called
+     * before the driver dispatches input: an action's effect can reach the tree before any event
+     * reports it (gesture clicks raise none, and content events are throttled), and the capture
+     * straight after an action is the one the settle gate exists for.
+     */
+    fun forgetStableTree() {
+      lastStableTree = null
+    }
 
     /** The class name of the current foreground activity, tracked from accessibility events. */
     @Volatile internal var currentActivityClass: String? = null
@@ -877,8 +905,19 @@ class TrailblazeAccessibilityService : AccessibilityService() {
               )
             }
           }
+          val uiEventCountBeforeSample = uiEventCount.get()
           var sample = sampleTree(root)
           val now = SystemClock.uptimeMillis()
+          if (previousSignature == null) {
+            val reused = lastStableTree.reusableFor(sample.signature, uiEventCountBeforeSample, uiEventCount.get())
+            if (reused != null) {
+              Console.log("[settle] tree unchanged since it was last proven stable; no UI events since")
+              return reused
+            }
+            // Something moved since the proof. A looping animation can come back to the proven
+            // frame on a later capture, so the proof must not outlive this mismatch.
+            lastStableTree = null
+          }
           if (sample.signature != previousSignature) {
             previousSignature = sample.signature
             lastChangeUptimeMs = now
@@ -900,6 +939,7 @@ class TrailblazeAccessibilityService : AccessibilityService() {
             }
             if (!assessment.looksTruncated) {
               Console.log("[settle] tree stable after ${now - startUptimeMs}ms")
+              lastStableTree = StableTreeMemo(sample.signature, uiEventCountBeforeSample, assessment)
               return assessment
             }
             if (!loggedTruncated) {
@@ -1775,13 +1815,20 @@ class TrailblazeAccessibilityService : AccessibilityService() {
      * accessibility service. Going through [InstrumentationUtil.withUiAutomation] is how this
      * path guarantees the flag (and the shared stale-handle recovery) without re-deriving the
      * signature list or reflection logic here.
+     *
+     * [onGrabOrdered] runs once nothing can overtake the grab: holding the UiAutomation lock, so a
+     * shell-dispatched action queues behind the grab, or after the native fallback has its frame,
+     * since that path first sleeps out its rate limit. It may run more than once.
      */
-    fun captureScreenshot(): Bitmap? = TrailblazeTracer.traceDetail(
+    fun captureScreenshot(onGrabOrdered: () -> Unit = {}): Bitmap? = TrailblazeTracer.traceDetail(
       "captureScreenshot",
       ACCESSIBILITY_TRACE_CAT,
     ) {
       try {
-        InstrumentationUtil.withUiAutomation { takeScreenshot() }
+        InstrumentationUtil.withUiAutomation {
+          onGrabOrdered()
+          takeScreenshot()
+        }
       } catch (e: Exception) {
         Console.log(
           "captureScreenshot: UiAutomation unavailable (${e.message}), " +
@@ -1792,7 +1839,7 @@ class TrailblazeAccessibilityService : AccessibilityService() {
         TrailblazeTracer.traceDetail("captureScreenshot.nativeFallback", ACCESSIBILITY_TRACE_CAT) {
           captureScreenshotNativeBlocking()
         }
-      }
+      }.also { onGrabOrdered() }
     }
 
     /**

@@ -31,7 +31,16 @@ class HostTrailblazeLoggingRule(
    * standalone test harnesses that need reactive session updates).
    */
   watchFileSystem: Boolean = false,
-  val logsRepo: LogsRepo = LogsRepo(resolveLogsDir(logsDir), readOnly = noLogging, watchFileSystem = watchFileSystem),
+  // `primeSessionCache = false`: this repo writes one run's logs. Priming parsed every session in
+  // the logs dir first — every screen tree of every past run — and a host-driven CLI tool call
+  // builds one of these per call, so each iOS or web `trailblaze tool` paid seconds that grew with
+  // the logs dir. Nothing reads the primed cache; the daemon's own repo serves the session list.
+  val logsRepo: LogsRepo = LogsRepo(
+    resolveLogsDir(logsDir),
+    readOnly = noLogging,
+    watchFileSystem = watchFileSystem,
+    primeSessionCache = false,
+  ),
 ) : TrailblazeLoggingRule(
   logsBaseUrl = logsBaseUrl,
   additionalLogEmitter = additionalLogEmitter,

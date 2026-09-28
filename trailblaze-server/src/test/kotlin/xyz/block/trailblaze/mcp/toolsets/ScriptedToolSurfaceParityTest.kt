@@ -5,6 +5,8 @@ import xyz.block.trailblaze.mcp.executor.DirectMcpToolExecutor
 import xyz.block.trailblaze.toolcalls.ToolName
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSetCatalog
 import xyz.block.trailblaze.toolcalls.allToolNames
+import xyz.block.trailblaze.toolcalls.toolName
+import xyz.block.trailblaze.toolcalls.trailblazeToolClassAnnotation
 import kotlin.test.Test
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
@@ -69,7 +71,13 @@ class ScriptedToolSurfaceParityTest {
       .map { it.name }
       .toSet()
 
-    val missing = resolved.allToolNames.map { it.toolName }.toSet() - advertised
+    // A class-backed tool marked `surfaceToLlm = false` (e.g. the deprecated `launchApp`) is resolved
+    // for dispatch but deliberately never advertised.
+    val hidden = resolved.toolClasses
+      .filterNot { it.trailblazeToolClassAnnotation().surfaceToLlm }
+      .map { it.toolName().toolName }
+      .toSet()
+    val missing = resolved.allToolNames.map { it.toolName }.toSet() - hidden - advertised
     assertTrue(
       missing.isEmpty(),
       "DirectMcpToolExecutor must advertise every resolved tool (class/YAML/scripted). Missing: $missing",

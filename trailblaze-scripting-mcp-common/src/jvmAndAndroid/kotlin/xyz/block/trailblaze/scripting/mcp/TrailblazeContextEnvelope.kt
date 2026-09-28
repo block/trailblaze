@@ -49,6 +49,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
  *     widthPixels: number;
  *     heightPixels: number;
  *     driverType: string;
+ *     instanceId: string; // emulator serial / simulator UDID — what host CLIs name the device by
  *   };
  *   target?: {
  *     id: string;
@@ -271,6 +272,8 @@ object TrailblazeContextEnvelope {
       put("widthPixels", device.widthPixels)
       put("heightPixels", device.heightPixels)
       put("driverType", device.trailblazeDriverType.yamlKey)
+      // What `adb -s` / `xcrun simctl` need, so a tool composing `exec` can name this device.
+      put("instanceId", device.trailblazeDeviceId.instanceId)
     }
   }
 }

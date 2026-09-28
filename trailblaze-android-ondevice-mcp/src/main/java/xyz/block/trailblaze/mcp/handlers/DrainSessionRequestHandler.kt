@@ -34,18 +34,20 @@ import xyz.block.trailblaze.util.Console
 class DrainSessionRequestHandler(
   /**
    * The driver's own teardown for a drained device — the accessibility runner releases the
-   * scripted-tool bundles it keeps alive across a session's dispatches. Failures are logged and
-   * never fail the drain.
+   * scripted-tool bundles it keeps alive across a session's dispatches. Returns how many log
+   * uploads it left pending (see [DrainSessionResponse.logUploadsLeftPending]). Failures are logged
+   * and never fail the drain.
    */
-  private val onDrain: () -> Unit = {},
+  private val onDrain: () -> Int = { 0 },
 ) : RpcHandler<DrainSessionRequest, DrainSessionResponse> {
 
   override suspend fun handle(request: DrainSessionRequest): RpcResult<DrainSessionResponse> {
     Console.log("🔌 DrainSessionRequestHandler: draining (reason=${request.reason})")
-    try {
+    val logUploadsLeftPending = try {
       onDrain()
     } catch (t: Throwable) {
       Console.log("❌ DrainSessionRequestHandler: onDrain threw ${t::class.java.simpleName}: ${t.message}")
+      0
     }
     val cleared = try {
       InstrumentationUtil.clearInstrumentationUiAutomationCache()
@@ -57,6 +59,8 @@ class DrainSessionRequestHandler(
       false
     }
     Console.log("🔌 DrainSessionRequestHandler: drain complete (uiAutomationCleared=$cleared)")
-    return RpcResult.Success(DrainSessionResponse(uiAutomationCleared = cleared))
+    return RpcResult.Success(
+      DrainSessionResponse(uiAutomationCleared = cleared, logUploadsLeftPending = logUploadsLeftPending),
+    )
   }
 }

@@ -14,6 +14,7 @@ import xyz.block.trailblaze.android.AndroidTrailblazeRule
 import xyz.block.trailblaze.android.BaseAndroidStandaloneServerTest
 import xyz.block.trailblaze.android.InstrumentationArgUtil
 import xyz.block.trailblaze.android.OnDeviceOpenAICompatibleLlmClientFactory
+import xyz.block.trailblaze.android.accessibility.AccessibilityTrailRunner
 import xyz.block.trailblaze.android.accessibility.OnDeviceAccessibilityServiceSetup
 import xyz.block.trailblaze.android.accessibility.ScriptedToolBundleReuse
 import xyz.block.trailblaze.android.devices.TrailblazeAndroidOnDeviceClassifier
@@ -164,8 +165,13 @@ class AndroidStandaloneServerTest : BaseAndroidStandaloneServerTest() {
       screenStateCaptor = AccessibilityScreenStateCaptor,
       waitForSettled = AccessibilitySettleGate::waitForSettled,
       deviceClassifiers = getDeviceClassifiers(),
-      // The host is tearing the connection down, so no session on it dispatches again.
-      onDrain = { ScriptedToolBundleReuse.releaseAll() },
+      // The host is tearing the connection down, so no session on it dispatches again. It may be
+      // about to end the session too, so the last dispatch's log uploads land first.
+      onDrain = {
+        val logUploadsLeftPending = AccessibilityTrailRunner.flushLogsBeforeSessionEnd()
+        ScriptedToolBundleReuse.releaseAll()
+        logUploadsLeftPending
+      },
     )
     onDeviceRpcServer.startServer(port = onDeviceRpcPort, wait = true)
   }

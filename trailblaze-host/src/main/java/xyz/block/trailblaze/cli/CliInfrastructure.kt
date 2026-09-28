@@ -2101,6 +2101,8 @@ internal fun buildContentDriftBanner(anchor: String): List<String> {
   return out
 }
 
+private val cwdContentHasher = WorkspaceContentHasher.Reusing()
+
 /**
  * Compute the cwd workspace's content hash using the same algorithm the daemon
  * captures at startup. Walks every non-excluded file under `<configDir>/` —
@@ -2108,10 +2110,14 @@ internal fun buildContentDriftBanner(anchor: String): List<String> {
  * the daemon would have to be restarted to pick up shows up as a different hash
  * here. Returns null when the configDir is unreadable; we skip the drift check
  * rather than fire a noisy warning.
+ *
+ * Reuses the previous hash while no file's size or modification time has moved: the daemon runs
+ * this for every command a CLI forwards to it, and re-reading the whole workspace each time cost
+ * more than the command's own setup.
  */
 private fun computeCwdContentHash(anchorFile: File): String? = try {
   val configDir = anchorFile.parentFile ?: return null
-  WorkspaceContentHasher.compute(configDir, TrailblazeVersion.version)
+  cwdContentHasher.compute(configDir, TrailblazeVersion.version)
 } catch (_: Exception) {
   null
 }

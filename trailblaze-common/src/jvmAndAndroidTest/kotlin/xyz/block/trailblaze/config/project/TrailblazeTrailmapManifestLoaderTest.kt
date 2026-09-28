@@ -522,6 +522,43 @@ class TrailblazeTrailmapManifestLoaderTest {
   }
 
   @Test
+  fun `bundled ios library trailmap loads and owns the ios primitive tools`() {
+    // The iOS counterpart of the `android` library trailmap below: target-less, owning the
+    // `ios_*` trailhead building blocks via `ios_primitives`, so the prefix-equals-trailmap-id rule
+    // holds for them.
+    val trailmapUrl = checkNotNull(
+      javaClass.classLoader.getResource("trails/config/trailmaps/ios/trailmap.yaml"),
+    )
+    val tempDir = createTempDirectory("trailmap-loader-test").toFile()
+    try {
+      val trailmapFile = File(tempDir, "trailmap.yaml").apply { writeText(trailmapUrl.readText()) }
+      val manifest = TrailblazeTrailmapManifestLoader.load(trailmapFile).manifest
+
+      assertEquals("ios", manifest.id)
+      assertEquals(null, manifest.target)
+      val platforms = checkNotNull(manifest.platforms)
+      assertEquals(setOf("ios"), platforms.keys)
+      assertEquals(listOf("ios_primitives"), platforms["ios"]?.toolSets)
+
+      val toolsetUrl = checkNotNull(
+        javaClass.classLoader.getResource("trails/config/trailmaps/ios/toolsets/ios_primitives.yaml"),
+      )
+      val toolset = TrailblazeConfigYaml.instance.decodeFromString(
+        ToolSetYamlConfig.serializer(),
+        toolsetUrl.readText(),
+      )
+      assertEquals("ios_primitives", toolset.id)
+      assertEquals(listOf("ios_grantPrivacy", "ios_terminate"), toolset.tools)
+      // Always-enabled for the same reason as android_primitives: nothing activates a toolset the
+      // LLM cannot see, so a trailhead's first `ctx.tools.ios_*` callback would otherwise fail.
+      assertTrue(toolset.alwaysEnabled)
+      assertEquals(listOf("ios-host", "ios-axe"), toolset.drivers)
+    } finally {
+      tempDir.deleteRecursively()
+    }
+  }
+
+  @Test
   fun `bundled android library trailmap loads and owns the android primitive tools`() {
     // Pins the `android` library trailmap (parallel to the `mobile` trailmap above, see
     // PR #3451) as a target-less manifest that owns the Android framework `android_*`
@@ -574,6 +611,7 @@ class TrailblazeTrailmapManifestLoaderTest {
         listOf(
           "android_adbShell",
           "android_ensureAppCompiled",
+          "android_forceStop",
           "android_grantAppOpsPermission",
           "android_grantPermissions",
           "android_sendBroadcast",

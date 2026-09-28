@@ -6,11 +6,16 @@ import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionStatus
 import java.io.File
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertIs
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.hours
 
 /**
  * Pins the disk-truth read the CLI run handler relies on: when a session's terminal `Ended`
@@ -169,5 +174,100 @@ class LogsRepoDiskTruthTest {
       written.name.endsWith("_TrailblazeSessionStatusChangeLog.json"),
       "driver-log files must not be read by the guard; got ${written.name}",
     )
+  }
+
+  @Test
+  fun `a failed finalization can fail a succeeded end, and nothing else can replace an end`() {
+    val logsDir = tempLogsDir()
+    val logsRepo = LogsRepo(logsDir, watchFileSystem = false)
+    val passed = SessionId("session-passed-then-finalization-failed")
+    val cancelled = SessionId("session-cancelled-then-finalization-failed")
+    writeEndedLogToDisk(logsDir, passed)
+    logsRepo.saveLogToDisk(
+      TrailblazeLog.TrailblazeSessionStatusChangeLog(
+        sessionStatus = SessionStatus.Ended.Cancelled(durationMs = 5000L, cancellationMessage = "cancelled"),
+        session = cancelled,
+        timestamp = Clock.System.now(),
+      ),
+    )
+
+    assertTrue(logsRepo.failSucceededEnd(passed, "late failure", null))
+    assertFalse(logsRepo.failSucceededEnd(cancelled, "late failure", null))
+    // Once failed, the session's end is a failure, so a second replacement is refused too.
+    assertFalse(logsRepo.failSucceededEnd(passed, "late failure", null))
+
+    assertIs<SessionStatus.Ended.Failed>(logsRepo.getSessionInfoDirect(passed)?.latestStatus)
+    assertIs<SessionStatus.Ended.Cancelled>(logsRepo.getSessionInfoDirect(cancelled)?.latestStatus)
+  }
+
+  @Test
+  fun `a failed finalization sorts after a succeeded end stamped by a clock running ahead`() {
+    val logsDir = tempLogsDir()
+    val logsRepo = LogsRepo(logsDir, watchFileSystem = false)
+    val sessionId = SessionId("session-ended-on-a-fast-device-clock")
+    logsRepo.saveLogToDisk(
+      TrailblazeLog.TrailblazeSessionStatusChangeLog(
+        sessionStatus = SessionStatus.Ended.Succeeded(durationMs = 1234L),
+        session = sessionId,
+        timestamp = Clock.System.now() + 1.hours,
+      ),
+    )
+
+    assertTrue(logsRepo.failSucceededEnd(sessionId, "late failure", null))
+
+    assertIs<SessionStatus.Ended.Failed>(logsRepo.getSessionInfoDirect(sessionId)?.latestStatus)
+  }
+
+  @Test
+  fun `concurrent failed finalizations replace a succeeded end once`() {
+    val logsDir = tempLogsDir()
+    val logsRepo = LogsRepo(logsDir, watchFileSystem = false)
+    val sessionId = SessionId("session-failed-by-two-cleanups")
+    writeEndedLogToDisk(logsDir, sessionId)
+    val start = CountDownLatch(1)
+    val pool = Executors.newFixedThreadPool(8)
+    try {
+      val attempts = List(8) {
+        pool.submit<Boolean> {
+          start.await()
+          logsRepo.failSucceededEnd(sessionId, "late failure", null)
+        }
+      }
+      start.countDown()
+
+      assertEquals(1, attempts.count { it.get(60, TimeUnit.SECONDS) })
+    } finally {
+      pool.shutdownNow()
+    }
+  }
+
+  @Test
+  fun `a finalization failure before the end lands fails a succeeded end, but not a cancel`() {
+    val logsDir = tempLogsDir()
+    val logsRepo = LogsRepo(logsDir, watchFileSystem = false)
+    val passed = SessionId("session-device-end-lands-after-finalization")
+    val cancelled = SessionId("session-cancel-lands-after-finalization")
+
+    assertFalse(logsRepo.failSucceededEnd(passed, "late failure", null))
+    assertFalse(logsRepo.failSucceededEnd(cancelled, "late failure", null))
+    logsRepo.saveLogToDisk(
+      TrailblazeLog.TrailblazeSessionStatusChangeLog(
+        sessionStatus = SessionStatus.Ended.Succeeded(durationMs = 1234L),
+        session = passed,
+        timestamp = Clock.System.now() + 1.hours,
+      ),
+    )
+    logsRepo.saveLogToDisk(
+      TrailblazeLog.TrailblazeSessionStatusChangeLog(
+        sessionStatus = SessionStatus.Ended.Cancelled(durationMs = 5000L, cancellationMessage = "cancelled"),
+        session = cancelled,
+        timestamp = Clock.System.now(),
+      ),
+    )
+
+    val failed = assertIs<SessionStatus.Ended.Failed>(logsRepo.getSessionInfoDirect(passed)?.latestStatus)
+    assertEquals("late failure", failed.exceptionMessage)
+    assertEquals(1234L, failed.durationMs)
+    assertIs<SessionStatus.Ended.Cancelled>(logsRepo.getSessionInfoDirect(cancelled)?.latestStatus)
   }
 }

@@ -3,6 +3,8 @@ package xyz.block.trailblaze.host.rules
 import ai.koog.prompt.executor.clients.LLMClient
 import ai.koog.prompt.executor.model.PromptExecutor
 import assertk.assertThat
+import assertk.assertions.isEmpty
+import assertk.assertions.isEqualTo
 import assertk.assertions.isFalse
 import assertk.assertions.isTrue
 import java.io.File
@@ -15,9 +17,11 @@ import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.host.NoOpPageManager
 import xyz.block.trailblaze.http.DynamicLlmClient
+import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeSession
 import xyz.block.trailblaze.logs.model.SessionId
+import xyz.block.trailblaze.logs.model.SessionStatus
 
 /**
  * Pins that a `--no-logging` run writes no session files, on the two host rules the runner's
@@ -118,6 +122,33 @@ class HostRuleNoLoggingTest {
     }
     assertThat(emitted).isFalse()
     assertThat(sessionArtifacts(rule, logsDir)).isFalse()
+  }
+
+  /**
+   * A run's rule only writes its own session, and host-driven CLI tool calls build one per call, so
+   * reading every past session at construction made each call cost more as the logs dir grew.
+   */
+  @Test
+  fun `building a run's rule reads none of the sessions already in the logs dir`() {
+    val logsDir = tempFolder.newFolder("host-existing-sessions")
+    listOf("earlier-run-a", "earlier-run-b").forEach { id ->
+      // A status log, because a session summary is built from one: without it a primed repo
+      // would also list nothing, and the assertion below could not tell the two apart.
+      val ended: TrailblazeLog = TrailblazeLog.TrailblazeSessionStatusChangeLog(
+        sessionStatus = SessionStatus.Ended.Succeeded(durationMs = 1_000L),
+        session = SessionId(id),
+        timestamp = Clock.System.now(),
+      )
+      File(logsDir, id).apply { mkdirs() }.resolve("0_TrailblazeSessionStatusChangeLog.json")
+        .writeText(TrailblazeJsonInstance.encodeToString(ended))
+    }
+
+    val rule = hostRule(logsDir, noLogging = false)
+
+    assertThat(rule.logsRepo.sessionInfoFlow.value).isEmpty()
+    // Still a working repo for this run: it lists what is there and writes its own session.
+    assertThat(rule.logsRepo.getSessionIds().size).isEqualTo(2)
+    assertThat(sessionArtifacts(rule, logsDir)).isTrue()
   }
 
   @Test

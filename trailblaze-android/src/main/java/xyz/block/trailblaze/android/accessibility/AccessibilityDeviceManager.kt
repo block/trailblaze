@@ -182,7 +182,7 @@ class AccessibilityDeviceManager(
       // (via [getScreenState]/[waitForReady]) keep the stability gate in both modes.
       awaitStableTree = !InProcessIdleSettleClient.isEnabled(),
       // Only the WAIT for the screenshot moves off this capture's critical path; the shot is still
-      // requested at the same instant. Defaults to turbo's state, and every non-logging caller
+      // requested at the same instant. On by default, and every non-logging caller
       // keeps today's behaviour because they do not pass this at all. See [ReplayCaptureOptions].
       asyncScreenshotJoin = ReplayCaptureOptions.asyncLoggingScreenshot(),
     )
@@ -263,6 +263,7 @@ class AccessibilityDeviceManager(
         emptyMap()
       },
     ) {
+      TrailblazeAccessibilityService.forgetStableTree()
       dispatchAction(action)
     }
   }
@@ -512,6 +513,7 @@ class AccessibilityDeviceManager(
   private fun executeInputText(action: AccessibilityAction.InputText): ExecutionResult {
     val nodeSelector = action.nodeSelector ?: run {
       inputText(action.text)
+      if (action.hideKeyboardAfter) hideKeyboardAfterTyping(::hideKeyboard)
       return ExecutionResult()
     }
     val focused = focusOnElement(nodeSelector, action.timeoutMs)
@@ -522,6 +524,7 @@ class AccessibilityDeviceManager(
           "preceding inputText log line for which recovery path gave up.",
       )
     }
+    if (action.hideKeyboardAfter) hideKeyboardAfterTyping(::hideKeyboard)
     return focused
   }
 
@@ -1396,6 +1399,19 @@ internal sealed interface UnresolvedTapOutcome {
 }
 
 /** Decides which [UnresolvedTapOutcome] applies. Recorded coordinates win over `optional`. */
+/**
+ * Runs [hide] for an `inputText` that already typed its text, so a failed hide says the text went
+ * in. The type and the hide are one action and log one row, and without this that row would read
+ * as a failed type. The text itself is left out of the message: it may be a password.
+ */
+internal fun hideKeyboardAfterTyping(hide: () -> Unit) {
+  try {
+    hide()
+  } catch (e: IllegalStateException) {
+    error("The text was typed, but closing the keyboard afterwards failed: ${e.message}")
+  }
+}
+
 internal fun planUnresolvedTapOutcome(
   action: AccessibilityAction.TapOnElement,
 ): UnresolvedTapOutcome {

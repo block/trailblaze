@@ -381,6 +381,9 @@ abstract class TrailblazeDesktopApp(
     val completionLatch = CountDownLatch(1)
     var success = false
     var errorMessage: String? = null
+    // A passed trail whose session could not be finalized: kept apart from errorMessage because
+    // the on-disk end overrides a connect/teardown error, and must not override this.
+    var finalizationError: String? = null
     // An AtomicReference, not a captured `var`: the session poll below reads this from the
     // handler's coroutine while the runner writes it from its own thread, and the read is no
     // longer fenced by `completionLatch.await()`. `onConnectionStatus` can release that latch
@@ -460,7 +463,12 @@ abstract class TrailblazeDesktopApp(
         completionResult.set(result)
         when (result) {
           is TrailExecutionResult.Success -> success = true
-          is TrailExecutionResult.Failed -> errorMessage = result.errorMessage
+          is TrailExecutionResult.Failed -> {
+            errorMessage = result.errorMessage
+            if (result.sessionFinalizationFailed) {
+              finalizationError = result.errorMessage ?: "Session finalization failed"
+            }
+          }
           is TrailExecutionResult.Cancelled -> errorMessage = "Cancelled"
         }
         completionLatch.countDown()
@@ -551,6 +559,7 @@ abstract class TrailblazeDesktopApp(
       latchError = errorMessage,
       diskStatus = pinnedSessionInfo?.latestStatus,
       sessionDescription = pinnedSessionId.toString(),
+      finalizationError = finalizationError,
     )
     success = reconciled.success
     errorMessage = reconciled.error

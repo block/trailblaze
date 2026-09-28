@@ -199,7 +199,7 @@ class DeviceManagerToolSet(
     headless: Boolean? = null,
     @LLMDescription("For CREATE_WEB action: Playwright `devices` preset name (e.g. 'iPhone 14', 'Pixel 7', 'iPad Pro 11') OR raw '<width>x<height>' viewport like '375x812'. Sets the slot's viewport / emulation profile. Pass null to clear.")
     viewport: String? = null,
-    @LLMDescription("For INFO action: inspect only this MCP session's device binding. Internal CLI reuse probe; default false preserves the current process-wide device view.")
+    @LLMDescription("For INFO action: inspect only this MCP session's device binding, without the available-tools list. Internal CLI reuse probe; default false preserves the current process-wide device view.")
     sessionOnly: Boolean = false,
     @LLMDescription("For BIND and UNBIND actions: the name this session addresses the device by (e.g. 'seller', 'buyer'). switchDevice(name=…) uses the same names.")
     name: String? = null,
@@ -266,7 +266,9 @@ class DeviceManagerToolSet(
               appendLine()
               appendLine(describeNamedBindings(sessionContext))
             }
-            val toolSummary = buildAvailableToolsSummary(currentDeviceId)
+            // The session-only probe is read by the CLI for the header, driver status and roster,
+            // never the tool list, and building that list re-walks the target's tool catalog.
+            val toolSummary = if (sessionOnly) null else buildAvailableToolsSummary(currentDeviceId)
             if (toolSummary != null) {
               appendLine()
               append(toolSummary)

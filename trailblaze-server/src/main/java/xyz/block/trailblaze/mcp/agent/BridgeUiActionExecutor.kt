@@ -87,9 +87,9 @@ class BridgeUiActionExecutor(
     val startTime = System.currentTimeMillis()
 
     return try {
-      // Validate launchApp before executing
-      if (toolName == "launchApp") {
-        val validationError = validateLaunchApp(args)
+      // Validate app-opening tools before executing
+      if (toolName == "launchApp" || toolName == "openApp") {
+        val validationError = validateLaunchApp(toolName, args)
         if (validationError != null) {
           return ExecutionResult.Failure(
             error = validationError,
@@ -231,7 +231,7 @@ class BridgeUiActionExecutor(
   }
 
   /**
-   * Validates a launchApp request before execution.
+   * Validates a launchApp / openApp request before execution.
    *
    * Checks:
    * 1. App ID is provided
@@ -242,9 +242,9 @@ class BridgeUiActionExecutor(
    *
    * @return Error message if validation fails, null if valid
    */
-  private suspend fun validateLaunchApp(args: JsonObject): String? {
+  private suspend fun validateLaunchApp(toolName: String, args: JsonObject): String? {
     val appId = (args["appId"] as? JsonPrimitive)?.contentOrNull
-      ?: return "launchApp requires an 'appId' argument"
+      ?: return "$toolName requires an 'appId' argument"
 
     // Resolve display name → bundle ID for well-known iOS system apps
     // (e.g. "Contacts" → "com.apple.MobileAddressBook")

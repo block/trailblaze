@@ -273,12 +273,12 @@ class AccessibilityServiceScreenState(
         screenshotThread = thread(name = "tb-screenshot-capture") {
           if (captureSpanId != null) TraceSpanLocal.set(TraceSpanFrame(captureSpanId))
           shotRequestMs = System.currentTimeMillis()
-          requested.countDown()
           try {
-            _screenshotBitmap = TrailblazeAccessibilityService.captureScreenshot()
+            _screenshotBitmap = TrailblazeAccessibilityService.captureScreenshot(onGrabOrdered = requested::countDown)
           } catch (e: Exception) {
             Console.log("⚠️ Parallel screenshot capture failed: ${e.message}")
           }
+          requested.countDown()
           shotCompleteMs = System.currentTimeMillis()
         }
         pendingScreenshotThread = screenshotThread
@@ -302,13 +302,11 @@ class AccessibilityServiceScreenState(
       // first read of [screenshotBytes] joins it (see [awaitScreenshot]). The request was already
       // issued above, so the frame is unchanged — only who pays for waiting on it changes.
       if (asyncScreenshotJoin) {
-        // Only the WAIT for the frame moves off this capture's path. The REQUEST still has to be
-        // issued before the constructor returns, because the caller dispatches its gesture the
-        // moment it does — a thread that had not yet been scheduled would grab a POST-action frame
-        // and pair it with this pre-action tree. Waiting for the thread to reach the grab is
-        // scheduling latency, not the grab.
-        awaitScreenshotRequested()
-        screenshotThread = null
+        // Only the WAIT for the frame moves off this capture's path. The grab still has to be
+        // ordered before the constructor returns, because the caller dispatches its action the
+        // moment it does, and a grab behind it would pair a POST-action frame with this pre-action
+        // tree. If the barrier doesn't open in time, wait for the frame as the synchronous path does.
+        if (awaitScreenshotRequested()) screenshotThread = null
       }
       TrailblazeTracer.traceDetail("awaitScreenshotThread", SCREEN_STATE_TRACE_CAT) {
         screenshotThread?.join()
@@ -420,18 +418,19 @@ class AccessibilityServiceScreenState(
   }
 
   /**
-   * Blocks until the screenshot thread has reached its frame grab, which is the ordering barrier
-   * the deferred join depends on. Bounded by [SCREENSHOT_REQUEST_BARRIER_MS] and logged when it
-   * expires, so a pair that could be skewed says so rather than being assumed sound.
+   * Blocks until nothing the caller does next can overtake the screenshot thread's frame grab (see
+   * `captureScreenshot`'s `onGrabOrdered`), which is the ordering barrier the deferred join depends
+   * on. Returns false when [SCREENSHOT_REQUEST_BARRIER_MS] expires first, and the caller then waits
+   * for the frame instead.
    */
-  private fun awaitScreenshotRequested() {
-    val requested = screenshotRequested ?: return
-    if (!requested.await(SCREENSHOT_REQUEST_BARRIER_MS, TimeUnit.MILLISECONDS)) {
-      Console.log(
-        "⚠️ [pair-skew] screenshot request not issued within ${SCREENSHOT_REQUEST_BARRIER_MS}ms; " +
-          "the deferred frame may lag this tree",
-      )
-    }
+  private fun awaitScreenshotRequested(): Boolean {
+    val requested = screenshotRequested ?: return true
+    if (requested.await(SCREENSHOT_REQUEST_BARRIER_MS, TimeUnit.MILLISECONDS)) return true
+    Console.log(
+      "⚠️ [pair-skew] screenshot grab not ordered within ${SCREENSHOT_REQUEST_BARRIER_MS}ms; " +
+        "waiting for the frame so it can't lag this tree",
+    )
+    return false
   }
 
   /**

@@ -35,6 +35,7 @@ NOTE:
 
 - `reasoning` — `String`
 - `hideKeyboardAfter` — `Boolean`
+  Close the soft keyboard after typing. Defaults to true; pass false to keep typing into the same field.
 
 ## Output
 

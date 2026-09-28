@@ -115,14 +115,46 @@ object WorkspaceContentHasher {
   fun compute(configDir: File, version: String): String =
     computeWithStats(configDir, version).hash
 
-  private fun computeWithStats(configDir: File, version: String): HashResult {
-    val md = MessageDigest.getInstance("SHA-256")
-    md.update(version.toByteArray(Charsets.UTF_8))
-    md.update(SEPARATOR)
+  private fun computeWithStats(configDir: File, version: String): HashResult =
+    hashFiles(version, listHashedFiles(configDir))
 
-    if (!configDir.isDirectory) return HashResult(md.digest().toLowerHex(), fileCount = 0)
+  /**
+   * Like [compute], but reads file contents only when some hashed file's path, size or
+   * modification time differs from the previous call on this instance. The walk itself still
+   * runs every call, so adds, deletes and renames are always seen; what it skips is reading
+   * and digesting every byte of an unchanged workspace, which is most of [compute]'s cost.
+   *
+   * An edit that keeps both a file's size and its modification time is missed until anything
+   * else in the tree changes. Editors, `git checkout` and `cp` all set a new time; only a
+   * deliberate `touch -r` style reset preserves it.
+   *
+   * One per long-lived caller: the daemon checks drift on every command it runs for a CLI.
+   */
+  class Reusing {
+    private data class Entry(val configDir: File, val version: String, val files: List<HashedFile>, val hash: String)
 
-    val files = configDir.walkTopDown()
+    @Volatile
+    private var last: Entry? = null
+
+    fun compute(configDir: File, version: String): String {
+      val files = listHashedFiles(configDir)
+      last?.let { if (it.configDir == configDir && it.version == version && it.files == files) return it.hash }
+      // Sizes and times are read before contents, so a file edited mid-hash is re-hashed on the
+      // next call rather than cached under its new bytes.
+      val result = hashFiles(version, files)
+      // A file that failed to read left a partial digest. Fixing its permissions keeps its size
+      // and time, so caching that digest would report drift until something else changed.
+      if (result.fileCount == files.size) last = Entry(configDir, version, files, result.hash)
+      return result.hash
+    }
+  }
+
+  /** One file [compute] hashes, with the size and time [Reusing] compares. Equality covers all four. */
+  private data class HashedFile(val relativePath: String, val file: File, val size: Long, val modifiedNanos: Long)
+
+  private fun listHashedFiles(configDir: File): List<HashedFile> {
+    if (!configDir.isDirectory) return emptyList()
+    return configDir.walkTopDown()
       .onEnter { dir ->
         // Don't descend into excluded dirs. `onEnter` returning false prunes the
         // entire subtree, which is critical for `node_modules` (could be GBs).
@@ -131,20 +163,36 @@ object WorkspaceContentHasher {
         val name = dir.name
         !name.startsWith(".") && name != "dist" && name != "node_modules"
       }
-      .filter { file ->
-        file.isFile &&
-          !file.name.startsWith(".") &&
-          file.name !in EXCLUDED_GENERATED_FILENAMES &&
-          // walkTopDown() follows symlinks by default; skip them to prevent loops
-          // and keep hashes deterministic across clones with different symlink layouts.
-          !java.nio.file.Files.isSymbolicLink(file.toPath())
+      .filter { file -> !file.name.startsWith(".") && file.name !in EXCLUDED_GENERATED_FILENAMES }
+      .mapNotNull { file ->
+        // Not following links, so a symlinked file reads as a link and is skipped: following it
+        // could loop, and would make the hash depend on each clone's symlink layout. One call
+        // answers that and supplies the size and time, which matters on a walk run per command.
+        val attrs = try {
+          java.nio.file.Files.readAttributes(
+            file.toPath(),
+            java.nio.file.attribute.BasicFileAttributes::class.java,
+            java.nio.file.LinkOption.NOFOLLOW_LINKS,
+          )
+        } catch (_: IOException) {
+          return@mapNotNull null
+        }
+        if (!attrs.isRegularFile) return@mapNotNull null
+        HashedFile(
+          relativePath = file.relativeTo(configDir).path.replace(File.separatorChar, '/'),
+          file = file,
+          size = attrs.size(),
+          modifiedNanos = attrs.lastModifiedTime().to(java.util.concurrent.TimeUnit.NANOSECONDS),
+        )
       }
-      .map { file ->
-        val rel = file.relativeTo(configDir).path.replace(File.separatorChar, '/')
-        rel to file
-      }
-      .sortedBy { it.first }
+      .sortedBy { it.relativePath }
       .toList()
+  }
+
+  private fun hashFiles(version: String, files: List<HashedFile>): HashResult {
+    val md = MessageDigest.getInstance("SHA-256")
+    md.update(version.toByteArray(Charsets.UTF_8))
+    md.update(SEPARATOR)
 
     var hashedCount = 0
     val buffer = ByteArray(STREAM_CHUNK_BYTES)

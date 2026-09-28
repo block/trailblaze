@@ -748,6 +748,7 @@ internal fun screenshotDetailLines(
     is AgentDriverAction.EnterText -> {
       lines.add("Action" to "Enter Text")
       lines.add("Text" to "\"${action.text}\"")
+      if (action.hideKeyboardAfter) lines.add("Then" to "Hide keyboard")
     }
     is AgentDriverAction.AssertCondition -> {
       lines.add("Action" to "Assert")

@@ -65,6 +65,7 @@ import xyz.block.trailblaze.model.DesktopAppRunYamlParams
 import xyz.block.trailblaze.model.TrailExecutionResult
 import xyz.block.trailblaze.model.TrailblazeConfig
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
+import xyz.block.trailblaze.model.findById
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.ui.composables.DeviceClassifierIconProvider
@@ -82,6 +83,7 @@ import xyz.block.trailblaze.host.rules.BasePlaywrightNativeTest
 import xyz.block.trailblaze.util.AndroidHostAdbUtils
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.util.isMacOs
+import xyz.block.trailblaze.util.SimctlCommand
 
 /**
  * Manages device discovery, selection, and state across the application.
@@ -566,7 +568,22 @@ class TrailblazeDeviceManager(
             "Fix the trail's target:, create the target, or restart Trail Runner to pick up edits.",
         )
     } else {
-      getCurrentSelectedTargetApp()
+      // A CLI session's `--target` / `TRAILBLAZE_TARGET` outranks the daemon-wide selection, as it
+      // does for tool dispatch and capture. Without it a `trailblaze tool` on a host-driven device
+      // loaded and ran the desktop app's selected target's tools instead of the session's. A
+      // session target that no longer resolves (a workspace reload dropped it) is an error for the
+      // same reason as a declared one: falling back runs another target's tools under this session.
+      val sessionTargetId = existingSessionId?.let { sessionTargetRegistry.get(it, trailblazeDeviceId) }
+      if (sessionTargetId != null) {
+        availableAppTargets.findById(sessionTargetId)
+          ?: error(
+            "This session's target '$sessionTargetId' is not registered in this daemon " +
+              "(available: ${availableAppTargets.map { it.id }.sorted()}). " +
+              "Pass a registered --target, or restart Trail Runner to pick up target edits.",
+          )
+      } else {
+        getCurrentSelectedTargetApp()
+      }
     }
     // Derive the recorded name from the SAME resolution as the target object — otherwise a
     // target resolved through the workspace `defaults.target` rung would run against the app
@@ -1079,6 +1096,27 @@ class TrailblazeDeviceManager(
     finalizationFailure?.let { throw it }
 
     return sessionId
+  }
+
+  /**
+   * Fails a run's session that already ended succeeded, because finalizing it then failed, and
+   * returns the message to fail the run with. A run's captured evidence is part of its result: a
+   * network capture that required traffic and saw none means the run proved nothing. That differs
+   * from [endSessionForDevice], where the same failure is only a warning on an interactive session.
+   *
+   * The run writes its end before it finalizes, so without this the session reads as passed in the
+   * report. Only a succeeded end is replaced, including one that lands later: a failed session keeps
+   * its own failure.
+   */
+  fun failSucceededSessionOnFinalization(sessionId: SessionId, failure: Throwable): String {
+    val message = describeCaptureFailure(failure)
+    try {
+      logsRepo.failSucceededEnd(sessionId, message, failure.stackTraceToString())
+    } catch (e: Exception) {
+      // The run still fails: its result is marked a finalization failure, which disk can't override.
+      Console.log("Failed to record the finalization failure on session $sessionId: ${e.message}")
+    }
+    return message
   }
 
   /**
@@ -2491,7 +2529,7 @@ class TrailblazeDeviceManager(
     internal fun listBootedIosSimulators(): List<Pair<String, String>> {
       if (!isMacOs()) return emptyList()
       return try {
-        val process = ProcessBuilder("xcrun", "simctl", "list", "devices", "booted")
+        val process = ProcessBuilder(SimctlCommand.argv("list", "devices", "booted"))
           .redirectErrorStream(true)
           .start()
         val finished = process.waitFor(60, TimeUnit.SECONDS)

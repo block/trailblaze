@@ -19,28 +19,15 @@ function playbackGapMs(gapMs: number): number {
 // not become an hour of animation). Written here in playback ms, so `gap / 4` capped at 1000 is the
 // same mapping.
 //
-// The floor is the one deliberate difference: it keeps a step on screen long enough for the
-// exporter to catch it. The legacy path had no floor, so a burst of sub-100ms tool calls could be
-// fast-forwarded past the shutter and never appear in the artifact at all.
-//
-// It is set relative to that shutter's NOMINAL cadence — 200ms, PlaywrightReportCapture's
-// FRAME_INTERVAL_MS (~5fps). A dwell at least one shutter period long always contains a capture
-// instant, so 250ms clears it with 25% to spare. `PlaywrightReportCaptureTest` asserts the two
-// constants stay ordered that way, because the cadence lives in Kotlin and this floor lives here.
-//
-// What that does NOT cover: the 200ms cadence is requested, not guaranteed. `page.screenshot()`
-// costs ~50-150ms, and on a loaded runner it can overshoot until the EFFECTIVE interval exceeds
-// this floor — `computeFps` treats a measured 2fps (500ms/frame) as a normal outcome, and at that
-// rate a 250ms dwell can land entirely between two samples and appear in no frame. The old 350ms
-// floor had the same hole at a slightly higher load threshold; nothing about a time-sampled capture
-// loop closes it. Capturing on each step transition instead of on a timer is the actual fix, and it
-// belongs with the capture loop rather than with this constant.
+// The floor is the one deliberate difference: it keeps each step on screen long enough to read.
+// The exporter already gives every step its own frame (`?autoplay=step` renders each entry's
+// offset exactly, then fills the gap to the next one), so the floor is not what makes a step
+// appear — it is how long the viewer gets to look at it. A burst of sub-100ms tool calls would
+// otherwise flash past faster than anyone could follow.
 //
 // This is also the term that sets export length on a DENSE session — a step-heavy trail floors
 // nearly every gap, so the artifact's length is essentially (row count x this value) and the 4x
-// speedup above barely enters into it. It is the only lever that shortens such an export, and it is
-// now one quarter of a shutter period from the point where steps start dropping even on an idle
-// machine, so the next shortening needs the transition-driven capture above, not a smaller number.
+// speedup above barely enters into it. It is the lever to turn when such an export runs long.
 const EXPORT_SPEEDUP = 4;
 const EXPORT_GAP_MIN_MS = 250;
 const EXPORT_GAP_MAX_MS = 1000;

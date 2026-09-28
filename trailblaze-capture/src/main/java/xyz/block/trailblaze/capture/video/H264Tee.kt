@@ -9,7 +9,8 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.util.Console
 
 /**
- * Per-device fan-out for a single `adb exec-out screenrecord --output-format=h264` stream.
+ * Per-device fan-out for a single Android screen stream: scrcpy's server where it runs, else
+ * `adb exec-out screenrecord --output-format=h264` (see [AndroidScreenProducerFactory]).
  *
  * **Why one tee per device?** Most Android devices serialize the hardware H.264 encoder — a
  * second `screenrecord` invocation on the same device blocks or fails. Both the live `/devices`
@@ -55,10 +56,10 @@ class H264Tee internal constructor(
   private val videoSize: String,
   private val bitRate: String,
   /**
-   * Test seam: spawns the producer subprocess. Default uses `adb exec-out screenrecord`. Tests
-   * can pass a fixed [InputStream] of canned bytes plus a no-op closer.
+   * Test seam: spawns the producer subprocess. Default is scrcpy with a `screenrecord` fallback.
+   * Tests can pass a fixed [InputStream] of canned bytes plus a no-op closer.
    */
-  private val producerFactory: ProducerFactory = AdbScreenrecordProducerFactory,
+  private val producerFactory: ProducerFactory = AndroidScreenProducerFactory.default,
   /**
    * Test seam: lookup of Android SDK level. Default queries the device; tests inject 34+ to
    * exercise the unlimited-time-limit path and < 34 to exercise the restart-on-exit chain.
@@ -68,12 +69,14 @@ class H264Tee internal constructor(
   private val restartOnUnexpectedExit: Boolean = true,
 ) {
 
-  // Synchronized on this Object for refCount/state transitions only — never held across a
-  // subprocess wait or a network read. Consumers are tracked separately in a concurrent map so
-  // the producer thread can iterate them without holding our lock.
+  // Synchronized on this Object for refCount/state transitions only. The one exception is the first
+  // attach, which starts the producer under it: on Android that includes scrcpy's startup (adb
+  // checks, a push on first use, and a connect of up to 15 s). Only other attaches to this tee wait
+  // behind it, and they want that same stream. Consumers are tracked separately in a concurrent map
+  // so the producer thread can iterate them without holding our lock.
   private val refCountLock = Any()
   private var refCount = 0
-  private var producerHandle: ProducerHandle? = null
+  @Volatile private var producerHandle: ProducerHandle? = null
   private var readerThread: Thread? = null
 
   private val consumers = ConcurrentHashMap<Long, Consumer>()
@@ -104,6 +107,12 @@ class H264Tee internal constructor(
 
   /** True while a producer is streaming; see [feeding]. Read it before detaching. */
   internal val isFeeding: Boolean get() = feeding
+
+  /**
+   * Whether the running producer writes each frame's device time into the stream as a
+   * [FrameTimeSei]. Settled once [attach] returns, since the first attach starts the producer.
+   */
+  internal val carriesDeviceFrameTimes: Boolean get() = producerHandle?.carriesDeviceFrameTimes == true
 
   /**
    * Attach a new consumer with the given ring-buffer capacity. If this is the first consumer,
@@ -184,7 +193,7 @@ class H264Tee internal constructor(
     val sdk = runCatching { sdkLevelProvider() }.getOrDefault(0)
     val unlimited = sdk >= ANDROID_U_SDK
     Console.log(
-      "[H264Tee] starting screenrecord for ${deviceId.instanceId} " +
+      "[H264Tee] starting screen stream for ${deviceId.instanceId} " +
         "(size=$videoSize bitRate=$bitRate sdk=$sdk unlimited=$unlimited)",
     )
     val handle = producerFactory.spawn(deviceId, videoSize, bitRate, unlimited)
@@ -263,7 +272,7 @@ class H264Tee internal constructor(
       // generation delivers a fresh one.
       finishKeyframeGeneration()
       Console.log(
-        "[H264Tee] screenrecord exited " +
+        "[H264Tee] screen stream exited " +
           (if (unlimited) "unexpectedly" else "at its time limit") +
           "; signaling restart and respawning",
       )
@@ -288,7 +297,7 @@ class H264Tee internal constructor(
       }
       if (shuttingDown.get()) return
       handle = try {
-        producerFactory.spawn(deviceId, videoSize, bitRate, unlimited = unlimited)
+        producerFactory.respawn(deviceId, videoSize, bitRate, unlimited = unlimited)
       } catch (e: Exception) {
         Console.log("[H264Tee] respawn failed: ${e.message}; reader stopping")
         return
@@ -587,6 +596,9 @@ class H264Tee internal constructor(
   /** Handle to a running screenrecord producer. */
   interface ProducerHandle : AutoCloseable {
     val input: InputStream
+
+    /** True when [input] carries a [FrameTimeSei] ahead of every frame. */
+    val carriesDeviceFrameTimes: Boolean get() = false
   }
 
   /** Strategy: spawn a new screenrecord-equivalent producer. */
@@ -598,6 +610,10 @@ class H264Tee internal constructor(
       /** If true, request `--time-limit 0` (Android 14+); otherwise default 3-min cap. */
       unlimited: Boolean,
     ): ProducerHandle
+
+    /** Starts the next producer when one exits while consumers are still reading. */
+    fun respawn(deviceId: TrailblazeDeviceId, videoSize: String, bitRate: String, unlimited: Boolean): ProducerHandle =
+      spawn(deviceId, videoSize, bitRate, unlimited)
   }
 
   companion object {

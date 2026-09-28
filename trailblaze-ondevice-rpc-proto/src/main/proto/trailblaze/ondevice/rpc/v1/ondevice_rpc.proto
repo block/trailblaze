@@ -167,6 +167,7 @@ message TrailblazeConfig {
   string node_selector_mode = 6;
   bool prefer_host_agent = 7;
   bool capture_network_traffic = 8;
+  bool host_drains_before_session_end = 9;
 }
 
 message Referrer {
@@ -180,6 +181,7 @@ message DrainSessionRequest {
 
 message DrainSessionResponse {
   bool ui_automation_cleared = 1;
+  int32 log_uploads_left_pending = 2;
 }
 
 message SubscribeToProgressRequest {

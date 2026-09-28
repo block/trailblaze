@@ -3,13 +3,13 @@ package xyz.block.trailblaze.cli
 import java.io.File
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
-import kotlin.test.fail
 import org.junit.Test
 
 /**
  * Covers the `MAX_PLAYBACK_WAIT_MS` override resolution shared by all three exporters
  * (`--gif`, `--webp`, `--video`) — the escape hatch the timeout warnings advertise.
  * `--video` previously ignored it and hit a hardcoded Playwright timeout (https://github.com/block/trailblaze/issues/173).
+ * Also pins where the frame-stepped capture puts its frames and how long each is held.
  */
 class PlaywrightReportCaptureTest {
 
@@ -32,74 +32,35 @@ class PlaywrightReportCaptureTest {
     assertEquals(1_800_000L, PlaywrightReportCapture.resolveMaxPlaybackWaitMs("  1800000  "))
   }
 
-  // computeFps — frames are emitted on a fixed 200ms (5fps) cadence; the rate is measured
-  // from real elapsed time and clamped to [1, 20] so a degenerate window can't produce a
-  // non-physical encode rate. Relevant to the truncated fail-soft capture path (#173).
+  // Frames are stepped through playback time, one on every timeline event and evenly spaced
+  // between them, so the artifact shows each tap at the moment it happened.
 
-  @Test fun `computeFps returns the nominal rate when no time elapsed`() {
-    assertEquals(5, PlaywrightReportCapture.computeFps(frameCount = 1, elapsedMs = 0))
+  @Test fun `every event gets its own frame and no frame covers more than the interval`() {
+    // The export schedule for four steps at 0/250/500/1500ms ending at 1750ms.
+    val times = PlaywrightReportCapture.frameTimesFor(1_750, listOf(0, 250, 500, 1_500))
+    assertEquals(listOf<Long>(0, 125, 250, 375, 500, 700, 900, 1_100, 1_300, 1_500, 1_625, 1_750), times)
+    assertTrue(times.containsAll(listOf(0L, 250L, 500L, 1_500L)))
+    assertTrue(times.zipWithNext().all { (a, b) -> b - a in 1..PlaywrightReportCapture.FRAME_INTERVAL_MS })
   }
 
-  @Test fun `computeFps measures real-time rate for a normal capture`() {
-    // 30 frames over 6s = 5fps.
-    assertEquals(5, PlaywrightReportCapture.computeFps(frameCount = 30, elapsedMs = 6_000))
-    // A slow capture (screenshots lagged the cadence) under-reports honestly, not clamped up.
-    assertEquals(2, PlaywrightReportCapture.computeFps(frameCount = 12, elapsedMs = 6_000))
-    // A fast tail (e.g. 8fps) is within the physical ceiling and passes through unclamped.
-    assertEquals(8, PlaywrightReportCapture.computeFps(frameCount = 48, elapsedMs = 6_000))
+  @Test fun `frameTimesFor tolerates unsorted, duplicate and out-of-range events`() {
+    assertEquals(listOf<Long>(0, 200, 400), PlaywrightReportCapture.frameTimesFor(400, listOf(400, 900, -5, 200, 200)))
+    assertEquals(listOf<Long>(0), PlaywrightReportCapture.frameTimesFor(0, emptyList())) // nothing to play: the end state
   }
 
-  @Test fun `computeFps clamps the degenerate slow and non-physical fast extremes`() {
-    // One frame over a long truncated window -> floor of 1, never 0.
-    assertEquals(1, PlaywrightReportCapture.computeFps(frameCount = 1, elapsedMs = 60_000))
-    // A non-physical spike (clock skew / near-empty capture) -> capped at 4x nominal (20).
-    assertEquals(20, PlaywrightReportCapture.computeFps(frameCount = 50, elapsedMs = 100))
+  @Test fun `fractional instants round up so the frame shows that instant`() {
+    assertEquals(251L, PlaywrightReportCapture.wholeMsAtOrAfter(250.25))
+    assertEquals(250L, PlaywrightReportCapture.wholeMsAtOrAfter(250))
   }
 
-  // The cross-language half of the export-dwell invariant. The floor a step is held for lives in
-  // TypeScript (EXPORT_GAP_MIN_MS in run-report-playback.ts); the cadence it must clear lives here
-  // in Kotlin. Each side's own tests can only pin its own constant, so raising FRAME_INTERVAL_MS
-  // would silently start dropping steps from every export with the TypeScript guard still green.
-  // This reads the other language's source and asserts the ordering from this side.
-
-  /**
-   * The `.ts` is excluded from `processResources`, so it isn't on the test classpath and has to be
-   * found in the source tree. Resolved by walking ancestors for a sibling
-   * `trailblaze-report/src/main/resources/...`, which lands the same way whichever depth the
-   * sibling modules sit at — this test must not care how far down the tree its module lives.
-   */
-  private fun readPlaybackTs(): String {
-    val suffix = "trailblaze-report/src/main/resources/xyz/block/trailblaze/" +
-      "trailrunner/web/app/run-report-playback.ts"
-    var dir: File? = File(System.getProperty("user.dir")).absoluteFile
-    val tried = mutableListOf<String>()
-    while (dir != null) {
-      val candidate = File(dir, suffix)
-      tried += candidate.path
-      if (candidate.isFile) return candidate.readText()
-      dir = dir.parentFile
-    }
-    // Fail loudly rather than skipping: a "can't find it" that passes would retire the invariant
-    // silently, which is the exact failure this test exists to prevent.
-    fail("Could not locate run-report-playback.ts. Looked for:\n" + tried.joinToString("\n"))
+  @Test fun `each frame is held until the next one, and the last for one interval`() {
+    assertEquals(listOf(125, 125, 200), PlaywrightReportCapture.frameDurationsFor(listOf(0, 125, 250)))
+    assertEquals(emptyList(), PlaywrightReportCapture.frameDurationsFor(emptyList()))
   }
 
-  @Test fun `the export dwell floor clears the capture cadence`() {
-    val ts = readPlaybackTs()
-    val floorMs = Regex("""const\s+EXPORT_GAP_MIN_MS\s*=\s*(\d+)\s*;""")
-      .find(ts)
-      ?.groupValues
-      ?.get(1)
-      ?.toLong()
-      ?: fail("EXPORT_GAP_MIN_MS not found in run-report-playback.ts — was it renamed?")
-
-    assertTrue(
-      PlaywrightReportCapture.FRAME_INTERVAL_MS <= floorMs,
-      "FRAME_INTERVAL_MS (${PlaywrightReportCapture.FRAME_INTERVAL_MS}ms) must stay at or below the " +
-        "export dwell floor EXPORT_GAP_MIN_MS (${floorMs}ms) in run-report-playback.ts. A step held " +
-        "for less than one shutter period can fall between two captures and appear in no frame of " +
-        "the exported animation. Lower the cadence, raise the floor, or switch the capture loop to " +
-        "shooting on step transitions instead of on a timer.",
-    )
+  @Test fun `gif and webp load the stepped variant, video the real-time one`() {
+    val html = File("/tmp/report.html")
+    assertTrue(PlaywrightReportCapture.buildReportUrl(html, stepped = true).endsWith("?autoplay=step"))
+    assertTrue(PlaywrightReportCapture.buildReportUrl(html).endsWith("?autoplay=1"))
   }
 }

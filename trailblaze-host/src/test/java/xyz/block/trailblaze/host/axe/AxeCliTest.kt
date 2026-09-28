@@ -10,6 +10,7 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import xyz.block.trailblaze.util.SimctlCommand
 
 /**
  * Unit tests for [AxeCli]'s pure version-parsing/comparison helpers backing the minimum-axe-
@@ -334,7 +335,7 @@ class AxeCliTest {
       AxeCli.pasteFromPasteboardArgs("SIM-ARGS").drop(1),
     )
     assertEquals(
-      listOf("xcrun", "simctl", "pbcopy", "SIM-ARGS"),
+      SimctlCommand.argv("pbcopy", "SIM-ARGS"),
       AxeCli.writePasteboardArgs("SIM-ARGS"),
     )
   }

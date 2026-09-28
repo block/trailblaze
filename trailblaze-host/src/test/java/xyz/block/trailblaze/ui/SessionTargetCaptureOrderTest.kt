@@ -7,6 +7,8 @@ import kotlin.reflect.KClass
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertTrue
 import kotlinx.coroutines.runBlocking
 import xyz.block.trailblaze.capture.CaptureOptions
 import xyz.block.trailblaze.capture.CaptureSession
@@ -18,6 +20,11 @@ import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.host.capture.SessionCaptureCoordinator
 import xyz.block.trailblaze.host.driver.HostDriverDescriptorRegistry
+import xyz.block.trailblaze.llm.TrailblazeLlmModel
+import xyz.block.trailblaze.llm.TrailblazeLlmProvider
+import xyz.block.trailblaze.llm.TrailblazeReferrer
+import xyz.block.trailblaze.logs.model.SessionId
+import xyz.block.trailblaze.model.DesktopAppRunYamlParams
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
@@ -82,6 +89,7 @@ class SessionTargetCaptureOrderTest {
 
   private fun manager(
     stream: RecordingStream,
+    runYamlLambda: (DesktopAppRunYamlParams) -> Unit = { error("YAML runner not available in tests") },
     installedAppIdsOnDevice: (TrailblazeDeviceId) -> Set<String> = { emptySet() },
   ): TrailblazeDeviceManager {
     val logsRepo = LogsRepo(logsDir = File(tempDir, "logs").also { it.mkdirs() }, watchFileSystem = false)
@@ -99,11 +107,22 @@ class SessionTargetCaptureOrderTest {
         supportedDriverTypes = emptySet(),
       ),
       defaultHostAppTarget = TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget,
-      currentTrailblazeLlmModelProvider = { error("LLM not available in tests") },
+      // A run request carries a model even when nothing calls it.
+      currentTrailblazeLlmModelProvider = {
+        TrailblazeLlmModel(
+          trailblazeLlmProvider = TrailblazeLlmProvider(id = "test", display = "Test"),
+          modelId = "test-model",
+          inputCostPerOneMillionTokens = 0.0,
+          outputCostPerOneMillionTokens = 0.0,
+          contextLength = 1000,
+          maxOutputTokens = 1000,
+          capabilityIds = emptyList(),
+        )
+      },
       initialAppTargets = setOf(daemonWide, sessionTarget),
       appIconProvider = AppIconProvider.DefaultAppIconProvider,
       deviceClassifierIconProvider = DefaultDeviceClassifierIconProvider,
-      runYamlLambda = { error("YAML runner not available in tests") },
+      runYamlLambda = runYamlLambda,
       installedAppIdsProviderBlocking = installedAppIdsOnDevice,
       appVersionInfoProviderBlocking = { _, _ -> null },
       onDeviceInstrumentationArgsProvider = { emptyMap() },
@@ -133,6 +152,70 @@ class SessionTargetCaptureOrderTest {
       "capture must sample the app the session targets, not the daemon-wide selection",
     )
   }
+
+  @Test
+  fun `a run in a session with its own target runs that target, not the daemon-wide one`() {
+    // `trailblaze tool --target session-target` on a host-driven device reaches the runner through
+    // runYaml. Handing it the daemon-wide selection loaded and ran the wrong target's tools.
+    var ranTarget: String? = null
+    val manager = manager(RecordingStream(), runYamlLambda = { params ->
+      ranTarget = params.targetTestApp?.id
+      throw RunnerReached()
+    })
+    val device = TrailblazeDeviceId("emulator-5554", TrailblazeDevicePlatform.ANDROID)
+    val sessionId = checkNotNull(manager.setTargetForActiveSession(device, sessionTarget.id).sessionId)
+
+    assertFailsWith<RunnerReached> {
+      runBlocking {
+        manager.runYaml(
+          yamlToRun = "- tools:\n    - pressKey:\n        keyCode: BACK",
+          trailblazeDeviceId = device,
+          sendSessionStartLog = false,
+          sendSessionEndLog = false,
+          existingSessionId = sessionId,
+          referrer = TrailblazeReferrer(id = "test", display = "Test"),
+        )
+      }
+    }
+    assertEquals(sessionTarget.id, ranTarget)
+  }
+
+  @Test
+  fun `a session target resolves regardless of case, like every other target lookup`() {
+    var ranTarget: String? = null
+    val manager = manager(RecordingStream(), runYamlLambda = { params ->
+      ranTarget = params.targetTestApp?.id
+      throw RunnerReached()
+    })
+    val device = TrailblazeDeviceId("emulator-5554", TrailblazeDevicePlatform.ANDROID)
+    val sessionId = checkNotNull(manager.setTargetForActiveSession(device, sessionTarget.id.uppercase()).sessionId)
+
+    assertFailsWith<RunnerReached> { runBlocking { runBack(manager, device, sessionId) } }
+    assertEquals(sessionTarget.id, ranTarget)
+  }
+
+  @Test
+  fun `a session target the daemon no longer has fails the run instead of running the daemon-wide one`() {
+    val manager = manager(RecordingStream(), runYamlLambda = { error("must not run under a substituted target") })
+    val device = TrailblazeDeviceId("emulator-5554", TrailblazeDevicePlatform.ANDROID)
+    val sessionId = checkNotNull(manager.setTargetForActiveSession(device, "removed-target").sessionId)
+
+    val failure = assertFailsWith<IllegalStateException> { runBlocking { runBack(manager, device, sessionId) } }
+    assertTrue("'removed-target'" in failure.message.orEmpty(), "error should name the target, got: ${failure.message}")
+  }
+
+  private suspend fun runBack(manager: TrailblazeDeviceManager, device: TrailblazeDeviceId, sessionId: SessionId) {
+    manager.runYaml(
+      yamlToRun = "- tools:\n    - pressKey:\n        keyCode: BACK",
+      trailblazeDeviceId = device,
+      sendSessionStartLog = false,
+      sendSessionEndLog = false,
+      existingSessionId = sessionId,
+      referrer = TrailblazeReferrer(id = "test", display = "Test"),
+    )
+  }
+
+  private class RunnerReached : RuntimeException()
 
   @Test
   fun `capture picks the declared app id the device actually has, not the first one declared`() {

@@ -144,6 +144,12 @@ internal class AnnexBAccessUnitSplitter {
     emitPicture(emit)
   }
 
+  /** The NALs of the picture still being assembled, and the unparsed tail, without start codes. */
+  fun pendingNals(): List<ByteArray> =
+    (pictureNals + prefixNals + unparsed).mapNotNull { nal ->
+      nalHeaderIndex(nal)?.let { nal.copyOfRange(it, nal.size) }
+    }
+
   fun reset() {
     unparsed = ByteArray(0)
     prefixNals.clear()

@@ -283,6 +283,72 @@ class HostScriptedToolLauncherPrecompiledBundleTest {
     assertEquals(listOf("a", "b"), disposed)
   }
 
+  @Test
+  fun `a tool that exists only in the jar uses its precompiled bundle, and an on-disk tool bundles live`() {
+    val jarOnly = inlineTool("jarOnly")
+    val onDisk = inlineTool("onDisk")
+    val noBundle = inlineTool("noBundle")
+    val onDiskSource = extractRoot.newFile("onDisk.ts")
+    val bundles = mapOf(jarOnly.script to File("jarOnly.bundle.js"), onDisk.script to File("onDisk.bundle.js"))
+
+    val shipped = HostScriptedToolLauncher.shippedPrecompiledBundles(
+      listOf(jarOnly, onDisk, noBundle),
+      resolveWorkspaceSource = { script -> onDiskSource.takeIf { script == onDisk.script } },
+      resolvePrecompiled = { bundles[it] },
+    )
+
+    // `onDisk` may carry a local edit, and `noBundle` has nothing to fall back to: both stay on the
+    // live-bundle path.
+    assertEquals(mapOf(jarOnly to File("jarOnly.bundle.js")), shipped)
+  }
+
+  @Test
+  fun `a binary user's live route registers JAR-shipped and on-disk tools together, in order`() = runBlocking {
+    val (jarFirst, onDisk, jarLast) = listOf(inlineTool("jarFirst"), inlineTool("onDisk"), inlineTool("jarLast"))
+    val route = HostScriptedToolLauncher.InlineToolRoute.LiveBundle(listOf(jarFirst, onDisk, jarLast), allowPrecompiledFallback = true)
+    val liveBundled = mutableListOf<List<InlineScriptToolConfig>>()
+
+    val bundles = HostScriptedToolLauncher.liveBundleRoute(
+      route,
+      shippedBundles = { mapOf(jarFirst to File("jarFirst.bundle.js"), jarLast to File("jarLast.bundle.js")) },
+    ) { tools ->
+      liveBundled += tools
+      tools.map { it to File("${it.name}.live.js") }
+    }
+
+    assertEquals(listOf(listOf(onDisk)), liveBundled, "only the on-disk tool is live-bundled")
+    assertEquals(
+      listOf(jarFirst to File("jarFirst.bundle.js"), onDisk to File("onDisk.live.js"), jarLast to File("jarLast.bundle.js")),
+      bundles,
+    )
+  }
+
+  @Test
+  fun `a live route with only JAR-shipped tools never runs the live bundler`() = runBlocking {
+    val jarOnly = inlineTool("jarOnly")
+    val route = HostScriptedToolLauncher.InlineToolRoute.LiveBundle(listOf(jarOnly), allowPrecompiledFallback = true)
+
+    val bundles = HostScriptedToolLauncher.liveBundleRoute(
+      route,
+      shippedBundles = { mapOf(jarOnly to File("jarOnly.bundle.js")) },
+    ) { error("esbuild must not run when every tool ships a precompiled bundle") }
+
+    assertEquals(listOf(jarOnly to File("jarOnly.bundle.js")), bundles)
+  }
+
+  @Test
+  fun `a source checkout live-bundles every tool, shipped bundle or not`() = runBlocking {
+    val tool = inlineTool("edited")
+    val route = HostScriptedToolLauncher.InlineToolRoute.LiveBundle(listOf(tool), allowPrecompiledFallback = false)
+
+    val bundles = HostScriptedToolLauncher.liveBundleRoute(
+      route,
+      shippedBundles = { error("a checkout must not look for shipped bundles, or a stale one could shadow an edit") },
+    ) { tools -> tools.map { it to File("${it.name}.live.js") } }
+
+    assertEquals(listOf(tool to File("edited.live.js")), bundles)
+  }
+
   private data class FakeRegistration(val id: String)
 
   private fun inlineTool(name: String): InlineScriptToolConfig =

@@ -122,6 +122,16 @@ class DesktopYamlRunner(
     internal fun requestedDeviceLocale(config: TrailConfig?): String? =
       config?.locale?.takeIf { config.skip.isNullOrBlank() }
 
+    /**
+     * The part of a trail's `locale:` this runner sets on the device itself. The Playwright native
+     * driver has no system language to set: it opens the session's browser context in the trail's
+     * locale instead (see `BasePlaywrightNativeTest.resolveBrowserLocale`). Every other driver,
+     * Electron included, goes through [DeviceLocaleConfigurator], which rejects what it cannot set
+     * rather than run the trail in the wrong language.
+     */
+    internal fun systemLocaleToApply(driverType: TrailblazeDriverType, locale: String?): String? =
+      locale?.takeUnless { driverType == TrailblazeDriverType.PLAYWRIGHT_NATIVE }
+
     /** Applying a device language always requires a fresh target process. */
     internal fun shouldForceStopTargetApp(requested: Boolean, locale: String?): Boolean =
       requested || locale != null
@@ -551,7 +561,7 @@ class DesktopYamlRunner(
           selectedDeviceConfiguration = selectedConfigurationName,
         )
       }.getOrNull()
-      val deviceLocale = requestedDeviceLocale(resolvedTrailConfig)
+      val requestedLocale = requestedDeviceLocale(resolvedTrailConfig)
 
       // Resolve driver type: request (CLI --driver / trail config) > the trail's own driver pin
       // resolved against THIS device > app setting > connected device default. The trail-pin rung
@@ -618,6 +628,7 @@ class DesktopYamlRunner(
       // `runYamlRequest.copy(driverType = …)`. The swap is same-platform (resolution is
       // platform-scoped), so instanceId / platform / deviceId are unchanged.
       val hostRunDevice = connectedTrailblazeDevice.copy(trailblazeDriverType = trailblazeDriverType)
+      val deviceLocale = systemLocaleToApply(driverType = trailblazeDriverType, locale = requestedLocale)
 
       // Which path this run takes. Resolved once here so the multi-device gate below and the
       // `when` that dispatches both read the same answer — the gate used to re-derive the
@@ -1259,10 +1270,13 @@ class DesktopYamlRunner(
             RunEndCaptureAction.LEAVE_RUNNING -> null
           }
           if (finalizerFailure != null && executionResult is TrailExecutionResult.Success) {
-            executionResult =
-              TrailExecutionResult.Failed(
-                finalizerFailure.message ?: "Host session finalization failed; artifacts may be incomplete."
-              )
+            // The session on disk already says it passed; it is failed too, before onComplete, so
+            // the report reads the same failure. The flag keeps the daemon's disk-based verdict
+            // from passing the run when that write could not land.
+            executionResult = TrailExecutionResult.Failed(
+              trailblazeDeviceManager.failSucceededSessionOnFinalization(resolvedSessionId, finalizerFailure),
+              sessionFinalizationFailed = true,
+            )
           }
         }
         // After this run's own capture stop: ending the device's last run releases the sessions a

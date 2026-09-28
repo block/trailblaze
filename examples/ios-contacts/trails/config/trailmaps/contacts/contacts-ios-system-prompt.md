@@ -27,10 +27,11 @@ be marked with colored boxes containing `ref` ids for interactive elements.
   the contacts list. The `contacts_ios_searchContacts` tool handles the
   swipe-down-then-tap-search dance — prefer it over driving the search
   field with raw taps.
-- `launchApp` with `launchMode: "FORCE_RESTART"` is the recommended way to
-  get a deterministic starting state — iOS will otherwise restore the
-  scene from the previous session, which on Contacts often means a
-  mid-edit draft.
+- `contacts_ios_openApp` is the way to start a Contacts flow: it
+  force-restarts the app for a deterministic starting state — iOS will
+  otherwise restore the scene from the previous session, which on Contacts
+  often means a mid-edit draft. `openApp` only brings the app to the front
+  as it is.
 
 ## Special tools — always prefer these for the listed tasks
 

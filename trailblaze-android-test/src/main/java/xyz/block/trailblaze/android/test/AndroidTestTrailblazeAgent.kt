@@ -16,6 +16,7 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
 import xyz.block.trailblaze.logs.model.TraceId
+import xyz.block.trailblaze.mobile.tools.AndroidForceStopTrailblazeTool
 import xyz.block.trailblaze.mobile.tools.ClearAppDataTrailblazeTool
 import xyz.block.trailblaze.model.ResolvedTarget
 import xyz.block.trailblaze.toolcalls.DelegatingTrailblazeTool
@@ -181,7 +182,11 @@ class AndroidTestTrailblazeAgent(
     refuseIfSelfDestructive(tool)
       ?: executeCanonicalTool(tool, context)
       ?: refuseIfMaestroBound(tool)
-      ?: executeMeasured(tool, context, DISPATCH_SPAN_GENERIC) { it.execute(context) }
+      ?: executeMeasured(tool, context, DISPATCH_SPAN_GENERIC) { resolved ->
+        // Checked again after interpolation: an authored `{{memory.target}}` only becomes the
+        // instrumented package here.
+        refuseIfSelfDestructive(resolved) ?: resolved.execute(context)
+      }
 
   /**
    * Refuses a tool whose only body is Maestro dispatch, or null to let it through. This driver
@@ -242,18 +247,25 @@ class AndroidTestTrailblazeAgent(
    * needs a fresh install needs a lane that installs; a scripted chain that needs a session reset
    * forks on `ctx.device.driverType` in its own trailmap and composes an app-specific reset (a
    * sign-out broadcast, a debug intent) on this driver instead.
+   *
+   * `android_forceStop` is refused for the same reason: `am force-stop` on the app under test kills
+   * this process just as surely as `pm clear` does.
    */
   private fun refuseIfSelfDestructive(tool: ExecutableTrailblazeTool): TrailblazeToolResult? {
-    if (tool !is ClearAppDataTrailblazeTool) return null
+    val (toolName, appId, effect) = when (tool) {
+      is ClearAppDataTrailblazeTool -> Triple("mobile_clearAppData", tool.appId, "clearing it would kill the test rather than reset the app")
+      is AndroidForceStopTrailblazeTool -> Triple("android_forceStop", tool.appId, "stopping it would kill the test rather than restart the app")
+      else -> return null
+    }
     val instrumentedPackage =
       InstrumentationRegistry.getInstrumentation().targetContext.packageName
-    if (tool.appId != instrumentedPackage) return null
+    if (appId != instrumentedPackage) return null
     return TrailblazeToolResult.Error.ExceptionThrown(
-      errorMessage = "mobile_clearAppData cannot target '$instrumentedPackage' on the ANDROID_TEST " +
-        "driver: this instrumentation runs inside that process, so clearing it would kill the test " +
-        "rather than reset the app. Clearing a DIFFERENT package is still allowed; a scripted " +
-        "chain that needs a session reset forks on ctx.device.driverType in its trailmap and " +
-        "composes an app-specific reset on this driver instead.",
+      errorMessage = "$toolName cannot target '$instrumentedPackage' on the ANDROID_TEST " +
+        "driver: this instrumentation runs inside that process, so $effect. Targeting a " +
+        "DIFFERENT package is still allowed; a scripted chain that needs a session reset forks " +
+        "on ctx.device.driverType in its trailmap and composes an app-specific reset on this " +
+        "driver instead.",
       command = tool,
     )
   }

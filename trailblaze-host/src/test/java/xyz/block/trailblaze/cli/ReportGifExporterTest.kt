@@ -4,6 +4,7 @@ import java.awt.Color
 import java.awt.image.BufferedImage
 import java.io.File
 import javax.imageio.ImageIO
+import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Test
@@ -30,7 +31,7 @@ class ReportGifExporterTest {
     writeSentinelFrames(framesDir, frameCount = 6, widthPx = 64, heightPx = 48)
     val out = File(tempFolder.root, "out.gif")
 
-    ReportGifExporter.assembleGif(framesDir, out, fps = 5, targetWidthPx = null)
+    ReportGifExporter.assembleGif(framesDir, out, List(6) { 200 }, targetWidthPx = null)
 
     assertTrue(out.exists() && out.length() > 0, "GIF file is missing or empty")
     val bytes = out.readBytes()
@@ -64,9 +65,9 @@ class ReportGifExporterTest {
     writeSentinelFrames(framesDir, frameCount = 6, widthPx = 320, heightPx = 240)
 
     val fullSize = File(tempFolder.root, "full.gif")
-    ReportGifExporter.assembleGif(framesDir, fullSize, fps = 5, targetWidthPx = null)
+    ReportGifExporter.assembleGif(framesDir, fullSize, List(6) { 200 }, targetWidthPx = null)
     val rescaled = File(tempFolder.root, "rescaled.gif")
-    ReportGifExporter.assembleGif(framesDir, rescaled, fps = 5, targetWidthPx = 64)
+    ReportGifExporter.assembleGif(framesDir, rescaled, List(6) { 200 }, targetWidthPx = 64)
 
     assertTrue(fullSize.exists() && fullSize.length() > 0, "full-resolution GIF missing")
     assertTrue(rescaled.exists() && rescaled.length() > 0, "rescaled GIF missing")
@@ -91,7 +92,7 @@ class ReportGifExporterTest {
     writeSentinelFrames(framesDir, frameCount = 4, widthPx = 64, heightPx = 48)
     val extensionless = File(tempFolder.root, "out")
 
-    ReportGifExporter.assembleGif(framesDir, extensionless, fps = 5, targetWidthPx = null)
+    ReportGifExporter.assembleGif(framesDir, extensionless, List(4) { 200 }, targetWidthPx = null)
 
     assertTrue(extensionless.exists() && extensionless.length() > 0, "GIF missing at extensionless dest")
     val magic = extensionless.readBytes().sliceArray(0..5).decodeToString()
@@ -100,6 +101,40 @@ class ReportGifExporterTest {
       "Expected GIF magic at extensionless dest, got '$magic'",
     )
   }
+
+  @Test fun `each frame is held for its own captured duration`() {
+    // Frames land on the timeline's events, so they are not evenly spaced; a GIF that played
+    // them at one fixed rate would drift off the taps it is meant to show.
+    assumeTrue("ffmpeg must be on PATH", ffmpegAvailable())
+
+    val framesDir = tempFolder.newFolder("frames")
+    writeSentinelFrames(framesDir, frameCount = 4, widthPx = 64, heightPx = 48)
+    val out = File(tempFolder.root, "timed.gif")
+
+    ReportGifExporter.assembleGif(framesDir, out, listOf(120, 500, 250, 200), targetWidthPx = null)
+
+    // GIF delays are centiseconds; the last comes from final_delay rather than a stray frame.
+    assertEquals(listOf(12, 50, 25, 20), gifFrameDelaysCs(out.readBytes()))
+  }
+
+  @Test fun `concatList quotes each frame path and pairs it with its duration`() {
+    val list = ReportGifExporter.concatList(
+      listOf(File("/tmp/it's here/frame_00000.png"), File("/tmp/f/frame_00001.png")),
+      listOf(125, 1000),
+    )
+    assertEquals(
+      "ffconcat version 1.0\n" +
+        "file '/tmp/it'\\''s here/frame_00000.png'\noption framerate 100\nduration 0.125\n" +
+        "file '/tmp/f/frame_00001.png'\noption framerate 100\nduration 1.000\n",
+      list,
+    )
+  }
+
+  /** Delay (centiseconds) of every frame, read off the GIF's graphic-control extensions. */
+  private fun gifFrameDelaysCs(bytes: ByteArray): List<Int> =
+    (0 until bytes.size - 5)
+      .filter { bytes[it] == 0x21.toByte() && bytes[it + 1] == 0xF9.toByte() && bytes[it + 2] == 0x04.toByte() }
+      .map { (bytes[it + 4].toInt() and 0xFF) or ((bytes[it + 5].toInt() and 0xFF) shl 8) }
 
   private fun writeSentinelFrames(dir: File, frameCount: Int, widthPx: Int = 64, heightPx: Int = 48) {
     val palette = listOf(Color.RED, Color.GREEN, Color.BLUE, Color.YELLOW, Color.MAGENTA, Color.CYAN)

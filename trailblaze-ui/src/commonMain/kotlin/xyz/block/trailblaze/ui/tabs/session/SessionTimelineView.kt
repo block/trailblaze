@@ -519,7 +519,8 @@ private fun logSummary(log: TrailblazeLog): Pair<String, String?> =
         when (val a = log.action) {
           is AgentDriverAction.TapPoint -> "Tap (${a.x}, ${a.y})"
           is AgentDriverAction.Swipe -> "Swipe ${a.direction}"
-          is AgentDriverAction.EnterText -> "Input: ${a.text}"
+          is AgentDriverAction.EnterText ->
+            "Input: ${a.text}" + if (a.hideKeyboardAfter) " (then hide keyboard)" else ""
           is AgentDriverAction.AssertCondition -> "Assert: ${a.conditionDescription}"
           is AgentDriverAction.LaunchApp -> "Launch: ${a.appId}"
           is AgentDriverAction.Scroll -> "Scroll ${if (a.forward) "down" else "up"}"
