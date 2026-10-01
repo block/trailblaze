@@ -990,6 +990,7 @@ release_daemon_startup() {
 # JVM startup, with nothing failing to say so. The launcher's own shell test
 # diffs this line against the Kotlin set so the drift is loud instead; keep the
 # declaration on one line and space-separated, because that check parses it.
+# Adding one that can run for minutes? Say so in ipc_try_forward's waiting notice.
 TRAILBLAZE_IPC_FORWARDABLE_SUBCOMMANDS="snapshot ask config tool"
 #
 # Falls through to the normal JVM path if:
@@ -1308,6 +1309,13 @@ ipc_try_forward() {
     # leader and `setpgid` refuse. Bash prints that refusal on OUR stderr, mixed into
     # the output of whatever command the user forwarded. `test_ipc_replay.sh` fails
     # if job control comes back.
+    # Only the commands that can genuinely run for minutes say so; for `snapshot` or
+    # `config` a long wait means queued or wedged, and "takes minutes" would mislead.
+    local notice_slow_hint=
+    case "$ipc_requested" in
+        ask) notice_slow_hint=" 'ask' can take minutes." ;;
+        tool) notice_slow_hint=" A tool that installs or launches an app can take minutes." ;;
+    esac
     local notice_pid
     {
         sleep "$TRAILBLAZE_IPC_NOTICE_SECONDS" < /dev/null > /dev/null 2>&1
@@ -1321,7 +1329,7 @@ ipc_try_forward() {
         # its activeRuns counts async trail runs, not execs — so it is offered as a health check
         # only. `stop` ends the daemon, after which the failed forward falls through and this
         # command re-runs locally from the start; it is not aborted.
-        echo "  It may still be running this command, or queued behind an earlier one — 'ask' and launch tools take minutes." >&2
+        echo "  It may still be running this command, or queued behind an earlier one.${notice_slow_hint}" >&2
         echo "  'trailblaze status' checks its health. 'trailblaze stop' ends it, and this command starts over from scratch." >&2
     } > /dev/null &
     notice_pid=$!

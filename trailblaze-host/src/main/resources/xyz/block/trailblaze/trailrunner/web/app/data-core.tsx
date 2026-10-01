@@ -84,7 +84,7 @@ function pendingRunWanted(token) {
   return !!(_pendingRun && isPendingRun(token) && !_pendingRun.error && !_stoppedRuns.has(token));
 }
 
-// Mirrors TrailblazeRunner.DEFAULT_MAX_STEPS. Sending this value explicitly is equivalent to
+// Mirrors KoogStrategyGraphAgent.DEFAULT_MAX_LLM_CALLS. Sending this value explicitly is equivalent to
 // sending nothing, so the UI omits it and lets the framework own the default.
 const DEFAULT_MAX_LLM_CALLS = 25;
 

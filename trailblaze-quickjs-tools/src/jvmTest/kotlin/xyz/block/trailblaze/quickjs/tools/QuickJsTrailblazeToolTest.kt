@@ -3,6 +3,7 @@ package xyz.block.trailblaze.quickjs.tools
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlin.test.fail
 import kotlinx.datetime.Clock
@@ -12,6 +13,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
@@ -19,6 +21,7 @@ import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
+import xyz.block.trailblaze.devices.TrailblazeDevicePort.getTrailblazeOnDeviceSpecificPort
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.client.TrailblazeSession
@@ -229,6 +232,48 @@ class QuickJsTrailblazeToolTest {
       "quickjs-trailblaze-tool-test",
       device["instanceId"]!!.jsonPrimitive.content,
     )
+    assertEquals(1080, device["widthPixels"]!!.jsonPrimitive.int)
+    assertEquals(1920, device["heightPixels"]!!.jsonPrimitive.int)
+    // The host (this JVM) computes the port, so a TS tool can reach the device's Trailblaze server.
+    assertEquals(
+      TrailblazeDeviceId(
+        instanceId = "quickjs-trailblaze-tool-test",
+        trailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID,
+      ).getTrailblazeOnDeviceSpecificPort(),
+      device["trailblazePort"]!!.jsonPrimitive.int,
+    )
+  }
+
+  @Test
+  fun `execute omits trailblazePort for a web device`() = runBlocking {
+    val host = connect(
+      """
+      const tools = (globalThis.__trailblazeTools = globalThis.__trailblazeTools || {});
+      tools["readCtx"] = {
+        name: "readCtx",
+        spec: {},
+        handler: async (_args, ctx) => ({
+          content: [{ type: "text", text: JSON.stringify(ctx) }],
+        }),
+      };
+      """.trimIndent(),
+    )
+    val webDevice = TrailblazeDeviceInfo(
+      trailblazeDeviceId = TrailblazeDeviceId(
+        instanceId = "playwright-native",
+        trailblazeDevicePlatform = TrailblazeDevicePlatform.WEB,
+      ),
+      trailblazeDriverType = TrailblazeDriverType.PLAYWRIGHT_NATIVE,
+      widthPixels = 1280,
+      heightPixels = 800,
+    )
+    val result = QuickJsTrailblazeTool(host, ToolName("readCtx"), buildJsonObject {})
+      .execute(buildContext(deviceInfo = webDevice))
+    val rendered = (result as TrailblazeToolResult.Success).message!!
+    val device = kotlinx.serialization.json.Json.parseToJsonElement(rendered).jsonObject["device"]!!.jsonObject
+    // Absent, not JSON null: the handler reads `ctx` straight from `JSON.parse`, with no SDK
+    // normalization, so a null would reach a `=== undefined` guard as a real value.
+    assertFalse(device.containsKey("trailblazePort"))
   }
 
   @Test
@@ -505,10 +550,7 @@ class QuickJsTrailblazeToolTest {
 
   private fun buildContext(
     memory: AgentMemory = AgentMemory(),
-  ): TrailblazeToolExecutionContext = TrailblazeToolExecutionContext(
-    screenState = null,
-    traceId = null,
-    trailblazeDeviceInfo = TrailblazeDeviceInfo(
+    deviceInfo: TrailblazeDeviceInfo = TrailblazeDeviceInfo(
       trailblazeDeviceId = TrailblazeDeviceId(
         instanceId = "quickjs-trailblaze-tool-test",
         trailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID,
@@ -517,6 +559,10 @@ class QuickJsTrailblazeToolTest {
       widthPixels = 1080,
       heightPixels = 1920,
     ),
+  ): TrailblazeToolExecutionContext = TrailblazeToolExecutionContext(
+    screenState = null,
+    traceId = null,
+    trailblazeDeviceInfo = deviceInfo,
     sessionProvider = TrailblazeSessionProvider {
       TrailblazeSession(sessionId = SessionId(TEST_SESSION_ID), startTime = Clock.System.now())
     },

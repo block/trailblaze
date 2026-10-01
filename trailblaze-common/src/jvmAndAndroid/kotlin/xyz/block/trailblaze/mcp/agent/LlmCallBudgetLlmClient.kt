@@ -20,10 +20,9 @@ import java.util.concurrent.atomic.AtomicInteger
  * Koog's own `maxAgentIterations` counts graph *node* executions — every hop, including tool
  * execution and the in-memory prune pass — so a graph with three nodes per LLM turn burns that
  * limit three times faster than the number reads, and the ratio changes every time a node is added.
- * The legacy runner's `TrailblazeRunner.DEFAULT_MAX_STEPS` counts LLM calls. This decorator makes the
- * strategy-graph agent count the same thing: the request that would exceed [maxLlmCalls] throws
- * [MaxCallsLimitReachedException] *before* it reaches the model, and the session manager already maps
- * that exception to `SessionStatus.Ended.MaxCallsLimitReached`, exactly as for the legacy runner.
+ * This decorator counts LLM calls instead: the request that would exceed [maxLlmCalls] throws
+ * [MaxCallsLimitReachedException] *before* it reaches the model, and the session manager maps that
+ * exception to `SessionStatus.Ended.MaxCallsLimitReached`.
  *
  * Every generation request counts — including the history-compression summarization call — because
  * the budget exists to bound cost and a summarization round-trip costs the same as a reasoning one.

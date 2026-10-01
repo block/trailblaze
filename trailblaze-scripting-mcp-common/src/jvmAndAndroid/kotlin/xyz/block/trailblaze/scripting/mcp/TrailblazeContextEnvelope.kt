@@ -11,6 +11,8 @@ import kotlinx.serialization.json.putJsonObject
 import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.applyScriptedToolMemoryDelta
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
+import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
+import xyz.block.trailblaze.devices.TrailblazeDevicePort.getTrailblazeOnDeviceSpecificPort
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 
@@ -50,6 +52,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
  *     heightPixels: number;
  *     driverType: string;
  *     instanceId: string; // emulator serial / simulator UDID — what host CLIs name the device by
+ *     trailblazePort?: number; // host-computed; android/ios only, never on-device
  *   };
  *   target?: {
  *     id: string;
@@ -117,7 +120,7 @@ object TrailblazeContextEnvelope {
           if (k !in memory.sensitiveKeys) put(k, JsonPrimitive(v))
         }
       }
-      putDeviceObject(device)
+      putDeviceObject(device, runtime = null)
     }
 
   /**
@@ -178,7 +181,7 @@ object TrailblazeContextEnvelope {
       if (runtime != null) put("runtime", runtime)
       put("sessionId", sessionId.value)
       put("invocationId", invocationId)
-      putDeviceObject(device)
+      putDeviceObject(device, runtime)
       if (target != null) putTargetObject(target)
       putJsonObject(META_KEY_MEMORY) {
         memory.variables.forEach { (k, v) ->
@@ -259,7 +262,7 @@ object TrailblazeContextEnvelope {
    * stay structurally identical — drift between them would produce confusing bugs for authors
    * migrating off the arg-key path.
    */
-  private fun JsonObjectBuilder.putDeviceObject(device: TrailblazeDeviceInfo) {
+  private fun JsonObjectBuilder.putDeviceObject(device: TrailblazeDeviceInfo, runtime: String?) {
     putJsonObject("device") {
       // Lowercase — the envelope is a TS-consumed contract, and the SHOUTY_CASE of Kotlin's
       // enum name reads awkwardly as a literal union type ("ios" | "android" | "web" is the
@@ -274,6 +277,18 @@ object TrailblazeContextEnvelope {
       put("driverType", device.trailblazeDriverType.yamlKey)
       // What `adb -s` / `xcrun simctl` need, so a tool composing `exec` can name this device.
       put("instanceId", device.trailblazeDeviceId.instanceId)
+      // The port the device's Trailblaze server (the Android runner, or an iOS app's in-app
+      // server) is bridged on. Host-only: it hashes in the host's ADB server port, which a process
+      // on the device doesn't have. Web devices have no such server.
+      val hasOnDeviceServer =
+        device.platform == TrailblazeDevicePlatform.ANDROID ||
+          device.platform == TrailblazeDevicePlatform.IOS
+      if (runtime != RUNTIME_ONDEVICE && hasOnDeviceServer) {
+        put(
+          "trailblazePort",
+          device.trailblazeDeviceId.getTrailblazeOnDeviceSpecificPort(),
+        )
+      }
     }
   }
 }

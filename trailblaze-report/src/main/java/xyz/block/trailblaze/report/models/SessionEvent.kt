@@ -29,15 +29,6 @@ sealed interface SessionEvent {
   ) : SessionEvent
 
   @Serializable
-  data class OtherEvent(
-    val type: String,
-    val details: String,
-    override val timestamp: Instant,
-    override val elapsedTimeMs: Long,
-    override val durationMs: Long,
-  ) : SessionEvent
-
-  @Serializable
   data class TrailblazeTool(
     val code: String,
     override val timestamp: Instant,

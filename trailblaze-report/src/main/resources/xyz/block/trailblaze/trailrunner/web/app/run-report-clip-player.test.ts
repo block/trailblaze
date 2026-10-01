@@ -2,7 +2,8 @@
 // frames and times it returns, so a wrong time here is a wrong frame on screen.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import {
-  frameIndexAt, keepRefusedPlays, keyframeBefore, parseWebm, registerClipBytes, unregisterClipBytes, watchClipElement,
+  adjacentFrameTime, clipFrameSource, frameIndexAt, keepRefusedPlays, keyframeBefore, parseWebm, registerClipBytes, unregisterClipBytes,
+  watchClipElement,
 } from "./run-report-clip-player";
 
 // 32x48 VP9, one keyframe, frames at 0, 0.25, 1.0, 1.25, 1.5, 1.75 s — sparse and variable-rate
@@ -78,6 +79,36 @@ describe("frame lookup", () => {
   });
 });
 
+describe("stepping a frame", () => {
+  test("lands on the neighbouring frame of a variable-rate recording, never past either end", () => {
+    const url = "blob:https://app.test/step";
+    registerClipBytes(url, bytes(SPARSE_WEBM));
+    try {
+      // Frames at 0, 0.25, 1, 1.25, 1.5, 1.75 s: one step from 0.25 is the frame at 1, not 0.25 + a fixed tick.
+      expect(adjacentFrameTime(url, 0.25, 1)).toBe(1);
+      expect(adjacentFrameTime(url, 0.6, 1)).toBe(1);
+      expect(adjacentFrameTime(url, 1.0005, -1)).toBe(0.25);
+      expect(adjacentFrameTime(url, 1.75, 1)).toBe(1.75);
+      expect(adjacentFrameTime(url, 0, -1)).toBe(0);
+    } finally {
+      unregisterClipBytes(url);
+    }
+    expect(adjacentFrameTime("blob:https://app.test/unknown", 0.25, 1)).toBeNull();
+  });
+
+  test("a recording whose bytes arrive after a first lookup steps exactly from then on", () => {
+    const url = "blob:https://app.test/late";
+    try {
+      // Asked before the bytes landed: no frames known, the caller nudges by a nominal frame.
+      expect(adjacentFrameTime(url, 0.25, 1)).toBeNull();
+      registerClipBytes(url, bytes(SPARSE_WEBM));
+      expect(adjacentFrameTime(url, 0.25, 1)).toBe(1);
+    } finally {
+      unregisterClipBytes(url);
+    }
+  });
+});
+
 // The player itself, against the smallest stand-ins bun allows: an EventTarget for the <video>, a
 // canvas whose captured stream records stops, and a VideoDecoder that can be told to fail.
 describe("the fallback player", () => {
@@ -126,13 +157,17 @@ describe("the fallback player", () => {
     g.HTMLCanvasElement = class {};
     g.HTMLCanvasElement.prototype.captureStream = () => {};
     g.document = {
-      createElement: () => ({
-        getContext: () => ({ drawImage() {} }),
-        captureStream: () => ({
-          getVideoTracks: () => [{ requestFrame() {} }],
-          getTracks: () => [{ stop: () => stoppedTracks.push(1) }],
-        }),
-      }),
+      createElement: () => {
+        const canvas = {
+          painted: 0,
+          getContext: () => ({ drawImage() { canvas.painted++; } }),
+          captureStream: () => ({
+            getVideoTracks: () => [{ requestFrame() {} }],
+            getTracks: () => [{ stop: () => stoppedTracks.push(1) }],
+          }),
+        };
+        return canvas;
+      },
     };
   });
   afterAll(() => { for (const k of Object.keys(saved)) g[k] = saved[k]; });
@@ -247,6 +282,31 @@ describe("the fallback player", () => {
     await sleep(40);
 
     expect(el.paused).toBe(true);
+  });
+
+  test("an element off the page is painted on every seek, and its frame is read from the player's canvas", async () => {
+    // How the Strings tab takes a still from a recording the host won't let a <video> load: a
+    // detached element, told only the clip's header, seeking from one capture's time to the next.
+    const url = `blob:player-test-${n++}`;
+    registerClipBytes(url, bytes(SPARSE_WEBM));
+    const el: any = new FakeVideo(url);
+    el.isConnected = false;
+    const events: string[] = [];
+    for (const type of ["loadedmetadata", "loadeddata", "seeked"]) el.addEventListener(type, () => events.push(type));
+    watchClipElement(el);
+    expect(clipFrameSource(el)).toBe(el); // not taken over: the element shows its own frames
+    el.dispatchEvent(new Event("error"));
+    await sleep(5);
+    expect(events).toEqual(["loadedmetadata"]);
+
+    const canvas: any = clipFrameSource(el);
+    expect(canvas).not.toBe(el);
+    const before = canvas.painted;
+    el.currentTime = 1;
+    await sleep(5);
+
+    expect(events).toContain("seeked");
+    expect(canvas.painted).toBeGreaterThan(before);
   });
 
   test("a play refused for a clip the fallback can't take is still refused", async () => {

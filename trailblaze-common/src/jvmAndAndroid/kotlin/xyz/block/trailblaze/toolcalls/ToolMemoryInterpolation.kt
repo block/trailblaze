@@ -85,7 +85,7 @@ fun <T : TrailblazeTool> interpolateMemoryInTool(
  * Restores the AUTHORED tool identity on a failure result whose
  * [TrailblazeToolResult.Error.ExceptionThrown.command] is the boundary-RESOLVED instance the
  * failing tool stamped as `this`. That command renders verbatim into LLM-facing error content
- * (`AgentMessages`' exception renderer) and from there into persisted LLM request logs — so, by
+ * (the agent's tool-result text) and from there into persisted LLM request logs — so, by
  * the same rule that keeps `toolsExecuted` authored, it must carry the token-bearing form, not
  * resolved memory values (a `rememberSensitive` secret in a failing tool's args would otherwise
  * leak). Matched by concrete class: when the boundary rewrote the tool, the dispatched instance

@@ -38,5 +38,22 @@ interface IosDeviceManager {
   /** Dispatches one action, returning the resolved tap point when one exists. */
   fun execute(action: IosDriverAction): ExecutionResult
 
+  /**
+   * Opens a span — one tool call — in which the reads taken before the call acts may share one
+   * capture: the call's own [sharedScreenState], the pre-action log capture, and a selector poll's
+   * first try see the same tree instead of each paying for a fresh one. Any action that can change
+   * the screen ends the sharing, and so does closing the span. Spans nest. The default shares
+   * nothing.
+   */
+  fun shareScreenReads(): AutoCloseable = AutoCloseable {}
+
+  /**
+   * [getScreenState], except that inside a [shareScreenReads] span it may return the span's latest
+   * capture. Only for reads that describe the screen the call is about to act on. A caller that
+   * waits for the screen to change must use [getScreenState]: the screen can change without an
+   * action (an app launched through simctl, an animation finishing), and nothing tells the manager.
+   */
+  fun sharedScreenState(): ScreenState = getScreenState()
+
   data class ExecutionResult(val resolvedX: Int? = null, val resolvedY: Int? = null)
 }

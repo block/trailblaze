@@ -665,40 +665,124 @@ function parseProperties(v: unknown): Record<string, unknown> {
 // Screen text, device log, trace
 // ---------------------------------------------------------------------------------------------
 
-function loadScreenText(dir: string): ScreenText[] {
+// The image name inside whatever a log recorded: a bare filename locally, a signed URL on a farm
+// run. The last path segment once the query is dropped, else the last query value naming an image.
+const IMAGE_NAME = /\.(png|webp|jpe?g|gif)$/i;
+function captureIdFrom(ref: string): string {
+  const decode = (v: string) => {
+    try {
+      return decodeURIComponent(v.replace(/\+/g, " "));
+    } catch {
+      return v;
+    }
+  };
+  const beforeFragment = ref.split("#")[0] ?? ref;
+  const q = beforeFragment.indexOf("?");
+  const fromPath = decode(q >= 0 ? beforeFragment.slice(0, q) : beforeFragment).split("/").pop() ?? "";
+  if (IMAGE_NAME.test(fromPath)) return fromPath;
+  if (q >= 0) {
+    const names = beforeFragment.slice(q + 1).split("&")
+      .map((kv) => decode(kv.slice(kv.indexOf("=") + 1)).split("/").pop() ?? "")
+      .filter((n) => IMAGE_NAME.test(n));
+    const last = names[names.length - 1];
+    if (last) return last;
+  }
+  return ref;
+}
+
+// `sizedBounds`: a version-1 export stored a box as `[x, y, width, height]`; every other source
+// stores its corners, which is what `ScreenText.bounds` promises.
+function screenTextRow(s: unknown, at: { captureId: string; screenshot?: string; stepIndex: number; file: string; line?: number; timeMs?: number }, sizedBounds = false): ScreenText | null {
+  const str = asRecord(s);
+  const text = asString(str?.text);
+  if (!text) return null;
+  const row: ScreenText = {
+    kind: "screen-text",
+    text,
+    source: asString(str?.source) ?? "text",
+    captureId: at.captureId,
+    stepIndex: at.stepIndex,
+    // Recorded only when false: on screen is the default the log leaves out.
+    visible: str?.visible !== false,
+    file: at.file,
+    line: at.line,
+    timeMs: at.timeMs,
+    summary: `saw "${text.length > 80 ? text.slice(0, 80) + "…" : text}"`,
+    detail: { text, captureId: at.captureId },
+  };
+  if (at.screenshot) row.screenshot = at.screenshot;
+  const b = str?.bounds;
+  if (Array.isArray(b) && b.length === 4 && b.every((n) => typeof n === "number")) {
+    const [l, t, x3, x4] = b as [number, number, number, number];
+    row.bounds = sizedBounds ? [l, t, l + x3, t + x4] : [l, t, x3, x4];
+  }
+  return row;
+}
+
+/**
+ * Every string each capture's view tree held. Read off the capture logs, where the logging rule
+ * recorded them; one capture per screenshot, since a driver log and the LLM request made on the
+ * same screen name one image. A capture with no screenshot is named by the id its log was stamped
+ * with. Sessions recorded before the logs carried strings fall back to the
+ * `visible-strings.ndjson` export, either version.
+ */
+function loadScreenText(dir: string, logs: LogRecord[]): ScreenText[] {
+  const out: ScreenText[] = [];
+  const seen = new Set<string>();
+  for (const rec of logs) {
+    const log = rec.log as unknown as { screenshotFile?: unknown; captureId?: unknown; visibleStrings?: unknown };
+    if (!Array.isArray(log.visibleStrings)) continue;
+    const screenshot = typeof log.screenshotFile === "string" && log.screenshotFile ? captureIdFrom(log.screenshotFile) : undefined;
+    // A screenshot-less capture recorded before ids existed has nothing to be named by.
+    const captureId = screenshot ?? (typeof log.captureId === "string" && log.captureId ? log.captureId : undefined);
+    if (!captureId || seen.has(captureId)) continue;
+    const at = { captureId, screenshot, stepIndex: seen.size, file: rec.file, timeMs: rec.timeMs };
+    seen.add(captureId);
+    for (const s of log.visibleStrings) {
+      const row = screenTextRow(s, at);
+      if (row) out.push(row);
+    }
+  }
+  return seen.size > 0 ? out : loadScreenTextFile(dir);
+}
+
+function loadScreenTextFile(dir: string): ScreenText[] {
   const path = join(dir, VISIBLE_STRINGS_FILE);
   if (!existsSync(path)) return [];
   const out: ScreenText[] = [];
-  // A capture that showed the same screen as an earlier step is written with no strings and a
-  // `repeatOfStepIndex` naming that step. It is still a capture of those strings at its own time,
-  // so it gets them back: without them, a screen the run returned to reads as never shown again.
+  // A capture that showed the same screen as an earlier one is written with no strings and a
+  // pointer to it: `repeatOf` (its capture id) in version 2, `repeatOfStepIndex` in version 1. It is
+  // still a capture of those strings at its own time, so it gets them back: without them, a screen
+  // the run returned to reads as never shown again.
   const stringsByStep = new Map<number, unknown[]>();
+  const stringsByCapture = new Map<string, unknown[]>();
+  let ordinal = 0;
   for (const { line, row } of readNdjson(path)) {
     const rec = asRecord(row);
     if (!rec || rec.kind !== "screen" || !Array.isArray(rec.strings)) continue;
     const captureId = asString(rec.captureId) ?? "";
-    const stepIndex = asNumber(rec.stepIndex) ?? -1;
-    const timeMs = parseIsoMs(asString(rec.timestamp));
-    const repeatOf = asNumber(rec.repeatOfStepIndex);
+    // Lines written before the `screenshot` field was split out named the capture by its screenshot.
+    const screenshot = asString(rec.screenshot) ?? (IMAGE_NAME.test(captureId) ? captureId : undefined);
+    const stepIndex = asNumber(rec.stepIndex) ?? ordinal;
+    ordinal++;
     const own = rec.strings as unknown[];
-    if (own.length > 0) stringsByStep.set(stepIndex, own);
-    const strings = own.length === 0 && repeatOf !== undefined ? (stringsByStep.get(repeatOf) ?? []) : own;
+    if (own.length > 0) {
+      stringsByStep.set(stepIndex, own);
+      if (captureId) stringsByCapture.set(captureId, own);
+    }
+    const repeatOfStep = asNumber(rec.repeatOfStepIndex);
+    const repeatOf = asString(rec.repeatOf);
+    const strings = own.length > 0 ? own
+      : repeatOf !== undefined ? (stringsByCapture.get(repeatOf) ?? [])
+      : repeatOfStep !== undefined ? (stringsByStep.get(repeatOfStep) ?? [])
+      : own;
+    const at = { captureId, screenshot, stepIndex, file: VISIBLE_STRINGS_FILE, line, timeMs: parseIsoMs(asString(rec.timestamp)) };
+    // A repeat's strings are copied from the screen it names, which is in the same file, so the
+    // file's version decides the box shape for both.
+    const sizedBounds = asNumber(rec.v) === 1;
     for (const s of strings) {
-      const str = asRecord(s);
-      const text = asString(str?.text);
-      if (!text) continue;
-      out.push({
-        kind: "screen-text",
-        text,
-        source: asString(str?.source) ?? "text",
-        captureId,
-        stepIndex,
-        file: VISIBLE_STRINGS_FILE,
-        line,
-        timeMs,
-        summary: `saw "${text.length > 80 ? text.slice(0, 80) + "…" : text}"`,
-        detail: { text, captureId },
-      });
+      const r = screenTextRow(s, at, sizedBounds);
+      if (r) out.push(r);
     }
   }
   return out;
@@ -902,7 +986,7 @@ export class SurveySession {
     this.network = new Records(network, matchNetwork);
     this.events = new Records(streams, matchEvent);
     this.analytics = new Records(analyticsFrom(streams), matchAnalytics);
-    this.screenText = new Records(loadScreenText(dir), matchScreenText);
+    this.screenText = new Records(loadScreenText(dir, logs), matchScreenText);
     this.deviceLog = new Records(deviceLog.lines, matchDeviceLog);
     this.trace = new Records(loadTrace(dir), matchTrace);
   }

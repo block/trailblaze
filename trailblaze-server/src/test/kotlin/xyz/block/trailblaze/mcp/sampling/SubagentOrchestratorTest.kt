@@ -10,7 +10,6 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.TraceId
-import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.mcp.TrailblazeMcpBridge
 import xyz.block.trailblaze.mcp.TrailblazeMcpSessionContext
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetScreenStateResponse
@@ -401,7 +400,7 @@ private class MockTrailblazeMcpBridge : TrailblazeMcpBridge {
   override fun getAvailableAppTargets(): Set<TrailblazeHostAppTarget> =
     throw NotImplementedError("Not needed for parsing tests")
 
-  override suspend fun runYaml(yaml: String, startNewSession: Boolean, agentImplementation: AgentImplementation) =
+  override suspend fun runYaml(yaml: String, startNewSession: Boolean) =
     throw NotImplementedError("Not needed for parsing tests")
 
   override fun getCurrentlySelectedDeviceId(): TrailblazeDeviceId? =

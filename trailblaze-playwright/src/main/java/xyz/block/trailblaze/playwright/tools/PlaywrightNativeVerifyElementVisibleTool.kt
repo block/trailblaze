@@ -41,6 +41,7 @@ data class PlaywrightNativeVerifyElementVisibleTool(
     reasoning?.let { Console.log("### Reasoning: $it") }
     Console.log("### Verifying element visible: $description")
     return try {
+      PlaywrightPageResponsiveness.requireResponsive(page)
       val (locator, error) =
         PlaywrightExecutableTool.validateAndResolveRef(page, ref, description, context, nodeSelector)
       if (error != null) return error

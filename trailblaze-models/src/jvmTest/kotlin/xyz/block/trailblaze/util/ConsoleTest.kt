@@ -230,10 +230,80 @@ class ConsoleTest {
     )
   }
 
+  @Test fun `a thread-scoped quiet command does not silence other threads`() {
+    // The daemon runs forwarded commands in-process. A quiet one used to drop every other daemon
+    // thread's log line — MCP sessions, trail runs — for as long as it ran.
+    Console.withThreadScopedQuietMode {
+      Console.runQuiet {
+        Console.log("command-chatter")
+        onAnotherThread { Console.log("other-thread-line") }
+      }
+    }
+    val text = captured.toString(Charsets.UTF_8)
+    assertTrue(text.contains("other-thread-line"), "another thread's log() must still be written: $text")
+    assertFalse(text.contains("command-chatter"), "the quiet command's own log() must still be dropped")
+  }
+
+  @Test fun `a thread-scoped quiet command sends its info to the log channel, on its thread only`() {
+    // Same routing as process-wide quiet mode, which points `info()` at the log channel — but the
+    // other thread's `info()` must stay on the user-facing stream.
+    val logChannel = ByteArrayOutputStream()
+    setPrivateStream("out", PrintStream(logChannel, /* autoFlush = */ true, Charsets.UTF_8))
+
+    Console.withThreadScopedQuietMode {
+      Console.runQuiet {
+        Console.info("command-note")
+        onAnotherThread { Console.info("other-thread-note") }
+      }
+    }
+
+    assertTrue(logChannel.toString(Charsets.UTF_8).contains("command-note"))
+    val userFacing = captured.toString(Charsets.UTF_8)
+    assertTrue(userFacing.contains("other-thread-note"), "the other thread's info() belongs on its own stream")
+    assertFalse(userFacing.contains("command-note"))
+  }
+
+  @Test fun `quiet mode outside a thread scope still silences every thread`() {
+    // The standalone CLI: one command per process, and work it hands to another thread must stay
+    // quiet too.
+    Console.runQuiet { onAnotherThread { Console.log("background-chatter") } }
+    assertFalse(captured.toString(Charsets.UTF_8).contains("background-chatter"))
+  }
+
+  @Test fun `a thread scope never touches process-wide quiet mode`() {
+    Console.withThreadScopedQuietMode {
+      Console.enableQuietMode()
+      assertTrue(Console.isQuietMode(), "the scoped thread must see its own quiet mode")
+      onAnotherThread { assertFalse(Console.isQuietMode(), "no other thread may see it") }
+      // Left on deliberately: the scope, not the command, decides that it ends.
+    }
+    assertFalse(Console.isQuietMode(), "a command's quiet mode must not outlive its scope")
+    Console.log("after-the-scope")
+    assertTrue(captured.toString(Charsets.UTF_8).contains("after-the-scope"))
+  }
+
+  @Test fun `process-wide quiet mode still silences a thread-scoped command`() {
+    Console.enableQuietMode()
+    Console.withThreadScopedQuietMode {
+      Console.disableQuietMode()
+      Console.log("scoped-line")
+    }
+    assertTrue(Console.isQuietMode(), "a scoped command must not be able to lift process-wide quiet mode")
+    assertFalse(captured.toString(Charsets.UTF_8).contains("scoped-line"))
+  }
+
   @Test fun `disableJsonMode without prior enable is a no-op`() {
     Console.disableJsonMode()
     Console.log("still visible")
     assertTrue(captured.toString(Charsets.UTF_8).contains("still visible"))
+  }
+
+  private fun onAnotherThread(block: () -> Unit) {
+    var failure: Throwable? = null
+    val thread = Thread { failure = runCatching(block).exceptionOrNull() }
+    thread.start()
+    thread.join()
+    failure?.let { throw it }
   }
 
   /** Re-point one of `Console`'s cached streams; see the note in [setUp] on why reflection. */

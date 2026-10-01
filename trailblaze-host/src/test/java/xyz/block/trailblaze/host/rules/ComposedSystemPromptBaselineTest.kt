@@ -2,7 +2,7 @@ package xyz.block.trailblaze.host.rules
 
 import java.io.File
 import org.junit.Test
-import xyz.block.trailblaze.agent.TrailblazeRunner
+import xyz.block.trailblaze.agent.TrailblazeSystemPrompt
 import xyz.block.trailblaze.util.Console
 
 /**
@@ -26,7 +26,7 @@ class ComposedSystemPromptBaselineTest {
   fun `composed mobile prompt matches baseline`() {
     assertBaseline(
       baselineName = "composed_mobile_prompt.txt",
-      actual = TrailblazeRunner.composeSystemPrompt(),
+      actual = TrailblazeSystemPrompt.compose(),
     )
   }
 
@@ -36,7 +36,7 @@ class ComposedSystemPromptBaselineTest {
   fun `composed playwright native prompt matches baseline`() {
     assertBaseline(
       baselineName = "composed_playwright_native_prompt.txt",
-      actual = TrailblazeRunner.composeSystemPrompt(
+      actual = TrailblazeSystemPrompt.compose(
         BasePlaywrightNativeTest.PLAYWRIGHT_NATIVE_SYSTEM_PROMPT,
       ),
     )
@@ -48,7 +48,7 @@ class ComposedSystemPromptBaselineTest {
   fun `composed playwright electron prompt matches baseline`() {
     assertBaseline(
       baselineName = "composed_playwright_electron_prompt.txt",
-      actual = TrailblazeRunner.composeSystemPrompt(
+      actual = TrailblazeSystemPrompt.compose(
         BasePlaywrightElectronTest.PLAYWRIGHT_ELECTRON_SYSTEM_PROMPT,
       ),
     )
@@ -60,7 +60,7 @@ class ComposedSystemPromptBaselineTest {
   fun `composed compose desktop prompt matches baseline`() {
     assertBaseline(
       baselineName = "composed_compose_desktop_prompt.txt",
-      actual = TrailblazeRunner.composeSystemPrompt(BaseComposeTest.COMPOSE_SYSTEM_PROMPT),
+      actual = TrailblazeSystemPrompt.compose(BaseComposeTest.COMPOSE_SYSTEM_PROMPT),
     )
   }
 
@@ -70,7 +70,7 @@ class ComposedSystemPromptBaselineTest {
   fun `composed web prompt matches baseline`() {
     assertBaseline(
       baselineName = "composed_web_prompt.txt",
-      actual = TrailblazeRunner.composeSystemPrompt(BaseWebTrailblazeTest.WEB_SYSTEM_PROMPT),
+      actual = TrailblazeSystemPrompt.compose(BaseWebTrailblazeTest.WEB_SYSTEM_PROMPT),
     )
   }
 

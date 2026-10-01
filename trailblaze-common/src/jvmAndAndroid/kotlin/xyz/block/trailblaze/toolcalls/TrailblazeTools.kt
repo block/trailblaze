@@ -25,7 +25,6 @@ NOTE:
 - If more than one view matches the text, other optional properties are required to disambiguate.
       """
 
-  fun List<KClass<out TrailblazeTool>>.filterForMapsToMaestroCommands(): List<KClass<out TrailblazeTool>> = this.filter { it.isSubclassOf(MapsToMaestroCommands::class) }
 }
 
 // Make this a top-level public function so it can be used elsewhere

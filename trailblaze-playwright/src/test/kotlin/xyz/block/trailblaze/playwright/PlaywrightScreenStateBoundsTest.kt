@@ -695,6 +695,37 @@ class PlaywrightScreenStateBoundsTest {
   """.trimIndent()
 
   @Test
+  fun `a covered landmark keeps its visible children under it`() {
+    // The overlay covers the middle of the navigation bar but not the link at its left edge.
+    page.setContent(
+      """
+      <!DOCTYPE html>
+      <html>
+      <body style="margin:0; padding:0;">
+        <h1 style="margin:0; height:40px;">Welcome</h1>
+        <nav aria-label="Site" style="width:1000px; height:40px;">
+          <a href="#" style="display:inline-block; width:80px;">Home</a>
+        </nav>
+        <div style="position:fixed; left:400px; top:40px; width:200px; height:40px; background:#000; z-index:999;"></div>
+      </body>
+      </html>
+      """.trimIndent(),
+    )
+    val screenState = PlaywrightScreenState(page = page, viewportWidth = 1280, viewportHeight = 800)
+
+    val lines = screenState.viewHierarchyTextRepresentation!!.lines()
+    assertFalse(lines.any { it.contains("] navigation \"Site\"") }, "the covered nav is not a ref: $lines")
+    val navIndex = lines.indexOfFirst { it.trim() == "navigation \"Site\":" }
+    assertTrue(navIndex >= 0, "the covered nav stays as a header: $lines")
+    val link = lines[navIndex + 1]
+    assertTrue(
+      link.contains("link \"Home\"") &&
+        link.takeWhile { it == ' ' }.length > lines[navIndex].takeWhile { it == ' ' }.length,
+      "the link stays nested under the nav: $lines",
+    )
+  }
+
+  @Test
   fun `occluded elements are filtered from text view by default`() {
     page.setContent(occludedPageHtml)
 

@@ -2,6 +2,12 @@ package xyz.block.trailblaze.playwright
 
 import com.microsoft.playwright.Page
 import com.microsoft.playwright.options.AriaRole
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import xyz.block.trailblaze.api.DriverNodeDetail
 import xyz.block.trailblaze.api.TrailblazeNode
 import xyz.block.trailblaze.tracing.TrailblazeTracer
@@ -42,7 +48,29 @@ object PlaywrightTrailblazeNodeMapper {
 
     var nextNodeId = 1L
     val descriptorOccurrences = mutableMapOf<String, Int>()
-    return parseLines(lines, 0, { nextNodeId++ }, descriptorOccurrences).first
+    return parseLines(lines, null, 0, { nextNodeId++ }, descriptorOccurrences, null).first
+  }
+
+  /**
+   * Maps a boxed ARIA snapshot to a [TrailblazeNode] tree whose bounds are the snapshot's own
+   * per-node boxes, in viewport coordinates, so every element node is located, not just those a
+   * DOM walk can match back by role and name.
+   *
+   * Given [page], it also runs [mapWithBounds]'s DOM walk for the `cssSelector` and `dataTestId`
+   * that walk stamps on the nodes it matches, so the tree is [mapWithBounds]'s — same nodes,
+   * same selector fields — with more boxes, and a selector recorded against one resolves
+   * against the other.
+   */
+  fun mapBoxedSnapshot(snapshot: PlaywrightAriaSnapshot.BoxedAriaSnapshot, page: Page? = null): TrailblazeNode? {
+    if (snapshot.lines.isEmpty()) return null
+    var nextNodeId = 1L
+    val descriptorOccurrences = mutableMapOf<String, Int>()
+    val tree = parseLines(snapshot.lines, snapshot.boxes, 0, { nextNodeId++ }, descriptorOccurrences, null).first
+      ?: return null
+    if (page == null) return tree
+    val domBounds = TrailblazeTracer.trace("captureDomBounds", "screenState") { captureDomBounds(page) }
+    // The walk's boxes are page coordinates; this tree's are the viewport's, the screenshot's.
+    return if (domBounds.isEmpty()) tree else enrichTreeWithBounds(tree, domBounds, takeBounds = false)
   }
 
   /**
@@ -89,23 +117,34 @@ object PlaywrightTrailblazeNodeMapper {
    */
   private fun parseLines(
     lines: List<String>,
+    boxes: List<TrailblazeNode.Bounds?>?,
     startIndex: Int,
     nextId: () -> Long,
     descriptorOccurrences: MutableMap<String, Int>,
+    parentBounds: TrailblazeNode.Bounds?,
   ): Pair<TrailblazeNode?, Int> {
     if (startIndex >= lines.size) return null to startIndex
 
     val rootLine = lines[startIndex]
     val rootIndent = rootLine.indexOfFirst { it != ' ' && it != '-' }
     val rootParsed = parseAriaLine(rootLine)
+    // A text run has no element of its own, so it takes the box of the nearest element it sits in.
+    val bounds = boxes?.getOrNull(startIndex) ?: parentBounds?.takeIf { rootParsed.role == "text" }
 
     val children = mutableListOf<TrailblazeNode>()
+    val properties = mutableMapOf<String, String>()
     var i = startIndex + 1
     while (i < lines.size) {
       val lineIndent = lines[i].indexOfFirst { it != ' ' && it != '-' }
       if (lineIndent <= rootIndent) break
 
-      val (child, nextIndex) = parseLines(lines, i, nextId, descriptorOccurrences)
+      // `- /url: …` and `- /placeholder: …` describe their parent; they are not page text.
+      PROPERTY_LINE.matchEntire(lines[i])?.let { match ->
+        properties[match.groupValues[1]] = yamlScalar(match.groupValues[2])
+        i++
+        continue
+      }
+      val (child, nextIndex) = parseLines(lines, boxes, i, nextId, descriptorOccurrences, bounds ?: parentBounds)
       if (child != null) children.add(child)
       i = nextIndex
     }
@@ -117,7 +156,8 @@ object PlaywrightTrailblazeNodeMapper {
     val node = TrailblazeNode(
       nodeId = nextId(),
       children = children,
-      bounds = null, // populated later by enrichTreeWithBounds
+      // Without boxes, populated later by enrichTreeWithBounds.
+      bounds = bounds,
       driverDetail = DriverNodeDetail.Web(
         ariaRole = rootParsed.role,
         ariaName = rootParsed.name,
@@ -126,6 +166,8 @@ object PlaywrightTrailblazeNodeMapper {
         nthIndex = occurrenceIndex,
         isInteractive = rootParsed.ariaRole in INTERACTIVE_ROLES,
         isLandmark = rootParsed.ariaRole in LANDMARK_ROLES,
+        placeholder = properties["placeholder"],
+        url = properties["url"],
       ),
     )
     return node to i
@@ -229,6 +271,19 @@ object PlaywrightTrailblazeNodeMapper {
 
   // -- Regex patterns --
 
+  private val PROPERTY_LINE = Regex("""^\s*-\s+/(\w+):\s*(.*)$""")
+
+  /** A YAML scalar as Playwright writes one: bare, or quoted when it holds YAML syntax. */
+  internal fun yamlScalar(raw: String): String {
+    val v = raw.trim()
+    return when {
+      v.length >= 2 && v.startsWith('"') && v.endsWith('"') ->
+        v.substring(1, v.length - 1).replace("\\\"", "\"").replace("\\\\", "\\")
+      v.length >= 2 && v.startsWith('\'') && v.endsWith('\'') -> v.substring(1, v.length - 1).replace("''", "'")
+      else -> v
+    }
+  }
+
   private val QUOTED_ROLE_PATTERN = Regex("""^(\w+)\s+"(.+?)".*$""")
   private val COLON_ROLE_PATTERN = Regex("""^(\w+):\s*(.+)$""")
   private val CONTAINER_ROLE_PATTERN = Regex("""^(\w+):?\s*$""")
@@ -281,24 +336,26 @@ object PlaywrightTrailblazeNodeMapper {
    * visible element. Returns a flat list of [DomElementBounds] with page-coordinate
    * bounds (scroll offset applied) and element identifiers for matching.
    */
-  @Suppress("UNCHECKED_CAST")
   internal fun captureDomBounds(page: Page): List<DomElementBounds> {
     return try {
-      val result = page.evaluate(DOM_BOUNDS_SCRIPT) as? List<Map<String, Any?>>
-        ?: return emptyList()
-
-      result.map { entry ->
+      // One JSON string, not an array of objects: Playwright ships an array one object at a
+      // time, which on a 4,000-element page costs 20ms more than the walk itself.
+      val json = page.evaluate(DOM_BOUNDS_SCRIPT) as? String ?: return emptyList()
+      Json.parseToJsonElement(json).jsonArray.map { element ->
+        val entry = element.jsonObject
+        fun string(key: String) = entry[key]?.jsonPrimitive?.contentOrNull
+        fun int(key: String) = entry[key]?.jsonPrimitive?.intOrNull ?: 0
         DomElementBounds(
-          tag = entry["tag"] as? String ?: "",
-          ariaRole = entry["ariaRole"] as? String,
-          ariaLabel = entry["ariaLabel"] as? String,
-          textContent = entry["textContent"] as? String,
-          id = entry["id"] as? String,
-          dataTestId = entry["dataTestId"] as? String,
-          x = (entry["x"] as? Number)?.toInt() ?: 0,
-          y = (entry["y"] as? Number)?.toInt() ?: 0,
-          width = (entry["w"] as? Number)?.toInt() ?: 0,
-          height = (entry["h"] as? Number)?.toInt() ?: 0,
+          tag = string("tag") ?: "",
+          ariaRole = string("ariaRole"),
+          ariaLabel = string("ariaLabel"),
+          textContent = string("textContent"),
+          id = string("id"),
+          dataTestId = string("dataTestId"),
+          x = int("x"),
+          y = int("y"),
+          width = int("w"),
+          height = int("h"),
         )
       }
     } catch (e: Exception) {
@@ -375,7 +432,7 @@ object PlaywrightTrailblazeNodeMapper {
       }
 
       walkDOM(document.documentElement);
-      return results;
+      return JSON.stringify(results);
     }
   """.trimIndent()
 
@@ -398,6 +455,7 @@ object PlaywrightTrailblazeNodeMapper {
   internal fun enrichTreeWithBounds(
     root: TrailblazeNode,
     domBounds: List<DomElementBounds>,
+    takeBounds: Boolean = true,
   ): TrailblazeNode {
     // Index DOM elements by role+name for efficient lookup.
     // Multiple DOM elements can share the same key, so we track occurrence indices.
@@ -412,7 +470,7 @@ object PlaywrightTrailblazeNodeMapper {
     // Track how many times each ARIA descriptor has been seen during tree walk
     val ariaDescriptorCount = mutableMapOf<String, Int>()
 
-    return enrichNode(root, domByKey, consumed, ariaDescriptorCount)
+    return enrichNode(root, domByKey, consumed, ariaDescriptorCount, takeBounds)
   }
 
   private fun enrichNode(
@@ -420,6 +478,7 @@ object PlaywrightTrailblazeNodeMapper {
     domByKey: Map<String, List<IndexedValue<DomElementBounds>>>,
     consumed: MutableSet<Int>,
     ariaDescriptorCount: MutableMap<String, Int>,
+    takeBounds: Boolean,
   ): TrailblazeNode {
     val detail = node.driverDetail as? DriverNodeDetail.Web ?: return node
     val descriptor = detail.ariaDescriptor ?: return node
@@ -435,7 +494,7 @@ object PlaywrightTrailblazeNodeMapper {
 
     // Enrich children first (pre-order, but children get enriched after parent key is tracked)
     val enrichedChildren = node.children.map { child ->
-      enrichNode(child, domByKey, consumed, ariaDescriptorCount)
+      enrichNode(child, domByKey, consumed, ariaDescriptorCount, takeBounds)
     }
 
     if (matched != null) {
@@ -443,12 +502,16 @@ object PlaywrightTrailblazeNodeMapper {
       val entry = matched.value
       return node.copy(
         children = enrichedChildren,
-        bounds = TrailblazeNode.Bounds(
-          left = entry.x,
-          top = entry.y,
-          right = entry.x + entry.width,
-          bottom = entry.y + entry.height,
-        ),
+        bounds = if (takeBounds) {
+          TrailblazeNode.Bounds(
+            left = entry.x,
+            top = entry.y,
+            right = entry.x + entry.width,
+            bottom = entry.y + entry.height,
+          )
+        } else {
+          node.bounds
+        },
         driverDetail = detail.copy(
           cssSelector = detail.cssSelector ?: buildCssSelector(entry),
           dataTestId = detail.dataTestId ?: entry.dataTestId,

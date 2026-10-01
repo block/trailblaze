@@ -81,9 +81,7 @@ data class AssertVisibleTrailblazeTool(
     // here: its traversal doesn't skip offscreen/dedup the same way and will mismatch on iOS.
     val targetNode = tree.findFirst { it.ref == ref }
       ?: throw TrailblazeToolExecutionException(
-        // See TapTrailblazeTool for why the "Element ref 'X' not found on current screen"
-        // prefix is load-bearing (matched by StaleRefRecovery.STALE_REF_REGEX) and why we
-        // dropped the "use 'snapshot'" pointer.
+        // See TapTrailblazeTool for why we dropped the "use 'snapshot'" pointer.
         message = "assertVisible: Element ref '$ref' not found on current screen. " +
           "The screen has changed since this ref was last visible. " +
           "Use a ref from the current view hierarchy instead.",
@@ -100,6 +98,32 @@ data class AssertVisibleTrailblazeTool(
       "### assertVisible: Resolved '$ref' → ${targetNode.describe()} at (${center.first}, ${center.second})",
     )
 
+    // The selector the assert records. A presence check describes what a touch at the
+    // ref's center lands on, like `tap` ([selectorSourceNode]). A text check is a claim about
+    // THIS ref's text, so it records the ref's own node: the hit-test can settle on a child label
+    // under the center (a cell's "Model Name" inside "Model Name, iPhone 17") and the text check
+    // would then read the child. Lazy because the ANDROID Maestro path below records a
+    // TapSelectorV2 selector and never reads it.
+    //
+    // A text check also skips selectors that pick the ref out by `containsChild` /
+    // `containsDescendants`: the text post-pass reads those children instead of the node itself
+    // (that is what a hand-written one means), so a row whose own text repeats, told apart by a
+    // child, would be checked against the child. When every unique selector needs a child
+    // anchor, it records the best one anyway and the failure lists the fields it compared.
+    val recordedSelector by lazy {
+      if (resolvedText.expectedText == null) {
+        TrailblazeNodeSelectorGenerator.findBestSelector(
+          tree,
+          selectorSourceNode(tree, targetNode, center.first, center.second),
+        )
+      } else {
+        TrailblazeNodeSelectorGenerator.findAllValidSelectors(tree, targetNode, maxResults = Int.MAX_VALUE)
+          .map { it.selector }
+          .firstOrNull { it.containsChild == null && it.containsDescendants.isNullOrEmpty() }
+          ?: TrailblazeNodeSelectorGenerator.findBestSelector(tree, targetNode)
+      }
+    }
+
     // Accessibility-driver path: emit nodeSelector-only, mirroring [TapTrailblazeTool]'s
     // forward-only recording shape (see that file for the full rationale, including why
     // [DriverNodeDetail.AndroidView] joins it here). Without the AndroidView case, an
@@ -108,11 +132,7 @@ data class AssertVisibleTrailblazeTool(
     if (tree.driverDetail is DriverNodeDetail.AndroidAccessibility ||
       tree.driverDetail is DriverNodeDetail.AndroidView
     ) {
-      val accessibilityHitTestNode = selectorSourceNode(tree, targetNode, center.first, center.second)
-      val accessibilityNodeSelector = TrailblazeNodeSelectorGenerator.findBestSelector(
-        tree,
-        accessibilityHitTestNode,
-      )
+      val accessibilityNodeSelector = recordedSelector
       return listOf(
         AssertVisibleBySelectorTrailblazeTool(
           reason = reasoning,
@@ -123,32 +143,21 @@ data class AssertVisibleTrailblazeTool(
       )
     }
 
-    val matchingNode = ViewHierarchyTreeNode.dfs(screenState.viewHierarchy) { node ->
-      node.centerPoint?.let {
-        val (cx, cy) = it.split(",").map { s -> s.toInt() }
-        cx == center.first && cy == center.second
-      } ?: false
-    } ?: throw TrailblazeToolExecutionException(
-      message = "assertVisible: Could not map ref '$ref' to a view-hierarchy node for selector generation.",
-      tool = this,
-    )
-
     // Generate a rich TrailblazeNodeSelector where possible; AssertVisibleBySelectorTrailblazeTool
     // dispatches via nodeSelector or a Maestro-lowered projection of it based on NodeSelectorMode
-    // internally. [selectorSourceNode] resolves the frontmost node at the coordinates that the
-    // ref could actually have meant — the same round-trip validation as TapTrailblazeTool (see
-    // TrailblazeNode.hitTest for tiebreaker logic, and SelectorSourceNode for the occlusion
-    // case it overrides). It always answers, because a hit-test at the ref's own center cannot
-    // miss: bounds contain their own center point. The `?: null` that used to guard this and
-    // defer to the TapSelectorV2 projection below was therefore already dead.
+    // internally. For a presence check, [selectorSourceNode] resolves the frontmost node at the
+    // coordinates that the ref could actually have meant — the same round-trip validation as
+    // TapTrailblazeTool (see TrailblazeNode.hitTest for tiebreaker logic, and SelectorSourceNode
+    // for the occlusion case it overrides). It always answers, because a hit-test at the ref's
+    // own center cannot miss: bounds contain their own center point. The `?: null` that used to
+    // guard this and defer to the TapSelectorV2 projection below was therefore already dead.
     // Skipped on ANDROID: recordedNodeSelectorForMaestroPath below always records the
     // TapSelectorV2-derived selector there, so the modern generation would be dead work.
     val nodeSelector = if (screenState.trailblazeDevicePlatform == TrailblazeDevicePlatform.ANDROID) {
       null
     } else {
-      val hitTestNode = selectorSourceNode(tree, targetNode, center.first, center.second)
       try {
-        TrailblazeNodeSelectorGenerator.findBestSelector(tree, hitTestNode)
+        recordedSelector
       } catch (e: Exception) {
         Console.log(
           "WARNING: TrailblazeNodeSelector generation failed, falling back to legacy selector: ${e.message}",
@@ -157,29 +166,38 @@ data class AssertVisibleTrailblazeTool(
       }
     }
 
-    val selectorWithStrategy = findBestTrailblazeElementSelectorForTargetNodeWithStrategy(
-      root = screenState.viewHierarchy,
-      target = matchingNode,
-      trailblazeDevicePlatform = screenState.trailblazeDevicePlatform,
-      widthPixels = screenState.deviceWidth,
-      heightPixels = screenState.deviceHeight,
-      spatialHints = null,
-    )
-
     // AssertVisibleBySelectorTrailblazeTool no longer carries the legacy TrailblazeElementSelector
     // field, so TapSelectorV2's output is converted to nodeSelector shape before storage; replay
     // lowers it back to a Maestro selector via `lowerToMaestroSelector`. The selector-source
     // choice lives in [recordedNodeSelectorForMaestroPath] (shared with TapTrailblazeTool) —
-    // an assert recorded against a container-shaped modern selector would pass vacuously.
+    // an assert recorded against a container-shaped modern selector would pass vacuously. The
+    // view-hierarchy lookup and TapSelectorV2 only run when that selector is recorded, so neither
+    // can fail an assert that records the modern selector.
     return listOf(
       AssertVisibleBySelectorTrailblazeTool(
         reason = reasoning,
         nodeSelector = recordedNodeSelectorForMaestroPath(
           platform = screenState.trailblazeDevicePlatform,
           modernNodeSelector = nodeSelector,
-          legacyAsNodeSelector = selectorWithStrategy.selector.toTrailblazeNodeSelector(
-            screenState.trailblazeDevicePlatform,
-          ),
+          legacyAsNodeSelector = {
+            val matchingNode = ViewHierarchyTreeNode.dfs(screenState.viewHierarchy) { node ->
+              node.centerPoint?.let {
+                val (cx, cy) = it.split(",").map { s -> s.toInt() }
+                cx == center.first && cy == center.second
+              } ?: false
+            } ?: throw TrailblazeToolExecutionException(
+              message = "assertVisible: Could not map ref '$ref' to a view-hierarchy node for selector generation.",
+              tool = this,
+            )
+            findBestTrailblazeElementSelectorForTargetNodeWithStrategy(
+              root = screenState.viewHierarchy,
+              target = matchingNode,
+              trailblazeDevicePlatform = screenState.trailblazeDevicePlatform,
+              widthPixels = screenState.deviceWidth,
+              heightPixels = screenState.deviceHeight,
+              spatialHints = null,
+            ).selector.toTrailblazeNodeSelector(screenState.trailblazeDevicePlatform)
+          },
         ),
         expectedText = resolvedText.expectedText,
         textMatchMode = resolvedText.mode,

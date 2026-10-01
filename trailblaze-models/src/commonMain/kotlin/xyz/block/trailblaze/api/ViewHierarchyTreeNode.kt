@@ -147,10 +147,6 @@ data class ViewHierarchyTreeNode(
     }
 
     /**
-     * We use this to provide unique IDs for each node in the view hierarchy.
-     */
-
-    /**
      * Relabels the tree with new nodeIds using a shared atomic incrementer.
      * Returns a new tree with the same structure and data, but fresh nodeIds.
      */
@@ -248,12 +244,6 @@ data class ViewHierarchyTreeNode(
   fun deepCopyWithoutBounds(): ViewHierarchyTreeNode = deepTransform { node ->
     node.copy(centerPoint = null, dimensions = null, x1 = 0, y1 = 0, x2 = 0, y2 = 0)
   }
-
-  @Deprecated(
-    message = "Use deepCopyWithoutBounds() which more accurately describes the behavior.",
-    replaceWith = ReplaceWith("deepCopyWithoutBounds()"),
-  )
-  fun deepCopyWithoutDimensions(): ViewHierarchyTreeNode = deepCopyWithoutBounds()
 
   /**
    * Relabels the tree with new nodeIds using a shared atomic incrementer.

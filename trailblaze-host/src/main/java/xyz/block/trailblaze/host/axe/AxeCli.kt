@@ -184,38 +184,6 @@ object AxeCli {
     return run(args, timeoutSeconds)
   }
 
-  /** Tap by accessibility identifier (set by the app as `accessibilityIdentifier`). */
-  fun tapById(
-    udid: String,
-    id: String,
-    postDelaySeconds: Double = DEFAULT_SETTLE_MS / 1000.0,
-    timeoutSeconds: Long = 10,
-  ): Result = run(
-    listOf(
-      axeBin, "tap",
-      "--id", id,
-      "--post-delay", postDelaySeconds.toString(),
-      "--udid", udid,
-    ),
-    timeoutSeconds,
-  )
-
-  /** Tap by accessibility label (AXLabel). */
-  fun tapByLabel(
-    udid: String,
-    label: String,
-    postDelaySeconds: Double = DEFAULT_SETTLE_MS / 1000.0,
-    timeoutSeconds: Long = 10,
-  ): Result = run(
-    listOf(
-      axeBin, "tap",
-      "--label", label,
-      "--post-delay", postDelaySeconds.toString(),
-      "--udid", udid,
-    ),
-    timeoutSeconds,
-  )
-
   /**
    * Presses and holds a touch at ([x], [y]) for [durationMs] before releasing — the real
    * iOS long-press gesture. Uses AXe's `touch` primitive (`--down` → sleep → `--up`) rather

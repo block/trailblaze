@@ -27,24 +27,20 @@ trail:
   - step: "Tap the \"Name\" field and type \"Jane Doe\""
     recording:
       android-phone:
-        - tapOnElementBySelector:
-            reason: The 'Name' field is an EditText with nodeId 10. Tapping it will focus the input field to allow text entry.
-            nodeSelector:
-              androidAccessibility:
-                hintTextRegex: Name
         - inputText:
             text: Jane Doe
+            selector:
+              androidAccessibility:
+                hintTextRegex: Name
 
   - step: "Tap the \"Email\" field and type \"jane@example.com\""
     recording:
       android-phone:
-        - tapOnElementBySelector:
-            reason: The 'Email' field corresponds to the EditText with nodeId 12. To type an email address, the field must first be focused.
-            nodeSelector:
-              androidAccessibility:
-                hintTextRegex: Email
         - inputText:
             text: jane@example.com
+            selector:
+              androidAccessibility:
+                hintTextRegex: Email
 
   - step: "Tap the \"Submit\" button"
     recording:

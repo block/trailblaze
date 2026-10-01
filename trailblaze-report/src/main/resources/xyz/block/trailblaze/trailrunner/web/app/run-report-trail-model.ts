@@ -116,6 +116,22 @@ const groupRows = (group: ReportTraceGroup): TraceStep[] =>
 const shows = (hasShot: HasShot, lane: number, file: string | null | undefined): file is string =>
   Boolean(file) && hasShot(lane, file);
 
+// A capture that saved no screenshot still has a picture: the frame the run's recording shows at
+// that moment. It is named by this key in place of a file, and the viewer takes the frame from the
+// recording when it is shown.
+export const VIDEO_SHOT_PREFIX = '@video:';
+export const videoShotKey = (captureId: string): string => VIDEO_SHOT_PREFIX + captureId;
+/** The capture id a video-frame key names, or null for a screenshot file. */
+export const videoShotCaptureId = (file: string | null | undefined): string | null =>
+  file && file.startsWith(VIDEO_SHOT_PREFIX) ? file.slice(VIDEO_SHOT_PREFIX.length) : null;
+/** A record's picture: its screenshot, else the recording's frame at its first screenshot-less capture. */
+export const captureShotFile = (record: { screenshotFile?: string | null; captureIds?: string[] } | null | undefined): string | null => {
+  if (!record) return null;
+  if (record.screenshotFile) return record.screenshotFile;
+  const id = record.captureIds && record.captureIds[0];
+  return id ? videoShotKey(id) : null;
+};
+
 // Offset of a captured moment from the lane's run start. A folded dispatch that logged no
 // timestamp of its own rides its owning row's, so a capture is never stranded off the clock while
 // the row around it is on it. That fallback is also what places a row's OWN cue: `shotTs`/`markTs`
@@ -131,13 +147,15 @@ const atMs = (ts: number | null | undefined, rowTs: number | null | undefined, t
 // already contributed.
 const collectFrames = (group: ReportTraceGroup, lane: number, t0: number | null, hasShot: HasShot): TrailFrame[] =>
   groupRows(group).flatMap((row) => {
-    const seen = new Set([row.screenshotFile]);
+    const rowFile = captureShotFile(row);
+    const seen = new Set([rowFile]);
     return [
-      ...(shows(hasShot, lane, row.screenshotFile) ? [{ rowId: row.i, kid: null, file: row.screenshotFile as string, label: row.label, atMs: atMs(row.shotTs, row.ts, t0) }] : []),
+      ...(shows(hasShot, lane, rowFile) ? [{ rowId: row.i, kid: null, file: rowFile, label: row.label, atMs: atMs(row.shotTs, row.ts, t0) }] : []),
       ...(row.children || []).flatMap((child, kid) => {
-        if (!shows(hasShot, lane, child.screenshotFile) || seen.has(child.screenshotFile)) return [];
-        seen.add(child.screenshotFile);
-        return [{ rowId: row.i, kid, file: child.screenshotFile as string, label: `${row.label} · ${child.label}`, atMs: atMs(child.ts, row.ts, t0) }];
+        const file = captureShotFile(child);
+        if (!shows(hasShot, lane, file) || seen.has(file)) return [];
+        seen.add(file);
+        return [{ rowId: row.i, kid, file, label: `${row.label} · ${child.label}`, atMs: atMs(child.ts, row.ts, t0) }];
       }),
     ];
   });
@@ -151,8 +169,9 @@ const pickLastFrame = (group: ReportTraceGroup, lane: number, t0: number | null,
   const rows = groupRows(group);
   let picked: TrailFrame | null = null;
   for (let r = rows.length - 1; r >= 0; r--) {
-    if (shows(hasShot, lane, rows[r].screenshotFile)) {
-      picked = { rowId: rows[r].i, kid: null, file: rows[r].screenshotFile as string, label: rows[r].label, atMs: atMs(rows[r].shotTs, rows[r].ts, t0) };
+    const file = captureShotFile(rows[r]);
+    if (shows(hasShot, lane, file)) {
+      picked = { rowId: rows[r].i, kid: null, file, label: rows[r].label, atMs: atMs(rows[r].shotTs, rows[r].ts, t0) };
       break;
     }
   }
@@ -160,8 +179,9 @@ const pickLastFrame = (group: ReportTraceGroup, lane: number, t0: number | null,
     for (let r = rows.length - 1; r >= 0; r--) {
       const kids = rows[r].children || [];
       for (let k = kids.length - 1; k >= 0; k--) {
-        if (shows(hasShot, lane, kids[k].screenshotFile)) {
-          picked = { rowId: rows[r].i, kid: k, file: kids[k].screenshotFile as string, label: `${rows[r].label} · ${kids[k].label}`, atMs: atMs(kids[k].ts, rows[r].ts, t0) };
+        const file = captureShotFile(kids[k]);
+        if (shows(hasShot, lane, file)) {
+          picked = { rowId: rows[r].i, kid: k, file, label: `${rows[r].label} · ${kids[k].label}`, atMs: atMs(kids[k].ts, rows[r].ts, t0) };
           break;
         }
       }
@@ -348,7 +368,7 @@ export function traceDeviceLanes(trace: TraceStep[]): DeviceLaneTrace[] {
     trace: trace.flatMap((row) => {
       if ((row.device ?? null) === device) return [row];
       if (!row.objective) return [];
-      return [{ ...row, ts: null, ms: 0, screenshotFile: null, mark: null, shotTs: null, markTs: null, children: undefined }];
+      return [{ ...row, ts: null, ms: 0, screenshotFile: null, captureIds: undefined, mark: null, shotTs: null, markTs: null, children: undefined }];
     }),
   }));
 }

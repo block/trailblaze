@@ -218,11 +218,21 @@ export interface ScreenTextQuery {
   /** Substring or pattern over the visible text. */
   text?: ContainsMatch;
   source?: TextMatch;
+  /** The screenshot, by file name. */
+  captureId?: TextMatch;
+  /** False for text that was in the tree but scrolled away or hidden. */
+  visible?: boolean;
   where?: (s: ScreenText) => boolean;
 }
 
 export function matchScreenText(s: ScreenText, q: ScreenTextQuery): boolean {
-  return matchContains(s.text, q.text) && matchText(s.source, q.source) && (q.where === undefined || q.where(s));
+  return (
+    matchContains(s.text, q.text) &&
+    matchText(s.source, q.source) &&
+    matchText(s.captureId, q.captureId) &&
+    (q.visible === undefined || s.visible === q.visible) &&
+    (q.where === undefined || q.where(s))
+  );
 }
 
 export interface DeviceLogQuery {

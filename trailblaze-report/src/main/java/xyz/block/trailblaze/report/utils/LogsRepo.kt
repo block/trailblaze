@@ -7,6 +7,7 @@ import kotlinx.datetime.Instant
 import xyz.block.trailblaze.api.ImageFormatDetector
 import xyz.block.trailblaze.api.TrailblazeImageFormat
 import xyz.block.trailblaze.logs.TrailblazeLogsDataProvider
+import xyz.block.trailblaze.logs.client.withVisibleStrings
 import xyz.block.trailblaze.logs.client.TrailblazeDeviceClockOffsets
 import xyz.block.trailblaze.logs.client.TrailblazeCompactJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
@@ -1000,8 +1001,10 @@ class LogsRepo(
     )
 
   private fun writeLogToDisk(logEvent: TrailblazeLog): File {
+    // Strings are normally filled in by the logging rule that emitted the log. This catches host
+    // writers that skip the rule, and logs from a device runner that predates the field.
     @Suppress("NAME_SHADOWING")
-    val logEvent = costEnricher(logEvent)
+    val logEvent = costEnricher(logEvent).withVisibleStrings()
     val logCount = getNextLogCountForSession(logEvent.session)
     // Only add timestamp if we restarted mid-session (to avoid filename collisions)
     val filename = if (logEvent.session in sessionsNeedingTimestamp) {

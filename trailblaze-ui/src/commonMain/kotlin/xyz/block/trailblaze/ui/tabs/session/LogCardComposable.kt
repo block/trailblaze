@@ -246,6 +246,13 @@ fun LogCard(
       }.takeIf { it.isNotBlank() }
     )
 
+    is TrailblazeLog.TrailblazeDecisionRequestLog -> LogCardData(
+      title = "Decision request",
+      duration = log.durationMs,
+      elapsedTime = elapsedTimeMs,
+      preformattedText = log.summary(),
+    )
+
     is TrailblazeLog.McpAskLog -> LogCardData(
       title = "MCP Ask",
       duration = null,

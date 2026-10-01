@@ -256,11 +256,6 @@ below the recommended deterministic primitives. They require an LLM:
 trailblaze config llm anthropic/claude-sonnet-4-20250514
 ```
 
-The built-in agent implements features from the
-[Mobile-Agent-v3](https://arxiv.org/abs/2508.15144) research line: exception handling
-for popups and stuck states, reflection and self-correction, task decomposition,
-cross-app memory, and enhanced recording for robust replay.
-
 For serious authoring work, you want a real coding agent (Claude Code, Cursor, Codex)
 driving the Trailblaze primitives instead — those bring your codebase, log inspection,
 and project context to the loop, which the built-in agent can't.

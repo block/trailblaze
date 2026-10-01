@@ -15,7 +15,7 @@ Trailblaze takes an instance of a [`LLMClient`](https://github.com/JetBrains/koo
 - OpenRouter
 - Ollama
 
-Any of these can be passed as the `llmClient` argument to the `TrailblazeRunner` constructor.
+Any of these can be passed as the `llmClient` argument to `AndroidTrailblazeRule`.
 
 #### Example usage with OpenAI
 
@@ -24,15 +24,16 @@ Gradle Dependency: `ai.koog:prompt-executor-openai-client:VERSION`
 ```kotlin
 import ai.koog.prompt.executor.clients.LLMClient
 import ai.koog.prompt.executor.clients.openai.OpenAILLMClient
-import xyz.block.trailblaze.agent.TrailblazeRunner
+import xyz.block.trailblaze.android.AndroidTrailblazeRule
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.llm.providers.OpenAITrailblazeLlmModelList
 
 private val trailblazeLlmModel: TrailblazeLlmModel = OpenAITrailblazeLlmModelList.OPENAI_DEFAULT
 private val llmClient: LLMClient = OpenAILLMClient("API_KEY_HERE")
-TrailblazeRunner(
-    llmClient = llmClient,
+
+@get:Rule
+val trailblazeRule = AndroidTrailblazeRule(
     trailblazeLlmModel = trailblazeLlmModel,
-    // ... plus the required agent, screen-state provider, tool repo, and logger wiring
+    llmClient = llmClient,
 )
 ```

@@ -90,23 +90,27 @@ internal const val ANDROID_VIEW_LOWERING_REFUSAL: String =
  * their dispatch resolves the nodeSelector natively (e.g. web/Playwright), and the legacy
  * conversion drops their driver match entirely. When it doesn't lower cleanly (e.g. driver-only
  * classNameRegex), fall back to [legacyAsNodeSelector] so the Maestro fallback stays functional.
+ *
+ * [legacyAsNodeSelector] is only invoked when it is recorded: TapSelectorV2 can throw on a tree it
+ * cannot describe, and that must not fail a tool that records the modern selector anyway.
  */
 internal fun recordedNodeSelectorForMaestroPath(
   platform: TrailblazeDevicePlatform,
   modernNodeSelector: TrailblazeNodeSelector?,
-  legacyAsNodeSelector: TrailblazeNodeSelector,
+  legacyAsNodeSelector: () -> TrailblazeNodeSelector,
 ): TrailblazeNodeSelector {
   if (platform == TrailblazeDevicePlatform.ANDROID) {
+    val legacy = legacyAsNodeSelector()
     if (modernNodeSelector != null) {
       Console.log(
         "[record-selector] ANDROID Maestro path: recording TapSelectorV2 selector " +
-          "(${legacyAsNodeSelector.description()}); discarding modern nodeSelector " +
+          "(${legacy.description()}); discarding modern nodeSelector " +
           "(${modernNodeSelector.description()})",
       )
     }
-    return legacyAsNodeSelector
+    return legacy
   }
   val modernLowersToMaestro =
     modernNodeSelector?.toTrailblazeElementSelector()?.let { !it.isBlank() } ?: false
-  return if (modernLowersToMaestro) modernNodeSelector!! else legacyAsNodeSelector
+  return if (modernLowersToMaestro) modernNodeSelector!! else legacyAsNodeSelector()
 }

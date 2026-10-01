@@ -19,7 +19,6 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.TraceId
-import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.mcp.DeviceClaimRegistry
 import xyz.block.trailblaze.mcp.McpDeviceContext
 import xyz.block.trailblaze.mcp.TrailblazeMcpBridge
@@ -448,7 +447,6 @@ class MultiDeviceToolSetTest {
     override suspend fun runYaml(
       yaml: String,
       startNewSession: Boolean,
-      agentImplementation: AgentImplementation,
     ): String = throw NotImplementedError()
     override suspend fun getCurrentScreenState(): ScreenState? = null
     override suspend fun executeTrailblazeTool(

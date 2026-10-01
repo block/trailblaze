@@ -14,8 +14,8 @@ import xyz.block.trailblaze.util.isMacOs
 /**
  * Captures iOS Simulator system log using `xcrun simctl spawn log stream`.
  *
- * This is the iOS equivalent of Android's logcat. The log is streamed directly to a file and can be
- * optionally filtered to the app under test by process name.
+ * This is the iOS equivalent of Android's logcat. The log is streamed directly to a file, filtered to
+ * the app under test when one is known, and to errors and faults otherwise.
  *
  * ### Output format
  *
@@ -44,34 +44,12 @@ class IosLogCapture : CaptureStream, AppScopedCaptureStream {
     startTimestampMs = System.currentTimeMillis()
     outputFile = File(sessionDir, CaptureFilenames.DEVICE_LOG)
 
-    val command =
-      mutableListOf(
-        "xcrun",
-        "simctl",
-        "spawn",
-        deviceId,
-        "log",
-        "stream",
-        "--style",
-        "compact",
-        // info-and-above (notice/error/fault too) rather than `debug`: the unified log emits an
-        // enormous volume of debug-level chatter, and a test report wants the app's meaningful
-        // output, not the firehose. The iOS analog of not dumping every logcat VERBOSE line.
-        "--level",
-        "info",
-      )
-
-    // Scope to the app under test — the logcat-equivalent app filter, NOT the full
-    // system-log firehose (see [buildIosLogStreamPredicate]). Null means we couldn't derive
-    // an app-scoped predicate, so fall through to capturing unfiltered.
-    val predicate = buildIosLogStreamPredicate(appId)
-    if (predicate != null) {
-      command.addAll(listOf("--predicate", predicate))
-      isAppScoped = true
-    } else if (appId != null) {
+    val (command, appScoped) = buildIosLogStreamCommand(deviceId, appId)
+    isAppScoped = appScoped
+    if (!appScoped && appId != null) {
       Console.log(
         "iOS log capture: appId '$appId' resolved to a blank process name; " +
-          "no process predicate applied — capturing all simulator logs.",
+          "capturing only errors and faults from all simulator processes.",
       )
     }
 
@@ -119,11 +97,49 @@ class IosLogCapture : CaptureStream, AppScopedCaptureStream {
   }
 }
 
+/** The `log stream` argv for [deviceId], and whether it is scoped to the app under test. */
+internal data class IosLogStreamCommand(val argv: List<String>, val isAppScoped: Boolean)
+
+/**
+ * Keeps only errors and faults, from every process. Used when there is no app to scope to (target
+ * `default`, or an unusable app id): the unfiltered simulator log runs to megabytes a minute of
+ * system-daemon chatter (`dasd`, `runningboardd`, SpringBoard), about 20x what this keeps, and
+ * crashes and assertion failures still come through.
+ */
+internal const val IOS_UNSCOPED_LOG_PREDICATE = "messageType == error OR messageType == fault"
+
+/**
+ * Builds the `xcrun simctl spawn <device> log stream` argv. Scoped to the app under test when
+ * [appId] yields a predicate (see [buildIosLogStreamPredicate]); otherwise limited to
+ * [IOS_UNSCOPED_LOG_PREDICATE] rather than capturing the whole simulator log.
+ */
+internal fun buildIosLogStreamCommand(deviceId: String, appId: String?): IosLogStreamCommand {
+  val argv =
+    mutableListOf(
+      "xcrun",
+      "simctl",
+      "spawn",
+      deviceId,
+      "log",
+      "stream",
+      "--style",
+      "compact",
+      // info-and-above (notice/error/fault too) rather than `debug`: the unified log emits an
+      // enormous volume of debug-level chatter, and a test report wants the app's meaningful
+      // output, not the firehose. The iOS analog of not dumping every logcat VERBOSE line.
+      "--level",
+      "info",
+    )
+  val appPredicate = buildIosLogStreamPredicate(appId)
+  argv.addAll(listOf("--predicate", appPredicate ?: IOS_UNSCOPED_LOG_PREDICATE))
+  return IosLogStreamCommand(argv, isAppScoped = appPredicate != null)
+}
+
 /**
  * Builds the `log stream --predicate` that scopes capture to the app under test — the
  * logcat-equivalent app filter, NOT the full system-log firehose (which is orders of magnitude
  * noisier than Android logcat). Returns `null` when [appId] is null or its last component is
- * blank, in which case the caller captures unfiltered.
+ * blank, in which case the caller falls back to [IOS_UNSCOPED_LOG_PREDICATE].
  *
  * Matches the app three ways, because an app's logs don't all carry the same identity (matching
  * ONLY `process == <last-bundle-component>` missed apps whose process name differs from that

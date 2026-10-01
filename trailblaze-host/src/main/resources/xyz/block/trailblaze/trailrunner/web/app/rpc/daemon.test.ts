@@ -275,7 +275,6 @@ describe("createDaemonRpc", () => {
       llm: { provider: "anthropic", model: "claude" },
       selfHealEnabled: true,
       requireSteps: false,
-      saveAnnotatedScreenshots: true,
     });
     const rpc = createDaemonRpc({ baseUrl: "http://daemon", fetchImpl: impl });
 
@@ -701,7 +700,6 @@ describe("createDaemonRpc", () => {
       llm: { provider: "anthropic", model: "claude" },
       selfHealEnabled: true,
       requireSteps: false,
-      saveAnnotatedScreenshots: true,
     });
     const rpc = createDaemonRpc({ baseUrl: "http://daemon", fetchImpl: impl });
 

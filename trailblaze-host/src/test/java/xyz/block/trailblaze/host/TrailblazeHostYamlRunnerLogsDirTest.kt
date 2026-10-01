@@ -35,7 +35,7 @@ import xyz.block.trailblaze.model.TrailblazeConfig
  * just run and skipped saving.
  *
  * Observable without a device because the repo is constructed (and `mkdirs()` its directory) before
- * the first LLM client or RPC dispatch. Both runs below therefore fail — the stub LLM client throws
+ * the first LLM client or RPC dispatch. The runs below therefore fail — the stub LLM client throws
  * on `createLlmClient()`, and the RPC device does not exist — but the directory decision has
  * already been made by then, which is exactly what these tests read.
  */
@@ -97,35 +97,13 @@ class TrailblazeHostYamlRunnerLogsDirTest {
   private fun unclaimedLogsDir(name: String) = File(tempFolder.newFolder(name), "configured-logs")
 
   @Test
-  fun `runHostV3WithAccessibilityYaml puts its logs repo at the given directory`() {
-    val logsDir = unclaimedLogsDir("v3")
-    assertThat(logsDir.exists()).isFalse()
-
-    runCatching {
-      runBlocking {
-        TrailblazeHostYamlRunner.runHostV3WithAccessibilityYaml(
-          dynamicLlmClient = throwingLlmClient,
-          onDeviceRpc = rpcClient,
-          runYamlRequest = request(),
-          trailblazeDeviceId = testDeviceId,
-          onProgressMessage = {},
-          targetTestApp = null,
-          logsDir = logsDir,
-        )
-      }
-    }
-
-    assertThat(logsDir.isDirectory).isTrue()
-  }
-
-  @Test
-  fun `runHostTrailblazeRunnerWithOnDeviceRpc puts its logs repo at the given directory`() {
+  fun `runHostAgentWithOnDeviceRpc puts its logs repo at the given directory`() {
     val logsDir = unclaimedLogsDir("on-device-rpc")
     assertThat(logsDir.exists()).isFalse()
 
     runCatching {
       runBlocking {
-        TrailblazeHostYamlRunner.runHostTrailblazeRunnerWithOnDeviceRpc(
+        TrailblazeHostYamlRunner.runHostAgentWithOnDeviceRpc(
           dynamicLlmClient = throwingLlmClient,
           onDeviceRpc = rpcClient,
           runYamlRequest = request(),
@@ -146,7 +124,7 @@ class TrailblazeHostYamlRunnerLogsDirTest {
 
     runCatching {
       runBlocking {
-        TrailblazeHostYamlRunner.runHostV3WithAccessibilityYaml(
+        TrailblazeHostYamlRunner.runHostAgentWithOnDeviceRpc(
           dynamicLlmClient = throwingLlmClient,
           onDeviceRpc = rpcClient,
           runYamlRequest = request(),
@@ -157,7 +135,7 @@ class TrailblazeHostYamlRunnerLogsDirTest {
       }
     }
 
-    // Guards the two tests above against passing vacuously: they would still be green if the
+    // Guards the test above against passing vacuously: it would still be green if the
     // directory were created by the temp-folder helper or by anything other than the threaded
     // value. Omitting `logsDir` leaves the same path untouched, so its creation above is
     // attributable to the parameter.

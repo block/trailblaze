@@ -97,6 +97,7 @@ class PlaywrightElectronEvalTests {
                 trailblazeDeviceId = electronTest.trailblazeDeviceInfo.trailblazeDeviceId,
                 trailFilePath = trailFile.absolutePath,
                 sendSessionStartLog = true,
+                useRecordedSteps = true,
               )
             }
           }

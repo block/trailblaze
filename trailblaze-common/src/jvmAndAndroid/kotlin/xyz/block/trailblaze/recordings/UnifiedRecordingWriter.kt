@@ -232,25 +232,6 @@ object UnifiedRecordingWriter {
   }
 
   /**
-   * True when the unified trail this save-back would write ([unifiedRecordingTarget]) already
-   * carries a non-empty recording for [classifier]'s exact slot (in any step or the trailhead).
-   * False when the file is absent (greenfield), unreadable, or the slot has no recording yet.
-   */
-  @Deprecated(
-    "Checks the exact slot only, so a device replaying a broader key (an android-phone run of an " +
-      "android: recording) reads as unrecorded. Use unifiedTrailFullyRecordedForDevice.",
-  )
-  fun unifiedClassifierAlreadyRecorded(trailFileOrDir: File, classifier: String): Boolean {
-    val unifiedFile = unifiedRecordingTarget(trailFileOrDir) ?: return false
-    if (!unifiedFile.isFile) return false
-    val unified = runCatching { createTrailblazeYaml().decodeUnifiedTrail(unifiedFile.readText()) }
-      .getOrNull() ?: return false
-    val stepHit = unified.trail.any { it.recordings[classifier]?.isNotEmpty() == true }
-    val trailheadHit = unified.trailhead?.recordings?.get(classifier)?.isNotEmpty() == true
-    return stepHit || trailheadHit
-  }
-
-  /**
    * True when a run on this device replays EVERY step of the unified trail this save-back would
    * write ([unifiedRecordingTarget]) from a recording, so the run had nothing new to record.
    *
@@ -511,9 +492,11 @@ object UnifiedRecordingWriter {
       //  - a DECLARED CAST is canon; a save must never add a second one beside or over it.
       //  - a SINGLE-DEVICE layout would be silently converted. Planting a cast beside authored
       //    single-device entries leaves the file declaring exactly one configuration, which
-      //    `MultiDeviceConfigurationResolver.selectConfigurationName` then auto-selects on EVERY
-      //    later replay — orphaning the classifier legs that worked before. And when the cast's name
-      //    collides with such an entry, `+` REPLACES it, dropping its driver pin outright.
+      //    `MultiDeviceConfigurationResolver.selectConfigurationName` then auto-selects on every
+      //    later replay that binds companions — and a trail whose legs were all recorded
+      //    single-device carries none keyed by it. A trail's configuration is authored, not
+      //    synthesized behind its author's back. And when the cast's name collides with such an
+      //    entry, `+` REPLACES it, dropping its driver pin outright.
       // Re-saving the same roster session over its own earlier save is unaffected: that file
       // declares the configuration, so no synthesis is needed and the ordinary name-keyed merge runs.
       val declaresSynthesizedCast = castToDeclare != null && declaredDeviceKeys(existing).isEmpty()

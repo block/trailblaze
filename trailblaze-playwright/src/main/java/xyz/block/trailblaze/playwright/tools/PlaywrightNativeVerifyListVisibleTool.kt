@@ -59,6 +59,7 @@ data class PlaywrightNativeVerifyListVisibleTool(
       )
     }
     return try {
+      PlaywrightPageResponsiveness.requireResponsive(page)
       val (container, error) =
         PlaywrightExecutableTool.validateAndResolveRef(page, ref, description, context, nodeSelector)
       if (error != null) return error

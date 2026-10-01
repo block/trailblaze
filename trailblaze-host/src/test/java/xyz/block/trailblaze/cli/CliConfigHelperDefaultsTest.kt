@@ -12,7 +12,6 @@ import org.junit.rules.TemporaryFolder
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget
-import xyz.block.trailblaze.mcp.AgentImplementation
 
 class CliConfigHelperDefaultsTest {
 
@@ -42,53 +41,6 @@ class CliConfigHelperDefaultsTest {
     assertEquals(
       TrailblazeDriverType.PLAYWRIGHT_NATIVE,
       config.selectedTrailblazeDriverTypes[TrailblazeDevicePlatform.WEB],
-    )
-  }
-
-  @Test
-  fun `agent selection stays null unless the user picks one (tri-state)`() {
-    // Same argument as the trails-directory and target tests below. An agent persisted without
-    // user intent is indistinguishable from a real pick, so it would outrank the framework default
-    // on every later resolution and pin the user to whatever the default happened to be on the day
-    // their settings file was last written — which makes the next default change unshippable.
-    val appDataDir = tempFolder.newFolder("agent-tristate", "appdata")
-    System.setProperty("trailblaze.appdata.dir", appDataDir.absolutePath)
-
-    assertNull(CliConfigHelper.defaultConfig().agentImplementation)
-
-    // First-run write path must not persist one...
-    CliConfigHelper.getOrCreateConfig()
-    assertNull(CliConfigHelper.readConfigRaw()?.agentImplementation)
-
-    // ...and an unrelated mutation must not write one either.
-    CliConfigHelper.updateConfig { it }
-    assertNull(CliConfigHelper.readConfig()?.agentImplementation)
-    assertNull(CliConfigHelper.readConfigRaw()?.agentImplementation)
-
-    // The settings file on disk must not even mention the key.
-    assertFalse(
-      File(appDataDir, "trailblaze-settings.json").readText().contains("agentImplementation"),
-      "an unchosen agent implementation must not be written to the settings file",
-    )
-  }
-
-  @Test
-  fun `saved legacy agent is written explicitly and round trips`() {
-    val appDataDir = tempFolder.newFolder("runtime", "appdata")
-    System.setProperty("trailblaze.appdata.dir", appDataDir.absolutePath)
-
-    CliConfigHelper.updateConfig {
-      it.copy(agentImplementation = AgentImplementation.TRAILBLAZE_RUNNER)
-    }
-
-    assertEquals(
-      AgentImplementation.TRAILBLAZE_RUNNER,
-      CliConfigHelper.readConfigRaw()?.agentImplementation,
-    )
-    assertTrue(
-      File(appDataDir, "trailblaze-settings.json")
-        .readText()
-        .contains("\"agentImplementation\": \"TRAILBLAZE_RUNNER\""),
     )
   }
 
@@ -188,14 +140,17 @@ class CliConfigHelperDefaultsTest {
   @Test
   fun `a settings file carrying a retired key still deserializes`() {
     // `unifiedRecordingsEnabled` was dropped from SavedTrailblazeAppConfig once unified became the
-    // only recording format. Anyone whose settings file still carries it must keep loading — an
-    // unknown key is ignored, not a hard read failure that resets every other setting.
+    // only recording format, and `agentImplementation` once there was one agent (its saved value
+    // names an agent that no longer exists). Anyone whose settings file still carries them must
+    // keep loading — an unknown key is ignored, not a hard read failure that resets every other
+    // setting.
     val appDataDir = tempFolder.newFolder("retired-key", "appdata")
     System.setProperty("trailblaze.appdata.dir", appDataDir.absolutePath)
     File(appDataDir, "trailblaze-settings.json").writeText(
       """
       {
         "unifiedRecordingsEnabled": false,
+        "agentImplementation": "TRAILBLAZE_RUNNER",
         "selectedTrailblazeDriverTypes": { "ANDROID": "ANDROID_ONDEVICE_INSTRUMENTATION" },
         "selectedTargetAppId": "myapp"
       }

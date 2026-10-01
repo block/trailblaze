@@ -494,7 +494,6 @@ internal suspend fun buildRecordTrailRangeResponse(
           // Recording, so the agent fills each step rather than replaying what is already there.
           useRecordedSteps = false,
           maxLlmCalls = body.maxLlmCalls,
-          agent = body.agent,
           selfHeal = body.selfHeal,
           captureVideo = body.captureVideo,
           captureLogcat = body.captureLogcat,

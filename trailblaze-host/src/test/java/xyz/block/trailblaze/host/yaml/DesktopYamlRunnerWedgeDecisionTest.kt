@@ -98,7 +98,7 @@ class DesktopYamlRunnerWedgeDecisionTest {
     }
   }
 
-  // On the host-agent path (preferHostAgent=true — the real CI accessibility V1 RPC path), a
+  // On the host-agent path (preferHostAgent=true — the real CI accessibility RPC path), a
   // mid-trail wedge surfaces NOT as the device's raw message but as the host-side `TrailblazeException`
   // re-thrown by the trail loop. Session logs written before `TrailblazeSessionManager` split the
   // stack into `exceptionStackTrace` carry `<message-line>\n<stack-trace>` in
@@ -243,7 +243,7 @@ class DesktopYamlRunnerWedgeDecisionTest {
 
   @Test
   fun `log scan still honors the terminal-status signal with no tool logs`() {
-    // Delegation to the status overload: the V1 fire-and-forget path can wedge during session
+    // Delegation to the status overload: the on-device-agent fire-and-forget path can wedge during session
     // setup, before any tool log exists.
     val logs = listOf(
       statusLog(

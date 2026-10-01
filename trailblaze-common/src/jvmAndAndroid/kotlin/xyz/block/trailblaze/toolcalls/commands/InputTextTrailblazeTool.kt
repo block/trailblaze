@@ -3,6 +3,7 @@ package xyz.block.trailblaze.toolcalls.commands
 import ai.koog.agents.core.tools.annotations.LLMDescription
 import kotlinx.serialization.Serializable
 import maestro.orchestra.InputTextCommand
+import xyz.block.trailblaze.api.TrailblazeNodeSelector
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.ReasoningTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
@@ -37,11 +38,33 @@ data class InputTextTrailblazeTool(
     "Close the soft keyboard after typing. Defaults to true; pass false to keep typing into the same field.",
   )
   val hideKeyboardAfter: Boolean = true,
+  /**
+   * The field to type into. When set, the field is tapped first with the same selector-resolved tap
+   * as `tapOnElementBySelector`, so a field that reacts to a click still gets one; the Android
+   * accessibility driver then also focuses it directly when it is an editable field, so the text
+   * can't land in another one. A selector naming the field's label, or a hint that focusing hides,
+   * types into the field the tap focused. When null, types into the focused field, as recorded
+   * trails always have.
+   *
+   * Hidden from the LLM with every other selector param: it picks fields by `tap` ref.
+   */
+  @param:LLMDescription("Tap this field first, then type into it. Omit to type into the focused field.")
+  val selector: TrailblazeNodeSelector? = null,
 ) : ExecutableTrailblazeTool, ReasoningTrailblazeTool {
 
   override suspend fun execute(toolExecutionContext: TrailblazeToolExecutionContext): TrailblazeToolResult {
     // {{var}}/${var} tokens are resolved by the dispatch boundary (interpolateMemoryInTool)
     // before execute() runs, so `text` arrives resolved here.
+    if (selector != null) {
+      // Tap first, as the tapOnElementBySelector step this replaces did.
+      val tapResult = TapOnByElementSelector(reason = reasoning, nodeSelector = selector)
+        .execute(toolExecutionContext)
+      if (!tapResult.isSuccess()) return tapResult
+      // A driver that can focus the field directly types there; the rest type into what the tap focused.
+      toolExecutionContext.maestroTrailblazeAgent
+        ?.executeNodeSelectorInputText(selector, text, hideKeyboardAfter, toolExecutionContext.traceId)
+        ?.let { return it }
+    }
     val maestroCommands = if (hideKeyboardAfter) {
       listOf(InputTextCommand(text)) +
         HideKeyboardTrailblazeTool.hideKeyboardCommands(toolExecutionContext.trailblazeDeviceInfo)

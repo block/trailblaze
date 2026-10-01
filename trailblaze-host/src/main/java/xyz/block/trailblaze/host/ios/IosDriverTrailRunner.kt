@@ -129,7 +129,9 @@ object IosDriverTrailRunner {
    * Capture failures are non-fatal — the action still runs, just without a driver log.
    */
   private fun captureScreenStateForLogging(deviceManager: IosDeviceManager): ScreenState? = try {
-    deviceManager.getScreenState().also { screenState ->
+    // Shared: this capture describes the screen the action is about to act on, which is the same
+    // screen the action's own first selector poll reads.
+    deviceManager.sharedScreenState().also { screenState ->
       screenState.screenshotBytes
       screenState.trailblazeNodeTree
     }

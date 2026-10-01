@@ -584,9 +584,6 @@ class H264Tee internal constructor(
         return toRead
       }
     }
-
-    /** Currently buffered bytes. Test seam. */
-    internal fun currentSize(): Int = synchronized(lock) { size }
   }
 
   // ────────────────────────────────────────────────────────────────────────────
@@ -835,5 +832,4 @@ internal object AdbScreenrecordProducerFactory : H264Tee.ProducerFactory {
       }
     }
   }
-
 }

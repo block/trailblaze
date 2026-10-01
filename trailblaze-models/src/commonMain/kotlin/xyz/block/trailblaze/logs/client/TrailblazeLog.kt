@@ -9,6 +9,7 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import xyz.block.trailblaze.agent.model.AgentTaskStatus
 import xyz.block.trailblaze.agent.model.PromptRecordingResult
+import xyz.block.trailblaze.api.ExtractedString
 import xyz.block.trailblaze.api.AgentDriverAction
 import xyz.block.trailblaze.api.CaptureCoverage
 import xyz.block.trailblaze.api.TrailblazeNode
@@ -104,7 +105,7 @@ sealed interface TrailblazeLog {
    */
   @Serializable
   data class LlmRequestContext(
-    /** Which agent architecture was used (TRAILBLAZE_RUNNER or MULTI_AGENT_V3) */
+    /** Which agent architecture was used */
     val agentImplementation: AgentImplementation,
     /** How the LLM was called (DIRECT or MCP_SAMPLING) */
     val llmCallStrategy: LlmCallStrategy,
@@ -204,15 +205,19 @@ sealed interface TrailblazeLog {
      * annotated→raw twin-search when this log already references the raw
      * image — without this hint, the twin search would risk picking a
      * neighboring step's screenshot whose timestamp lands within its 1-second
-     * window. `null` on older logs predating the `annotated-screenshots`
-     * config flag, in which case consumers should assume `true` (the historical
-     * default — every persisted LLM log screenshot was the annotated variant).
+     * window. New logs always save the raw variant and set `false`. `null` on
+     * older logs, in which case consumers should assume `true` (those logs
+     * saved the annotated variant).
      *
      * That 1-second window is also narrower than normal device clock skew, so a
      * consumer still doing the twin-search should normalize by [clock] first —
      * see [TrailblazeLog.clock] and [TrailblazeLog.hostReceivedAt].
      */
     val screenshotIsAnnotated: Boolean? = null,
+    /** This capture's readable strings. See [AgentDriverLog.visibleStrings]. */
+    val visibleStrings: List<ExtractedString>? = null,
+    /** Names this capture when it has no [screenshotFile]. See [AgentDriverLog.captureId]. */
+    val captureId: String? = null,
     override val clock: TrailblazeClockDomain? = null,
     override val hostReceivedAt: Instant? = null,
   ) : TrailblazeLog,
@@ -315,6 +320,13 @@ sealed interface TrailblazeLog {
      * log type it lands on. Null on every non-migration capture.
      */
     val driverMigrationTreeNode: TrailblazeNode? = null,
+    /**
+     * The content of each iframe on the page, one tree per frame in document order, with bounds
+     * in the same space as [trailblazeNodeTree]'s. Kept out of that tree because selectors resolve
+     * against all of it, and a frame's own "Continue" would make the page's ambiguous. Web replay
+     * captures only; for reading the page's strings, never for resolving a selector.
+     */
+    val frameTrees: List<TrailblazeNode>? = null,
     override val screenshotFile: String?,
     val action: AgentDriverAction,
     /**
@@ -324,6 +336,23 @@ sealed interface TrailblazeLog {
      * aggregator and other programmatic consumers, not human reading.
      */
     val captureCoverage: CaptureCoverage? = null,
+    /**
+     * The strings a person could read on this capture, each with its box and whether it was on
+     * screen, as the agent's element list showed them. Filled in by [withVisibleStrings] as the log
+     * is emitted — on the device for an on-device run, on the host otherwise — so every session
+     * carries them without a pass over its logs afterwards.
+     *
+     * Null when the log carries no tree to read them from, or was written before this field
+     * existed; empty when the screen had no text.
+     */
+    val visibleStrings: List<ExtractedString>? = null,
+    /**
+     * Names this capture when it has no [screenshotFile], so its strings can still be told apart
+     * and pointed at. A capture with a screenshot is named by that screenshot's file name, and
+     * this stays null. Stamped once by [withVisibleStrings] as the log is emitted and never
+     * rewritten, so every reader sees the same value; treat it as opaque.
+     */
+    val captureId: String? = null,
     override val durationMs: Long,
     override val session: SessionId,
     override val timestamp: Instant,
@@ -520,6 +549,8 @@ sealed interface TrailblazeLog {
      * aggregator and other programmatic consumers, not human reading.
      */
     val captureCoverage: CaptureCoverage? = null,
+    /** This capture's readable strings. See [AgentDriverLog.visibleStrings]. */
+    val visibleStrings: List<ExtractedString>? = null,
     override val deviceWidth: Int,
     override val deviceHeight: Int,
     override val session: SessionId,
@@ -716,7 +747,7 @@ sealed interface TrailblazeLog {
   // 2. (Inner loop activity)  - LLM calls, screen analysis, etc.
   // 3. McpToolCallResponseLog - What we sent back to the outer agent
   //
-  // This separation is critical for debugging MULTI_AGENT_V3 mode where
+  // This separation is critical for debugging the two-tier MCP flow, where
   // the inner loop's decisions directly influence the response.
 
   /**
@@ -819,9 +850,51 @@ sealed interface TrailblazeLog {
 
   // endregion
 
+  /**
+   * One decision request: typed questions about a piece of state, answered with probabilities
+   * instead of generated text. The sibling of [TrailblazeLlmRequestLog] for the
+   * [xyz.block.trailblaze.decision.DecisionEngine] request type. [request] and [response] are the
+   * wire bodies verbatim, so an entry can be replayed against any engine that speaks the contract.
+   *
+   * [outcome] is the caller's one-line account of what it did with the answers (for example
+   * "tapped w34" or "handed to the LLM: not sure which element"), since the engine alone cannot
+   * know. [traceId] is the step trace the decision was asked under, which links it to the LLM
+   * request and tool call around it.
+   */
+  @Serializable
+  data class TrailblazeDecisionRequestLog(
+    /** [xyz.block.trailblaze.decision.DecisionEngine.name] of the engine that answered. */
+    val engine: String,
+    val request: xyz.block.trailblaze.decision.DecisionRequest,
+    /** Null when the engine failed; [errorMessage] then says why. */
+    val response: xyz.block.trailblaze.decision.DecisionResponse? = null,
+    val errorMessage: String? = null,
+    val outcome: String? = null,
+    /** Null when the engine could not price its answer. */
+    val cost: xyz.block.trailblaze.decision.DecisionCost? = null,
+    override val traceId: TraceId?,
+    override val durationMs: Long,
+    override val session: SessionId,
+    override val timestamp: Instant,
+    override val clock: TrailblazeClockDomain? = null,
+    override val hostReceivedAt: Instant? = null,
+  ) : TrailblazeLog,
+    HasTraceId,
+    HasDuration {
+    /** One line per question (`key: answer`), then the outcome; for log viewers. */
+    fun summary(): String = buildString {
+      request.questions.keys.forEach { key ->
+        val answer = response?.answers?.get(key)
+        appendLine("$key: ${answer?.describe() ?: "no answer"}")
+      }
+      errorMessage?.let { appendLine("error: $it") }
+      outcome?.let { appendLine("outcome: $it") }
+    }.trimEnd()
+  }
+
   // region Progress Reporting Logs (Phase 6)
   //
-  // These logs capture progress events from the Multi-Agent V3 implementation.
+  // These logs capture agent progress events.
   // They provide real-time visibility into:
   // - Execution lifecycle (start, complete)
   // - Step progress (started, completed)

@@ -22,8 +22,7 @@ import kotlin.reflect.KClass
  *   low-level framework plumbing that has no on-device meaning at all: forking a subprocess
  *   (`exec`, `runCommand`), holding a second bound device (`switchDevice`), reading a registry only
  *   the host populates (`assertWaypoint`). Setting it makes the host dispatch forks
- *   (`HostOnDeviceRpcTrailblazeAgent`, `HostAccessibilityRpcClient`,
- *   `TrailblazeMcpBridgeImpl.resolveToolDispatchRoute`) keep the call host-side, and for a
+ *   (`HostOnDeviceRpcTrailblazeAgent`, `TrailblazeMcpBridgeImpl.resolveToolDispatchRoute`) keep the call host-side, and for a
  *   *scripted* tool it additionally drops the tool at on-device registration
  *   (`TrailblazeToolMeta`/`QuickJsToolMeta.shouldRegister`, reading `trailblaze/requiresHost` out of
  *   a `*.tool.yaml` or a TS `_meta` block — never this annotation).

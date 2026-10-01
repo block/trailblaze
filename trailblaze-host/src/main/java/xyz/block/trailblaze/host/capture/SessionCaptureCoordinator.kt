@@ -1,6 +1,8 @@
 package xyz.block.trailblaze.host.capture
 
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import xyz.block.trailblaze.capture.CaptureMetadata
@@ -236,7 +238,26 @@ class SessionCaptureCoordinator(
   }
 
   private val lock = Any()
+
+  /**
+   * Runs [shutdownAll] when the JVM exits. `trailblaze stop` exits the daemon with interactive
+   * sessions still open, and their `simctl log stream` / `screenrecord` subprocesses outlive it
+   * otherwise. Registered by the first capture start, so a coordinator that never records adds none.
+   */
+  private val stopCapturesOnExit: Lazy<Unit> = lazy {
+    Runtime.getRuntime().addShutdownHook(Thread({ shutdownAll() }, "session-capture-shutdown-hook"))
+  }
   private val active = mutableMapOf<SessionId, ActiveCapture>()
+
+  /**
+   * One latch per [startForSession] between its reservation and its return. [shutdownAll] waits on
+   * them: a stop that lands mid-start leaves the cleanup to the start thread, which the JVM halts as
+   * soon as the shutdown hook returns.
+   */
+  private val startsInFlight = ConcurrentHashMap.newKeySet<CountDownLatch>()
+
+  /** Set by [shutdownAll]; no capture starts after it. Guarded by `lock`. */
+  private var shuttingDown = false
 
   /**
    * Session ids whose `stopAll()` threw — we removed the [active] entry but may have
@@ -319,7 +340,9 @@ class SessionCaptureCoordinator(
     // owns this sessionId, if this id was tombstoned by a previous failed `stopAll`
     // (could still have a leaked subprocess we don't want to race), OR if no capture
     // stream is wired for this platform (`fromOptions` returns null when capture is off).
+    val startDone = CountDownLatch(1)
     val reservation: ActiveCapture = synchronized(lock) {
+      if (shuttingDown) return false
       if (active.containsKey(sessionId)) return false
       if (tombstoned.contains(sessionId)) {
         Console.log(
@@ -353,13 +376,32 @@ class SessionCaptureCoordinator(
         }
       ActiveCapture(captureSession, sessionDir, deviceId, platform, options).also {
         active[sessionId] = it
+        startsInFlight += startDone
         syncObserverRegistration()
       }
     }
 
+    stopCapturesOnExit.value
+
     // Step 2: start capture OUTSIDE `lock`. This can block on adb/ffmpeg/xcrun startup,
     // so we deliberately don't serialize the daemon's session lifecycle on it.
     return try {
+      startCommitted(sessionId, deviceId, platform, appId, reservation)
+    } finally {
+      startsInFlight -= startDone
+      startDone.countDown()
+    }
+  }
+
+  /** Steps 2-4 of [startForSession], from starting the reserved capture to committing or undoing it. */
+  private fun startCommitted(
+    sessionId: SessionId,
+    deviceId: String,
+    platform: TrailblazeDevicePlatform,
+    appId: String?,
+    reservation: ActiveCapture,
+  ): Boolean =
+    try {
       reservation.session.startAll(reservation.sessionDir, deviceId, appId)
 
       // Step 3: re-acquire `lock` to commit the started state. If a concurrent
@@ -403,7 +445,6 @@ class SessionCaptureCoordinator(
       )
       false
     }
-  }
 
   /**
    * Tells the capture for [sessionId] which devices the session binds, and records every companion.
@@ -640,16 +681,32 @@ class SessionCaptureCoordinator(
   }
 
   /**
-   * Best-effort shutdown of every still-active capture session. Called from daemon
-   * shutdown hooks so a daemon kill (e.g. CLI source-change rebuild) doesn't leak
-   * stale `screenrecord` / `xcrun` processes.
+   * Best-effort shutdown of every still-active capture session. Called from a JVM
+   * shutdown hook (see [stopCapturesOnExit]) so a daemon exit (`trailblaze stop`, a CLI
+   * source-change rebuild) doesn't leak stale `screenrecord` / `xcrun` processes.
    *
-   * Sessions stop in parallel with a per-session timeout — the default JVM shutdown
+   * Refuses new starts, and waits up to [perSessionTimeoutMs] for starts already under way to
+   * commit. Sessions then stop in parallel with a per-session timeout — the default JVM shutdown
    * grace period is short, and a single wedged `stopAll()` (e.g. ffmpeg muxer stuck on
    * a missing keyframe) should not block the rest of the cleanup. Sessions that don't
-   * stop in [perSessionTimeoutMs] are left for the OS to reap.
+   * stop in [perSessionTimeoutMs] are interrupted, and given [interruptGraceMs] to run the
+   * process kills their interrupted waits fall through to: returning sooner lets the JVM halt
+   * with those subprocesses still running.
    */
-  fun shutdownAll(perSessionTimeoutMs: Long = SHUTDOWN_PER_SESSION_TIMEOUT_MS) {
+  fun shutdownAll(
+    perSessionTimeoutMs: Long = SHUTDOWN_PER_SESSION_TIMEOUT_MS,
+    interruptGraceMs: Long = SHUTDOWN_INTERRUPT_GRACE_MS,
+  ) {
+    // Starts already under way finish first, so each is stopped below as a committed capture.
+    val inFlight = synchronized(lock) {
+      shuttingDown = true
+      startsInFlight.toList()
+    }
+    val startsDeadline = System.currentTimeMillis() + perSessionTimeoutMs
+    for (start in inFlight) {
+      val remaining = (startsDeadline - System.currentTimeMillis()).coerceAtLeast(0)
+      runCatching { start.await(remaining, TimeUnit.MILLISECONDS) }
+    }
     val ids = synchronized(lock) { active.keys.toList() }
     if (ids.isEmpty()) return
     val pool = Executors.newFixedThreadPool(ids.size.coerceAtMost(8)) { runnable ->
@@ -671,6 +728,7 @@ class SessionCaptureCoordinator(
       }
     } finally {
       pool.shutdownNow()
+      runCatching { pool.awaitTermination(interruptGraceMs, TimeUnit.MILLISECONDS) }
     }
   }
 
@@ -684,6 +742,13 @@ class SessionCaptureCoordinator(
      * JVM shutdown grace on a wedged stream.
      */
     const val SHUTDOWN_PER_SESSION_TIMEOUT_MS = 3_000L
+
+    /**
+     * How long [shutdownAll] waits, after interrupting stops that ran past their deadline, for
+     * them to kill their subprocesses. Bounded so one stream that ignores the interrupt cannot
+     * hold JVM exit.
+     */
+    const val SHUTDOWN_INTERRUPT_GRACE_MS = 2_000L
 
     /**
      * Documentation baseline showing how production callers resolve `CaptureOptions`

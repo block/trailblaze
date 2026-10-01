@@ -44,5 +44,6 @@ fun TrailblazeLog.withClockMetadata(
   is TrailblazeLog.McpToolCallRequestLog -> copy(timestamp = timestamp, clock = clock, hostReceivedAt = hostReceivedAt)
   is TrailblazeLog.McpToolCallResponseLog -> copy(timestamp = timestamp, clock = clock, hostReceivedAt = hostReceivedAt)
   is TrailblazeLog.McpAskLog -> copy(timestamp = timestamp, clock = clock, hostReceivedAt = hostReceivedAt)
+  is TrailblazeLog.TrailblazeDecisionRequestLog -> copy(timestamp = timestamp, clock = clock, hostReceivedAt = hostReceivedAt)
   is TrailblazeLog.TrailblazeProgressLog -> copy(timestamp = timestamp, clock = clock, hostReceivedAt = hostReceivedAt)
 }

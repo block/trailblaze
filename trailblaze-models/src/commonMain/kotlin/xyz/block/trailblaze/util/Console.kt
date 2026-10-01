@@ -82,6 +82,9 @@ expect object Console {
    * After this call, only [info] and [error] produce visible terminal output.
    * Use for CLI commands where clean, minimal output is desired.
    *
+   * Process-wide, except on a JVM thread inside `withThreadScopedQuietMode`, where it applies
+   * to that thread alone.
+   *
    * No-op on Android and wasmJs.
    */
   fun enableQuietMode()
@@ -89,9 +92,9 @@ expect object Console {
   /**
    * Restore normal [log] output after a prior [enableQuietMode].
    *
-   * Required for callers that toggle quiet mode around a bounded operation —
-   * notably the daemon's in-process CLI path, where a forwarded `snapshot`
-   * would otherwise leave the long-lived daemon permanently silenced.
+   * Required for callers that toggle quiet mode around a bounded operation in a
+   * JVM that outlives it — the daemon, or a shared test JVM — which would
+   * otherwise stay silenced after the operation ends.
    *
    * No-op on Android and wasmJs.
    */

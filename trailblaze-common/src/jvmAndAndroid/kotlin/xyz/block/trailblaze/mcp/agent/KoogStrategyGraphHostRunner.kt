@@ -18,6 +18,8 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.resolveToolName
 import xyz.block.trailblaze.toolcalls.toKoogToolDescriptor
+import xyz.block.trailblaze.toolcalls.commands.AssertVisibleTrailblazeTool
+import xyz.block.trailblaze.decision.NextMoveDecisionLlmClient
 import xyz.block.trailblaze.toolcalls.commands.ObjectiveStatusTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.Status
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
@@ -31,23 +33,20 @@ import xyz.block.trailblaze.yaml.VerificationStep
 /**
  * Runs a block of prompt steps through the in-process [KoogStrategyGraphAgent], driver-agnostically.
  *
- * This is the shared seam behind [xyz.block.trailblaze.mcp.AgentImplementation.KOOG_STRATEGY_GRAPH].
- * It was originally inlined in the web (`BasePlaywrightNativeTest`) runner; it's factored out here
- * so every host driver — web (Playwright), Revyl cloud (Android + iOS), and on-device Android RPC —
- * can opt into the Koog strategy-graph agent through the same code by passing its own [agent],
- * [screenStateProvider], [toolRepo], etc. The default agent ([AgentImplementation.TRAILBLAZE_RUNNER])
- * never reaches this function, so wiring a new driver in is a behavior-neutral addition.
+ * Every host driver — web (Playwright), Revyl cloud (Android + iOS), and on-device Android RPC —
+ * runs the agent through this one function by passing its own [agent], [screenStateProvider],
+ * [toolRepo], etc.
  *
  * The objective is the prompt steps' text joined on newlines (a multi-prompt block becomes a single
  * multi-line objective, matching how an author reads it). Tool execution routes through
  * [agent].runTrailblazeTools via the executor-aware [TrailblazeToolRepo.asToolRegistry] overload, so
  * every tool the graph calls runs through the same driver dispatch (settle, node-selector
- * enrichment, session logging) the legacy runner uses — only the reasoning loop differs.
+ * enrichment, session logging) as a recorded tool.
  *
  * Returns a [TrailblazeToolResult] so the caller treats Koog like any other item result. A thrown
  * exception (LLM error, exhausted LLM-call budget, tool failure) propagates to the caller's existing
  * try/catch, which maps it to a failed session — an exhausted budget arrives as the same
- * [xyz.block.trailblaze.exception.MaxCallsLimitReachedException] the legacy runner throws.
+ * [xyz.block.trailblaze.exception.MaxCallsLimitReachedException].
  *
  * @param agent the driver agent (any [KoogRunnableAgent]) that executes tools against its device —
  *   in a multi-device session, the routing agent that resolves the active device per call.
@@ -60,6 +59,9 @@ import xyz.block.trailblaze.yaml.VerificationStep
  * @param instrumentation optional per-objective recorder for Koog's lifecycle events. The caller
  *   owns it because the interesting case is the one where this function THROWS: the record has to
  *   outlive the call to be readable. See [KoogRunInstrumentation].
+ * @param decisionSettings where the decision engine's settings and key are read
+ *   (`TRAILBLAZE_DECISION_MOVES` and friends). The process environment by default; an on-device run
+ *   has none of the host's, so it passes its instrumentation arguments instead.
  */
 suspend fun runPromptsWithKoogStrategyGraph(
   promptSteps: List<PromptStep>,
@@ -76,6 +78,7 @@ suspend fun runPromptsWithKoogStrategyGraph(
   systemPromptTemplate: String,
   onStepProgress: ((stepIndex: Int, totalSteps: Int, stepText: String) -> Unit)? = null,
   instrumentation: KoogRunInstrumentation? = null,
+  decisionSettings: (String) -> String? = System::getenv,
 ): TrailblazeToolResult {
   val objective = promptSteps.joinToString(separator = "\n") { it.prompt }
   onStepProgress?.invoke(1, 1, objective)
@@ -144,6 +147,17 @@ suspend fun runPromptsWithKoogStrategyGraph(
   // screenshot attachment, and request logging.
   val sharedScreenCapture = SharedScreenStateCapture(screenStateProvider)
   val sharedScreenProvider = sharedScreenCapture.asProvider()
+  // Opt-in: a verify step whose claim is only "these quoted phrases are visible" is checked by rule,
+  // with no LLM call, when every phrase is already on screen. Anything else falls through below.
+  val fastPathMode = VerifyFastPath.modeFromEnv()
+  if (fastPathMode != null && isVerificationBlock(promptSteps) && promptSteps.size == 1) {
+    val closed = try {
+      tryVerifyFastPath(promptSteps.single().prompt, fastPathMode, agent, sharedScreenProvider, elementComparator, screenStateProvider, traceId)
+    } finally {
+      sharedScreenCapture.clear()
+    }
+    if (closed != null) return closed
+  }
   // Per-call dispatcher: routes each Koog tool call through the driver agent (driver-correct
   // execution + logging), then returns the tool result PLUS the FRESH post-action screen so the
   // LLM perceives the latest state via Koog's native tool-result channel. The prune node in
@@ -255,6 +269,7 @@ suspend fun runPromptsWithKoogStrategyGraph(
       screenStateProvider = screenStateProvider,
     )
   }
+  val withPostActionScreen: (String) -> String = { result -> appendPostActionScreen(result, sharedScreenCapture) }
   // The live registry the AIAgent's environment resolves tool calls against. Built once from the
   // currently-active toolsets; [onToolSurfaceRefresh] tops it up in place when a toolset switch
   // makes new tools active (Koog's ToolRegistry is the same instance the environment holds).
@@ -262,6 +277,7 @@ suspend fun runPromptsWithKoogStrategyGraph(
     toolDispatcher = toolDispatcher,
     trailblazeToolContextProvider = trailblazeToolContextProvider,
     afterDynamicToolExecution = sharedScreenCapture::clear,
+    decorateDynamicToolResult = withPostActionScreen,
   )
   // Invoked by the strategy graph's prune-pre-send node before each follow-up LLM request. When a
   // ConfigTrailblazeTool has changed the active toolsets (toolSurfaceDirty), rebuild the tool
@@ -281,6 +297,7 @@ suspend fun runPromptsWithKoogStrategyGraph(
         toolDispatcher = toolDispatcher,
         trailblazeToolContextProvider = trailblazeToolContextProvider,
         afterDynamicToolExecution = sharedScreenCapture::clear,
+        decorateDynamicToolResult = withPostActionScreen,
       )
     } else {
       null
@@ -288,10 +305,22 @@ suspend fun runPromptsWithKoogStrategyGraph(
   }
 
   // Inner: emit a TrailblazeLlmRequestLog (token usage / cost, prompt + response messages,
-  // toolOptions) for every Koog `execute(...)` at parity with the legacy runner — the AIAgent calls
-  // the client directly, bypassing TrailblazeLogger.logLlmRequest.
+  // toolOptions) for every Koog `execute(...)` — the AIAgent calls the client directly, bypassing
+  // TrailblazeLogger.logLlmRequest.
   val loggingLlmClient = LoggingLlmClient(
-    delegate = llmClient,
+    // Opt-in (TRAILBLAZE_DECISION_MOVES): a decision engine makes the moves it is sure of. Inside the
+    // logger so each of its decision requests, and each move it makes, lands in this session's log.
+    // Below the LLM-call budget on purpose: an engine move counts as a turn, so decisions never give
+    // an objective more turns than it gets without them, and the budget still stops a looping engine.
+    delegate = NextMoveDecisionLlmClient.wrapIfEnabled(
+      // Innermost: a request that never reached the model (DNS miss, refused connect) is retried here,
+      // so it is logged and budgeted once.
+      delegate = NetworkRetryLlmClient(llmClient),
+      objective = objective,
+      verification = isVerificationBlock(promptSteps),
+      screenText = { sharedScreenProvider().viewHierarchyTextRepresentation },
+      env = decisionSettings,
+    ),
     logger = logger,
     session = session,
     trailblazeLlmModel = trailblazeLlmModel,
@@ -302,8 +331,8 @@ suspend fun runPromptsWithKoogStrategyGraph(
   )
 
   // Outer: attach the current annotated screenshot to each tool-calling request so a vision-capable
-  // model perceives the rendered screen (set-of-mark), not just the accessibility text — parity with
-  // the legacy runner's TrailblazeKoogLlmClientHelper. OUTERMOST so the LoggingLlmClient below sees
+  // model perceives the rendered screen (set-of-mark), not just the accessibility text. OUTERMOST so
+  // the LoggingLlmClient below sees
   // the post-attachment prompt and its token breakdown counts the image (the log stores attachments
   // as a type marker, not bytes, so no log bloat); the real client receives the image last.
   // The shared capture remains seeded after each request so tool dispatch can reuse the exact screen
@@ -315,9 +344,8 @@ suspend fun runPromptsWithKoogStrategyGraph(
     onRequestEnd = {},
   )
 
-  // Render the system prompt the same way the legacy runner does — the template contains a
-  // {{device_description}} placeholder, so passing it raw would leak the literal token to the LLM.
-  // Mirrors TrailblazeKoogLlmClientHelper.buildDeviceDescription (classifiers/platform + dimensions);
+  // Render the system prompt — the template contains a {{device_description}} placeholder, so
+  // passing it raw would leak the literal token to the LLM. Classifiers/platform + dimensions,
   // rendered once from the run-start screen state (device size is static per run).
   val koogDeviceDescription = sharedScreenProvider().let { ss ->
     val classifiers = ss.deviceClassifiers
@@ -349,7 +377,7 @@ suspend fun runPromptsWithKoogStrategyGraph(
     "attempts, call `objectiveStatus` with status=FAILED and explain why. Always report status " +
     "via objectiveStatus before ending." +
     // Surface non-sensitive remembered values so the model can reason over what earlier steps
-    // captured (parity with the legacy runner). agent is a BaseTrailblazeAgent, which is a
+    // captured. agent is a BaseTrailblazeAgent, which is a
     // TrailblazeAgentContext, so its memory is directly available. Bound trail args join the
     // same list keyed by token spelling (`args.<name>`) — prompt text is never interpolated, so
     // this is how the LLM resolves a literal `{{args.x}}` in an objective, exactly as it
@@ -392,7 +420,7 @@ suspend fun runPromptsWithKoogStrategyGraph(
     val finalMessage = koogAgent.run(objective)
     // The Koog graph forces a tool call every turn and can only finish via a lone `objectiveStatus`
     // the dispatcher above accepted as COMPLETED/FAILED (no free-text termination, no IN_PROGRESS
-    // exit), matching the legacy runner. So by the time run() returns, the dispatcher has already
+    // exit). So by the time run() returns, the dispatcher has already
     // captured that outcome and logged it.
     resolveKoogObjectiveResult(
       outcome = objectiveStatusOutcome,
@@ -412,8 +440,7 @@ suspend fun runPromptsWithKoogStrategyGraph(
 
 /**
  * Caps on `## Remembered values` rendering — prevent per-step prompt bloat from unbounded variable
- * accumulation and contain prompt-injection vectors in stored values. Mirror the legacy
- * `TrailblazeAiRunnerMessages` so the two agents render memory the same way.
+ * accumulation and contain prompt-injection vectors in stored values.
  */
 private const val MAX_REMEMBERED_VALUES = 50
 private const val MAX_REMEMBERED_VALUE_LENGTH = 200
@@ -421,7 +448,7 @@ private const val MAX_REMEMBERED_VALUE_LENGTH = 200
 /**
  * Truncate to [MAX_REMEMBERED_VALUE_LENGTH] then escape so a stored value (which could contain
  * newlines or markdown copied from the app) can't break out of its bullet line and inject headers /
- * new sections into the prompt. Mirrors `TrailblazeAiRunnerMessages.sanitizeRememberedValue`.
+ * new sections into the prompt.
  */
 private fun sanitizeRememberedValue(raw: String): String {
   val truncated =
@@ -435,8 +462,8 @@ private fun sanitizeRememberedValue(raw: String): String {
 
 /**
  * Renders the agent's non-sensitive remembered values as a system-prompt section so the model can
- * reason over values captured by earlier steps (e.g. an order id saved with `remember`), mirroring
- * what the legacy runner surfaces per step. Sensitive keys (PINs/passwords) are filtered out — they
+ * reason over values captured by earlier steps (e.g. an order id saved with `remember`). Sensitive
+ * keys (PINs/passwords) are filtered out — they
  * remain available for `${var}`-style interpolation in tool args, just not exposed to the LLM. Each
  * value is truncated, escaped, and quoted ([sanitizeRememberedValue]); the list is capped at
  * [MAX_REMEMBERED_VALUES] with an overflow note. Returns `""` when there's nothing to surface.
@@ -697,6 +724,67 @@ internal fun resolveKoogObjectiveResult(
 }
 
 /**
+ * The [VerifyFastPath] attempt for one verify step: when [claim] passes the [mode] gate and every
+ * quoted phrase is on the current screen, asserts each through the real `assertVisible` tool (so the
+ * check is logged, recorded, and graded like the agent's own), logs the COMPLETED objective status,
+ * and returns the step's result. Returns null whenever the claim or the screen doesn't fit (having
+ * asserted nothing), and when an assertion fails or throws (any passing assertions stay logged), so
+ * the agent gets the step instead.
+ */
+internal suspend fun tryVerifyFastPath(
+  claim: String,
+  mode: VerifyFastPath.Mode,
+  agent: KoogRunnableAgent,
+  screenProvider: () -> ScreenState,
+  elementComparator: ElementComparator,
+  screenStateProvider: () -> ScreenState,
+  traceId: TraceId?,
+): TrailblazeToolResult? {
+  val phrases = VerifyFastPath.phrasesOf(claim, mode) ?: return null
+  val screenText = screenProvider().viewHierarchyTextRepresentation ?: return null
+  val matches = VerifyFastPath.matchOnScreen(phrases, screenText) ?: run {
+    Console.log("[KOOG_VERIFY_FAST_PATH] not every quoted phrase is on screen yet; handing the step to the agent")
+    return null
+  }
+  for (match in matches) {
+    val result = try {
+      agent.runTrailblazeTools(
+        tools = listOf(
+          AssertVisibleTrailblazeTool(ref = match.ref, expectedText = match.phrase, reasoning = "verify fast path"),
+        ),
+        traceId = traceId,
+        screenState = screenProvider(),
+        elementComparator = elementComparator,
+        screenStateProvider = screenStateProvider,
+      ).result
+    } catch (e: kotlinx.coroutines.CancellationException) {
+      throw e
+    } catch (e: Exception) {
+      Console.log("[KOOG_VERIFY_FAST_PATH] assertVisible '${match.phrase}' threw (${e.message}); handing the step to the agent")
+      return null
+    }
+    if (result !is TrailblazeToolResult.Success) {
+      Console.log("[KOOG_VERIFY_FAST_PATH] assertVisible '${match.phrase}' did not pass; handing the step to the agent")
+      return null
+    }
+  }
+  val explanation = "Every quoted phrase is visible: " + matches.joinToString { "\"${it.phrase}\"" } +
+    " (verify fast path, no LLM call)"
+  Console.log("[KOOG_VERIFY_FAST_PATH] closed a verify step by rule: $explanation")
+  try {
+    agent.logToolExecution(
+      tool = ObjectiveStatusTrailblazeTool(explanation = explanation, status = Status.COMPLETED),
+      timeBeforeExecution = Clock.System.now(),
+      traceId = traceId ?: TraceId.generate(TraceId.Companion.TraceOrigin.TOOL),
+      result = TrailblazeToolResult.Success(message = explanation),
+    )
+  } catch (e: Exception) {
+    Console.log("[KOOG_VERIFY_FAST_PATH] failed to log objectiveStatus tool: ${e.message}")
+  }
+  return resolveKoogObjectiveResult(outcome = Status.COMPLETED, explanation = explanation, finalMessage = explanation)
+}
+
+/**
  * What the dispatcher does with an `objectiveStatus` call: record its status as the objective's
  * outcome, or refuse it. [endsObjective] is what the graph's completion gate reads afterwards.
  */
@@ -801,6 +889,29 @@ internal suspend fun describeToolDispatch(
   "Tool $toolName failed: $summary"
 }
 
+
+/**
+ * Appends the post-action screen to a scripted tool's [result]. A scripted tool's result carries
+ * only its own message, so without it the agent loses every element ref after one — a scripted
+ * swipe left it tapping screenshot coordinates. Same "Current screen:" suffix the class-backed
+ * branch of the runner's tool dispatcher adds.
+ *
+ * The tool has already run when this captures, so a failed capture returns the bare result rather
+ * than turning a completed action into a failed call the agent might retry (a sign-in, an
+ * install). The failed capture also invalidates the cached snapshot, so the next request
+ * re-captures.
+ */
+internal fun appendPostActionScreen(result: String, capture: SharedScreenStateCapture): String {
+  val screen = try {
+    capture.captureFresh().viewHierarchyTextRepresentation
+  } catch (e: kotlinx.coroutines.CancellationException) {
+    throw e
+  } catch (e: Exception) {
+    Console.log("[KOOG] post-action screen capture failed; returning the tool result without it: ${e.message}")
+    null
+  }
+  return if (screen.isNullOrBlank()) result else "$result\n\nCurrent screen:\n$screen"
+}
 /**
  * Rebuilds the Koog tool surface after a [ConfigTrailblazeTool] (e.g. `setActiveToolSets`) changed
  * which toolsets are active, and returns the descriptor list the LLM should now see.
@@ -836,6 +947,7 @@ internal fun refreshKoogToolSurface(
   toolDispatcher: suspend (TrailblazeTool) -> String,
   trailblazeToolContextProvider: () -> TrailblazeToolExecutionContext,
   afterDynamicToolExecution: () -> Unit,
+  decorateDynamicToolResult: (String) -> String = { it },
 ): List<ToolDescriptor> {
   // Execution: top up the live registry from the executor-routed (ungated, superset) view so every
   // currently-registered tool — including scripted tools from not-yet-active toolsets — can dispatch.
@@ -843,6 +955,7 @@ internal fun refreshKoogToolSurface(
     toolDispatcher = toolDispatcher,
     trailblazeToolContextProvider = trailblazeToolContextProvider,
     afterDynamicToolExecution = afterDynamicToolExecution,
+    decorateDynamicToolResult = decorateDynamicToolResult,
   )
   fresh.tools.forEach { tool ->
     if (liveRegistry.getToolOrNull(tool.name) == null) {

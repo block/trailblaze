@@ -114,7 +114,7 @@ data class ProjectDefaults(
   @SerialName("target") val target: String? = null,
   @SerialName("llm") val llm: String? = null,
   /**
-   * Team-wide cap on LLM calls per objective for the legacy TRAILBLAZE_RUNNER agent.
+   * Team-wide cap on LLM calls per objective.
    * Committed alongside the project so every developer / CI runner inherits the same
    * default without each invocation needing to pass `--max-llm-calls` or set
    * `TRAILBLAZE_MAX_LLM_CALLS`. Per-run CLI flag and env var still win when set; the

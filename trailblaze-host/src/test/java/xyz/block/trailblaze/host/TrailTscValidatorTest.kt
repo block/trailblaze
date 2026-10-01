@@ -671,6 +671,117 @@ class TrailTscValidatorTest {
   }
 
   @Test
+  fun `attributeRecordedCalls checks a mixed trail's classifier leg in both the single-device and paired runs`() {
+    // Beside single-device entries the configuration binds only when companions are bound. A run
+    // without them replays the classifier-keyed leg single-device on the session target; a run with
+    // them replays the same leg as the configuration's fallback, on its start member. Either can
+    // reject the tool, so the leg is checked against both surfaces.
+    val doc = yaml.decodeTrailDocument(
+      """
+      config:
+        target: storefront
+        devices:
+          android-tablet: {}
+          register-kitchen:
+            devices:
+              register:
+                classifier: tablet-a
+                target: register-only
+              kitchen:
+                classifier: android-tablet
+                target: kitchen
+      trail:
+      - step: Do a thing on the single device
+        recording:
+          android:
+          - demoTap:
+              text: X
+      """.trimIndent(),
+    )
+
+    val calls = TrailTscValidator.attributeRecordedCalls(doc).calls
+
+    assertEquals(
+      setOf("register" to "register-only", null to "storefront"),
+      calls.map { it.deviceName to it.target }.toSet(),
+    )
+    assertEquals(listOf("demoTap", "demoTap"), calls.map { it.tool.name })
+  }
+
+  @Test
+  fun `attributeRecordedCalls checks a mixed trail's classifier leg beside the configuration's own slot single-device only`() {
+    // The paired run always takes the configuration-keyed slot, so the classifier leg in the same
+    // step is reached only by the single-device run. Checking it against the start member's surface
+    // would reject a valid leg whose tools exist only on the session target.
+    val doc = yaml.decodeTrailDocument(
+      """
+      config:
+        target: storefront
+        devices:
+          android-tablet: {}
+          register-kitchen:
+            devices:
+              register:
+                classifier: tablet-a
+                target: register-only
+              kitchen:
+                classifier: android-tablet
+                target: kitchen
+      trail:
+      - step: Do a thing
+        recording:
+          register-kitchen:
+          - register_tapOnItem:
+              text: X
+          android:
+          - storefront_tapOnItem:
+              text: X
+      """.trimIndent(),
+    )
+
+    val calls = TrailTscValidator.attributeRecordedCalls(doc).calls
+
+    assertEquals(
+      listOf(
+        Triple("register-kitchen", "register", "register-only"),
+        Triple("android", null, "storefront"),
+      ),
+      calls.map { Triple(it.classifier, it.deviceName, it.target) },
+    )
+  }
+
+  @Test
+  fun `attributeRecordedCalls checks a mixed trail's leg once where both runs share a target`() {
+    // The start member inherits the session target, so the paired and single-device runs check the
+    // same surface — staging the call twice would only duplicate its diagnostics.
+    val doc = yaml.decodeTrailDocument(
+      """
+      config:
+        target: storefront
+        devices:
+          android-tablet: {}
+          register-kitchen:
+            devices:
+              register:
+                classifier: tablet-a
+              kitchen:
+                classifier: android-tablet
+                target: kitchen
+      trail:
+      - step: Do a thing on whichever device launched
+        recording:
+          android:
+          - demoTap:
+              text: X
+      """.trimIndent(),
+    )
+
+    val call = TrailTscValidator.attributeRecordedCalls(doc).calls.single()
+
+    assertEquals("storefront", call.target)
+  }
+
+  @Test
   fun `attributeRecordedCalls replays a handover recorded in a classifier-keyed fallback leg`() {
     // The fallback leg is the SAME session, so a `switchDevice` in it reroutes the tools after it —
     // the runtime resolves `activeAgent()` per recorded tool regardless of which key matched. Reading

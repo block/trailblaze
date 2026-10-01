@@ -11,16 +11,17 @@
 // other would embed a whole report viewer in the loader script, or the loader in every exported
 // report.
 //
-// `stream`, `organize`, `eventstep`, `place`, `eventq`, and `eventall` preserve the focused event
-// navigator. Three keys are retired, and are listed only so a link written before their view went
-// away is still canonicalized rather than ignored: `filter` (the Self-healed index filter), plus
-// `mode` and `trail` (the standalone trail page's projection and scope). `dir`, `all` and `align`
-// were that page's too but are NOT retired — they still carry the trail tabs' own layout.
+// `at` holds a Timeline seek between steps, in ms from the run's first timestamp. `stream`,
+// `organize`, `eventstep`, `place`, `eventq`, and `eventall` preserve the focused event navigator.
+// Four keys are retired, and are listed only so a link written before their view went away is
+// still canonicalized rather than ignored: `filter` (the Self-healed index filter), `mode`
+// and `trail` (the standalone trail page's projection and scope), and `dir` (the removed Map tab's
+// orientation). `all` and `align` are NOT retired — they still carry the trail tabs' own layout.
 // `basesession`/`vssession` name a compare side by session id rather than by index — how one
 // report links into another, whose run order it cannot know. They are inbound only: the viewer
 // resolves them to indices and writes `base`/`vs` back.
 export const VIEWER_ROUTE_KEYS = [
-  'view', 'runs', 'run', 'tab', 'step', 'kid', 'streams', 'types', 'llm', 'inspect',
+  'view', 'runs', 'run', 'tab', 'step', 'kid', 'at', 'streams', 'types', 'llm', 'inspect',
   'stream', 'organize', 'eventstep', 'place', 'eventq', 'eventall', 'group', 'sort', 'search',
   'filter', 'mode', 'dir', 'all', 'align', 'trail', 'pick', 'base', 'vs', 'basesession', 'vssession', 'lane',
 ];

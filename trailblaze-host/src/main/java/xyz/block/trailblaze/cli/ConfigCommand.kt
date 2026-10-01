@@ -588,13 +588,3 @@ class ConfigResetCommand : Callable<Int> {
     return TrailblazeExitCode.SUCCESS.code
   }
 }
-
-/** Hidden alias: list drivers (advanced, kept for backwards compat). */
-@Command(name = "drivers", hidden = true, mixinStandardHelpOptions = true, description = ["List available driver types"])
-class ConfigDriversCommand : Callable<Int> {
-  override fun call(): Int {
-    Console.info("Driver configuration is available in the Trailblaze desktop app.")
-    Console.log("")
-    return TrailblazeExitCode.SUCCESS.code
-  }
-}

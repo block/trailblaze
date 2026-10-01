@@ -59,6 +59,32 @@ class RecordingFormatTest {
   }
 
   @Test
+  fun `every webm encode is TV range, converted and tagged, because Chrome cannot decode full-range VP9`() {
+    fun List<String>.valueOf(flag: String): String? = indexOf(flag).takeIf { it >= 0 }?.let { get(it + 1) }
+    val codecArgs = mapOf(
+      "after-the-fact" to RecordingFormat.WEBM.encodeArgs(),
+      "web standard" to RecordingFormat.WEBM.webScreencastEncodeArgs(WebVideoQuality.STANDARD),
+      "web high" to RecordingFormat.WEBM.webScreencastEncodeArgs(WebVideoQuality.HIGH),
+      "live" to WallClockMuxConsumer.Output.WebmVp9().ffmpegArgs(),
+    )
+    codecArgs.forEach { (path, args) -> assertEquals("tv", args.valueOf("-color_range"), "$path: $args") }
+
+    // The tag alone converts nothing before ffmpeg 7.1, so the filter chain has to do it — and has to
+    // be the command's only `-vf`, since ffmpeg keeps just the last one.
+    val alone = RecordingFormat.WEBM.videoFilterArgs()
+    assertEquals(listOf("-vf", "scale=out_range=tv"), alone)
+    val merged = RecordingFormat.WEBM.videoFilterArgs("fps=10", null)
+    assertEquals(listOf("-vf", "fps=10,scale=out_range=tv"), merged, "the caller's filter runs first, in the same chain")
+  }
+
+  @Test
+  fun `an mp4 encode adds no filter of its own`() {
+    assertEquals(emptyList(), RecordingFormat.MP4.videoFilterArgs())
+    assertEquals(listOf("-vf", "fps=10"), RecordingFormat.MP4.videoFilterArgs("fps=10"))
+    assertFalse("-color_range" in RecordingFormat.MP4.encodeArgs(), "H.264 plays in either range; leave it alone")
+  }
+
+  @Test
   fun `the live-file crash-safety settings stay out of the encodes that run after the session`() {
     // `-lag-in-frames 0` buys one thing: bytes on disk while the file is still being written. The
     // simctl transcode, the iOS stitch and the web screencast mux all run to completion at stop,

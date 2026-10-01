@@ -7,18 +7,21 @@
 // Shared contract types come from the ambient run-report-types.d.ts (see its header for why it
 // stays ambient rather than becoming module exports).
 import { alignedScenes, compareEventStreams, compareEventStreamsByStep, compareEventStreamsMany, compareToolTimelines, defaultComparePair as comparePairDefault, diffPixels, SCENE_DIFF_THRESHOLD_PERCENT, type CompareEventStep, type CompareEventStepAnchor, type CompareEventsResult, type CompareManyEventsResult, type CompareManyStreamDiff, type CompareScene, type CompareStreamDiff, type ContentDiff, type ContentHunk } from './run-report-compare-model';
-import { declaredTrailSteps, isLlmTurnRow, localRunAgentPrompt, rowToolCallCount, traceStepCount, traceToolCallCount, transcriptCallMessages, yamlRootSection } from './run-report-extract';
+import { captureFrameFile, declaredTrailSteps, isLlmTurnRow, localRunAgentPrompt, parseLogTimestamp, rowToolCallCount, traceStepCount, traceToolCallCount, transcriptCallMessages, yamlRootSection } from './run-report-extract';
 import { hitTestNode, inspectorDetailsHtml, inspectorModel, inspectorRectsHtml, inspectorTreeHtml } from './run-report-inspector';
+import { buildStringsModel, carryStringsSelection, DEFAULT_STRING_KINDS, DEFAULT_STRING_VISIBILITY, resolveStringsSelection, shownHits, stillCaptureIds, stringCrops, stringsTabHtml, type StringCrops, type StringKind, type StringsModel, type StringsScreen, type StringVisibility } from './run-report-strings';
+import { grabClipFrames, type FrameRequest } from './run-report-strings-frames';
 import { chunkJsonWithoutRuntimeAttachments, eventPrettyText, eventValueText, inflateEventsGz, inflateGzJsonArray, inflateGzJsonRecord, inflateGzText, inflateLlmMessagesGz, normalizeEventPayload, parseEventJsonish, rawPrettyText, tbBootLoaderHtml, jsonToYaml, toInertJson, transcriptToolCallYaml, transcriptToolResultDisplay, withoutRuntimeAttachments } from './run-report-payload';
 import { buildExportSchedule, buildPlaybackSchedule, playbackGapMs, playbackPositionAt, videoEndMs } from './run-report-playback';
+import { adjacentMark, entryAtOrBefore, fractionToOffset, snapFraction, timelineTracks, trackMarks, type TimelineTrack, type TrackMark } from './run-report-timeline-tracks';
 import { VIEWER_ROUTE_KEYS } from './run-report-route';
 import { inspectorKeyForNodeId, isSelectorAnalyzableTree, loadSelectorEngine, loadSelectorEngineFromChunk, mismatchVizHtml, nodeIdForInspectorKey, selectorSuggestionsHtml } from './run-report-selectors';
 import { buildReportTraceModel, createReportTraceModelResolver, failureAnchorIndex as traceFailureAnchorIndex, type ReportTraceGroup, type ReportTraceModel } from './run-report-trace-model';
-import { fitCamera, focusCamera, hubCounterScale, tweenCamera, unionBox, wirePlan, zoomedCamera, type TrailCamera, type WireBox, type WireHub } from './run-report-trail-camera';
-import { buildTrailMatrix, pruneIdleTrailCells, traceDeviceLanes, trailIdentity, trailJoinFor, trailViewScopes, type DeviceLaneTrace, type TrailCell, type TrailJoin, type TrailMatrix, type TrailRow } from './run-report-trail-model';
+import { buildTrailMatrix, captureShotFile, pruneIdleTrailCells, traceDeviceLanes, trailIdentity, trailJoinFor, trailViewScopes, videoShotCaptureId, type DeviceLaneTrace, type TrailCell, type TrailFrame, type TrailJoin, type TrailMatrix, type TrailRow } from './run-report-trail-model';
 import { buildPerfettoTrace, handToPerfetto, openPerfettoWindow, perfettoBuffer, perfettoMemoryFrom, perfettoTraceJson, type PerfettoHost, type PerfettoLane, type PerfettoMemory, type PerfettoStream } from './run-report-perfetto';
-import { alignReplayByStep, aspectHeld, buildReplayMemorySeries, buildReplayTimeline, clampMemorySeries, clampTime, describeMemorySample, fmtMemoryKb, fmtReplayClock, heldClipsTimeAt, laneMarksAt, laneStateAt, laneStops, markWindowMs, memoryEntriesFromStream, MEMORY_SERIES_FIELDS, memoryNearLimit, memoryPoints, memoryPointsAttr, memorySampleAt, memoryStreamName, memoryY, nextStop, remapMemorySeries, replayMemoryScaleKb, replayable, replayChipFor, replayStripZoomMax, replayTickSeconds, replayToolLabelRoom, REPLAY_STRIP_MIN_LABEL_PX, segmentAt, followReplayHead, revealReplayRow, fmtReplaySpan, fmtRulerClock, rangeReplayStrip, replayRulerStep, zoomReplayStrip, type ReplayStripZoom, videoClipRate, videoClipTimeAt, type ReplayAlignment, type ReplayLane, type ReplayLaneFailure, type ReplayMemorySeries, type ReplayTimeline } from './run-report-trail-replay';
-import { installClipFallback, registerClipBytes, unregisterClipBytes, watchClipElement } from './run-report-clip-player';
+import { alignReplayByStep, aspectHeld, buildReplayMemorySeries, buildReplayTimeline, clampMemorySeries, clampTime, describeMemorySample, fmtMemoryKb, fmtReplayClock, heldClipsTimeAt, laneMarksAt, laneStateAt, laneStops, markWindowMs, memoryEntriesFromStream, MEMORY_SERIES_FIELDS, memoryNearLimit, memoryPoints, memoryPointsAttr, memorySampleAt, memoryStreamName, memoryY, nextStop, remapMemorySeries, replayMemoryScaleKb, replayable, replayChipFor, replayStripZoomMax, replayTickSeconds, replayToolLabelRoom, REPLAY_STRIP_MIN_LABEL_PX, segmentAt, followReplayHead, revealReplayRow, fmtReplaySpan, fmtRulerClock, rangeReplayStrip, replayOpeningMs, replayRecordingStartsMs, replayRulerStep, replayTrackKey, replayTrackOpen, zoomReplayStrip, type ReplayStripZoom, videoClipRate, videoClipTimeAt, type ReplayAlignment, type ReplayLane, type ReplayLaneFailure, type ReplayMemorySeries, type ReplayTimeline } from './run-report-trail-replay';
+import { adjacentFrameTime, clipFrameSource, FRAME_TIME_SLACK_SEC, installClipFallback, registerClipBytes, unregisterClipBytes, watchClipElement } from './run-report-clip-player';
+import { formatShotClipLength, formatShotClipTime, nextShotClipSpeed, SHOT_CLIP_MIN_SEC, SHOT_CLIP_SPEED, shotClipCovers, shotClipMediaSecAt, shotClipRunSecAt, shotClipSegment, type ShotClipSegment } from './run-report-shot-clip';
 import { formatUsd } from './report-format';
 import { findAttachmentRefs } from '../../../report/run-report-events';
 
@@ -214,12 +217,12 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   // distinction durable after hydration gives up so comparison views never turn a truncated report
   // into authoritative "nothing changed" or "nothing captured" claims.
   const hydrationFailures = new Set<number>();
-  // The three trail projections are tabs of a run's own report, beside Timeline and Lightbox — not
+  // The two trail projections are tabs of a run's own report, beside Timeline and Lightbox — not
   // a page of their own. The tab id IS the projection (`st.trailMode`), so the tab nav and the
   // body renderers cannot disagree about which one is on screen. Route order follows the tab
   // order the reader sees: Replay first, because playing the run back is what most readers open
   // this for.
-  const TRAIL_TABS = ['replay', 'steps', 'map'];
+  const TRAIL_TABS = ['replay', 'steps'];
   const onTrailTab = () => st.view === 'detail' && TRAIL_TABS.indexOf(st.tab) >= 0;
   // The trail projections show the SAME authored trail across runs — one lane per device, joined
   // on the authored step — so they exist only when every session names one trail (by trailId when
@@ -243,10 +246,10 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   })));
   // Whether a specific trail can be staged.
   const trailViewAvailableFor = (key: string | null) => key != null && key !== '' && trailScopes().has(key);
-  // Whether the run being read can be staged as a trail — the gate on its Replay / Grid / Map
-  // tabs. A trail with several runs stages one lane per run; a lone run splits into one lane per
+  // Whether the run being read can be staged as a trail — the gate on its Replay / Grid tabs.
+  // A trail with several runs stages one lane per run; a lone run splits into one lane per
   // DEVICE when the session drove several (see trailDeviceLanes), and is otherwise still a trail —
-  // its replay, grid and map are the whole point of loading a recording — so the lone run keeps
+  // its replay and grid are the whole point of loading a recording — so the lone run keeps
   // the tabs.
   // Membership, not merely presence. A SKIPPED run is dropped from its trail's lane list while the
   // key survives for the trail's other runs, so testing the key alone puts the tabs on a run whose
@@ -518,6 +521,29 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   // `<session>` for k = 0 and `<session>-<k>` otherwise, the same key the document hoists its
   // bytes under (#tb-clip-<key>), so every per-recording table here (clipUrlCache, clipUnplayable,
   // clipDurations) is keyed alike. Recording 0 is the start device's.
+  // An archive's recordings arrive as blob: URLs. Their bytes are registered on first use, as an
+  // embedded recording's are, so frame stepping and the in-page fallback player can read them, and
+  // released on teardown. The archive loader hands them over alongside each clip (not enumerable,
+  // see sessionVideoClips in zip-report-core.js); a payload that crossed a JSON boundary on the way
+  // here (Trail Runner's zip screen renders into a same-origin srcdoc frame) has lost them, but its
+  // blob: URL still resolves in this page, so a WebM's bytes are read back from it.
+  const registeredZipClipUrls = new Set<string>();
+  const registerZipClipBytes = (clip: VideoClip) => {
+    if (!clip.url || registeredZipClipUrls.has(clip.url)) return;
+    const url = clip.url;
+    const bytes = (clip as { bytes?: unknown }).bytes;
+    if (bytes instanceof Uint8Array) {
+      registeredZipClipUrls.add(url);
+      registerClipBytes(url, bytes);
+      return;
+    }
+    if (url.slice(0, 5) !== 'blob:' || clip.mime !== 'video/webm' || typeof fetch !== 'function') return;
+    registeredZipClipUrls.add(url);
+    fetch(url).then((r) => r.arrayBuffer()).then((buffer) => {
+      // Torn down while reading: the next archive's viewer owns the tables now.
+      if (registeredZipClipUrls.has(url)) registerClipBytes(url, new Uint8Array(buffer));
+    }).catch(() => { /* frame stepping falls back to a nominal frame; nothing else depends on it */ });
+  };
   const sessionClipKey = (sessionIndex: number, k: number) => (k === 0 ? String(sessionIndex) : `${sessionIndex}-${k}`);
   const sessionZipClips = (session: SessionPayload): VideoClip[] | null => (
     session.videoClips && session.videoClips.length ? session.videoClips : session.videoClip ? [session.videoClip] : null
@@ -529,7 +555,11 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     const key = sessionClipKey(sessionIndex, k);
     if (clipUnplayable[key]) return null;
     const zipClips = sessionZipClips(session);
-    if (zipClips) return zipClips[k] || null;
+    if (zipClips) {
+      const clip = zipClips[k] || null;
+      if (clip) registerZipClipBytes(clip);
+      return clip;
+    }
     const video = sessionVideos(session)[k];
     const clip = video && video.clip;
     if (!clip) return null;
@@ -625,6 +655,416 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     const first = firstTracedDevice((SESSIONS[sessionIndex] || {}).trace);
     return first == null || first === devices[0] ? recordingIndexAt(sessionIndex, devices[0], atMs) : -1;
   };
+  // ── Step thumbnails that play their step ─────────────────────────────────────────────────────
+  // A still of a session that was recorded carries where its step sits in that recording, and
+  // hovering (or focusing) it plays the stretch from the step's start to the captured frame once,
+  // then rests on that frame, with controls to pause, scrub and change speed. Any surface opts a
+  // `.galshot` in by stamping shotClipMark's attrs on it; the gallery wiring pass (wireShotClip)
+  // does the rest, and the zoom opened from it plays the same stretch, so a new strip
+  // of step frames plays the same way without code of its own.
+  const prefersReducedMotion = () => {
+    try { return typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches; } catch (err) { return false; }
+  };
+  // The device row `i` ran on: its own, else the last one named before it — a step without a
+  // device of its own ran on the last one named (the carry-forward tlDevice applies).
+  const traceDeviceAt = (trace: TraceStep[] | undefined, i: number): string | null => {
+    let device: string | null = null;
+    for (const t of trace || []) {
+      if (t.device) device = t.device;
+      if (t.i === i) break;
+    }
+    return device;
+  };
+  // The device a capture at `at` was taken on. A row is stamped with the device it ends on, so
+  // when it hands over partway through, only a capture at or after its last handover is on that
+  // device, and one before its first handover is on the device the row before it ran on. Anywhere
+  // else (between two handovers, or tied to no one call in the row) it can't be told: undefined.
+  // No device named (no row, or an unstamped one) means the one device of a single-device run, and
+  // can't be told in a run whose rows name more than one.
+  const captureDevice = (trace: TraceStep[], at: { step: number; kid: number | null } | null): string | null | undefined => {
+    const multi = new Set(trace.map((t) => t.device).filter(Boolean)).size > 1;
+    const named = (device: string | null | undefined) => device || (multi ? undefined : null);
+    const index = at ? trace.findIndex((t) => t.i === at.step) : -1;
+    const row = index >= 0 ? trace[index] : null;
+    if (!row) return named(null);
+    const switches: number[] = [];
+    (row.children || []).forEach((c, kid) => { if (c.label === 'switchDevice' && c.ok !== false) switches.push(kid); });
+    if (!switches.length || (at!.kid != null && at!.kid >= switches[switches.length - 1])) return named(row.device);
+    if (at!.kid != null && at!.kid < switches[0]) return named(index > 0 ? trace[index - 1].device : null);
+    return undefined;
+  };
+  // The attributes that make a thumbnail playable: which session's recording (and which of its
+  // recordings, for a device that recorded more than once) shows the frame row `rowId` (or its
+  // dispatch `kid`) captured, the step's start, and the instant the frame was taken, as epoch ms.
+  // Taken is the capturing record's END (shotEndTs), not the cue Replay places the still by
+  // (`cueMs`, the action's start): ending there would rest a beat before the still, on the screen
+  // the action was about to change. The cue stands in only where no end is known: a recording that
+  // stopped before a known end never shows the still's screen, so it keeps its still. Empty — the cell stays a still — when no recording of that device covers
+  // the frame, or the reader asked for reduced motion.
+  type ShotClipMark = { attrs: string; lengthSec: number };
+  // A recording url a thumbnail may load, under the attachment media rule: the archive's blob:, an
+  // embedded data: video, a hosted http(s) file, or a linked report's relative path.
+  const playableClipUrl = (url: string | null | undefined) => !!safeAttachmentSrc(url);
+  const shotClipMark = (sessionIndex: number, rowId: number, kid: number | null, fromMs: number | null, cueMs: number | null): ShotClipMark | null => {
+    const session = SESSIONS[sessionIndex];
+    if (!session || prefersReducedMotion()) return null;
+    const row = (session.trace || []).find((t) => t.i === rowId);
+    const child = row && kid != null ? (row.children || [])[kid] : null;
+    const takenMs = (kid != null ? child && child.shotEndTs : row && row.shotEndTs) ?? null;
+    const atMs = takenMs ?? cueMs;
+    if (atMs == null) return null;
+    // A row's own still is its last capture, so it is on the device the row ends on. A dispatch's is
+    // on whichever device was active when it ran; one between two handovers can't be told: a still.
+    const device = kid == null ? traceDeviceAt(session.trace, rowId) : captureDevice(session.trace || [], { step: rowId, kid });
+    if (device === undefined) return null;
+    const k = sessionClipIndexFor(sessionIndex, device, device == null || firstTracedDevice(session.trace) === device, atMs);
+    const recording = k >= 0 ? sessionRecordings(sessionIndex)[k] : null;
+    const clip = recording ? sessionClipAt(sessionIndex, k) : null;
+    if (!recording || !clip || !playableClipUrl(clip.url)) return null;
+    const toMs = atMs;
+    if (!shotClipCovers(recording, toMs)) return null;
+    // As long as the stretch that plays: a step that began before the recording did plays from its first frame.
+    const lengthSec = Math.max(SHOT_CLIP_MIN_SEC, (toMs - Math.max(fromMs ?? toMs, recording.startMs)) / 1000);
+    return {
+      attrs: ` data-clip-run="${esc(sessionIndex)}" data-clip-k="${esc(k)}"${fromMs != null ? ` data-clip-from="${esc(fromMs)}"` : ''} data-clip-to="${esc(toMs)}"`,
+      lengthSec,
+    };
+  };
+  // A playable still's caption hint: how long its step runs. Outside the screenshot, so nothing is
+  // drawn over the captured screen until the reader hovers it.
+  const shotClipHintHtml = (mark: ShotClipMark) =>
+    `<span class="shotcliphint" title="Hover the screenshot to play this step">▶ ${formatShotClipLength(mark.lengthSec)}</span>`;
+  // One element per session for the thumbnails, moved into whichever is playing: a wall of them
+  // must not hold a decoder per cell. The src is the session's recording, so a second hover in the
+  // same session plays without reloading it. The zoom keeps an element of its own: Chrome paints a
+  // thumbnail's element black once it is moved into the overlay, though its frames still decode.
+  // A slot is keyed by its url too: another recording gets a fresh element, since the CSP fallback
+  // adopts an element for good and would keep drawing the old file. Only the few most recently
+  // used are kept, each holding a decoder and its file until released.
+  const SHOT_CLIP_KEPT_VIDEOS = 4;
+  const shotClipVideos = new Map<string, HTMLVideoElement>();
+  const releaseShotClipVideo = (vid: HTMLVideoElement) => {
+    const owner = shotClipOwners.get(vid);
+    if (owner) owner.stop();
+    vid.pause();
+    if (vid.parentNode) vid.parentNode.removeChild(vid);
+    vid.removeAttribute('src');
+    if (vid.load) vid.load();
+  };
+  const shotClipVideo = (surface: 'thumb' | 'zoom', sessionIndex: number, clip: VideoClip): HTMLVideoElement | null => {
+    if (!clip.url || !playableClipUrl(clip.url)) return null;
+    const key = `${surface}:${sessionIndex}:${clip.url}`;
+    let vid = shotClipVideos.get(key);
+    if (vid) shotClipVideos.delete(key);
+    else {
+      for (const [other, old] of shotClipVideos) if (other.startsWith(`${surface}:${sessionIndex}:`)) { shotClipVideos.delete(other); releaseShotClipVideo(old); }
+      vid = document.createElement('video');
+      const el = vid;
+      const url = clip.url;
+      // A linked recording is requested in CORS mode, so where its server allows it the zoom's
+      // "Open frame" can read a frame back off it (a no-CORS load taints the canvas). A server that
+      // doesn't allow it fails that load, so the element retries once without CORS: it still plays,
+      // and Open frame reports it can't read the frame. Registered ahead of every other listener,
+      // so the failed CORS attempt never reaches the player as a broken recording.
+      if (/^https?:/i.test(url)) {
+        el.crossOrigin = 'anonymous';
+        el.addEventListener('error', (e) => {
+          if (el.crossOrigin == null) return;
+          e.stopImmediatePropagation();
+          el.removeAttribute('crossorigin');
+          el.src = url;
+        }, true);
+      }
+      watchClipElement(el);
+      el.className = 'shotclip';
+      el.muted = true;
+      el.playsInline = true;
+      el.preload = 'auto';
+      el.setAttribute('aria-hidden', 'true');
+      el.src = url;
+    }
+    shotClipVideos.set(key, vid);
+    for (const [other, old] of shotClipVideos) {
+      if (shotClipVideos.size <= SHOT_CLIP_KEPT_VIDEOS) break;
+      shotClipVideos.delete(other);
+      releaseShotClipVideo(old);
+    }
+    return vid;
+  };
+  // The speed the reader last picked, shared by every thumbnail and the zoom for the page's life.
+  let shotClipSpeed = SHOT_CLIP_SPEED;
+  // Suppresses focus-to-play while focus is handed back to a thumbnail programmatically (closing
+  // the zoom), so the still the reader just came from doesn't start playing under them.
+  let shotClipQuietFocus = false;
+  type ShotClipRef = { run: number; k: number; from: number | null; to: number };
+  const shotClipRefOf = (el: HTMLElement): ShotClipRef | undefined => el.dataset && el.dataset.clipRun != null
+    ? { run: Number(el.dataset.clipRun), k: Number(el.dataset.clipK), from: el.dataset.clipFrom != null ? Number(el.dataset.clipFrom) : null, to: Number(el.dataset.clipTo) }
+    : undefined;
+  const SHOT_CLIP_PLAY_ICON = '<svg viewBox="0 0 10 10" width="9" height="9" aria-hidden="true"><path d="M2 1l7 4-7 4z" fill="currentColor"/></svg>';
+  const SHOT_CLIP_PAUSE_ICON = '<svg viewBox="0 0 10 10" width="9" height="9" aria-hidden="true"><path d="M2 1h2.2v8H2zM5.8 1H8v8H5.8z" fill="currentColor"/></svg>';
+  type ShotClipBar = { bar: HTMLElement; play: HTMLButtonElement; seek: HTMLInputElement; time: HTMLElement; speed: HTMLButtonElement };
+  // The player's controls: play/pause, a scrubber over this step's stretch only, where in the step
+  // it is, and the speed. Its keys and clicks stay its own — they would otherwise open the zoom,
+  // jump the timeline, or pan the zoomed image — except Escape, which still closes the zoom.
+  const buildShotClipBar = (extraClass: string): ShotClipBar => {
+    const bar = document.createElement('div'); bar.className = `shotclipbar${extraClass ? ` ${extraClass}` : ''}`;
+    const button = (className: string) => { const b = document.createElement('button'); b.type = 'button'; b.className = `shotclipbtn ${className}`; return b; };
+    const play = button('shotclipplay');
+    const seek = document.createElement('input'); seek.type = 'range'; seek.className = 'shotclipseek'; seek.min = '0'; seek.step = '100'; seek.value = '0';
+    seek.setAttribute('aria-label', 'Seek within this step');
+    const time = document.createElement('span'); time.className = 'shotcliptime';
+    const speed = button('shotclipspeed');
+    bar.appendChild(play); bar.appendChild(seek); bar.appendChild(time); bar.appendChild(speed);
+    bar.onclick = (e) => e.stopPropagation();
+    bar.onpointerdown = (e) => e.stopPropagation();
+    bar.onkeydown = (e) => { if (e.key !== 'Escape') e.stopPropagation(); };
+    return { bar, play, seek, time, speed };
+  };
+  type ShotClipPlayer = {
+    vid: HTMLVideoElement;
+    playing: () => boolean;
+    // Resting on the step's captured frame (or not yet on any frame): the surface shows its still.
+    atEnd: () => boolean;
+    dragging: () => boolean;
+    toggle: () => void;
+    stepFrames: (n: number) => void;
+    stop: () => void;
+  };
+  // Which player drives each element: a new one takes the element over from the last.
+  const shotClipOwners = new Map<HTMLVideoElement, ShotClipPlayer>();
+  // Plays one step's stretch of a recording, from the step's start to its captured frame, and
+  // drives `ui` to match. `mount` places the element; `onshown` says whether the surface should
+  // show the video (a frame of the stretch is up) or its still (resting on the captured frame,
+  // which the still shows sharper). Null when there's no recording to play.
+  const createShotClipPlayer = (ref: ShotClipRef, ui: ShotClipBar, opts: { surface: 'thumb' | 'zoom'; autoplay: boolean; mount: (vid: HTMLVideoElement) => void; onshown: (shown: boolean) => void; onfail: () => void }): ShotClipPlayer | null => {
+    if (typeof document === 'undefined') return null;
+    const clip = sessionClipAt(ref.run, ref.k);
+    // A recording that already failed to load stays failed: the cell keeps its still rather than
+    // retrying the same broken file on every hover.
+    if (!clip || clipUnplayable[sessionClipKey(ref.run, ref.k)]) return null;
+    const vid = shotClipVideo(opts.surface, ref.run, clip);
+    if (!vid) return null;
+    const previous = shotClipOwners.get(vid);
+    if (previous) previous.stop();
+    let segment: ShotClipSegment | null = null;
+    let playing = false;
+    let hasFrame = false;
+    let dead = false;
+    let frame = 0;
+    let afterSeek: (() => void) | null = null;
+    let wantPlay = opts.autoplay;
+    let scrubbing = false;
+    let resumeAfterScrub = false;
+    let dragging = false;
+    const durationSec = () => (Number.isFinite(vid.duration) ? vid.duration : null);
+    const atEnd = () => !segment || (!playing && !afterSeek && (!hasFrame || vid.currentTime >= segment.toSec - 0.01));
+    const sync = () => {
+      if (dead) return;
+      const state = playing || afterSeek ? 'pause' : 'play';
+      if (ui.play.dataset.icon !== state) { ui.play.dataset.icon = state; ui.play.innerHTML = state === 'pause' ? SHOT_CLIP_PAUSE_ICON : SHOT_CLIP_PLAY_ICON; }
+      ui.play.setAttribute('aria-label', playing || afterSeek ? 'Pause' : 'Play this step');
+      ui.speed.textContent = `${shotClipSpeed}×`;
+      ui.speed.setAttribute('aria-label', `Playback speed ${shotClipSpeed}×, change`);
+      if (!segment) { ui.seek.disabled = true; ui.time.textContent = ''; opts.onshown(false); return; }
+      const lengthMs = Math.round(shotClipRunSecAt(segment, segment.toSec) * 1000);
+      const atMs = atEnd() ? lengthMs : Math.round(shotClipRunSecAt(segment, vid.currentTime) * 1000);
+      ui.seek.disabled = false;
+      // Whole steps of the scrubber's own: a max off its step grid could never be dragged to, and
+      // the end of the stretch is the one place the reader most needs to reach.
+      ui.seek.max = String(Math.max(100, Math.ceil(lengthMs / 100) * 100));
+      if (!scrubbing) ui.seek.value = String(atMs >= lengthMs ? ui.seek.max : atMs);
+      ui.seek.style.setProperty('--seek', `${lengthMs > 0 ? Math.min(100, (atMs / lengthMs) * 100) : 100}%`);
+      ui.time.textContent = `${formatShotClipTime(atMs / 1000)} / ${formatShotClipTime(lengthMs / 1000)}`;
+      opts.onshown(!atEnd());
+    };
+    const cancelTick = () => { if (frame && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(frame); frame = 0; };
+    const seekTo = (sec: number, then: (() => void) | null) => {
+      if (!segment) return;
+      afterSeek = then;
+      vid.currentTime = Math.max(segment.fromSec, Math.min(segment.toSec, sec));
+    };
+    // Stop ON the captured frame: a check overshoots by up to one check's worth of media, so the
+    // rest is a seek to the exact instant, not wherever it paused. Frame callbacks give the
+    // precision; timeupdate is the backstop where they don't run (a hidden page never fires them,
+    // while its media still plays).
+    const reachedEnd = () => {
+      if (dead || !playing || !segment) return true;
+      if (vid.currentTime < segment.toSec && !vid.ended) return false;
+      playing = false;
+      cancelTick();
+      vid.pause();
+      if (Math.abs(vid.currentTime - segment.toSec) > 0.01) seekTo(segment.toSec, null);
+      sync();
+      return true;
+    };
+    const tick = () => { if (!reachedEnd()) { sync(); frame = requestAnimationFrame(tick); } };
+    const begin = () => {
+      if (dead || !segment) return;
+      playing = true;
+      vid.playbackRate = segment.rate;
+      const played = vid.play();
+      if (played && typeof played.catch === 'function') played.catch(() => {});
+      cancelTick();
+      if (typeof requestAnimationFrame === 'function') frame = requestAnimationFrame(tick);
+      sync();
+    };
+    const play = () => {
+      if (dead) return;
+      if (!segment) { wantPlay = true; return; }
+      // From the captured frame (or no frame yet), playing means the step again from its start.
+      if (atEnd()) seekTo(segment.fromSec, begin);
+      else begin();
+      sync();
+    };
+    const pause = () => {
+      wantPlay = false;
+      afterSeek = null;
+      playing = false;
+      cancelTick();
+      vid.pause();
+      sync();
+    };
+    const setSpeed = (speed: number) => {
+      shotClipSpeed = speed;
+      if (segment) segment = shotClipSegment(clip, ref.from, ref.to, durationSec(), speed) || segment;
+      if (playing && segment) vid.playbackRate = segment.rate;
+      sync();
+    };
+    const player: ShotClipPlayer = {
+      vid,
+      playing: () => playing || !!afterSeek,
+      atEnd,
+      dragging: () => dragging,
+      toggle: () => (playing || afterSeek ? pause() : play()),
+      stepFrames: (n: number) => {
+        if (!segment) return;
+        const from = atEnd() ? segment.toSec : vid.currentTime;
+        pause();
+        // The recording's own neighbouring frame where its frames are known (every WebM, embedded or
+        // from an archive); an mp4's aren't, so it nudges by a nominal frame.
+        const next = adjacentFrameTime(clip.url, from, n);
+        seekTo(next != null ? next + FRAME_TIME_SLACK_SEC : from + n / 30, null);
+      },
+      stop: () => {
+        if (dead) return;
+        dead = true;
+        cancelTick();
+        if (shotClipOwners.get(vid) === player) shotClipOwners.delete(vid);
+        vid.onloadedmetadata = null; vid.onseeked = null; vid.ontimeupdate = null; vid.onerror = null;
+        vid.pause();
+        if (vid.parentNode) vid.parentNode.removeChild(vid);
+      },
+    };
+    shotClipOwners.set(vid, player);
+    vid.onerror = () => { clipUnplayable[sessionClipKey(ref.run, ref.k)] = true; player.stop(); opts.onfail(); };
+    // A frame of the stretch is up only once a seek lands: showing the element before that would
+    // flash whatever frame it last rested on — another step's, when the element was just reused.
+    vid.onseeked = () => {
+      if (dead) return;
+      hasFrame = true;
+      const then = afterSeek;
+      afterSeek = null;
+      if (then) then(); else sync();
+    };
+    vid.ontimeupdate = () => { if (!reachedEnd()) sync(); };
+    ui.play.onclick = () => player.toggle();
+    ui.speed.onclick = () => setSpeed(nextShotClipSpeed(shotClipSpeed));
+    ui.seek.onpointerdown = (e) => {
+      e.stopPropagation();
+      dragging = true;
+      const release = () => { dragging = false; window.removeEventListener('pointerup', release, true); };
+      window.addEventListener('pointerup', release, true);
+    };
+    ui.seek.oninput = () => {
+      if (!segment) return;
+      if (!scrubbing) { scrubbing = true; resumeAfterScrub = player.playing(); }
+      if (player.playing()) { playing = false; afterSeek = null; cancelTick(); vid.pause(); }
+      const atMs = Number(ui.seek.value);
+      const lengthSec = shotClipRunSecAt(segment, segment.toSec);
+      seekTo(atMs / 1000 >= lengthSec ? segment.toSec : shotClipMediaSecAt(segment, atMs / 1000), null);
+      sync();
+    };
+    ui.seek.onchange = () => {
+      scrubbing = false;
+      if (resumeAfterScrub && !atEnd()) begin();
+      resumeAfterScrub = false;
+      sync();
+    };
+    opts.mount(vid);
+    const start = () => {
+      if (dead) return;
+      segment = shotClipSegment(clip, ref.from, ref.to, durationSec(), shotClipSpeed);
+      if (!segment) { player.stop(); opts.onfail(); return; }
+      if (wantPlay) { wantPlay = false; play(); } else sync();
+    };
+    sync();
+    if (vid.readyState >= 1 && Number.isFinite(vid.duration) && vid.duration > 0) start();
+    else vid.onloadedmetadata = () => { vid.onloadedmetadata = null; start(); };
+    return player;
+  };
+  // The thumbnail playing now, with its controls, fading in over the bottom of its still.
+  let shotClipActive: { host: HTMLElement; player: ShotClipPlayer; ui: ShotClipBar } | null = null;
+  const stopShotClip = (host?: HTMLElement) => {
+    const active = shotClipActive;
+    if (!active || (host && active.host !== host)) return;
+    shotClipActive = null;
+    active.player.stop();
+    if (active.host.classList) active.host.classList.remove('clipactive', 'clipplaying');
+    if (active.host.setAttribute) active.host.setAttribute('role', 'button');
+    if (active.ui.bar.parentNode) active.ui.bar.parentNode.removeChild(active.ui.bar);
+  };
+  const playShotClip = (host: HTMLElement) => {
+    if (typeof document === 'undefined' || prefersReducedMotion()) return;
+    // Already this cell's: a click focusing a hovered cell must not restart its playback.
+    if (shotClipActive && shotClipActive.host === host) return;
+    const ref = shotClipRefOf(host);
+    if (!ref) return;
+    stopShotClip();
+    const ui = buildShotClipBar('');
+    const player = createShotClipPlayer(ref, ui, {
+      surface: 'thumb',
+      autoplay: true,
+      mount: (vid) => host.appendChild(vid),
+      onshown: (shown) => { if (host.classList) host.classList.toggle('clipplaying', shown); },
+      onfail: () => stopShotClip(host),
+    });
+    if (!player) return;
+    shotClipActive = { host, player, ui };
+    host.appendChild(ui.bar);
+    if (host.classList) host.classList.add('clipactive');
+    // A playing still is a player, not a button: a button's contents are presentational, which
+    // would hide what its play, seek and speed controls are. Enter still opens the zoom.
+    if (host.setAttribute) host.setAttribute('role', 'group');
+    // Tabbing out of the controls ends it like tabbing off the still does.
+    ui.bar.addEventListener('focusout', (e: FocusEvent) => {
+      const to = e.relatedTarget as Node | null;
+      if (!to || !host.contains(to)) stopShotClip(host);
+    });
+  };
+  // Hover plays for a pointer that can hover (a touch has no hover, and its tap opens the zoom);
+  // keyboard focus plays too, so the preview isn't mouse-only. Leaving either restores the still —
+  // except a pointer leaving a cell the keyboard is still in, or one still dragging its scrubber.
+  // A click focuses the cell as well, so only keyboard focus (:focus-visible) outlasts the hover.
+  const focusVisible = (el: Element | null) => {
+    try { return !!el && typeof (el as HTMLElement).matches === 'function' && (el as HTMLElement).matches(':focus-visible'); } catch (err) { return false; }
+  };
+  const wireShotClip = (el: HTMLElement) => {
+    if (!el.dataset || el.dataset.clipRun == null) return;
+    el.onpointerenter = (e) => { if (hoverCapablePointer(e)) playShotClip(el); };
+    el.onpointerleave = () => {
+      const active = shotClipActive;
+      if (active && active.host === el && active.player.dragging()) {
+        const settle = () => { window.removeEventListener('pointerup', settle); if (!el.matches(':hover')) stopShotClip(el); };
+        window.addEventListener('pointerup', settle);
+        return;
+      }
+      const focused = document.activeElement;
+      if (!(focused && el.contains(focused) && focusVisible(focused))) stopShotClip(el);
+    };
+    // Keyboard focus only: a click focuses the cell too, and opens the zoom rather than a hover.
+    el.onfocus = () => { if (!shotClipQuietFocus && focusVisible(el)) playShotClip(el); };
+    el.onblur = (e: FocusEvent) => { const to = e.relatedTarget as Node | null; if (!to || !el.contains(to)) stopShotClip(el); };
+  };
   const generatedAt = RAW.generatedAt || (SESSIONS[0] && SESSIONS[0].meta && SESSIONS[0].meta.generatedAt) || '';
   // `?chrome=none` — the report is embedded in a host that already renders a run header of its own
   // (Trail Runner's run details). Drop the duplicated identity row: the run title, the status dot,
@@ -697,6 +1137,10 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   // can't follow the user's later navigation to another run.
   const exportReport = (sessions, filename, title) => whenDocumentComplete(() => {
     const clone = document.documentElement.cloneNode(true) as HTMLElement;
+    // The Strings tab's crop stylesheet is page state built from the payload; shipped, it would
+    // carry every screenshot a second time.
+    const cropSheet = clone.querySelector('#strcrops');
+    if (cropSheet) cropSheet.remove();
     // Re-seed the static boot loader (the live document's first render replaced it) so the
     // exported file also paints a loader instead of a blank page while it boots.
     const heading = sessions.length === 1 ? (sessions[0].meta.title || 'Trailblaze run') : 'Trailblaze Report';
@@ -882,10 +1326,11 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   const sessionHierarchies = (session) => session.hierarchies || hierarchiesInflater.cache.get(session) || null;
   const stepHierarchy = (i) => { const h = sessionHierarchies(D); return h ? h[String(i)] : null; };
   // The selected step gets the device-side "Inspect UI" affordance when it is a non-header row
-  // with an inlined screenshot AND a hierarchy. Known precisely once hierarchies are inline (or
+  // with a picture (an inlined screenshot, or the recording's frame at a screenshot-less capture)
+  // AND a hierarchy. Known precisely once hierarchies are inline (or
   // inflated); while a compressed payload hasn't inflated yet the affordance shows optimistically
   // for a screenshot step, then corrects on the post-inflate re-render.
-  const stepInspectable = (t) => Boolean(!t.objective && t.screenshotFile && safeImageSrc(D.shots[t.screenshotFile])
+  const stepInspectable = (t) => Boolean(!t.objective && captureShownIn(st.session, captureShotFile(t))
     && (stepHierarchy(t.i) != null || (D.hierarchiesGz && !hierarchiesInflater.cache.has(D))));
 
   const logPayload = (session) => ({
@@ -919,20 +1364,29 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     const index = traceModel().indexById.get(stepId);
     return index == null ? null : D.trace[index] || null;
   };
-  const TIMELINE_EVENT_KINDS = ['tool', 'llm', 'assert', 'fail'];
+  const TIMELINE_EVENT_KINDS = ['tool', 'llm', 'decision', 'assert', 'fail'];
   const stepCat = (t) => {
     if (!t.ok) return 'fail';
+    // A decision request answers typed questions with probabilities; it is not an LLM call even
+    // when an LLM backs the engine, so it gets its own kind (and colour, icon and filter).
+    if (t.decision) return 'decision';
     const tool = String(t.tool || ''); const lbl = String(t.label || '').toLowerCase();
     if (t.llm != null || tool === 'agent step' || tool.indexOf('llm') === 0) return 'llm';
     if (lbl.indexOf('assert') === 0 || lbl.indexOf('verify') === 0 || tool.toLowerCase().indexOf('assert') >= 0) return 'assert';
     return 'tool';
   };
   const allTimelineEventKinds = () => [...TIMELINE_EVENT_KINDS];
-  // The trail projections, in toolbar order. `map` is the default and so goes unwritten in the
-  // route; the rest round-trip through `?mode=`.
-  // 'time' was a projection once; Replay superseded it (same per-lane timing, plus the playback),
-  // so an old mode=time link now lands on the map like any other unknown mode.
-  const TRAIL_MODES = ['map', 'steps', 'replay'];
+  // The Timeline's open tracks, by stream name. Null-prototype: a stream is named by its file, so
+  // `constructor` or `__proto__` is a name like any other and must not read as already open.
+  const openTrackSet = () => Object.create(null) as Record<string, boolean>;
+  // The kinds the Events filter offers for the open run: Decision only when the run has one, so a
+  // run without decision requests keeps its familiar four-way filter.
+  const offeredTimelineEventKinds = () => TIMELINE_EVENT_KINDS.filter((kind) => kind !== 'decision' || (D && Array.isArray(D.trace) && D.trace.some((t) => t && t.decision)));
+  const selectedOfferedEventKinds = () => { const offered = offeredTimelineEventKinds(); return st.tlEventKinds.filter((kind) => offered.indexOf(kind) >= 0); };
+  // The trail projections a legacy `?view=trail&mode=` link can name. Anything else — 'time',
+  // which Replay superseded, and 'map', a fan-out graph the Grid made redundant — lands on the
+  // Grid.
+  const TRAIL_MODES = ['steps', 'replay'];
   // Replay speeds, and the default. A trail runs for minutes, so 1× is a documentary: the useful
   // default is fast enough to watch a whole run and slow enough to see the devices diverge. The top
   // speed stops at 10× because a lane playing its recording drives a real media element, and
@@ -949,7 +1403,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   // `kid` narrows the step selection to one folded child dispatch (index into the row's children):
   // the preview pane shows that dispatch's own frame and its args panel expands — how a batched
   // step's every interaction is reachable (WASM-report parity). Null selects the row itself.
-  const st = { view: MULTI ? 'index' : 'detail', session: 0, tab: 'timeline', step: 0, kid: null, llmSel: 0, tlStreams: [], tlEventKinds: allTimelineEventKinds(), tlMenuOpen: false, tlEventMenuOpen: false, trailheadOpen: true, trailOpen: true, stepsOpen: {}, kidsOpen: {}, lightboxAll: false, lightboxZoom: 1, runGroup: 'status', runSort: 'original', runSearch: '', idxOpen: [], compareMode: false, playing: false, vSpeed: 1, vDevice: null as string | null, pageTransition: '', trailMode: 'map', trailDir: 'v', trailAll: false, trailAlign: 'clock' as 'clock' | 'step', trailRowsOpen: {}, trailCam: null, trailStripZoom: null as ReplayStripZoom | null, trailT: -1, trailLane: null, trailSpeed: 10, trailLanesOff: {}, trailPick: null as number[] | null, pick: [] as number[], backTo: '', backToTrail: null as { session: number; tab: string; lanesOff: Record<string, boolean> } | null, cmpBase: defaultComparePair()[0] || 0, cmpVs: defaultComparePair()[1] || 1, cmpGapsOpen: {}, cmpEventsOpen: {} as Record<string, boolean>, cmpStreamsOpen: {} as Record<string, boolean>, cmpJumpAt: {} as Record<string, number>, cmpTab: 'screens', cmpStream: null as string | null, cmpEventGroup: 'stream' as 'stream' | 'step', cmpEventStep: null as string | null, cmpEventPlace: 0, cmpEventSearch: '', cmpEventDiffOnly: true, cmpMissing: null as { missingIds: string[]; wantedIds: { base: string | null; vs: string | null }; shownBase: number; shownVs: number; widenable: boolean } | null };
+  const st = { view: MULTI ? 'index' : 'detail', session: 0, tab: 'timeline', step: 0, kid: null, llmSel: 0, tlStreams: [], tlEventKinds: allTimelineEventKinds(), tlMenuOpen: false, tlEventMenuOpen: false, tlTracksOpen: false, tlTrackOpen: openTrackSet(), tlTrackSel: null as string | null, tlSeek: null as { ms: number; step: number; kid: number | null } | null, trailheadOpen: true, trailOpen: true, stepsOpen: {}, kidsOpen: {}, lightboxAll: false, lightboxZoom: 1, strMode: 'string' as 'string' | 'screen', strSel: null as number | null, strScreen: 0, strHit: 0, strKinds: { ...DEFAULT_STRING_KINDS } as Record<StringKind, boolean>, strVis: DEFAULT_STRING_VISIBILITY as StringVisibility, strQ: '', runGroup: 'status', runSort: 'original', runSearch: '', idxOpen: [], compareMode: false, playing: false, vSpeed: 1, vDevice: null as string | null, pageTransition: '', trailMode: 'steps', trailAll: false, trailAlign: 'clock' as 'clock' | 'step', trailRowsOpen: {}, trailTracksOpen: {} as Record<string, boolean>, trailStripZoom: null as ReplayStripZoom | null, trailT: -1, trailLane: null, trailSpeed: 10, trailLanesOff: {}, trailPick: null as number[] | null, pick: [] as number[], backTo: '', backToTrail: null as { session: number; tab: string; lanesOff: Record<string, boolean>; tracksOpen: Record<string, boolean> } | null, backToCompare: null as { lanesOff: Record<string, boolean>; tracksOpen: Record<string, boolean> } | null, cmpBase: defaultComparePair()[0] || 0, cmpVs: defaultComparePair()[1] || 1, cmpGapsOpen: {}, cmpEventsOpen: {} as Record<string, boolean>, cmpStreamsOpen: {} as Record<string, boolean>, cmpJumpAt: {} as Record<string, number>, cmpTab: 'screens', cmpStream: null as string | null, cmpEventGroup: 'stream' as 'stream' | 'step', cmpEventStep: null as string | null, cmpEventPlace: 0, cmpEventSearch: '', cmpEventDiffOnly: true, cmpMissing: null as { missingIds: string[]; wantedIds: { base: string | null; vs: string | null }; shownBase: number; shownVs: number; widenable: boolean } | null };
   const resetEventNavigator = () => {
     st.cmpStream = null;
     st.cmpEventGroup = 'stream';
@@ -1179,11 +1633,12 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   const openSession = (i) => {
     // st.lightboxZoom deliberately survives this reset: thumbnail size is a cross-run viewing
     // preference, unlike the per-session lightboxAll expansion.
-    stopTimeline(); closeTranscript(); pendingDetailRoute = null; pendingDetailRouteFromHistory = false; st.session = i; D = SESSIONS[i]; st.view = 'detail'; st.tab = 'timeline'; st.step = 0; st.kid = null; st.llmSel = 0; st.tlStreams = []; st.tlEventKinds = allTimelineEventKinds(); st.tlMenuOpen = false; st.tlEventMenuOpen = false; st.trailOpen = true; st.stepsOpen = {}; st.kidsOpen = {}; st.lightboxAll = false;
+    stopTimeline(); closeTranscript(); pendingDetailRoute = null; pendingDetailRouteFromHistory = false; st.session = i; D = SESSIONS[i]; st.view = 'detail'; st.tab = 'timeline'; st.step = 0; st.kid = null; st.llmSel = 0; st.tlStreams = []; st.tlEventKinds = allTimelineEventKinds(); st.tlMenuOpen = false; st.tlEventMenuOpen = false; st.tlTracksOpen = false; st.tlTrackOpen = openTrackSet(); st.tlTrackSel = null; st.tlSeek = null; st.trailOpen = true; st.stepsOpen = {}; st.kidsOpen = {}; st.lightboxAll = false;
+    st.strMode = 'string'; st.strSel = null; st.strScreen = 0; st.strHit = 0; st.strKinds = { ...DEFAULT_STRING_KINDS }; st.strVis = DEFAULT_STRING_VISIBILITY; st.strQ = '';
     // The trail tabs stage THIS run's trail, so anything aimed at the previous one's lanes has to
-    // go with it: hidden lanes are keyed by session index, and the camera and playhead point at a
-    // stage that no longer exists.
-    st.trailLanesOff = {}; st.trailRowsOpen = {}; st.trailCam = null; st.trailStripZoom = null; st.trailT = -1; st.trailLane = null;
+    // go with it: hidden lanes are keyed by session index, and the playhead points at a stage that
+    // no longer exists.
+    st.trailLanesOff = {}; st.trailRowsOpen = {}; st.trailTracksOpen = {}; st.trailStripZoom = null; st.trailT = -1; st.trailLane = null;
     // Chunked documents hydrate on open: synchronous when the session's chunk has already
     // streamed in (the common case). Otherwise render()'s loading shell holds the view until the
     // chunk lands, then the seed + re-render below run.
@@ -1280,7 +1735,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     const query = new URLSearchParams(String(location.search || ''));
     const hasQueryRoute = routeKeys.some((key) => query.has(key));
     const p = hasQueryRoute ? query : new URLSearchParams(String(location.hash || '').replace(/^#/, ''));
-    if (p.get('view') === 'trail') return { view: 'trail', trail: p.get('trail') || '', pick: p.get('pick') || '', mode: p.get('mode') || 'map', dir: p.get('dir') || 'v', all: p.get('all') === '1', align: p.get('align') || '' };
+    if (p.get('view') === 'trail') return { view: 'trail', trail: p.get('trail') || '', pick: p.get('pick') || '', mode: p.get('mode') || 'steps', all: p.get('all') === '1', align: p.get('align') || '' };
     // Absent stays absent — substituting 0 and 1 here would make "the address named no pair" look
     // identical to "the address named runs 0 and 1", and the default-pair rule could never run.
     if (p.get('view') === 'compare') {
@@ -1318,25 +1773,29 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       view: 'detail', session: Number(p.get('run') || 0), tab: p.get('tab') || 'timeline',
       step: p.has('step') ? Number(p.get('step')) : null,
       kid: p.has('kid') ? Number(p.get('kid')) : null,
+      at: p.has('at') ? Number(p.get('at')) : null,
       llm: p.has('llm') ? Number(p.get('llm')) : null,
       inspect: p.has('inspect') ? Number(p.get('inspect')) : null,
       streams: p.get('streams'),
       types: p.get('types'),
       // The trail tabs' own settings. Named as the standalone trail page named them, so links
-      // written before the projections became tabs keep their orientation and expansion.
-      dir: p.get('dir') || 'v', all: p.get('all') === '1', align: p.get('align') || '',
+      // written before the projections became tabs keep their expansion.
+      all: p.get('all') === '1', align: p.get('align') || '',
     };
   };
   // Apply the detail-view parts of a parsed route (tab/step/llm/streams) to the open session.
   // Split out of applyRoute because a route into a not-yet-hydrated session parks here and
   // re-applies from seedSessionDetail once the chunk lands.
+  let routedSeek: { at: number; step: number; kid: number | null } | null = null;
   const applyDetailRoute = (r, fromHistory = false) => {
     pendingInspectorOpen = null;
     pendingInspectorHistoryBacked = false;
     pendingLlmHistoryBacked = false;
-    const requestedTab = r.tab === 'grid' ? 'lightbox' : r.tab;
+    // `grid` was the Lightbox's old name; `map` was a trail tab the Grid replaced, and the viewer
+    // wrote it into every URL while it was open, so shared links carry it.
+    const requestedTab = r.tab === 'grid' ? 'lightbox' : r.tab === 'map' ? 'steps' : r.tab;
     // Legacy 'events' routes land on the timeline, where inline event streams now live.
-    const allowed = ['timeline', ...TRAIL_TABS, 'lightbox', 'video', 'llm', 'config', 'recording', 'device', 'network', 'info'];
+    const allowed = ['timeline', ...TRAIL_TABS, 'lightbox', 'video', 'llm', 'config', 'recording', 'device', 'network', 'strings', 'info'];
     if (allowed.indexOf(requestedTab) >= 0) st.tab = requestedTab;
     // The projection IS the tab, so the tab nav and the body renderers read one value. The lanes
     // of a chunked report stream in behind the open run, so the stage is requested here and the
@@ -1344,7 +1803,6 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     // turns out not to align).
     if (TRAIL_TABS.indexOf(st.tab) >= 0) {
       st.trailMode = st.tab;
-      st.trailDir = r.dir === 'h' ? 'h' : 'v';
       st.trailAll = !!r.all;
       st.trailAlign = r.align === 'step' ? 'step' : 'clock';
       ensureScopeChunks(detailTrailScope(), detailTrailToken());
@@ -1358,6 +1816,10 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       const routed = D.trace.find((t) => t.i === st.step);
       st.kid = r.kid != null && Number.isFinite(r.kid) && routed && routed.children && r.kid >= 0 && r.kid < routed.children.length ? r.kid : null;
     }
+    // `at` is a seek, in ms from the run's first timestamp. The route is applied at boot, before
+    // the Timeline's axis exists, so it is parked here and resolved on its first read (tlSeekMs).
+    st.tlSeek = null;
+    routedSeek = r.at != null && Number.isFinite(r.at) ? { at: r.at, step: st.step, kid: st.kid } : null;
     // A deep-linked call (`?llm=N`) highlights its per-request table row AND opens that call's
     // transcript lightbox — the lightbox IS the detail surface, so the link lands the reader in
     // the transcript with the row waiting underneath when it closes.
@@ -1387,7 +1849,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     // run index when there is one, the lone detail otherwise.
     if (r.view === 'trail') {
       stopTimeline();
-      const mode = TRAIL_MODES.indexOf(r.mode) >= 0 ? r.mode : 'map';
+      const mode = TRAIL_MODES.indexOf(r.mode) >= 0 ? r.mode : 'steps';
       // Indices this document can't stage are dropped rather than failing the whole link — a
       // report regenerated with fewer runs still opens on the ones it kept — and the filter is
       // `stageable`, the same predicate the checkboxes use. Deduped and sorted to match what
@@ -1410,8 +1872,8 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
         };
       } else if (run != null) {
         r = {
-          view: 'detail', session: run, tab: mode, step: null, kid: null, llm: null, inspect: null,
-          streams: null, types: null, dir: r.dir, all: r.all, align: r.align,
+          view: 'detail', session: run, tab: mode, step: null, kid: null, at: null, llm: null, inspect: null,
+          streams: null, types: null, all: r.all, align: r.align,
         };
       } else {
         if (MULTI) st.view = 'index';
@@ -1595,12 +2057,20 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       params.set('tab', st.tab);
       if (st.tab === 'timeline' && Number.isFinite(st.step)) params.set('step', String(st.step));
       if (st.tab === 'timeline' && st.kid != null) params.set('kid', String(st.kid));
+      if (st.tab === 'timeline') {
+        // A seek is only ever set once the viewer is up; before that (the boot's own route write) a
+        // routed one is still parked, unresolved, and goes back out as it came in.
+        const seekMs = st.tlSeek ? tlSeekMs() : null;
+        const seekT0 = seekMs != null ? traceT0() : null;
+        const at = seekMs != null && seekT0 != null ? Math.round(seekMs - seekT0)
+          : routedSeek && routedSeek.step === st.step && routedSeek.kid === st.kid ? routedSeek.at : null;
+        if (at != null) params.set('at', String(at));
+      }
       if (st.tab === 'timeline' && st.tlStreams.length) params.set('streams', st.tlStreams.join(','));
-      if (st.tab === 'timeline' && st.tlEventKinds.length !== TIMELINE_EVENT_KINDS.length) params.set('types', st.tlEventKinds.length ? st.tlEventKinds.join(',') : 'none');
+      if (st.tab === 'timeline') { const selected = selectedOfferedEventKinds(); if (selected.length !== offeredTimelineEventKinds().length) params.set('types', selected.length ? selected.join(',') : 'none'); }
       // The trail tabs' own settings. The tab already names the projection, so `mode` is gone;
       // the rest read as they always did.
-      if (st.tab === 'map' && st.trailDir === 'h') params.set('dir', 'h');
-      if ((st.tab === 'map' || st.tab === 'steps') && st.trailAll) params.set('all', '1');
+      if (st.tab === 'steps' && st.trailAll) params.set('all', '1');
       if (st.tab === 'replay' && st.trailAlign === 'step') params.set('align', 'step');
       // Pushed destinations are route state: opening one creates a history entry, so browser Back
       // dismisses it without navigating away from the selected report. The same parameters make
@@ -1757,10 +2227,11 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   applyRoute();
   writeRoute(true);
 
-  const catColor = { fail: 'var(--fail)', llm: 'var(--ai)', assert: 'var(--pass)', tool: 'var(--txt)' };
+  const catColor = { fail: 'var(--fail)', llm: 'var(--ai)', decision: 'var(--decision)', assert: 'var(--pass)', tool: 'var(--txt)' };
   const timelineEventKindMeta = {
     tool: { label: 'Tool / action', color: 'var(--txt)' },
     llm: { label: 'LLM / agent', color: 'var(--ai)' },
+    decision: { label: 'Decision', color: 'var(--decision)' },
     assert: { label: 'Assertion', color: 'var(--amber)' },
     fail: { label: 'Error', color: 'var(--fail)' },
   };
@@ -1777,6 +2248,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     skip: stepStatusIcon('M5.2 8h5.6'),
   };
   const llmStepIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2M20 14h2M15 13v2M9 13v2"/></svg>';
+  const decisionStepIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="m3 17 2 2 4-4"/><path d="m3 7 2 2 4-4"/><path d="M13 6h8"/><path d="M13 12h8"/><path d="M13 18h8"/></svg>';
   const toolStepIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.8-3.8a6 6 0 0 1-7.9 7.9l-6.9 6.9a2.1 2.1 0 0 1-3-3l6.9-6.9a6 6 0 0 1 7.9-7.9Z"/></svg>';
   const stepIcon = (t) => {
     const label = String(t.label || '').toLowerCase();
@@ -1789,6 +2261,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     const handover = label.indexOf('switchdevice') === 0 || label.indexOf('switch device') === 0;
     if (!t.ok) return { cls: 'failure', glyph: '×' };
     if (handover) return { cls: 'switch', glyph: '⇄' };
+    if (t.decision) return { cls: 'decision', glyph: decisionStepIcon };
     if (llm) return { cls: 'llm', glyph: llmStepIcon };
     if (assertion) return { cls: 'verify', glyph: '✓' };
     if (tap) return { cls: 'tap', glyph: '◉' };
@@ -1997,17 +2470,27 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   // The instant a device that recorded more than once picks its recording by: the pane's own — a
   // folded dispatch's clock when one is selected or previewed on `subject`, else the step's.
   const tlSubjectClockMs = (subject: number) => {
+    // A drag, or a seek left between entries, is the pane's instant — so it picks the recording too:
+    // a device that recorded twice inside one step has the later file cover a later seek. Playback
+    // drives its own clock and keeps the step's.
+    if (!st.playing && subject === tlSubject()) {
+      const seekAt = tlPaneSeekMs();
+      if (seekAt != null) return seekAt;
+    }
     const selection = timelinePreview || { step: st.step, kid: st.kid };
     return clockMsFor(subject, selection.step === subject ? selection.kid : null);
   };
-  const tlClipIndex = (subject: number = tlSubject()) => {
+  // `atMs` is an instant the caller is about to map onto the recording, when it has one: the
+  // recording is the one covering THAT instant (a transcript's call can sit in an earlier
+  // recording than the pane's seek). Without one, the pane's own instant decides.
+  const tlClipIndex = (subject: number = tlSubject(), atMs: number | null = null) => {
     const device = tlDevice(subject);
-    return sessionClipIndexFor(st.session, device, device == null || firstTracedDevice(D.trace) === device, tlSubjectClockMs(subject));
+    return sessionClipIndexFor(st.session, device, device == null || firstTracedDevice(D.trace) === device, atMs != null ? atMs : tlSubjectClockMs(subject));
   };
-  const tlClipKey = (subject: number = tlSubject()) => sessionClipKey(st.session, Math.max(0, tlClipIndex(subject)));
-  const tlClip = (subject: number = tlSubject()) => {
+  const tlClipKey = (subject: number = tlSubject(), atMs: number | null = null) => sessionClipKey(st.session, Math.max(0, tlClipIndex(subject, atMs)));
+  const tlClip = (subject: number = tlSubject(), atMs: number | null = null) => {
     if (!tlVideo()) return null;
-    const k = tlClipIndex(subject);
+    const k = tlClipIndex(subject, atMs);
     return k >= 0 ? sessionClipAt(st.session, k) : null;
   };
   // Media duration is only readable once the browser has parsed the container — and mapping a run
@@ -2022,19 +2505,19 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     const d = clipDurations[key];
     return d != null && d > 0 ? d : null;
   };
-  const tlClipDuration = (subject: number = tlSubject()) => {
-    const key = tlClipKey(subject);
+  const tlClipDuration = (subject: number = tlSubject(), atMs: number | null = null) => {
+    const key = tlClipKey(subject, atMs);
     const known = knownClipDuration(key);
     if (known != null) return known;
-    primeClipDuration(key, subject);
+    primeClipDuration(key, subject, atMs);
     // Re-read rather than returning null outright: a host that already holds the container can
     // answer inside the src assignment, and the surface that asked is about to paint with it.
     return knownClipDuration(key);
   };
   let primingClip = false;
-  const primeClipDuration = (key: string, subject: number = tlSubject()) => {
+  const primeClipDuration = (key: string, subject: number = tlSubject(), atMs: number | null = null) => {
     if (clipPrimed[key]) return;
-    const clip = tlClip(subject);
+    const clip = tlClip(subject, atMs);
     if (!clip || typeof document === 'undefined') return;
     clipPrimed[key] = true;
     const probe = document.createElement('video');
@@ -2066,8 +2549,8 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   // the file's duration differ by a beat, and subtracting drifts by that whole difference over a
   // long run (see videoClipTimeAt).
   const tlClipTimeAt = (clockMs: number | null, subject: number = tlSubject()): number | null => {
-    const clip = tlClip(subject);
-    return clip && clockMs != null ? videoClipTimeAt(clip, clockMs, 0, tlClipDuration(subject)) : null;
+    const clip = tlClip(subject, clockMs);
+    return clip && clockMs != null ? videoClipTimeAt(clip, clockMs, 0, tlClipDuration(subject, clockMs)) : null;
   };
   // Seek the pane's clip element to a position the view already resolved. Paused and exact: this
   // surface is a still of one step, not playback (the playback engine below drives the element
@@ -2156,9 +2639,13 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     const paneMark = captureShot ? captureMark : (cur.screenshotFile ? markHtml(cur) : '');
     const inspectable = stepInspectable(cur);
     const v = allowVideo ? tlVideo() : null;
-    const clockAtStep = v ? clockMsFor(cur.i, subject.kid) : null;
+    // A drag on the scrubber, or a seek it left between entries, is an instant of its own: the
+    // recording shows THAT moment, while the selection (and the screenshot fallback) stays on the
+    // entry that was on screen then.
+    const seekAt = tlPaneSeekMs();
+    const clockAtStep = v ? (seekAt != null ? seekAt : clockMsFor(cur.i, subject.kid)) : null;
     const clipAt = clockAtStep != null ? tlClipTimeAt(clockAtStep) : null;
-    const clipUrl = clipAt != null ? (tlClip() || {}).url : null;
+    const clipUrl = clipAt != null ? (tlClip(undefined, clockAtStep) || {}).url : null;
     // The recording shows wherever the step maps onto it, and the screenshot is the fallback for
     // everything it can't place: a session with no recording, a clip whose duration the browser
     // hasn't read yet, a step outside the recorder's window, or a run the clip can't be put on the
@@ -2266,7 +2753,15 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       }
       return 1;
     };
-    return { stepFrac, tsFrac, totalMs: haveTs ? Math.max(1, hi - lo) : span };
+    // The instant at a rail position — tsFrac run backwards — for a seek that lands between entries.
+    const fracTs = (f: number): number | null => {
+      if (!haveTs || !entries.length) return null;
+      const offset = fractionToOffset(real, stepFrac, f);
+      return offset == null ? null : lo + offset;
+    };
+    // Without two distinct timestamps there is no clock to place an instant on: no seek between
+    // entries, and no tracks.
+    return { stepFrac, tsFrac, fracTs, hasClock: haveTs, totalMs: haveTs ? Math.max(1, hi - lo) : span };
   };
 
   // Match Trail Runner's high-volume stream behavior: streams are opt-in on the timeline. The
@@ -2292,6 +2787,123 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     }
     return (stream.events || []).map((e, n) => ({ ...e, stream: stream.name, streamIndex, key: `${stream.name}-${n}` }));
   }).sort((a, b) => (a.t || 0) - (b.t || 0));
+
+  // ── Event tracks under the scrubber ──────────────────────────────────────────────────────────
+  // Every stream with timed events, one track each — independent of the Streams menu, which picks
+  // what the event LIST interleaves. The list only counts; a track's marks are built when it is
+  // opened, because a raw stream's labels parse every payload. Both are memoized on the stream and
+  // its size (a live run appends in place), since the scrubber renders on every selection change.
+  const streamSize = (stream) => (stream.rows && stream.rows.length) || (stream.events || []).length;
+  const timelineTracksMemo = new WeakMap<object, { sizes: number[]; tracks: TimelineTrack[] }>();
+  const timelineTrackModel = (): TimelineTrack[] => {
+    const streams = sessionEvents(D) || [];
+    const sizes = streams.map(streamSize);
+    const prior = timelineTracksMemo.get(streams);
+    if (prior && prior.sizes.length === sizes.length && prior.sizes.every((n, i) => n === sizes[i])) return prior.tracks;
+    const tracks = timelineTracks(streams);
+    timelineTracksMemo.set(streams, { sizes, tracks });
+    return tracks;
+  };
+  const trackMarksMemo = new WeakMap<object, { size: number; marks: TrackMark[] }>();
+  const timelineTrackMarks = (track: TimelineTrack): TrackMark[] => {
+    const stream = (sessionEvents(D) || [])[track.streamIndex];
+    if (!stream) return [];
+    const size = streamSize(stream);
+    const prior = trackMarksMemo.get(stream);
+    if (prior && prior.size === size) return prior.marks;
+    const marks = trackMarks(stream, (event, name) => normalizeEventPayload({ ...event, stream: name }).semanticLabel || 'Event');
+    trackMarksMemo.set(stream, { size, marks });
+    return marks;
+  };
+  // The event behind a track mark, as the Timeline's event list would hold it: a formatted row, or
+  // a raw event. Keys are `<stream>-<n>`, the list's own.
+  const timelineTrackEvent = (key: string | null): { stream: string; streamIndex: number; row: FormattedRow | null; event: { t: number | null; d?: string; stream: string; streamIndex: number; key: string } } | null => {
+    if (key == null) return null;
+    const streams = sessionEvents(D) || [];
+    for (let streamIndex = 0; streamIndex < streams.length; streamIndex++) {
+      const stream = streams[streamIndex];
+      const prefix = `${stream.name}-`;
+      if (!key.startsWith(prefix)) continue;
+      const n = Number(key.slice(prefix.length));
+      if (!Number.isInteger(n) || n < 0) continue;
+      if (stream.rows && stream.rows.length) {
+        const row = stream.rows[n];
+        if (row) return { stream: stream.name, streamIndex, row, event: { t: row.t, stream: stream.name, streamIndex, key } };
+      } else {
+        const event = (stream.events || [])[n];
+        if (event) return { stream: stream.name, streamIndex, row: null, event: { ...event, stream: stream.name, streamIndex, key } };
+      }
+    }
+    return null;
+  };
+  // A seek between entries holds only while the selection it resolved to is still the selection:
+  // moving anywhere else (←/→, Previous/Next, playback) leaves it behind without clearing it. A
+  // click on an entry (its list row, or a step via gotoEntry) clears it outright, because a click
+  // on the entry the seek already sits in means "this entry", not "this instant". It is dropped the first time it is read off its entry —
+  // every selection change repaints the pane, which reads it — so coming back to that entry later
+  // lands on the entry, not on an instant the reader has since moved away from.
+  const tlSeekMs = (): number | null => {
+    // A routed seek is honored only where it lands inside the routed entry — the entry on screen at
+    // that instant — so a stale or hand-edited `at` can't put the head where the selection isn't.
+    if (routedSeek) {
+      const routed = routedSeek;
+      routedSeek = null;
+      const t0 = traceT0();
+      const axis = timelineAxis();
+      const entries = timelineEntries();
+      const ms = t0 != null ? t0 + routed.at : null;
+      const f = ms != null ? axis.tsFrac(ms) : null;
+      const entry = f != null ? entries[entryAtOrBefore(axis.stepFrac, (i) => isSelectableTimelineEntry(entries[i]), f)] : null;
+      if (entry && entry.row.i === routed.step && entry.kid === routed.kid) st.tlSeek = { ms, step: routed.step, kid: routed.kid };
+    }
+    if (!st.tlSeek) return null;
+    if (st.tlSeek.step === st.step && st.tlSeek.kid === st.kid) return st.tlSeek.ms;
+    st.tlSeek = null;
+    return null;
+  };
+  // The instant a drag on the scrubber is at, while the drag runs. Not in `st`: it is committed as
+  // a seek when the pointer lifts, and nothing renders mid-drag.
+  let timelineScrubMs: number | null = null;
+  // The instant the pane shows, when it isn't simply its entry's: a drag's, else a seek's (which a
+  // hover preview of another entry sets aside).
+  const tlPaneSeekMs = (): number | null => (timelineScrubMs != null ? timelineScrubMs : timelinePreview ? null : tlSeekMs());
+  // The event a track mark asked the list to reveal, until a render has produced its row: bringing
+  // a stream into the list can take more than the one render the click does (a render that lands
+  // after it rebuilds the list), so the reveal belongs to whichever render first has the row.
+  let pendingTrackReveal: { session: number; key: string } | null = null;
+  const fmtTrackAt = (t: number) => {
+    const t0 = traceT0();
+    return t0 != null ? `+${((t - t0) / 1000).toFixed(1)}s` : '';
+  };
+  // One track: its name is the disclosure toggle, and a closed track draws nothing but that name —
+  // the reader opens the ones they want, so a run with thousands of analytics events doesn't paint
+  // them all under the rail.
+  const timelineTrackRowHtml = (track: TimelineTrack, index: number, axis, headFrac: number | null) => {
+    const open = !!st.tlTrackOpen[track.name];
+    const display = streamDisplayName(track.name);
+    const color = streamColor(track.streamIndex);
+    const count = track.count;
+    const name = `<button type="button" class="tltrackname${open ? '' : ' closed'}" data-tltrack="${esc(track.name)}" aria-expanded="${open}" aria-controls="tltrack-${index}" title="${esc(`${track.name} · ${count} event${count === 1 ? '' : 's'} — ${open ? 'collapse' : 'expand'} the track`)}" style="--stream-color:${color}"><svg class="tltrackchev" viewBox="0 0 8 8" aria-hidden="true"><path d="M2.5 1.5 5.5 4l-3 2.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="tltrackdot" aria-hidden="true"></span><span class="tltracklabel">${esc(display)}</span><span class="tltrackcount">${esc(fmtN(count))}</span></button>`;
+    if (!open) return `${name}<div class="tltrackrail closed" id="tltrack-${index}" aria-hidden="true"></div>`;
+    const marks = timelineTrackMarks(track).map((mark) => {
+      const start = axis.tsFrac(mark.t);
+      if (start == null) return '';
+      const end = mark.endT != null ? axis.tsFrac(mark.endT) : null;
+      const width = end != null && end > start ? ` width:max(${((end - start) * 100).toFixed(3)}%, 3px);` : '';
+      const cls = `tlmark${width ? ' span' : ''}${mark.tone === 'error' ? ' error' : mark.tone === 'warn' ? ' warn' : ''}${mark.key === st.tlTrackSel ? ' sel' : ''}`;
+      const at = fmtTrackAt(mark.t);
+      const dur = mark.endT != null ? ` · ${fmtDur(mark.endT - mark.t)}` : '';
+      return `<span class="${cls}" data-tlmark="${esc(mark.key)}" style="left:${(start * 100).toFixed(3)}%;${width}" title="${esc(`${mark.label}${at ? ` · ${at}` : ''}${dur}`)}"></span>`;
+    }).join('');
+    const head = headFrac != null ? `<span class="tltrackhead" data-tltrackhead style="left:${headFrac * 100}%"></span>` : '';
+    return `${name}<div class="tltrackrail" id="tltrack-${index}" data-tltrack-rail="${esc(track.name)}" tabindex="0" role="group" style="--stream-color:${color}" aria-label="${esc(`${display} track, ${count} event${count === 1 ? '' : 's'}. Left and right arrows walk the events and open each one in the event list; Escape clears the selection.`)}">${marks}${head}</div>`;
+  };
+  const timelineTracksHtml = (axis, headFrac: number | null) => {
+    if (!st.tlTracksOpen) return '';
+    const tracks = timelineTrackModel();
+    if (!tracks.length) return '';
+    return `<div class="tltracks" id="tltracks" role="group" aria-label="Event tracks">${tracks.map((track, i) => timelineTrackRowHtml(track, i, axis, headFrac)).join('')}</div>`;
+  };
 
   const eventBuckets = (events) => {
     const buckets = D.trace.map(() => []);
@@ -2505,14 +3117,16 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       tlEventByKey.set(e.key, e);
       const producer = streamDisplayName(e.stream);
       const previewAttr = owner ? ` data-tlevent-step="${esc(owner.i)}"` : '';
+      // The event a track mark picked, marked so the reader sees which row the click landed on.
+      const sel = e.key === st.tlTrackSel ? ' tracksel' : '';
       if (e.row) {
         const badges = rowBadgesHtml(e.row);
         const tone = e.row.tone === 'error' ? ' e' : e.row.tone === 'warn' ? ' w' : '';
-        return `<details class="timelineevent${tone}" style="--stream-color:${streamColor(e.streamIndex)}" data-lazykey="${esc(e.key)}"${previewAttr}><summary title="${esc(e.stream)}"><span class="streamdot" aria-hidden="true"></span><span class="streamtype">${esc(producer)}</span><span class="timelineeventlabel">${esc(e.row.label)}</span>${badges ? `<span class="fmtbadges">${badges}</span>` : '<span></span>'}<span class="timelineeventchev" aria-hidden="true"></span></summary><div class="fmtbody tlbody"></div></details>`;
+        return `<details class="timelineevent${tone}${sel}" style="--stream-color:${streamColor(e.streamIndex)}" data-lazykey="${esc(e.key)}"${previewAttr}><summary title="${esc(e.stream)}"><span class="streamdot" aria-hidden="true"></span><span class="streamtype">${esc(producer)}</span><span class="timelineeventlabel">${esc(e.row.label)}</span>${badges ? `<span class="fmtbadges">${badges}</span>` : '<span></span>'}<span class="timelineeventchev" aria-hidden="true"></span></summary><div class="fmtbody tlbody"></div></details>`;
       }
       const { semanticLabel } = normalizeEventPayload(e);
       const label = semanticLabel || 'Event';
-      return `<details class="timelineevent" style="--stream-color:${streamColor(e.streamIndex)}" data-lazykey="${esc(e.key)}"${previewAttr}><summary title="${esc(e.stream)}"><span class="streamdot" aria-hidden="true"></span><span class="streamtype">${esc(producer)}</span><span class="timelineeventlabel">${esc(label)}</span><span></span><span class="timelineeventchev" aria-hidden="true"></span></summary><pre class="mono"></pre></details>`;
+      return `<details class="timelineevent${sel}" style="--stream-color:${streamColor(e.streamIndex)}" data-lazykey="${esc(e.key)}"${previewAttr}><summary title="${esc(e.stream)}"><span class="streamdot" aria-hidden="true"></span><span class="streamtype">${esc(producer)}</span><span class="timelineeventlabel">${esc(label)}</span><span></span><span class="timelineeventchev" aria-hidden="true"></span></summary><pre class="mono"></pre></details>`;
     }).join('')}</div>`;
   };
 
@@ -2643,7 +3257,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
         : t.objective ? 'var(--timeline-objective-mark)' : catColor[cat];
       const kind = objectiveTone === 'selfhealed' ? 'Self-healed'
         : objectiveTone === 'failed' ? 'Failed'
-        : t.objective ? '' : cat === 'llm' ? 'LLM' : cat === 'fail' ? 'Error' : cat === 'assert' ? 'Assertion' : 'Tool / action';
+        : t.objective ? '' : cat === 'llm' ? 'LLM' : cat === 'decision' ? 'Decision' : cat === 'fail' ? 'Error' : cat === 'assert' ? 'Assertion' : 'Tool / action';
       // A semantic range below represents a recovered or failed authored step more clearly than
       // paired objective bars. A recovered objective can also appear twice (attempt + retry), so
       // this avoids duplicating its status at both boundaries.
@@ -2670,7 +3284,10 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       const color = streamColor(e.streamIndex);
       return `<span class="scrubtick event stream" data-scrub-step="${esc(scrubStepAtFraction(scrubModel.ranges, f).token)}" data-scrub-kind="Stream" aria-hidden="true" style="left:calc(${f * 100}% - 1px);background:${color};--tick-color:${color}"></span>`;
     }).join('');
-    const frac = axis.stepFrac[pos] || 0;
+    // A seek between entries puts the head at its own instant; otherwise it sits on the selection.
+    const seekMs = tlSeekMs();
+    const seekFrac = seekMs != null ? axis.tsFrac(seekMs) : null;
+    const frac = seekFrac != null ? seekFrac : (axis.stepFrac[pos] || 0);
     const trailStart = timelineEntries().findIndex((e) => e.row.objective && !e.row.trailhead);
     const hasTrailhead = D.trace.some((t) => t.objective && t.trailhead);
     const trailFrac = trailStart >= 0 ? (axis.stepFrac[trailStart] || 0) : 1;
@@ -2693,7 +3310,14 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       <button type="button" class="timelinecontrol play" id="tlplay" aria-label="${playbackLabel} timeline" title="${playbackLabel} timeline">${st.playing ? '<span class="transporticon stopicon" aria-hidden="true"></span>' : '<svg class="transporticon playicon" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3.5v17L20 12Z" fill="currentColor"/></svg>'}</button>
       <button type="button" class="timelinecontrol" id="next" aria-label="Next tool call" title="Next tool call"${nextAction < 0 ? ' disabled' : ''}><span class="transporticon direction" aria-hidden="true"></span></button>
     </div>`;
-    return `<div class="scrub"><div class="scrubclock">0:00</div><div class="scrubtrack${laneCount ? ' devlanes' : ''}"${laneCount ? ` style="--scrub-lanes:${laneCount}"` : ''} data-scrub role="slider" tabindex="0" aria-label="${phaseLabel}" aria-valuemin="1" aria-valuemax="${timelineEntries().length}" aria-valuenow="${pos + 1}" aria-valuetext="${esc(scrubValueText(pos))}">${rail}${deviceBands}<span class="scrubhoverstep" data-scrubhover-range aria-hidden="true"></span>${statusRanges}${ticks}${eventTicks}<span class="scrubtooltip scrubtracktooltip" data-scrubhover aria-hidden="true" style="--tick-color:var(--timeline-objective-mark)"><span class="scrubtooltipmeta"><span class="scrubtooltiptag scrubtooltipstep" data-scrubhover-step></span><span class="scrubtooltiptag scrubtooltipkind" data-scrubhover-kind></span></span></span><div class="scrubhead" style="left:${frac * 100}%"></div></div><div class="scrubclock">${fmtClock(axis.totalMs)}</div>${transport}</div>`;
+    // The event tracks: a small disclosure at the rail's left end opens the panel, and the panel
+    // opens with every track shut. It sits in the track names' column, above their own chevrons.
+    const trackCount = axis.hasClock ? timelineTrackModel().length : 0;
+    const tracksOpen = st.tlTracksOpen && trackCount > 0;
+    const tracksToggle = trackCount
+      ? `<button type="button" class="tltracksbtn${tracksOpen ? ' open' : ''}" id="tltracksbtn" aria-expanded="${tracksOpen}" aria-controls="tltracks" aria-label="Event tracks, ${trackCount} stream${trackCount === 1 ? '' : 's'}" title="${tracksOpen ? 'Hide' : 'Show'} the event tracks — one per event stream (${trackCount}), on this rail's axis"><svg class="tltrackchev" viewBox="0 0 8 8" aria-hidden="true"><path d="M2.5 1.5 5.5 4l-3 2.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></button>`
+      : '';
+    return `<div class="scrub${trackCount ? ' hastracks' : ''}">${tracksToggle}<div class="scrubclock">0:00</div><div class="scrubtrack${laneCount ? ' devlanes' : ''}"${laneCount ? ` style="--scrub-lanes:${laneCount}"` : ''} data-scrub role="slider" tabindex="0" aria-label="${phaseLabel}" aria-valuemin="1" aria-valuemax="${timelineEntries().length}" aria-valuenow="${pos + 1}" aria-valuetext="${esc(scrubValueText(pos))}">${rail}${deviceBands}<span class="scrubhoverstep" data-scrubhover-range aria-hidden="true"></span>${statusRanges}${ticks}${eventTicks}<span class="scrubtooltip scrubtracktooltip" data-scrubhover aria-hidden="true" style="--tick-color:var(--timeline-objective-mark)"><span class="scrubtooltipmeta"><span class="scrubtooltiptag scrubtooltipstep" data-scrubhover-step></span><span class="scrubtooltiptag scrubtooltipkind" data-scrubhover-kind></span></span></span><div class="scrubhead" style="left:${frac * 100}%"></div></div><div class="scrubclock">${fmtClock(axis.totalMs)}</div>${transport}${tracksOpen ? timelineTracksHtml(axis, frac) : ''}</div>`;
   };
 
   // Chat glyph for every "open this call's transcript" affordance (timeline rows, LLM tab rows) —
@@ -2785,8 +3409,11 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     const llmCall = llmIndex != null ? D.llm[llmIndex] : null;
     // Keep the dense timeline categorical. Producer-specific labels such as "Screen Analyzer",
     // "Outer Agent", or "Koog Strategy Graph" remain available in the LLM detail view.
-    const rowLabel = llmCall ? 'LLM' : t.label;
-    const detail = llmCall
+    const isDecision = !!llmCall && llmCall.kind === 'decision';
+    const rowLabel = isDecision ? 'Decision' : llmCall ? 'LLM' : t.label;
+    const detail = isDecision
+      ? [llmCall.outcome, llmCall.model, llmCall.inputTokens != null ? `in ${fmtN(llmCall.inputTokens)}` : ''].filter(Boolean).join(' · ')
+      : llmCall
       ? `${llmCall.model || ''}${llmCall.inputTokens != null ? ` · in ${fmtN(llmCall.inputTokens)}` : ''}${llmCall.outputTokens != null ? ` · out ${fmtN(llmCall.outputTokens)}` : ''}`
       : t.tool;
     // Multi-device dressing: the row indents to its device's lane, carries the lane's color, and a
@@ -2797,7 +3424,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     // The handover row bridges the lanes, so it keeps lane 0's indent while wearing its
     // destination's color.
     const laneStyle = lane >= 0 ? ` style="--lane-color:${laneColor(lane)};--lane-index:${icon.cls === 'switch' ? 0 : lane}"` : '';
-    const row = `<div class="step${sel ? ' sel' : ''}${child ? ' child' : ''}${t.selfHealSource ? ' selfheal' : ''}${llmCall ? ' llmturn' : ''}${laneCls}" data-step="${stepId}"${laneStyle} role="button" tabindex="${sel ? 0 : -1}"${sel ? ' aria-current="step"' : ''}>
+    const row = `<div class="step${sel ? ' sel' : ''}${child ? ' child' : ''}${t.selfHealSource ? ' selfheal' : ''}${llmCall ? ' llmturn' : ''}${isDecision ? ' decisionturn' : ''}${laneCls}" data-step="${stepId}"${laneStyle} role="button" tabindex="${sel ? 0 : -1}"${sel ? ' aria-current="step"' : ''}>
 
       ${child ? '' : `<span class="num">${stepId}</span>`}
       <span class="ic ${icon.cls}"${icon.cls === 'dot' ? ` style="--icon-color:${catColor[cat]}"` : ''} aria-hidden="true">${icon.glyph}</span>
@@ -2813,7 +3440,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     // The transcript affordance remains a sibling of its row because the row itself is a button.
     // UI inspection belongs to the device preview and is rendered once for the selected step.
     const affordances = llmCall ? txOpenBtnHtml(llmIndex, `call ${Number(llmIndex) + 1}`) : '';
-    return affordances ? `<div class="steprow">${row}${affordances}</div>` : row;
+    return affordances ? `<div class="steprow${isDecision ? ' decision' : ''}">${row}${affordances}</div>` : row;
   };
 
   const renderTimeline = () => {
@@ -2835,8 +3462,9 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     // every lookup comes from a data-attach button in the DOM this render is about to replace.
     attachRefByKey.clear();
     const events = streamEvents();
-    const kindCounts = Object.fromEntries(TIMELINE_EVENT_KINDS.map((kind) => [kind, D.trace.filter((t) => !t.objective && !t.terminal && stepCat(t) === kind).length]));
-    const eventChooser = `<details class="streamselect eventselect" data-eventselect${st.tlEventMenuOpen ? ' open' : ''}><summary aria-label="Events, ${st.tlEventKinds.length} of ${TIMELINE_EVENT_KINDS.length} selected">${TIMELINE_FILTER_ICON_SVG}<span>Events</span><span class="streamselectcount">${st.tlEventKinds.length}/${TIMELINE_EVENT_KINDS.length}</span></summary><div class="streammenu"><div class="streammenuhead"><span>Events · ${st.tlEventKinds.length}/${TIMELINE_EVENT_KINDS.length}</span><span class="streammenuactions"><button type="button" data-tlkinds="all">All</button><button type="button" data-tlkinds="none">None</button></span></div>${TIMELINE_EVENT_KINDS.map((kind) => { const meta = timelineEventKindMeta[kind]; return `<label class="streamoption" style="--stream-color:${meta.color}"><input type="checkbox" data-tlkind="${kind}"${st.tlEventKinds.indexOf(kind) >= 0 ? ' checked' : ''}><span class="streamoptiondot" aria-hidden="true"></span><span class="streamname">${meta.label}</span><span class="streamcount">${kindCounts[kind]}</span>${TIMELINE_CHECK_ICON_SVG}</label>`; }).join('')}</div></details>`;
+    const offeredKinds = offeredTimelineEventKinds(); const selectedKinds = selectedOfferedEventKinds().length;
+    const kindCounts = Object.fromEntries(offeredKinds.map((kind) => [kind, D.trace.filter((t) => !t.objective && !t.terminal && stepCat(t) === kind).length]));
+    const eventChooser = `<details class="streamselect eventselect" data-eventselect${st.tlEventMenuOpen ? ' open' : ''}><summary aria-label="Events, ${selectedKinds} of ${offeredKinds.length} selected">${TIMELINE_FILTER_ICON_SVG}<span>Events</span><span class="streamselectcount">${selectedKinds}/${offeredKinds.length}</span></summary><div class="streammenu"><div class="streammenuhead"><span>Events · ${selectedKinds}/${offeredKinds.length}</span><span class="streammenuactions"><button type="button" data-tlkinds="all">All</button><button type="button" data-tlkinds="none">None</button></span></div>${offeredKinds.map((kind) => { const meta = timelineEventKindMeta[kind]; return `<label class="streamoption" style="--stream-color:${meta.color}"><input type="checkbox" data-tlkind="${kind}"${st.tlEventKinds.indexOf(kind) >= 0 ? ' checked' : ''}><span class="streamoptiondot" aria-hidden="true"></span><span class="streamname">${meta.label}</span><span class="streamcount">${kindCounts[kind]}</span>${TIMELINE_CHECK_ICON_SVG}</label>`; }).join('')}</div></details>`;
     const streamChooser = streams.length ? `<details class="streamselect" data-streamselect${st.tlMenuOpen ? ' open' : ''}><summary aria-label="Streams, ${st.tlStreams.length} of ${streams.length} selected">${TIMELINE_FILTER_ICON_SVG}<span>Streams</span><span class="streamselectcount">${st.tlStreams.length}/${streams.length}</span></summary><div class="streammenu"><div class="streammenuhead"><span>Event streams · ${st.tlStreams.length}/${streams.length}</span><span class="streammenuactions"><button type="button" data-tlstreams="all">All</button><button type="button" data-tlstreams="none">None</button></span></div>${streams.map((stream, i) => `<label class="streamoption" style="--stream-color:${streamColor(i)}" title="${esc(stream.name)}"><input type="checkbox" data-tlstream="${i}"${st.tlStreams.indexOf(i) >= 0 ? ' checked' : ''}><span class="streamoptiondot" aria-hidden="true"></span><span class="streamname">${esc(streamDisplayName(stream.name))}</span><span class="streamcount">${stream.total || (stream.events || []).length}</span>${TIMELINE_CHECK_ICON_SVG}</label>`).join('')}</div></details>` : '';
     const outcome = indexOutcome(D);
     const outcomeLabel = outcome === 'failed' && failureGroup && failureGroup.header
@@ -2962,7 +3590,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
 
   const fmtN = (n) => n == null ? '—' : n.toLocaleString();
   const fmtCost = (c) => c == null ? '—' : formatUsd(c);
-  const decisionOf = (r) => { const t = (r.response || []).find((p) => p.kind === 'tool'); return t ? t.tool : ((r.response || []).find((p) => p.kind === 'text') ? 'text reply' : r.label); };
+  const decisionOf = (r) => { if (r.kind === 'decision') return r.outcome || 'decision request'; const t = (r.response || []).find((p) => p.kind === 'tool'); return t ? t.tool : ((r.response || []).find((p) => p.kind === 'text') ? 'text reply' : r.label); };
   // The repo's canonical LLM identity: `<provider id>/<model id>` — the form `trailblaze config`
   // prints, the CLI's "Using LLM:" line uses, and workspace LLM config keys models under. A call
   // whose log carried no provider renders the bare model id (never a guessed prefix), and a call
@@ -2990,13 +3618,14 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   // in full; long ones (the system prompt, per-turn screen-state dumps) collapse behind a
   // <details> expander so the transcript stays skimmable.
   const TX_COLLAPSE_CHARS = 600;
-  const txRoleClass = (role) => role === 'user' ? 'user' : role === 'assistant' ? 'assistant' : role === 'system' ? 'system' : 'tool';
+  const txRoleClass = (role) => role === 'user' ? 'user' : role === 'assistant' ? 'assistant' : role === 'answer' ? 'answer' : role === 'system' ? 'system' : 'tool';
   // Role word only — the tool name renders in its own span beside it (txMsgHtml), so the CSS
   // small-caps treatment can never mangle a camelCase tool name.
   const txRoleLabel = (m) => {
     const role = String(m.role || '');
     if (role === 'user') return 'Trailblaze';
     if (role === 'assistant') return 'Assistant';
+    if (role === 'answer') return 'Answer';
     if (role === 'system') return 'System';
     if (role === 'tool_call' || role === 'tool_use') return 'Tool call';
     if (role === 'tool_result') return 'Tool result';
@@ -3012,11 +3641,12 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   // results the device reported back) reads on the right with the blue accent, chat-app style.
   // The system prompt is a quiet full-width preamble.
   const txVoice = (role) => role === 'assistant' || role === 'tool_call' || role === 'tool_use' ? 'llm'
+    : role === 'answer' ? 'decision'
     : role === 'system' ? 'sys' : 'user';
   const txAvatar = (m) => {
     const role = String(m.role || '');
     const voice = txVoice(role);
-    const glyph = voice === 'llm' ? 'AI' : role === 'system' ? 'S' : role === 'user' ? 'T' : '⚙';
+    const glyph = voice === 'llm' ? 'AI' : voice === 'decision' ? '✓' : role === 'system' ? 'S' : role === 'user' ? 'T' : '⚙';
     return `<span class="txavatar ${voice}" aria-hidden="true">${glyph}</span>`;
   };
   const txMsgHtml = (m) => {
@@ -3099,7 +3729,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     const clock = video && row ? stepClockMs(row.i) : null;
     // The call's own row picks the recording: the timeline selection may sit on another device's step.
     const clipAt = clock != null ? tlClipTimeAt(clock, row.i) : null;
-    const clip = clipAt != null ? tlClip(row.i) : null;
+    const clip = clipAt != null ? tlClip(row.i, clock) : null;
     return {
       map, group, row, stepAt, status, statusLabel, stepToken,
       title: group && group.header ? group.header.label : 'LLM call',
@@ -3202,10 +3832,14 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     // which is the detail view; there is no master list or inline detail pane. Numbering stays
     // global across groups so `?llm=N` deep links are stable. A call with no composition shows
     // em-dashes (never zeros); the Images cell is an em-dash when no images were sent.
+    // Tag each row by kind only when decisions are in the list; an LLM-only run reads as before.
+    const tagKinds = D.llm.some((c) => c.kind === 'decision');
     const tableRowHtml = (call, i, inGroup = false) => {
       const c = call.comp;
-      return `<tr class="llmrow${i === st.llmSel ? ' sel' : ''}${inGroup ? ' grouped' : ''}" data-llm="${i}" tabindex="0"${i === st.llmSel ? ' aria-current="true"' : ''}>
-        <td class="llmreq">${i + 1}. ${esc(decisionOf(call))}</td>
+      const decision = call.kind === 'decision';
+      const chip = decision ? '<span class="decisionchip">Decision</span>' : tagKinds ? '<span class="llmchip">LLM</span>' : '';
+      return `<tr class="llmrow${i === st.llmSel ? ' sel' : ''}${inGroup ? ' grouped' : ''}${decision ? ' decision' : ''}" data-llm="${i}" tabindex="0"${i === st.llmSel ? ' aria-current="true"' : ''}>
+        <td class="llmreq">${i + 1}. ${chip}${esc(decisionOf(call))}</td>
         <td class="llmmodel mono" title="${esc(llmModelLabel(call))}">${esc(llmModelLabel(call))}</td>
         <td class="num">${c ? fmtN(c.system) : '—'}</td>
         <td class="num">${c ? fmtN(c.user) : '—'}</td>
@@ -3227,11 +3861,52 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     // No "Input (Est)" column: the estimated split is folded to sum to the reported total, so an
     // estimate column always equals Input (LLM) — two columns agreeing by construction read as an
     // independent check that isn't happening. The per-category estimates stay (that's the split).
+    // On a run with decisions: who answered each of the agent's requests, and everything spent
+    // answering it. A decision runs inside the request it serves. One whose start falls inside an
+    // LLM call's span was not confident and handed off, so it is charged to that call; any other
+    // decision answered the request itself. The rows then add up to the session total. Absent on
+    // a run without decisions, so other runs read as before.
+    const split = (() => {
+      if (!D.llm.some((c) => c.kind === 'decision')) return '';
+      const kinds = { llm: D.llm.filter((c) => c.kind !== 'decision').map((c) => ({ own: c, tried: [] })), decision: [] };
+      for (const c of D.llm) {
+        if (c.kind !== 'decision') continue;
+        const home = c.startedAt == null ? null : kinds.llm.find((r) => r.own.startedAt != null && r.own.startedAt <= c.startedAt && c.startedAt <= r.own.startedAt + (r.own.durationMs || 0));
+        if (home) home.tried.push(c); else kinds.decision.push({ own: c, tried: [] });
+      }
+      const costOf = (r) => [r.own, ...r.tried].reduce((a, c) => a + (c.totalCost || 0), 0);
+      const usd = (c) => c == null ? '—' : `$${c.toFixed(4)}`;
+      // What the agent waited: an LLM call's duration already spans the decision tried first.
+      const avg = (rows, f) => rows.length ? rows.reduce((a, r) => a + f(r), 0) / rows.length : null;
+      const avgCost = { llm: avg(kinds.llm, costOf), decision: avg(kinds.decision, costOf) };
+      const avgTime = { llm: avg(kinds.llm, (r) => r.own.durationMs || 0), decision: avg(kinds.decision, (r) => r.own.durationMs || 0) };
+      const row = (label, rows, cls) => {
+        if (!rows.length) return '';
+        const cost = rows.reduce((a, r) => a + costOf(r), 0);
+        const t = avg(rows, (r) => r.own.durationMs || 0);
+        return `<tr class="llmsplitrow${cls ? ` ${cls}` : ''}"><th scope="row">${esc(label)}</th><td class="num">${fmtN(rows.length)}</td><td class="num">${usd(cost)}</td><td class="num">${usd(cost / rows.length)}</td><td class="num">${fmtDur(Math.round(t)) || '—'}</td></tr>`;
+      };
+      const all = [...kinds.llm, ...kinds.decision];
+      const total = all.reduce((a, r) => a + costOf(r), 0);
+      const handedOff = kinds.llm.filter((r) => r.tried.length);
+      const overhead = handedOff.reduce((a, r) => a + r.tried.reduce((b, c) => b + (c.totalCost || 0), 0), 0);
+      const skipped = kinds.decision.length;
+      const headline = avgCost.llm && avgCost.decision
+        ? `A decision answered a request for ${usd(avgCost.decision)} in ${fmtDur(Math.round(avgTime.decision))}; the LLM took ${usd(avgCost.llm)} and ${fmtDur(Math.round(avgTime.llm))}${avgTime.decision ? ` (${Math.round(avgCost.llm / avgCost.decision)}× the cost, ${(avgTime.llm / avgTime.decision).toFixed(1)}× the time)` : ''}. ${fmtN(skipped)} of ${fmtN(all.length)} requests never reached the LLM.`
+        : `${fmtN(skipped)} of ${fmtN(all.length)} requests never reached the LLM.`;
+      const notes = [
+        handedOff.length ? `The LLM row includes the decision tried first on ${fmtN(handedOff.length)} of its ${fmtN(kinds.llm.length)} requests (${usd(overhead)}); it was not confident enough, so it handed the request on.` : '',
+      ].filter(Boolean);
+      return `<div class="card llmsplit"><div style="font-size:12px;font-weight: var(--font-weight-emphasis);color:var(--sub)">Who answered the agent's requests</div>
+        <div class="llmsplithead">${esc(headline)}</div>
+        <table class="llmtable"><thead><tr><th>Answered by</th><th class="num">Requests</th><th class="num">Cost</th><th class="num">Cost per request</th><th class="num">Avg time</th></tr></thead><tbody>${row('LLM', kinds.llm, '')}${row('Decision', kinds.decision, 'decision')}<tr class="llmsplitrow total"><th scope="row">Total</th><td class="num">${fmtN(all.length)}</td><td class="num">${usd(total)}</td><td class="num">${all.length ? usd(total / all.length) : '—'}</td><td class="num"></td></tr></tbody></table>
+        ${notes.map((n) => `<div class="llmbreaknote">${esc(n)}</div>`).join('')}</div>`;
+    })();
     const table = `<div class="card llmtablewrap"><div style="font-size:12px;font-weight: var(--font-weight-emphasis);color:var(--sub)">Per-request details</div>
       <table class="llmtable${grouped ? ' grouped' : ''}"><thead><tr><th>Request</th><th>Model</th><th class="num">System</th><th class="num">User</th><th class="num">Tools</th><th class="num">Images</th><th class="num">Input (LLM)</th><th class="num">Output</th><th><span class="srlabel">Transcript</span></th><th class="num">Cost</th></tr></thead>${tableRows}</table></div>`;
     // Three stacked blocks: session totals, the context-window breakdown, and the per-request
     // table. Per-call detail lives in the transcript lightbox alone.
-    return viewPage('LLM', `${D.llm.length} call${D.llm.length === 1 ? '' : 's'}`, `<div class="card"><div style="font-size:12px;font-weight: var(--font-weight-emphasis);color:var(--sub)">Session totals · ${D.llm.length} calls</div>
+    return viewPage('LLM', `${D.llm.length} call${D.llm.length === 1 ? '' : 's'}`, `<div class="card"><div style="font-size:12px;font-weight: var(--font-weight-emphasis);color:var(--sub)">Session totals · ${D.llm.length} calls${(() => { const n = D.llm.filter((c) => c.kind === 'decision').length; return n ? ` (${fmtN(D.llm.length - n)} LLM, ${fmtN(n)} decision${n === 1 ? '' : 's'})` : ''; })()}</div>
         <div class="totals"><div><div class="n">${fmtN(totals.i)}</div><div class="t">input tokens</div></div>
         <div><div class="n">${fmtN(totals.o)}</div><div class="t">output tokens</div></div>
         <div><div class="n">${fmtCost(totals.c)}</div><div class="t">total cost</div></div>
@@ -3240,7 +3915,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
         ${totals.k ? `<div><div class="n">${fmtN(totals.k)} <span style="font-weight: var(--font-weight-emphasis);color:var(--sub)">(${Math.round((totals.k / (totals.i || 1)) * 100)}%)</span></div><div class="t">cached input</div></div>` : ''}
         ${totals.s > 0 ? `<div><div class="n">−${fmtCost(totals.s)}</div><div class="t">cache savings · ${fmtCost(totals.c + totals.s)} without cache</div></div>` : ''}
         ${totals.d ? `<div><div class="n">${(totals.d / D.llm.length / 1000).toFixed(1)}s</div><div class="t">avg response</div></div>` : ''}</div>
-        ${modelsUsed.length ? `<div class="llmmodels"><span class="k">${modelsUsed.length === 1 ? 'Model' : `Models (${modelsUsed.length})`}</span>${modelsUsed.map((m) => `<span class="v mono">${esc(m)}</span>`).join('')}</div>` : ''}</div>${breakdown}${table}`);
+        ${modelsUsed.length ? `<div class="llmmodels"><span class="k">${modelsUsed.length === 1 ? 'Model' : `Models (${modelsUsed.length})`}</span>${modelsUsed.map((m) => `<span class="v mono">${esc(m)}</span>`).join('')}</div>` : ''}</div>${split}${breakdown}${table}`);
   };
 
   // Thumbnail width steps for the lightbox zoom control. The grid packs as many columns of the
@@ -3250,10 +3925,16 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   const GAL_ZOOM_SIZES = [140, 190, 260, 360, 500];
 
   type LightboxEntry = { trace: TraceStep; group: ReportTraceGroup; kid?: TraceChild; kidIndex?: number };
-  const lightboxShotAvailable = (file) => !!(file && safeImageSrc(D.shots[file]));
+  // A frame is a record's screenshot, or the recording's frame at its screenshot-less capture.
+  const lightboxShotAvailable = (file) => captureShownIn(st.session, file);
   const lightboxCapturedAt = (entry: LightboxEntry): number | null => entry.kid
     ? (entry.kid.ts ?? entry.trace.ts ?? null)
     : (entry.trace.shotTs ?? entry.trace.ts ?? null);
+  // Where a step's recording stretch starts: its first timed record.
+  const lightboxStepStartMs = (group: ReportTraceGroup): number | null => {
+    for (const row of [group.header, ...group.items]) if (row && row.ts != null) return row.ts;
+    return null;
+  };
   // A step's closing frames — one PER DEVICE, not one per step. A single step can act on more than
   // one device ("check that both screens show $25"), and keeping only the last frame would drop the
   // other device's evidence entirely. Single-device steps are unchanged: every row keys to the same
@@ -3267,8 +3948,8 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       // Children first preserves the historical row preference when captures have no usable clock
       // (or the same instant). When their clocks differ, the comparison below decides truthfully.
       ...(trace.children || []).flatMap((kid, kidIndex) =>
-        lightboxShotAvailable(kid.screenshotFile) ? [{ trace, group, kid, kidIndex }] : []),
-      ...(lightboxShotAvailable(trace.screenshotFile) ? [{ trace, group }] : []),
+        lightboxShotAvailable(captureShotFile(kid)) ? [{ trace, group, kid, kidIndex }] : []),
+      ...(lightboxShotAvailable(captureShotFile(trace)) ? [{ trace, group }] : []),
     ]);
     // Establish the historical structural fallback first: the last candidate for each device.
     // Only a pair of observed clocks may override it; one missing clock says nothing about order.
@@ -3311,12 +3992,14 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       if (!st.lightboxAll) return lightboxStepFrames(group);
       const rows = [group.header, ...group.items].filter((row): row is TraceStep => Boolean(row));
       return rows.flatMap((trace) => {
-        const seen = new Set([trace.screenshotFile]);
+        const own = captureShotFile(trace);
+        const seen = new Set([own]);
         return [
-          ...(lightboxShotAvailable(trace.screenshotFile) ? [{ trace, group }] : []),
+          ...(lightboxShotAvailable(own) ? [{ trace, group }] : []),
           ...(trace.children || []).flatMap((c, k) => {
-            if (!lightboxShotAvailable(c.screenshotFile) || seen.has(c.screenshotFile)) return [];
-            seen.add(c.screenshotFile);
+            const file = captureShotFile(c);
+            if (!lightboxShotAvailable(file) || seen.has(file)) return [];
+            seen.add(file);
             return [{ trace, group, kid: c, kidIndex: k }];
           }),
         ];
@@ -3326,12 +4009,14 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     // is. Each cell carries its device's name and lane color — the same lanes as the timeline — so
     // a step that captured both devices reads as two labeled frames rather than two similar shots.
     const galLanes = detailDevices(D.trace);
-    const cells = entries.map(({ trace, group, kid, kidIndex }) => {
+    const cells = entries.map((entry) => {
+      const { trace, group, kid, kidIndex } = entry;
+      const clip = shotClipMark(st.session, trace.i, kid ? kidIndex ?? null : null, lightboxStepStartMs(group), lightboxCapturedAt(entry));
       const trailhead = Boolean(group.header && group.header.trailhead);
       const token = trailhead ? 'TRAILHEAD' : (group.num ? `STEP ${group.num}` : 'RUN');
       const label = (group.header && group.header.label) || trace.label;
       const tool = kid ? `${trace.label} · ${kid.label}` : (trace !== group.header ? trace.label : '');
-      const file = kid ? kid.screenshotFile : trace.screenshotFile;
+      const file = captureShotFile(kid || trace);
       const lane = trace.device ? galLanes.indexOf(trace.device) : -1;
       const device = lane >= 0 ? trace.device : '';
       const alt = device ? `${label} on the ${device} device` : label;
@@ -3342,10 +4027,13 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       const deviceBar = device
         ? `<div class="galdevbar" title="Captured on the ${esc(device)} device"><span class="galdevdot" aria-hidden="true"></span>${esc(device)}</div>`
         : '';
-      return `<button type="button" class="galcell${lane >= 0 ? ` devlane devlane-${lane}` : ''}"${lane >= 0 ? ` style="--lane-color:${laneColor(lane)}"` : ''} data-lightbox-step="${trace.i}"${kid ? ` data-lightbox-kid="${kidIndex}"` : ''}>
-        ${deviceBar}<div class="galshot" data-shot="${esc(file)}" data-shot-token="${esc(token)}" data-shot-label="${esc(label)}"${tool ? ` data-shot-tool="${esc(tool)}"` : ''}${device ? ` data-shot-device="${esc(device)}"` : ''} role="button" tabindex="0" aria-label="${esc(alt)}"><img alt="${esc(alt)}" /></div>
-        <div class="cap"><span class="galchip${trailhead ? ' trailhead' : ''}">${token}</span><span class="gallabel">${esc(label)}</span>${tool ? `<span class="galtool">${esc(tool)}</span>` : ''}</div>
-      </button>`;
+      // Clicking the cell opens its step in the Timeline, but the cell isn't a button: a button's
+      // contents are presentational to a screen reader, and a playing still holds real controls.
+      // The keyboard reaches that action through the caption instead (a click there bubbles here).
+      return `<div class="galcell${lane >= 0 ? ` devlane devlane-${lane}` : ''}"${lane >= 0 ? ` style="--lane-color:${laneColor(lane)}"` : ''} data-lightbox-step="${trace.i}"${kid ? ` data-lightbox-kid="${kidIndex}"` : ''}>
+        ${deviceBar}<div class="galshot" data-shot="${esc(file)}" data-shot-token="${esc(token)}" data-shot-label="${esc(label)}"${tool ? ` data-shot-tool="${esc(tool)}"` : ''}${device ? ` data-shot-device="${esc(device)}"` : ''}${clip ? clip.attrs : ''} role="button" tabindex="0" aria-label="${esc(alt)}"><img alt="${esc(alt)}" /></div>
+        <div class="cap" role="button" tabindex="0" aria-label="Open in Timeline: ${esc(label)}${tool ? ` · ${esc(tool)}` : ''}">${((chip) => (clip ? `<span class="galcaphead">${chip}${shotClipHintHtml(clip)}</span>` : chip))(`<span class="galchip${trailhead ? ' trailhead' : ''}">${token}</span>`)}<span class="gallabel">${esc(label)}</span>${tool ? `<span class="galtool">${esc(tool)}</span>` : ''}</div>
+      </div>`;
     }).join('');
     const zoom = `<div class="lightboxzoom" role="group" aria-label="Thumbnail size"><button type="button" class="lightboxzoombtn" data-gal-zoom="-1" aria-label="Smaller thumbnails" title="Smaller thumbnails"${st.lightboxZoom <= 0 ? ' disabled' : ''}>−</button><button type="button" class="lightboxzoombtn" data-gal-zoom="1" aria-label="Larger thumbnails" title="Larger thumbnails"${st.lightboxZoom >= GAL_ZOOM_SIZES.length - 1 ? ' disabled' : ''}>+</button></div>`;
     const toggle = `<div class="lightboxtoolbar"><button class="lightboxtoggle" type="button" role="switch" id="lightboxmode" aria-checked="${st.lightboxAll}"><span class="lightboxtoggletrack" aria-hidden="true"><span class="lightboxtogglethumb"></span></span><span>Show all</span></button>${deviceLegendHtml()}${zoom}</div>`;
@@ -3404,6 +4092,364 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
         <button class="evchip" data-lvl="e">Failed</button>
         <span class="count" id="nlcount"></span></div>
       <div class="logpane net" id="nlpane">${rows}</div>`, 'logview');
+  };
+
+  // The Strings tab: every string the run's screens showed, each tied to its screenshots and box.
+  // The model is built once per session payload and rebuilt when a live update changes what it
+  // reads — the strings, the screenshot map, or the trace — whether by replacing an array or by
+  // appending to it in place. The selection lives in `st` and is re-resolved against the chips on
+  // every render, so hiding the selected string moves to the next one.
+  const stringsModels = new WeakMap<object, { inputs: unknown[]; model: StringsModel }>();
+  const sessionStringsModel = (): StringsModel => {
+    const inputs = [D.visibleStrings, (D.visibleStrings || []).length, D.shots, Object.keys(D.shots || {}).length, D.trace, (D.trace || []).length];
+    const prior = stringsModels.get(D);
+    if (prior && prior.inputs.every((v, i) => v === inputs[i])) return prior.model;
+    const shotSteps: Record<string, { step: number; kid: number | null }> = {};
+    for (const t of D.trace || []) {
+      if (t.screenshotFile && !shotSteps[t.screenshotFile]) shotSteps[t.screenshotFile] = { step: t.i, kid: null };
+      // A capture with no screenshot is found by its id: on the dispatch whose span it fell in when
+      // there is one, else on the row.
+      (t.children || []).forEach((c, kid) => {
+        if (c.screenshotFile && !shotSteps[c.screenshotFile]) shotSteps[c.screenshotFile] = { step: t.i, kid };
+        for (const id of c.captureIds || []) if (!shotSteps[id]) shotSteps[id] = { step: t.i, kid };
+      });
+      for (const id of t.captureIds || []) if (!shotSteps[id]) shotSteps[id] = { step: t.i, kid: null };
+    }
+    const model = buildStringsModel(D.visibleStrings, D.shots, shotSteps);
+    if (prior) Object.assign(st, (({ sel, screen, hit }) => ({ strSel: sel, strScreen: screen, strHit: hit }))(carryStringsSelection(prior.model, model, stringsState())));
+    stringsModels.set(D, { inputs, model });
+    return model;
+  };
+  const stringsState = () => ({ mode: st.strMode, sel: st.strSel, screen: st.strScreen, hit: st.strHit, kinds: st.strKinds, vis: st.strVis });
+  // A capture with no screenshot shows the frame the run's recording has at that capture's time
+  // (see run-report-strings-frames.ts). Frames are taken only when the tab needs them and kept for
+  // the boot's life, keyed `<session>:<captureId>`: a data URL, or null when the recording can't
+  // give one. A key that is absent while its capture has a recording
+  // to come from is being taken.
+  const stringFrames = new Map<string, string | null>();
+  const stringFramesTaking = new Set<string>();
+  let stringFramesLanded = 0;
+  // Set once this boot is torn down: a frame still being taken then belongs to a report that is
+  // gone, so it is dropped and repaints nothing.
+  let stringFramesRetired = false;
+  const stringFrameKey = (session: number, screen: StringsScreen) => `${session}:${screen.captureId}`;
+  // A frame the session saved from its recording (captureFrameFile) is the still itself: it goes in
+  // the cache on first ask, and the recording is never asked for it. It is there even when the
+  // recording is too big to embed.
+  const savedStill = (session: number, captureId: string | null | undefined): void => {
+    if (!captureId) return;
+    const key = `${session}:${captureId}`;
+    if (stringFrames.has(key)) return;
+    const src = safeImageSrc(((SESSIONS[session] || {}).shots || {})[captureFrameFile(captureId)]);
+    if (src) stringFrames.set(key, src);
+  };
+  // A screen that folded several screenshot-less captures shows whichever of them has a saved frame.
+  const savedScreenStill = (session: number, screen: StringsScreen): void => {
+    const key = stringFrameKey(session, screen);
+    if (stringFrames.has(key)) return;
+    const shots = (SESSIONS[session] || {}).shots || {};
+    for (const captureId of stillCaptureIds(screen)) {
+      const src = safeImageSrc(shots[captureFrameFile(captureId)]);
+      if (src) {
+        stringFrames.set(key, src);
+        return;
+      }
+    }
+  };
+  // The recording covering one of this screen's screenshot-less captures, and that capture's time:
+  // the recording of the device the capture was taken on, whose window holds the time, taking the
+  // first capture that has one. Which lane a device is on follows the Timeline's own rule.
+  const clipCovering = (session: number, at: { step: number; kid: number | null } | null, atMs: number): { k: number; clip: VideoClip } | null =>
+    clipCoveringOn(session, captureDevice((SESSIONS[session] || {}).trace || [], at), atMs);
+  const clipCoveringOn = (session: number, device: string | null | undefined, atMs: number): { k: number; clip: VideoClip } | null => {
+    if (device === undefined) return null;
+    const trace = (SESSIONS[session] || {}).trace || [];
+    const k = sessionClipIndexFor(session, device, device == null || firstTracedDevice(trace) === device, atMs);
+    const clip = k >= 0 ? sessionClipAt(session, k) : null;
+    return clip && atMs >= clip.startMs && atMs <= clip.endMs ? { k, clip } : null;
+  };
+  const stringFrameClip = (session: number, screen: StringsScreen): { k: number; clip: VideoClip; atMs: number } | null => {
+    if (screen.shot || !screen.captureId) return null;
+    for (const { atMs, at } of screen.frameTimes) {
+      const found = clipCovering(session, at, atMs);
+      if (found) return { ...found, atMs };
+    }
+    return null;
+  };
+  const stringFrameFor = (screen: StringsScreen): string | null | undefined => {
+    savedScreenStill(st.session, screen);
+    const key = stringFrameKey(st.session, screen);
+    if (stringFrames.has(key)) return stringFrames.get(key)!;
+    return stringFrameClip(st.session, screen) ? undefined : null;
+  };
+  // Every other surface that shows a capture's picture (Replay, Compare and its pixel diff, the
+  // Lightbox and grids, the inspector) names a screenshot-less capture by its video-frame key
+  // (captureShotFile) and gets the same still, from the same cache: taken on first ask, in batches
+  // per recording, and repainted in when it lands. A capture's time is its strings line's when the
+  // run kept one, else the call it fell in.
+  type CaptureMoment = { atMs: number | null; at: { step: number; kid: number | null }; w?: number; h?: number; device?: string | null };
+  const captureMomentsMemo = new WeakMap<object, { inputs: unknown[]; moments: Map<string, CaptureMoment> }>();
+  const captureMoments = (session: number): Map<string, CaptureMoment> => {
+    const s = SESSIONS[session];
+    if (!s) return new Map();
+    const inputs = [s.trace, (s.trace || []).length, s.visibleStrings, (s.visibleStrings || []).length];
+    const prior = captureMomentsMemo.get(s);
+    if (prior && prior.inputs.every((v, i) => v === inputs[i])) return prior.moments;
+    const moments = new Map<string, CaptureMoment>();
+    for (const t of s.trace || []) {
+      (t.children || []).forEach((c, kid) => {
+        for (const id of c.captureIds || []) if (!moments.has(id)) moments.set(id, { atMs: c.ts ?? t.ts ?? null, at: { step: t.i, kid } });
+      });
+      for (const id of t.captureIds || []) if (!moments.has(id)) moments.set(id, { atMs: t.ts ?? null, at: { step: t.i, kid: null } });
+    }
+    for (const line of s.visibleStrings || []) {
+      const moment = line.captureId && !line.screenshot ? moments.get(line.captureId) : null;
+      if (!moment) continue;
+      const atMs = parseLogTimestamp(line.timestamp);
+      if (atMs != null) moment.atMs = atMs;
+      moment.w = line.deviceWidth;
+      moment.h = line.deviceHeight;
+    }
+    // Each capture's device, once: the grids ask whether every capture has a picture on each render.
+    for (const moment of moments.values()) moment.device = captureDevice(s.trace || [], moment.at);
+    captureMomentsMemo.set(s, { inputs, moments });
+    return moments;
+  };
+  const videoStillClip = (session: number, captureId: string): { k: number; clip: VideoClip; atMs: number; w?: number; h?: number } | null => {
+    const moment = captureMoments(session).get(captureId);
+    if (!moment || moment.atMs == null) return null;
+    const found = clipCoveringOn(session, moment.device, moment.atMs);
+    return found ? { ...found, atMs: moment.atMs, w: moment.w, h: moment.h } : null;
+  };
+  const videoStillAsks = new Map<string, Promise<string | null>>();
+  let videoStillsQueued: Array<{ session: number; key: string; found: NonNullable<ReturnType<typeof videoStillClip>>; resolve: (src: string | null) => void }> = [];
+  // One recording decodes at a time, as the pixel diff decodes one scene at a time.
+  let videoStillQueue: Promise<unknown> = Promise.resolve();
+  const takeQueuedVideoStills = () => {
+    const batches = new Map<string, { clip: VideoClip; requests: FrameRequest[]; resolvers: Map<string, (src: string | null) => void> }>();
+    for (const { session, key, found, resolve } of videoStillsQueued) {
+      const id = `${session}|${found.k}`;
+      const batch = batches.get(id) || { clip: found.clip, requests: [], resolvers: new Map() };
+      batch.requests.push({ key, atMs: found.atMs, width: found.w, height: found.h });
+      batch.resolvers.set(key, resolve);
+      batches.set(id, batch);
+    }
+    videoStillsQueued = [];
+    for (const { clip, requests, resolvers } of batches.values()) {
+      videoStillQueue = videoStillQueue.then(() => grabClipFrames(clip, requests, (key, src) => {
+        stringFramesTaking.delete(key);
+        if (stringFramesRetired) return;
+        stringFrames.set(key, src);
+        stringFramesLanded++;
+        resolvers.get(key)!(src);
+      }));
+    }
+  };
+  /** The recording's still for a screenshot-less capture, or null when its recording can't give one. */
+  const takeVideoStill = (session: number, captureId: string): Promise<string | null> => {
+    savedStill(session, captureId);
+    const key = `${session}:${captureId}`;
+    if (stringFrames.has(key)) return Promise.resolve(stringFrames.get(key)!);
+    const asked = videoStillAsks.get(key);
+    if (asked) return asked;
+    const found = videoStillClip(session, captureId);
+    if (!found) return Promise.resolve(null);
+    const ask = new Promise<string | null>((resolve) => {
+      if (!videoStillsQueued.length) setTimeout(takeQueuedVideoStills, 0);
+      videoStillsQueued.push({ session, key, found, resolve });
+    });
+    stringFramesTaking.add(key);
+    videoStillAsks.set(key, ask);
+    return ask;
+  };
+  // A landed still repaints the page it was asked for, once per burst. Not a playing Replay: it
+  // paints from the recording itself, and a re-render would restart it.
+  let videoStillRepaint: ReturnType<typeof setTimeout> | null = null;
+  const repaintForVideoStill = () => {
+    if (videoStillRepaint != null || stringFramesRetired) return;
+    videoStillRepaint = setTimeout(() => {
+      videoStillRepaint = null;
+      const replaying = (onTrailTab() && st.trailMode === 'replay') || (st.compareMode && st.cmpTab === 'replay');
+      if (!stringFramesRetired && !replaying) render(true);
+    }, 50);
+  };
+  /**
+   * What a surface paints for a capture's picture in `session` now: the screenshot's source, or the
+   * recording's still once taken. Null while the still is being taken, which asks for it and
+   * repaints when it lands.
+   */
+  const captureSrcIn = (session: number, file: string | null | undefined): string | null => {
+    const captureId = videoShotCaptureId(file);
+    if (captureId == null) return file ? safeImageSrc(((SESSIONS[session] || {}).shots || {})[file]) || null : null;
+    savedStill(session, captureId);
+    const key = `${session}:${captureId}`;
+    if (stringFrames.has(key)) return stringFrames.get(key) || null;
+    // Repaint once the still is settled either way, so a failed one clears its placeholder. Not when
+    // there was no recording to ask: nothing changed, and the repaint would ask again.
+    void takeVideoStill(session, captureId).then(() => { if (stringFrames.has(key)) repaintForVideoStill(); });
+    return null;
+  };
+  /** Whether a capture has a picture: a kept screenshot, or a recording covering its time that has not failed to give one. */
+  const captureShownIn = (session: number, file: string | null | undefined): boolean => {
+    const captureId = videoShotCaptureId(file);
+    if (captureId == null) return Boolean(file && safeImageSrc(((SESSIONS[session] || {}).shots || {})[file]));
+    savedStill(session, captureId);
+    const key = `${session}:${captureId}`;
+    if (stringFrames.has(key)) return stringFrames.get(key) != null;
+    return videoStillClip(session, captureId) != null;
+  };
+  /** The picture's source for the pixel diff: waits for a still still being taken. */
+  const captureSrcFor = async (session: number, file: string | null | undefined): Promise<string | null> => {
+    const captureId = videoShotCaptureId(file);
+    return captureId == null ? captureSrcIn(session, file) : takeVideoStill(session, captureId);
+  };
+  // Queue every frame this session's tab still lacks, the screen on show first, one batch per
+  // recording. The tab repaints when the first frame lands and again when all have.
+  const takeStringFrames = (model: StringsModel, shown: number | null) => {
+    const session = st.session;
+    const batches = new Map<number, { clip: VideoClip; requests: FrameRequest[] }>();
+    const screens = [...model.screens].sort((a, b) => Number(b.id === shown) - Number(a.id === shown));
+    for (const screen of screens) {
+      savedScreenStill(session, screen);
+      const key = stringFrameKey(session, screen);
+      if (stringFrames.has(key) || stringFramesTaking.has(key)) continue;
+      const found = stringFrameClip(session, screen);
+      if (!found) continue;
+      stringFramesTaking.add(key);
+      const batch = batches.get(found.k) || { clip: found.clip, requests: [] };
+      batch.requests.push({ key, atMs: found.atMs, width: screen.w, height: screen.h });
+      batches.set(found.k, batch);
+    }
+    const repaint = () => { if (!stringFramesRetired && st.tab === 'strings' && st.session === session) render(true); };
+    for (const { clip, requests } of batches.values()) {
+      let first = true;
+      void grabClipFrames(clip, requests, (key, src) => {
+        if (stringFramesRetired) return;
+        stringFrames.set(key, src);
+        stringFramesTaking.delete(key);
+        stringFramesLanded++;
+        if (first) { first = false; repaint(); }
+      }).then(repaint);
+    }
+  };
+  // Each model's crops, worked out once, and their stylesheet mounted once in the page's head: the
+  // tab re-renders on every click, and its screenshots can be megabytes of inline data URLs. A
+  // frame landing from the recording gives its screen a source, so they're worked out again then.
+  const stringCropsByModel = new WeakMap<StringsModel, StringCrops & { frames: number }>();
+  let mountedCrops: StringCrops | null = null;
+  const stringsCrops = (model: StringsModel): StringCrops & { mounted: boolean } => {
+    let crops = stringCropsByModel.get(model);
+    if (!crops || crops.frames !== stringFramesLanded) {
+      crops = { ...stringCrops(model, (key) => safeImageSrc(D.shots[key]), stringFrameFor), frames: stringFramesLanded };
+      stringCropsByModel.set(model, crops);
+    }
+    const head = typeof document !== 'undefined' ? document.head : null;
+    if (!head) return { ...crops, mounted: false };
+    if (mountedCrops !== crops) {
+      let el = document.getElementById('strcrops');
+      if (!el) {
+        el = document.createElement('style');
+        el.id = 'strcrops';
+        head.appendChild(el);
+      }
+      el.textContent = crops.css;
+      mountedCrops = crops;
+    }
+    return { ...crops, mounted: true };
+  };
+  // The stylesheet carries every screenshot of one run, so it goes as soon as the tab does: it
+  // would otherwise pin a run the reader left, or the previous report in a shell that loads another.
+  const unmountStringCrops = () => {
+    const el = typeof document !== 'undefined' && document.getElementById ? document.getElementById('strcrops') : null;
+    if (el) el.remove();
+    mountedCrops = null;
+  };
+  const renderStrings = () => {
+    const model = sessionStringsModel();
+    const view = resolveStringsSelection(model, stringsState());
+    st.strSel = view.sel; st.strScreen = view.screen; st.strHit = view.hit;
+    const meta = `${model.captures} captures · ${model.screens.length} distinct screens · ${model.entries.length} distinct strings`;
+    const shownScreen = view.mode === 'screen' ? view.screen : (view.sel != null ? (shownHits(model.entries[view.sel], view.vis)[view.hit] || {}).screen ?? null : null);
+    takeStringFrames(model, shownScreen);
+    return viewPage('Strings', meta, stringsTabHtml(model, view, st.strQ, (key) => safeImageSrc(D.shots[key]), esc, stringFrameFor, stringsCrops(model)), 'stringsview');
+  };
+  const wireStrings = () => {
+    const list = document.getElementById('strlist');
+    const input = document.getElementById('strq') as HTMLInputElement | null;
+    const countEl = document.getElementById('strcount');
+    // The text filter hides rows in place, like the log panes, so typing keeps focus.
+    const applyQuery = () => {
+      if (!list) return;
+      const q = st.strQ.trim().toLowerCase();
+      let shown = 0;
+      const rows = Array.from(list.querySelectorAll<HTMLElement>('[data-str-id]'));
+      for (const r of rows) {
+        const on = !q || (r.dataset.strQ || '').indexOf(q) >= 0;
+        r.style.display = on ? '' : 'none';
+        if (on) shown++;
+      }
+      if (countEl) countEl.textContent = q ? `${shown} of ${rows.length}` : `${rows.length}`;
+    };
+    if (input) input.oninput = () => { st.strQ = input.value; applyQuery(); };
+    applyQuery();
+    const rerender = () => { render(true); };
+    root.querySelectorAll<HTMLElement>('[data-str-kind]').forEach((el) => el.onclick = () => {
+      const kind = el.dataset.strKind as StringKind;
+      st.strKinds = { ...st.strKinds, [kind]: !st.strKinds[kind] };
+      rerender();
+    });
+    root.querySelectorAll<HTMLElement>('[data-str-vis]').forEach((el) => el.onclick = () => {
+      const vis = el.dataset.strVis as StringVisibility;
+      if (vis === st.strVis) return;
+      // Stay on the screen in view when the selected string still shows there.
+      const model = sessionStringsModel();
+      const sel = st.strSel != null ? model.entries[st.strSel] : null;
+      const screenInView = sel ? shownHits(sel, st.strVis)[st.strHit]?.screen : undefined;
+      st.strVis = vis;
+      st.strHit = sel && screenInView != null ? Math.max(0, shownHits(sel, vis).findIndex((h) => h.screen === screenInView)) : 0;
+      rerender();
+    });
+    root.querySelectorAll<HTMLElement>('[data-str-mode]').forEach((el) => el.onclick = () => {
+      const mode = el.dataset.strMode === 'screen' ? 'screen' : 'string';
+      if (mode === st.strMode) return;
+      // Carry the reader's place across: the screen they were looking at, or its first string.
+      const model = sessionStringsModel();
+      const sel = st.strSel != null ? model.entries[st.strSel] : null;
+      const inView = sel ? shownHits(sel, st.strVis)[st.strHit] : null;
+      if (mode === 'screen' && inView) st.strScreen = inView.screen;
+      st.strMode = mode;
+      rerender();
+    });
+    root.querySelectorAll<HTMLElement>('.strlist [data-str-id], .strboxes [data-str-id]').forEach((el) => el.onclick = () => {
+      const id = +el.dataset.strId;
+      const model = sessionStringsModel();
+      const prev = st.strSel != null ? model.entries[st.strSel] : null;
+      const inView = prev ? shownHits(prev, st.strVis)[st.strHit] : null;
+      const screenInView = inView ? inView.screen : null;
+      st.strSel = id;
+      st.strHit = 0;
+      // A box names a string on the screen already in view, so stay on that screen.
+      if (st.strMode === 'string' && screenInView != null && el.closest('.strboxes')) {
+        const here = shownHits(model.entries[id], st.strVis).findIndex((h) => h.screen === screenInView);
+        if (here >= 0) st.strHit = here;
+      }
+      rerender();
+    });
+    root.querySelectorAll<HTMLElement>('[data-str-hit]').forEach((el) => el.onclick = () => { st.strHit = +el.dataset.strHit; rerender(); });
+    root.querySelectorAll<HTMLElement>('[data-str-screen]').forEach((el) => el.onclick = () => { st.strScreen = +el.dataset.strScreen; rerender(); });
+    // Scroll only the list and the strip, never the page: scrollIntoView would also move the page
+    // and take the filter row out of view.
+    const selRow = list && list.querySelector<HTMLElement>('.strrow.sel');
+    if (list && selRow) {
+      const top = selRow.offsetTop;
+      if (top < list.scrollTop || top + selRow.offsetHeight > list.scrollTop + list.clientHeight) list.scrollTop = top - list.clientHeight / 3;
+    }
+    const strip = root.querySelector<HTMLElement>('.strstrip');
+    const onThumb = strip && strip.querySelector<HTMLElement>('.strthumb.on');
+    if (strip && onThumb) {
+      const left = onThumb.offsetLeft;
+      if (left < strip.scrollLeft || left + onThumb.offsetWidth > strip.scrollLeft + strip.clientWidth) strip.scrollLeft = left - 8;
+    }
   };
 
   // Shared text + severity filtering for the device/network log panes. Filters rows in place
@@ -4317,7 +5363,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   // Which session a lane's shots/clip/links resolve against: in device mode every lane is the one
   // session; otherwise the lane's selected run.
   const trailLaneSession = (lane: number) => trailDeviceMode() ? trailScopeSessions()[0] : trailSel()[lane];
-  const trailShotSrc = (lane, file) => safeImageSrc(((SESSIONS[trailLaneSession(lane)] || {}).shots || {})[file]);
+  const trailShotSrc = (lane, file) => captureSrcIn(trailLaneSession(lane), file);
   // A lane's playable recording, and the epoch origin its clock is measured from. A session may
   // have none (no capture, or a host that produced no embeddable re-encode), so every consumer
   // needs the no-clip path and falls back to stepping that lane's screenshots.
@@ -4554,7 +5600,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     if (trailMatrixThisRender) return trailMatrixThisRender;
     const matrix = buildTrailMatrix(
       trailDeviceMode() ? trailDeviceModels() : trailSel().map((i) => resolveTraceModel(SESSIONS[i])),
-      (lane, file) => Boolean(file && trailShotSrc(lane, file)),
+      (lane, file) => captureShownIn(trailLaneSession(lane), file),
       isLlmTurnRow,
       trailLaneFailureAnchor,
       trailScopeJoin(),
@@ -4622,19 +5668,23 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   // off SESSIONS, and lane positions shift as lanes are toggled. The device rides along explicitly
   // because a device-lane split puts EVERY lane on session 0 — deriving the name from the session
   // index would label every companion's frame with the start device.
-  const trailFrameHtml = (row: TrailRow, frame, session: number, device: string, captioned: boolean) => `<figure class="trailframe">
-      <div class="galshot" data-shot="${esc(frame.file)}" data-shot-run="${session}" data-shot-device="${esc(device)}" data-shot-token="${esc(trailStepToken(row.num))}" data-shot-label="${esc(row.label)}" data-shot-tool="${esc(frame.label)}" role="button" tabindex="0" aria-label="${esc(device)} · ${esc(trailStepToken(row.num))} screenshot: ${esc(frame.label)}"><img alt="${esc(frame.label)}" loading="lazy" /></div>
-      ${captioned ? `<figcaption class="trailframecap">${esc(frame.label)}</figcaption>` : ''}
+  // `t0` is the lane's clock origin: the cell's start and the frame's capture are offsets on it.
+  const trailFrameHtml = (row: TrailRow, cell: TrailCell, frame: TrailFrame, session: number, device: string, captioned: boolean, t0: number | null) => {
+    const clip = t0 == null ? null : shotClipMark(session, frame.rowId, frame.kid, cell.startMs != null ? t0 + cell.startMs : null, frame.atMs != null ? t0 + frame.atMs : null);
+    return `<figure class="trailframe">
+      <div class="galshot" data-shot="${esc(frame.file)}" data-shot-run="${session}" data-shot-device="${esc(device)}" data-shot-token="${esc(trailStepToken(row.num))}" data-shot-label="${esc(row.label)}" data-shot-tool="${esc(frame.label)}"${clip ? clip.attrs : ''} role="button" tabindex="0" aria-label="${esc(device)} · ${esc(trailStepToken(row.num))} screenshot: ${esc(frame.label)}"><img alt="${esc(frame.label)}" loading="lazy" /></div>
+      ${captioned ? `<figcaption class="trailframecap">${esc(frame.label)}${clip ? ` ${shotClipHintHtml(clip)}` : ''}</figcaption>` : ''}
     </figure>`;
+  };
   const trailCellOutcome = (cell: TrailCell) => !cell.ok ? 'failed' : cell.selfHeal ? 'selfheal' : 'passed';
   const trailOpenLabel = (row: TrailRow, device: string) => `Open ${trailStepToken(row.num)} on ${device} in that run's timeline`;
   // `join` comes from the matrix being drawn rather than from the state, so a cell can't disagree
   // with the stage it sits in — and the rule isn't re-derived once per cell.
-  const trailCellHtml = (row: TrailRow, cell: TrailCell | null, session: number, device: string, open: boolean, join: TrailJoin) => {
+  const trailCellHtml = (row: TrailRow, cell: TrailCell | null, session: number, device: string, open: boolean, join: TrailJoin, t0: number | null) => {
     if (!cell) return `<div class="trailcell missing"><span class="traildot missing" aria-hidden="true"></span><div class="trailcard trailnotrun">${join === 'position' ? 'no step here' : 'not reached'}</div></div>`;
     const outcome = trailCellOutcome(cell);
     const frames = open ? cell.frames : (cell.lastFrame ? [cell.lastFrame] : []);
-    const shots = frames.map((frame) => trailFrameHtml(row, frame, session, device, open)).join('');
+    const shots = frames.map((frame) => trailFrameHtml(row, cell, frame, session, device, open, t0)).join('');
     const stats = [
       cell.durationMs != null ? fmtTrailMs(cell.durationMs) : null,
       cell.toolCount ? `${cell.toolCount} tool${cell.toolCount === 1 ? '' : 's'}` : null,
@@ -4657,6 +5707,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
         ${pair && lane.session === pair.current ? `<span class="cmppairtag current" role="img" aria-label="Run B: ${esc(compareRunLabel(pair.current))}" title="${esc(compareRunLabel(pair.current))}">B</span>` : ''}
         ${lane.duration ? `<span class="traillanedur">${esc(lane.duration)}</span>` : ''}
       </div>`).join('');
+    const laneT0s = lanes.map((lane) => (SESSIONS[lane.session] ? resolveTraceModel(SESSIONS[lane.session]).traceT0 : null));
     const rows = matrix.rows.map((row) => {
       const open = trailRowOpen(row.num);
       const label = `<div class="trailstep">
@@ -4665,7 +5716,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
           </button>
           <div class="trailsteplabel">${esc(row.label)}</div>
         </div>`;
-      return `<div class="trailrowgroup">${label}${row.cells.map((cell, pos) => trailCellHtml(row, cell, (lanes[pos] || {}).session ?? pos, (lanes[pos] || {}).label || '', open, matrix.join)).join('')}</div>`;
+      return `<div class="trailrowgroup">${label}${row.cells.map((cell, pos) => trailCellHtml(row, cell, (lanes[pos] || {}).session ?? pos, (lanes[pos] || {}).label || '', open, matrix.join, laneT0s[pos])).join('')}</div>`;
     }).join('');
     return `<div class="trailscroll"><div class="trailgrid" style="--trail-lanes:${lanes.length}"><div class="trailcorner"></div>${heads}${rows}</div></div>`;
   };
@@ -4756,7 +5807,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     if (!replayable(timeline)) {
       return `<div class="trailscroll"><div class="rpempty">
           <h2>Nothing to replay</h2>
-          <p>Replay needs timestamps to put the devices on one clock, and none of these runs recorded any. The Map and Grid projections don't need them.</p>
+          <p>Replay needs timestamps to put the devices on one clock, and none of these runs recorded any. The Grid doesn't need them.</p>
         </div></div>`;
     }
     const total = timeline.totalMs;
@@ -4793,9 +5844,17 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     // The strip: names in one column, rails in the other, so a single playhead can span every rail.
     // A lane with memory gets a second row of each: the rail's name column says what the line is
     // and where it topped out, which is the one number that compares across devices at a glance.
-    const names = lanes.map((lane) => `<div class="rpstripname" data-rp-pick="${lane.index}" role="button" tabindex="-1" aria-label="Follow ${esc(lane.label)} with the arrow keys">${esc(lane.label)}</div>${memory[lane.index]
-      ? `<div class="rpstripmem${memoryNearLimit(memory[lane.index]) ? ' nearlimit' : ''}" title="${esc(`${lane.label} · app ${memory[lane.index].kind}, peak ${describeMemorySample(memory[lane.index], memory[lane.index].peak)} ${memory[lane.index].peak.atMs < 0 ? 'before the first step' : `at ${replayAt(alignment, memory[lane.index].peak.atMs)}`}`)}">${esc(memory[lane.index].kind)} · peak ${esc(fmtMemoryKb(memory[lane.index].peak.usedKb))}</div>`
-      : ''}`).join('');
+    // That row starts collapsed to a thin labelled strip — the data is there, but it stays out of
+    // the way of the screens until the reader asks for it — and its name is the toggle.
+    const trackOpen = (lane: { session: number; label: string }) => replayTrackOpen(st.trailTracksOpen, replayTrackKey(lane, 'memory'));
+    const names = lanes.map((lane) => {
+      const series = memory[lane.index];
+      const head = `<div class="rpstripname" data-rp-pick="${lane.index}" role="button" tabindex="-1" aria-label="Follow ${esc(lane.label)} with the arrow keys">${esc(lane.label)}</div>`;
+      if (!series) return head;
+      const open = trackOpen(lane);
+      const title = `${lane.label} · app ${series.kind}, peak ${describeMemorySample(series, series.peak)} ${series.peak.atMs < 0 ? 'before the first step' : `at ${replayAt(alignment, series.peak.atMs)}`}`;
+      return `${head}<button type="button" class="rpstripmem${memoryNearLimit(series) ? ' nearlimit' : ''}${open ? '' : ' closed'}" data-rp-track="${esc(replayTrackKey(lane, 'memory'))}" data-rp-track-lane="${lane.index}" aria-expanded="${open}" aria-controls="rpmemrail-${lane.index}" title="${esc(`${title} — ${open ? 'collapse' : 'expand'} the memory track`)}">${esc(series.kind)} · peak ${esc(fmtMemoryKb(series.peak.usedKb))}<svg class="rptrackchev" viewBox="0 0 8 8" aria-hidden="true"><path d="M2.5 1.5 5.5 4l-3 2.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></button>`;
+    }).join('');
     // The memory rail: the app's heap as a filled line on the same axis, broken where the process
     // died, with the spikes and the peak marked — the moments the rail exists to make findable.
     // The SVG stretches to the rail (preserveAspectRatio none), so the stroke is pinned to screen
@@ -4821,7 +5880,9 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       // "Stopped running", not "died": the readings cannot tell a crash from a kill from an orderly
       // teardown, and the mark is drawn for all three.
       const stops = series.stops.map((atMs) => `<span class="rpmemdied" style="left:${pct(atMs)}" role="img" aria-label="${esc(`${device} app stopped running at ${replayAt(alignment, atMs)}`)}" title="${esc(`${device} · app stopped running`)}"></span>`).join('');
-      return `<div class="rpmemrail${memoryNearLimit(series) ? ' nearlimit' : ''}" data-rp-memrail="${lane.index}"><svg class="rpmemsvg" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true">${lines}</svg>${spikes}${stops}${peak}</div>`;
+      // Drawn even while collapsed, so expanding is a class flip rather than a re-render that
+      // would reload every pane's recording.
+      return `<div class="rpmemrail${memoryNearLimit(series) ? ' nearlimit' : ''}${trackOpen(lanes[lane.index] || { session: -1, label: '' }) ? '' : ' closed'}" id="rpmemrail-${lane.index}" data-rp-memrail="${lane.index}"><svg class="rpmemsvg" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true">${lines}</svg>${spikes}${stops}${peak}</div>`;
     };
     const rails = timeline.lanes.map((lane) => {
       // Each block carries its instants (for double-click-to-zoom and the sticky label) and a label
@@ -4878,221 +5939,8 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
         </div>
       </div>`;
   };
-  // The Map projection: the trail as a fan-out / fan-in graph. Each authored step is a small hub
-  // card holding the natural-language text; wires fan OUT from it to one screenshot card per
-  // device — every device in its own lane — and all lanes merge BACK into the next step's hub.
-  // Reading down follows the trail, reading across compares devices at that moment. Cards size
-  // to their screenshots (portrait phones narrow, landscape tablets wide), so the world lays out
-  // in normal flow, the wires are drawn from measured positions after layout, and the camera
-  // pans and zooms over the result.
-  const trailMapBody = (lanes, matrix) => {
-    const title = trailScopeTitle();
-    const startDevices = lanes.map((lane) => `<span class="wpdevchip">
-        <span class="wpdot ${esc(lane.outcome)}" role="img" aria-label="${esc(lane.outcomeLabel)}" title="${esc(lane.outcomeLabel)}"></span>
-        <span class="wpdevname">${esc(lane.label)}</span>${lane.duration ? `<span class="wpdevdur">${esc(lane.duration)}</span>` : ''}
-      </span>`).join('');
-    const start = `<section class="wpnode wpstart" data-wp-start>
-        <div class="wpstartkicker">Trail · ${lanes.length} device${lanes.length === 1 ? '' : 's'}</div>
-        <h2 class="wpstarttitle">${esc(title)}</h2>
-        <div class="wpstartdevices">${startDevices}</div>
-      </section>`;
-    const steps = matrix.rows.map((row, i) => {
-      // Each frame carries a pace bar: this device's time on the step as a share of the slowest
-      // device's, so pacing differences read at a glance without leaving the map.
-      const slowestMs = Math.max(...row.cells.map((cell) => (cell && cell.durationMs) || 0), 1);
-      const frames = lanes.map((lane) => {
-        const cell = row.cells[lane.index];
-        const head = (outcome: string) => `<div class="wpframehead"><span class="wpdot ${outcome}" aria-hidden="true"></span><span class="wpframedev">${esc(lane.label)}</span></div>`;
-        // An unreached step keeps the lane's slot (dashed ghost) so lanes hold their x position,
-        // but it gets no wires: the device's chain visibly stops feeding the next hub.
-        if (!cell) return `<div class="wpframe missing">${head('missing')}<div class="wpshot"><span class="wpnotreached">not reached</span></div></div>`;
-        const outcome = trailCellOutcome(cell);
-        const stats = [
-          cell.durationMs != null ? fmtTrailMs(cell.durationMs) : null,
-          cell.toolCount ? `${cell.toolCount} tool${cell.toolCount === 1 ? '' : 's'}` : null,
-          cell.frames.length > 1 ? `${cell.frames.length} frames` : null,
-        ].filter(Boolean).join(' · ');
-        const frameShot = (frame) => `<div class="galshot" data-shot="${esc(frame.file)}" data-shot-run="${lane.session}" data-shot-device="${esc(lane.label)}" data-shot-token="${esc(trailStepToken(row.num))}" data-shot-label="${esc(row.label)}" data-shot-tool="${esc(frame.label)}" role="button" tabindex="0" aria-label="${esc(lane.label)} · ${esc(trailStepToken(row.num))} screenshot: ${esc(frame.label)}"><img alt="${esc(frame.label)}" loading="lazy" /></div>`;
-        // The All screenshots switch applies to the flow too: every frame of the step joins the
-        // card as a strip, instead of the step's final frame alone.
-        const shown = st.trailAll ? cell.frames : (cell.lastFrame ? [cell.lastFrame] : []);
-        const shots = shown.length
-          ? `<div class="wpshots${st.trailAll && shown.length > 1 ? ' all' : ''}">${shown.map((frame) => `<div class="wpshot">${frameShot(frame)}</div>`).join('')}</div>`
-          : `<div class="wpshot"><span class="wpnotreached">no capture</span></div>`;
-        const pace = cell.durationMs != null
-          ? `<span class="wppace" title="${esc(fmtTrailMs(cell.durationMs))} — slowest device took ${esc(fmtTrailMs(slowestMs))}"><span class="wppacefill ${outcome}" style="width:${Math.max(4, Math.round(cell.durationMs / slowestMs * 100))}%"></span></span>`
-          : '';
-        return `<div class="wpframe ${outcome}" data-wp-frame="${i}:${lane.index}">${head(outcome)}${shots}${pace}
-            ${cell.labelDiffers ? `<div class="wpvariant" title="This device's own wording of the step">${esc(cell.label)}</div>` : ''}
-            <div class="wpframefoot"><span class="wpframestats">${esc(stats)}</span><button class="trailopenbtn" type="button" data-trail-open="${lane.session}:${cell.headerId}" aria-label="${esc(trailOpenLabel(row, lane.label))}">Open →</button></div>
-          </div>`;
-      }).join('');
-      return `<section class="wphub" data-wp-hub="${i}">
-          <span class="galchip${row.num === 0 ? ' trailhead' : ''}">${trailStepToken(row.num)}</span><div class="wpnodelabel">${esc(row.label)}</div>
-        </section>
-        <div class="wpframes">${frames}</div>`;
-    }).join('');
-    return `<div class="trailcanvas"><div class="trailworld wpflow${st.trailDir === 'h' ? ' wphoriz' : ''}">
-        <svg class="wpwires" aria-hidden="true"><defs><marker id="trailarrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1 L 9 5 L 0 9 z" /></marker><marker id="trailarrowfail" class="failed" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1 L 9 5 L 0 9 z" /></marker></defs></svg>
-        ${start}${steps}
-      </div></div>`;
-  };
-  // The map camera: drag the background (or scroll) to pan, pinch / ctrl+wheel / the header
-  // buttons to zoom. Camera state lives in st.trailCam so mode flips and Open→ round-trips return
-  // to the same framing — but NOT in the route: a shared link should land on the fitted default,
-  // not wherever the sender happened to leave the canvas.
-  const wireTrailMapCanvas = () => {
-    const canvas = root.querySelector<HTMLElement>('.trailcanvas');
-    if (!canvas) return;
-    const world = canvas.querySelector<HTMLElement>('.trailworld');
-    const horizontal = world.classList.contains('wphoriz');
-    // Nodes size to their screenshots, so the world is measured live rather than precomputed;
-    // fitCamera/zoomedCamera/wirePlan then own the arithmetic (run-report-trail-camera).
-    const fitCam = (whole: boolean) => fitCamera({
-      viewW: canvas.clientWidth || 1,
-      viewH: canvas.clientHeight || 1,
-      worldW: world.offsetWidth || 1,
-      worldH: world.offsetHeight || 1,
-      horizontal,
-      whole,
-    });
-    // The camera persists (st.trailCam) only once the reader has moved it; an untouched camera
-    // keeps re-fitting as lazy screenshots arrive and widen the nodes under it.
-    let touched = !!st.trailCam;
-    let cam: TrailCamera = st.trailCam || fitCam(false);
-    const apply = () => {
-      if (touched) st.trailCam = cam;
-      world.style.transform = `translate(${cam.x}px, ${cam.y}px) scale(${cam.s})`;
-      // Step hubs counter-scale so their text keeps a readable size as the camera pulls back —
-      // the step wording is the map's spine, and a map you can't read the steps of is a wall of
-      // thumbnails. The hub floats in the gap between two ranks, so the growth is capped.
-      world.style.setProperty('--wp-inv', String(hubCounterScale(cam.s)));
-    };
-    apply();
-    // Wires connect measured positions: each hub fans out to that step's frames, and every frame
-    // merges into the next hub. offset* coordinates are pre-transform, so the camera never
-    // invalidates them — only layout changes (a screenshot arriving) do.
-    const wires = world.querySelector<SVGElement>('svg.wpwires');
-    const measure = (el: HTMLElement): WireBox => ({ left: el.offsetLeft, top: el.offsetTop, width: el.offsetWidth, height: el.offsetHeight });
-    const drawWires = () => {
-      if (!wires) return;
-      wires.setAttribute('width', String(world.offsetWidth || 0));
-      wires.setAttribute('height', String(world.offsetHeight || 0));
-      const startNode = world.querySelector<HTMLElement>('[data-wp-start]');
-      const hubs: WireHub[] = Array.from(world.querySelectorAll<HTMLElement>('[data-wp-hub]')).map((hub, i) => ({
-        hub: measure(hub),
-        frames: Array.from(world.querySelectorAll<HTMLElement>(`[data-wp-frame^="${i}:"]`))
-          .map((frame) => ({ box: measure(frame), failed: frame.classList.contains('failed') })),
-      }));
-      const paths = wirePlan({ start: startNode ? measure(startNode) : null, hubs }, horizontal)
-        .map((path) => `<path class="wpwire${path.failed ? ' failed' : ''}" d="${path.d}" marker-end="url(#${path.failed ? 'trailarrowfail' : 'trailarrow'})" />`)
-        .join('');
-      const defs = wires.querySelector('defs');
-      wires.innerHTML = (defs ? defs.outerHTML : '') + paths;
-    };
-    drawWires();
-    // Screenshots arrive one at a time and each one reshapes the world. Redrawing per image would
-    // measure and rebuild the whole overlay dozens of times in a burst, so loads coalesce into a
-    // single frame's work.
-    let pendingFrame = 0;
-    const scheduleRedraw = () => {
-      if (pendingFrame) return;
-      const raf = typeof requestAnimationFrame === 'function' ? requestAnimationFrame : (cb) => setTimeout(cb, 16);
-      pendingFrame = raf(() => {
-        pendingFrame = 0;
-        drawWires();
-        if (!touched) { cam = fitCam(false); apply(); }
-      }) as unknown as number;
-    };
-    world.addEventListener('load', (e) => {
-      if ((e.target as HTMLElement).tagName !== 'IMG') return;
-      scheduleRedraw();
-    }, true);
-    // A step-jump tween in flight yields to ANY manual gesture — a reader who grabs the canvas
-    // mid-animation owns the camera from that instant, no fighting.
-    let tweenFrame = 0;
-    const stopTween = () => {
-      if (tweenFrame && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(tweenFrame);
-      tweenFrame = 0;
-    };
-    const zoomAt = (px: number, py: number, factor: number) => {
-      stopTween();
-      touched = true;
-      cam = zoomedCamera(cam, px, py, factor);
-      apply();
-    };
-    canvas.onwheel = (e: WheelEvent) => {
-      e.preventDefault();
-      const rect = canvas.getBoundingClientRect();
-      // Wheel and pinch both zoom — on a canvas this size, button-only zoom is a dozen clicks from
-      // an overview to a readable step. Panning is the drag, which works from anywhere. (A trackpad
-      // pinch reaches the page as ctrl+wheel, and shift+wheel keeps a one-handed pan.)
-      if (e.shiftKey) { stopTween(); touched = true; cam = { x: cam.x - e.deltaX, y: cam.y - e.deltaY, s: cam.s }; apply(); }
-      else zoomAt(e.clientX - rect.left, e.clientY - rect.top, Math.exp(-e.deltaY * (e.ctrlKey || e.metaKey ? 0.01 : 0.0025)));
-    };
-    let pan: { px: number; py: number; x: number; y: number } | null = null;
-    canvas.onpointerdown = (e: PointerEvent) => {
-      // Interactive pieces keep their clicks (zoom gallery, Open →); everything else — node
-      // surfaces included — is a pan handle, so the canvas drags from anywhere.
-      if ((e.target as HTMLElement).closest && (e.target as HTMLElement).closest('.galshot, button, a')) return;
-      stopTween();
-      pan = { px: e.clientX, py: e.clientY, x: cam.x, y: cam.y };
-      canvas.classList.add('panning');
-      if (canvas.setPointerCapture) canvas.setPointerCapture(e.pointerId);
-    };
-    canvas.onpointermove = (e: PointerEvent) => {
-      if (!pan) return;
-      touched = true;
-      cam = { x: pan.x + (e.clientX - pan.px), y: pan.y + (e.clientY - pan.py), s: cam.s };
-      apply();
-    };
-    canvas.onpointerup = canvas.onpointercancel = () => { pan = null; canvas.classList.remove('panning'); };
-    root.querySelectorAll<HTMLElement>('[data-trail-cam]').forEach((el) => el.onclick = () => {
-      const rect = canvas.getBoundingClientRect();
-      if (el.dataset.trailCam === 'fit') { stopTween(); touched = true; cam = fitCam(true); apply(); }
-      // Zoom about the middle of the canvas, so the content the reader is looking at stays put
-      // instead of sliding toward a corner.
-      else zoomAt(rect.width / 2, rect.height / 2, el.dataset.trailCam === 'in' ? 1.4 : 1 / 1.4);
-    });
-    // ── Arrow keys walk the trail ── each press glides the camera to the next step's whole rank
-    // (its hub plus every device's take on it) and marks the hub, so the map can be READ step by
-    // step instead of only panned. The flight eases out and interpolates zoom geometrically
-    // (tweenCamera): the jump reads as travel across the trail, not a cut.
-    const animateTo = (target: TrailCamera) => {
-      stopTween();
-      touched = true;
-      const raf = typeof requestAnimationFrame === 'function' ? requestAnimationFrame : null;
-      const reduced = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
-      if (!raf || reduced) { cam = target; apply(); return; }
-      const from = cam;
-      const FLIGHT_MS = 340;
-      let start = 0;
-      const step = (now: number) => {
-        if (!start) start = now;
-        const t = Math.min(1, (now - start) / FLIGHT_MS);
-        cam = tweenCamera(from, target, 1 - Math.pow(1 - t, 3));
-        apply();
-        tweenFrame = t < 1 ? raf(step) : 0;
-      };
-      tweenFrame = raf(step);
-    };
-    const clearHubFocus = () => world.querySelectorAll('.wpfocus').forEach((el) => el.classList.remove('wpfocus'));
-    const hubCount = world.querySelectorAll('[data-wp-hub]').length;
-    const focusHub = (i: number) => {
-      const hub = world.querySelector<HTMLElement>(`[data-wp-hub="${i}"]`);
-      if (!hub) return;
-      clearHubFocus();
-      hub.classList.add('wpfocus');
-      // Measured fresh at every press: screenshots keep arriving and reshaping the world, so a
-      // framing computed once at wire time would drift off its step.
-      const box = unionBox([measure(hub),
-        ...Array.from(world.querySelectorAll<HTMLElement>(`[data-wp-frame^="${i}:"]`)).map(measure)]);
-      if (box) animateTo(focusCamera({ viewW: canvas.clientWidth || 1, viewH: canvas.clientHeight || 1, box }));
-    };
-    if (hubCount) trailNavKeys = trailStepNavKeys(hubCount, focusHub, clearHubFocus);
-  };
-  // The Grid's arrow keys: the same cursor over the same steps, but here a step is a row, so the
-  // page scrolls to it and its label lights up.
+  // The Grid's arrow keys walk the steps: a step is a row, so the page scrolls to it and its label
+  // lights up.
   const wireTrailGridNav = () => {
     const rows = Array.from(root.querySelectorAll<HTMLElement>('.trailrowgroup'));
     if (!rows.length) return;
@@ -5192,9 +6040,8 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
         else if (rearm) rearm();
       });
   };
-  // Map and Grid step with the arrow keys too (re-set on every wire pass by whichever projection is
-  // on screen). One cursor implementation serves both: →/↓ next step, ←/↑ previous, Home/End the
-  // ends, Escape lets go. The cursor starts BEFORE the trail, so the first press lands on the
+  // The Grid steps with the arrow keys too (re-set on every wire pass while it is on screen): →/↓
+  // next step, ←/↑ previous, Home/End the ends, Escape lets go. The cursor starts BEFORE the trail, so the first press lands on the
   // trailhead rather than skipping it.
   let trailNavKeys: ((e: KeyboardEvent) => void) | null = null;
   const trailStepNavKeys = (count: number, go: (i: number) => void, clear: () => void) => {
@@ -5522,7 +6369,9 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     const el = <T extends Element = HTMLElement>(selector: string) => wrap.querySelector<T>(selector);
     // Frames come out of the archive as blob/data URLs, so warming them costs no network — but a
     // cold decode still lands as a blank pane mid-playback. Ask for all of them up front.
+    // A recording's still is left alone: the recording itself is what plays there.
     timeline.lanes.forEach((lane) => lane.captures.forEach((capture) => {
+      if (videoShotCaptureId(capture.file) != null) return;
       const src = trailShotSrc(lane.index, capture.file);
       if (src && typeof Image === 'function') { const warm = new Image(); warm.src = src; }
     }));
@@ -5550,7 +6399,10 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     // One media element per recording a lane has (usually one; one per bind for a device bound
     // again), plus the duration its clock needs. Duration only exists once the browser has read the
     // container, so until then videoClipTimeAt declines and the lane shows screenshots — the pane
-    // is never blank waiting on metadata.
+    // is never blank waiting on metadata. The metadata lands after the first paint, and nothing else
+    // repaints a paused replay, so learning a duration repaints — otherwise the lane stays on "no
+    // capture yet" over a loaded recording until the reader plays or scrubs. Bound once paint exists.
+    let repaintForMedia = () => {};
     type ReplayMedia = { vid: HTMLVideoElement; clip: VideoClip; t0: number | null; duration: number | null };
     const media: Array<ReplayMedia[] | null> = timeline.lanes.map((lane) => {
       const entries = trailClips(lane.index).map((clip, n): ReplayMedia | null => {
@@ -5558,7 +6410,9 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
         if (!vid) return null;
         const entry: ReplayMedia = { vid, clip, t0: trailLaneT0(lane.index), duration: null };
         const readDuration = () => {
+          const learned = entry.duration == null && Number.isFinite(vid.duration) && vid.duration > 0;
           if (Number.isFinite(vid.duration) && vid.duration > 0) entry.duration = vid.duration;
+          if (learned) repaintForMedia();
           // Sizing the frame from the video's own pixels keeps the pane's aspect honest even before
           // a single screenshot has loaded — from the recording on screen, or the first before any is.
           const memo = shown[lane.index];
@@ -5775,6 +6629,21 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
         rails.setAttribute('aria-valuetext', replayPositionLabel(alignment, st.trailT));
       }
     };
+    // Where the view first opened, and so where the head still is if the reader has not moved it. The
+    // opening only weighs recordings that have loaded (replayRecordingStartsMs), so one that loads
+    // after the first paint may move it earlier — while the head is still where it was opened.
+    let opened: number | null = null;
+    const openingMs = () => clampTime(replayOpeningMs(timeline.firstCaptureMs, replayRecordingStartsMs(
+      timeline.lanes.map((lane) => ({ index: lane.index, heldAtStart: laneHeldAtStart(lane.index), recordings: media[lane.index] || [] })),
+      alignment,
+    )), total);
+    // Playing repaints every frame already; paused, redo the instant on screen in place.
+    repaintForMedia = () => {
+      if (playing || st.trailT < 0) return;
+      if (opened != null && st.trailT === opened) opened = openingMs();
+      else opened = null;
+      paint(opened ?? st.trailT, false);
+    };
     // Also the authority on whether the recordings should be rolling: syncMedia reads this flag, so
     // every route into and out of playback (button, space, scrub, the loop's own end) moves the
     // video with it and no path can leave a lane playing on underneath a paused replay.
@@ -5840,14 +6709,40 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     wrap.querySelectorAll<HTMLElement>('[data-rp-pick]').forEach((pick) => {
       pick.onclick = (e) => { if (e) e.stopPropagation(); const index = +pick.dataset.rpPick!; selectLane(st.trailLane === index ? null : index); };
     });
+    // A data track's name expands or collapses it in place: the rail is already drawn, so a re-render
+    // (which would reload every pane's recording mid-playback) buys nothing. The state lives in `st`
+    // so the next render draws the track the way the reader left it.
+    wrap.querySelectorAll<HTMLButtonElement>('[data-rp-track]').forEach((toggle) => {
+      toggle.onclick = (e) => {
+        if (e) e.stopPropagation();
+        const key = toggle.dataset.rpTrack!;
+        const open = !replayTrackOpen(st.trailTracksOpen, key);
+        if (open) st.trailTracksOpen[key] = true; else delete st.trailTracksOpen[key];
+        toggle.classList.toggle('closed', !open);
+        toggle.setAttribute('aria-expanded', String(open));
+        toggle.title = toggle.title.replace(/— (collapse|expand) the/, `— ${open ? 'collapse' : 'expand'} the`);
+        const rail = wrap.querySelector<HTMLElement>(`[data-rp-memrail="${toggle.dataset.rpTrackLane}"]`);
+        if (rail) rail.classList.toggle('closed', !open);
+        // The rows changed height, so they may start or stop overflowing the strip's cap.
+        syncRows();
+      };
+      // The names column is clipped and follows the rails' scroll, so tabbing to a toggle below the
+      // fold scrolls the names alone; bring the rails along or row N drifts off its name.
+      toggle.onfocus = () => {
+        if (scroller && namesCol && namesCol.scrollTop !== scroller.scrollTop) { scroller.scrollTop = namesCol.scrollTop; syncRows(); }
+      };
+    });
     // The stage frame enlarges, like every other screenshot in the report: the zoom walks THIS
     // device's captures, which is the per-device filmstrip the other projections can't offer.
     timeline.lanes.forEach((lane) => {
       const screen = el(`[data-rp-screen="${lane.index}"]`);
       if (!screen) return;
-      (screen as HTMLElement).onclick = () => {
-        const entries = lane.captures.map((capture) => ({
-          src: trailShotSrc(lane.index, capture.file),
+      // Async because a tree-only run's frames come from its recording, taken on first ask.
+      (screen as HTMLElement).onclick = async () => {
+        const session = trailLaneSession(lane.index);
+        const srcs = await Promise.all(lane.captures.map((capture) => captureSrcFor(session, capture.file)));
+        const entries = lane.captures.map((capture, i) => ({
+          src: srcs[i],
           token: capture.stepNum === 0 ? 'TRAILHEAD' : `STEP ${capture.stepNum}`,
           label: capture.stepLabel,
           tool: capture.label,
@@ -6054,8 +6949,10 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     // does not, so bring its rail back into view.
     if (st.trailLane != null && timeline.lanes[st.trailLane]) revealRail(st.trailLane);
     // st.trailT starts at the sentinel -1 meaning "never placed": open where the first device
-    // actually has something to show, not on a row of empty panes. Home still parks it at 0.
-    paint(st.trailT < 0 ? timeline.firstCaptureMs : st.trailT, false);
+    // actually has something to show — a capture or a loaded recording — not on a row of empty
+    // panes. Home still parks it at 0.
+    if (st.trailT < 0) opened = openingMs();
+    paint(opened ?? st.trailT, false);
     // A data refresh that arrived mid-playback hands the run back, from the instant it was at.
     if (resume) play();
   };
@@ -6067,10 +6964,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     const matrix = trailMatrix();
     const scope = trailScopeSessions();
     const stepCount = matrix.rows.filter((row) => row.num > 0).length;
-    const zoom = st.trailMode === 'map'
-      ? `<div class="lightboxzoom" role="group" aria-label="Map zoom"><button type="button" class="lightboxzoombtn" data-trail-cam="out" aria-label="Zoom out" title="Zoom out (or scroll on the map)">−</button><button type="button" class="lightboxzoombtn" data-trail-cam="in" aria-label="Zoom in" title="Zoom in (or scroll on the map)">+</button><button type="button" class="lightboxzoombtn trailfitbtn" data-trail-cam="fit" aria-label="Fit the trail" title="Fit as much of the trail as stays readable">Fit</button></div>`
-      : '';
-    const showAll = st.trailMode === 'steps' || st.trailMode === 'map'
+    const showAll = st.trailMode === 'steps'
       ? `<button class="lightboxtoggle" type="button" role="switch" id="trailall" aria-checked="${st.trailAll}"><span class="lightboxtoggletrack" aria-hidden="true"><span class="lightboxtogglethumb"></span></span><span>All screenshots</span></button>`
       : '';
     // Replay's clock: wall time, or one segment per step that every device starts together. Only
@@ -6079,12 +6973,6 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     // shared authored step, which a positional stage's rows are not.
     const alignSwitch = st.trailMode === 'replay' && matrix.join === 'step' && replayable(buildReplayTimeline(matrix))
       ? `<button class="lightboxtoggle" type="button" role="switch" id="trailalign" aria-checked="${st.trailAlign === 'step'}" title="Give every step one segment, as wide as the slowest device's time on it, so the devices realign at each step instead of drifting apart on the wall clock"><span class="lightboxtoggletrack" aria-hidden="true"><span class="lightboxtogglethumb"></span></span><span>Align by step</span></button>`
-      : '';
-    const dir = st.trailMode === 'map'
-      ? `<div class="trailmodes" role="group" aria-label="Map orientation">
-          <button class="trailmodebtn${st.trailDir !== 'h' ? ' active' : ''}" type="button" data-trail-dir="v" aria-pressed="${st.trailDir !== 'h'}" title="Flow top to bottom">↓</button>
-          <button class="trailmodebtn${st.trailDir === 'h' ? ' active' : ''}" type="button" data-trail-dir="h" aria-pressed="${st.trailDir === 'h'}" title="Flow left to right">→</button>
-        </div>`
       : '';
     // One chip per loaded run, shown or not: with five devices on stage the reader often wants just
     // the two that diverge, so a chip toggles its lane rather than the set being all-or-nothing.
@@ -6113,21 +7001,21 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     const laneCount = trailDeviceMode()
       ? `${lanes.length} devices, one run`
       : `${lanes.length}${scope.length > lanes.length ? ` of ${scope.length}` : ''} device${scope.length === 1 ? '' : 's'}`;
-    return `<div class="trailcontext trailtabtools"><div class="trailsub">${laneCount} · ${stepCount} step${stepCount === 1 ? '' : 's'} · ${trailDeviceMode() ? 'one trail, one lane per device' : 'same trail, one lane per run'}${st.trailMode === 'replay' ? '' : ' <span class="trailkeys">· ← → walks the steps</span>'}</div><div class="trailtools">${laneBar}${dir}${showAll}${alignSwitch}${zoom}${perfetto}</div></div>`;
+    return `<div class="trailcontext trailtabtools"><div class="trailsub">${laneCount} · ${stepCount} step${stepCount === 1 ? '' : 's'} · ${trailDeviceMode() ? 'one trail, one lane per device' : 'same trail, one lane per run'}${st.trailMode === 'replay' ? '' : ' <span class="trailkeys">· ← → walks the steps</span>'}</div><div class="trailtools">${laneBar}${showAll}${alignSwitch}${perfetto}</div></div>`;
   };
   // The projection itself. `st.trailMode` is the open tab (see TRAIL_TABS), so the tab nav and
   // this cannot disagree about which one is drawn.
   const renderTrailBody = () => {
     const lanes = trailLanes();
     const matrix = trailMatrix();
-    // Only Replay reads the event streams, so only Replay pays to decompress them. Map and Grid
+    // Only Replay reads the event streams, so only Replay pays to decompress them. The Grid
     // would otherwise inflate every scoped run's events for rails they never draw.
     if (st.trailMode === 'replay') {
       armReplayInflation(trailScopeSessions().map((i) => SESSIONS[i]), () => onTrailTab() && st.trailMode === 'replay');
       const replay = trailReplayTimeline(matrix);
       return trailReplayBody(lanes, matrix, replay.timeline, replay.alignment);
     }
-    return st.trailMode === 'steps' ? trailStepsBody(lanes, matrix) : trailMapBody(lanes, matrix);
+    return trailStepsBody(lanes, matrix);
   };
 
   // ── Compare view: run-vs-run tool-call, event-stream and screen diffs ──
@@ -6200,8 +7088,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       // Sequential, not Promise.all: decoding two full-resolution frames per scene is the cost,
       // and a 40-scene decode storm would freeze the tab the reader is scrolling.
       cmpDiffQueue = cmpDiffQueue.then(async () => {
-        const baseSrc = safeImageSrc(((SESSIONS[baseRun] || {}).shots || {})[scene.baselineFile]);
-        const vsSrc = safeImageSrc(((SESSIONS[vsRun] || {}).shots || {})[scene.currentFile]);
+        const [baseSrc, vsSrc] = await Promise.all([captureSrcFor(baseRun, scene.baselineFile), captureSrcFor(vsRun, scene.currentFile)]);
         const [basePx, vsPx] = await Promise.all([baseSrc ? loadScenePixels(baseSrc) : null, vsSrc ? loadScenePixels(vsSrc) : null]);
         if (!basePx || !vsPx) { cmpSceneDiffs.set(key, { state: 'unavailable' }); return; }
         const result = diffPixels(basePx, vsPx);
@@ -6488,18 +7375,20 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     // The screen a run was looking at when this call happened: the call's own capture, else the
     // most recent one before it — a tool that captured nothing still ran ON some screen, and that
     // screen is the context. Children are searched too: in a folded turn they often hold the only
-    // frames. Returns a file key into that session's shots map, or null when nothing precedes.
+    // frames. Returns a file key into that session's shots map, or a capture's video-frame key
+    // (captureShotFile), or null when nothing precedes.
     const frameFileAt = (sessionIndex, stepI) => {
       const s = SESSIONS[sessionIndex];
       const trace = (s && s.trace) || [];
-      const shots = (s && s.shots) || {};
       const at = trace.findIndex((t) => t && t.i === stepI);
       if (at < 0) return null;
       for (let k = at; k >= 0; k--) {
-        if (trace[k].screenshotFile && shots[trace[k].screenshotFile]) return trace[k].screenshotFile;
+        const own = captureShotFile(trace[k]);
+        if (captureShownIn(sessionIndex, own)) return own;
         const kids = trace[k].children || [];
         for (let c = kids.length - 1; c >= 0; c--) {
-          if (kids[c].screenshotFile && shots[kids[c].screenshotFile]) return kids[c].screenshotFile;
+          const file = captureShotFile(kids[c]);
+          if (captureShownIn(sessionIndex, file)) return file;
         }
       }
       return null;
@@ -7065,8 +7954,8 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     // what it is.
     const detailAllRunsCompare = allRunsCompareHref(st.session);
     const lightboxStepFrameCount = groupTrace().filter((group) => [group.header, ...group.items]
-      .some((t) => t && ((t.screenshotFile && D.shots[t.screenshotFile])
-        || (t.children || []).some((c) => c.screenshotFile && D.shots[c.screenshotFile])))).length;
+      .some((t) => t && (lightboxShotAvailable(captureShotFile(t))
+        || (t.children || []).some((c) => lightboxShotAvailable(captureShotFile(c)))))).length;
     const hasShots = lightboxStepFrameCount > 0;
     // The trail projections, beside the run's other views. Replay leads: playing the run back with
     // every device on one clock is what most readers come here for, and it used to be two clicks
@@ -7074,7 +7963,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     // no trace) simply doesn't get them.
     const trailTab = TRAIL_TABS.indexOf(st.tab) >= 0;
     const trailTabs: string[][] = detailTrailAvailable(st.session)
-      ? [['replay', 'Replay'], ['steps', 'Grid'], ['map', 'Map']]
+      ? [['replay', 'Replay'], ['steps', 'Grid']]
       : [];
     // A chunked report parses a run's trace on first open, so the OTHER lanes of this run's trail
     // can still be streaming when the tab is deep-linked or clicked into. Drawing the stage anyway
@@ -7091,6 +7980,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       ...(D.recordingYaml || D.originalYaml ? [['recording', 'YAML']] : []),
       ...(D.deviceLog || D.deviceLogGz ? [['device', 'Device logs']] : []),
       ...((D.network && D.network.length) || D.networkGz ? [['network', 'Network']] : []),
+      ...(D.visibleStrings && D.visibleStrings.length ? [['strings', 'Strings']] : []),
       ['info', 'Info'],
     ];
     const body = trailLanesLoading
@@ -7104,6 +7994,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       : st.tab === 'recording' ? renderRecording()
       : st.tab === 'device' ? renderDevice()
       : st.tab === 'network' ? renderNetwork()
+      : st.tab === 'strings' ? renderStrings()
       : renderInfo();
     const shotCount = screenshotEntries(D).length;
     const logsAvailable = hasLogs(D);
@@ -7128,7 +8019,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     // in the host's own run actions.
     // The trail projections carry a toolbar of their own — which devices are on stage, and the
     // controls that shape the projection. It rides under the tab nav rather than inside <main>,
-    // whose layout the Map and Replay stages own outright.
+    // whose layout the Replay stage owns outright.
     const trailToolbar = trailTab && !trailLanesLoading ? renderTrailToolbar() : '';
     const header = EMBEDDED
       ? `<header class="detailheader notitle"><div class="tabrow">${tabsNav}<div class="detailactions">${exportMenu}</div></div>${trailToolbar}</header>`
@@ -7142,7 +8033,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       </header>`;
     root.innerHTML = `
       ${header}
-      <main class="${trailLanesLoading ? '' : st.tab === 'timeline' ? 'timelinemain' : trailTab ? `trailmain${st.tab === 'map' ? ' trailmapmain' : ''}${st.tab === 'replay' ? ' trailreplaymain' : ''}` : ''}">${body}</main>
+      <main class="${trailLanesLoading ? '' : st.tab === 'timeline' ? 'timelinemain' : trailTab ? `trailmain${st.tab === 'replay' ? ' trailreplaymain' : ''}` : ''}">${body}</main>
       ${!trailLanesLoading && st.tab === 'timeline' && D.trace.length ? scrubberHtml(timelineAxis(), streamEvents(), selectedEntryIndex()) : ''}
       <footer class="detailfooter"><div class="detailfootermeta" tabindex="0" aria-label="Run metadata">${footerItems}${runOn}</div></footer>`;
     wire();
@@ -7152,6 +8043,15 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     if (previousTimelineScroll != null) {
       const timelineList = root.querySelector<HTMLElement>('.timelinescroll');
       if (timelineList) timelineList.scrollTop = previousTimelineScroll;
+    }
+    if (pendingTrackReveal != null && pendingTrackReveal.session !== st.session) pendingTrackReveal = null;
+    if (pendingTrackReveal != null && st.tab === 'timeline') {
+      const key = pendingTrackReveal.key;
+      if (Array.from(root.querySelectorAll<HTMLElement>('.timelineevent[data-lazykey]')).some((el) => el.dataset.lazykey === key)) {
+        pendingTrackReveal = null;
+        reopenTimelineEvents(new Set([key]));
+        centerTimelineRow(`.timelineevent[data-lazykey="${key.replace(/["\\]/g, '\\$&')}"]`);
+      }
     }
     if (previousMainScroll != null) {
       const main = root.querySelector<HTMLElement>('main');
@@ -7185,6 +8085,69 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   let zoomEl = null;
   let zoomReturnFocus = null;
   let zoomMove = null;
+  // The zoomed still's player, when its step was recorded: the still is the stretch's last frame,
+  // and scrubbing back or playing shows the recording leading up to it.
+  let zoomClip: { player: ShotClipPlayer; ui: ShotClipBar; layer: HTMLElement } | null = null;
+  const stopZoomClip = () => {
+    const active = zoomClip;
+    if (!active) return;
+    zoomClip = null;
+    active.player.stop();
+    if (active.ui.bar.parentNode) active.ui.bar.parentNode.removeChild(active.ui.bar);
+    if (active.layer.classList) active.layer.classList.remove('clipshown');
+  };
+  // Space plays or pauses, `,` and `.` step a frame back or forward — except where a focused
+  // control already owns the key.
+  const zoomClipKey = (e: KeyboardEvent): boolean => {
+    if (!zoomClip) return false;
+    const target = e.target as HTMLElement | null;
+    const onControl = !!(target && typeof target.closest === 'function' && target.closest('button, input, select, textarea'));
+    if (e.key === ' ' && !onControl) { e.preventDefault(); zoomClip.player.toggle(); return true; }
+    if (e.key === ',' || e.key === '.') { e.preventDefault(); zoomClip.player.stepFrames(e.key === ',' ? -1 : 1); return true; }
+    return false;
+  };
+  const dataUrlBlob = (url: string): Blob | null => {
+    const m = /^data:([^;,]*)(;base64)?,(.*)$/s.exec(url);
+    if (!m) return null;
+    const bytes = m[2] ? Uint8Array.from(atob(m[3]), (c) => c.charCodeAt(0)) : new TextEncoder().encode(decodeURIComponent(m[3]));
+    return new Blob([bytes], { type: m[1] || 'application/octet-stream' });
+  };
+  // "Open frame": the frame on screen, in a new tab — the screenshot itself when resting on it,
+  // else the recording's frame drawn off the element. Browsers won't navigate a tab to a data: URL,
+  // so the screenshot goes as a blob. Where no tab can open (a popup blocker, or the desktop app's
+  // web view, which drops window.open like it drops downloads) or the frame can't be read (a
+  // recording from another origin without CORS taints the canvas), the button says so instead.
+  const openShotFrame = (player: ShotClipPlayer, stillSrc: string, button: HTMLButtonElement) => {
+    let url: string | null = null;
+    let owned = false;
+    try {
+      if (player.atEnd()) {
+        const blob = /^data:/i.test(stillSrc) ? dataUrlBlob(stillSrc) : null;
+        if (blob) { url = URL.createObjectURL(blob); owned = true; } else url = stillSrc;
+      } else {
+        const source = clipFrameSource(player.vid);
+        const width = (source as HTMLVideoElement).videoWidth || source.width;
+        const height = (source as HTMLVideoElement).videoHeight || source.height;
+        const canvas = document.createElement('canvas');
+        canvas.width = width; canvas.height = height;
+        const g = canvas.getContext('2d');
+        if (!g || !width || !height) throw new Error('no frame');
+        g.drawImage(source, 0, 0, width, height);
+        const blob = dataUrlBlob(canvas.toDataURL('image/png'));
+        if (blob) { url = URL.createObjectURL(blob); owned = true; }
+      }
+    } catch (err) { url = null; }
+    if (!url) { button.textContent = "Can't open this frame"; button.disabled = true; return; }
+    // Not 'noopener': that makes window.open return null even when the tab opened, and null is the
+    // only sign that nothing did. The opener is cut by hand instead.
+    const tab = window.open(url, '_blank');
+    if (!tab) {
+      if (owned) URL.revokeObjectURL(url);
+      button.textContent = "Can't open a tab here"; button.disabled = true; return;
+    }
+    try { tab.opener = null; } catch (err) { /* already cut */ }
+    if (owned) { const opened = url; setTimeout(() => URL.revokeObjectURL(opened), 60_000); }
+  };
   // How far a screenshot can be magnified past its fitted size — enough to read fine print on a
   // dense screen without the picture dissolving into visible pixels.
   const ZOOM_IMG_MAX_SCALE = 4;
@@ -7196,10 +8159,16 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   // it as HTML is safe.
   const closeZoom = () => {
     if (!zoomEl) return;
+    stopZoomClip();
     zoomEl.remove(); zoomEl = null; zoomMove = null;
-    if (zoomReturnFocus && zoomReturnFocus.focus) zoomReturnFocus.focus();
+    if (zoomReturnFocus && zoomReturnFocus.focus) {
+      shotClipQuietFocus = true;
+      try { zoomReturnFocus.focus(); } finally { shotClipQuietFocus = false; }
+    }
   };
-  const openZoom = (src: string, markup?: string, gallery: { src: string; token?: string; label?: string; tool?: string; device?: string }[] = [{ src }], startIndex = 0) => {
+  const openZoom = (src: string, markup?: string, gallery: { src: string; token?: string; label?: string; tool?: string; device?: string; clip?: ShotClipRef }[] = [{ src }], startIndex = 0) => {
+    // The zoom plays the stretch itself; the thumbnail it opened from goes back to its still.
+    stopShotClip();
     zoomReturnFocus = document.activeElement;
     zoomEl = document.createElement('div'); zoomEl.className = gallery.length > 1 ? 'zoom haslist' : 'zoom';
     zoomEl.setAttribute('role', 'dialog'); zoomEl.setAttribute('aria-modal', 'true'); zoomEl.setAttribute('aria-label', 'Expanded screenshot'); zoomEl.tabIndex = -1;
@@ -7295,6 +8264,27 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     const show = () => {
       const entry = gallery[galleryIndex];
       big.src = entry.src;
+      stopZoomClip();
+      if (entry.clip && !prefersReducedMotion()) {
+        const ui = buildShotClipBar('zoomclipbar');
+        const open = document.createElement('button'); open.type = 'button'; open.className = 'shotclipbtn shotclipopen';
+        open.textContent = 'Open frame'; open.title = 'Open the frame on screen in a new tab';
+        ui.bar.appendChild(open);
+        const player = createShotClipPlayer(entry.clip, ui, {
+          surface: 'zoom',
+          autoplay: false,
+          // Over the still and under its tap/swipe marks, inside the layer that zooms and pans.
+          mount: (vid) => layer.insertBefore(vid, big.nextSibling),
+          onshown: (shown) => { if (layer.classList) layer.classList.toggle('clipshown', shown); },
+          onfail: () => { stopZoomClip(); zoomEl.className = zoomEl.className.replace(' hasclip', ''); },
+        });
+        if (player) {
+          zoomClip = { player, ui, layer };
+          open.onclick = () => openShotFrame(player, entry.src, open);
+          wrap.appendChild(ui.bar);
+        }
+      }
+      zoomEl.className = `zoom${gallery.length > 1 ? ' haslist' : ''}${zoomClip ? ' hasclip' : ''}`;
       // A new screenshot opens fitted, not wherever the last one was left zoomed and panned to.
       cam = { x: 0, y: 0, s: 1 };
       applyCam();
@@ -7346,7 +8336,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     return `<div class="txpanelhead">
       <div class="detailedge"><button type="button" class="back" data-tx-close aria-label="Back to report" title="Back to report">${BACK_ICON_SVG}</button></div>
       <div class="txpaneltitle">
-        <div class="txpanelidentity"><span class="txsteptoken">${esc(context.stepToken)}</span><span class="h" id="txpanel-title">LLM transcript</span><span class="txcallposition">Call ${callAt >= 0 ? callAt + 1 : i + 1} of ${step ? step.calls.length : D.llm.length}</span></div>
+        <div class="txpanelidentity"><span class="txsteptoken">${esc(context.stepToken)}</span><span class="h" id="txpanel-title">${r.kind === 'decision' ? 'Decision transcript' : 'LLM transcript'}</span><span class="txcallposition">Call ${callAt >= 0 ? callAt + 1 : i + 1} of ${step ? step.calls.length : D.llm.length}</span></div>
         <div class="txpanelmeta">${meta}</div>
       </div>
       <nav class="txnav" aria-label="Transcript navigation">
@@ -7630,7 +8620,14 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     const row = D.trace.find((t) => t.i === inspState.step);
     const hier = stepHierarchy(inspState.step);
     const model = inspectedModel();
-    const shot = row && row.screenshotFile ? safeImageSrc(D.shots[row.screenshotFile]) || null : null;
+    const shotFile = captureShotFile(row);
+    const shot = captureSrcIn(st.session, shotFile);
+    // A recording's still still being taken paints in when it lands, or its placeholder clears when
+    // it fails, if this step is still open. A failure is cached, so the repaint asks nothing again.
+    if (!shot && captureShownIn(st.session, shotFile)) {
+      const step = inspState.step;
+      void captureSrcFor(st.session, shotFile).then(() => { if (inspectorEl && inspState.step === step) paintInspector(); });
+    }
     const anchorDims = inspectorAnchorDims();
     const shape = inspectorShape(anchorDims);
     let body;
@@ -8057,10 +9054,11 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     inspectorHistoryPushed = pushHistory ? writeRoute(false) : historyBacked;
   };
 
-  const centerTimelineSelection = (immediate = false) => {
+  // Scroll the Timeline list so the row `selector` names sits in the middle of it (or at its top, when taller).
+  const centerTimelineRow = (selector: string, immediate = false) => {
     const center = () => {
       const list = root.querySelector<HTMLElement>('.timelinescroll');
-      const selected = root.querySelector<HTMLElement>(`[data-step="${st.step}"]`);
+      const selected = root.querySelector<HTMLElement>(selector);
       if (!list || !selected || !list.scrollTo || !list.getBoundingClientRect || !selected.getBoundingClientRect) return;
       const scrolls = (el: HTMLElement) => el.scrollHeight > el.clientHeight + 1
         && (typeof getComputedStyle === 'undefined' || /(auto|scroll)/.test(getComputedStyle(el).overflowY));
@@ -8072,20 +9070,197 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       }
       const listRect = scroller.getBoundingClientRect();
       const selectedRect = selected.getBoundingClientRect();
-      const top = Math.max(0, scroller.scrollTop + selectedRect.top - listRect.top - (scroller.clientHeight - selectedRect.height) / 2);
+      // A row taller than the list (an opened event) leads with its top, so its summary line —
+      // what the reader clicked to see — is on screen rather than the middle of its body. Its top
+      // goes under the phase and step headers stuck over it (position: sticky), not behind them.
+      let stuck = 0;
+      if (selectedRect.height > scroller.clientHeight && typeof getComputedStyle !== 'undefined') {
+        for (let parent = selected.parentElement; parent && parent !== scroller; parent = parent.parentElement) {
+          for (const sibling of Array.from(parent.children) as HTMLElement[]) {
+            if (sibling.contains(selected)) continue;
+            const style = getComputedStyle(sibling);
+            if (style.position === 'sticky') stuck = Math.max(stuck, (parseFloat(style.top) || 0) + sibling.offsetHeight);
+          }
+        }
+      }
+      const inset = selectedRect.height > scroller.clientHeight ? stuck + 8 : (scroller.clientHeight - selectedRect.height) / 2;
+      const top = Math.max(0, scroller.scrollTop + selectedRect.top - listRect.top - inset);
       const reducedMotion = typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches;
       scroller.scrollTo({ top, behavior: immediate || reducedMotion ? 'auto' : 'smooth' });
     };
     if (typeof requestAnimationFrame === 'undefined') center();
     else requestAnimationFrame(() => requestAnimationFrame(center));
   };
+  const centerTimelineSelection = (immediate = false) => centerTimelineRow(`[data-step="${st.step}"]`, immediate);
   // Select the timeline entry at index `p` — a trace row, or one folded dispatch inside it: the
   // shared landing sequence for every explicit timeline navigation (transport buttons, scrubber,
   // arrow keys).
+  // ── Seeking the Timeline ──────────────────────────────────────────────────────────────────────
+  // A click or drag on the scrubber puts the head at the instant under the pointer, not only on
+  // the nearest step: the recording shows that moment and the list selects the entry that was on
+  // screen then. Within a few pixels of a step the head lands ON the step, so the steps stay easy
+  // to hit; ←/→ still walk entry to entry.
+  let timelineSeekDragging = false;
+  // An attribute value inside a double-quoted selector: stream names are producer-chosen text.
+  const cssAttr = (value: string) => value.replace(/["\\]/g, '\\$&');
+  const paintTimelineHead = (f: number) => {
+    const head = root.querySelector<HTMLElement>('.scrubhead');
+    if (head) head.style.left = `${f * 100}%`;
+    root.querySelectorAll<HTMLElement>('[data-tltrackhead]').forEach((line) => { line.style.left = `${f * 100}%`; });
+  };
+  // What a pointer at `clientX` on the scrubber lands on — shared by hover and press, so the pane a
+  // hover previews is the one a press selects. Within a few pixels of a step it lands ON the step;
+  // elsewhere on the entry on screen at that instant. A position with no instant of its own — on
+  // a step, or between entries that share one time (an untimed row repeats the one before) — holds
+  // no seek: its instant would draw the head back at the earlier entry.
+  const scrubPointAt = (axis: ReturnType<typeof timelineAxis>, scrub: HTMLElement, clientX: number) => {
+    const entries = timelineEntries();
+    const selectable = (i: number) => isSelectableTimelineEntry(entries[i]);
+    const r = scrub.getBoundingClientRect();
+    const width = Math.max(1, r.width);
+    const f = snapFraction(Math.min(1, Math.max(0, (clientX - r.left) / width)), axis.stepFrac.filter((_, i) => selectable(i)), 6 / width);
+    const index = entryAtOrBefore(axis.stepFrac, selectable, f);
+    const onEntry = index >= 0 && axis.stepFrac[index] === f;
+    const ms = onEntry ? null : axis.fracTs(f);
+    const back = ms != null ? axis.tsFrac(ms) : null;
+    return { f, index, ms: back != null && Math.abs(back - f) < 1e-6 ? ms : null };
+  };
+  const wireTimelineSeek = (scrub: HTMLElement) => {
+    const axis = timelineAxis();
+    const entries = timelineEntries();
+    const resolve = (e: { clientX: number }) => scrubPointAt(axis, scrub, e.clientX);
+    const paint = (at: { f: number; index: number; ms: number | null }) => {
+      const entry = entries[at.index];
+      paintTimelineHead(at.f);
+      timelineScrubMs = at.ms;
+      timelinePreview = entry ? { step: entry.row.i, kid: entry.kid } : null;
+      paintTimelinePane(!!tlVideo());
+    };
+    const commit = (at: { f: number; index: number; ms: number | null }) => {
+      timelineScrubMs = null;
+      timelinePreview = null;
+      const entry = entries[at.index];
+      if (!entry) return;
+      st.step = entry.row.i; st.kid = entry.kid;
+      st.tlSeek = at.ms != null ? { ms: at.ms, step: entry.row.i, kid: entry.kid } : null;
+      revealTimelineStep(st.step); writeRoute(true); render(true); centerTimelineSelection();
+    };
+    let pointer: number | null = null;
+    scrub.onpointerdown = (e: PointerEvent) => {
+      if (e.button != null && e.button !== 0) return;
+      stopTimeline();
+      pointer = e.pointerId;
+      timelineSeekDragging = true;
+      if (scrub.setPointerCapture) { try { scrub.setPointerCapture(e.pointerId); } catch (err) { /* not capturable */ } }
+      paint(resolve(e));
+    };
+    const move = scrub.onpointermove;
+    scrub.onpointermove = (e: PointerEvent) => {
+      if (timelineSeekDragging && e.pointerId === pointer) paint(resolve(e));
+      if (move) move.call(scrub, e);
+    };
+    const finish = (e: PointerEvent, keep: boolean) => {
+      if (!timelineSeekDragging || e.pointerId !== pointer) return;
+      timelineSeekDragging = false;
+      pointer = null;
+      if (keep) commit(resolve(e));
+      else { timelineScrubMs = null; timelinePreview = null; render(true); }
+    };
+    scrub.onpointerup = (e: PointerEvent) => finish(e, true);
+    scrub.onpointercancel = (e: PointerEvent) => finish(e, false);
+  };
+  // The tracks: the panel's button, each track's name, and the marks. A mark opens its event where
+  // every event already opens — in the Timeline's event list, beside the step it happened in — so
+  // there is one place to read an event, and the tracks never grow a panel that squeezes the page.
+  const selectTimelineTrackMark = (mark: TrackMark, focusRail: string | null) => {
+    const hit = timelineTrackEvent(mark.key);
+    if (!hit) return;
+    stopTimeline();
+    st.tlTrackSel = mark.key;
+    // The list only shows the streams the reader picked; the one they just clicked into joins them.
+    if (st.tlStreams.indexOf(hit.streamIndex) < 0) st.tlStreams = [...st.tlStreams, hit.streamIndex].sort((a, b) => a - b);
+    // Seek to the event: the screen shows what was up when it happened.
+    const axis = timelineAxis();
+    const entries = timelineEntries();
+    const f = axis.tsFrac(mark.t);
+    const index = f != null ? entryAtOrBefore(axis.stepFrac, (i) => isSelectableTimelineEntry(entries[i]), f) : -1;
+    const entry = entries[index];
+    if (entry) {
+      st.step = entry.row.i; st.kid = entry.kid;
+      st.tlSeek = { ms: mark.t, step: entry.row.i, kid: entry.kid };
+      revealTimelineStep(st.step);
+    }
+    // The list files an event under the last row that started at or before it (eventBuckets), which
+    // can be a step other than the selected entry's — a header, or the next step's opening row —
+    // so that row's step is opened too, or the event would land inside a collapsed body.
+    let owner = null;
+    for (const row of D.trace) { if (row.ts != null && row.ts <= mark.t) owner = row; }
+    if (owner) {
+      revealTimelineStep(owner.i);
+      const headerId = groupHeaderIdOf(owner.i);
+      if (headerId != null && headerId !== groupHeaderIdOf(st.step)) st.stepsOpen[headerId] = true;
+    }
+    pendingTrackReveal = { session: st.session, key: mark.key };
+    writeRoute(true); render(true);
+    if (focusRail != null) root.querySelector<HTMLElement>(`[data-tltrack-rail="${cssAttr(focusRail)}"]`)?.focus({ preventScroll: true });
+  };
+  const clearTimelineTrackSelection = (focusRail: string | null) => {
+    if (st.tlTrackSel == null) return;
+    st.tlTrackSel = null;
+    render(true);
+    if (focusRail != null) root.querySelector<HTMLElement>(`[data-tltrack-rail="${cssAttr(focusRail)}"]`)?.focus({ preventScroll: true });
+  };
+  const wireTimelineTracks = () => {
+    const toggle = document.getElementById('tltracksbtn');
+    if (toggle) toggle.onclick = () => {
+      st.tlTracksOpen = !st.tlTracksOpen;
+      render(true);
+      document.getElementById('tltracksbtn')?.focus({ preventScroll: true });
+    };
+    const panel = root.querySelector<HTMLElement>('.tltracks');
+    if (!panel) return;
+    const tracks = timelineTrackModel();
+    const trackOf = (name: string | undefined) => tracks.find((track) => track.name === name) || null;
+    panel.querySelectorAll<HTMLElement>('[data-tltrack]').forEach((btn) => {
+      btn.onclick = () => {
+        const name = btn.dataset.tltrack as string;
+        if (st.tlTrackOpen[name]) delete st.tlTrackOpen[name]; else st.tlTrackOpen[name] = true;
+        // A closed track can't show its selected event's mark; the selection goes with it.
+        const sel = timelineTrackEvent(st.tlTrackSel);
+        if (sel && !st.tlTrackOpen[sel.stream]) st.tlTrackSel = null;
+        render(true);
+        root.querySelector<HTMLElement>(`[data-tltrack="${cssAttr(name)}"]`)?.focus({ preventScroll: true });
+      };
+    });
+    panel.querySelectorAll<HTMLElement>('[data-tltrack-rail]').forEach((rail) => {
+      const track = trackOf(rail.dataset.tltrackRail);
+      if (!track) return;
+      const marks = timelineTrackMarks(track);
+      // A click focuses the rail, and the render it triggers replaces it: focus goes back to the new
+      // one, so ←/→ and Escape go on working from where the mouse left off.
+      rail.onclick = (e) => {
+        const target = e.target as HTMLElement | null;
+        const markEl = target && target.closest ? target.closest<HTMLElement>('[data-tlmark]') : null;
+        const mark = markEl ? marks.find((m) => m.key === markEl.dataset.tlmark) : null;
+        if (mark) selectTimelineTrackMark(mark, track.name);
+      };
+      rail.onkeydown = (e: KeyboardEvent) => {
+        if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+          e.preventDefault(); e.stopPropagation();
+          const current = timelineTrackEvent(st.tlTrackSel);
+          const next = adjacentMark(marks, current && current.stream === track.name ? st.tlTrackSel : null, e.key === 'ArrowRight' ? 1 : -1);
+          if (next) selectTimelineTrackMark(next, track.name);
+        } else if (e.key === 'Escape' && st.tlTrackSel != null) {
+          e.preventDefault(); e.stopPropagation();
+          clearTimelineTrackSelection(track.name);
+        }
+      };
+    });
+  };
   const gotoEntry = (p) => {
     const entry = timelineEntries()[p];
     if (!entry) return;
-    stopTimeline(); st.step = entry.row.i; st.kid = entry.kid; revealTimelineStep(st.step); writeRoute(true); render(true); centerTimelineSelection();
+    stopTimeline(); st.step = entry.row.i; st.kid = entry.kid; st.tlSeek = null; revealTimelineStep(st.step); writeRoute(true); render(true); centerTimelineSelection();
   };
   // The single playback engine behind the timeline AND the Video tab: one requestAnimationFrame
   // loop that accumulates elapsed playback time from real frame-to-frame deltas (dt × speed(), so a
@@ -8265,7 +9440,17 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   };
   // Shared landing sequence when playback ends or is paused: drop the engine, then ONE route write
   // + full render restoring canonical (non-playing) state.
-  const endTimelinePlayback = () => { stopTimeline(); writeRoute(true); render(true); };
+  // Paused on the run clock, the head stays where the recording stopped instead of snapping back
+  // to the start of the entry it was in: that instant is left as a seek.
+  // Playback that ran to its end leaves no seek: parked at the end, Play starts over.
+  let timelinePlayClockMs: number | null = null;
+  const endTimelinePlayback = (finished = false) => {
+    const at = timelinePlayClockMs;
+    timelinePlayClockMs = null;
+    stopTimeline();
+    st.tlSeek = !finished && at != null ? { ms: at, step: st.step, kid: st.kid } : null;
+    writeRoute(true); render(true);
+  };
   // Auto-play the timeline like a video: ONE master clock drives the recording (when the run has
   // a run-clock-mappable one), the advancing step selection, and the scrub head, so they can
   // never disagree. With video, the clock is the real run clock — steps advance exactly when their
@@ -8302,7 +9487,32 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     // `indexOf` answered -1 in both cases and restarted the run from the top.
     const played = timelineEntries().slice(0, selectedEntryIndex() + 1).filter(isSelectableTimelineEntry).length;
     const selectedPlaybackIndex = Math.max(0, played - 1);
-    const startMs = schedule.offsets[selectedPlaybackIndex] ?? 0;
+    // A seek left between entries is where Play picks up. On the run clock that is the instant
+    // itself; on the steps clock, the same share of the way to the next entry as the seek sits on
+    // the rail, which is drawn on that clock. The export clock starts at the entry on screen.
+    const seekMs = tlSeekMs();
+    const entryStart = schedule.offsets[selectedPlaybackIndex] ?? 0;
+    const stepsSeekStart = (): number | null => {
+      if (seekMs == null || schedule.mode !== 'steps') return null;
+      const next = schedule.offsets[selectedPlaybackIndex + 1];
+      const all = timelineEntries();
+      const at = selectedEntryIndex();
+      let nextAt = at + 1;
+      while (nextAt < all.length && !isSelectableTimelineEntry(all[nextAt])) nextAt++;
+      const f = axis.tsFrac(seekMs);
+      const from = axis.stepFrac[at]; const to = axis.stepFrac[nextAt];
+      if (next == null || f == null || from == null || to == null || !(to > from)) return null;
+      return entryStart + Math.min(1, Math.max(0, (f - from) / (to - from))) * (next - entryStart);
+    };
+    const stepsStart = compressedClock ? null : stepsSeekStart();
+    let startMs = !compressedClock && schedule.mode === 'video' && seekMs != null && schedule.clock0 != null
+      ? Math.max(0, seekMs - schedule.clock0)
+      : stepsStart ?? entryStart;
+    // A seek at (or past) the end has nothing left to play: start over, as Play does from the end.
+    if (startMs >= schedule.totalMs) startMs = 0;
+    // On the steps clock the head moves entry to entry, so resuming between two entries holds it at
+    // the seek until the next entry arrives, rather than stepping it back to this one's start.
+    let holdHead = stepsStart != null && startMs === stepsStart;
     const span = Math.max(1, schedule.offsets.length ? schedule.offsets[schedule.offsets.length - 1] : 0);
     const grab = () => ({
       clip: document.getElementById('tlvclip') as HTMLVideoElement | null,
@@ -8332,6 +9542,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
         els = grab();
       }
       const pos = playbackPositionAt(schedule, playMs);
+      timelinePlayClockMs = compressedClock ? null : pos.clockMs;
       if (pos.stepIndex !== lastIndex) {
         lastIndex = pos.stepIndex;
         const entry = playbackEntries[pos.stepIndex];
@@ -8394,23 +9605,24 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
           }
         }
       }
-      if (els.head) {
+      if (holdHead && pos.stepIndex !== selectedPlaybackIndex) holdHead = false;
+      if (els.head && !holdHead) {
         const f = pos.clockMs != null ? axis.tsFrac(pos.clockMs) : axis.stepFrac[selectedEntryIndex()];
-        if (f != null) els.head.style.left = `${f * 100}%`;
+        if (f != null) paintTimelineHead(f);
       }
       return pos;
     };
     if (AUTOPLAY_STEPPED) {
       exposeExportStepper(schedule.totalMs, schedule.offsets, (playMs) => {
         const pos = paintAt(playMs);
-        if (pos.done) endTimelinePlayback();
+        if (pos.done) endTimelinePlayback(true);
         return pos;
       });
       return;
     }
     timelinePlaybackStop = startPlaybackLoop(() => 1, (elapsed) => {
       const pos = paintAt(startMs + elapsed);
-      if (pos.done) { endTimelinePlayback(); if (AUTOPLAY) signalPlaybackEnded(); return false; }
+      if (pos.done) { endTimelinePlayback(true); if (AUTOPLAY) signalPlaybackEnded(); return false; }
       return true;
     });
   };
@@ -8514,7 +9726,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     if (st.tab !== 'timeline') stopTimeline(); // playback only lives on the timeline tab
     root.querySelectorAll<HTMLElement>('[data-theme-toggle]').forEach((button) => button.onclick = () => setTheme(currentTheme() === 'dark' ? 'light' : 'dark'));
     root.querySelectorAll<HTMLElement>('[data-session]').forEach((el) => {
-      const open = () => { openSession(+el.dataset.session); st.backTo = 'index'; st.pageTransition = 'forward'; writeRoute(false); render(); if (st.tab === 'timeline') centerTimelineSelection(true); };
+      const open = () => { openSession(+el.dataset.session); st.backTo = 'index'; st.backToCompare = null; st.pageTransition = 'forward'; writeRoute(false); render(); if (st.tab === 'timeline') centerTimelineSelection(true); };
       el.onclick = open;
       el.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } };
     });
@@ -8621,11 +9833,14 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     root.querySelectorAll<HTMLElement>('[data-back]').forEach((backBtn) => { backBtn.onclick = () => {
       stopTimeline();
       const toTrail = st.backTo === 'trail' && st.backToTrail && SESSIONS[st.backToTrail.session] ? st.backToTrail : null;
-      // openSession clears the stage's lane visibility, because it normally means a different
-      // trail. Coming BACK to the stage means the same one, so the lanes the reader hid ride along.
-      if (toTrail) { openSession(toTrail.session); st.tab = toTrail.tab; st.trailMode = toTrail.tab; st.trailLanesOff = toTrail.lanesOff; }
-      else st.view = st.view !== 'compare' && st.backTo === 'compare' && compareViewAvailable() ? 'compare' : MULTI ? 'index' : 'detail';
-      st.backTo = ''; st.backToTrail = null;
+      // openSession clears the stage's lane visibility and open tracks, because it normally means a
+      // different trail. Coming BACK to the stage means the same one, so both ride along.
+      if (toTrail) { openSession(toTrail.session); st.tab = toTrail.tab; st.trailMode = toTrail.tab; st.trailLanesOff = toTrail.lanesOff; st.trailTracksOpen = toTrail.tracksOpen; }
+      else if (st.view !== 'compare' && st.backTo === 'compare' && compareViewAvailable()) {
+        st.view = 'compare';
+        if (st.backToCompare) { st.trailLanesOff = st.backToCompare.lanesOff; st.trailTracksOpen = st.backToCompare.tracksOpen; }
+      } else st.view = MULTI ? 'index' : 'detail';
+      st.backTo = ''; st.backToTrail = null; st.backToCompare = null;
       st.pageTransition = 'back'; writeRoute(false); render(); window.scrollTo({ top: 0 });
     }; });
     // ── Picking runs to compare ──
@@ -8867,24 +10082,15 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       const step = Number(parts[1]);
       if (!Number.isFinite(si) || si < 0 || si >= SESSIONS.length) return;
       stopTimeline();
+      const stage = { lanesOff: st.trailLanesOff, tracksOpen: st.trailTracksOpen };
       openSession(si);
       if (Number.isFinite(step) && (SESSIONS[si].trace || []).some((t) => t.i === step)) { st.step = step; revealTimelineStep(step); }
-      st.backTo = 'compare';
+      st.backTo = 'compare'; st.backToCompare = stage;
       st.pageTransition = 'forward'; writeRoute(false); render(); window.scrollTo({ top: 0 });
     });
-    root.querySelectorAll<HTMLElement>('[data-trail-dir]').forEach((el) => el.onclick = () => {
-      const direction = el.dataset.trailDir === 'h' ? 'h' : 'v';
-      if (st.trailDir === direction) return;
-      // A pivot reshapes the whole world, so the camera re-fits rather than pointing at the spot
-      // where the old orientation used to be.
-      st.trailDir = direction; st.trailCam = null;
-      writeRoute(true); render();
-      root.querySelector<HTMLElement>(`[data-trail-dir="${direction}"]`)?.focus({ preventScroll: true });
-    });
-    // The nav handler belongs to whichever projection is on screen; a wire pass that finds neither
-    // a map canvas nor a grid leaves it unset, so stale keys can't drive a torn-down view.
+    // The nav handler belongs to the Grid; a wire pass that finds no grid leaves it unset, so stale
+    // keys can't drive a torn-down view.
     trailNavKeys = null;
-    wireTrailMapCanvas();
     wireTrailGridNav();
     wireTrailReplay();
     const perfettoTrail = document.getElementById('openperfetto-trail');
@@ -8930,9 +10136,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       keepAlignedPlace(() => {
         if (st.trailLanesOff[session]) delete st.trailLanesOff[session]; else st.trailLanesOff[session] = true;
       });
-      // The world reshapes and lane positions shift, so the camera re-fits and replay's followed
-      // lane lets go.
-      st.trailCam = null;
+      // Lane positions shift, so replay's followed lane lets go.
       st.trailLane = null;
       render(true);
       root.querySelector<HTMLElement>(`[data-trail-lane="${session}"]`)?.focus({ preventScroll: true });
@@ -8943,10 +10147,13 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       const fromCompare = st.view === 'compare';
       // Captured before openSession replaces both: a lane cell opens a DIFFERENT run than the one
       // whose report the stage was on, so Back has to name the run as well as the projection.
-      const fromTrail = onTrailTab() ? { session: st.session, tab: st.tab, lanesOff: st.trailLanesOff } : null;
+      const fromTrail = onTrailTab() ? { session: st.session, tab: st.tab, lanesOff: st.trailLanesOff, tracksOpen: st.trailTracksOpen } : null;
+      // Compare's Replay keeps its lanes and tracks in the same fields, so Back to it carries them too.
+      const stage = { lanesOff: st.trailLanesOff, tracksOpen: st.trailTracksOpen };
       openSession(lane);
       st.backTo = fromCompare ? 'compare' : 'trail';
       st.backToTrail = fromTrail;
+      st.backToCompare = fromCompare ? stage : null;
       st.step = headerId; st.kid = null; st.tab = 'timeline';
       revealTimelineStep(st.step);
       st.pageTransition = 'forward';
@@ -9004,7 +10211,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       el.onclick = (e) => {
         if (e) e.stopPropagation();
         if (el.focus) el.focus({ preventScroll: true });
-        stopTimeline(); st.step = +el.dataset.step; st.kid = null; revealTimelineStep(st.step); writeRoute(true); render(true);
+        stopTimeline(); st.step = +el.dataset.step; st.kid = null; st.tlSeek = null; revealTimelineStep(st.step); writeRoute(true); render(true);
       };
     });
     // Highlight the activated per-request table row in place (no re-render — the lightbox opens
@@ -9154,19 +10361,22 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     // the device is the whole page's subject, and naming it on every frame would be noise.
     const laneNames = onTrailTab() ? trailAllLanes().map((lane) => lane.label) : null;
     const galleryEntries = galleryShots.map((el) => {
-      const shots = el.dataset.shotRun != null ? ((SESSIONS[+el.dataset.shotRun] || {}).shots || {}) : D.shots;
       return {
-        src: safeImageSrc(shots[el.dataset.shot]),
+        src: captureSrcIn(el.dataset.shotRun != null ? +el.dataset.shotRun : st.session, el.dataset.shot),
         token: el.dataset.shotToken,
         label: el.dataset.shotLabel,
         tool: el.dataset.shotTool,
         // A frame's own device wins where it has one (the Lightbox of a multi-device session stamps
         // every cell); lane names cover the trail tabs, where the run itself names the device.
         device: el.dataset.shotDevice || (laneNames && el.dataset.shotRun != null ? laneNames[+el.dataset.shotRun] : undefined),
+        clip: shotClipRefOf(el),
       };
     });
+    // A render that replaced the cell playing its step leaves that element detached; free it.
+    if (shotClipActive && shotClipActive.host.isConnected === false) stopShotClip();
     galleryShots.forEach((el, index) => {
       const entry = galleryEntries[index];
+      wireShotClip(el);
       const image = el.querySelector?.('img') as HTMLImageElement | null;
       // Not draggable: a native image drag over a shell-hosted report reads as an archive drop.
       if (image) image.draggable = false;
@@ -9183,7 +10393,10 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       }
       el.onclick = (e) => { if (e) e.stopPropagation(); if (entry.src) openZoom(entry.src, '', galleryEntries, index); };
     });
+    // A nested one (a Lightbox still inside its cell) answers first; its cell must not act on the
+    // same key too.
     root.querySelectorAll<HTMLElement>('[role="button"][tabindex="0"]').forEach((el) => el.onkeydown = (e) => {
+      if (e.defaultPrevented) return;
       if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); el.click(); }
     });
     // The dispatch-list summary sits inside a selectable step row: without stopPropagation the
@@ -9208,7 +10421,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       const activate = (e) => {
         if (e) { e.preventDefault(); e.stopPropagation(); }
         const [step, kid] = String(el.dataset.kidsel).split(':').map(Number);
-        stopTimeline(); st.step = step; st.kid = kid; revealTimelineStep(st.step); writeRoute(true); render(true);
+        stopTimeline(); st.step = step; st.kid = kid; st.tlSeek = null; revealTimelineStep(st.step); writeRoute(true); render(true);
       };
       el.onpointerenter = (e) => {
         const [step, kid] = String(el.dataset.kidsel).split(':').map(Number);
@@ -9244,7 +10457,8 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
         const r = scrub.getBoundingClientRect();
         const pointerX = Math.min(r.width, Math.max(0, e.clientX - r.left));
         const f = pointerX / Math.max(1, r.width);
-        previewTimelineFraction(f, e, hoverAxis);
+        // A drag paints its own instant (wireTimelineSeek); the hover preview would fight it.
+        if (!timelineSeekDragging) { const at = scrubPointAt(hoverAxis, scrub, e.clientX); if (at.index >= 0) previewTimelineEntry(at.index, e); }
         const hoveredRange = scrubStepAtFraction(hoverRanges, f);
         const marker = (e.target as HTMLElement | null)?.closest?.('.scrubtick,.scrubstatusbox') as HTMLElement | null;
         const step = marker?.dataset.scrubStep || hoveredRange.token;
@@ -9286,12 +10500,8 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
         }
       };
     }
-    if (scrub) scrub.onclick = (e) => {
-      const r = scrub.getBoundingClientRect();
-      const f = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
-      const best = selectableEntryIndexAtFraction(timelineAxis(), f);
-      if (best >= 0) gotoEntry(best);
-    };
+    if (scrub) wireTimelineSeek(scrub);
+    wireTimelineTracks();
     if (scrub) scrub.onkeydown = (e) => {
       const p = selectedEntryIndex();
       const total = timelineEntries().length;
@@ -9302,8 +10512,8 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     if (tlplay) tlplay.onclick = () => {
       if (timelinePlaybackStop) { endTimelinePlayback(); return; }
       if (!D.trace.length) return;
-      // Restart from the top if parked at the end.
-      if (selectedEntryIndex() >= timelineEntries().length - 1) { st.step = D.trace[0].i; st.kid = null; }
+      // Restart from the top if parked at the end — unless a pause left a seek there to resume from.
+      if (selectedEntryIndex() >= timelineEntries().length - 1 && tlSeekMs() == null) { st.step = D.trace[0].i; st.kid = null; }
       timelinePreview = null;
       st.playing = true;
       // Render the playing state (pause icon, selection) FIRST, then start the engine so it caches
@@ -9317,6 +10527,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     if (st.tab === 'video') wireVideo();
     if (st.tab === 'device') wireLogFilter('dlpane', 'dlq', 'dlbar', 'dlcount');
     if (st.tab === 'network') wireLogFilter('nlpane', 'nlq', 'nlbar', 'nlcount');
+    if (st.tab === 'strings') wireStrings(); else unmountStringCrops();
     if (st.tab === 'timeline') wireLazyTimelineBodies();
     const copycmd = document.getElementById('copycmd');
     if (copycmd) copycmd.onclick = () => { try { navigator.clipboard.writeText(D.meta.cmd); copycmd.textContent = 'Copied'; setTimeout(() => { copycmd.textContent = 'Copy'; }, 1500); } catch (e) {} };
@@ -9420,6 +10631,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     // which would preventDefault them and leave the player unresponsive.
     if (attachEl) { if (e.key === 'Escape') { e.preventDefault(); closeAttachment(); } return; }
     if (zoomEl) {
+      if (zoomClipKey(e)) return;
       if (e.key === 'Escape') { e.preventDefault(); closeZoom(); }
       if (e.key === 'ArrowLeft') { e.preventDefault(); if (zoomMove) zoomMove(-1); }
       if (e.key === 'ArrowRight') { e.preventDefault(); if (zoomMove) zoomMove(1); }
@@ -9438,7 +10650,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       trailReplayKeys(e);
       return;
     }
-    // The Map and Grid step with the arrow keys under the same reach-from-anywhere rule: a reader
+    // The Grid steps with the arrow keys under the same reach-from-anywhere rule: a reader
     // shouldn't have to click a particular element before the trail answers the keyboard.
     if (onTrailTab() && trailNavKeys) {
       if (target && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName))) return;
@@ -9469,7 +10681,8 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     closeAttachment();
     // The marker a lane cell left behind ("Back goes to the stage I came from") is consumed by
     // whichever route leaves the cell — the header's Back button OR the browser's — because
-    // applyRoute re-opens the run, and openSession clears the lanes the reader had hidden.
+    // applyRoute re-opens the run, and openSession clears the lanes the reader had hidden and the
+    // tracks they had opened.
     //
     // ARRIVING at the recorded stage is the whole test, and it has to be: a reader who drills in
     // and then moves around inside that run (a tab, a step) leaves history entries of their own,
@@ -9477,13 +10690,21 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     // opened was their own lane's. Consuming the marker there would strand them: the header's
     // Back, one press from the stage, would send them to the index instead.
     const returning = st.backToTrail;
+    const returningToCompare = st.backToCompare;
     applyRoute(true);
     // A chunked run's tab is applied only once its chunk lands, so the stage may still be reading
     // Timeline with the tab it is on its way to parked in the pending route.
     const arrivedTab = pendingDetailRoute ? pendingDetailRoute.tab : st.tab;
     if (returning && st.view === 'detail' && st.session === returning.session && arrivedTab === returning.tab) {
       st.trailLanesOff = returning.lanesOff;
+      st.trailTracksOpen = returning.tracksOpen;
       st.backTo = ''; st.backToTrail = null;
+    }
+    // Compare's stage the same way: its route reopens the comparison, which shows every lane again.
+    if (returningToCompare && st.view === 'compare') {
+      st.trailLanesOff = returningToCompare.lanesOff;
+      st.trailTracksOpen = returningToCompare.tracksOpen;
+      st.backTo = ''; st.backToCompare = null;
     }
     if (st.view !== previousView) st.pageTransition = st.view === 'detail' ? 'forward' : 'back';
     render(hadPushedDestination);
@@ -9502,6 +10723,10 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   // necessarily implement removeEventListener, and a stale playback stopper closes over the previous
   // run's timers.
   disposeViewerGlobals = () => {
+    try { unmountStringCrops(); } catch (e) { /* stylesheet already gone */ }
+    // A still from this boot's recordings that lands after it must not repaint over the next one.
+    stringFramesRetired = true;
+    stringFrames.clear();
     if (typeof document.removeEventListener === 'function') document.removeEventListener('keydown', onKeydown);
     if (canListenOnWindow && typeof window.removeEventListener === 'function') window.removeEventListener('popstate', onPopstate);
     if (disposeThemeListener) { try { disposeThemeListener(); } catch (e) { /* media query already gone */ } }
@@ -9530,6 +10755,9 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
         }
         delete clipUrlCache[key];
       });
+      // The shell revokes an archive's URLs; the bytes registered for them are the viewer's to drop.
+      registeredZipClipUrls.forEach((url) => unregisterClipBytes(url));
+      registeredZipClipUrls.clear();
     } catch (e) { /* the URLs are already gone with the previous document */ }
   };
 

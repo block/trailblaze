@@ -78,8 +78,9 @@ internal fun <T> withUserFacingOutputPolicy(parseResult: CommandLine.ParseResult
  * The restore is the whole point. Quiet mode is one process-global flag, so an entry point that
  * only switches it on decides how loud the rest of the JVM will be. That is harmless in a one-shot
  * CLI process which exits moments later, and wrong wherever the JVM outlives the command — the
- * daemon, or the shared test JVM, where one command silences `Console.log` for every test scheduled
- * after it and the failure is charged to whichever class ran next.
+ * shared test JVM, where one command silences `Console.log` for every test scheduled after it and
+ * the failure is charged to whichever class ran next. (The daemon scopes each forwarded command's
+ * quiet mode to its own thread with `Console.withThreadScopedQuietMode`.)
  *
  * An already-quiet caller stays quiet: [runQuiet] restores the prior state rather than assuming it
  * was off, so a command that is both marked [QuietUnlessVerbose] and calls a connection helper is

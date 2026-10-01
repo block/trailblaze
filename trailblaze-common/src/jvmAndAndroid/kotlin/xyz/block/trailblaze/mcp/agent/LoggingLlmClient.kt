@@ -10,9 +10,11 @@ import ai.koog.prompt.message.LLMChoice
 import ai.koog.prompt.message.Message
 import ai.koog.prompt.streaming.StreamFrame
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.withContext
 import kotlinx.datetime.Clock
 import xyz.block.trailblaze.agent.model.PromptStepStatus
 import xyz.block.trailblaze.api.ScreenState
+import xyz.block.trailblaze.decision.DecisionLogContext
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
@@ -33,8 +35,7 @@ import xyz.block.trailblaze.yaml.DirectionStep
  * which calls the underlying [LLMClient] directly (via the prompt executor) instead of routing
  * through Trailblaze's [TrailblazeLogger.logLlmRequest]. So the Koog path produced tool / snapshot
  * logs but **no** `TrailblazeLlmRequestLog` — meaning token usage / cost, the prompt + response
- * messages, and the `toolOptions` available to the LLM were all missing from the session log,
- * unlike the legacy [xyz.block.trailblaze.agent.TrailblazeRunner] path.
+ * messages, and the `toolOptions` available to the LLM were all missing from the session log.
  *
  * This decorator closes that gap without changing the reasoning loop: it sits between the agent's
  * prompt executor and the real client. On each [execute] it (1) delegates to the real client, then
@@ -77,7 +78,14 @@ class LoggingLlmClient(
     tools: List<ToolDescriptor>,
   ): Message.Assistant {
     val startTime = Clock.System.now()
-    val response = delegate.execute(prompt = prompt, model = model, tools = tools)
+    // Any decision request the delegate makes on the way to its answer (a client that settles
+    // some turns with a DecisionEngine, say) is logged to this session under this step's trace.
+    val decisionLog = DecisionLogContext(session = session.sessionId, traceId = traceId) { log ->
+      logger.log(session, log)
+    }
+    val response = withContext(decisionLog) {
+      delegate.execute(prompt = prompt, model = model, tools = tools)
+    }
     logLlmRequest(
       requestMessages = prompt.messages,
       response = response,

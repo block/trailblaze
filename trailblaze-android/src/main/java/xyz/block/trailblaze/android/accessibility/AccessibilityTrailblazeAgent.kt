@@ -265,6 +265,37 @@ class AccessibilityTrailblazeAgent(
   }
 
   /**
+   * Focuses the field matching [nodeSelector] and types into it via [AccessibilityAction.InputText].
+   * A gesture tap on an editable does not guarantee focus moves to it, and typing afterwards would
+   * land in whatever field kept it. A selector that doesn't resolve to an editable field types into
+   * the field the tap focused, and fails when there is none.
+   *
+   * Only accessibility-shaped selectors resolve against this tree; any other shape returns null so
+   * the caller falls back to its tap-then-type path.
+   */
+  override suspend fun executeNodeSelectorInputText(
+    nodeSelector: TrailblazeNodeSelector,
+    text: String,
+    hideKeyboardAfter: Boolean,
+    traceId: TraceId?,
+  ): TrailblazeToolResult? {
+    if (nodeSelector.androidAccessibility == null) return null
+    return AccessibilityTrailRunner.runActions(
+      actions = listOf(
+        AccessibilityAction.InputText(
+          text = text,
+          nodeSelector = nodeSelector,
+          hideKeyboardAfter = hideKeyboardAfter,
+        ),
+      ),
+      traceId = traceId,
+      trailblazeLogger = trailblazeLogger,
+      sessionProvider = sessionProvider,
+      deviceManager = deviceManager,
+    )
+  }
+
+  /**
    * Asserts that an element matching the [nodeSelector] is visible using the accessibility tree.
    */
   override suspend fun executeNodeSelectorAssertVisible(

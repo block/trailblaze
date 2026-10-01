@@ -196,7 +196,13 @@ internal object CanonicalToolAdapters {
       TrailblazeToolResult.Success(message = "Waited for idle (ceiling ${tool.timeToWaitInSeconds}s).")
     }
 
-    is InputTextTrailblazeTool -> CanonicalDispatch { target, _ ->
+    is InputTextTrailblazeTool -> CanonicalDispatch { target, context ->
+      // A named field is tapped first so the keys reach it rather than whatever holds focus, and
+      // a field that isn't there fails the step instead of typing into the wrong one.
+      tool.selector?.let { selector ->
+        val tapped = AndroidTestTapTool(nodeSelector = selector).executeWithAndroidTest(target, context)
+        if (tapped !is TrailblazeToolResult.Success) return@CanonicalDispatch tapped
+      }
       // Key-event injection into the focused window — the same semantics the instrumentation
       // driver this vocabulary was recorded under gives `inputText`, and the only shape that
       // also reaches a passcode keypad listening for key presses rather than an EditText.

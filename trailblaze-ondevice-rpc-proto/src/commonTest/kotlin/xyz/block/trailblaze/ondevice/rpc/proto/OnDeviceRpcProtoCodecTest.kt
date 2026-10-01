@@ -80,7 +80,6 @@ class OnDeviceRpcProtoCodecTest {
       referrer = TrailblazeReferrer("test", "Test"),
       traceId = traceId,
       driverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
-      agentImplementation = AgentImplementation.TRAILBLAZE_RUNNER,
       memorySnapshot = mapOf("email" to "person@example.com"),
       maxLlmCalls = 9,
       initialMemorySeeds = mapOf("name" to "Ada"),
@@ -108,6 +107,9 @@ class OnDeviceRpcProtoCodecTest {
 
     assertEquals(request, decodedRequest)
     assertEquals(response, decodedResponse)
+    // An older device reads a missing agent name as its own default, which could be the removed
+    // legacy runner, so the request still names the agent.
+    assertEquals("KOOG_STRATEGY_GRAPH", OnDeviceRpcProtoCodec.run { request.toProto() }.agent_implementation)
   }
 
   @Test
@@ -130,7 +132,7 @@ class OnDeviceRpcProtoCodecTest {
         session,
         device,
         "Checkout",
-        AgentImplementation.TRAILBLAZE_RUNNER,
+        AgentImplementation.KOOG_STRATEGY_GRAPH,
         true,
       ),
       TrailblazeProgressEvent.ExecutionCompleted(12, session, device, true, 100, 8),
@@ -142,7 +144,7 @@ class OnDeviceRpcProtoCodecTest {
         deviceId = device,
         state = ExecutionState.RUNNING,
         objective = "Checkout",
-        agentImplementation = AgentImplementation.TRAILBLAZE_RUNNER,
+        agentImplementation = AgentImplementation.KOOG_STRATEGY_GRAPH,
         progressPercent = 50,
         currentStep = "Pay",
         completedSteps = 1,
@@ -159,6 +161,35 @@ class OnDeviceRpcProtoCodecTest {
 
     assertEquals(progress, OnDeviceRpcProtoCodec.run { progress.toProto().toModel() })
     assertEquals(status, OnDeviceRpcProtoCodec.run { status.toProto().toModel() })
+  }
+
+  @Test
+  fun `a status naming a removed agent still decodes`() {
+    val status = GetExecutionStatusResponse(
+      status = ExecutionStatus(
+        sessionId = SessionId("old-device"),
+        deviceId = null,
+        state = ExecutionState.RUNNING,
+        objective = "Checkout",
+        agentImplementation = AgentImplementation.KOOG_STRATEGY_GRAPH,
+        progressPercent = 0,
+        currentStep = null,
+        completedSteps = 0,
+        totalSteps = 1,
+        actionsExecuted = 0,
+        elapsedMs = 0,
+        estimatedRemainingMs = null,
+        exceptionsHandled = 0,
+        memoryFactCount = 0,
+        lastUpdated = 1,
+      ),
+      found = true,
+    )
+    val fromOlderDevice = OnDeviceRpcProtoCodec.run { status.toProto() }.let { proto ->
+      proto.copy(status = proto.status!!.copy(agent_implementation = "TRAILBLAZE_RUNNER"))
+    }
+
+    assertEquals(status, OnDeviceRpcProtoCodec.run { fromOlderDevice.toModel() })
   }
 
   @Test

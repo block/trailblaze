@@ -396,7 +396,11 @@ class TrailFileManagerTest {
   fun `loadTrail binds a trail's only configuration and lowers its leg`() {
     val file = newPairedTrail("flows/paired/trail.yaml", "pos-pair")
 
-    val result = manager().loadTrail(file.absolutePath, listOf(TrailblazeDeviceClassifier("android")))
+    val result = manager().loadTrail(
+      file.absolutePath,
+      listOf(TrailblazeDeviceClassifier("android")),
+      bindsCompanionDevices = true,
+    )
 
     assertTrue(result.success, "load failed: ${result.error}")
     assertEquals("pos-pair", result.selectedDeviceConfiguration)
@@ -409,10 +413,26 @@ class TrailFileManagerTest {
   }
 
   @Test
+  fun `loadTrail lowers the single-device leg of a trail declaring one beside its configuration when no companions are bound`() {
+    val file = newPairedTrail("flows/paired-solo/trail.yaml", "pos-pair")
+
+    val result = manager().loadTrail(file.absolutePath, listOf(TrailblazeDeviceClassifier("android")))
+
+    assertTrue(result.success, "load failed: ${result.error}")
+    assertNull(result.selectedDeviceConfiguration)
+    val step = result.promptSteps?.single() as DirectionStep
+    assertEquals(listOf("androidTool"), step.recording?.tools?.map { it.name })
+  }
+
+  @Test
   fun `loadTrail refuses a trail with several configurations until one is named`() {
     val file = newPairedTrail("flows/paired2/trail.yaml", "pos-pair", "kitchen-pair")
 
-    val ambiguous = manager().loadTrail(file.absolutePath, listOf(TrailblazeDeviceClassifier("android")))
+    val ambiguous = manager().loadTrail(
+      file.absolutePath,
+      listOf(TrailblazeDeviceClassifier("android")),
+      bindsCompanionDevices = true,
+    )
     assertFalse(ambiguous.success, "picking one of several configurations would replay the wrong device set")
     assertTrue(ambiguous.error!!.contains("pos-pair") && ambiguous.error!!.contains("kitchen-pair"))
 

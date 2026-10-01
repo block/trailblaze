@@ -14,7 +14,6 @@ import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.TraceId
-import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.mcp.TrailblazeMcpBridge
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetScreenStateResponse
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
@@ -134,7 +133,6 @@ class TrailExecutorTrailheadTest {
     override suspend fun runYaml(
       yaml: String,
       startNewSession: Boolean,
-      agentImplementation: AgentImplementation,
     ): String = throw NotImplementedError()
     override fun getCurrentlySelectedDeviceId(): TrailblazeDeviceId? = null
     override suspend fun getCurrentScreenState(): ScreenState? = null

@@ -488,7 +488,7 @@ class WaypointCaptureExampleCommand : Callable<Int> {
    * For those log types we use [referencedFile] as-is and skip the twin lookup entirely.
    *
    * Same skip applies when the LLM log itself declares `screenshotIsAnnotated: false`
-   * (sessions captured with `trailblaze config annotated-screenshots false`) — the
+   * (every session recorded since LLM logs started keeping the raw screenshot) — the
    * referenced image is already the raw variant, and twin-searching would risk picking
    * an adjacent step's screenshot in dense sessions.
    *
@@ -512,8 +512,8 @@ class WaypointCaptureExampleCommand : Callable<Int> {
     val isLlmRequestLog = logFile.name.endsWith("_TrailblazeLlmRequestLog.json")
     if (!isLlmRequestLog) return referencedFile
 
-    // LLM log explicitly tagged as already-raw (annotated-screenshots flag was off
-    // at capture time) — use referencedFile directly, skip the twin neighbor scan.
+    // LLM log explicitly tagged as already-raw — use referencedFile directly, skip
+    // the twin neighbor scan.
     val screenshotIsAnnotated = (sourceJson["screenshotIsAnnotated"] as? JsonPrimitive)
       ?.booleanOrNull
     if (screenshotIsAnnotated == false) return referencedFile

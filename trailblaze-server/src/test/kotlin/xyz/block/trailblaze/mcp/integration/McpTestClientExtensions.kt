@@ -1,6 +1,5 @@
 package xyz.block.trailblaze.mcp.integration
 
-import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.mcp.AgentToolTransport
 import xyz.block.trailblaze.mcp.LlmCallStrategy
 import xyz.block.trailblaze.mcp.ScreenshotFormat
@@ -112,12 +111,6 @@ suspend fun McpTestClient.setAgentToolTransport(transport: AgentToolTransport): 
   callTool(ToolNames.SET_AGENT_TOOL_TRANSPORT, mapOf(ToolParams.TRANSPORT to transport.name))
 
 /**
- * Sets the agent implementation to use.
- */
-suspend fun McpTestClient.setAgentImplementation(implementation: AgentImplementation): McpTestClient.ToolResult =
-  callTool(ToolNames.SET_AGENT_IMPLEMENTATION, mapOf(ToolParams.IMPLEMENTATION to implementation.name))
-
-/**
  * Sets maximum iterations per objective for DirectMcpAgent.
  */
 suspend fun McpTestClient.setMaxIterations(iterations: Int): McpTestClient.ToolResult =
@@ -213,7 +206,6 @@ object ToolNames {
   const val SET_VIEW_HIERARCHY_VERBOSITY = "setViewHierarchyVerbosity"
   const val SET_LLM_CALL_STRATEGY = "setLlmCallStrategy"
   const val SET_AGENT_TOOL_TRANSPORT = "setAgentToolTransport"
-  const val SET_AGENT_IMPLEMENTATION = "setAgentImplementation"
   const val CONFIGURE_SESSION = "configureSession"
   const val GET_SESSION_CONFIG = "getSessionConfig"
 
@@ -236,7 +228,6 @@ object ToolParams {
   const val FORMAT = "format"
   const val STRATEGY = "strategy"
   const val TRANSPORT = "transport"
-  const val IMPLEMENTATION = "implementation"
   const val STEPS = "steps"
   const val MAX_ITERATIONS_PER_OBJECTIVE = "maxIterationsPerObjective"
 

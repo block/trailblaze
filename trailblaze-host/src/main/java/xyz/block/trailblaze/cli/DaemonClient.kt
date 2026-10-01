@@ -297,10 +297,16 @@ class DaemonClient(
 
         // Time out only after a full window with NO forward progress (wedged daemon backstop).
         if (System.currentTimeMillis() - lastProgressAtMs > runPollTimeoutMs) {
+          // Cancel the run we are giving up on. Left running, it keeps its device and session, so
+          // a caller's retry runs beside it, and if it later passes, that pass is credited to an
+          // attempt this client already reported failed. The client's request timeout bounds the
+          // call, so a wedged daemon that never answers it cannot hold up this report.
+          val cancelled = cancelRun(runId)
           return CliRunResponse(
             success = false,
             error =
-              "Timed out waiting for run to complete: no progress for ${runPollTimeoutMs / 1000}s",
+              "Timed out waiting for run to complete: no progress for ${runPollTimeoutMs / 1000}s" +
+                if (cancelled) " (run cancelled)" else " (cancelling the run failed; it may still be running)",
             errorKind = CliRunResponse.ERROR_KIND_INFRA,
           )
         }

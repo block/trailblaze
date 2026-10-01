@@ -768,6 +768,19 @@ class PlaywrightBrowserManager(
     }
   }
 
+  override fun captureTreeForReplay(withScreenshot: Boolean, secrets: Set<String>): ScreenState? = onPlaywrightThread {
+    TrailblazeTracer.trace("captureTreeForReplay", "browser") {
+      PlaywrightTreeScreenState(
+        currentPage,
+        resolvedViewport.width,
+        resolvedViewport.height,
+        browserEngine = browserEngine,
+        withScreenshot = withScreenshot,
+        secrets = secrets,
+      ).takeIf { it.hasContent }
+    }
+  }
+
   /** Captures the current screen state from the active page. Self-bridged — see above. */
   override fun getScreenState(): ScreenState = onPlaywrightThread {
     getScreenStateOnThread()

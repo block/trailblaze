@@ -173,25 +173,4 @@ object TrailblazeLlmModels {
    */
   val DEFAULT_OUTER_MODEL = GPT_4O
 
-  /**
-   * Returns recommended models for the given agent tier.
-   *
-   * @param tier The agent tier to get models for
-   * @return List of models suitable for that tier
-   */
-  fun modelsForTier(tier: AgentTier): List<TrailblazeLlmModel> = when (tier) {
-    AgentTier.INNER -> INNER_AGENT_MODELS
-    AgentTier.OUTER -> OUTER_AGENT_MODELS
-  }
-
-  /**
-   * Returns the default model for the given agent tier.
-   *
-   * @param tier The agent tier
-   * @return The recommended default model for that tier
-   */
-  fun defaultModelForTier(tier: AgentTier): TrailblazeLlmModel = when (tier) {
-    AgentTier.INNER -> DEFAULT_INNER_MODEL
-    AgentTier.OUTER -> DEFAULT_OUTER_MODEL
-  }
 }

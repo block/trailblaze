@@ -102,9 +102,8 @@ class TrailblazeRunnerUtil(
    *   except for a [TrailblazeToolResult.Error.FatalError], which always throws.
    *   FatalError's contract is "abort the test immediately": it marks dead infrastructure
    *   (e.g. a wedged on-device server) or broken tooling — not the UI drift self-heal exists
-   *   for — and the AI loop already honors it by aborting without an LLM retry
-   *   (`TrailblazeKoogLlmClientHelper`), so recorded replay does the same rather than routing
-   *   a known-terminal error through AI recovery.
+   *   for — so recorded replay throws rather than routing a known-terminal error through AI
+   *   recovery.
    * - A trailhead step (a lowered `trailhead:`, marked via [DirectionStep.isTrailhead]) also
    *   always throws on failure - a [TrailheadException] - regardless of [selfHeal]: the trail
    *   never reached its starting state, so recovery or continuing would only mask the real

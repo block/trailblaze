@@ -31,6 +31,7 @@ data class PlaywrightNativeVerifyTextVisibleTool(
     reasoning?.let { Console.log("### Reasoning: $it") }
     Console.log("### Verifying text visible: $text")
     return try {
+      PlaywrightPageResponsiveness.requireResponsive(page)
       val locator = page.getByText(text)
       assertThat(locator.first()).isVisible()
       TrailblazeToolResult.Success(message = "Verified text '$text' is visible on the page.")

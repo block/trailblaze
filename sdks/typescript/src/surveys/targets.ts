@@ -16,12 +16,8 @@ import type { TargetCatalog, TargetDefinition } from "./scope.js";
 const SKIP_DIRS = new Set(["node_modules", ".git", "build", "dist", ".gradle"]);
 const MAX_DEPTH = 5;
 
-/**
- * Reads every `trailmap.yaml` under `inputs` (files or directories) into a catalog. A trailmap
- * contributes a target when it has a top-level `id` and `target.platforms.<platform>.app_ids`.
- * Parsing relies on the Bun runtime's YAML support, which the surveys CLI already runs under.
- */
-export function loadTargetCatalog(inputs: ReadonlyArray<string>, log?: (message: string) => void): TargetCatalog {
+/** Every `trailmap.yaml` under `inputs` (files or directories), in walk order. */
+export function findTrailmapFiles(inputs: ReadonlyArray<string>, log?: (message: string) => void): string[] {
   const files: string[] = [];
   const walk = (path: string, depth: number) => {
     if (!existsSync(path)) {
@@ -40,6 +36,16 @@ export function loadTargetCatalog(inputs: ReadonlyArray<string>, log?: (message:
     }
   };
   for (const input of inputs) walk(input, 0);
+  return files;
+}
+
+/**
+ * Reads every `trailmap.yaml` under `inputs` (files or directories) into a catalog. A trailmap
+ * contributes a target when it has a top-level `id` and `target.platforms.<platform>.app_ids`.
+ * Parsing relies on the Bun runtime's YAML support, which the surveys CLI already runs under.
+ */
+export function loadTargetCatalog(inputs: ReadonlyArray<string>, log?: (message: string) => void): TargetCatalog {
+  const files = findTrailmapFiles(inputs, log);
 
   const catalog: TargetCatalog = {};
   for (const file of files) {

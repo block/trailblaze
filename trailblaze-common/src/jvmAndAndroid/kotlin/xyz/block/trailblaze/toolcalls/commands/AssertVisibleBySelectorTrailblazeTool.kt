@@ -189,7 +189,10 @@ data class AssertVisibleBySelectorTrailblazeTool(
     ?: nodeSelector?.androidMaestro?.resourceIdRegex
     ?: nodeSelector?.androidView?.resourceIdRegex
     ?: nodeSelector?.iosMaestro?.resourceIdRegex
-    ?: "element"
+    // Tier: the whole selector, so a structural one (`containsChild`, `childOf`, an index) still
+    // names what it matched.
+    ?: nodeSelector?.description()?.takeIf { it.isNotBlank() }
+    ?: "an empty selector"
 
   /**
    * Post-pass text-equality check, invoked only when [expectedText] is set. The
@@ -262,16 +265,23 @@ data class AssertVisibleBySelectorTrailblazeTool(
     return if (foundText != null) {
       TrailblazeToolResult.Success(message = "Verified '$desc' shows text='$expected'")
     } else {
-      val candidateTexts = candidates.mapNotNull { readText(it)?.trim() }
+      val candidateTexts = candidates.mapNotNull { node -> readText(node)?.trim()?.let { node.printable(it) } }
         .filter { it.isNotBlank() }
       val sample = candidateTexts.take(5).joinToString(", ") { "'$it'" }
+      // Every text field of each compared element, named and verbatim. The check compares one
+      // field per element, and the caller may have copied a different one (a snapshot can print
+      // a field's hint beside its value, or cut a long label short); listing them all lets the
+      // caller pick the field it meant instead of this check guessing.
+      val fields = candidates.map { it.textFields() }.filter { it.isNotEmpty() }.take(5)
+        .joinToString("; ") { node -> node.joinToString(", ") { (name, value) -> "$name='$value'" } }
       // The "no readable text" tail can no longer be reached by an emptiness assertion: its
       // candidate is the matched node alone and a blank reading would have PASSED, so reaching
       // here means the value is non-blank and `sample` names it.
       TrailblazeToolResult.Error.ExceptionThrown(
         errorMessage = "assertVisible: element matched '$desc' but expected text '$expected' " +
           "not found on the selector-matched element(s). " +
-          (if (sample.isNotEmpty()) "Actual text(s): $sample" else "Matched element has no readable text."),
+          (if (sample.isNotEmpty()) "Actual text(s): $sample" else "Matched element has no readable text.") +
+          (if (fields.isNotEmpty()) " Text fields: $fields" else ""),
       )
     }
   }
@@ -502,6 +512,71 @@ data class AssertVisibleBySelectorTrailblazeTool(
     slots.firstOrNull { !it.isNullOrBlank() } ?: slots.firstOrNull { it != null }
 
   /**
+   * Every non-blank text field of this node, by name, in the order [extractText] reads them. For
+   * the failure message only: it tells the caller what the element actually carries. A password
+   * field's typed value reads as [HIDDEN_VALUE], because the message is saved with the session.
+   */
+  private fun TrailblazeNode.textFields(): List<Pair<String, String>> {
+    val secret = secretFieldNames()
+    return namedTextSlots().mapNotNull { (name, value) ->
+      value?.takeIf { it.isNotBlank() }?.let { name to if (name in secret) HIDDEN_VALUE else it }
+    }
+  }
+
+  /** [text] as the failure message may print it: [HIDDEN_VALUE] when it is a password's value. */
+  private fun TrailblazeNode.printable(text: String): String {
+    val secret = secretFieldNames()
+    val isSecret = namedTextSlots().any { (name, value) -> name in secret && value?.trim() == text }
+    return if (isSecret) HIDDEN_VALUE else text
+  }
+
+  private fun TrailblazeNode.namedTextSlots(): List<Pair<String, String?>> = when (val d = driverDetail) {
+    is DriverNodeDetail.AndroidAccessibility -> listOf(
+      "text" to d.text,
+      "hintText" to d.hintText,
+      "contentDescription" to d.contentDescription,
+      "labeledByText" to d.labeledByText,
+    )
+    is DriverNodeDetail.AndroidView -> listOf(
+      "text" to d.text,
+      "hintText" to d.hintText,
+      "contentDescription" to d.contentDescription,
+    )
+    is DriverNodeDetail.AndroidMaestro -> listOf(
+      "text" to d.text,
+      "hintText" to d.hintText,
+      "accessibilityText" to d.accessibilityText,
+    )
+    is DriverNodeDetail.Compose -> listOf(
+      "editableText" to d.editableText,
+      "text" to d.text,
+      "contentDescription" to d.contentDescription,
+    )
+    is DriverNodeDetail.IosMaestro -> listOf(
+      "text" to d.text,
+      "hintText" to d.hintText,
+      "accessibilityText" to d.accessibilityText,
+    )
+    is DriverNodeDetail.IosAxe -> listOf("label" to d.label, "value" to d.value, "title" to d.title)
+    is DriverNodeDetail.Web -> listOf("ariaName" to d.ariaName)
+  }
+
+  /**
+   * The slots of [namedTextSlots] that hold a password field's typed value — the same slots
+   * `VisibleStrings` keeps out of the log. AXe marks a secure field by role as often as by subrole.
+   */
+  private fun TrailblazeNode.secretFieldNames(): Set<String> = when (val d = driverDetail) {
+    is DriverNodeDetail.AndroidAccessibility -> if (d.isPassword) setOf("text") else emptySet()
+    is DriverNodeDetail.AndroidView -> if (d.isPassword) setOf("text") else emptySet()
+    is DriverNodeDetail.AndroidMaestro -> if (d.password) setOf("text") else emptySet()
+    is DriverNodeDetail.Compose -> if (d.isPassword) setOf("editableText", "text") else emptySet()
+    is DriverNodeDetail.IosMaestro -> if (d.password) setOf("text") else emptySet()
+    is DriverNodeDetail.IosAxe ->
+      if (d.role == SECURE_TEXT_FIELD || d.subrole == SECURE_TEXT_FIELD) setOf("value") else emptySet()
+    is DriverNodeDetail.Web -> emptySet()
+  }
+
+  /**
    * The element's OWN value — the slot the user's input lands in — ignoring anything it falls
    * back to DISPLAYING when that value is empty. This is what a blank [expectedText] asks about,
    * and it is also how [collectTextCandidates] decides whether a node is a leaf or a container.
@@ -607,6 +682,10 @@ data class AssertVisibleBySelectorTrailblazeTool(
      * `TrailblazeNodeSelectorResolver.IOS_TEXT_INPUT_TYPES` (private to that file, in a different
      * module) — keep the two lists in sync if either changes.
      */
+    /** What a failure message prints in place of a password field's typed value. */
+    private const val HIDDEN_VALUE = "(hidden)"
+    private const val SECURE_TEXT_FIELD = "AXSecureTextField"
+
     private val IOS_TEXT_INPUT_TYPES = setOf("TextField", "SecureTextField", "SearchField", "TextView")
   }
 }

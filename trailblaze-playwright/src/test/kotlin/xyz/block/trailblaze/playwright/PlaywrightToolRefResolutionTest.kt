@@ -26,6 +26,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.util.escapeForSelector
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -239,6 +240,82 @@ class PlaywrightToolRefResolutionTest {
     assertNotNull(error)
     assertIs<TrailblazeToolResult.Error.ExceptionThrown>(error)
     assertContains(error.errorMessage, "web_snapshot")
+  }
+
+  @Test
+  fun `a ref whose element changed role names the element it became`() {
+    page.setContent(
+      """<html><body><input type="search" aria-label="Search Wikipedia" /></body></html>""",
+    )
+    val screenState = PlaywrightScreenState(page = page, viewportWidth = 1280, viewportHeight = 800)
+    val context = buildContext(screenState)
+    val ref = assertNotNull(
+      screenState.elementIdMapping.entries.find { it.value.descriptor == "searchbox \"Search Wikipedia\"" },
+      "snapshot should list the searchbox: ${screenState.elementIdMapping}",
+    ).key
+
+    // Focusing a search field often turns it into a combobox (autocomplete).
+    page.evaluate("document.querySelector('input').setAttribute('role', 'combobox')")
+
+    val (locator, error) = PlaywrightExecutableTool.validateAndResolveRef(page, ref, "search field", context)
+    assertNull(locator)
+    assertIs<TrailblazeToolResult.Error.ExceptionThrown>(error)
+    assertContains(error.errorMessage, "combobox \"Search Wikipedia\"")
+    assertContains(error.errorMessage, "web_snapshot")
+  }
+
+  @Test
+  fun `a descriptor ref whose element changed role names the element it became`() {
+    page.setContent(
+      """<html><body><input type="search" aria-label="Search Wikipedia" /></body></html>""",
+    )
+    val screenState = PlaywrightScreenState(page = page, viewportWidth = 1280, viewportHeight = 800)
+    page.evaluate("document.querySelector('input').setAttribute('role', 'combobox')")
+
+    // The snapshot is taken after the change, as when a recorded ref replays on a newer page.
+    val (_, error) = PlaywrightExecutableTool.validateAndResolveRef(
+      page, "searchbox \"Search Wikipedia\"", "search field", buildContext(screenState),
+    )
+    assertIs<TrailblazeToolResult.Error.ExceptionThrown>(error)
+    assertContains(error.errorMessage, "combobox \"Search Wikipedia\"")
+    // A descriptor ref has no snapshot of its own to compare against, so no causal claim.
+    assertFalse(error.errorMessage.contains("role changed"), error.errorMessage)
+  }
+
+  @Test
+  fun `a same-named element that was already on the page is not called a role change`() {
+    page.setContent(
+      """<html><body><a href="#">Sign in</a><button>Sign in</button></body></html>""",
+    )
+    val screenState = PlaywrightScreenState(page = page, viewportWidth = 1280, viewportHeight = 800)
+    val context = buildContext(screenState)
+    val ref = assertNotNull(
+      screenState.elementIdMapping.entries.find { it.value.descriptor == "button \"Sign in\"" },
+      "snapshot should list the button: ${screenState.elementIdMapping}",
+    ).key
+
+    page.evaluate("document.querySelector('button').remove()")
+
+    val (locator, error) = PlaywrightExecutableTool.validateAndResolveRef(page, ref, "sign in", context)
+    assertNull(locator)
+    assertIs<TrailblazeToolResult.Error.ExceptionThrown>(error)
+    assertFalse(error.errorMessage.contains("role changed"), error.errorMessage)
+  }
+
+  @Test
+  fun `a miss the caller will discard skips the role-change diagnosis`() {
+    page.setContent(
+      """<html><body><input type="search" aria-label="Search Wikipedia" /></body></html>""",
+    )
+    val screenState = PlaywrightScreenState(page = page, viewportWidth = 1280, viewportHeight = 800)
+    val context = buildContext(screenState)
+    val ref = screenState.elementIdMapping.entries.first { it.value.descriptor.startsWith("searchbox") }.key
+    page.evaluate("document.querySelector('input').setAttribute('role', 'combobox')")
+
+    val (_, error) =
+      PlaywrightExecutableTool.validateAndResolveRef(page, ref, "search field", context, explainMiss = false)
+    assertIs<TrailblazeToolResult.Error.ExceptionThrown>(error)
+    assertFalse(error.errorMessage.contains("combobox"), error.errorMessage)
   }
 
   @Test

@@ -22,7 +22,7 @@ class SystemPromptBaselineTest {
   fun `base system prompt matches baseline`() {
     assertBaseline(
       baselineName = "base_system_prompt.txt",
-      actual = TrailblazeRunner.baseSystemPrompt,
+      actual = TrailblazeSystemPrompt.basePrompt,
     )
   }
 
@@ -30,7 +30,7 @@ class SystemPromptBaselineTest {
   fun `default platform prompt matches baseline`() {
     assertBaseline(
       baselineName = "default_platform_prompt.txt",
-      actual = TrailblazeRunner.defaultPlatformPrompt,
+      actual = TrailblazeSystemPrompt.defaultPlatformPrompt,
     )
   }
 
@@ -38,7 +38,7 @@ class SystemPromptBaselineTest {
   fun `composed default prompt matches baseline`() {
     assertBaseline(
       baselineName = "composed_default_prompt.txt",
-      actual = TrailblazeRunner.composeSystemPrompt(),
+      actual = TrailblazeSystemPrompt.compose(),
     )
   }
 
@@ -47,7 +47,7 @@ class SystemPromptBaselineTest {
     val customPlatform = "**Custom platform instructions.**\n- Do something special."
     assertBaseline(
       baselineName = "composed_custom_platform_prompt.txt",
-      actual = TrailblazeRunner.composeSystemPrompt(customPlatform),
+      actual = TrailblazeSystemPrompt.compose(customPlatform),
     )
   }
 

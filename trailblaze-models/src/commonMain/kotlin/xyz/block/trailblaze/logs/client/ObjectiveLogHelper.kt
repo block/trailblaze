@@ -11,7 +11,7 @@ import xyz.block.trailblaze.yaml.PromptStep
 /**
  * Shared helper for creating objective lifecycle log events.
  *
- * Used by DeterministicTrailExecutor, TrailblazeRunnerUtil, and TrailExecutorImpl to avoid
+ * Used by TrailblazeRunnerUtil and TrailExecutorImpl to avoid
  * duplicating the log-building logic.
  */
 object ObjectiveLogHelper {

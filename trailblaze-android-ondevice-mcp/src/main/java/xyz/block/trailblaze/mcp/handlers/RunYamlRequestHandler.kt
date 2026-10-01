@@ -88,11 +88,8 @@ private fun defaultProbeUiAutomationWedge(): Boolean =
   }
 
 /**
- * Handler for test execution requests.
- *
- * Routes requests based on [RunYamlRequest.agentImplementation]:
- * - [AgentImplementation.TRAILBLAZE_RUNNER]: Legacy YAML-based TrailblazeRunner
- * - [AgentImplementation.MULTI_AGENT_V3]: Mobile-Agent-v3 inspired implementation
+ * Handler for test execution requests. Prompt steps run on-device through the Koog
+ * strategy-graph agent via [runTrailblazeYaml].
  *
  * Manages session lifecycle and executes tests in the background.
  *
@@ -114,7 +111,7 @@ class RunYamlRequestHandler(
    *  request — see the callers of [OnDeviceRpcServer]. */
   private val loggingRule: TrailblazeLoggingRule,
   /**
-   * Callback to run via TrailblazeRunner (legacy YAML processing). The third argument is a
+   * Callback that runs the request's trail YAML on-device. The third argument is a
    * shared [AgentMemory] that the handler pre-populates from `request.memorySnapshot`; the
    * callback is responsible for threading it into the constructed agent so writes from
    * on-device tools land in the same instance the handler reads from afterward. The return
@@ -131,9 +128,6 @@ class RunYamlRequestHandler(
   private val trailblazeDeviceInfoProvider: (TrailblazeDeviceId) -> TrailblazeDeviceInfo,
   /** Optional progress manager for emitting progress events to MCP clients */
   private val progressManager: ProgressSessionManager? = null,
-  /** Callback to run via MultiAgentV3. When null (default for on-device), MULTI_AGENT_V3
-   *  requests fall back to TRAILBLAZE_RUNNER. V3 is intended to run on the host, not on-device. */
-  private val runMultiAgentV3Callback: (suspend (RunYamlRequest, TrailblazeSession) -> TrailblazeSession)? = null,
   /**
    * Seam for waiting on the UI to settle before tool dispatch. Invoked ONCE per handled
    * request, immediately before the tool(s) execute — not after. (Post-tool settling, when
@@ -347,8 +341,8 @@ class RunYamlRequestHandler(
               sessionId = session.sessionId,
               deviceId = request.trailblazeDeviceId,
               objective = objective,
-              agentImplementation = request.agentImplementation,
-              hasTaskPlan = request.agentImplementation == AgentImplementation.MULTI_AGENT_V3,
+              agentImplementation = AgentImplementation.KOOG_STRATEGY_GRAPH,
+              hasTaskPlan = false,
             )
           )
 
@@ -362,71 +356,17 @@ class RunYamlRequestHandler(
           waitForSettled()
           ActionTrace.mark(ActionTrace.Boundary.PRE_SETTLE_DONE)
 
-          // Route to appropriate agent implementation
-          // For TRAILBLAZE_RUNNER, suppress the Started log in the callback since
-          // the handler already emitted it above via sessionManager.emitSessionStartLog().
-          var lastToolSuccess: TrailblazeToolResult.Success? = null
+          // The handler already emitted the Started log above via
+          // sessionManager.emitSessionStartLog(), so suppress it in the callback.
+          val requestWithStartLogSuppressed = request.copy(
+            config = request.config.copy(sendSessionStartLog = false),
+          )
+          val callbackResult = runTrailblazeYaml(requestWithStartLogSuppressed, session, agentMemory)
+          val lastToolSuccess = callbackResult.lastToolSuccess
           // How many on-device tool logs this run emitted — surfaced to the host so it can skip
           // its own catch-all tool-log emit and avoid double-logging the tool (#3818).
-          var onDeviceToolLogCount = 0
-          val finalSession = when (request.agentImplementation) {
-            AgentImplementation.TRAILBLAZE_RUNNER -> {
-              Console.log("[RunYamlRequestHandler] Using TRAILBLAZE_RUNNER (legacy)")
-              val requestWithStartLogSuppressed = request.copy(
-                config = request.config.copy(sendSessionStartLog = false),
-              )
-              val callbackResult =
-                runTrailblazeYaml(requestWithStartLogSuppressed, session, agentMemory)
-              lastToolSuccess = callbackResult.lastToolSuccess
-              onDeviceToolLogCount = callbackResult.onDeviceToolLogCount
-              callbackResult.session
-            }
-
-            AgentImplementation.MULTI_AGENT_V3 -> {
-              val callback = runMultiAgentV3Callback
-              if (callback != null) {
-                Console.log("[RunYamlRequestHandler] Using MULTI_AGENT_V3")
-                // On-device V3 is reserved for the future — no in-repo caller wires this
-                // callback today (the on-device handler's V3 dispatch always falls through
-                // to the TRAILBLAZE_RUNNER branch below, which DOES populate
-                // `lastToolSuccess`). When an on-device V3 dispatcher lands and starts being
-                // wired up, this branch will need a callback-result hook that surfaces the
-                // per-tool [TrailblazeToolResult.Success] back to the handler so the
-                // tool-payload mirror to [RunYamlResponse.toolMessage] /
-                // [RunYamlResponse.toolStructuredContent] stays consistent across agent
-                // implementations. Tracked as a follow-up; see PR #3507 lead-dev review.
-                callback.invoke(request, session)
-              } else {
-                Console.log("[RunYamlRequestHandler] MULTI_AGENT_V3 is not supported on-device; falling back to TRAILBLAZE_RUNNER")
-                val requestWithStartLogSuppressed = request.copy(
-                  config = request.config.copy(sendSessionStartLog = false),
-                )
-                val callbackResult =
-                  runTrailblazeYaml(requestWithStartLogSuppressed, session, agentMemory)
-                lastToolSuccess = callbackResult.lastToolSuccess
-                onDeviceToolLogCount = callbackResult.onDeviceToolLogCount
-                callbackResult.session
-              }
-            }
-
-            AgentImplementation.KOOG_STRATEGY_GRAPH -> {
-              // KOOG_STRATEGY_GRAPH now runs on-device: the agent + its dispatch seam live in
-              // trailblaze-common (jvmAndAndroid), so the same TrailblazeRunner callback path drives
-              // it. We keep agentImplementation = KOOG on the forwarded request so the on-device
-              // AndroidTrailblazeRule selects the Koog strategy-graph agent for live prompt steps
-              // (see AndroidTrailblazeRule.runSuspend). Only the Started-log is suppressed, exactly
-              // like the TRAILBLAZE_RUNNER branch above.
-              Console.log("[RunYamlRequestHandler] Using KOOG_STRATEGY_GRAPH (on-device)")
-              val requestWithStartLogSuppressed = request.copy(
-                config = request.config.copy(sendSessionStartLog = false),
-              )
-              val callbackResult =
-                runTrailblazeYaml(requestWithStartLogSuppressed, session, agentMemory)
-              lastToolSuccess = callbackResult.lastToolSuccess
-              onDeviceToolLogCount = callbackResult.onDeviceToolLogCount
-              callbackResult.session
-            }
-          }
+          val onDeviceToolLogCount = callbackResult.onDeviceToolLogCount
+          val finalSession = callbackResult.session
 
           // Post-settle intentionally omitted. The previous version called waitForSettled()
           // here for up to 5s to ensure a settled UI for any follow-up. That protection is
@@ -505,7 +445,7 @@ class RunYamlRequestHandler(
           )
 
           if (request.config.sendSessionEndLog) {
-            // Pass the raw exception through UNCHANGED so V1's on-disk
+            // Pass the raw exception through UNCHANGED so the on-disk
             // SessionStatus.Ended.Failed.exceptionMessage keeps the verbatim wedge signature
             // for the host's session-status matcher (PR #4119). The typed tag below is the
             // additive structured signal, not a replacement for that text.

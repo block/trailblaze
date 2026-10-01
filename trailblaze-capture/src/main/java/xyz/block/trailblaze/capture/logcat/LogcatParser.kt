@@ -138,14 +138,4 @@ object LogcatParser {
       ts in windowStart..windowEnd
     }
   }
-
-  /**
-   * Extracts logcat lines that fall within a time window, returning raw text.
-   */
-  fun sliceTextByTimeRange(
-    logcatFile: File,
-    startMs: Long,
-    endMs: Long,
-    paddingMs: Long = 500,
-  ): String = sliceByTimeRange(logcatFile, startMs, endMs, paddingMs).joinToString("\n") { it.text }
 }

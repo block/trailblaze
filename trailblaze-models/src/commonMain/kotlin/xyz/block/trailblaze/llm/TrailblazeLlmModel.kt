@@ -85,28 +85,6 @@ data class TrailblazeLlmModel(
         capabilityIds = DEFAULT_CAPABILITY_IDS,
       )
 
-    fun LLModel.toTrailblazeLlmModel(
-      inputCostPerOneMillionTokens: Double,
-      outputCostPerOneMillionTokens: Double,
-      cachedInputDiscountMultiplier: Double = 1.0,
-      maxOutputTokens: Long? = null,
-      imageTokenFormula: ImageTokenFormula = ImageTokenFormula.DEFAULT,
-    ): TrailblazeLlmModel {
-      return TrailblazeLlmModel(
-        trailblazeLlmProvider = TrailblazeLlmProvider.fromKoogLlmProvider(this.provider),
-        modelId = this.id,
-        inputCostPerOneMillionTokens = inputCostPerOneMillionTokens,
-        outputCostPerOneMillionTokens = outputCostPerOneMillionTokens,
-        cachedInputCostPerOneMillionTokens = inputCostPerOneMillionTokens * cachedInputDiscountMultiplier,
-        imageTokenFormula = imageTokenFormula,
-        contextLength = this.contextLength
-          ?: error("contextLength must be set for ${this.id}"),
-        maxOutputTokens = maxOutputTokens ?: this.maxOutputTokens
-        ?: error("maxOutputTokens must be set for ${this.id}"),
-        capabilityIds = this.capabilities?.map { it.id } ?: emptyList()
-      )
-    }
-
     /**
      * Creates a TrailblazeLlmModel for MCP Sampling requests.
      *

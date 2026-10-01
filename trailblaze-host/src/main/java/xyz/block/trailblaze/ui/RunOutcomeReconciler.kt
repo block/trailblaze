@@ -14,7 +14,7 @@ data class ReconciledRunOutcome(
  *
  * Symmetric with the in-process cross-check in `TrailCommand.runSingleTrailFile`:
  * - A session that ended Succeeded(WithSelfHeal) is a pass even when a post-run connect/teardown
- *   error set [latchError] — on the V1 on-device-RPC path a dead instrumentation server can emit a
+ *   error set [latchError] — on the on-device-agent path a dead instrumentation server can emit a
  *   terminal code that a later connect reads as a ConnectionFailure AFTER the trail already passed.
  * - A run that passed but whose session could not then be finalized ([finalizationError]) fails
  *   whatever the disk says: its session is failed on disk too, but that write may not have landed.

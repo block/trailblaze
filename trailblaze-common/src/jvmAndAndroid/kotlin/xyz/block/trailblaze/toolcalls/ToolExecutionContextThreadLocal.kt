@@ -103,25 +103,4 @@ object ToolExecutionContextThreadLocal {
   fun clear() {
     slot.remove()
   }
-
-  /**
-   * Run [block] with [ctx] bound to the [TrailblazeToolExecutionContext] ThreadLocal,
-   * propagated correctly across **coroutine dispatcher hops**. Use this when the block
-   * is a suspend chain that may resume on a different thread than the one that installed
-   * the context — typically when the chain ends in a QuickJS host's async binding callback
-   * (`__trailblazeCall`) which can be invoked on whatever dispatcher the JS engine runs on.
-   *
-   * Internally uses [ThreadLocal.asContextElement] so the value rides on the coroutine
-   * context and gets re-installed on whatever thread the suspension resumes on. This is
-   * the recommended pattern for coroutine-aware ThreadLocal access (see
-   * `ToolExecutionContextThreadLocal`'s class kdoc — same dispatcher-hop hazard).
-   *
-   * Pairs naturally with [install] / [clear] for non-suspend / sequential-batch callers
-   * (`BaseTrailblazeAgent.runTrailblazeTools`); use this method when the block can suspend
-   * across thread switches.
-   */
-  suspend fun <T> withInstalledContext(
-    ctx: TrailblazeToolExecutionContext,
-    block: suspend () -> T,
-  ): T = withContext(slot.asContextElement(ctx)) { block() }
 }

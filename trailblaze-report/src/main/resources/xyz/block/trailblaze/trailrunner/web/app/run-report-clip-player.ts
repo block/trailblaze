@@ -219,6 +219,22 @@ function frameIndexAt(frames: ClipFrame[], t: number): number {
   return lo;
 }
 
+/**
+ * The time of the frame `n` frames from the one on screen at `t` in the recording at `url`, clamped
+ * to the file's first and last frames — how a one-frame step lands on the neighbouring frame
+ * whatever the capture's rate, which varies within a wall-clock stamped recording. Null when the
+ * recording's frames aren't known here (not a WebM, or its bytes were never registered).
+ */
+function adjacentFrameTime(url: string, t: number, n: number): number | null {
+  const clip = clipFor(url);
+  if (!clip) return null;
+  const at = frameIndexAt(clip.frames, t + FRAME_TIME_SLACK_SEC);
+  return clip.frames[Math.max(0, Math.min(clip.frames.length - 1, at + n))].t;
+}
+// A seek lands a hair past a frame's time so the element shows that frame, not a rounding short of
+// it; the same slack reads the frame back when the next step starts from there.
+const FRAME_TIME_SLACK_SEC = 0.0005;
+
 /** The keyframe a decode must start from to reach frame `index`. */
 function keyframeBefore(frames: ClipFrame[], index: number): number {
   for (let i = index; i > 0; i--) if (frames[i].key) return i;
@@ -245,10 +261,16 @@ const adopting = new WeakSet<HTMLMediaElement>();
 // arrived: a surface plays right after setting src, and a large clip takes long enough to hand
 // over that the reader's first press lands in between.
 const refusedPlays = new WeakSet<HTMLMediaElement>();
+// The canvas each taken-over element's frames are painted onto. The element itself only shows them
+// through a stream while it is in the page, so a reader that needs a detached element's frame (a
+// still for the Strings tab) reads it here instead.
+const adoptedCanvases = new WeakMap<HTMLMediaElement, HTMLCanvasElement>();
 
 /** Tell the fallback which bytes an object URL minted for a clip holds, so it can decode them. */
 function registerClipBytes(url: string, bytes: Uint8Array): void {
   clipBytes.set(url, bytes);
+  // Bytes can arrive after a lookup already found none (an archive clip read back from its URL).
+  parsedClips.delete(url);
 }
 
 /**
@@ -276,8 +298,10 @@ function bytesFor(url: string): Uint8Array | null {
 function clipFor(url: string): WebmClip | null {
   if (parsedClips.has(url)) return parsedClips.get(url);
   const bytes = bytesFor(url);
+  // No bytes YET is not a verdict on the file: only a parse is cached, so a later registration counts.
+  if (!bytes) return null;
   let clip: WebmClip | null = null;
-  try { clip = bytes ? parseWebm(bytes) : null; } catch (e) { clip = null; }
+  try { clip = parseWebm(bytes); } catch (e) { clip = null; }
   parsedClips.set(url, clip);
   return clip;
 }
@@ -342,6 +366,7 @@ function adopt(el: HTMLMediaElement, clip: WebmClip): Promise<boolean> {
     canvas.height = clip.height;
     const g = canvas.getContext('2d');
     const stream: MediaStream = (canvas as any).captureStream(0);
+    adoptedCanvases.set(el, canvas);
     const track: any = stream.getVideoTracks()[0];
 
     let decoder: any = null;
@@ -382,6 +407,7 @@ function adopt(el: HTMLMediaElement, clip: WebmClip): Promise<boolean> {
     // Free everything the player holds. Nothing can restart it afterwards.
     const teardown = () => {
       dead = true;
+      adoptedCanvases.delete(el);
       stopClock();
       closeDecoder();
       stream.getTracks().forEach((t) => t.stop());
@@ -598,8 +624,16 @@ function watchClipElement(el: HTMLMediaElement): void {
   if (el && typeof el.addEventListener === 'function') el.addEventListener('error', onMediaError, true);
 }
 
+/**
+ * Where `el`'s current frame can be drawn from: the fallback's canvas once it has taken the element
+ * over (painted on every seek, in the page or not), else the element itself.
+ */
+function clipFrameSource(el: HTMLVideoElement): HTMLVideoElement | HTMLCanvasElement {
+  return adoptedCanvases.get(el) || el;
+}
+
 export {
-  parseWebm, frameIndexAt, keyframeBefore, registerClipBytes, unregisterClipBytes, installClipFallback, watchClipElement,
-  keepRefusedPlays,
+  parseWebm, frameIndexAt, keyframeBefore, adjacentFrameTime, FRAME_TIME_SLACK_SEC, registerClipBytes, unregisterClipBytes, installClipFallback, watchClipElement,
+  keepRefusedPlays, clipFrameSource,
 };
 export type { WebmClip, ClipFrame };

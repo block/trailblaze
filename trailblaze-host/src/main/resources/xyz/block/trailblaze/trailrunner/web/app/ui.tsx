@@ -402,33 +402,6 @@ function ModelPicker() {
   );
 }
 
-// Picks the agent implementation (TRAILBLAZE_RUNNER / MULTI_AGENT_V3 / KOOG_STRATEGY_GRAPH) that owns
-// the run loop. Collapsed chip shows the friendly agent name; persists to the global agent setting.
-function AgentPicker() {
-  const settings = TB.useSettings();
-  const s = settings.data;
-  if (!s || s.available === false || !s.llm) return null;
-  const agents = (s.llm.availableAgents || []);
-  if (agents.length === 0) return null;
-  const cur = s.llm.agent || '';
-  const display = (agents.find((a) => a.id === cur) || {}).display || cur || 'agent';
-  return (
-    <Select compact subtle value={cur} options={agents.map((a) => [a.id, a.display])} label={display} title="Agent driving the run"
-      onChange={(e) => TB.updateSetting({ agent: e.target.value }).then(() => settings.reload())} />
-  );
-}
-
-// The model + agent pickers as one unit, for run/recording surfaces. `showAgent={false}` for
-// model-only contexts (e.g. step proposal, which doesn't run the agent loop).
-function RunControls({ showAgent = true }) {
-  return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-      <ModelPicker />
-      {showAgent && <AgentPicker />}
-    </span>
-  );
-}
-
 // The shared header for every left list-rail (Tools, Trailheads, Devices, Trails,
 // Active, Completed). One source of truth for the rail
 // header's padding, title size, leading-icon size, and right-action alignment so they

@@ -286,12 +286,6 @@ object TrailblazeProjectConfigLoader {
       is ToolEntry.Ref -> loadRef(entry.path, anchor, ToolYamlConfig.serializer(), "tool")
     }
 
-  internal fun resolveProviderEntry(entry: ProviderEntry, anchor: File): BuiltInProviderConfig =
-    when (entry) {
-      is ProviderEntry.Inline -> entry.config
-      is ProviderEntry.Ref -> loadRef(entry.path, anchor, BuiltInProviderConfig.serializer(), "provider")
-    }
-
   internal fun <T> loadRef(
     refPath: String,
     anchor: File,
@@ -1905,7 +1899,6 @@ object TrailblazeProjectConfigLoader {
     /** Every trailmap that completed sibling resolution — surfaced via [TrailblazeResolvedConfig]. */
     val resolvedTrailmaps: List<ResolvedTrailmap> = emptyList(),
   )
-
 }
 
 /**

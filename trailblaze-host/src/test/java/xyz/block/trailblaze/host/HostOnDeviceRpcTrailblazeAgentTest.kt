@@ -337,7 +337,6 @@ class HostOnDeviceRpcTrailblazeAgentTest {
   // success=false, so the RPC Failure-arm string matches never see it — the host must read the
   // typed field, arm the daemon's server-relaunch breaker, and return FatalError so the agent
   // loop aborts instead of burning its LLM budget re-dispatching against a dead server.
-  // Mirrors the V3 coverage in HostAccessibilityRpcClientTest.
 
   /** A success=false response whose typed `nonRecoverableWedge` field is set by [wedged].
    *  The errorMessage deliberately carries NO wedge phrases — the typed field alone must

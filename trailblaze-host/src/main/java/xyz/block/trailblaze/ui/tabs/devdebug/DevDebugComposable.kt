@@ -567,7 +567,6 @@ private fun McpSessionCard(session: McpSessionSnapshot) {
         ) {
           McpSessionDetailRow("Session ID", session.sessionId)
           McpSessionDetailRow("Mode", session.mode.name)
-          McpSessionDetailRow("Agent", session.agentImplementation.name)
           McpSessionDetailRow(
             "Device",
             session.associatedDeviceId?.instanceId ?: "None"

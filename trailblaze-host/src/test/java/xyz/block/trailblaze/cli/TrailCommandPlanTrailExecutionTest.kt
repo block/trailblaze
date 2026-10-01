@@ -5,6 +5,7 @@ import java.io.File
 import java.nio.charset.StandardCharsets
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -1144,6 +1145,195 @@ class TrailCommandPlanTrailExecutionTest {
     assertIs<TrailExecutionItem.Skip>(
       TrailCommand.planTrailExecution(files = listOf(file), includeTags = emptyList()).items.single(),
     )
+  }
+
+  /**
+   * A trail declaring single-device entries beside its configuration runs as that configuration
+   * only when the run binds companions, so a `skip:` keyed by the configuration must halt a
+   * `--bind` run and leave a plain single-device run alone.
+   */
+  @Test
+  fun `a configuration-keyed skip on a mixed trail applies only to a run that binds companions`() {
+    val file = File(tempFolder.root, "mixed-skip.trail.yaml")
+    file.writeText(
+      """
+      config:
+        target: myapp
+        devices:
+          android-tablet: {}
+          pos-pair:
+            devices:
+              seller:
+                classifier: android-tablet
+              buyer:
+                classifier: android-phone
+        skip:
+          pos-pair: "pair flow blocked on #456"
+      trail:
+        - step: Do the thing
+      """.trimIndent() + "\n",
+    )
+
+    fun planItem(bindsCompanionDevices: Boolean, deviceConfiguration: String? = null) =
+      TrailCommand.planTrailExecution(
+        files = listOf(file),
+        includeTags = emptyList(),
+        configClassifiers = listOf(TrailblazeDeviceClassifier("android-tablet")),
+        deviceConfiguration = deviceConfiguration,
+        bindsCompanionDevices = bindsCompanionDevices,
+      ).items.single()
+
+    assertIs<TrailExecutionItem.Run>(planItem(bindsCompanionDevices = false))
+    val paired = planItem(bindsCompanionDevices = true)
+    assertIs<TrailExecutionItem.Skip>(paired)
+    assertEquals("pair flow blocked on #456", paired.reason)
+    // Naming the configuration selects it with or without bindings, exactly as the runtime does.
+    assertIs<TrailExecutionItem.Skip>(
+      planItem(bindsCompanionDevices = false, deviceConfiguration = "pos-pair"),
+    )
+  }
+
+  /**
+   * The planner reads this shell's `TRAILBLAZE_DEVICE_BINDINGS`, but a delegated run executes with the
+   * daemon's environment, so a mixed trail must carry the shell's bindings to run what was planned.
+   */
+  @Test
+  fun `a delegated mixed trail carries this shell's environment bindings`() {
+    val mixed = """
+      config:
+        devices:
+          android-tablet: {}
+          pos-pair:
+            devices:
+              seller:
+                classifier: android-tablet
+              buyer:
+                classifier: android-phone
+      trail:
+        - step: Do the thing
+    """.trimIndent()
+
+    assertEquals(
+      mapOf("buyer" to "emulator-5556"),
+      TrailCommand.delegatedDeviceBindings(mixed, emptyMap(), rawEnvironmentBindings = "buyer=emulator-5556"),
+    )
+    // `--bind` still wins over the environment.
+    assertEquals(
+      mapOf("buyer" to "emulator-5558"),
+      TrailCommand.delegatedDeviceBindings(
+        mixed,
+        mapOf("buyer" to "emulator-5558"),
+        rawEnvironmentBindings = "buyer=emulator-5556",
+      ),
+    )
+  }
+
+  @Test
+  fun `only a run forwarding environment bindings to a mixed trail depends on per-run binding support`() {
+    val mixed = File(tempFolder.root, "mixed-forward.trail.yaml").apply {
+      writeText(
+        """
+        config:
+          devices:
+            android-tablet: {}
+            pos-pair:
+              devices:
+                seller:
+                  classifier: android-tablet
+                buyer:
+                  classifier: android-phone
+        trail:
+          - step: Do the thing
+        """.trimIndent() + "\n",
+      )
+    }
+    val singleDevice = File(tempFolder.root, "single-forward.trail.yaml").apply {
+      writeText(
+        """
+        config:
+          devices:
+            android-tablet: {}
+        trail:
+          - step: Do the thing
+        """.trimIndent() + "\n",
+      )
+    }
+
+    assertTrue(TrailCommand.forwardsEnvironmentBindings(listOf(singleDevice, mixed), emptyMap(), "buyer=emulator-5556"))
+    assertFalse(TrailCommand.forwardsEnvironmentBindings(listOf(singleDevice), emptyMap(), "buyer=emulator-5556"))
+    assertFalse(TrailCommand.forwardsEnvironmentBindings(listOf(mixed), emptyMap(), rawEnvironmentBindings = null))
+    // `--bind` is gated up front already; the environment isn't forwarded beside it.
+    assertFalse(
+      TrailCommand.forwardsEnvironmentBindings(listOf(mixed), mapOf("buyer" to "emulator-5558"), "buyer=emulator-5556"),
+    )
+  }
+
+  @Test
+  fun `a delegated trail that is not mixed leaves environment bindings to the daemon`() {
+    val singleDevice = """
+      config:
+        devices:
+          android-tablet: {}
+      trail:
+        - step: Do the thing
+    """.trimIndent()
+    val configurationOnly = """
+      config:
+        devices:
+          pos-pair:
+            devices:
+              seller:
+                classifier: android-tablet
+              buyer:
+                classifier: android-phone
+      trail:
+        - step: Do the thing
+    """.trimIndent()
+
+    // A request binding on a trail declaring no configuration is a hard error where the env var is
+    // ignored, and a configuration-only trail binds its configuration either way.
+    for (yaml in listOf(singleDevice, configurationOnly)) {
+      assertEquals(
+        emptyMap(),
+        TrailCommand.delegatedDeviceBindings(yaml, emptyMap(), rawEnvironmentBindings = "buyer=emulator-5556"),
+      )
+    }
+  }
+
+  @Test
+  fun `an undeclared configuration name is not planned as the sole configuration's skip`() {
+    // The runtime rejects a selection the trail doesn't declare. Planning it as the sole
+    // configuration would apply that configuration's `skip:` and report a clean skip, so the typo
+    // would never reach the runtime's error.
+    val file = File(tempFolder.root, "mixed-typo-skip.trail.yaml")
+    file.writeText(
+      """
+      config:
+        target: myapp
+        devices:
+          android-tablet: {}
+          pos-pair:
+            devices:
+              seller:
+                classifier: android-tablet
+              buyer:
+                classifier: android-phone
+        skip:
+          pos-pair: "pair flow blocked on #456"
+      trail:
+        - step: Do the thing
+      """.trimIndent() + "\n",
+    )
+
+    val item = TrailCommand.planTrailExecution(
+      files = listOf(file),
+      includeTags = emptyList(),
+      configClassifiers = listOf(TrailblazeDeviceClassifier("android-tablet")),
+      deviceConfiguration = "pos-piar",
+      bindsCompanionDevices = true,
+    ).items.single()
+
+    assertIs<TrailExecutionItem.Run>(item)
   }
 
   @Test

@@ -38,29 +38,6 @@ data class LlmRequestUsageAndCost(
     }
 
   /**
-   * Returns true if the estimated breakdown matches the LLM-reported input tokens.
-   * Allows for a small tolerance of 1% or 10 tokens (whichever is larger).
-   */
-  fun hasInputTokenMismatch(): Boolean {
-    val breakdown = inputTokenBreakdown ?: return false
-    if (inputTokens == 0L) return false
-
-    val estimatedTotal = breakdown.totalEstimatedTokens
-    val diff = kotlin.math.abs(estimatedTotal - inputTokens)
-    val tolerance = maxOf(10, (inputTokens * 0.01).toLong())
-
-    return diff > tolerance
-  }
-
-  /**
-   * Returns the difference between estimated and reported tokens.
-   */
-  fun getInputTokenDifference(): Long {
-    val breakdown = inputTokenBreakdown ?: return 0
-    return breakdown.totalEstimatedTokens - inputTokens
-  }
-
-  /**
    * Returns a copy with costs recalculated using the given model's pricing.
    * Used by the host-side LogsRepo to enrich logs from on-device execution
    * where the device may not have had the latest pricing config.
@@ -92,34 +69,6 @@ data class LlmRequestUsageAndCost(
       val cachedCost = cacheReadInputTokens *
         model.cachedInputCostPerOneMillionTokens / 1_000_000.0
       return nonCachedCost + cachedCost
-    }
-
-    /**
-     * Calculates cost from LLM response without token breakdown.
-     * Use this when you don't have access to the original request data.
-     */
-    fun Message.Assistant.calculateCost(
-      trailblazeLlmModel: TrailblazeLlmModel,
-    ): LlmRequestUsageAndCost {
-      val usage = this.metaInfo
-      val promptTokens = usage.inputTokensCount?.toLong() ?: 0L
-      val completionTokens = usage.outputTokensCount?.toLong() ?: 0L
-      val cachedTokens = CachedTokenExtractor.extractCacheReadTokens(usage.metadata)
-
-      val promptCost = calculatePromptCost(promptTokens, cachedTokens, trailblazeLlmModel)
-      val completionCost =
-        completionTokens * trailblazeLlmModel.outputCostPerOneMillionTokens / 1_000_000.0
-
-      return LlmRequestUsageAndCost(
-        trailblazeLlmModel = trailblazeLlmModel,
-        inputTokens = promptTokens,
-        outputTokens = completionTokens,
-        cacheReadInputTokens = cachedTokens,
-        cacheCreationInputTokens = CachedTokenExtractor.extractCacheCreationTokens(usage.metadata),
-        promptCost = promptCost,
-        completionCost = completionCost,
-        inputTokenBreakdown = null,
-      )
     }
   }
 

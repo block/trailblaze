@@ -9,6 +9,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import xyz.block.trailblaze.android.tools.shellEscape
+import xyz.block.trailblaze.decision.NextMoveDecisionLlmClient
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDevicePort
@@ -430,11 +431,17 @@ object HostAndroidDeviceConnectUtils {
     // launched it, so reusing on that signal skips the install check and the launch and then binds
     // to whatever else answers the device port. Those runs get the full clean-slate path below;
     // the readiness probe, not `pidof`, is what says they are up.
+    //
+    // The runner's RPC server must be listening too, not only its process alive: after a reboot
+    // Android restarts the accessibility service the runner hosts, so the process is back with no
+    // instrumentation behind it, and reusing it would sit out the whole readiness probe before
+    // the zombie restart.
     val alreadyRunning = !forceRestart &&
       trailblazeOnDeviceInstrumentationTarget.processLivenessProvesInstrumentationAttached &&
-      AndroidHostAdbUtils.isAppRunning(
+      AndroidHostAdbUtils.isOnDeviceRpcServerUp(
         deviceId = trailblazeDeviceId,
         appId = trailblazeOnDeviceInstrumentationTarget.instrumentationProcessAppId,
+        rpcPort = trailblazeDeviceId.getTrailblazeOnDeviceSpecificPort(),
       )
 
     if (alreadyRunning) {
@@ -561,7 +568,10 @@ object HostAndroidDeviceConnectUtils {
           } else {
             null
           },
-        additionalInstrumentationArgs = additionalInstrumentationArgs,
+        // The on-device agent reads decision settings from its instrumentation args; an explicit
+        // arg from the caller still wins.
+        additionalInstrumentationArgs =
+          NextMoveDecisionLlmClient.instrumentationArgs() + additionalInstrumentationArgs,
       ).joinToString(" ")
       val handle = AndroidHostAdbUtils.streamingShell(
         deviceId = trailblazeDeviceId,
@@ -744,20 +754,6 @@ object HostAndroidDeviceConnectUtils {
     }
   }
 
-  // Function to get devices from adb
-  suspend fun getAdbDevices(): List<TrailblazeDeviceId> =
-    AndroidHostAdbUtils.listConnectedAdbDevices()
-
-  // Function to get the device model name from adb
-  fun getDeviceModelName(deviceId: TrailblazeDeviceId): String = try {
-    AndroidHostAdbUtils.execAdbShellCommand(
-      deviceId = deviceId,
-      args = listOf("getprop", "ro.product.model"),
-    ).lines().firstOrNull()?.takeIf { it.isNotBlank() } ?: deviceId.instanceId
-  } catch (e: Exception) {
-    deviceId.instanceId
-  }
-
   /**
    * The HTTPS port each device's currently-running instrumentation was launched with.
    *
@@ -800,15 +796,16 @@ object HostAndroidDeviceConnectUtils {
   private val lastLaunchedLlmAuthByDevice = ConcurrentHashMap<TrailblazeDeviceId, String>()
 
   /**
-   * A stable, non-reversible summary of the LLM credentials in [additionalInstrumentationArgs], or
-   * `""` when it carries none.
+   * A stable, non-reversible summary of the LLM credentials and decision settings in
+   * [additionalInstrumentationArgs], or `""` when it carries none. Decision settings count because
+   * a reused runner keeps those too: turning decisions on must reach a runner launched without them.
    *
    * Keyed by arg name as well as value so that gaining or losing a provider counts as a change, and
    * sorted so that two equal arg maps of different iteration order agree.
    */
   internal fun llmAuthFingerprint(additionalInstrumentationArgs: Map<String, String>): String {
     val authArgs = additionalInstrumentationArgs
-      .filterKeys { LlmAuthResolver.isAuthTokenArg(it) }
+      .filterKeys { LlmAuthResolver.isAuthTokenArg(it) || it in NextMoveDecisionLlmClient.SETTING_NAMES }
       .toSortedMap()
     if (authArgs.isEmpty()) return ""
     val digest = MessageDigest.getInstance("SHA-256")
@@ -1005,6 +1002,7 @@ object HostAndroidDeviceConnectUtils {
     additionalInstrumentationArgs: Map<String, String>,
     forceRestart: Boolean,
     sendProgressMessage: (String) -> Unit,
+    decisionArgs: Map<String, String> = NextMoveDecisionLlmClient.instrumentationArgs(),
     connect: suspend (effectiveForceRestart: Boolean) -> DeviceConnectionStatus,
   ): DeviceConnectionStatus = deviceConnectMutex(deviceId).withLock {
     val staleRouting = requiresRelaunchForHttpsPort(
@@ -1018,16 +1016,17 @@ object HostAndroidDeviceConnectUtils {
       )
     }
 
-    val requestedLlmAuth = llmAuthFingerprint(additionalInstrumentationArgs)
+    // The decision settings as the launch will add them, so a change in them relaunches too.
+    val requestedLlmAuth = llmAuthFingerprint(decisionArgs + additionalInstrumentationArgs)
     val staleLlmAuth = requiresRelaunchForLlmAuth(
       launchedLlmAuthFingerprint = lastLaunchedLlmAuthByDevice[deviceId],
       requestedLlmAuthFingerprint = requestedLlmAuth,
     )
     if (staleLlmAuth && !forceRestart) {
       sendProgressMessage(
-        "The on-device runner still holds the credential it was launched with and the host has a " +
-          "refreshed LLM credential — relaunching instrumentation so the device authenticates " +
-          "with the current one.",
+        "The on-device runner still holds the credential or decision settings it was launched " +
+          "with and the host has new ones — relaunching instrumentation so the device uses the " +
+          "current ones.",
       )
     }
 
@@ -1060,6 +1059,7 @@ object HostAndroidDeviceConnectUtils {
     additionalInstrumentationArgs: Map<String, String> = emptyMap(),
     forceRestart: Boolean = false,
     sendProgressMessage: (String) -> Unit = {},
+    decisionArgs: Map<String, String> = emptyMap(),
     connect: suspend (effectiveForceRestart: Boolean) -> DeviceConnectionStatus,
   ): DeviceConnectionStatus = withRoutePinnedUnderDeviceLock(
     deviceId = deviceId,
@@ -1067,6 +1067,7 @@ object HostAndroidDeviceConnectUtils {
     additionalInstrumentationArgs = additionalInstrumentationArgs,
     forceRestart = forceRestart,
     sendProgressMessage = sendProgressMessage,
+    decisionArgs = decisionArgs,
     connect = connect,
   )
 

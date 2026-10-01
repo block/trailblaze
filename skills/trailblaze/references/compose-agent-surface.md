@@ -24,6 +24,7 @@ define a waypoint, curate which tools the agent sees, write a
 
 - [What you compose](#what-you-compose)
 - [Directory layout](#directory-layout)
+- [Before you write a tool](#before-you-write-a-tool)
 - [Authoring the smallest useful tool](#authoring-the-smallest-useful-tool)
 - [Materializing the workspace](#materializing-the-workspace)
 - [When the tool doesn't appear in `toolbox`](#when-the-tool-doesnt-appear-in-toolbox)
@@ -64,6 +65,42 @@ define a waypoint, curate which tools the agent sees, write a
 trailmaps:
   - trailmaps/myapp/trailmap.yaml
 ```
+
+## Before you write a tool
+
+Settle two questions first: does it need to be a registered tool, and does it need Kotlin?
+Usually the answers are no and no.
+
+- **Register a tool only when trails or many callers need it.** Every registered tool is listed
+  in every session's tool registry, and someone maintains it. Plumbing that one or two tools share
+  is an exported function in the trailmap's `tools/` directory, imported by those tools. Calling a
+  helper is a plain JavaScript call, so it costs nothing and adds nothing to the registry.
+- **Write it in TypeScript.** A scripted tool runs in-process in QuickJS. A call costs about
+  0.2 ms more than the same tool in Kotlin, while one device action takes hundreds of
+  milliseconds (devlog `2026-09-29-typescript-tools-cost-a-fifth-of-a-millisecond`). The tool
+  ships with its trailmap and needs no framework build.
+- **Reach the host through `exec` and HTTP through `fetch`.** Between them, they cover most of
+  what native tools used to be written for.
+- **Use Kotlin only for a primitive the sandbox lacks**, such as sensitive agent memory,
+  environment variables, binary HTTP bodies or sockets. Keep the Kotlin to that primitive and
+  write the rest in TypeScript on top of it.
+- **A Kotlin tool that only TypeScript calls, by name, should be ported.** Turn it into a
+  TypeScript helper and delete the Kotlin.
+
+```ts
+// trails/config/trailmaps/myapp/tools/myapp_preferences.ts
+// A helper, not a tool: no trailblaze.tool(), no YAML descriptor, nothing registered.
+import type { ToolContext } from "@trailblaze/scripting";
+
+/** Reads one key from the app's preferences on the host. */
+export async function readMyAppPreference(ctx: ToolContext, key: string): Promise<string> {
+  return String(await ctx.tools.exec({ argv: ["myapp-prefs", "get", key] })).trim();
+}
+```
+
+The tool that needs the value imports `readMyAppPreference` and calls it directly. The
+Wikipedia and iOS Contacts examples share code this way (`wikipedia_shared.ts`,
+`contacts_ios_shared.ts`).
 
 ## Authoring the smallest useful tool
 

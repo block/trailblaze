@@ -144,7 +144,7 @@ class HostMaestroDriverScreenState(
     val tree = stableTrailblazeNodeTree ?: return null
     return when (deviceInfo.platform) {
       Platform.IOS -> CompactScreenElements.buildForIos(tree, details, screenHeight = deviceHeight, screenWidth = deviceWidth)
-      Platform.ANDROID -> CompactScreenElements.buildForAndroid(tree, details, screenHeight = deviceHeight)
+      Platform.ANDROID -> CompactScreenElements.buildForAndroid(tree, details, screenHeight = deviceHeight, screenWidth = deviceWidth)
       else -> null
     }
   }

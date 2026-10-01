@@ -76,7 +76,6 @@ interface TrailblazeMcpBridge {
   suspend fun runYaml(
     yaml: String,
     startNewSession: Boolean,
-    agentImplementation: AgentImplementation = AgentImplementation.DEFAULT,
   ): String
 
   /**
@@ -239,7 +238,6 @@ interface TrailblazeMcpBridge {
    * @param objectives List of prompt strings to wait for (matches ObjectiveCompleteLog.promptStep.prompt)
    * @param onProgress Callback for progress messages during execution
    * @param timeoutPerObjective Maximum time to wait for each objective
-   * @param agentImplementation Which agent to use for execution (default TRAILBLAZE_RUNNER)
    * @return Result describing success/failure
    */
   suspend fun runYamlBlocking(
@@ -247,7 +245,6 @@ interface TrailblazeMcpBridge {
     objectives: List<String>,
     onProgress: (String) -> Unit = {},
     timeoutPerObjective: Duration = Duration.parse("5m"),
-    agentImplementation: AgentImplementation = AgentImplementation.DEFAULT,
   ): RunYamlBlockingResult = RunYamlBlockingResult.NotImplemented
 
   /**
@@ -454,18 +451,6 @@ interface TrailblazeMcpBridge {
    * @return null on success, or an error message
    */
   fun setLlmConfig(provider: String?, model: String?): String? = "Not implemented"
-
-  /**
-   * Returns the current agent implementation from the persisted app config.
-   */
-  fun getAgentImplementation(): AgentImplementation? = null
-
-  /**
-   * Updates the agent implementation in the persisted app config.
-   *
-   * @return null on success, or an error message
-   */
-  fun setAgentImplementation(implementation: AgentImplementation): String? = "Not implemented"
 
   /**
    * Returns the built-in tool classes for the inner agent based on the currently connected device.

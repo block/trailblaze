@@ -12,6 +12,7 @@ val libsCatalog = extensions.getByType<VersionCatalogsExtension>().named("libs")
 val skikoVersion = libsCatalog.findVersion("skiko").get().requiredVersion
 val serializationVersion = libsCatalog.findVersion("kotlinx-serialization").get().requiredVersion
 val micrometerVersion = libsCatalog.findVersion("micrometer").get().requiredVersion
+val log4jVersion = libsCatalog.findVersion("log4j").get().requiredVersion
 val ktorVersion = libsCatalog.findVersion("ktor").get().requiredVersion
 val kotlinVersion = libsCatalog.findVersion("kotlin").get().requiredVersion
 val opentelemetryVersion = libsCatalog.findVersion("opentelemetry").get().requiredVersion
@@ -64,15 +65,24 @@ subprojects {
     }
   }
 
-  // Force micrometer to a version that fixes CVE-2026-40984 (CWE-770: Allocation of Resources
-  // Without Limits or Throttling). micrometer is a transitive dependency of
-  // dev.mobile:maestro-utils, which pins the vulnerable 1.13.4; this project does not use it
-  // directly.
+  // Maestro's metrics dependency still requests an older Micrometer version. Keep its modules
+  // aligned at a version that fixes CVE-2026-40984, CVE-2026-59295 and CVE-2026-59296.
   configurations.all {
     resolutionStrategy.eachDependency {
       if (requested.group == "io.micrometer") {
         useVersion(micrometerVersion)
-        because("CVE-2026-40984: micrometer-core < 1.15.12 is vulnerable to resource exhaustion")
+        because("Micrometer security fixes require $micrometerVersion or newer")
+      }
+    }
+  }
+
+  // Maestro's logging dependencies still request vulnerable Log4j 2.25.3. Align the entire
+  // family, including the SLF4J bridge, at a patched version across all configurations.
+  configurations.all {
+    resolutionStrategy.eachDependency {
+      if (requested.group == "org.apache.logging.log4j") {
+        useVersion(log4jVersion)
+        because("Log4j security fixes require $log4jVersion or newer")
       }
     }
   }

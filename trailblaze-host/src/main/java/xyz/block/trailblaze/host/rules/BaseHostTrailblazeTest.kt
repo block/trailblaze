@@ -8,13 +8,9 @@ import maestro.DeviceInfo
 import org.junit.Rule
 import org.junit.rules.RuleChain
 import xyz.block.trailblaze.TrailblazeYamlUtil
-import xyz.block.trailblaze.agent.DefaultProgressReporter
-import xyz.block.trailblaze.agent.InnerLoopScreenAnalyzer
-import xyz.block.trailblaze.agent.MultiAgentV3Runner
-import xyz.block.trailblaze.agent.MultiAgentV3TestAgentRunner
 import xyz.block.trailblaze.agent.TrailblazeElementComparator
 import xyz.block.trailblaze.BaseTrailblazeAgent
-import xyz.block.trailblaze.agent.TrailblazeRunner
+import xyz.block.trailblaze.agent.TrailblazeSystemPrompt
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TargetTemplateContext
 import xyz.block.trailblaze.mcp.agent.KoogTestAgentRunner
@@ -32,7 +28,6 @@ import xyz.block.trailblaze.host.HostYamlRunResult
 import xyz.block.trailblaze.host.devices.DeviceLocaleConfigurator
 import xyz.block.trailblaze.host.MaestroHostRunnerImpl
 import xyz.block.trailblaze.MaestroTrailblazeAgent
-import xyz.block.trailblaze.agent.AgentUiActionExecutor
 import xyz.block.trailblaze.host.toMaestroPlatform
 import xyz.block.trailblaze.host.ios.IosDriverTrailblazeAgent
 import xyz.block.trailblaze.host.ios.IosDeviceManager
@@ -45,13 +40,9 @@ import xyz.block.trailblaze.host.rules.TrailblazeHostLlmConfig.DEFAULT_TRAILBLAZ
 import xyz.block.trailblaze.http.DynamicLlmClient
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.logs.client.TrailblazeLog
-import xyz.block.trailblaze.logs.client.TrailblazeSessionManager
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.logs.model.TraceId
-import xyz.block.trailblaze.mcp.AgentImplementation
-import xyz.block.trailblaze.cli.CliConfigHelper
-import xyz.block.trailblaze.mcp.sampling.LocalLlmSamplingSource
 import xyz.block.trailblaze.model.TrailblazeConfig
 import xyz.block.trailblaze.host.ios.MobileDeviceUtils
 import xyz.block.trailblaze.model.ResolvedTarget
@@ -68,7 +59,6 @@ import xyz.block.trailblaze.toolcalls.EmptyTrailblazeToolSurface
 import xyz.block.trailblaze.toolcalls.ResolvedAgentToolbox
 import xyz.block.trailblaze.toolcalls.ResolvedToolExclusions
 import xyz.block.trailblaze.toolcalls.ToolName
-import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toTrailblazeToolDescriptor
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
@@ -335,7 +325,7 @@ abstract class BaseHostTrailblazeTest(
         // A failed probe throws and reaches the onFailure log below. An EMPTY inventory is the
         // other shape a broken probe can take — a running device always has packages — so it is
         // logged too, keeping a downstream "ctx.target.resolveAppId() === undefined" debuggable
-        // (mirrors the V1 resolution site in TrailblazeHostYamlRunner).
+        // (mirrors the resolution site in TrailblazeHostYamlRunner).
         MobileDeviceUtils.getInstalledAppIds(deviceId).also { installed ->
           if (installed.isEmpty()) {
             Console.log(
@@ -397,16 +387,6 @@ abstract class BaseHostTrailblazeTest(
   }
 
   /**
-   * Which agent implementation to use for this test.
-   * Configurable via the `trailblaze.agent` system property for CI toggle.
-   * Defaults to KOOG_STRATEGY_GRAPH; TRAILBLAZE_RUNNER remains available as an explicit legacy
-   * selection.
-   */
-  protected open val agentImplementation: AgentImplementation =
-    System.getProperty("trailblaze.agent", AgentImplementation.DEFAULT_NAME)
-      .let { AgentImplementation.valueOf(it) }
-
-  /**
    * The active target's `excluded_tools:` surface (class / YAML / scripted) for this driver, when an
    * [appTarget] was supplied. Threaded into the repo below so a host JUnit/CLI run honors the SAME
    * scripted + YAML opt-outs the daemon and on-device paths do — not just the class-backed ones the
@@ -459,98 +439,26 @@ abstract class BaseHostTrailblazeTest(
     )
   }
 
+  /**
+   * The agent, as a [KoogTestAgentRunner] for this Maestro host path (local Android + iOS). It does
+   * NOT run the prompt loop itself — the loop lives in [TrailblazeRunnerUtil.runPromptSuspend],
+   * which replays recorded steps and only delegates unrecorded ones to this runner.
+   * [trailblazeAgent] is a [BaseTrailblazeAgent] for every Maestro target.
+   */
   val trailblazeRunner: TestAgentRunner by lazy {
-    when (agentImplementation) {
-      AgentImplementation.MULTI_AGENT_V3 -> createV3Runner()
-      AgentImplementation.KOOG_STRATEGY_GRAPH -> createKoogRunner()
-      else -> createLegacyRunner()
-    }
-  }
-
-  private fun createLegacyRunner(): TrailblazeRunner {
-    return TrailblazeRunner(
-      screenStateProvider = screenStateProvider,
+    KoogTestAgentRunner(
       agent = trailblazeAgent,
+      toolRepo = toolRepo,
+      screenStateProvider = screenStateProvider,
+      elementComparator = elementComparator,
       llmClient = dynamicLlmClient.createLlmClient(),
       trailblazeLlmModel = trailblazeLlmModel,
-      trailblazeToolRepo = toolRepo,
-      systemPromptTemplate = systemPromptTemplate,
-      trailblazeLogger = loggingRule.logger,
+      logger = loggingRule.logger,
       sessionProvider = { loggingRule.session ?: error("Session not available - ensure test is running") },
+      maxLlmCalls = null,
+      systemPromptTemplate = TrailblazeSystemPrompt.compose(platformPrompt = systemPromptTemplate),
     )
   }
-
-  private fun createV3Runner(): MultiAgentV3TestAgentRunner {
-    val llmClient = dynamicLlmClient.createLlmClient()
-    val samplingSource = LocalLlmSamplingSource(
-      llmClient = llmClient,
-      llmModel = trailblazeLlmModel,
-      logsRepo = hostLoggingRule.logsRepo,
-      sessionIdProvider = { loggingRule.session?.sessionId },
-      saveAnnotatedScreenshotsProvider = {
-        CliConfigHelper.readConfig()?.saveAnnotatedScreenshots ?: true
-      },
-    )
-    val screenAnalyzer = InnerLoopScreenAnalyzer(
-      samplingSource = samplingSource,
-      model = trailblazeLlmModel,
-    )
-    val executor = AgentUiActionExecutor(
-      agent = trailblazeAgent,
-      screenStateProvider = screenStateProvider,
-      toolRepo = toolRepo,
-      elementComparator = elementComparator,
-    )
-
-    val session = loggingRule.session ?: error("Session not available - ensure test is running")
-    val progressListener = loggingRule.logger.createProgressListener(session)
-    val progressReporter = DefaultProgressReporter(progressListener)
-
-    val availableToolsProvider = {
-      toolRepo.getCurrentToolDescriptors().map { it.toTrailblazeToolDescriptor() }
-    }
-
-    val v3Runner = MultiAgentV3Runner.create(
-      screenAnalyzer = screenAnalyzer,
-      executor = executor,
-      progressReporter = progressReporter,
-      deviceId = trailblazeDeviceId,
-      availableToolsProvider = availableToolsProvider,
-    )
-
-    // sessionIdProvider is invoked once per tool/step. If we hit the fallback
-    // path, we must return the *same* fallback ID across calls — otherwise
-    // consecutive tool invocations in one test would write to different session
-    // directories — and we should log the unexpected fallback exactly once.
-    var cachedFallbackSessionId: SessionId? = null
-    return MultiAgentV3TestAgentRunner(
-      v3Runner = v3Runner,
-      screenStateProvider = screenStateProvider,
-      sessionIdProvider = {
-        loggingRule.session?.sessionId ?: cachedFallbackSessionId ?: run {
-          Console.error("⚠️ No active loggingRule session; generating fallback session ID")
-          TrailblazeSessionManager.generateSessionId("host_test_fallback")
-            .also { cachedFallbackSessionId = it }
-        }
-      },
-      caseTitleProvider = { currentCaseTitle },
-    )
-  }
-
-  /**
-   * The title of the trail currently being executed (e.g. an external test-case name).
-   *
-   * Updated at the start of each [runTrail] call so [MultiAgentV3TestAgentRunner] can
-   * forward it as [RecommendationContext.overallObjective] for every step. This lets the
-   * inner agent recognise impossible objectives early rather than exhausting all retries.
-   *
-   * Thread-safety: JUnit creates a new [BaseHostTrailblazeTest] instance per `@Test`
-   * method, so only one [runTrail] call can ever execute on a given instance at a time.
-   * [Volatile] provides the visibility guarantee needed when the lazy [trailblazeRunner]
-   * reads the field from the coroutine's execution thread.
-   */
-  @Volatile
-  private var currentCaseTitle: String? = null
 
   private val trailblazeYaml = TrailblazeYaml.Default
   private var currentToolTraceId: TraceId? = null
@@ -595,12 +503,6 @@ abstract class BaseHostTrailblazeTest(
     trailItems: List<TrailYamlItem>,
     useRecordedSteps: Boolean,
   ): TrailblazeToolResult.Success? {
-    // Capture the trail title once so caseTitleProvider in the V3 runner can read it for every
-    // step. We scan for the first ConfigTrailItem rather than relying on item order so the title
-    // is available even if prompts appear before the config block in the YAML.
-    currentCaseTitle = trailItems.filterIsInstance<TrailYamlItem.ConfigTrailItem>()
-      .firstOrNull()?.config?.title
-
     resolveTrailContextFromEnv()?.let { trailblazeRunner.appendToSystemPrompt(it) }
     resolveSetupTrailIdFromEnv()?.let { setupTrailId ->
       val setupFile = File(setupTrailId)
@@ -642,8 +544,8 @@ abstract class BaseHostTrailblazeTest(
     for (item in trailItems) {
       val itemResult = when (item) {
         is TrailYamlItem.PromptsTrailItem ->
-          // Agent-agnostic: replays recorded steps deterministically and delegates only unrecorded
-          // steps to the configured runner (legacy / V3 / KOOG). Default (TRAILBLAZE_RUNNER) unchanged.
+          // Replays recorded steps deterministically and delegates only unrecorded steps to the
+          // agent.
           trailblazeRunnerUtil.runPromptSuspend(
             prompts = item.promptSteps,
             useRecordedSteps = useRecordedSteps,
@@ -691,29 +593,6 @@ abstract class BaseHostTrailblazeTest(
     System.getenv(TRAILBLAZE_SELF_HEAL_ENABLED_ENV)?.lowercase()?.toBooleanStrictOrNull()
       ?: config.selfHeal
 
-  /**
-   * Builds the [KOOG_STRATEGY_GRAPH][AgentImplementation.KOOG_STRATEGY_GRAPH] brain as a
-   * [KoogTestAgentRunner] for this Maestro host path (local Android + iOS). It does NOT run the
-   * prompt loop itself — the loop lives in [TrailblazeRunnerUtil.runPromptSuspend], which replays
-   * recorded steps and only delegates unrecorded ones to this runner. [trailblazeAgent] is a
-   * [BaseTrailblazeAgent] for every Maestro target; the system prompt is composed exactly as
-   * [createLegacyRunner] composes it for this path.
-   */
-  private fun createKoogRunner(): KoogTestAgentRunner = KoogTestAgentRunner(
-    agent = trailblazeAgent,
-    toolRepo = toolRepo,
-    screenStateProvider = screenStateProvider,
-    elementComparator = elementComparator,
-    llmClient = dynamicLlmClient.createLlmClient(),
-    trailblazeLlmModel = trailblazeLlmModel,
-    logger = loggingRule.logger,
-    sessionProvider = { loggingRule.session ?: error("Session not available - ensure test is running") },
-    maxLlmCalls = null,
-    systemPromptTemplate = TrailblazeRunner.composeSystemPrompt(
-      platformPrompt = systemPromptTemplate,
-    ),
-  )
-
   fun runTools(tools: List<TrailblazeTool>): TrailblazeToolResult = trailblazeRunnerUtil.runTrailblazeTool(tools)
 
   /**
@@ -726,7 +605,7 @@ abstract class BaseHostTrailblazeTest(
     trailFilePath: String?,
     traceId: TraceId? = null,
     forceStopApp: Boolean = true,
-    useRecordedSteps: Boolean = true,
+    useRecordedSteps: Boolean,
     sendSessionStartLog: Boolean,
     /**
      * CLI `--memory` / `--secret` seeds, composed with the trail's `config.memory:` block via

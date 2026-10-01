@@ -122,6 +122,14 @@ class StepToolSet(
       "No device connected. Use device(action=ANDROID), device(action=IOS), or device(action=WEB) first."
 
     /**
+     * What a step reports when a device is connected and its driver reads as ready, yet no screen
+     * came back. Saying "No device connected" here sends the caller to connect a device it already
+     * has, when what stopped is the driver behind it.
+     */
+    const val NO_SCREEN_MESSAGE =
+      "The connected device returned no screen. Its driver may have stopped; reconnect the device and retry."
+
+    /**
      * How a failed direct tool call reads back to the caller.
      *
      * Ref-taking tools already open their error with their own name — `"tap: Element ref 'h619'
@@ -176,7 +184,7 @@ class StepToolSet(
       val platform = detectPlatformFromTree(tree)
       if (platform != null && (details.isNotEmpty() || screenState.viewHierarchyTextRepresentation == null)) {
         val elements = when (platform) {
-          "android" -> AndroidCompactElementList.build(tree, details, screenState.deviceHeight).text
+          "android" -> AndroidCompactElementList.build(tree, details, screenState.deviceHeight, screenState.deviceWidth).text
           "ios" -> if (tree.driverDetail is DriverNodeDetail.IosAxe ||
             tree.children.firstOrNull()?.driverDetail is DriverNodeDetail.IosAxe
           ) {
@@ -184,7 +192,7 @@ class StepToolSet(
               tree, details, screenState.deviceHeight, screenState.deviceWidth,
             ).text
           } else {
-            IosCompactElementList.build(tree, details, screenState.deviceHeight).text
+            IosCompactElementList.build(tree, details, screenState.deviceHeight, screenState.deviceWidth).text
           }
           else -> null
         }
@@ -221,6 +229,10 @@ class StepToolSet(
   /** The driver's status, or null when it is ready. */
   private fun driverStatus(): String? =
     if (deviceConnectedProvider?.invoke() == false) NO_DEVICE_MESSAGE else driverStatusProvider?.invoke()
+
+  /** Why no screen state came back: the driver's status, or failing that, whether a device is connected. */
+  private fun noScreenStateError(): String =
+    driverStatus() ?: if (deviceConnectedProvider?.invoke() == true) NO_SCREEN_MESSAGE else NO_DEVICE_MESSAGE
 
   /**
    * Waits for [screenStateProvider] to return a non-null [ScreenState].
@@ -367,8 +379,7 @@ class StepToolSet(
     }
       ?: return StepResult(
         executed = false,
-        error = driverStatus()
-          ?: NO_DEVICE_MESSAGE,
+        error = noScreenStateError(),
       ).toMarkdown()
 
     // Snapshot short-circuit: skip tool execution entirely and return the
@@ -460,10 +471,12 @@ class StepToolSet(
       )
     } catch (e: Exception) {
       emitObjectiveComplete(promptStep, stepStartTime, success = false, failureReason = e.message)
-      return StepResult(
-        executed = false,
-        error = "Failed to analyze screen: ${e.message}",
-      ).toMarkdown()
+      return analysisFailure("Failed to analyze screen: ${e.message}")
+    }
+    analysis.llmError?.let { llmError ->
+      val failureReason = "LLM call failed: $llmError"
+      emitObjectiveComplete(promptStep, stepStartTime, success = false, failureReason = failureReason)
+      return analysisFailure(failureReason)
     }
 
     Console.log("")
@@ -972,8 +985,7 @@ class StepToolSet(
     // screenshot; the no-LLM fallback path just returns raw screen state.
     val screenState = awaitScreenState(includeAnnotated = screenAnalyzer != null)
     if (screenState == null) {
-      val driverStatus = driverStatus()
-        ?: NO_DEVICE_MESSAGE
+      val driverStatus = noScreenStateError()
       Console.error("[ask] Screen state is null — driverStatus=$driverStatus")
       return AskResult(
         answer = null,
@@ -1021,12 +1033,14 @@ class StepToolSet(
       } catch (e: Exception) {
         Console.error("[ask] screenAnalyzer.analyze() FAILED: ${e::class.simpleName}: ${e.message}")
         emitAskLog(question, null, null, e.message, traceId, startTime)
-        return AskResult(
-          answer = null,
-          error = "Failed to analyze screen: ${e.message}",
-          screenshotPath = screenshotPath,
-          viewHierarchy = viewHierarchyText,
-        ).toMarkdown()
+        return analysisFailure("Failed to analyze screen: ${e.message}") +
+          askDiagnostics(screenshotPath, viewHierarchyText)
+      }
+      analysis.llmError?.let { llmError ->
+        val failureReason = "LLM call failed: $llmError"
+        Console.error("[ask] $failureReason")
+        emitAskLog(question, null, null, failureReason, traceId, startTime)
+        return analysisFailure(failureReason) + askDiagnostics(screenshotPath, viewHierarchyText)
       }
 
       Console.log("")
@@ -1171,6 +1185,18 @@ class StepToolSet(
       ),
     )
   }
+
+  /**
+   * The response for a step or ask whose screen analysis never happened. The `Error:` prefix is
+   * what makes the MCP server flag the call `isError`, so MCP clients see a tool error and the CLI
+   * exits non-zero. Rendering it as a normal result instead let an LLM outage (a revoked key, a
+   * 403) pass as an answer or a "needs input".
+   */
+  private fun analysisFailure(message: String): String = "Error: $message"
+
+  /** The screenshot path and view hierarchy an `ask` was asked for, which don't need the LLM. */
+  private fun askDiagnostics(screenshotPath: String?, viewHierarchy: String?): String =
+    AskResult(answer = null, screenshotPath = screenshotPath, viewHierarchy = viewHierarchy).toMarkdown()
 
   private fun emitAskLog(
     question: String,

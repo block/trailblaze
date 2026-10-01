@@ -18,7 +18,6 @@ import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
 import xyz.block.trailblaze.llm.RunYamlRequest
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.llm.TrailblazeReferrer
-import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.model.TrailblazeConfig
 import xyz.block.trailblaze.ui.icons.McpLogo
 import xyz.block.trailblaze.ui.models.TrailblazeServerState.SavedTrailblazeAppConfig
@@ -46,10 +45,6 @@ class RunYamlRequestFactory(
     referrer: TrailblazeReferrer,
     trailFilePath: String? = null,
     useRecordedSteps: Boolean = true,
-    // A never-chosen persisted agent is null (tri-state), so derive the default here rather than
-    // in the config.
-    agentImplementation: AgentImplementation = appConfig.agentImplementation
-      ?: AgentImplementation.DEFAULT,
   ): RunYamlRequest = RunYamlRequest(
     testName = testName,
     yaml = yaml,
@@ -71,7 +66,6 @@ class RunYamlRequestFactory(
     // instead of being refused. Left empty, the runner resolves pin → app setting → this same
     // device default, so a run with no pin lands on the identical driver.
     referrer = referrer,
-    agentImplementation = agentImplementation,
   )
 }
 

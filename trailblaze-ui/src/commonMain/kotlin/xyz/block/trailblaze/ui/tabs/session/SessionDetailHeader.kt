@@ -75,7 +75,6 @@ internal fun SessionDetailHeader(
   cardsPerRow: Int,
   maxCards: Int,
   overallStatus: xyz.block.trailblaze.logs.model.SessionStatus? = null,
-  agentImplementation: xyz.block.trailblaze.mcp.AgentImplementation? = null,
 ) {
   Row(
     modifier = Modifier.fillMaxWidth(),
@@ -144,7 +143,6 @@ internal fun SessionDetailHeader(
           sessionDetail.session.trailblazeDeviceInfo?.trailblazeDriverType?.let {
             subtitleParts.add(it.name)
           }
-          agentImplementation?.let { subtitleParts.add(it.name) }
           sessionDetail.session.trailblazeDeviceInfo?.classifiers
             ?.takeIf { it.isNotEmpty() }
             ?.let { subtitleParts.add(it.joinToString(", ")) }

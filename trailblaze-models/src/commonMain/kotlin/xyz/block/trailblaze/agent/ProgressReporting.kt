@@ -465,19 +465,3 @@ class ExecutionStatusBuilder(
     )
   }
 }
-
-/**
- * Creates a new ExecutionStatusBuilder.
- *
- * @param sessionId Unique session identifier
- * @param objective The objective being achieved
- * @param agentImplementation The agent implementation being used
- * @param deviceId Device ID for tracking progress per-device
- * @return A new builder instance
- */
-fun executionStatusBuilder(
-  sessionId: SessionId,
-  objective: String,
-  agentImplementation: AgentImplementation,
-  deviceId: TrailblazeDeviceId? = null,
-): ExecutionStatusBuilder = ExecutionStatusBuilder(sessionId, objective, agentImplementation, deviceId)

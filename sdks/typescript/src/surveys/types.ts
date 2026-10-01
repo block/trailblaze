@@ -137,14 +137,22 @@ export interface Objective extends SessionRecord {
   explanation?: string;
 }
 
-/** One string visible on screen at some capture. */
+/** One string in the view tree at some capture. */
 export interface ScreenText extends SessionRecord {
   kind: "screen-text";
   text: string;
   /** Which accessibility attribute carried it (`text`, `contentDescription`, ...). */
   source: string;
+  /** Names the capture; opaque. The screenshot's file name when it has one, else the id its log was stamped with. */
   captureId: string;
+  /** The screenshot the capture took, by file name. Absent when the capture has no screenshot. */
+  screenshot?: string;
+  /** Which capture, in session order, starting at 0. */
   stepIndex: number;
+  /** False when it was in the tree but scrolled away or hidden when captured. */
+  visible: boolean;
+  /** Its box as `[left, top, right, bottom]` in device points, when recorded. */
+  bounds?: [number, number, number, number];
 }
 
 /** One line of the captured device log. */

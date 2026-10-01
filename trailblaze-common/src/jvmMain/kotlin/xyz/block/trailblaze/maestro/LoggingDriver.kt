@@ -352,20 +352,5 @@ class LoggingDriver(
     /** Static [ScreenState] to use temporarily. */
     private var temporaryStaticScreenStateData: TemporaryStaticScreenStateData? = null
 
-    /**
-     * Allows the work to be done inside this block to be done without screenshots logged
-     */
-    fun logWithStaticScreenStateTemporarily(
-      reason: String,
-      screenState: ScreenState?,
-      work: () -> Unit,
-    ) {
-      this.temporaryStaticScreenStateData = TemporaryStaticScreenStateData(
-        reason = reason,
-        screenState = screenState,
-      )
-      work()
-      this.temporaryStaticScreenStateData = null
-    }
   }
 }

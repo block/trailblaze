@@ -1,7 +1,6 @@
 package xyz.block.trailblaze.desktop
 
 import java.io.File
-import xyz.block.trailblaze.cli.CliConfigHelper
 import xyz.block.trailblaze.host.devices.HostProbedDeviceClassifiers
 import xyz.block.trailblaze.host.rules.TrailblazeHostDynamicLlmClientProvider
 import xyz.block.trailblaze.host.rules.TrailblazeHostDynamicLlmTokenProvider
@@ -152,9 +151,6 @@ class OpenSourceTrailblazeDesktopApp : TrailblazeDesktopApp(
       },
       llmModelProvider = { desktopAppConfig.getCurrentLlmModel() },
       llmModelListsProvider = { desktopAppConfig.getAllSupportedLlmModelLists() },
-      saveAnnotatedScreenshotsProvider = {
-        CliConfigHelper.readConfig()?.saveAnnotatedScreenshots ?: true
-      },
       // Probe the bound device from the host so the MCP `trail` tool can lower a recording keyed by
       // sub-category (`android-phone:`), not just by platform. Bounded and degrades to
       // platform-only, so the worst case is the previous behavior.

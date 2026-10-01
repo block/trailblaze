@@ -72,7 +72,7 @@ object IosVideoStitcher {
             plan.entries.forEach { add("-i"); add(it.file.absolutePath) }
             add("-an")
             add("-filter_complex")
-            add(filterComplex(plan, target))
+            add(filterComplex(plan, target, format))
             add("-map")
             add("[$CONCAT_OUTPUT_LABEL]")
             addAll(format.encodeArgs())
@@ -175,7 +175,11 @@ object IosVideoStitcher {
    *
    * Internal so the graph is assertable without running ffmpeg.
    */
-  internal fun filterComplex(plan: IosVideoStitchPlan.StitchPlan, target: VideoFrameSize.Size?): String {
+  internal fun filterComplex(
+    plan: IosVideoStitchPlan.StitchPlan,
+    target: VideoFrameSize.Size?,
+    format: RecordingFormat,
+  ): String {
     val fit = target?.let { (w, h) ->
       "scale=$w:$h:force_original_aspect_ratio=decrease,pad=$w:$h:(ow-iw)/2:(oh-ih)/2,setsar=1,"
     }.orEmpty()
@@ -189,7 +193,10 @@ object IosVideoStitcher {
       "[$index:v]$fit${hold}setpts=PTS-STARTPTS[v$index]"
     }
     val inputs = plan.entries.indices.joinToString("") { "[v$it]" }
-    return (chains + "${inputs}concat=n=${plan.entries.size}:v=1:a=0[$CONCAT_OUTPUT_LABEL]")
+    // The output filter [format] needs (WebM's TV-range conversion) rides on the concat: ffmpeg
+    // refuses a `-vf` on a stream a complex graph feeds.
+    val tail = format.videoFilterChain()?.let { ",$it" }.orEmpty()
+    return (chains + "${inputs}concat=n=${plan.entries.size}:v=1:a=0$tail[$CONCAT_OUTPUT_LABEL]")
       .joinToString(";")
   }
 }

@@ -43,7 +43,8 @@ enum class RecordingFormat(
   /**
    * ffmpeg codec and container args for an encode that runs after the fact — stitching two
    * segments, muxing screencast frames, transcoding a simctl recording. Timing is left to the input
-   * (`-fps_mode passthrough`) so whatever timeline the source carries survives the encode.
+   * (`-fps_mode passthrough`) so whatever timeline the source carries survives the encode. Codec
+   * args only: the command's video filter comes from [videoFilterArgs].
    */
   fun encodeArgs(): List<String> = when (this) {
     WEBM -> WallClockMuxConsumer.Output.vp9CodecArgs() + listOf("-fps_mode", "passthrough")
@@ -54,6 +55,21 @@ enum class RecordingFormat(
       "-pix_fmt", "yuv420p",
       "-movflags", "+faststart",
     )
+  }
+
+  /**
+   * The `-vf` args for an after-the-fact encode that runs [steps] (nulls skipped) — the only `-vf`
+   * the command should carry, since ffmpeg keeps just the last one. [WEBM] always has one: it ends
+   * in the TV-range conversion Chrome needs to decode the file
+   * ([WallClockMuxConsumer.Output.TV_RANGE_FILTER]). [MP4] has one only when a step asks.
+   */
+  fun videoFilterArgs(vararg steps: String?): List<String> =
+    videoFilterChain(*steps)?.let { listOf("-vf", it) }.orEmpty()
+
+  /** The chain [videoFilterArgs] passes, for a caller that builds its own `-filter_complex` graph. */
+  fun videoFilterChain(vararg steps: String?): String? = when (this) {
+    WEBM -> WallClockMuxConsumer.Output.vp9FilterChain(*steps)
+    MP4 -> steps.filterNotNull().joinToString(",").ifEmpty { null }
   }
 
   /**

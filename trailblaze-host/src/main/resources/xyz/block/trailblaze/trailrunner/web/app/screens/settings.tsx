@@ -3,14 +3,6 @@
 // The build-time transpile strips types regardless, so the browser runtime is unaffected.
 // Remove this pragma once the file's real errors are fixed; run `bun run typecheck` to see them.
 
-// Short descriptions for each agent implementation, shown in the Agents section so the choice is
-// meaningful (the settings DTO only carries id + display name).
-const AGENT_DESCRIPTIONS = {
-  TRAILBLAZE_RUNNER: 'Legacy YAML runner - stable, battle-tested. The default for every run and recording.',
-  MULTI_AGENT_V3: 'Planner + explorer multi-agent (Mobile-Agent-v3 style). Goal-oriented action planning for trail + blaze modes.',
-  KOOG_STRATEGY_GRAPH: 'A single Koog strategy-graph that owns the agent loop. Opt-in successor - run it to A/B against the runner.',
-};
-
 // Layout primitives for the settings panes. Defined at MODULE scope (not inside SettingsScreen) so
 // their component identity is stable across renders — otherwise every parent re-render (a status
 // poll, a settings.reload) would remount the whole pane, and `NumberSetting`'s focused input would
@@ -200,37 +192,6 @@ function SettingsScreen({ go, initTab }) {
     </Section>
   ));
 
-  const AgentsBody = () => {
-    if (!llm) return <NotWired />;
-    const agents = llm.availableAgents || [];
-    const cur = llm.agent || '';
-    return (
-      <Section title="Agent" sub="The agent implementation that owns the run loop - tool dispatch, planning, recovery. Drives runs and recordings; a run can still override it in the advanced Configure-run dialog.">
-        <Row label="Active agent" desc="Used by default for every run and recording">
-          <Select value={cur} options={agents.map((a) => [a.id, a.display])}
-            onChange={(e) => TB.updateSetting({ agent: e.target.value }).then(() => settings.reload())} />
-        </Row>
-        <div style={{ display: 'grid', gap: 9, padding: '12px 0 4px' }}>
-          {agents.map((a) => {
-            const on = a.id === cur;
-            return (
-              <div key={a.id} style={{ border: '1px solid ' + (on ? 'var(--tb-ai)' : 'var(--tb-hairline)'), borderRadius: 10, padding: '11px 13px', background: on ? 'var(--bg-prominent)' : 'transparent' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <Ico n="bot" s={15} c={on ? 'var(--tb-ai)' : 'var(--text-subtle-variant)'} />
-                  <span style={{ fontSize: 13.5, fontWeight: 600 }}>{a.display}</span>
-                  <span className="tb-mono tb-sub" style={{ fontSize: 10.5 }}>{a.id}</span>
-                  <span style={{ flex: 1 }} />
-                  {on && <Chip tone="green">Active</Chip>}
-                </div>
-                <div className="tb-sub" style={{ fontSize: 12, marginTop: 6, lineHeight: 1.5 }}>{AGENT_DESCRIPTIONS[a.id] || ''}</div>
-              </div>
-            );
-          })}
-        </div>
-      </Section>
-    );
-  };
-
   const IntegrationsBody = () => <IntegrationsScreen embedded go={go} />;
 
   const RunsBody = () => {
@@ -249,9 +210,6 @@ function SettingsScreen({ go, initTab }) {
           </Row>
           <Row label="Max LLM calls" desc="Budget per objective (blank = unbounded)">
             <NumberSetting field="maxLlmCalls" value={s.maxLlmCalls} placeholder="∞" onCommit={reload} />
-          </Row>
-          <Row label="Save annotated screenshots" desc="Keep the set-of-mark annotated screenshots alongside the raw ones">
-            <Switch on={!!s.saveAnnotatedScreenshots} onClick={() => toggle('saveAnnotatedScreenshots', s.saveAnnotatedScreenshots)} />
           </Row>
         </Section>
         <Section title="Capture defaults" sub="Defaults for new runs; the Configure-run dialog can still override per run.">
@@ -331,7 +289,6 @@ function SettingsScreen({ go, initTab }) {
 
   const TABS = [
     { id: 'models', label: 'Models', ico: 'cpu', body: ModelsBody },
-    { id: 'agents', label: 'Agents', ico: 'bot', body: AgentsBody },
     { id: 'integrations', label: 'Integrations', ico: 'plug', body: IntegrationsBody, badge: intgConnected || null },
     { id: 'runs', label: 'Run behavior', ico: 'wand-sparkles', body: RunsBody },
     { id: 'workspace', label: 'Workspace', ico: 'folder', body: WorkspaceBody },

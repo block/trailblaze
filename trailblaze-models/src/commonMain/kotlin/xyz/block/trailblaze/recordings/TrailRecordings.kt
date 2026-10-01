@@ -246,24 +246,6 @@ object TrailRecordings {
     }
   }
 
-  fun findBestTrailForClassifiers(
-    trailPaths: List<String>,
-    deviceClassifiers: List<TrailblazeDeviceClassifier>,
-  ): String? {
-    // Build list of candidate filenames in priority order
-    val candidateFileNames = computePossibleFileNamesForDeviceClassifiers(deviceClassifiers)
-
-    // Find the first trail file that matches any candidate
-    val matchedFile =
-      candidateFileNames.firstNotNullOfOrNull { candidateFileName ->
-        trailPaths.find { trail -> trail.endsWith(candidateFileName) }
-      }
-
-    Console.log("No matching trail file found matching ($candidateFileNames) for classifiers $deviceClassifiers in $trailPaths")
-
-    return matchedFile
-  }
-
   /**
    * Finds the best trail resource path based on the given path and device classifiers.
    *

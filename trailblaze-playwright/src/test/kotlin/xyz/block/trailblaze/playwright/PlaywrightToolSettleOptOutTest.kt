@@ -21,6 +21,7 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
+import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.client.TrailblazeSession
 import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
@@ -28,6 +29,7 @@ import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.playwright.tools.PlaywrightExecutableTool
 import xyz.block.trailblaze.playwright.tools.PlaywrightNativeClickTool
 import xyz.block.trailblaze.playwright.tools.PlaywrightNativeEvaluateTool
+import xyz.block.trailblaze.playwright.tools.PlaywrightNativeFillSecretTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.commands.BooleanAssertionTrailblazeTool
@@ -99,6 +101,70 @@ class PlaywrightToolSettleOptOutTest {
     assertThat(manager.screenshots).isEqualTo(0)
   }
 
+  /** A recorded replay keeps the boxed tree per acting tool, and nothing for a poll. */
+  @Test
+  fun `a scripted run captures the tree before an acting tool and not before web_evaluate`() = runBlocking {
+    val agent = buildAgent().apply { replayCapture = WebReplayCapture.TREE }
+    agent.runScripted {
+      agent.runTrailblazeTools(
+        tools = listOf(DefaultSettlingTool, PlaywrightNativeEvaluateTool(script = "document.title")),
+        elementComparator = noOpComparator,
+      ).result
+    }
+
+    assertThat(manager.treeCaptures).isEqualTo(listOf(false))
+    assertThat(manager.screenshots).isEqualTo(0)
+  }
+
+  @Test
+  fun `a scripted run captures nothing when replay capture is off`() = runBlocking {
+    val agent = buildAgent().apply { replayCapture = WebReplayCapture.OFF }
+    agent.runScripted {
+      agent.runTrailblazeTools(tools = listOf(DefaultSettlingTool), elementComparator = noOpComparator).result
+    }
+
+    assertThat(manager.treeCaptures).isEqualTo(emptyList())
+  }
+
+  /** A host reuses one agent across MCP sessions; a secret typed in one is not the next one's. */
+  @Test
+  fun `a filled secret is kept out of later captures in its own session only`() = runBlocking {
+    page.setContent("<html><body><input aria-label=\"Code\"></body></html>")
+    var session = "first"
+    val agent = buildAgent { session }.apply { replayCapture = WebReplayCapture.TREE }
+    val fill = PlaywrightNativeFillSecretTool(ref = "css=input", value = "otp-83716")
+    agent.runScripted {
+      agent.runTrailblazeTools(tools = listOf(fill, DefaultSettlingTool), elementComparator = noOpComparator).result
+    }
+    session = "second"
+    agent.runScripted {
+      agent.runTrailblazeTools(tools = listOf(DefaultSettlingTool), elementComparator = noOpComparator).result
+    }
+
+    assertThat(manager.treeCaptureSecrets).isEqualTo(listOf(emptySet(), setOf("otp-83716"), emptySet()))
+  }
+
+  /** The report takes a tree-only capture's picture from the video at its log's time. */
+  @Test
+  fun `a replay capture is logged at the moment its tree was read`() = runBlocking {
+    val logs = mutableListOf<TrailblazeLog>()
+    val states = mutableListOf<PlaywrightTreeScreenState>()
+    manager.replayState = { withScreenshot, secrets ->
+      PlaywrightTreeScreenState(page, 1280, 800, BrowserEngine.CHROMIUM, withScreenshot, secrets).also {
+        states += it
+        Thread.sleep(50) // a slow capture: the tool starts well after the tree was read
+      }
+    }
+    val agent = buildAgent(logger = TrailblazeLogger(logEmitter = { logs += it }, screenStateLogger = { "" }))
+      .apply { replayCapture = WebReplayCapture.TREE }
+    agent.runScripted {
+      agent.runTrailblazeTools(tools = listOf(DefaultSettlingTool), elementComparator = noOpComparator).result
+    }
+
+    val driverLog = logs.filterIsInstance<TrailblazeLog.AgentDriverLog>().single()
+    assertThat(driverLog.timestamp).isEqualTo(states.single().capturedAt)
+  }
+
   /** Recorded tools carry a selector, not a ref; the post-action capture only turns a ref into one. */
   @Test
   fun `a click by selector is captured before the action and not again after it`() = runBlocking {
@@ -125,6 +191,12 @@ class PlaywrightToolSettleOptOutTest {
   private class CountingPageManager(override val currentPage: Page) : PlaywrightPageManager {
     var settles = 0
     var screenshots = 0
+
+    /** One entry per replay capture: whether it asked for a JPEG. */
+    val treeCaptures = mutableListOf<Boolean>()
+
+    /** The secrets each replay capture was asked to keep out. */
+    val treeCaptureSecrets = mutableListOf<Set<String>>()
     override val playwrightDispatcher: CoroutineDispatcher = Dispatchers.Default
     override val idlingConfig: PlaywrightNativeIdlingConfig = PlaywrightNativeIdlingConfig()
 
@@ -138,6 +210,15 @@ class PlaywrightToolSettleOptOutTest {
       error("the agent must tolerate a failed capture; the count is what this test reads")
     }
 
+    override fun captureTreeForReplay(withScreenshot: Boolean, secrets: Set<String>): ScreenState? {
+      treeCaptures += withScreenshot
+      treeCaptureSecrets += secrets
+      return replayState?.invoke(withScreenshot, secrets)
+    }
+
+    /** What a replay capture hands back; none unless a test supplies one. */
+    var replayState: ((Boolean, Set<String>) -> ScreenState?)? = null
+
     override fun requestDetails(details: Set<ViewHierarchyDetail>) = Unit
     override fun getScreenState(): ScreenState = error("getScreenState is not under test")
     override fun waitForPageReady(domStabilityTimeoutMs: Double) = Unit
@@ -145,9 +226,12 @@ class PlaywrightToolSettleOptOutTest {
     override fun close() = Unit
   }
 
-  private fun buildAgent(): PlaywrightTrailblazeAgent = PlaywrightTrailblazeAgent(
+  private fun buildAgent(
+    logger: TrailblazeLogger = TrailblazeLogger.createNoOp(),
+    sessionId: () -> String = { "fixture-session" },
+  ): PlaywrightTrailblazeAgent = PlaywrightTrailblazeAgent(
     browserManager = manager,
-    trailblazeLogger = TrailblazeLogger.createNoOp(),
+    trailblazeLogger = logger,
     trailblazeDeviceInfoProvider = {
       TrailblazeDeviceInfo(
         trailblazeDeviceId = TrailblazeDeviceId(
@@ -160,7 +244,7 @@ class PlaywrightToolSettleOptOutTest {
       )
     },
     sessionProvider = TrailblazeSessionProvider {
-      TrailblazeSession(sessionId = SessionId("fixture-session"), startTime = Clock.System.now())
+      TrailblazeSession(sessionId = SessionId(sessionId()), startTime = Clock.System.now())
     },
   )
 

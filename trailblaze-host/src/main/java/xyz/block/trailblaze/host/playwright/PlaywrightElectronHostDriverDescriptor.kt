@@ -222,7 +222,6 @@ class PlaywrightElectronHostDriverDescriptor(
         traceId = runYamlRequest.traceId,
         useRecordedSteps = runYamlRequest.useRecordedSteps,
         sendSessionStartLog = runYamlRequest.config.sendSessionStartLog,
-        agentImplementation = runYamlRequest.agentImplementation,
         initialMemorySeeds = runYamlRequest.initialMemorySeeds,
         initialMemorySensitiveSeeds = runYamlRequest.initialMemorySensitiveSeeds,
         initialArgs = runYamlRequest.initialArgs,

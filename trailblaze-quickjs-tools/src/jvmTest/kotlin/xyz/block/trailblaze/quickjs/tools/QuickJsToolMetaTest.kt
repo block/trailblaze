@@ -168,6 +168,10 @@ class QuickJsToolMetaTest {
       hostOnly.shouldRegister(TrailblazeDriverType.DEFAULT_ANDROID, preferHostAgent = true),
       "requiresHost=true must register host sessions (preferHostAgent=true)",
     )
+    assertTrue(
+      hostOnly.shouldRegister(TrailblazeDriverType.IOS_HOST, preferHostAgent = false),
+      "a driver whose tools run on the host keeps requiresHost tools whatever the preference",
+    )
   }
 
   @Test

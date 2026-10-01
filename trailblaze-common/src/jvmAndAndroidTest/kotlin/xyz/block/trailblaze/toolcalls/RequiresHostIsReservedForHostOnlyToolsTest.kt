@@ -44,8 +44,7 @@ import kotlin.test.fail
  * - the four here: BOTH. The flag for the machine requirement, the marker for the dispatch.
  *
  * They do overlap in one place, which is why the marker is not a substitute: every host dispatch fork
- * (`HostOnDeviceRpcTrailblazeAgent`, `HostAccessibilityRpcClient`,
- * `TrailblazeMcpBridgeImpl.resolveToolDispatchRoute`) branches on
+ * (`HostOnDeviceRpcTrailblazeAgent`, `TrailblazeMcpBridgeImpl.resolveToolDispatchRoute`) branches on
  * `tool is HostLocalExecutableTrailblazeTool || tool.requiresHostInstance()`, so either declaration
  * alone gets host-side routing. The flag carries the additional fact.
  *

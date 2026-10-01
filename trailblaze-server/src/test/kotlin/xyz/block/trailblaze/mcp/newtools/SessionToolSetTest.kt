@@ -18,7 +18,6 @@ import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.logs.model.TraceId
-import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.mcp.TrailblazeMcpBridge
 import xyz.block.trailblaze.mcp.TrailblazeMcpMode
 import xyz.block.trailblaze.mcp.TrailblazeMcpSessionContext
@@ -912,7 +911,6 @@ class SessionTestBridge(
   override suspend fun runYaml(
     yaml: String,
     startNewSession: Boolean,
-    agentImplementation: AgentImplementation,
   ) = ""
 
   override fun getCurrentlySelectedDeviceId(): TrailblazeDeviceId? = null

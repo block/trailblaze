@@ -31,6 +31,7 @@ import {
   readTraceFile,
   readVideo,
   remoteShotValue,
+  reportShotFiles,
   screenshotDataUri,
 } from "./run-report-cli";
 
@@ -388,6 +389,20 @@ describe("attachments referenced by event streams", () => {
 // embedded-vs-linked switch as the step screenshots — but through readVideo's own resolver rather
 // than the shots loop, so it needs its own coverage. The viewer half — the #tb-clip-<i> hoist and
 // the surfaces that play it — lives in ../trailrunner/web/app/run-report-core.test.ts.
+describe("the images a session's report carries (reportShotFiles)", () => {
+  test("a frame saved from the recording is carried when it is on disk, and a candidate that is not stays out", () => {
+    const dir = mkdtempSync(join(tmpdir(), "tb-report-frames-"));
+    try {
+      writeFileSync(join(dir, "capture-saved.webp"), "webp");
+      writeFileSync(join(dir, "typing.png"), "png");
+      expect(reportShotFiles(dir, ["tap.png"], ["typing.png", "gone.png"], ["capture-saved.webp", "capture-never.webp", "tap.png"]))
+        .toEqual(["tap.png", "typing.png", "capture-saved.webp"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("session recording (readVideo)", () => {
   const WEBM = "video.webm";
   const MP4 = "video.mp4";

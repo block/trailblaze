@@ -129,19 +129,6 @@ class RetryRule(private val maxRetries: Int) : TestRule {
       Console.log("\n⚠️  WARNING: Retried tests indicate flakiness and should be investigated!")
       Console.log("=".repeat(70) + "\n")
     }
-
-    /**
-     * Returns a list of all tests that needed retries during this test run.
-     * Useful for identifying flaky tests in CI.
-     */
-    fun getRetriedTests(): List<RetryInfo> = retriedTests.toList()
-
-    /**
-     * Clears the retry statistics. Useful for testing.
-     */
-    fun clearRetryStats() {
-      retriedTests.clear()
-    }
   }
 
   override fun apply(base: Statement, description: Description): Statement {

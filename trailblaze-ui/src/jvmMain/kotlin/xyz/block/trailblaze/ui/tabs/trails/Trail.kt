@@ -485,17 +485,6 @@ object TrailConfigCache {
   }
 
   /**
-   * Checks if a config is already cached and fresh for a given path.
-   */
-  fun isCached(absolutePath: String): Boolean {
-    val file = File(absolutePath)
-    if (!file.exists()) return false
-
-    val cached = cache[absolutePath] ?: return false
-    return cached.lastModified == file.lastModified()
-  }
-
-  /**
    * Invalidates a single cache entry for a specific file path.
    * Use this after editing/saving a trail file to force re-parsing on next access.
    */
@@ -540,9 +529,4 @@ object TrailConfigCache {
       cache.keys.take(toRemove).forEach { cache.remove(it) }
     }
   }
-
-  /**
-   * Returns the current cache size (number of entries).
-   */
-  fun cacheSize(): Int = cache.size
 }

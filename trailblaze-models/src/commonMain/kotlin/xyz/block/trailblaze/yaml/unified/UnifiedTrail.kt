@@ -13,10 +13,7 @@ import kotlinx.serialization.Serializable
  * per test, with each step's natural-language description appearing exactly
  * once and per-device tool recordings nested underneath via classifier keys.
  *
- * Named `Unified*` (rather than `TrailV3*`) so it doesn't collide in
- * conversation or code-search with [xyz.block.trailblaze.mcp.AgentImplementation.MULTI_AGENT_V3],
- * which references a completely unrelated agent-architecture concept from
- * the Mobile-Agent-v3 paper. The on-disk filename is still `trail.yaml`.
+ * The on-disk filename is still `trail.yaml`.
  *
  * See [the design devlog](../../../../../../../docs/devlog/2026-05-22-trail-yaml-unified-syntax.md)
  * for the full spec.

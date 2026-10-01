@@ -13,6 +13,8 @@ import xyz.block.trailblaze.config.project.TrailmapSource
 import xyz.block.trailblaze.config.project.ResolvedTrailmap
 import xyz.block.trailblaze.config.project.toInlineScriptToolConfigs
 import xyz.block.trailblaze.devices.TrailblazeDriverType
+import xyz.block.trailblaze.scripting.mcp.TrailblazeToolMeta
+import kotlinx.serialization.json.JsonObject
 import xyz.block.trailblaze.logs.client.TrailblazeSerializationInitializer
 import xyz.block.trailblaze.toolcalls.ResolvedTargetIdempotentWrite
 import xyz.block.trailblaze.toolcalls.ResolvedTargetToolDetailRenderer
@@ -704,7 +706,7 @@ object ResolvedTargetReportEmitter {
 
     // Target-root scripted tools (`target.tools:` and exported deps) — driver-agnostic, so they
     // apply to every driver column, narrowed only by the `_meta["trailblaze/supportedPlatforms"]`
-    // field when present (mirrors `TargetToolBaselineGenerator.driversForScriptedTool`; without
+    // field when present (see [scriptedToolApplicableColumns]; without
     // this filter a `supportedPlatforms: [android]` tool would wrongly show ✅ under web drivers —
     // caught by Copilot review on PR #3326). Toolset-delivered scripted tools are excluded here
     // (handled per-cell above) so they aren't re-marked ✅ across columns their toolset never
@@ -752,24 +754,20 @@ object ResolvedTargetReportEmitter {
   }
 
   /**
-   * Narrows [driverColumns] for a scripted tool by its `_meta["trailblaze/supportedPlatforms"]`
-   * field, falling back to the full set when the metadata is missing or malformed. Mirrors
-   * `TargetToolBaselineGenerator.driversForScriptedTool`. A scripted tool declared with
-   * `supportedPlatforms: [android, ios]` only resolves under those platforms' driver columns;
-   * without this filter the matrix would over-report availability under e.g. web drivers.
+   * Narrows [driverColumns] for a scripted tool to the drivers a session would register it for —
+   * the runtime's own [TrailblazeToolMeta.shouldRegister] gate (`supportedPlatforms`,
+   * `supportedDrivers`, `requiresHost` on a host session), so the matrix can't claim a tool the
+   * session drops. A column whose driver key doesn't name a known driver is kept.
    */
   private fun scriptedToolApplicableColumns(
     tool: InlineScriptToolConfig,
     driverColumns: List<Pair<String, String>>,
   ): List<Pair<String, String>> {
-    val raw = tool.meta?.get("trailblaze/supportedPlatforms") ?: return driverColumns
-    val array = runCatching { (raw as kotlinx.serialization.json.JsonArray) }.getOrNull()
-      ?: return driverColumns
-    val supportedPlatforms = array.mapNotNullTo(linkedSetOf()) { element ->
-      runCatching { (element as kotlinx.serialization.json.JsonPrimitive).content.lowercase() }.getOrNull()
+    val meta = TrailblazeToolMeta.fromJsonObject(tool.meta ?: JsonObject(emptyMap()))
+    return driverColumns.filter { (_, driverKey) ->
+      val driver = TrailblazeDriverType.entries.firstOrNull { it.yamlKey == driverKey }
+      driver == null || meta.shouldRegister(driver, preferHostAgent = true)
     }
-    if (supportedPlatforms.isEmpty()) return driverColumns
-    return driverColumns.filter { (platform, _) -> platform.lowercase() in supportedPlatforms }
   }
 
   private fun StringBuilder.renderResolutionTrace(

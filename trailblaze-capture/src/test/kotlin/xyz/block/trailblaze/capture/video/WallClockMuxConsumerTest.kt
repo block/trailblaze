@@ -82,17 +82,22 @@ class WallClockMuxConsumerTest {
     // On the output side: a filter placed before `-i` applies to nothing and ffmpeg says nothing
     // about it, so the recording comes out unrotated and no one finds out.
     assertTrue(command.indexOf("-vf") > command.indexOf("-i"), "the filter has to follow -i: $command")
-    assertEquals("transpose=2", command[command.indexOf("-vf") + 1])
+    assertEquals("transpose=2,scale=out_range=tv", command[command.indexOf("-vf") + 1])
+    assertEquals(1, command.count { it == "-vf" }, "ffmpeg keeps only the last -vf, so there must be one: $command")
     assertFalse(command.contains("-display_rotation:v:0"), "WebM has no display matrix to set: $command")
   }
 
   @Test
   fun `an unrotated recording adds no rotation arguments at all`() {
-    listOf(WallClockMuxConsumer.Output.Mp4Copy, WallClockMuxConsumer.Output.WebmVp9()).forEach { output ->
-      val command = muxCommandFor(output, IosScreenRotation.NONE)
-      assertFalse(command.contains("-vf"), "$output: portrait must not pay for a filter: $command")
-      assertFalse(command.contains("-display_rotation:v:0"), "$output: nothing to declare: $command")
-    }
+    val mp4 = muxCommandFor(WallClockMuxConsumer.Output.Mp4Copy, IosScreenRotation.NONE)
+    assertFalse(mp4.contains("-vf"), "portrait mp4 must not pay for a filter: $mp4")
+    assertFalse(mp4.contains("-display_rotation:v:0"), "nothing to declare: $mp4")
+
+    // WebM still converts to TV range — Chrome fails to decode a full-range recording — but turns nothing.
+    val webm = muxCommandFor(WallClockMuxConsumer.Output.WebmVp9(), IosScreenRotation.NONE)
+    assertEquals("scale=out_range=tv", webm[webm.indexOf("-vf") + 1])
+    assertTrue(webm.indexOf("-vf") > webm.indexOf("-i"), "the filter has to follow -i: $webm")
+    assertFalse(webm.contains("-display_rotation:v:0"), "nothing to declare: $webm")
   }
 
   private fun muxCommandFor(

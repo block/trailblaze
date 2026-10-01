@@ -236,11 +236,6 @@ abstract class TrailblazeHostAppTarget(
    */
   open val allowsRuntimeToolSource: Boolean = false
 
-  fun getAllCustomToolClassesForSerialization(): Set<KClass<out TrailblazeTool>> =
-    TrailblazeDriverType.entries.flatMap { trailblazeDriverType ->
-      getCustomToolsForDriver(trailblazeDriverType)
-    }.toSet()
-
   fun internalGetAndroidOnDeviceTarget(): TrailblazeOnDeviceInstrumentationTarget {
     return DEFAULT_ANDROID_ON_DEVICE
   }

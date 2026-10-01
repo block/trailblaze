@@ -5,7 +5,6 @@ import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.host.yaml.DesktopDispatchDecision
 import xyz.block.trailblaze.host.yaml.DispatchPath
-import xyz.block.trailblaze.mcp.AgentImplementation
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
@@ -48,12 +47,10 @@ class HostAgentToggleVisibilityTest {
       .forEach { driverType ->
         val withToggleOff = DesktopDispatchDecision.decide(
           driverType = driverType,
-          agentImplementation = AgentImplementation.TRAILBLAZE_RUNNER,
           preferHostAgent = false,
         )
         val withToggleOn = DesktopDispatchDecision.decide(
           driverType = driverType,
-          agentImplementation = AgentImplementation.TRAILBLAZE_RUNNER,
           preferHostAgent = true,
         )
 
@@ -79,7 +76,6 @@ class HostAgentToggleVisibilityTest {
       assertTrue(
         DesktopDispatchDecision.decide(
           driverType = driverType,
-          agentImplementation = AgentImplementation.TRAILBLAZE_RUNNER,
           preferHostAgent = true,
         ) == DispatchPath.HOST_AGENT_OVER_ONDEVICE_RPC,
         "the toggle is offered for $driverType, so enabling it must reach the host agent",

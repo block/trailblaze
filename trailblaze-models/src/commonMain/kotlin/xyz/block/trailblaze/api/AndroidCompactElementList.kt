@@ -32,15 +32,23 @@ object AndroidCompactElementList {
     val elementBounds: List<TrailblazeNode.Bounds> = emptyList(),
     /** Maps ref slug (e.g., "ref:sign-in") to TrailblazeNode.nodeId for resolution. */
     val refMapping: Map<String, Long> = emptyMap(),
+    /**
+     * Nodes whose text the list printed without giving them a ref: a container's own header
+     * label, a non-interactive child quoted under its parent, or the child whose label a
+     * text-less parent absorbed. With [elementNodeIds] this is every node whose text was shown.
+     */
+    val textNodeIds: List<Long> = emptyList(),
   )
 
   fun build(
     root: TrailblazeNode,
     details: Set<SnapshotDetail> = emptySet(),
     screenHeight: Int = 0,
+    screenWidth: Int = 0,
   ): CompactElements {
     val lines = mutableListOf<String>()
     val elementNodeIds = mutableListOf<Long>()
+    val textNodeIds = mutableListOf<Long>()
     val elementBounds = mutableListOf<TrailblazeNode.Bounds>()
     val refMapping = mutableMapOf<String, Long>()
     val refTracker = ElementRef.RefTracker()
@@ -49,11 +57,10 @@ object AndroidCompactElementList {
     val includeAllElements = SnapshotDetail.ALL_ELEMENTS in details
     var offscreenCount = 0
     buildRecursive(
-      root, depth = 0, lines, elementNodeIds, elementBounds, refMapping, refTracker,
+      root, depth = 0, lines, elementNodeIds, textNodeIds, elementBounds, refMapping, refTracker,
       includeBounds, includeOffscreen, includeAllElements, screenHeight,
-    ) {
-      offscreenCount++
-    }
+      offscreenCounter = { offscreenCount++ }, screenWidth = screenWidth,
+    )
 
     val text = buildString {
       if (lines.isEmpty()) {
@@ -67,7 +74,7 @@ object AndroidCompactElementList {
     }
     return CompactElements(
       text = text, elementNodeIds = elementNodeIds,
-      elementBounds = elementBounds, refMapping = refMapping,
+      elementBounds = elementBounds, refMapping = refMapping, textNodeIds = textNodeIds,
     )
   }
 
@@ -269,6 +276,7 @@ object AndroidCompactElementList {
     depth: Int,
     lines: MutableList<String>,
     elementNodeIds: MutableList<Long>,
+    textNodeIds: MutableList<Long>,
     elementBounds: MutableList<TrailblazeNode.Bounds>,
     refMapping: MutableMap<String, Long>,
     refTracker: ElementRef.RefTracker,
@@ -277,13 +285,15 @@ object AndroidCompactElementList {
     includeAllElements: Boolean = false,
     screenHeight: Int = 0,
     offscreenCounter: () -> Unit = {},
+    underHiddenAncestor: Boolean = false,
+    screenWidth: Int = 0,
   ) {
     val props = AndroidNodeProps.of(node) ?: return
 
     // Skip system UI
     if (props.packageName?.startsWith("com.android.systemui") == true) return
 
-    val scrolledAway = isOffscreen(node, screenHeight)
+    val scrolledAway = isOffscreen(node, screenHeight, screenWidth, underHiddenAncestor)
 
     // Skip non-visible nodes (count as offscreen if they have content). A scrolled-away
     // editable field still gets a scroll-to-reveal affordance instead of being dropped.
@@ -305,20 +315,28 @@ object AndroidCompactElementList {
       // rendered inside a ViewFactoryHolder whose wrapper is marked invisible).
       for (child in node.children) {
         buildRecursive(
-          child, depth, lines, elementNodeIds, elementBounds, refMapping,
-          refTracker, includeBounds, includeOffscreen, includeAllElements, screenHeight, offscreenCounter,
+          child, depth, lines, elementNodeIds, textNodeIds, elementBounds, refMapping,
+          refTracker, includeBounds, includeOffscreen, includeAllElements, screenHeight, offscreenCounter, underHiddenAncestor, screenWidth = screenWidth,
         )
       }
       return
     }
 
-    // Track offscreen-but-visible elements (e.g., below the fold in a scroll view)
+    // Track offscreen-but-visible elements (e.g., below the fold in a scroll view). Hide only this
+    // node: its children carry their own bounds, and a zero-size wrapper reads as offscreen.
     if (scrolledAway && !includeOffscreen && isMeaningful(props, resolveLabel(props))) {
       if (props.isEditable) {
         lines.add(scrollToRevealLine(node, props, screenHeight, depth))
         return
       }
       offscreenCounter()
+      for (child in node.children) {
+        buildRecursive(
+          child, depth, lines, elementNodeIds, textNodeIds, elementBounds, refMapping,
+          refTracker, includeBounds, includeOffscreen, includeAllElements, screenHeight, offscreenCounter,
+          underHiddenAncestor = true, screenWidth = screenWidth,
+        )
+      }
       return
     }
 
@@ -326,7 +344,9 @@ object AndroidCompactElementList {
     // Suppress generic class names that add no information
     val shortClass = if (rawClass in GENERIC_CLASSES) "" else rawClass
     // For clickable containers without direct text, absorb the first child's label
-    val label = resolveLabel(props) ?: resolveChildLabel(node, props)
+    val ownLabel = resolveLabel(props)
+    val absorbedFrom = if (ownLabel == null) labelSourceChild(node, props) else null
+    val label = ownLabel ?: absorbedFrom?.let { AndroidNodeProps.of(it)?.let(::resolveLabel) }
     val isContainer = isContainer(props, shortClass)
     val isMeaningful = includeAllElements || isMeaningful(props, label)
     val indent = "  ".repeat(depth)
@@ -338,6 +358,8 @@ object AndroidCompactElementList {
         label != null -> "\"$label\""
         else -> shortClass
       }
+      if (ownLabel != null) textNodeIds.add(node.nodeId)
+      absorbedFrom?.let { textNodeIds.add(it.nodeId) }
       val itemCount = props.collectionInfo?.let { ci ->
         val count = if (ci.columnCount <= 1) ci.rowCount else ci.rowCount * ci.columnCount
         if (count > 0) " [$count items]" else ""
@@ -345,8 +367,8 @@ object AndroidCompactElementList {
       lines.add("$indent$containerLabel$itemCount:")
       for (child in node.children) {
         buildRecursive(
-          child, depth + 1, lines, elementNodeIds, elementBounds, refMapping,
-          refTracker, includeBounds, includeOffscreen, includeAllElements, screenHeight, offscreenCounter,
+          child, depth + 1, lines, elementNodeIds, textNodeIds, elementBounds, refMapping,
+          refTracker, includeBounds, includeOffscreen, includeAllElements, screenHeight, offscreenCounter, underHiddenAncestor, screenWidth = screenWidth,
         )
       }
     } else if (isMeaningful) {
@@ -364,12 +386,13 @@ object AndroidCompactElementList {
       val annotations = buildAnnotations(props, label)
       val boundsStr = if (includeBounds) boundsAnnotation(node) else ""
       val offscreenStr =
-        if (includeOffscreen && isOffscreen(node, screenHeight)) " (offscreen)" else ""
+        if (includeOffscreen && scrolledAway) " (offscreen)" else ""
       val invertedStr = if (hasInvertedBounds(node)) " (bounds-transformed)" else ""
       lines.add("$indent[$ref] $descriptor$annotations$boundsStr$offscreenStr$invertedStr")
       elementNodeIds.add(node.nodeId)
       node.bounds?.let { elementBounds.add(it) }
       refMapping[ref] = node.nodeId
+      absorbedFrom?.let { textNodeIds.add(it.nodeId) }
 
       // Emit child content: non-interactive children become quoted strings under the
       // parent, interactive children recurse as separate elements
@@ -382,8 +405,8 @@ object AndroidCompactElementList {
           // still surface as refs. Consistent with the same treatment in the main path.
           for (grandchild in child.children) {
             buildRecursive(
-              grandchild, depth + 1, lines, elementNodeIds, elementBounds, refMapping,
-              refTracker, includeBounds, includeOffscreen, includeAllElements, screenHeight, offscreenCounter,
+              grandchild, depth + 1, lines, elementNodeIds, textNodeIds, elementBounds, refMapping,
+              refTracker, includeBounds, includeOffscreen, includeAllElements, screenHeight, offscreenCounter, underHiddenAncestor, screenWidth = screenWidth,
             )
           }
           continue
@@ -396,13 +419,19 @@ object AndroidCompactElementList {
         // same hint text) must always be emitted so the agent knows it can interact.
         if (childLabel != null && childLabel == label && !childInteractive) continue
         if (childLabel != null && !childInteractive) {
-          // Non-interactive text child → indented quoted string
-          lines.add("$indent  \"$childLabel\"")
+          // Non-interactive text child → indented quoted string. Under a hidden ancestor it passes
+          // the same on-screen check as an element, or a collapsed ghost's text would read as visible.
+          if (underHiddenAncestor && isOffscreen(child, screenHeight, screenWidth, underHiddenAncestor)) {
+            offscreenCounter()
+          } else {
+            lines.add("$indent  \"$childLabel\"")
+            textNodeIds.add(child.nodeId)
+          }
         } else {
           // Interactive or container child → recurse
           buildRecursive(
-            child, depth + 1, lines, elementNodeIds, elementBounds, refMapping,
-            refTracker, includeBounds, includeOffscreen, includeAllElements, screenHeight, offscreenCounter,
+            child, depth + 1, lines, elementNodeIds, textNodeIds, elementBounds, refMapping,
+            refTracker, includeBounds, includeOffscreen, includeAllElements, screenHeight, offscreenCounter, underHiddenAncestor, screenWidth = screenWidth,
           )
         }
       }
@@ -410,8 +439,8 @@ object AndroidCompactElementList {
       // Structural/transparent: skip this node, recurse children at same depth
       for (child in node.children) {
         buildRecursive(
-          child, depth, lines, elementNodeIds, elementBounds, refMapping,
-          refTracker, includeBounds, includeOffscreen, includeAllElements, screenHeight, offscreenCounter,
+          child, depth, lines, elementNodeIds, textNodeIds, elementBounds, refMapping,
+          refTracker, includeBounds, includeOffscreen, includeAllElements, screenHeight, offscreenCounter, underHiddenAncestor, screenWidth = screenWidth,
         )
       }
     }
@@ -460,7 +489,13 @@ object AndroidCompactElementList {
   private fun resolveChildLabel(
     node: TrailblazeNode,
     props: AndroidNodeProps,
-  ): String? {
+  ): String? = labelSourceChild(node, props)?.let { child -> AndroidNodeProps.of(child)?.let(::resolveLabel) }
+
+  /** The child whose label [resolveChildLabel] absorbs, or null when the parent absorbs none. */
+  private fun labelSourceChild(
+    node: TrailblazeNode,
+    props: AndroidNodeProps,
+  ): TrailblazeNode? {
     // Also absorb when the parent surfaces meaningful state (selected) but is not clickable —
     // Material 3's Compose NavigationBar drops the click action from the currently-selected
     // tab and moves `isSelected=true` to the parent View; without this absorption the
@@ -468,8 +503,7 @@ object AndroidCompactElementList {
     if (!props.isClickable && !props.isCheckable && !props.isSelected) return null
     for (child in node.children) {
       val childProps = AndroidNodeProps.of(child) ?: continue
-      val childLabel = resolveLabel(childProps)
-      if (childLabel != null) return childLabel
+      if (resolveLabel(childProps) != null) return child
     }
     return null
   }
@@ -591,9 +625,14 @@ object AndroidCompactElementList {
   private fun boundsAnnotation(node: TrailblazeNode): String =
     CompactElementListUtils.boundsAnnotation(node)
 
-  /** Checks if an element is below the visible screen area. */
-  private fun isOffscreen(node: TrailblazeNode, screenHeight: Int): Boolean =
-    CompactElementListUtils.isOffscreen(node, screenHeight)
+  /**
+   * Checks if an element is above or below the visible screen area. Width counts only under a hidden
+   * ancestor, so a horizontally scrolled-away node elsewhere stays listed, as it always has.
+   */
+  private fun isOffscreen(node: TrailblazeNode, screenHeight: Int, screenWidth: Int, underHiddenAncestor: Boolean): Boolean =
+    CompactElementListUtils.isOffscreen(
+      node, screenHeight, screenWidth = if (underHiddenAncestor) screenWidth else 0, underHiddenAncestor,
+    )
 
   /** Returns true when the node has inverted bounds (Compose graphicsLayer artifact). */
   private fun hasInvertedBounds(node: TrailblazeNode): Boolean =

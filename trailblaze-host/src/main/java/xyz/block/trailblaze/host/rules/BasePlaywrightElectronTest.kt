@@ -4,12 +4,10 @@ import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.withContext
 import kotlinx.datetime.Clock
 import xyz.block.trailblaze.agent.TrailblazeElementComparator
-import xyz.block.trailblaze.agent.TrailblazeRunner
 import xyz.block.trailblaze.capture.CaptureOptions
 import xyz.block.trailblaze.capture.CaptureSession
 import xyz.block.trailblaze.mcp.agent.KoogTestAgentRunner
 import xyz.block.trailblaze.api.TestAgentRunner
-import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
@@ -186,24 +184,9 @@ class BasePlaywrightElectronTest(
     )
   }
 
-  private val trailblazeRunner: TrailblazeRunner by lazy {
-    TrailblazeRunner(
-      screenStateProvider = webStreamScreenshots.screenStateProvider,
-      agent = playwrightAgent,
-      llmClient = dynamicLlmClient.createLlmClient(),
-      trailblazeLlmModel = trailblazeLlmModel,
-      trailblazeToolRepo = toolRepo,
-      systemPromptTemplate = PLAYWRIGHT_ELECTRON_SYSTEM_PROMPT,
-      trailblazeLogger = loggingRule.logger,
-      sessionProvider = { loggingRule.session ?: error("Session not available - ensure test is running") },
-      maxSteps = maxLlmCalls ?: TrailblazeRunner.DEFAULT_MAX_STEPS,
-    )
-  }
-
-  // KOOG brain as a [TestAgentRunner], parallel to the legacy runner. Rides the same
-  // [TrailblazeRunnerUtil.runPromptSuspend] loop, so recordings replay uniformly; only unrecorded
-  // steps reach the Koog brain. Selected per-run in [runTrail].
-  private val koogRunner: KoogTestAgentRunner by lazy {
+  // Rides the [TrailblazeRunnerUtil.runPromptSuspend] loop, so recordings replay without the agent;
+  // only unrecorded steps reach it.
+  private val agentRunner: KoogTestAgentRunner by lazy {
     KoogTestAgentRunner(
       agent = playwrightAgent,
       toolRepo = toolRepo,
@@ -230,8 +213,7 @@ class BasePlaywrightElectronTest(
   private val trailblazeYaml = TrailblazeYaml.Default
   private var currentToolTraceId: TraceId? = null
 
-  // The runner-util (deterministic replay + tool dispatch) is identical regardless of agent — only
-  // the wrapped brain differs — so build one per runner. Recordings replay the same either way.
+  // The runner-util: deterministic replay + tool dispatch around the agent.
   private fun runnerUtilFor(runner: TestAgentRunner): TrailblazeRunnerUtil = TrailblazeRunnerUtil(
     trailblazeRunner = runner,
     runTrailblazeTool = { trailblazeTools: List<TrailblazeTool> ->
@@ -253,8 +235,7 @@ class BasePlaywrightElectronTest(
     sharedToolBatch = { block -> playwrightAgent.runInSharedToolBatch(block) },
   )
 
-  private val trailblazeRunnerUtil by lazy { runnerUtilFor(trailblazeRunner) }
-  private val koogRunnerUtil by lazy { runnerUtilFor(koogRunner) }
+  private val agentRunnerUtil by lazy { runnerUtilFor(agentRunner) }
 
   private suspend fun runTrail(
     trailItems: List<TrailYamlItem>,
@@ -263,14 +244,10 @@ class BasePlaywrightElectronTest(
     // adoption, Playwright-layer settling (PlaywrightPageManager.dispatchAndAwaitSettle)
     // no longer branches on this flag — both modes settle via request-tracking.
     useRecordedSteps: Boolean,
-    agentImplementation: AgentImplementation,
     onStepProgress: ((stepIndex: Int, totalSteps: Int, stepText: String) -> Unit)? = null,
   ) {
-    // Pick the brain (legacy or KOOG); recordings are replayed identically by the runner-util either
-    // way — only unrecorded steps reach the selected agent.
-    val koog = agentImplementation == AgentImplementation.KOOG_STRATEGY_GRAPH
-    val activeRunner: TestAgentRunner = if (koog) koogRunner else trailblazeRunner
-    val activeRunnerUtil = if (koog) koogRunnerUtil else trailblazeRunnerUtil
+    val activeRunner: TestAgentRunner = agentRunner
+    val activeRunnerUtil = agentRunnerUtil
     for (item in trailItems) {
       val itemResult = when (item) {
         is TrailYamlItem.PromptsTrailItem ->
@@ -314,9 +291,8 @@ class BasePlaywrightElectronTest(
     trailblazeDeviceId: TrailblazeDeviceId,
     trailFilePath: String?,
     traceId: TraceId? = null,
-    useRecordedSteps: Boolean = true,
+    useRecordedSteps: Boolean,
     sendSessionStartLog: Boolean,
-    agentImplementation: AgentImplementation = AgentImplementation.DEFAULT,
     /**
      * CLI `--memory` / `--secret` seeds, composed with the trail's `config.memory:` block via
      * [xyz.block.trailblaze.AgentMemory.seedFrom] before any tool runs (later tiers win on a
@@ -410,7 +386,7 @@ class BasePlaywrightElectronTest(
     ensureWebConsoleCaptureStarted()
     currentToolTraceId = traceId
     try {
-      runTrail(trailItems, useRecordedSteps, agentImplementation, onStepProgress)
+      runTrail(trailItems, useRecordedSteps, onStepProgress)
     } finally {
       currentToolTraceId = null
     }

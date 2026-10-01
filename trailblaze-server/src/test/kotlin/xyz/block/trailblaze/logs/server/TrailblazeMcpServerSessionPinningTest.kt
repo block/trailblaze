@@ -14,7 +14,6 @@ import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.TraceId
-import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.mcp.DeviceClaimRegistry
 import xyz.block.trailblaze.mcp.TRAILBLAZE_CLI_CLIENT_NAME
 import xyz.block.trailblaze.mcp.TrailblazeMcpBridge
@@ -681,7 +680,6 @@ private class TestPinBridge(
   override suspend fun runYaml(
     yaml: String,
     startNewSession: Boolean,
-    agentImplementation: AgentImplementation,
   ): String = ""
 
   override fun getCurrentlySelectedDeviceId(): TrailblazeDeviceId? = null

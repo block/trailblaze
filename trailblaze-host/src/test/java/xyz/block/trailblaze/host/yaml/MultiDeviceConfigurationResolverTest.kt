@@ -15,6 +15,7 @@ import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.exception.TrailblazeException
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
+import xyz.block.trailblaze.yaml.TrailblazeYaml
 
 /**
  * Behavioral contract for resolving a unified trail's multi-device configuration to concrete
@@ -47,6 +48,16 @@ class MultiDeviceConfigurationResolverTest {
     rawDeviceBindings = rawDeviceBindings,
     sessionDriverType = sessionDriverType,
   )
+
+  /** The configuration a run that names none selects, before any device-side work. */
+  private fun selectUnnamed(yaml: String, rawDeviceBindings: String? = null) =
+    MultiDeviceConfigurationResolver.selectConfigurationName(
+      yaml = yaml,
+      requestConfigurationName = null,
+      environmentConfigurationName = null,
+      requestDeviceBindingNames = emptySet(),
+      rawDeviceBindings = rawDeviceBindings,
+    )
 
   private fun pairTrail(
     sellerClassifier: String = "android-tablet",
@@ -301,7 +312,7 @@ class MultiDeviceConfigurationResolverTest {
         rawDeviceBindings = null,
       ),
     ).isNull()
-    assertThat(MultiDeviceConfigurationResolver.declaredConfigurationNames(singleDeviceTrail)).isEmpty()
+    assertThat(selectUnnamed(singleDeviceTrail)).isNull()
 
     val v1Trail = """
       - prompt: "tap checkout"
@@ -313,13 +324,12 @@ class MultiDeviceConfigurationResolverTest {
         rawDeviceBindings = "buyer=emulator-5562",
       ),
     ).isNull()
-    assertThat(MultiDeviceConfigurationResolver.declaredConfigurationNames(v1Trail)).isEmpty()
+    assertThat(selectUnnamed(v1Trail)).isNull()
   }
 
   @Test
-  fun `declared configuration names are reported for the dispatch-path check`() {
-    assertThat(MultiDeviceConfigurationResolver.declaredConfigurationNames(pairTrail()))
-      .isEqualTo(setOf("pos-pair"))
+  fun `the pre-dispatch selection names a configuration-only trail's configuration`() {
+    assertThat(selectUnnamed(pairTrail())).isEqualTo("pos-pair")
   }
 
   @Test
@@ -341,7 +351,7 @@ class MultiDeviceConfigurationResolverTest {
     ).contains("Failed to decode")
     assertThat(
       assertFailsWith<TrailblazeException> {
-        MultiDeviceConfigurationResolver.declaredConfigurationNames(malformed)
+        selectUnnamed(malformed)
       }.message.orEmpty(),
     ).contains("Failed to decode")
   }
@@ -897,6 +907,151 @@ class MultiDeviceConfigurationResolverTest {
     assertThat(
       MultiDeviceConfigurationResolver.startDeviceTargetId(twoConfigurations, "pos-pair"),
     ).isEqualTo("pos-app")
+  }
+
+  /**
+   * A trail declaring single-device entries beside its configuration — the shape that lets one
+   * `trail.yaml` carry a paired-display leg next to its per-classifier legs. The seller overrides
+   * its target so the force-stop rule below has something to get wrong.
+   */
+  private val mixedTrail = """
+    |config:
+    |  devices:
+    |    android-tablet: {}
+    |    ios-iphone: {}
+    |    pos-pair:
+    |      devices:
+    |        seller:
+    |          classifier: android-tablet
+    |          target: kiosk-app
+    |        buyer:
+    |          classifier: android-phone
+    |trail:
+    |  - prompt: "tap checkout"
+    |
+  """.trimMargin()
+
+  @Test
+  fun `a mixed trail with no bindings runs single-device instead of failing at start`() {
+    assertThat(resolve(mixedTrail, launchDevice, rawDeviceBindings = null)).isNull()
+  }
+
+  @Test
+  fun `a mixed trail binds its configuration when the env value binds companions`() {
+    val resolved = resolve(mixedTrail, launchDevice, rawDeviceBindings = "buyer=emulator-5562")!!
+
+    assertThat(resolved.configurationName).isEqualTo("pos-pair")
+    assertThat(resolved.companionDeviceIds.getValue("buyer").instanceId).isEqualTo("emulator-5562")
+  }
+
+  @Test
+  fun `a mixed trail binds its configuration when the request binds companions`() {
+    val resolved = MultiDeviceConfigurationResolver.resolve(
+      yaml = mixedTrail,
+      primaryDeviceId = launchDevice,
+      rawDeviceBindings = null,
+      requestDeviceBindings = mapOf("buyer" to "emulator-5562"),
+      sessionDriverType = null,
+    )!!
+
+    assertThat(resolved.configurationName).isEqualTo("pos-pair")
+  }
+
+  /**
+   * Any binding selects the configuration, not just one naming its members: a lane that booted a
+   * companion for this trail under the wrong name must hear about the name, not quietly run
+   * single-device with its companion idle.
+   */
+  @Test
+  fun `a mixed trail with a misnamed binding reports the name instead of running single-device`() {
+    val message = assertFailsWith<TrailblazeException> {
+      resolve(mixedTrail, launchDevice, rawDeviceBindings = "customer=emulator-5562")
+    }.message.orEmpty()
+
+    assertThat(message).contains("[customer]")
+  }
+
+  /** Naming the configuration is an explicit request for the pair, so its unbound member is still an error. */
+  @Test
+  fun `a mixed trail whose configuration is named explicitly still needs its bindings`() {
+    val message = assertFailsWith<TrailblazeException> {
+      MultiDeviceConfigurationResolver.resolve(
+        yaml = mixedTrail,
+        primaryDeviceId = launchDevice,
+        rawDeviceBindings = null,
+        requestConfigurationName = "pos-pair",
+        sessionDriverType = null,
+      )
+    }.message.orEmpty()
+
+    assertThat(message).contains("declares device 'buyer'")
+  }
+
+  /**
+   * A companion-less run of a mixed trail is single-device, so it launches the session target —
+   * force-stopping the configuration's start-device app would stop an app the run never opens and
+   * leave the one under test running.
+   */
+  @Test
+  fun `a mixed trail's single-device run reports no start-device override`() {
+    assertThat(MultiDeviceConfigurationResolver.startDeviceTargetId(mixedTrail)).isNull()
+    assertThat(MultiDeviceConfigurationResolver.startDeviceTargetId(mixedTrail, "pos-pair"))
+      .isEqualTo("kiosk-app")
+  }
+
+  /**
+   * `UnifiedTrailConfig.implicitMultiDeviceConfigurationName` is how CI plan generation predicts
+   * this selection for a lane before any session exists; if the two disagree, a lane's
+   * `requireRecordings` and `skip:` gates judge a trail by legs its runs never replay.
+   */
+  @Test
+  fun `the pre-flight prediction agrees with the runtime selection for every trail shape`() {
+    val shapes = mapOf(
+      "configuration-only" to pairTrail(),
+      "mixed" to mixedTrail,
+      "two configurations beside single-device entries" to mixedTwoConfigurations,
+      "single-device" to singleDeviceTrail,
+    )
+    val bindingCases = mapOf<String?, Boolean>(null to false, "buyer=emulator-5562" to true)
+    shapes.forEach { (shape, yaml) ->
+      bindingCases.forEach { (rawBindings, bindsCompanions) ->
+        val where = "$shape trail, bindings=$rawBindings"
+        val config = TrailblazeYaml.Default.decodeUnifiedTrailConfig(yaml)
+        if (config.requiresExplicitMultiDeviceConfiguration(bindsCompanions)) {
+          assertFailsWith<TrailblazeException>(where) { selectUnnamed(yaml, rawBindings) }
+        } else {
+          assertThat(config.implicitMultiDeviceConfigurationName(bindsCompanions), where)
+            .isEqualTo(selectUnnamed(yaml, rawBindings))
+        }
+      }
+    }
+  }
+
+  /**
+   * Two configurations beside single-device entries: without companions the run is single-device
+   * like any mixed trail; with them it must name one, exactly as a configuration-only trail must.
+   */
+  private val mixedTwoConfigurations = twoConfigurations.replace(
+    "config:\n  devices:\n",
+    "config:\n  devices:\n    ios-iphone: {}\n",
+  )
+
+  @Test
+  fun `a mixed trail with two configurations runs single-device without companions and must name one with them`() {
+    assertThat(selectUnnamed(mixedTwoConfigurations)).isNull()
+    assertThat(
+      assertFailsWith<TrailblazeException> {
+        selectUnnamed(mixedTwoConfigurations, rawDeviceBindings = "buyer=emulator-5562")
+      }.message.orEmpty(),
+    ).contains("2 device configurations")
+  }
+
+  /** Nothing parseable binds nothing, so a mixed trail still runs single-device. */
+  @Test
+  fun `a mixed trail with blank or unparseable env bindings runs single-device`() {
+    listOf("", " , ", "buyer").forEach { raw ->
+      assertThat(selectUnnamed(mixedTrail, rawDeviceBindings = raw), "bindings='$raw'").isNull()
+    }
   }
 
   /** Total, as above: `resolve` reports both of these with a message about trail shape. */

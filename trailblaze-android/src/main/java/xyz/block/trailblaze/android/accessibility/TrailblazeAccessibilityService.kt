@@ -1300,11 +1300,6 @@ class TrailblazeAccessibilityService : AccessibilityService() {
 
     fun getCurrentLocale(): Locale = appContext.resources.configuration.getLocales().get(0)
 
-    fun getDeviceCategory(): TrailblazeAndroidDeviceCategory =
-      if (appContext.resources.configuration.smallestScreenWidthDp < 600)
-        TrailblazeAndroidDeviceCategory.PHONE
-      else TrailblazeAndroidDeviceCategory.TABLET
-
     fun getScreenDimensions(): Pair<Int, Int> {
       val windowManager = requireService().getSystemService(WINDOW_SERVICE) as WindowManager
 
@@ -1746,10 +1741,6 @@ class TrailblazeAccessibilityService : AccessibilityService() {
       service.startActivity(intent)
     }
 
-    fun pressRecents() {
-      requireService().performGlobalAction(GLOBAL_ACTION_RECENTS)
-    }
-
     fun setClipboard(text: String) {
       val clipboardManager =
         requireService().getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
@@ -1981,19 +1972,28 @@ class TrailblazeAccessibilityService : AccessibilityService() {
       }
 
       // Fast ACTION_SET_TEXT path first; its verify reads the dispatched node directly.
-      when (tryDispatchActionSetText(text)) {
-        SetTextOutcome.LANDED -> return@traceDetail true
-        SetTextOutcome.NOT_DISPATCHED -> Unit
-        SetTextOutcome.UNCONFIRMED -> {
-          // In a WebView this is the end: keystroke synthesis cannot clear a Chromium input, so it
-          // could only add a second copy. The probe is a tree walk, so it is paid only here.
-          if (focusedEditableIsInWebView()) {
-            Console.log(
-              "inputText (length=${text.length}) ACTION_SET_TEXT did not take effect in WebView " +
-                "(waited ${SET_TEXT_VERIFY_TIMEOUT_MS}ms); not synthesizing keystrokes to " +
-                "avoid duplicate entry."
-            )
-            return@traceDetail false
+      when (val outcome = tryDispatchActionSetText(text)) {
+        SetTextOutcome.Landed -> return@traceDetail true
+        SetTextOutcome.NotDispatched -> Unit
+        is SetTextOutcome.Unconfirmed -> {
+          when (outcome.plan) {
+            UnconfirmedSetTextPlan.TYPE_KEYSTROKES -> Unit
+            UnconfirmedSetTextPlan.GIVE_UP -> {
+              Console.log(
+                "inputText (length=${text.length}) ACTION_SET_TEXT did not take effect in " +
+                  "WebView (waited ${SET_TEXT_VERIFY_TIMEOUT_MS}ms); not synthesizing " +
+                  "keystrokes to avoid duplicate entry."
+              )
+              return@traceDetail false
+            }
+            UnconfirmedSetTextPlan.ACCEPT_UNREADABLE -> {
+              Console.log(
+                "inputText (length=${text.length}) ACTION_SET_TEXT dispatched to a WebView " +
+                  "password field; its value is not exposed to accessibility, so the entry " +
+                  "could not be confirmed."
+              )
+              return@traceDetail true
+            }
           }
         }
       }
@@ -2031,9 +2031,9 @@ class TrailblazeAccessibilityService : AccessibilityService() {
      * hint-showing field reads as empty — we append to real content only.
      */
     private fun tryDispatchActionSetText(text: String): SetTextOutcome {
-      val root = getApplicationWindowRoot() ?: return SetTextOutcome.NOT_DISPATCHED
+      val root = getApplicationWindowRoot() ?: return SetTextOutcome.NotDispatched
       return try {
-        val editableNode = findFocusedEditableNode(root) ?: return SetTextOutcome.NOT_DISPATCHED
+        val editableNode = findFocusedEditableNode(root) ?: return SetTextOutcome.NotDispatched
         try {
           val existing =
             resolveExistingEditableText(
@@ -2041,11 +2041,18 @@ class TrailblazeAccessibilityService : AccessibilityService() {
               editableNode.isShowingHintText,
             )
           val expected = existing + text
-          if (!dispatchSetTextValue(editableNode, expected)) return SetTextOutcome.NOT_DISPATCHED
+          if (!dispatchSetTextValue(editableNode, expected)) return SetTextOutcome.NotDispatched
           if (awaitNodeTextChangedFrom(editableNode, existing, SET_TEXT_VERIFY_TIMEOUT_MS)) {
-            SetTextOutcome.LANDED
+            SetTextOutcome.Landed
           } else {
-            SetTextOutcome.UNCONFIRMED
+            // Both inputs come from the dispatched node, not a re-find of whatever holds focus
+            // after the wait. The ancestor walk is paid only here.
+            SetTextOutcome.Unconfirmed(
+              planUnconfirmedSetText(
+                inWebView = isInWebView(editableNode),
+                isPassword = editableNode.isPassword,
+              )
+            )
           }
         } finally {
           editableNode.recycle()
@@ -2056,18 +2063,19 @@ class TrailblazeAccessibilityService : AccessibilityService() {
     }
 
     /** What [tryDispatchActionSetText] could prove about its `ACTION_SET_TEXT` dispatch. */
-    private enum class SetTextOutcome {
+    private sealed interface SetTextOutcome {
       /** No focused editable, or the node refused the action outright. Nothing was entered. */
-      NOT_DISPATCHED,
+      data object NotDispatched : SetTextOutcome
 
       /** The node read back as changed, so the write reached the field. */
-      LANDED,
+      data object Landed : SetTextOutcome
 
       /**
        * Accepted, but the node's text never moved off its pre-dispatch value — silently rejected
-       * (masked payment fields do this), or the app is holding the write.
+       * (masked payment fields do this), the app is holding the write, or the value is unreadable.
+       * [plan] is decided from the dispatched node.
        */
-      UNCONFIRMED,
+      data class Unconfirmed(val plan: UnconfirmedSetTextPlan) : SetTextOutcome
     }
 
     /**
@@ -2341,7 +2349,7 @@ class TrailblazeAccessibilityService : AccessibilityService() {
 
     /**
      * How long [tryDispatchActionSetText] polls the refreshed dispatch node before reporting
-     * [SetTextOutcome.UNCONFIRMED]. One window covers every field, WebView included: the separate
+     * [SetTextOutcome.Unconfirmed]. One window covers every field, WebView included: the separate
      * multi-second windows this replaced were sized to ride out the stale-cache read described on
      * [awaitNodeTextChangedFrom], which waiting never resolves. What is left to wait for is the app
      * applying the write. Kept short because it sits in front of the keystroke fallback a masked
@@ -2366,7 +2374,7 @@ class TrailblazeAccessibilityService : AccessibilityService() {
     private const val DOUBLED_INPUT_SETTLE_TIMEOUT_MS = 2000L
 
     /**
-     * Upper bound on the focused editable's ancestor walk in [focusedEditableIsInWebView]. Any real
+     * Upper bound on the editable's ancestor walk in [isInWebView]. Any real
      * WebView host sits a handful of levels above the focused input; this cap only guards against a
      * pathological or cyclic tree making the walk unbounded.
      */
@@ -2403,39 +2411,28 @@ class TrailblazeAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * Whether the currently focused editable field lives inside a Chromium `WebView`.
+     * Whether [editable] lives inside a Chromium `WebView`.
      *
-     * Detected by walking up the focused editable's ancestor chain for an `android.webkit.WebView`
-     * node — Chromium reports the focused input itself as a plain `EditText`, so the WebView host
-     * only appears above it. Bounded by [MAX_WEBVIEW_ANCESTOR_WALK] so a pathological tree can't
-     * make this walk unbounded. Returns false when there is no focused editable.
+     * Detected by walking up [editable]'s ancestor chain for an `android.webkit.WebView` node —
+     * Chromium reports the focused input itself as a plain `EditText`, so the WebView host only
+     * appears above it. Bounded by [MAX_WEBVIEW_ANCESTOR_WALK] so a pathological tree can't make
+     * this walk unbounded. Does not recycle [editable].
      *
-     * [inputText] uses this to give WebView fields a longer ACTION_SET_TEXT verify window and to
-     * never fall back to keystroke synthesis there (which can't clear a Chromium input and would
-     * double the entered text).
+     * [tryDispatchActionSetText] uses this so an unconfirmed WebView write never falls back to
+     * keystroke synthesis (which can't clear a Chromium input and would double the entered text).
      */
-    private fun focusedEditableIsInWebView(): Boolean {
-      val root = getApplicationWindowRoot() ?: return false
-      return try {
-        val editable = findFocusedEditableNode(root) ?: return false
-        try {
-          var ancestor: AccessibilityNodeInfo? = editable.parent
-          var depth = 0
-          while (ancestor != null && depth < MAX_WEBVIEW_ANCESTOR_WALK) {
-            val isWebView = ancestor.className?.toString() == "android.webkit.WebView"
-            val next = if (isWebView) null else ancestor.parent
-            ancestor.recycle()
-            if (isWebView) return true
-            ancestor = next
-            depth++
-          }
-          false
-        } finally {
-          editable.recycle()
-        }
-      } finally {
-        root.recycle()
+    private fun isInWebView(editable: AccessibilityNodeInfo): Boolean {
+      var ancestor: AccessibilityNodeInfo? = editable.parent
+      var depth = 0
+      while (ancestor != null && depth < MAX_WEBVIEW_ANCESTOR_WALK) {
+        val isWebView = ancestor.className?.toString() == "android.webkit.WebView"
+        val next = if (isWebView) null else ancestor.parent
+        ancestor.recycle()
+        if (isWebView) return true
+        ancestor = next
+        depth++
       }
+      return false
     }
 
     fun eraseText(charactersToErase: Int): Boolean {
@@ -2493,6 +2490,46 @@ class TrailblazeAccessibilityService : AccessibilityService() {
  */
 internal fun resolveExistingEditableText(rawText: String?, isShowingHintText: Boolean): String =
   if (isShowingHintText) "" else rawText.orEmpty()
+
+/** What `inputText` does after an accepted `ACTION_SET_TEXT` never read back as changed. */
+internal enum class UnconfirmedSetTextPlan {
+  /** Fall back to keystroke synthesis, which verifies on its own. */
+  TYPE_KEYSTROKES,
+
+  /** Report the input as not entered. */
+  GIVE_UP,
+
+  /**
+   * Report the input as entered: the field's value cannot be read, so there is nothing to wait for.
+   * The unreadable value also means the dispatch could not append, so it REPLACED whatever the
+   * field held; a populated field ends up holding only the new text.
+   */
+  ACCEPT_UNREADABLE,
+}
+
+/**
+ * Decides what `inputText` does when the field accepted `ACTION_SET_TEXT` but its text never moved
+ * off the pre-dispatch value. Side-effect-free so it is unit-testable without an
+ * `AccessibilityNodeInfo` (see [PlanUnconfirmedSetTextTest]).
+ *
+ * - **Outside a WebView**, fall back to keystrokes: masked native fields silently reject
+ *   `ACTION_SET_TEXT` and only take key events. A native password field reads back its masked
+ *   characters, so it is verifiable and stays on this path.
+ * - **Inside a WebView**, never type: keystroke synthesis cannot clear a Chromium input, so it could
+ *   only add a second copy. A plain field that did not change gave up.
+ * - **A WebView password field** never exposes its value (it reads back empty whatever it holds),
+ *   so "did not change" proves nothing. The dispatch was accepted, which is the most that can be
+ *   known, and it counts as entered — the no-selector path always reported it that way.
+ */
+internal fun planUnconfirmedSetText(
+  inWebView: Boolean,
+  isPassword: Boolean,
+): UnconfirmedSetTextPlan =
+  when {
+    !inWebView -> UnconfirmedSetTextPlan.TYPE_KEYSTROKES
+    isPassword -> UnconfirmedSetTextPlan.ACCEPT_UNREADABLE
+    else -> UnconfirmedSetTextPlan.GIVE_UP
+  }
 
 /**
  * Decides whether a post-`inputText` field reading [currentText] is the expected

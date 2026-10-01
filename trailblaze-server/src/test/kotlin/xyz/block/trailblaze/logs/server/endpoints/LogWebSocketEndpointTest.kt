@@ -15,6 +15,7 @@ import xyz.block.trailblaze.api.TrailblazeNode
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeLogServerClient
+import xyz.block.trailblaze.logs.client.withVisibleStrings
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.TrailblazeClockDomain
 import xyz.block.trailblaze.logs.server.ServerEndpoints.logsServerKtorEndpoints
@@ -59,7 +60,8 @@ class LogWebSocketEndpointTest {
     assertTrue(runBlocking { uploadClient.sendScreenshot("home.png", session, screenshot) })
     assertTrue(runBlocking { uploadClient.sendTrace(session, "{\"trace\":true}") })
 
-    assertEquals(log, logsRepo.getLogsForSession(session).single())
+    // The disk sink records the capture's strings as it saves, so the saved log is the sent one plus those.
+    assertEquals(log.withVisibleStrings(), logsRepo.getLogsForSession(session).single())
     assertContentEquals(screenshot, logsRepo.getSessionDir(session).resolve("home.png").readBytes())
     assertEquals("{\"trace\":true}", logsRepo.getSessionDir(session).resolve("trace.json").readText())
     assertEquals(1, connectionCount.get())
@@ -110,7 +112,7 @@ class LogWebSocketEndpointTest {
       "the socket transport must anchor device-clock logs exactly like the JSON POST",
     )
     assertEquals(TrailblazeClockDomain.DEVICE, persisted.clock)
-    assertEquals(deviceLog, (persisted as TrailblazeLog.TrailblazeSnapshotLog).copy(hostReceivedAt = null))
+    assertEquals(deviceLog.withVisibleStrings(), (persisted as TrailblazeLog.TrailblazeSnapshotLog).copy(hostReceivedAt = null))
     uploadClient.close()
   }
 
@@ -162,7 +164,8 @@ class LogWebSocketEndpointTest {
 
     assertTrue(runBlocking { uploadClient.sendAgentLog(log) })
 
-    assertEquals(log, logsRepo.getLogsForSession(session).single())
+    // The disk sink records the capture's strings as it saves, so the saved log is the sent one plus those.
+    assertEquals(log.withVisibleStrings(), logsRepo.getLogsForSession(session).single())
     assertEquals(0, connectionCount.get())
     LogWebSocketEndpoint.setServerConnectionListener {}
     uploadClient.close()

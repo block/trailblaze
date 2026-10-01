@@ -134,14 +134,6 @@ object TrailblazeDesktopUtil {
   }
 
   /**
-   * Gets the settings file in the default app data directory.
-   * @return The settings file
-   */
-  fun getDefaultSettingsFile(): File {
-    return File(getDefaultAppDataDirectory(), SETTINGS_FILENAME)
-  }
-
-  /**
    * Gets the desktop application logs directory.
    * This is for the desktop app's own runtime logs (e.g. logback output),
    * separate from the Trailblaze session/test logs.

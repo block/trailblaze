@@ -245,6 +245,10 @@
             mime: mime,
           };
           if (artifact.device != null) clip.device = artifact.device;
+          // The file's own bytes, for the viewer's frame index and its in-page fallback player — a
+          // blob: URL can't be read back synchronously. Not enumerable, so nothing that copies or
+          // serializes the payload carries the recording along.
+          Object.defineProperty(clip, 'bytes', { value: bytes, enumerable: false });
           return clip;
         });
       }
@@ -806,6 +810,9 @@
       isSafeSessionRelativePath: render.isSafeSessionRelativePath || g.isSafeSessionRelativePath,
       slimTracerSpans: render.slimTracerSpans || g.slimTracerSpans,
       MAX_TRACE_BYTES: render.MAX_TRACE_BYTES || g.MAX_TRACE_BYTES,
+      extractVisibleStrings: render.extractVisibleStrings || g.extractVisibleStrings,
+      visibleStringsShotFiles: render.visibleStringsShotFiles || g.visibleStringsShotFiles,
+      captureFrameFiles: render.captureFrameFiles || g.captureFrameFiles,
     };
   }
 
@@ -841,18 +848,38 @@
           var meta = buildRunMeta(session.logs, {
             recordingYaml: session.recordingYaml, originalYaml: originalYaml, generatedAt: generatedAt,
           });
-          // Only the screenshots the trace references — the archive may also hold sprite sheets and
-          // other image-shaped artifacts the report never shows.
-          var wanted = render.traceScreenshotFiles(trace);
+          // Only the screenshots the trace references, plus the ones the Strings tab shows — the
+          // archive may also hold sprite sheets and other image-shaped artifacts the report never shows.
+          // The strings ride on the capture logs themselves, through the renderer's own reader
+          // (run-report-visible-strings via run-report-core), so an archive shows the same strings
+          // as a CLI-built report. An older bundle without the reader leaves the report without the
+          // tab, exactly as before.
           var shots = {};
-          var shotChain = Promise.resolve();
-          wanted.forEach(function (file) {
-            shotChain = shotChain.then(function () {
-              return sessionImageDataUri(zipBytes, session, file, { inflateRaw: inflateRaw })
-                .then(function (uri) { if (uri) shots[file] = uri; });
-            });
-          });
-          return shotChain
+          var visibleStrings = typeof render.extractVisibleStrings === 'function' ? render.extractVisibleStrings(session.logs) : null;
+          return Promise.resolve()
+            .then(function () {
+              var wanted = render.traceScreenshotFiles(trace);
+              if (typeof render.visibleStringsShotFiles === 'function') {
+                render.visibleStringsShotFiles(visibleStrings).forEach(function (file) {
+                  if (wanted.indexOf(file) < 0 && (/^https?:\/\//i.test(file) || session.byFileName[file])) wanted.push(file);
+                });
+              }
+              // The frames saved from the recording for captures with no screenshot, where the
+              // archive has them.
+              if (typeof render.captureFrameFiles === 'function') {
+                render.captureFrameFiles(session.logs).forEach(function (file) {
+                  if (wanted.indexOf(file) < 0 && session.byFileName[file]) wanted.push(file);
+                });
+              }
+              var shotChain = Promise.resolve();
+              wanted.forEach(function (file) {
+                shotChain = shotChain.then(function () {
+                  return sessionImageDataUri(zipBytes, session, file, { inflateRaw: inflateRaw })
+                    .then(function (uri) { if (uri) shots[file] = uri; });
+                });
+              });
+              return shotChain;
+            })
             .then(function () { return sessionVideoClips(zipBytes, session, { inflateRaw: inflateRaw }); })
             .then(function (videoClips) {
               return sessionEventStreams(zipBytes, session, render, inflateRaw).then(function (events) {
@@ -864,7 +891,7 @@
                       videoClip: videoClips.length ? videoClips[0] : null,
                       videoClips: videoClips.length ? videoClips : null,
                       events: events, attachments: attachments,
-                      spans: spans,
+                      spans: spans, visibleStrings: visibleStrings,
                     });
                   });
                 });
@@ -909,7 +936,7 @@
             meta: s0.meta, trace: s0.trace, llmLogs: s0.llmLogs, shots: s0.shots,
             events: s0.events || null, attachments: s0.attachments || null,
             hierarchies: s0.hierarchies || null, hierarchiesGz: s0.hierarchiesGz || null,
-            spans: s0.spans || null,
+            spans: s0.spans || null, visibleStrings: s0.visibleStrings || null,
             videoClip: s0.videoClip || null, videoClips: s0.videoClips || null,
             keepAttachmentObjectUrls: keepAttachmentObjectUrls,
           })

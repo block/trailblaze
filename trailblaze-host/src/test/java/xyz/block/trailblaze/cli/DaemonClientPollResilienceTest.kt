@@ -14,6 +14,7 @@ import io.ktor.server.application.install
 import io.ktor.server.cio.CIO
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
+import io.ktor.server.request.receiveText
 import io.ktor.server.response.respondText
 import io.ktor.server.routing.get
 import io.ktor.server.routing.post
@@ -23,6 +24,8 @@ import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertFailsWith
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.llm.RunYamlRequest
@@ -59,6 +62,12 @@ class DaemonClientPollResilienceTest {
 
     @Volatile var runId: String = UUID.randomUUID().toString()
 
+    /** Every runId the client asked `/cli/run-cancel` to cancel, in order. */
+    val cancelledRunIds: MutableList<String> = java.util.Collections.synchronizedList(mutableListOf())
+
+    /** How long `/cli/run-cancel` takes to answer; a large value stands in for a wedged daemon. */
+    @Volatile var cancelResponseDelayMs: Long = 0L
+
     /** Assigned by Ktor's own bind in [start], never probed ahead of it — see [startOnEphemeralPort]. */
     var port: Int = EPHEMERAL_PORT
       private set
@@ -81,6 +90,13 @@ class DaemonClientPollResilienceTest {
           val n = runStatusResponder.incrementAndGet()
           val (status, body) = runStatusHandler(n)
           call.respondText(body, ContentType.Application.Json, status)
+        }
+        post(CliEndpoints.RUN_CANCEL) {
+          kotlinx.coroutines.delay(cancelResponseDelayMs)
+          val body = call.receiveText()
+          cancelledRunIds += TrailblazeJsonInstance.parseToJsonElement(body)
+            .jsonObject.getValue("runId").jsonPrimitive.content
+          call.respondText("""{"success":true}""", ContentType.Application.Json, HttpStatusCode.OK)
         }
       }
     }
@@ -274,7 +290,8 @@ class DaemonClientPollResilienceTest {
 
   /**
    * The backstop still fires: a run whose progress never advances (wedged daemon, `/ping` may even
-   * be healthy) is abandoned after a full window with no forward progress.
+   * be healthy) is abandoned after a full window with no forward progress — and cancelled on the
+   * daemon, so a retry does not run beside it and a late pass is not credited to this attempt.
    */
   @Test
   fun runAsync_timesOutWhenProgressStalls() {
@@ -286,7 +303,28 @@ class DaemonClientPollResilienceTest {
       val response = client.runSync(CliRunRequest(runYamlRequest = sampleRequest()))
       assertThat(response.success).isFalse()
       assertThat(response.error).isNotNull().contains("no progress")
+      assertThat(response.error).isNotNull().contains("(run cancelled)")
       assertThat(response.errorKind).isEqualTo(CliRunResponse.ERROR_KIND_INFRA)
+      assertThat(daemon.cancelledRunIds.toList()).isEqualTo(listOf(daemon.runId))
+    }
+  }
+
+  /**
+   * The cancel is bounded too: this branch is the wedged-daemon backstop, so a daemon that takes
+   * the cancel request and never answers must not hold up the timeout report. Unbounded, the client
+   * would wait for the delayed answer and report the run cancelled.
+   */
+  @Test
+  fun runAsync_timeoutReportsWithoutWaitingOnAnUnansweredCancel() {
+    daemon.runStatusHandler = { _ ->
+      HttpStatusCode.OK to runStatusJsonWithProgress("RUNNING", "stuck", null)
+    }
+    daemon.cancelResponseDelayMs = 120_000L
+
+    DaemonClient(port = daemon.port, pollIntervalMs = 10L, runPollTimeoutMs = 100L).use { client ->
+      val response = client.runSync(CliRunRequest(runYamlRequest = sampleRequest()))
+      assertThat(response.success).isFalse()
+      assertThat(response.error).isNotNull().contains("(cancelling the run failed; it may still be running)")
     }
   }
 

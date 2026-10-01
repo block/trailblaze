@@ -30,6 +30,7 @@ import xyz.block.trailblaze.report.models.failureCodeOf
 import xyz.block.trailblaze.report.models.failurePayloadOf
 import xyz.block.trailblaze.report.models.SessionRecordingInfo
 import xyz.block.trailblaze.report.models.SkippedTrail
+import xyz.block.trailblaze.report.strings.CaptureVideoFrames
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.util.BunBinaryResolver
 import xyz.block.trailblaze.util.Console
@@ -156,6 +157,7 @@ class RunReportGenerator(
       return null
     }
 
+    ReportTiming.stage("RunReportGenerator.saveVideoFrames") { saveVideoFrames(logsRepo, snapshots) }
     val sessionsJson = ReportTiming.stage("RunReportGenerator.buildSessionJson") {
       buildJsonArray {
         for (snapshot in snapshots) {
@@ -273,6 +275,31 @@ class RunReportGenerator(
     } finally {
       workDir.deleteRecursively()
       ReportTiming.log("RunReportGenerator.generate", generateStart)
+    }
+  }
+
+  /**
+   * Saves a frame from each session's recording for every capture that has no screenshot, before
+   * the renderer looks for images on disk. Done here because every report is built here, wherever
+   * the session came from: a host run, a daemon session, or logs pulled back from a device farm,
+   * where no Trailblaze code ran on the host to save them. A capture that already has a screenshot
+   * or a saved frame is skipped without opening the recording, so a report over sessions that need
+   * nothing pays only a file check per capture. Best-effort: a frame that can't be saved leaves
+   * the report as it was, and the viewer takes that frame from the recording in the browser.
+   */
+  private fun saveVideoFrames(logsRepo: LogsRepo, snapshots: List<SessionLogSnapshot>) {
+    for (snapshot in snapshots) {
+      try {
+        val result = CaptureVideoFrames.fill(logsRepo.getSessionDir(snapshot.sessionId), snapshot.logs)
+        if (result.written > 0) {
+          Console.log("[RunReportGenerator] ${snapshot.sessionId.value}: saved ${result.written} video frame(s)")
+        }
+      } catch (e: Exception) {
+        Console.log(
+          "[RunReportGenerator] ${snapshot.sessionId.value}: could not save video frames: " +
+            "${e::class.simpleName}${e.message?.let { ": $it" }.orEmpty()}",
+        )
+      }
     }
   }
 

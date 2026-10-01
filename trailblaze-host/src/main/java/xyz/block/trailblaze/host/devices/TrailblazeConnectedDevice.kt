@@ -45,6 +45,8 @@ class MaestroConnectedDevice(
   private val maestroDriver: Driver,
   trailblazeDriverType: TrailblazeDriverType,
   instanceId: String,
+  /** The actual port supplied when building this iOS driver; null for Android. */
+  val driverHostPort: Int? = null,
 ) : TrailblazeConnectedDevice(trailblazeDriverType, instanceId) {
 
   val initialMaestroDeviceInfo: DeviceInfo = maestroDriver.deviceInfo()

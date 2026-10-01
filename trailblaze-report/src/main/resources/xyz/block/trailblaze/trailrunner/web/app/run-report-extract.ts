@@ -358,6 +358,34 @@ const sameClockCueTs = (
   return driverTs >= spanStart && driverTs <= spanEnd ? driverTs : null;
 };
 
+// When a capture was actually taken: the END of the record that carries it. A driver screenshots
+// once its action has completed, so the record's start — the `ts`/`shotTs` cues Replay places a
+// still by — is up to that record's whole duration early (seconds, for a wait or a polled
+// assertion). The latest carrier wins, as it does for a fold's screenshotFile.
+//
+// A tool row folds driver records that may be on another clock, so its carrier is held to the
+// same test as a cue: the row's own record passes, and a folded driver record passes only when
+// sameClockCueTs puts its start inside `span`, the row's host-clock span. Otherwise — including a
+// span with no usable start or length to judge by, where a cue falls back to the row's start —
+// null, and the viewer falls back to the cue. A row with no `span` is one whose records all share
+// a clock (a driver action and its folded repeats), so its latest carrier stands.
+const captureEndTs = (
+  logs: TrailblazeLogRecord[] | null | undefined,
+  file: string | null | undefined,
+  span: { start: number | null | undefined; end: number | null | undefined } | null,
+): number | null => {
+  if (!file || !logs) return null;
+  for (let j = logs.length - 1; j >= 0; j--) {
+    const l: any = logs[j];
+    if (!l || l.screenshotFile !== file) continue;
+    const at = l.timestamp ? Date.parse(l.timestamp) : NaN;
+    if (!Number.isFinite(at)) return null;
+    const onRowClock = !span || at === span.start || sameClockCueTs(span.start, span.end, at) != null;
+    return onRowClock ? at + (l.durationMs || 0) : null;
+  }
+  return null;
+};
+
 function extractTrace(rawLogs: TrailblazeLogRecord[]): RawTraceRow[] {
   // One timeline, one clock. Every stamp below is compared against another — to fold a batch, to
   // place a step on the recording's host-clock window — so a device-stamped log has to be shifted
@@ -443,8 +471,10 @@ function extractTrace(rawLogs: TrailblazeLogRecord[]): RawTraceRow[] {
   let llmIndex = 0;
 
   for (const log of logs) {
+    if (answeredWithoutModel(log)) continue;
     const cls = logClass(log);
     const llmRowsForLog = (log.llmMessages || log.llmResponse ? 1 : 0)
+      + (cls === 'TrailblazeDecisionRequestLog' ? 1 : 0)
       + (log.usageAndCost && log.systemPrompt !== undefined && !(log.traceId && samplingRequestTraceIds.has(log.traceId)) ? 1 : 0);
     const llmAt = llmRowsForLog ? llmIndex : null;
     llmIndex += llmRowsForLog;
@@ -566,14 +596,14 @@ function extractTrace(rawLogs: TrailblazeLogRecord[]): RawTraceRow[] {
         const aerr = aok ? null : (err || `Assertion failed: ${cond}`);
         const open = asserts.get(cond);
         const canFold = open && (!traceId || !open._trace || open._trace === traceId);
-        if (canFold) { open.count++; open.ms += log.durationMs || 0; open.ok = aok; open.err = aerr; if (screenshotFile) open.screenshotFile = screenshotFile; if (viewHierarchy) open.viewHierarchy = viewHierarchy; if (viewport) open.viewport = viewport; open._logs.push(log); continue; }
+        if (canFold) { open.count++; open.ms += log.durationMs || 0; open.ok = aok; open.err = aerr; if (screenshotFile) open.screenshotFile = screenshotFile; if (viewHierarchy) adoptHierarchy(open, log, viewHierarchy, screenshotFile); if (viewport) open.viewport = viewport; open._logs.push(log); continue; }
         const row = { _trace: traceId, label: actionType, _logs: [log], tool: describeAction(action), args: actionArgsYaml(action), ms: log.durationMs || 0, ok: aok, err: aerr, screenshotFile, viewHierarchy, viewport, ts, count: 1, mark: actionMark(action, log) };
         out.push(row); asserts.set(cond, row); continue;
       }
       asserts = new Map();
       const sig = actionType + ':' + describeAction(action);
       const prev = out[out.length - 1];
-      if (prev && prev._sig === sig && (!traceId || !prev._trace || prev._trace === traceId)) { prev.count = (prev.count || 1) + 1; prev.ms += log.durationMs || 0; if (screenshotFile) prev.screenshotFile = screenshotFile; if (viewHierarchy) prev.viewHierarchy = viewHierarchy; if (viewport) prev.viewport = viewport; prev._logs.push(log); continue; }
+      if (prev && prev._sig === sig && (!traceId || !prev._trace || prev._trace === traceId)) { prev.count = (prev.count || 1) + 1; prev.ms += log.durationMs || 0; if (screenshotFile) prev.screenshotFile = screenshotFile; if (viewHierarchy) adoptHierarchy(prev, log, viewHierarchy, screenshotFile); if (viewport) prev.viewport = viewport; prev._logs.push(log); continue; }
       out.push({ _sig: sig, _trace: traceId, _logs: [log], label: actionType, tool: describeAction(action), args: actionArgsYaml(action), ms: log.durationMs || 0, ok: true, err: null, screenshotFile, viewHierarchy, viewport, ts, count: 1, mark: actionMark(action, log) });
       continue;
     }
@@ -605,6 +635,16 @@ function extractTrace(rawLogs: TrailblazeLogRecord[]): RawTraceRow[] {
       const prow = { _trace: traceId, label: truncate(promptText, 120), _logs: [log], tool: log.modelName ? `llm · ${log.modelName}` : 'agent step', ms: log.durationMs || 0, ok: !err, err, screenshotFile, viewHierarchy, viewport, ts, objective: isObjective, trailhead: isObjective && log.promptStep?.isTrailhead === true, ...(llmAt != null ? { llm: llmAt } : {}) };
       out.push(prow);
       if (isObjective) objRow = prow;
+      continue;
+    }
+
+    // A decision request is a model call of its own kind: one timeline row, opening the same
+    // transcript view. Never a failed row: an engine error means the step went to the LLM instead,
+    // and marking it failed would pull the run's failure anchor onto it.
+    if (cls === 'TrailblazeDecisionRequestLog' && llmAt != null) {
+      asserts = new Map(); closeGroup();
+      const model = log.response?.model || log.request?.model || '?';
+      out.push({ _trace: traceId, label: log.outcome ? `Decision · ${truncate(String(log.outcome), 100)}` : 'Decision request', _logs: [log], tool: `decision · ${model}`, ms: log.durationMs || 0, ok: true, err: null, screenshotFile: null, viewHierarchy: null, ts, llm: llmAt, decision: true });
       continue;
     }
 
@@ -745,6 +785,33 @@ function errorCodeOf(payload: any): string | null {
   return typeof payload.code === 'string' ? payload.code : null;
 }
 
+// The captures among `logs` that have no screenshot, by the id their log was stamped with as it was
+// emitted (a capture with a screenshot is found by that instead). The Strings tab links such a
+// capture's strings to its Timeline row with these.
+function screenshotlessCaptureIds(logs: TrailblazeLogRecord[]): string[] {
+  const ids: string[] = [];
+  for (const l of logs) {
+    if (l && !l.screenshotFile && typeof l.captureId === 'string' && l.captureId && ids.indexOf(l.captureId) < 0) ids.push(l.captureId);
+  }
+  return ids;
+}
+
+// A folded action row takes each repeat's hierarchy, and the picture goes with it: a repeat with
+// no screenshot but a capture id shows that capture's video frame, not an earlier repeat's JPEG.
+function adoptHierarchy(row: RawTraceRow, log: TrailblazeLogRecord, viewHierarchy: unknown, screenshotFile: string | null): void {
+  row.viewHierarchy = viewHierarchy;
+  row._shotCapture = log.captureId;
+  if (!screenshotFile && typeof log.captureId === 'string' && log.captureId) row.screenshotFile = null;
+}
+
+// A row's picture is its first capture id (see captureShotFile). A folded action row keeps its
+// LAST log's hierarchy, so the capture that hierarchy came from goes first, and the frame shown
+// is the page the tree describes.
+function pictureFirst(ids: string[], shotCapture: unknown): string[] {
+  const at = typeof shotCapture === 'string' ? ids.indexOf(shotCapture) : -1;
+  return at > 0 ? [ids[at], ...ids.slice(0, at), ...ids.slice(at + 1)] : ids;
+}
+
 function toolChildren(r: any): TraceChild[] | null {
   const logs: any[] = r._logs || [];
   const isDelegating = (l: any) => logClass(l) === 'DelegatingTrailblazeToolLog';
@@ -759,18 +826,23 @@ function toolChildren(r: any): TraceChild[] | null {
   // dispatch. The action also supplies the tap/swipe overlay for the child's frame. This is what
   // lets a folded batch show EVERY interaction's screenshot (the row itself keeps only the first).
   const executedAt = logs.map((l, i) => (i > 0 && l && isExecuted(l) ? i : -1)).filter((i) => i >= 0);
-  const spanCapture = (from: number): { screenshotFile: string | null; mark: ActionMark | null } => {
+  const spanCapture = (from: number): { screenshotFile: string | null; shotEndTs: number | null; mark: ActionMark | null; captureIds: string[] } => {
     const to = executedAt.find((j) => j > from) ?? logs.length;
+    const captureIds = screenshotlessCaptureIds(logs.slice(from, to));
     let screenshotFile = (logs[from] && logs[from].screenshotFile) || null;
+    // The dispatch's own record is the host-clock span its folded driver records must fall inside.
+    const spanStart = logs[from] && logs[from].timestamp ? Date.parse(logs[from].timestamp) : null;
+    const span = { start: spanStart, end: spanStart == null || !Number.isFinite(spanStart) ? null : spanStart + ((logs[from] && logs[from].durationMs) || 0) };
+    let shotEndTs = screenshotFile ? captureEndTs([logs[from]], screenshotFile, span) : null;
     let mark: ActionMark | null = null;
     for (let j = from + 1; j < to && !(screenshotFile && mark); j++) {
       const l = logs[j];
       if (!l) continue;
-      if (!screenshotFile && l.screenshotFile) screenshotFile = l.screenshotFile;
+      if (!screenshotFile && l.screenshotFile) { screenshotFile = l.screenshotFile; shotEndTs = captureEndTs([l], screenshotFile, span); }
       const action = logClass(l) === 'MaestroDriverLog' ? l.action : null;
       if (!mark && action) mark = actionMark(action, l);
     }
-    return { screenshotFile, mark };
+    return { screenshotFile, shotEndTs, mark, captureIds };
   };
   const executed = logs
     .map((l, i) => ({ l, i }))
@@ -788,7 +860,7 @@ function toolChildren(r: any): TraceChild[] | null {
   const rootIdentity = { label: String((logs[0] && logs[0].toolName) || r.label || ''), sig: JSON.stringify((logs[0] && logs[0].trailblazeTool && logs[0].trailblazeTool.raw) ?? null) };
   unmatched.set(key(rootIdentity), (unmatched.get(key(rootIdentity)) || 0) + 1);
   for (const c of executed) unmatched.set(key(c), (unmatched.get(key(c)) || 0) + 1);
-  const declared: Array<{ i: number; label: string; tool: string; note: string | null; sig: string; ms: number | null; ts: number | null; ok: boolean; err: string | null; code: string | null; result: string | null; args: string | null; screenshotFile: string | null; mark: ActionMark | null; _logs: TrailblazeLogRecord[] }> = [];
+  const declared: Array<{ i: number; label: string; tool: string; note: string | null; sig: string; ms: number | null; ts: number | null; ok: boolean; err: string | null; code: string | null; result: string | null; args: string | null; screenshotFile: string | null; mark: ActionMark | null; captureIds?: string[]; _logs: TrailblazeLogRecord[] }> = [];
   logs.forEach((l, i) => {
     if (!isDelegating(l)) return;
     for (const e of (Array.isArray(l.executableTools) ? l.executableTools : [])) {
@@ -819,11 +891,12 @@ function toolChildren(r: any): TraceChild[] | null {
       if (c.ms != null) prev.ms = (prev.ms || 0) + c.ms;
       if (prev.result !== c.result) { prev.result = null; prev.resultVaries = true; }
       if (c._logs && c._logs.length) prev._logs = [...(prev._logs || []), ...c._logs];
+      if (c.captureIds && c.captureIds.length) prev.captureIds = [...(prev.captureIds || []), ...c.captureIds];
       continue;
     }
     // A ×N fold keeps the FIRST member's ts (set here, never advanced above) — the instant the
     // folded sequence began, which is what playback schedules its one entry on.
-    kids.push({ label: c.label, tool: c.tool, note: c.note ?? null, ms: c.ms, ts: c.ts ?? null, ok: c.ok, err: c.err ?? null, code: c.code ?? null, result: c.result ?? null, resultVaries: false, count: 1, args: c.args ?? null, screenshotFile: c.screenshotFile ?? null, mark: c.mark ?? null, _logs: c._logs || [] });
+    kids.push({ label: c.label, tool: c.tool, note: c.note ?? null, ms: c.ms, ts: c.ts ?? null, ok: c.ok, err: c.err ?? null, code: c.code ?? null, result: c.result ?? null, resultVaries: false, count: 1, args: c.args ?? null, screenshotFile: c.screenshotFile ?? null, ...(c.screenshotFile && (c as any).shotEndTs != null ? { shotEndTs: (c as any).shotEndTs } : {}), mark: c.mark ?? null, ...(c.captureIds && c.captureIds.length ? { captureIds: c.captureIds } : {}), _logs: c._logs || [] });
     prevSig = c.sig;
   }
   return kids.length ? kids : null;
@@ -1000,6 +1073,19 @@ function llmCacheSavings(usage: any): number {
   return (cached * fullRate) / 1_000_000 - (cached * cachedRate) / 1_000_000;
 }
 
+// An LLM request no model answered: a client that settles some requests itself (from a decision it
+// logged separately, or by a fixed rule in the framework) marks its response's metadata under this
+// key (the Kotlin AnsweredWithoutLlm). Nothing went to a model, so the report shows no row for it:
+// the model-call list and the timeline hold only calls that reached a model, and the decision that
+// answered it has its own row. Both extractors skip it the same way, so trace-row `llm` indexes
+// still line up.
+const ANSWERED_BY_KEY = 'trailblaze.answeredBy';
+function answeredWithoutModel(log: TrailblazeLogRecord): boolean {
+  if (!(log && (log.llmMessages || log.llmResponse))) return false;
+  const parts = Array.isArray(log.llmResponse) ? log.llmResponse : [];
+  return parts.some((r) => { const v = r && r.metaInfo && r.metaInfo.metadata && r.metaInfo.metadata[ANSWERED_BY_KEY]; return typeof v === 'string' && v !== ''; });
+}
+
 function extractLlmLogs(rawLogs: TrailblazeLogRecord[]): RawLlmRow[] {
   const logs = normalizedToHostClock(rawLogs || []); // same one-clock rule as extractTrace
   const rows: RawLlmRow[] = [];
@@ -1049,6 +1135,11 @@ function extractLlmLogs(rawLogs: TrailblazeLogRecord[]): RawLlmRow[] {
     return null;
   };
   for (const log of logs) {
+    if (answeredWithoutModel(log)) continue;
+    if (logClass(log) === 'TrailblazeDecisionRequestLog') {
+      rows.push(decisionLlmRow(log));
+      continue;
+    }
     if (log.llmMessages || log.llmResponse) {
       const u = log.llmRequestUsageAndCost;
       const model = (u?.trailblazeLlmModel?.modelId)
@@ -1072,6 +1163,7 @@ function extractLlmLogs(rawLogs: TrailblazeLogRecord[]): RawLlmRow[] {
         durationMs: log.durationMs || 0,
         label: log.llmRequestLabel || 'LLM Request',
         instructions: log.instructions || null,
+        startedAt: typeof log.timestamp === 'string' && !isNaN(Date.parse(log.timestamp)) ? Date.parse(log.timestamp) : null,
       });
     }
     if (log.usageAndCost && log.systemPrompt !== undefined) {
@@ -1111,6 +1203,91 @@ function extractLlmLogs(rawLogs: TrailblazeLogRecord[]): RawLlmRow[] {
     }
   }
   return rows;
+}
+
+// A decision request (TrailblazeDecisionRequestLog) as a row of the session's model-call list, so
+// the LLM tab and transcript show it beside the LLM calls it replaced or handed off to. Its request
+// and response are the decision contract's bodies; the transcript renders them as turns: the state,
+// each question with its options followed by its answer (a probability bar per option), and what
+// the caller did with them. Cost is the engine's own price for the answer, when it logged one.
+function decisionLlmRow(log: TrailblazeLogRecord): RawLlmRow {
+  const request = log.request || {};
+  const response = log.response || null;
+  const questions = request.questions && typeof request.questions === 'object' ? request.questions : {};
+  const answers = response && response.answers && typeof response.answers === 'object' ? response.answers : {};
+  const state = typeof request.state === 'string' ? request.state : JSON.stringify(request.state ?? '', null, 2);
+  const num = (v) => (typeof v === 'number' && isFinite(v) ? v : null);
+  const fixed = (v) => (num(v) == null ? '?' : v.toFixed(2));
+  // 16 cells keeps a 16-option answer under the transcript's collapse length, so it reads open.
+  const bar = (p) => '█'.repeat(Math.round(Math.max(0, Math.min(1, num(p) ?? 0)) * 16)).padEnd(16, '·');
+  const optionsOf = (q) => {
+    const c = q && q.criteria;
+    if (q && q.type === 'score' && Array.isArray(c)) return c.map((text, i) => [String(i), String(text)]);
+    if (c && typeof c === 'object' && !Array.isArray(c)) return Object.entries(c).map(([k, v]) => [k, String(v)]);
+    return q && q.type === 'noul' ? [['true', 'Yes'], ['false', 'No']] : [];
+  };
+  const questionText = (key, q) => {
+    const opts = optionsOf(q);
+    return `Question "${key}" (${q?.type || '?'})\n${q?.instructions || ''}${opts.length ? `\n\n${opts.map(([id, text]) => `- ${id}: ${text}`).join('\n')}` : ''}`;
+  };
+  const answerText = (key, q, a) => {
+    if (!a) return `${key}: no answer`;
+    if (a.type === 'noul') {
+      const yes = num(a.noul);
+      return `${key}: yes ${fixed(yes)}\n  yes  ${bar(yes)} ${fixed(yes)}\n  no   ${bar(yes == null ? null : 1 - yes)} ${fixed(yes == null ? null : 1 - yes)}`;
+    }
+    const probs = a.probabilities && typeof a.probabilities === 'object' ? a.probabilities : {};
+    const ids = optionsOf(q).map(([id]) => id);
+    Object.keys(probs).forEach((id) => { if (!ids.includes(id)) ids.push(id); });
+    const width = Math.max(4, ...ids.map((id) => id.length));
+    const picked = a.type === 'score' ? `score ${fixed(a.score)}` : String(a.choice ?? '?');
+    return `${key}: ${picked} · confidence ${fixed(a.confidence)}\n${ids.map((id) => `  ${id.padEnd(width)}  ${bar(probs[id])} ${fixed(probs[id] ?? 0)}`).join('\n')}`;
+  };
+  const keys = Object.keys(questions);
+  // Each question is followed by its own answer, so the transcript reads as question and answer
+  // pairs; a failed request lists the questions, then says why nothing was answered.
+  const messages = [
+    { role: 'user', message: `State\n\n${state}` },
+    ...keys.flatMap((key) => [
+      { role: 'user', message: questionText(key, questions[key]) },
+      ...(response ? [{ role: 'answer', message: answerText(key, questions[key], answers[key]) }] : []),
+    ]),
+    ...(response ? [] : [{ role: 'answer', message: `No answers: ${log.errorMessage || 'the engine failed'}` }]),
+    ...(log.outcome ? [{ role: 'system', message: `Outcome: ${log.outcome}` }] : []),
+  ];
+  const summary = keys.map((key) => {
+    const a = answers[key];
+    if (!a) return `${key}=?`;
+    if (a.type === 'noul') return `${key}=yes ${fixed(a.noul)}`;
+    if (a.type === 'score') return `${key}=${fixed(a.score)}`;
+    const p = a.probabilities && a.choice != null ? a.probabilities[a.choice] : null;
+    return `${key}=${a.choice ?? '?'} ${fixed(p)}`;
+  }).join(' · ');
+  const usage = response && response.usage;
+  const cost = log.cost && typeof log.cost === 'object' ? log.cost : null;
+  const inputCost = num(cost?.inputCost);
+  const outputCost = num(cost?.outputCost);
+  return {
+    model: (response && response.model) || request.model || '?',
+    traceId: typeof log.traceId === 'string' ? log.traceId : null,
+    provider: typeof log.engine === 'string' && log.engine ? log.engine : null,
+    inputTokens: num(usage?.input_tokens),
+    outputTokens: num(usage?.output_tokens),
+    cacheReadTokens: 0,
+    promptCost: inputCost,
+    completionCost: outputCost,
+    cacheSavings: 0,
+    comp: null,
+    totalCost: inputCost != null && outputCost != null ? inputCost + outputCost : null,
+    messages,
+    response: [{ kind: 'text', text: response ? summary : `error: ${log.errorMessage || 'engine failed'}` }],
+    durationMs: log.durationMs || 0,
+    label: 'Decision request',
+    instructions: null,
+    startedAt: typeof log.timestamp === 'string' && !isNaN(Date.parse(log.timestamp)) ? Date.parse(log.timestamp) : null,
+    kind: 'decision',
+    outcome: typeof log.outcome === 'string' ? log.outcome : null,
+  };
 }
 
 function stepText(promptStep: any): string | null {
@@ -1225,6 +1402,22 @@ function traceScreenshotFiles(trace: RawTraceRow[] | null | undefined): string[]
     .filter(Boolean) as string[])];
 }
 
+// A capture that saved no screenshot can have a frame saved from the session's recording instead,
+// beside the screenshots under this name (the Kotlin CaptureVideoFrames writes it once the run's
+// recording is final). The viewer shows it wherever it would otherwise take that frame from the
+// recording itself, so a report carries it even when the recording is too big to embed.
+const captureFrameFile = (captureId: string): string => `${captureId}.webp`;
+
+// The frame file each screenshot-less capture in `logs` would have, for a producer to carry beside
+// the screenshots. These are candidates: a session whose frames were never saved has none of them,
+// so each producer keeps only the files it can read, as it already does for a Strings-tab
+// screenshot. An id that isn't a plain file name never names one.
+function captureFrameFiles(logs: TrailblazeLogRecord[] | null | undefined): string[] {
+  return screenshotlessCaptureIds(Array.isArray(logs) ? logs : [])
+    .filter((id) => /^[\w-][\w.-]*$/.test(id))
+    .map(captureFrameFile);
+}
+
 // Strip the heavy, viewer-irrelevant fields off each trace step before embedding: `_logs` (the
 // raw log records), `_sig` (extraction bookkeeping), and `viewHierarchy` (can be hundreds of KB
 // per step). Trace ids remain extraction-only correlation keys: the compact public payload stamps
@@ -1242,6 +1435,7 @@ function slimTraceForShare(trace: RawTraceRow[] | null | undefined): TraceStep[]
     ok: t.ok !== false,
     err: t.ok === false ? (t.err || null) : null,
     screenshotFile: t.screenshotFile || null,
+    ...((ids) => (ids.length ? { captureIds: ids } : {}))(pictureFirst(screenshotlessCaptureIds(t._logs || []), t._shotCapture)),
     objective: !!t.objective,
     trailhead: !!t.trailhead,
     selfHeal: !!t.selfHeal,
@@ -1256,18 +1450,20 @@ function slimTraceForShare(trace: RawTraceRow[] | null | undefined): TraceStep[]
     // so the common case where the row and its cue share a timestamp costs nothing.
     ...(t.shotTs != null && t.shotTs !== t.ts ? { shotTs: t.shotTs } : {}),
     ...(t.markTs != null && t.markTs !== t.ts ? { markTs: t.markTs } : {}),
+    ...((end) => (end != null ? { shotEndTs: end } : {}))(captureEndTs(t._logs as TrailblazeLogRecord[] | undefined, t.screenshotFile, t._cueEnd === undefined ? null : { start: t.ts, end: t._cueEnd })),
     // Full call content for the selected row's expanded detail (WASM-report parity).
     ...(t.args ? { args: t.args } : {}),
     // The row's index into the session's llm call list (extractLlmLogs order) — how the viewer
     // opens the right transcript from a timeline row. Only present on LLM-call rows.
     ...(t.llm != null ? { llm: t.llm } : {}),
+    ...(t.decision ? { decision: true } : {}),
     // The capture's viewport — the inspector's coordinate anchor (see TraceStep.viewport). Kept
     // only where a hierarchy rides along; ~20 bytes, unlike the hierarchy it describes.
     ...(t.viewport && t.viewHierarchy != null ? { viewport: t.viewport } : {}),
     // Per-child fields ride only when they carry signal (an executed ms, a failure, a real fold,
     // full args, its own capture) — the common green declared-or-single dispatch slims to just
     // label+tool.
-    ...(t.children && t.children.length ? { children: t.children.map((c: any) => ({ label: c.label, tool: c.tool || '', ...(c.note ? { note: c.note } : {}), ...(c.ms != null ? { ms: c.ms } : {}), ...(c.ts != null ? { ts: c.ts } : {}), ...(c.ok === false ? { ok: false } : {}), ...(c.ok === false && c.err ? { err: c.err } : {}), ...(c.ok === false && c.code ? { code: c.code } : {}), ...(c.result ? { result: c.result } : {}), ...(c.resultVaries ? { resultVaries: true } : {}), ...((c.count || 1) > 1 ? { count: c.count } : {}), ...(c.args ? { args: c.args } : {}), ...(c.screenshotFile ? { screenshotFile: c.screenshotFile } : {}), ...(c.mark ? { mark: c.mark } : {}) })) } : {}),
+    ...(t.children && t.children.length ? { children: t.children.map((c: any) => ({ label: c.label, tool: c.tool || '', ...(c.note ? { note: c.note } : {}), ...(c.ms != null ? { ms: c.ms } : {}), ...(c.ts != null ? { ts: c.ts } : {}), ...(c.ok === false ? { ok: false } : {}), ...(c.ok === false && c.err ? { err: c.err } : {}), ...(c.ok === false && c.code ? { code: c.code } : {}), ...(c.result ? { result: c.result } : {}), ...(c.resultVaries ? { resultVaries: true } : {}), ...((c.count || 1) > 1 ? { count: c.count } : {}), ...(c.args ? { args: c.args } : {}), ...(c.screenshotFile ? { screenshotFile: c.screenshotFile } : {}), ...(c.screenshotFile && c.shotEndTs != null ? { shotEndTs: c.shotEndTs } : {}), ...(c.captureIds && c.captureIds.length ? { captureIds: c.captureIds } : {}), ...(c.mark ? { mark: c.mark } : {}) })) } : {}),
     // The composite call's full argument list (see toolParams). Only present beside children.
     ...(t.params && t.params.length ? { params: t.params } : {}),
     // Which device this row acted on (see assignTraceDevices). Only stamped on multi-device
@@ -1374,6 +1570,8 @@ function slimLlmForShare(llmLogs: RawLlmRow[] | null | undefined): LlmCall[] {
     response: (r.response || []).map((p) => p.kind === 'tool'
       ? { kind: 'tool', tool: p.tool, args: p.args || null, reasoning: p.reasoning || null }
       : { kind: 'text', text: p.text || '' }),
+    ...(r.kind === 'decision' ? { kind: 'decision' as const, outcome: r.outcome ?? null } : {}),
+    ...(r.startedAt != null ? { startedAt: r.startedAt } : {}),
   }));
 }
 
@@ -1482,6 +1680,7 @@ function toSessionPayloads({ generatedAt, sessions }: { generatedAt?: string; se
       eventsGz: s.eventsGz || null,
       spans: s.spans || null,
       spansGz: s.spansGz || null,
+      visibleStrings: s.visibleStrings && s.visibleStrings.length ? s.visibleStrings : null,
       // The bun driver supplies the transcripts pre-packed (inline or gz — packLlmMessages in
       // run-report-cli.ts); the browser/zip paths hand raw llmLogs, so derive them here.
       llmMessages: s.llmMessages !== undefined ? s.llmMessages : (s.llmMessagesGz ? null : extractLlmTranscripts(s.llmLogs)),
@@ -1504,7 +1703,7 @@ export {
   truncate, logClass, originalYamlFromLogs, yamlRootSection, declaredTrailSteps, localRunAgentPrompt, extractTrace, mergeWebHierarchyBounds,
   deviceClockOffsets, normalizedToHostClock, parseLogTimestamp,
   toolChildren, describeAction, parseLlmResponse, extractLlmLogs, estimateLlmComp, stepText, toolDetail,
-  summarizeToolArgs, describeSelector, slimTraceForShare, slimLlmForShare, toSessionPayloads, traceScreenshotFiles,
+  summarizeToolArgs, describeSelector, slimTraceForShare, slimLlmForShare, toSessionPayloads, traceScreenshotFiles, captureFrameFile, captureFrameFiles,
   isLlmTurnRow, traceStepCount, rowToolCallCount, traceToolCallCount, extractLlmTranscripts, transcriptCallMessages,
   traceHierarchies, packSessionInputsHierarchies,
 };

@@ -3,7 +3,7 @@
 // lane's own clock, and frame selection matches the Lightbox's rules.
 import { describe, expect, test } from "bun:test";
 import { buildReportTraceModel, failureAnchorIndex } from "./run-report-trace-model";
-import { buildTrailMatrix, pruneIdleTrailCells, traceDeviceLanes, trailIdentity, trailJoinFor, trailViewScopes, type TrailCandidate } from "./run-report-trail-model";
+import { buildTrailMatrix, captureShotFile, pruneIdleTrailCells, traceDeviceLanes, trailIdentity, trailJoinFor, trailViewScopes, videoShotCaptureId, videoShotKey, type TrailCandidate } from "./run-report-trail-model";
 
 const row = (i: number, patch: Partial<TraceStep> = {}): TraceStep => ({
   i,
@@ -313,6 +313,43 @@ describe("buildTrailMatrix", () => {
   });
 });
 
+describe("screenshot-less captures", () => {
+  test("a capture with no screenshot is named by its video-frame key, a screenshot always wins", () => {
+    expect(captureShotFile({ screenshotFile: null, captureIds: ["c-1", "c-2"] })).toBe(videoShotKey("c-1"));
+    expect(captureShotFile({ screenshotFile: "own.webp", captureIds: ["c-1"] })).toBe("own.webp");
+    expect(captureShotFile({ screenshotFile: null })).toBeNull();
+    expect(videoShotCaptureId(videoShotKey("c-1"))).toBe("c-1");
+    expect(videoShotCaptureId("own.webp")).toBeNull();
+  });
+
+  test("become frames and a step summary, each dispatch's once", () => {
+    const model = buildReportTraceModel([
+      row(1, { objective: true, label: "Fill the form", ts: 1000 }),
+      row(2, {
+        ts: 1100,
+        captureIds: ["c-1", "c-2"],
+        children: [
+          { i: 0, label: "web_fill", ms: 1, ts: 1100, ok: true, err: null, screenshotFile: null, captureIds: ["c-1"], mark: null },
+          { i: 1, label: "web_click", ms: 1, ts: 1200, ok: true, err: null, screenshotFile: null, captureIds: ["c-2"], mark: null },
+        ],
+      } as Partial<TraceStep>),
+    ], 0);
+    const cell = buildTrailMatrix([model], everyShot, isLlmTurn).rows[0].cells[0];
+    expect(cell?.frames.map((f) => f.file)).toEqual([videoShotKey("c-1"), videoShotKey("c-2")]);
+    expect(cell?.lastFrame?.file).toBe(videoShotKey("c-2"));
+  });
+
+  test("the viewer's shot filter decides whether a recording can show one", () => {
+    const model = buildReportTraceModel([
+      row(1, { objective: true, label: "Step" }),
+      row(2, { captureIds: ["outside-the-recording"] }),
+    ], 0);
+    const cell = buildTrailMatrix([model], (_, file) => videoShotCaptureId(file) == null, isLlmTurn).rows[0].cells[0];
+    expect(cell?.frames).toEqual([]);
+    expect(cell?.lastFrame).toBeNull();
+  });
+});
+
 // One SESSION that drove two devices through switchDevice handovers (TraceStep.device), split
 // into one lane per device instead of one lane per run. Timing intent: the session starts on the
 // storefront device, step 2's objective is ANNOUNCED while the storefront still has focus, then
@@ -343,6 +380,7 @@ describe("traceDeviceLanes", () => {
 
   test("every lane keeps every step header for alignment, but a borrowed header is declocked and captureless", () => {
     const trace = sessionTrace();
+    trace[2] = { ...trace[2], captureIds: ["storefront-capture"] };
     const [storefront, kitchen] = traceDeviceLanes(trace);
     expect(storefront.trace.filter((r) => r.objective).map((r) => r.i)).toEqual([1, 3, 5]);
     expect(kitchen.trace.filter((r) => r.objective).map((r) => r.i)).toEqual([1, 3, 5]);
@@ -354,6 +392,7 @@ describe("traceDeviceLanes", () => {
     expect(borrowed).not.toBe(trace[2]);
     expect(borrowed?.ts).toBeNull();
     expect(borrowed?.screenshotFile).toBeNull();
+    expect(borrowed?.captureIds).toBeUndefined();
   });
 
   test("device lanes join into a matrix where idle steps prune to gaps, on one shared session clock", () => {

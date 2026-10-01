@@ -28,7 +28,6 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
 import maestro.Driver
 import xyz.block.trailblaze.api.ScreenState
-import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
@@ -501,7 +500,6 @@ class TrailblazeDeviceManager(
     existingSessionId: SessionId?,
     forceStopTargetApp: Boolean = false,
     referrer: TrailblazeReferrer,
-    agentImplementation: AgentImplementation = AgentImplementation.DEFAULT,
     traceId: TraceId? = null,
     // Optional per-run overrides (Run-config dialog). All default to the
     // prior in-app behavior, so existing callers are unaffected:
@@ -611,10 +609,9 @@ class TrailblazeDeviceManager(
       trailblazeDeviceId = trailblazeDeviceId,
       driverType = trailConfigDriver,
       referrer = referrer,
-      agentImplementation = agentImplementation,
       traceId = traceId,
-      // RunYamlRequest rejects maxLlmCalls with MULTI_AGENT_V3 and non-positive values.
-      maxLlmCalls = maxLlmCalls?.takeIf { it > 0 && agentImplementation != AgentImplementation.MULTI_AGENT_V3 },
+      // RunYamlRequest rejects non-positive maxLlmCalls.
+      maxLlmCalls = maxLlmCalls?.takeIf { it > 0 },
       initialMemorySeeds = initialMemorySeeds,
       initialMemorySensitiveSeeds = initialMemorySensitiveSeeds,
     )
@@ -1070,7 +1067,14 @@ class TrailblazeDeviceManager(
     // Write times are truncated to the millisecond while a log's own timestamp is not, so the last
     // log can be stamped later within that millisecond. Ending at its start would sort the end
     // before a Started log written in it, and the session would read as still in progress.
-    val endedAt = activityWindow?.let { kotlinx.datetime.Instant.fromEpochMilliseconds(it.last + 1) }
+    // The filesystem's write time can also lag the serialized Started timestamp. Read only the
+    // small status logs, not the full session, and keep duration tied to the original file times.
+    val endedAt = activityWindow?.let { window ->
+      val startedAtMs = logsRepo.getSessionInfoSummary(sessionId)?.timestamp?.toEpochMilliseconds()
+      kotlinx.datetime.Instant.fromEpochMilliseconds(
+        maxOf(window.last, startedAtMs ?: window.last) + 1,
+      )
+    }
       ?: kotlinx.datetime.Clock.System.now()
 
     // Write session end log. A failed finalization means the session's captured evidence may be
@@ -2111,6 +2115,17 @@ class TrailblazeDeviceManager(
    */
   fun getActiveDriverForDevice(trailblazeDeviceId: TrailblazeDeviceId): Driver? {
     return maestroDriverByDeviceMap[trailblazeDeviceId]
+  }
+
+  /**
+   * Closes and drops the active driver for [trailblazeDeviceId], for a caller that found the device
+   * behind it gone. An MCP-referrer run keeps its driver registered between tool calls, and
+   * [getActiveDriverForDevice] would otherwise keep handing out the dead one.
+   */
+  fun forgetActiveDriverForDevice(trailblazeDeviceId: TrailblazeDeviceId) {
+    if (maestroDriverByDeviceMap.containsKey(trailblazeDeviceId)) {
+      closeAndRemoveMaestroDriverForDevice(trailblazeDeviceId)
+    }
   }
 
   fun setActivePlaywrightNativeTest(

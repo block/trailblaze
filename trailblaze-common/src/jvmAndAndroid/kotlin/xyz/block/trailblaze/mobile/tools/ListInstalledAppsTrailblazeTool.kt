@@ -22,10 +22,9 @@ import xyz.block.trailblaze.util.IosHostSimctlUtils
  * Returned via [TrailblazeToolResult.Success.structuredContent] — the TS SDK's
  * `client.tools.mobile_listInstalledApps(...)` proxy unwraps it as the typed `result` per
  * `TrailblazeToolMap.mobile_listInstalledApps.result` (declared in `built-in-tools.ts`), no
- * `JSON.parse` required. The tool leaves [TrailblazeToolResult.Success.message] unset —
- * `AgentMessages.toContentString` (the LLM/CLI/direct-YAML rendering path) falls back to
- * rendering `structuredContent` as compact JSON when `message` is absent, so LLM/CLI callers see
- * the same app-id data as TS callers without this tool duplicating it into a second field by hand.
+ * `JSON.parse` required. The tool leaves [TrailblazeToolResult.Success.message] unset — the agent's
+ * tool-result text and the CLI's `renderToolResultOutput` both carry `structuredContent`, so LLM/CLI
+ * callers see the same app-id data as TS callers without this tool duplicating it into a second field.
  */
 @Serializable
 data class ListInstalledAppsResult(val appIds: List<String>)

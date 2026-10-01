@@ -777,6 +777,15 @@ sealed interface DriverNodeDetail {
     override val isInteractive: Boolean = false,
     /** **Display-only.** Whether this element is a landmark section (nav, main, etc.). */
     val isLandmark: Boolean = false,
+    /** **Display-only.** A text field's placeholder, from the snapshot's `/placeholder:` line. */
+    val placeholder: String? = null,
+    /**
+     * **Display-only.** A link's target, from the snapshot's `/url:` line; on a replay capture's
+     * document root, the page's own URL.
+     */
+    val url: String? = null,
+    /** **Display-only.** On a replay capture's document root, the page's `<title>`. */
+    val title: String? = null,
   ) : DriverNodeDetail {
 
     override val matchablePropertyNames: Set<String>

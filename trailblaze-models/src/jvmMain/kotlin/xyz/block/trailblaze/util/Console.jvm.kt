@@ -35,12 +35,52 @@ actual object Console {
 
   @Volatile private var preJsonUserOut: PrintStream = System.out
 
+  /** Quiet-mode state for one thread inside [withThreadScopedQuietMode]. */
+  private class ThreadQuietScope {
+    var quiet: Boolean = false
+  }
+
+  private val threadQuietScope = ThreadLocal<ThreadQuietScope?>()
+
+  /**
+   * Runs [block] with quiet mode scoped to the calling thread: [enableQuietMode] and
+   * [disableQuietMode] inside it change only this thread's [log] and [info] routing, and never the
+   * process-wide flag or streams.
+   *
+   * For the daemon, which runs forwarded CLI commands in-process. Quiet mode is process-wide
+   * everywhere else, so a quiet command would otherwise drop every other thread's [log] line —
+   * MCP sessions, trail runs — before it reaches the desktop log-file tee, for as long as the
+   * command runs. Work the command hands to another thread is not quiet; that matches the
+   * daemon's per-thread output capture, which also misses it.
+   *
+   * A process-wide quiet mode still silences this thread too. The scope starts loud and is
+   * discarded on exit, so nothing a command does to quiet mode outlives it.
+   */
+  fun <T> withThreadScopedQuietMode(block: () -> T): T {
+    val prior = threadQuietScope.get()
+    threadQuietScope.set(ThreadQuietScope())
+    try {
+      return block()
+    } finally {
+      threadQuietScope.set(prior)
+    }
+  }
+
+  private fun isThreadQuiet(): Boolean = threadQuietScope.get()?.quiet == true
+
+  /**
+   * Where [info] goes. A thread-scoped quiet command sends it to the log channel, as a
+   * process-wide [enableQuietMode] does by moving [userOut] — computed here instead so the
+   * redirect stays on this thread.
+   */
+  private fun userStream(): PrintStream = if (isThreadQuiet()) out else userOut
+
   actual fun log(message: String) {
-    if (!quietMode) out.println(message)
+    if (!isQuietMode()) out.println(message)
   }
 
   actual fun info(message: String) {
-    userOut.println(message)
+    userStream().println(message)
   }
 
   actual fun error(message: String) {
@@ -48,15 +88,16 @@ actual object Console {
   }
 
   actual fun appendLog(message: String) {
-    if (!quietMode) {
+    if (!isQuietMode()) {
       out.print(message)
       out.flush()
     }
   }
 
   actual fun appendInfo(message: String) {
-    userOut.print(message)
-    userOut.flush()
+    val stream = userStream()
+    stream.print(message)
+    stream.flush()
   }
 
   actual fun useStdErr() {
@@ -68,6 +109,10 @@ actual object Console {
   }
 
   actual fun enableQuietMode() {
+    threadQuietScope.get()?.let {
+      it.quiet = true
+      return
+    }
     if (quietMode) return
     // Point user-facing output at the general stream, which preserves the
     // DesktopLogFileWriter tee so info() still reaches both the terminal and the
@@ -84,6 +129,10 @@ actual object Console {
   }
 
   actual fun disableQuietMode() {
+    threadQuietScope.get()?.let {
+      it.quiet = false
+      return
+    }
     if (!quietMode) return
     quietMode = false
     val redirect = quietRedirect ?: return
@@ -100,7 +149,7 @@ actual object Console {
     if (jsonMode && preJsonUserOut === redirect.installed) preJsonUserOut = redirect.displaced
   }
 
-  actual fun isQuietMode(): Boolean = quietMode
+  actual fun isQuietMode(): Boolean = quietMode || isThreadQuiet()
 
   actual fun enableJsonMode() {
     if (jsonMode) return

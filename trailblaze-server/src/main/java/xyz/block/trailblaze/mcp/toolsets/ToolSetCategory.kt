@@ -154,25 +154,6 @@ enum class ToolSetCategory(
      */
     val TESTING = setOf(CORE_INTERACTION, NAVIGATION, OBSERVATION, VERIFICATION, MEMORY)
 
-    /**
-     * Returns the allowed categories for a given mode.
-     * 
-     * - MCP_CLIENT_AS_AGENT: All categories (client controls which to use)
-     * - TRAILBLAZE_AS_AGENT: SESSION only (client sends prompts, Trailblaze reasons)
-     */
-    fun getCategoriesForMode(mode: TrailblazeMcpMode): Set<ToolSetCategory> = when (mode) {
-      TrailblazeMcpMode.MCP_CLIENT_AS_AGENT -> entries.toSet()
-      TrailblazeMcpMode.TRAILBLAZE_AS_AGENT -> setOf(SESSION)
-    }
-
-    /**
-     * Returns the default categories for a given mode.
-     */
-    fun getDefaultCategoriesForMode(mode: TrailblazeMcpMode): Set<ToolSetCategory> = when (mode) {
-      TrailblazeMcpMode.MCP_CLIENT_AS_AGENT -> DEFAULT_CATEGORIES
-      TrailblazeMcpMode.TRAILBLAZE_AS_AGENT -> setOf(SESSION)
-    }
-
   }
 }
 
@@ -293,7 +274,6 @@ object ToolSetCategoryMapping {
     yamlToolNames = getYamlToolNames(categories),
     scriptedToolNames = getScriptedToolNames(categories),
   )
-
 }
 
 /**

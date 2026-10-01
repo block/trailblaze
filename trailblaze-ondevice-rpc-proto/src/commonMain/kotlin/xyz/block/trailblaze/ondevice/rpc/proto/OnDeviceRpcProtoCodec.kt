@@ -169,7 +169,6 @@ object OnDeviceRpcProtoCodec {
       referrer = referrer?.toModel() ?: error("Binary RunYamlRequest omitted referrer"),
       traceId = trace_id?.toTraceId(),
       driverType = driver_type?.let(TrailblazeDriverType::valueOf),
-      agentImplementation = AgentImplementation.valueOf(agent_implementation),
       awaitCompletion = await_completion,
       memorySnapshot = memory_snapshot,
       maxLlmCalls = max_llm_calls,
@@ -386,7 +385,7 @@ object OnDeviceRpcProtoCodec {
       deviceId = device_id?.toModel(),
       state = ExecutionState.valueOf(state),
       objective = objective,
-      agentImplementation = AgentImplementation.valueOf(agent_implementation),
+      agentImplementation = AgentImplementation.fromWireName(agent_implementation),
       progressPercent = progress_percent,
       currentStep = current_step,
       completedSteps = completed_steps,
@@ -622,7 +621,7 @@ object OnDeviceRpcProtoCodec {
         session,
         device,
         execution_started.objective,
-        AgentImplementation.valueOf(execution_started.agent_implementation),
+        AgentImplementation.fromWireName(execution_started.agent_implementation),
         execution_started.has_task_plan,
       )
       execution_completed != null -> ModelProgressEvent.ExecutionCompleted(

@@ -50,8 +50,9 @@ data class CompactScreenElements(
       tree: TrailblazeNode,
       details: Set<SnapshotDetail> = emptySet(),
       screenHeight: Int = 0,
+      screenWidth: Int = 0,
     ): CompactScreenElements {
-      val r = AndroidCompactElementList.build(tree, details, screenHeight)
+      val r = AndroidCompactElementList.build(tree, details, screenHeight, screenWidth)
       return CompactScreenElements(r.text, r.elementNodeIds, r.elementBounds, r.refMapping)
     }
 

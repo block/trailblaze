@@ -301,7 +301,6 @@ private suspend fun recordIntoFolder(
           // The blaze has no recordings yet, so let the agent fill each step.
           useRecordedSteps = false,
           maxLlmCalls = body.maxLlmCalls,
-          agent = body.agent,
           captureVideo = body.captureVideo,
           selfHeal = body.selfHeal,
           // trailId is the source-trail id the Runs/Trace views navigate to (go('trails', {sel})

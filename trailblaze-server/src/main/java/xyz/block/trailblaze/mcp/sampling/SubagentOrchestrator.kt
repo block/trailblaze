@@ -1,8 +1,6 @@
 package xyz.block.trailblaze.mcp.sampling
 
-import io.ktor.util.encodeBase64
 import kotlinx.serialization.json.JsonObject
-import xyz.block.trailblaze.agent.SamplingResult
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import xyz.block.trailblaze.api.EffectiveScreenshotScalingConfig
@@ -15,13 +13,10 @@ import xyz.block.trailblaze.mcp.TrailblazeMcpSessionContext
 import xyz.block.trailblaze.mcp.toolsets.ToolSetCategory
 import xyz.block.trailblaze.mcp.toolsets.ToolSetCategoryMapping
 import xyz.block.trailblaze.mcp.utils.ScreenStateCaptureUtil
-import xyz.block.trailblaze.toolcalls.KoogToolExt
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
-import xyz.block.trailblaze.toolcalls.toKoogToolDescriptor
 import xyz.block.trailblaze.toolcalls.trailblazeToolClassAnnotation
-import xyz.block.trailblaze.viewhierarchy.ViewHierarchyFilter
 import xyz.block.trailblaze.viewhierarchy.ViewHierarchyFilter.Companion.asTrailblazeElementSelector
 import xyz.block.trailblaze.viewhierarchy.ViewHierarchyFilter.Companion.isInteractable
 import kotlin.reflect.KClass
@@ -103,144 +98,6 @@ RULES:
 - If stuck after several attempts, respond with failed"""
   }
 
-  /** Generate the full system prompt with tool descriptions from actual tool classes and
-   *  YAML-defined tools. */
-  private fun generateSystemPrompt(): String = buildString {
-    appendLine(SYSTEM_PROMPT_BASE)
-    appendLine()
-    appendLine("AVAILABLE TOOLS:")
-    appendLine()
-
-    val classDescriptors = availableTools.toolClasses.mapNotNull { it.toKoogToolDescriptor() }
-    val yamlDescriptors = KoogToolExt.buildDescriptorsForYamlDefined(availableTools.yamlToolNames)
-    (classDescriptors + yamlDescriptors).forEach { descriptor ->
-      appendLine("## ${descriptor.name}")
-      appendLine(descriptor.description)
-      if (descriptor.requiredParameters.isNotEmpty()) {
-        appendLine("Required parameters:")
-        descriptor.requiredParameters.forEach { param ->
-          appendLine("  - ${param.name} (${param.type}): ${param.description}")
-        }
-      }
-      if (descriptor.optionalParameters.isNotEmpty()) {
-        appendLine("Optional parameters:")
-        descriptor.optionalParameters.forEach { param ->
-          appendLine("  - ${param.name} (${param.type}): ${param.description}")
-        }
-      }
-      appendLine()
-    }
-  }
-
-  /**
-   * Runs a multi-step automation task using the client's LLM for reasoning.
-   *
-   * @param objective The high-level objective to accomplish (e.g., "Log in and check my balance")
-   * @param includeScreenshots Whether to include screenshots in sampling requests
-   * @return Result describing success/failure and actions taken
-   */
-  suspend fun runObjective(
-    objective: String,
-    includeScreenshots: Boolean = true,
-  ): OrchestrationResult {
-    // Check prerequisites
-    if (!samplingClient.isSamplingSupported()) {
-      return OrchestrationResult.Error(
-        "MCP client does not support sampling. Cannot use subagent mode.",
-      )
-    }
-
-    val actions = mutableListOf<String>()
-    var iteration = 0
-
-    while (iteration < MAX_ITERATIONS) {
-      iteration++
-
-      // 1. Capture current screen state
-      val screenState = captureScreenState()
-      if (screenState == null) {
-        return OrchestrationResult.Error(
-          "Failed to capture screen state at iteration $iteration",
-          actionsTaken = actions,
-        )
-      }
-
-      // 2. Build screen state for sampling
-      val screenStateForSampling = buildScreenStateForSampling(
-        screenState = screenState,
-        includeScreenshot = includeScreenshots,
-      )
-
-      // 3. Request next action from client's LLM
-      val userMessage = buildUserMessage(objective, screenStateForSampling, iteration)
-      val samplingResult = samplingClient.requestCompletion(
-        systemPrompt = generateSystemPrompt(),
-        userMessage = userMessage,
-        screenshotBase64 = screenStateForSampling.screenshotBase64,
-      )
-
-      // 4. Handle sampling result
-      @Suppress("DEPRECATION")
-      when (samplingResult) {
-        is SamplingResult.Error -> {
-          return OrchestrationResult.Error(
-            "Sampling failed at iteration $iteration: ${samplingResult.message}",
-            actionsTaken = actions,
-          )
-        }
-        is SamplingResult.ToolCall -> {
-          // SubagentOrchestrator uses text-based parsing, not native tool calls
-          // This shouldn't happen with the deprecated requestCompletion method
-          actions.add("[$iteration] Unexpected tool call: ${samplingResult.toolName}")
-          // Continue loop - this is an unexpected state
-        }
-        is SamplingResult.Text -> {
-          val response = samplingResult.completion.trim()
-          actions.add("[$iteration] LLM: $response")
-
-          // 5. Parse and execute the action
-          val parseResult = parseAction(response)
-          when (parseResult) {
-            is ParsedAction.Complete -> {
-              return OrchestrationResult.Success(
-                summary = parseResult.summary,
-                actionsTaken = actions,
-                iterations = iteration,
-              )
-            }
-            is ParsedAction.Failed -> {
-              return OrchestrationResult.Failed(
-                reason = parseResult.reason,
-                actionsTaken = actions,
-                iterations = iteration,
-              )
-            }
-            is ParsedAction.Tool -> {
-              // Execute the tool
-              val toolResult = executeAction(parseResult)
-              actions.add("[$iteration] Executed: ${parseResult.name} -> $toolResult")
-
-              if (toolResult.startsWith("[ERROR]")) {
-                // Tool execution failed, continue to let LLM see the error
-                actions.add("[$iteration] Tool error, continuing...")
-              }
-              // Continue loop for next iteration
-            }
-            is ParsedAction.Unknown -> {
-              actions.add("[$iteration] Could not parse response, asking LLM to clarify...")
-              // Continue loop - LLM will see same screen and hopefully respond better
-            }
-          }
-        }
-      }
-    }
-
-    return OrchestrationResult.Error(
-      "Exceeded maximum iterations ($MAX_ITERATIONS). Agent may be stuck.",
-      actionsTaken = actions,
-    )
-  }
-
   /**
    * Captures the current screen state using the shared utility.
    */
@@ -249,35 +106,6 @@ RULES:
       mcpBridge = mcpBridge,
       screenshotScalingConfig = screenshotScalingConfig
     )
-
-  private fun buildScreenStateForSampling(
-    screenState: ScreenState,
-    includeScreenshot: Boolean,
-  ): ScreenStateForSampling {
-    val vhFilter = ViewHierarchyFilter.create(
-      screenWidth = screenState.deviceWidth,
-      screenHeight = screenState.deviceHeight,
-      platform = screenState.trailblazeDevicePlatform,
-    )
-    val filtered = vhFilter.filterInteractableViewHierarchyTreeNodes(screenState.viewHierarchy)
-
-    return ScreenStateForSampling(
-      viewHierarchy = buildViewHierarchyText(filtered),
-      screenshotBase64 = if (includeScreenshot) screenState.screenshotBytes?.encodeBase64() else null,
-      deviceWidth = screenState.deviceWidth,
-      deviceHeight = screenState.deviceHeight,
-    )
-  }
-
-  private fun buildViewHierarchyText(node: ViewHierarchyTreeNode): String {
-    val elements = mutableListOf<String>()
-    collectInteractableElements(node, elements)
-    return if (elements.isEmpty()) {
-      "No interactable elements found on screen."
-    } else {
-      elements.joinToString("\n")
-    }
-  }
 
   private fun collectInteractableElements(
     node: ViewHierarchyTreeNode,

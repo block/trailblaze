@@ -368,6 +368,74 @@ class SessionCaptureCoordinatorTest {
 
   private val coordAlternator = AtomicInteger(0)
 
+  /**
+   * `trailblaze stop` can land while a capture is still starting. Stopping an uncommitted start
+   * leaves its cleanup to the start thread, and the JVM halts that thread as soon as the hook
+   * returns — so the hook waits for the start, then stops it like any other capture.
+   */
+  @Test
+  fun `shutdownAll stops a capture that was still starting`() {
+    val starting = CountDownLatch(1)
+    val slowStart = object : CaptureStream {
+      override val type = CaptureType.VIDEO
+      val stopCalls = AtomicInteger(0)
+      override fun start(sessionDir: File, deviceId: String, appId: String?) {
+        starting.countDown()
+        Thread.sleep(300)
+      }
+      override fun stop(options: CaptureOptions): CaptureArtifact? {
+        stopCalls.incrementAndGet()
+        return null
+      }
+    }
+    val (coord, _) = coordinatorWith(factory = { opts, _ -> CaptureSession(listOf(slowStart), opts) })
+    val start = Thread {
+      coord.startForSession(sessionId(), "android-1", TrailblazeDevicePlatform.ANDROID, CaptureOptions())
+    }.apply { start() }
+    assertTrue(starting.await(60, TimeUnit.SECONDS), "the capture never started")
+
+    // The per-session timeout is the test's hang guard; the start needs a fraction of it.
+    coord.shutdownAll(perSessionTimeoutMs = 60_000)
+
+    assertEquals(1, slowStart.stopCalls.get(), "shutdownAll returned with the starting recorder still running")
+    start.join(60_000)
+    assertFalse(
+      coord.startForSession(sessionId("after"), "android-1", TrailblazeDevicePlatform.ANDROID, CaptureOptions()),
+      "a capture started after shutdown, with no hook left to stop it",
+    )
+  }
+
+  /**
+   * A stop that outlives its deadline is interrupted, and the kill its interrupted wait falls
+   * through to must run before [SessionCaptureCoordinator.shutdownAll] returns: the JVM halts as
+   * soon as the shutdown hook does, so returning first leaves the subprocess running.
+   */
+  @Test
+  fun `shutdownAll waits for an interrupted stop to finish its cleanup`() {
+    val cleanedUp = CountDownLatch(1)
+    val stuckStop = object : CaptureStream {
+      override val type = CaptureType.VIDEO
+      override fun start(sessionDir: File, deviceId: String, appId: String?) = Unit
+      override fun stop(options: CaptureOptions): CaptureArtifact? {
+        try {
+          Thread.sleep(Long.MAX_VALUE)
+        } catch (_: InterruptedException) {
+          // Stands in for the destroyForcibly an interrupted waitFor falls through to.
+          Thread.sleep(200)
+          cleanedUp.countDown()
+        }
+        return null
+      }
+    }
+    val (coord, _) = coordinatorWith(factory = { opts, _ -> CaptureSession(listOf(stuckStop), opts) })
+    coord.startForSession(sessionId(), "android-1", TrailblazeDevicePlatform.ANDROID, CaptureOptions())
+
+    // The grace period is the test's hang guard; the cleanup needs a fraction of it.
+    coord.shutdownAll(perSessionTimeoutMs = 50, interruptGraceMs = 60_000)
+
+    assertEquals(0L, cleanedUp.count, "shutdownAll returned before the interrupted stop cleaned up")
+  }
+
   @Test
   fun `a coordinator with no capture running is not on the tool-dispatch path`() {
     // The observer registry holds by identity for the life of the JVM, so registering in the

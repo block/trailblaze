@@ -78,8 +78,6 @@ class DirectMcpAgent(
   private val trailblazeLogger: TrailblazeLogger? = null,
   private val sessionProvider: TrailblazeSessionProvider? = null,
   private val trailblazeLlmModel: TrailblazeLlmModel? = null,
-  /** Which agent architecture this agent is part of */
-  private val agentImplementation: AgentImplementation = AgentImplementation.MULTI_AGENT_V3,
   /** How LLM calls are made (DIRECT or MCP_SAMPLING) */
   private val llmCallStrategy: LlmCallStrategy = LlmCallStrategy.DIRECT,
   /** Which tier this agent represents (OUTER for planning, INNER would use ScreenAnalyzer) */
@@ -487,7 +485,7 @@ GUIDELINES:
         traceId = traceId,
         toolDescriptors = koogToolDescriptors,
         requestContext = TrailblazeLog.LlmRequestContext(
-          agentImplementation = agentImplementation,
+          agentImplementation = AgentImplementation.KOOG_STRATEGY_GRAPH,
           llmCallStrategy = llmCallStrategy,
           agentTier = agentTier,
         ),

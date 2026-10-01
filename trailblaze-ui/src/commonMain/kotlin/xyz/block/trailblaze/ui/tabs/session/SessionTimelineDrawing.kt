@@ -12,9 +12,7 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.DrawScope
-import androidx.compose.ui.graphics.drawscope.Stroke
 
 /**
  * Resolved color palette for timeline rendering. Computed once per composition from the theme so
@@ -182,72 +180,6 @@ internal fun DrawScope.drawLiveEdgePulse(
 // ---------------------------------------------------------------------------
 // Marker icon drawing (used by horizontal timeline)
 // ---------------------------------------------------------------------------
-
-/** Draw a distinctive icon for an event marker at the given center point. */
-internal fun DrawScope.drawMarkerIcon(
-  actionKind: ActionKind,
-  center: Offset,
-  radius: Float,
-  color: Color,
-) {
-  // White border behind the icon
-  drawCircle(color = Color.White, radius = radius + 2f, center = center)
-
-  when (actionKind) {
-    ActionKind.Tap -> {
-      drawCircle(color = color, radius = radius, center = center, style = Stroke(2f))
-      drawCircle(color = color, radius = radius * 0.35f, center = center)
-    }
-    ActionKind.Swipe -> {
-      drawCircle(color = color.copy(alpha = 0.15f), radius = radius, center = center)
-      val hw = radius * 0.6f
-      drawLine(color, Offset(center.x - hw, center.y), Offset(center.x + hw, center.y), 2f)
-      val ah = radius * 0.35f
-      drawLine(color, Offset(center.x + hw, center.y), Offset(center.x + hw - ah, center.y - ah), 2f)
-      drawLine(color, Offset(center.x + hw, center.y), Offset(center.x + hw - ah, center.y + ah), 2f)
-    }
-    ActionKind.Assert -> {
-      drawCircle(color = color.copy(alpha = 0.15f), radius = radius, center = center)
-      val path = Path().apply {
-        moveTo(center.x - radius * 0.4f, center.y)
-        lineTo(center.x - radius * 0.05f, center.y + radius * 0.35f)
-        lineTo(center.x + radius * 0.45f, center.y - radius * 0.3f)
-      }
-      drawPath(path, color, style = Stroke(2f))
-    }
-    ActionKind.Tool -> {
-      val hs = radius * 0.35f
-      drawCircle(color = color.copy(alpha = 0.15f), radius = radius, center = center)
-      drawRect(color, Offset(center.x - hs, center.y - hs), Size(hs * 2, hs * 2), style = Stroke(1.5f))
-      drawLine(color, Offset(center.x + hs, center.y + hs), Offset(center.x + radius * 0.6f, center.y + radius * 0.6f), 2f)
-    }
-    ActionKind.Screenshot -> {
-      drawCircle(color = color.copy(alpha = 0.15f), radius = radius, center = center)
-      val bw = radius * 0.7f
-      val bh = radius * 0.5f
-      drawRect(color, Offset(center.x - bw, center.y - bh + 1f), Size(bw * 2, bh * 2), style = Stroke(1.5f))
-      drawCircle(color = color, radius = radius * 0.2f, center = center)
-    }
-    ActionKind.Input -> {
-      drawCircle(color = color.copy(alpha = 0.15f), radius = radius, center = center)
-      val vh = radius * 0.5f
-      drawLine(color, Offset(center.x, center.y - vh), Offset(center.x, center.y + vh), 2f)
-      val hh = radius * 0.25f
-      drawLine(color, Offset(center.x - hh, center.y - vh), Offset(center.x + hh, center.y - vh), 1.5f)
-      drawLine(color, Offset(center.x - hh, center.y + vh), Offset(center.x + hh, center.y + vh), 1.5f)
-    }
-    ActionKind.Navigation -> {
-      drawCircle(color = color.copy(alpha = 0.15f), radius = radius, center = center)
-      val path = Path().apply {
-        moveTo(center.x - radius * 0.3f, center.y - radius * 0.4f)
-        lineTo(center.x + radius * 0.45f, center.y)
-        lineTo(center.x - radius * 0.3f, center.y + radius * 0.4f)
-        close()
-      }
-      drawPath(path, color)
-    }
-  }
-}
 
 /**
  * Compute spotlight alpha for a tick at [tickFraction] relative to [scrubFraction]. Near the scrub

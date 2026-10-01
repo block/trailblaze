@@ -253,19 +253,4 @@ internal object HostDriverPortUtils {
       }
     }
   }
-
-  /**
-   * Removes a stale adb port forward for the given device and port.
-   * Safe to call even if no forward exists.
-   */
-  fun removeStaleAdbPortForward(deviceInstanceId: String, port: Int) {
-    try {
-      AndroidHostAdbUtils.removePortForward(
-        deviceId = TrailblazeDeviceId(deviceInstanceId, TrailblazeDevicePlatform.ANDROID),
-        localPort = port,
-      )
-    } catch (e: Exception) {
-      // Ignore cleanup failures
-    }
-  }
 }

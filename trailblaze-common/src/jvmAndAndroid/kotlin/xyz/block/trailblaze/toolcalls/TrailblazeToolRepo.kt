@@ -194,8 +194,7 @@ class TrailblazeToolRepo(
   }
 
   /**
-   * Executor-routed [ToolRegistry] for agent-driven, in-process Koog loops (e.g. the
-   * [xyz.block.trailblaze.mcp.AgentImplementation.KOOG_STRATEGY_GRAPH] web path).
+   * Executor-routed [ToolRegistry] for agent-driven, in-process Koog loops (e.g. the web path).
    *
    * Differs from [asToolRegistry] only in how class-backed and YAML-defined tool calls are
    * EXECUTED: instead of calling `tool.execute(context)` directly, each decoded tool is
@@ -203,8 +202,7 @@ class TrailblazeToolRepo(
    * That route is mandatory for driver-specific tools (Playwright / Compose) whose own
    * `execute` throws and is only reachable via their agent. Routing through the agent also
    * preserves the side-effect `logToolExecution` / session logging the strategy-graph agent
-   * relies on, so session logs happen exactly as they do on the legacy
-   * [xyz.block.trailblaze.agent.TrailblazeRunner] path.
+   * relies on.
    *
    * Dynamic (subprocess-MCP) tools keep the context-provider path — their `execute` round-trips
    * through their own transport, not the driver agent, so [trailblazeToolContextProvider] (used
@@ -219,10 +217,18 @@ class TrailblazeToolRepo(
     afterDynamicToolExecution = {},
   )
 
+  /**
+   * @param afterDynamicToolExecution runs after every dynamic (scripted) tool call, including one
+   *   that throws.
+   * @param decorateDynamicToolResult rewrites a dynamic tool's successful result before the LLM
+   *   reads it — the strategy-graph runner appends the post-action screen, as it already does for
+   *   class-backed tools.
+   */
   internal fun asToolRegistryWithDynamicToolHook(
     toolDispatcher: suspend (TrailblazeTool) -> String,
     trailblazeToolContextProvider: () -> TrailblazeToolExecutionContext,
     afterDynamicToolExecution: () -> Unit,
+    decorateDynamicToolResult: (String) -> String = { it },
   ): ToolRegistry {
     val snapshot = snapshotRegisteredTools()
     return ToolRegistry {
@@ -240,7 +246,7 @@ class TrailblazeToolRepo(
         tools(
           advertisedDynamic.map {
             it.buildKoogTool(trailblazeToolContextProvider)
-              .withAfterExecution(afterDynamicToolExecution)
+              .withAfterExecution(afterDynamicToolExecution, decorateDynamicToolResult)
           },
         )
       }
@@ -249,11 +255,15 @@ class TrailblazeToolRepo(
 
   private fun <T : TrailblazeTool> TrailblazeKoogTool<T>.withAfterExecution(
     afterExecution: () -> Unit,
+    decorateResult: (String) -> String,
   ): Tool<T, String> = object : Tool<T, String>(argsType, resultType, descriptor, metadata) {
-    override suspend fun execute(args: T): String = try {
-      this@withAfterExecution.execute(args)
-    } finally {
-      afterExecution()
+    override suspend fun execute(args: T): String {
+      val result = try {
+        this@withAfterExecution.execute(args)
+      } finally {
+        afterExecution()
+      }
+      return decorateResult(result)
     }
 
     override fun encodeResultToString(result: String, serializer: JSONSerializer): String =
@@ -320,14 +330,6 @@ class TrailblazeToolRepo(
     registeredDynamicTools.remove(name)
   }
 
-  fun removeTrailblazeTools(vararg trailblazeToolArgs: KClass<out TrailblazeTool>) = synchronized(registeredTrailblazeToolClasses) {
-    trailblazeToolArgs.forEach { tool ->
-      if (registeredTrailblazeToolClasses.contains(tool)) {
-        registeredTrailblazeToolClasses.remove(tool)
-      }
-    }
-  }
-
   fun removeAllTrailblazeTools() = synchronized(registeredTrailblazeToolClasses) {
     registeredTrailblazeToolClasses.clear()
     registeredYamlToolNames.clear()
@@ -373,8 +375,7 @@ class TrailblazeToolRepo(
     // 3. YAML-defined path — resolve to the registered ToolYamlConfig + decode via that tool's
     //    pre-bound [YamlDefinedToolSerializer]. Mirrors what [asToolRegistry] does on the Koog
     //    side so planners that advertise YAML tools via [getCurrentToolDescriptors] can also
-    //    have those tool calls deserialize cleanly on execution paths that route through here
-    //    (e.g. AgentUiActionExecutor.mapToTrailblazeTool, HostAccessibilityRpcClient.execute).
+    //    have those tool calls deserialize cleanly on execution paths that route through here.
     //    Koog hands us the name as a raw String; wrap it once for the typed-set membership test.
     val typedName = ToolName(toolName)
     if (typedName in snapshot.yamlToolNames) {
@@ -902,13 +903,12 @@ class TrailblazeToolRepo(
       emptySet()
     }
 
-  // On-demand "full screen" inspection for the in-process Koog agent loops (the
-  // [xyz.block.trailblaze.mcp.AgentImplementation.KOOG_STRATEGY_GRAPH] path). The screen view the
+  // On-demand "full screen" inspection for the in-process Koog agent loops. The screen view the
   // agent sees after each action is the compact, interactable-only element list; this tool lets it
   // request the full ref-annotated list (all visible elements) when it needs more — non-interactable
   // labels for context, or an element the compact filter omitted. Added only to the two
-  // `asToolRegistry` overloads (the Koog registries), so the legacy runner's tool surface is
-  // unchanged. Read-only, so it never appears in recordings.
+  // `asToolRegistry` overloads (the Koog registries). Read-only, so it never appears in
+  // recordings.
   //
   // Scoped to the same drivers as the `observation` toolset: host (iOS) and on-device (Android),
   // which expose a screen-inspection hierarchy AND whose agents execute a generic

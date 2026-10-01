@@ -85,13 +85,17 @@ object TrailToolUsageScanner {
    * that records under its configuration, which is every such trail. Selection is what makes those
    * legs reachable: `UnifiedTrailAdapter.lowerToTrailItems` puts the selected configuration's name
    * at the HEAD of the chain and excludes only the OTHER configurations' names, so each attempt
-   * below mirrors one runnable session. A trail that declares a configuration has NO
-   * configuration-free session — `MultiDeviceConfigurationResolver.resolve` always selects the
-   * sole declared configuration, and rejects a trail declaring more than one — so the plain
-   * single-device chain is attempted only when the trail declares none. In a configured trail a
-   * member resolves with its configuration at the head of its chain, where it can shadow a broader
-   * leg (`all:`); a classifier no configuration casts never runs the trail at all, so it has no
-   * sessions and reaches nothing. A classifier reaches the tool when any of its sessions does.
+   * below mirrors one runnable session. A trail that declares ONLY configurations has no
+   * configuration-free session — `MultiDeviceConfigurationResolver.selectConfigurationName` selects
+   * the sole declared configuration with or without bindings, and rejects a trail declaring more
+   * than one — so the plain single-device chain is attempted only when the trail declares none, or
+   * when it also declares ordinary single-device entries (the mixed shape, which a run without
+   * companions replays single-device; see
+   * [xyz.block.trailblaze.yaml.unified.UnifiedTrailConfig.implicitMultiDeviceConfigurationName]).
+   * In a configured trail a member resolves with its configuration at the head of its chain, where
+   * it can shadow a broader leg (`all:`); in a configuration-only trail a classifier no
+   * configuration casts never runs the trail at all, so it has no sessions and reaches nothing. A
+   * classifier reaches the tool when any of its sessions does.
    */
   fun invokingClassifiers(trail: UnifiedTrail, steps: List<TrailStepToolUsage>): Set<String> {
     if (steps.isEmpty()) return emptySet()
@@ -110,12 +114,15 @@ object TrailToolUsageScanner {
         .chainFor(TrailblazeDeviceClassifier(classifier))
         .map { it.classifier }
       // Each entry is one session this classifier can run in. `null` — select nothing, exclude
-      // every configuration name — exists only when the trail declares no configuration: a trail
-      // that declares one always replays with it selected. A member's sessions are the
-      // configurations casting it; a classifier no configuration casts never runs a configured
-      // trail at all, so it gets no sessions and reaches nothing.
+      // every configuration name — exists when the trail declares no configuration, or declares
+      // single-device entries beside one: a configuration-only trail always replays with its
+      // configuration selected. A member's sessions add the configurations casting it; a classifier
+      // no configuration casts never runs a configuration-only trail at all, so it gets no sessions
+      // and reaches nothing.
       val sessions: List<String?> = when {
         configurationNames.isEmpty() -> listOf(null)
+        trail.config.declaresSingleDeviceEntries ->
+          listOf(null) + configurationsByMember[classifier].orEmpty()
         else -> configurationsByMember[classifier].orEmpty()
       }
       sessions.any { selectedConfiguration ->

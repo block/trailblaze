@@ -251,12 +251,7 @@ fun SessionDetailComposable(
       Box(modifier = Modifier.fillMaxSize()) {
         Column(modifier = Modifier.fillMaxSize()) {
           CompositionLocalProvider(LocalFontScale provides fontSizeScale) {
-            // Extract agent implementation from the first LLM request log's context
-            val agentImplementation = sessionDetail.logs
-              .filterIsInstance<TrailblazeLog.TrailblazeLlmRequestLog>()
-              .firstNotNullOfOrNull { it.requestContext?.agentImplementation }
-
-            // Header (consolidated: status, device, driver, agent, classifiers, duration, trail path)
+            // Header (consolidated: status, device, driver, classifiers, duration, trail path)
             SessionDetailHeader(
               sessionDetail = sessionDetail,
               onBackClick = onBackClick,
@@ -283,7 +278,6 @@ fun SessionDetailComposable(
               cardsPerRow = cardsPerRow,
               maxCards = maxCards,
               overallStatus = sessionDetail.overallStatus,
-              agentImplementation = agentImplementation,
             )
 
             Spacer(modifier = Modifier.height(16.dp))

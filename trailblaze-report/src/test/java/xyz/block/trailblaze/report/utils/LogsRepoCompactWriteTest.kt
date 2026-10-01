@@ -4,6 +4,7 @@ import kotlinx.datetime.Clock
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeLog
+import xyz.block.trailblaze.logs.client.withVisibleStrings
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionStatus
 import java.io.File
@@ -79,7 +80,8 @@ class LogsRepoCompactWriteTest {
 
   @Test
   fun `a compact log round-trips through the reader unchanged`() {
-    // Only whitespace changed, so nothing that reads a session log should notice.
+    // Only whitespace changed, so nothing that reads a session log should notice. The sink also
+    // records the capture's strings, which is the one field it adds.
     val logsDir = tempLogsDir()
     val logsRepo = LogsRepo(logsDir, watchFileSystem = false)
     val sessionId = SessionId("compact-round-trip")
@@ -88,7 +90,7 @@ class LogsRepoCompactWriteTest {
     val file = logsRepo.saveLogToDisk(original)
     val decoded = TrailblazeJsonInstance.decodeFromString<TrailblazeLog>(file.readText())
 
-    assertEquals(original, decoded)
+    assertEquals(original.withVisibleStrings(), decoded)
   }
 
   @Test

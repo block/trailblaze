@@ -408,12 +408,14 @@ class TrailblazeYaml internal constructor(
    * guard), so it is safe for any classifier list including empty (empty → null driver, same
    * as the no-classifier overload). v1 configs carry their scalar `driver:` unchanged.
    *
-   * The caller here is pre-flight — it has classifiers but no bound session — so the skip lookup
-   * assumes the trail's sole declared configuration
-   * ([UnifiedTrailConfig.soleMultiDeviceConfigurationName]). Without it a `skip:` keyed by a
-   * configuration name is invisible to the device's chain and the CLI planner runs a trail its
-   * author disabled. `devices:` needs no such treatment: a configuration entry never pins the run
-   * driver — per-device drivers live on its named devices.
+   * The caller here is pre-flight with no selection, so the skip lookup assumes the configuration
+   * a run with no companions would bind
+   * ([UnifiedTrailConfig.implicitMultiDeviceConfigurationName]): a configuration-only trail's sole
+   * configuration, nothing for a trail that also declares single-device entries. Without it a
+   * `skip:` keyed by a configuration name is invisible to the device's chain and a trail its author
+   * disabled runs. A caller that knows the run binds companions passes its selection to the
+   * three-argument overload instead. `devices:` needs no such treatment: a configuration entry
+   * never pins the run driver — per-device drivers live on its named devices.
    */
   fun extractTrailConfig(
     yaml: String,
@@ -426,8 +428,7 @@ class TrailblazeYaml internal constructor(
 
   /**
    * Device-aware config extraction for a run whose multi-device configuration is already known.
-   * A null selection retains the single-configuration pre-flight fallback of the two-argument
-   * overload.
+   * A null selection retains the no-companions pre-flight fallback of the two-argument overload.
    */
   fun extractTrailConfig(
     yaml: String,
@@ -440,7 +441,8 @@ class TrailblazeYaml internal constructor(
       resolvedSkip = UnifiedTrailAdapter.resolveSkip(
         doc.trail.config,
         deviceClassifiers,
-        selectedDeviceConfiguration ?: doc.trail.config.soleMultiDeviceConfigurationName,
+        selectedDeviceConfiguration
+          ?: doc.trail.config.implicitMultiDeviceConfigurationName(bindsCompanionDevices = false),
       ),
       resolvedLocale = UnifiedTrailAdapter.resolveLocale(doc.trail.config, deviceClassifiers),
     )

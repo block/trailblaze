@@ -129,6 +129,8 @@ class DirectMcpToolExecutor(
         sessionId = sessionId,
         sessionDir = sessionDir,
         toolNames = availableScriptedToolNames,
+        // Not bound to a session: [toolDescriptors] advertises the same unscoped set.
+        drivers = null,
         logPrefix = "[DirectMcpToolExecutor]",
         // Install a real (unrestricted) `fetch` so scripted tools can make HTTP calls without
         // shelling curl — matches the host run path. See `:trailblaze-scripting-fetch`.

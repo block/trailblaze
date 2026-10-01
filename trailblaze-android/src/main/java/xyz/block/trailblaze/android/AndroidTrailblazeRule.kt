@@ -27,18 +27,10 @@ import xyz.block.trailblaze.android.accessibility.OnDeviceAccessibilityServiceSe
 import xyz.block.trailblaze.android.accessibility.TrailblazeAccessibilityService
 import xyz.block.trailblaze.TrailblazeAndroidLoggingRule
 import xyz.block.trailblaze.TrailblazeYamlUtil
-import xyz.block.trailblaze.agent.AgentUiActionExecutor
-import xyz.block.trailblaze.agent.InnerLoopScreenAnalyzer
-import xyz.block.trailblaze.agent.MultiAgentV3Runner
-import xyz.block.trailblaze.agent.MultiAgentV3TestAgentRunner
 import xyz.block.trailblaze.agent.TrailblazeElementComparator
-import xyz.block.trailblaze.agent.TrailblazeRunner
+import xyz.block.trailblaze.agent.TrailblazeSystemPrompt
 import xyz.block.trailblaze.agent.model.AgentTaskStatus
-import xyz.block.trailblaze.android.agent.KoogLlmSamplingSource
-import xyz.block.trailblaze.logs.client.TrailblazeSessionManager
-import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.mcp.agent.KoogTestAgentRunner
-import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toTrailblazeToolDescriptor
 import xyz.block.trailblaze.android.devices.TrailblazeAndroidOnDeviceClassifier
 import xyz.block.trailblaze.android.uiautomator.AndroidOnDeviceUiAutomatorScreenState
 import xyz.block.trailblaze.api.ScreenState
@@ -177,12 +169,10 @@ open class AndroidTrailblazeRule(
    */
   agentMemoryOverride: AgentMemory? = null,
   /**
-   * Per-objective cap on LLM calls forwarded into [TrailblazeRunner.maxSteps]. Surfaced as
+   * Per-objective cap on LLM calls forwarded into [KoogTestAgentRunner]. Surfaced as
    * the CLI's `--max-llm-calls` flag and threaded through
    * [xyz.block.trailblaze.llm.RunYamlRequest.maxLlmCalls] into this rule's constructor.
-   * Null = use the runner's built-in default. Ignored when
-   * [AgentImplementation.MULTI_AGENT_V3] is selected (the CLI rejects the combination at
-   * parse time).
+   * Null = use the runner's built-in default.
    */
   private val maxLlmCalls: Int? = null,
   /**
@@ -197,15 +187,6 @@ open class AndroidTrailblazeRule(
    */
   private val target: TrailblazeHostAppTarget? = null,
   /**
-   * Per-run override for which [AgentImplementation] drives prompt steps. When null (the default,
-   * e.g. a direct `@Rule` instrumentation test), the agent is read from the `trailblaze.agent`
-   * instrumentation arg via [InstrumentationArgUtil.agentImplementation]. The on-device RPC path
-   * threads the host's [xyz.block.trailblaze.llm.RunYamlRequest.agentImplementation] in here so a
-   * `--agent KOOG_STRATEGY_GRAPH` selection made on the host CLI takes effect on-device for that
-   * request without depending on a process-wide instrumentation arg.
-   */
-  private val agentImplementationOverride: AgentImplementation? = null,
-  /**
    * The session tool repo to register scripted-tool bundles into AND dispatch against. When a
    * caller supplies an [agentOverride] it MUST pass the same repo it constructed that agent with
    * here, so the bundle launcher registers `openUrl` & friends into the very repo the override
@@ -216,9 +197,8 @@ open class AndroidTrailblazeRule(
    */
   trailblazeToolRepoOverride: TrailblazeToolRepo? = null,
   /**
-   * Optional platform/system prompt template threaded into the legacy [TrailblazeRunner] and the
-   * Koog runner (null = the built-in default platform prompt in both). The V3 runner does not
-   * consume a platform template — its inner/outer agents own their prompts.
+   * Optional platform/system prompt template threaded into the Koog runner (null = the built-in
+   * default platform prompt).
    */
   private val systemPromptTemplate: String? = null,
 ) : SimpleTestRuleChain(trailblazeLoggingRule),
@@ -646,89 +626,9 @@ open class AndroidTrailblazeRule(
     customTrailblazeToolClasses = customToolClasses?.allForSerializationTools() ?: setOf(),
   )
 
-  /**
-   * Agent implementation selected via [agentImplementationOverride] (the on-device RPC path) or,
-   * when that's null, the instrumentation arg `-e trailblaze.agent` via
-   * [InstrumentationArgUtil.agentImplementation]. Defaults to
-   * [AgentImplementation.KOOG_STRATEGY_GRAPH]. `TRAILBLAZE_RUNNER` retains the legacy agent as an
-   * explicit selection; `MULTI_AGENT_V3` opts into the multi-agent V3 architecture (see
-   * [runSuspend]).
-   */
-  private val agentImplementation: AgentImplementation =
-    agentImplementationOverride ?: InstrumentationArgUtil.agentImplementation()
-
-  /**
-   * Title of the trail currently executing (e.g. an external test-case name).
-   *
-   * Set at [runSuspend] entry before any step runs, then forwarded via
-   * [caseTitleProvider] in the V3 runner so the inner agent receives the
-   * test case title as overallObjective. This lets the agent detect impossible
-   * steps early instead of exhausting retries.
-   *
-   * Thread-safety: JUnit creates a new rule instance per @Test method, so
-   * only one [runSuspend] executes on a given instance at a time. @Volatile
-   * provides the visibility guarantee when the lazy runner reads this field
-   * from its coroutine thread.
-   */
-  @Volatile
-  private var currentCaseTitle: String? = null
-
-  private val trailblazeRunner: TestAgentRunner by lazy {
-    when (agentImplementation) {
-      AgentImplementation.MULTI_AGENT_V3 -> createV3Runner()
-      // KOOG is a first-class [TestAgentRunner] like V3, so it rides the same per-step trail loop
-      // ([TrailblazeRunnerUtil.runPromptSuspend]) and therefore gets deterministic recorded-replay
-      // for free — recordings replay (zero LLM) and only unrecorded steps reach the Koog brain.
-      AgentImplementation.KOOG_STRATEGY_GRAPH -> createKoogRunner()
-      else -> TrailblazeRunner(
-        trailblazeToolRepo = trailblazeToolRepo,
-        trailblazeLlmModel = trailblazeLlmModel,
-        llmClient = llmClient,
-        screenStateProvider = screenStateProvider,
-        agent = trailblazeAgent,
-        trailblazeLogger = trailblazeLoggingRule.logger,
-        sessionProvider = { trailblazeLoggingRule.session ?: error("Session not available - ensure test is running") },
-        maxSteps = maxLlmCalls ?: TrailblazeRunner.DEFAULT_MAX_STEPS,
-        systemPromptTemplate = systemPromptTemplate,
-      )
-    }
-  }
-
-  private fun createV3Runner(): MultiAgentV3TestAgentRunner {
-    val samplingSource = KoogLlmSamplingSource(
-      llmClient = llmClient,
-      llmModel = trailblazeLlmModel,
-    )
-    val screenAnalyzer = InnerLoopScreenAnalyzer(
-      samplingSource = samplingSource,
-      model = trailblazeLlmModel,
-    )
-    val executor = AgentUiActionExecutor(
-      agent = trailblazeAgent,
-      screenStateProvider = screenStateProvider,
-      toolRepo = trailblazeToolRepo,
-      elementComparator = elementComparator,
-    )
-    val v3Runner = MultiAgentV3Runner.create(
-      screenAnalyzer = screenAnalyzer,
-      executor = executor,
-      deviceId = trailblazeDeviceId,
-      availableToolsProvider = { trailblazeToolRepo.getCurrentToolDescriptors().map { it.toTrailblazeToolDescriptor() } },
-    )
-    var cachedFallbackSessionId: xyz.block.trailblaze.logs.model.SessionId? = null
-    return MultiAgentV3TestAgentRunner(
-      v3Runner = v3Runner,
-      screenStateProvider = screenStateProvider,
-      sessionIdProvider = {
-        trailblazeLoggingRule.session?.sessionId ?: cachedFallbackSessionId ?: run {
-          Console.error("⚠️ No active loggingRule session; generating fallback session ID")
-          TrailblazeSessionManager.generateSessionId("android_test_fallback")
-            .also { cachedFallbackSessionId = it }
-        }
-      },
-      caseTitleProvider = { currentCaseTitle },
-    )
-  }
+  // The Koog runner rides the per-step trail loop ([TrailblazeRunnerUtil.runPromptSuspend]), so
+  // recordings replay deterministically (zero LLM) and only unrecorded steps reach the Koog brain.
+  private val trailblazeRunner: TestAgentRunner by lazy { createKoogRunner() }
 
   val trailblazeRunnerUtil by lazy {
     // Per-tool screen-state capture for the deterministic Maestro→accessibility selector
@@ -884,12 +784,6 @@ open class AndroidTrailblazeRule(
       trailblazeAgent.clearMemory()
     }
 
-    // Extract title before the loop so V3's caseTitleProvider sees it on every step.
-    // Scans eagerly (not item-order dependent) so the title is available even when
-    // the config block appears after the first prompts block in the YAML.
-    currentCaseTitle = trailItems.filterIsInstance<TrailYamlItem.ConfigTrailItem>()
-      .firstOrNull()?.config?.title
-
     if (!trailblazeYaml.hasActionableSteps(trailItems)) {
       val trailName = trailConfig?.title ?: trailFilePath ?: "unknown"
       throw TrailblazeException(
@@ -973,8 +867,7 @@ open class AndroidTrailblazeRule(
         val itemResult = when (item) {
           is TrailYamlItem.PromptsTrailItem ->
             // Agent-agnostic: runPrompt replays recorded steps deterministically (zero LLM) and
-            // delegates only the unrecorded steps to the configured [trailblazeRunner] — legacy,
-            // V3, or KOOG. The agent choice never changes how recordings are handled.
+            // delegates only the unrecorded steps to the Koog [trailblazeRunner].
             trailblazeRunnerUtil.runPrompt(
               prompts = item.promptSteps,
               useRecordedSteps = useRecordedSteps,
@@ -1114,17 +1007,15 @@ open class AndroidTrailblazeRule(
     ).result
 
   /**
-   * Builds the [KOOG_STRATEGY_GRAPH][AgentImplementation.KOOG_STRATEGY_GRAPH] brain as a
-   * [TestAgentRunner], so it plugs into the same per-step trail loop as the legacy/V3 runners and
-   * inherits deterministic recorded-replay from [TrailblazeRunnerUtil.runPromptSuspend]. Wired with
-   * this rule's on-device driver agent, tool repo, screen-state provider, and LLM client — so every
-   * tool the Koog graph calls executes through the exact same dispatch (settle, node-selector
-   * enrichment, session logging) the legacy on-device runner uses. Only the reasoning loop differs.
+   * Builds the Koog strategy-graph brain as a [TestAgentRunner], so it plugs into the per-step trail
+   * loop and inherits deterministic recorded-replay from [TrailblazeRunnerUtil.runPromptSuspend].
+   * Wired with this rule's on-device driver agent, tool repo, screen-state provider, and LLM client —
+   * so every tool the Koog graph calls executes through the same dispatch (settle, node-selector
+   * enrichment, session logging) as recorded replay.
    *
-   * The system prompt mirrors the legacy runner's composition: the base prompt plus
-   * [systemPromptTemplate] (a target's declared platform prompt) via
-   * [TrailblazeRunner.composeSystemPrompt], falling back to the default platform prompt when the
-   * rule has no template.
+   * The system prompt is the base prompt plus [systemPromptTemplate] (a target's declared platform
+   * prompt) via [TrailblazeSystemPrompt.compose], falling back to the default platform prompt when
+   * the rule has no template.
    */
   private fun createKoogRunner(): KoogTestAgentRunner = KoogTestAgentRunner(
     agent = trailblazeAgent,
@@ -1136,7 +1027,10 @@ open class AndroidTrailblazeRule(
     logger = trailblazeLoggingRule.logger,
     sessionProvider = { trailblazeLoggingRule.session ?: error("Session not available - ensure test is running") },
     maxLlmCalls = maxLlmCalls,
-    systemPromptTemplate = TrailblazeRunner.composeSystemPrompt(platformPrompt = systemPromptTemplate),
+    systemPromptTemplate = TrailblazeSystemPrompt.compose(platformPrompt = systemPromptTemplate),
+    // The instrumentation process inherits none of the host's environment, so decision settings
+    // arrive as instrumentation arguments named like the env vars (`-e TRAILBLAZE_DECISION_MOVES first`).
+    decisionSettings = { name -> InstrumentationArgUtil.getInstrumentationArg(name) ?: System.getenv(name) },
   )
 
   @Deprecated("Prefer the suspend version.")
@@ -1234,7 +1128,7 @@ open class AndroidTrailblazeRule(
       AndroidAssetsUtil::assetExists,
     ),
     forceStopApp: Boolean = true,
-    useRecordedSteps: Boolean = true,
+    useRecordedSteps: Boolean = InstrumentationArgUtil.useRecordedSteps(),
     targetAppId: String? = null,
   ) {
     val computedAssetPath: String = TrailRecordings.findBestTrailResourcePath(

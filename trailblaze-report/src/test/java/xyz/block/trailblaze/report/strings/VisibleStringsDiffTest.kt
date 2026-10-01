@@ -23,25 +23,20 @@ class VisibleStringsDiffTest {
     repeatOf: Int? = null,
     volatileTexts: List<String> = emptyList(),
   ) = VisibleStringsScreenLine(
-    stepIndex = stepIndex,
     captureId = "shot-$stepIndex.png",
-    logType = "AgentDriverLog",
     timestamp = "2026-09-09T17:04:11Z",
     action = "tap",
     deviceWidth = 1080,
     deviceHeight = 1920,
     screenContentHash = "hash-$stepIndex",
     partialCapture = partialCapture,
-    repeatOfStepIndex = repeatOf,
-    strings = texts.map { ExtractedString(text = it, source = VisibleStringSource.TEXT) } +
-      volatileTexts.map { ExtractedString(text = it, source = VisibleStringSource.TEXT, volatile = true) },
+    repeatOf = repeatOf?.let { "shot-$it.png" },
+    strings = (texts.toList() + volatileTexts).map { ExtractedString(text = it, source = VisibleStringSource.TEXT) },
   )
 
   private fun sourced(stepIndex: Int, vararg strings: Pair<String, VisibleStringSource>) =
     VisibleStringsScreenLine(
-      stepIndex = stepIndex,
       captureId = "shot-$stepIndex.png",
-      logType = "AgentDriverLog",
       timestamp = "2026-09-09T17:04:11Z",
       action = "tap",
       deviceWidth = 1080,
@@ -164,13 +159,66 @@ class VisibleStringsDiffTest {
   fun `steps only one run reached are reported rather than compared`() {
     val result = VisibleStringsDiff.diff(
       file("en", screen(0, "Checkout"), screen(1, "Receipt")),
-      file("en", screen(0, "Checkout"), screen(2, "Error")),
+      file("en", screen(0, "Checkout"), screen(1, "Error"), screen(2, "Retry")),
     )
 
-    assertEquals(listOf(0), result.steps.map { it.stepIndex })
-    assertEquals(listOf(1), result.baselineOnlySteps)
+    assertEquals(listOf(0, 1), result.steps.map { it.stepIndex })
+    assertEquals(emptyList(), result.baselineOnlySteps)
     assertEquals(listOf(2), result.candidateOnlySteps)
     assertFalse(result.aligned)
+  }
+
+  /** Screens pair by position: two locales share no filename and no string, only an order. */
+  @Test
+  fun `screens pair up by their place in each file, whatever their screenshots are called`() {
+    val baseline = file("en", screen(0, "Checkout"), screen(1, "Receipt"))
+    val candidate = file("es", screen(7, "Pagar"), screen(9, "Recibo"))
+
+    val result = VisibleStringsDiff.diff(baseline, candidate)
+
+    assertEquals(listOf("shot-0.png" to "shot-7.png", "shot-1.png" to "shot-9.png"), result.steps.map { it.baselineCaptureId to it.candidateCaptureId })
+    assertTrue(result.aligned)
+  }
+
+  /**
+   * Files recorded before the format keyed screens by screenshot still diff against new ones. The
+   * old repeat pointer is a step number; read wrongly, a repeated screen reads as one that lost
+   * all its text.
+   */
+  @Test
+  fun `a version 1 file diffs against a version 2 file, repeats included`() {
+    val v1 = VisibleStringsDiff.parse(
+      """
+      {"v":1,"kind":"run","session":"old","locale":"en"}
+      {"v":1,"kind":"screen","stepIndex":0,"captureId":"a.png","logType":"AgentDriverLog","timestamp":"2026-09-09T17:04:11Z","deviceWidth":1080,"deviceHeight":1920,"screenContentHash":"h","strings":[{"text":"Checkout","source":"text","bounds":[0,0,200,50],"visible":true,"volatile":false}]}
+      {"v":1,"kind":"screen","stepIndex":1,"captureId":"b.png","logType":"AgentDriverLog","timestamp":"2026-09-09T17:04:12Z","deviceWidth":1080,"deviceHeight":1920,"screenContentHash":"h","repeatOfStepIndex":0,"strings":[]}
+      """.trimIndent(),
+    )
+    val v2 = file("en", screen(0, "Checkout"), screen(1, repeatOf = 0))
+
+    val result = VisibleStringsDiff.diff(v1, v2)
+
+    assertEquals(listOf(false, false), result.steps.map { it.changed })
+    assertEquals(listOf("Checkout"), result.steps[1].unchanged)
+  }
+
+  @Test
+  fun `a version 1 file with two lines for one screenshot still lines up with version 2`() {
+    val v1 = VisibleStringsDiff.parse(
+      """
+      {"v":1,"kind":"run","session":"old","locale":"en"}
+      {"v":1,"kind":"screen","stepIndex":0,"captureId":"a.png","logType":"AgentDriverLog","timestamp":"2026-09-09T17:04:11Z","deviceWidth":1080,"deviceHeight":1920,"screenContentHash":"h","strings":[{"text":"Checkout","source":"text","visible":true,"volatile":false}]}
+      {"v":1,"kind":"screen","stepIndex":1,"captureId":"a.png","logType":"TrailblazeLlmRequestLog","timestamp":"2026-09-09T17:04:11Z","deviceWidth":1080,"deviceHeight":1920,"screenContentHash":"h","repeatOfStepIndex":0,"strings":[]}
+      {"v":1,"kind":"screen","stepIndex":2,"captureId":"b.png","logType":"AgentDriverLog","timestamp":"2026-09-09T17:04:12Z","deviceWidth":1080,"deviceHeight":1920,"screenContentHash":"i","strings":[{"text":"Paid","source":"text","visible":true,"volatile":false}]}
+      """.trimIndent(),
+    )
+    val v2 = file("en", screen(0, "Checkout"), screen(1, "Paid"))
+
+    val result = VisibleStringsDiff.diff(v1, v2)
+
+    assertEquals(listOf(false, false), result.steps.map { it.changed })
+    assertEquals(listOf("Paid"), result.steps[1].unchanged)
+    assertEquals(emptyList(), result.baselineOnlySteps)
   }
 
   @Test

@@ -29,7 +29,7 @@ import kotlin.test.assertFailsWith
 /**
  * Lifecycle guards for the [MockRpcServer] test fixture itself.
  *
- * One mainline run failed every [HostAccessibilityRpcClientTest] case at once with
+ * One mainline run failed every host RPC-client test case at once with
  * `BindException: Address already in use` on the fixture's device-derived port, and dragged
  * `DevicesPageEndpointTest` down as collateral (the uncaught bind failure was charged to the next
  * `runTest`). The commit under test touched only shell scripts, so nothing in the product was

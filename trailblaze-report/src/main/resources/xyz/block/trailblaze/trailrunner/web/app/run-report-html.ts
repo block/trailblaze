@@ -18,10 +18,10 @@ const RUN_REPORT_VIEWER_SCRIPT: string = embeddedViewerScript();
 // contract. Optional generic event streams, the authored/recorded YAML, and pre-packed hierarchies
 // (packSessionInputsHierarchies — the Share path compresses before serializing) ride alongside the
 // trace, LLM calls, and screenshots. Pure: no fetch, no DOM — usable identically in browser and bun.
-function buildRunReportHtml({ meta, trace, llmLogs, shots, events = null, attachments = null, hierarchies = null, hierarchiesGz = null, spans = null, spansGz = null, videoClip = null, videoClips = null, keepAttachmentObjectUrls = false }: { meta: RunMeta; trace: RawTraceRow[]; llmLogs: RawLlmRow[]; shots: Record<string, string>; events?: EventStream[] | null; attachments?: Record<string, string> | null; hierarchies?: Record<string, unknown> | null; hierarchiesGz?: string | null; spans?: TracerSpan[] | null; spansGz?: string | null; videoClip?: VideoClip | null; videoClips?: VideoClip[] | null; keepAttachmentObjectUrls?: boolean }): string {
+function buildRunReportHtml({ meta, trace, llmLogs, shots, events = null, attachments = null, hierarchies = null, hierarchiesGz = null, spans = null, spansGz = null, visibleStrings = null, videoClip = null, videoClips = null, keepAttachmentObjectUrls = false }: { meta: RunMeta; trace: RawTraceRow[]; llmLogs: RawLlmRow[]; shots: Record<string, string>; events?: EventStream[] | null; attachments?: Record<string, string> | null; hierarchies?: Record<string, unknown> | null; hierarchiesGz?: string | null; spans?: TracerSpan[] | null; spansGz?: string | null; visibleStrings?: VisibleStringsScreen[] | null; videoClip?: VideoClip | null; videoClips?: VideoClip[] | null; keepAttachmentObjectUrls?: boolean }): string {
   return buildMultiReportHtml({
     generatedAt: (meta || {}).generatedAt || '',
-    sessions: [{ meta, trace, llmLogs, shots, events, attachments, hierarchies, hierarchiesGz, spans, spansGz, videoClip, videoClips }],
+    sessions: [{ meta, trace, llmLogs, shots, events, attachments, hierarchies, hierarchiesGz, spans, spansGz, visibleStrings, videoClip, videoClips }],
     keepAttachmentObjectUrls,
   });
 }

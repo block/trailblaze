@@ -329,8 +329,8 @@ class BridgeUiActionExecutor(
         // Detect platform from tree — check root and first child (root may be a wrapper)
         val platform = detectPlatform(tree)
         val elements = when (platform) {
-          "android" -> AndroidCompactElementList.build(tree, details, screenState.deviceHeight).text
-          "ios" -> IosCompactElementList.build(tree, details, screenState.deviceHeight).text
+          "android" -> AndroidCompactElementList.build(tree, details, screenState.deviceHeight, screenState.deviceWidth).text
+          "ios" -> IosCompactElementList.build(tree, details, screenState.deviceHeight, screenState.deviceWidth).text
           else -> null
         }
         if (elements != null) {

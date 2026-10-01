@@ -196,10 +196,6 @@ object AdbCommandUtil {
     }
   }
 
-  fun getSerialNumber(): String {
-    return execShellCommand("getprop ro.boot.serialno")
-  }
-
   /**
    * Whether real airplane mode is on. The one Android definition of this read, so a trail cannot
    * get a different answer depending on which driver replays it.
@@ -242,12 +238,6 @@ object AdbCommandUtil {
         if (unreadable) " (says nothing readable — reporting airplane mode off)" else "",
     )
     return answer
-  }
-
-  fun grantPermissions(targetAppPackageName: String, permissions: List<String>) {
-    permissions.forEach { permission ->
-      grantPermission(targetAppPackageName, permission)
-    }
   }
 
   private fun isPermissionGranted(permission: String, packageName: String): Boolean {
@@ -445,43 +435,6 @@ object AdbCommandUtil {
   /** Disable Immersive Mode (Show Nav Bar) */
   fun showVirtualBottomNavBar() {
     execShellCommand("settings put global policy_control null")
-  }
-
-  /**
-   * Disable gesture navigation and enable 3-button navigation.
-   * This prevents swipe gestures from accidentally navigating back to the home screen.
-   *
-   * Navigation modes:
-   * - 0 = 3-button navigation (traditional)
-   * - 1 = 2-button navigation (deprecated)
-   * - 2 = Gesture navigation (fully gestural)
-   */
-  fun enableThreeButtonNavigation() {
-    execShellCommand("settings put secure navigation_mode 0")
-    execShellCommand("settings put global policy_control immersive.navigation=*")
-  }
-
-  /**
-   * Re-enable gesture navigation (default on modern Android versions).
-   */
-  fun enableGestureNavigation() {
-    execShellCommand("cmd overlay enable com.android.internal.systemui.navbar.gestural")
-    execShellCommand("settings put secure navigation_mode 2")
-  }
-
-  /**
-   * Wait for app to not be in the foreground
-   */
-  fun waitUntilAppNotInForeground(
-    appId: String,
-    maxWaitMs: Long = 30_000,
-    checkIntervalMs: Long = 200,
-  ) = PollingUtils.tryUntilSuccessOrThrowException(
-    maxWaitMs = maxWaitMs,
-    intervalMs = checkIntervalMs,
-    "App $appId should not be in foreground",
-  ) {
-    getForegroundComponents().none { AndroidForegroundParser.packageFromComponent(it) == appId }
   }
 
   /**

@@ -22,6 +22,7 @@ import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
+import xyz.block.trailblaze.devices.TrailblazeDevicePort.getTrailblazeOnDeviceSpecificPort
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.scripting.mcp.TrailblazeContextEnvelope
@@ -100,6 +101,59 @@ class TrailblazeContextEnvelopeTest {
     assertThat(device["widthPixels"]!!.jsonPrimitive.int).isEqualTo(1080)
     assertThat(device["heightPixels"]!!.jsonPrimitive.int).isEqualTo(2400)
     assertThat(device["instanceId"]!!.jsonPrimitive.content).isEqualTo("emulator-5554")
+  }
+
+  @Test fun `device block carries the host-computed trailblaze on-device port for mobile devices`() {
+    val iosDevice = TrailblazeDeviceInfo(
+      trailblazeDeviceId = TrailblazeDeviceId("ABC-123-UDID", TrailblazeDevicePlatform.IOS),
+      trailblazeDriverType = TrailblazeDriverType.IOS_HOST,
+      widthPixels = 1170,
+      heightPixels = 2532,
+    )
+    for (device in listOf(deviceInfo, iosDevice)) {
+      val expected = device.trailblazeDeviceId.getTrailblazeOnDeviceSpecificPort()
+      val legacy = TrailblazeContextEnvelope.buildLegacyArgEnvelope(AgentMemory(), device)
+      val meta = TrailblazeContextEnvelope.buildMetaTrailblaze(
+        memory = AgentMemory(),
+        device = device,
+        baseUrl = "http://localhost:52525",
+        sessionId = SessionId("session-abc"),
+        invocationId = "inv-123",
+      )
+      for (envelope in listOf(legacy, meta)) {
+        val port = envelope["device"]!!.jsonObject["trailblazePort"]!!.jsonPrimitive.int
+        assertThat(port).isEqualTo(expected)
+      }
+    }
+  }
+
+  @Test fun `device block omits the trailblaze on-device port for web devices and on-device runtimes`() {
+    val webDevice = TrailblazeDeviceInfo(
+      trailblazeDeviceId = TrailblazeDeviceId("playwright-native", TrailblazeDevicePlatform.WEB),
+      trailblazeDriverType = TrailblazeDriverType.PLAYWRIGHT_NATIVE,
+      widthPixels = 1280,
+      heightPixels = 800,
+    )
+    val web = TrailblazeContextEnvelope.buildMetaTrailblaze(
+      memory = AgentMemory(),
+      device = webDevice,
+      baseUrl = "http://localhost:52525",
+      sessionId = SessionId("session-abc"),
+      invocationId = "inv-123",
+    )
+    // Only the host knows the port (it hashes in the host's ADB server port), so an envelope
+    // built for the on-device runtime must not carry a guess.
+    val onDevice = TrailblazeContextEnvelope.buildMetaTrailblaze(
+      memory = AgentMemory(),
+      device = deviceInfo,
+      baseUrl = null,
+      sessionId = SessionId("session-abc"),
+      invocationId = "inv-123",
+      runtime = TrailblazeContextEnvelope.RUNTIME_ONDEVICE,
+    )
+    for (envelope in listOf(web, onDevice)) {
+      assertThat(envelope["device"]!!.jsonObject.keys).doesNotContain("trailblazePort")
+    }
   }
 
   @Test fun `meta key is literal trailblaze`() {

@@ -123,40 +123,6 @@ class SubscribeToProgressHandler(
   }
 
   /**
-   * Gets the current list of active subscriptions.
-   *
-   * Useful for monitoring which sessions are being listened to.
-   *
-   * @return List of active subscription IDs
-   */
-  fun getActiveSubscriptions(): List<String> {
-    return activeSubscriptions.keys.toList()
-  }
-
-  /**
-   * Gets details about a specific subscription.
-   *
-   * @param subscriptionId The subscription ID
-   * @return Subscription details, or null if not found
-   */
-  fun getSubscription(subscriptionId: String): ProgressSubscription? {
-    return activeSubscriptions[subscriptionId]
-  }
-
-  /**
-   * Cancels all active subscriptions.
-   *
-   * Useful for cleanup when the handler is being shut down.
-   */
-  fun cancelAll() {
-    activeSubscriptions.forEach { (id, subscription) ->
-      subscription.job.cancel("Handler shutting down")
-    }
-    activeSubscriptions.clear()
-    Console.log("[SubscribeToProgressHandler] All subscriptions cancelled")
-  }
-
-  /**
    * Metadata for an active progress subscription.
    *
    * @param subscriptionId Unique identifier for this subscription

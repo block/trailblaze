@@ -25,6 +25,7 @@ object DisplayUtils {
       is TrailblazeLog.McpToolCallRequestLog -> "MCP Tool Request"
       is TrailblazeLog.McpToolCallResponseLog -> "MCP Tool Response"
       is TrailblazeLog.McpAskLog -> "Ask"
+      is TrailblazeLog.TrailblazeDecisionRequestLog -> "Decision"
       is TrailblazeLog.TrailblazeProgressLog -> "Progress: ${log.eventType}"
       is TrailblazeLog.TrailblazeToolCatalogLog -> "Tool Catalog (${log.toolOptions.size})"
     }

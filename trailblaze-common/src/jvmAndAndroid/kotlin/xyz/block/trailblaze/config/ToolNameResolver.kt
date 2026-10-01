@@ -113,15 +113,6 @@ class ToolNameResolver(
     names.map { resolve(it) }.toSet()
 
   /**
-   * Resolves a list of tool names leniently — skips unknown names with a warning. Only
-   * returns class-backed tools; YAML-defined tools in [names] are silently excluded from the
-   * result set. Callers that care about YAML-defined tools should also consult
-   * [partitionLenient].
-   */
-  fun resolveAllLenient(names: List<String>, context: String = ""): Set<KClass<out TrailblazeTool>> =
-    partitionLenient(names, context).classBacked
-
-  /**
    * Result of splitting a list of tool names by backing. `yamlDefinedNames` and
    * `scriptedToolNames` are typed as [ToolName] — the YAML-wire layer (`tools: List<String>` in
    * toolset configs) is the one legitimate place raw strings become typed identifiers; everything
@@ -172,18 +163,6 @@ class ToolNameResolver(
       scriptedToolNames = scriptedNames,
     )
   }
-
-  /**
-   * Returns a new resolver with additional tool classes merged in. YAML-defined and scripted
-   * name sets carry through unchanged.
-   */
-  fun withAdditionalTools(
-    extra: Map<ToolName, KClass<out TrailblazeTool>>,
-  ): ToolNameResolver = ToolNameResolver(
-    knownTools = knownTools + extra,
-    knownYamlToolNames = knownYamlToolNames,
-    knownScriptedToolNames = knownScriptedToolNames,
-  )
 
   companion object {
     /**

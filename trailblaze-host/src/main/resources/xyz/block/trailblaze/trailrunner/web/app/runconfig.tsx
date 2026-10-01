@@ -8,7 +8,7 @@ function RunConfigDialog({ trail: initialTrail, seed, pinnedId, go, close, closi
   const [trailQuery, setTrailQuery] = React.useState('');
   const [rightTab, setRightTab] = React.useState('steps');
   // Two panes and nothing else by default: WHICH DEVICES on the left, WHICH STEPS on the right, Play
-  // and Record at the bottom. Model, agent, AI call limit, capture toggles and the CLI command are
+  // and Record at the bottom. Model, AI call limit, capture toggles and the CLI command are
   // all real but rarely touched, so they live behind one disclosure. Sticky, so anyone who does tune
   // them isn't reopening it every run. Visibility only: every default VALUE is unchanged.
   const [advanced, setAdvanced] = useStickyState('tb-run-advanced', false);
@@ -223,16 +223,6 @@ function RunConfigDialog({ trail: initialTrail, seed, pinnedId, go, close, closi
 
   const [selfHeal, setSelfHeal] = React.useState(false);
   const [useRecordedSteps, setUseRecordedSteps] = React.useState(seed && seed.replay ? 'replay' : 'auto');
-  const [agent, setAgent] = React.useState('');
-  const agentTouched = React.useRef(false);
-  const effectiveAgent = settingsResult.data?.llm?.agent || null;
-  React.useEffect(() => {
-    setAgent((currentAgent) => seedRunAgent(currentAgent, effectiveAgent, agentTouched.current));
-  }, [effectiveAgent]);
-  const chooseAgent = (nextAgent) => {
-    agentTouched.current = true;
-    setAgent(nextAgent);
-  };
   const [maxLlmCalls, setMaxLlmCalls] = React.useState(String(DEFAULT_MAX_LLM_CALLS));
   const [llm, setLlm] = React.useState('');
   const [verbose, setVerbose] = React.useState(false);
@@ -273,7 +263,7 @@ function RunConfigDialog({ trail: initialTrail, seed, pinnedId, go, close, closi
     trailId: trail ? trail.id : null,
     devicePlatform: selectedDevice ? selectedDevice.platform : null,
     deviceId: selectedDevice ? selectedDevice.id : null,
-    selfHeal, useRecordedSteps, agent, maxLlmCalls, llm,
+    selfHeal, useRecordedSteps, maxLlmCalls, llm,
     verbose, headless, captureVideo, captureLogcat, captureNetwork, captureIosLogs, captureMemory, captureAnalytics, captureEvents,
     saveRecording, noReport, markdown, noLogging, tags,
   };
@@ -388,7 +378,6 @@ function RunConfigDialog({ trail: initialTrail, seed, pinnedId, go, close, closi
         selfHeal: cfg.selfHeal,
         useRecordedSteps: cfg.useRecordedSteps === 'replay' ? true : cfg.useRecordedSteps === 'ai' ? false : null,
         maxLlmCalls: (!isNaN(maxCalls) && maxCalls > 0 && maxCalls !== DEFAULT_MAX_LLM_CALLS) ? maxCalls : null,
-        agent: runAgentOption(cfg.agent),
         captureVideo: cfg.captureVideo,
         captureLogcat: cfg.captureLogcat,
         captureNetworkTraffic: cfg.captureNetwork,
@@ -424,7 +413,6 @@ function RunConfigDialog({ trail: initialTrail, seed, pinnedId, go, close, closi
         const reachable = connects.filter((c) => c.ok);
         const started = await TB.withTimeout(TB.recordTrailRange(trail.id, range.start, range.end, reachable.map((c) => TbRunFanout.deviceRunId(c.device)), {
           maxLlmCalls: opts.maxLlmCalls,
-          agent: opts.agent,
           selfHeal: opts.selfHeal,
           captureVideo: opts.captureVideo,
           captureLogcat: opts.captureLogcat,
@@ -610,7 +598,7 @@ function RunConfigDialog({ trail: initialTrail, seed, pinnedId, go, close, closi
               {advanced && (
                 <Section id="behavior" title="Behavior" ico="bot">
                   <BehaviorSection selfHeal={selfHeal} setSelfHeal={setSelfHeal} useRecordedSteps={useRecordedSteps} setUseRecordedSteps={setUseRecordedSteps}
-                    agent={agent} setAgent={chooseAgent} maxLlmCalls={maxLlmCalls} setMaxLlmCalls={setMaxLlmCalls} llm={llm} setLlm={setLlm}
+                    maxLlmCalls={maxLlmCalls} setMaxLlmCalls={setMaxLlmCalls} llm={llm} setLlm={setLlm}
                     verbose={verbose} setVerbose={setVerbose} headless={headless} setHeadless={setHeadless} web={selectedDevice && selectedDevice.platform === 'web'} />
                 </Section>
               )}

@@ -48,6 +48,7 @@ import javax.imageio.ImageWriteParam
  *   When non-empty, the [viewHierarchyTextRepresentation] will be enriched with the
  *   requested information (e.g., bounding boxes). Automatically cleared after consumption
  *   by [PlaywrightBrowserManager] so subsequent turns return to the compact default.
+ * @param enrichmentBudgetMs The wall-clock cap on each per-element bounds or selector pass.
  */
 class PlaywrightScreenState(
   private val page: Page,
@@ -59,6 +60,7 @@ class PlaywrightScreenState(
     EffectiveScreenshotScalingConfig.effectiveForWeb,
   private val requestedDetails: Set<ViewHierarchyDetail> = emptySet(),
   private val captureTimeoutMs: Double = CAPTURE_TIMEOUT_MS,
+  private val enrichmentBudgetMs: Long = ENRICHMENT_BUDGET_MS,
 ) : ScreenState {
 
   /** The raw ARIA snapshot YAML - preferred format for web LLM prompts. */
@@ -441,12 +443,15 @@ class PlaywrightScreenState(
     if (offscreenIds.isEmpty() && occludedIds.isEmpty()) return text
 
     // Annotation pass: tag every kept line with its visibility status.
+    // A named landmark is listed once, as its own `[eN]` line with its children under it, so
+    // hiding that line would leave visible children under whatever line came before. A hidden
+    // landmark stays as a bare header instead; the pass below drops it if no child is left.
     val annotatedLines = text.lines().map { line ->
       val match = ELEMENT_ID_PATTERN.find(line) ?: return@map line
       val elementId = "e${match.groupValues[1]}"
       when (elementId) {
-        in offscreenIds -> if (includeOffscreen) "$line (offscreen)" else null
-        in occludedIds -> if (includeOccluded) "$line (occluded)" else null
+        in offscreenIds -> if (includeOffscreen) "$line (offscreen)" else landmarkHeaderOrNull(line)
+        in occludedIds -> if (includeOccluded) "$line (occluded)" else landmarkHeaderOrNull(line)
         else -> line
       }
     }
@@ -487,6 +492,10 @@ class PlaywrightScreenState(
     }
     return result.joinToString("\n")
   }
+
+  /** `  [e4] list "Tasks"` -> `  list "Tasks":` for a landmark line; null for anything else. */
+  private fun landmarkHeaderOrNull(line: String): String? =
+    (line.replaceFirst(ELEMENT_ID_PREFIX_PATTERN, "") + ":").takeIf { LANDMARK_HEADER_PATTERN.matches(it) }
 
   /**
    * Per-element visibility data computed once per snapshot via [BATCH_VIEWPORT_CHECK_JS].
@@ -670,7 +679,7 @@ class PlaywrightScreenState(
         return@trace ElementVisibility(offscreen = fastOffscreen, occluded = fastOccluded, bounds = fastBounds)
       }
 
-      val deadlineMs = System.currentTimeMillis() + ENRICHMENT_BUDGET_MS
+      val deadlineMs = System.currentTimeMillis() + enrichmentBudgetMs
       val (ids, handles) = resolveElementHandles(idsToRefs, deadlineMs)
       if (ids.isEmpty()) {
         return@trace ElementVisibility(offscreen = fastOffscreen, occluded = fastOccluded, bounds = fastBounds)
@@ -771,11 +780,20 @@ class PlaywrightScreenState(
       return compact.text
     }
 
-    // Build per-element annotations in a single pass
+    // Build per-element annotations in a single pass. Same bounds as the set-of-mark
+    // fallback in [annotationElements]: skip an element no locator matches, and stop at the
+    // budget, so a page with hundreds of unmatched elements can't stall the request.
+    val deadlineMs = System.currentTimeMillis() + enrichmentBudgetMs
+    var cutShort = false
     val annotationsByElementId: Map<String, String> =
       compact.elementIdMapping.mapValues { (_, elementRef) ->
+        if (budgetExceeded(deadlineMs, "element list enrichment")) {
+          cutShort = true
+          return@mapValues ""
+        }
         try {
           val locator = PlaywrightAriaSnapshot.resolveElementRef(page, elementRef)
+          if (locator.count() == 0) return@mapValues ""
           val parts = mutableListOf<String>()
 
           if (enrichBounds) {
@@ -805,11 +823,16 @@ class PlaywrightScreenState(
       val annotation = annotationsByElementId[elementId]
       if (!annotation.isNullOrEmpty()) "$line $annotation" else line
     }.toMutableList()
+    if (cutShort) {
+      // Without this, an element past the cutoff reads as one with no position or selector.
+      enrichedLines.add("")
+      enrichedLines.add(ELEMENT_LIST_CUT_SHORT_NOTE)
+    }
 
     // When CSS_SELECTORS is requested, also surface hidden elements
     // (generic/structural nodes that were filtered out of the compact list)
     if (enrichCss) {
-      val hiddenElements = discoverHiddenCssTargetableElements(compact)
+      val hiddenElements = discoverHiddenCssTargetableElements(compact, deadlineMs)
       if (hiddenElements.isNotEmpty()) {
         enrichedLines.add("")
         enrichedLines.add(
@@ -879,14 +902,19 @@ class PlaywrightScreenState(
   @Suppress("UNCHECKED_CAST")
   private fun discoverHiddenCssTargetableElements(
     compact: PlaywrightAriaSnapshot.CompactAriaElements,
+    deadlineMs: Long,
   ): List<String> {
     return try {
       // Collect all CSS selectors already known from the ARIA elements
       // so we don't duplicate them in the hidden elements section
       val knownCssSelectors = mutableSetOf<String>()
+      // Same bounds as the element-list pass: an element no locator matches is skipped, and
+      // the shared deadline stops the walk.
       for ((_, elementRef) in compact.elementIdMapping) {
+        if (budgetExceeded(deadlineMs, "hidden element scan")) break
         try {
           val locator = PlaywrightAriaSnapshot.resolveElementRef(page, elementRef)
+          if (locator.count() == 0) continue
           val css = buildCssSelectorForLocator(locator)
           if (css != null) knownCssSelectors.add(css)
         } catch (_: Exception) {}
@@ -1087,7 +1115,10 @@ class PlaywrightScreenState(
    * [elementVisibility] couldn't resolve (no AI-mode ref correlation — see
    * [PlaywrightAriaSnapshot.buildAiRefsByRoleName] — or the resolution budget ran out),
    * we fall back to per-element `locator.boundingBox()` so the overlay still renders
-   * via Playwright's accessibility-aware locator path.
+   * via Playwright's accessibility-aware locator path. That fallback skips an element no
+   * locator matches (`boundingBox` would wait out its timeout for it) and stops at
+   * [ENRICHMENT_BUDGET_MS]: an article with hundreds of unmatched links otherwise held
+   * every LLM request for minutes.
    *
    * Filtered to [PlaywrightAriaSnapshot.ElementRef.imageAnnotatable] elements only,
    * **minus** anything in [ElementVisibility.offscreen] or [ElementVisibility.occluded]
@@ -1100,6 +1131,7 @@ class PlaywrightScreenState(
     val visibility = elementVisibility
     val out = mutableListOf<AnnotationElement>()
     var nodeId = 1L
+    val deadlineMs = System.currentTimeMillis() + enrichmentBudgetMs
     for ((id, ref) in elementIdMapping) {
       if (!ref.imageAnnotatable) continue
       if (id in visibility.offscreen) continue
@@ -1109,8 +1141,10 @@ class PlaywrightScreenState(
         // Ref-based resolution didn't cover this element (no AI-mode ref correlation,
         // or the resolution budget ran out). Fall back to the locator-based path —
         // accessibility-aware bbox.
+        if (budgetExceeded(deadlineMs, "set-of-mark annotation")) return@run null
         try {
           val locator = PlaywrightAriaSnapshot.resolveElementRef(page, ref)
+          if (locator.count() == 0) return@run null
           val box = locator.boundingBox(
             Locator.BoundingBoxOptions().setTimeout(captureTimeoutMs),
           ) ?: return@run null
@@ -1245,7 +1279,22 @@ class PlaywrightScreenState(
    * a session that traverses several Wikipedia-class pages logs once per page rather than
    * once globally.
    */
-  private var enrichmentBudgetExceededLogged = false
+  private val budgetExceededLoggedStages = mutableSetOf<String>()
+
+  /**
+   * True once [deadlineMs] has passed. Logs the first time per [stage] per screen state, so a
+   * stage that trips after another one did still leaves its own line.
+   */
+  private fun budgetExceeded(deadlineMs: Long, stage: String): Boolean {
+    if (System.currentTimeMillis() <= deadlineMs) return false
+    if (budgetExceededLoggedStages.add(stage)) {
+      Console.log(
+        "[PlaywrightScreenState] $stage budget (${enrichmentBudgetMs}ms) exceeded — " +
+          "skipping the remaining elements.",
+      )
+    }
+    return true
+  }
 
   /**
    * Enriches a [ViewHierarchyTreeNode] tree with bounds from the live page.
@@ -1274,7 +1323,7 @@ class PlaywrightScreenState(
     // computeViewHierarchyBoundsBatched and the per-node locator fallback below — computed
     // once, up front, so the two phases can't stack into up to 2x ENRICHMENT_BUDGET_MS
     // worst-case latency on a pathologically large page.
-    val deadlineMs = System.currentTimeMillis() + ENRICHMENT_BUDGET_MS
+    val deadlineMs = System.currentTimeMillis() + enrichmentBudgetMs
     val batchedBounds = computeViewHierarchyBoundsBatched(tree, deadlineMs)
     // Build ARIA descriptor occurrence counts to disambiguate duplicate elements for the
     // fallback locator path.
@@ -1460,16 +1509,7 @@ class PlaywrightScreenState(
     nthIndex: Int,
     deadlineMs: Long,
   ): TrailblazeNode.Bounds? {
-    if (System.currentTimeMillis() > deadlineMs) {
-      if (!enrichmentBudgetExceededLogged) {
-        Console.log(
-          "[PlaywrightScreenState] viewHierarchy enrichment budget (${ENRICHMENT_BUDGET_MS}ms) " +
-            "exceeded — returning partial bounds for remaining nodes.",
-        )
-        enrichmentBudgetExceededLogged = true
-      }
-      return null
-    }
+    if (budgetExceeded(deadlineMs, "viewHierarchy enrichment")) return null
     return try {
       val elementRef = PlaywrightAriaSnapshot.ElementRef(descriptor, nthIndex)
       val locator = PlaywrightAriaSnapshot.resolveElementRef(page, elementRef)
@@ -1592,8 +1632,16 @@ class PlaywrightScreenState(
      */
     private const val ENRICHMENT_BUDGET_MS = 5_000L
 
+    /** Ends an element list whose bounds and selectors stopped at the budget. */
+    internal const val ELEMENT_LIST_CUT_SHORT_NOTE =
+      "-- Element details stop partway: the capture budget ran out, so later elements show " +
+        "no bounds or css selector even where they have one. --"
+
     /** Pattern matching element ID references like [e42] in compact element list text. */
     private val ELEMENT_ID_PATTERN = Regex("""\[e(\d+)]""")
+
+    /** The `[eN] ` in front of a compact-list descriptor. */
+    private val ELEMENT_ID_PREFIX_PATTERN = Regex("""\[e\d+]\s+""")
 
     /** Pattern matching ARIA landmark/container header lines like "navigation:", "  main:", or "navigation "Top nav":" */
     private val LANDMARK_HEADER_PATTERN = Regex(

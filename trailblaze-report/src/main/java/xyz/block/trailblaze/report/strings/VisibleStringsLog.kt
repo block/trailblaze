@@ -6,13 +6,12 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonNames
 import xyz.block.trailblaze.api.ExtractedString
-import xyz.block.trailblaze.api.TrailblazeNode
-import xyz.block.trailblaze.api.ViewHierarchyTreeNode
-import xyz.block.trailblaze.api.VisibleStringExtractor
 import xyz.block.trailblaze.logs.client.TrailblazeLog
+import xyz.block.trailblaze.logs.client.visibleStringsOrExtracted
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionInfo
 import xyz.block.trailblaze.report.utils.LogsRepo
+import xyz.block.trailblaze.util.Console
 import java.io.File
 import java.net.URLDecoder
 import java.security.MessageDigest
@@ -32,25 +31,42 @@ data class VisibleStringsRunLine(
   val startedAt: String? = null,
 )
 
-/** One screen capture and everything a person could read on it. */
+/**
+ * One screen capture and everything a person could read on it.
+ *
+ * Keyed by [captureId] alone — no log class, no step counter. Within a file each capture appears
+ * once; across files (two locales of one trail) screens pair up by their position in the file,
+ * because every string and every filename differs between them.
+ *
+ * [captureId] only names the capture. Where its image is lives in separate fields — [screenshot],
+ * or [frame] for a capture that saved none — so a capture with no screenshot is still a line.
+ */
 @Serializable
 data class VisibleStringsScreenLine(
   val v: Int = VisibleStringsLog.FORMAT_VERSION,
   val kind: String = "screen",
-  /** Position in the trail. The only key that survives a locale change, so the only join key. */
-  val stepIndex: Int,
   /**
-   * The screenshot's filename, which is the durable link back to the image. A farm run records a
-   * signed URL built as `<baseArtifactUrl><filename>`, and [VisibleStringsLog.captureIdFrom] pulls
-   * the same name back out of either form — so a local run and a farm run of one trail agree,
-   * which is what a cross-run diff prints.
+   * Names this capture, unique within a session; treat it as opaque. It is the [screenshot] name
+   * when the capture has one — which a local and a farm run of one trail agree on — and otherwise
+   * the id the log was stamped with as it was emitted (`captureId` on the log).
    */
   val captureId: String,
+  /**
+   * The screenshot's filename, the durable link back to the image. A farm run records a signed
+   * URL built as `<baseArtifactUrl><filename>`, and [VisibleStringsLog.captureIdFrom] pulls the
+   * same name back out of either form. Absent when the capture has no screenshot.
+   */
+  val screenshot: String? = null,
   /** The full reference the log recorded, when that was more than a bare filename: a signed farm
-   *  URL. Absent on a local run. It expires, which is why it is not [captureId]. */
+   *  URL. Absent on a local run. It expires, which is why it is not [screenshot]. */
   val captureUrl: String? = null,
-  val logType: String,
-  /** True when [captureId] is the set-of-mark overlay rather than the clean screenshot. */
+  /**
+   * For a capture with no [screenshot]: the filename of the frame the session's recording shows at
+   * its instant, saved beside the screenshots (see [CaptureVideoFrames]). Absent when the capture
+   * has a screenshot, or when no single recording covers it.
+   */
+  val frame: String? = null,
+  /** True when [screenshot] is the set-of-mark overlay rather than the clean screenshot. */
   val screenshotIsAnnotated: Boolean = false,
   val timestamp: String,
   val traceId: String? = null,
@@ -69,7 +85,8 @@ data class VisibleStringsScreenLine(
    */
   val deviceWidth: Int,
   val deviceHeight: Int,
-  /** Content hash of [strings]. Collapses repeats within a run; useless across locales. */
+  /** Hash of the source and text of [strings], so the same words at a moved position share one.
+   *  Useless across locales. Not the repeat key: see [repeatOf]. */
   @OptIn(ExperimentalSerializationApi::class)
   @JsonNames("screenId")
   val screenContentHash: String,
@@ -83,22 +100,29 @@ data class VisibleStringsScreenLine(
    * lost rather than some.
    */
   val partialCapture: Boolean? = null,
-  /** Set when this capture said exactly what an earlier step already said. */
-  val repeatOfStepIndex: Int? = null,
+  /** The [captureId] of the earlier capture whose strings are identical to this one's in every
+   *  field — text, source, ref, bounds and visibility — and whose line holds them; this one's are
+   *  omitted. A reader copies them back verbatim, so anything less than equal would be wrong. */
+  val repeatOf: String? = null,
   val strings: List<ExtractedString> = emptyList(),
 )
 
 /**
- * Builds `visible-strings.ndjson` for a session out of logs already on disk.
+ * Writes a session's strings out as `visible-strings.ndjson`, for diffs and other tools that want
+ * one file rather than a session's logs.
  *
- * Reads, never captures. Every log that carries a screenshot also carries the view tree that
- * produced it, so this runs against finished sessions — including ones recorded long before this
- * file existed.
+ * An export, not the record: every screen-capture log already carries its strings, filled in as it
+ * was emitted (see `withVisibleStrings`). A log from before that field existed is read from its
+ * tree instead, so this still covers sessions recorded long before either existed.
  */
 object VisibleStringsLog {
 
   const val FILE_NAME: String = "visible-strings.ndjson"
-  const val FORMAT_VERSION: Int = 1
+  /**
+   * 2 keys screens by screenshot and writes `bounds` as corners; 1 keyed them by step number and
+   * wrote `[x, y, width, height]`. Both are four integers, which is why the version has to say.
+   */
+  const val FORMAT_VERSION: Int = 2
 
   private val IMAGE_EXTENSION = Regex("\\.(png|webp|jpe?g|gif)$", RegexOption.IGNORE_CASE)
 
@@ -111,6 +135,9 @@ object VisibleStringsLog {
   /**
    * Writes the file into the session's own directory and returns it, or null with no captures.
    *
+   * First saves a frame from the session's recording for each capture that has no screenshot, so
+   * its line can name one ([VisibleStringsScreenLine.frame]).
+   *
    * Reads the session exactly once. The header and the screen lines both need the full log set,
    * and that set — view hierarchies plus the cumulative LLM transcript — is the largest thing the
    * repo deserializes, so `getSessionInfoDirect` here would parse all of it a second time.
@@ -121,34 +148,55 @@ object VisibleStringsLog {
    */
   fun write(logsRepo: LogsRepo, sessionId: SessionId, collapseRepeats: Boolean = true): File? {
     val logs = logsRepo.getLogsForSession(sessionId)
+    val sessionDir = logsRepo.getSessionDir(sessionId)
+    val filled = CaptureVideoFrames.fill(sessionDir, logs)
+    // A capture no recording covers is the usual case for a run that recorded nothing; any other
+    // miss is a frame that should have been there, and this line is what says why it isn't.
+    if (filled.missed.values.any { it != CaptureVideoFrames.Miss.NOT_RECORDED }) {
+      val counts = filled.missed.values.groupingBy { it }.eachCount().entries.joinToString { "${it.key}=${it.value}" }
+      Console.log("[VisibleStringsLog] ${sessionId.value}: ${filled.missed.size} captures got no video frame ($counts)")
+    }
     val lines = render(
       sessionId = sessionId,
       sessionInfo = logsRepo.sessionInfoFrom(logs),
       logs = logs,
       collapseRepeats = collapseRepeats,
+      frames = filled.frames,
     ) ?: return null
-    return File(logsRepo.getSessionDir(sessionId), FILE_NAME).apply { writeText(lines) }
+    return File(sessionDir, FILE_NAME).apply { writeText(lines) }
   }
 
-  /** Returns the file's contents, or null when the session holds no readable capture. */
+  /**
+   * Returns the file's contents, or null when the session holds no readable capture.
+   *
+   * @param frames the frame file of each screenshot-less capture that has one, by capture id.
+   */
   fun render(
     sessionId: SessionId,
     sessionInfo: SessionInfo?,
     logs: List<TrailblazeLog>,
     collapseRepeats: Boolean = true,
+    frames: Map<String, String> = emptyMap(),
   ): String? {
-    val captures = logs.sortedBy { it.timestamp }.mapNotNull { it.toCapture() }
+    // One line per capture. A driver log and the LLM request made on the same screen can name
+    // the same image; they are one capture, and the first to name it speaks for it. A capture with
+    // no screenshot is named by the id it was stamped with, so it never merges with another.
+    val captures = logs.sortedBy { it.timestamp }
+      .mapNotNull { it.toCapture()?.takeIf { capture -> capture.captureId != null } }
+      .distinctBy { it.captureId }
     if (captures.isEmpty()) return null
 
-    val seenScreens = mutableMapOf<String, Int>()
-    val screenLines = captures.mapIndexed { stepIndex, capture ->
-      val strings = capture.extractStrings()
+    // Keyed on the strings themselves, not [screenContentHash]: a reader restores a repeat by
+    // copying the first capture's strings, so a scroll or a string going offscreen must not count.
+    val seenScreens = mutableMapOf<List<ExtractedString>, String>()
+    val screenLines = captures.map { capture ->
+      val strings = capture.strings
       val screenContentHash = screenContentHash(strings.orEmpty())
       VisibleStringsScreenLine(
-        stepIndex = stepIndex,
-        captureId = captureIdFrom(capture.screenshotFile),
-        captureUrl = capture.screenshotFile.takeIf { it.contains('/') },
-        logType = capture.logType,
+        captureId = capture.captureId!!,
+        screenshot = capture.screenshot,
+        captureUrl = capture.screenshotFile?.takeIf { it.contains('/') },
+        frame = if (capture.screenshot == null) frames[capture.captureId] else null,
         screenshotIsAnnotated = capture.annotated,
         timestamp = capture.timestamp.toString(),
         traceId = capture.traceId,
@@ -159,15 +207,15 @@ object VisibleStringsLog {
         // A capture with no tree lost all of it, which is the strongest form of this claim and
         // true on every platform, so it does not wait on the Android-only coverage assessment.
         partialCapture = if (strings == null) true else capture.partialCapture,
-        // `putIfAbsent`, so a repeat always names the FIRST step that carried these strings. With
-        // `put`, the third showing of a screen would point at the second — itself emitted with
-        // `strings` emptied below — and the pointer would dead-end on a blank line.
+        // `putIfAbsent`, so a repeat always names the FIRST capture that carried these strings.
+        // With `put`, the third showing of a screen would point at the second — itself emitted
+        // with `strings` emptied below — and the pointer would dead-end on a blank line.
         //
         // A hierarchy-less capture sits out entirely, neither claiming nor becoming a repeat: it
         // hashes to the empty-list id, so left in it would say two failed captures showed the
         // same screen, or that a failure repeated a screen that genuinely had no text.
-        repeatOfStepIndex = strings
-          ?.let { seenScreens.putIfAbsent(screenContentHash, stepIndex) }
+        repeatOf = strings
+          ?.let { seenScreens.putIfAbsent(it, capture.captureId!!) }
           .takeIf { collapseRepeats },
         strings = strings.orEmpty(),
       )
@@ -178,7 +226,7 @@ object VisibleStringsLog {
       screenLines.forEach { line ->
         // A repeat keeps its place in the sequence but not its payload; the step it points at
         // already holds the strings, and a trail re-reads the same screen after every action.
-        val emitted = if (line.repeatOfStepIndex == null) line else line.copy(strings = emptyList())
+        val emitted = if (line.repeatOf == null) line else line.copy(strings = emptyList())
         appendLine(JSON.encodeToString(emitted))
       }
     }
@@ -242,39 +290,34 @@ object VisibleStringsLog {
   }
 
   private class Capture(
-    val screenshotFile: String,
-    val tree: TrailblazeNode?,
-    val legacyTree: ViewHierarchyTreeNode?,
+    /** Null for a capture with no screenshot, which is then named by [stampedId]. */
+    val screenshotFile: String?,
+    /** The id the log was stamped with as it was emitted, which it gets only when it has no screenshot. */
+    val stampedId: String?,
+    /** Null when the capture carried no tree at all, which is not the same as a screen with no
+     *  text: iOS degrades to a hierarchy-less log when `describe-ui` fails, keeping the
+     *  screenshot, and a diff would otherwise report every string on it as deleted. */
+    val strings: List<ExtractedString>?,
     val deviceWidth: Int,
     val deviceHeight: Int,
-    val logType: String,
     val annotated: Boolean,
     val traceId: String?,
     val action: String?,
     val partialCapture: Boolean?,
     val timestamp: Instant,
   ) {
-    /**
-     * Null when the capture carried no tree at all, which is not the same as a screen with no
-     * text. iOS degrades to a hierarchy-less log when `describe-ui` fails, keeping the screenshot
-     * — so without the distinction a tooling failure files as an empty screen, and a diff then
-     * reports every string on it as deleted.
-     */
-    fun extractStrings(): List<ExtractedString>? = when {
-      tree != null -> VisibleStringExtractor.extract(tree, deviceWidth, deviceHeight)
-      legacyTree != null -> VisibleStringExtractor.extract(legacyTree)
-      else -> null
-    }
+    val screenshot: String? = screenshotFile?.let(::captureIdFrom)
+    /** Null when there is neither — a capture recorded before ids existed — which then sits out. */
+    val captureId: String? = screenshot ?: stampedId
   }
 
   private fun TrailblazeLog.toCapture(): Capture? = when (this) {
     is TrailblazeLog.AgentDriverLog -> Capture(
-      screenshotFile = screenshotFile ?: return null,
-      tree = trailblazeNodeTree,
-      legacyTree = viewHierarchy,
+      screenshotFile = screenshotFile?.takeIf { it.isNotBlank() },
+      stampedId = captureId,
+      strings = visibleStringsOrExtracted,
       deviceWidth = deviceWidth,
       deviceHeight = deviceHeight,
-      logType = "AgentDriverLog",
       annotated = false,
       traceId = traceId?.traceId,
       action = action.type.name,
@@ -284,11 +327,10 @@ object VisibleStringsLog {
 
     is TrailblazeLog.TrailblazeSnapshotLog -> Capture(
       screenshotFile = screenshotFile,
-      tree = trailblazeNodeTree,
-      legacyTree = viewHierarchy,
+      stampedId = null,
+      strings = visibleStringsOrExtracted,
       deviceWidth = deviceWidth,
       deviceHeight = deviceHeight,
-      logType = "TrailblazeSnapshotLog",
       annotated = false,
       traceId = traceId?.traceId,
       action = displayName ?: "snapshot",
@@ -297,15 +339,14 @@ object VisibleStringsLog {
     )
 
     is TrailblazeLog.TrailblazeLlmRequestLog -> Capture(
-      screenshotFile = screenshotFile ?: return null,
-      tree = trailblazeNodeTree,
-      legacyTree = viewHierarchy,
+      screenshotFile = screenshotFile?.takeIf { it.isNotBlank() },
+      stampedId = captureId,
+      strings = visibleStringsOrExtracted,
       deviceWidth = deviceWidth,
       deviceHeight = deviceHeight,
-      logType = "TrailblazeLlmRequestLog",
       // Absent means annotated: every screenshot on this log predating the flag was the
       // set-of-mark variant.
-      annotated = screenshotIsAnnotated ?: true,
+      annotated = !screenshotFile.isNullOrBlank() && (screenshotIsAnnotated ?: true),
       traceId = traceId.traceId,
       action = llmRequestLabel,
       // This log type carries no coverage assessment at all, so completeness is unknowable.

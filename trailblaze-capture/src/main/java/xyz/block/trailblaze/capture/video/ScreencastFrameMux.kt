@@ -39,6 +39,8 @@ internal object ScreencastFrameMux {
     output: File,
     sessionStartMs: Long,
     sessionEndMs: Long,
+    /** The calling recorder's container; decides the video filter the resample runs inside. */
+    format: RecordingFormat,
     /** Codec args from the calling recorder's [RecordingFormat] — the timing args are this object's. */
     encodeArgs: List<String>,
     ffmpegBinary: String,
@@ -66,7 +68,7 @@ internal object ScreencastFrameMux {
         // Resample the variable-rate image timeline to CFR so the container duration matches the
         // wall-clock window. Without this, the encoder stamps a default rate and the duration is
         // meaningless (frames ÷ 25), and the report's clip-time scaling would drift.
-        "-vf", "fps=$muxFps",
+      ) + format.videoFilterArgs("fps=$muxFps") + listOf(
         // Bound the encode to the window it claims to cover. The resample above has no way to
         // know how long the LAST frame lasts, so it reuses the gap before it and writes that much
         // extra — on a session ending quietly, nearly a second copy of the session. An output-side

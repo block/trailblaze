@@ -173,21 +173,6 @@ class McpSamplingClient(
   }
 
   /**
-   * Legacy method for backward compatibility.
-   * New code should use [requestTextCompletion] or [requestToolCall].
-   */
-  @Deprecated(
-    message = "Use requestTextCompletion() or requestToolCall() instead",
-    replaceWith = ReplaceWith("requestTextCompletion(systemPrompt, userMessage, maxTokens, screenshotBase64)"),
-  )
-  suspend fun requestCompletion(
-    systemPrompt: String,
-    userMessage: String,
-    maxTokens: Int = 1024,
-    screenshotBase64: String? = null,
-  ): SamplingResult = requestTextCompletion(systemPrompt, userMessage, maxTokens, screenshotBase64)
-
-  /**
    * Builds the messages list for a sampling request.
    */
   private fun buildMessages(
@@ -316,51 +301,6 @@ class McpSamplingClient(
       if (c == '}') { depth--; if (depth == 0) return text.substring(startIndex, i + 1) }
     }
     return null
-  }
-
-  /**
-   * Requests a completion with the current screen state included.
-   * Legacy method for backward compatibility.
-   */
-  @Deprecated(
-    message = "Use requestTextCompletion() or requestToolCall() with explicit tool definitions",
-    replaceWith = ReplaceWith("requestTextCompletion(systemPrompt, userMessage, maxTokens, screenshotBase64)"),
-  )
-  suspend fun requestCompletionWithScreenState(
-    objective: String,
-    screenState: ScreenStateForSampling? = null,
-  ): SamplingResult {
-    val systemPrompt = """
-      You are a mobile UI automation assistant. You can see the current screen state
-      and should determine the best action to accomplish the given objective.
-      
-      Available actions:
-      - tap(x, y) - Tap at specific coordinates
-      - swipe(startX, startY, endX, endY) - Swipe gesture
-      - type(text) - Enter text
-      - pressBack() - Press the back button
-      - complete() - Mark the objective as complete
-      - fail(reason) - Mark as failed with reason
-      
-      Respond with the single best action to take next.
-    """.trimIndent()
-
-    val userMessage = buildString {
-      appendLine("Objective: $objective")
-      appendLine()
-      if (screenState != null) {
-        appendLine("Current Screen State:")
-        appendLine(screenState.viewHierarchy)
-      } else {
-        appendLine("[No screen state available]")
-      }
-    }
-
-    return requestTextCompletion(
-      systemPrompt = systemPrompt,
-      userMessage = userMessage,
-      screenshotBase64 = screenState?.screenshotBase64,
-    )
   }
 }
 

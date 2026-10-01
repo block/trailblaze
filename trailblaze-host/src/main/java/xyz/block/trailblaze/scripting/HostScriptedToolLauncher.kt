@@ -70,6 +70,25 @@ import xyz.block.trailblaze.util.Console
 object HostScriptedToolLauncher {
 
   /**
+   * Drops the target's inline scripted tools that don't apply to this session's drivers, then splits
+   * the rest into (subprocess, in-process QuickJS) by runtime. Both runtimes share the one gate: a
+   * target's `tools:` list is not platform-scoped, so an in-process tool declaring
+   * `supportedPlatforms: [android]` would otherwise reach an iOS session's LLM tool list.
+   */
+  fun partitionSessionInlineTools(
+    tools: List<InlineScriptToolConfig>,
+    drivers: Collection<TrailblazeDriverType>,
+    preferHostAgent: Boolean,
+    logPrefix: String,
+  ): Pair<List<InlineScriptToolConfig>, List<InlineScriptToolConfig>> =
+    SubprocessToolRegistrar.applicableInlineTools(
+      tools = tools,
+      drivers = drivers,
+      preferHostAgent = preferHostAgent,
+      logPrefix = logPrefix,
+    ).partition { tool -> ScriptedToolRuntime.resolve(tool.runtime) == ScriptedToolRuntime.SUBPROCESS }
+
+  /**
    * @param includeSubprocess when `false`, the Node/Bun **subprocess** MCP path is skipped entirely
    *   — only the in-process (QuickJS) target-declared + catalog tools are registered. The daemon
    *   passes `true` (its historical behavior). The JUnit host test rule passes `false`: it has never
@@ -137,9 +156,13 @@ object HostScriptedToolLauncher {
       // (composes via client.callTool(...), no subprocess fork). A tool runs in-process unless its
       // descriptor explicitly sets `runtime: subprocess` — there is no extension heuristic.
       val targetToolConfigs = targetTestApp?.getInlineScriptTools().orEmpty()
-      val (nodeApiInlineTools, quickJsInlineTools) = targetToolConfigs.partition { tool ->
-        ScriptedToolRuntime.resolve(tool.runtime) == ScriptedToolRuntime.SUBPROCESS
-      }
+      val sessionDrivers = listOf(deviceInfo.trailblazeDriverType) + additionalDriverTypes
+      val (nodeApiInlineTools, quickJsInlineTools) = partitionSessionInlineTools(
+        tools = targetToolConfigs,
+        drivers = sessionDrivers,
+        preferHostAgent = config.preferHostAgent,
+        logPrefix = logPrefix,
+      )
       val targetInlineRegistrations = if (quickJsInlineTools.isNotEmpty()) {
         // Filter out tools an earlier pass already registered (idempotency) up front, so neither the
         // precompiled-bundle lookup nor the esbuild resolution runs for a tool already present.
@@ -182,6 +205,8 @@ object HostScriptedToolLauncher {
         sessionId = sessionId,
         sessionDir = sessionDir,
         toolNames = toolRepo.allCatalogScriptedToolNames,
+        drivers = sessionDrivers,
+        preferHostAgent = config.preferHostAgent,
         skipNames = targetToolConfigs.map { ToolName(it.name) }.toSet(),
         classLoader = classLoader,
         logPrefix = logPrefix,
@@ -194,19 +219,9 @@ object HostScriptedToolLauncher {
       // inline registrations succeeded, the inline regs are stranded in the toolRepo with no cleanup
       // handle — catch + dispose them before rethrowing.
       //
-      // Gated on the session's driver/platform FIRST: a tool this session would discard at
-      // `tools/list` must not cost a fork and a `script:` resolution to discover that. See
-      // [SubprocessToolRegistrar.applicableInlineTools].
-      val spawnableInlineTools = if (includeSubprocess) {
-        SubprocessToolRegistrar.applicableInlineTools(
-          tools = nodeApiInlineTools,
-          drivers = listOf(deviceInfo.trailblazeDriverType) + additionalDriverTypes,
-          preferHostAgent = config.preferHostAgent,
-          logPrefix = logPrefix,
-        )
-      } else {
-        emptyList()
-      }
+      // Already gated on the session's driver/platform by [partitionSessionInlineTools]: a tool this
+      // session would discard at `tools/list` must not cost a fork and a `script:` resolution.
+      val spawnableInlineTools = if (includeSubprocess) nodeApiInlineTools else emptyList()
       val mcpServers = if (spawnableInlineTools.isNotEmpty()) {
         InlineScriptToolServerSynthesizer.synthesize(
           tools = spawnableInlineTools,

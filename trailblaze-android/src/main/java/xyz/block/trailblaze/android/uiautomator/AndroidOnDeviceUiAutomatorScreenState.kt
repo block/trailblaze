@@ -216,7 +216,7 @@ class AndroidOnDeviceUiAutomatorScreenState(
   /** Cached compact elements — shared between text representation and annotation elements. */
   private val compactElements: CompactScreenElements? by lazy {
     val tree = _trailblazeNodeTree ?: return@lazy null
-    val result = CompactScreenElements.buildForAndroid(tree, screenHeight = deviceHeight)
+    val result = CompactScreenElements.buildForAndroid(tree, screenHeight = deviceHeight, screenWidth = deviceWidth)
     _trailblazeNodeTree = result.applyRefsToTree(tree)
     result
   }

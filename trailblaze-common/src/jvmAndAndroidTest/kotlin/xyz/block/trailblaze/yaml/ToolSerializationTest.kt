@@ -1125,6 +1125,27 @@ trail:
   }
 
   @Test
+  fun deserializeInputTextWithSelector() {
+    val yaml = """
+config: {}
+trail:
+  - step: recorded
+    recording:
+      android:
+        - inputText:
+            text: 4111 1111 1111 1111
+            selector:
+              androidAccessibility:
+                hintTextRegex: Card number
+    """.trimIndent()
+
+    val tool = decodeRecordedTools(yaml).single().trailblazeTool as InputTextTrailblazeTool
+    assertThat(tool.text).isEqualTo("4111 1111 1111 1111")
+    val match = tool.selector!!.driverMatch as DriverNodeMatch.AndroidAccessibility
+    assertThat(match.hintTextRegex).isEqualTo("Card number")
+  }
+
+  @Test
   fun deserializeAssertMatchCountWithNodeSelector() {
     val yaml = """
 config: {}

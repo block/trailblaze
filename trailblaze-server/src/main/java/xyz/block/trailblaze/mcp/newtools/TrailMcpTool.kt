@@ -111,7 +111,9 @@ class TrailMcpTool(
     page: Int? = null,
     @LLMDescription(
       "Which multi-device configuration to bind (for RUN), e.g. \"pos-pair\". Only needed when " +
-        "the trail declares more than one — a trail declaring exactly one binds it automatically.",
+        "the trail declares more than one — a trail declaring exactly one binds it automatically, " +
+        "unless it also declares single-device entries and this session has no companion devices " +
+        "bound, in which case it runs single-device.",
     )
     deviceConfiguration: String? = null,
   ): String {
@@ -373,6 +375,7 @@ class TrailMcpTool(
       trailFile,
       deviceClassifiers = deviceClassifiersProvider(sessionContext?.associatedDeviceId),
       requestedDeviceConfiguration = deviceConfiguration,
+      bindsCompanionDevices = bindsCompanionDevices(sessionContext),
     )
     if (!loadResult.success) {
       return TrailRunResult(

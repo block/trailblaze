@@ -70,7 +70,6 @@ import xyz.block.trailblaze.logs.server.endpoints.CliRunRequest
 import xyz.block.trailblaze.logs.server.endpoints.CliRunResponse
 import xyz.block.trailblaze.logs.server.endpoints.CliStatusResponse
 import xyz.block.trailblaze.logs.server.endpoints.ScriptingCallbackEndpoint
-import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.mcp.DeviceBusyException
 import xyz.block.trailblaze.mcp.DeviceClaimRegistry
 import xyz.block.trailblaze.mcp.HostLocalToolDispatchingBridge
@@ -175,7 +174,6 @@ data class McpSessionSnapshot(
   val mode: TrailblazeMcpMode,
   val associatedDeviceId: TrailblazeDeviceId?,
   val clientName: String?,
-  val agentImplementation: AgentImplementation,
   val isRecording: Boolean,
   val currentTrailName: String?,
   val createdAtMillis: Long?,
@@ -246,14 +244,6 @@ class TrailblazeMcpServer(
   val llmModelProvider: (() -> TrailblazeLlmModel?)? = null,
   /** Provider for all supported LLM model lists (for the trailblaze://llm/providers resource). */
   val llmModelListsProvider: () -> Set<TrailblazeLlmModelList>,
-  /**
-   * Provider for the `saveAnnotatedScreenshots` config flag. The annotated
-   * screenshot is always sent to the LLM regardless of this flag — only the
-   * variant persisted to logs changes. Defaults to `{ true }` so the OSS
-   * distro keeps the current "save what the model saw" behavior unless a host
-   * wires up its settings repo.
-   */
-  val saveAnnotatedScreenshotsProvider: () -> Boolean = { true },
   /**
    * Resolves the bound device's classifiers when the `trail` tool lowers a unified trail's
    * per-classifier recordings. The default knows only the device's platform, which cannot resolve a
@@ -445,7 +435,6 @@ class TrailblazeMcpServer(
           mode = ctx.mode,
           associatedDeviceId = ctx.associatedDeviceId,
           clientName = ctx.mcpClientName,
-          agentImplementation = ctx.agentImplementation,
           isRecording = ctx.isRecordingActive(),
           currentTrailName = ctx.getCurrentTrailName(),
           createdAtMillis = sessionCreationTimes[id],
@@ -881,6 +870,8 @@ class TrailblazeMcpServer(
         sessionDir = sessionDir,
         toolNames = toolRepo.allCatalogScriptedToolNames +
           (customScriptedToolNames - scope.excluded.scriptedToolNames),
+        drivers = listOf(driverType),
+        preferHostAgent = TrailblazeConfig.DEFAULT.preferHostAgent,
         skipNames = inlineTools.map { ToolName(it.name) }.toSet(),
         logPrefix = "[TrailblazeMcpServer]",
         // Install a real (unrestricted) `fetch` so scripted tools can make HTTP calls without
@@ -1226,9 +1217,6 @@ class TrailblazeMcpServer(
   private fun finishSessionClosing(sessionId: String) {
     closingMcpSessionIds -= sessionId
   }
-
-  fun getSessionContext(mcpSessionId: McpSessionId): TrailblazeMcpSessionContext? =
-    sessionContexts[mcpSessionId.sessionId]
 
   /**
    * Test seam: directly install a fully-formed session context under
@@ -2729,7 +2717,6 @@ class TrailblazeMcpServer(
           llmModel = llmModel,
           logsRepo = logsRepo,
           sessionIdProvider = { mcpBridge.getActiveSessionId() },
-          saveAnnotatedScreenshotsProvider = saveAnnotatedScreenshotsProvider,
         )
         InnerLoopScreenAnalyzer(
           samplingSource = innerSamplingSource,
@@ -3271,19 +3258,6 @@ class TrailblazeMcpServer(
     }
     done.join()
   }
-
-  /**
-   * @deprecated Use [startStreamableHttpMcpServer] instead. SSE transport has been deprecated by LLM providers.
-   */
-  @Deprecated(
-    message = "SSE transport has been deprecated. Use startStreamableHttpMcpServer() instead.",
-    replaceWith = ReplaceWith("startStreamableHttpMcpServer(port, wait)"),
-  )
-  fun startSseMcpServer(
-    port: Int = TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTP_PORT,
-    httpsPort: Int = TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTPS_PORT,
-    wait: Boolean = false,
-  ): EmbeddedServer<*, *> = startStreamableHttpMcpServer(port, httpsPort, wait)
 
   /**
    * Converts a string to a JsonElement for log storage.

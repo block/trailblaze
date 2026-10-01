@@ -63,7 +63,9 @@ data class QuickJsToolMeta(
     if (supportedPlatforms.isNotEmpty() && driver.platform.name !in supportedPlatforms) {
       return false
     }
-    if (requiresHost && !preferHostAgent) {
+    // `preferHostAgent` only chooses where an on-device driver's agent runs. A driver whose tools
+    // already execute on the host (iOS, web) runs a host-only tool whatever the preference says.
+    if (requiresHost && !preferHostAgent && driver.executesToolsOnDevice) {
       return false
     }
     return true

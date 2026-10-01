@@ -12,6 +12,12 @@ import ai.koog.prompt.message.ResponseMetaInfo
 import ai.koog.utils.time.KoogClock
 import kotlinx.coroutines.test.runTest
 import org.junit.Test
+import java.io.File
+import xyz.block.trailblaze.agent.ScreenContext
+import xyz.block.trailblaze.api.ViewHierarchyTreeNode
+import xyz.block.trailblaze.logs.client.TrailblazeLog
+import xyz.block.trailblaze.logs.model.SessionId
+import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.llm.TrailblazeLlmProvider
 import xyz.block.trailblaze.mcp.TrailblazeMcpSessionContext
@@ -125,6 +131,46 @@ class SamplingSourceTest {
 
     assertIs<SamplingResult.Error>(result)
     assertTrue(result.message.contains("API Error"))
+  }
+
+  @Test
+  fun `LocalLlmSamplingSource logs the raw screenshot while the LLM gets the annotated one`() = runTest {
+    // A log is read as what the screen showed (reports, string crops, waypoint examples); the
+    // set-of-mark boxes the model needs would cover the UI there.
+    val png = byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A)
+    val raw = png + 1
+    val annotated = png + 2
+    val logsDir = kotlin.io.path.createTempDirectory("sampling-raw-shot").toFile()
+    try {
+      val sessionId = SessionId("raw_shot_session")
+      val repo = LogsRepo(logsDir = logsDir, watchFileSystem = false)
+      val source = LocalLlmSamplingSource(
+        llmClient = MockLlmClient(),
+        llmModel = createMockLlmModel(),
+        logsRepo = repo,
+        sessionIdProvider = { sessionId },
+      )
+
+      source.sampleText(
+        systemPrompt = "system",
+        userMessage = "user",
+        screenshotBytes = annotated,
+        screenContext = ScreenContext(
+          viewHierarchy = ViewHierarchyTreeNode(nodeId = 1, className = "FrameLayout"),
+          deviceWidth = 1080,
+          deviceHeight = 1920,
+          rawScreenshotBytes = raw,
+        ),
+      )
+
+      val request = repo.getLogsForSession(sessionId)
+        .filterIsInstance<TrailblazeLog.TrailblazeLlmRequestLog>().single()
+      val saved = File(repo.getSessionDir(sessionId), assertNotNull(request.screenshotFile))
+      assertTrue(saved.readBytes().contentEquals(raw), "the logged screenshot must be the raw one")
+      assertEquals(false, request.screenshotIsAnnotated)
+    } finally {
+      logsDir.deleteRecursively()
+    }
   }
 
   // endregion

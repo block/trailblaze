@@ -150,17 +150,6 @@ data class ToolResultSummary(
     )
 
     /**
-     * Creates a result for configuration changes.
-     */
-    fun configChange(
-      setting: String,
-      newValue: String,
-    ) = ToolResultSummary(
-      success = true,
-      action = "Set $setting to $newValue",
-    )
-
-    /**
      * Wraps an existing string result in the standard format.
      * Use this for backward compatibility with existing tool implementations.
      */
@@ -188,38 +177,3 @@ data class ToolResultSummary(
  */
 fun String.toToolResult(success: Boolean = true): ToolResultSummary =
   ToolResultSummary.fromLegacy(this, success)
-
-/**
- * Helper object for building tool results with common patterns.
- */
-object ToolResults {
-  fun ok(message: String) = ToolResultSummary.success(message)
-  fun fail(message: String, reason: String) = ToolResultSummary.failure(message, reason)
-
-  /**
-   * For device not connected errors.
-   */
-  fun noDevice() = ToolResultSummary.failure(
-    action = "No device connected",
-    reason = "Connect a device first using connectToDevice()",
-    nextHint = "Call listConnectedDevices() to see available devices",
-  )
-
-  /**
-   * For element not found errors.
-   */
-  fun elementNotFound(selector: String) = ToolResultSummary.failure(
-    action = "Element not found: $selector",
-    reason = "The specified element is not visible on screen",
-    nextHint = "Try scrolling or navigating to the correct screen",
-  )
-
-  /**
-   * For timeout errors.
-   */
-  fun timeout(operation: String) = ToolResultSummary.failure(
-    action = "Timeout: $operation",
-    reason = "Operation took too long to complete",
-    nextHint = "Check if the app is responsive",
-  )
-}

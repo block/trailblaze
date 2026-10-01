@@ -396,11 +396,6 @@ public abstract interface class xyz/block/trailblaze/agent/ProgressEventListener
 	public abstract fun onProgressEvent (Lxyz/block/trailblaze/agent/TrailblazeProgressEvent;)V
 }
 
-public final class xyz/block/trailblaze/agent/ProgressReportingKt {
-	public static final fun executionStatusBuilder-uYmklxk (Ljava/lang/String;Ljava/lang/String;Lxyz/block/trailblaze/mcp/AgentImplementation;Lxyz/block/trailblaze/devices/TrailblazeDeviceId;)Lxyz/block/trailblaze/agent/ExecutionStatusBuilder;
-	public static synthetic fun executionStatusBuilder-uYmklxk$default (Ljava/lang/String;Ljava/lang/String;Lxyz/block/trailblaze/mcp/AgentImplementation;Lxyz/block/trailblaze/devices/TrailblazeDeviceId;ILjava/lang/Object;)Lxyz/block/trailblaze/agent/ExecutionStatusBuilder;
-}
-
 public final class xyz/block/trailblaze/agent/RecommendationContext {
 	public static final field Companion Lxyz/block/trailblaze/agent/RecommendationContext$Companion;
 	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;IZZ)V
@@ -440,82 +435,6 @@ public final synthetic class xyz/block/trailblaze/agent/RecommendationContext$$s
 }
 
 public final class xyz/block/trailblaze/agent/RecommendationContext$Companion {
-	public final fun serializer ()Lkotlinx/serialization/KSerializer;
-}
-
-public final class xyz/block/trailblaze/agent/RecordedAction {
-	public static final field Companion Lxyz/block/trailblaze/agent/RecordedAction$Companion;
-	public fun <init> (Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lxyz/block/trailblaze/agent/Confidence;Ljava/lang/Long;ZLjava/lang/String;)V
-	public synthetic fun <init> (Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lxyz/block/trailblaze/agent/Confidence;Ljava/lang/Long;ZLjava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
-	public final fun component1 ()Ljava/lang/String;
-	public final fun component2 ()Lkotlinx/serialization/json/JsonObject;
-	public final fun component3 ()Ljava/lang/String;
-	public final fun component4 ()Ljava/lang/String;
-	public final fun component5 ()Ljava/lang/String;
-	public final fun component6 ()Lxyz/block/trailblaze/agent/Confidence;
-	public final fun component7 ()Ljava/lang/Long;
-	public final fun component8 ()Z
-	public final fun component9 ()Ljava/lang/String;
-	public final fun copy (Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lxyz/block/trailblaze/agent/Confidence;Ljava/lang/Long;ZLjava/lang/String;)Lxyz/block/trailblaze/agent/RecordedAction;
-	public static synthetic fun copy$default (Lxyz/block/trailblaze/agent/RecordedAction;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lxyz/block/trailblaze/agent/Confidence;Ljava/lang/Long;ZLjava/lang/String;ILjava/lang/Object;)Lxyz/block/trailblaze/agent/RecordedAction;
-	public fun equals (Ljava/lang/Object;)Z
-	public final fun getConfidence ()Lxyz/block/trailblaze/agent/Confidence;
-	public final fun getDurationMs ()Ljava/lang/Long;
-	public final fun getErrorMessage ()Ljava/lang/String;
-	public final fun getReasoning ()Ljava/lang/String;
-	public final fun getScreenSummaryAfter ()Ljava/lang/String;
-	public final fun getScreenSummaryBefore ()Ljava/lang/String;
-	public final fun getSuccess ()Z
-	public final fun getToolArgs ()Lkotlinx/serialization/json/JsonObject;
-	public final fun getToolName ()Ljava/lang/String;
-	public fun hashCode ()I
-	public fun toString ()Ljava/lang/String;
-}
-
-public final synthetic class xyz/block/trailblaze/agent/RecordedAction$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
-	public static final field INSTANCE Lxyz/block/trailblaze/agent/RecordedAction$$serializer;
-	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
-	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
-	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lxyz/block/trailblaze/agent/RecordedAction;
-	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
-	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
-	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lxyz/block/trailblaze/agent/RecordedAction;)V
-	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
-}
-
-public final class xyz/block/trailblaze/agent/RecordedAction$Companion {
-	public final fun serializer ()Lkotlinx/serialization/KSerializer;
-}
-
-public final class xyz/block/trailblaze/agent/RecordingUsageStats {
-	public static final field Companion Lxyz/block/trailblaze/agent/RecordingUsageStats$Companion;
-	public fun <init> (III)V
-	public final fun component1 ()I
-	public final fun component2 ()I
-	public final fun component3 ()I
-	public final fun copy (III)Lxyz/block/trailblaze/agent/RecordingUsageStats;
-	public static synthetic fun copy$default (Lxyz/block/trailblaze/agent/RecordingUsageStats;IIIILjava/lang/Object;)Lxyz/block/trailblaze/agent/RecordingUsageStats;
-	public fun equals (Ljava/lang/Object;)Z
-	public final fun getAiSteps ()I
-	public final fun getPendingSteps ()I
-	public final fun getRecordingSteps ()I
-	public fun hashCode ()I
-	public final fun isZeroLlmCost ()Z
-	public fun toString ()Ljava/lang/String;
-}
-
-public final synthetic class xyz/block/trailblaze/agent/RecordingUsageStats$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
-	public static final field INSTANCE Lxyz/block/trailblaze/agent/RecordingUsageStats$$serializer;
-	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
-	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
-	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lxyz/block/trailblaze/agent/RecordingUsageStats;
-	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
-	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
-	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lxyz/block/trailblaze/agent/RecordingUsageStats;)V
-	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
-}
-
-public final class xyz/block/trailblaze/agent/RecordingUsageStats$Companion {
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
 }
 
@@ -982,8 +901,10 @@ public final class xyz/block/trailblaze/agent/SamplingResult$ToolCall$Companion 
 
 public final class xyz/block/trailblaze/agent/ScreenAnalysis {
 	public static final field Companion Lxyz/block/trailblaze/agent/ScreenAnalysis$Companion;
-	public fun <init> (Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/util/List;Ljava/util/List;Lxyz/block/trailblaze/agent/Confidence;ZZLjava/lang/String;Ljava/lang/String;Lxyz/block/trailblaze/agent/ExceptionalScreenState;FLxyz/block/trailblaze/agent/RecoveryAction;)V
+	public synthetic fun <init> (Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/util/List;Ljava/util/List;Lxyz/block/trailblaze/agent/Confidence;ZZLjava/lang/String;Ljava/lang/String;Lxyz/block/trailblaze/agent/ExceptionalScreenState;FLxyz/block/trailblaze/agent/RecoveryAction;)V
 	public synthetic fun <init> (Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/util/List;Ljava/util/List;Lxyz/block/trailblaze/agent/Confidence;ZZLjava/lang/String;Ljava/lang/String;Lxyz/block/trailblaze/agent/ExceptionalScreenState;FLxyz/block/trailblaze/agent/RecoveryAction;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun <init> (Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/util/List;Ljava/util/List;Lxyz/block/trailblaze/agent/Confidence;ZZLjava/lang/String;Ljava/lang/String;Lxyz/block/trailblaze/agent/ExceptionalScreenState;FLxyz/block/trailblaze/agent/RecoveryAction;Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/util/List;Ljava/util/List;Lxyz/block/trailblaze/agent/Confidence;ZZLjava/lang/String;Ljava/lang/String;Lxyz/block/trailblaze/agent/ExceptionalScreenState;FLxyz/block/trailblaze/agent/RecoveryAction;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun component1 ()Ljava/lang/String;
 	public final fun component10 ()Z
 	public final fun component11 ()Ljava/lang/String;
@@ -991,6 +912,7 @@ public final class xyz/block/trailblaze/agent/ScreenAnalysis {
 	public final fun component13 ()Lxyz/block/trailblaze/agent/ExceptionalScreenState;
 	public final fun component14 ()F
 	public final fun component15 ()Lxyz/block/trailblaze/agent/RecoveryAction;
+	public final fun component16 ()Ljava/lang/String;
 	public final fun component2 ()Lkotlinx/serialization/json/JsonObject;
 	public final fun component3 ()Ljava/lang/String;
 	public final fun component4 ()Ljava/lang/String;
@@ -999,13 +921,16 @@ public final class xyz/block/trailblaze/agent/ScreenAnalysis {
 	public final fun component7 ()Ljava/util/List;
 	public final fun component8 ()Lxyz/block/trailblaze/agent/Confidence;
 	public final fun component9 ()Z
-	public final fun copy (Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/util/List;Ljava/util/List;Lxyz/block/trailblaze/agent/Confidence;ZZLjava/lang/String;Ljava/lang/String;Lxyz/block/trailblaze/agent/ExceptionalScreenState;FLxyz/block/trailblaze/agent/RecoveryAction;)Lxyz/block/trailblaze/agent/ScreenAnalysis;
+	public final synthetic fun copy (Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/util/List;Ljava/util/List;Lxyz/block/trailblaze/agent/Confidence;ZZLjava/lang/String;Ljava/lang/String;Lxyz/block/trailblaze/agent/ExceptionalScreenState;FLxyz/block/trailblaze/agent/RecoveryAction;)Lxyz/block/trailblaze/agent/ScreenAnalysis;
+	public final fun copy (Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/util/List;Ljava/util/List;Lxyz/block/trailblaze/agent/Confidence;ZZLjava/lang/String;Ljava/lang/String;Lxyz/block/trailblaze/agent/ExceptionalScreenState;FLxyz/block/trailblaze/agent/RecoveryAction;Ljava/lang/String;)Lxyz/block/trailblaze/agent/ScreenAnalysis;
 	public static synthetic fun copy$default (Lxyz/block/trailblaze/agent/ScreenAnalysis;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/util/List;Ljava/util/List;Lxyz/block/trailblaze/agent/Confidence;ZZLjava/lang/String;Ljava/lang/String;Lxyz/block/trailblaze/agent/ExceptionalScreenState;FLxyz/block/trailblaze/agent/RecoveryAction;ILjava/lang/Object;)Lxyz/block/trailblaze/agent/ScreenAnalysis;
+	public static synthetic fun copy$default (Lxyz/block/trailblaze/agent/ScreenAnalysis;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/util/List;Ljava/util/List;Lxyz/block/trailblaze/agent/Confidence;ZZLjava/lang/String;Ljava/lang/String;Lxyz/block/trailblaze/agent/ExceptionalScreenState;FLxyz/block/trailblaze/agent/RecoveryAction;Ljava/lang/String;ILjava/lang/Object;)Lxyz/block/trailblaze/agent/ScreenAnalysis;
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getAlternativeApproaches ()Ljava/util/List;
 	public final fun getAnswer ()Ljava/lang/String;
 	public final fun getConfidence ()Lxyz/block/trailblaze/agent/Confidence;
 	public final fun getDetectionConfidence ()F
+	public final fun getLlmError ()Ljava/lang/String;
 	public final fun getObjectiveAppearsAchieved ()Z
 	public final fun getObjectiveAppearsImpossible ()Z
 	public final fun getPotentialBlockers ()Ljava/util/List;
@@ -1127,146 +1052,6 @@ public final synthetic class xyz/block/trailblaze/agent/ToolCallAnalysisResponse
 public final class xyz/block/trailblaze/agent/ToolCallAnalysisResponse$Companion {
 	public final fun fromToolCallArguments (Lkotlinx/serialization/json/JsonObject;)Lxyz/block/trailblaze/agent/ToolCallAnalysisResponse;
 	public final fun getFieldNames ()Ljava/util/Set;
-	public final fun serializer ()Lkotlinx/serialization/KSerializer;
-}
-
-public final class xyz/block/trailblaze/agent/TrailConfig {
-	public static final field Companion Lxyz/block/trailblaze/agent/TrailConfig$Companion;
-	public fun <init> ()V
-	public fun <init> (Lxyz/block/trailblaze/agent/TrailExecutionMode;Lxyz/block/trailblaze/llm/TrailblazeLlmModel;IJ)V
-	public synthetic fun <init> (Lxyz/block/trailblaze/agent/TrailExecutionMode;Lxyz/block/trailblaze/llm/TrailblazeLlmModel;IJILkotlin/jvm/internal/DefaultConstructorMarker;)V
-	public final fun component1 ()Lxyz/block/trailblaze/agent/TrailExecutionMode;
-	public final fun component2 ()Lxyz/block/trailblaze/llm/TrailblazeLlmModel;
-	public final fun component3 ()I
-	public final fun component4 ()J
-	public final fun copy (Lxyz/block/trailblaze/agent/TrailExecutionMode;Lxyz/block/trailblaze/llm/TrailblazeLlmModel;IJ)Lxyz/block/trailblaze/agent/TrailConfig;
-	public static synthetic fun copy$default (Lxyz/block/trailblaze/agent/TrailConfig;Lxyz/block/trailblaze/agent/TrailExecutionMode;Lxyz/block/trailblaze/llm/TrailblazeLlmModel;IJILjava/lang/Object;)Lxyz/block/trailblaze/agent/TrailConfig;
-	public fun equals (Ljava/lang/Object;)Z
-	public final fun getFallbackModel ()Lxyz/block/trailblaze/llm/TrailblazeLlmModel;
-	public final fun getMaxRetries ()I
-	public final fun getMode ()Lxyz/block/trailblaze/agent/TrailExecutionMode;
-	public final fun getStepTimeoutMs ()J
-	public fun hashCode ()I
-	public fun toString ()Ljava/lang/String;
-}
-
-public final synthetic class xyz/block/trailblaze/agent/TrailConfig$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
-	public static final field INSTANCE Lxyz/block/trailblaze/agent/TrailConfig$$serializer;
-	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
-	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
-	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lxyz/block/trailblaze/agent/TrailConfig;
-	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
-	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
-	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lxyz/block/trailblaze/agent/TrailConfig;)V
-	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
-}
-
-public final class xyz/block/trailblaze/agent/TrailConfig$Companion {
-	public final fun getAI_ONLY ()Lxyz/block/trailblaze/agent/TrailConfig;
-	public final fun getCI_DETERMINISTIC ()Lxyz/block/trailblaze/agent/TrailConfig;
-	public final fun getDEFAULT ()Lxyz/block/trailblaze/agent/TrailConfig;
-	public final fun getDETERMINISTIC ()Lxyz/block/trailblaze/agent/TrailConfig;
-	public final fun getRECORDING_WITH_AI_RETRIES ()Lxyz/block/trailblaze/agent/TrailConfig;
-	public final fun serializer ()Lkotlinx/serialization/KSerializer;
-}
-
-public final class xyz/block/trailblaze/agent/TrailExecutionMode : java/lang/Enum {
-	public static final field AI_ONLY Lxyz/block/trailblaze/agent/TrailExecutionMode;
-	public static final field Companion Lxyz/block/trailblaze/agent/TrailExecutionMode$Companion;
-	public static final field DETERMINISTIC Lxyz/block/trailblaze/agent/TrailExecutionMode;
-	public static final field HYBRID Lxyz/block/trailblaze/agent/TrailExecutionMode;
-	public static final field RECORDING_WITH_FALLBACK Lxyz/block/trailblaze/agent/TrailExecutionMode;
-	public static fun getEntries ()Lkotlin/enums/EnumEntries;
-	public static fun valueOf (Ljava/lang/String;)Lxyz/block/trailblaze/agent/TrailExecutionMode;
-	public static fun values ()[Lxyz/block/trailblaze/agent/TrailExecutionMode;
-}
-
-public final class xyz/block/trailblaze/agent/TrailExecutionMode$Companion {
-	public final fun serializer ()Lkotlinx/serialization/KSerializer;
-}
-
-public final class xyz/block/trailblaze/agent/TrailResult {
-	public static final field Companion Lxyz/block/trailblaze/agent/TrailResult$Companion;
-	public fun <init> (ZLxyz/block/trailblaze/agent/TrailState;JLjava/util/Map;Ljava/lang/String;Lxyz/block/trailblaze/devices/TrailblazeDeviceId;)V
-	public synthetic fun <init> (ZLxyz/block/trailblaze/agent/TrailState;JLjava/util/Map;Ljava/lang/String;Lxyz/block/trailblaze/devices/TrailblazeDeviceId;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
-	public final fun component1 ()Z
-	public final fun component2 ()Lxyz/block/trailblaze/agent/TrailState;
-	public final fun component3 ()J
-	public final fun component4 ()Ljava/util/Map;
-	public final fun component5 ()Ljava/lang/String;
-	public final fun component6 ()Lxyz/block/trailblaze/devices/TrailblazeDeviceId;
-	public final fun copy (ZLxyz/block/trailblaze/agent/TrailState;JLjava/util/Map;Ljava/lang/String;Lxyz/block/trailblaze/devices/TrailblazeDeviceId;)Lxyz/block/trailblaze/agent/TrailResult;
-	public static synthetic fun copy$default (Lxyz/block/trailblaze/agent/TrailResult;ZLxyz/block/trailblaze/agent/TrailState;JLjava/util/Map;Ljava/lang/String;Lxyz/block/trailblaze/devices/TrailblazeDeviceId;ILjava/lang/Object;)Lxyz/block/trailblaze/agent/TrailResult;
-	public fun equals (Ljava/lang/Object;)Z
-	public final fun getDurationMs ()J
-	public final fun getErrorMessage ()Ljava/lang/String;
-	public final fun getGeneratedRecordings ()Ljava/util/Map;
-	public final fun getHasGeneratedRecordings ()Z
-	public final fun getState ()Lxyz/block/trailblaze/agent/TrailState;
-	public final fun getSuccess ()Z
-	public final fun getTargetDeviceId ()Lxyz/block/trailblaze/devices/TrailblazeDeviceId;
-	public fun hashCode ()I
-	public fun toString ()Ljava/lang/String;
-}
-
-public final synthetic class xyz/block/trailblaze/agent/TrailResult$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
-	public static final field INSTANCE Lxyz/block/trailblaze/agent/TrailResult$$serializer;
-	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
-	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
-	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lxyz/block/trailblaze/agent/TrailResult;
-	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
-	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
-	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lxyz/block/trailblaze/agent/TrailResult;)V
-	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
-}
-
-public final class xyz/block/trailblaze/agent/TrailResult$Companion {
-	public final fun serializer ()Lkotlinx/serialization/KSerializer;
-}
-
-public final class xyz/block/trailblaze/agent/TrailState {
-	public static final field Companion Lxyz/block/trailblaze/agent/TrailState$Companion;
-	public fun <init> (Ljava/util/List;ILjava/util/Set;ZLjava/lang/String;Ljava/util/Map;ILxyz/block/trailblaze/devices/TrailblazeDeviceId;)V
-	public synthetic fun <init> (Ljava/util/List;ILjava/util/Set;ZLjava/lang/String;Ljava/util/Map;ILxyz/block/trailblaze/devices/TrailblazeDeviceId;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
-	public final fun component1 ()Ljava/util/List;
-	public final fun component2 ()I
-	public final fun component3 ()Ljava/util/Set;
-	public final fun component4 ()Z
-	public final fun component5 ()Ljava/lang/String;
-	public final fun component6 ()Ljava/util/Map;
-	public final fun component7 ()I
-	public final fun component8 ()Lxyz/block/trailblaze/devices/TrailblazeDeviceId;
-	public final fun copy (Ljava/util/List;ILjava/util/Set;ZLjava/lang/String;Ljava/util/Map;ILxyz/block/trailblaze/devices/TrailblazeDeviceId;)Lxyz/block/trailblaze/agent/TrailState;
-	public static synthetic fun copy$default (Lxyz/block/trailblaze/agent/TrailState;Ljava/util/List;ILjava/util/Set;ZLjava/lang/String;Ljava/util/Map;ILxyz/block/trailblaze/devices/TrailblazeDeviceId;ILjava/lang/Object;)Lxyz/block/trailblaze/agent/TrailState;
-	public fun equals (Ljava/lang/Object;)Z
-	public final fun getCompletedSteps ()Ljava/util/Set;
-	public final fun getCurrentStepIndex ()I
-	public final fun getCurrentStepPrompt ()Ljava/lang/String;
-	public final fun getFailed ()Z
-	public final fun getFailureReason ()Ljava/lang/String;
-	public final fun getProgress ()F
-	public final fun getRecordingUsageStats ()Lxyz/block/trailblaze/agent/RecordingUsageStats;
-	public final fun getRetryCount ()I
-	public final fun getSteps ()Ljava/util/List;
-	public final fun getTargetDeviceId ()Lxyz/block/trailblaze/devices/TrailblazeDeviceId;
-	public final fun getUsedRecordings ()Ljava/util/Map;
-	public fun hashCode ()I
-	public final fun isComplete ()Z
-	public fun toString ()Ljava/lang/String;
-}
-
-public final synthetic class xyz/block/trailblaze/agent/TrailState$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
-	public static final field INSTANCE Lxyz/block/trailblaze/agent/TrailState$$serializer;
-	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
-	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
-	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lxyz/block/trailblaze/agent/TrailState;
-	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
-	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
-	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lxyz/block/trailblaze/agent/TrailState;)V
-	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
-}
-
-public final class xyz/block/trailblaze/agent/TrailState$Companion {
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
 }
 
@@ -1980,29 +1765,6 @@ public final class xyz/block/trailblaze/agent/model/AgentTaskStatusData$Companio
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
 }
 
-public final class xyz/block/trailblaze/agent/model/AssertionTargetExtractor {
-	public static final field INSTANCE Lxyz/block/trailblaze/agent/model/AssertionTargetExtractor;
-	public final fun extract (Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;)Lxyz/block/trailblaze/agent/model/NormalizedAssertionTarget;
-}
-
-public final class xyz/block/trailblaze/agent/model/NormalizedAssertionTarget {
-	public static final field Companion Lxyz/block/trailblaze/agent/model/NormalizedAssertionTarget$Companion;
-	public fun <init> (Ljava/lang/String;)V
-	public final fun component1 ()Ljava/lang/String;
-	public final fun copy (Ljava/lang/String;)Lxyz/block/trailblaze/agent/model/NormalizedAssertionTarget;
-	public static synthetic fun copy$default (Lxyz/block/trailblaze/agent/model/NormalizedAssertionTarget;Ljava/lang/String;ILjava/lang/Object;)Lxyz/block/trailblaze/agent/model/NormalizedAssertionTarget;
-	public fun equals (Ljava/lang/Object;)Z
-	public final fun getNormalized ()Ljava/lang/String;
-	public final fun getRaw ()Ljava/lang/String;
-	public fun hashCode ()I
-	public final fun matches (Lxyz/block/trailblaze/agent/model/NormalizedAssertionTarget;)Z
-	public fun toString ()Ljava/lang/String;
-}
-
-public final class xyz/block/trailblaze/agent/model/NormalizedAssertionTarget$Companion {
-	public final fun normalize (Ljava/lang/String;)Ljava/lang/String;
-}
-
 public abstract interface class xyz/block/trailblaze/agent/model/PromptRecordingResult {
 	public static final field Companion Lxyz/block/trailblaze/agent/model/PromptRecordingResult$Companion;
 }
@@ -2070,73 +1832,18 @@ public final class xyz/block/trailblaze/agent/model/PromptRecordingResult$Succes
 }
 
 public final class xyz/block/trailblaze/agent/model/PromptStepStatus {
-	public static final field Companion Lxyz/block/trailblaze/agent/model/PromptStepStatus$Companion;
-	public static final field DEFAULT_MAX_HISTORY_SIZE I
-	public fun <init> (Lxyz/block/trailblaze/yaml/PromptStep;ZLjava/util/List;Lkotlin/jvm/functions/Function0;II)V
-	public synthetic fun <init> (Lxyz/block/trailblaze/yaml/PromptStep;ZLjava/util/List;Lkotlin/jvm/functions/Function0;IIILkotlin/jvm/internal/DefaultConstructorMarker;)V
-	public final fun addCompletedToolCallToChatHistory (Lxyz/block/trailblaze/toolcalls/TrailblazeToolResult;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Lai/koog/prompt/message/MessagePart$Tool$Call;)V
-	public final fun addCompletedToolCallToChatHistory (Lxyz/block/trailblaze/toolcalls/TrailblazeToolResult;Ljava/lang/String;Ljava/util/List;Lkotlinx/serialization/json/JsonObject;Lai/koog/prompt/message/MessagePart$Tool$Call;)V
-	public final fun addCompletedToolCallToChatHistory (Lxyz/block/trailblaze/toolcalls/TrailblazeToolResult;Ljava/lang/String;Ljava/util/Map;Lai/koog/prompt/message/MessagePart$Tool$Call;)V
-	public static synthetic fun addCompletedToolCallToChatHistory$default (Lxyz/block/trailblaze/agent/model/PromptStepStatus;Lxyz/block/trailblaze/toolcalls/TrailblazeToolResult;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Lai/koog/prompt/message/MessagePart$Tool$Call;ILjava/lang/Object;)V
-	public static synthetic fun addCompletedToolCallToChatHistory$default (Lxyz/block/trailblaze/agent/model/PromptStepStatus;Lxyz/block/trailblaze/toolcalls/TrailblazeToolResult;Ljava/lang/String;Ljava/util/List;Lkotlinx/serialization/json/JsonObject;Lai/koog/prompt/message/MessagePart$Tool$Call;ILjava/lang/Object;)V
-	public static synthetic fun addCompletedToolCallToChatHistory$default (Lxyz/block/trailblaze/agent/model/PromptStepStatus;Lxyz/block/trailblaze/toolcalls/TrailblazeToolResult;Ljava/lang/String;Ljava/util/Map;Lai/koog/prompt/message/MessagePart$Tool$Call;ILjava/lang/Object;)V
-	public final fun addObjectiveStatusUpdate (Ljava/lang/String;)V
-	public final fun attachVerifyAssertionLedger (Lxyz/block/trailblaze/agent/model/VerifyAssertionLedger;)V
+	public fun <init> (Lxyz/block/trailblaze/yaml/PromptStep;Lkotlin/jvm/functions/Function0;)V
 	public final fun component1 ()Lxyz/block/trailblaze/yaml/PromptStep;
-	public final fun component2 ()Z
-	public final fun consumePendingCycleWarning ()Ljava/lang/String;
-	public final fun consumePendingStaleRefRecovery ()Ljava/lang/String;
-	public final fun copy (Lxyz/block/trailblaze/yaml/PromptStep;ZLjava/util/List;Lkotlin/jvm/functions/Function0;II)Lxyz/block/trailblaze/agent/model/PromptStepStatus;
-	public static synthetic fun copy$default (Lxyz/block/trailblaze/agent/model/PromptStepStatus;Lxyz/block/trailblaze/yaml/PromptStep;ZLjava/util/List;Lkotlin/jvm/functions/Function0;IIILjava/lang/Object;)Lxyz/block/trailblaze/agent/model/PromptStepStatus;
+	public final fun copy (Lxyz/block/trailblaze/yaml/PromptStep;Lkotlin/jvm/functions/Function0;)Lxyz/block/trailblaze/agent/model/PromptStepStatus;
+	public static synthetic fun copy$default (Lxyz/block/trailblaze/agent/model/PromptStepStatus;Lxyz/block/trailblaze/yaml/PromptStep;Lkotlin/jvm/functions/Function0;ILjava/lang/Object;)Lxyz/block/trailblaze/agent/model/PromptStepStatus;
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getCurrentScreenState ()Lxyz/block/trailblaze/api/ScreenState;
 	public final fun getCurrentStatus ()Lkotlinx/coroutines/flow/MutableStateFlow;
-	public final fun getCurrentStep ()I
-	public final fun getLatestObjectiveStatus ()Ljava/lang/String;
-	public final fun getLimitedHistory ()Ljava/util/List;
-	public final fun getLlmStatusChecks ()Z
 	public final fun getPromptStep ()Lxyz/block/trailblaze/yaml/PromptStep;
-	public final fun getTaskCreatedTimestamp ()Lkotlinx/datetime/Instant;
 	public final fun getTaskId-TqKaErY ()Ljava/lang/String;
-	public final fun getVerifyAssertionLedger ()Lxyz/block/trailblaze/agent/model/VerifyAssertionLedger;
-	public final fun handleEmptyToolCall (Ljava/lang/String;)V
 	public fun hashCode ()I
-	public final fun isFinished ()Z
-	public final fun markAsComplete (Ljava/lang/String;)V
-	public static synthetic fun markAsComplete$default (Lxyz/block/trailblaze/agent/model/PromptStepStatus;Ljava/lang/String;ILjava/lang/Object;)V
-	public final fun markAsFailed (Ljava/lang/String;)V
-	public static synthetic fun markAsFailed$default (Lxyz/block/trailblaze/agent/model/PromptStepStatus;Ljava/lang/String;ILjava/lang/Object;)V
 	public final fun prepareNextStep ()V
-	public final fun setPendingCycleWarning (Ljava/lang/String;)V
-	public final fun setPendingStaleRefRecovery (Ljava/lang/String;)V
 	public fun toString ()Ljava/lang/String;
-}
-
-public final class xyz/block/trailblaze/agent/model/PromptStepStatus$Companion {
-}
-
-public final class xyz/block/trailblaze/agent/model/VerifyAssertionLedger {
-	public static final field Companion Lxyz/block/trailblaze/agent/model/VerifyAssertionLedger$Companion;
-	public static final field MIN_REPEATS I
-	public static final field MIN_UNIQUE_TARGETS I
-	public fun <init> (Ljava/lang/String;)V
-	public final fun allSatisfied ()Z
-	public final fun getRepeatCount ()I
-	public final fun getRequiredTargets ()Ljava/util/Set;
-	public final fun getSatisfiedSnapshot ()Ljava/util/Set;
-	public final fun getSeenSnapshot ()Ljava/util/Set;
-	public final fun isLikelyRotatingLoop ()Z
-	public final fun missingTargets ()Ljava/util/Set;
-	public final fun recordSuccessfulAssertion (Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Z)Z
-	public final fun shouldAutoTerminate ()Z
-}
-
-public final class xyz/block/trailblaze/agent/model/VerifyAssertionLedger$Companion {
-}
-
-public final class xyz/block/trailblaze/agent/model/VerifyTextParser {
-	public static final field INSTANCE Lxyz/block/trailblaze/agent/model/VerifyTextParser;
-	public final fun parse (Ljava/lang/String;)Ljava/util/Set;
 }
 
 public final class xyz/block/trailblaze/api/AgentActionType : java/lang/Enum {
@@ -2694,33 +2401,28 @@ public final class xyz/block/trailblaze/api/AgentDriverAction$WaitForSettle$Comp
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
 }
 
-public final class xyz/block/trailblaze/api/AgentMessages {
-	public static final field INSTANCE Lxyz/block/trailblaze/api/AgentMessages;
-	public final fun toContentString (Lxyz/block/trailblaze/toolcalls/TrailblazeToolResult;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;)Ljava/lang/String;
-	public final fun toContentString (Lxyz/block/trailblaze/toolcalls/TrailblazeToolResult;Ljava/util/List;Lkotlinx/serialization/json/JsonObject;)Ljava/lang/String;
-	public final fun toContentString (Lxyz/block/trailblaze/toolcalls/TrailblazeToolResult;Ljava/util/Map;)Ljava/lang/String;
-}
-
 public final class xyz/block/trailblaze/api/AndroidCompactElementList {
 	public static final field INSTANCE Lxyz/block/trailblaze/api/AndroidCompactElementList;
-	public final fun build (Lxyz/block/trailblaze/api/TrailblazeNode;Ljava/util/Set;I)Lxyz/block/trailblaze/api/AndroidCompactElementList$CompactElements;
-	public static synthetic fun build$default (Lxyz/block/trailblaze/api/AndroidCompactElementList;Lxyz/block/trailblaze/api/TrailblazeNode;Ljava/util/Set;IILjava/lang/Object;)Lxyz/block/trailblaze/api/AndroidCompactElementList$CompactElements;
+	public final fun build (Lxyz/block/trailblaze/api/TrailblazeNode;Ljava/util/Set;II)Lxyz/block/trailblaze/api/AndroidCompactElementList$CompactElements;
+	public static synthetic fun build$default (Lxyz/block/trailblaze/api/AndroidCompactElementList;Lxyz/block/trailblaze/api/TrailblazeNode;Ljava/util/Set;IIILjava/lang/Object;)Lxyz/block/trailblaze/api/AndroidCompactElementList$CompactElements;
 }
 
 public final class xyz/block/trailblaze/api/AndroidCompactElementList$CompactElements {
-	public fun <init> (Ljava/lang/String;Ljava/util/List;Ljava/util/List;Ljava/util/Map;)V
-	public synthetic fun <init> (Ljava/lang/String;Ljava/util/List;Ljava/util/List;Ljava/util/Map;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun <init> (Ljava/lang/String;Ljava/util/List;Ljava/util/List;Ljava/util/Map;Ljava/util/List;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/util/List;Ljava/util/List;Ljava/util/Map;Ljava/util/List;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun component1 ()Ljava/lang/String;
 	public final fun component2 ()Ljava/util/List;
 	public final fun component3 ()Ljava/util/List;
 	public final fun component4 ()Ljava/util/Map;
-	public final fun copy (Ljava/lang/String;Ljava/util/List;Ljava/util/List;Ljava/util/Map;)Lxyz/block/trailblaze/api/AndroidCompactElementList$CompactElements;
-	public static synthetic fun copy$default (Lxyz/block/trailblaze/api/AndroidCompactElementList$CompactElements;Ljava/lang/String;Ljava/util/List;Ljava/util/List;Ljava/util/Map;ILjava/lang/Object;)Lxyz/block/trailblaze/api/AndroidCompactElementList$CompactElements;
+	public final fun component5 ()Ljava/util/List;
+	public final fun copy (Ljava/lang/String;Ljava/util/List;Ljava/util/List;Ljava/util/Map;Ljava/util/List;)Lxyz/block/trailblaze/api/AndroidCompactElementList$CompactElements;
+	public static synthetic fun copy$default (Lxyz/block/trailblaze/api/AndroidCompactElementList$CompactElements;Ljava/lang/String;Ljava/util/List;Ljava/util/List;Ljava/util/Map;Ljava/util/List;ILjava/lang/Object;)Lxyz/block/trailblaze/api/AndroidCompactElementList$CompactElements;
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getElementBounds ()Ljava/util/List;
 	public final fun getElementNodeIds ()Ljava/util/List;
 	public final fun getRefMapping ()Ljava/util/Map;
 	public final fun getText ()Ljava/lang/String;
+	public final fun getTextNodeIds ()Ljava/util/List;
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
 }
@@ -2801,8 +2503,8 @@ public final class xyz/block/trailblaze/api/CompactScreenElements {
 }
 
 public final class xyz/block/trailblaze/api/CompactScreenElements$Companion {
-	public final fun buildForAndroid (Lxyz/block/trailblaze/api/TrailblazeNode;Ljava/util/Set;I)Lxyz/block/trailblaze/api/CompactScreenElements;
-	public static synthetic fun buildForAndroid$default (Lxyz/block/trailblaze/api/CompactScreenElements$Companion;Lxyz/block/trailblaze/api/TrailblazeNode;Ljava/util/Set;IILjava/lang/Object;)Lxyz/block/trailblaze/api/CompactScreenElements;
+	public final fun buildForAndroid (Lxyz/block/trailblaze/api/TrailblazeNode;Ljava/util/Set;II)Lxyz/block/trailblaze/api/CompactScreenElements;
+	public static synthetic fun buildForAndroid$default (Lxyz/block/trailblaze/api/CompactScreenElements$Companion;Lxyz/block/trailblaze/api/TrailblazeNode;Ljava/util/Set;IIILjava/lang/Object;)Lxyz/block/trailblaze/api/CompactScreenElements;
 	public final fun buildForIos (Lxyz/block/trailblaze/api/TrailblazeNode;Ljava/util/Set;II)Lxyz/block/trailblaze/api/CompactScreenElements;
 	public static synthetic fun buildForIos$default (Lxyz/block/trailblaze/api/CompactScreenElements$Companion;Lxyz/block/trailblaze/api/TrailblazeNode;Ljava/util/Set;IIILjava/lang/Object;)Lxyz/block/trailblaze/api/CompactScreenElements;
 	public final fun buildForIosAxe (Lxyz/block/trailblaze/api/TrailblazeNode;Ljava/util/Set;II)Lxyz/block/trailblaze/api/CompactScreenElements;
@@ -3398,9 +3100,12 @@ public final class xyz/block/trailblaze/api/DriverNodeDetail$IosMaestro$Companio
 public final class xyz/block/trailblaze/api/DriverNodeDetail$Web : xyz/block/trailblaze/api/DriverNodeDetail {
 	public static final field Companion Lxyz/block/trailblaze/api/DriverNodeDetail$Web$Companion;
 	public fun <init> ()V
-	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Integer;Ljava/lang/String;Ljava/lang/String;IZZ)V
-	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Integer;Ljava/lang/String;Ljava/lang/String;IZZILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Integer;Ljava/lang/String;Ljava/lang/String;IZZLjava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Integer;Ljava/lang/String;Ljava/lang/String;IZZLjava/lang/String;Ljava/lang/String;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun component1 ()Ljava/lang/String;
+	public final fun component10 ()Ljava/lang/String;
+	public final fun component11 ()Ljava/lang/String;
+	public final fun component12 ()Ljava/lang/String;
 	public final fun component2 ()Ljava/lang/String;
 	public final fun component3 ()Ljava/lang/String;
 	public final fun component4 ()Ljava/lang/Integer;
@@ -3409,8 +3114,8 @@ public final class xyz/block/trailblaze/api/DriverNodeDetail$Web : xyz/block/tra
 	public final fun component7 ()I
 	public final fun component8 ()Z
 	public final fun component9 ()Z
-	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Integer;Ljava/lang/String;Ljava/lang/String;IZZ)Lxyz/block/trailblaze/api/DriverNodeDetail$Web;
-	public static synthetic fun copy$default (Lxyz/block/trailblaze/api/DriverNodeDetail$Web;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Integer;Ljava/lang/String;Ljava/lang/String;IZZILjava/lang/Object;)Lxyz/block/trailblaze/api/DriverNodeDetail$Web;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Integer;Ljava/lang/String;Ljava/lang/String;IZZLjava/lang/String;Ljava/lang/String;Ljava/lang/String;)Lxyz/block/trailblaze/api/DriverNodeDetail$Web;
+	public static synthetic fun copy$default (Lxyz/block/trailblaze/api/DriverNodeDetail$Web;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Integer;Ljava/lang/String;Ljava/lang/String;IZZLjava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lxyz/block/trailblaze/api/DriverNodeDetail$Web;
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getAriaDescriptor ()Ljava/lang/String;
 	public final fun getAriaName ()Ljava/lang/String;
@@ -3421,6 +3126,9 @@ public final class xyz/block/trailblaze/api/DriverNodeDetail$Web : xyz/block/tra
 	public final fun getHeadingLevel ()Ljava/lang/Integer;
 	public fun getMatchablePropertyNames ()Ljava/util/Set;
 	public final fun getNthIndex ()I
+	public final fun getPlaceholder ()Ljava/lang/String;
+	public final fun getTitle ()Ljava/lang/String;
+	public final fun getUrl ()Ljava/lang/String;
 	public fun hashCode ()I
 	public fun isInteractive ()Z
 	public final fun isLandmark ()Z
@@ -3855,23 +3563,21 @@ public final class xyz/block/trailblaze/api/ElementRef$RefTracker {
 
 public final class xyz/block/trailblaze/api/ExtractedString {
 	public static final field Companion Lxyz/block/trailblaze/api/ExtractedString$Companion;
-	public fun <init> (Ljava/lang/String;Lxyz/block/trailblaze/api/VisibleStringSource;Ljava/lang/String;Ljava/util/List;ZZ)V
-	public synthetic fun <init> (Ljava/lang/String;Lxyz/block/trailblaze/api/VisibleStringSource;Ljava/lang/String;Ljava/util/List;ZZILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun <init> (Ljava/lang/String;Lxyz/block/trailblaze/api/VisibleStringSource;Ljava/lang/String;Ljava/util/List;Z)V
+	public synthetic fun <init> (Ljava/lang/String;Lxyz/block/trailblaze/api/VisibleStringSource;Ljava/lang/String;Ljava/util/List;ZILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun component1 ()Ljava/lang/String;
 	public final fun component2 ()Lxyz/block/trailblaze/api/VisibleStringSource;
 	public final fun component3 ()Ljava/lang/String;
 	public final fun component4 ()Ljava/util/List;
 	public final fun component5 ()Z
-	public final fun component6 ()Z
-	public final fun copy (Ljava/lang/String;Lxyz/block/trailblaze/api/VisibleStringSource;Ljava/lang/String;Ljava/util/List;ZZ)Lxyz/block/trailblaze/api/ExtractedString;
-	public static synthetic fun copy$default (Lxyz/block/trailblaze/api/ExtractedString;Ljava/lang/String;Lxyz/block/trailblaze/api/VisibleStringSource;Ljava/lang/String;Ljava/util/List;ZZILjava/lang/Object;)Lxyz/block/trailblaze/api/ExtractedString;
+	public final fun copy (Ljava/lang/String;Lxyz/block/trailblaze/api/VisibleStringSource;Ljava/lang/String;Ljava/util/List;Z)Lxyz/block/trailblaze/api/ExtractedString;
+	public static synthetic fun copy$default (Lxyz/block/trailblaze/api/ExtractedString;Ljava/lang/String;Lxyz/block/trailblaze/api/VisibleStringSource;Ljava/lang/String;Ljava/util/List;ZILjava/lang/Object;)Lxyz/block/trailblaze/api/ExtractedString;
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getBounds ()Ljava/util/List;
 	public final fun getRef ()Ljava/lang/String;
 	public final fun getSource ()Lxyz/block/trailblaze/api/VisibleStringSource;
 	public final fun getText ()Ljava/lang/String;
 	public final fun getVisible ()Z
-	public final fun getVolatile ()Z
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
 }
@@ -3933,19 +3639,21 @@ public final class xyz/block/trailblaze/api/IosCompactElementList {
 }
 
 public final class xyz/block/trailblaze/api/IosCompactElementList$CompactElements {
-	public fun <init> (Ljava/lang/String;Ljava/util/List;Ljava/util/List;Ljava/util/Map;)V
-	public synthetic fun <init> (Ljava/lang/String;Ljava/util/List;Ljava/util/List;Ljava/util/Map;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun <init> (Ljava/lang/String;Ljava/util/List;Ljava/util/List;Ljava/util/Map;Ljava/util/List;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/util/List;Ljava/util/List;Ljava/util/Map;Ljava/util/List;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun component1 ()Ljava/lang/String;
 	public final fun component2 ()Ljava/util/List;
 	public final fun component3 ()Ljava/util/List;
 	public final fun component4 ()Ljava/util/Map;
-	public final fun copy (Ljava/lang/String;Ljava/util/List;Ljava/util/List;Ljava/util/Map;)Lxyz/block/trailblaze/api/IosCompactElementList$CompactElements;
-	public static synthetic fun copy$default (Lxyz/block/trailblaze/api/IosCompactElementList$CompactElements;Ljava/lang/String;Ljava/util/List;Ljava/util/List;Ljava/util/Map;ILjava/lang/Object;)Lxyz/block/trailblaze/api/IosCompactElementList$CompactElements;
+	public final fun component5 ()Ljava/util/List;
+	public final fun copy (Ljava/lang/String;Ljava/util/List;Ljava/util/List;Ljava/util/Map;Ljava/util/List;)Lxyz/block/trailblaze/api/IosCompactElementList$CompactElements;
+	public static synthetic fun copy$default (Lxyz/block/trailblaze/api/IosCompactElementList$CompactElements;Ljava/lang/String;Ljava/util/List;Ljava/util/List;Ljava/util/Map;Ljava/util/List;ILjava/lang/Object;)Lxyz/block/trailblaze/api/IosCompactElementList$CompactElements;
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getElementBounds ()Ljava/util/List;
 	public final fun getElementNodeIds ()Ljava/util/List;
 	public final fun getRefMapping ()Ljava/util/Map;
 	public final fun getText ()Ljava/lang/String;
+	public final fun getTextNodeIds ()Ljava/util/List;
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
 }
@@ -4602,7 +4310,6 @@ public final class xyz/block/trailblaze/api/ViewHierarchyTreeNode {
 	public final fun copy (JLjava/lang/String;IIIILjava/lang/String;ZLjava/util/List;Ljava/lang/String;ZLjava/lang/String;ZZZLjava/lang/String;ZZLjava/lang/String;ZZLjava/lang/String;)Lxyz/block/trailblaze/api/ViewHierarchyTreeNode;
 	public static synthetic fun copy$default (Lxyz/block/trailblaze/api/ViewHierarchyTreeNode;JLjava/lang/String;IIIILjava/lang/String;ZLjava/util/List;Ljava/lang/String;ZLjava/lang/String;ZZZLjava/lang/String;ZZLjava/lang/String;ZZLjava/lang/String;ILjava/lang/Object;)Lxyz/block/trailblaze/api/ViewHierarchyTreeNode;
 	public final fun deepCopyWithoutBounds ()Lxyz/block/trailblaze/api/ViewHierarchyTreeNode;
-	public final fun deepCopyWithoutDimensions ()Lxyz/block/trailblaze/api/ViewHierarchyTreeNode;
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getAccessibilityText ()Ljava/lang/String;
 	public final fun getBounds ()Lxyz/block/trailblaze/viewhierarchy/ViewHierarchyFilter$Bounds;
@@ -4652,6 +4359,7 @@ public final class xyz/block/trailblaze/api/ViewHierarchyTreeNode$Companion {
 public final class xyz/block/trailblaze/api/VisibleStringExtractor {
 	public static final field INSTANCE Lxyz/block/trailblaze/api/VisibleStringExtractor;
 	public final fun extract (Lxyz/block/trailblaze/api/TrailblazeNode;II)Ljava/util/List;
+	public final fun extract (Lxyz/block/trailblaze/api/TrailblazeNode;IILjava/util/List;)Ljava/util/List;
 	public final fun extract (Lxyz/block/trailblaze/api/ViewHierarchyTreeNode;)Ljava/util/List;
 	public static synthetic fun extract$default (Lxyz/block/trailblaze/api/VisibleStringExtractor;Lxyz/block/trailblaze/api/TrailblazeNode;IIILjava/lang/Object;)Ljava/util/List;
 }
@@ -4681,6 +4389,11 @@ public final class xyz/block/trailblaze/api/VisibleStringSource$Companion {
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
 }
 
+public final class xyz/block/trailblaze/api/VolatileText {
+	public static final field INSTANCE Lxyz/block/trailblaze/api/VolatileText;
+	public final fun looksVolatile (Ljava/lang/String;)Z
+}
+
 public final class xyz/block/trailblaze/api/waypoint/ResolvedWaypoint {
 	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/util/List;Lxyz/block/trailblaze/api/waypoint/WaypointExampleRef;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/util/List;Lxyz/block/trailblaze/api/waypoint/WaypointExampleRef;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
@@ -4708,7 +4421,6 @@ public final class xyz/block/trailblaze/api/waypoint/ResolvedWaypoint {
 public final class xyz/block/trailblaze/api/waypoint/ResolvedWaypointKt {
 	public static final fun resolveFor-MyJWTFs (Lxyz/block/trailblaze/api/waypoint/WaypointDefinition;Ljava/lang/String;Ljava/util/List;)Lxyz/block/trailblaze/api/waypoint/ResolvedWaypoint;
 	public static synthetic fun resolveFor-MyJWTFs$default (Lxyz/block/trailblaze/api/waypoint/WaypointDefinition;Ljava/lang/String;Ljava/util/List;ILjava/lang/Object;)Lxyz/block/trailblaze/api/waypoint/ResolvedWaypoint;
-	public static final fun resolveForDevice (Lxyz/block/trailblaze/api/waypoint/WaypointDefinition;Ljava/util/List;)Lxyz/block/trailblaze/api/waypoint/ResolvedWaypoint;
 }
 
 public final class xyz/block/trailblaze/api/waypoint/WaypointCondition {
@@ -5023,7 +4735,6 @@ public final class xyz/block/trailblaze/config/DriverTypeKey {
 	public static final field INSTANCE Lxyz/block/trailblaze/config/DriverTypeKey;
 	public final fun getKnownKeys ()Ljava/util/Set;
 	public final fun isKnown (Ljava/lang/String;)Z
-	public final fun keysContaining (Lxyz/block/trailblaze/devices/TrailblazeDriverType;)Ljava/util/Set;
 	public final fun resolve (Ljava/lang/String;)Ljava/util/Set;
 	public final fun resolveAll (Ljava/util/List;)Ljava/util/Set;
 }
@@ -5326,7 +5037,6 @@ public final class xyz/block/trailblaze/config/ToolYamlLoader {
 	public final fun discoverYamlDefinedTools (Lxyz/block/trailblaze/llm/config/ConfigResourceSource;)Ljava/util/Map;
 	public static synthetic fun discoverYamlDefinedTools$default (Lxyz/block/trailblaze/config/ToolYamlLoader;Lxyz/block/trailblaze/llm/config/ConfigResourceSource;ILjava/lang/Object;)Ljava/util/Map;
 	public final fun loadFromConfigs (Ljava/util/List;)Ljava/util/Map;
-	public final fun loadFromYamlContents (Ljava/util/Map;)Ljava/util/Map;
 }
 
 public final class xyz/block/trailblaze/config/TrailblazeConfigYaml {
@@ -5943,6 +5653,268 @@ public final synthetic class xyz/block/trailblaze/config/project/TrailmapTargetC
 }
 
 public final class xyz/block/trailblaze/config/project/TrailmapTargetConfig$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class xyz/block/trailblaze/decision/AnsweredWithoutLlm {
+	public static final field DECISION Ljava/lang/String;
+	public static final field INSTANCE Lxyz/block/trailblaze/decision/AnsweredWithoutLlm;
+	public static final field METADATA_KEY Ljava/lang/String;
+	public final fun metadata (Ljava/lang/String;)Lkotlinx/serialization/json/JsonObject;
+	public final fun modelRequests (Ljava/util/List;)Ljava/util/List;
+	public final fun of (Lai/koog/prompt/message/Message$Assistant;)Ljava/lang/String;
+	public final fun of (Lxyz/block/trailblaze/logs/client/TrailblazeLog$TrailblazeLlmRequestLog;)Ljava/lang/String;
+}
+
+public final class xyz/block/trailblaze/decision/DecisionAnswer {
+	public static final field Companion Lxyz/block/trailblaze/decision/DecisionAnswer$Companion;
+	public fun <init> (Lxyz/block/trailblaze/decision/DecisionQuestionType;Ljava/lang/String;Ljava/lang/Double;Ljava/util/Map;Ljava/lang/Double;Ljava/util/Map;Ljava/lang/Double;)V
+	public synthetic fun <init> (Lxyz/block/trailblaze/decision/DecisionQuestionType;Ljava/lang/String;Ljava/lang/Double;Ljava/util/Map;Ljava/lang/Double;Ljava/util/Map;Ljava/lang/Double;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Lxyz/block/trailblaze/decision/DecisionQuestionType;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/Double;
+	public final fun component4 ()Ljava/util/Map;
+	public final fun component5 ()Ljava/lang/Double;
+	public final fun component6 ()Ljava/util/Map;
+	public final fun component7 ()Ljava/lang/Double;
+	public final fun copy (Lxyz/block/trailblaze/decision/DecisionQuestionType;Ljava/lang/String;Ljava/lang/Double;Ljava/util/Map;Ljava/lang/Double;Ljava/util/Map;Ljava/lang/Double;)Lxyz/block/trailblaze/decision/DecisionAnswer;
+	public static synthetic fun copy$default (Lxyz/block/trailblaze/decision/DecisionAnswer;Lxyz/block/trailblaze/decision/DecisionQuestionType;Ljava/lang/String;Ljava/lang/Double;Ljava/util/Map;Ljava/lang/Double;Ljava/util/Map;Ljava/lang/Double;ILjava/lang/Object;)Lxyz/block/trailblaze/decision/DecisionAnswer;
+	public final fun describe ()Ljava/lang/String;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getChoice ()Ljava/lang/String;
+	public final fun getConfidence ()Ljava/lang/Double;
+	public final fun getLegend ()Ljava/util/Map;
+	public final fun getNoul ()Ljava/lang/Double;
+	public final fun getProbabilities ()Ljava/util/Map;
+	public final fun getScore ()Ljava/lang/Double;
+	public final fun getType ()Lxyz/block/trailblaze/decision/DecisionQuestionType;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class xyz/block/trailblaze/decision/DecisionAnswer$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lxyz/block/trailblaze/decision/DecisionAnswer$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lxyz/block/trailblaze/decision/DecisionAnswer;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lxyz/block/trailblaze/decision/DecisionAnswer;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class xyz/block/trailblaze/decision/DecisionAnswer$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class xyz/block/trailblaze/decision/DecisionConfidence {
+	public static final field INSTANCE Lxyz/block/trailblaze/decision/DecisionConfidence;
+	public final fun of (Ljava/util/Collection;)D
+}
+
+public final class xyz/block/trailblaze/decision/DecisionCost {
+	public static final field Companion Lxyz/block/trailblaze/decision/DecisionCost$Companion;
+	public fun <init> (DD)V
+	public final fun component1 ()D
+	public final fun component2 ()D
+	public final fun copy (DD)Lxyz/block/trailblaze/decision/DecisionCost;
+	public static synthetic fun copy$default (Lxyz/block/trailblaze/decision/DecisionCost;DDILjava/lang/Object;)Lxyz/block/trailblaze/decision/DecisionCost;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getInputCost ()D
+	public final fun getOutputCost ()D
+	public final fun getTotalCost ()D
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class xyz/block/trailblaze/decision/DecisionCost$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lxyz/block/trailblaze/decision/DecisionCost$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lxyz/block/trailblaze/decision/DecisionCost;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lxyz/block/trailblaze/decision/DecisionCost;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class xyz/block/trailblaze/decision/DecisionCost$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public abstract interface class xyz/block/trailblaze/decision/DecisionEngine {
+	public fun costOf (Lxyz/block/trailblaze/decision/DecisionResponse;)Lxyz/block/trailblaze/decision/DecisionCost;
+	public abstract fun decide (Lxyz/block/trailblaze/decision/DecisionRequest;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun getMaxChoiceOptions ()I
+	public abstract fun getName ()Ljava/lang/String;
+}
+
+public final class xyz/block/trailblaze/decision/DecisionEngine$DefaultImpls {
+	public static fun costOf (Lxyz/block/trailblaze/decision/DecisionEngine;Lxyz/block/trailblaze/decision/DecisionResponse;)Lxyz/block/trailblaze/decision/DecisionCost;
+	public static fun getMaxChoiceOptions (Lxyz/block/trailblaze/decision/DecisionEngine;)I
+}
+
+public final class xyz/block/trailblaze/decision/DecisionLogContext : kotlin/coroutines/AbstractCoroutineContextElement {
+	public static final field Key Lxyz/block/trailblaze/decision/DecisionLogContext$Key;
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Lkotlin/jvm/functions/Function1;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun getSession-OeRlnm0 ()Ljava/lang/String;
+	public final fun getTraceId-3wr0nlg ()Ljava/lang/String;
+}
+
+public final class xyz/block/trailblaze/decision/DecisionLogContext$Key : kotlin/coroutines/CoroutineContext$Key {
+}
+
+public final class xyz/block/trailblaze/decision/DecisionLoggingKt {
+	public static final fun decideLogged (Lxyz/block/trailblaze/decision/DecisionEngine;Lxyz/block/trailblaze/decision/DecisionRequest;Lxyz/block/trailblaze/decision/DecisionRequest;Lkotlin/jvm/functions/Function1;Lkotlin/jvm/functions/Function1;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun decideLogged$default (Lxyz/block/trailblaze/decision/DecisionEngine;Lxyz/block/trailblaze/decision/DecisionRequest;Lxyz/block/trailblaze/decision/DecisionRequest;Lkotlin/jvm/functions/Function1;Lkotlin/jvm/functions/Function1;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+}
+
+public final class xyz/block/trailblaze/decision/DecisionQuestion {
+	public static final field Companion Lxyz/block/trailblaze/decision/DecisionQuestion$Companion;
+	public static final field MAX_CHOICE_OPTIONS I
+	public static final field MAX_SCORE_LEVELS I
+	public static final field MIN_SCORE_LEVELS I
+	public fun <init> (Lxyz/block/trailblaze/decision/DecisionQuestionType;Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;)V
+	public synthetic fun <init> (Lxyz/block/trailblaze/decision/DecisionQuestionType;Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Lxyz/block/trailblaze/decision/DecisionQuestionType;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Lkotlinx/serialization/json/JsonElement;
+	public final fun copy (Lxyz/block/trailblaze/decision/DecisionQuestionType;Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;)Lxyz/block/trailblaze/decision/DecisionQuestion;
+	public static synthetic fun copy$default (Lxyz/block/trailblaze/decision/DecisionQuestion;Lxyz/block/trailblaze/decision/DecisionQuestionType;Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;ILjava/lang/Object;)Lxyz/block/trailblaze/decision/DecisionQuestion;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getChoiceOptions ()Ljava/util/Map;
+	public final fun getCriteria ()Lkotlinx/serialization/json/JsonElement;
+	public final fun getInstructions ()Ljava/lang/String;
+	public final fun getNoulMeanings ()Ljava/util/Map;
+	public final fun getScoreLevels ()Ljava/util/List;
+	public final fun getType ()Lxyz/block/trailblaze/decision/DecisionQuestionType;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class xyz/block/trailblaze/decision/DecisionQuestion$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lxyz/block/trailblaze/decision/DecisionQuestion$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lxyz/block/trailblaze/decision/DecisionQuestion;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lxyz/block/trailblaze/decision/DecisionQuestion;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class xyz/block/trailblaze/decision/DecisionQuestion$Companion {
+	public final fun choice (Ljava/lang/String;Ljava/util/Map;)Lxyz/block/trailblaze/decision/DecisionQuestion;
+	public final fun noul (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Lxyz/block/trailblaze/decision/DecisionQuestion;
+	public static synthetic fun noul$default (Lxyz/block/trailblaze/decision/DecisionQuestion$Companion;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lxyz/block/trailblaze/decision/DecisionQuestion;
+	public final fun score (Ljava/lang/String;Ljava/util/List;)Lxyz/block/trailblaze/decision/DecisionQuestion;
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class xyz/block/trailblaze/decision/DecisionQuestionType : java/lang/Enum {
+	public static final field CHOICE Lxyz/block/trailblaze/decision/DecisionQuestionType;
+	public static final field Companion Lxyz/block/trailblaze/decision/DecisionQuestionType$Companion;
+	public static final field NOUL Lxyz/block/trailblaze/decision/DecisionQuestionType;
+	public static final field SCORE Lxyz/block/trailblaze/decision/DecisionQuestionType;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lxyz/block/trailblaze/decision/DecisionQuestionType;
+	public static fun values ()[Lxyz/block/trailblaze/decision/DecisionQuestionType;
+}
+
+public final class xyz/block/trailblaze/decision/DecisionQuestionType$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class xyz/block/trailblaze/decision/DecisionRequest {
+	public static final field Companion Lxyz/block/trailblaze/decision/DecisionRequest$Companion;
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/util/Map;)V
+	public fun <init> (Lkotlinx/serialization/json/JsonElement;Ljava/lang/String;Ljava/util/Map;)V
+	public final fun component1 ()Lkotlinx/serialization/json/JsonElement;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/util/Map;
+	public final fun copy (Lkotlinx/serialization/json/JsonElement;Ljava/lang/String;Ljava/util/Map;)Lxyz/block/trailblaze/decision/DecisionRequest;
+	public static synthetic fun copy$default (Lxyz/block/trailblaze/decision/DecisionRequest;Lkotlinx/serialization/json/JsonElement;Ljava/lang/String;Ljava/util/Map;ILjava/lang/Object;)Lxyz/block/trailblaze/decision/DecisionRequest;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getModel ()Ljava/lang/String;
+	public final fun getQuestions ()Ljava/util/Map;
+	public final fun getState ()Lkotlinx/serialization/json/JsonElement;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class xyz/block/trailblaze/decision/DecisionRequest$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lxyz/block/trailblaze/decision/DecisionRequest$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lxyz/block/trailblaze/decision/DecisionRequest;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lxyz/block/trailblaze/decision/DecisionRequest;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class xyz/block/trailblaze/decision/DecisionRequest$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class xyz/block/trailblaze/decision/DecisionResponse {
+	public static final field Companion Lxyz/block/trailblaze/decision/DecisionResponse$Companion;
+	public fun <init> (Ljava/lang/String;Ljava/util/Map;Lxyz/block/trailblaze/decision/DecisionUsage;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/util/Map;Lxyz/block/trailblaze/decision/DecisionUsage;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/util/Map;
+	public final fun component3 ()Lxyz/block/trailblaze/decision/DecisionUsage;
+	public final fun copy (Ljava/lang/String;Ljava/util/Map;Lxyz/block/trailblaze/decision/DecisionUsage;)Lxyz/block/trailblaze/decision/DecisionResponse;
+	public static synthetic fun copy$default (Lxyz/block/trailblaze/decision/DecisionResponse;Ljava/lang/String;Ljava/util/Map;Lxyz/block/trailblaze/decision/DecisionUsage;ILjava/lang/Object;)Lxyz/block/trailblaze/decision/DecisionResponse;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAnswers ()Ljava/util/Map;
+	public final fun getModel ()Ljava/lang/String;
+	public final fun getUsage ()Lxyz/block/trailblaze/decision/DecisionUsage;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class xyz/block/trailblaze/decision/DecisionResponse$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lxyz/block/trailblaze/decision/DecisionResponse$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lxyz/block/trailblaze/decision/DecisionResponse;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lxyz/block/trailblaze/decision/DecisionResponse;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class xyz/block/trailblaze/decision/DecisionResponse$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class xyz/block/trailblaze/decision/DecisionUsage {
+	public static final field Companion Lxyz/block/trailblaze/decision/DecisionUsage$Companion;
+	public fun <init> (II)V
+	public final fun component1 ()I
+	public final fun component2 ()I
+	public final fun copy (II)Lxyz/block/trailblaze/decision/DecisionUsage;
+	public static synthetic fun copy$default (Lxyz/block/trailblaze/decision/DecisionUsage;IIILjava/lang/Object;)Lxyz/block/trailblaze/decision/DecisionUsage;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getInputTokens ()I
+	public final fun getOutputTokens ()I
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class xyz/block/trailblaze/decision/DecisionUsage$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lxyz/block/trailblaze/decision/DecisionUsage$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lxyz/block/trailblaze/decision/DecisionUsage;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lxyz/block/trailblaze/decision/DecisionUsage;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class xyz/block/trailblaze/decision/DecisionUsage$Companion {
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
 }
 
@@ -7541,10 +7513,7 @@ public final class xyz/block/trailblaze/http/ReverseProxyHeaders {
 public final class xyz/block/trailblaze/llm/AgentTierCostTracker {
 	public fun <init> ()V
 	public final fun getCostBreakdown ()Lxyz/block/trailblaze/llm/TierCostBreakdown;
-	public final fun getTotalCost ()D
 	public final fun recordCall (Lxyz/block/trailblaze/agent/AgentTier;Lxyz/block/trailblaze/agent/TokenUsage;Lxyz/block/trailblaze/llm/TrailblazeLlmModel;)V
-	public final fun recordInnerCall (Lxyz/block/trailblaze/agent/TokenUsage;Lxyz/block/trailblaze/llm/TrailblazeLlmModel;)V
-	public final fun recordOuterCall (Lxyz/block/trailblaze/agent/TokenUsage;Lxyz/block/trailblaze/llm/TrailblazeLlmModel;)V
 	public final fun reset ()V
 }
 
@@ -7674,14 +7643,12 @@ public final class xyz/block/trailblaze/llm/LlmRequestUsageAndCost {
 	public final fun getCacheSavings ()D
 	public final fun getCompletionCost ()D
 	public final fun getInputTokenBreakdown ()Lxyz/block/trailblaze/llm/LlmInputTokenBreakdown;
-	public final fun getInputTokenDifference ()J
 	public final fun getInputTokens ()J
 	public final fun getNonCachedInputTokens ()J
 	public final fun getOutputTokens ()J
 	public final fun getPromptCost ()D
 	public final fun getTotalCost ()D
 	public final fun getTrailblazeLlmModel ()Lxyz/block/trailblaze/llm/TrailblazeLlmModel;
-	public final fun hasInputTokenMismatch ()Z
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
 	public final fun withRecalculatedCosts (Lxyz/block/trailblaze/llm/TrailblazeLlmModel;)Lxyz/block/trailblaze/llm/LlmRequestUsageAndCost;
@@ -7699,7 +7666,6 @@ public final synthetic class xyz/block/trailblaze/llm/LlmRequestUsageAndCost$$se
 }
 
 public final class xyz/block/trailblaze/llm/LlmRequestUsageAndCost$Companion {
-	public final fun calculateCost (Lai/koog/prompt/message/Message$Assistant;Lxyz/block/trailblaze/llm/TrailblazeLlmModel;)Lxyz/block/trailblaze/llm/LlmRequestUsageAndCost;
 	public final fun calculatePromptCost (JJLxyz/block/trailblaze/llm/TrailblazeLlmModel;)D
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
 }
@@ -7819,26 +7785,25 @@ public final class xyz/block/trailblaze/llm/RunYamlCallbackResult {
 
 public final class xyz/block/trailblaze/llm/RunYamlRequest : xyz/block/trailblaze/mcp/android/ondevice/rpc/RpcRequest {
 	public static final field Companion Lxyz/block/trailblaze/llm/RunYamlRequest$Companion;
-	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ZLxyz/block/trailblaze/devices/TrailblazeDeviceId;Lxyz/block/trailblaze/llm/TrailblazeLlmModel;Lxyz/block/trailblaze/model/TrailblazeConfig;Lxyz/block/trailblaze/llm/TrailblazeReferrer;Ljava/lang/String;Lxyz/block/trailblaze/devices/TrailblazeDriverType;Lxyz/block/trailblaze/mcp/AgentImplementation;ZLjava/util/Map;Ljava/lang/Integer;Ljava/util/Map;Ljava/util/Map;Ljava/util/List;Ljava/util/Map;Ljava/util/Map;Ljava/util/List;Ljava/lang/String;Ljava/lang/String;Ljava/util/Map;Ljava/util/List;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
-	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ZLxyz/block/trailblaze/devices/TrailblazeDeviceId;Lxyz/block/trailblaze/llm/TrailblazeLlmModel;Lxyz/block/trailblaze/model/TrailblazeConfig;Lxyz/block/trailblaze/llm/TrailblazeReferrer;Ljava/lang/String;Lxyz/block/trailblaze/devices/TrailblazeDriverType;Lxyz/block/trailblaze/mcp/AgentImplementation;ZLjava/util/Map;Ljava/lang/Integer;Ljava/util/Map;Ljava/util/Map;Ljava/util/List;Ljava/util/Map;Ljava/util/Map;Ljava/util/List;Ljava/lang/String;Ljava/lang/String;Ljava/util/Map;Ljava/util/List;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ZLxyz/block/trailblaze/devices/TrailblazeDeviceId;Lxyz/block/trailblaze/llm/TrailblazeLlmModel;Lxyz/block/trailblaze/model/TrailblazeConfig;Lxyz/block/trailblaze/llm/TrailblazeReferrer;Ljava/lang/String;Lxyz/block/trailblaze/devices/TrailblazeDriverType;ZLjava/util/Map;Ljava/lang/Integer;Ljava/util/Map;Ljava/util/Map;Ljava/util/List;Ljava/util/Map;Ljava/util/Map;Ljava/util/List;Ljava/lang/String;Ljava/lang/String;Ljava/util/Map;Ljava/util/List;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ZLxyz/block/trailblaze/devices/TrailblazeDeviceId;Lxyz/block/trailblaze/llm/TrailblazeLlmModel;Lxyz/block/trailblaze/model/TrailblazeConfig;Lxyz/block/trailblaze/llm/TrailblazeReferrer;Ljava/lang/String;Lxyz/block/trailblaze/devices/TrailblazeDriverType;ZLjava/util/Map;Ljava/lang/Integer;Ljava/util/Map;Ljava/util/Map;Ljava/util/List;Ljava/util/Map;Ljava/util/Map;Ljava/util/List;Ljava/lang/String;Ljava/lang/String;Ljava/util/Map;Ljava/util/List;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun component1 ()Ljava/lang/String;
 	public final fun component10-3wr0nlg ()Ljava/lang/String;
 	public final fun component11 ()Lxyz/block/trailblaze/devices/TrailblazeDriverType;
-	public final fun component12 ()Lxyz/block/trailblaze/mcp/AgentImplementation;
-	public final fun component13 ()Z
-	public final fun component14 ()Ljava/util/Map;
-	public final fun component15 ()Ljava/lang/Integer;
+	public final fun component12 ()Z
+	public final fun component13 ()Ljava/util/Map;
+	public final fun component14 ()Ljava/lang/Integer;
+	public final fun component15 ()Ljava/util/Map;
 	public final fun component16 ()Ljava/util/Map;
-	public final fun component17 ()Ljava/util/Map;
-	public final fun component18 ()Ljava/util/List;
+	public final fun component17 ()Ljava/util/List;
+	public final fun component18 ()Ljava/util/Map;
 	public final fun component19 ()Ljava/util/Map;
 	public final fun component2 ()Ljava/lang/String;
-	public final fun component20 ()Ljava/util/Map;
-	public final fun component21 ()Ljava/util/List;
+	public final fun component20 ()Ljava/util/List;
+	public final fun component21 ()Ljava/lang/String;
 	public final fun component22 ()Ljava/lang/String;
-	public final fun component23 ()Ljava/lang/String;
-	public final fun component24 ()Ljava/util/Map;
-	public final fun component25 ()Ljava/util/List;
+	public final fun component23 ()Ljava/util/Map;
+	public final fun component24 ()Ljava/util/List;
 	public final fun component3 ()Ljava/lang/String;
 	public final fun component4 ()Ljava/lang/String;
 	public final fun component5 ()Z
@@ -7846,8 +7811,8 @@ public final class xyz/block/trailblaze/llm/RunYamlRequest : xyz/block/trailblaz
 	public final fun component7 ()Lxyz/block/trailblaze/llm/TrailblazeLlmModel;
 	public final fun component8 ()Lxyz/block/trailblaze/model/TrailblazeConfig;
 	public final fun component9 ()Lxyz/block/trailblaze/llm/TrailblazeReferrer;
-	public final fun copy-gXPnFeg (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ZLxyz/block/trailblaze/devices/TrailblazeDeviceId;Lxyz/block/trailblaze/llm/TrailblazeLlmModel;Lxyz/block/trailblaze/model/TrailblazeConfig;Lxyz/block/trailblaze/llm/TrailblazeReferrer;Ljava/lang/String;Lxyz/block/trailblaze/devices/TrailblazeDriverType;Lxyz/block/trailblaze/mcp/AgentImplementation;ZLjava/util/Map;Ljava/lang/Integer;Ljava/util/Map;Ljava/util/Map;Ljava/util/List;Ljava/util/Map;Ljava/util/Map;Ljava/util/List;Ljava/lang/String;Ljava/lang/String;Ljava/util/Map;Ljava/util/List;)Lxyz/block/trailblaze/llm/RunYamlRequest;
-	public static synthetic fun copy-gXPnFeg$default (Lxyz/block/trailblaze/llm/RunYamlRequest;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ZLxyz/block/trailblaze/devices/TrailblazeDeviceId;Lxyz/block/trailblaze/llm/TrailblazeLlmModel;Lxyz/block/trailblaze/model/TrailblazeConfig;Lxyz/block/trailblaze/llm/TrailblazeReferrer;Ljava/lang/String;Lxyz/block/trailblaze/devices/TrailblazeDriverType;Lxyz/block/trailblaze/mcp/AgentImplementation;ZLjava/util/Map;Ljava/lang/Integer;Ljava/util/Map;Ljava/util/Map;Ljava/util/List;Ljava/util/Map;Ljava/util/Map;Ljava/util/List;Ljava/lang/String;Ljava/lang/String;Ljava/util/Map;Ljava/util/List;ILjava/lang/Object;)Lxyz/block/trailblaze/llm/RunYamlRequest;
+	public final fun copy-FWeYQLw (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ZLxyz/block/trailblaze/devices/TrailblazeDeviceId;Lxyz/block/trailblaze/llm/TrailblazeLlmModel;Lxyz/block/trailblaze/model/TrailblazeConfig;Lxyz/block/trailblaze/llm/TrailblazeReferrer;Ljava/lang/String;Lxyz/block/trailblaze/devices/TrailblazeDriverType;ZLjava/util/Map;Ljava/lang/Integer;Ljava/util/Map;Ljava/util/Map;Ljava/util/List;Ljava/util/Map;Ljava/util/Map;Ljava/util/List;Ljava/lang/String;Ljava/lang/String;Ljava/util/Map;Ljava/util/List;)Lxyz/block/trailblaze/llm/RunYamlRequest;
+	public static synthetic fun copy-FWeYQLw$default (Lxyz/block/trailblaze/llm/RunYamlRequest;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ZLxyz/block/trailblaze/devices/TrailblazeDeviceId;Lxyz/block/trailblaze/llm/TrailblazeLlmModel;Lxyz/block/trailblaze/model/TrailblazeConfig;Lxyz/block/trailblaze/llm/TrailblazeReferrer;Ljava/lang/String;Lxyz/block/trailblaze/devices/TrailblazeDriverType;ZLjava/util/Map;Ljava/lang/Integer;Ljava/util/Map;Ljava/util/Map;Ljava/util/List;Ljava/util/Map;Ljava/util/Map;Ljava/util/List;Ljava/lang/String;Ljava/lang/String;Ljava/util/Map;Ljava/util/List;ILjava/lang/Object;)Lxyz/block/trailblaze/llm/RunYamlRequest;
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getAgentImplementation ()Lxyz/block/trailblaze/mcp/AgentImplementation;
 	public final fun getArgsSnapshot ()Ljava/util/Map;
@@ -8039,8 +8004,6 @@ public final class xyz/block/trailblaze/llm/TrailblazeLlmModel$Companion {
 	public static synthetic fun mcpSampling$default (Lxyz/block/trailblaze/llm/TrailblazeLlmModel$Companion;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lxyz/block/trailblaze/llm/TrailblazeLlmModel;
 	public static synthetic fun mcpSampling$default (Lxyz/block/trailblaze/llm/TrailblazeLlmModel$Companion;Lxyz/block/trailblaze/llm/McpClient;Ljava/lang/String;ILjava/lang/Object;)Lxyz/block/trailblaze/llm/TrailblazeLlmModel;
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
-	public final fun toTrailblazeLlmModel (Lai/koog/prompt/llm/LLModel;DDDLjava/lang/Long;Lxyz/block/trailblaze/llm/ImageTokenFormula;)Lxyz/block/trailblaze/llm/TrailblazeLlmModel;
-	public static synthetic fun toTrailblazeLlmModel$default (Lxyz/block/trailblaze/llm/TrailblazeLlmModel$Companion;Lai/koog/prompt/llm/LLModel;DDDLjava/lang/Long;Lxyz/block/trailblaze/llm/ImageTokenFormula;ILjava/lang/Object;)Lxyz/block/trailblaze/llm/TrailblazeLlmModel;
 }
 
 public abstract interface class xyz/block/trailblaze/llm/TrailblazeLlmModelList {
@@ -8050,7 +8013,6 @@ public abstract interface class xyz/block/trailblaze/llm/TrailblazeLlmModelList 
 
 public final class xyz/block/trailblaze/llm/TrailblazeLlmModels {
 	public static final field INSTANCE Lxyz/block/trailblaze/llm/TrailblazeLlmModels;
-	public final fun defaultModelForTier (Lxyz/block/trailblaze/agent/AgentTier;)Lxyz/block/trailblaze/llm/TrailblazeLlmModel;
 	public final fun getALL_MODELS ()Ljava/util/List;
 	public final fun getCLAUDE_HAIKU ()Lxyz/block/trailblaze/llm/TrailblazeLlmModel;
 	public final fun getCLAUDE_SONNET ()Lxyz/block/trailblaze/llm/TrailblazeLlmModel;
@@ -8062,7 +8024,6 @@ public final class xyz/block/trailblaze/llm/TrailblazeLlmModels {
 	public final fun getGPT_4O_MINI ()Lxyz/block/trailblaze/llm/TrailblazeLlmModel;
 	public final fun getINNER_AGENT_MODELS ()Ljava/util/List;
 	public final fun getOUTER_AGENT_MODELS ()Ljava/util/List;
-	public final fun modelsForTier (Lxyz/block/trailblaze/agent/AgentTier;)Ljava/util/List;
 }
 
 public final class xyz/block/trailblaze/llm/TrailblazeLlmProvider {
@@ -8798,32 +8759,37 @@ public final class xyz/block/trailblaze/logs/client/TrailblazeLog$AccessibilityA
 
 public final class xyz/block/trailblaze/logs/client/TrailblazeLog$AgentDriverLog : xyz/block/trailblaze/logs/client/TrailblazeLog, xyz/block/trailblaze/logs/model/HasDuration, xyz/block/trailblaze/logs/model/HasScreenshot, xyz/block/trailblaze/logs/model/HasTraceId {
 	public static final field Companion Lxyz/block/trailblaze/logs/client/TrailblazeLog$AgentDriverLog$Companion;
-	public synthetic fun <init> (Lxyz/block/trailblaze/api/ViewHierarchyTreeNode;Lxyz/block/trailblaze/api/TrailblazeNode;Lxyz/block/trailblaze/api/TrailblazeNode;Ljava/lang/String;Lxyz/block/trailblaze/api/AgentDriverAction;Lxyz/block/trailblaze/api/CaptureCoverage;JLjava/lang/String;Lkotlinx/datetime/Instant;IILjava/lang/String;Lxyz/block/trailblaze/logs/model/TrailblazeClockDomain;Lkotlinx/datetime/Instant;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
-	public synthetic fun <init> (Lxyz/block/trailblaze/api/ViewHierarchyTreeNode;Lxyz/block/trailblaze/api/TrailblazeNode;Lxyz/block/trailblaze/api/TrailblazeNode;Ljava/lang/String;Lxyz/block/trailblaze/api/AgentDriverAction;Lxyz/block/trailblaze/api/CaptureCoverage;JLjava/lang/String;Lkotlinx/datetime/Instant;IILjava/lang/String;Lxyz/block/trailblaze/logs/model/TrailblazeClockDomain;Lkotlinx/datetime/Instant;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun <init> (Lxyz/block/trailblaze/api/ViewHierarchyTreeNode;Lxyz/block/trailblaze/api/TrailblazeNode;Lxyz/block/trailblaze/api/TrailblazeNode;Ljava/util/List;Ljava/lang/String;Lxyz/block/trailblaze/api/AgentDriverAction;Lxyz/block/trailblaze/api/CaptureCoverage;Ljava/util/List;Ljava/lang/String;JLjava/lang/String;Lkotlinx/datetime/Instant;IILjava/lang/String;Lxyz/block/trailblaze/logs/model/TrailblazeClockDomain;Lkotlinx/datetime/Instant;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun <init> (Lxyz/block/trailblaze/api/ViewHierarchyTreeNode;Lxyz/block/trailblaze/api/TrailblazeNode;Lxyz/block/trailblaze/api/TrailblazeNode;Ljava/util/List;Ljava/lang/String;Lxyz/block/trailblaze/api/AgentDriverAction;Lxyz/block/trailblaze/api/CaptureCoverage;Ljava/util/List;Ljava/lang/String;JLjava/lang/String;Lkotlinx/datetime/Instant;IILjava/lang/String;Lxyz/block/trailblaze/logs/model/TrailblazeClockDomain;Lkotlinx/datetime/Instant;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun component1 ()Lxyz/block/trailblaze/api/ViewHierarchyTreeNode;
-	public final fun component10 ()I
-	public final fun component11 ()I
-	public final fun component12-3wr0nlg ()Ljava/lang/String;
-	public final fun component13 ()Lxyz/block/trailblaze/logs/model/TrailblazeClockDomain;
-	public final fun component14 ()Lkotlinx/datetime/Instant;
+	public final fun component10 ()J
+	public final fun component11-OeRlnm0 ()Ljava/lang/String;
+	public final fun component12 ()Lkotlinx/datetime/Instant;
+	public final fun component13 ()I
+	public final fun component14 ()I
+	public final fun component15-3wr0nlg ()Ljava/lang/String;
+	public final fun component16 ()Lxyz/block/trailblaze/logs/model/TrailblazeClockDomain;
+	public final fun component17 ()Lkotlinx/datetime/Instant;
 	public final fun component2 ()Lxyz/block/trailblaze/api/TrailblazeNode;
 	public final fun component3 ()Lxyz/block/trailblaze/api/TrailblazeNode;
-	public final fun component4 ()Ljava/lang/String;
-	public final fun component5 ()Lxyz/block/trailblaze/api/AgentDriverAction;
-	public final fun component6 ()Lxyz/block/trailblaze/api/CaptureCoverage;
-	public final fun component7 ()J
-	public final fun component8-OeRlnm0 ()Ljava/lang/String;
-	public final fun component9 ()Lkotlinx/datetime/Instant;
-	public final fun copy-h91MVGA (Lxyz/block/trailblaze/api/ViewHierarchyTreeNode;Lxyz/block/trailblaze/api/TrailblazeNode;Lxyz/block/trailblaze/api/TrailblazeNode;Ljava/lang/String;Lxyz/block/trailblaze/api/AgentDriverAction;Lxyz/block/trailblaze/api/CaptureCoverage;JLjava/lang/String;Lkotlinx/datetime/Instant;IILjava/lang/String;Lxyz/block/trailblaze/logs/model/TrailblazeClockDomain;Lkotlinx/datetime/Instant;)Lxyz/block/trailblaze/logs/client/TrailblazeLog$AgentDriverLog;
-	public static synthetic fun copy-h91MVGA$default (Lxyz/block/trailblaze/logs/client/TrailblazeLog$AgentDriverLog;Lxyz/block/trailblaze/api/ViewHierarchyTreeNode;Lxyz/block/trailblaze/api/TrailblazeNode;Lxyz/block/trailblaze/api/TrailblazeNode;Ljava/lang/String;Lxyz/block/trailblaze/api/AgentDriverAction;Lxyz/block/trailblaze/api/CaptureCoverage;JLjava/lang/String;Lkotlinx/datetime/Instant;IILjava/lang/String;Lxyz/block/trailblaze/logs/model/TrailblazeClockDomain;Lkotlinx/datetime/Instant;ILjava/lang/Object;)Lxyz/block/trailblaze/logs/client/TrailblazeLog$AgentDriverLog;
+	public final fun component4 ()Ljava/util/List;
+	public final fun component5 ()Ljava/lang/String;
+	public final fun component6 ()Lxyz/block/trailblaze/api/AgentDriverAction;
+	public final fun component7 ()Lxyz/block/trailblaze/api/CaptureCoverage;
+	public final fun component8 ()Ljava/util/List;
+	public final fun component9 ()Ljava/lang/String;
+	public final fun copy-1sYdr_I (Lxyz/block/trailblaze/api/ViewHierarchyTreeNode;Lxyz/block/trailblaze/api/TrailblazeNode;Lxyz/block/trailblaze/api/TrailblazeNode;Ljava/util/List;Ljava/lang/String;Lxyz/block/trailblaze/api/AgentDriverAction;Lxyz/block/trailblaze/api/CaptureCoverage;Ljava/util/List;Ljava/lang/String;JLjava/lang/String;Lkotlinx/datetime/Instant;IILjava/lang/String;Lxyz/block/trailblaze/logs/model/TrailblazeClockDomain;Lkotlinx/datetime/Instant;)Lxyz/block/trailblaze/logs/client/TrailblazeLog$AgentDriverLog;
+	public static synthetic fun copy-1sYdr_I$default (Lxyz/block/trailblaze/logs/client/TrailblazeLog$AgentDriverLog;Lxyz/block/trailblaze/api/ViewHierarchyTreeNode;Lxyz/block/trailblaze/api/TrailblazeNode;Lxyz/block/trailblaze/api/TrailblazeNode;Ljava/util/List;Ljava/lang/String;Lxyz/block/trailblaze/api/AgentDriverAction;Lxyz/block/trailblaze/api/CaptureCoverage;Ljava/util/List;Ljava/lang/String;JLjava/lang/String;Lkotlinx/datetime/Instant;IILjava/lang/String;Lxyz/block/trailblaze/logs/model/TrailblazeClockDomain;Lkotlinx/datetime/Instant;ILjava/lang/Object;)Lxyz/block/trailblaze/logs/client/TrailblazeLog$AgentDriverLog;
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getAction ()Lxyz/block/trailblaze/api/AgentDriverAction;
 	public final fun getCaptureCoverage ()Lxyz/block/trailblaze/api/CaptureCoverage;
+	public final fun getCaptureId ()Ljava/lang/String;
 	public fun getClock ()Lxyz/block/trailblaze/logs/model/TrailblazeClockDomain;
 	public fun getDeviceHeight ()I
 	public fun getDeviceWidth ()I
 	public final fun getDriverMigrationTreeNode ()Lxyz/block/trailblaze/api/TrailblazeNode;
 	public fun getDurationMs ()J
+	public final fun getFrameTrees ()Ljava/util/List;
 	public fun getHostReceivedAt ()Lkotlinx/datetime/Instant;
 	public fun getScreenshotFile ()Ljava/lang/String;
 	public fun getSession-OeRlnm0 ()Ljava/lang/String;
@@ -8831,6 +8797,7 @@ public final class xyz/block/trailblaze/logs/client/TrailblazeLog$AgentDriverLog
 	public fun getTraceId-3wr0nlg ()Ljava/lang/String;
 	public final fun getTrailblazeNodeTree ()Lxyz/block/trailblaze/api/TrailblazeNode;
 	public final fun getViewHierarchy ()Lxyz/block/trailblaze/api/ViewHierarchyTreeNode;
+	public final fun getVisibleStrings ()Ljava/util/List;
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
 }
@@ -9485,10 +9452,61 @@ public final class xyz/block/trailblaze/logs/client/TrailblazeLog$TrailblazeAgen
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
 }
 
+public final class xyz/block/trailblaze/logs/client/TrailblazeLog$TrailblazeDecisionRequestLog : xyz/block/trailblaze/logs/client/TrailblazeLog, xyz/block/trailblaze/logs/model/HasDuration, xyz/block/trailblaze/logs/model/HasTraceId {
+	public static final field Companion Lxyz/block/trailblaze/logs/client/TrailblazeLog$TrailblazeDecisionRequestLog$Companion;
+	public synthetic fun <init> (Ljava/lang/String;Lxyz/block/trailblaze/decision/DecisionRequest;Lxyz/block/trailblaze/decision/DecisionResponse;Ljava/lang/String;Ljava/lang/String;Lxyz/block/trailblaze/decision/DecisionCost;Ljava/lang/String;JLjava/lang/String;Lkotlinx/datetime/Instant;Lxyz/block/trailblaze/logs/model/TrailblazeClockDomain;Lkotlinx/datetime/Instant;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun <init> (Ljava/lang/String;Lxyz/block/trailblaze/decision/DecisionRequest;Lxyz/block/trailblaze/decision/DecisionResponse;Ljava/lang/String;Ljava/lang/String;Lxyz/block/trailblaze/decision/DecisionCost;Ljava/lang/String;JLjava/lang/String;Lkotlinx/datetime/Instant;Lxyz/block/trailblaze/logs/model/TrailblazeClockDomain;Lkotlinx/datetime/Instant;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component10 ()Lkotlinx/datetime/Instant;
+	public final fun component11 ()Lxyz/block/trailblaze/logs/model/TrailblazeClockDomain;
+	public final fun component12 ()Lkotlinx/datetime/Instant;
+	public final fun component2 ()Lxyz/block/trailblaze/decision/DecisionRequest;
+	public final fun component3 ()Lxyz/block/trailblaze/decision/DecisionResponse;
+	public final fun component4 ()Ljava/lang/String;
+	public final fun component5 ()Ljava/lang/String;
+	public final fun component6 ()Lxyz/block/trailblaze/decision/DecisionCost;
+	public final fun component7-3wr0nlg ()Ljava/lang/String;
+	public final fun component8 ()J
+	public final fun component9-OeRlnm0 ()Ljava/lang/String;
+	public final fun copy-G5hSIUc (Ljava/lang/String;Lxyz/block/trailblaze/decision/DecisionRequest;Lxyz/block/trailblaze/decision/DecisionResponse;Ljava/lang/String;Ljava/lang/String;Lxyz/block/trailblaze/decision/DecisionCost;Ljava/lang/String;JLjava/lang/String;Lkotlinx/datetime/Instant;Lxyz/block/trailblaze/logs/model/TrailblazeClockDomain;Lkotlinx/datetime/Instant;)Lxyz/block/trailblaze/logs/client/TrailblazeLog$TrailblazeDecisionRequestLog;
+	public static synthetic fun copy-G5hSIUc$default (Lxyz/block/trailblaze/logs/client/TrailblazeLog$TrailblazeDecisionRequestLog;Ljava/lang/String;Lxyz/block/trailblaze/decision/DecisionRequest;Lxyz/block/trailblaze/decision/DecisionResponse;Ljava/lang/String;Ljava/lang/String;Lxyz/block/trailblaze/decision/DecisionCost;Ljava/lang/String;JLjava/lang/String;Lkotlinx/datetime/Instant;Lxyz/block/trailblaze/logs/model/TrailblazeClockDomain;Lkotlinx/datetime/Instant;ILjava/lang/Object;)Lxyz/block/trailblaze/logs/client/TrailblazeLog$TrailblazeDecisionRequestLog;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getClock ()Lxyz/block/trailblaze/logs/model/TrailblazeClockDomain;
+	public final fun getCost ()Lxyz/block/trailblaze/decision/DecisionCost;
+	public fun getDurationMs ()J
+	public final fun getEngine ()Ljava/lang/String;
+	public final fun getErrorMessage ()Ljava/lang/String;
+	public fun getHostReceivedAt ()Lkotlinx/datetime/Instant;
+	public final fun getOutcome ()Ljava/lang/String;
+	public final fun getRequest ()Lxyz/block/trailblaze/decision/DecisionRequest;
+	public final fun getResponse ()Lxyz/block/trailblaze/decision/DecisionResponse;
+	public fun getSession-OeRlnm0 ()Ljava/lang/String;
+	public fun getTimestamp ()Lkotlinx/datetime/Instant;
+	public fun getTraceId-3wr0nlg ()Ljava/lang/String;
+	public fun hashCode ()I
+	public final fun summary ()Ljava/lang/String;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class xyz/block/trailblaze/logs/client/TrailblazeLog$TrailblazeDecisionRequestLog$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lxyz/block/trailblaze/logs/client/TrailblazeLog$TrailblazeDecisionRequestLog$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lxyz/block/trailblaze/logs/client/TrailblazeLog$TrailblazeDecisionRequestLog;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lxyz/block/trailblaze/logs/client/TrailblazeLog$TrailblazeDecisionRequestLog;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class xyz/block/trailblaze/logs/client/TrailblazeLog$TrailblazeDecisionRequestLog$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
 public final class xyz/block/trailblaze/logs/client/TrailblazeLog$TrailblazeLlmRequestLog : xyz/block/trailblaze/logs/client/TrailblazeLog, xyz/block/trailblaze/logs/model/HasAgentTaskStatus, xyz/block/trailblaze/logs/model/HasDuration, xyz/block/trailblaze/logs/model/HasScreenshot, xyz/block/trailblaze/logs/model/HasTraceId {
 	public static final field Companion Lxyz/block/trailblaze/logs/client/TrailblazeLog$TrailblazeLlmRequestLog$Companion;
-	public synthetic fun <init> (Lxyz/block/trailblaze/agent/model/AgentTaskStatus;Lxyz/block/trailblaze/api/ViewHierarchyTreeNode;Lxyz/block/trailblaze/api/ViewHierarchyTreeNode;Lxyz/block/trailblaze/api/TrailblazeNode;Lxyz/block/trailblaze/api/TrailblazeNode;Ljava/lang/String;Lxyz/block/trailblaze/llm/TrailblazeLlmModel;Ljava/util/List;Ljava/util/List;Ljava/util/List;Ljava/util/List;Ljava/lang/String;Ljava/util/List;Lxyz/block/trailblaze/llm/LlmRequestUsageAndCost;Ljava/lang/String;JLjava/lang/String;Lkotlinx/datetime/Instant;Ljava/lang/String;IILxyz/block/trailblaze/logs/client/TrailblazeLog$LlmRequestContext;Ljava/lang/String;Ljava/lang/Boolean;Lxyz/block/trailblaze/logs/model/TrailblazeClockDomain;Lkotlinx/datetime/Instant;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
-	public synthetic fun <init> (Lxyz/block/trailblaze/agent/model/AgentTaskStatus;Lxyz/block/trailblaze/api/ViewHierarchyTreeNode;Lxyz/block/trailblaze/api/ViewHierarchyTreeNode;Lxyz/block/trailblaze/api/TrailblazeNode;Lxyz/block/trailblaze/api/TrailblazeNode;Ljava/lang/String;Lxyz/block/trailblaze/llm/TrailblazeLlmModel;Ljava/util/List;Ljava/util/List;Ljava/util/List;Ljava/util/List;Ljava/lang/String;Ljava/util/List;Lxyz/block/trailblaze/llm/LlmRequestUsageAndCost;Ljava/lang/String;JLjava/lang/String;Lkotlinx/datetime/Instant;Ljava/lang/String;IILxyz/block/trailblaze/logs/client/TrailblazeLog$LlmRequestContext;Ljava/lang/String;Ljava/lang/Boolean;Lxyz/block/trailblaze/logs/model/TrailblazeClockDomain;Lkotlinx/datetime/Instant;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun <init> (Lxyz/block/trailblaze/agent/model/AgentTaskStatus;Lxyz/block/trailblaze/api/ViewHierarchyTreeNode;Lxyz/block/trailblaze/api/ViewHierarchyTreeNode;Lxyz/block/trailblaze/api/TrailblazeNode;Lxyz/block/trailblaze/api/TrailblazeNode;Ljava/lang/String;Lxyz/block/trailblaze/llm/TrailblazeLlmModel;Ljava/util/List;Ljava/util/List;Ljava/util/List;Ljava/util/List;Ljava/lang/String;Ljava/util/List;Lxyz/block/trailblaze/llm/LlmRequestUsageAndCost;Ljava/lang/String;JLjava/lang/String;Lkotlinx/datetime/Instant;Ljava/lang/String;IILxyz/block/trailblaze/logs/client/TrailblazeLog$LlmRequestContext;Ljava/lang/String;Ljava/lang/Boolean;Ljava/util/List;Ljava/lang/String;Lxyz/block/trailblaze/logs/model/TrailblazeClockDomain;Lkotlinx/datetime/Instant;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun <init> (Lxyz/block/trailblaze/agent/model/AgentTaskStatus;Lxyz/block/trailblaze/api/ViewHierarchyTreeNode;Lxyz/block/trailblaze/api/ViewHierarchyTreeNode;Lxyz/block/trailblaze/api/TrailblazeNode;Lxyz/block/trailblaze/api/TrailblazeNode;Ljava/lang/String;Lxyz/block/trailblaze/llm/TrailblazeLlmModel;Ljava/util/List;Ljava/util/List;Ljava/util/List;Ljava/util/List;Ljava/lang/String;Ljava/util/List;Lxyz/block/trailblaze/llm/LlmRequestUsageAndCost;Ljava/lang/String;JLjava/lang/String;Lkotlinx/datetime/Instant;Ljava/lang/String;IILxyz/block/trailblaze/logs/client/TrailblazeLog$LlmRequestContext;Ljava/lang/String;Ljava/lang/Boolean;Ljava/util/List;Ljava/lang/String;Lxyz/block/trailblaze/logs/model/TrailblazeClockDomain;Lkotlinx/datetime/Instant;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun component1 ()Lxyz/block/trailblaze/agent/model/AgentTaskStatus;
 	public final fun component10 ()Ljava/util/List;
 	public final fun component11 ()Ljava/util/List;
@@ -9506,8 +9524,10 @@ public final class xyz/block/trailblaze/logs/client/TrailblazeLog$TrailblazeLlmR
 	public final fun component22 ()Lxyz/block/trailblaze/logs/client/TrailblazeLog$LlmRequestContext;
 	public final fun component23 ()Ljava/lang/String;
 	public final fun component24 ()Ljava/lang/Boolean;
-	public final fun component25 ()Lxyz/block/trailblaze/logs/model/TrailblazeClockDomain;
-	public final fun component26 ()Lkotlinx/datetime/Instant;
+	public final fun component25 ()Ljava/util/List;
+	public final fun component26 ()Ljava/lang/String;
+	public final fun component27 ()Lxyz/block/trailblaze/logs/model/TrailblazeClockDomain;
+	public final fun component28 ()Lkotlinx/datetime/Instant;
 	public final fun component3 ()Lxyz/block/trailblaze/api/ViewHierarchyTreeNode;
 	public final fun component4 ()Lxyz/block/trailblaze/api/TrailblazeNode;
 	public final fun component5 ()Lxyz/block/trailblaze/api/TrailblazeNode;
@@ -9515,11 +9535,12 @@ public final class xyz/block/trailblaze/logs/client/TrailblazeLog$TrailblazeLlmR
 	public final fun component7 ()Lxyz/block/trailblaze/llm/TrailblazeLlmModel;
 	public final fun component8 ()Ljava/util/List;
 	public final fun component9 ()Ljava/util/List;
-	public final fun copy-pxS41EE (Lxyz/block/trailblaze/agent/model/AgentTaskStatus;Lxyz/block/trailblaze/api/ViewHierarchyTreeNode;Lxyz/block/trailblaze/api/ViewHierarchyTreeNode;Lxyz/block/trailblaze/api/TrailblazeNode;Lxyz/block/trailblaze/api/TrailblazeNode;Ljava/lang/String;Lxyz/block/trailblaze/llm/TrailblazeLlmModel;Ljava/util/List;Ljava/util/List;Ljava/util/List;Ljava/util/List;Ljava/lang/String;Ljava/util/List;Lxyz/block/trailblaze/llm/LlmRequestUsageAndCost;Ljava/lang/String;JLjava/lang/String;Lkotlinx/datetime/Instant;Ljava/lang/String;IILxyz/block/trailblaze/logs/client/TrailblazeLog$LlmRequestContext;Ljava/lang/String;Ljava/lang/Boolean;Lxyz/block/trailblaze/logs/model/TrailblazeClockDomain;Lkotlinx/datetime/Instant;)Lxyz/block/trailblaze/logs/client/TrailblazeLog$TrailblazeLlmRequestLog;
-	public static synthetic fun copy-pxS41EE$default (Lxyz/block/trailblaze/logs/client/TrailblazeLog$TrailblazeLlmRequestLog;Lxyz/block/trailblaze/agent/model/AgentTaskStatus;Lxyz/block/trailblaze/api/ViewHierarchyTreeNode;Lxyz/block/trailblaze/api/ViewHierarchyTreeNode;Lxyz/block/trailblaze/api/TrailblazeNode;Lxyz/block/trailblaze/api/TrailblazeNode;Ljava/lang/String;Lxyz/block/trailblaze/llm/TrailblazeLlmModel;Ljava/util/List;Ljava/util/List;Ljava/util/List;Ljava/util/List;Ljava/lang/String;Ljava/util/List;Lxyz/block/trailblaze/llm/LlmRequestUsageAndCost;Ljava/lang/String;JLjava/lang/String;Lkotlinx/datetime/Instant;Ljava/lang/String;IILxyz/block/trailblaze/logs/client/TrailblazeLog$LlmRequestContext;Ljava/lang/String;Ljava/lang/Boolean;Lxyz/block/trailblaze/logs/model/TrailblazeClockDomain;Lkotlinx/datetime/Instant;ILjava/lang/Object;)Lxyz/block/trailblaze/logs/client/TrailblazeLog$TrailblazeLlmRequestLog;
+	public final fun copy-ZsZJN4w (Lxyz/block/trailblaze/agent/model/AgentTaskStatus;Lxyz/block/trailblaze/api/ViewHierarchyTreeNode;Lxyz/block/trailblaze/api/ViewHierarchyTreeNode;Lxyz/block/trailblaze/api/TrailblazeNode;Lxyz/block/trailblaze/api/TrailblazeNode;Ljava/lang/String;Lxyz/block/trailblaze/llm/TrailblazeLlmModel;Ljava/util/List;Ljava/util/List;Ljava/util/List;Ljava/util/List;Ljava/lang/String;Ljava/util/List;Lxyz/block/trailblaze/llm/LlmRequestUsageAndCost;Ljava/lang/String;JLjava/lang/String;Lkotlinx/datetime/Instant;Ljava/lang/String;IILxyz/block/trailblaze/logs/client/TrailblazeLog$LlmRequestContext;Ljava/lang/String;Ljava/lang/Boolean;Ljava/util/List;Ljava/lang/String;Lxyz/block/trailblaze/logs/model/TrailblazeClockDomain;Lkotlinx/datetime/Instant;)Lxyz/block/trailblaze/logs/client/TrailblazeLog$TrailblazeLlmRequestLog;
+	public static synthetic fun copy-ZsZJN4w$default (Lxyz/block/trailblaze/logs/client/TrailblazeLog$TrailblazeLlmRequestLog;Lxyz/block/trailblaze/agent/model/AgentTaskStatus;Lxyz/block/trailblaze/api/ViewHierarchyTreeNode;Lxyz/block/trailblaze/api/ViewHierarchyTreeNode;Lxyz/block/trailblaze/api/TrailblazeNode;Lxyz/block/trailblaze/api/TrailblazeNode;Ljava/lang/String;Lxyz/block/trailblaze/llm/TrailblazeLlmModel;Ljava/util/List;Ljava/util/List;Ljava/util/List;Ljava/util/List;Ljava/lang/String;Ljava/util/List;Lxyz/block/trailblaze/llm/LlmRequestUsageAndCost;Ljava/lang/String;JLjava/lang/String;Lkotlinx/datetime/Instant;Ljava/lang/String;IILxyz/block/trailblaze/logs/client/TrailblazeLog$LlmRequestContext;Ljava/lang/String;Ljava/lang/Boolean;Ljava/util/List;Ljava/lang/String;Lxyz/block/trailblaze/logs/model/TrailblazeClockDomain;Lkotlinx/datetime/Instant;ILjava/lang/Object;)Lxyz/block/trailblaze/logs/client/TrailblazeLog$TrailblazeLlmRequestLog;
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getActions ()Ljava/util/List;
 	public fun getAgentTaskStatus ()Lxyz/block/trailblaze/agent/model/AgentTaskStatus;
+	public final fun getCaptureId ()Ljava/lang/String;
 	public fun getClock ()Lxyz/block/trailblaze/logs/model/TrailblazeClockDomain;
 	public fun getDeviceHeight ()I
 	public fun getDeviceWidth ()I
@@ -9545,6 +9566,7 @@ public final class xyz/block/trailblaze/logs/client/TrailblazeLog$TrailblazeLlmR
 	public final fun getTrailblazeNodeTree ()Lxyz/block/trailblaze/api/TrailblazeNode;
 	public final fun getViewHierarchy ()Lxyz/block/trailblaze/api/ViewHierarchyTreeNode;
 	public final fun getViewHierarchyFiltered ()Lxyz/block/trailblaze/api/ViewHierarchyTreeNode;
+	public final fun getVisibleStrings ()Ljava/util/List;
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
 }
@@ -9683,24 +9705,25 @@ public final class xyz/block/trailblaze/logs/client/TrailblazeLog$TrailblazeSess
 
 public final class xyz/block/trailblaze/logs/client/TrailblazeLog$TrailblazeSnapshotLog : xyz/block/trailblaze/logs/client/TrailblazeLog, xyz/block/trailblaze/logs/model/HasScreenshot, xyz/block/trailblaze/logs/model/HasTraceId {
 	public static final field Companion Lxyz/block/trailblaze/logs/client/TrailblazeLog$TrailblazeSnapshotLog$Companion;
-	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Lxyz/block/trailblaze/api/ViewHierarchyTreeNode;Lxyz/block/trailblaze/api/TrailblazeNode;Lxyz/block/trailblaze/api/TrailblazeNode;Ljava/lang/String;Lxyz/block/trailblaze/api/CaptureCoverage;IILjava/lang/String;Lkotlinx/datetime/Instant;Ljava/lang/String;Lxyz/block/trailblaze/logs/model/TrailblazeClockDomain;Lkotlinx/datetime/Instant;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
-	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Lxyz/block/trailblaze/api/ViewHierarchyTreeNode;Lxyz/block/trailblaze/api/TrailblazeNode;Lxyz/block/trailblaze/api/TrailblazeNode;Ljava/lang/String;Lxyz/block/trailblaze/api/CaptureCoverage;IILjava/lang/String;Lkotlinx/datetime/Instant;Ljava/lang/String;Lxyz/block/trailblaze/logs/model/TrailblazeClockDomain;Lkotlinx/datetime/Instant;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Lxyz/block/trailblaze/api/ViewHierarchyTreeNode;Lxyz/block/trailblaze/api/TrailblazeNode;Lxyz/block/trailblaze/api/TrailblazeNode;Ljava/lang/String;Lxyz/block/trailblaze/api/CaptureCoverage;Ljava/util/List;IILjava/lang/String;Lkotlinx/datetime/Instant;Ljava/lang/String;Lxyz/block/trailblaze/logs/model/TrailblazeClockDomain;Lkotlinx/datetime/Instant;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Lxyz/block/trailblaze/api/ViewHierarchyTreeNode;Lxyz/block/trailblaze/api/TrailblazeNode;Lxyz/block/trailblaze/api/TrailblazeNode;Ljava/lang/String;Lxyz/block/trailblaze/api/CaptureCoverage;Ljava/util/List;IILjava/lang/String;Lkotlinx/datetime/Instant;Ljava/lang/String;Lxyz/block/trailblaze/logs/model/TrailblazeClockDomain;Lkotlinx/datetime/Instant;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun component1 ()Ljava/lang/String;
-	public final fun component10-OeRlnm0 ()Ljava/lang/String;
-	public final fun component11 ()Lkotlinx/datetime/Instant;
-	public final fun component12-3wr0nlg ()Ljava/lang/String;
-	public final fun component13 ()Lxyz/block/trailblaze/logs/model/TrailblazeClockDomain;
-	public final fun component14 ()Lkotlinx/datetime/Instant;
+	public final fun component10 ()I
+	public final fun component11-OeRlnm0 ()Ljava/lang/String;
+	public final fun component12 ()Lkotlinx/datetime/Instant;
+	public final fun component13-3wr0nlg ()Ljava/lang/String;
+	public final fun component14 ()Lxyz/block/trailblaze/logs/model/TrailblazeClockDomain;
+	public final fun component15 ()Lkotlinx/datetime/Instant;
 	public final fun component2 ()Ljava/lang/String;
 	public final fun component3 ()Lxyz/block/trailblaze/api/ViewHierarchyTreeNode;
 	public final fun component4 ()Lxyz/block/trailblaze/api/TrailblazeNode;
 	public final fun component5 ()Lxyz/block/trailblaze/api/TrailblazeNode;
 	public final fun component6 ()Ljava/lang/String;
 	public final fun component7 ()Lxyz/block/trailblaze/api/CaptureCoverage;
-	public final fun component8 ()I
+	public final fun component8 ()Ljava/util/List;
 	public final fun component9 ()I
-	public final fun copy-kYcTdvM (Ljava/lang/String;Ljava/lang/String;Lxyz/block/trailblaze/api/ViewHierarchyTreeNode;Lxyz/block/trailblaze/api/TrailblazeNode;Lxyz/block/trailblaze/api/TrailblazeNode;Ljava/lang/String;Lxyz/block/trailblaze/api/CaptureCoverage;IILjava/lang/String;Lkotlinx/datetime/Instant;Ljava/lang/String;Lxyz/block/trailblaze/logs/model/TrailblazeClockDomain;Lkotlinx/datetime/Instant;)Lxyz/block/trailblaze/logs/client/TrailblazeLog$TrailblazeSnapshotLog;
-	public static synthetic fun copy-kYcTdvM$default (Lxyz/block/trailblaze/logs/client/TrailblazeLog$TrailblazeSnapshotLog;Ljava/lang/String;Ljava/lang/String;Lxyz/block/trailblaze/api/ViewHierarchyTreeNode;Lxyz/block/trailblaze/api/TrailblazeNode;Lxyz/block/trailblaze/api/TrailblazeNode;Ljava/lang/String;Lxyz/block/trailblaze/api/CaptureCoverage;IILjava/lang/String;Lkotlinx/datetime/Instant;Ljava/lang/String;Lxyz/block/trailblaze/logs/model/TrailblazeClockDomain;Lkotlinx/datetime/Instant;ILjava/lang/Object;)Lxyz/block/trailblaze/logs/client/TrailblazeLog$TrailblazeSnapshotLog;
+	public final fun copy-ZuyXKOE (Ljava/lang/String;Ljava/lang/String;Lxyz/block/trailblaze/api/ViewHierarchyTreeNode;Lxyz/block/trailblaze/api/TrailblazeNode;Lxyz/block/trailblaze/api/TrailblazeNode;Ljava/lang/String;Lxyz/block/trailblaze/api/CaptureCoverage;Ljava/util/List;IILjava/lang/String;Lkotlinx/datetime/Instant;Ljava/lang/String;Lxyz/block/trailblaze/logs/model/TrailblazeClockDomain;Lkotlinx/datetime/Instant;)Lxyz/block/trailblaze/logs/client/TrailblazeLog$TrailblazeSnapshotLog;
+	public static synthetic fun copy-ZuyXKOE$default (Lxyz/block/trailblaze/logs/client/TrailblazeLog$TrailblazeSnapshotLog;Ljava/lang/String;Ljava/lang/String;Lxyz/block/trailblaze/api/ViewHierarchyTreeNode;Lxyz/block/trailblaze/api/TrailblazeNode;Lxyz/block/trailblaze/api/TrailblazeNode;Ljava/lang/String;Lxyz/block/trailblaze/api/CaptureCoverage;Ljava/util/List;IILjava/lang/String;Lkotlinx/datetime/Instant;Ljava/lang/String;Lxyz/block/trailblaze/logs/model/TrailblazeClockDomain;Lkotlinx/datetime/Instant;ILjava/lang/Object;)Lxyz/block/trailblaze/logs/client/TrailblazeLog$TrailblazeSnapshotLog;
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getCaptureCoverage ()Lxyz/block/trailblaze/api/CaptureCoverage;
 	public fun getClock ()Lxyz/block/trailblaze/logs/model/TrailblazeClockDomain;
@@ -9716,6 +9739,7 @@ public final class xyz/block/trailblaze/logs/client/TrailblazeLog$TrailblazeSnap
 	public final fun getTrailblazeNodeTree ()Lxyz/block/trailblaze/api/TrailblazeNode;
 	public final fun getViewHierarchy ()Lxyz/block/trailblaze/api/ViewHierarchyTreeNode;
 	public final fun getViewHierarchyText ()Ljava/lang/String;
+	public final fun getVisibleStrings ()Ljava/util/List;
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
 }
@@ -9845,6 +9869,11 @@ public final class xyz/block/trailblaze/logs/client/TrailblazeLogClockNormalizat
 	public static final fun normalizedTimestamp (Lxyz/block/trailblaze/logs/client/TrailblazeLog;Lxyz/block/trailblaze/logs/client/TrailblazeDeviceClockOffsets;)Lkotlinx/datetime/Instant;
 	public static final fun normalizedToHostClock (Ljava/util/List;Lxyz/block/trailblaze/logs/client/TrailblazeDeviceClockOffsets;)Ljava/util/List;
 	public static synthetic fun normalizedToHostClock$default (Ljava/util/List;Lxyz/block/trailblaze/logs/client/TrailblazeDeviceClockOffsets;ILjava/lang/Object;)Ljava/util/List;
+}
+
+public final class xyz/block/trailblaze/logs/client/TrailblazeLogVisibleStringsKt {
+	public static final fun getVisibleStringsOrExtracted (Lxyz/block/trailblaze/logs/client/TrailblazeLog;)Ljava/util/List;
+	public static final fun withVisibleStrings (Lxyz/block/trailblaze/logs/client/TrailblazeLog;)Lxyz/block/trailblaze/logs/client/TrailblazeLog;
 }
 
 public final class xyz/block/trailblaze/logs/client/TrailblazeSerializationInitializer {
@@ -10557,17 +10586,14 @@ public final class xyz/block/trailblaze/logs/model/TrailblazeLlmMessage$Companio
 
 public final class xyz/block/trailblaze/mcp/AgentImplementation : java/lang/Enum {
 	public static final field Companion Lxyz/block/trailblaze/mcp/AgentImplementation$Companion;
-	public static final field DEFAULT_NAME Ljava/lang/String;
 	public static final field KOOG_STRATEGY_GRAPH Lxyz/block/trailblaze/mcp/AgentImplementation;
-	public static final field MULTI_AGENT_V3 Lxyz/block/trailblaze/mcp/AgentImplementation;
-	public static final field TRAILBLAZE_RUNNER Lxyz/block/trailblaze/mcp/AgentImplementation;
 	public static fun getEntries ()Lkotlin/enums/EnumEntries;
 	public static fun valueOf (Ljava/lang/String;)Lxyz/block/trailblaze/mcp/AgentImplementation;
 	public static fun values ()[Lxyz/block/trailblaze/mcp/AgentImplementation;
 }
 
 public final class xyz/block/trailblaze/mcp/AgentImplementation$Companion {
-	public final fun getDEFAULT ()Lxyz/block/trailblaze/mcp/AgentImplementation;
+	public final fun fromWireName (Ljava/lang/String;)Lxyz/block/trailblaze/mcp/AgentImplementation;
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
 }
 
@@ -10700,7 +10726,6 @@ public abstract interface class xyz/block/trailblaze/mcp/TrailblazeMcpBridge {
 	public fun executeTrailblazeToolForResult-ePjdmS4 (Lxyz/block/trailblaze/toolcalls/TrailblazeTool;ZLjava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public static synthetic fun executeTrailblazeToolForResult-ePjdmS4$default (Lxyz/block/trailblaze/mcp/TrailblazeMcpBridge;Lxyz/block/trailblaze/toolcalls/TrailblazeTool;ZLjava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 	public fun getActiveSessionId-37nZJyo ()Ljava/lang/String;
-	public fun getAgentImplementation ()Lxyz/block/trailblaze/mcp/AgentImplementation;
 	public abstract fun getAvailableAppTargets ()Ljava/util/Set;
 	public abstract fun getAvailableDevices (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun getConfiguredDriverType (Lxyz/block/trailblaze/devices/TrailblazeDevicePlatform;)Lxyz/block/trailblaze/devices/TrailblazeDriverType;
@@ -10725,14 +10750,12 @@ public abstract interface class xyz/block/trailblaze/mcp/TrailblazeMcpBridge {
 	public fun launchWebBrowserAwait (Ljava/lang/String;Ljava/lang/String;Ljava/lang/Boolean;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public static synthetic fun launchWebBrowserAwait$default (Lxyz/block/trailblaze/mcp/TrailblazeMcpBridge;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Boolean;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 	public fun releasePersistentDeviceConnection (Lxyz/block/trailblaze/devices/TrailblazeDeviceId;)V
-	public abstract fun runYaml (Ljava/lang/String;ZLxyz/block/trailblaze/mcp/AgentImplementation;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public static synthetic fun runYaml$default (Lxyz/block/trailblaze/mcp/TrailblazeMcpBridge;Ljava/lang/String;ZLxyz/block/trailblaze/mcp/AgentImplementation;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
-	public fun runYamlBlocking-gwCluXo (Ljava/lang/String;Ljava/util/List;Lkotlin/jvm/functions/Function1;JLxyz/block/trailblaze/mcp/AgentImplementation;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public static synthetic fun runYamlBlocking-gwCluXo$default (Lxyz/block/trailblaze/mcp/TrailblazeMcpBridge;Ljava/lang/String;Ljava/util/List;Lkotlin/jvm/functions/Function1;JLxyz/block/trailblaze/mcp/AgentImplementation;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public abstract fun runYaml (Ljava/lang/String;ZLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun runYamlBlocking-zkXUZaI (Ljava/lang/String;Ljava/util/List;Lkotlin/jvm/functions/Function1;JLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun runYamlBlocking-zkXUZaI$default (Lxyz/block/trailblaze/mcp/TrailblazeMcpBridge;Ljava/lang/String;Ljava/util/List;Lkotlin/jvm/functions/Function1;JLkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 	public abstract fun selectAppTarget (Ljava/lang/String;)Ljava/lang/String;
 	public abstract fun selectDevice (Lxyz/block/trailblaze/devices/TrailblazeDeviceId;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun selectDeviceForSession (Lxyz/block/trailblaze/devices/TrailblazeDeviceId;)V
-	public fun setAgentImplementation (Lxyz/block/trailblaze/mcp/AgentImplementation;)Ljava/lang/String;
 	public fun setBoundDeviceRoster-VMxRres (Ljava/lang/String;Ljava/util/List;)Ljava/lang/String;
 	public fun setConfiguredDriverType (Lxyz/block/trailblaze/devices/TrailblazeDevicePlatform;Lxyz/block/trailblaze/devices/TrailblazeDriverType;)Ljava/lang/String;
 	public fun setLlmConfig (Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;
@@ -10749,7 +10772,6 @@ public final class xyz/block/trailblaze/mcp/TrailblazeMcpBridge$DefaultImpls {
 	public static fun executeTrailblazeToolForResult-ePjdmS4 (Lxyz/block/trailblaze/mcp/TrailblazeMcpBridge;Lxyz/block/trailblaze/toolcalls/TrailblazeTool;ZLjava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public static synthetic fun executeTrailblazeToolForResult-ePjdmS4$default (Lxyz/block/trailblaze/mcp/TrailblazeMcpBridge;Lxyz/block/trailblaze/toolcalls/TrailblazeTool;ZLjava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 	public static fun getActiveSessionId-37nZJyo (Lxyz/block/trailblaze/mcp/TrailblazeMcpBridge;)Ljava/lang/String;
-	public static fun getAgentImplementation (Lxyz/block/trailblaze/mcp/TrailblazeMcpBridge;)Lxyz/block/trailblaze/mcp/AgentImplementation;
 	public static fun getConfiguredDriverType (Lxyz/block/trailblaze/mcp/TrailblazeMcpBridge;Lxyz/block/trailblaze/devices/TrailblazeDevicePlatform;)Lxyz/block/trailblaze/devices/TrailblazeDriverType;
 	public static fun getDeviceDriverType (Lxyz/block/trailblaze/mcp/TrailblazeMcpBridge;Lxyz/block/trailblaze/devices/TrailblazeDeviceId;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public static fun getDirectScreenStateProvider (Lxyz/block/trailblaze/mcp/TrailblazeMcpBridge;Z)Lkotlin/jvm/functions/Function1;
@@ -10768,11 +10790,9 @@ public final class xyz/block/trailblaze/mcp/TrailblazeMcpBridge$DefaultImpls {
 	public static fun launchWebBrowserAwait (Lxyz/block/trailblaze/mcp/TrailblazeMcpBridge;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Boolean;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public static synthetic fun launchWebBrowserAwait$default (Lxyz/block/trailblaze/mcp/TrailblazeMcpBridge;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Boolean;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 	public static fun releasePersistentDeviceConnection (Lxyz/block/trailblaze/mcp/TrailblazeMcpBridge;Lxyz/block/trailblaze/devices/TrailblazeDeviceId;)V
-	public static synthetic fun runYaml$default (Lxyz/block/trailblaze/mcp/TrailblazeMcpBridge;Ljava/lang/String;ZLxyz/block/trailblaze/mcp/AgentImplementation;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
-	public static fun runYamlBlocking-gwCluXo (Lxyz/block/trailblaze/mcp/TrailblazeMcpBridge;Ljava/lang/String;Ljava/util/List;Lkotlin/jvm/functions/Function1;JLxyz/block/trailblaze/mcp/AgentImplementation;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public static synthetic fun runYamlBlocking-gwCluXo$default (Lxyz/block/trailblaze/mcp/TrailblazeMcpBridge;Ljava/lang/String;Ljava/util/List;Lkotlin/jvm/functions/Function1;JLxyz/block/trailblaze/mcp/AgentImplementation;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public static fun runYamlBlocking-zkXUZaI (Lxyz/block/trailblaze/mcp/TrailblazeMcpBridge;Ljava/lang/String;Ljava/util/List;Lkotlin/jvm/functions/Function1;JLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun runYamlBlocking-zkXUZaI$default (Lxyz/block/trailblaze/mcp/TrailblazeMcpBridge;Ljava/lang/String;Ljava/util/List;Lkotlin/jvm/functions/Function1;JLkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 	public static fun selectDeviceForSession (Lxyz/block/trailblaze/mcp/TrailblazeMcpBridge;Lxyz/block/trailblaze/devices/TrailblazeDeviceId;)V
-	public static fun setAgentImplementation (Lxyz/block/trailblaze/mcp/TrailblazeMcpBridge;Lxyz/block/trailblaze/mcp/AgentImplementation;)Ljava/lang/String;
 	public static fun setBoundDeviceRoster-VMxRres (Lxyz/block/trailblaze/mcp/TrailblazeMcpBridge;Ljava/lang/String;Ljava/util/List;)Ljava/lang/String;
 	public static fun setConfiguredDriverType (Lxyz/block/trailblaze/mcp/TrailblazeMcpBridge;Lxyz/block/trailblaze/devices/TrailblazeDevicePlatform;Lxyz/block/trailblaze/devices/TrailblazeDriverType;)Ljava/lang/String;
 	public static fun setLlmConfig (Lxyz/block/trailblaze/mcp/TrailblazeMcpBridge;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;
@@ -11641,7 +11661,6 @@ public abstract class xyz/block/trailblaze/model/TrailblazeHostAppTarget {
 	public final fun acceptsDeviceForPlatform (Lxyz/block/trailblaze/devices/TrailblazeDevicePlatform;Ljava/lang/String;)Z
 	public final fun allInstrumentationTargets ()Ljava/util/List;
 	public fun formatVersionInfo (Lxyz/block/trailblaze/devices/TrailblazeDevicePlatform;Lxyz/block/trailblaze/model/AppVersionInfo;)Ljava/lang/String;
-	public final fun getAllCustomToolClassesForSerialization ()Ljava/util/Set;
 	public fun getAllowsAppNotInstalled ()Z
 	public fun getAllowsRuntimeToolSource ()Z
 	public fun getAndroidTestInstrumentationTarget ()Lxyz/block/trailblaze/model/TrailblazeOnDeviceInstrumentationTarget;
@@ -12067,7 +12086,6 @@ public final class xyz/block/trailblaze/recordings/TrailRecordings {
 	public static final field UNIFIED_TRAIL_FILENAME Ljava/lang/String;
 	public final fun computePossibleFileNamesForDeviceClassifiers (Ljava/util/List;)Ljava/util/List;
 	public final fun deriveTestIdentityFromTrailPath (Ljava/lang/String;Ljava/lang/String;)Lxyz/block/trailblaze/recordings/DerivedTestIdentity;
-	public final fun findBestTrailForClassifiers (Ljava/util/List;Ljava/util/List;)Ljava/lang/String;
 	public final fun findBestTrailResourcePath (Ljava/lang/String;Ljava/util/List;Lkotlin/jvm/functions/Function1;)Ljava/lang/String;
 	public final fun getNL_DEFINITION_FILENAMES ()Ljava/util/List;
 	public final fun isNlDefinitionFile (Ljava/lang/String;)Z
@@ -12106,7 +12124,6 @@ public final class xyz/block/trailblaze/toolcalls/CoreTools {
 	public static final field WAIT Ljava/lang/String;
 	public static final field WAIT_FOR_CHANGE Ljava/lang/String;
 	public final fun isTapAction (Ljava/lang/String;)Z
-	public final fun isTextInputAction (Ljava/lang/String;)Z
 }
 
 public abstract interface class xyz/block/trailblaze/toolcalls/DeclaredSensitiveArgs {
@@ -12351,31 +12368,9 @@ public final synthetic class xyz/block/trailblaze/toolcalls/ToolCompatibility$$s
 }
 
 public final class xyz/block/trailblaze/toolcalls/ToolCompatibility$Companion {
-	public final fun builtinMobile (Ljava/lang/String;Ljava/lang/String;)Lxyz/block/trailblaze/toolcalls/ToolCompatibility;
-	public static synthetic fun builtinMobile$default (Lxyz/block/trailblaze/toolcalls/ToolCompatibility$Companion;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lxyz/block/trailblaze/toolcalls/ToolCompatibility;
 	public final fun hostOnly (Ljava/lang/String;Lxyz/block/trailblaze/toolcalls/ToolSource;Ljava/util/Set;Ljava/lang/String;)Lxyz/block/trailblaze/toolcalls/ToolCompatibility;
 	public static synthetic fun hostOnly$default (Lxyz/block/trailblaze/toolcalls/ToolCompatibility$Companion;Ljava/lang/String;Lxyz/block/trailblaze/toolcalls/ToolSource;Ljava/util/Set;Ljava/lang/String;ILjava/lang/Object;)Lxyz/block/trailblaze/toolcalls/ToolCompatibility;
-	public final fun mcpTool (Ljava/lang/String;Ljava/util/Set;Ljava/util/Set;ZLjava/lang/String;)Lxyz/block/trailblaze/toolcalls/ToolCompatibility;
-	public static synthetic fun mcpTool$default (Lxyz/block/trailblaze/toolcalls/ToolCompatibility$Companion;Ljava/lang/String;Ljava/util/Set;Ljava/util/Set;ZLjava/lang/String;ILjava/lang/Object;)Lxyz/block/trailblaze/toolcalls/ToolCompatibility;
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
-}
-
-public final class xyz/block/trailblaze/toolcalls/ToolCompatibilityRegistry {
-	public static final field Companion Lxyz/block/trailblaze/toolcalls/ToolCompatibilityRegistry$Companion;
-	public fun <init> ()V
-	public final fun get (Ljava/lang/String;)Lxyz/block/trailblaze/toolcalls/ToolCompatibility;
-	public final fun getCompatibleTools (Lxyz/block/trailblaze/devices/TrailblazeDevicePlatform;Lxyz/block/trailblaze/toolcalls/ToolExecutionMode;Z)Ljava/util/List;
-	public static synthetic fun getCompatibleTools$default (Lxyz/block/trailblaze/toolcalls/ToolCompatibilityRegistry;Lxyz/block/trailblaze/devices/TrailblazeDevicePlatform;Lxyz/block/trailblaze/toolcalls/ToolExecutionMode;ZILjava/lang/Object;)Ljava/util/List;
-	public final fun isCompatible (Ljava/lang/String;Lxyz/block/trailblaze/devices/TrailblazeDevicePlatform;Lxyz/block/trailblaze/toolcalls/ToolExecutionMode;Z)Z
-	public static synthetic fun isCompatible$default (Lxyz/block/trailblaze/toolcalls/ToolCompatibilityRegistry;Ljava/lang/String;Lxyz/block/trailblaze/devices/TrailblazeDevicePlatform;Lxyz/block/trailblaze/toolcalls/ToolExecutionMode;ZILjava/lang/Object;)Z
-	public final fun register (Lxyz/block/trailblaze/toolcalls/ToolCompatibility;)V
-	public final fun registerAll (Ljava/util/Collection;)V
-	public final fun validateTools (Ljava/util/List;Lxyz/block/trailblaze/devices/TrailblazeDevicePlatform;Lxyz/block/trailblaze/toolcalls/ToolExecutionMode;Z)Ljava/util/List;
-	public static synthetic fun validateTools$default (Lxyz/block/trailblaze/toolcalls/ToolCompatibilityRegistry;Ljava/util/List;Lxyz/block/trailblaze/devices/TrailblazeDevicePlatform;Lxyz/block/trailblaze/toolcalls/ToolExecutionMode;ZILjava/lang/Object;)Ljava/util/List;
-}
-
-public final class xyz/block/trailblaze/toolcalls/ToolCompatibilityRegistry$Companion {
-	public final fun withCoreTools ()Lxyz/block/trailblaze/toolcalls/ToolCompatibilityRegistry;
 }
 
 public final class xyz/block/trailblaze/toolcalls/ToolExecutionMode : java/lang/Enum {
@@ -13505,7 +13500,6 @@ public final class xyz/block/trailblaze/viewhierarchy/ViewHierarchyFilter$Compan
 	public final fun hasMaestroProperties (Lxyz/block/trailblaze/api/ViewHierarchyTreeNode;)Z
 	public final fun isInteractable (Lxyz/block/trailblaze/api/ViewHierarchyTreeNode;)Z
 	public final fun pruneNodesWithoutMaestroProperties (Lxyz/block/trailblaze/api/ViewHierarchyTreeNode;)Lxyz/block/trailblaze/api/ViewHierarchyTreeNode;
-	public final fun trimEmptyNodes (Lxyz/block/trailblaze/api/ViewHierarchyTreeNode;)Lxyz/block/trailblaze/api/ViewHierarchyTreeNode;
 }
 
 public final class xyz/block/trailblaze/viewhierarchy/ViewHierarchyFilter$Companion$OptimizationResult {
@@ -14491,6 +14485,7 @@ public final class xyz/block/trailblaze/yaml/unified/UnifiedTrailConfig {
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getArgs ()Ljava/util/Map;
 	public final fun getContext ()Ljava/lang/String;
+	public final fun getDeclaresSingleDeviceEntries ()Z
 	public final fun getDescription ()Ljava/lang/String;
 	public final fun getDevices ()Ljava/util/Map;
 	public final fun getId ()Ljava/lang/String;
@@ -14504,6 +14499,8 @@ public final class xyz/block/trailblaze/yaml/unified/UnifiedTrailConfig {
 	public final fun getTarget ()Ljava/lang/String;
 	public final fun getTitle ()Ljava/lang/String;
 	public fun hashCode ()I
+	public final fun implicitMultiDeviceConfigurationName (Z)Ljava/lang/String;
+	public final fun requiresExplicitMultiDeviceConfiguration (Z)Z
 	public fun toString ()Ljava/lang/String;
 }
 

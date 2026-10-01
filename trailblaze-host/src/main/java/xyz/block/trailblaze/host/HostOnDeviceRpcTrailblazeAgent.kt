@@ -25,7 +25,6 @@ import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
 import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.TraceId
-import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetScreenStateRequest
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.OnDeviceRpcClient
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcResult
@@ -54,18 +53,13 @@ import xyz.block.trailblaze.tracing.TrailblazeTracer
 
 /**
  * Host-side [MaestroTrailblazeAgent] that delegates individual tool executions to an on-device
- * driver (accessibility or instrumentation) via RPC, while keeping the
- * [xyz.block.trailblaze.agent.TrailblazeRunner] agent loop (LLM calls, tool selection)
- * running on the host.
+ * driver (accessibility or instrumentation) via RPC, while keeping the agent loop (LLM calls,
+ * tool selection) running on the host.
  *
  * Each tool call is serialized as single-step trail YAML and sent to the device as a
- * [RunYamlRequest] with [AgentImplementation.TRAILBLAZE_RUNNER] and
- * [RunYamlRequest.awaitCompletion] = `true`. The device executes the tool via whichever
+ * [RunYamlRequest] with [RunYamlRequest.awaitCompletion] = `true`. The device executes the tool via whichever
  * driver is specified in the request's `driverType` and the terminal state comes back
  * inline on the response — no status polling.
- *
- * This mirrors the [HostAccessibilityRpcClient] pattern used by Multi-Agent V3, but integrated
- * with the [MaestroTrailblazeAgent] interface so it works with the legacy TrailblazeRunner.
  */
 class HostOnDeviceRpcTrailblazeAgent(
   private val rpcClient: OnDeviceRpcClient,
@@ -104,9 +98,8 @@ class HostOnDeviceRpcTrailblazeAgent(
   /**
    * Pre-resolved session target — threaded into every [TrailblazeToolExecutionContext] this
    * agent builds so in-process scripted-tool handlers can read `ctx.target.{id, appIds,
-   * appId}` without per-call device probes. Mirrors the V3 wiring in
-   * `HostAccessibilityRpcClient`: the host-side caller resolves the target once at session
-   * start and passes it in here. Defaults to null to preserve back-compat with callers that
+   * appId}` without per-call device probes. The host-side caller resolves the target once at
+   * session start and passes it in here. Defaults to null to preserve back-compat with callers that
    * don't yet wire it (their in-process scripted tools will see `ctx.target` as undefined,
    * which is the pre-#2904 behaviour).
    */
@@ -184,7 +177,7 @@ class HostOnDeviceRpcTrailblazeAgent(
    *  at [MAX_CONSECUTIVE_DEVICE_WEDGE_FAILURES] to fail fast on dead `system_server`. */
   private val consecutiveDeviceWedgeFailures = AtomicInteger(0)
 
-  /** RPC-backed screen state provider for the host-side TrailblazeRunner. */
+  /** RPC-backed screen state provider for the host-side agent. */
   val screenStateProvider: () -> ScreenState = {
     runBlocking { captureScreenState() }
       ?: error(
@@ -462,10 +455,9 @@ class HostOnDeviceRpcTrailblazeAgent(
     // Without this resolution, an OtherTrailblazeTool whose name maps to a registered
     // scripted tool fell into the `else` branch below and surfaced as
     // `"Unsupported tool type for RPC execution: OtherTrailblazeTool"`, even though the
-    // session's `toolRepo` knew exactly how to dispatch it. Mirrors the resolution pattern
-    // [HostAccessibilityRpcClient.execute] and `.executePreAction` use on the V3 path —
-    // resolution is the contract every host-driver dispatcher must honor (and the docstring
-    // on `MaestroTrailblazeAgent.trailblazeToolRepo` already promises this).
+    // session's `toolRepo` knew exactly how to dispatch it. Resolution is the contract every
+    // host-driver dispatcher must honor (and the docstring on
+    // `MaestroTrailblazeAgent.trailblazeToolRepo` already promises this).
     //
     // [BaseTrailblazeAgent.runTrailblazeTools] also resolves at its loop boundary via
     // `resolveDynamicTool`, but `executeTool` is reachable independently — e.g. from the
@@ -704,7 +696,6 @@ class HostOnDeviceRpcTrailblazeAgent(
         // start/end logs are still suppressed — the host owns the session lifecycle.
         val request = runYamlRequestTemplate.copy(
           yaml = yaml,
-          agentImplementation = AgentImplementation.TRAILBLAZE_RUNNER,
           traceId = traceId,
           // Per-tool RPCs block the HTTP response on on-device completion. Explicit for
           // clarity even though the request default is also true.
@@ -867,8 +858,7 @@ class HostOnDeviceRpcTrailblazeAgent(
           // `OnDeviceRpcClient.rpcCall` never sees. FatalError (not ExceptionThrown) aborts
           // THIS trail: every subsequent dispatch is guaranteed to fail identically, so
           // feeding the error back to the LLM (or to self-heal) just burns the call budget
-          // against a dead server. Parity with the V3 `HostAccessibilityRpcClient` path
-          // (same arm + `recoverable = false`).
+          // against a dead server.
           //
           // Console.info (this file's CI-triage convention): when the device's errorMessage
           // lacks the wedge phrases — the exact case the typed field exists for — no other

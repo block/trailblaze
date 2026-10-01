@@ -949,9 +949,9 @@ class UsagesCommandTest {
     // The other half of the pair, and the reason resolving through a configuration cannot degrade
     // into "a configuration key exists, so every member reaches it". `lab-a`/`lab-b` are cast only
     // by `pos-pair`, whose leg invokes something else, and there is no broader leg for them to fall
-    // through to — so neither reaches the tool. Neither does `solo`: no configuration casts it, and
-    // a configured trail always replays with its configuration selected, so no session runs `solo`
-    // at all — not even the second step, where its own leg is the only one invoking.
+    // through to — so neither reaches the tool. `solo` does: it is an ordinary single-device entry
+    // beside the configuration, so a run with no companions bound selects no configuration and
+    // replays `solo`'s own legs — the mixed shape one trail uses to carry both kinds of leg.
     writeTrail(
       "paired-negative.trail.yaml",
       """
@@ -987,10 +987,10 @@ class UsagesCommandTest {
       "all three are declared — the denominator does not shrink",
     )
     assertEquals(
-      emptySet(),
+      setOf("solo"),
       usage.invokingDevices.toSet(),
       "the paired devices resolve their configuration's own leg, which invokes something else, " +
-        "and `solo`, which no configuration casts, never runs this trail: ${usage.invokingDevices}",
+        "while `solo` runs single-device on its own invoking leg: ${usage.invokingDevices}",
     )
   }
 

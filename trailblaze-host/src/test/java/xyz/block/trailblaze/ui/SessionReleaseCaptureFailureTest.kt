@@ -10,6 +10,7 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 import kotlinx.datetime.Clock
 import xyz.block.trailblaze.capture.CaptureSession
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
@@ -102,6 +103,18 @@ class SessionReleaseCaptureFailureTest {
   @Test
   fun `a capture that fails at release leaves the session succeeded, with the failure as its warning`() {
     val sessionId = startInteractiveSession()
+    val startedAt = assertNotNull(
+      logsRepo.getLogsForSession(sessionId)
+        .filterIsInstance<TrailblazeLog.TrailblazeSessionStatusChangeLog>()
+        .firstOrNull { it.sessionStatus is SessionStatus.Started },
+    ).timestamp
+    val startFile = logsRepo.getSessionDir(sessionId)
+      .listFiles().orEmpty()
+      .single { it.name.contains("TrailblazeSessionStatusChangeLog") }
+    assertTrue(startFile.setLastModified(startedAt.toEpochMilliseconds() - 100))
+    val activityBeforeRelease = assertNotNull(logsRepo.activityWindowMs(sessionId))
+    assertTrue(activityBeforeRelease.last < startedAt.toEpochMilliseconds())
+
     val failingCapture = HostSessionFinalizerRegistry.register { finalizing ->
       if (finalizing == sessionId) {
         error("Network capture for 'com.example' ended without evidence")
@@ -114,6 +127,25 @@ class SessionReleaseCaptureFailureTest {
     } finally {
       failingCapture.close()
     }
+
+    val statusLogs = logsRepo.getLogsForSession(sessionId)
+      .filterIsInstance<TrailblazeLog.TrailblazeSessionStatusChangeLog>()
+    val endedAt = assertNotNull(
+      statusLogs.firstOrNull { it.sessionStatus is SessionStatus.Ended },
+      "The finalizer failure must not suppress the serialized end status",
+    ).timestamp
+    val lastWrittenBeforeRelease = logsRepo.getSessionDir(sessionId)
+      .listFiles().orEmpty()
+      .filter { it.name.contains("TrailblazeSessionStatusChangeLog") }
+      .minOf { it.lastModified() }
+    assertEquals(activityBeforeRelease.last, lastWrittenBeforeRelease)
+    assertTrue(
+      endedAt > startedAt,
+      "The serialized Ended status must follow Started; timestamp delta ms=" +
+        "${endedAt.toEpochMilliseconds() - startedAt.toEpochMilliseconds()}, " +
+        "activity mtime-to-start ms=" +
+        "${activityBeforeRelease.last - startedAt.toEpochMilliseconds()}",
+    )
 
     val status = assertIs<SessionStatus.Ended.Succeeded>(logsRepo.getSessionInfoDirect(sessionId)!!.latestStatus)
     // The capture that actually failed, not just the barrier's count of failures.

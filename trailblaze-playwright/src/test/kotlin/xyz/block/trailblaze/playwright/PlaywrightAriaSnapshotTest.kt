@@ -347,4 +347,64 @@ class PlaywrightAriaSnapshotTest {
     assertNotNull(textbox)
     assertTrue(textbox.focusable == true, "Textboxes should be focusable")
   }
+
+  // -- named landmarks --
+
+  @Test
+  fun `a named landmark is listed once, as its own ref, with its children under it`() {
+    val yaml = """
+      - document:
+        - navigation "Site":
+          - link "Home"
+        - list "Tasks":
+          - listitem:
+            - checkbox "Mark done"
+    """.trimIndent()
+
+    val lines = PlaywrightAriaSnapshot.buildCompactElementList(yaml).text.lines()
+
+    for (landmark in listOf("navigation \"Site\"", "list \"Tasks\"")) {
+      val matches = lines.filter { it.contains(landmark) }
+      assertEquals(1, matches.size, "$landmark should appear once, got $matches")
+      assertTrue(Regex("""^\s*\[e\d+] """).containsMatchIn(matches.single()), "$landmark keeps its ref")
+    }
+    val navIndent = lines.first { it.contains("navigation \"Site\"") }.indexOfFirst { it != ' ' }
+    val linkIndent = lines.first { it.contains("link \"Home\"") }.indexOfFirst { it != ' ' }
+    assertTrue(linkIndent > navIndent, "the link stays nested under its navigation: $lines")
+  }
+
+  // -- roleChanges --
+
+  @Test
+  fun `names the role a same-named element took on`() {
+    val after = """
+      - banner:
+        - combobox "Search Wikipedia" [expanded]:
+          - listbox "Search results"
+        - button "Search"
+    """.trimIndent()
+    assertEquals(
+      listOf("combobox \"Search Wikipedia\""),
+      PlaywrightAriaSnapshot.roleChanges(null, after, "searchbox \"Search Wikipedia\""),
+    )
+  }
+
+  @Test
+  fun `ignores the same role, other names, descriptors without a name, and roles already there`() {
+    val before = """
+      - link "Sign in"
+      - button "Sign in"
+    """.trimIndent()
+    val after = """
+      - link "Sign in"
+      - menuitem "Sign in"
+      - menuitem "Sign in"
+      - button "Search"
+    """.trimIndent()
+    assertEquals(
+      listOf("menuitem \"Sign in\""),
+      PlaywrightAriaSnapshot.roleChanges(before, after, "button \"Sign in\""),
+    )
+    assertEquals(emptyList(), PlaywrightAriaSnapshot.roleChanges(before, after, "navigation"))
+  }
 }

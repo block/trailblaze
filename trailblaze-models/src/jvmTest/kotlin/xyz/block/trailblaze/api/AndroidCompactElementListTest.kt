@@ -3,6 +3,7 @@ package xyz.block.trailblaze.api
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class AndroidCompactElementListTest {
@@ -971,5 +972,112 @@ class AndroidCompactElementListTest {
     val result = AndroidCompactElementList.build(root, screenHeight = 800)
 
     assertTrue(!result.text.contains("\"BelowFold\""), "Normal below-fold node must stay offscreen-dropped")
+  }
+
+  @Test
+  fun `on-screen child of a zero-size wrapper is listed and its ref taps the child`() {
+    val signIn =
+      node(
+        detail =
+          DriverNodeDetail.AndroidAccessibility(
+            className = "android.widget.Button",
+            text = "Sign In",
+            isClickable = true,
+          ),
+        bounds = TrailblazeNode.Bounds(left = 40, top = 600, right = 680, bottom = 680),
+      )
+    val wrapper =
+      node(
+        detail = DriverNodeDetail.AndroidAccessibility(className = "android.view.View", isClickable = true),
+        bounds = TrailblazeNode.Bounds(left = 0, top = 0, right = 0, bottom = 0),
+        children = listOf(signIn),
+      )
+    val root = node(bounds = TrailblazeNode.Bounds(0, 0, 720, 1280), children = listOf(wrapper))
+
+    val elements = CompactScreenElements.buildForAndroid(root, screenHeight = 1280)
+
+    assertContains(elements.text, "\"Sign In\"")
+    val ref = elements.refMapping.entries.single { it.value == signIn.nodeId }.key
+    assertEquals(signIn.nodeId, elements.applyRefsToTree(root).findFirst { it.ref == ref }?.nodeId)
+  }
+
+  @Test
+  fun `a child straddling the screen edge under a zero-size wrapper stays hidden`() {
+    val ghost =
+      node(
+        detail =
+          DriverNodeDetail.AndroidAccessibility(className = "android.widget.Button", text = "3", isClickable = true),
+        bounds = TrailblazeNode.Bounds(left = 0, top = -20, right = 40, bottom = 30),
+      )
+    val wrapper =
+      node(
+        detail = DriverNodeDetail.AndroidAccessibility(className = "android.view.View", isClickable = true),
+        bounds = TrailblazeNode.Bounds(left = 0, top = 0, right = 0, bottom = 0),
+        children = listOf(ghost),
+      )
+    val root = node(bounds = TrailblazeNode.Bounds(0, 0, 720, 1280), children = listOf(wrapper))
+
+    val result = AndroidCompactElementList.build(root, screenHeight = 1280)
+
+    assertTrue(result.refMapping.isEmpty(), result.text)
+  }
+
+  @Test
+  fun `a child left of the screen under a zero-size wrapper stays hidden`() {
+    val offLeft =
+      node(
+        detail =
+          DriverNodeDetail.AndroidAccessibility(className = "android.widget.Button", text = "Back", isClickable = true),
+        bounds = TrailblazeNode.Bounds(left = -40, top = 100, right = -1, bottom = 140),
+      )
+    val wrapper =
+      node(
+        detail = DriverNodeDetail.AndroidAccessibility(className = "android.view.View", isClickable = true),
+        bounds = TrailblazeNode.Bounds(left = 0, top = 0, right = 0, bottom = 0),
+        children = listOf(offLeft),
+      )
+    val root = node(bounds = TrailblazeNode.Bounds(0, 0, 720, 1280), children = listOf(wrapper))
+
+    val elements = CompactScreenElements.buildForAndroid(root, screenHeight = 1280, screenWidth = 720)
+
+    assertTrue(elements.refMapping.isEmpty(), elements.text)
+  }
+
+  @Test
+  fun `quoted text straddling the screen edge under a zero-size wrapper is not shown`() {
+    val onScreenText =
+      node(
+        detail = DriverNodeDetail.AndroidAccessibility(className = "android.widget.TextView", text = "Pay"),
+        bounds = TrailblazeNode.Bounds(left = 10, top = 110, right = 200, bottom = 190),
+      )
+    val ghostText =
+      node(
+        detail = DriverNodeDetail.AndroidAccessibility(className = "android.widget.TextView", text = "3"),
+        bounds = TrailblazeNode.Bounds(left = 0, top = -20, right = 40, bottom = 30),
+      )
+    val row =
+      node(
+        detail =
+          DriverNodeDetail.AndroidAccessibility(
+            className = "android.widget.Button",
+            contentDescription = "Amount",
+            isClickable = true,
+          ),
+        bounds = TrailblazeNode.Bounds(left = 0, top = 100, right = 720, bottom = 200),
+        children = listOf(onScreenText, ghostText),
+      )
+    val wrapper =
+      node(
+        detail = DriverNodeDetail.AndroidAccessibility(className = "android.view.View", isClickable = true),
+        bounds = TrailblazeNode.Bounds(left = 0, top = 0, right = 0, bottom = 0),
+        children = listOf(row),
+      )
+    val root = node(bounds = TrailblazeNode.Bounds(0, 0, 720, 1280), children = listOf(wrapper))
+
+    val result = AndroidCompactElementList.build(root, screenHeight = 1280, screenWidth = 720)
+
+    assertTrue(result.text.contains("\"Pay\""), result.text)
+    assertFalse(result.text.contains("\"3\""), result.text)
+    assertFalse(ghostText.nodeId in result.textNodeIds, "the ghost's text would count as visible")
   }
 }

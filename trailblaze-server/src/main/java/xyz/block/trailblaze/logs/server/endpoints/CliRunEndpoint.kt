@@ -50,8 +50,6 @@ data class CliRunRequest(
   val showBrowser: Boolean = false,
   /** When true, uses a no-op logger so no session files are written to disk. */
   val noLogging: Boolean = false,
-  /** Agent implementation override (e.g., "MULTI_AGENT_V3"). */
-  val agentImplementation: String? = null,
   /**
    * Override the persisted `trailblaze config self-heal` setting for this run.
    * `null` = inherit the saved config; `true`/`false` = explicit CLI override
@@ -80,9 +78,8 @@ data class CliRunRequest(
    */
   val captureNetworkTraffic: Boolean? = null,
   /**
-   * Per-objective cap on LLM calls for the legacy TRAILBLAZE_RUNNER agent. Forwarded from
-   * the CLI's `--max-llm-calls` flag into [RunYamlRequest.maxLlmCalls]. Null = use the
-   * runner's built-in default.
+   * Per-objective cap on LLM calls. Forwarded from the CLI's `--max-llm-calls` flag into
+   * [RunYamlRequest.maxLlmCalls]. Null = use the agent's built-in default.
    */
   val maxLlmCalls: Int? = null,
   /**

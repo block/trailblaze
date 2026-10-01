@@ -36,7 +36,10 @@ fun ViewHierarchyTreeNode.asTreeNode(): TreeNode {
     attributes = attributes,
     children = children.map { it.asTreeNode() },
     clickable = if (clickable) true else null,
-    enabled = if (enabled) true else null,
+    // Explicit, unlike the flags beside it: [toViewHierarchyTreeNode] reads a missing `enabled` as
+    // true, so a null here turned every disabled node enabled on the way back, and a matched node
+    // with a disabled descendant (an iOS cell's chevron) never equaled the node it was matched for.
+    enabled = enabled,
     focused = if (focused) true else null,
     checked = if (checked) true else null,
     selected = if (selected) true else null,

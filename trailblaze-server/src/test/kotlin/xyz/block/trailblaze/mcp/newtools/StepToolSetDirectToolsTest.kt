@@ -1633,6 +1633,49 @@ class StepToolSetDirectToolsTest {
     assertContains(result, StepToolSet.NO_DEVICE_MESSAGE)
   }
 
+  /**
+   * A connected device whose driver reads ready but returns no screen is not "no device": that text
+   * sends the caller to connect a device it already has.
+   */
+  @Test
+  fun `a connected device that returns no screen does not claim no device is connected`() = runTest {
+    val toolSet =
+      StepToolSet(
+        screenAnalyzer = throwingScreenAnalyzer,
+        executor = throwingExecutor,
+        screenStateProvider = { _, _, _ -> null },
+        driverStatusProvider = { null },
+        deviceConnectedProvider = { true },
+      )
+
+    val stepResult = toolSet.step(objective = "Take a snapshot", tools = "- takeSnapshot: {}")
+    val askResult = toolSet.ask(question = "What is on the screen?")
+
+    for (result in listOf(stepResult, askResult)) {
+      assertContains(result, StepToolSet.NO_SCREEN_MESSAGE)
+      assertFalse(result.contains("No device connected"), result)
+    }
+  }
+
+  @Test
+  fun `a dead runner's status is the error, and no capture retry is waited out for it`() = runTest {
+    var captures = 0
+    val runnerStopped = "The iOS XCTest runner on 'SIM' stopped (nothing answers on port 55522)."
+    val toolSet =
+      StepToolSet(
+        screenAnalyzer = throwingScreenAnalyzer,
+        executor = throwingExecutor,
+        screenStateProvider = { _, _, _ -> captures++; null },
+        driverStatusProvider = { runnerStopped },
+        deviceConnectedProvider = { true },
+      )
+
+    val result = toolSet.step(objective = "Take a snapshot", tools = "- takeSnapshot: {}")
+
+    assertContains(result, runnerStopped)
+    assertEquals(1, captures, "the capture was retried for a runner already known to be dead")
+  }
+
   @Test
   fun `direct tools wait for an initializing driver before running`() = runTest {
     var captures = 0

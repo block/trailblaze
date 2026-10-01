@@ -17,8 +17,7 @@ import xyz.block.trailblaze.yaml.TrailblazeToolYamlWrapper
  * Goes through the tool's concrete `@Serializable` class serializer so the result is the flat
  * shape the downstream executor expects (`{"text": "Jane Doe"}`) — not the persisted log
  * shape (`{"toolName": …, "raw": {…}}`) that abstract-typed [TrailblazeTool] encoding would
- * produce. Shared by [TrailGoalPlanner] and [DeterministicTrailExecutor]; both encode tool
- * calls into the same RPC arg shape so they must produce identical JSON.
+ * produce.
  *
  * Tools that don't have a concrete kotlinx serializer ([OtherTrailblazeTool],
  * [RawArgumentTrailblazeTool], or non-`@Serializable` test stubs) still produce a usable args

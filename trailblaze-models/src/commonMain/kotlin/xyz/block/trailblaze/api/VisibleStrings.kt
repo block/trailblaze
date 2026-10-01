@@ -62,33 +62,42 @@ data class ExtractedString(
   val source: VisibleStringSource,
   /** Stable element ref (e.g. `k42`) when the capture carried one, for pointing at the element. */
   val ref: String? = null,
-  /** `[x, y, width, height]` in screen coordinates, or null when the capture had no bounds. */
+  /**
+   * `[left, top, right, bottom]` in the device's screen coordinates — the corners
+   * [TrailblazeNode.Bounds] stores — or null when the capture had no bounds.
+   */
   val bounds: List<Int>? = null,
   /** False when the element sits outside the viewport. Recorded, not dropped: an untranslated
-   *  string below the fold is still a regression. */
+   *  string below the fold is still a regression. Recorded at capture because it depends on the
+   *  viewport at that moment, which nothing can reconstruct later. */
   val visible: Boolean = true,
-  /** Digits with no letters — a clock, balance, or counter that will differ on every run. */
-  val volatile: Boolean = false,
 )
 
 /**
- * Reads the strings a person could see on one screen capture out of the view tree that capture
- * already persisted.
+ * Reads the strings on one screen capture out of its view tree.
  *
- * Visibility follows the rules the compact element list builders apply — the same system-UI,
- * platform-hidden and offscreen decisions, made once.
+ * Runs as each capture log is emitted, on the device or the host (see `withVisibleStrings`), so
+ * the strings travel on the log; a log recorded before that can still be read the same way later.
+ * The strings are the elements the agent's element list showed — the same list the LLM and the
+ * CLI `snapshot` were given — built over the same tree and device size, so the two cannot
+ * disagree about what was on screen. Each element contributes its full text from its own fields,
+ * never the list's rendering, which truncates long labels.
  *
- * Deliberately wider than what the agent saw: a string outside the viewport is returned with
- * [ExtractedString.visible] set to false rather than dropped, because an untranslated string below
- * the fold is still a regression. Everything the platform reports as covered or hidden in place is
- * dropped outright.
+ * Elements the list shows only when asked for offscreen content are kept with
+ * [ExtractedString.visible] set to false, because an untranslated string below the fold is still
+ * a regression. An element the list hides for any other reason — covered, hidden in place, or
+ * judged structural — contributes nothing. The Android list judges offscreen by height alone, so a
+ * node scrolled sideways out of view is reported visible, as the agent was shown it.
+ *
+ * This applies to iOS AXe, iOS Maestro and the three Android drivers, whose lists live in this
+ * module. Compose and Web trees have no list here and keep a direct walk of the tree with the same
+ * hidden, system-UI and offscreen rules the lists apply.
  */
 object VisibleStringExtractor {
 
   private const val SYSTEM_UI_PACKAGE = "com.android.systemui"
   private const val SECURE_TEXT_FIELD = "AXSecureTextField"
   private val WHITESPACE_RUN = Regex("\\s+")
-  private val MERIDIEM = setOf("am", "pm")
 
   /** Reading order: top to bottom, then left to right. Boundless nodes keep tree order, last. */
   private val READING_ORDER = compareBy<ExtractedString>(
@@ -97,13 +106,30 @@ object VisibleStringExtractor {
     { it.bounds?.get(0) ?: 0 },
   )
 
+  fun extract(root: TrailblazeNode, screenWidth: Int = 0, screenHeight: Int = 0): List<ExtractedString> =
+    extract(root, screenWidth, screenHeight, frames = emptyList())
+
+  /**
+   * [extract] for a web page with iframes, each frame a tree of its own in the page's coordinates.
+   * The frames are read with the page and deduped with it, so a label on both reads once, as a
+   * repeat within one tree does. An overload rather than a defaulted parameter, so the
+   * three-argument method compiled clients call stays in the ABI.
+   */
   fun extract(
     root: TrailblazeNode,
-    screenWidth: Int = 0,
-    screenHeight: Int = 0,
+    screenWidth: Int,
+    screenHeight: Int,
+    frames: List<TrailblazeNode>,
   ): List<ExtractedString> {
     val found = mutableListOf<ExtractedString>()
-    collect(root, screenWidth, screenHeight, found)
+    for (tree in listOf(root) + frames) {
+      val shown = ElementListSelection.of(tree, screenWidth, screenHeight)
+      if (shown != null) {
+        collectShown(tree, shown, screenWidth, screenHeight, found)
+      } else {
+        collect(tree, screenWidth, screenHeight, found)
+      }
+    }
     return found.dedupePreferringVisible()
   }
 
@@ -115,7 +141,7 @@ object VisibleStringExtractor {
   fun extract(root: ViewHierarchyTreeNode): List<ExtractedString> = root.aggregate()
     .filterNot { it.resourceId?.startsWith(SYSTEM_UI_PACKAGE) == true }
     .flatMap { node ->
-      val bounds = node.bounds?.let { listOf(it.x1, it.y1, it.width, it.height) }
+      val bounds = node.bounds?.let { listOf(it.x1, it.y1, it.x2, it.y2) }
       listOf(
         VisibleStringSource.TEXT to node.text.takeUnless { node.password },
         VisibleStringSource.CONTENT_DESCRIPTION to node.accessibilityText,
@@ -123,6 +149,74 @@ object VisibleStringExtractor {
       ).toExtractedStrings(ref = null, bounds = bounds, visible = true)
     }
     .dedupePreferringVisible()
+
+  /**
+   * The node ids the element list printed for a tree: [onScreen] in its default view, and
+   * [offscreenOnly] only once `SnapshotDetail.OFFSCREEN` is asked for. Null for a driver with no
+   * list in this module.
+   *
+   * The capture-time screen states build the list with no details, so the default view is exactly
+   * what the agent was shown. The driver is read off the root, as the builders do: a tree comes
+   * from one driver.
+   */
+  private class ElementListSelection(val onScreen: Set<Long>, val offscreenOnly: Set<Long>) {
+    companion object {
+      fun of(root: TrailblazeNode, screenWidth: Int, screenHeight: Int): ElementListSelection? {
+        val shownBy: (Set<SnapshotDetail>) -> List<Long> = when (root.driverDetail) {
+          is DriverNodeDetail.IosAxe -> { details ->
+            IosAxeCompactElementList.build(root, details, screenHeight, screenWidth).elementNodeIds
+          }
+          is DriverNodeDetail.IosMaestro -> { details ->
+            IosCompactElementList.build(root, details, screenHeight, screenWidth)
+              .let { it.elementNodeIds + it.textNodeIds }
+          }
+          is DriverNodeDetail.AndroidAccessibility,
+          is DriverNodeDetail.AndroidView,
+          is DriverNodeDetail.AndroidMaestro,
+          -> { details ->
+            AndroidCompactElementList.build(root, details, screenHeight, screenWidth)
+              .let { it.elementNodeIds + it.textNodeIds }
+          }
+          else -> return null
+        }
+        val onScreen = shownBy(emptySet()).toSet()
+        return ElementListSelection(
+          onScreen = onScreen,
+          offscreenOnly = shownBy(setOf(SnapshotDetail.OFFSCREEN)).toSet() - onScreen,
+        )
+      }
+    }
+  }
+
+  /**
+   * Emits every node the element list showed.
+   *
+   * The offscreen view also admits nodes the platform hides in place (an Android node covered by
+   * a dialog is `isVisibleToUser = false` on screen), so an offscreen-only node is kept only when
+   * its bounds really are outside the viewport and its driver's hidden flag can mean scrolled away
+   * — the same reading [isScrolledAway] gives the direct walk. System UI stays filtered because
+   * the Android list recognises it only by package, and an accessibility node can name it through
+   * its resource id alone.
+   */
+  private fun collectShown(
+    node: TrailblazeNode,
+    shown: ElementListSelection,
+    screenWidth: Int,
+    screenHeight: Int,
+    found: MutableList<ExtractedString>,
+  ) {
+    val detail = node.driverDetail
+    val visible = when (node.nodeId) {
+      in shown.onScreen -> true
+      in shown.offscreenOnly -> {
+        val offscreen = CompactElementListUtils.isOffscreen(node, screenHeight, screenWidth)
+        if (offscreen && (!detail.isHiddenFromUser() || detail.isScrolledAway(offscreen))) false else null
+      }
+      else -> null
+    }
+    if (visible != null && !detail.isSystemUi()) found += node.readableStrings(visible)
+    node.children.forEach { collectShown(it, shown, screenWidth, screenHeight, found) }
+  }
 
   private fun collect(
     node: TrailblazeNode,
@@ -134,19 +228,22 @@ object VisibleStringExtractor {
     val offscreen = detail.hasViewportCoordinates() &&
       CompactElementListUtils.isOffscreen(node, screenHeight, screenWidth)
     if (!detail.isSystemUi() && (!detail.isHiddenFromUser() || detail.isScrolledAway(offscreen))) {
-      found += detail.readableFields().toExtractedStrings(
-        ref = node.ref,
-        // Inverted bounds mean a Compose `graphicsLayer` transform that `boundsInRoot` excludes,
-        // so `width`/`height` come out negative. Recording that would put a nonsense rectangle in
-        // the file; the string itself is still real.
-        bounds = node.bounds
-          ?.takeUnless { CompactElementListUtils.hasInvertedBounds(node) }
-          ?.let { listOf(it.left, it.top, it.width, it.height) },
-        visible = !offscreen,
-      )
+      found += node.readableStrings(visible = !offscreen)
     }
     node.children.forEach { collect(it, screenWidth, screenHeight, found) }
   }
+
+  private fun TrailblazeNode.readableStrings(visible: Boolean): List<ExtractedString> =
+    driverDetail.readableFields().toExtractedStrings(
+      ref = ref,
+      // Inverted bounds mean a Compose `graphicsLayer` transform that `boundsInRoot` excludes,
+      // so `width`/`height` come out negative. Recording that would put a nonsense rectangle in
+      // the file; the string itself is still real.
+      bounds = bounds
+        ?.takeUnless { CompactElementListUtils.hasInvertedBounds(this) }
+        ?.let { listOf(it.left, it.top, it.right, it.bottom) },
+      visible = visible,
+    )
 
   /**
    * The same label can appear both scrolled out of the viewport and on screen — a sticky header
@@ -170,27 +267,7 @@ object VisibleStringExtractor {
       ref = ref,
       bounds = bounds,
       visible = visible,
-      volatile = text.looksVolatile(),
     )
-  }
-
-  /**
-   * A clock, a balance, or a counter: something that differs on every run and would bury the real
-   * changes in a diff. Recorded as a hint, never as a reason to drop the string.
-   *
-   * The test is a digit plus no words except an English `AM`/`PM`, which catches `9:41`,
-   * `9:41 PM`, `$12.00`, `1,234.56` and `12/25/2026` while leaving `2 items` alone.
-   *
-   * A localized meridiem or a month name is deliberately not detected — `5 de enero de 2026` is
-   * recorded as ordinary copy. There is no locale data in this module, and the two errors are not
-   * symmetric: a string wrongly marked volatile is a regression the diff will never report, while
-   * one wrongly left alone is noise someone can see and ignore.
-   */
-  private fun String.looksVolatile(): Boolean {
-    if (none { it.isDigit() }) return false
-    return split(WHITESPACE_RUN)
-      .filter { word -> word.any { it.isLetter() } }
-      .all { word -> word.filter { it.isLetter() }.lowercase() in MERIDIEM }
   }
 
   /**
@@ -223,7 +300,7 @@ object VisibleStringExtractor {
 
   /**
    * Whether a hidden node is hidden only because it sits outside the viewport, in which case its
-   * text is still the app's copy and [collect] keeps it as not visible.
+   * text is still the app's copy and is kept as not visible.
    *
    * Only `isVisibleToUser` earns this reading. It is documented as covering "off-screen/hidden/
    * covered" — three situations in one flag, and geometry is what tells them apart. Every other
@@ -288,13 +365,16 @@ object VisibleStringExtractor {
 
     // AXe reports a secure field's role as `AXSecureTextField` and leaves subrole null as often as
     // not, so reading only the subrole would put a password in the log.
+    //
+    // `roleDescription` is left out: on AXe it is the system's name for the role ("button",
+    // "group"), not app copy, and the element list shows the element type in its place. Android's
+    // `roleDescription` is app-authored and stays.
     is DriverNodeDetail.IosAxe -> listOf(
       VisibleStringSource.TEXT to label,
       VisibleStringSource.VALUE to value
         .takeUnless { role == SECURE_TEXT_FIELD || subrole == SECURE_TEXT_FIELD },
       VisibleStringSource.TITLE to title,
       VisibleStringSource.HELP to help,
-      VisibleStringSource.ROLE_DESCRIPTION to roleDescription,
     ) + customActions.map { VisibleStringSource.CUSTOM_ACTION to it }
 
     // `toggleableState` is left out on purpose: both collectors serialize it as a fixed English
@@ -311,12 +391,45 @@ object VisibleStringExtractor {
     )
 
     // `ariaDescriptor` is Playwright's locator string (`button "Submit"`), not copy: it
-    // restates `ariaName` wrapped in a role, so reading it would double every Web string.
+    // restates `ariaName` wrapped in a role, so reading it would double every Web string. `url`
+    // is an address, not copy. A field with no label takes its placeholder as its name, so the
+    // placeholder is read as a hint only when it says something the name does not.
     is DriverNodeDetail.Web -> listOf(
       VisibleStringSource.TEXT to ariaName,
+      VisibleStringSource.HINT to placeholder.takeUnless { it == ariaName },
+      VisibleStringSource.TITLE to title,
     )
   }
 
   private fun String.normalizeWhitespace(): String =
     trim().split(WHITESPACE_RUN).joinToString(" ")
+}
+
+/**
+ * A clock, a balance, or a counter: text that differs on every run and would bury the real changes
+ * in a diff. Judged when the strings are read, never stored with them, so a better rule applies to
+ * every session already recorded.
+ *
+ * The test is a digit plus no words except an English `AM`/`PM`, which catches `9:41`, `9:41 PM`,
+ * `$12.00`, `1,234.56` and `12/25/2026` while leaving `2 items` alone.
+ *
+ * A localized meridiem or a month name is deliberately not detected — `5 de enero de 2026` reads as
+ * ordinary copy. There is no locale data in this module, and the two errors are not symmetric: a
+ * string wrongly judged volatile is a regression a diff will never report, while one wrongly left
+ * alone is noise someone can see and ignore.
+ *
+ * The report's Strings tab applies the same rule in TypeScript (`looksVolatile` in
+ * `run-report-visible-strings.ts`); keep the two in step.
+ */
+object VolatileText {
+
+  private val WORD_SPLIT = Regex("\\s+")
+  private val MERIDIEM = setOf("am", "pm")
+
+  fun looksVolatile(text: String): Boolean {
+    if (text.none { it.isDigit() }) return false
+    return text.split(WORD_SPLIT)
+      .filter { word -> word.any { it.isLetter() } }
+      .all { word -> word.filter { it.isLetter() }.lowercase() in MERIDIEM }
+  }
 }

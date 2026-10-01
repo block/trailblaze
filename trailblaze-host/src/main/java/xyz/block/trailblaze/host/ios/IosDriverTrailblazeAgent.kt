@@ -46,6 +46,12 @@ class IosDriverTrailblazeAgent(
   resolvedTarget: ResolvedTarget? = null,
   appId: String? = null,
   sessionDirProvider: ((SessionId) -> File)? = null,
+  /**
+   * Whether each driver action captures a pre-action screenshot + tree for an
+   * `AgentDriverLog`. Off for callers whose [trailblazeLogger] discards everything, where the
+   * capture is a screenshot and a tree read per action for nothing.
+   */
+  private val logDriverActions: Boolean = true,
 ) : MaestroTrailblazeAgent(
   trailblazeLogger = trailblazeLogger,
   trailblazeDeviceInfoProvider = trailblazeDeviceInfoProvider,
@@ -59,6 +65,17 @@ class IosDriverTrailblazeAgent(
 
   /** Flagged so tools can choose AXe-friendly command paths (mirrors the Android accessibility flag). */
   override val usesAccessibilityDriver: Boolean = true
+
+  private val driverActionLogger: TrailblazeLogger? get() = trailblazeLogger.takeIf { logDriverActions }
+
+  /** One tool call is one [IosDeviceManager.shareScreenReads] span on the trail-runner path. */
+  override fun executeTool(
+    tool: TrailblazeTool,
+    context: TrailblazeToolExecutionContext,
+    toolsExecuted: MutableList<TrailblazeTool>,
+  ): TrailblazeToolResult = deviceManager.shareScreenReads().use {
+    super.executeTool(tool, context, toolsExecuted)
+  }
 
   /**
    * The base implementation dispatches one command at a time, which would let earlier commands
@@ -89,7 +106,7 @@ class IosDriverTrailblazeAgent(
       actions = actions,
       traceId = traceId,
       deviceManager = deviceManager,
-      trailblazeLogger = trailblazeLogger,
+      trailblazeLogger = driverActionLogger,
       sessionProvider = sessionProvider,
     )
   }
@@ -108,7 +125,7 @@ class IosDriverTrailblazeAgent(
     actions = listOf(IosDriverAction.TapOnElement(nodeSelector, longPress = longPress)),
     traceId = traceId,
     deviceManager = deviceManager,
-    trailblazeLogger = trailblazeLogger,
+    trailblazeLogger = driverActionLogger,
     sessionProvider = sessionProvider,
   )
 
@@ -120,7 +137,7 @@ class IosDriverTrailblazeAgent(
     actions = listOf(IosDriverAction.AssertVisible(nodeSelector, timeoutMs ?: DEFAULT_AXE_TIMEOUT_MS)),
     traceId = traceId,
     deviceManager = deviceManager,
-    trailblazeLogger = trailblazeLogger,
+    trailblazeLogger = driverActionLogger,
     sessionProvider = sessionProvider,
   )
 
@@ -132,7 +149,7 @@ class IosDriverTrailblazeAgent(
     actions = listOf(IosDriverAction.AssertNotVisible(nodeSelector, timeoutMs ?: DEFAULT_AXE_TIMEOUT_MS)),
     traceId = traceId,
     deviceManager = deviceManager,
-    trailblazeLogger = trailblazeLogger,
+    trailblazeLogger = driverActionLogger,
     sessionProvider = sessionProvider,
   )
 
@@ -153,7 +170,12 @@ class IosDriverTrailblazeAgent(
    * dispatch below. Without this, every repo-resolvable tool that reached this entry as a
    * placeholder failed with a misleading "not a known TrailblazeTool shape" error.
    */
-  suspend fun runTool(tool: TrailblazeTool, context: TrailblazeToolExecutionContext): TrailblazeToolResult {
+  suspend fun runTool(
+    tool: TrailblazeTool,
+    context: TrailblazeToolExecutionContext,
+  ): TrailblazeToolResult = deviceManager.shareScreenReads().use { dispatchTool(tool, context) }
+
+  private suspend fun dispatchTool(tool: TrailblazeTool, context: TrailblazeToolExecutionContext): TrailblazeToolResult {
     return when (val resolved = resolveDynamicTool(tool)) {
       is ExecutableTrailblazeTool -> resolved.execute(context)
       is DelegatingTrailblazeTool -> {

@@ -4,11 +4,13 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, extname, join, resolve, sep } from "node:path";
+import { basename, dirname, extname, join, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { type SurveyDefinition, isSurvey, withId } from "./survey.js";
 import { isSessionDirectory } from "./session.js";
+import { findTrailmapFiles } from "./targets.js";
+import * as surveysSdk from "./index.js";
 
 const MAX_DEPTH = 4;
 const SURVEY_FILE = /\.survey\.(ts|js|mjs|mts)$/;
@@ -127,13 +129,55 @@ export interface LoadedSurvey {
   exportName: string;
 }
 
+export interface LoadSurveysOptions {
+  /**
+   * `trailmap.yaml` files, or directories walked for them. Each trailmap's `surveys/` directory is
+   * loaded as though it had been passed as an input, so a target's surveys ship inside its
+   * trailmap the way its tools do. A trailmap without one contributes nothing.
+   */
+  trailmaps?: ReadonlyArray<string>;
+}
+
+interface BunPluginHost {
+  plugin(plugin: {
+    name: string;
+    setup(build: { module(specifier: string, load: () => { exports: object; loader: "object" }): void }): void;
+  }): void;
+}
+
+let sdkServed = false;
+
+/**
+ * Serves `@trailblaze/scripting/surveys` to survey files from this loader's own copy of the SDK.
+ * A survey in another repo's trailmap then imports it with no tsconfig `paths` or installed
+ * package, the way the shared surveys resolve it inside this repo.
+ */
+function serveSdkToSurveys(): void {
+  const bun = (globalThis as { Bun?: BunPluginHost }).Bun;
+  if (sdkServed || !bun) return;
+  sdkServed = true;
+  bun.plugin({
+    name: "trailblaze-surveys-sdk",
+    setup(build) {
+      build.module("@trailblaze/scripting/surveys", () => ({ exports: surveysSdk, loader: "object" }));
+    },
+  });
+}
+
 /**
  * Imports survey modules and returns every export that came out of `survey()`. A path that
  * is a file is imported whatever its name; a directory is walked for `*.survey.ts` (or `.js`).
  * The export name becomes the survey id; two modules exporting the same name is an error, as
- * it would be for tools.
+ * it would be for tools, including one in a trailmap and one passed directly.
  */
-export async function loadSurveys(inputs: ReadonlyArray<string>, log?: (message: string) => void): Promise<LoadedSurvey[]> {
+export async function loadSurveys(
+  inputs: ReadonlyArray<string>,
+  log?: (message: string) => void,
+  options: LoadSurveysOptions = {},
+): Promise<LoadedSurvey[]> {
+  const fromTrailmaps = findTrailmapFiles(options.trailmaps ?? [], log)
+    .map((file) => join(dirname(file), "surveys"))
+    .filter((dir) => existsSync(dir) && statSync(dir).isDirectory());
   const files: string[] = [];
   const walk = (path: string, depth: number) => {
     if (!existsSync(path)) {
@@ -153,8 +197,9 @@ export async function loadSurveys(inputs: ReadonlyArray<string>, log?: (message:
       else if (SURVEY_FILE.test(name) && !/\.test\.[cm]?[jt]s$/.test(name)) files.push(child);
     }
   };
-  for (const input of inputs) walk(resolve(input), 0);
+  for (const input of [...inputs, ...fromTrailmaps]) walk(resolve(input), 0);
 
+  serveSdkToSurveys();
   const loaded: LoadedSurvey[] = [];
   const byId = new Map<string, string>();
   // A directory and one of its children both name the same file; load it once or every finding doubles.

@@ -1,28 +1,39 @@
 #!/usr/bin/env bun
 // Runs surveys over sessions from the command line.
 //
-//   bun src/surveys/cli.ts --surveys <dir|file>... --sessions <dir|zip>... [--out report.json]
+//   bun src/surveys/cli.ts --target square                 # from anywhere inside a workspace
+//   bun src/surveys/cli.ts --target square ./sessions-dir  # over a downloaded batch instead
 //
-// Sessions may be session directories, directories of sessions, artifact zips, or directories of
-// zips. Surveys may be files (any name) or directories walked for `*.survey.ts`. With no
+// Run inside a workspace, it finds the workspace the way the trailblaze CLI does and loads every
+// survey it carries: `<config>/surveys/` and each trailmap's `surveys/`. `--surveys` and
+// `--trailmaps` replace that with explicit paths. Sessions default to ~/.trailblaze/logs and may be
+// session directories, directories of sessions, artifact zips, or directories of zips. With no
 // `--out`, the markdown report goes to stdout; with `--out`, JSON goes to the file and a one-line
 // per-session summary goes to stdout.
 
 import { parseArgs } from "node:util";
 import { writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 
-import { discoverSessions, loadSurveys } from "./discover.js";
+import { discoverSessions, loadSurveys, type LoadedSurvey } from "./discover.js";
 import { renderMarkdown, renderSummaryLines } from "./report.js";
 import { runSurveys } from "./runner.js";
 import { surveyFeatures } from "./survey.js";
 import { loadTargetCatalog, sessionMatchesTarget, type TargetCatalog } from "./targets.js";
 import type { SessionSummary } from "./types.js";
+import { findWorkspaceConfigDir, loadWorkspace } from "./workspace.js";
 
-const HELP = `Usage: bun cli.ts --surveys <path>... --sessions <path>... [options]
+const HELP = `Usage: bun cli.ts [--target <id>] [<sessions>...] [options]
+
+Run inside a workspace, every survey it carries loads: <config>/surveys/ and each trailmap's
+surveys/. Sessions default to ~/.trailblaze/logs.
 
 Options:
-  -t, --surveys <path>   Survey file, or directory walked for *.survey.ts (repeatable)
+      --target <id>         Only sessions of this target, and only the surveys that apply to it (repeatable)
   -s, --sessions <path>     Session dir, dir of sessions, session zip, or dir of zips (repeatable)
+  -t, --surveys <path>      Instead of the workspace's surveys: a survey file, or directory walked
+                            for *.survey.ts (repeatable)
   -o, --out <file>          Write the JSON report here (markdown otherwise goes to stdout)
       --format <fmt>        stdout format: markdown (default without --out), summary (default with --out), json, none
       --no-evidence         Omit evidence lines from the markdown report
@@ -32,10 +43,10 @@ Options:
       --platform <p>        Only sessions on this platform: android, ios, web, ... (repeatable)
       --device <classifier> Only sessions whose device carries this classifier: iphone, ipad, tablet, ... (repeatable)
       --app-id <id>         Only sessions of this app id (repeatable)
-      --target <id>         Only sessions of this trail target (repeatable)
-      --trailmaps <path>    trailmap.yaml file or directory walked for them; teaches --target and a
-                            survey's targets which app ids each target owns, so sessions that drove
-                            one of a target's apps count even if their trail named no target (repeatable)
+      --trailmaps <path>    Instead of the workspace's trailmaps: a trailmap.yaml or directory walked
+                            for them. Each contributes its surveys/, and its app ids place sessions
+                            that drove one of a target's apps even if their trail named no target
+                            (repeatable)
       --outcome <o>         Only sessions with this outcome: PASSED, FAILED, ... (repeatable)
                             Session filters are ANDed; values within one flag are ORed.
   -q, --quiet               No progress on stderr
@@ -70,20 +81,37 @@ async function main(argv: string[]): Promise<number> {
     return 0;
   }
   const surveyPaths = values.surveys ?? [];
-  const sessionPaths = [...(values.sessions ?? []), ...positionals];
-  if (surveyPaths.length === 0 || sessionPaths.length === 0) {
-    process.stderr.write(HELP);
-    return 2;
-  }
+  const trailmapPaths = values.trailmaps ?? [];
+  const given = [...(values.sessions ?? []), ...positionals];
+  const sessionPaths = given.length > 0 ? given : [join(homedir(), ".trailblaze", "logs")];
   const log = values.quiet ? undefined : (m: string) => process.stderr.write(m + "\n");
 
-  const loaded = await loadSurveys(surveyPaths, log);
+  let loaded: LoadedSurvey[];
+  let catalog: TargetCatalog | undefined;
+  let lookedIn = "the paths given";
+  if (surveyPaths.length > 0 || trailmapPaths.length > 0) {
+    loaded = await loadSurveys(surveyPaths, log, { trailmaps: trailmapPaths });
+    catalog = trailmapPaths.length ? loadTargetCatalog(trailmapPaths, log) : undefined;
+  } else {
+    const configDir = findWorkspaceConfigDir();
+    if (!configDir) {
+      process.stderr.write("Not inside a Trailblaze workspace (no trailblaze-config/ or trails/config/ above here); pass --surveys or --trailmaps.\n");
+      return 2;
+    }
+    log?.(`workspace: ${configDir}`);
+    const workspace = await loadWorkspace(configDir, log);
+    loaded = workspace.surveys;
+    catalog = workspace.targets;
+    lookedIn = `${join(configDir, "surveys")} or any trailmap's surveys/`;
+  }
   let surveys = loaded.map((l) => l.definition);
+  // A survey scoped to another target would only report every session as skipped.
+  if (values.target?.length) surveys = surveys.filter((c) => !c.spec.targets || c.spec.targets.some((t) => values.target!.includes(t)));
   // A catalog survey's own `feature` is a family name; `--feature refunds` must find the survey that reports it.
   if (values.feature?.length) surveys = surveys.filter((c) => [c.spec.feature, ...surveyFeatures(c.spec)].some((f) => values.feature!.includes(f)));
   if (values.tag?.length) surveys = surveys.filter((c) => c.spec.tags?.some((t) => values.tag!.includes(t)));
   if (surveys.length === 0) {
-    process.stderr.write("No surveys found.\n");
+    process.stderr.write(`No surveys found in ${lookedIn}${values.target?.length ? " for that target" : ""}.\n`);
     return 2;
   }
   log?.(`${surveys.length} survey(s) from ${new Set(loaded.map((l) => l.file)).size} file(s)`);
@@ -95,7 +123,6 @@ async function main(argv: string[]): Promise<number> {
   }
   log?.(`${sessions.length} session(s)`);
 
-  const catalog = values.trailmaps?.length ? loadTargetCatalog(values.trailmaps, log) : undefined;
   if (catalog) log?.(`${Object.keys(catalog).length} target(s) from trailmaps: ${Object.keys(catalog).join(", ")}`);
 
   const where = sessionFilter(catalog, {

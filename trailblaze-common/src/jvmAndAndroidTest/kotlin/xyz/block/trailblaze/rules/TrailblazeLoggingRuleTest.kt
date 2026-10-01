@@ -23,7 +23,10 @@ import org.junit.Test
 import org.junit.runner.Description
 import xyz.block.trailblaze.agent.AgentTier
 import xyz.block.trailblaze.agent.model.PromptStepStatus
+import xyz.block.trailblaze.api.AgentDriverAction
+import xyz.block.trailblaze.api.DriverNodeDetail
 import xyz.block.trailblaze.api.ScreenState
+import xyz.block.trailblaze.api.TrailblazeNode
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
@@ -638,7 +641,7 @@ class TrailblazeLoggingRuleTest {
       traceId = TraceId.generate(TraceId.Companion.TraceOrigin.LLM),
       toolDescriptors = toolNames.map { ToolDescriptor(name = it, description = "does $it") },
       requestContext = TrailblazeLog.LlmRequestContext(
-        agentImplementation = AgentImplementation.TRAILBLAZE_RUNNER,
+        agentImplementation = AgentImplementation.KOOG_STRATEGY_GRAPH,
         llmCallStrategy = LlmCallStrategy.DIRECT,
         agentTier = AgentTier.OUTER,
       ),
@@ -652,6 +655,47 @@ class TrailblazeLoggingRuleTest {
 
   /** Any Description will do — afterTestExecution reads the result, not the description. */
   private val DESCRIPTION: Description = Description.createTestDescription("Fake", "run")
+
+  /**
+   * An on-device run with no reachable host writes its logs to the device's disk, and those files
+   * are all CI pulls. The strings have to be on that copy, read while the tree was in hand, or a
+   * device-farm session has none.
+   */
+  @Test
+  fun `a screen capture reaches the disk with the strings its tree showed`() {
+    val written = mutableListOf<TrailblazeLog>()
+    val rule = TestLoggingRule(useDeviceClock = true, writeLogToDisk = { _, log -> written += log })
+    val tree = TrailblazeNode(
+      nodeId = 0,
+      driverDetail = DriverNodeDetail.AndroidAccessibility(),
+      bounds = TrailblazeNode.Bounds(0, 0, 1080, 1920),
+      children = listOf(
+        TrailblazeNode(
+          nodeId = 1,
+          driverDetail = DriverNodeDetail.AndroidAccessibility(text = "Charge $5.00"),
+          bounds = TrailblazeNode.Bounds(40, 1700, 1040, 1820),
+        ),
+      ),
+    )
+
+    rule.logger.log(
+      session(),
+      TrailblazeLog.AgentDriverLog(
+        viewHierarchy = null,
+        trailblazeNodeTree = tree,
+        screenshotFile = "test_session_1790367715162.png",
+        action = AgentDriverAction.BackPress,
+        durationMs = 0,
+        session = SessionId("test_session"),
+        timestamp = Clock.System.now(),
+        deviceWidth = 1080,
+        deviceHeight = 1920,
+      ),
+    )
+
+    val strings = written.filterIsInstance<TrailblazeLog.AgentDriverLog>().single().visibleStrings
+    assertEquals(listOf("Charge $5.00" to listOf(40, 1700, 1040, 1820)), strings?.map { it.text to it.bounds })
+  }
 
   /** The properties the JDK's default proxy selector reads, saved and restored around a fixture. */
   private val PROXY_PROPERTIES = listOf("http.proxyHost", "http.proxyPort", "http.nonProxyHosts")

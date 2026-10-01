@@ -115,8 +115,11 @@ class WallClockMuxConsumer(
      */
     internal open fun rotationInputArgs(rotation: IosScreenRotation): List<String> = emptyList()
 
-    /** Args placed **after** `-i` that bake [rotation] into the pixels. Empty when unnecessary. */
-    internal open fun rotationOutputArgs(rotation: IosScreenRotation): List<String> = emptyList()
+    /**
+     * The video filter placed **after** `-i`: [rotation] baked into the pixels, plus whatever the
+     * codec needs done to every frame. Empty when this container needs no filter.
+     */
+    internal open fun outputFilterArgs(rotation: IosScreenRotation): List<String> = emptyList()
 
     /** Remux the device's H.264 as-is into a fragmented mp4. */
     data object Mp4Copy : Output() {
@@ -189,19 +192,44 @@ class WallClockMuxConsumer(
       /**
        * WebM has no display matrix, so a landscape recording has to be turned in the pixels. This
        * encode is already running, so the transpose is close to free — unlike [Mp4Copy], where it
-       * would mean giving up the stream copy entirely.
+       * would mean giving up the stream copy entirely. The chain always ends in the TV-range
+       * conversion every WebM recording needs ([vp9FilterChain]).
        */
-      override fun rotationOutputArgs(rotation: IosScreenRotation): List<String> =
-        rotation.transposeFilter?.let { listOf("-vf", it) }.orEmpty()
+      override fun outputFilterArgs(rotation: IosScreenRotation): List<String> =
+        vp9FilterArgs(rotation.transposeFilter)
     }
 
     companion object {
       const val DEFAULT_CRF: Int = 32
 
       /**
+       * Converts every frame to TV (limited) range. Chrome will not decode a VP9 profile 0 stream
+       * tagged full range (`PIPELINE_ERROR_DECODE`), and a screen feed is often full range — JPEG
+       * screencast frames always are — so without this the report's player shows a white box.
+       * [vp9CodecArgs] tags the stream `tv`, but only ffmpeg 7.1 and later convert the pixels to
+       * match a tag; on older builds the tag alone would mislabel full-range pixels and shift every
+       * colour. This filter does the conversion on every version, and is a no-op on a feed that is
+       * already TV range.
+       */
+      const val TV_RANGE_FILTER: String = "scale=out_range=tv"
+
+      /**
+       * The `-vf` chain for a VP9 encode: the caller's [steps] (nulls skipped), then
+       * [TV_RANGE_FILTER]. ffmpeg keeps only the LAST `-vf` it is given, so a caller with a filter
+       * of its own passes it here rather than adding a second `-vf`. A caller that builds a
+       * `-filter_complex` graph instead appends this chain to the graph's output — ffmpeg refuses
+       * `-vf` on a stream a complex graph feeds.
+       */
+      fun vp9FilterChain(vararg steps: String?): String = (steps.filterNotNull() + TV_RANGE_FILTER).joinToString(",")
+
+      /** [vp9FilterChain] as the `-vf` args that go with [vp9CodecArgs]. */
+      fun vp9FilterArgs(vararg steps: String?): List<String> = listOf("-vf", vp9FilterChain(*steps))
+
+      /**
        * The VP9 encoder configuration every WebM recording uses, live or not — one measured setting,
        * so a stitched or transcoded recording looks like a live one. [crf] is libvpx's
        * constant-quality level (lower is better; 32 is visually transparent for UI recordings).
+       * Pair it with [vp9FilterArgs], which converts the pixels to the range tagged here.
        */
       fun vp9CodecArgs(crf: Int = DEFAULT_CRF): List<String> = listOf(
         "-c:v", "libvpx-vp9",
@@ -218,6 +246,8 @@ class WallClockMuxConsumer(
         "-cpu-used", "6",
         "-row-mt", "1",
         "-pix_fmt", "yuv420p",
+        // TV range, never full: Chrome fails to decode full-range VP9 profile 0. See [TV_RANGE_FILTER].
+        "-color_range", "tv",
       )
 
       /**
@@ -461,7 +491,7 @@ class WallClockMuxConsumer(
     ) + output.rotationInputArgs(rotation) + listOf(
     "-i", "pipe:0",
     "-an",
-  ) + output.rotationOutputArgs(rotation) + output.ffmpegArgs() + outputFile.absolutePath
+  ) + output.outputFilterArgs(rotation) + output.ffmpegArgs() + outputFile.absolutePath
 
   private fun runDrainLoop() {
     val cons = consumer ?: return

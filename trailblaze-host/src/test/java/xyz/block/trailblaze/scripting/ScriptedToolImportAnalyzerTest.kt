@@ -211,7 +211,130 @@ class ScriptedToolImportAnalyzerTest {
     assertNull(verdict.reason)
   }
 
+  @Test
+  fun `a tool importing an SDK copy that cannot bundle still gets a verdict it keeps`() = runBlocking {
+    assumeEsbuildPresent()
+    // A workspace's unpacked SDK: its dist dynamically imports an MCP transport that is not
+    // installed, so walking into it makes esbuild fail — and a failed analysis is never kept.
+    stageUnbundleableSdk()
+    val src = writeTs(
+      name = "usesSdk.ts",
+      body = """
+        |import { trailblaze } from "@trailblaze/scripting";
+        |export const tool = trailblaze;
+      """.trimMargin(),
+    ).also(::backdate)
+    val counting = countingEsbuild()
+
+    val first = ScriptedToolImportAnalyzer(esbuildBinary = counting).analyze(src)
+    val second = ScriptedToolImportAnalyzer(esbuildBinary = counting).analyze(src)
+
+    assertFalse(first.requiresHost, "expected NOT host-only; got reason=${first.reason}")
+    assertEquals(first, second)
+    assertEquals(1, esbuildRuns(), "a later session must reuse the verdict instead of forking esbuild again")
+  }
+
+  @Test
+  fun `a tool importing the SDK is still flagged for its own node builtin import`() = runBlocking {
+    assumeEsbuildPresent()
+    stageUnbundleableSdk()
+    val src = writeTs(
+      name = "usesSdkAndFs.ts",
+      body = """
+        |import { trailblaze } from "@trailblaze/scripting";
+        |import "node:fs";
+        |export const tool = trailblaze;
+      """.trimMargin(),
+    )
+
+    val verdict = analyzer.analyze(src)
+
+    assertTrue(verdict.requiresHost, "expected host-only; reason=${verdict.reason}")
+    assertEquals("usesSdkAndFs.ts → node:fs", verdict.reason)
+  }
+
+  @Test
+  fun `a tool importing a host-side SDK subpath is flagged host-only`() = runBlocking {
+    assumeEsbuildPresent()
+    val src = writeTs(
+      name = "usesSurveys.ts",
+      body = """
+        |import { trailblaze } from "@trailblaze/scripting";
+        |import { discover } from "@trailblaze/scripting/surveys";
+        |export const tool = [trailblaze, discover];
+      """.trimMargin(),
+    )
+
+    val verdict = analyzer.analyze(src)
+
+    assertTrue(verdict.requiresHost, "expected host-only; reason=${verdict.reason}")
+    assertEquals("usesSurveys.ts → @trailblaze/scripting/surveys", verdict.reason)
+  }
+
+  @Test
+  fun `a tool importing the SDK matcher stays on-device`() = runBlocking {
+    assumeEsbuildPresent()
+    val src = writeTs(
+      name = "usesMatcher.ts",
+      body = """
+        |import { trailblaze } from "@trailblaze/scripting";
+        |import { matches } from "@trailblaze/scripting/matcher";
+        |export const tool = [trailblaze, matches];
+      """.trimMargin(),
+    )
+
+    val verdict = analyzer.analyze(src)
+
+    assertFalse(verdict.requiresHost, "expected on-device; reason=${verdict.reason}")
+  }
+
   // --- helpers ---
+
+  private val esbuildRunLog by lazy { File(tempFolder.root, "esbuild-runs.log").apply { writeText("") } }
+
+  /** A wrapper around the real esbuild that records each run, so a test can see a reused verdict. */
+  private fun countingEsbuild(): File = File(tempFolder.root, "counting-esbuild").apply {
+    writeText(
+      """
+      |#!/bin/sh
+      |printf 'run\n' >> '${esbuildRunLog.absolutePath}'
+      |exec '${esbuild.absolutePath}' "${'$'}@"
+      """.trimMargin(),
+    )
+    setExecutable(true)
+  }
+
+  private fun esbuildRuns(): Int = esbuildRunLog.readLines().count { it == "run" }
+
+  /**
+   * Resolves `@trailblaze/scripting` (via a tsconfig `paths` entry beside the tools, the way a
+   * workspace points at its unpacked SDK) to a file whose dynamic import esbuild cannot resolve.
+   */
+  private fun stageUnbundleableSdk() {
+    val sdk = File(tempFolder.root, "sdk/dist/index.js").apply {
+      parentFile.mkdirs()
+      writeText(
+        """
+        |export const trailblaze = {};
+        |export async function connect() {
+        |  return await import("@modelcontextprotocol/sdk/server/stdio.js");
+        |}
+        """.trimMargin(),
+      )
+      backdate(this)
+    }
+    File(tempFolder.root, "tsconfig.json").apply {
+      writeText(
+        """{ "compilerOptions": { "baseUrl": ".", "paths": { "@trailblaze/scripting": ["${sdk.absolutePath}"] } } }""",
+      )
+      backdate(this)
+    }
+  }
+
+  /** A file written moments before an analysis may have changed during it, so it is never remembered. */
+  private fun backdate(file: File) {
+    file.setLastModified(System.currentTimeMillis() - 60_000)
+  }
 
   private fun writeTs(name: String, body: String): File {
     val file = tempFolder.newFile(name)

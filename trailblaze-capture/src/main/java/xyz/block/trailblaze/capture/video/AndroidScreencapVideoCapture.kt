@@ -174,6 +174,7 @@ class AndroidScreencapVideoCapture(
       output = output,
       sessionStartMs = startTimestampMs,
       sessionEndMs = endTimestampMs,
+      format = format,
       encodeArgs = format.encodeArgs(),
       ffmpegBinary = ffmpegBinary,
       logTag = "AndroidScreencapVideoCapture",

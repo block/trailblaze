@@ -36,6 +36,13 @@ interface PlaywrightPageManager : AutoCloseable, DriverDispatch {
    * screenshot: no settle wait, and none of the element detail only the LLM reads.
    */
   fun captureScreenStateForRecord(): ScreenState = captureScreenStateForLogging()
+
+  /**
+   * What a recorded replay keeps before an action: the boxed accessibility tree, and a JPEG when
+   * [withScreenshot]. [secrets] are kept out of it (see [PlaywrightTreeScreenState]). Null where
+   * the page manager has no cheap tree capture.
+   */
+  fun captureTreeForReplay(withScreenshot: Boolean, secrets: Set<String> = emptySet()): ScreenState? = null
   fun waitForPageReady(
     domStabilityTimeoutMs: Double = DEFAULT_DOM_STABILITY_TIMEOUT_MS,
   )

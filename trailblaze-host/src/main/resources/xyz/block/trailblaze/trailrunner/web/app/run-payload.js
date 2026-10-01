@@ -37,6 +37,11 @@
       // so a live or Shared report carries the same `trace.json` spans a CLI-built one does.
       slimTracerSpans: o.slimTracerSpans || g.slimTracerSpans,
       MAX_TRACE_BYTES: o.MAX_TRACE_BYTES || g.MAX_TRACE_BYTES,
+      // The capture logs' strings reader, from run-report-visible-strings.ts the same way.
+      extractVisibleStrings: o.extractVisibleStrings || g.extractVisibleStrings,
+      visibleStringsShotFiles: o.visibleStringsShotFiles || g.visibleStringsShotFiles,
+      // The frames saved from the recording for captures with no screenshot, by the same route.
+      captureFrameFiles: o.captureFrameFiles || g.captureFrameFiles,
     };
   }
 
@@ -248,10 +253,26 @@
   //   'embed' fetches the bytes and inlines them as data URIs, reporting onProgress(done, total);
   //   'link'  points at the daemon's /static/ tree and fetches nothing — a linked report must not
   //           download the images, that is the whole point of linking them.
-  async function collectShots(trace, sessionId, mode, onProgress, deps) {
+  // `visibleStrings` adds the frames the Strings tab shows that the trace never references.
+  // `frameFiles` adds the frames saved from the recording for captures with no screenshot — only
+  // when embedding, which drops a file that isn't there. A link can't tell a missing file from a
+  // present one, and the page it lands in has the recording to take those frames from.
+  async function collectShots(trace, sessionId, mode, onProgress, deps, visibleStrings, frameFiles) {
     var d = resolve(deps);
     var files = d.traceScreenshotFiles(trace);
+    if (visibleStrings && typeof d.visibleStringsShotFiles === 'function') {
+      d.visibleStringsShotFiles(visibleStrings).forEach(function (f) { if (files.indexOf(f) < 0) files.push(f); });
+    }
+    if (mode !== 'link') (frameFiles || []).forEach(function (f) { if (files.indexOf(f) < 0) files.push(f); });
     var shots = {};
+    // A farm capture recorded under an http(s) URL is not in the session tree: the browser loads it
+    // from there, in either mode, and it is never fetched here. Reserialized, like the CLI's
+    // remoteShotValue, because the viewer interpolates a shot into `src="…"` unescaped.
+    var remote = function (f) { return /^https?:\/\//i.test(f); };
+    files.filter(remote).forEach(function (f) {
+      try { shots[f] = new URL(f).href; } catch (e) { shots[f] = f.replace(/"/g, '%22'); }
+    });
+    files = files.filter(function (f) { return !remote(f); });
     if (mode === 'link') {
       files.forEach(function (f) { shots[f] = staticUrl(sessionId, f); });
       return shots;
@@ -418,10 +439,37 @@
         console.error('trace: skipping trace.json — ' + declared + ' bytes is over the ' + d.MAX_TRACE_BYTES + '-byte cap');
         return null;
       }
-      var text = await res.text();
-      if (d.MAX_TRACE_BYTES && text.length > d.MAX_TRACE_BYTES) return null;
-      return d.slimTracerSpans(JSON.parse(text));
+      // Capped in bytes as the body arrives, so a missing or understated Content-Length cannot
+      // buffer an unbounded response.
+      var body = await readBodyWithinLimit(res, d.MAX_TRACE_BYTES || undefined);
+      if (!body) return null;
+      return d.slimTracerSpans(JSON.parse(new TextDecoder().decode(body)));
     } catch (e) { return null; }
+  }
+
+  // The session's log records, for a caller that did not bring them. Fails soft to null.
+  async function fetchLogs(sessionId, d) {
+    try {
+      var res = await d.fetch(apiUrl(sessionId, 'logs'));
+      if (!res.ok) return null;
+      return await res.json();
+    } catch (e) { return null; }
+  }
+
+  // The strings each screen capture showed, for the Strings tab: read off the capture logs, where the
+  // logging rule recorded them, so a running session shows them as its captures land.
+  function visibleStringsFromLogs(logs, d) {
+    try {
+      if (!logs || typeof d.extractVisibleStrings !== 'function') return null;
+      return d.extractVisibleStrings(logs);
+    } catch (e) { return null; }
+  }
+
+  function frameFilesFromLogs(logs, d) {
+    try {
+      if (!logs || typeof d.captureFrameFiles !== 'function') return [];
+      return d.captureFrameFiles(logs);
+    } catch (e) { return []; }
   }
 
   // The side channels, in parallel, each failing soft to null. `logs` lets a caller that has already
@@ -434,15 +482,22 @@
   // document asks for it once, on the build that follows the run's terminal status.
   async function fetchSideChannels(sessionId, deps, logs, withRecordingYaml) {
     var d = resolve(deps);
+    // One download of the logs, shared by the two channels read off them.
+    var logsReady = logs ? Promise.resolve(logs) : fetchLogs(sessionId, d);
     var out = await Promise.all([
       withRecordingYaml === false ? null : fetchRecordingYaml(sessionId, d),
-      fetchOriginalYaml(sessionId, d, logs),
+      logsReady.then(function (l) { return fetchOriginalYaml(sessionId, d, l); }),
       fetchReportEvents(sessionId, d),
       fetchAnalyticsStream(sessionId, d),
       fetchTraceSpans(sessionId, d),
+      logsReady.then(function (l) { return visibleStringsFromLogs(l, d); }),
+      logsReady.then(function (l) { return frameFilesFromLogs(l, d); }),
     ]);
     var events = (out[2] || []).concat(out[3] ? [out[3]] : []);
-    return { recordingYaml: out[0], originalYaml: out[1], events: events.length ? events : null, spans: out[4] || null };
+    return {
+      recordingYaml: out[0], originalYaml: out[1], events: events.length ? events : null,
+      spans: out[4] || null, visibleStrings: out[5] || null, frameFiles: out[6] || [],
+    };
   }
 
   // The full run-report session input: `{ meta, trace, llmLogs, shots, events, spans }`, ready for
@@ -450,8 +505,8 @@
   async function buildSessionInput(args) {
     var a = args || {};
     var mode = a.mode === 'link' ? 'link' : 'embed';
-    var shots = await collectShots(a.trace, a.sessionId, mode, a.onProgress, a.deps);
     var side = await fetchSideChannels(a.sessionId, a.deps, a.logs, a.withRecordingYaml);
+    var shots = await collectShots(a.trace, a.sessionId, mode, a.onProgress, a.deps, side.visibleStrings, side.frameFiles);
     var attachments = await collectAttachments(side.events, a.sessionId, mode, a.deps);
     var input = {
       meta: runMeta({
@@ -468,6 +523,7 @@
       events: side.events,
       attachments: attachments,
       spans: side.spans,
+      visibleStrings: side.visibleStrings,
     };
     // 'embed' compresses the per-step view hierarchies into the same gz side-channel the CLI-built
     // report carries: inline hierarchies would otherwise dominate the exported file's size AND be

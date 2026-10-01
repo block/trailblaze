@@ -2,6 +2,7 @@
 
 package xyz.block.trailblaze.agent
 
+import ai.koog.prompt.Prompt
 import ai.koog.prompt.executor.clients.LLMClient
 import ai.koog.prompt.message.AttachmentContent
 import xyz.block.trailblaze.util.Console
@@ -11,6 +12,7 @@ import ai.koog.prompt.message.MessagePart
 import ai.koog.prompt.message.RequestMetaInfo
 import ai.koog.prompt.params.LLMParams
 import ai.koog.utils.time.KoogClock
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import xyz.block.trailblaze.agent.util.ElementRetriever
@@ -28,26 +30,52 @@ import xyz.block.trailblaze.toolcalls.commands.StringEvaluationTrailblazeTool
 import xyz.block.trailblaze.util.TemplatingUtil
 import xyz.block.trailblaze.utils.ElementComparator
 import xyz.block.trailblaze.utils.getNumberFromString
+import kotlin.uuid.ExperimentalUuidApi
+import kotlin.uuid.Uuid
 
 /**
  * Service that identifies element locators and evaluates UI elements.
  */
 class TrailblazeElementComparator(
   private val screenStateProvider: () -> ScreenState,
-  trailblazeLlmModel: TrailblazeLlmModel,
-  llmClient: LLMClient,
+  private val trailblazeLlmModel: TrailblazeLlmModel,
+  private val llmClient: LLMClient,
   val toolRepo: TrailblazeToolRepo,
   private val systemPromptToolTemplate: String = TemplatingUtil.getResourceAsText("trailblaze_locator_tool_system_prompt.md")!!,
   private val userPromptTemplate: String = TemplatingUtil.getResourceAsText("trailblaze_locator_user_prompt_template.md")!!,
 ) : ElementComparator {
 
-  private val koogLlmClientHelper = TrailblazeKoogLlmClientHelper(
-    trailblazeLlmModel = trailblazeLlmModel,
-    llmClient = llmClient,
-    systemPromptTemplate = systemPromptToolTemplate,
-    elementComparator = this,
-    toolRepo = toolRepo,
-  )
+  /** Sends one request, retrying up to three times with a growing delay on any failure. */
+  private suspend fun callLlm(llmRequestData: KoogLlmRequestData): Message.Assistant {
+    val maxRetries = 3
+    for (attempt in 1..maxRetries) {
+      try {
+        // Koog requires every prompt to carry an id; a random one is enough.
+        @OptIn(ExperimentalUuidApi::class)
+        val promptId = Uuid.random().toString()
+        return llmClient.execute(
+          prompt = Prompt(
+            messages = llmRequestData.messages,
+            id = promptId,
+            params = LLMParams(
+              temperature = trailblazeLlmModel.defaultTemperature,
+              speculation = null,
+              schema = null,
+              toolChoice = llmRequestData.toolChoice,
+            ),
+          ),
+          model = trailblazeLlmModel.toKoogLlmModel(),
+          tools = llmRequestData.toolDescriptors,
+        )
+      } catch (e: Exception) {
+        if (attempt == maxRetries) throw e
+        val delayMs = 1000L + (attempt - 1) * 3000L
+        Console.log("[RETRY] Server error (attempt $attempt/$maxRetries), retrying in ${delayMs}ms...")
+        delay(delayMs)
+      }
+    }
+    error("unreachable: the final attempt either returns or throws")
+  }
 
   /**
    * Gets the value of an element based on a prompt description.
@@ -121,7 +149,7 @@ class TrailblazeElementComparator(
       toolChoice = LLMParams.ToolChoice.Required,
     )
 
-    val koogLlmChatResponse: Message.Assistant = runBlocking { koogLlmClientHelper.callLlm(koogRequestData) }
+    val koogLlmChatResponse: Message.Assistant = runBlocking { callLlm(koogRequestData) }
     val toolCalls = koogLlmChatResponse.parts.filterIsInstance<MessagePart.Tool.Call>()
     val assertionToolCall: MessagePart.Tool.Call = toolCalls.firstOrNull() ?: return BooleanAssertionTrailblazeTool(
       result = false,
@@ -172,7 +200,7 @@ class TrailblazeElementComparator(
     val evaluationToolRepo = TrailblazeToolRepo(StringEvaluationTrailblazeToolSet)
 
     val koogLlmChatResponse: Message.Assistant = runBlocking {
-      koogLlmClientHelper.callLlm(
+      callLlm(
         KoogLlmRequestData(
           messages = koogAiRequestMessages,
           toolDescriptors = evaluationToolRepo.getCurrentToolDescriptors(),
@@ -273,7 +301,7 @@ class TrailblazeElementComparator(
 
     val elementRetrieverToolRepo = TrailblazeToolRepo(ElementRetrieverTrailblazeToolSet)
     val koogLlmChatResponse: Message.Assistant = runBlocking {
-      koogLlmClientHelper.callLlm(
+      callLlm(
         KoogLlmRequestData(
           messages = koogRequestMessages,
           toolDescriptors = elementRetrieverToolRepo.getCurrentToolDescriptors(),

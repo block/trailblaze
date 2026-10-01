@@ -14,7 +14,6 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.logs.server.TrailblazeMcpServer
-import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.mcp.TrailblazeMcpBridge
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.report.utils.LogsRepo
@@ -420,7 +419,7 @@ private class TestTrailblazeMcpBridge : TrailblazeMcpBridge {
   override fun getAvailableAppTargets(): Set<TrailblazeHostAppTarget> =
     setOf(TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget)
 
-  override suspend fun runYaml(yaml: String, startNewSession: Boolean, agentImplementation: AgentImplementation): String {
+  override suspend fun runYaml(yaml: String, startNewSession: Boolean): String {
     // No-op for testing
     return ""
   }

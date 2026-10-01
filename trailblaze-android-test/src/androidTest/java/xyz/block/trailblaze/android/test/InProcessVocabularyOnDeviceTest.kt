@@ -38,6 +38,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.commands.ClearTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.InputTextRandomTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.InputTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.MaestroTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.NetworkConnectionTrailblazeTool
 import xyz.block.trailblaze.utils.NoOpElementComparator
@@ -208,6 +209,35 @@ class InProcessVocabularyOnDeviceTest {
       "The generated value should follow the prefix/digit shape asked for, got: $remembered",
     )
     run(AndroidTestAssertVisibleTool(composeText(Regex.escape(remembered))))
+  }
+
+  /**
+   * `inputText` with a `selector` types into the field it names, not the one holding focus: the
+   * Compose input is focused first, and the text must land in the View input instead.
+   */
+  @Test
+  fun inputTextWithASelectorTypesIntoThatFieldRatherThanTheFocusedOne() {
+    run(AndroidTestTapTool(composeTag(MixedUiFixtureActivity.COMPOSE_INPUT_TAG)))
+
+    run(InputTextTrailblazeTool(text = "typed-by-selector", selector = viewHint(MixedUiFixtureActivity.VIEW_INPUT_HINT)))
+
+    run(AndroidTestAssertVisibleTool(viewText("typed-by-selector")))
+    run(AndroidTestAssertNotVisibleTool(composeText("typed-by-selector")))
+  }
+
+  /** A `selector` that matches nothing fails the step, and nothing reaches the focused field. */
+  @Test
+  fun inputTextWithASelectorThatMatchesNothingTypesNothing() {
+    run(AndroidTestTapTool(composeTag(MixedUiFixtureActivity.COMPOSE_INPUT_TAG)))
+
+    runExpectingError(
+      InputTextTrailblazeTool(
+        text = "stray-text",
+        selector = viewHint("No Such Field"),
+      ),
+    )
+
+    run(AndroidTestAssertNotVisibleTool(composeText("stray-text")))
   }
 
   /**

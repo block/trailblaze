@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.report.models
 
 import kotlinx.serialization.Serializable
+import xyz.block.trailblaze.decision.AnsweredWithoutLlm
 import maestro.orchestra.ApplyConfigurationCommand
 import xyz.block.trailblaze.agent.model.AgentTaskStatus
 import xyz.block.trailblaze.api.AgentActionType
@@ -91,6 +92,7 @@ data class SessionSummary(
             is TrailblazeLog.TrailblazeProgressLog,
             is TrailblazeLog.McpAskLog,
             is TrailblazeLog.TrailblazeToolCatalogLog,
+            is TrailblazeLog.TrailblazeDecisionRequestLog,
             -> it
           }
         }.sortedBy { log -> log.timestamp }
@@ -248,6 +250,7 @@ data class SessionSummary(
             is TrailblazeLog.McpAskLog,
             // Session-level metadata, not an event on the timeline.
             is TrailblazeLog.TrailblazeToolCatalogLog,
+            is TrailblazeLog.TrailblazeDecisionRequestLog,
             -> null
           }
         }
@@ -271,7 +274,7 @@ data class SessionSummary(
       return SessionSummary(
         sessionId = sessionId,
         outcome = finalStatus?.let { it.agentTaskStatus::class.java.simpleName },
-        llmCallCount = sortedLogs.filterIsInstance<TrailblazeLog.TrailblazeLlmRequestLog>().size,
+        llmCallCount = AnsweredWithoutLlm.modelRequests(sortedLogs).size,
         sessionStartTimestampMs = sessionStartTimestamp.toEpochMilliseconds(),
         screenshots = screenshotUrls,
         agentTasks = sortedLogs.filterIsInstance<HasAgentTaskStatus>()

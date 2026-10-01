@@ -9,7 +9,6 @@ import xyz.block.trailblaze.host.TrailblazeHostYamlRunner
 import xyz.block.trailblaze.host.rules.BaseHostTrailblazeTest
 import xyz.block.trailblaze.http.DynamicLlmClient
 import xyz.block.trailblaze.llm.TrailblazeReferrer
-import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.scripting.LaunchedScriptingRuntime
 import xyz.block.trailblaze.scripting.finishScriptingRuntimeCleanup
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
@@ -64,12 +63,6 @@ internal suspend fun runIosSimulatorYaml(
     logsDir = logsDir,
     noLogging = runOnHostParams.noLogging,
   ) {
-    // Honor the agent implementation chosen for THIS run (CLI --agent / settings / request),
-    // overriding BaseHostTrailblazeTest's JUnit-eval system-property default so
-    // KOOG_STRATEGY_GRAPH takes effect on this local-simulator path exactly like the web / Revyl /
-    // on-device paths. Default (TRAILBLAZE_RUNNER) is unchanged.
-    override val agentImplementation: AgentImplementation = runYamlRequest.agentImplementation
-
     override fun ensureTargetAppIsStopped() {
       // Convert the YAML-ordered List to a Set for ensureAppsAreForceStopped, which takes
       // membership-style Set<String>.
@@ -178,6 +171,7 @@ internal suspend fun runIosSimulatorYaml(
     val yamlRun = hostTbRunner.runTrailblazeYamlSuspend(
       yaml = runYamlRequest.yaml,
       forceStopApp = runOnHostParams.forceStopTargetApp,
+      useRecordedSteps = runYamlRequest.useRecordedSteps,
       trailFilePath = runYamlRequest.trailFilePath,
       trailblazeDeviceId = trailblazeDeviceId,
       traceId = runYamlRequest.traceId,

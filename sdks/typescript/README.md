@@ -316,7 +316,7 @@ jq -r 'select(.toolName == "fundAccount") | {successful, exceptionMessage}' \
 | `TrailblazeClient`                    | type      | Third handler arg. Exposes the typed `client.tools.<name>(args)` namespace. |
 | `TrailblazeToolMap`                   | type      | Open interface mapping tool name → arg shape. Augmented by built-ins + per-trailmap `.d.ts` codegen. |
 | `TrailblazeCallToolResult`            | type      | Resolved value from any `client.tools.<name>(args)` call. `{ success: true, textContent, errorMessage }`. |
-| `TrailblazeDevice`                    | type      | `ctx.device`: `{ platform, widthPixels, heightPixels, driverType, instanceId? }`. `instanceId` is the emulator serial on Android or the simulator UDID on iOS, for host CLIs that target this device; older daemons omit it. |
+| `TrailblazeDevice`                    | type      | `ctx.device`: `{ platform, widthPixels, heightPixels, driverType, instanceId?, trailblazePort? }`. `instanceId` is the emulator serial on Android or the simulator UDID on iOS, for host CLIs that target this device; older daemons omit it. `trailblazePort` is the port the device's Trailblaze server (Android runner, or an iOS app's in-app server) is bridged on, for `fetch` to `localhost`; absent on web devices, when running on the device itself, and from older daemons. |
 | `RunOptions`, `TrailblazeToolHandler`, `TrailblazeToolSpec` | types | Supporting types for `run` / `tool`. |
 
 ## Consuming the package

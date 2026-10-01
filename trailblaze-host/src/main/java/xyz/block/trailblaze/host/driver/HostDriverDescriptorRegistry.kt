@@ -39,9 +39,8 @@ class HostDriverDescriptorRegistry(
       .also { byType ->
         // The type-level "no host run body" declaration, checked against the enum that decides
         // where the driver actually dispatches. A driver may skip a run body only when BOTH
-        // properties hold: `DesktopDispatchDecision` sends `!executesToolsOnDevice` to
-        // HOST_IN_PROCESS_KOOG and `!hostRpcReachable` to HOST_DEFAULT, and both of those call
-        // `runHostYaml`. The two coincide today; requiring the conjunction means a driver that
+        // properties hold: `DesktopDispatchDecision` sends both `!executesToolsOnDevice` and
+        // `!hostRpcReachable` to HOST_IN_PROCESS_KOOG, which calls `runHostYaml`. The two coincide today; requiring the conjunction means a driver that
         // splits them later fails here rather than at the first host run.
         val cannotRun = byType.filterValues { it is HostDriverDescriptor.OnDeviceTools }
           .filterKeys { !(it.executesToolsOnDevice && it.hostRpcReachable) }

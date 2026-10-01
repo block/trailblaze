@@ -140,7 +140,7 @@ class IosVideoStitcherTest {
 
   @Test
   fun `every segment is decoded on its own and scaled onto one frame size before joining`() {
-    val graph = IosVideoStitcher.filterComplex(twoSegmentPlan(), VideoFrameSize.Size(1206, 2622))
+    val graph = IosVideoStitcher.filterComplex(twoSegmentPlan(), VideoFrameSize.Size(1206, 2622), RecordingFormat.MP4)
 
     // Each input gets its own chain — that separate decode is what lets segments of different
     // codecs join at all.
@@ -153,8 +153,18 @@ class IosVideoStitcherTest {
   }
 
   @Test
+  fun `a webm stitch converts to TV range inside the graph, and an mp4 stitch does not`() {
+    // ffmpeg refuses a -vf on a stream a complex graph feeds, so the range conversion Chrome needs
+    // has to ride on the concat's own output.
+    val webm = IosVideoStitcher.filterComplex(twoSegmentPlan(), VideoFrameSize.Size(320, 240), RecordingFormat.WEBM)
+    assertContains(webm, "concat=n=2:v=1:a=0,scale=out_range=tv[stitched]")
+    val mp4 = IosVideoStitcher.filterComplex(twoSegmentPlan(), VideoFrameSize.Size(320, 240), RecordingFormat.MP4)
+    assertFalse("out_range" in mp4, mp4)
+  }
+
+  @Test
   fun `a non-final segment holds its last frame out to its presented duration`() {
-    val graph = IosVideoStitcher.filterComplex(twoSegmentPlan(), VideoFrameSize.Size(320, 240))
+    val graph = IosVideoStitcher.filterComplex(twoSegmentPlan(), VideoFrameSize.Size(320, 240), RecordingFormat.MP4)
 
     // The 2s gap is filled with clones of the dying screen rather than black, and the trim pins the
     // next segment to offset 4s whether this one's footage ran long or short.
@@ -237,7 +247,7 @@ class IosVideoStitcherTest {
     // baguette segment — comes through this join, so refusing without a size would lose the whole
     // session's video on such a host. Same-sized segments still join; mismatched ones are left to
     // fail in ffmpeg's own exit code.
-    val graph = IosVideoStitcher.filterComplex(twoSegmentPlan(), target = null)
+    val graph = IosVideoStitcher.filterComplex(twoSegmentPlan(), target = null, format = RecordingFormat.MP4)
 
     assertFalse(graph.contains("scale="), "with no size to fit onto, no scaling may be attempted: $graph")
     assertFalse(graph.contains(",pad="), "with no size to fit onto, no letterboxing may be attempted: $graph")

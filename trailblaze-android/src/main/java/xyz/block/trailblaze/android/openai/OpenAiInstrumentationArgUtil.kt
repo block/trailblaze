@@ -11,21 +11,6 @@ import xyz.block.trailblaze.llm.config.LlmAuthResolver
 object OpenAiInstrumentationArgUtil {
 
   /**
-   * Gets the OpenAI API key from instrumentation arguments.
-   * Checks the dynamic convention first, then legacy arg names.
-   */
-  fun getApiKeyFromInstrumentationArg(): String = if (InstrumentationArgUtil.isAiEnabled()) {
-    val openAiApiKey =
-      InstrumentationArgUtil.getInstrumentationArg(LlmAuthResolver.resolve(TrailblazeLlmProvider.OPENAI))
-    if (openAiApiKey.isNullOrBlank()) {
-      throw IllegalStateException("OpenAI API key not set (expected trailblaze.llm.auth.token.openai)")
-    }
-    openAiApiKey
-  } else {
-    "AI_DISABLED"
-  }
-
-  /**
    * Gets the OpenAI base URL from instrumentation arguments.
    * Checks the dynamic convention first, then legacy arg names.
    * Defaults to the standard OpenAI API endpoint if not provided.

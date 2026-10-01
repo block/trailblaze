@@ -56,8 +56,7 @@ class DynamicToolSetTest {
   fun `toolCallToTrailblazeTool can deserialize YAML-defined tool calls`() {
     // Pair to the descriptor test above — keeps advertise/execute in sync. If
     // getCurrentToolDescriptors() advertises a YAML-defined tool like `eraseText`, the LLM can
-    // legally select it, and the executor path (AgentUiActionExecutor / HostAccessibilityRpcClient)
-    // routes through toolCallToTrailblazeTool() to deserialize the tool call. That deserialization
+    // legally select it, and the executor path routes through toolCallToTrailblazeTool() to deserialize the tool call. That deserialization
     // used to only resolve class-backed tools, so YAML picks would crash the executor with
     // "Could not find Trailblaze tool class". Now YAML tool names resolve via the registered
     // ToolYamlConfig + YamlDefinedToolSerializer.

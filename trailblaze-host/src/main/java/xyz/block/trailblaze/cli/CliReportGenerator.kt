@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.cli
 
 import kotlin.time.Duration.Companion.milliseconds
+import xyz.block.trailblaze.decision.AnsweredWithoutLlm
 import java.io.File
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
@@ -416,7 +417,7 @@ open class CliReportGenerator {
   }
 
   private fun countLlmCalls(logs: List<TrailblazeLog>): Int {
-    return logs.filterIsInstance<TrailblazeLog.TrailblazeLlmRequestLog>().size
+    return AnsweredWithoutLlm.modelRequests(logs).size
   }
 
   /**

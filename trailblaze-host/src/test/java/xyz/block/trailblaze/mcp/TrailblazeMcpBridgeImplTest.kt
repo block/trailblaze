@@ -1,6 +1,11 @@
 package xyz.block.trailblaze.mcp
 
 import java.io.File
+import xyz.block.trailblaze.mcp.android.ondevice.rpc.OnDeviceRpcClient
+import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetScreenStateRequest
+import xyz.block.trailblaze.host.jvmScopedDeviceId
+import xyz.block.trailblaze.host.MockRpcServer
+import java.io.IOException
 import kotlin.reflect.KClass
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -37,6 +42,7 @@ import xyz.block.trailblaze.logs.client.TrailblazeSession
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
+import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcResult
 import xyz.block.trailblaze.model.ResolvedTarget
 import xyz.block.trailblaze.model.TrailExecutionResult
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
@@ -228,6 +234,118 @@ class TrailblazeMcpBridgeImplTest {
 
     assertEquals(runner, TrailblazeMcpBridgeImpl.deadRunnerUnderReadyAgent("emulator-5560", ready, runners) { false })
     assertNull(TrailblazeMcpBridgeImpl.deadRunnerUnderReadyAgent("emulator-5560", ready, runners) { true })
+  }
+
+  /**
+   * A fake of the bridge's ready-agent state: [forgetStoppedRunner] is the bridge's own
+   * [TrailblazeMcpBridgeImpl.forgetRunnerAfterTransportFailure] wiring, with [serving] standing in
+   * for the device probe, and [nextRpcStartsAgent] is the gate every RPC passes first.
+   */
+  private class ReadyAgentState(val key: String, var serving: () -> Boolean) {
+    val runner = "xyz.block.trailblaze.runner"
+    val ready = mutableSetOf(key)
+    var probes = 0
+    var starts = 0
+
+    fun forgetStoppedRunner(failure: RpcResult.Failure): String? =
+      TrailblazeMcpBridgeImpl.forgetRunnerAfterTransportFailure(
+        failure = failure,
+        forgetIfGone = {
+          probes++
+          TrailblazeMcpBridgeImpl.deadRunnerUnderReadyAgent(key, ready, mapOf(key to runner)) { serving() }
+            ?.also { ready.remove(key) }
+        },
+        forgetUnverified = {
+          TrailblazeMcpBridgeImpl.deadRunnerUnderReadyAgent(key, ready, mapOf(key to runner)) { false }
+            ?.also { ready.remove(key) }
+        },
+      )
+
+    fun nextRpcStartsAgent(): Boolean {
+      val before = starts
+      TrailblazeMcpBridgeImpl.startOnDeviceAgentIfNotReady(
+        key = key,
+        isReady = { key in ready },
+        awaitingWedgeRestart = { false },
+        start = { starts++; ready += key; null },
+      )
+      return starts > before
+    }
+  }
+
+  /**
+   * A reboot took the runner's server down without telling the bridge. Against a real server: a
+   * failure it answered leaves the agent alone, and once it stops answering, the RPC that finds out
+   * drops the ready flag — otherwise every later RPC trusts it and fails the same way.
+   */
+  @Test
+  fun `an RPC that finds the runner's server gone makes the next RPC relaunch it`() {
+    val device = jvmScopedDeviceId("test-ready-agent-stops-serving")
+    val state = ReadyAgentState(device.instanceId, serving = { false })
+    val server = MockRpcServer(device).apply { start() }
+    val client = OnDeviceRpcClient(trailblazeDeviceId = device, repairTransportOnNetworkError = false)
+    try {
+      val answered = runBlocking {
+        TrailblazeMcpBridgeImpl.rpcToReadyAgent(client, GetScreenStateRequest(includeScreenshot = false), state::forgetStoppedRunner)
+      }
+      assertIs<RpcResult.Failure>(answered.result)
+      assertNull(answered.stoppedRunner)
+      assertEquals(0, state.probes, "a server that answered is up; probing it costs every failing tool an adb round trip")
+      assertFalse(state.nextRpcStartsAgent())
+
+      server.stop()
+      val unanswered = runBlocking {
+        TrailblazeMcpBridgeImpl.rpcToReadyAgent(client, GetScreenStateRequest(includeScreenshot = false), state::forgetStoppedRunner)
+      }
+      assertEquals(RpcResult.ErrorType.NETWORK_ERROR, assertIs<RpcResult.Failure>(unanswered.result).errorType)
+      assertEquals(state.runner, unanswered.stoppedRunner)
+      assertTrue(state.nextRpcStartsAgent())
+    } finally {
+      client.close()
+      server.stop()
+    }
+  }
+
+  @Test
+  fun `a transport failure while the runner still serves keeps it ready`() {
+    val state = ReadyAgentState("emulator-5554", serving = { true })
+    val networkError = RpcResult.Failure(RpcResult.ErrorType.NETWORK_ERROR, "Network error during RPC call")
+
+    assertNull(state.forgetStoppedRunner(networkError))
+    assertEquals(1, state.probes)
+    assertFalse(state.nextRpcStartsAgent(), "a relaunch per dropped socket would reinstall a healthy runner")
+  }
+
+  /** adb was unreachable too, right after a reboot: nothing confirms the runner, so it is not trusted. */
+  @Test
+  fun `a transport failure the probe cannot check forgets the runner rather than throwing`() {
+    val state = ReadyAgentState("emulator-5554", serving = { throw IOException("device offline") })
+    val networkError = RpcResult.Failure(RpcResult.ErrorType.NETWORK_ERROR, "Network error during RPC call")
+
+    assertEquals(state.runner, state.forgetStoppedRunner(networkError))
+    assertTrue(state.nextRpcStartsAgent())
+  }
+
+  /**
+   * Two calls fail against the same dead runner. One probes, forgets and relaunches it while the
+   * other's probe is still out; that probe's "not serving" was about the old runner and must not
+   * clear the new one.
+   */
+  @Test
+  fun `a verdict reached before a relaunch does not forget the relaunched runner`() {
+    val key = "emulator-5560"
+    val generations = ReadyAgentGenerations()
+    val ready = mutableSetOf<String>()
+    generations.becameReady(key) { ready += key }
+
+    val slowProbeStarted = generations.current(key)
+    val fastProbeStarted = generations.current(key)
+    assertTrue(generations.forgetIfStill(key, fastProbeStarted) { ready -= key })
+    generations.becameReady(key) { ready += key }
+
+    assertFalse(generations.forgetIfStill(key, slowProbeStarted) { ready -= key })
+    assertTrue(key in ready, "a stale verdict cleared the relaunch, so its next RPC fails and relaunches again")
+    assertTrue(generations.forgetIfStill(key, generations.current(key)) { ready -= key })
   }
 
   /**
@@ -956,6 +1074,7 @@ class TrailblazeMcpBridgeImplTest {
     // context that re-derived it from `resolvedTarget` would read "com.example.declared".
     assertEquals("com.example.installed", ctx.appId)
     assertSame(toolRepo, ctx.toolRepo)
+    assertEquals(File(System.getProperty("user.dir")), ctx.workingDirectory)
     assertSame(sessionDirProvider, ctx.sessionDirProvider)
   }
 

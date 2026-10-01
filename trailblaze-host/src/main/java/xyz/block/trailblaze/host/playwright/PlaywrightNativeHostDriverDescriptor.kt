@@ -252,9 +252,6 @@ class PlaywrightNativeHostDriverDescriptor : HostDriverDescriptor {
         traceId = runYamlRequest.traceId,
         useRecordedSteps = runYamlRequest.useRecordedSteps,
         sendSessionStartLog = runYamlRequest.config.sendSessionStartLog,
-        // Routes prompt steps through the in-process Koog strategy-graph agent when the run
-        // opted in (AgentImplementation.KOOG_STRATEGY_GRAPH); otherwise the legacy runner.
-        agentImplementation = runYamlRequest.agentImplementation,
         initialMemorySeeds = runYamlRequest.initialMemorySeeds,
         initialMemorySensitiveSeeds = runYamlRequest.initialMemorySensitiveSeeds,
         initialArgs = runYamlRequest.initialArgs,
@@ -345,7 +342,7 @@ class PlaywrightNativeHostDriverDescriptor : HostDriverDescriptor {
       cachedBrowserManager != null ->
         // The model, the max-llm-calls cap, the logs directory, the no-logging stance, or the
         // device classifier changed. All five are baked into the cached test (the first two into
-        // its lazy TrailblazeRunner, the next two into its logging rule's LogsRepo, the last into
+        // its lazy agent runner, the next two into its logging rule's LogsRepo, the last into
         // the device info its sessions report), so the test instance has to be rebuilt; we keep
         // the cached browser to avoid relaunching Chromium every time.
         PlaywrightCacheResolution.RebuildWithCachedBrowser(cachedBrowserManager)

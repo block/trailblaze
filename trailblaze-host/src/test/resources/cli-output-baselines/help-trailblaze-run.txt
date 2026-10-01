@@ -11,9 +11,8 @@ Usage: trailblaze run [-hvV] [--all-devices] [--capture-all] [--[no-]
                       capture-video] [--full-report-payloads] [--[no-]headless]
                       [--markdown] [--no-daemon] [--no-logging] [--no-report]
                       [--[no-]save-recording] [--self-heal] [--[no-]turbo] [--
-                      [no-]use-recorded-steps] [-a=<agent>]
-                      [--args-file=<file>] [--compose-port=<composePort>]
-                      [--configuration=<name>]
+                      [no-]use-recorded-steps] [--args-file=<file>]
+                      [--compose-port=<composePort>] [--configuration=<name>]
                       [--device-classifier=<catalog-key>]
                       [--driver=<driverType>] [--llm=<llm>]
                       [--llm-model=<llmModel>] [--llm-provider=<llmProvider>]
@@ -49,11 +48,6 @@ removed in a future release.
                                pass a `.trail.yaml` path or name a directory (e.
                                g. `trails/`) to fan out under a workspace's
                                trails directory.
-  -a, --agent=<agent>        Agent implementation name for AI-driven steps:
-                               TRAILBLAZE_RUNNER, MULTI_AGENT_V3, or
-                               KOOG_STRATEGY_GRAPH. Set it persistently with
-                               'trailblaze config agent'. Default:
-                               KOOG_STRATEGY_GRAPH
       --all-devices          Run each trail on EVERY connected device whose
                                platform the trail supports (its `platform:
                                `/`driver:` for v1, or its `devices:`/recording
@@ -208,13 +202,10 @@ removed in a future release.
                                google)
       --markdown             Generate a markdown report after execution
       --max-llm-calls=<maxLlmCalls>
-                             Cap the number of LLM calls per objective for the
-                               TRAILBLAZE_RUNNER and KOOG_STRATEGY_GRAPH
-                               agents. Useful on metered or expensive providers
-                               to cut off a stuck self-heal loop. Must be a
-                               positive integer. Default: 25 (both agents'
-                               built-in cap). Not compatible with --agent
-                               MULTI_AGENT_V3.
+                             Cap the number of LLM calls per objective. Useful
+                               on metered or expensive providers to cut off a
+                               stuck self-heal loop. Must be a positive
+                               integer. Default: 25.
       --memory=KEY=VAL       Pre-populate trail memory with KEY=VAL before any
                                step runs. Repeatable (`--memory user=sam
                                --memory accountTier=PRO`). Overrides any value

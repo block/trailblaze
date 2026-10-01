@@ -27,7 +27,7 @@ import kotlin.test.assertFailsWith
 /**
  * Contract of [LlmCallBudgetLlmClient]: the budget is spent one unit per request that would reach
  * the model, the request that would exceed it is refused before it is forwarded, and the refusal is
- * the same exception the legacy runner throws so session-level handling is shared.
+ * the exception session-level handling maps to a max-calls ending.
  */
 class LlmCallBudgetLlmClientTest {
 

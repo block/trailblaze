@@ -133,7 +133,7 @@ class TrailblazeMcpSessionContext(
   var viewHierarchyVerbosity: ViewHierarchyVerbosity = ViewHierarchyVerbosity.MINIMAL,
 
   /**
-   * Agent implementation to use in TRAILBLAZE_AS_AGENT mode.
+   * LLM call strategy to use in TRAILBLAZE_AS_AGENT mode.
    *
    * - DIRECT: New Koog-based agent with SamplingSource abstraction
    * - MCP_SAMPLING: Original SubagentOrchestrator (requires MCP client sampling)
@@ -166,17 +166,6 @@ class TrailblazeMcpSessionContext(
    * Both use the same MCP-compatible interface - difference is transport layer.
    */
   @Volatile var agentToolTransport: AgentToolTransport = AgentToolTransport.MCP_IN_PROCESS,
-
-  /**
-   * Agent implementation to use in TRAILBLAZE_AS_AGENT mode.
-   *
-   * - TRAILBLAZE_RUNNER: Stable YAML-based TrailblazeRunner.kt
-   * - MULTI_AGENT_V3: Koog-based multi-agent runner with inner/outer agents
-   *
-   * Defaults to [AgentImplementation.DEFAULT]. Use setAgentImplementation(MULTI_AGENT_V3)
-   * to opt into the modern architecture.
-   */
-  @Volatile var agentImplementation: AgentImplementation = AgentImplementation.DEFAULT,
 
   /**
    * Maximum iterations per objective for DirectMcpAgent.
@@ -825,7 +814,6 @@ class TrailblazeMcpSessionContext(
     appendLine("View hierarchy verbosity: ${viewHierarchyVerbosity.name}")
     appendLine("LLM call strategy: ${llmCallStrategy.name}")
     appendLine("Agent tool transport: ${agentToolTransport.name}")
-    appendLine("Agent implementation: ${agentImplementation.name}")
     appendLine("Include primitive tools: $includePrimitiveTools")
     twoTierAgentConfig?.let { config ->
       appendLine("Two-tier agent: ${if (config.enabled) "ENABLED" else "disabled"}")

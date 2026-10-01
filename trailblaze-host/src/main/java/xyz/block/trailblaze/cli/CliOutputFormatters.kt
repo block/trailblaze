@@ -393,30 +393,6 @@ internal fun screenSummaryDuplicatesAnswer(answer: String?, screenSummary: Strin
 }
 
 /**
- * Format session result (sessionId + message).
- */
-internal fun formatSessionResultAgent(result: CliMcpClient.ToolResult) {
-  if (result.isError) {
-    Console.error(result.content)
-    return
-  }
-  try {
-    val json = Json.parseToJsonElement(result.content).jsonObject
-    val error = json["error"]?.jsonPrimitive?.content
-    if (error != null) {
-      Console.error(error)
-      return
-    }
-    val message = json["message"]?.jsonPrimitive?.content
-    val sessionId = json["sessionId"]?.jsonPrimitive?.content
-    if (sessionId != null) Console.info("Session: $sessionId")
-    if (message != null) Console.info(message)
-  } catch (_: Exception) {
-    Console.info(result.content)
-  }
-}
-
-/**
  * Parse screen summary into structured sections (### Page, ### Screen).
  *
  * Input format from daemon:
@@ -513,8 +489,8 @@ internal fun extractJsonError(content: String): String? {
  * silent two-layer drift if a new marker is added in one site but not the
  * other.
  *
- * - `"Unknown tool"` matches both the singular `Unknown tool: foo` (emitted
- *   by `AgentUiActionExecutor`) and the plural `Unknown tools: a, b, c`
+ * - `"Unknown tool"` matches both the singular `Unknown tool: foo` and the
+ *   plural `Unknown tools: a, b, c`
  *   (emitted by `StepToolSet` when a batch contains multiple unknown names).
  * - `"not valid for the current device/target"` matches both `Tool not valid …`
  *   (singular) and `Tools not valid …` (plural) — `StepToolSet` pluralizes

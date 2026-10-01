@@ -53,8 +53,8 @@ object RecordingTailHold {
     val frames = frameCount(file, ffprobeBinary) ?: return false
     val held = File(file.parentFile, "${file.nameWithoutExtension}.held.${file.extension}")
     val result = runSubprocessWithTimeout(
-      listOf(ffmpegBinary, "-y", "-hide_banner", "-loglevel", "error", "-i", file.absolutePath, "-an", "-vf", filter(frames, untilMs)) +
-        encodeArgsFor(file) + ENCODER_TIME_BASE + held.absolutePath,
+      listOf(ffmpegBinary, "-y", "-hide_banner", "-loglevel", "error", "-i", file.absolutePath, "-an") +
+        formatFor(file).videoFilterArgs(filter(frames, untilMs)) + encodeArgsFor(file) + ENCODER_TIME_BASE + held.absolutePath,
       timeoutSeconds = TIMEOUT_SECONDS,
     )
     val durationMs = if (result?.exitCode == 0 && held.isFile) VideoDuration.probeMs(held, ffprobeBinary) else null
@@ -100,12 +100,14 @@ object RecordingTailHold {
    * out to a constant rate. B-frames are off because x264 reorders the far-off clone ahead of the
    * frames before it, and the mp4 then reads 0.8 s long for a 6 s hold.
    */
-  internal fun encodeArgsFor(file: File): List<String> =
-    if (file.extension.equals(RecordingFormat.MP4.fileExtension, ignoreCase = true)) {
-      RecordingFormat.MP4.encodeArgs() + listOf("-fps_mode", "passthrough", "-bf", "0")
-    } else {
-      RecordingFormat.WEBM.encodeArgs()
-    }
+  internal fun encodeArgsFor(file: File): List<String> = when (formatFor(file)) {
+    RecordingFormat.MP4 -> RecordingFormat.MP4.encodeArgs() + listOf("-fps_mode", "passthrough", "-bf", "0")
+    RecordingFormat.WEBM -> RecordingFormat.WEBM.encodeArgs()
+  }
+
+  private fun formatFor(file: File): RecordingFormat =
+    if (file.extension.equals(RecordingFormat.MP4.fileExtension, ignoreCase = true)) RecordingFormat.MP4
+    else RecordingFormat.WEBM
 
   /**
    * Clones the final frame once, then moves only that clone to [untilMs]. Frames are counted from

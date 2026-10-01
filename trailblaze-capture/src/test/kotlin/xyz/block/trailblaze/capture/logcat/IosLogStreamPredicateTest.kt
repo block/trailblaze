@@ -2,6 +2,7 @@ package xyz.block.trailblaze.capture.logcat
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -42,14 +43,42 @@ class IosLogStreamPredicateTest {
   }
 
   @Test
-  fun `returns null for null appId so the caller captures unfiltered`() {
+  fun `returns null for null appId`() {
     assertNull(buildIosLogStreamPredicate(null))
   }
 
   @Test
   fun `returns null when the last component is blank`() {
-    // A trailing dot yields a blank process name; `process == ""` matches nothing, so we'd
-    // rather capture unfiltered than silently record zero lines.
+    // A trailing dot yields a blank process name; `process == ""` matches nothing, so the caller
+    // falls back to errors and faults rather than silently recording zero lines.
     assertNull(buildIosLogStreamPredicate("com.example."))
+  }
+
+  @Test
+  fun `a known app scopes the stream to that app`() {
+    val command = buildIosLogStreamCommand("SIM-1", "com.example.sampleapp")
+    assertEquals(buildIosLogStreamPredicate("com.example.sampleapp"), command.predicate())
+    assertTrue(command.isAppScoped)
+    assertEquals(listOf("xcrun", "simctl", "spawn", "SIM-1", "log", "stream"), command.argv.take(6))
+  }
+
+  @Test
+  fun `no app keeps only errors and faults instead of the whole simulator log`() {
+    val command = buildIosLogStreamCommand("SIM-1", null)
+    assertEquals("messageType == error OR messageType == fault", command.predicate())
+    assertFalse(command.isAppScoped)
+  }
+
+  @Test
+  fun `an app id with no usable process name also keeps only errors and faults`() {
+    val command = buildIosLogStreamCommand("SIM-1", "com.example.")
+    assertEquals(IOS_UNSCOPED_LOG_PREDICATE, command.predicate())
+    assertFalse(command.isAppScoped)
+  }
+
+  private fun IosLogStreamCommand.predicate(): String? {
+    val flags = argv.withIndex().filter { it.value == "--predicate" }
+    assertEquals(1, flags.size, "expected exactly one --predicate in $argv")
+    return argv.getOrNull(flags.single().index + 1)
   }
 }

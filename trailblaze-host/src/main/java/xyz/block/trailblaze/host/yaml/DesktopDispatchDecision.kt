@@ -1,18 +1,17 @@
 package xyz.block.trailblaze.host.yaml
 
 import xyz.block.trailblaze.devices.TrailblazeDriverType
-import xyz.block.trailblaze.mcp.AgentImplementation
 
 /**
  * Where [DesktopYamlRunner] sends a run: the agent loop's location and the channel it uses to
  * reach the device.
  */
 enum class DispatchPath {
-  /** In-process Koog strategy-graph agent on the host, via `TrailblazeHostYamlRunner.runHostYaml`. */
+  /**
+   * In-process agent on the host, via `TrailblazeHostYamlRunner.runHostYaml` — Maestro and the
+   * other drivers that execute tools on the host.
+   */
   HOST_IN_PROCESS_KOOG,
-
-  /** V3 planner/analyzer on the host JVM, individual tool calls to the device over RPC. */
-  V3_ACCESSIBILITY_ON_HOST,
 
   /**
    * Host agent loop, individual tool calls to the device over RPC. The only path wired for
@@ -22,9 +21,6 @@ enum class DispatchPath {
 
   /** Whole YAML shipped to the device; the agent loop runs on-device. */
   ON_DEVICE_AGENT,
-
-  /** Default host path — Maestro and the other host-resident drivers. */
-  HOST_DEFAULT,
 }
 
 /**
@@ -32,9 +28,9 @@ enum class DispatchPath {
  * exercised without a device.
  *
  * This exists because the decision is not a switch on driver type: it is a function of the
- * driver's declared capabilities, the requested agent implementation, and one config toggle.
- * Holding it in one pure function is what lets the multi-device gate ask which path a run will
- * actually take instead of re-deriving a predicate that has to be kept in agreement by hand.
+ * driver's declared capabilities and one config toggle. Holding it in one pure function is what
+ * lets the multi-device gate ask which path a run will actually take instead of re-deriving a
+ * predicate that has to be kept in agreement by hand.
  */
 object DesktopDispatchDecision {
 
@@ -43,32 +39,22 @@ object DesktopDispatchDecision {
    */
   fun decide(
     driverType: TrailblazeDriverType,
-    agentImplementation: AgentImplementation,
     preferHostAgent: Boolean,
   ): DispatchPath = when {
-    // Opt-in Koog strategy-graph agent, top priority so it short-circuits driver-based routing.
-    // On-device drivers are excluded: they need the device attached via the on-device RPC server,
-    // which the host path cannot provide. They run the Koog agent ON the device instead (the
-    // ON_DEVICE_AGENT path below), or host-side over RPC when `preferHostAgent` opts in.
-    agentImplementation == AgentImplementation.KOOG_STRATEGY_GRAPH &&
-      !driverType.executesToolsOnDevice -> DispatchPath.HOST_IN_PROCESS_KOOG
-
-    // Names the driver rather than asking `AndroidAccessibilityServiceDrivers`, and stays that way:
-    // this arm is not "the driver goes through the accessibility service", it is "the V3
-    // planner/analyzer was built against THIS driver". A second accessibility-service driver would
-    // need V3 checked out against it before routing there, so widening the arm by capability is
-    // exactly the wrong default.
-    driverType == TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY &&
-      agentImplementation == AgentImplementation.MULTI_AGENT_V3 -> DispatchPath.V3_ACCESSIBILITY_ON_HOST
+    // Drivers whose tools run on the host take the in-process agent. On-device drivers need the
+    // device attached via the on-device RPC server, which the host path cannot provide, so they
+    // run the agent on the device, or host-side over RPC when `preferHostAgent` opts in.
+    !driverType.executesToolsOnDevice -> DispatchPath.HOST_IN_PROCESS_KOOG
 
     driverType.hostRpcReachable &&
       driverType.hostAgentDispatchable &&
-      agentImplementation != AgentImplementation.MULTI_AGENT_V3 &&
       preferHostAgent -> DispatchPath.HOST_AGENT_OVER_ONDEVICE_RPC
 
     driverType.hostRpcReachable -> DispatchPath.ON_DEVICE_AGENT
 
-    else -> DispatchPath.HOST_DEFAULT
+    // An on-device driver the host RPC cannot reach. No driver declares this today (the host
+    // driver registry rejects it); it falls back to the in-process host agent.
+    else -> DispatchPath.HOST_IN_PROCESS_KOOG
   }
 
   /**
@@ -84,20 +70,25 @@ object DesktopDispatchDecision {
   fun supportsMultiDevice(path: DispatchPath): Boolean = path == DispatchPath.HOST_AGENT_OVER_ONDEVICE_RPC
 
   /**
+   * Whether a run must be refused on [path] because it binds a multi-device configuration there.
+   * Keyed on the run's SELECTION ([selectedConfigurationName]), not on what the trail declares: a
+   * trail declaring single-device entries beside its configuration runs single-device when no
+   * companions are bound, and its iOS or web legs must stay runnable on those paths.
+   */
+  fun refusesMultiDeviceRun(path: DispatchPath, selectedConfigurationName: String?): Boolean =
+    selectedConfigurationName != null && !supportsMultiDevice(path)
+
+  /**
    * Why a multi-device trail cannot run here, phrased as the change that would make it
    * dispatchable.
    *
    * Keyed off the resolved [path] rather than the driver alone, because the same driver is blocked
-   * for different reasons depending on the agent and the toggle — telling someone to enable
-   * `preferHostAgent` when it is already on sends them looking in the wrong place.
+   * for different reasons depending on the toggle — telling someone to enable `preferHostAgent`
+   * when it is already on sends them looking in the wrong place.
    */
   fun multiDeviceRemedy(path: DispatchPath, driverType: TrailblazeDriverType): String = when (path) {
     DispatchPath.HOST_AGENT_OVER_ONDEVICE_RPC ->
       "This configuration does dispatch multi-device."
-
-    DispatchPath.V3_ACCESSIBILITY_ON_HOST ->
-      "The $driverType driver dispatches multi-device, but not under the V3 multi-agent " +
-        "implementation. Re-run with the default agent implementation."
 
     DispatchPath.ON_DEVICE_AGENT ->
       if (!driverType.hostAgentDispatchable) {
@@ -109,9 +100,7 @@ object DesktopDispatchDecision {
           "`preferHostAgent` and re-run."
       }
 
-    DispatchPath.HOST_IN_PROCESS_KOOG,
-    DispatchPath.HOST_DEFAULT,
-    ->
+    DispatchPath.HOST_IN_PROCESS_KOOG ->
       "The $driverType driver runs entirely on the host and is never reached over the on-device " +
         "RPC server. Run this trail on an Android device with an on-device driver and " +
         "`preferHostAgent` enabled."

@@ -373,12 +373,16 @@ class TrailFileManager(
    *   derives it — see [selectDeviceConfiguration]. Configuration names are invisible to classifier
    *   lineage, so a two-device trail loaded without one lowers every configuration-keyed step with
    *   NO recording and reads as unrecorded.
+   * @param bindsCompanionDevices Whether the session has bound devices beyond the one it runs on —
+   *   what decides whether a trail declaring single-device entries beside its one configuration
+   *   binds it (see [selectDeviceConfiguration]).
    * @return LoadResult with parsed trail data
    */
   fun loadTrail(
     filePath: String,
     deviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList(),
     requestedDeviceConfiguration: String? = null,
+    bindsCompanionDevices: Boolean = false,
   ): LoadResult {
     val file = try {
       validateWithinTrailsDir(File(filePath), filePath)
@@ -391,11 +395,17 @@ class TrailFileManager(
 
     return try {
       val yamlContent = file.readText()
-      val selection = selectDeviceConfiguration(yamlContent, requestedDeviceConfiguration, trailblazeYaml)
+      val selection = selectDeviceConfiguration(
+        yamlContent,
+        requestedDeviceConfiguration,
+        trailblazeYaml,
+        bindsCompanionDevices,
+      )
       selection.errorMessage()?.let { message ->
         return LoadResult(success = false, error = message)
       }
       val selectedDeviceConfiguration = (selection as DeviceConfigurationSelection.Selected).name
+      selection.singleDeviceFallbackMessage()?.let { Console.log("[TrailFileManager] $it") }
       val trailItems = trailblazeYaml.decodeTrail(
         yamlContent,
         deviceClassifiers = deviceClassifiers,
@@ -633,34 +643,6 @@ class TrailFileManager(
   /** [readTrailTitle] by path — the edit surface reports the title without loading the steps. */
   fun readTrailTitle(filePath: String): String? =
     runCatching { readTrailTitle(validateWithinTrailsDir(File(filePath), filePath)) }.getOrNull()
-
-  /**
-   * Gets trail info (config + prompt count) without fully loading.
-   * Useful for displaying trail lists with metadata without parsing the entire file.
-   *
-   * @param filePath Path to the trail file
-   * @return Pair of (config, step count) or null if not found
-   */
-  fun getTrailInfo(filePath: String): Pair<TrailConfig?, Int>? {
-    val file = try {
-      validateWithinTrailsDir(File(filePath), filePath)
-    } catch (_: IllegalArgumentException) {
-      return null
-    }
-    if (!file.exists()) return null
-
-    return try {
-      val yamlContent = file.readText()
-      val trailItems = trailblazeYaml.decodeTrail(yamlContent)
-      val config = trailblazeYaml.extractTrailConfig(trailItems)
-      val stepCount = trailItems
-        .filterIsInstance<TrailYamlItem.PromptsTrailItem>()
-        .sumOf { it.promptSteps.size }
-      Pair(config, stepCount)
-    } catch (_: Exception) {
-      null
-    }
-  }
 
   // ─────────────────────────────────────────────────────────────────────────────
   // Trail editing
@@ -926,8 +908,8 @@ class TrailFileManager(
    * Creates a TrailblazeToolYamlWrapper from tool call data.
    *
    * Uses [OtherTrailblazeTool] to store raw tool call data as a generic tool representation.
-   * This enables deterministic replay via [DeterministicTrailExecutor] which extracts
-   * the tool name and args from the wrapper for execution.
+   * This enables deterministic replay, which extracts the tool name and args from the
+   * wrapper for execution.
    */
   private fun createToolWrapper(
     toolName: String,

@@ -16,18 +16,6 @@ class HttpRequestUtils(
 
   private val client = createOnDeviceRpcHttpClient()
 
-  suspend fun getRequest(urlPath: String): String {
-    val response = client.get("$baseUrl$urlPath") {
-      contentType(ContentType.Application.Json)
-    }
-
-    val responseBody = response.bodyAsText()
-    if (response.status.value !in 200..299) {
-      throw HttpRpcException("HTTP ${response.status.value}: ${response.status.description}", responseBody)
-    }
-    return responseBody
-  }
-
   /**
    * Posts a JSON body to [urlPath]. If [requestTimeoutMs] is non-null, applies a per-request
    * HttpTimeout override for both request + socket — so a long-running RPC (e.g. a sync

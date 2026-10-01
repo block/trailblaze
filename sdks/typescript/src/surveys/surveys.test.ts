@@ -7,7 +7,7 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
-import { SurveySession, purposeOf, survey, discoverSessions, loadSurveys, loadTargetCatalog, matchFootprint, runSurveys, renderMarkdown, targetsOf } from "./index.js";
+import { SurveySession, purposeOf, survey, discoverSessions, findWorkspaceConfigDir, loadSurveys, loadTargetCatalog, loadWorkspace, matchFootprint, runSurveys, renderMarkdown, targetsOf } from "./index.js";
 import { redactUrl } from "./session.js";
 
 const LOG = "xyz.block.trailblaze.logs.client.TrailblazeLog";
@@ -383,6 +383,82 @@ describe("analytics and other streams", () => {
     expect(last.map((t) => [t.text, t.captureId, t.timeMs, t.line])).toEqual([["Home", "shot-2.webp", t0 + 3000, 4]]);
   });
 
+  test("the strings each capture log recorded are the screen text, one capture per screenshot, with box and visibility", () => {
+    const dir = join(root, "strings-on-logs");
+    mkdirSync(dir, { recursive: true });
+    const t0 = 1_700_000_400_000;
+    const capture = (ms: number, screenshotFile: string, strings: unknown[]) => ({
+      class: "xyz.block.trailblaze.logs.client.TrailblazeLog.AgentDriverLog", timestamp: iso(t0 + ms), screenshotFile, visibleStrings: strings,
+    });
+    writeFileSync(join(dir, "001_AgentDriverLog.json"), JSON.stringify(capture(1000, "https://files.example/run/a.webp?sig=x", [
+      { text: "Pay", source: "text", bounds: [24, 180, 320, 224], visible: true },
+      { text: "Terms", source: "text", visible: false },
+    ])));
+    // The LLM request made on the same screen names the same image: not a second capture.
+    writeFileSync(join(dir, "002_TrailblazeLlmRequestLog.json"), JSON.stringify({ ...capture(1500, "a.webp", [{ text: "Pay", source: "text" }]), class: "xyz.block.trailblaze.logs.client.TrailblazeLog.TrailblazeLlmRequestLog" }));
+    writeFileSync(join(dir, "003_AgentDriverLog.json"), JSON.stringify(capture(2000, "b.webp", [{ text: "Paid", source: "text" }])));
+    // An export left beside the logs is not read twice.
+    writeFileSync(join(dir, "visible-strings.ndjson"), ndjson([{ kind: "screen", captureId: "x.webp", strings: [{ text: "From the file", source: "text" }] }]));
+    const rows = SurveySession.load(dir).screenText.all();
+    expect(rows.map((t) => [t.text, t.captureId, t.stepIndex, t.visible, t.file])).toEqual([
+      ["Pay", "a.webp", 0, true, "001_AgentDriverLog.json"],
+      ["Terms", "a.webp", 0, false, "001_AgentDriverLog.json"],
+      ["Paid", "b.webp", 1, true, "003_AgentDriverLog.json"],
+    ]);
+    expect(rows[0].bounds).toEqual([24, 180, 320, 224]);
+    expect(rows[0].timeMs).toBe(t0 + 1000);
+    const session = SurveySession.load(dir);
+    expect(session.screenText.filter({ visible: false }).map((t) => t.text)).toEqual(["Terms"]);
+    expect(session.screenText.filter({ captureId: "b.webp" }).map((t) => t.text)).toEqual(["Paid"]);
+  });
+
+  test("a capture with no screenshot is screen text named by the id its log was stamped with", () => {
+    const dir = join(root, "strings-no-screenshot");
+    mkdirSync(dir, { recursive: true });
+    const log = (ms: number, extra: Record<string, unknown>) => ({
+      class: "xyz.block.trailblaze.logs.client.TrailblazeLog.AgentDriverLog", timestamp: iso(1_700_000_500_000 + ms),
+      visibleStrings: [{ text: `At ${ms}`, source: "text" }], ...extra,
+    });
+    writeFileSync(join(dir, "001_AgentDriverLog.json"), JSON.stringify(log(1000, { captureId: "capture-1-0000abcd" })));
+    writeFileSync(join(dir, "002_AgentDriverLog.json"), JSON.stringify(log(2000, { screenshotFile: "b.webp" })));
+    // Recorded before ids existed: nothing names it, so it is not read.
+    writeFileSync(join(dir, "003_AgentDriverLog.json"), JSON.stringify(log(3000, {})));
+    const rows = SurveySession.load(dir).screenText.all();
+    expect(rows.map((t) => [t.text, t.captureId, t.screenshot ?? null, t.stepIndex])).toEqual([
+      ["At 1000", "capture-1-0000abcd", null, 0],
+      ["At 2000", "b.webp", "b.webp", 1],
+    ]);
+  });
+
+  test("a version 1 export's boxes, stored as position and size, read as corners like every other source", () => {
+    const dir = join(root, "v1-bounds");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "001_TrailblazeToolLog.json"), JSON.stringify(toolLog(1_700_000_450_000, "tapOn", {})));
+    writeFileSync(join(dir, "visible-strings.ndjson"), ndjson([
+      { v: 1, kind: "run", session: "r" },
+      { v: 1, kind: "screen", stepIndex: 0, captureId: "a.png", strings: [{ text: "Pay", source: "text", bounds: [24, 180, 296, 44] }] },
+      { v: 1, kind: "screen", stepIndex: 1, captureId: "b.png", repeatOfStepIndex: 0, strings: [] },
+      { v: 2, kind: "screen", captureId: "c.png", strings: [{ text: "Paid", source: "text", bounds: [24, 180, 320, 224] }] },
+    ]));
+    expect(SurveySession.load(dir).screenText.all().map((t) => [t.captureId, t.bounds])).toEqual([
+      ["a.png", [24, 180, 320, 224]],
+      ["b.png", [24, 180, 320, 224]],
+      ["c.png", [24, 180, 320, 224]],
+    ]);
+  });
+
+  test("a version 2 export's repeat, which names the capture it repeats, still shows that screen", () => {
+    const dir = join(root, "repeated-screen-v2");
+    mkdirSync(dir, { recursive: true });
+    const t0 = 1_700_000_500_000;
+    writeFileSync(join(dir, "001_TrailblazeToolLog.json"), JSON.stringify(toolLog(t0, "tapOn", {})));
+    const screen = (id: string, ms: number, strings: string[], repeatOf?: string) =>
+      ({ v: 2, kind: "screen", captureId: id, timestamp: iso(t0 + ms), repeatOf, strings: strings.map((text) => ({ text, source: "text", visible: true })) });
+    writeFileSync(join(dir, "visible-strings.ndjson"), ndjson([{ v: 2, kind: "run" }, screen("a.png", 1000, ["Home"]), screen("b.png", 2000, ["Settings"]), screen("c.png", 3000, [], "a.png")]));
+    const last = SurveySession.load(dir).screenText.all().filter((t) => t.captureId === "c.png");
+    expect(last.map((t) => [t.text, t.stepIndex, t.timeMs])).toEqual([["Home", 2, t0 + 3000]]);
+  });
+
   test("objectives pair start and completion and carry the verdict", () => {
     const s = SurveySession.load(hashed);
     expect(s.objectives.all()).toHaveLength(2);
@@ -643,6 +719,92 @@ describe("discovery", () => {
     });
     expect(found.map((p) => basename(p))).toEqual(["from-the-zip"]);
     expect(said.join("\n")).toContain("outside the archive");
+  });
+
+  test("a trailmap's surveys/ directory loads beside the ones passed directly", async () => {
+    // A target's surveys ship inside its trailmap, the way its tools do, so a repo that owns a
+    // target owns its surveys too, and naming the trailmaps is enough to run them.
+    const sdk = JSON.stringify(join(import.meta.dir, "index.ts"));
+    const maps = join(root, "survey-trailmaps");
+    mkdirSync(join(maps, "acme", "surveys", "nested"), { recursive: true });
+    writeFileSync(join(maps, "acme", "trailmap.yaml"), "id: acme\n");
+    writeFileSync(join(maps, "acme", "surveys", "nested", "checkout.survey.ts"), `import { trailblaze } from ${sdk};\nexport const acmeCheckout = trailblaze.survey({ feature: "checkout", targets: ["acme"], footprint: { tools: {} } });\n`);
+    // Only surveys/ counts: a survey file elsewhere in the trailmap is not picked up.
+    mkdirSync(join(maps, "acme", "tools"), { recursive: true });
+    writeFileSync(join(maps, "acme", "tools", "stray.survey.ts"), `import { trailblaze } from ${sdk};\nexport const stray = trailblaze.survey({ feature: "x", footprint: { tools: {} } });\n`);
+    // A trailmap with no surveys/ contributes nothing and says nothing.
+    mkdirSync(join(maps, "plain"), { recursive: true });
+    writeFileSync(join(maps, "plain", "trailmap.yaml"), "id: plain\n");
+    const direct = join(root, "survey-direct");
+    mkdirSync(direct, { recursive: true });
+    writeFileSync(join(direct, "generic.survey.ts"), `import { trailblaze } from ${sdk};\nexport const generic = trailblaze.survey({ feature: "g", footprint: { tools: {} } });\n`);
+
+    const said: string[] = [];
+    const loaded = await loadSurveys([direct], (m) => said.push(m), { trailmaps: [maps] });
+    expect(loaded.map((c) => c.definition.id).sort()).toEqual(["acmeCheckout", "generic"]);
+    expect(said).toEqual([]);
+    // Without trailmaps, nothing changes for existing callers.
+    expect((await loadSurveys([direct])).map((c) => c.definition.id)).toEqual(["generic"]);
+  });
+
+  test("a survey in a trailmap and one passed directly cannot share a name", async () => {
+    const src = `import { trailblaze } from ${JSON.stringify(join(import.meta.dir, "index.ts"))};\nexport const clash = trailblaze.survey({ feature: "a", footprint: { tools: {} } });\n`;
+    const maps = join(root, "clash-trailmaps");
+    mkdirSync(join(maps, "acme", "surveys"), { recursive: true });
+    writeFileSync(join(maps, "acme", "trailmap.yaml"), "id: acme\n");
+    writeFileSync(join(maps, "acme", "surveys", "a.survey.ts"), src);
+    const direct = join(root, "clash-direct");
+    mkdirSync(direct, { recursive: true });
+    writeFileSync(join(direct, "b.survey.ts"), src);
+    await expect(loadSurveys([direct], undefined, { trailmaps: [maps] })).rejects.toThrow(/exported by both/);
+  });
+
+  test("a workspace is found from anywhere inside it, and carries its own and its trailmaps' surveys", async () => {
+    // Running surveys should need no paths: the repo a survey lives in is the workspace it runs in.
+    const sdk = JSON.stringify(join(import.meta.dir, "index.ts"));
+    const ws = join(root, "workspace");
+    const config = join(ws, "trailblaze-config");
+    mkdirSync(join(config, "surveys"), { recursive: true });
+    mkdirSync(join(config, "trailmaps", "acme", "surveys"), { recursive: true });
+    mkdirSync(join(ws, "deep", "er"), { recursive: true });
+    writeFileSync(join(config, "trailblaze.yaml"), "trailmaps: []\n");
+    writeFileSync(join(config, "surveys", "any.survey.ts"), `import { trailblaze } from ${sdk};\nexport const anyTarget = trailblaze.survey({ feature: "any", footprint: { tools: {} } });\n`);
+    writeFileSync(join(config, "trailmaps", "acme", "trailmap.yaml"), "id: acme\ntarget:\n  platforms:\n    android:\n      app_ids: [com.example.acme]\n");
+    // The public specifier, with no tsconfig `paths` or installed package: a trailmap from another
+    // repo has neither, so the loader must serve the SDK itself.
+    writeFileSync(join(config, "trailmaps", "acme", "surveys", "pay.survey.ts"), `import { trailblaze } from "@trailblaze/scripting/surveys";\nexport const acmePay = trailblaze.survey({ feature: "pay", targets: ["acme"], footprint: { tools: {} } });\n`);
+
+    const saved = process.env.TRAILBLAZE_CONFIG_DIR;
+    delete process.env.TRAILBLAZE_CONFIG_DIR;
+    try {
+      expect(findWorkspaceConfigDir(join(ws, "deep", "er"))).toBe(config);
+      const workspace = await loadWorkspace(config);
+      expect(workspace.surveys.map((s) => s.definition.id).sort()).toEqual(["acmePay", "anyTarget"]);
+      expect(Object.keys(workspace.targets)).toEqual(["acme"]);
+
+      // The legacy layout is a workspace too.
+      const legacy = join(root, "legacy-workspace");
+      mkdirSync(join(legacy, "trails", "config"), { recursive: true });
+      writeFileSync(join(legacy, "trails", "config", "trailblaze.yaml"), "trailmaps: []\n");
+      expect(findWorkspaceConfigDir(join(legacy, "trails"))).toBe(join(legacy, "trails", "config"));
+
+      process.env.TRAILBLAZE_CONFIG_DIR = join(legacy, "trails", "config");
+      expect(findWorkspaceConfigDir(join(ws, "deep"))).toBe(join(legacy, "trails", "config"));
+
+      // An override that is not a directory is ignored, as the CLI ignores it.
+      process.env.TRAILBLAZE_CONFIG_DIR = join(ws, "no-such-dir");
+      expect(findWorkspaceConfigDir(join(ws, "deep"))).toBe(config);
+      delete process.env.TRAILBLAZE_CONFIG_DIR;
+
+      // A workspace with no trailmaps/ loads its shared surveys and says nothing about it.
+      const said: string[] = [];
+      const bare = await loadWorkspace(join(legacy, "trails", "config"), (m) => said.push(m));
+      expect(bare.surveys).toEqual([]);
+      expect(said).toEqual([]);
+    } finally {
+      if (saved === undefined) delete process.env.TRAILBLAZE_CONFIG_DIR;
+      else process.env.TRAILBLAZE_CONFIG_DIR = saved;
+    }
   });
 
   test("two files exporting the same survey name is an error", async () => {

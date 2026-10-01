@@ -25,7 +25,12 @@ import xyz.block.trailblaze.ui.models.AppIconProvider
 import xyz.block.trailblaze.ui.models.TrailblazeServerState.SavedTrailblazeAppConfig
 import xyz.block.trailblaze.ui.recordings.RecordedTrailsRepo
 import xyz.block.trailblaze.ui.recordings.RecordedTrailsRepoJvm
+import xyz.block.trailblaze.util.Console
+import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.OutputStream
+import java.io.PrintStream
+import kotlin.concurrent.thread
 
 /**
  * Tests for [TrailblazeCli.executeForDaemon]. Exercises the branches that
@@ -94,6 +99,80 @@ class TrailblazeCliExecuteForDaemonTest {
       "onlyTheDaemonKnowsThisOne",
       message = "the listing must show the daemon's live targets. Output: '${captured.out}'",
     )
+  }
+
+  /**
+   * A forwarded command that goes quiet must silence only itself. Quiet mode used to be one
+   * process-wide flag, so while any forwarded command ran, every other daemon thread's
+   * `Console.log` — MCP sessions, trail runs — was dropped before it reached the log file.
+   *
+   * `config target` lists targets inside `Console.runQuiet`, and reads them from the provider
+   * below, so the provider runs as a quiet command: it logs chatter of its own, and has another
+   * thread log while it is quiet.
+   */
+  @Test fun `a quiet forwarded command drops only its own log lines, not other daemon threads'`() {
+    CliOutCapture.install()
+    // The daemon's shape: `DesktopLogFileWriter` tees the streams `CliOutCapture` installed.
+    val logFile = ByteArrayOutputStream()
+    val daemonStream = PrintStream(TeeOutputStream(System.out, logFile), /* autoFlush = */ true, Charsets.UTF_8)
+    val consoleFields = listOf("out", "userOut").map {
+      Console::class.java.getDeclaredField(it).apply { isAccessible = true }
+    }
+    val originalConsoleStreams = consoleFields.map { it.get(Console) }
+    consoleFields.forEach { it.set(Console, daemonStream) }
+
+    val liveTargets = setOf(target("listedTarget"))
+    val settingsRepo = TrailblazeSettingsRepo(
+      settingsFile = File(tempFolder.root, "settings.json"),
+      initialConfig = SavedTrailblazeAppConfig(selectedTrailblazeDriverTypes = emptyMap()),
+      defaultHostAppTarget = TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget,
+      allTargetApps = { liveTargets },
+      supportedDriverTypes = emptySet(),
+    )
+    val priorBridge = DaemonSettingsBridge.settingsRepo
+    DaemonSettingsBridge.settingsRepo = settingsRepo
+    val response = try {
+      TrailblazeCli.executeForDaemon(
+        CliExecRequest(args = listOf("config", "target")),
+        providers = TrailblazeCli.CliProviders(
+          appProvider = { error("listing targets must not build the desktop app") },
+          configProvider = { NoDiscoveryConfig(tempFolder.root, settingsRepo) },
+          appTargetsProvider = {
+            Console.log("quiet-command-chatter")
+            thread { Console.log("other-daemon-thread-line") }.join()
+            liveTargets
+          },
+        ),
+      )
+    } finally {
+      DaemonSettingsBridge.settingsRepo = priorBridge
+      consoleFields.zip(originalConsoleStreams).forEach { (field, original) -> field.set(Console, original) }
+    }
+
+    val logged = logFile.toString(Charsets.UTF_8)
+    assertEquals(0, response.exitCode, "stderr: '${response.stderr}'")
+    assertContains(logged, "other-daemon-thread-line", message = "another thread's log line must reach the log file")
+    assertContains(response.stdout, "listedTarget", message = "the command's own output must still reach the caller")
+    assertFalse(response.stdout.contains("quiet-command-chatter"), "the quiet command's log chatter must not reach the caller")
+    assertFalse(logged.contains("quiet-command-chatter"), "and quiet still means dropped, not relocated")
+    assertFalse(Console.isQuietMode(), "the command's quiet mode must not outlive it")
+  }
+
+  private class TeeOutputStream(private val first: OutputStream, private val second: OutputStream) : OutputStream() {
+    override fun write(b: Int) {
+      first.write(b)
+      second.write(b)
+    }
+
+    override fun write(b: ByteArray, off: Int, len: Int) {
+      first.write(b, off, len)
+      second.write(b, off, len)
+    }
+
+    override fun flush() {
+      first.flush()
+      second.flush()
+    }
   }
 
   private fun target(id: String): TrailblazeHostAppTarget = object : TrailblazeHostAppTarget(

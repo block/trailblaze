@@ -1,12 +1,15 @@
 package xyz.block.trailblaze.report.strings
 
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import xyz.block.trailblaze.api.VisibleStringSource
+import xyz.block.trailblaze.api.VolatileText
 
 /** One step's worth of difference between two runs of the same trail. */
 data class StepDiff(
+  /** The screen's position in both files, counting from 0 — the only key two locales share. */
   val stepIndex: Int,
   val action: String?,
   val baselineCaptureId: String,
@@ -49,10 +52,14 @@ data class VisibleStringsDiffResult(
 /**
  * Compares two `visible-strings.ndjson` files step by step.
  *
- * Steps align by [StepDiff.stepIndex], never by content: in a localization diff every string
+ * Steps align by position in the file, never by content: in a localization diff every string
  * changes, so a content hash matches nothing in the one case this exists for. That is also why the
  * result is only meaningful for a mechanical trail — an LLM-driven objective takes a different path
  * each run and its step numbers mean nothing across runs.
+ *
+ * Reads both format versions. A version-1 file's step numbers are its positions, and its
+ * `repeatOfStepIndex` pointers are resolved to the screenshot they name, so a file recorded before
+ * the format changed diffs against one recorded after.
  */
 object VisibleStringsDiff {
 
@@ -114,14 +121,31 @@ object VisibleStringsDiff {
       try {
         when (val kind = JSON.parseToJsonElement(line).jsonObject["kind"]?.jsonPrimitive?.content) {
           "run" -> run = JSON.decodeFromString<VisibleStringsRunLine>(line)
-          "screen" -> screens += JSON.decodeFromString<VisibleStringsScreenLine>(line)
+          "screen" -> screens += screenLine(line, screens)
           else -> throw IllegalArgumentException("unrecognized kind ${kind ?: "(absent)"}")
         }
       } catch (e: Exception) {
         throw MalformedFile(index + 1, e)
       }
     }
-    return ParsedFile(run, screens)
+    // A version-1 file can hold two lines for one screenshot (a driver log and the LLM request made
+    // on that screen). Version 2 writes the first only, and positions are the pairing key, so the
+    // later one goes too — after the pointers above are resolved, since those count every line.
+    val seen = mutableSetOf<String>()
+    return ParsedFile(run, screens.filter { seen.add(it.captureId) })
+  }
+
+  /**
+   * A version-1 line points at its repeat by step number, and a step number is a position; version
+   * 2 names the screenshot. Resolve the old pointer against the lines already read — a repeat always
+   * points backwards — so everything past the parser sees one shape. Bounds are not converted: the
+   * diff compares text, never position.
+   */
+  private fun screenLine(line: String, earlier: List<VisibleStringsScreenLine>): VisibleStringsScreenLine {
+    val obj = JSON.parseToJsonElement(line).jsonObject
+    val parsed = JSON.decodeFromString<VisibleStringsScreenLine>(line)
+    val v1Repeat = obj["repeatOfStepIndex"]?.jsonPrimitive?.intOrNull ?: return parsed
+    return parsed.copy(repeatOf = earlier.getOrNull(v1Repeat)?.captureId)
   }
 
   /**
@@ -145,18 +169,19 @@ object VisibleStringsDiff {
 
   /**
    * Volatile strings are dropped before comparing: a clock or a balance differs on every run and
-   * would bury the real changes. They stay in the file, which is the record of what was on screen.
+   * would bury the real changes. They stay in the file, which is the record of what was on screen,
+   * and are judged here rather than there so a better rule reaches files already written.
    *
    * A repeated capture carries no strings of its own, so it resolves back to the step it points at.
    * Without that, every repeat would read as a screen that lost all its text.
    */
   private fun ParsedFile.stringsByStep(): Map<Int, Step> {
-    val byIndex = screens.associateBy { it.stepIndex }
-    return screens.associate { line ->
-      val source = line.repeatOfStepIndex?.let { byIndex[it] } ?: line
-      line.stepIndex to Step(
+    val byCapture = screens.associateBy { it.captureId }
+    return screens.withIndex().associate { (position, line) ->
+      val source = line.repeatOf?.let { byCapture[it] } ?: line
+      position to Step(
         line = line,
-        strings = source.strings.filterNot { it.volatile }.map { Entry(it.text, it.source) }.toSet(),
+        strings = source.strings.filterNot { VolatileText.looksVolatile(it.text) }.map { Entry(it.text, it.source) }.toSet(),
       )
     }
   }

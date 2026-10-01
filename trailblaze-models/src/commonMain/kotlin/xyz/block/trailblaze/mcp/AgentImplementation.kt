@@ -1,66 +1,38 @@
 package xyz.block.trailblaze.mcp
 
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonNames
 
 /**
- * Agent implementation to use for UI automation.
+ * The agent that ran a session, as recorded in session logs and progress events.
  *
- * This controls which architecture handles the agent loop:
- * - [TRAILBLAZE_RUNNER]: Legacy YAML-based implementation retained for explicit selection
- * - [MULTI_AGENT_V3]: Modern multi-agent architecture with inner/outer agent separation
- * - [KOOG_STRATEGY_GRAPH]: Default Koog strategy-graph implementation
+ * There is one agent, so this is a label rather than a choice. It stays a type because session
+ * logs and the on-device RPC wire format carry it, and older logs name agents that have since
+ * been removed.
  */
 @Serializable
 enum class AgentImplementation {
   /**
-   * TrailblazeRunner via YAML execution (legacy).
+   * The Koog `strategy { }` graph that owns the agent reasoning loop, with Trailblaze owning the
+   * domain (screen state, drivers, deterministic replay).
    *
-   * Uses the original TrailblazeRunner.kt implementation which:
-   * - Converts prompts to YAML format
-   * - Has rich tool support via TrailblazeToolRepo
-   * - Produces detailed logs (TrailblazeLlmRequestLog, TrailblazeToolLog)
-   * - Is battle-tested in production
-   *
-   * This legacy option remains available for explicit selection and backward compatibility.
+   * Also decodes the removed `MULTI_AGENT_V3` and `TRAILBLAZE_RUNNER` values, so logs and
+   * payloads written before their removal still load.
    */
-  TRAILBLAZE_RUNNER,
-
-  /**
-   * Multi-agent architecture inspired by Mobile-Agent-v3.
-   *
-   * Uses Koog's planner infrastructure with two modes:
-   * - **trail()**: Execute predefined steps from .trail.yaml files
-   * - **blaze()**: Explore and discover steps via screen analysis
-   *
-   * Key features:
-   * - Goal-oriented action planning for both modes
-   * - Zero LLM calls for fully recorded trails (deterministic)
-   * - Recording generation from blaze exploration
-   * - Optional reflection, progress tracking, and memory nodes
-   *
-   * @see https://arxiv.org/abs/2508.15144
-   */
-  MULTI_AGENT_V3,
-
-  /**
-   * Single Koog `strategy { }` graph that owns the agent reasoning loop — orchestration,
-   * tool dispatch, and (over time) replanning / recovery / history compression — with
-   * Trailblaze owning the domain (screen state, drivers, deterministic replay).
-   *
-   * This is the default agent. [TRAILBLAZE_RUNNER] remains available for explicit selection via
-   * the CLI, the `trailblaze.agent` instrumentation arg, desktop run requests, and MCP requests.
-   *
-   * Intended successor to [MULTI_AGENT_V3] — add opt-in, prove via eval, then collapse the
-   * hand-rolled loops onto this one.
-   */
+  @OptIn(ExperimentalSerializationApi::class)
+  @JsonNames("MULTI_AGENT_V3", "TRAILBLAZE_RUNNER")
   KOOG_STRATEGY_GRAPH,
   ;
 
   companion object {
-    /** Name of the default agent, usable in annotation parameters that require a const. */
-    const val DEFAULT_NAME = "KOOG_STRATEGY_GRAPH"
-
-    /** Global default agent implementation. Change this to switch the default everywhere. */
-    val DEFAULT = KOOG_STRATEGY_GRAPH
+    /**
+     * Decodes a wire name, mapping any name this build no longer knows (a removed agent, or an
+     * empty field from a sender that omitted it) to [KOOG_STRATEGY_GRAPH]. The on-device RPC
+     * carries the name as a plain string, so a device and host built at different versions can
+     * disagree about which names exist.
+     */
+    fun fromWireName(name: String?): AgentImplementation =
+      entries.firstOrNull { it.name == name } ?: KOOG_STRATEGY_GRAPH
   }
 }

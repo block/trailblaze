@@ -18,7 +18,6 @@ import xyz.block.trailblaze.host.ios.MobileDeviceUtils
 import xyz.block.trailblaze.llm.TrailblazeReferrer
 import xyz.block.trailblaze.cli.RECORDING_LOG_STABILITY_MAX_WAIT_MS
 import xyz.block.trailblaze.cli.RECORDING_LOG_STABILITY_POLL_MS
-import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionStatus
@@ -182,12 +181,6 @@ internal suspend fun buildRunDispatchResult(deps: TrailRunnerDeps, body: RunRequ
       )
     }
   }
-  // Explicit per-request agent wins; otherwise fall back to the persisted global agent setting
-  // (the one the UI's run-controls agent picker edits), then the built-in default.
-  val agentImpl = body.agent
-    ?.let { a -> runCatching { AgentImplementation.valueOf(a) }.getOrNull() }
-    ?: deps.settingsRepo?.serverStateFlow?.value?.appConfig?.agentImplementation
-    ?: AgentImplementation.DEFAULT
   val captureAnalyticsOn = body.captureAnalytics == true
   val analyticsCapture: AutoCloseable? =
     if (captureAnalyticsOn) runCatching { deps.analyticsCaptureStarter?.invoke(id) }.getOrNull() else null
@@ -233,7 +226,6 @@ internal suspend fun buildRunDispatchResult(deps: TrailRunnerDeps, body: RunRequ
       sendSessionEndLog = true,
       existingSessionId = resolution.sessionId,
       referrer = TrailblazeReferrer.RECORDING_TAB_REPLAY,
-      agentImplementation = agentImpl,
       selfHeal = body.selfHeal,
       useRecordedSteps = body.useRecordedSteps
         ?: runCatching { createTrailblazeYaml().hasRecordedSteps(yaml) }.getOrDefault(false),

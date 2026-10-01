@@ -87,6 +87,7 @@ class PlaywrightNativeEvalTests {
         trailblazeDeviceId = playwrightTest.trailblazeDeviceInfo.trailblazeDeviceId,
         trailFilePath = trailFile.absolutePath,
         sendSessionStartLog = true,
+        useRecordedSteps = true,
       )
     }
   }

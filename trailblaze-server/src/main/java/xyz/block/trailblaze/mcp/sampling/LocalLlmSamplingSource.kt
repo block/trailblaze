@@ -65,16 +65,6 @@ class LocalLlmSamplingSource(
   private val sessionIdProvider: (() -> SessionId?)? = null,
   /** Timeout for each LLM call in milliseconds. Default: 120 seconds. */
   private val llmCallTimeoutMs: Long = DEFAULT_LLM_CALL_TIMEOUT_MS,
-  /** Which agent architecture this sampling source is part of — recorded in LLM request logs. */
-  private val agentImplementation: AgentImplementation = AgentImplementation.MULTI_AGENT_V3,
-  /**
-   * Provider for the `saveAnnotatedScreenshots` config flag (default: true).
-   * When false and [ScreenContext.rawScreenshotBytes] is available, the
-   * un-annotated bytes are persisted to logs instead of the annotated bytes that
-   * were sent to the LLM. The LLM still receives the annotated screenshot
-   * regardless — flipping the flag never changes what the model sees.
-   */
-  private val saveAnnotatedScreenshotsProvider: () -> Boolean = { true },
 ) : SamplingSource {
 
   /**
@@ -530,11 +520,10 @@ class LocalLlmSamplingSource(
     // Save screenshot to disk if available. saveScreenshotBytes sniffs the payload
     // and picks the right extension internally — caller doesn't supply it.
     //
-    // The `saveAnnotatedScreenshots` flag only affects the *log* variant; the
-    // model already received the annotated bytes via `buildMessages` above.
-    // When the flag is off and the caller provided clean pixels via
-    // [ScreenContext.rawScreenshotBytes], persist those instead so downstream
-    // tooling (e.g. waypoint authoring) gets un-annotated examples.
+    // The model already received the annotated bytes via `buildMessages` above.
+    // When the caller provided clean pixels via [ScreenContext.rawScreenshotBytes],
+    // persist those instead: a log is read as what the screen showed (reports,
+    // string crops, waypoint examples), and set-of-mark boxes cover the UI.
     //
     // Gate on `screenshotBytes` (the bytes actually sent to the model) — not
     // `rawScreenshotBytes` — so that fast-mode text-only calls (which pass
@@ -542,8 +531,7 @@ class LocalLlmSamplingSource(
     // don't accidentally start persisting an image. `includedScreenshot` then
     // matches what's actually on disk.
     val rawScreenshotBytes = screenContext?.rawScreenshotBytes
-    val swapToRaw = !saveAnnotatedScreenshotsProvider() &&
-      screenshotBytes != null &&
+    val swapToRaw = screenshotBytes != null &&
       screenshotBytes.isNotEmpty() &&
       rawScreenshotBytes != null &&
       rawScreenshotBytes.isNotEmpty()
@@ -625,7 +613,7 @@ class LocalLlmSamplingSource(
         deviceWidth = screenContext.deviceWidth,
         deviceHeight = screenContext.deviceHeight,
         requestContext = TrailblazeLog.LlmRequestContext(
-          agentImplementation = agentImplementation,
+          agentImplementation = AgentImplementation.KOOG_STRATEGY_GRAPH,
           llmCallStrategy = LlmCallStrategy.DIRECT,
           agentTier = AgentTier.INNER,
         ),

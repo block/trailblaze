@@ -78,19 +78,8 @@ object TrailsDirectoryScanner {
   }
 
   /**
-   * Counts the total number of trails.
-   */
-  fun countTrails(trails: List<Trail>): Int = trails.size
-
-  /**
    * Counts the total number of trail variants across all trails.
    */
   fun countVariants(trails: List<Trail>): Int = trails.sumOf { it.variants.size }
 
-  /**
-   * Finds a trail by its ID.
-   */
-  fun findTrailById(trails: List<Trail>, id: String): Trail? {
-    return trails.find { it.id == id }
-  }
 }

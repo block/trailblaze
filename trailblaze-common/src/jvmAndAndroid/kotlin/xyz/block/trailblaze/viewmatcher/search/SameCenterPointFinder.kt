@@ -164,11 +164,4 @@ internal object SameCenterPointFinder {
 
     return null
   }
-
-  private fun isEmptySelector(selector: TrailblazeElementSelector): Boolean = selector.textRegex == null &&
-    selector.idRegex == null &&
-    selector.enabled == null &&
-    selector.selected == null &&
-    selector.checked == null &&
-    selector.focused == null
 }

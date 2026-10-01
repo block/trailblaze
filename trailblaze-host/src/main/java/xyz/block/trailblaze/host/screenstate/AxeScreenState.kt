@@ -11,6 +11,7 @@ import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.host.axe.AxeCli
 import xyz.block.trailblaze.host.axe.AxeJsonMapper
 import xyz.block.trailblaze.host.axe.AxeViewportClamp
+import xyz.block.trailblaze.util.Console
 import java.nio.file.Files
 import java.nio.file.Paths
 
@@ -29,26 +30,34 @@ class AxeScreenState(
   override val deviceHeight: Int,
   // Injectable for tests only — production always shells out to the AXe CLI.
   private val describeUi: () -> AxeCli.Result = { AxeCli.describeUi(udid) },
+  /**
+   * Source of the raw tree. [xyz.block.trailblaze.host.axe.AxeDeviceManager] passes either a fresh
+   * read or its shared one (see [xyz.block.trailblaze.host.ios.IosDeviceManager.sharedScreenState]).
+   */
+  private val readTree: () -> TrailblazeNode? = { parseDescribeUi(describeUi(), "AxeScreenState") },
 ) : ScreenState {
+
+  companion object {
+    /** Parses one `describe-ui` result; null (with a log line tagged [source]) when it is unusable. */
+    internal fun parseDescribeUi(res: AxeCli.Result, source: String): TrailblazeNode? {
+      if (!res.success) {
+        Console.log("[$source] axe describe-ui failed: ${res.stderr.trim()}")
+        return null
+      }
+      return try {
+        AxeJsonMapper.parse(res.stdout)
+      } catch (e: Exception) {
+        Console.log("[$source] axe describe-ui produced unparseable JSON: ${e.message}")
+        null
+      }
+    }
+  }
 
   override val trailblazeDevicePlatform: TrailblazeDevicePlatform = TrailblazeDevicePlatform.IOS
   override val deviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList()
 
   /** Raw TrailblazeNode tree straight from AXe — no refs yet. */
-  private val parsedTree: TrailblazeNode? by lazy {
-    val res = describeUi()
-    if (!res.success) {
-      System.err.println("[AxeScreenState] axe describe-ui failed: ${res.stderr.trim()}")
-      null
-    } else {
-      try {
-        AxeJsonMapper.parse(res.stdout)
-      } catch (e: Exception) {
-        System.err.println("[AxeScreenState] axe describe-ui produced unparseable JSON: ${e.message}")
-        null
-      }
-    }
-  }
+  private val parsedTree: TrailblazeNode? by lazy { readTree() }
 
   /**
    * [parsedTree] with off-viewport nodes pruned — the ONLY tree this screen state exposes.

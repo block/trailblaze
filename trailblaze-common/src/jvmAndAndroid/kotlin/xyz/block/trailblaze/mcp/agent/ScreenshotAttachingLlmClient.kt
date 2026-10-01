@@ -21,21 +21,20 @@ import xyz.block.trailblaze.util.Console
 
 /**
  * A delegating [LLMClient] wrapper that attaches the **current annotated screenshot** to each
- * tool-calling request the Koog strategy-graph agent makes, giving the model the same set-of-mark
- * visual perception the legacy [xyz.block.trailblaze.agent.TrailblazeRunner] path has.
+ * tool-calling request the Koog strategy-graph agent makes, giving the model set-of-mark visual
+ * perception.
  *
  * ## Why this exists
  *
- * The opt-in [KoogStrategyGraphAgent] drives the device through Koog's [ai.koog.agents.core.agent.AIAgent],
+ * The [KoogStrategyGraphAgent] drives the device through Koog's [ai.koog.agents.core.agent.AIAgent],
  * which assembles its own prompt from text tool results — the view hierarchy is appended as text by
- * [runPromptsWithKoogStrategyGraph]'s tool dispatcher, but the prompt is otherwise text-only. The
- * legacy path attaches `ScreenState.annotatedScreenshotBytes` as a vision attachment on every request
- * (see `TrailblazeKoogLlmClientHelper`), so a vision-capable model can reason over the rendered screen
- * (set-of-mark numbering, visual layout) — not just the accessibility text. Without this decorator the
- * Koog agent is blind to anything the a11y tree under-represents, which regresses pass rate on
- * visually-driven screens versus the default agent.
+ * [runPromptsWithKoogStrategyGraph]'s tool dispatcher, but the prompt is otherwise text-only.
+ * Attaching `ScreenState.annotatedScreenshotBytes` lets a vision-capable model reason over the
+ * rendered screen (set-of-mark numbering, visual layout) — not just the accessibility text. Without
+ * this decorator the agent is blind to anything the a11y tree under-represents, which regresses pass
+ * rate on visually-driven screens.
  *
- * This is the screenshot half of closing that gap; [LoggingLlmClient] is the logging half. They
+ * [LoggingLlmClient] is the logging counterpart. They
  * compose with this decorator OUTERMOST (it attaches the image first) wrapping [LoggingLlmClient]
  * wrapping the real client. That ordering lets the logger record the post-attachment prompt, so its
  * token breakdown counts the image (the log stores attachments as a type marker, not bytes — no

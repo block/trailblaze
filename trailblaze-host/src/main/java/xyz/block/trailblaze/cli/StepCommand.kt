@@ -259,34 +259,6 @@ class StepCommand : Callable<Int>, QuietUnlessVerbose {
   }
 
   /**
-   * Parses Markdown output from StepResult.toMarkdown().
-   *
-   * Format: `**<emoji> <Status>** — <message>\n\n**Screen:** <summary>`
-   *
-   * @return Triple of (status, message, screenSummary) or null if not Markdown format
-   */
-  private fun parseMarkdownResult(content: String): Triple<String, String, String?>? {
-    if (!content.startsWith("**")) return null
-    val statusMatch = Regex("""^\*\*.*?(Done|Executed|Analyzed|PASSED|FAILED|Error|Needs input)\*\*""")
-      .find(content) ?: return null
-    val status = statusMatch.groupValues[1]
-    val afterStatus = content.substring(statusMatch.range.last + 1)
-
-    // Extract screen summary if present
-    val screenMarker = "\n\n**Screen:** "
-    val screenIdx = afterStatus.indexOf(screenMarker)
-    val (messagePart, screenSummary) = if (screenIdx >= 0) {
-      afterStatus.substring(0, screenIdx) to afterStatus.substring(screenIdx + screenMarker.length)
-    } else {
-      afterStatus to null
-    }
-
-    // Strip leading " — " separator
-    val message = messagePart.removePrefix(" — ").trim()
-    return Triple(status, message, screenSummary)
-  }
-
-  /**
    * Handles the --save flow: export the current session as a trail YAML file.
    *
    * If neither --setup nor --no-setup is provided, shows a numbered step list

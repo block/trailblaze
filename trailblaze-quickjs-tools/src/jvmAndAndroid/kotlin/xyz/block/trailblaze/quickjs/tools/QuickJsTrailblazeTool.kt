@@ -103,7 +103,7 @@ class QuickJsTrailblazeTool(
 
   override suspend fun execute(toolExecutionContext: TrailblazeToolExecutionContext): TrailblazeToolResult {
     // Resolve ${key}/{{key}} memory tokens in the recorded args before they reach the JS engine.
-    // The AI path interpolates upstream (AgentUiActionExecutor.mapToTrailblazeTool); recorded-replay
+    // The AI path interpolates upstream; recorded-replay
     // decodes args verbatim and never did, so a recorded `email: ${userEmail}` reached the
     // bundle as the literal token and was typed as "undefined". Idempotent on the AI path (already-
     // resolved args carry no tokens). rawToolArguments stays un-interpolated so replaying a tokenized
@@ -188,6 +188,10 @@ class QuickJsTrailblazeTool(
         driverType = deviceInfo.trailblazeDriverType.yamlKey,
         driver = deviceInfo.trailblazeDriverType.yamlKey,
         instanceId = deviceInfo.trailblazeDeviceId.instanceId,
+        widthPixels = deviceInfo.widthPixels,
+        heightPixels = deviceInfo.heightPixels,
+        trailblazePort =
+          trailblazePortOrNull(deviceInfo.trailblazeDeviceId),
       ),
       target = target,
       memory = nonSensitiveMemory,

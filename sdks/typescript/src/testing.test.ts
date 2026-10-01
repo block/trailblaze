@@ -182,6 +182,12 @@ describe("createMockContext", () => {
     expect(ctx.memory.keys()).toEqual(["last"]);
   });
 
+  test("device.trailblazePort reaches ctx.device only when set", () => {
+    const withPort = createMockContext({ platform: "ios", device: { trailblazePort: 53187 } });
+    expect(withPort.device.trailblazePort).toBe(53187);
+    expect(createMockContext({ platform: "ios" }).device.trailblazePort).toBeUndefined();
+  });
+
   test("deprecated device.driver fixture is normalized into driverType", () => {
     const ctx = createMockContext({
       platform: "android",

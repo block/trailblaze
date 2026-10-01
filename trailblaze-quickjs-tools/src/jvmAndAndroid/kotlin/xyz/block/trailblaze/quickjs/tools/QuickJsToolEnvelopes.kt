@@ -1,5 +1,7 @@
 package xyz.block.trailblaze.quickjs.tools
 
+import kotlinx.serialization.EncodeDefault
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
@@ -109,6 +111,19 @@ internal data class QuickJsDeviceContext(
    */
   val driver: String,
   val instanceId: String,
+  /** Screen size — the SDK types these as always present, matching the subprocess/MCP envelope. */
+  val widthPixels: Int,
+  val heightPixels: Int,
+  /**
+   * `TrailblazeDeviceId.getTrailblazeOnDeviceSpecificPort()` — the port the device's Trailblaze
+   * server (the Android runner, or an iOS app's in-app server) is bridged on. Absent where
+   * the value can't be trusted; see [trailblazePortOrNull]. Never encoded as
+   * `null`: the handler gets this object straight from `JSON.parse`, and the SDK types the field
+   * `number | undefined`.
+   */
+  @OptIn(ExperimentalSerializationApi::class)
+  @EncodeDefault(EncodeDefault.Mode.NEVER)
+  val trailblazePort: Int? = null,
 )
 
 /**

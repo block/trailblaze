@@ -47,15 +47,6 @@ object ToolYamlLoader {
     resolveClassBackedConfigsLeniently(discoverAllConfigs(resourceSource))
 
   /**
-   * Loads tool definitions from pre-read YAML content strings. Returns a map of [ToolName] to
-   * resolved [KClass] — tools-mode YAMLs are skipped.
-   */
-  fun loadFromYamlContents(
-    yamlContents: Map<String, String>,
-  ): Map<ToolName, KClass<out TrailblazeTool>> =
-    resolveClassBackedConfigsLeniently(parseAllConfigs(yamlContents))
-
-  /**
    * Loads tool definitions from already-parsed configs. Class-backed tools are returned;
    * YAML-defined (`tools:` mode) entries are skipped.
    */

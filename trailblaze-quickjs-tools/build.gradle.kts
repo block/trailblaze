@@ -38,10 +38,17 @@ trailblazeAuthorToolBundles {
     entryPoint.set("probe.ts")
     autoInstall.set(false) // No package.json in that dir; the SDK's esbuild is what we need.
   }
+  // SDK-authored tools for `QuickJsToolDispatchBenchmark`, so its timings include the SDK wrapper.
+  register("dispatchBenchmark") {
+    sourceDir.set(layout.projectDirectory.dir("src/jvmTest/fixtures/dispatch-benchmark"))
+    entryPoint.set("bench.ts")
+    autoInstall.set(false) // No package.json in that dir; the SDK's esbuild is what we need.
+  }
 }
 
 tasks.named("bundleSampleAppTypedAuthorTool") { dependsOn(installTrailblazeScriptingSdkTaskPath) }
 tasks.named("bundleOnDeviceMemoryProbeAuthorTool") { dependsOn(installTrailblazeScriptingSdkTaskPath) }
+tasks.named("bundleDispatchBenchmarkAuthorTool") { dependsOn(installTrailblazeScriptingSdkTaskPath) }
 
 // Wire the produced bundle into jvmTest as a system property and a task dependency. The
 // `SampleAppToolsDemoTest.on-device TS bundles via esbuild and runs in QuickJS` test reads
@@ -55,12 +62,22 @@ val sampleAppTypedBundle = tasks.named("bundleSampleAppTypedAuthorTool").map { t
 val onDeviceMemoryProbeBundle = tasks.named("bundleOnDeviceMemoryProbeAuthorTool").map { task ->
   (task as BundleAuthorToolsTask).outputFile.get().asFile.absolutePath
 }
+val dispatchBenchmarkBundle = tasks.named("bundleDispatchBenchmarkAuthorTool").map { task ->
+  (task as BundleAuthorToolsTask).outputFile.get().asFile.absolutePath
+}
 tasks.withType<Test>().configureEach {
   if (name == "jvmTest") {
     dependsOn("bundleSampleAppTypedAuthorTool")
     dependsOn("bundleOnDeviceMemoryProbeAuthorTool")
+    dependsOn("bundleDispatchBenchmarkAuthorTool")
     systemProperty("trailblaze.test.sampleAppTypedBundle", sampleAppTypedBundle.get())
     systemProperty("trailblaze.test.onDeviceMemoryProbeBundle", onDeviceMemoryProbeBundle.get())
+    systemProperty("trailblaze.test.dispatchBenchmarkBundle", dispatchBenchmarkBundle.get())
+    // Opt-in for QuickJsToolDispatchBenchmark. A provider, not System.getenv in the test, so the
+    // configuration cache keys on it instead of replaying a stale value into later runs:
+    //   ./gradlew :trailblaze-quickjs-tools:jvmTest --tests '*QuickJsToolDispatchBenchmark*' \
+    //     -Dtrailblaze.benchmark=true -i
+    systemProperty("trailblaze.benchmark", providers.systemProperty("trailblaze.benchmark").getOrElse("false"))
   }
 }
 

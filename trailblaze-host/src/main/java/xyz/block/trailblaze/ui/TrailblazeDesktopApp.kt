@@ -19,7 +19,6 @@ import xyz.block.trailblaze.devices.TrailblazePortRangeConflictException
 import xyz.block.trailblaze.host.yaml.DesktopYamlRunner
 import xyz.block.trailblaze.llm.RunYamlRequest
 import xyz.block.trailblaze.llm.TrailblazeReferrer
-import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.report.trace.SessionTraceFile
 import xyz.block.trailblaze.logs.model.SessionStatus
@@ -306,22 +305,6 @@ abstract class TrailblazeDesktopApp(
     val effectiveUseRecordedSteps = request.useRecordedSteps
       ?: TrailblazeYaml().hasRecordedSteps(resolvedYaml)
 
-    val agentImpl =
-      when (
-        val resolution =
-          resolveRunAgentImplementation(
-            requestedAgent = request.agentImplementation,
-            savedAgent = deviceManager.settingsRepo.serverStateFlow.value.appConfig.agentImplementation,
-          )
-      ) {
-        is CliRunAgentResolution.Resolved -> resolution.agentImplementation
-        is CliRunAgentResolution.Unrecognized ->
-          return@withContext cliRunMisuseResponse(resolution.message)
-      }
-    cliRunAgentMaxLlmCallsResponse(agentImpl, request.maxLlmCalls)?.let {
-      return@withContext it
-    }
-
     // Honor the CLI's --self-heal override when provided; fall back to the daemon's
     // persisted `trailblaze config self-heal` setting; otherwise stay opt-out.
     val effectiveSelfHeal =
@@ -364,7 +347,6 @@ abstract class TrailblazeDesktopApp(
       // Use "cli" referrer (not "cli-daemon") so DesktopYamlRunner's shared-scope set
       // matches and parallel CLI delegations don't cancel each other.
       referrer = TrailblazeReferrer(id = "cli", display = "CLI"),
-      agentImplementation = agentImpl,
       maxLlmCalls = request.maxLlmCalls,
       initialMemorySeeds = request.initialMemorySeeds,
       initialMemorySensitiveSeeds = request.initialMemorySensitiveSeeds,
@@ -477,9 +459,11 @@ abstract class TrailblazeDesktopApp(
 
     // Record this run at the level its caller asked for, then hand the daemon its own level back.
     // Null (an older CLI, or an MCP/HTTP submission) leaves the daemon's level untouched.
-    TrailblazeTracer.withLevel(TraceLevel.parse(request.traceLevel)) {
-      desktopYamlRunner.runYaml(params)
-      completionLatch.await()
+    blockUntilTrailEndsOrCancelIt { onTrailStarted ->
+      TrailblazeTracer.withLevel(TraceLevel.parse(request.traceLevel)) {
+        onTrailStarted(desktopYamlRunner.runYaml(params))
+        completionLatch.await()
+      }
     }
 
     // A run the runner rejected as invalid before attempting it (e.g. an unrecognized
@@ -552,7 +536,7 @@ abstract class TrailblazeDesktopApp(
     // Reconcile against the pinned session's on-disk status (source of truth for pass/fail).
     // Inspect ONLY the pinned session — sibling sessions belong to parallel trail runs and have
     // no bearing on this one's success. A session that ended Succeeded must not be demoted by a
-    // post-run connect/teardown ConnectionFailure (the V1 on-device-RPC dead-server case).
+    // post-run connect/teardown ConnectionFailure (the on-device-agent dead-server case).
     val pinnedSessionInfo = logsRepo.getSessionInfoDirect(pinnedSessionId)
     val reconciled = reconcileRunOutcome(
       latchSuccess = success,

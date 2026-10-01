@@ -417,6 +417,42 @@ export function heldClipsTimeAt(
   return held != null ? { index: 0, at: held } : null;
 }
 
+/**
+ * Where Replay opens: the first instant ANY device has something on screen — its first capture
+ * ([ReplayTimeline.firstCaptureMs]) or the instant its recording starts, whichever is sooner. A
+ * recorded lane has picture long before its first capture, so opening at the capture alone lands
+ * seconds into the run with that lane's video skipped. `recordingStartsMs` are axis instants; a
+ * recorder already rolling when the run's clock began opens at 0.
+ */
+export function replayOpeningMs(firstCaptureMs: number, recordingStartsMs: ReadonlyArray<number>): number {
+  return Math.max(0, Math.min(firstCaptureMs, ...recordingStartsMs));
+}
+
+/**
+ * The axis instants [replayOpeningMs] weighs for each lane's recordings — only the ones that can be
+ * shown, meaning the browser has read their duration. A recording that never loads (a decode error,
+ * a file missing from a re-hosted report) is never counted, so it cannot pull the opening onto panes
+ * with nothing in them. A recording's start is `clip.startMs - t0` on its lane's own clock, carried
+ * onto the axis through `alignment` when the replay is aligned by step; a lane the axis holds at its
+ * start shows its recording's first frame throughout, so it has picture from 0.
+ */
+export function replayRecordingStartsMs(
+  lanes: ReadonlyArray<{
+    index: number;
+    heldAtStart: boolean;
+    recordings: ReadonlyArray<{ clip: { startMs: number }; t0: number | null; duration: number | null }>;
+  }>,
+  alignment: Pick<ReplayAlignment, 'toAligned'> | null,
+): number[] {
+  return lanes.flatMap((lane) => lane.recordings.flatMap((recording) => {
+    if (recording.duration == null || !(recording.duration > 0)) return [];
+    if (lane.heldAtStart) return [0];
+    if (recording.t0 == null) return [];
+    const own = recording.clip.startMs - recording.t0;
+    return [alignment ? alignment.toAligned(lane.index, own) : own];
+  }));
+}
+
 // ── Aligning the clock by step ─────────────────────────────────────────────────────────────────
 //
 // The wall clock shows which device falls behind. It also means that by step 4 a fast phone and a
@@ -1050,6 +1086,22 @@ function lastIndexAtOrBefore<T>(sorted: T[], keyOf: (entry: T) => number, t: num
   }
   return found;
 }
+
+// ── Data tracks under the strip ───────────────────────────────────────────────────────────────
+/** A per-lane data row under a lane's step rail. */
+export type ReplayTrackKind = 'memory';
+
+/**
+ * The key a data track's open state is kept under: one per lane AND kind, so opening one device's
+ * memory leaves every other track shut. Keyed on the lane's session and label, not its position —
+ * hiding a lane shifts every later lane's index, and the tracks the reader opened must not move to
+ * a different device.
+ */
+export const replayTrackKey = (lane: { session: number; label: string }, kind: ReplayTrackKind): string =>
+  `${kind}:${lane.session}:${lane.label}`;
+
+/** Whether a data track is expanded. Every track starts collapsed: only a toggle opens one. */
+export const replayTrackOpen = (open: Readonly<Record<string, boolean>>, key: string): boolean => open[key] === true;
 
 /** A reading's height in a `height`-tall box, higher use drawn HIGHER (SVG y grows downward). */
 export const memoryY = (usedKb: number, scaleKb: number, height: number): number =>

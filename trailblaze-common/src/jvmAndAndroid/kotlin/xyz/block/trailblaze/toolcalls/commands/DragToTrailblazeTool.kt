@@ -71,8 +71,6 @@ data class DragToTrailblazeTool(
 
     val sourceNode = tree.findFirst { it.ref == ref }
       ?: throw TrailblazeToolExecutionException(
-        // "Element ref 'X' not found on current screen" prefix is load-bearing for the runner's
-        // stale-ref recovery detector (StaleRefRecovery.STALE_REF_REGEX) — keep the phrasing.
         message = "dragTo: Element ref '$ref' not found on current screen. The screen has " +
           "changed since this ref was last visible. Use a ref from the current view hierarchy instead.",
         tool = this,

@@ -21,7 +21,6 @@ import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.TraceId
-import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.mcp.TrailblazeMcpBridge
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetScreenStateResponse
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
@@ -172,7 +171,6 @@ class TrailMcpToolListFindTest {
     override suspend fun runYaml(
       yaml: String,
       startNewSession: Boolean,
-      agentImplementation: AgentImplementation,
     ): String = throw NotImplementedError("runYaml must not be called in list/find tests")
 
     override fun getCurrentlySelectedDeviceId(): TrailblazeDeviceId? = null

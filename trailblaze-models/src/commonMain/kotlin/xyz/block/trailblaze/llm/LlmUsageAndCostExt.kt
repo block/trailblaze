@@ -1,13 +1,15 @@
 package xyz.block.trailblaze.llm
 
 import xyz.block.trailblaze.logs.client.TrailblazeLog
+import xyz.block.trailblaze.decision.AnsweredWithoutLlm
 import kotlin.math.round
 
 object LlmUsageAndCostExt {
   private fun Double.roundTo2DecimalPlaces(): Double = round(this * 100) / 100
 
   fun List<TrailblazeLog>.computeUsageSummary(): LlmSessionUsageAndCost? {
-    val requests = this.filterIsInstance<TrailblazeLog.TrailblazeLlmRequestLog>()
+    // A request a decision engine or rule answered cost no model call, so it is not counted as one.
+    val requests = AnsweredWithoutLlm.modelRequests(this)
     if (requests.isEmpty()) {
       // Short Circuit if there are no requests
       return null

@@ -11,6 +11,10 @@ Entries tagged as **Decision** record significant architectural or technical cho
 
 | Date | Title | Type |
 | :--- | :--- | :--- |
+| 2026-09-30 | [Take Report Pictures from the Video](2026-09-30-video-instead-of-screenshots.md) | Decision |
+| 2026-09-29 | [What a Screenshot Costs per Capture](2026-09-29-what-a-screenshot-costs-per-capture.md) | Devlog |
+| 2026-09-29 | [Write Tools in TypeScript: a Scripted Tool Costs a Fifth of a Millisecond](2026-09-29-typescript-tools-cost-a-fifth-of-a-millisecond.md) | Decision |
+| 2026-09-27 | [Strings on Every Capture](2026-09-27-strings-on-every-capture.md) | Decision |
 | 2026-09-23 | [Trail Metadata Takes Any YAML Shape](2026-09-23-trail-metadata-any-shape.md) | Decision |
 | 2026-08-27 | [Tracing: One Producer, One Timeline](2026-08-27-tracing-one-producer-one-timeline.md) | Devlog |
 | 2026-08-27 | [The Trail View: One Trail, Every Device, One Clock](2026-08-27-multi-run-trail-view.md) | Devlog |

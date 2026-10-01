@@ -103,7 +103,7 @@ class RpcScreenStateAdapter(
   /** Cached compact elements result — shared between text representation and annotation elements. */
   private val compactElements by lazy {
     val tree = response.trailblazeNodeTree ?: return@lazy null
-    AndroidCompactElementList.build(tree, screenHeight = response.deviceHeight)
+    AndroidCompactElementList.build(tree, screenHeight = response.deviceHeight, screenWidth = response.deviceWidth)
   }
 
   override val trailblazeNodeTree: TrailblazeNode? by lazy {

@@ -10,7 +10,6 @@ import xyz.block.trailblaze.api.TrailblazeNode
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.llm.RunYamlRequest
 import xyz.block.trailblaze.llm.RunYamlResponse
-import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetScreenStateResponse
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.OnDeviceRpcClient
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcResult
@@ -215,7 +214,6 @@ class OnDeviceRpcDeviceScreenStream(
   suspend fun dispatchYaml(yaml: String) {
     val request = runYamlRequestTemplate.copy(
       yaml = yaml,
-      agentImplementation = AgentImplementation.TRAILBLAZE_RUNNER,
       awaitCompletion = false,
     )
     when (val result: RpcResult<RunYamlResponse> = rpc.rpcCall(request)) {
@@ -239,9 +237,6 @@ class OnDeviceRpcDeviceScreenStream(
     val yaml = trailblazeYaml.encodeTools(listOf(fromTrailblazeTool(tool)))
     val request = runYamlRequestTemplate.copy(
       yaml = yaml,
-      // TRAILBLAZE_RUNNER dispatches a fixed tool list directly — no LLM call, no agent
-      // loop. Right shape for "I have one tool, just run it".
-      agentImplementation = AgentImplementation.TRAILBLAZE_RUNNER,
       // Fire-and-forget. The screen-state poll loop is the source of truth for what the
       // user sees, and it ticks every [frameIntervalMs] regardless of dispatch state.
       // Blocking the tap on `awaitCompletion = true` adds the on-device pre-tool UI-settle

@@ -65,11 +65,7 @@ data class TapTrailblazeTool(
     // screens with many offscreen elements.
     val targetNode = tree.findFirst { it.ref == ref }
       ?: throw TrailblazeToolExecutionException(
-        // Prefix "Element ref 'X' not found on current screen" is load-bearing: the runner's
-        // stale-ref recovery detector (StaleRefRecovery.STALE_REF_REGEX) matches on it to
-        // count consecutive hallucinations and inject a recovery message. Do NOT change
-        // that phrase without also updating the regex. The pointer text was previously
-        // "use 'snapshot'" — there is no `snapshot` LLM tool, so it sent models chasing a
+        // The pointer text was previously "use 'snapshot'" — there is no `snapshot` LLM tool, so it sent models chasing a
         // nonexistent tool. The same text reaches a `trailblaze tool tap ref=…` user, who has
         // no "request" the hierarchy is appended to, so it names the current hierarchy and
         // leaves each caller to fetch it its own way (the CLI adds its own snapshot tip).
@@ -304,7 +300,7 @@ data class TapTrailblazeTool(
           recordedNodeSelectorForMaestroPath(
             platform = screenState.trailblazeDevicePlatform,
             modernNodeSelector = nodeSelector,
-            legacyAsNodeSelector = legacyAsNodeSelector,
+            legacyAsNodeSelector = { legacyAsNodeSelector },
           )
         },
       ),

@@ -25,7 +25,6 @@ import xyz.block.trailblaze.ui.desktoputil.DesktopUtil
 import xyz.block.trailblaze.ui.desktoputil.EnvVarSaveResult
 import xyz.block.trailblaze.ui.desktoputil.saveEnvVarToShellProfile
 import xyz.block.trailblaze.ui.desktoputil.ShellProfileRestartRequiredDialog
-import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.ui.TrailblazeDesktopUtil
 import xyz.block.trailblaze.ui.TrailblazeSettingsRepo
 import xyz.block.trailblaze.ui.composables.SelectableText
@@ -571,68 +570,6 @@ object SettingsTabComposables {
 
     val languageModelSection: @Composable () -> Unit = {
       SettingsSection(title = "Language Model Settings") {
-        // Agent Implementation Selection
-        var showAgentImplMenu by remember { mutableStateOf(false) }
-        val agentImplOptions = listOf(
-          AgentImplementation.TRAILBLAZE_RUNNER to "TrailblazeRunner (Legacy)",
-          AgentImplementation.MULTI_AGENT_V3 to "Multi-Agent V3",
-          AgentImplementation.KOOG_STRATEGY_GRAPH to "Koog Strategy Graph (default)"
-        )
-        // An unset persisted agent means "never chose" (tri-state), and the run itself falls back
-        // to AgentImplementation.DEFAULT — so show that, not a hardcoded label that would now name
-        // an agent the user is not getting.
-        val effectiveAgentImpl =
-          serverState.appConfig.agentImplementation ?: AgentImplementation.DEFAULT
-        val currentAgentImplLabel =
-          agentImplOptions.find { it.first == effectiveAgentImpl }?.second
-            ?: effectiveAgentImpl.name
-
-        Column(
-          modifier = Modifier.fillMaxWidth(),
-          verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-          SelectableText("Agent Implementation", style = MaterialTheme.typography.bodyMedium)
-          SelectableText(
-            text = "Controls which architecture handles the agent loop",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-          )
-          ExposedDropdownMenuBox(
-            expanded = showAgentImplMenu,
-            onExpandedChange = { showAgentImplMenu = !showAgentImplMenu }
-          ) {
-            OutlinedTextField(
-              modifier = Modifier.fillMaxWidth().menuAnchor(),
-              value = currentAgentImplLabel,
-              onValueChange = {},
-              readOnly = true,
-              trailingIcon = {
-                ExposedDropdownMenuDefaults.TrailingIcon(
-                  expanded = showAgentImplMenu
-                )
-              }
-            )
-            DropdownMenu(
-              expanded = showAgentImplMenu,
-              onDismissRequest = { showAgentImplMenu = false }
-            ) {
-              agentImplOptions.forEach { (agentImpl, label) ->
-                DropdownMenuItem(
-                  text = { SelectableText(label) },
-                  onClick = {
-                    showAgentImplMenu = false
-                    trailblazeSettingsRepo.updateAppConfig {
-                      it.copy(agentImplementation = agentImpl)
-                    }
-                  }
-                )
-              }
-            }
-          }
-        }
-
-        Spacer(modifier = Modifier.height(8.dp))
-
         // LLM Provider and Model Selection
         var showLlmProviderMenu by remember { mutableStateOf(false) }
         var showLlmModelMenu by remember { mutableStateOf(false) }

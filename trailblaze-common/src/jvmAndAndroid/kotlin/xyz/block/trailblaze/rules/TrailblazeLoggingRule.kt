@@ -17,6 +17,7 @@ import xyz.block.trailblaze.logs.client.TrailblazeScreenStateLog
 import xyz.block.trailblaze.logs.client.TrailblazeSession
 import xyz.block.trailblaze.logs.client.TrailblazeSessionManager
 import xyz.block.trailblaze.logs.client.withClockMetadata
+import xyz.block.trailblaze.logs.client.withVisibleStrings
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.logs.model.TrailblazeClockDomain
@@ -241,13 +242,16 @@ abstract class TrailblazeLoggingRule(
       // still falls back to guessing device-vs-host from the log CLASS for those — a guess that is
       // wrong for every host driver, because a host driver's AgentDriverLog carries the same
       // serial name an on-device Maestro driver log does. A positive HOST retires that guess.
-      val log = if (emittedLog.clock == null) {
+      val stamped = if (emittedLog.clock == null) {
         emittedLog.withClockMetadata(
           clock = if (useDeviceClock) TrailblazeClockDomain.DEVICE else TrailblazeClockDomain.HOST,
         )
       } else {
         emittedLog
       }
+      // Read a capture's strings here, while its tree is in hand, so they reach the server upload
+      // and the disk fallback alike. On an on-device run that disk is the only copy CI pulls.
+      val log = stamped.withVisibleStrings()
 
       // Notify additional log emitter (for test inspection, etc.)
       additionalLogEmitter?.emit(log)

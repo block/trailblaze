@@ -112,6 +112,13 @@ class OuterLoopAgent(
 
       val screenSummaryBefore = describeScreenState(screenState)
       val analysis = innerAgent.analyze(context, screenState, traceId)
+      analysis.llmError?.let {
+        return StrategistResult.Error(
+          message = "LLM call failed: $it",
+          iterations = iteration,
+          actionsTaken = actions,
+        )
+      }
 
       // 3. Check if objective is already achieved
       if (analysis.objectiveAppearsAchieved) {

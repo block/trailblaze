@@ -208,6 +208,25 @@ abstract class MaestroTrailblazeAgent(
   ): TrailblazeToolResult? = null
 
   /**
+   * Types [text] into the field [nodeSelector] names, focusing it directly when the selector
+   * resolves to an editable field. A selector naming something else (a label over the field, a hint
+   * the focus hid) types into the field the tap focused; with no field focused, it fails.
+   *
+   * Override in drivers that can focus a node directly (today: the Android accessibility driver).
+   *
+   * `inputText` calls this after tapping the field, so an override only has to focus and type.
+   *
+   * @return A [TrailblazeToolResult] if the driver handled the action, or null to fall back to
+   *   typing into the field the tap focused.
+   */
+  open suspend fun executeNodeSelectorInputText(
+    nodeSelector: TrailblazeNodeSelector,
+    text: String,
+    hideKeyboardAfter: Boolean,
+    traceId: TraceId?,
+  ): TrailblazeToolResult? = null
+
+  /**
    * Waits until the on-device UI tree changes relative to a baseline captured at call entry,
    * then waits [quietWindowMs] of no further events to settle.
    *

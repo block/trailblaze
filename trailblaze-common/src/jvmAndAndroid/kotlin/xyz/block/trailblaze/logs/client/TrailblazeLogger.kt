@@ -114,43 +114,6 @@ class TrailblazeLogger(
   }
 
   /**
-   * Logs the annotated screenshot from a screen state.
-   * This saves the screenshot with set-of-mark annotations applied.
-   *
-   * @param session The session this screenshot belongs to
-   * @param screenState The screen state containing annotated screenshot
-   * @return The filename where the screenshot was stored, or null if no screenshot available
-   */
-  fun logScreenStateAnnotated(session: TrailblazeSession, screenState: ScreenState): String? {
-    val screenshotBytes = screenState.annotatedScreenshotBytes ?: return null
-
-    val imageFormat = ImageFormatDetector.detectFormat(screenshotBytes)
-    val timestamp = Clock.System.now()
-    val screenshotFileName = buildScreenshotFileName(
-      sessionId = session.sessionId.value,
-      epochMs = timestamp.toEpochMilliseconds(),
-      ext = imageFormat.fileExtension,
-    )
-
-    // Create a wrapper that exposes the annotated screenshot as the primary screenshot
-    val annotatedScreenStateWrapper = object : ScreenState by screenState {
-      override val screenshotBytes: ByteArray?
-        get() = screenState.annotatedScreenshotBytes
-      override val annotatedScreenshotBytes: ByteArray?
-        get() = screenState.annotatedScreenshotBytes
-    }
-
-    val screenStateLog = TrailblazeScreenStateLog(
-      fileName = screenshotFileName,
-      sessionId = session.sessionId,
-      screenState = annotatedScreenStateWrapper,
-    )
-    screenStateLogger.logScreenState(screenStateLog)
-
-    return screenshotFileName
-  }
-
-  /**
    * Logs a snapshot with clean screenshot and view hierarchy.
    *
    * @param session The session this snapshot belongs to
@@ -267,7 +230,9 @@ class TrailblazeLogger(
     llmRequestLabel: String? = null,
   ) {
     val toolCalls = response.parts.filterIsInstance<MessagePart.Tool.Call>()
-    val screenshotFilename = logScreenStateAnnotated(session, stepStatus.currentScreenState)
+    // The raw screenshot, never the set-of-mark variant the model was sent: a log is read as what
+    // the screen showed (reports, string crops, waypoint examples), and the marks cover the UI.
+    val screenshotFilename = logScreenState(session, stepStatus.currentScreenState)
 
     val toolOptions = toolDescriptors
       .map { it.toTrailblazeToolDescriptor() }
@@ -353,6 +318,7 @@ class TrailblazeLogger(
         trailblazeLlmModel = trailblazeLlmModel,
         llmMessages = (koogLlmRequestMessages + response).toTrailblazeLlmMessages(),
         screenshotFile = screenshotFilename,
+        screenshotIsAnnotated = screenshotFilename?.let { false },
         llmResponse = listOf(response),
         llmRequestUsageAndCost = usageAndCost,
         actions = toolCalls.map {

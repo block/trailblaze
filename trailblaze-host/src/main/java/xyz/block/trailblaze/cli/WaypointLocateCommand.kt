@@ -98,8 +98,8 @@ class WaypointLocateCommand : Callable<Int> {
     // and tests run sequentially, so the same single-threaded invariant holds. The
     // save/restore pattern only matters because subsequent picocli invocations in the
     // SAME test JVM would otherwise inherit quiet mode. If `waypoint locate` is ever
-    // added to FORWARDABLE_SUBCOMMANDS, that path's own save/restore (TrailblazeCli.kt:263)
-    // covers it — but this toggle would need to compose with the daemon's existing one.
+    // added to FORWARDABLE_SUBCOMMANDS, the daemon runs it inside
+    // `Console.withThreadScopedQuietMode`, so this toggle silences only its own thread.
     val batchMode = isBatchMode()
     val wasQuiet = Console.isQuietMode()
     if (batchMode && !wasQuiet) Console.enableQuietMode()

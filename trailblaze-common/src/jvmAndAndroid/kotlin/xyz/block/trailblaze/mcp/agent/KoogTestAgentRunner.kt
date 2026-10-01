@@ -23,9 +23,8 @@ import xyz.block.trailblaze.utils.ElementComparator
 import xyz.block.trailblaze.yaml.PromptStep
 
 /**
- * Adapter that exposes the Koog strategy-graph agent behind the [TestAgentRunner] interface, so the
- * `KOOG_STRATEGY_GRAPH` agent participates in the **same** per-step trail loop as the legacy
- * [xyz.block.trailblaze.agent.TrailblazeRunner] and [xyz.block.trailblaze.agent.MultiAgentV3Runner].
+ * Adapter that exposes the Koog strategy-graph agent behind the [TestAgentRunner] interface, so it
+ * participates in the per-step trail loop.
  *
  * ## Why this exists — uniform deterministic replay
  *
@@ -33,13 +32,12 @@ import xyz.block.trailblaze.yaml.PromptStep
  * tool sequence with **zero LLM calls**, and only unrecorded steps need an agent. That replay lives in
  * [xyz.block.trailblaze.rules.TrailblazeRunnerUtil.runPromptSuspend] and is **agent-agnostic** — it
  * replays when a recording exists and only delegates the *unrecorded* step to whatever [TestAgentRunner]
- * is configured. By implementing that interface (instead of the earlier item-level "run the whole block
- * live through Koog" bypass), KOOG gets deterministic replay for free and handles recordings identically
- * to every other agent. The agent is purely the natural-language brain for unrecorded steps.
+ * is configured. By implementing that interface, the agent gets deterministic replay for free. The
+ * agent is purely the natural-language brain for unrecorded steps.
  *
  * Each call delegates to [runPromptsWithKoogStrategyGraph] with a **single** step — the Koog graph's own
  * minimal-context pruning (latest-screen-only) means there's negligible loss versus running a whole block
- * as one conversation, and it matches how the legacy/V3 runners are driven per-step.
+ * as one conversation.
  *
  * @param agent the driver agent that executes tools — any [KoogRunnableAgent]; in a multi-device
  *   session this is the host runner's routing agent, so dispatch follows a `switchDevice` handover.
@@ -53,7 +51,7 @@ import xyz.block.trailblaze.yaml.PromptStep
  * @param maxLlmCalls optional per-step budget, counted in requests sent to the model (not in graph
  *   iterations); null uses [KoogStrategyGraphAgent.DEFAULT_MAX_LLM_CALLS].
  * @param systemPromptTemplate the platform system prompt template (rendered + augmented by the helper);
- *   [appendToSystemPrompt] appends trail `config.context` to it, matching the legacy runner.
+ *   [appendToSystemPrompt] appends trail `config.context` to it.
  */
 class KoogTestAgentRunner(
   private val agent: KoogRunnableAgent,
@@ -66,12 +64,14 @@ class KoogTestAgentRunner(
   private val sessionProvider: () -> TrailblazeSession,
   private val maxLlmCalls: Int? = null,
   systemPromptTemplate: String,
+  /** Where the decision engine's settings are read; see [runPromptsWithKoogStrategyGraph]. */
+  private val decisionSettings: (String) -> String? = System::getenv,
 ) : TestAgentRunner {
 
   /** Dynamic session context re-read before each step (e.g. roster + active device). */
   var perStepSystemPromptContextProvider: (() -> String?)? = null
 
-  /** Mutable so trail `config.context` can be folded in via [appendToSystemPrompt], like the legacy runner. */
+  /** Mutable so trail `config.context` can be folded in via [appendToSystemPrompt]. */
   private var currentSystemPrompt: String = systemPromptTemplate
 
   override fun run(
@@ -105,7 +105,7 @@ class KoogTestAgentRunner(
     val instrumentation = KoogRunInstrumentation()
     // Emit the objective lifecycle logs the AI path is responsible for — the shared per-step loop
     // (TrailblazeRunnerUtil) only emits these on the RECORDED branch and delegates the unrecorded
-    // (AI) branch to the agent, exactly as the legacy TrailblazeRunner does. Without this pair,
+    // (AI) branch to the agent. Without this pair,
     // report/progress builders (which pair Start↔Complete) and recording-generation step grouping
     // can't segment a KOOG-blazed step.
     val session = sessionProvider()
@@ -136,6 +136,7 @@ class KoogTestAgentRunner(
           perStepSystemPromptContextProvider?.invoke(),
         ),
         instrumentation = instrumentation,
+        decisionSettings = decisionSettings,
       )
       status = result.toAgentTaskStatus(prompt, startTime, instrumentation)
       return status
@@ -193,7 +194,7 @@ class KoogTestAgentRunner(
     val statusData = AgentTaskStatusData(
       taskId = TaskId.generate(),
       prompt = prompt.prompt,
-      // The legacy runner's per-step LLM round count, counted here at Koog's own pipeline. This does
+      // The per-step LLM round count, counted at Koog's own pipeline. This does
       // NOT affect cost/token reporting — those come from the per-request TrailblazeLlmRequestLog
       // the LoggingLlmClient emits inside runPromptsWithKoogStrategyGraph, independent of statusData.
       callCount = instrumentation.llmCallsCompleted,

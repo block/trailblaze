@@ -10,17 +10,9 @@ function shQuote(v) {
   return "'" + s.replace(/'/g, "'\\''") + "'";
 }
 
-function seedRunAgent(currentAgent, effectiveAgent, touched) {
-  return !touched && effectiveAgent ? effectiveAgent : currentAgent;
-}
-
-function runAgentOption(agent) {
-  return agent || null;
-}
-
 /**
- * `seedRunAgent` for the memory toggle, where `null` means "not known yet". The dialog sends this
- * value as a per-run override and the daemon reads a null override as "use the saved setting", so
+ * Seeds the memory toggle from the saved setting until the user touches it, where `null` means
+ * "not known yet". The dialog sends this value as a per-run override and the daemon reads a null override as "use the saved setting", so
  * an unseeded dialog has to stay null: seeding a bare `false` makes a Run clicked before settings
  * arrive silently disable capture even though Settings has it on.
  */
@@ -40,7 +32,6 @@ function buildRunCommand(cfg) {
   if (cfg.selfHeal) parts.push('--self-heal');
   if (cfg.useRecordedSteps === 'replay') parts.push('--use-recorded-steps');
   else if (cfg.useRecordedSteps === 'ai') parts.push('--no-use-recorded-steps');
-  if (cfg.agent) parts.push('--agent', cfg.agent);
   if (cfg.maxLlmCalls !== '' && String(cfg.maxLlmCalls) !== String(DEFAULT_MAX_LLM_CALLS)) parts.push('--max-llm-calls', String(cfg.maxLlmCalls));
   if ((cfg.llm || '').trim()) parts.push('--llm', shQuote(cfg.llm.trim()));
   if (cfg.verbose) parts.push('--verbose');
@@ -87,4 +78,4 @@ function applyYamlOverrides(yaml, ov) {
   return lines.join('\n');
 }
 
-Object.assign(window, { shQuote, seedRunAgent, runAgentOption, seedCaptureMemory, buildRunCommand, applyYamlOverrides });
+Object.assign(window, { shQuote, seedCaptureMemory, buildRunCommand, applyYamlOverrides });

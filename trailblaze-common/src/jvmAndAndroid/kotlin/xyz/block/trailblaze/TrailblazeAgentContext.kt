@@ -34,8 +34,8 @@ import xyz.block.trailblaze.util.Console
  * Common context properties shared by all [TrailblazeAgent] implementations.
  *
  * Both [MaestroTrailblazeAgent] and PlaywrightTrailblazeAgent implement this
- * interface, allowing [TrailblazeKoogLlmClientHelper] to work with any agent
- * without a hard cast to a specific implementation.
+ * interface, so agent code can work with either without a hard cast to a specific
+ * implementation.
  */
 interface TrailblazeAgentContext {
   val trailblazeLogger: TrailblazeLogger

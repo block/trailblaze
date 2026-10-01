@@ -251,6 +251,7 @@ class WebScreencastVideoCapture(
     output = output,
     sessionStartMs = sessionStartMs,
     sessionEndMs = sessionEndMs,
+    format = format,
     encodeArgs = format.webScreencastEncodeArgs(quality),
     ffmpegBinary = ffmpegBinary,
     logTag = "WebScreencastVideoCapture",

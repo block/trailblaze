@@ -511,6 +511,167 @@ class TrailCommandSaveRecordingTest {
     )
   }
 
+  @Test
+  fun `a phone save adds a phone leg only where its tools differ from the android leg`() {
+    // A trail recorded under `android:`; the phone run healed step 2 and reached step 3, which had
+    // no recording. Step 1 replayed the android leg unchanged, so a phone copy of it is a duplicate.
+    val cmd = command()
+    val dir = tempFolder.newFolder()
+    File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME).writeText(
+      twoStepsPlusUnrecorded(classifier = "android", tools = listOf("a", "b", null)),
+    )
+    val recording = File(dir, "recording.trail.yaml").apply {
+      writeText(twoStepsPlusUnrecorded(classifier = "android-phone", tools = listOf("a", "c", "d")))
+    }
+
+    cmd.saveRecordingAsUnified(dir, recording, listOf("android", "phone"), selectedDeviceConfiguration = null)
+
+    val unified = createTrailblazeYaml().decodeUnifiedTrail(File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME).readText())
+    val legs = unified.trail.map { step -> step.recordings.mapValues { (_, tools) -> tools.map { it.name } } }
+    assertEquals(
+      listOf(
+        mapOf("android" to listOf("a")),
+        mapOf("android" to listOf("b"), "android-phone" to listOf("c")),
+        mapOf("android-phone" to listOf("d")),
+      ),
+      legs,
+    )
+    assertEquals(setOf("android"), unified.config.devices.orEmpty().keys, "same driver, so no phone pin")
+  }
+
+  @Test
+  fun `a phone save on a different driver keeps its whole leg`() {
+    // The android leg's tools were recorded for another driver; replaying them under the phone's
+    // pin is not what either recording did, so nothing is folded into it.
+    val cmd = command()
+    val dir = tempFolder.newFolder()
+    File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME).writeText(
+      twoStepsPlusUnrecorded(classifier = "android", tools = listOf("a", "b", null)),
+    )
+    val recording = File(dir, "recording.trail.yaml").apply {
+      writeText(
+        twoStepsPlusUnrecorded(
+          classifier = "android-phone",
+          tools = listOf("a", "b", null),
+          driver = "ANDROID_ONDEVICE_ACCESSIBILITY",
+        ),
+      )
+    }
+
+    cmd.saveRecordingAsUnified(dir, recording, listOf("android", "phone"), selectedDeviceConfiguration = null)
+
+    val unified = createTrailblazeYaml().decodeUnifiedTrail(File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME).readText())
+    assertEquals(listOf("a"), unified.trail[0].recordings["android-phone"]?.map { it.name })
+    assertEquals(listOf("b"), unified.trail[1].recordings["android-phone"]?.map { it.name })
+    assertEquals(setOf("android", "android-phone"), unified.config.devices.orEmpty().keys)
+  }
+
+  @Test
+  fun `a phone save still folds into an android leg whose device entry carries a description`() {
+    // A description doesn't change what replays, so it mustn't make the phone keep a duplicate leg.
+    val cmd = command()
+    val dir = tempFolder.newFolder()
+    val base = createTrailblazeYaml().decodeUnifiedTrail(twoStepsPlusUnrecorded(classifier = "android", tools = listOf("a", "b", null)))
+    val devices = base.config.devices.orEmpty()
+    writeUnified(
+      dir,
+      base.copy(config = base.config.copy(devices = devices + ("android" to devices.getValue("android").copy(description = "Any Android")))),
+    )
+    val recording = File(dir, "recording.trail.yaml").apply {
+      writeText(twoStepsPlusUnrecorded(classifier = "android-phone", tools = listOf("a", "c", null)))
+    }
+
+    cmd.saveRecordingAsUnified(dir, recording, listOf("android", "phone"), selectedDeviceConfiguration = null)
+
+    val unified = createTrailblazeYaml().decodeUnifiedTrail(File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME).readText())
+    assertEquals(setOf("android"), unified.trail[0].recordings.keys)
+    assertEquals(listOf("c"), unified.trail[1].recordings["android-phone"]?.map { it.name })
+    assertEquals(setOf("android"), unified.config.devices.orEmpty().keys)
+  }
+
+  @Test
+  fun `a phone save keeps its whole leg when the android entry pins another locale`() {
+    // The android leg was recorded in Spanish; the phone's English run isn't a copy of it.
+    val cmd = command()
+    val dir = tempFolder.newFolder()
+    val base = createTrailblazeYaml().decodeUnifiedTrail(twoStepsPlusUnrecorded(classifier = "android", tools = listOf("a", "b", null)))
+    val devices = base.config.devices.orEmpty()
+    writeUnified(
+      dir,
+      base.copy(config = base.config.copy(devices = devices + ("android" to devices.getValue("android").copy(locale = "es")))),
+    )
+    val recording = File(dir, "recording.trail.yaml").apply {
+      writeText(twoStepsPlusUnrecorded(classifier = "android-phone", tools = listOf("a", "c", null)))
+    }
+
+    cmd.saveRecordingAsUnified(dir, recording, listOf("android", "phone"), selectedDeviceConfiguration = null)
+
+    val unified = createTrailblazeYaml().decodeUnifiedTrail(File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME).readText())
+    assertEquals(listOf("a"), unified.trail[0].recordings["android-phone"]?.map { it.name })
+    assertEquals(setOf("android", "android-phone"), unified.config.devices.orEmpty().keys)
+  }
+
+  @Test
+  fun `a phone save drops its trailhead leg when the android trailhead already matches`() {
+    val cmd = command()
+    val dir = tempFolder.newFolder()
+    File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME).writeText(
+      unifiedRecordingYamlWithTrailhead(trailheadToolName = "openBootstrap", classifier = "android"),
+    )
+    val recording = File(dir, "recording.trail.yaml").apply {
+      writeText(unifiedRecordingYamlWithTrailhead(trailheadToolName = "openBootstrap", classifier = "android-phone"))
+    }
+
+    cmd.saveRecordingAsUnified(dir, recording, listOf("android", "phone"), selectedDeviceConfiguration = null)
+
+    val unified = createTrailblazeYaml().decodeUnifiedTrail(File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME).readText())
+    assertEquals(setOf("android"), unified.trailhead?.recordings?.keys)
+  }
+
+  @Test
+  fun `a phone save keeps its trailhead leg when it differs from the android trailhead`() {
+    val cmd = command()
+    val dir = tempFolder.newFolder()
+    File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME).writeText(
+      unifiedRecordingYamlWithTrailhead(trailheadToolName = "openBootstrap", classifier = "android"),
+    )
+    val recording = File(dir, "recording.trail.yaml").apply {
+      writeText(unifiedRecordingYamlWithTrailhead(trailheadToolName = "openPhoneBootstrap", classifier = "android-phone"))
+    }
+
+    cmd.saveRecordingAsUnified(dir, recording, listOf("android", "phone"), selectedDeviceConfiguration = null)
+
+    val unified = createTrailblazeYaml().decodeUnifiedTrail(File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME).readText())
+    assertEquals(listOf("openPhoneBootstrap"), unified.trailhead?.recordings?.get("android-phone")?.map { it.name })
+    assertEquals(setOf("android", "android-phone"), unified.trailhead?.recordings?.keys)
+  }
+
+  @Test
+  fun `a save never folds into all, which other devices read only after a segment's leg`() {
+    // An `android-phone` device reads `android:`, then `phone:`, then `all:`. Dropping the android
+    // leg of step 1 for matching `all:` would make that device replay `x` instead of `a`.
+    val cmd = command()
+    val dir = tempFolder.newFolder()
+    File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME).writeText(
+      twoStepsPlusUnrecorded(classifier = "all", tools = listOf("a", "b", null)),
+    )
+    val phoneRecording = File(dir, "phone.trail.yaml").apply {
+      writeText(twoStepsPlusUnrecorded(classifier = "phone", tools = listOf("x", "b", null)))
+    }
+    cmd.saveRecordingAsUnified(dir, phoneRecording, listOf("phone"), selectedDeviceConfiguration = null)
+    val recording = File(dir, "recording.trail.yaml").apply {
+      writeText(twoStepsPlusUnrecorded(classifier = "android", tools = listOf("a", "b", null)))
+    }
+
+    cmd.saveRecordingAsUnified(dir, recording, listOf("android"), selectedDeviceConfiguration = null)
+
+    val unified = createTrailblazeYaml().decodeUnifiedTrail(File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME).readText())
+    assertEquals(
+      mapOf("all" to listOf("a"), "phone" to listOf("x"), "android" to listOf("a")),
+      unified.trail[0].recordings.mapValues { (_, tools) -> tools.map { it.name } },
+    )
+  }
+
   // ---------------------------------------------------------------------------
   // saveRecordingAfterPass — a passing run rewrites the trail only when a step healed
   // ---------------------------------------------------------------------------
@@ -1702,6 +1863,29 @@ class TrailCommandSaveRecordingTest {
   /** A command with self-heal pinned, so routing tests don't read ambient env/config. */
   private fun command(selfHeal: Boolean = false) = TrailCommand().apply {
     this.selfHeal = selfHeal
+  }
+
+  /** Three steps under [classifier]; a null tool leaves that step unrecorded. */
+  private fun twoStepsPlusUnrecorded(
+    classifier: String,
+    tools: List<String?>,
+    driver: String = "ANDROID_ONDEVICE_INSTRUMENTATION",
+  ): String {
+    val prompts = listOf("Open the cart", "Check out", "Confirm the order")
+    return createTrailblazeYaml().encodeUnifiedTrailToString(
+      UnifiedTrailAdapter.mergeRecordedClassifier(
+        existing = null,
+        recordedItems = listOf(
+          TrailYamlItem.ConfigTrailItem(TrailConfig(id = "app/x", target = "app", driver = driver)),
+          TrailYamlItem.PromptsTrailItem(
+            prompts.zip(tools) { prompt, name ->
+              DirectionStep(step = prompt, recording = name?.let { ToolRecording(tools = listOf(tool(it))) })
+            },
+          ),
+        ),
+        classifier = classifier,
+      ),
+    )
   }
 
   private fun writeUnified(dir: File, unified: UnifiedTrail) {

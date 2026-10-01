@@ -106,7 +106,7 @@ abstract class BaseAndroidStandaloneServerTest {
       ?: TrailblazeDevicePort.TRAILBLAZE_DEFAULT_ON_DEVICE_RPC_PORT
 
   /**
-   * Creates a callback for running YAML-based tests via TrailblazeRunner.
+   * Creates a callback for running YAML-based tests through [AndroidTrailblazeRule].
    *
    * This callback handles session lifecycle management around [handleRunRequest].
    * Use this when constructing an [OnDeviceRpcServer] in subclasses.

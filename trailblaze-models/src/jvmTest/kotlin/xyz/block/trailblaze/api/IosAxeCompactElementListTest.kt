@@ -338,4 +338,142 @@ class IosAxeCompactElementListTest {
     val composed = IosAxeCompactElementList.composeDisplayText(detail)!!
     assertTrue(composed.length <= 120, "composite should be <=120 chars, got ${composed.length}")
   }
+
+  // SpringBoard nests every home-screen icon under a zero-size Button at {0,0,0,0}.
+  @Test
+  fun `on-screen child of a zero-size wrapper is listed and its ref taps the child`() {
+    val fitness =
+      node(
+        detail = DriverNodeDetail.IosAxe(role = "AXButton", type = "Button", label = "Fitness"),
+        bounds = TrailblazeNode.Bounds(28, 88, 96, 178),
+      )
+    val wrapper =
+      node(
+        detail = DriverNodeDetail.IosAxe(role = "AXButton", type = "Button"),
+        bounds = TrailblazeNode.Bounds(0, 0, 0, 0),
+        children = listOf(fitness),
+      )
+    val root = node(bounds = TrailblazeNode.Bounds(0, 0, 402, 874), children = listOf(wrapper))
+
+    val elements = CompactScreenElements.buildForIosAxe(root, screenHeight = 874, screenWidth = 402)
+
+    assertContains(elements.text, "Button \"Fitness\"")
+    val ref = elements.refMapping.entries.single { it.value == fitness.nodeId }.key
+    val tapped = elements.applyRefsToTree(root).findFirst { it.ref == ref }
+    assertEquals(fitness.nodeId, tapped?.nodeId)
+    assertEquals(62 to 133, tapped?.centerPoint())
+    assertFalse(
+      wrapper.nodeId in elements.refMapping.values,
+      "a ref on the zero-size wrapper would tap the screen corner",
+    )
+  }
+
+  @Test
+  fun `a child with no bounds under a zero-size wrapper gets no ref`() {
+    val unplaced =
+      node(detail = DriverNodeDetail.IosAxe(role = "AXButton", type = "Button", label = "Edit"), bounds = null)
+    val wrapper =
+      node(
+        detail = DriverNodeDetail.IosAxe(role = "AXButton", type = "Button"),
+        bounds = TrailblazeNode.Bounds(0, 0, 0, 0),
+        children = listOf(unplaced),
+      )
+    val root = node(bounds = TrailblazeNode.Bounds(0, 0, 402, 874), children = listOf(wrapper))
+
+    val result = IosAxeCompactElementList.build(root, screenHeight = 874, screenWidth = 402)
+
+    assertFalse(
+      unplaced.nodeId in result.refMapping.values,
+      "nothing shows the child is on screen, so its ref would tap the screen corner:\n${result.text}",
+    )
+  }
+
+  @Test
+  fun `on-screen child of an off-screen wrapper is listed`() {
+    val send =
+      node(
+        detail = DriverNodeDetail.IosAxe(role = "AXButton", type = "Button", label = "Send"),
+        bounds = TrailblazeNode.Bounds(20, 700, 380, 760),
+      )
+    val wrapper =
+      node(
+        detail = DriverNodeDetail.IosAxe(role = "AXGroup", type = "Group", label = "Footer"),
+        bounds = TrailblazeNode.Bounds(0, -200, 402, -100),
+        children = listOf(send),
+      )
+    val root = node(bounds = TrailblazeNode.Bounds(0, 0, 402, 874), children = listOf(wrapper))
+
+    val result = IosAxeCompactElementList.build(root, screenHeight = 874, screenWidth = 402)
+
+    assertContains(result.text, "Button \"Send\"")
+    assertFalse(result.text.contains("\"Footer\""), "the off-screen wrapper itself stays hidden")
+    assertContains(result.text, "1 offscreen elements hidden")
+  }
+
+  @Test
+  fun `off-screen children of an off-screen wrapper stay hidden`() {
+    val below =
+      node(
+        detail = DriverNodeDetail.IosAxe(role = "AXButton", type = "Button", label = "Load more"),
+        bounds = TrailblazeNode.Bounds(0, 1200, 200, 1250),
+      )
+    val wrapper =
+      node(
+        detail = DriverNodeDetail.IosAxe(role = "AXGroup", type = "Group", label = "More"),
+        bounds = TrailblazeNode.Bounds(0, 1100, 402, 1300),
+        children = listOf(below),
+      )
+    val root =
+      node(
+        bounds = TrailblazeNode.Bounds(0, 0, 402, 874),
+        children =
+          listOf(
+            node(detail = DriverNodeDetail.IosAxe(type = "StaticText", label = "Activity")),
+            wrapper,
+          ),
+      )
+
+    val hidden = IosAxeCompactElementList.build(root, screenHeight = 874, screenWidth = 402)
+    val shown =
+      IosAxeCompactElementList.build(
+        root,
+        details = setOf(SnapshotDetail.OFFSCREEN),
+        screenHeight = 874,
+        screenWidth = 402,
+      )
+
+    assertFalse(hidden.text.contains("Load more"), hidden.text)
+    assertContains(shown.text, "Button \"Load more\"")
+    assertContains(shown.text, "(offscreen)")
+  }
+
+  // Real shape from a payment app's amount screen: a collapsed copy of the keypad whose zero-width keys
+  // hold digit glyphs straddling the left edge, beside the real keypad.
+  @Test
+  fun `a collapsed ghost keypad under a zero-size wrapper stays hidden beside the real one`() {
+    val ghostGlyph =
+      node(
+        detail = DriverNodeDetail.IosAxe(role = "AXStaticText", type = "StaticText", label = "3"),
+        bounds = TrailblazeNode.Bounds(-7, 54, 7, 85),
+      )
+    val ghostKey =
+      node(
+        detail = DriverNodeDetail.IosAxe(role = "AXButton", type = "Button", label = "3"),
+        bounds = TrailblazeNode.Bounds(0, 62, 0, 77),
+        children = listOf(ghostGlyph),
+      )
+    val ghostKeypad = node(bounds = TrailblazeNode.Bounds(0, 0, 0, 0), children = listOf(ghostKey))
+    val realKey =
+      node(
+        detail = DriverNodeDetail.IosAxe(role = "AXButton", type = "Button", label = "3"),
+        bounds = TrailblazeNode.Bounds(269, 590, 402, 644),
+      )
+    val root = node(bounds = TrailblazeNode.Bounds(0, 0, 402, 874), children = listOf(ghostKeypad, realKey))
+
+    val elements = CompactScreenElements.buildForIosAxe(root, screenHeight = 874, screenWidth = 402)
+
+    assertEquals(setOf(realKey.nodeId), elements.refMapping.values.toSet(), elements.text)
+    val ref = elements.refMapping.keys.single()
+    assertEquals(realKey.nodeId, elements.applyRefsToTree(root).findFirst { it.ref == ref }?.nodeId)
+  }
 }

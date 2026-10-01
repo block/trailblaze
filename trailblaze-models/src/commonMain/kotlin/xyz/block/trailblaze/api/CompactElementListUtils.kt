@@ -31,4 +31,24 @@ internal object CompactElementListUtils {
     if (screenWidth > 0 && b.right >= b.left && (b.left >= screenWidth || b.right <= 0)) return true
     return false
   }
+
+  /**
+   * [isOffscreen] for a node under an ancestor the list hid as offscreen. Descendants of a hidden
+   * node can be real (SpringBoard nests every home-screen icon under a zero-size Button) or a
+   * collapsed ghost (an app can keep a zero-size copy of its keypad whose digits straddle the left edge),
+   * so they count as on screen only when they have a box with area that lies wholly inside the screen.
+   */
+  fun isOffscreen(
+    node: TrailblazeNode,
+    screenHeight: Int,
+    screenWidth: Int,
+    underHiddenAncestor: Boolean,
+  ): Boolean {
+    if (isOffscreen(node, screenHeight, screenWidth)) return true
+    if (!underHiddenAncestor || screenHeight <= 0) return false
+    val b = node.bounds ?: return true
+    if (b.right <= b.left || b.bottom <= b.top) return true
+    if (b.top < 0 || b.bottom > screenHeight) return true
+    return screenWidth > 0 && (b.left < 0 || b.right > screenWidth)
+  }
 }

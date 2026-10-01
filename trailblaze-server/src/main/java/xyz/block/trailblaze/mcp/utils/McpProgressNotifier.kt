@@ -184,6 +184,7 @@ class McpProgressNotifier(
 
     // Log types we don't surface as progress notifications (yet)
     is TrailblazeLog.AccessibilityActionLog,
+    is TrailblazeLog.TrailblazeDecisionRequestLog,
     is TrailblazeLog.TrailblazeAgentTaskStatusChangeLog,
     is TrailblazeLog.TrailblazeSnapshotLog,
     is TrailblazeLog.McpAgentRunLog,

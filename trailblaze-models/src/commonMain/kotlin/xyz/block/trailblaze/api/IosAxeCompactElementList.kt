@@ -90,19 +90,28 @@ object IosAxeCompactElementList {
     screenHeight: Int,
     screenWidth: Int,
     onOffscreen: () -> Unit,
+    underHiddenAncestor: Boolean = false,
   ) {
     val detail = node.driverDetail as? DriverNodeDetail.IosAxe
     if (detail == null) {
       node.children.forEach {
         walk(it, depth, lines, elementNodeIds, elementBounds, refMapping, refTracker,
-          includeBounds, includeOffscreen, includeAllElements, screenHeight, screenWidth, onOffscreen)
+          includeBounds, includeOffscreen, includeAllElements, screenHeight, screenWidth, onOffscreen,
+          underHiddenAncestor)
       }
       return
     }
 
-    val offscreen = CompactElementListUtils.isOffscreen(node, screenHeight, screenWidth)
+    // Hide only this node: its children can still be on screen (see the underHiddenAncestor
+    // overload of isOffscreen for how they are judged).
+    val offscreen = CompactElementListUtils.isOffscreen(node, screenHeight, screenWidth, underHiddenAncestor)
     if (offscreen && !includeOffscreen) {
       if (detail.hasIdentifiableProperties) onOffscreen()
+      node.children.forEach {
+        walk(it, depth, lines, elementNodeIds, elementBounds, refMapping, refTracker,
+          includeBounds, includeOffscreen, includeAllElements, screenHeight, screenWidth, onOffscreen,
+          underHiddenAncestor = true)
+      }
       return
     }
 
@@ -141,13 +150,15 @@ object IosAxeCompactElementList {
       node.bounds?.let { elementBounds.add(it) }
       node.children.forEach {
         walk(it, depth + 1, lines, elementNodeIds, elementBounds, refMapping, refTracker,
-          includeBounds, includeOffscreen, includeAllElements, screenHeight, screenWidth, onOffscreen)
+          includeBounds, includeOffscreen, includeAllElements, screenHeight, screenWidth, onOffscreen,
+          underHiddenAncestor)
       }
     } else {
       // Structural / empty container — skip, recurse at the same depth.
       node.children.forEach {
         walk(it, depth, lines, elementNodeIds, elementBounds, refMapping, refTracker,
-          includeBounds, includeOffscreen, includeAllElements, screenHeight, screenWidth, onOffscreen)
+          includeBounds, includeOffscreen, includeAllElements, screenHeight, screenWidth, onOffscreen,
+          underHiddenAncestor)
       }
     }
   }

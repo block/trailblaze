@@ -231,6 +231,9 @@ interface PlaywrightExecutableTool : ExecutableTrailblazeTool {
       context: TrailblazeToolExecutionContext,
       nodeSelector: TrailblazeNodeSelector? = null,
       timeoutMs: Double = elementResolutionTimeoutMs,
+      // On a miss, spend one more page snapshot saying whether the ref's element changed role.
+      // Off for callers that discard the error.
+      explainMiss: Boolean = true,
     ): Pair<Locator?, TrailblazeToolResult?> {
       val effectiveRef = ref?.takeIf { it.isNotBlank() }
       if (effectiveRef == null && nodeSelector == null) {
@@ -279,8 +282,10 @@ interface PlaywrightExecutableTool : ExecutableTrailblazeTool {
         preferred.first() to null
       } catch (_: TimeoutError) {
         val identifier = effectiveRef ?: nodeSelector?.description() ?: "<unidentified>"
+        val roleChanged =
+          effectiveRef?.takeIf { explainMiss }?.let { roleChangedHint(page, it, context) }.orEmpty()
         null to TrailblazeToolResult.Error.ExceptionThrown(
-          "No element found matching '$identifier' ($description) within ${timeoutMs.toLong()}ms. " +
+          "No element found matching '$identifier' ($description) within ${timeoutMs.toLong()}ms.$roleChanged " +
             "Use web_snapshot to refresh the page state.",
         )
       } catch (e: PlaywrightException) {
@@ -292,6 +297,47 @@ interface PlaywrightExecutableTool : ExecutableTrailblazeTool {
         )
       }
     }
+
+    /**
+     * When a ref times out, names any element that now has the same accessible name under a
+     * different role — e.g. a search box that becomes `combobox "Search"` once focused. Without
+     * this the agent only learns "not found" and has no reason to suspect the ref went stale.
+     * For an `eN` ref, elements already in the snapshot it came from are skipped: a page that
+     * always had both `link "Sign in"` and `button "Sign in"` didn't change the button's role.
+     * Any other ref can't tell new from old, so its hint only says the same name is there.
+     * Returns "" when the ref has no role+name, nothing new matches, or the page can't be
+     * snapshotted within [ROLE_CHANGE_SNAPSHOT_TIMEOUT_MS].
+     */
+    private fun roleChangedHint(
+      page: Page,
+      ref: String,
+      context: TrailblazeToolExecutionContext,
+    ): String {
+      if (ref.startsWith("css=")) return ""
+      val screenState = context.screenState as? PlaywrightScreenState
+      // Only an `eN` ref pins which snapshot it came from. A descriptor ref (e.g. from a
+      // recording) may predate the current snapshot, which can already show the new role.
+      val fromSnapshot = screenState?.resolveElementId(ref)
+      val descriptor = fromSnapshot?.descriptor ?: ref
+      val after =
+        PlaywrightAriaSnapshot.captureAriaSnapshot(page, ROLE_CHANGE_SNAPSHOT_TIMEOUT_MS).yaml
+      val others = PlaywrightAriaSnapshot.roleChanges(
+        beforeYaml = fromSnapshot?.let { screenState.ariaSnapshotYaml },
+        afterYaml = after,
+        descriptor = descriptor,
+      )
+      if (others.isEmpty()) return ""
+      val found = others.joinToString(", ")
+      // Without the ref's own snapshot there's no telling whether that element is new.
+      return if (fromSnapshot != null) {
+        " The page now has $found: the element's role changed since that ref was taken."
+      } else {
+        " The page has $found with the same name; that ref may be stale."
+      }
+    }
+
+    /** Bound on the extra snapshot [roleChangedHint] takes after a miss that already waited. */
+    private const val ROLE_CHANGE_SNAPSHOT_TIMEOUT_MS = 1_000.0
 
     /**
      * Upper bound on the element-attached auto-wait inside [validateAndResolveRef]. Defaults

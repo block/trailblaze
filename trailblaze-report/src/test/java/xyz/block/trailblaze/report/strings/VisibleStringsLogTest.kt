@@ -11,6 +11,7 @@ import xyz.block.trailblaze.api.AgentDriverAction
 import xyz.block.trailblaze.api.DriverNodeDetail
 import xyz.block.trailblaze.api.TrailblazeNode
 import xyz.block.trailblaze.logs.client.TrailblazeLog
+import xyz.block.trailblaze.logs.client.withVisibleStrings
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionInfo
 import xyz.block.trailblaze.logs.model.SessionStatus
@@ -24,13 +25,16 @@ class VisibleStringsLogTest {
   private val session = SessionId("2026_09_09_test")
   private var clock = Instant.parse("2026-09-09T17:04:11Z")
 
-  private fun screen(vararg labels: String): TrailblazeNode = TrailblazeNode(
+  private fun screen(vararg labels: String): TrailblazeNode = screenAt(top = 0, *labels)
+
+  /** [screen] with every element pushed down by [top], as a scroll would move it. */
+  private fun screenAt(top: Int, vararg labels: String): TrailblazeNode = TrailblazeNode(
     driverDetail = DriverNodeDetail.AndroidAccessibility(),
     children = labels.mapIndexed { index, label ->
       TrailblazeNode(
         nodeId = index.toLong(),
         driverDetail = DriverNodeDetail.AndroidAccessibility(text = label),
-        bounds = TrailblazeNode.Bounds(0, index * 100, 200, index * 100 + 50),
+        bounds = TrailblazeNode.Bounds(0, top + index * 100, 200, top + index * 100 + 50),
       )
     },
   )
@@ -83,14 +87,64 @@ class VisibleStringsLogTest {
   }
 
   @Test
-  fun `captures are ordered and numbered by when they happened, not by list order`() {
+  fun `captures are ordered by when they happened, not by list order`() {
     val first = driverLog("first.png", screen("One"))
     val second = driverLog("second.png", screen("Two"))
 
     val lines = render(listOf(second, first)).drop(1)
 
     assertEquals(listOf("first.png", "second.png"), lines.map { it.getValue("captureId").jsonPrimitive.content })
-    assertEquals(listOf(0, 1), lines.map { it.getValue("stepIndex").jsonPrimitive.content.toInt() })
+  }
+
+  /** The screenshot is the key; a step counter or the log's class name would be a second one. */
+  @Test
+  fun `a screen line names its screenshot and nothing else to join on`() {
+    val line = render(listOf(driverLog("shot-a.png", screen("Checkout")))).last()
+
+    assertNull(line["stepIndex"])
+    assertNull(line["logType"])
+  }
+
+  /** A driver log and the LLM request made on the same screen can name one image; that is one capture. */
+  @Test
+  fun `two logs naming the same screenshot are one line`() {
+    val lines = render(
+      listOf(
+        driverLog("shot-a.png", screen("Checkout")),
+        driverLog("shot-a.png", screen("Checkout", "Tip")),
+        driverLog("shot-b.png", screen("Done")),
+      ),
+    ).drop(1)
+
+    assertEquals(listOf("shot-a.png", "shot-b.png"), lines.map { it.getValue("captureId").jsonPrimitive.content })
+    assertEquals(listOf("Checkout"), lines[0].strings())
+  }
+
+  @Test
+  fun `bounds are the corners of the element, as the tree stores them`() {
+    val line = render(listOf(driverLog("shot-a.png", screen("Checkout", "Pay")))).last()
+
+    assertEquals(
+      listOf(listOf(0, 0, 200, 50), listOf(0, 100, 200, 150)),
+      line.getValue("strings").jsonArray.map { s -> s.jsonObject.getValue("bounds").jsonArray.map { it.jsonPrimitive.content.toInt() } },
+    )
+  }
+
+  /** Emission fills the strings in; the export writes what the log carries rather than re-reading the tree. */
+  @Test
+  fun `the strings a log carries are the ones written`() {
+    val recorded = listOf(xyz.block.trailblaze.api.ExtractedString(text = "Recorded on device", source = xyz.block.trailblaze.api.VisibleStringSource.TEXT))
+    val line = render(listOf(driverLog("shot-a.png", screen("Stale tree")).copy(visibleStrings = recorded))).last()
+
+    assertEquals(listOf("Recorded on device"), line.strings())
+  }
+
+  /** Volatility is judged by whoever reads the file, so a better rule reaches files already written. */
+  @Test
+  fun `a string carries no volatile judgement`() {
+    val line = render(listOf(driverLog("shot-a.png", screen("9:41")))).last()
+
+    assertNull(line.getValue("strings").jsonArray.single().jsonObject["volatile"])
   }
 
   @Test
@@ -102,14 +156,14 @@ class VisibleStringsLogTest {
       ),
     ).drop(1)
 
-    assertNull(lines[0]["repeatOfStepIndex"])
+    assertNull(lines[0]["repeatOf"])
     assertEquals(listOf("Checkout"), lines[0].strings())
-    assertEquals(0, lines[1].getValue("repeatOfStepIndex").jsonPrimitive.content.toInt())
+    assertEquals("shot-a.png", lines[1].getValue("repeatOf").jsonPrimitive.content)
     assertEquals(emptyList(), lines[1].strings())
   }
 
   @Test
-  fun `a screen seen three times points every repeat at the step that still holds the strings`() {
+  fun `a screen seen three times points every repeat at the capture that still holds the strings`() {
     val lines = render(
       listOf(
         driverLog("shot-a.png", screen("Checkout")),
@@ -119,10 +173,45 @@ class VisibleStringsLogTest {
     ).drop(1)
 
     assertEquals(
-      listOf(0, 0),
-      lines.drop(1).map { it.getValue("repeatOfStepIndex").jsonPrimitive.content.toInt() },
+      listOf("shot-a.png", "shot-a.png"),
+      lines.drop(1).map { it.getValue("repeatOf").jsonPrimitive.content },
     )
     assertEquals(listOf("Checkout"), lines[0].strings())
+  }
+
+  @Test
+  fun `the same words at a new position are not a repeat, so a reader never copies stale bounds`() {
+    val lines = render(
+      listOf(
+        driverLog("shot-a.png", screenAt(top = 0, "Checkout")),
+        driverLog("shot-b.png", screenAt(top = 400, "Checkout")),
+      ),
+    ).drop(1)
+
+    assertTrue(lines.all { it["repeatOf"] == null })
+    assertEquals(
+      listOf("[0,400,200,450]"),
+      lines[1].getValue("strings").jsonArray.map { it.jsonObject.getValue("bounds").toString() },
+    )
+    assertEquals(lines[0]["screenContentHash"], lines[1]["screenContentHash"])
+  }
+
+  @Test
+  fun `the same words scrolled offscreen are not a repeat, so a reader never copies stale visibility`() {
+    val lines = render(
+      listOf(
+        driverLog("shot-a.png", screenAt(top = 0, "Checkout")),
+        driverLog("shot-b.png", screenAt(top = 4000, "Checkout")),
+      ),
+    ).drop(1)
+
+    assertTrue(lines.all { it["repeatOf"] == null })
+    assertEquals(
+      listOf(true, false),
+      lines.map { line ->
+        line.getValue("strings").jsonArray.single().jsonObject["visible"]?.jsonPrimitive?.content?.toBoolean() ?: true
+      },
+    )
   }
 
   @Test
@@ -136,7 +225,7 @@ class VisibleStringsLogTest {
     ).drop(1)
 
     assertEquals(listOf(listOf("Checkout"), listOf("Checkout")), lines.map { it.strings() })
-    assertTrue(lines.all { it["repeatOfStepIndex"] == null })
+    assertTrue(lines.all { it["repeatOf"] == null })
   }
 
   @Test
@@ -156,7 +245,35 @@ class VisibleStringsLogTest {
   }
 
   @Test
-  fun `a log with no screenshot cannot be traced back, so it is not a line`() {
+  fun `a capture with no screenshot is a line named by the id it was stamped with`() {
+    val stamped = driverLog(screenshot = null, tree = screen("Signed in")).withVisibleStrings() as TrailblazeLog.AgentDriverLog
+    val lines = render(listOf(stamped, driverLog("shot-a.png", screen("Checkout")))).drop(1)
+
+    assertEquals(listOf(stamped.captureId!!, "shot-a.png"), lines.map { it.getValue("captureId").jsonPrimitive.content })
+    assertEquals(listOf("Signed in"), lines[0].strings())
+    assertNull(lines[0]["screenshot"])
+    assertNull(lines[0]["captureUrl"])
+    assertEquals("false", lines[0].getValue("screenshotIsAnnotated").jsonPrimitive.content)
+  }
+
+  @Test
+  fun `a capture with no screenshot names its video frame, and one with a screenshot does not`() {
+    val stamped = driverLog(screenshot = null, tree = screen("Signed in")).withVisibleStrings() as TrailblazeLog.AgentDriverLog
+    val id = stamped.captureId!!
+    val lines = VisibleStringsLog.render(
+      session,
+      sessionInfo = null,
+      logs = listOf(stamped, driverLog("shot-a.png", screen("Checkout"))),
+      frames = mapOf(id to "$id.webp", "shot-a.png" to "shot-a.png.webp"),
+    )!!.trim().lines().drop(1).map { Json.parseToJsonElement(it).jsonObject }
+
+    assertEquals("$id.webp", lines[0].getValue("frame").jsonPrimitive.content)
+    assertNull(lines[1]["frame"])
+  }
+
+  /** A log recorded before capture ids existed, with no screenshot, has nothing to be named by. */
+  @Test
+  fun `a capture with neither a screenshot nor an id is not a line`() {
     val lines = render(
       listOf(
         driverLog(screenshot = null, tree = screen("Invisible")),
@@ -209,6 +326,7 @@ class VisibleStringsLogTest {
     val line = render(listOf(driverLog(url, screen("Checkout")))).last()
 
     assertEquals("2026_09_09_1704_1757437451123.png", line.getValue("captureId").jsonPrimitive.content)
+    assertEquals("2026_09_09_1704_1757437451123.png", line.getValue("screenshot").jsonPrimitive.content)
     assertEquals(url, line.getValue("captureUrl").jsonPrimitive.content)
   }
 
@@ -323,8 +441,8 @@ class VisibleStringsLogTest {
       ),
     ).drop(1)
 
-    assertNull(lines[0]["repeatOfStepIndex"])
-    assertNull(lines[1]["repeatOfStepIndex"])
+    assertNull(lines[0]["repeatOf"])
+    assertNull(lines[1]["repeatOf"])
   }
 
   @Test
@@ -336,12 +454,12 @@ class VisibleStringsLogTest {
       ),
     ).drop(1)
 
-    assertNull(lines[1]["repeatOfStepIndex"])
+    assertNull(lines[1]["repeatOf"])
     assertNull(lines[1]["partialCapture"])
   }
 
   @Test
-  fun `a hierarchy failure keeps its step number so the steps after it still line up`() {
+  fun `a hierarchy failure keeps its place so the screens after it still line up`() {
     val lines = render(
       listOf(
         driverLog("shot-a.png", screen("Checkout")),
@@ -350,7 +468,7 @@ class VisibleStringsLogTest {
       ),
     ).drop(1)
 
-    assertEquals(listOf(0, 1, 2), lines.map { it.getValue("stepIndex").jsonPrimitive.content.toInt() })
+    assertEquals(listOf("shot-a.png", "shot-b.png", "shot-c.png"), lines.map { it.getValue("captureId").jsonPrimitive.content })
     assertEquals(listOf("Payment complete"), lines[2].strings())
   }
 }

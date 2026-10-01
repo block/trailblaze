@@ -6,13 +6,11 @@ import org.junit.After
 import org.junit.Assume.assumeTrue
 import org.junit.Test
 import xyz.block.trailblaze.devices.TrailblazeDriverType
-import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.util.Console
 import kotlin.test.assertFalse
-import kotlin.test.assertTrue
 
 /**
- * Real-device MCP integration tests for Android driver types × agent implementations.
+ * Real-device MCP integration tests for Android driver types.
  *
  * Tests the full MCP protocol stack against a real Android device/emulator:
  * initialize → config → connect → blaze → verify.
@@ -20,10 +18,6 @@ import kotlin.test.assertTrue
  * ## Driver Types Tested
  * - ANDROID_ONDEVICE_INSTRUMENTATION
  * - ANDROID_ONDEVICE_ACCESSIBILITY
- *
- * ## Agent Implementations Tested
- * - TRAILBLAZE_RUNNER
- * - MULTI_AGENT_V3
  *
  * ## Running in CI
  * ```bash
@@ -43,20 +37,14 @@ class McpRealDeviceIntegrationTest : TrailblazeServerTestBase() {
   override val requestTimeoutMs = 300_000L // 5 minutes for agent operations
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // Android Driver × Agent Implementation (2 drivers × 2 agents = 4 tests)
+  // Android Drivers
   // ═══════════════════════════════════════════════════════════════════════════
 
-  @Test fun `blaze - ANDROID_ONDEVICE_INSTRUMENTATION x TRAILBLAZE_RUNNER`() =
-    blazeTest(TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION, AgentImplementation.TRAILBLAZE_RUNNER)
+  @Test fun `blaze - ANDROID_ONDEVICE_INSTRUMENTATION`() =
+    blazeTest(TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION)
 
-  @Test fun `blaze - ANDROID_ONDEVICE_INSTRUMENTATION x MULTI_AGENT_V3`() =
-    blazeTest(TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION, AgentImplementation.MULTI_AGENT_V3)
-
-  @Test fun `blaze - ANDROID_ONDEVICE_ACCESSIBILITY x TRAILBLAZE_RUNNER`() =
-    blazeTest(TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY, AgentImplementation.TRAILBLAZE_RUNNER)
-
-  @Test fun `blaze - ANDROID_ONDEVICE_ACCESSIBILITY x MULTI_AGENT_V3`() =
-    blazeTest(TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY, AgentImplementation.MULTI_AGENT_V3)
+  @Test fun `blaze - ANDROID_ONDEVICE_ACCESSIBILITY`() =
+    blazeTest(TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY)
 
   // ═══════════════════════════════════════════════════════════════════════════
   // Lifecycle
@@ -94,11 +82,11 @@ class McpRealDeviceIntegrationTest : TrailblazeServerTestBase() {
   // ═══════════════════════════════════════════════════════════════════════════
 
   /**
-   * Blaze test: set driver type + agent implementation, connect, run a simple objective, verify.
+   * Blaze test: set driver type, connect, run a simple objective, verify.
    * Requires LLM credentials to be configured.
    */
-  private fun blazeTest(driverType: TrailblazeDriverType, agentImpl: AgentImplementation) = runBlocking {
-    val tag = "${driverType.name} x ${agentImpl.name}"
+  private fun blazeTest(driverType: TrailblazeDriverType) = runBlocking {
+    val tag = driverType.name
     Console.log("[$tag] Starting")
 
     // 0. End any stale session so the device call creates a fresh one with our testName
@@ -118,20 +106,12 @@ class McpRealDeviceIntegrationTest : TrailblazeServerTestBase() {
     )
     assumeTrue("No Android device available", connectResult.isSuccess)
 
-    // 3. Set agent implementation
-    val agentResult = client.callTool(
-      "config",
-      mapOf("action" to "SET", "key" to "agentImplementation", "value" to agentImpl.name),
-    )
-    Console.log("[$tag] Agent set: ${agentResult.content.take(200)}")
-    assertTrue(agentResult.isSuccess, "[$tag] Setting agent should succeed: ${agentResult.content}")
-
-    // 4. Run a simple step (retry while driver is still initializing)
+    // 3. Run a simple step (retry while driver is still initializing)
     val stepResult = callToolWithDriverRetry(tag, "step", mapOf("objective" to "Press the home button"))
     Console.log("[$tag] Step result: ${stepResult.content.take(500)}")
     assertFalse(stepResult.isError, "[$tag] Step should not error: ${stepResult.content.take(500)}")
 
-    // 5. Verify the result
+    // 4. Verify the result
     val verifyResult = client.callTool(
       "step",
       mapOf("objective" to "The home screen or launcher is visible", "hint" to "VERIFY"),

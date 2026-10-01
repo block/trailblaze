@@ -50,7 +50,6 @@ import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.toolcalls.TrailblazeToolDescriptor
 import xyz.block.trailblaze.logs.client.TrailblazeToolCatalog
 import xyz.block.trailblaze.logs.model.SessionStatus
-import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.mcp.LlmCallStrategy
 import xyz.block.trailblaze.ui.tabs.chat.LlmMessageComposable
 import xyz.block.trailblaze.ui.utils.DisplayUtils
@@ -249,6 +248,8 @@ fun LogDetailsDialog(
           ToolCatalogDetailsFlat(log)
         }
       }
+
+      is TrailblazeLog.TrailblazeDecisionRequestLog -> {}
     }
 
     // Bottom padding
@@ -328,25 +329,8 @@ fun ChatHistoryDialog(
               }
               Spacer(modifier = Modifier.height(4.dp))
 
-              // Request Context (agent architecture, tier, strategy)
+              // Request Context (tier, strategy)
               log.requestContext?.let { ctx ->
-                // Agent Implementation
-                Row(
-                  modifier = Modifier.fillMaxWidth(),
-                  horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                  Text("Agent Architecture:", fontWeight = FontWeight.Medium)
-                  Text(
-                    text = ctx.agentImplementation.name,
-                    color = when (ctx.agentImplementation) {
-                      AgentImplementation.TRAILBLAZE_RUNNER -> Color(0xFF1976D2)
-                      AgentImplementation.MULTI_AGENT_V3 -> Color(0xFF7B1FA2)
-                      AgentImplementation.KOOG_STRATEGY_GRAPH -> Color(0xFF00897B)
-                    }
-                  )
-                }
-                Spacer(modifier = Modifier.height(4.dp))
-
                 // Agent Tier (for two-tier architecture)
                 Row(
                   modifier = Modifier.fillMaxWidth(),

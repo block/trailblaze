@@ -6,6 +6,9 @@ import com.microsoft.playwright.Playwright
 import org.junit.After
 import org.junit.Before
 import org.junit.Test
+import xyz.block.trailblaze.api.SnapshotDetail
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
@@ -87,4 +90,75 @@ class PlaywrightScreenStateEnrichmentBudgetTest {
 
     context.close()
   }
+
+  @Test
+  fun `set-of-mark annotation does not wait on elements that are no longer on the page`() {
+    // The element list is read, then the page changes before the screenshot is annotated
+    // (a back navigation, a live page). None of the listed links can be found any more, and
+    // each used to wait out its own capture timeout: 400 links held the request ~200s.
+    val context = browser.newContext(Browser.NewContextOptions().setViewportSize(1280, 800))
+    val page = context.newPage()
+    page.setContent("<!DOCTYPE html><html><body>${links(400)}</body></html>")
+    val state = PlaywrightScreenState(page, 1280, 800)
+    assertEquals(400, state.elementIdMapping.size)
+
+    page.setContent("<!DOCTYPE html><html><body><p>Another page</p></body></html>")
+    val start = System.currentTimeMillis()
+    val annotations = state.annotationElements
+    val elapsed = System.currentTimeMillis() - start
+
+    assertEquals(null, annotations, "no listed element is on the page, so none can be boxed")
+    assertTrue(
+      elapsed < 30_000,
+      "annotating took ${elapsed}ms for elements that are gone; this is a hang guard, " +
+        "the stall it catches is ~200s",
+    )
+    context.close()
+  }
+
+  @Test
+  fun `an element list asked for bounds and selectors does not wait on elements that are gone`() {
+    // Same stale page, through the element list the LLM asks for with BOUNDS or ALL_ELEMENTS.
+    // Before the fix a bounds lookup waited 500ms per gone element and a selector lookup 30s.
+    for (detail in listOf(SnapshotDetail.BOUNDS, SnapshotDetail.ALL_ELEMENTS)) {
+      val context = browser.newContext(Browser.NewContextOptions().setViewportSize(1280, 800))
+      val page = context.newPage()
+      page.setContent("<!DOCTYPE html><html><body>${links(400)}</body></html>")
+      val state = PlaywrightScreenState(page, 1280, 800)
+      assertEquals(400, state.elementIdMapping.size)
+
+      page.setContent("<!DOCTYPE html><html><body><p>Another page</p></body></html>")
+      val start = System.currentTimeMillis()
+      val text = state.viewHierarchyTextRepresentation(setOf(detail))
+      val elapsed = System.currentTimeMillis() - start
+
+      assertTrue(elapsed < 30_000, "$detail: enriching took ${elapsed}ms for elements that are gone")
+      // A gone element is skipped outright, so the budget never runs out; waiting on each one
+      // instead would spend it (400 x 500ms) and end the list with the note.
+      assertFalse(
+        text.contains(PlaywrightScreenState.ELEMENT_LIST_CUT_SHORT_NOTE),
+        "$detail: gone elements were waited on until the budget ran out",
+      )
+      context.close()
+    }
+  }
+
+  @Test
+  fun `an element list cut short by the budget says so`() {
+    val context = browser.newContext(Browser.NewContextOptions().setViewportSize(1280, 800))
+    val page = context.newPage()
+    page.setContent("<!DOCTYPE html><html><body>${links(20)}</body></html>")
+
+    val full = PlaywrightScreenState(page, 1280, 800).viewHierarchyTextRepresentation(setOf(SnapshotDetail.BOUNDS))
+    assertTrue(full.contains("{x:"), "a live page gets bounds")
+    assertFalse(full.contains(PlaywrightScreenState.ELEMENT_LIST_CUT_SHORT_NOTE))
+
+    val cut = PlaywrightScreenState(page, 1280, 800, enrichmentBudgetMs = -1)
+      .viewHierarchyTextRepresentation(setOf(SnapshotDetail.BOUNDS))
+    assertFalse(cut.contains("{x:"), "an expired budget adds no bounds")
+    assertTrue(cut.contains(PlaywrightScreenState.ELEMENT_LIST_CUT_SHORT_NOTE))
+    context.close()
+  }
+
+  private fun links(count: Int) = (1..count).joinToString("") { "<a href=\"#l$it\">Link $it</a> " }
 }

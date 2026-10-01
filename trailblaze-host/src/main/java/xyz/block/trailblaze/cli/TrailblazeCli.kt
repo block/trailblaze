@@ -385,13 +385,6 @@ object TrailblazeCli {
         },
         traceFileFor = traceFileFor,
       ) {
-      // Save/restore the global `Console.quietMode` flag. cli*WithDevice(verbose=false)
-      // flips it for the duration of the CLI command, but there's no reset path in
-      // the CLI itself; without this wrapper the long-lived daemon would go silent
-      // for every Console.log after the first forwarded invocation. Save-restore is
-      // safer than unconditional `disableQuietMode()` because a future daemon
-      // feature could legitimately set quiet mode outside this scope.
-      val priorQuiet = Console.isQuietMode()
       // Pin the caller's cwd as a thread-local so any picocli command that walks
       // relative paths (e.g. waypoint --target's workspace-anchor lookup) anchors at
       // the user's shell directory rather than the daemon's launch directory. Null
@@ -414,6 +407,10 @@ object TrailblazeCli {
           transcript.sink(CliExecStream.STDOUT),
           transcript.sink(CliExecStream.STDERR),
         ) {
+        // A forwarded command that goes quiet (every non-`--verbose` one) must silence only its
+        // own output. Process-wide quiet mode would drop every other daemon thread's Console.log
+        // — MCP sessions, trail runs — before the log-file tee sees it, for as long as it runs.
+        Console.withThreadScopedQuietMode {
           val cli = TrailblazeCliCommand(
             resolvedProviders.appProvider,
             resolvedProviders.configProvider,
@@ -451,9 +448,8 @@ object TrailblazeCli {
               reason = describeThrowableForUser(e),
             )
             TrailblazeExitCode.INFRA_FAILED.code
-          } finally {
-            if (priorQuiet) Console.enableQuietMode() else Console.disableQuietMode()
           }
+        }
         }
         }
         }

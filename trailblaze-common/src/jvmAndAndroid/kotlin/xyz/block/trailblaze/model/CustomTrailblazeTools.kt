@@ -137,8 +137,6 @@ data class CustomTrailblazeTools(
     addAll(TrailblazeToolSet.NonLlmTrailblazeTools)
     add(ObjectiveStatusTrailblazeTool::class)
   }
-
-  fun allForSerializationToolsByName(): Map<ToolName, KClass<out TrailblazeTool>> = allForSerializationTools().associateBy { it.toolName() }
 }
 
 /**
@@ -325,12 +323,3 @@ fun TrailblazeHostAppTarget?.toSessionToolRepo(
     catalog = catalog,
     driverType = driverType,
   )
-
-private fun catalogToolClasses(d: TrailblazeDriverType, c: List<ToolSetCatalogEntry>) =
-  TrailblazeToolSetCatalog.defaultToolClassesForDriver(d, c)
-
-private fun catalogYamlNames(d: TrailblazeDriverType, c: List<ToolSetCatalogEntry>) =
-  TrailblazeToolSetCatalog.defaultYamlToolNamesForDriver(d, c)
-
-private fun catalogScriptedNames(d: TrailblazeDriverType, c: List<ToolSetCatalogEntry>) =
-  TrailblazeToolSetCatalog.defaultScriptedToolNamesForDriver(d, c)

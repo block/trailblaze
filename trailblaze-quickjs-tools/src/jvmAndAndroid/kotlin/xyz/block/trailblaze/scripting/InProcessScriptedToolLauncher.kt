@@ -4,12 +4,15 @@ import xyz.block.trailblaze.config.InlineScriptToolConfig
 import xyz.block.trailblaze.config.ScriptedToolNameDiscoverer
 import xyz.block.trailblaze.config.ScriptedToolRuntime
 import xyz.block.trailblaze.config.project.toInlineScriptToolConfigs
+import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.quickjs.tools.QuickJsEngineExtension
+import xyz.block.trailblaze.quickjs.tools.QuickJsToolMeta
 import xyz.block.trailblaze.toolcalls.ToolName
 import xyz.block.trailblaze.toolcalls.TrailblazeToolDescriptor
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.util.Console
+import kotlinx.serialization.json.buildJsonObject
 import java.io.File
 
 /**
@@ -118,6 +121,12 @@ object InProcessScriptedToolLauncher {
    * @param toolNames catalog scripted tool names to launch in-process.
    * @param skipNames names already handled elsewhere (target-declared inline tools, subprocess
    *   tools) — not re-registered here. The target-declared version wins on a name collision.
+   * @param drivers the session's drivers. A tool whose `supportedPlatforms` / `supportedDrivers` /
+   *   `requiresHost` rules out all of them is not registered — the gate target-declared tools and
+   *   the on-device launcher already apply. Toolset scoping alone doesn't cover this: a toolset
+   *   enabled on several platforms can carry a tool that runs on only one. Null only for a caller
+   *   bound to no session (`DirectMcpToolExecutor`, whose advertised surface isn't driver-scoped
+   *   either).
    * @return the registrations created, for session-end disposal via [LazyYamlScriptedToolRegistration.dispose].
    */
   suspend fun launch(
@@ -125,6 +134,8 @@ object InProcessScriptedToolLauncher {
     sessionId: SessionId,
     sessionDir: File,
     toolNames: Set<ToolName>,
+    drivers: Collection<TrailblazeDriverType>?,
+    preferHostAgent: Boolean = true,
     skipNames: Set<ToolName> = emptySet(),
     classLoader: ClassLoader? = InProcessScriptedToolLauncher::class.java.classLoader,
     logPrefix: String = "[InProcessScriptedToolLauncher]",
@@ -143,6 +154,7 @@ object InProcessScriptedToolLauncher {
     // tool is a no-op, so skipping it is strictly safer than crashing.
     val alreadyRegistered = toolRepo.getRegisteredDynamicTools().keys
     val resolved = resolveInProcessScriptedTools(toolNames, skipNames + alreadyRegistered, logPrefix)
+      .filter { drivers == null || appliesToSession(it.config, drivers, preferHostAgent) }
     if (resolved.isEmpty()) return emptyList()
 
     val accumulated = mutableListOf<LazyYamlScriptedToolRegistration>()
@@ -194,6 +206,16 @@ object InProcessScriptedToolLauncher {
     }
 
     return accumulated
+  }
+
+  /** Whether [config]'s `_meta` gates let it register in a session bound to any of [drivers]. */
+  internal fun appliesToSession(
+    config: InlineScriptToolConfig,
+    drivers: Collection<TrailblazeDriverType>,
+    preferHostAgent: Boolean,
+  ): Boolean {
+    val meta = QuickJsToolMeta.fromSpec(buildJsonObject { config.meta?.let { put("_meta", it) } })
+    return drivers.any { meta.shouldRegister(it, preferHostAgent) }
   }
 
   /**

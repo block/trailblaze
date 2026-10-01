@@ -7,7 +7,6 @@ import kotlinx.serialization.Serializable
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
-import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.mcp.McpToolNames
 import xyz.block.trailblaze.mcp.ScreenshotFormat
 import xyz.block.trailblaze.mcp.TrailblazeMcpBridge
@@ -56,7 +55,7 @@ class ConfigToolSet(
     config(action=SET, key="llmProvider", value="none") → disable LLM
     config(action=LIST) → show all configurable keys with descriptions
 
-    Settings include device drivers, LLM model, agent implementation, and more.
+    Settings include device drivers, LLM model, screenshot format, and more.
     """
   )
   @Tool(McpToolNames.TOOL_CONFIG)
@@ -224,12 +223,6 @@ class ConfigToolSet(
       KEY_WEB_DRIVER -> setDriverType(TrailblazeDevicePlatform.WEB, value)
       KEY_LLM_PROVIDER -> mcpBridge.setLlmConfig(provider = value, model = null)
       KEY_LLM_MODEL -> mcpBridge.setLlmConfig(provider = null, model = value)
-      KEY_AGENT_IMPLEMENTATION -> {
-        val impl = AgentImplementation.entries.find { it.name.equals(value, ignoreCase = true) }
-          ?: return "Invalid implementation: $value"
-        sessionContext?.agentImplementation = impl
-        mcpBridge.setAgentImplementation(impl)
-      }
       KEY_SCREENSHOT_FORMAT -> {
         val format = ScreenshotFormat.entries.find { it.name.equals(value, ignoreCase = true) }
           ?: return "Invalid screenshot format: $value"
@@ -267,7 +260,6 @@ class ConfigToolSet(
     const val KEY_WEB_DRIVER = "webDriver"
     const val KEY_LLM_PROVIDER = "llmProvider"
     const val KEY_LLM_MODEL = "llmModel"
-    const val KEY_AGENT_IMPLEMENTATION = "agentImplementation"
     const val KEY_SCREENSHOT_FORMAT = "screenshotFormat"
     const val KEY_VIEW_HIERARCHY_VERBOSITY = "viewHierarchyVerbosity"
     const val KEY_MODE = "mode"
@@ -297,9 +289,6 @@ class ConfigToolSet(
         values[KEY_LLM_PROVIDER] = provider
         values[KEY_LLM_MODEL] = model
       }
-
-      // Global agent implementation from bridge
-      mcpBridge.getAgentImplementation()?.let { values[KEY_AGENT_IMPLEMENTATION] = it.name }
 
       // Session-level settings
       sessionContext?.let { ctx ->
@@ -352,11 +341,6 @@ class ConfigToolSet(
       ConfigKeyDef(
         key = KEY_LLM_MODEL,
         description = "LLM model ID. Set to 'none' to disable LLM. Read trailblaze://llm/providers for all supported models per provider",
-      ),
-      ConfigKeyDef(
-        key = KEY_AGENT_IMPLEMENTATION,
-        description = "Agent architecture for automation",
-        validValues = AgentImplementation.entries.map { it.name },
       ),
       ConfigKeyDef(
         key = KEY_SCREENSHOT_FORMAT,

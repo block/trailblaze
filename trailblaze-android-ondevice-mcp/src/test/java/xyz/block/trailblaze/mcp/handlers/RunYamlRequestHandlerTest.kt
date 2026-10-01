@@ -29,7 +29,6 @@ import xyz.block.trailblaze.llm.TrailblazeLlmProvider
 import xyz.block.trailblaze.llm.TrailblazeReferrer
 import xyz.block.trailblaze.logs.client.TrailblazeSession
 import xyz.block.trailblaze.logs.model.SessionId
-import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcResult
 import xyz.block.trailblaze.mcp.progress.ProgressSessionManager
 import xyz.block.trailblaze.model.TrailblazeConfig
@@ -97,14 +96,12 @@ class RunYamlRequestHandlerTest {
   }
 
   /**
-   * KOOG_STRATEGY_GRAPH now runs on-device, so the handler must route it through the SAME
-   * `runTrailblazeYaml` callback as TRAILBLAZE_RUNNER (no silent fallback) — forwarding the request
-   * with the Started log suppressed AND the agent selection PRESERVED (not relabeled to
-   * TRAILBLAZE_RUNNER), so AndroidTrailblazeRule picks the Koog strategy-graph agent for live
-   * prompt steps.
+   * The handler emits the session Started log itself, so the request it forwards to the
+   * `runTrailblazeYaml` callback must carry the Started log suppressed — otherwise the session
+   * would log Started twice.
    */
   @Test
-  fun `KOOG_STRATEGY_GRAPH routes to the on-device callback preserving the agent selection`() = runTest {
+  fun `forwards the request to the on-device callback with the Started log suppressed`() = runTest {
     var forwarded: RunYamlRequest? = null
     val handler = createHandler(
       runTrailblazeYaml = { request, session, _ ->
@@ -113,19 +110,12 @@ class RunYamlRequestHandlerTest {
       },
     )
 
-    val result = handler.handle(
-      testRequest.copy(
-        agentImplementation = AgentImplementation.KOOG_STRATEGY_GRAPH,
-        awaitCompletion = true,
-      ),
-    )
+    val result = handler.handle(testRequest.copy(awaitCompletion = true))
 
     assertTrue(result is RpcResult.Success, "Expected RpcResult.Success, got $result")
     assertEquals(true, result.data.success)
-    assertNotNull(forwarded, "runTrailblazeYaml callback was not invoked for KOOG_STRATEGY_GRAPH")
-    // Agent selection preserved so the device actually runs Koog (was previously relabeled away).
-    assertEquals(AgentImplementation.KOOG_STRATEGY_GRAPH, forwarded!!.agentImplementation)
-    // Started log suppressed in the forwarded request (handler already emitted it), as for legacy.
+    assertNotNull(forwarded, "runTrailblazeYaml callback was not invoked")
+    assertEquals(testRequest.testName, forwarded!!.testName)
     assertFalse(forwarded!!.config.sendSessionStartLog)
   }
 

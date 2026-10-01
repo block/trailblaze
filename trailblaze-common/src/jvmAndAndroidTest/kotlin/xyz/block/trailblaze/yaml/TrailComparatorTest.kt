@@ -212,6 +212,38 @@ class TrailComparatorTest {
   }
 
   @Test
+  fun extractNaturalLanguageSteps_countsAnAuthoredTrailheadAsTheFirstStep() {
+    val yaml = """
+      trailhead:
+        step: Launch the app signed in
+      trail:
+        - step: Open settings
+        - verify: Settings appear
+    """.trimIndent()
+
+    val steps = comparator.extractNaturalLanguageSteps(yaml, trailblazeYaml)
+
+    assertThat(steps).containsExactly("Launch the app signed in", "Open settings", "Settings appear")
+  }
+
+  @Test
+  fun compare_matchesAStepMovedIntoTheTrailhead() {
+    val stepAtTop = """
+      trail:
+        - step: Launch the app signed in
+        - step: Open settings
+    """.trimIndent()
+    val stepInTrailhead = """
+      trailhead:
+        step: Launch the app signed in
+      trail:
+        - step: Open settings
+    """.trimIndent()
+
+    assertThat(comparator.compare(stepAtTop, stepInTrailhead, trailblazeYaml).isMatch).isTrue()
+  }
+
+  @Test
   fun toSummary_formatsMatchCorrectly() {
     val result = TrailComparisonResult(emptyList())
 

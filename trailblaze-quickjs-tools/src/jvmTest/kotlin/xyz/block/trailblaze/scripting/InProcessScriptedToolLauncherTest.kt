@@ -12,6 +12,7 @@ import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import xyz.block.trailblaze.config.ScriptedToolNameDiscoverer
+import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.scripting.callback.JsScriptingCallbackArgumentValidator
 import xyz.block.trailblaze.toolcalls.REDACTED_TOOL_ARG_PLACEHOLDER
@@ -95,6 +96,7 @@ class InProcessScriptedToolLauncherTest {
         sessionId = SessionId.sanitized("inproc-launcher-test"),
         sessionDir = sessionDir,
         toolNames = setOf(openUrl),
+        drivers = null,
       )
       assertTrue(
         registrations.any { it.name == openUrl },
@@ -135,6 +137,7 @@ class InProcessScriptedToolLauncherTest {
         sessionId = SessionId.sanitized("inproc-idempotent-first"),
         sessionDir = sessionDir,
         toolNames = setOf(openUrl),
+        drivers = null,
       )
       assertTrue(first.any { it.name == openUrl }, "first launch registers openUrl")
 
@@ -144,10 +147,41 @@ class InProcessScriptedToolLauncherTest {
         sessionId = SessionId.sanitized("inproc-idempotent-second"),
         sessionDir = sessionDir,
         toolNames = setOf(openUrl),
+        drivers = null,
       )
       assertTrue(second.isEmpty(), "second launch skips the already-registered openUrl")
     } finally {
       (first + second).forEach { runCatching { it.dispose() } }
+      sessionDir.deleteRecursively()
+    }
+  }
+
+  /**
+   * A catalog tool registers only in a session whose drivers its `supportedPlatforms` allows.
+   * `openUrl` declares `[android, ios]`: an iOS session gets it, a web session doesn't — even
+   * though the name is handed to the launcher either way.
+   */
+  @Test
+  fun `a catalog tool registers only for the platforms it supports`() = runBlocking {
+    val sessionDir = Files.createTempDirectory("inproc-platform-gate-test").toFile()
+    val launched = mutableListOf<LazyYamlScriptedToolRegistration>()
+    try {
+      suspend fun launchFor(driver: TrailblazeDriverType): Set<ToolName> {
+        val registrations = InProcessScriptedToolLauncher.launch(
+          toolRepo = TrailblazeToolRepo.withDynamicToolSets(),
+          sessionId = SessionId.sanitized("inproc-platform-gate-${driver.yamlKey}"),
+          sessionDir = sessionDir,
+          toolNames = setOf(openUrl),
+          drivers = listOf(driver),
+        )
+        launched += registrations
+        return registrations.map { it.name }.toSet()
+      }
+
+      assertEquals(setOf(openUrl), launchFor(TrailblazeDriverType.IOS_HOST))
+      assertEquals(emptySet(), launchFor(TrailblazeDriverType.PLAYWRIGHT_NATIVE))
+    } finally {
+      launched.forEach { runCatching { it.dispose() } }
       sessionDir.deleteRecursively()
     }
   }

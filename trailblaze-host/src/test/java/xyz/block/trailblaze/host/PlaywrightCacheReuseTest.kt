@@ -92,7 +92,7 @@ class PlaywrightCacheReuseTest {
 
   @Test
   fun `max-llm-calls differs means rebuild around the cached browser`() {
-    // The lazy TrailblazeRunner inside BasePlaywrightNativeTest bakes maxSteps at
+    // The lazy agent runner inside BasePlaywrightNativeTest bakes the LLM call cap at
     // construction time, so a cap change (e.g. cap=10 first run, cap=1 second run) needs
     // a fresh test instance — otherwise the second run silently inherits the first run's
     // cap. Preserve the browser so the page state isn't lost.

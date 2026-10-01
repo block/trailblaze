@@ -191,6 +191,170 @@ class IosCompactElementListTest {
     assertContains(result.text, "test.pdf")
   }
 
+  /**
+   * A home-screen app icon as Maestro reports it: a labeled element over a bare image layer and
+   * an id-only text container holding two bare text layers.
+   */
+  private fun appIcon(): Pair<TrailblazeNode, List<TrailblazeNode>> {
+    val image = node(bounds = TrailblazeNode.Bounds(left = 32, top = 92, right = 92, bottom = 152))
+    val text1 = node(bounds = TrailblazeNode.Bounds(left = 33, top = 157, right = 91, bottom = 176))
+    val text2 = node(bounds = TrailblazeNode.Bounds(left = 33, top = 157, right = 91, bottom = 176))
+    val labelView =
+      node(
+        detail = DriverNodeDetail.IosMaestro(resourceId = "label-view"),
+        bounds = TrailblazeNode.Bounds(left = 33, top = 157, right = 91, bottom = 176),
+        children = listOf(text1, text2),
+      )
+    val icon =
+      node(
+        detail = DriverNodeDetail.IosMaestro(accessibilityText = "Fitness", resourceId = "Fitness"),
+        bounds = TrailblazeNode.Bounds(left = 28, top = 88, right = 96, bottom = 178),
+        children = listOf(image, labelView),
+      )
+    return icon to listOf(image, text1, text2)
+  }
+
+  @Test
+  fun `a bare layer covering a labeled element's tap point is not listed again`() {
+    // Tapping "Fitness" lands on its center (62,133), inside the image layer: that layer is the
+    // same tap. The text layers sit below the center, so one of them stays as its own point
+    // (the second is the same point and is deduped).
+    val (icon, layers) = appIcon()
+    val (image, text1, text2) = layers
+    val result = IosCompactElementList.build(node(children = listOf(icon)))
+
+    assertFalse(image.nodeId in result.elementNodeIds, result.text)
+    assertEquals(listOf(icon.nodeId, text1.nodeId), result.elementNodeIds, result.text)
+    assertFalse(text2.nodeId in result.elementNodeIds)
+    assertEquals(1, Regex("""@\(""").findAll(result.text).count(), result.text)
+  }
+
+  @Test
+  fun `a labeled row whose only child is a bare trailing button keeps the button's coordinates`() {
+    // Tapping the row lands on its center, not on the delete button at its right edge.
+    val deleteButton = node(bounds = TrailblazeNode.Bounds(left = 350, top = 660, right = 390, bottom = 700))
+    val row =
+      node(
+        detail = DriverNodeDetail.IosMaestro(accessibilityText = "Invoice 42"),
+        bounds = TrailblazeNode.Bounds(left = 0, top = 640, right = 402, bottom = 720),
+        children = listOf(deleteButton),
+      )
+
+    val result = IosCompactElementList.build(node(children = listOf(row)))
+
+    assertContains(result.text, "@(370,680)")
+    assertTrue(deleteButton.nodeId in result.elementNodeIds)
+  }
+
+  @Test
+  fun `a labeled screen whose only child is a bare button keeps the button's coordinates`() {
+    // The unlabelled-icon-button shape with nothing else on screen: a labeled full-screen view over one
+    // metadata-free three-dot button.
+    val threeDotsButton = node(bounds = TrailblazeNode.Bounds(left = 161, top = 658, right = 185, bottom = 698))
+    val screen =
+      node(
+        detail = DriverNodeDetail.IosMaestro(accessibilityText = "Dashboard"),
+        bounds = TrailblazeNode.Bounds(left = 0, top = 0, right = 402, bottom = 874),
+        children = listOf(threeDotsButton),
+      )
+
+    val result = IosCompactElementList.build(node(children = listOf(screen)))
+
+    assertContains(result.text, "@(173,678)")
+    assertTrue(threeDotsButton.nodeId in result.elementNodeIds)
+  }
+
+  @Test
+  fun `the full view still lists the bare layers of a labeled control`() {
+    val (icon, layers) = appIcon()
+    val result =
+      IosCompactElementList.build(node(children = listOf(icon)), details = setOf(SnapshotDetail.ALL_ELEMENTS))
+
+    layers.forEach { assertTrue(it.nodeId in result.elementNodeIds, "layer ${it.nodeId} missing:\n${result.text}") }
+  }
+
+  @Test
+  fun `a bare button under a labeled element that has other labeled content keeps its coordinates`() {
+    // The three-dot button from the structural-else test, but nested under a labeled
+    // full-screen view (the real Dashboard shape): tapping the view's ref would tap the
+    // middle of the screen, so the button's own coordinates must stay.
+    val threeDotsButton =
+      node(bounds = TrailblazeNode.Bounds(left = 161, top = 658, right = 185, bottom = 698))
+    val fileName =
+      node(
+        detail = DriverNodeDetail.IosMaestro(text = "test.pdf"),
+        bounds = TrailblazeNode.Bounds(left = 75, top = 670, right = 130, bottom = 686),
+      )
+    val screen =
+      node(
+        detail = DriverNodeDetail.IosMaestro(accessibilityText = "Dashboard"),
+        bounds = TrailblazeNode.Bounds(left = 0, top = 0, right = 402, bottom = 874),
+        children = listOf(threeDotsButton, fileName),
+      )
+
+    val result = IosCompactElementList.build(node(children = listOf(screen)))
+
+    assertContains(result.text, "@(173,678)")
+    assertTrue(threeDotsButton.nodeId in result.elementNodeIds)
+  }
+
+  @Test
+  fun `bare leaves beside a clickable child of a labeled element keep their coordinates`() {
+    val clickableChild =
+      node(
+        detail = DriverNodeDetail.IosMaestro(clickable = true),
+        bounds = TrailblazeNode.Bounds(left = 143, top = 659, right = 203, bottom = 697),
+      )
+    val bareButton = node(bounds = TrailblazeNode.Bounds(left = 350, top = 660, right = 390, bottom = 700))
+    val row =
+      node(
+        detail = DriverNodeDetail.IosMaestro(accessibilityText = "Invoice"),
+        bounds = TrailblazeNode.Bounds(left = 0, top = 640, right = 402, bottom = 716),
+        children = listOf(clickableChild, bareButton),
+      )
+
+    val result = IosCompactElementList.build(node(children = listOf(row)))
+
+    assertContains(result.text, "@(173,678)")
+    assertContains(result.text, "@(370,680)")
+    assertTrue(clickableChild.nodeId in result.elementNodeIds)
+    assertTrue(bareButton.nodeId in result.elementNodeIds)
+  }
+
+  @Test
+  fun `bare nodes at the same point are offered as one tap point`() {
+    val bounds = TrailblazeNode.Bounds(left = 0, top = 0, right = 402, bottom = 874)
+    val layers = List(3) { node(bounds = bounds) }
+    val root = node(children = layers)
+
+    val lean = IosCompactElementList.build(root, screenHeight = 874, screenWidth = 402)
+    assertEquals(1, Regex("""@\(201,437\)""").findAll(lean.text).count(), lean.text)
+    assertEquals(listOf(layers.first().nodeId), lean.elementNodeIds)
+
+    val all = IosCompactElementList.build(root, details = setOf(SnapshotDetail.ALL_ELEMENTS))
+    layers.forEach { assertTrue(it.nodeId in all.elementNodeIds, "layer ${it.nodeId} missing:\n${all.text}") }
+  }
+
+  @Test
+  fun `a bare node whose center is off the screen is not offered as a tap point`() {
+    // A tall background layer that pokes onto the screen but is centered far above it.
+    val tallLayer = node(bounds = TrailblazeNode.Bounds(left = 0, top = -2000, right = 402, bottom = 100))
+    val sideLayer = node(bounds = TrailblazeNode.Bounds(left = 300, top = 400, right = 900, bottom = 500))
+    val root = node(children = listOf(tallLayer, sideLayer))
+
+    val lean = IosCompactElementList.build(root, screenHeight = 874, screenWidth = 402)
+    assertEquals("(no elements found)", lean.text)
+
+    val offscreen =
+      IosCompactElementList.build(root, details = setOf(SnapshotDetail.OFFSCREEN), screenHeight = 874, screenWidth = 402)
+    assertContains(offscreen.text, "@(201,-950)")
+    assertContains(offscreen.text, "@(600,450)")
+
+    // Without screen dimensions nothing can be judged off the screen.
+    val unknownScreen = IosCompactElementList.build(root)
+    assertContains(unknownScreen.text, "@(201,-950)")
+  }
+
   @Test
   fun `clickable control hoists a lone icon child resourceId into its id annotation`() {
     // The overflow-button case: a clickable ButtonView labeled "More" (VoiceOver) wrapping a
@@ -1182,4 +1346,125 @@ class IosCompactElementListTest {
     assertContains(result.text, "\"Search\"")
   }
 
+  @Test
+  fun `on-screen child of a zero-size wrapper is listed and its ref taps the child`() {
+    val fitness =
+      node(
+        detail = DriverNodeDetail.IosMaestro(text = "Fitness", clickable = true),
+        bounds = TrailblazeNode.Bounds(28, 88, 96, 178),
+      )
+    val wrapper =
+      node(
+        detail = DriverNodeDetail.IosMaestro(accessibilityText = "Home screen icons"),
+        bounds = TrailblazeNode.Bounds(0, 0, 0, 0),
+        children = listOf(fitness),
+      )
+    val root = node(bounds = TrailblazeNode.Bounds(0, 0, 402, 874), children = listOf(wrapper))
+
+    val elements = CompactScreenElements.buildForIos(root, screenHeight = 874, screenWidth = 402)
+
+    assertContains(elements.text, "\"Fitness\"")
+    val ref = elements.refMapping.entries.single { it.value == fitness.nodeId }.key
+    assertEquals(fitness.nodeId, elements.applyRefsToTree(root).findFirst { it.ref == ref }?.nodeId)
+    assertFalse(elements.text.contains("Home screen icons"), "the zero-size wrapper itself stays hidden")
+  }
+
+  @Test
+  fun `class-only off-screen nodes get no ref, above or below a labeled off-screen wrapper`() {
+    val offscreenChild =
+      node(
+        detail = DriverNodeDetail.IosMaestro(className = "UIButton", clickable = true),
+        bounds = TrailblazeNode.Bounds(0, 1200, 200, 1250),
+      )
+    val labeledWrapper =
+      node(
+        detail = DriverNodeDetail.IosMaestro(accessibilityText = "More"),
+        bounds = TrailblazeNode.Bounds(0, 1100, 402, 1300),
+        children = listOf(offscreenChild),
+      )
+    val onScreen =
+      node(
+        detail = DriverNodeDetail.IosMaestro(text = "Fitness", clickable = true),
+        bounds = TrailblazeNode.Bounds(28, 88, 96, 178),
+      )
+    val zeroSizeClassOnly =
+      node(
+        detail = DriverNodeDetail.IosMaestro(className = "UIButton", clickable = true),
+        bounds = TrailblazeNode.Bounds(0, 0, 0, 0),
+        children = listOf(onScreen),
+      )
+    val root =
+      node(bounds = TrailblazeNode.Bounds(0, 0, 402, 874), children = listOf(zeroSizeClassOnly, labeledWrapper))
+
+    val result = IosCompactElementList.build(root, screenHeight = 874, screenWidth = 402)
+
+    assertContains(result.text, "\"Fitness\"")
+    assertEquals(setOf(onScreen.nodeId), result.refMapping.values.toSet(), result.text)
+  }
+
+  // Real shape from a payment app's amount screen: a collapsed copy of the keypad whose zero-width keys
+  // hold digit glyphs straddling the left edge, ahead of the real keypad in the tree.
+  @Test
+  fun `a collapsed ghost keypad does not take the real key's ref`() {
+    val ghostGlyph =
+      node(detail = DriverNodeDetail.IosMaestro(accessibilityText = "3"), bounds = TrailblazeNode.Bounds(-7, 54, 7, 85))
+    val ghostKey =
+      node(
+        detail = DriverNodeDetail.IosMaestro(accessibilityText = "3"),
+        bounds = TrailblazeNode.Bounds(0, 62, 0, 77),
+        children = listOf(ghostGlyph),
+      )
+    val ghostKeypad = node(bounds = TrailblazeNode.Bounds(0, 0, 0, 0), children = listOf(ghostKey))
+    val realKey =
+      node(detail = DriverNodeDetail.IosMaestro(accessibilityText = "3"), bounds = TrailblazeNode.Bounds(269, 590, 402, 644))
+    val root = node(bounds = TrailblazeNode.Bounds(0, 0, 402, 874), children = listOf(ghostKeypad, realKey))
+
+    val elements = CompactScreenElements.buildForIos(root, screenHeight = 874, screenWidth = 402)
+
+    assertEquals(setOf(realKey.nodeId), elements.refMapping.values.toSet(), elements.text)
+    val ref = elements.refMapping.keys.single()
+    assertEquals(realKey.nodeId, elements.applyRefsToTree(root).findFirst { it.ref == ref }?.nodeId)
+  }
+
+  // Maestro's iOS tree root is itself an unlabeled zero-size node.
+  @Test
+  fun `a row cut off by the screen edge stays listed under the zero-size root`() {
+    val row =
+      node(
+        detail = DriverNodeDetail.IosMaestro(text = "Recent activity", clickable = true),
+        bounds = TrailblazeNode.Bounds(0, 800, 402, 900),
+      )
+    val root = node(bounds = TrailblazeNode.Bounds(0, 0, 0, 0), children = listOf(row))
+
+    val result = IosCompactElementList.build(root, screenHeight = 874, screenWidth = 402)
+
+    assertEquals(setOf(row.nodeId), result.refMapping.values.toSet(), result.text)
+  }
+
+  @Test
+  fun `quoted text straddling the screen edge under a labeled zero-size wrapper is not shown`() {
+    val onScreenText =
+      node(detail = DriverNodeDetail.IosMaestro(text = "Pay"), bounds = TrailblazeNode.Bounds(10, 110, 200, 190))
+    val ghostText =
+      node(detail = DriverNodeDetail.IosMaestro(text = "3"), bounds = TrailblazeNode.Bounds(-7, 54, 7, 85))
+    val row =
+      node(
+        detail = DriverNodeDetail.IosMaestro(accessibilityText = "Amount", clickable = true),
+        bounds = TrailblazeNode.Bounds(0, 100, 402, 200),
+        children = listOf(onScreenText, ghostText),
+      )
+    val wrapper =
+      node(
+        detail = DriverNodeDetail.IosMaestro(accessibilityText = "Keypad"),
+        bounds = TrailblazeNode.Bounds(0, 0, 0, 0),
+        children = listOf(row),
+      )
+    val root = node(bounds = TrailblazeNode.Bounds(0, 0, 402, 874), children = listOf(wrapper))
+
+    val result = IosCompactElementList.build(root, screenHeight = 874, screenWidth = 402)
+
+    assertContains(result.text, "\"Pay\"")
+    assertFalse(result.text.contains("\"3\""), result.text)
+    assertFalse(ghostText.nodeId in result.textNodeIds, "the ghost's text would count as visible")
+  }
 }

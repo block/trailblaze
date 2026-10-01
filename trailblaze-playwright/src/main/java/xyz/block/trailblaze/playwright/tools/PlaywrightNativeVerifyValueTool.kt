@@ -64,6 +64,7 @@ data class PlaywrightNativeVerifyValueTool(
     reasoning?.let { Console.log("### Reasoning: $it") }
     Console.log("### Verifying $type of '$description' equals '$expected'")
     return try {
+      PlaywrightPageResponsiveness.requireResponsive(page)
       val (locator, error) =
         PlaywrightExecutableTool.validateAndResolveRef(page, ref, description, context, nodeSelector)
       if (error != null) return error

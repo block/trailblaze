@@ -13,7 +13,6 @@ import xyz.block.trailblaze.host.recording.EffectiveStreamScreenshotConfig
 import xyz.block.trailblaze.host.turbo.EffectiveTurboConfig
 import xyz.block.trailblaze.llm.TrailblazeLlmProvider
 import xyz.block.trailblaze.logs.client.TrailblazeJson
-import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.ui.TrailblazePortManager
 import xyz.block.trailblaze.ui.TrailblazeDesktopUtil
@@ -135,20 +134,6 @@ val CONFIG_KEYS: Map<String, ConfigKey> = listOf(
     },
   ),
   ConfigKey(
-    name = "agent",
-    description = "Agent implementation",
-    validValues = AgentImplementation.entries.joinToString(", ") { it.name },
-    // A never-chosen agent is null (tri-state), and runs resolve absence to the framework default
-    // — so name that default instead of claiming "(not set)" while runs use something concrete.
-    get = { config ->
-      config.agentImplementation?.name
-        ?: "(not set — default: ${AgentImplementation.DEFAULT_NAME})"
-    },
-    set = { config, value ->
-      CliConfigHelper.parseAgent(value)?.let { config.copy(agentImplementation = it) }
-    },
-  ),
-  ConfigKey(
     name = "android-driver",
     description = "Android driver type",
     validValues = TrailblazeDriverType.selectableForPlatform(TrailblazeDevicePlatform.ANDROID)
@@ -209,7 +194,7 @@ val CONFIG_KEYS: Map<String, ConfigKey> = listOf(
     // Use case: a developer wants a lower local cap for a debugging session without
     // editing the committed workspace file. The CLI flag and env var still win when set.
     name = "max-llm-calls",
-    description = "Per-objective LLM call cap for the TRAILBLAZE_RUNNER and KOOG_STRATEGY_GRAPH agents",
+    description = "Per-objective LLM call cap for the agent",
     validValues = "positive integer, or 'unset' to clear",
     get = { config -> config.maxLlmCalls?.toString() ?: "(not set)" },
     set = { config, value ->
@@ -219,19 +204,6 @@ val CONFIG_KEYS: Map<String, ConfigKey> = listOf(
         val parsed = value.toIntOrNull()
         if (parsed == null || parsed <= 0) null else config.copy(maxLlmCalls = parsed)
       }
-    },
-  ),
-  ConfigKey(
-    // The annotated (set-of-mark) screenshot is always sent to the LLM regardless
-    // of this flag — model accuracy depends on it. This flag only controls which
-    // variant is persisted to logs for inspection. Flip off when downstream tooling
-    // (e.g. waypoint authoring) wants clean screenshots in committed artifacts.
-    name = "annotated-screenshots",
-    description = "Save set-of-mark annotated screenshots to logs (LLM always receives annotated)",
-    validValues = "true, false",
-    get = { config -> config.saveAnnotatedScreenshots.toString() },
-    set = { config, value ->
-      value.toBooleanStrictOrNull()?.let { config.copy(saveAnnotatedScreenshots = it) }
     },
   ),
   ConfigKey(
@@ -710,15 +682,5 @@ object CliConfigHelper {
 
   fun parseIosDriver(driver: String): TrailblazeDriverType? =
     parseDriver(TrailblazeDevicePlatform.IOS, driver)
-  
-  /**
-   * Parse agent implementation string.
-   */
-  fun parseAgent(agent: String): AgentImplementation? {
-    return try {
-      AgentImplementation.valueOf(agent.uppercase())
-    } catch (e: IllegalArgumentException) {
-      null
-    }
-  }
+
 }

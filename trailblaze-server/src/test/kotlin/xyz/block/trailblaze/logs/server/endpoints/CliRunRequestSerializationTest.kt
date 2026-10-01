@@ -2,6 +2,7 @@ package xyz.block.trailblaze.logs.server.endpoints
 
 import kotlinx.serialization.json.Json
 import org.junit.Test
+import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 
@@ -127,5 +128,16 @@ class CliRunRequestSerializationTest {
 
     assertNull(decoded.snapshotBaseline)
     assertNull(decoded.snapshotBaselineThresholdPercent)
+  }
+
+  @Test
+  fun `payload from an older CLI that still names an agent decodes`() {
+    // CLIs from before the agent choice was removed send `agentImplementation`. Decoded with the
+    // daemon's own Json, the stale key must be ignored rather than reject the run.
+    val legacyPayload = """{"yamlContent":"- step: sign in","agentImplementation":"TRAILBLAZE_RUNNER"}"""
+
+    val decoded = TrailblazeJsonInstance.decodeFromString(CliRunRequest.serializer(), legacyPayload)
+
+    assertEquals("- step: sign in", decoded.yamlContent)
   }
 }

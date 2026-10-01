@@ -495,8 +495,8 @@ class AccessibilityDeviceManager(
    * Types text into an editable field, optionally naming the field first.
    *
    * With no selector this is [inputText] on whatever already holds input focus — the historical
-   * path, unchanged. With a selector, the field is resolved and focused before the same
-   * [inputText] runs, so every downstream behavior (the `ACTION_SET_TEXT` fast path, the WebView
+   * path, unchanged. With a selector, [focusOnElement] settles which field takes the text before the
+   * same [inputText] runs, so every downstream behavior (the `ACTION_SET_TEXT` fast path, the WebView
    * readback recovery, the keystroke-synthesis retry) is shared between the two shapes.
    *
    * The two shapes differ in what they do with [inputText]'s result. A selector-bearing action
@@ -529,15 +529,14 @@ class AccessibilityDeviceManager(
   }
 
   /**
-   * Polls for an element matching [nodeSelector] and gives it input focus, returning the
-   * resolved element's center for the action log.
+   * Polls until [nodeSelector]'s field holds input focus, returning the center of the field the
+   * text will land in for the action log.
    *
-   * Every obstacle — no match, a match that can't take input focus, a focus dispatch the live
-   * tree didn't answer — keeps polling until [timeoutMs] and then throws with the last one
-   * observed. Both halves of that matter: a field can resolve while a transition still has it
-   * disabled or its identity mid-shift, and *not* throwing at the end would type into whichever
-   * field happened to already be focused while reporting success, which is exactly the failure
-   * naming the field exists to prevent.
+   * Each poll asks [planSelectorInputFocus]: an editable match is focused directly; a match that
+   * isn't an editable field (a label, a row), or no match at all (a hint the focus just hid),
+   * types into the editable field the preceding tap left focused. Every obstacle keeps polling
+   * until [timeoutMs] and then throws with the last one observed — a field can resolve while a
+   * transition still has it disabled, and focus can land a frame after the tap.
    */
   private fun focusOnElement(
     nodeSelector: TrailblazeNodeSelector,
@@ -546,48 +545,54 @@ class AccessibilityDeviceManager(
     val startTime = Clock.System.now().toEpochMilliseconds()
     var lastObstacle = "no element matched the selector"
     while (Clock.System.now().toEpochMilliseconds() - startTime < timeoutMs) {
-      val tree = getAccessibilityTree()
-      val resolved = tree?.let {
-        when (val result = resolveSelectorWithFallback(it.toTrailblazeNode(), nodeSelector)) {
+      val capture = captureAccessibilityTree()
+      val root = capture.accessibilityNode?.toTrailblazeNode()
+      val resolved = root?.let {
+        when (val result = resolveSelectorWithFallback(it, nodeSelector)) {
           is TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch -> result.node
           is TrailblazeNodeSelectorResolver.ResolveResult.MultipleMatches ->
             pickPreferredMatch(result.nodes)
           is TrailblazeNodeSelectorResolver.ResolveResult.NoMatch -> null
         }
       }
-      if (resolved != null) {
-        val center = resolved.centerPoint()
-        when (val plan = planActionFocusRoute(resolved)) {
-          is FocusPlan.AlreadyFocused -> {
-            Console.log("[input-focus] ${nodeSelector.description()} already holds input focus")
+      val center = resolved?.centerPoint()
+      when (val plan = planSelectorInputFocus(resolved, root, capture.isAccessibilityNodeComplete)) {
+        is FocusPlan.AlreadyFocused -> {
+          Console.log("[input-focus] ${nodeSelector.description()} already holds input focus")
+          return ExecutionResult(resolvedX = center?.first, resolvedY = center?.second)
+        }
+        is FocusPlan.DispatchActionFocus -> {
+          val dispatched = dispatchAndAwaitSettleBlocking {
+            TrailblazeAccessibilityService.focusByActionFocusOnBounds(
+              plan.bounds.toAndroidRect(),
+              plan.className,
+              plan.resourceId,
+            )
+          }
+          if (dispatched) {
+            Console.log("[input-focus] ACTION_FOCUS dispatched on ${nodeSelector.description()}")
             return ExecutionResult(resolvedX = center?.first, resolvedY = center?.second)
           }
-          is FocusPlan.DispatchActionFocus -> {
-            val dispatched = dispatchAndAwaitSettleBlocking {
-              TrailblazeAccessibilityService.focusByActionFocusOnBounds(
-                plan.bounds.toAndroidRect(),
-                plan.className,
-                plan.resourceId,
-              )
-            }
-            if (dispatched) {
-              Console.log("[input-focus] ACTION_FOCUS dispatched on ${nodeSelector.description()}")
-              return ExecutionResult(resolvedX = center?.first, resolvedY = center?.second)
-            }
-            lastObstacle =
-              "no live editable node answered ACTION_FOCUS at the resolved identity " +
-              "(bounds=${plan.bounds} className=${plan.className} resourceId=${plan.resourceId})"
-          }
-          is FocusPlan.NotFocusable -> lastObstacle = plan.reason
+          lastObstacle =
+            "no live editable node answered ACTION_FOCUS at the resolved identity " +
+            "(bounds=${plan.bounds} className=${plan.className} resourceId=${plan.resourceId})"
         }
-      } else {
-        lastObstacle = "no element matched the selector"
+        is FocusPlan.FocusedByTap -> {
+          val detail = plan.field.driverDetail as? DriverNodeDetail.AndroidAccessibility
+          Console.log(
+            "[input-focus] ${nodeSelector.description()}: ${plan.because}; typing into the field " +
+              "the tap focused (className=${detail?.className} resourceId=${detail?.resourceId})",
+          )
+          val fieldCenter = plan.field.centerPoint()
+          return ExecutionResult(resolvedX = fieldCenter?.first, resolvedY = fieldCenter?.second)
+        }
+        is FocusPlan.Declined -> lastObstacle = plan.reason
       }
       Thread.sleep(POLL_INTERVAL_MS)
     }
     error(
       "Cannot type into ${nodeSelector.description()}: $lastObstacle (gave up after " +
-        "${timeoutMs}ms). The selector must name the editable field itself.",
+        "${timeoutMs}ms). Name the editable field, or something whose tap focuses one.",
     )
   }
 
@@ -1443,8 +1448,8 @@ internal data class ActionClickPlan(
 )
 
 /**
- * What [planActionFocusRoute] decided about giving a selector-resolved node input focus, ahead
- * of a selector-bearing [AccessibilityAction.InputText].
+ * What [planActionFocusRoute] and [planSelectorInputFocus] decided about where a selector-bearing
+ * [AccessibilityAction.InputText] types.
  */
 internal sealed interface FocusPlan {
   /**
@@ -1461,10 +1466,66 @@ internal sealed interface FocusPlan {
   ) : FocusPlan
 
   /**
-   * The node cannot be given input focus. [reason] is surfaced in the failure message — the
-   * caller must fail rather than type into whatever else is focused.
+   * The selector didn't resolve to an editable field ([because]), but [field] holds input focus
+   * after the tap that preceded this, so the text goes there — what a separate tap then
+   * `inputText` did.
    */
-  data class NotFocusable(val reason: String) : FocusPlan
+  data class FocusedByTap(val field: TrailblazeNode, val because: String) : FocusPlan
+
+  /** No field to type into yet. [reason] is surfaced in the failure message. */
+  sealed interface Declined : FocusPlan {
+    val reason: String
+  }
+
+  /**
+   * The node isn't an editable field. [planSelectorInputFocus] turns this into [FocusedByTap]
+   * when the tap left a field focused.
+   */
+  data class NotEditable(override val reason: String) : Declined
+
+  /** The node is an editable field that can't be given input focus. */
+  data class NotFocusable(override val reason: String) : Declined
+}
+
+/**
+ * Decides where a selector-bearing `inputText` types, given the node [resolved] from its selector
+ * (null when nothing matched) in the tree [root], both read after the selector was tapped.
+ * [captureComplete] is whether that read fetched every node.
+ *
+ * An editable match is judged by [planActionFocusRoute] alone: typing anywhere else when the
+ * trail named that field would report success with the text in the wrong place. Otherwise — the
+ * selector names a label or row whose tap focuses a field, or matched a hint the focus then hid —
+ * the field holding input focus takes the text, matching what the tap-then-type pair this step
+ * replaces did. With no field focused the step declines, so it fails rather than typing nowhere.
+ *
+ * No match only counts as a hidden hint in a complete capture. A capture that dropped a subtree
+ * may have dropped the named field with it, and typing into a different focused field would then
+ * put the text where the trail didn't name, so it declines and the caller polls again.
+ */
+internal fun planSelectorInputFocus(
+  resolved: TrailblazeNode?,
+  root: TrailblazeNode?,
+  captureComplete: Boolean,
+): FocusPlan {
+  if (resolved == null && !captureComplete) {
+    return FocusPlan.NotEditable("no element matched the selector in a partial capture")
+  }
+  val named = resolved?.let(::planActionFocusRoute)
+  if (named != null && named !is FocusPlan.NotEditable) return named
+  val because = named?.reason ?: "no element matched the selector after the tap"
+  val focused = root?.let(::findFocusedEditable)
+    ?: return FocusPlan.NotEditable("$because, and no editable field holds input focus")
+  return FocusPlan.FocusedByTap(focused, because)
+}
+
+/**
+ * The first node under [root] that is editable and holds input focus — the same test
+ * `TrailblazeAccessibilityService.inputText` uses to find where it types.
+ */
+internal fun findFocusedEditable(root: TrailblazeNode): TrailblazeNode? {
+  val detail = root.driverDetail as? DriverNodeDetail.AndroidAccessibility
+  if (detail?.isEditable == true && detail.isFocused) return root
+  return root.children.firstNotNullOfOrNull(::findFocusedEditable)
 }
 
 /**
@@ -1478,13 +1539,13 @@ internal sealed interface FocusPlan {
  * that named a field.
  *
  * Declines when:
- * - the node has no bounds — the live-tree lookup is bounds-keyed;
  * - it carries no [DriverNodeDetail.AndroidAccessibility] detail;
- * - it isn't editable. A selector that names a label, a container, or the row around the field
- *   must fail loudly: `ACTION_FOCUS` on a non-editable node reports success while the text lands
- *   in whichever field was already focused;
+ * - it isn't editable ([FocusPlan.NotEditable]). `ACTION_FOCUS` on a non-editable node reports
+ *   success without making it the input target, so there is nothing to dispatch;
+ *   [planSelectorInputFocus] decides whether a field the tap focused takes the text instead;
  * - it isn't enabled — a disabled field's `requestFocus()` returns false and nothing would be
  *   typed;
+ * - the node has no bounds — the live-tree lookup is bounds-keyed;
  * - it advertises neither `ACTION_FOCUS` nor an already-focused state. A view that can't take
  *   input focus offers neither, so there is no dispatch that would make it receive the text.
  *
@@ -1494,9 +1555,9 @@ internal sealed interface FocusPlan {
  */
 internal fun planActionFocusRoute(node: TrailblazeNode): FocusPlan {
   val detail = node.driverDetail as? DriverNodeDetail.AndroidAccessibility
-    ?: return FocusPlan.NotFocusable("resolved node carries no Android accessibility detail")
+    ?: return FocusPlan.NotEditable("resolved node carries no Android accessibility detail")
   if (!detail.isEditable) {
-    return FocusPlan.NotFocusable(
+    return FocusPlan.NotEditable(
       "resolved node is not an editable field (className=${detail.className ?: "<unknown>"})",
     )
   }

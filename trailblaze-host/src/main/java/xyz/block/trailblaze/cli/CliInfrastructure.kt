@@ -946,9 +946,6 @@ internal sealed class DeviceResolution {
   /** Daemon unreachable / list call failed — exit with [INFRA_FAILED]. */
   data object InfraFailed : DeviceResolution()
 
-  /** Caller-side convenience for `?: return <code>` patterns. */
-  fun deviceSpecOrNull(): String? = (this as? Resolved)?.deviceSpec
-
   /** Map the non-Resolved cases to a `TrailblazeExitCode.code`. */
   fun exitCodeFallback(): Int = when (this) {
     is Resolved -> SUCCESS.code

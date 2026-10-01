@@ -208,7 +208,12 @@ class TrailExecutorImpl(
     // A configuration's recording legs resolve by exact name only, so a two-device trail decoded
     // without one lowers every configuration-keyed step with no recording — and deterministic
     // execution, having no LLM fallback, would report a fully recorded trail as unrecorded.
-    val selection = selectDeviceConfiguration(yamlContent, requested = deviceConfiguration, trailblazeYaml = trailblazeYaml)
+    val selection = selectDeviceConfiguration(
+      yamlContent,
+      requested = deviceConfiguration,
+      trailblazeYaml = trailblazeYaml,
+      bindsCompanionDevices = bindsCompanionDevices(sessionContext),
+    )
     selection.errorMessage()?.let { message ->
       return TrailExecutionResult(
         passed = false,
@@ -227,6 +232,7 @@ class TrailExecutorImpl(
         },
       )
     }
+    selection.singleDeviceFallbackMessage()?.let { onProgress?.invoke(it) }
 
     val trailItems = try {
       trailblazeYaml.decodeTrail(

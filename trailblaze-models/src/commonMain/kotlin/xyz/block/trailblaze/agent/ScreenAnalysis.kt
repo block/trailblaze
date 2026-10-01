@@ -318,7 +318,100 @@ data class ScreenAnalysis(
    * @see detectionConfidence for the confidence in this recovery action
    */
   val recoveryAction: RecoveryAction? = null,
-)
+
+  /**
+   * Set when the LLM call itself failed (auth error, timeout, unusable response), so this
+   * analysis is a placeholder rather than a reading of the screen. Callers must treat it as a
+   * failure, not as a low-confidence recommendation.
+   */
+  val llmError: String? = null,
+) {
+  /**
+   * The constructor and `copy` descriptors from before [llmError], kept so this module's published
+   * artifact stays binary-compatible — the same shim, for the same reason, as `ToolUsagesReport`'s.
+   * Appending a defaulted parameter REPLACES the old JVM signatures rather than adding to them, so
+   * a consumer compiled against an earlier artifact would otherwise throw `NoSuchMethodError`.
+   *
+   * [DeprecationLevel.HIDDEN] rather than plain overloads: as plain overloads, `copy(reasoning = x)`
+   * would be applicable to both and Kotlin picks the SHORTER one, silently clearing [llmError] and
+   * turning a failed LLM call back into a recommendation. The constructor repeats the old defaults
+   * so the synthetic `(…, int, DefaultConstructorMarker)` descriptor is restored too. The guard is
+   * the committed API baseline.
+   */
+  @Deprecated("Binary compatibility only", level = DeprecationLevel.HIDDEN)
+  constructor(
+    recommendedTool: String,
+    recommendedArgs: JsonObject,
+    reasoning: String,
+    screenSummary: String,
+    progressIndicators: List<String> = emptyList(),
+    potentialBlockers: List<String> = emptyList(),
+    alternativeApproaches: List<String> = emptyList(),
+    confidence: Confidence,
+    objectiveAppearsAchieved: Boolean = false,
+    objectiveAppearsImpossible: Boolean = false,
+    answer: String? = null,
+    suggestedHint: String? = null,
+    screenState: ExceptionalScreenState = ExceptionalScreenState.NORMAL,
+    detectionConfidence: Float = 1.0f,
+    recoveryAction: RecoveryAction? = null,
+  ) : this(
+    recommendedTool = recommendedTool,
+    recommendedArgs = recommendedArgs,
+    reasoning = reasoning,
+    screenSummary = screenSummary,
+    progressIndicators = progressIndicators,
+    potentialBlockers = potentialBlockers,
+    alternativeApproaches = alternativeApproaches,
+    confidence = confidence,
+    objectiveAppearsAchieved = objectiveAppearsAchieved,
+    objectiveAppearsImpossible = objectiveAppearsImpossible,
+    answer = answer,
+    suggestedHint = suggestedHint,
+    screenState = screenState,
+    detectionConfidence = detectionConfidence,
+    recoveryAction = recoveryAction,
+    llmError = null,
+  )
+
+  /** Carries [llmError] through: a caller compiled against the old signature had no way to name
+   *  it, so it cannot have meant to clear it. See the constructor above. */
+  @Deprecated("Binary compatibility only", level = DeprecationLevel.HIDDEN)
+  fun copy(
+    recommendedTool: String = this.recommendedTool,
+    recommendedArgs: JsonObject = this.recommendedArgs,
+    reasoning: String = this.reasoning,
+    screenSummary: String = this.screenSummary,
+    progressIndicators: List<String> = this.progressIndicators,
+    potentialBlockers: List<String> = this.potentialBlockers,
+    alternativeApproaches: List<String> = this.alternativeApproaches,
+    confidence: Confidence = this.confidence,
+    objectiveAppearsAchieved: Boolean = this.objectiveAppearsAchieved,
+    objectiveAppearsImpossible: Boolean = this.objectiveAppearsImpossible,
+    answer: String? = this.answer,
+    suggestedHint: String? = this.suggestedHint,
+    screenState: ExceptionalScreenState = this.screenState,
+    detectionConfidence: Float = this.detectionConfidence,
+    recoveryAction: RecoveryAction? = this.recoveryAction,
+  ): ScreenAnalysis = ScreenAnalysis(
+    recommendedTool = recommendedTool,
+    recommendedArgs = recommendedArgs,
+    reasoning = reasoning,
+    screenSummary = screenSummary,
+    progressIndicators = progressIndicators,
+    potentialBlockers = potentialBlockers,
+    alternativeApproaches = alternativeApproaches,
+    confidence = confidence,
+    objectiveAppearsAchieved = objectiveAppearsAchieved,
+    objectiveAppearsImpossible = objectiveAppearsImpossible,
+    answer = answer,
+    suggestedHint = suggestedHint,
+    screenState = screenState,
+    detectionConfidence = detectionConfidence,
+    recoveryAction = recoveryAction,
+    llmError = llmError,
+  )
+}
 
 /**
  * Confidence level for a screen analysis recommendation.

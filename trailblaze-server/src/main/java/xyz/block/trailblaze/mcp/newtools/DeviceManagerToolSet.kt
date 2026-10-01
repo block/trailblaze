@@ -17,7 +17,6 @@ import xyz.block.trailblaze.devices.WebInstanceIds
 import xyz.block.trailblaze.devices.WebViewportSpec
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.model.SessionId
-import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.mcp.BoundDeviceRosterMember
 import xyz.block.trailblaze.mcp.DeviceBusyException
 import xyz.block.trailblaze.mcp.DeviceClaimRegistry
@@ -1219,7 +1218,6 @@ class DeviceManagerToolSet(
     val sessionId = mcpBridge.runYaml(
       yaml = yaml,
       startNewSession = false,
-      agentImplementation = sessionContext?.agentImplementation ?: AgentImplementation.DEFAULT,
     )
 
     return buildString {

@@ -445,7 +445,8 @@ class TargetToolBaselineGenerator(
   }
 
   /**
-   * Drivers this scripted tool applies to, derived from `_meta["trailblaze/supportedPlatforms"]`.
+   * Drivers this scripted tool applies to, derived from `_meta["trailblaze/supportedPlatforms"]`
+   * and `_meta["trailblaze/supportedDrivers"]`.
    *
    * The metadata key is set by the trailmap loader from the descriptor's `supportedPlatforms:`
    * field. Values are platform names \u2014 `"android"`, `"ios"`, `"web"`, or `"compose"` \u2014
@@ -462,22 +463,24 @@ class TargetToolBaselineGenerator(
     inlineScript: InlineScriptToolConfig,
     allDrivers: Set<TrailblazeDriverType>,
   ): Set<TrailblazeDriverType> {
-    val supportedPlatforms = readSupportedPlatforms(inlineScript.meta) ?: return allDrivers
-    if (supportedPlatforms.isEmpty()) return allDrivers
+    val supportedPlatforms = readMetaList(inlineScript.meta, "trailblaze/supportedPlatforms").orEmpty()
+    // `supportedDrivers` narrows further, the same way the runtime gate reads it: a tool declaring
+    // `[ios-host]` is not registered in an `ios-axe` session even though both are iOS.
+    val supportedDrivers = readMetaList(inlineScript.meta, "trailblaze/supportedDrivers").orEmpty()
     return allDrivers.filterTo(linkedSetOf()) { dt ->
-      dt.platform.name.lowercase() in supportedPlatforms
+      (supportedPlatforms.isEmpty() || dt.platform.name.lowercase() in supportedPlatforms) &&
+        (supportedDrivers.isEmpty() || dt.yamlKey.lowercase() in supportedDrivers)
     }
   }
 
   /**
-   * Parses `meta["trailblaze/supportedPlatforms"]` as a list of lowercase platform names,
-   * or returns null when the key is absent / malformed. Malformed in-line entries (non-
-   * string array members) get silently dropped; the doc still renders against the
-   * remaining valid entries rather than failing the whole generator run on a typo in one
-   * descriptor's metadata.
+   * Parses `meta[key]` as a list of lowercase names, or returns null when the key is absent /
+   * malformed. Malformed in-line entries (non-string array members) get silently dropped; the doc
+   * still renders against the remaining valid entries rather than failing the whole generator run
+   * on a typo in one descriptor's metadata.
    */
-  private fun readSupportedPlatforms(meta: JsonObject?): Set<String>? {
-    val raw = meta?.get("trailblaze/supportedPlatforms") ?: return null
+  private fun readMetaList(meta: JsonObject?, key: String): Set<String>? {
+    val raw = meta?.get(key) ?: return null
     val array: JsonArray = runCatching { raw.jsonArray }.getOrNull() ?: return null
     return array.mapNotNullTo(linkedSetOf()) { element ->
       runCatching { element.jsonPrimitive.content.lowercase() }.getOrNull()

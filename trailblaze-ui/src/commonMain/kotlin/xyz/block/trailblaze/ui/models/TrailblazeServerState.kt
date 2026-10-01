@@ -7,7 +7,6 @@ import xyz.block.trailblaze.devices.TrailblazeDevicePort
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.llm.TrailblazeLlmProvider
-import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.model.SELF_HEAL_DEFAULT
 import xyz.block.trailblaze.ui.tabs.session.SessionViewMode
 
@@ -90,20 +89,6 @@ data class TrailblazeServerState(
      * normal speed and says why.
      */
     val turboEnabled: Boolean? = null,
-    /**
-     * Agent implementation the user picked in the desktop app, or `null` when they never picked
-     * one.
-     *
-     * Tri-state like [turboEnabled], for the reason `TrailblazeJson` spells out: with
-     * `encodeDefaults = false` only a non-default value is written, so `null` is the one state
-     * that stays absent from the settings file. Readers resolve absence to
-     * [AgentImplementation.DEFAULT] themselves, which keeps "never chose" distinguishable from
-     * "chose today's default". Always-encoding a non-nullable field would instead freeze the
-     * current default into every existing user's config on the next settings write, and the
-     * persisted tier of agent resolution would then pin them to it — making the next default
-     * change unshippable.
-     */
-    val agentImplementation: AgentImplementation? = null,
     val yamlContent: String = """
 trail:
   - step: click back
@@ -205,21 +190,12 @@ trail:
     val cliDevicePlatform: String? = null,
     // Agent execution location: true = host controls via RPC, false = agent runs entirely on-device
     val preferHostAgent: Boolean = true,
-    // Save the set-of-mark annotated screenshot variant to logs. The annotated
-    // bytes are *always* sent to the LLM (set-of-mark improves model accuracy);
-    // this flag only controls which variant gets persisted to `LogsRepo` for
-    // inspection. When false, the un-annotated (raw) screenshot is saved
-    // instead — useful when the saved screenshots feed downstream tooling that
-    // wants clean pixels (e.g. waypoint authoring promotes raw screenshots as
-    // committed examples).
-    val saveAnnotatedScreenshots: Boolean = true,
     /**
-     * Persisted per-machine cap on LLM calls per objective for the legacy TRAILBLAZE_RUNNER
-     * agent. Set via `trailblaze config max-llm-calls <N>`. The CLI flag, the
+     * Persisted per-machine cap on LLM calls per objective. Set via `trailblaze config max-llm-calls <N>`. The CLI flag, the
      * `TRAILBLAZE_MAX_LLM_CALLS` env var, and workspace `trailblaze.yaml`
      * `defaults.max-llm-calls` all take precedence over this field; it kicks in only when
      * the higher tiers are silent. Null = inherit from those tiers (or fall back to the
-     * runner's built-in default when they are all silent). See
+     * agent's built-in default when they are all silent). See
      * `TrailCommand.resolveEffectiveMaxLlmCalls` for the full chain.
      */
     val maxLlmCalls: Int? = null,

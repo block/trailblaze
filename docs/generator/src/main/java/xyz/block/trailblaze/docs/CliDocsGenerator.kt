@@ -172,6 +172,15 @@ class CliDocsGenerator(
     appendLine(spec.usageMessage().description().joinToString(" ").stripPicocli().escapeMdxUnsafeUrls())
     appendLine()
 
+    // Every other name the parser answers to. An alias is kept so old trails and scripts keep
+    // working, which means readers meet it — and anything reading this file as the command set
+    // must resolve it, or the alias becomes a way around every option check.
+    val aliases = spec.aliases()
+    if (aliases.isNotEmpty()) {
+      appendLine("**Aliases:** " + aliases.joinToString(", ") { "`$parentPath $it`" })
+      appendLine()
+    }
+
     // Synopsis — show subcommand usage patterns if present (hidden-filtered).
     val visibleSubcommandsHere = commandLine.subcommands
       .filterValues { !it.commandSpec.usageMessage().hidden() }
@@ -260,10 +269,7 @@ class CliDocsGenerator(
     appendLine("trailblaze config llm anthropic/claude-sonnet-5      # Set both provider + model")
     appendLine("trailblaze config llm-provider openai                # Set provider only")
     appendLine("trailblaze config llm-model gpt-5.6-terra            # Set model only")
-    appendLine("trailblaze config agent MULTI_AGENT_V3               # Set agent implementation")
     appendLine("trailblaze config models                             # List available LLM models")
-    appendLine("trailblaze config agents                             # List agent implementations")
-    appendLine("trailblaze config drivers                            # List driver types")
     appendLine("```")
     appendLine()
   }
@@ -275,7 +281,7 @@ class CliDocsGenerator(
     appendLine("| Option | Description | Default |")
     appendLine("|--------|-------------|---------|")
     filteredOptions.forEach { option ->
-      val names = option.names().joinToString(", ") { "`$it`" }
+      val names = spelledNames(option).joinToString(", ") { "`$it`" }
       val desc = option.description().joinToString(" ").stripPicocli().escapeMdxUnsafeUrls().replace("|", "\\|")
       val default = if (option.defaultValue() != null && option.defaultValue().isNotEmpty()) {
         "`${option.defaultValue()}`"
@@ -306,6 +312,22 @@ class CliDocsGenerator(
 
     internal fun escapeMdxUnsafeUrls(text: String): String =
       MDX_UNSAFE_URL_PATTERN.replace(text) { "`${it.value}`" }
+
+    /**
+     * Every spelling the parser accepts, not just the declared ones.
+     *
+     * A picocli `negatable` boolean also answers to `--no-<name>`, and picocli's own `--help` says
+     * so (`--[no-]turbo`). Listing only `--turbo` left that spelling undocumented for the reader and
+     * invisible to anything that reads this table as the option set.
+     */
+    internal fun spelledNames(option: OptionSpec): List<String> = option.names().flatMap { name ->
+      // The command's transformer owns the spelling, so a custom one stays authoritative. It is
+      // identity for names with no negative form — short options most of all — which stay single.
+      val command = option.command()
+      if (!option.negatable() || command == null) return@flatMap listOf(name)
+      val negative = command.negatableOptionTransformer().makeNegative(name, command)
+      if (negative == name) listOf(name) else listOf(name, negative)
+    }
   }
 
   private fun String.escapeMdxUnsafeUrls(): String = Companion.escapeMdxUnsafeUrls(this)

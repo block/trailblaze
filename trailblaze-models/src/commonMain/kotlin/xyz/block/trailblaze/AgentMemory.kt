@@ -15,9 +15,8 @@ import xyz.block.trailblaze.yaml.TrailArgTokens
  * This class allows the trailblaze agent to remember data from the screen for reference later.
  * Values are kept in a map of the variable name to the value being remembered.
  *
- * Backed by [concurrentMutableMap] (`ConcurrentHashMap` on JVM/Android) so the host's shared
- * instance — see `TrailblazeHostYamlRunner.runHostV3WithAccessibilityYaml` — stays safe even
- * if tool execution is ever parallelized. Single-key reads/writes are atomic;
+ * Backed by [concurrentMutableMap] (`ConcurrentHashMap` on JVM/Android) so a shared instance
+ * stays safe even if tool execution is ever parallelized. Single-key reads/writes are atomic;
  * `interpolateVariables` does N independent gets, which is the safe pattern for a concurrent
  * hash map.
  */

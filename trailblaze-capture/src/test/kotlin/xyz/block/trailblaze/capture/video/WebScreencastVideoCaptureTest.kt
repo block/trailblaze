@@ -5,7 +5,9 @@ import java.awt.image.BufferedImage
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.nio.file.Files
+import java.util.concurrent.TimeUnit
 import javax.imageio.ImageIO
+import kotlin.math.abs
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
@@ -13,6 +15,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.test.fail
 import xyz.block.trailblaze.capture.CaptureOptions
 import xyz.block.trailblaze.capture.CaptureStream
 import xyz.block.trailblaze.capture.model.CaptureArtifact
@@ -210,5 +213,81 @@ class WebScreencastVideoCaptureTest {
     val late = FakeFeed()
     WebScreencastFeedRegistry.register(deviceId, late)
     assertEquals(0, late.subscriberCount, "the stopped recording no longer watches the device")
+  }
+
+  @Test
+  fun `a webm recording of full-range browser frames is TV range and keeps its colours`() {
+    if (!WallClockMuxConsumer.Output.vp9EncoderAvailable()) {
+      println("skipping: ffmpeg has no libvpx-vp9 encoder")
+      return
+    }
+    // Screencast frames are JPEG, which is always full range. Chrome refuses to decode a VP9
+    // profile 0 stream tagged full range, so the recording must come out TV range — with the
+    // pixels actually converted, or every colour shifts (a 40 grey tagged TV without converting
+    // plays back near 28). Two flat halves keep the samples clear of JPEG and chroma edges.
+    //
+    // This only catches a regression on ffmpeg 7.1 and later. The Hermit-pinned ffmpeg (6.0), which
+    // CI uses, converts these frames to TV range on the pixel format alone, so there this test
+    // passes with the fix reverted. There the args tests in RecordingFormatTest are the guard.
+    val capture = WebScreencastVideoCapture(fallback = null, format = RecordingFormat.WEBM).also { captures += it }
+    capture.start(sessionDir, deviceId, appId = null)
+    val feed = FakeFeed()
+    WebScreencastFeedRegistry.register(deviceId, feed)
+    val t0 = System.currentTimeMillis()
+    feed.emit(twoTone(DARK, LIGHT), tsMs = t0)
+    feed.emit(twoTone(DARK, LIGHT), tsMs = t0 + 500)
+
+    val recording = assertNotNull(capture.stop(CaptureOptions(captureVideo = true))).file
+    assertEquals("webm", recording.extension)
+    val range = stdoutOf(
+      "ffprobe", "-v", "error", "-select_streams", "v:0",
+      "-show_entries", "stream=color_range", "-of", "csv=p=0", recording.absolutePath,
+    ).decodeToString().trim()
+    assertEquals("tv", range, "Chrome fails to decode a full-range (pc) VP9 recording")
+
+    val rgb = stdoutOf(
+      "ffmpeg", "-v", "error", "-i", recording.absolutePath,
+      "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-",
+    )
+    assertEquals(TWO_TONE_WIDTH * TWO_TONE_HEIGHT * 3, rgb.size, "one decoded rgb24 frame")
+    fun redAt(x: Int, y: Int) = rgb[(y * TWO_TONE_WIDTH + x) * 3].toInt() and 0xFF
+    val dark = redAt(TWO_TONE_WIDTH / 8, TWO_TONE_HEIGHT / 2)
+    val light = redAt(TWO_TONE_WIDTH * 7 / 8, TWO_TONE_HEIGHT / 2)
+    assertTrue(abs(dark - DARK) <= COLOUR_TOLERANCE, "dark half plays back as $dark, recorded as $DARK")
+    assertTrue(abs(light - LIGHT) <= COLOUR_TOLERANCE, "light half plays back as $light, recorded as $LIGHT")
+  }
+
+  /** Stdout goes to a file, so the hang guard bounds the whole call rather than a blocking read. */
+  private fun stdoutOf(vararg command: String): ByteArray {
+    val out = File(sessionDir, "stdout-${command.first()}.bin")
+    val process = ProcessBuilder(*command)
+      .redirectOutput(out)
+      .redirectError(ProcessBuilder.Redirect.DISCARD)
+      .start()
+    if (!process.waitFor(60, TimeUnit.SECONDS)) {
+      process.destroyForcibly()
+      fail("${command.first()} did not finish within 60s")
+    }
+    assertEquals(0, process.exitValue(), "${command.first()} failed")
+    return out.readBytes()
+  }
+
+  private fun twoTone(left: Int, right: Int): ByteArray {
+    val image = BufferedImage(TWO_TONE_WIDTH, TWO_TONE_HEIGHT, BufferedImage.TYPE_INT_RGB)
+    val g = image.createGraphics()
+    g.color = Color(left, left, left)
+    g.fillRect(0, 0, TWO_TONE_WIDTH / 2, TWO_TONE_HEIGHT)
+    g.color = Color(right, right, right)
+    g.fillRect(TWO_TONE_WIDTH / 2, 0, TWO_TONE_WIDTH / 2, TWO_TONE_HEIGHT)
+    g.dispose()
+    return ByteArrayOutputStream().also { ImageIO.write(image, "jpg", it) }.toByteArray()
+  }
+
+  private companion object {
+    const val TWO_TONE_WIDTH = 128
+    const val TWO_TONE_HEIGHT = 96
+    const val DARK = 40
+    const val LIGHT = 200
+    const val COLOUR_TOLERANCE = 4
   }
 }

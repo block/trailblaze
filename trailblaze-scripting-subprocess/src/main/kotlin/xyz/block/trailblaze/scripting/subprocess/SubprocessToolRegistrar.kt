@@ -114,7 +114,7 @@ object SubprocessToolRegistrar {
     if (skipped.isNotEmpty()) {
       val sessionDescription = drivers.joinToString(" + ") { "${it.platform.name} / ${it.yamlKey}" }
       Console.log(
-        "$logPrefix Not spawning ${skipped.size} subprocess scripted tool(s) that don't apply to a " +
+        "$logPrefix Not registering ${skipped.size} scripted tool(s) that don't apply to a " +
           "$sessionDescription session: ${skipped.joinToString(", ") { it.name }}",
       )
     }

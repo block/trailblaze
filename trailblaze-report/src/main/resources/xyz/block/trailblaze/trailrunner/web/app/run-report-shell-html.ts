@@ -243,11 +243,12 @@ body:has(> #tb-shell) > #app { flex: 1 1 auto; height: auto; min-height: 0; }
 .tb-analysis-meta { color: var(--tb-analysis-muted); font-size: 12px; }
 .tb-analysis-toolbar { padding: 4px 0; font-size: 13px; }
 .tb-analysis-copy-error { color: var(--tb-analysis-copy-error); font-size: 12px; }
-.tb-analysis-focus { display: grid; gap: 32px; }
-.tb-analysis-hero { display: grid; gap: 20px; padding: 34px 0 8px; }
+.tb-analysis-focus { display: grid; gap: 20px; }
+.tb-analysis-hero { display: grid; gap: 16px; padding: 32px; border: 1px solid var(--tb-analysis-line); border-radius: 20px; background: var(--tb-analysis-card); }
 .tb-analysis-hero-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
-.tb-analysis-hero .tb-analysis-eyebrow { margin-top: 12px; }
-.tb-analysis-attention { max-width: 760px; color: var(--tb-analysis-deck); font-size: clamp(17px, 2vw, 22px); line-height: 1.45; letter-spacing: -.02em; }
+.tb-analysis-hero .tb-analysis-eyebrow { margin-top: 4px; }
+.tb-analysis-hero h1 { max-width: 100%; font-size: clamp(30px, 3.6vw, 46px); line-height: 1.12; letter-spacing: -.035em; }
+.tb-analysis-attention { max-width: 760px; color: var(--tb-analysis-deck); font-size: clamp(16px, 1.6vw, 19px); line-height: 1.5; letter-spacing: -.01em; }
 .tb-analysis-priority { display: grid; grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr); gap: 16px; align-items: stretch; }
 .tb-analysis-focus section { display: grid; align-content: start; gap: 14px; min-width: 0; }
 .tb-analysis-priority > section { padding: 25px; border: 1px solid var(--tb-analysis-line); border-radius: 20px; background: var(--tb-analysis-card); }
@@ -284,6 +285,7 @@ body:has(> #tb-shell) > #app { flex: 1 1 auto; height: auto; min-height: 0; }
 }
 @media (max-width: 480px) {
   .tb-analysis-toolbar { align-items: flex-start; flex-direction: column; }
+  .tb-analysis-hero { padding: 20px; }
   .tb-analysis-card, .tb-analysis-priority > section, .tb-analysis-detail-grid > section, .tb-analysis-lower { padding: 20px; }
 }
 .tb-shell-spinner {

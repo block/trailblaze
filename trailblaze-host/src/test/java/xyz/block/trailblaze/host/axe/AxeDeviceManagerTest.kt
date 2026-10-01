@@ -11,7 +11,7 @@ import xyz.block.trailblaze.host.ios.IosDriverAction
 /**
  * Unit tests for pure helpers on [AxeDeviceManager]. The resolver-poll loops
  * (`executeTapOnElement` / `executeAssertVisible` / `executeAssertNotVisible`) depend on
- * `AxeCli` subprocess calls and need a stubbable seam to unit-test — tracked separately.
+ * `AxeCli` subprocess calls; their read sharing is covered by [AxeDeviceManagerSharedReadsTest].
  */
 class AxeDeviceManagerTest {
 

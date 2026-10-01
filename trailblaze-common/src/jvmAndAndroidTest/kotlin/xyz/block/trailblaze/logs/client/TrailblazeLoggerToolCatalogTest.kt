@@ -91,7 +91,7 @@ class TrailblazeLoggerToolCatalogTest {
       traceId = TraceId.Companion.generate(TraceId.Companion.TraceOrigin.LLM),
       toolDescriptors = tools,
       requestContext = TrailblazeLog.LlmRequestContext(
-        agentImplementation = AgentImplementation.TRAILBLAZE_RUNNER,
+        agentImplementation = AgentImplementation.KOOG_STRATEGY_GRAPH,
         llmCallStrategy = LlmCallStrategy.DIRECT,
         agentTier = AgentTier.OUTER,
       ),

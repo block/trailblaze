@@ -112,7 +112,7 @@ class AndroidTestScreenState(
 
   private val compactElements: CompactScreenElements? by lazy {
     val tree = trailblazeNodeTree ?: return@lazy null
-    CompactScreenElements.buildForAndroid(tree, screenHeight = deviceHeight)
+    CompactScreenElements.buildForAndroid(tree, screenHeight = deviceHeight, screenWidth = deviceWidth)
   }
 
   override val viewHierarchyTextRepresentation: String? by lazy {

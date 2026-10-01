@@ -12,13 +12,16 @@ import xyz.block.trailblaze.api.ScreenshotScalingConfig
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
+import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.TraceId
-import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.mcp.TrailblazeMcpBridge
+import xyz.block.trailblaze.mcp.TrailblazeMcpSessionContext
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetScreenStateResponse
+import xyz.block.trailblaze.mcp.models.McpSessionId
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
+import xyz.block.trailblaze.toolcalls.SessionDeviceBindings
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 
 /**
@@ -60,6 +63,26 @@ class TrailExecutorDeviceConfigurationTest {
         recording:
           android:
             - hideKeyboard: {}
+          pos-pair:
+            - clearText: {}
+  """.trimIndent()
+
+  /** [oneConfigurationTrail] with no single-device entry beside the configuration. */
+  private val configurationOnlyTrail = """
+    config:
+      id: test/pos-pair-only
+      target: clock
+      devices:
+        pos-pair:
+          devices:
+            seller:
+              classifier: lab-a
+            buyer:
+              classifier: lab-b
+
+    trail:
+      - step: "Refund on the seller display"
+        recording:
           pos-pair:
             - clearText: {}
   """.trimIndent()
@@ -107,11 +130,12 @@ class TrailExecutorDeviceConfigurationTest {
 
   /**
    * The whole point of deriving: an agent that says `trail(action=RUN, name=…)` on a trail with one
-   * pairing means that pairing. Naming it as well is ceremony over a choice with a single option.
+   * pairing, in a session that has bound its devices, means that pairing. Naming it as well is
+   * ceremony over a choice with a single option.
    */
   @Test
   fun `a trail declaring one configuration binds it without being asked to`() {
-    val (result, dispatched) = runTrail(oneConfigurationTrail)
+    val (result, dispatched) = runTrail(oneConfigurationTrail, sessionContext = sessionWithCompanion())
 
     assertTrue(result.passed, "expected the trail to replay; failed: ${result.failureReason}")
     assertEquals(
@@ -119,6 +143,28 @@ class TrailExecutorDeviceConfigurationTest {
       dispatched,
       "the configuration's leg must be replayed, not the single-device `android:` leg",
     )
+  }
+
+  /**
+   * The same trail in a session that bound nothing beyond its own device: it declares an `android:`
+   * entry beside the pairing, so the run is single-device and replays that leg — as a daemon run
+   * with no device bindings does.
+   */
+  @Test
+  fun `a trail with single-device entries beside its configuration runs single-device without companions`() {
+    val (result, dispatched) = runTrail(oneConfigurationTrail)
+
+    assertTrue(result.passed, "expected the trail to replay; failed: ${result.failureReason}")
+    assertEquals(listOf("HideKeyboardTrailblazeTool"), dispatched)
+  }
+
+  /** A trail that declares ONLY its configuration has no single-device leg to fall back to. */
+  @Test
+  fun `a configuration-only trail binds its configuration even without companions`() {
+    val (result, dispatched) = runTrail(configurationOnlyTrail)
+
+    assertTrue(result.passed, "expected the trail to replay; failed: ${result.failureReason}")
+    assertEquals(listOf("ClearTextTrailblazeTool"), dispatched)
   }
 
   @Test
@@ -229,6 +275,7 @@ class TrailExecutorDeviceConfigurationTest {
   private fun runTrail(
     yaml: String,
     deviceConfiguration: String? = null,
+    sessionContext: TrailblazeMcpSessionContext? = null,
   ): Pair<TrailExecutionResult, List<String>> {
     val trailsDir = tempFolder.newFolder()
     File(trailsDir, "pair.trail.yaml").writeText(yaml)
@@ -236,12 +283,30 @@ class TrailExecutorDeviceConfigurationTest {
     val result = runBlocking {
       TrailExecutorImpl(
         mcpBridge = bridge,
-        sessionContext = null,
+        sessionContext = sessionContext,
         trailsDirectory = trailsDir.absolutePath,
         deviceClassifiersProvider = { listOf(TrailblazeDeviceClassifier("android")) },
       ).executeFromFile("pair.trail.yaml", deviceConfiguration = deviceConfiguration)
     }
     return result to bridge.dispatched
+  }
+
+  /** A session that has bound a second device under a name — what makes a run bind companions. */
+  private fun sessionWithCompanion() = TrailblazeMcpSessionContext(
+    mcpServerSession = null,
+    mcpSessionId = McpSessionId("mcp-session-under-test"),
+  ).also { context ->
+    listOf("seller" to "emulator-5554", "buyer" to "emulator-5556").forEach { (name, serial) ->
+      context.bindNamedDevice(
+        name,
+        SessionDeviceBindings.BoundDevice(
+          trailblazeDeviceId = TrailblazeDeviceId(serial, TrailblazeDevicePlatform.ANDROID),
+          trailblazeDeviceInfo = null,
+          description = null,
+          targetId = null,
+        ),
+      )
+    }
   }
 
   /** Captures the ordered tool class names dispatched to the device; every other method is inert. */
@@ -265,7 +330,6 @@ class TrailExecutorDeviceConfigurationTest {
     override suspend fun runYaml(
       yaml: String,
       startNewSession: Boolean,
-      agentImplementation: AgentImplementation,
     ): String = throw NotImplementedError()
     override fun getCurrentlySelectedDeviceId(): TrailblazeDeviceId? = null
     override suspend fun getCurrentScreenState(): ScreenState? = null

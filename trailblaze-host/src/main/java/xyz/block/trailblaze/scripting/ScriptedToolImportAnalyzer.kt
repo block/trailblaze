@@ -109,6 +109,13 @@ class ScriptedToolImportAnalyzer(
       val externals = buildList {
         add("node:*")
         addAll(knownNodeOnlyPackages)
+        // The SDK itself, which every tool imports. Walking whatever copy resolves here says
+        // nothing about the tool (a source checkout's bundler swaps it for the slim in-process
+        // entry) — and failing on it (a workspace's unpacked SDK dist dynamically imports an MCP
+        // transport that isn't installed) left every tool with no cached verdict, re-forking
+        // esbuild for each one on every host-driven tool call. Its subpaths are classified by
+        // [classifyHostOnlyImport] instead of walked.
+        add(SDK_PACKAGE)
       }
       val argv = listOf(
         esbuildBinary.absolutePath,
@@ -256,6 +263,10 @@ class ScriptedToolImportAnalyzer(
     // (`node:fs/promises`, etc.) are caught by the same `startsWith` check.
     if (path == "node:process") return null
     if (path.startsWith("node:")) return path
+    // The SDK is external, so its subpaths arrive here instead of being walked. Only the root
+    // and `/matcher` have an in-process entry; every other subpath (`/sub-process`, `/surveys`,
+    // …) is host-side code, and the in-process bundler couldn't resolve it anyway.
+    if (path.startsWith("$SDK_PACKAGE/") && path !in inProcessSdkSubpaths) return path
     // Map a possible subpath import back to its package root so the chain string stays
     // useful (`script.ts → axios`, not `script.ts → axios/lib/utils/foo`). The author
     // cares about the package they reached for, not which file inside it esbuild resolved.
@@ -377,6 +388,12 @@ class ScriptedToolImportAnalyzer(
 
   companion object {
     private val JSON_LENIENT = Json { ignoreUnknownKeys = true }
+
+    /** The scripting SDK package. esbuild's `--external` also covers its subpaths. */
+    private const val SDK_PACKAGE = "@trailblaze/scripting"
+
+    /** SDK subpaths the in-process bundler aliases, so a tool may import them on-device. */
+    private val inProcessSdkSubpaths = setOf("$SDK_PACKAGE/matcher")
 
     /**
      * Process-wide, because callers build a fresh analyzer for every session start and the daemon

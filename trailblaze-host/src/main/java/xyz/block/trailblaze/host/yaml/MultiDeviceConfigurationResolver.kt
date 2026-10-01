@@ -8,6 +8,7 @@ import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.recordings.TrailRecordings
 import xyz.block.trailblaze.yaml.TrailblazeYaml
 import xyz.block.trailblaze.yaml.unified.TrailblazeDeviceDefinition
+import xyz.block.trailblaze.yaml.unified.UnifiedTrailConfig
 import xyz.block.trailblaze.yaml.unified.UnifiedTrailTargets
 
 /**
@@ -58,18 +59,6 @@ object MultiDeviceConfigurationResolver {
   )
 
   /**
-   * Names of the CONFIGURATION entries this trail declares — empty for single-device trails
-   * (including every legacy v1 trail, since only the unified shape can declare configurations).
-   *
-   * Decode failures throw rather than returning empty: an undecodable `config:` on a trail that
-   * IS unified would otherwise silently downgrade a multi-device trail to a single-device run.
-   */
-  fun declaredConfigurationNames(yaml: String): Set<String> {
-    if (!TrailRecordings.isUnifiedTrailContent(yaml)) return emptySet()
-    return decodeConfigDevices(yaml).filterValues { it.isConfiguration }.keys
-  }
-
-  /**
    * The `target:` id the declared configuration's START device overrides with, or null when the
    * trail declares no configuration, the start device declares no override, or the trail isn't
    * unified.
@@ -79,10 +68,13 @@ object MultiDeviceConfigurationResolver {
    * target the start device will actually run, and reads them from the session target otherwise,
    * which is the wrong app whenever the start device overrides.
    *
-   * [selectedConfigurationName] is the run's effective selection (see [resolve]'s precedence) and
+   * [selectedConfigurationName] is the run's effective selection (see [selectConfigurationName]) and
    * is required to read the right start device on a trail declaring more than one configuration.
    * Without it every multi-configuration trail would force-stop the session default app, which is
-   * the exact defect this function exists to prevent, one level up.
+   * the exact defect this function exists to prevent, one level up. A null selection is read as a
+   * run that binds no companions: a configuration-only trail's sole configuration, but nothing for
+   * a trail that also declares single-device entries — that run is single-device, and force-
+   * stopping its configuration's start-device app would stop an app the run never launches.
    *
    * Deliberately total: a decode failure, an unmatched selection, or an unselected multi-
    * configuration trail all come back as null rather than throwing. [resolve] runs moments later on
@@ -90,20 +82,29 @@ object MultiDeviceConfigurationResolver {
    * an app-lifecycle step whose message says nothing about trail shape.
    */
   fun startDeviceTargetId(yaml: String, selectedConfigurationName: String? = null): String? = try {
-    if (!TrailRecordings.isUnifiedTrailContent(yaml)) {
-      null
-    } else {
-      val configurations = decodeConfigDevices(yaml).filterValues { it.isConfiguration }
-      val selected = when (val name = selectedConfigurationName?.takeIf { it.isNotBlank() }) {
-        null -> configurations.values.singleOrNull()
-        else -> configurations[name]
-      }
-      selected?.devices.orEmpty()
-        .values.firstOrNull()
-        ?.target
-    }
+    val config = decodeConfig(yaml)
+    val name = selectedConfigurationName?.takeIf { it.isNotBlank() }
+      ?: config.implicitMultiDeviceConfigurationName(bindsCompanionDevices = false)
+    name?.let { config.devices.orEmpty()[it] }
+      ?.takeIf { it.isConfiguration }
+      ?.devices.orEmpty()
+      .values.firstOrNull()
+      ?.target
   } catch (_: Exception) {
     null
+  }
+
+  /**
+   * The line explaining why a trail that declares a configuration runs single-device — a mixed
+   * trail with no companions bound — or null when it doesn't. Without it "why didn't my pair run?"
+   * has no answer in the run output. Total, like [startDeviceTargetId]: [resolve] owns the errors.
+   */
+  fun singleDeviceFallbackMessage(yaml: String, selectedConfigurationName: String?): String? {
+    if (selectedConfigurationName != null) return null
+    val declared = runCatching { decodeConfig(yaml).multiDeviceConfigurationNames }.getOrNull()
+    if (declared.isNullOrEmpty()) return null
+    return "Running single-device: no companion devices are bound (`--bind` / " +
+      "$DEVICE_BINDINGS_ENV_VAR), so the trail's device configuration ${declared.sorted()} is not used."
   }
 
   /**
@@ -113,7 +114,9 @@ object MultiDeviceConfigurationResolver {
    * [environmentConfigurationName] (`TRAILBLAZE_DEVICE_CONFIGURATION`, a daemon-wide default), and
    * a trail declaring exactly one configuration needs neither. A trail declaring more than one and
    * selecting neither is rejected — picking the first declared one would run a different device set
-   * than the author of the second one expected.
+   * than the author of the second one expected. A trail that ALSO declares ordinary single-device
+   * entries binds its configuration only when this run binds companions (see
+   * [selectConfigurationName]); otherwise this returns null and the run is single-device.
    *
    * **Which devices**: the FIRST declared name is the start device and binds to the launch device
    * ([primaryDeviceId]). Each remaining name → device binding comes from [requestDeviceBindings]
@@ -151,18 +154,15 @@ object MultiDeviceConfigurationResolver {
     // A non-unified (v1) trail declares no configuration rather than short-circuiting before
     // selection: returning null here would drop a per-request selection or binding silently, which
     // is the single-device run those fields exist to prevent.
-    val configurations = if (TrailRecordings.isUnifiedTrailContent(yaml)) {
-      decodeConfigDevices(yaml).filterValues { it.isConfiguration }
-    } else {
-      emptyMap()
-    }
+    val config = decodeConfig(yaml)
     val configurationName = selectConfigurationName(
-      declaredNames = configurations.keys,
+      config = config,
       requestConfigurationName = requestConfigurationName,
       environmentConfigurationName = environmentConfigurationName,
       requestDeviceBindingNames = requestDeviceBindings.keys,
+      rawDeviceBindings = rawDeviceBindings,
     ) ?: return null
-    val configuration = configurations.getValue(configurationName)
+    val configuration = config.devices.orEmpty().getValue(configurationName)
     val members = configuration.devices.orEmpty()
     // The first declared name is the start device: it binds to the LAUNCH device, so its driver is
     // the session's own and it never gets a companion connection. Computed before the validation
@@ -314,6 +314,27 @@ object MultiDeviceConfigurationResolver {
     ?: primaryDeviceId.trailblazeDevicePlatform
 
   /**
+   * [selectConfigurationName] over [yaml] — for a caller that needs the run's selection before
+   * [resolve] runs (validating it ahead of any device-side work, choosing which app to force-stop).
+   * Same inputs as [resolve], so the two cannot disagree about which configuration a run binds.
+   *
+   * A non-unified (v1) trail declares nothing, and a decode failure throws, both as in [resolve].
+   */
+  internal fun selectConfigurationName(
+    yaml: String,
+    requestConfigurationName: String?,
+    environmentConfigurationName: String?,
+    requestDeviceBindingNames: Set<String>,
+    rawDeviceBindings: String?,
+  ): String? = selectConfigurationName(
+    config = decodeConfig(yaml),
+    requestConfigurationName = requestConfigurationName,
+    environmentConfigurationName = environmentConfigurationName,
+    requestDeviceBindingNames = requestDeviceBindingNames,
+    rawDeviceBindings = rawDeviceBindings,
+  )
+
+  /**
    * The configuration name this run selects, before it is checked against what the trail declares:
    * the per-request field when it carries a non-blank one, else `TRAILBLAZE_DEVICE_CONFIGURATION`.
    *
@@ -344,13 +365,23 @@ object MultiDeviceConfigurationResolver {
    * Once the trail DOES declare configurations, an unmatched name from either source is an error:
    * silently binding a configuration nobody asked for is the wrong-device-set failure every rule
    * here exists to prevent.
+   *
+   * With no name from either source, the trail's shape and whether this run binds companions
+   * ([requestDeviceBindingNames] when non-empty, else [rawDeviceBindings]) decide, by
+   * [UnifiedTrailConfig.implicitMultiDeviceConfigurationName]. Bindings, not a selection, are the
+   * signal because they are what a CI lane that boots companions actually exports. Any binding
+   * counts, not just ones naming this configuration's members: a mistyped name then reaches
+   * [resolve]'s undeclared-binding error instead of quietly running single-device on a lane that
+   * booted companions for this trail.
    */
-  internal fun selectConfigurationName(
-    declaredNames: Set<String>,
+  private fun selectConfigurationName(
+    config: UnifiedTrailConfig,
     requestConfigurationName: String?,
     environmentConfigurationName: String?,
-    requestDeviceBindingNames: Set<String> = emptySet(),
+    requestDeviceBindingNames: Set<String>,
+    rawDeviceBindings: String?,
   ): String? {
+    val declaredNames = config.multiDeviceConfigurationNames
     val requested = requestConfigurationName?.takeIf { it.isNotBlank() }
     if (declaredNames.isEmpty()) {
       if (requested != null) {
@@ -376,7 +407,12 @@ object MultiDeviceConfigurationResolver {
       environmentConfigurationName = environmentConfigurationName,
     )
     if (selected == null) {
-      if (declaredNames.size > 1) {
+      // The env is parsed only where it can change the answer — a configuration-only trail binds
+      // its configuration either way — so a daemon-wide TRAILBLAZE_DEVICE_BINDINGS cannot fail
+      // selection for a run it doesn't affect; [resolve] parses (and validates) it for real.
+      val bindsCompanionDevices = requestDeviceBindingNames.isNotEmpty() ||
+        (config.declaresSingleDeviceEntries && parseDeviceBindings(rawDeviceBindings).isNotEmpty())
+      if (config.requiresExplicitMultiDeviceConfiguration(bindsCompanionDevices)) {
         throw TrailblazeException(
           "This trail declares ${declaredNames.size} device configurations ($declaredNames) and " +
             "this run selects none. Name one on $DEVICE_CONFIGURATION_REQUEST_FIELD, or set " +
@@ -385,7 +421,7 @@ object MultiDeviceConfigurationResolver {
             "others expected.",
         )
       }
-      return declaredNames.single()
+      return config.implicitMultiDeviceConfigurationName(bindsCompanionDevices)
     }
     if (selected !in declaredNames) {
       val source = if (requested != null) {
@@ -521,18 +557,22 @@ object MultiDeviceConfigurationResolver {
   }
 
   /**
-   * Config-only decode: recorded custom tools in the steps would throw on this default
-   * (custom-tool-free) YAML instance, but `config:` never contains tool recordings. Decode
-   * failures are re-thrown with context rather than swallowed — the caller already established
-   * this IS a unified trail, so an undecodable config here would otherwise silently downgrade a
-   * multi-device trail to a single-device session.
+   * Config-only decode; a non-unified (v1) trail comes back as an empty config, since only the
+   * unified shape can declare a configuration. Recorded custom tools in the steps would throw on
+   * this default (custom-tool-free) YAML instance, but `config:` never contains tool recordings.
+   * Decode failures of unified content are re-thrown with context rather than swallowed: an
+   * undecodable config would otherwise silently downgrade a multi-device trail to a single-device
+   * session.
    */
-  private fun decodeConfigDevices(yaml: String) = try {
-    TrailblazeYaml.Default.decodeUnifiedTrailConfig(yaml).devices.orEmpty()
-  } catch (e: Exception) {
-    throw TrailblazeException(
-      "Failed to decode this unified trail's `config:` block while resolving its device " +
-        "configuration: ${e.message}",
-    )
+  private fun decodeConfig(yaml: String): UnifiedTrailConfig {
+    if (!TrailRecordings.isUnifiedTrailContent(yaml)) return UnifiedTrailConfig()
+    return try {
+      TrailblazeYaml.Default.decodeUnifiedTrailConfig(yaml)
+    } catch (e: Exception) {
+      throw TrailblazeException(
+        "Failed to decode this unified trail's `config:` block while resolving its device " +
+          "configuration: ${e.message}",
+      )
+    }
   }
 }

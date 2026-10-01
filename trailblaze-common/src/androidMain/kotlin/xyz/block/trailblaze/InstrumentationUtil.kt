@@ -273,10 +273,6 @@ object InstrumentationUtil {
     }
   }
 
-  fun inputTextFast(text: String) {
-    execShellCommand("input text ${text.replace(" ", "%s")}")
-  }
-
   private fun keyPressShiftedToEvents(uiDevice: UiDevice, keyCode: Int) {
     uiDevice.pressKeyCode(keyCode, META_SHIFT_LEFT_ON)
   }

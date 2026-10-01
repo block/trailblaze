@@ -33,10 +33,14 @@ import {
   replayable,
   replayMemoryScaleKb,
   replayTickSeconds,
+  replayTrackKey,
+  replayTrackOpen,
   segmentAt,
   videoClipRate,
   heldClipTimeAt,
   heldClipsTimeAt,
+  replayOpeningMs,
+  replayRecordingStartsMs,
   videoClipTimeAt,
   followReplayHead,
   revealReplayRow,
@@ -448,6 +452,16 @@ describe("putting a recording on the shared clock", () => {
     // A lane held at its start holds the first recording's opening frame.
     expect(heldClipsTimeAt([binds[1]], laneT0, 0, true)).toEqual({ index: 0, at: 0 });
     expect(heldClipsTimeAt([], laneT0, 0, true)).toBeNull();
+  });
+
+  test("replay opens where the first recording starts when that is before the first capture", () => {
+    // A phone that recorded from before the run's clock began and first captured 10s in opens at
+    // 0, on its video, rather than skipping those 10s.
+    expect(replayOpeningMs(10_000, [-2_800])).toBe(0);
+    expect(replayOpeningMs(10_000, [4_000, 7_000])).toBe(4_000);
+    // A capture sooner than any recording still wins, and with no recording nothing changes.
+    expect(replayOpeningMs(3_000, [4_000])).toBe(3_000);
+    expect(replayOpeningMs(10_000, [])).toBe(10_000);
   });
 
   test("a lane held at its start shows its first frame instead of an empty pane", () => {
@@ -930,6 +944,27 @@ describe("aligning the clock by step", () => {
     expect(tablet.failure?.atMs).toBe(19_000);
     // The stops with no device followed are the segment starts, plus the death.
     expect(aligned.timeline.boundaries).toEqual([0, 15_000, 19_000, 20_000]);
+  });
+
+  test("a recording's start is weighed on the aligned axis, and only once it has loaded", () => {
+    const aligned = alignReplayByStep(buildReplayTimeline(paced));
+    const t0 = 1_700_000_000_000;
+    // The phone started recording 11s into its own run, inside its step 2 — which the aligned axis
+    // opens at 15s, so its video has picture from 16s on the axis, not 11s.
+    const phone = { index: 0, heldAtStart: false, recordings: [{ clip: { startMs: t0 + 11_000 }, t0, duration: 9 }] };
+    expect(replayRecordingStartsMs([phone], aligned)).toEqual([16_000]);
+    expect(replayRecordingStartsMs([phone], null)).toEqual([11_000]);
+    // A recorder already rolling before the run's clock began starts before the axis does.
+    const early = { index: 0, heldAtStart: false, recordings: [{ clip: { startMs: t0 - 2_800 }, t0, duration: 20 }] };
+    expect(replayOpeningMs(aligned.timeline.firstCaptureMs, replayRecordingStartsMs([early], aligned))).toBe(0);
+    // Not loaded yet — or never, on a decode error — is not counted, so the opening stays at the
+    // first capture instead of landing on panes with nothing to show.
+    const broken = { ...early, recordings: [{ ...early.recordings[0], duration: null }] };
+    expect(replayRecordingStartsMs([broken], aligned)).toEqual([]);
+    expect(replayOpeningMs(aligned.timeline.firstCaptureMs, replayRecordingStartsMs([broken], aligned))).toBe(aligned.timeline.firstCaptureMs);
+    // A lane held at its start shows its first frame throughout; an untimed run has no epoch to measure from.
+    expect(replayRecordingStartsMs([{ ...phone, heldAtStart: true }], aligned)).toEqual([0]);
+    expect(replayRecordingStartsMs([{ ...phone, recordings: [{ ...phone.recordings[0], t0: null }] }], aligned)).toEqual([]);
   });
 
   test("a fast device waits at the end of a segment, and its own clock holds there", () => {
@@ -1508,5 +1543,26 @@ describe("the zoomed ruler", () => {
     expect(fmtReplaySpan(600_000)).toBe("10 min");
     expect(fmtReplaySpan(5 * 3_600_000)).toBe("5 h");
     expect(fmtReplaySpan(10_956 * 60_000)).toBe("8 days");
+  });
+});
+
+describe("data tracks under the strip", () => {
+  test("every track starts collapsed, and opening one opens only that lane's track of that kind", () => {
+    const phone = { session: 0, label: "android-phone" };
+    const tablet = { session: 1, label: "ios-ipad" };
+    const open: Record<string, boolean> = {};
+    expect(replayTrackOpen(open, replayTrackKey(phone, "memory"))).toBe(false);
+    open[replayTrackKey(phone, "memory")] = true;
+    expect(replayTrackOpen(open, replayTrackKey(phone, "memory"))).toBe(true);
+    expect(replayTrackOpen(open, replayTrackKey(tablet, "memory"))).toBe(false);
+  });
+
+  test("a track's key follows its device, not its position among the shown lanes", () => {
+    // Hiding the lane before it shifts its index; the key must not change with it.
+    const shown = { index: 1, session: 2, label: "ios-ipad" };
+    const afterHidingTheOneBefore = { ...shown, index: 0 };
+    expect(replayTrackKey(afterHidingTheOneBefore, "memory")).toBe(replayTrackKey(shown, "memory"));
+    // Two devices driven by ONE session are different lanes, so the label is part of the key.
+    expect(replayTrackKey({ session: 0, label: "server" }, "memory")).not.toBe(replayTrackKey({ session: 0, label: "kitchen" }, "memory"));
   });
 });

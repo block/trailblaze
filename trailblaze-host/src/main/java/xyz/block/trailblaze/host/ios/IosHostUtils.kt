@@ -34,27 +34,6 @@ object IosHostUtils {
     IosHostSimctlUtils.listInstalledAppIds(deviceId).toSet()
 
   /**
-   * Returns a map of bundle ID → display name for all installed apps on the given simulator.
-   *
-   * Parses the display name from the `CFBundleName` field in `xcrun simctl listapps` output.
-   * Apps without a `CFBundleName` entry are still included in the result with an empty display name.
-   *
-   * @param deviceId The simulator device ID
-   * @return Map of bundleId to CFBundleName (display name)
-   */
-  fun getInstalledAppsWithDisplayNames(deviceId: String): Map<String, String> {
-    if (!isMacOs()) return emptyMap()
-    val output: CommandProcessResult = TrailblazeProcessBuilderUtils.createProcessBuilder(
-      SimctlCommand.argv(
-        "listapps",
-        deviceId,
-      ),
-    ).runProcess {}
-
-    return parseInstalledAppsWithDisplayNames(output.outputLines)
-  }
-
-  /**
    * Parses a map of bundle ID → display name from `xcrun simctl listapps` output lines.
    *
    * The output is a plist-style format where each app block looks like:
@@ -99,21 +78,6 @@ object IosHostUtils {
     }
 
     return result
-  }
-
-  /**
-   * Dismisses passkey-related system prompts on an iOS simulator. iOS may trigger passkey
-   * authentication during sign-in, showing system dialogs ("Bluetooth Off", "Scan QR Code") that
-   * are invisible to Maestro's accessibility tree. This terminates the AuthenticationServicesUI
-   * process via simctl, which cancels the passkey flow and lets the app fall back to its standard
-   * verification path. Safe to call even if no passkey dialog is present.
-   */
-  fun dismissPasskeyDialogIfPresent(deviceId: String) {
-    if (!isMacOs()) return
-    TrailblazeProcessBuilderUtils.createProcessBuilder(
-        SimctlCommand.argv("terminate", deviceId, "com.apple.AuthenticationServicesUI"),
-      )
-      .runProcess {}
   }
 
   fun clearAppDataContainer(deviceId: String, appId: String) {
@@ -237,9 +201,6 @@ object IosHostUtils {
    * Supports both XML plist format (parsed in Kotlin) and binary plist format
    * (converted using plutil, which is bundled with Xcode/macOS).
    *
-   * If you need multiple keys from the same plist, use [readPlistKeys] instead
-   * to avoid redundant file reads / plutil conversions.
-   *
    * @return The value for the key, or null if the key doesn't exist or an error occurs
    */
   fun readPlistKey(plistPath: String, key: String): String? {
@@ -248,22 +209,6 @@ object IosHostUtils {
       parseXmlPlistKey(xmlContent, key)
     } catch (e: Exception) {
       null
-    }
-  }
-
-  /**
-   * Reads multiple keys from a plist file in a single pass.
-   * The plist is read and (if binary) converted to XML only once.
-   *
-   * @return Map of key to value (value is null if the key doesn't exist)
-   */
-  fun readPlistKeys(plistPath: String, keys: List<String>): Map<String, String?> {
-    return try {
-      val xmlContent = getPlistXmlContent(plistPath)
-        ?: return keys.associateWith { null }
-      keys.associateWith { parseXmlPlistKey(xmlContent, it) }
-    } catch (e: Exception) {
-      keys.associateWith { null }
     }
   }
 
@@ -310,5 +255,4 @@ object IosHostUtils {
     val keyPattern = Regex("<key>\\s*${Regex.escape(key)}\\s*</key>\\s*<(string|integer|real)>([^<]*)</(string|integer|real)>")
     return keyPattern.find(content)?.groupValues?.get(2)?.trim()
   }
-
 }

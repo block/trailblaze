@@ -81,6 +81,35 @@ describe("fromMeta: device block", () => {
     expect(ctx).toBeDefined();
     expect(ctx?.device.instanceId).toBeUndefined();
   });
+
+  test("trailblazePort present is parsed onto ctx.device", () => {
+    const ctx = fromMeta(
+      withDevice({
+        platform: "ios",
+        widthPixels: 1170,
+        heightPixels: 2532,
+        driverType: "ios-host",
+        trailblazePort: 53187,
+      }),
+    );
+    expect(ctx?.device.trailblazePort).toBe(53187);
+  });
+
+  test("trailblazePort absent or non-integer is undefined, envelope still parses", () => {
+    for (const port of [undefined, "53187", 53187.5]) {
+      const ctx = fromMeta(
+        withDevice({
+          platform: "ios",
+          widthPixels: 1170,
+          heightPixels: 2532,
+          driverType: "ios-host",
+          ...(port !== undefined ? { trailblazePort: port } : {}),
+        }),
+      );
+      expect(ctx).toBeDefined();
+      expect(ctx?.device.trailblazePort).toBeUndefined();
+    }
+  });
 });
 
 describe("fromMeta: target block", () => {

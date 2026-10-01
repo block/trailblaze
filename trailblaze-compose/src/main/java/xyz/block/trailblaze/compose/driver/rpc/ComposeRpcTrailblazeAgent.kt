@@ -241,10 +241,9 @@ class ComposeRpcTrailblazeAgent(
       screenStateProvider = screenStateProvider,
     )
     // Capture ONE post-batch screenshot + view hierarchy for the HTML report, matching the
-    // pre-BaseTrailblazeAgent shape: once per batch, not once per tool. The default TRAILBLAZE_RUNNER
-    // path's recorded `tools:` blocks (a whole block dispatched as one batch) keep their single
-    // screenshot, while the KOOG path — which dispatches one tool per call — naturally gets one
-    // screenshot per tool. logScreenStateAfterExecution swallows RPC failures, so an errored batch
+    // pre-BaseTrailblazeAgent shape: once per batch, not once per tool. Recorded `tools:` blocks (a
+    // whole block replayed as one batch) keep their single screenshot, while the Koog agent — which
+    // dispatches one tool per call — naturally gets one screenshot per tool. logScreenStateAfterExecution swallows RPC failures, so an errored batch
     // still returns cleanly.
     val totalTimeMs =
       Clock.System.now().toEpochMilliseconds() - overallStartTime.toEpochMilliseconds()

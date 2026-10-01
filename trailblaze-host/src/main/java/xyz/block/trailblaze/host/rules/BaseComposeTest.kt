@@ -3,7 +3,7 @@ package xyz.block.trailblaze.host.rules
 import androidx.compose.ui.test.ExperimentalTestApi
 import kotlinx.datetime.Clock
 import xyz.block.trailblaze.agent.TrailblazeElementComparator
-import xyz.block.trailblaze.agent.TrailblazeRunner
+import xyz.block.trailblaze.agent.TrailblazeSystemPrompt
 import xyz.block.trailblaze.compose.driver.ComposeTrailblazeAgent
 import xyz.block.trailblaze.compose.driver.tools.ComposeToolSetIds
 import xyz.block.trailblaze.compose.target.ComposeTestTarget
@@ -18,6 +18,7 @@ import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionStatus
+import xyz.block.trailblaze.mcp.agent.KoogTestAgentRunner
 import xyz.block.trailblaze.model.TrailblazeConfig
 import xyz.block.trailblaze.rules.TrailblazeLoggingRule
 import xyz.block.trailblaze.rules.TrailblazeRunnerUtil
@@ -116,26 +117,27 @@ class BaseComposeTest(
 
     val screenStateProvider = agent.screenStateProvider
 
-    val trailblazeRunner =
-      TrailblazeRunner(
-        screenStateProvider = screenStateProvider,
-        agent = agent,
-        llmClient = dynamicLlmClient.createLlmClient(),
-        trailblazeLlmModel = trailblazeLlmModel,
-        trailblazeToolRepo = toolRepo,
-        systemPromptTemplate = COMPOSE_SYSTEM_PROMPT,
-        trailblazeLogger = loggingRule.logger,
-        sessionProvider = {
-          loggingRule.session ?: error("Session not available - ensure test is running")
-        },
-      )
-
     val elementComparator =
       TrailblazeElementComparator(
         screenStateProvider = screenStateProvider,
         llmClient = dynamicLlmClient.createLlmClient(),
         trailblazeLlmModel = trailblazeLlmModel,
         toolRepo = toolRepo,
+      )
+
+    val trailblazeRunner =
+      KoogTestAgentRunner(
+        agent = agent,
+        toolRepo = toolRepo,
+        screenStateProvider = screenStateProvider,
+        elementComparator = elementComparator,
+        llmClient = dynamicLlmClient.createLlmClient(),
+        trailblazeLlmModel = trailblazeLlmModel,
+        logger = loggingRule.logger,
+        sessionProvider = {
+          loggingRule.session ?: error("Session not available - ensure test is running")
+        },
+        systemPromptTemplate = TrailblazeSystemPrompt.compose(COMPOSE_SYSTEM_PROMPT),
       )
 
     val trailblazeRunnerUtil =

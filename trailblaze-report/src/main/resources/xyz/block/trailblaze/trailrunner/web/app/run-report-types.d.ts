@@ -143,6 +143,11 @@ interface TraceChild {
   /** This dispatch's own captured frame (its log's, else the driver log in its span) — the
    * screenshot the preview pane shows when the child is selected. Absent when none was captured. */
   screenshotFile?: string | null;
+  /** When this dispatch's frame was taken — see TraceStep.shotEndTs. */
+  shotEndTs?: number | null;
+  /** The captures in this dispatch's span that have no screenshot, by their stamped `captureId` —
+   * how a screenshot-less capture's strings find this row. Absent when there are none. */
+  captureIds?: string[];
   /** Tap/swipe/assert overlay for this dispatch's frame (see ActionMark). */
   mark?: ActionMark | null;
   /** Live Trail Runner detail source. Deliberately omitted from the slim shared-report payload. */
@@ -163,6 +168,9 @@ interface TraceStep {
   ok: boolean;
   err: string | null;
   screenshotFile: string | null;
+  /** Every capture folded into this row that has no screenshot, by its stamped `captureId` (see
+   * TraceChild.captureIds). Absent when there are none. */
+  captureIds?: string[];
   /** True for top-level trail steps (ObjectiveStartLog) — starts a STEP group header. */
   objective: boolean;
   /** True when the objective is the trail's `trailhead:` (step 0) — rendered as TRAILHEAD, unnumbered. */
@@ -192,6 +200,12 @@ interface TraceStep {
   shotTs?: number | null;
   markTs?: number | null;
   /**
+   * When `screenshotFile` was actually taken: the end of the record that carries it (a driver
+   * screenshots after its action completes, so `shotTs`/`ts` are up to that record's duration
+   * early). What a step thumbnail's hover playback rests on. Absent when no record carries it.
+   */
+  shotEndTs?: number | null;
+  /**
    * Full call content as trail-file YAML — a tool row's complete arguments (`- toolName:` +
    * indented args, the WASM report's toolToYaml shape) or a raw device action's full fields (the
    * untruncated assert condition). Rendered expanded under the SELECTED row, so what a step
@@ -204,6 +218,8 @@ interface TraceStep {
    * that lets the timeline open this call's transcript/usage. Absent on every other row.
    */
   llm?: number | null;
+  /** A decision-request row: rendered as its own event kind, never as an LLM call. */
+  decision?: boolean;
   /**
    * Turn-level trace id shared by an LLM request and the tool/action rows it produced. `llm` is
    * the durable positional link; this id is a compatibility fallback for older report rows.
@@ -240,7 +256,11 @@ interface RawTraceRow extends Partial<Omit<TraceStep, "children">> {
    * trailblazeNodeTree || viewHierarchy). Lifted into SessionPayload.hierarchies at share time
    * (traceHierarchies); never embedded on the row itself. */
   viewHierarchy?: unknown;
+  /** The capture id of the log that supplied a folded action row's viewHierarchy. */
+  _shotCapture?: unknown;
   _logs?: unknown[];
+  /** Tool rows only: the latest end of any tool in the row's batch — the host-clock span its driver cues are judged by. */
+  _cueEnd?: number | null;
 }
 
 /** One parsed part of an LLM response: a tool call (with optional extracted reasoning) or text. */
@@ -302,6 +322,15 @@ interface LlmCall {
   label: string;
   instructions: string | null;
   response: LlmResponsePart[];
+  /**
+   * `'decision'` for a decision request (TrailblazeDecisionRequestLog): typed questions answered
+   * with probabilities rather than an LLM chat call. Absent on LLM calls.
+   */
+  kind?: "decision";
+  /** For a decision request, the caller's one-line account of what it did with the answers. */
+  outcome?: string | null;
+  /** When the request started, epoch ms. Lets a decision be matched to the request it was asked inside. */
+  startedAt?: number | null;
 }
 
 /** Rows as extractLlmLogs produces them (superset of LlmCall; messages move to LlmTranscripts at share time). */
@@ -374,6 +403,11 @@ interface RowField {
  */
 interface FormattedRow {
   t: number | null;
+  /**
+   * Where the row's interval ends, on the same clock as `t` — a request row's response — so the
+   * Timeline's tracks draw it as a span rather than an instant. Absent for a row that is an instant.
+   */
+  endT?: number | null;
   label: string;
   tone?: RowTone;
   badges?: RowBadge[];
@@ -398,6 +432,8 @@ interface FormatterEntry {
  */
 interface FormatterRowInput {
   t?: number | null;
+  /** Optional end of the interval the row covers; kept only when it is after `t`. */
+  endT?: number | null;
   label: string;
   tone?: RowTone;
   badges?: RowBadge[];
@@ -556,6 +592,41 @@ interface SelectorEnginePayload {
 }
 
 /**
+ * One string off a screen capture, from the `visibleStrings` its capture log recorded. `bounds` is
+ * absent when the driver has no viewport coordinates.
+ */
+interface VisibleStringEntry {
+  text: string;
+  source: string;
+  ref?: string | null;
+  /** `[left, top, right, bottom]` in the capture's device coordinates (deviceWidth × deviceHeight). */
+  bounds?: [number, number, number, number] | null;
+  /** False when the element was in the tree but scrolled away or hidden when captured. */
+  visible: boolean;
+}
+
+/**
+ * One screen capture and the strings it showed, read off the capture's log record (see
+ * report/run-report-visible-strings.ts). One per capture, in capture order.
+ */
+interface VisibleStringsScreen {
+  /** Names the capture; opaque. The screenshot's filename when it has one, else the id its log was stamped with. */
+  captureId: string;
+  /** The screenshot's filename — the key into SessionPayload.shots. Absent when the capture has no screenshot. */
+  screenshot?: string | null;
+  /** The full reference the log recorded, when that was more than the filename (a farm URL). */
+  captureUrl?: string | null;
+  /** When the capture was taken, on the host clock the Timeline and the recording use. */
+  timestamp?: string | null;
+  action?: string | null;
+  deviceWidth: number;
+  deviceHeight: number;
+  /** The Android capture lost part of its tree, so strings may be missing. */
+  partialCapture?: boolean | null;
+  strings: VisibleStringEntry[];
+}
+
+/**
  * One span out of the session's `trace.json` — what `TrailblazeTracer` recorded in the host
  * process (the agent loop, each tool it dispatched, every HTTP call) and, when a device uploaded its
  * half, the driver's own operations. Chrome Trace "X" events, slimmed to what a timeline needs:
@@ -619,6 +690,8 @@ interface SessionPayload {
   spans?: TracerSpan[] | null;
   /** gzip(JSON.stringify(TracerSpan[])) as base64 — see deviceLogGz. */
   spansGz?: string | null;
+  /** Each screen capture's strings, read off its log record, for the Strings tab. */
+  visibleStrings?: VisibleStringsScreen[] | null;
   /** Per-call LLM chat transcripts (see LlmTranscripts), inline below the driver's threshold. */
   llmMessages?: LlmTranscripts | null;
   /** gzip(JSON.stringify(LlmTranscripts)) as base64 — see deviceLogGz. */
@@ -668,6 +741,8 @@ interface SessionInput {
   spans?: TracerSpan[] | null;
   /** See SessionPayload.spansGz. */
   spansGz?: string | null;
+  /** See SessionPayload.visibleStrings. */
+  visibleStrings?: VisibleStringsScreen[] | null;
   /** See SessionPayload.llmMessages. When neither transcript field is supplied, toSessionPayloads
    * derives the transcripts from `llmLogs` (the browser/zip paths); the bun driver supplies them
    * pre-packed instead. */

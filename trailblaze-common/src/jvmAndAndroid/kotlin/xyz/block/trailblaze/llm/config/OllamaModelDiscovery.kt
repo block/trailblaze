@@ -19,39 +19,6 @@ object OllamaModelDiscovery {
   private const val DEFAULT_MAX_OUTPUT_TOKENS = 8_192L
 
   /**
-   * Queries `ollama list` and returns discovered models.
-   * Returns empty list if Ollama is not installed or the command fails/times out.
-   */
-  fun discoverModels(): List<TrailblazeLlmModel> {
-    if (!TrailblazeProcessBuilderUtils.isCommandAvailable("ollama")) {
-      return emptyList()
-    }
-    return try {
-      val process = TrailblazeProcessBuilderUtils
-        .createProcessBuilder(listOf("ollama", "list"))
-        .start()
-
-      val completed = process.waitFor(TIMEOUT_SECONDS, TimeUnit.SECONDS)
-      if (!completed) {
-        process.destroyForcibly()
-        Console.log("Warning: ollama list timed out after ${TIMEOUT_SECONDS}s")
-        return emptyList()
-      }
-
-      if (process.exitValue() != 0) {
-        Console.log("Warning: ollama list exited with code ${process.exitValue()}")
-        return emptyList()
-      }
-
-      val output = process.inputStream.bufferedReader().readText()
-      parseOllamaListOutput(output)
-    } catch (e: Exception) {
-      Console.log("Warning: Failed to discover Ollama models: ${e.message}")
-      emptyList()
-    }
-  }
-
-  /**
    * Parses the tabular output of `ollama list`.
    * Format: NAME  ID  SIZE  MODIFIED (first line is header)
    */

@@ -37,9 +37,11 @@ export type {
 export { compactRecord, runSurvey, runSurveys } from "./runner.js";
 export type { SurveyReport, FeatureSummary, RunOptions, SessionResult } from "./runner.js";
 export { discoverSessions, loadSurveys } from "./discover.js";
-export { loadTargetCatalog, sessionMatchesTarget, targetFromTrailmap, targetsOf } from "./targets.js";
+export { findTrailmapFiles, loadTargetCatalog, sessionMatchesTarget, targetFromTrailmap, targetsOf } from "./targets.js";
 export type { TargetCatalog, TargetDefinition } from "./targets.js";
-export type { DiscoverSessionsOptions, LoadedSurvey } from "./discover.js";
+export type { DiscoverSessionsOptions, LoadSurveysOptions, LoadedSurvey } from "./discover.js";
+export { findWorkspaceConfigDir, loadWorkspace } from "./workspace.js";
+export type { Workspace } from "./workspace.js";
 export { renderMarkdown, renderSummaryLines } from "./report.js";
 export type {
   AnalyticsEvent,

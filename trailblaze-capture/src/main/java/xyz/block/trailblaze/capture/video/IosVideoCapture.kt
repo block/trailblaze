@@ -329,8 +329,8 @@ class IosVideoCapture(
   private fun transcodeToWebm(source: File, target: File, recordedMs: Long): Boolean {
     val timeoutSeconds = transcodeTimeoutSeconds(recordedMs)
     val result = runSubprocessWithTimeout(
-      command = listOf(ffmpegBinary, "-y", "-i", source.absolutePath, "-an", "-vf", DOWNSCALE_FILTER) +
-        RecordingFormat.WEBM.encodeArgs() + RecordingTailHold.ENCODER_TIME_BASE + target.absolutePath,
+      command = listOf(ffmpegBinary, "-y", "-i", source.absolutePath, "-an") +
+        RecordingFormat.WEBM.videoFilterArgs(DOWNSCALE_FILTER) + RecordingFormat.WEBM.encodeArgs() + RecordingTailHold.ENCODER_TIME_BASE + target.absolutePath,
       timeoutSeconds = timeoutSeconds,
     )
     if (!transcodeDelivered(target, result?.exitCode)) {

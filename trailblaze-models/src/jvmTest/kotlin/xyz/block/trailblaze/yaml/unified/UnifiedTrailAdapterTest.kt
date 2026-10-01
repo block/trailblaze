@@ -1194,11 +1194,8 @@ class UnifiedTrailAdapterTest {
     )
     assertEquals("kiosk", one.soleMultiDeviceConfigurationName)
 
-    // One configuration alongside a plain device pin. The ordinary entry does NOT withhold the
-    // selection: MultiDeviceConfigurationResolver.resolve filters ordinary entries out and binds
-    // the sole surviving configuration, so this trail really does run as `kiosk`. Abstaining here
-    // would leave mixed trails reading as unrecorded and unskipped — the misreading this property
-    // exists to prevent — for a shape the runtime resolves without hesitation.
+    // One configuration alongside a plain device pin still has exactly one configuration to name.
+    // Whether a run BINDS it is a separate question — see implicitMultiDeviceConfigurationName.
     val mixed = UnifiedTrailConfig(
       id = "x",
       target = "y",
@@ -1217,6 +1214,95 @@ class UnifiedTrailAdapterTest {
       devices = linkedMapOf("kiosk" to kioskConfiguration(), "register" to kioskConfiguration()),
     )
     assertNull(two.soleMultiDeviceConfigurationName)
+  }
+
+  @Test
+  fun `a configuration-only trail binds its configuration with or without companions`() {
+    val configurationOnly = UnifiedTrailConfig(devices = linkedMapOf("kiosk" to kioskConfiguration()))
+
+    assertFalse(configurationOnly.declaresSingleDeviceEntries)
+    // Without companions the run still selects it, and is then refused for its unbound members —
+    // it must not degrade to a single-device run of a trail with no single-device legs.
+    assertEquals("kiosk", configurationOnly.implicitMultiDeviceConfigurationName(bindsCompanionDevices = false))
+    assertEquals("kiosk", configurationOnly.implicitMultiDeviceConfigurationName(bindsCompanionDevices = true))
+  }
+
+  @Test
+  fun `a mixed trail binds its configuration only when the run binds companions`() {
+    val mixed = UnifiedTrailConfig(
+      devices = linkedMapOf(
+        "android-phone" to devicePin("ANDROID_ONDEVICE_ACCESSIBILITY"),
+        "kiosk" to kioskConfiguration(),
+      ),
+    )
+
+    assertTrue(mixed.declaresSingleDeviceEntries)
+    assertNull(
+      mixed.implicitMultiDeviceConfigurationName(bindsCompanionDevices = false),
+      "a companion-less run of a mixed trail is an ordinary single-device session",
+    )
+    assertEquals("kiosk", mixed.implicitMultiDeviceConfigurationName(bindsCompanionDevices = true))
+  }
+
+  @Test
+  fun `no implicit configuration when a trail declares none or more than one`() {
+    val none = UnifiedTrailConfig(devices = linkedMapOf("android" to devicePin("ANDROID_ONDEVICE_ACCESSIBILITY")))
+    val two = UnifiedTrailConfig(
+      devices = linkedMapOf("kiosk" to kioskConfiguration(), "register" to kioskConfiguration()),
+    )
+
+    listOf(true, false).forEach { binds ->
+      assertNull(none.implicitMultiDeviceConfigurationName(binds))
+      assertNull(two.implicitMultiDeviceConfigurationName(binds))
+    }
+  }
+
+  /**
+   * The pre-flight gates' view of a mixed trail on a single-device cell: its classifier legs count,
+   * and the configuration's fully-recorded leg does not stand in for a classifier that has none.
+   */
+  @Test
+  fun `a mixed trail's configuration legs are not coverage for a companion-less classifier`() {
+    val unified = TrailblazeYaml().decodeUnifiedTrail(
+      """
+      config:
+        devices:
+          android-tablet: {}
+          kiosk:
+            devices:
+              seller: {classifier: lab-a}
+              buyer: {classifier: lab-b}
+      trail:
+        - step: Tap pay
+          recording:
+            android-tablet:
+              - tapOnElementWithText: {text: Pay}
+            kiosk:
+              - tapOnElementWithText: {text: Pay}
+        - step: Hand over
+          recording:
+            kiosk:
+              - tapOnElementWithText: {text: Done}
+      """.trimIndent(),
+    )
+    val phone = listOf(classifier("android"), classifier("phone"))
+
+    assertFalse(
+      UnifiedTrailAdapter.hasRecordingForDevice(
+        unified,
+        phone,
+        unified.config.implicitMultiDeviceConfigurationName(bindsCompanionDevices = false),
+      ),
+      "android-phone has no leg of its own, so a single-device cell must not borrow the configuration's",
+    )
+    assertTrue(
+      UnifiedTrailAdapter.hasRecordingForDevice(
+        unified,
+        phone,
+        unified.config.implicitMultiDeviceConfigurationName(bindsCompanionDevices = true),
+      ),
+      "a cell that binds the configuration replays its fully recorded legs",
+    )
   }
 
   private fun classifier(value: String) = TrailblazeDeviceClassifier(value)

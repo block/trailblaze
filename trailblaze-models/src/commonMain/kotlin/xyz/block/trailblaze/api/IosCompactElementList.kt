@@ -29,6 +29,12 @@ object IosCompactElementList {
     val elementBounds: List<TrailblazeNode.Bounds> = emptyList(),
     /** Maps ref slug (e.g., "ref:sign-in") to TrailblazeNode.nodeId for resolution. */
     val refMapping: Map<String, Long> = emptyMap(),
+    /**
+     * Nodes whose text the list printed without giving them a ref: a class-less container's
+     * header label, or a non-interactive child quoted under its parent. With [elementNodeIds]
+     * this is every node whose text was shown.
+     */
+    val textNodeIds: List<Long> = emptyList(),
   )
 
   fun build(
@@ -39,6 +45,7 @@ object IosCompactElementList {
   ): CompactElements {
     val lines = mutableListOf<String>()
     val elementNodeIds = mutableListOf<Long>()
+    val textNodeIds = mutableListOf<Long>()
     val elementBounds = mutableListOf<TrailblazeNode.Bounds>()
     val refMapping = mutableMapOf<String, Long>()
     val refTracker = ElementRef.RefTracker()
@@ -48,7 +55,8 @@ object IosCompactElementList {
     var offscreenCount = 0
     val emittedLabels = mutableSetOf<String>()
     buildRecursive(
-      root, 0, lines, elementNodeIds, elementBounds, refMapping, refTracker, emittedLabels,
+      root, 0, lines, elementNodeIds, textNodeIds, elementBounds, refMapping, refTracker, emittedLabels,
+      emittedPoints = mutableSetOf(),
       includeBounds = includeBounds,
       includeOffscreen = includeOffscreen,
       includeAllElements = includeAllElements,
@@ -67,7 +75,13 @@ object IosCompactElementList {
         append("\n($offscreenCount offscreen elements hidden — use --offscreen to show)")
       }
     }
-    return CompactElements(text = text, elementNodeIds = elementNodeIds, elementBounds = elementBounds, refMapping = refMapping)
+    return CompactElements(
+      text = text,
+      elementNodeIds = elementNodeIds,
+      elementBounds = elementBounds,
+      refMapping = refMapping,
+      textNodeIds = textNodeIds,
+    )
   }
 
   private fun buildRecursive(
@@ -75,6 +89,7 @@ object IosCompactElementList {
     depth: Int,
     lines: MutableList<String>,
     elementNodeIds: MutableList<Long>,
+    textNodeIds: MutableList<Long>,
     elementBounds: MutableList<TrailblazeNode.Bounds>,
     refMapping: MutableMap<String, Long>,
     refTracker: ElementRef.RefTracker,
@@ -87,6 +102,9 @@ object IosCompactElementList {
     screenWidth: Int = 0,
     offscreenCounter: () -> Unit = {},
     promotedInTextLink: Boolean = false,
+    refAncestorCenter: Pair<Int, Int>? = null,
+    emittedPoints: MutableSet<Pair<Int, Int>>,
+    underHiddenAncestor: Boolean = false,
   ) {
     val detail = node.driverDetail as? DriverNodeDetail.IosMaestro ?: return
 
@@ -105,6 +123,22 @@ object IosCompactElementList {
     val isContainer = isContainer(detail, shortClass)
     val indent = "  ".repeat(depth)
 
+    // A label-less, class-less, id-less node can only be offered as a tap point. The lean view
+    // drops a point that is off the screen (nothing to tap) or that an earlier line already
+    // offers (the same tap); ALL_ELEMENTS keeps every node.
+    fun emitPositionOnly(bounds: TrailblazeNode.Bounds) {
+      val center = bounds.centerX to bounds.centerY
+      if (!includeAllElements) {
+        if (!includeOffscreen && isPointOffscreen(center, screenHeight, screenWidth)) return
+        if (!emittedPoints.add(center)) return
+      }
+      val ref = refTracker.ref(null, null, center.first, center.second)
+      lines.add("$indent[$ref] @(${center.first},${center.second})")
+      elementNodeIds.add(node.nodeId)
+      refMapping[ref] = node.nodeId
+      elementBounds.add(bounds)
+    }
+
     // Stable identifier for this control, hoisting a lone icon child's accessibilityIdentifier
     // onto a clickable wrapper that has none of its own (e.g. an "ellipsis-horizontal" overflow
     // button whose id lives on its UIImageView child). See [effectiveIosResourceId].
@@ -122,10 +156,16 @@ object IosCompactElementList {
       effectiveResourceId == null &&
       (label == parentLabel || label in emittedLabels)
 
-    // Track offscreen
-    val offscreen = isOffscreen(node, screenHeight, screenWidth)
-    if (offscreen && !includeOffscreen && label != null) {
-      offscreenCounter()
+    // Track offscreen. Hide only this node, labeled or not: a class-only one would otherwise get a
+    // ref off the screen. Its children can still be on screen (see the underHiddenAncestor overload
+    // of isOffscreen for how they are judged). Only a labeled node makes them suspect: the tree root
+    // is itself an unlabeled zero-size node.
+    val offscreen = CompactElementListUtils.isOffscreen(node, screenHeight, screenWidth, underHiddenAncestor)
+    if (offscreen && !includeOffscreen) {
+      if (label != null) offscreenCounter()
+      for (child in node.children) {
+        buildRecursive(child, depth, lines, elementNodeIds, textNodeIds, elementBounds, refMapping, refTracker, emittedLabels, parentLabel, includeBounds, includeOffscreen, includeAllElements, screenHeight, screenWidth, offscreenCounter, refAncestorCenter = refAncestorCenter, emittedPoints = emittedPoints, underHiddenAncestor = underHiddenAncestor || label != null)
+      }
       return
     }
 
@@ -135,14 +175,15 @@ object IosCompactElementList {
         else if (label != null && !isDuplicate) "\"$label\""
         else {
           for (child in node.children) {
-            buildRecursive(child, depth, lines, elementNodeIds, elementBounds, refMapping, refTracker, emittedLabels, label, includeBounds, includeOffscreen, includeAllElements, screenHeight, screenWidth, offscreenCounter)
+            buildRecursive(child, depth, lines, elementNodeIds, textNodeIds, elementBounds, refMapping, refTracker, emittedLabels, label, includeBounds, includeOffscreen, includeAllElements, screenHeight, screenWidth, offscreenCounter, refAncestorCenter = refAncestorCenter, emittedPoints = emittedPoints, underHiddenAncestor = underHiddenAncestor)
           }
           return
         }
       lines.add("$indent$containerLabel:")
+      if (shortClass.isEmpty()) textNodeIds.add(node.nodeId)
       val childLabels = mutableSetOf<String>()
       for (child in node.children) {
-        buildRecursive(child, depth + 1, lines, elementNodeIds, elementBounds, refMapping, refTracker, childLabels, label, includeBounds, includeOffscreen, includeAllElements, screenHeight, screenWidth, offscreenCounter)
+        buildRecursive(child, depth + 1, lines, elementNodeIds, textNodeIds, elementBounds, refMapping, refTracker, childLabels, label, includeBounds, includeOffscreen, includeAllElements, screenHeight, screenWidth, offscreenCounter, refAncestorCenter = refAncestorCenter, emittedPoints = emittedPoints, underHiddenAncestor = underHiddenAncestor)
       }
     } else if (!isDuplicate && (includeAllElements || isMeaningful(detail, label))) {
       val descriptor =
@@ -167,18 +208,10 @@ object IosCompactElementList {
           // emitted here, so the LLM can use tapOnPoint with the exact tree position
           // instead of visually estimating from the screenshot.
           if (!detail.hasIdentifiableProperties && (!offscreen || includeOffscreen)) {
-            val bounds = node.bounds
-            if (bounds != null) {
-              val center = bounds.centerX to bounds.centerY
-              val ref = refTracker.ref(null, null, center.first, center.second)
-              lines.add("$indent[$ref] @(${center.first},${center.second})")
-              elementNodeIds.add(node.nodeId)
-              refMapping[ref] = node.nodeId
-              elementBounds.add(bounds)
-            }
+            node.bounds?.let(::emitPositionOnly)
           }
           for (child in node.children) {
-            buildRecursive(child, depth, lines, elementNodeIds, elementBounds, refMapping, refTracker, emittedLabels, parentLabel, includeBounds, includeOffscreen, includeAllElements, screenHeight, screenWidth, offscreenCounter)
+            buildRecursive(child, depth, lines, elementNodeIds, textNodeIds, elementBounds, refMapping, refTracker, emittedLabels, parentLabel, includeBounds, includeOffscreen, includeAllElements, screenHeight, screenWidth, offscreenCounter, refAncestorCenter = refAncestorCenter, emittedPoints = emittedPoints, underHiddenAncestor = underHiddenAncestor)
           }
           return
         }
@@ -192,6 +225,12 @@ object IosCompactElementList {
       refMapping[ref] = node.nodeId
       node.bounds?.let { elementBounds.add(it) }
       if (label != null) emittedLabels.add(label)
+
+      // Children recurse knowing where a tap on this element's ref lands (its center). A bare
+      // layer that covers that point is what the ref already taps (a home-screen app icon's image
+      // layer), so it is not offered again below. A bare leaf elsewhere inside the element (a
+      // trailing delete button, a corner overflow button) keeps its own coordinates.
+      val childRefAncestorCenter = node.bounds?.let { it.centerX to it.centerY } ?: refAncestorCenter
 
       // Emit child text as quoted strings under the parent
       for (child in node.children) {
@@ -240,17 +279,21 @@ object IosCompactElementList {
           rawLabel.contains(rawChildLabel) &&
           !rawLabel.startsWith("$rawChildLabel: ")
         if (childLabel != null && !childInteractive && !isInTextLink) {
-          // Non-interactive text → quoted string (skip if already emitted)
-          if (childLabel !in emittedLabels) {
+          // Non-interactive text → quoted string (skip if already emitted). Under a hidden ancestor it
+          // passes the same on-screen check as an element, or a collapsed ghost's text would read as visible.
+          if (underHiddenAncestor && CompactElementListUtils.isOffscreen(child, screenHeight, screenWidth, underHiddenAncestor)) {
+            offscreenCounter()
+          } else if (childLabel !in emittedLabels) {
             lines.add("$indent  \"$childLabel\"")
             emittedLabels.add(childLabel)
+            textNodeIds.add(child.nodeId)
           }
         } else {
           // Interactive, label-less, or in-text-link child: recurse for its own ref. No
           // mirrored-label guard is needed here — the raw-label dedupe above already skipped
           // children that repeat the parent's label, and a truncation collision (equal display
           // labels, different raws) must still recurse or the promoted link would be dropped.
-          buildRecursive(child, depth + 1, lines, elementNodeIds, elementBounds, refMapping, refTracker, emittedLabels, label, includeBounds, includeOffscreen, includeAllElements, screenHeight, screenWidth, offscreenCounter, promotedInTextLink = isInTextLink)
+          buildRecursive(child, depth + 1, lines, elementNodeIds, textNodeIds, elementBounds, refMapping, refTracker, emittedLabels, label, includeBounds, includeOffscreen, includeAllElements, screenHeight, screenWidth, offscreenCounter, promotedInTextLink = isInTextLink, refAncestorCenter = childRefAncestorCenter, emittedPoints = emittedPoints, underHiddenAncestor = underHiddenAncestor)
         }
       }
     } else {
@@ -263,17 +306,13 @@ object IosCompactElementList {
       // so the LLM can use tapOnPoint with the precise tree position instead of visually
       // guessing from the screenshot. Only leaf nodes qualify; non-leaf nodes recurse so their
       // labeled descendants still surface normally.
-      if (node.children.isEmpty() && node.bounds != null && label == null && shortClass.isEmpty() && !detail.hasIdentifiableProperties && (!offscreen || includeOffscreen)) {
-        val bounds = node.bounds
-        val center = bounds.centerX to bounds.centerY
-        val ref = refTracker.ref(null, null, center.first, center.second)
-        lines.add("$indent[$ref] @(${center.first},${center.second})")
-        elementNodeIds.add(node.nodeId)
-        refMapping[ref] = node.nodeId
-        elementBounds.add(bounds)
+      if (node.children.isEmpty() && node.bounds != null && !node.bounds.covers(refAncestorCenter) && label == null && shortClass.isEmpty() && !detail.hasIdentifiableProperties && (!offscreen || includeOffscreen)) {
+        emitPositionOnly(node.bounds)
       } else {
+        // A bare leaf covering its ref'd ancestor's tap point falls through to here with no
+        // children, so it emits nothing.
         for (child in node.children) {
-          buildRecursive(child, depth, lines, elementNodeIds, elementBounds, refMapping, refTracker, emittedLabels, label ?: parentLabel, includeBounds, includeOffscreen, includeAllElements, screenHeight, screenWidth, offscreenCounter)
+          buildRecursive(child, depth, lines, elementNodeIds, textNodeIds, elementBounds, refMapping, refTracker, emittedLabels, label ?: parentLabel, includeBounds, includeOffscreen, includeAllElements, screenHeight, screenWidth, offscreenCounter, refAncestorCenter = refAncestorCenter, emittedPoints = emittedPoints, underHiddenAncestor = underHiddenAncestor)
         }
       }
     }
@@ -448,6 +487,10 @@ object IosCompactElementList {
     return false
   }
 
+  /** Whether these bounds contain [point]; a null point is never covered. */
+  private fun TrailblazeNode.Bounds.covers(point: Pair<Int, Int>?): Boolean =
+    point != null && point.first in left until right && point.second in top until bottom
+
   /** Checks if any descendant has visible, non-system-UI content. */
   private fun hasVisibleDescendants(node: TrailblazeNode): Boolean {
     for (child in node.children) {
@@ -464,9 +507,12 @@ object IosCompactElementList {
   private fun boundsAnnotation(node: TrailblazeNode): String =
     CompactElementListUtils.boundsAnnotation(node)
 
-  /** Checks if an element is outside the visible screen area. */
-  private fun isOffscreen(node: TrailblazeNode, screenHeight: Int, screenWidth: Int = 0): Boolean =
-    CompactElementListUtils.isOffscreen(node, screenHeight, screenWidth)
+  /** Whether a tap at [point] would land off the screen. Unknown (zero) dimensions never count. */
+  private fun isPointOffscreen(point: Pair<Int, Int>, screenHeight: Int, screenWidth: Int): Boolean {
+    if (screenHeight <= 0) return false
+    val (x, y) = point
+    return y < 0 || y >= screenHeight || (screenWidth > 0 && (x < 0 || x >= screenWidth))
+  }
 
   /**
    * iOS container classes that get a "ClassName:" header with indented children.

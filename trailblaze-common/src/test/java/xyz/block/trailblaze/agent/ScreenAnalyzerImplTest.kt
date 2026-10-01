@@ -74,6 +74,7 @@ class ScreenAnalyzerImplTest {
     assertFalse(result.objectiveAppearsImpossible)
     assertEquals(2, result.progressIndicators.size)
     assertEquals(1, result.alternativeApproaches.size)
+    assertEquals(null, result.llmError)
   }
 
   @Test
@@ -114,6 +115,7 @@ class ScreenAnalyzerImplTest {
     assertEquals("wait", result.recommendedTool)
     assertEquals(Confidence.LOW, result.confidence)
     assertTrue(result.reasoning.contains("text instead of a tool call"))
+    assertEquals("LLM returned text instead of a tool call", result.llmError)
   }
 
   @Test
@@ -244,6 +246,8 @@ class ScreenAnalyzerImplTest {
     assertEquals("wait", result.recommendedTool)
     assertEquals(Confidence.LOW, result.confidence)
     assertTrue(result.reasoning.contains("API rate limit exceeded"))
+    // The placeholder must be marked as a failure, or step/ask report it as a real result.
+    assertEquals("API rate limit exceeded", result.llmError)
   }
 
   @Test

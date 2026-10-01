@@ -31,7 +31,7 @@ class RecordedNodeSelectorForMaestroPathTest {
     val recorded = recordedNodeSelectorForMaestroPath(
       platform = TrailblazeDevicePlatform.ANDROID,
       modernNodeSelector = containerShapedModern,
-      legacyAsNodeSelector = legacy,
+      legacyAsNodeSelector = { legacy },
     )
     assertEquals(legacy, recorded)
   }
@@ -44,7 +44,20 @@ class RecordedNodeSelectorForMaestroPathTest {
     val recorded = recordedNodeSelectorForMaestroPath(
       platform = TrailblazeDevicePlatform.IOS,
       modernNodeSelector = modern,
-      legacyAsNodeSelector = legacy,
+      legacyAsNodeSelector = { legacy },
+    )
+    assertEquals(modern, recorded)
+  }
+
+  @Test
+  fun `non-ANDROID never builds the TapSelectorV2 selector when it keeps the modern one`() {
+    val modern = TrailblazeNodeSelector(
+      iosMaestro = DriverNodeMatch.IosMaestro(textRegex = "Buy Now"),
+    )
+    val recorded = recordedNodeSelectorForMaestroPath(
+      platform = TrailblazeDevicePlatform.IOS,
+      modernNodeSelector = modern,
+      legacyAsNodeSelector = { error("Index fallback failed") },
     )
     assertEquals(modern, recorded)
   }
@@ -59,7 +72,7 @@ class RecordedNodeSelectorForMaestroPathTest {
     val recorded = recordedNodeSelectorForMaestroPath(
       platform = TrailblazeDevicePlatform.IOS,
       modernNodeSelector = driverOnlyModern,
-      legacyAsNodeSelector = legacy,
+      legacyAsNodeSelector = { legacy },
     )
     assertEquals(legacy, recorded)
   }
@@ -69,7 +82,7 @@ class RecordedNodeSelectorForMaestroPathTest {
     val recorded = recordedNodeSelectorForMaestroPath(
       platform = TrailblazeDevicePlatform.WEB,
       modernNodeSelector = null,
-      legacyAsNodeSelector = legacy,
+      legacyAsNodeSelector = { legacy },
     )
     assertEquals(legacy, recorded)
   }
@@ -82,7 +95,7 @@ class RecordedNodeSelectorForMaestroPathTest {
     val recorded = recordedNodeSelectorForMaestroPath(
       platform = TrailblazeDevicePlatform.WEB,
       modernNodeSelector = modern,
-      legacyAsNodeSelector = legacy,
+      legacyAsNodeSelector = { legacy },
     )
     assertEquals(modern, recorded)
   }

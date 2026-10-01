@@ -22,8 +22,19 @@ class VisibleStringExtractorTest {
     children = children,
   )
 
-  private fun root(vararg children: TrailblazeNode): TrailblazeNode =
-    node(DriverNodeDetail.AndroidAccessibility(), bounds = null, children = children.toList())
+  /** A bare root of the same driver as its children: a capture's tree comes from one driver. */
+  private fun root(vararg children: TrailblazeNode): TrailblazeNode {
+    val rootDetail = when (children.first().driverDetail) {
+      is DriverNodeDetail.AndroidAccessibility -> DriverNodeDetail.AndroidAccessibility()
+      is DriverNodeDetail.AndroidView -> DriverNodeDetail.AndroidView()
+      is DriverNodeDetail.AndroidMaestro -> DriverNodeDetail.AndroidMaestro()
+      is DriverNodeDetail.IosMaestro -> DriverNodeDetail.IosMaestro()
+      is DriverNodeDetail.IosAxe -> DriverNodeDetail.IosAxe()
+      is DriverNodeDetail.Compose -> DriverNodeDetail.Compose()
+      is DriverNodeDetail.Web -> DriverNodeDetail.Web()
+    }
+    return node(rootDetail, bounds = null, children = children.toList())
+  }
 
   private fun List<ExtractedString>.texts(): List<String> = map { it.text }
 
@@ -64,7 +75,7 @@ class VisibleStringExtractorTest {
   }
 
   @Test
-  fun `ios axe reads label value title help role description and custom actions`() {
+  fun `ios axe reads label value title help and custom actions`() {
     val screen = root(
       node(
         DriverNodeDetail.IosAxe(
@@ -80,7 +91,7 @@ class VisibleStringExtractorTest {
     )
 
     assertEquals(
-      listOf("Balance", "$42.00", "Wallet", "Your available funds", "botón", "Edit mode", "Today"),
+      listOf("Balance", "$42.00", "Wallet", "Your available funds", "Edit mode", "Today"),
       VisibleStringExtractor.extract(screen).texts(),
     )
   }
@@ -142,6 +153,31 @@ class VisibleStringExtractorTest {
     assertEquals(listOf("Submit"), VisibleStringExtractor.extract(screen).texts())
   }
 
+  @Test
+  fun `web reads a field's placeholder and the page's title, and never a link's address`() {
+    val screen = node(
+      DriverNodeDetail.Web(ariaRole = "document", url = "https://example.com/signup", title = "Open an account"),
+      bounds = null,
+      children = listOf(
+        node(DriverNodeDetail.Web(ariaRole = "textbox", ariaName = "Business name", placeholder = "Hello Bakery")),
+        // No label, so the placeholder is its name too: one string, not a text and a hint.
+        node(DriverNodeDetail.Web(ariaRole = "textbox", ariaName = "Email", placeholder = "Email")),
+        node(DriverNodeDetail.Web(ariaRole = "link", ariaName = "Account Terms", url = "/terms")),
+      ),
+    )
+
+    assertEquals(
+      setOf(
+        "Open an account" to VisibleStringSource.TITLE,
+        "Business name" to VisibleStringSource.TEXT,
+        "Hello Bakery" to VisibleStringSource.HINT,
+        "Email" to VisibleStringSource.TEXT,
+        "Account Terms" to VisibleStringSource.TEXT,
+      ),
+      VisibleStringExtractor.extract(screen).map { it.text to it.source }.toSet(),
+    )
+  }
+
   // -- Visibility --
 
   @Test
@@ -176,15 +212,15 @@ class VisibleStringExtractorTest {
   @Test
   fun `only isVisibleToUser gets read together with geometry, because only it conflates the two`() {
     val offscreen = TrailblazeNode.Bounds(0, 3000, 100, 3050)
-    val screen = root(
-      node(DriverNodeDetail.AndroidView(text = "Gone view", isShown = false), bounds = offscreen),
-      node(DriverNodeDetail.IosMaestro(text = "Hidden ios node", visible = false), bounds = offscreen),
-      node(DriverNodeDetail.AndroidAccessibility(text = "Scrolled away", isVisibleToUser = false), bounds = offscreen),
+    val screens = listOf(
+      root(node(DriverNodeDetail.AndroidView(text = "Gone view", isShown = false), bounds = offscreen)),
+      root(node(DriverNodeDetail.IosMaestro(text = "Hidden ios node", visible = false), bounds = offscreen)),
+      root(node(DriverNodeDetail.AndroidAccessibility(text = "Scrolled away", isVisibleToUser = false), bounds = offscreen)),
     )
 
     assertEquals(
       listOf("Scrolled away"),
-      VisibleStringExtractor.extract(screen, screenWidth = 1080, screenHeight = 1920).texts(),
+      screens.flatMap { VisibleStringExtractor.extract(it, screenWidth = 1080, screenHeight = 1920).texts() },
     )
   }
 
@@ -200,14 +236,16 @@ class VisibleStringExtractorTest {
 
   @Test
   fun `the other android drivers name system ui through the resource id, and are filtered too`() {
-    val screen = root(
-      node(DriverNodeDetail.AndroidView(text = "9:41", resourceId = "com.android.systemui:id/clock")),
-      node(DriverNodeDetail.AndroidMaestro(text = "LTE", resourceId = "com.android.systemui:id/mobile")),
-      node(DriverNodeDetail.AndroidAccessibility(text = "Wifi", resourceId = "com.android.systemui:id/wifi")),
-      node(DriverNodeDetail.AndroidView(text = "Checkout", resourceId = "com.example.app:id/title")),
+    val screens = listOf(
+      root(
+        node(DriverNodeDetail.AndroidView(text = "9:41", resourceId = "com.android.systemui:id/clock")),
+        node(DriverNodeDetail.AndroidView(text = "Checkout", resourceId = "com.example.app:id/title")),
+      ),
+      root(node(DriverNodeDetail.AndroidMaestro(text = "LTE", resourceId = "com.android.systemui:id/mobile"))),
+      root(node(DriverNodeDetail.AndroidAccessibility(text = "Wifi", resourceId = "com.android.systemui:id/wifi"))),
     )
 
-    assertEquals(listOf("Checkout"), VisibleStringExtractor.extract(screen).texts())
+    assertEquals(listOf("Checkout"), screens.flatMap { VisibleStringExtractor.extract(it).texts() })
   }
 
   @Test
@@ -309,7 +347,7 @@ class VisibleStringExtractorTest {
     val extracted = VisibleStringExtractor.extract(screen, screenWidth = 1080, screenHeight = 1920).single()
 
     assertTrue(extracted.visible)
-    assertEquals(listOf(0, 300, 200, 50), extracted.bounds)
+    assertEquals(listOf(0, 300, 200, 350), extracted.bounds)
   }
 
   @Test
@@ -353,45 +391,35 @@ class VisibleStringExtractorTest {
   }
 
   @Test
-  fun `numeric strings are flagged volatile and worded ones are not`() {
-    val screen = root(
-      node(DriverNodeDetail.AndroidAccessibility(text = "$1,204.55"), bounds = TrailblazeNode.Bounds(0, 100, 200, 150)),
-      node(DriverNodeDetail.AndroidAccessibility(text = "Total due"), bounds = TrailblazeNode.Bounds(0, 200, 200, 250)),
-      node(DriverNodeDetail.AndroidAccessibility(text = "2 items"), bounds = TrailblazeNode.Bounds(0, 300, 200, 350)),
-    )
-
+  fun `numeric strings read as volatile and worded ones do not`() {
     assertEquals(
       listOf("$1,204.55" to true, "Total due" to false, "2 items" to false),
-      VisibleStringExtractor.extract(screen).map { it.text to it.volatile },
+      listOf("$1,204.55", "Total due", "2 items").map { it to VolatileText.looksVolatile(it) },
     )
   }
 
   @Test
   fun `a clock is volatile whether or not it spells out the meridiem`() {
-    val screen = root(
-      node(DriverNodeDetail.AndroidAccessibility(text = "9:41"), bounds = TrailblazeNode.Bounds(0, 100, 200, 150)),
-      node(DriverNodeDetail.AndroidAccessibility(text = "9:41 PM"), bounds = TrailblazeNode.Bounds(0, 200, 200, 250)),
-      node(DriverNodeDetail.AndroidAccessibility(text = "9:41 a.m."), bounds = TrailblazeNode.Bounds(0, 300, 200, 350)),
-      node(DriverNodeDetail.AndroidAccessibility(text = "12/25/2026"), bounds = TrailblazeNode.Bounds(0, 400, 200, 450)),
-    )
-
-    assertTrue(VisibleStringExtractor.extract(screen).all { it.volatile })
+    assertTrue(listOf("9:41", "9:41 PM", "9:41 a.m.", "12/25/2026").all { VolatileText.looksVolatile(it) })
   }
 
   /**
-   * The two errors are not symmetric. A string wrongly marked volatile is dropped from every diff
+   * The two errors are not symmetric. A string wrongly judged volatile is dropped from every diff
    * and its regression is never reported; one wrongly left alone is noise a reader can ignore. So
    * a localized date stays copy rather than being guessed at from a month-name list this module
    * has no locale data to build.
    */
   @Test
   fun `a localized date is left as copy, because guessing wrong would hide a real regression`() {
-    val screen = root(
-      node(DriverNodeDetail.AndroidAccessibility(text = "5 de enero de 2026"), bounds = TrailblazeNode.Bounds(0, 100, 200, 150)),
-      node(DriverNodeDetail.AndroidAccessibility(text = "Pedido n.º 4"), bounds = TrailblazeNode.Bounds(0, 200, 200, 250)),
-    )
+    assertTrue(listOf("5 de enero de 2026", "Pedido n.º 4").none { VolatileText.looksVolatile(it) })
+  }
 
-    assertTrue(VisibleStringExtractor.extract(screen).none { it.volatile })
+  /** Judged when read, so the extractor records nothing about it: a better rule reaches old sessions. */
+  @Test
+  fun `extracted strings carry no volatile judgement of their own`() {
+    val screen = root(node(DriverNodeDetail.AndroidAccessibility(text = "9:41"), bounds = TrailblazeNode.Bounds(0, 100, 200, 150)))
+    val encoded = kotlinx.serialization.json.Json.encodeToString(ExtractedString.serializer(), VisibleStringExtractor.extract(screen).single())
+    assertTrue("volatile" !in encoded, encoded)
   }
 
   @Test
@@ -403,7 +431,7 @@ class VisibleStringExtractorTest {
     val extracted = VisibleStringExtractor.extract(screen).single()
 
     assertEquals("k42", extracted.ref)
-    assertEquals(listOf(24, 180, 296, 44), extracted.bounds)
+    assertEquals(listOf(24, 180, 320, 224), extracted.bounds, "the corners, as TrailblazeNode.Bounds stores them")
   }
 
   // -- Legacy captures --
@@ -538,6 +566,166 @@ class VisibleStringExtractorTest {
     assertEquals(
       listOf("12.00", "Enter amount"),
       VisibleStringExtractor.extract(screen).texts(),
+    )
+  }
+
+  // -- Selection follows the agent's element list --
+
+  private fun axe(
+    label: String? = null,
+    type: String? = "StaticText",
+    bounds: TrailblazeNode.Bounds = TrailblazeNode.Bounds(0, 100, 200, 150),
+    children: List<TrailblazeNode> = emptyList(),
+    roleDescription: String? = null,
+  ): TrailblazeNode = node(
+    DriverNodeDetail.IosAxe(label = label, type = type, roleDescription = roleDescription),
+    bounds = bounds,
+    children = children,
+  )
+
+  private fun axeRoot(vararg children: TrailblazeNode): TrailblazeNode =
+    node(DriverNodeDetail.IosAxe(type = null), bounds = TrailblazeNode.Bounds(0, 0, 402, 874), children = children.toList())
+
+  /** The list caps a label at 120 characters for the prompt; the strings file keeps the copy. */
+  @Test
+  fun `an element the list shows yields its full text, even past the list's truncation`() {
+    val longCopy = "By continuing you agree to the Terms of Service and acknowledge the Privacy Notice, " +
+      "including how we use and share your information with partners."
+    val screen = axeRoot(axe(label = longCopy))
+
+    val listText = IosAxeCompactElementList.build(screen, screenHeight = 874, screenWidth = 402).text
+    val extracted = VisibleStringExtractor.extract(screen, screenWidth = 402, screenHeight = 874)
+
+    assertTrue(longCopy.length > 120 && longCopy !in listText, "the fixture must be one the list truncates")
+    assertEquals(listOf(longCopy), extracted.texts())
+  }
+
+  @Test
+  fun `a structural container the list skips contributes nothing, its labeled child does`() {
+    // No label, value, title or type: the list walks through it without a line.
+    val screen = axeRoot(
+      node(
+        DriverNodeDetail.IosAxe(type = null, help = "Container help"),
+        children = listOf(axe(label = "Recipient")),
+      ),
+    )
+
+    assertEquals(listOf("Recipient"), VisibleStringExtractor.extract(screen, 402, 874).texts())
+  }
+
+  /**
+   * A zero-size wrapper reads as offscreen to the list, which hides the wrapper but still lists its
+   * on-screen children. The contract under test is that the on-screen strings are exactly the list's
+   * selection.
+   */
+  @Test
+  fun `children of a zero-size wrapper are reported on screen exactly when the list shows them`() {
+    val child = axe(label = "Send", type = "Button")
+    val screen = axeRoot(
+      axe(label = "Amount"),
+      node(DriverNodeDetail.IosAxe(type = "Group"), bounds = TrailblazeNode.Bounds(0, 0, 0, 0), children = listOf(child)),
+    )
+
+    val shownIds = IosAxeCompactElementList.build(screen, screenHeight = 874, screenWidth = 402).elementNodeIds
+    val onScreen = VisibleStringExtractor.extract(screen, 402, 874).filter { it.visible }.texts()
+
+    assertEquals(child.nodeId in shownIds, "Send" in onScreen)
+    assertTrue("Amount" in onScreen)
+  }
+
+  @Test
+  fun `an axe role description is the system's role name and is not reported`() {
+    val screen = axeRoot(axe(label = "Pay", type = "Button", roleDescription = "button"))
+
+    assertEquals(
+      listOf("Pay" to VisibleStringSource.TEXT),
+      VisibleStringExtractor.extract(screen, 402, 874).map { it.text to it.source },
+    )
+  }
+
+  @Test
+  fun `an android role description is app-authored and is still reported`() {
+    val screen = root(
+      node(DriverNodeDetail.AndroidAccessibility(text = "Tip", roleDescription = "Stepper", isClickable = true)),
+    )
+
+    assertTrue(
+      VisibleStringExtractor.extract(screen, 1080, 1920)
+        .any { it.text == "Stepper" && it.source == VisibleStringSource.ROLE_DESCRIPTION },
+    )
+  }
+
+  @Test
+  fun `an axe element below the fold is reported as not visible`() {
+    val screen = axeRoot(
+      axe(label = "Recent activity"),
+      axe(label = "Load more", type = "Button", bounds = TrailblazeNode.Bounds(0, 1200, 200, 1250)),
+    )
+
+    assertEquals(
+      listOf("Recent activity" to true, "Load more" to false),
+      VisibleStringExtractor.extract(screen, 402, 874).map { it.text to it.visible },
+    )
+  }
+
+  @Test
+  fun `an offscreen android accessibility element is reported as not visible`() {
+    val screen = root(
+      node(DriverNodeDetail.AndroidAccessibility(text = "Total", isClickable = true), bounds = TrailblazeNode.Bounds(0, 100, 200, 150)),
+      node(
+        DriverNodeDetail.AndroidAccessibility(text = "Terms apply", isVisibleToUser = false),
+        bounds = TrailblazeNode.Bounds(0, 2400, 200, 2450),
+      ),
+    )
+
+    assertEquals(
+      listOf("Total" to true, "Terms apply" to false),
+      VisibleStringExtractor.extract(screen, 1080, 1920).map { it.text to it.visible },
+    )
+  }
+
+  /** The list prints a clickable row's label from its text child; that copy is the child's. */
+  @Test
+  fun `a label an android row absorbs from its child is reported, attributed to the child`() {
+    val caption = node(
+      DriverNodeDetail.AndroidAccessibility(text = "Network and internet"),
+      bounds = TrailblazeNode.Bounds(40, 110, 300, 140),
+      ref = "k7",
+    )
+    val screen = root(
+      node(DriverNodeDetail.AndroidAccessibility(isClickable = true), children = listOf(caption)),
+    )
+
+    val extracted = VisibleStringExtractor.extract(screen, 1080, 1920).single()
+
+    assertEquals("Network and internet", extracted.text)
+    assertEquals("k7", extracted.ref)
+  }
+
+  @Test
+  fun `text the android list quotes under its parent is reported`() {
+    val screen = root(
+      node(
+        DriverNodeDetail.AndroidAccessibility(text = "Wi-Fi", isClickable = true),
+        children = listOf(node(DriverNodeDetail.AndroidAccessibility(text = "Connected to Home"))),
+      ),
+    )
+
+    assertEquals(listOf("Wi-Fi", "Connected to Home"), VisibleStringExtractor.extract(screen, 1080, 1920).texts())
+  }
+
+  @Test
+  fun `an ios maestro container's header label is reported`() {
+    val screen = root(
+      node(
+        DriverNodeDetail.IosMaestro(accessibilityText = "Payment methods", scrollable = true),
+        children = listOf(node(DriverNodeDetail.IosMaestro(text = "Visa 4242", clickable = true))),
+      ),
+    )
+
+    assertEquals(
+      setOf("Payment methods", "Visa 4242"),
+      VisibleStringExtractor.extract(screen, 402, 874).texts().toSet(),
     )
   }
 }

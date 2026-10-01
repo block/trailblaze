@@ -26,10 +26,6 @@ sealed class TrailNode {
     val isExpanded: Boolean = false,
     val depth: Int = 0,
   ) : TrailNode() {
-    /**
-     * Returns a copy with the expanded state toggled.
-     */
-    fun toggleExpanded(): Directory = copy(isExpanded = !isExpanded)
     
     /**
      * Returns a copy with children updated.

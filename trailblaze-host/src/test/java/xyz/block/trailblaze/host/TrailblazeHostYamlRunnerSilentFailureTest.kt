@@ -22,21 +22,20 @@ import xyz.block.trailblaze.mcp.android.ondevice.rpc.OnDeviceRpcClient
 import xyz.block.trailblaze.model.TrailblazeConfig
 
 /**
- * Pins the silent-failure fix against the three sibling paths in
+ * Pins the silent-failure fix against the sibling paths in
  * [TrailblazeHostYamlRunner] that previously caught `Exception` and returned
  * `null`. The original silent-failure (executeTrailSession) hid a cached-LLM-
  * model bug: a thrown exception got swallowed, the
  * runner reported success, and MCP told the user "✓ Done" while the page was
  * blank.
  *
- * The two on-device-RPC paths covered here ([runHostV3WithAccessibilityYaml]
- * and [runHostTrailblazeRunnerWithOnDeviceRpc]) bail out on malformed trail
- * YAML before any device RPC is made, so we can drive them with stub
+ * The on-device-RPC path covered here ([TrailblazeHostYamlRunner.runHostAgentWithOnDeviceRpc])
+ * bails out on malformed trail YAML before any device RPC is made, so we can drive them with stub
  * dependencies. A regression that re-introduces `return null` on YAML decode
  * failure would let `DesktopYamlRunner.runYaml` keep `executionResult =
  * Success` and lie to the caller — exactly the bug class the silent-failure fix closed.
  *
- * The third path ([TrailblazeHostYamlRunner.runRevylYaml]) is private and
+ * The other path ([TrailblazeHostYamlRunner.runRevylYaml]) is private and
  * needs a live Revyl cloud session to drive, so it's covered by code review
  * + the shared catch-block comment instead.
  */
@@ -91,23 +90,9 @@ class TrailblazeHostYamlRunnerSilentFailureTest {
   }
 
   @Test(expected = SerializationException::class)
-  fun `runHostV3WithAccessibilityYaml rethrows on malformed yaml instead of returning null`() {
+  fun `runHostAgentWithOnDeviceRpc rethrows on malformed yaml instead of returning null`() {
     runBlocking {
-      TrailblazeHostYamlRunner.runHostV3WithAccessibilityYaml(
-        dynamicLlmClient = stubLlmClient,
-        onDeviceRpc = rpcClient,
-        runYamlRequest = request,
-        trailblazeDeviceId = testDeviceId,
-        onProgressMessage = {},
-        targetTestApp = null,
-      )
-    }
-  }
-
-  @Test(expected = SerializationException::class)
-  fun `runHostTrailblazeRunnerWithOnDeviceRpc rethrows on malformed yaml instead of returning null`() {
-    runBlocking {
-      TrailblazeHostYamlRunner.runHostTrailblazeRunnerWithOnDeviceRpc(
+      TrailblazeHostYamlRunner.runHostAgentWithOnDeviceRpc(
         dynamicLlmClient = stubLlmClient,
         onDeviceRpc = rpcClient,
         runYamlRequest = request,
@@ -119,13 +104,13 @@ class TrailblazeHostYamlRunnerSilentFailureTest {
   }
 
   @Test
-  fun `runHostV3WithAccessibilityYaml surfaces the underlying decode error`() {
+  fun `runHostAgentWithOnDeviceRpc surfaces the underlying decode error`() {
     // assertFails (not runCatching + !!) so an unexpected success surfaces a clear
     // "Expected an exception to be thrown" failure instead of a NullPointerException
     // on the !! — Copilot review feedback on the original PR.
     val captured = assertFails {
       runBlocking {
-        TrailblazeHostYamlRunner.runHostV3WithAccessibilityYaml(
+        TrailblazeHostYamlRunner.runHostAgentWithOnDeviceRpc(
           dynamicLlmClient = stubLlmClient,
           onDeviceRpc = rpcClient,
           runYamlRequest = request,
@@ -141,11 +126,11 @@ class TrailblazeHostYamlRunnerSilentFailureTest {
   }
 
   @Test
-  fun `runHostV3WithAccessibilityYaml emits a progress message before throwing`() {
+  fun `runHostAgentWithOnDeviceRpc emits a progress message before throwing`() {
     val progress = mutableListOf<String>()
     runCatching {
       runBlocking {
-        TrailblazeHostYamlRunner.runHostV3WithAccessibilityYaml(
+        TrailblazeHostYamlRunner.runHostAgentWithOnDeviceRpc(
           dynamicLlmClient = stubLlmClient,
           onDeviceRpc = rpcClient,
           runYamlRequest = request,

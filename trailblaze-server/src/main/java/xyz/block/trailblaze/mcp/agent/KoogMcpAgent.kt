@@ -137,25 +137,5 @@ Call tools to interact with the UI until the objective is complete."""
 
       return KoogMcpAgent(agent, toolRegistry)
     }
-
-    /**
-     * Creates a tool registry from the MCP server without creating the full agent.
-     *
-     * Useful when you want to inspect available tools or use them with a custom agent.
-     *
-     * @param mcpServerUrl The MCP server URL
-     * @return ToolRegistry with MCP tools
-     */
-    suspend fun createToolRegistry(
-      mcpServerUrl: String = DEFAULT_MCP_URL,
-    ): ToolRegistry {
-      val transport = McpToolRegistryProvider.defaultSseTransport(mcpServerUrl)
-      return McpToolRegistryProvider.fromTransport(
-        transport = transport,
-        serverInfo = McpServerInfo(url = mcpServerUrl),
-        name = DEFAULT_CLIENT_NAME,
-        version = "1.0.0",
-      )
-    }
   }
 }

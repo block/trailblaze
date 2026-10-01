@@ -69,22 +69,4 @@ object KoogMcpFactory {
       version = clientVersion,
     )
   }
-
-  /**
-   * Creates a Koog [ToolRegistry] from an existing MCP client.
-   *
-   * Use this when you already have an MCP client connection.
-   *
-   * @param mcpClient Existing MCP client
-   * @return ToolRegistry with tools from the MCP server
-   */
-  suspend fun createMcpToolRegistryFromClient(
-    mcpClient: Client,
-    mcpServerUrl: String = DEFAULT_SELF_CONNECTION_URL,
-  ): ToolRegistry {
-    return McpToolRegistryProvider.fromClient(
-      mcpClient = mcpClient,
-      serverInfo = McpServerInfo(url = mcpServerUrl),
-    )
-  }
 }

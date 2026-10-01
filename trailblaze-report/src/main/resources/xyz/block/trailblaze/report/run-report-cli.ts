@@ -81,7 +81,12 @@ type ReportCore = {
   extractLlmTranscripts(llmLogs: RawLlmRow[]): LlmTranscripts | null;
   traceHierarchies(trace: RawTraceRow[], sessionPassed: boolean): Record<string, unknown> | null;
   traceScreenshotFiles(trace: RawTraceRow[]): string[];
+  captureFrameFiles(logs: TrailblazeLogRecord[]): string[];
   isSelectorAnalyzableTree(hierarchy: unknown): boolean;
+  // From the bundle, not a staged sibling: the strings reader imports viewer modules that are
+  // only reachable through it.
+  extractVisibleStrings(logs: unknown[] | null | undefined): VisibleStringsScreen[] | null;
+  visibleStringsShotFiles(lines: VisibleStringsScreen[] | null | undefined): string[];
   buildMultiReportHtml(args: { generatedAt?: string; shareUrl?: string; allRunsUrl?: string; sessions: SessionInput[]; selectorEngine?: SelectorEnginePayload | null }): string;
 };
 
@@ -654,6 +659,19 @@ function loadFormatters(names: string[]): EventStreamFormatter[] {
 }
 
 /**
+ * Every image a session's report carries, first seen first: the Timeline's screenshots, then the
+ * Strings tab's that the Timeline doesn't show, then the frames saved from the recording for
+ * captures with no screenshot. The last two are only candidates, so each is kept only when it is
+ * on disk (or, for a Strings-tab farm capture, a URL the browser loads itself).
+ */
+export function reportShotFiles(sessionDir: string, traceFiles: string[], stringsFiles: string[], frameFiles: string[]): string[] {
+  const files = [...traceFiles];
+  for (const f of stringsFiles) if (files.indexOf(f) < 0 && (isRemoteScreenshot(f) || existsSync(join(sessionDir, f)))) files.push(f);
+  for (const f of frameFiles) if (files.indexOf(f) < 0 && existsSync(join(sessionDir, f))) files.push(f);
+  return files;
+}
+
+/**
  * The session recording the report plays, read from capture_metadata.json. Prefers the VIDEO_WEBM
  * artifact (Android's live VP9 encode) and otherwise takes the VIDEO mp4 (iOS, web, or an Android
  * host whose ffmpeg can't encode VP9). The artifact must name a file that exists and carry a
@@ -766,8 +784,11 @@ function main(): void {
     const logs = s.logs || [];
     const trace = core.extractTrace(logs);
     const llmLogs = core.extractLlmLogs(logs);
-    // Inline only the screenshots the timeline actually references (deduped).
-    const files = core.traceScreenshotFiles(trace);
+    // Inline only the screenshots the timeline references, plus the ones the Strings tab shows.
+    // The strings ride on the capture logs, so they come from the logs already in hand.
+    const visibleStrings = core.extractVisibleStrings(logs);
+    const traceFiles = core.traceScreenshotFiles(trace);
+    const files = reportShotFiles(s.sessionDir, traceFiles, core.visibleStringsShotFiles(visibleStrings), core.captureFrameFiles(logs));
     // Session id == the session dir's own name, the segment both hosts address images under.
     const sessionId = basename(s.sessionDir);
     // In linked-image mode a file that isn't on disk is dropped rather than referenced, matching
@@ -819,6 +840,7 @@ function main(): void {
       eventsGz,
       spans,
       spansGz,
+      visibleStrings,
       attachments,
       llmMessages,
       llmMessagesGz,

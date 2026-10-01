@@ -378,7 +378,7 @@ class AccessibilityServiceScreenState(
   /** Cached compact elements result — shared between text representation and annotation elements. */
   private val compactElements: CompactScreenElements? by lazy {
     val tree = _trailblazeNodeTree ?: return@lazy null
-    val result = CompactScreenElements.buildForAndroid(tree, screenHeight = deviceHeight)
+    val result = CompactScreenElements.buildForAndroid(tree, screenHeight = deviceHeight, screenWidth = deviceWidth)
     // Annotate tree nodes with their stable hash refs for debugging and inspector
     _trailblazeNodeTree = result.applyRefsToTree(tree)
     result

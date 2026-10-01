@@ -114,13 +114,14 @@ class TrailblazeToolMetaTest {
     assertThat(meta.shouldRegister(TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY, preferHostAgent = true)).isFalse()
   }
 
-  @Test fun `shouldRegister - all three filters combine - host-required ios-only on-device-agent session`() {
+  @Test fun `shouldRegister - all three filters combine - host-required ios-only tool`() {
     val meta = TrailblazeToolMeta(
       supportedDrivers = listOf("ios-host"),
       requiresHost = true,
     )
     assertThat(meta.shouldRegister(TrailblazeDriverType.IOS_HOST, preferHostAgent = true)).isTrue()
-    assertThat(meta.shouldRegister(TrailblazeDriverType.IOS_HOST, preferHostAgent = false)).isFalse()
+    // iOS has no on-device agent: its tools run on the host whatever `preferHostAgent` says.
+    assertThat(meta.shouldRegister(TrailblazeDriverType.IOS_HOST, preferHostAgent = false)).isTrue()
     assertThat(meta.shouldRegister(TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY, preferHostAgent = true)).isFalse()
   }
 

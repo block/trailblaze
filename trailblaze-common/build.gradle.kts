@@ -456,6 +456,7 @@ kotlin {
         // every consumer) must not inherit a server framework.
         implementation(libs.ktor.server.cio)
         implementation(libs.ktor.server.websockets)
+        implementation(libs.ktor.client.mock)
       }
     }
 

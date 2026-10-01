@@ -292,6 +292,8 @@ const clampRow = (row: FormatterRowInput | null | undefined): FormattedRow | nul
     t: typeof row.t === "number" ? row.t : null,
     label: clampText(row.label, CAPS.label),
   };
+  // An interval's end only when it is one: a finite instant after the row's own start.
+  if (out.t != null && typeof row.endT === "number" && Number.isFinite(row.endT) && row.endT > out.t) out.endT = row.endT;
   if (row.tone === "ok" || row.tone === "warn" || row.tone === "error") out.tone = row.tone;
   if (Array.isArray(row.badges)) {
     const badges = row.badges

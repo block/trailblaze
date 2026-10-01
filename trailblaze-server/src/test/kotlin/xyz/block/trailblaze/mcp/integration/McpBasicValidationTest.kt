@@ -6,7 +6,6 @@ import org.junit.After
 import org.junit.Assume.assumeTrue
 import org.junit.Before
 import org.junit.Test
-import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.mcp.TrailblazeMcpMode
 import java.net.URL
 import kotlin.test.assertTrue
@@ -185,9 +184,6 @@ class McpBasicValidationTest {
       val modeResult = client.setMode(TrailblazeMcpMode.TRAILBLAZE_AS_AGENT)
       Console.log("setMode result: ${modeResult.content}")
       
-      val agentResult = client.setAgentImplementation(AgentImplementation.MULTI_AGENT_V3)
-      Console.log("setAgentImplementation result: ${agentResult.content}")
-      
       // Run a very simple prompt
       Console.log("\n--- Running simple prompt: Press the home button ---")
       val promptResult = client.runPrompt(listOf("Press the home button"))
@@ -214,9 +210,6 @@ class McpBasicValidationTest {
       // Configure
       val modeResult = client.setMode(TrailblazeMcpMode.TRAILBLAZE_AS_AGENT)
       Console.log("setMode result: ${modeResult.content}")
-      
-      val agentResult = client.setAgentImplementation(AgentImplementation.MULTI_AGENT_V3)
-      Console.log("setAgentImplementation result: ${agentResult.content}")
       
       // Run a very simple prompt
       Console.log("\n--- Running simple prompt: Press the home button ---")

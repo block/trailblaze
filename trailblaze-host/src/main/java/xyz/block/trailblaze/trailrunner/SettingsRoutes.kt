@@ -16,7 +16,6 @@ import xyz.block.trailblaze.api.TrailblazeImageFormat
 import xyz.block.trailblaze.devices.TrailblazeDevicePort
 import xyz.block.trailblaze.llm.TrailblazeLlmModels
 import xyz.block.trailblaze.llm.TrailblazeLlmProvider
-import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.ui.models.TrailblazeServerState
 import xyz.block.trailblaze.util.Console
 import java.io.File
@@ -47,16 +46,9 @@ internal fun settingsDtoFromConfig(
   trailsDirectory = config.trailsDirectory,
   logsDirectory = config.logsDirectory,
   appDataDirectory = config.appDataDirectory,
-  // A never-chosen saved agent is null (tri-state); report the one a run would use.
-  llm = buildLlmSettingsDto(
-    deps,
-    config.llmProvider,
-    config.llmModel,
-    config.agentImplementation ?: AgentImplementation.DEFAULT,
-  ),
+  llm = buildLlmSettingsDto(deps, config.llmProvider, config.llmModel),
   selfHealEnabled = config.selfHealEnabled,
   requireSteps = config.requireSteps,
-  saveAnnotatedScreenshots = config.saveAnnotatedScreenshots,
   maxLlmCalls = config.maxLlmCalls,
   screenshotImageFormat = config.screenshotImageFormat?.name,
   screenshotMaxLongerSide = config.screenshotMaxLongerSide,
@@ -170,14 +162,9 @@ internal suspend fun buildSettingsPatchResponse(
     request.preferHostAgent?.let { updated = updated.copy(preferHostAgent = it) }
     request.selfHealEnabled?.let { updated = updated.copy(selfHealEnabled = it) }
     request.requireSteps?.let { updated = updated.copy(requireSteps = it) }
-    request.saveAnnotatedScreenshots?.let { updated = updated.copy(saveAnnotatedScreenshots = it) }
     request.maxLlmCalls?.let { updated = updated.copy(maxLlmCalls = it.takeIf { n -> n > 0 }) }
     request.llmProvider?.let { updated = updated.copy(llmProvider = it) }
     request.llmModel?.let { updated = updated.copy(llmModel = it) }
-    request.agent?.let { a ->
-      runCatching { AgentImplementation.valueOf(a) }.getOrNull()
-        ?.let { updated = updated.copy(agentImplementation = it) }
-    }
     request.screenshotImageFormat?.let { v ->
       if (v.isBlank()) updated = updated.copy(screenshotImageFormat = null)
       else runCatching { TrailblazeImageFormat.valueOf(v) }.getOrNull()?.let { updated = updated.copy(screenshotImageFormat = it) }
@@ -371,7 +358,6 @@ private fun buildLlmSettingsDto(
   deps: TrailRunnerDeps,
   selectedProvider: String,
   selectedModel: String,
-  selectedAgent: AgentImplementation,
 ): LlmSettingsDto {
   val modelLists = deps.llmModelListsProvider?.invoke()
   val providers = modelLists?.map { it.provider }?.distinctBy { it.id }
@@ -383,14 +369,5 @@ private fun buildLlmSettingsDto(
     model = selectedModel,
     availableProviders = providers.map { LlmProviderOptionDto(it.id, it.display) },
     availableModels = models.distinct().map { (modelId, providerId) -> LlmModelOptionDto(modelId, providerId) },
-    agent = selectedAgent.name,
-    availableAgents = AgentImplementation.entries.map { AgentOptionDto(it.name, agentDisplayName(it)) },
   )
-}
-
-/** Human-readable label for an agent implementation, shown in the run-controls agent picker. */
-private fun agentDisplayName(agent: AgentImplementation): String = when (agent) {
-  AgentImplementation.TRAILBLAZE_RUNNER -> "Trailblaze Runner"
-  AgentImplementation.MULTI_AGENT_V3 -> "Multi-Agent v3"
-  AgentImplementation.KOOG_STRATEGY_GRAPH -> "Koog Strategy Graph"
 }

@@ -30,6 +30,8 @@ class AxeDeviceManager(
   // constructed with a target (target-agnostic ad-hoc paths); selectors authored without
   // templates work either way.
   private val templateContext: xyz.block.trailblaze.api.TargetTemplateContext? = null,
+  // Injectable for tests only — production always shells out to the AXe CLI.
+  private val describeUi: () -> AxeCli.Result = { AxeCli.describeUi(udid) },
 ) : IosDeviceManager {
 
   companion object {
@@ -180,11 +182,55 @@ class AxeDeviceManager(
 
   // --- Screen state ---
 
-  override fun getScreenState(): ScreenState = AxeScreenState(
+  override fun getScreenState(): ScreenState = axeScreenState(::readTree)
+
+  override fun sharedScreenState(): ScreenState = axeScreenState(::sharedTree)
+
+  private fun axeScreenState(readTree: () -> TrailblazeNode?) = AxeScreenState(
     udid = udid,
     deviceWidth = deviceWidth,
     deviceHeight = deviceHeight,
+    readTree = readTree,
   )
+
+  // --- Shared reads (see [IosDeviceManager.shareScreenReads]) ---
+  //
+  // Every `describe-ui` is a fresh process walking the whole tree, and one tool call used to pay
+  // for several of them against a screen nothing had touched: the tool's own read, the pre-action
+  // log capture, and the selector poll's first try. Inside a span, those shared reads return the
+  // latest capture unless an action that can change the screen ran since. A plain
+  // [getScreenState] always reads fresh, and its capture becomes the latest one.
+
+  private val sharedReadLock = Any()
+  private var sharedReadDepth = 0
+  private var keptTree: TrailblazeNode? = null
+
+  override fun shareScreenReads(): AutoCloseable {
+    synchronized(sharedReadLock) { sharedReadDepth++ }
+    var closed = false
+    return AutoCloseable {
+      synchronized(sharedReadLock) {
+        if (closed) return@AutoCloseable
+        closed = true
+        if (--sharedReadDepth == 0) keptTree = null
+      }
+    }
+  }
+
+  /** The kept capture when one is valid, otherwise a fresh read (kept when a span is open). */
+  private fun sharedTree(): TrailblazeNode? = synchronized(sharedReadLock) { keptTree } ?: readTree()
+
+  /** One `describe-ui`, remembered as the latest capture while a span is open. */
+  private fun readTree(): TrailblazeNode? {
+    val tree = AxeScreenState.parseDescribeUi(describeUi(), "AxeDeviceManager")
+    synchronized(sharedReadLock) { if (sharedReadDepth > 0) keptTree = tree }
+    return tree
+  }
+
+  /** Drops the kept capture — called around anything that can change the screen. */
+  private fun forgetKeptTree() {
+    synchronized(sharedReadLock) { keptTree = null }
+  }
 
   /**
    * Fresh tree capture without waiting — used for selector resolution loops.
@@ -194,23 +240,17 @@ class AxeDeviceManager(
    * by a notification-alert auto-dismiss tap (see [maybeDismissNotificationAlert]) taken
    * during this capture. Callers must treat null as a retry signal, never a terminal error —
    * every existing caller is a poll loop that re-captures on the next iteration.
+   *
+   * [shared] lets a poll's first try reuse the span's kept capture; every later try must pass
+   * false, since re-reading the same tree cannot observe the screen changing.
    */
-  fun captureTree(): TrailblazeNode? {
-    val res = AxeCli.describeUi(udid)
-    if (!res.success) {
-      Console.log("[AxeDeviceManager] describe-ui failed: ${res.stderr.trim()}")
-      return null
-    }
-    val tree = try {
-      AxeJsonMapper.parse(res.stdout)
-    } catch (e: Exception) {
-      Console.log("[AxeDeviceManager] describe-ui produced unparseable JSON: ${e.message}")
-      null
-    }
+  fun captureTree(shared: Boolean = false): TrailblazeNode? {
+    val tree = if (shared) sharedTree() else readTree()
     if (tree != null && maybeDismissNotificationAlert(tree)) {
       // The dismiss tap just changed the UI, so this capture is stale — it still shows the
       // alert. Returning it would let the caller resolve selectors against a hierarchy that no
       // longer exists; return null so the poll loop that drove this capture re-captures.
+      forgetKeptTree()
       return null
     }
     return tree
@@ -248,6 +288,22 @@ class AxeDeviceManager(
 
   override fun execute(action: IosDriverAction): ExecutionResult {
     Console.log("[AxeDeviceManager] Executing: ${action.description}")
+    // Assertions and screenshots only look, so a capture from before them still holds after.
+    val readsOnly = action is IosDriverAction.AssertVisible ||
+      action is IosDriverAction.AssertNotVisible ||
+      action == IosDriverAction.TakeScreenshot
+    if (readsOnly) return dispatch(action)
+    // A selector tap resolves against the screen as it stands, so its first poll may still use
+    // the kept capture; everything else can change the screen before it reads anything.
+    if (action !is IosDriverAction.TapOnElement) forgetKeptTree()
+    try {
+      return dispatch(action)
+    } finally {
+      forgetKeptTree()
+    }
+  }
+
+  private fun dispatch(action: IosDriverAction): ExecutionResult {
     return when (action) {
       is IosDriverAction.Tap -> {
         AxeCli.tapXy(udid, action.x, action.y).throwIfError("tap")
@@ -465,9 +521,11 @@ class AxeDeviceManager(
 
   private fun executeTapOnElement(action: IosDriverAction.TapOnElement): ExecutionResult {
     var lastFullTree: TrailblazeNode? = null
+    var firstTry = true
     val startTime = System.currentTimeMillis()
     while (System.currentTimeMillis() - startTime < action.timeoutMs) {
-      val fullTree = captureTree()
+      val fullTree = captureTree(shared = firstTry)
+      firstTry = false
       if (fullTree != null) {
         lastFullTree = fullTree
         val matched = pickMatch(clampToViewport(fullTree), action.nodeSelector)
@@ -512,9 +570,11 @@ class AxeDeviceManager(
 
   private fun executeAssertVisible(action: IosDriverAction.AssertVisible): ExecutionResult {
     var lastFullTree: TrailblazeNode? = null
+    var firstTry = true
     val startTime = System.currentTimeMillis()
     while (System.currentTimeMillis() - startTime < action.timeoutMs) {
-      val fullTree = captureTree()
+      val fullTree = captureTree(shared = firstTry)
+      firstTry = false
       if (fullTree != null) {
         lastFullTree = fullTree
         val matched = pickMatch(clampToViewport(fullTree), action.nodeSelector)
@@ -545,9 +605,11 @@ class AxeDeviceManager(
     // non-matching captures to narrow that window (it cannot fully close it: both captures can
     // still land before a slow transition).
     var consecutiveNoMatch = 0
+    var firstTry = true
     val startTime = System.currentTimeMillis()
     while (System.currentTimeMillis() - startTime < action.timeoutMs) {
-      val tree = captureTree()
+      val tree = captureTree(shared = firstTry)
+      firstTry = false
       if (tree != null) {
         // Clamped like the positive assert: an element that scrolled below the fold is
         // "not visible" here too (Maestro parity — its filtered hierarchy drops the node).

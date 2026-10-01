@@ -59,8 +59,8 @@ import kotlin.test.Test
  *    `buildKoogToolExecutionContext` seam the Koog registry needs,
  *  - single- and multi-tool batches dispatch over RPC and succeed,
  *  - exactly ONE post-batch screenshot ([TrailblazeLog.AgentDriverLog]) is logged per
- *    `runTrailblazeTools` call (the pre-migration behavior — preserved for the default
- *    TRAILBLAZE_RUNNER path's recorded `tools:` blocks),
+ *    `runTrailblazeTools` call (the pre-migration behavior — preserved for recorded `tools:`
+ *    blocks replayed as one batch),
  *  - a failing tool stops the batch and only the executed tool is reported.
  */
 @OptIn(ExperimentalTestApi::class)
@@ -211,8 +211,8 @@ class ComposeRpcTrailblazeAgentTest {
       assertThat(result.result).isInstanceOf(TrailblazeToolResult.Success::class)
       assertThat(result.executedTools).hasSize(2)
 
-      // One screenshot for the whole batch (NOT one per tool) — this is the behavior the
-      // default TRAILBLAZE_RUNNER path's recorded `tools:` blocks rely on.
+      // One screenshot for the whole batch (NOT one per tool) — this is the behavior recorded
+      // `tools:` blocks, replayed as one batch, rely on.
       assertThat(captured.filterIsInstance<TrailblazeLog.AgentDriverLog>()).hasSize(1)
       // ...but each dispatched tool still produces its own TrailblazeToolLog.
       assertThat(captured.filterIsInstance<TrailblazeLog.TrailblazeToolLog>()).hasSize(2)

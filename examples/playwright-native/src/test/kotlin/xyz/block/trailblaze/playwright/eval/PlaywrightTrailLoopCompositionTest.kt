@@ -88,6 +88,7 @@ class PlaywrightTrailLoopCompositionTest {
         trailblazeDeviceId = playwrightTest.trailblazeDeviceInfo.trailblazeDeviceId,
         trailFilePath = null,
         sendSessionStartLog = true,
+        useRecordedSteps = true,
       )
     }
   }

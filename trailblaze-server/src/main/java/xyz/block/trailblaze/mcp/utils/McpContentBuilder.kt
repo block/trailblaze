@@ -80,28 +80,9 @@ class McpContentBuilder(
   }
 
   /**
-   * Conditionally adds a screenshot if autoIncludeScreenshotAfterAction is enabled.
-   */
-  fun addScreenshotIfAutoEnabled(
-    screenshotBytes: ByteArray?,
-    mimeType: String = ImageFormatDetector.detectFormat(screenshotBytes ?: ByteArray(0)).mimeType,
-  ): McpContentBuilder {
-    if (sessionContext?.autoIncludeScreenshotAfterAction == true) {
-      addScreenshot(screenshotBytes, mimeType)
-    }
-    return this
-  }
-
-  /**
    * Builds the content list for a CallToolResult.
    */
   fun build(): MutableList<TextContent> = contentList.toMutableList()
-
-  /**
-   * Builds and returns just the text portions joined together.
-   * Useful for logging or debugging.
-   */
-  fun buildTextOnly(): String = contentList.joinToString("\n") { it.text.orEmpty() }
 
   companion object {
     /**

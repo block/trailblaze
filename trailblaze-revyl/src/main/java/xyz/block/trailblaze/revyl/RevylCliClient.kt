@@ -164,16 +164,6 @@ class RevylCliClient(
     }
   }
 
-  /**
-   * Stops all active device sessions.
-   *
-   * @throws RevylCliException If the CLI exits with a non-zero code.
-   */
-  fun stopAllSessions() {
-    runCli(listOf("device", "stop", "--all"))
-    sessions.clear()
-  }
-
   // ---------------------------------------------------------------------------
   // Device actions — all return RevylActionResult with coordinates
   // ---------------------------------------------------------------------------
@@ -366,17 +356,6 @@ class RevylCliClient(
    */
   fun home() {
     runCli(deviceArgs("home"))
-  }
-
-  /**
-   * Toggles device network connectivity (airplane mode).
-   *
-   * @param connected true to enable network (disable airplane mode),
-   *     false to disable network (enable airplane mode).
-   * @throws RevylCliException If the CLI exits with a non-zero code.
-   */
-  fun setNetworkConnected(connected: Boolean) {
-    runCli(deviceArgs("network", if (connected) "--connected" else "--disconnected"))
   }
 
   // ---------------------------------------------------------------------------

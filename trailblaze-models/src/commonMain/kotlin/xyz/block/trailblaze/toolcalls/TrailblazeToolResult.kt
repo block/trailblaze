@@ -25,8 +25,8 @@ sealed interface TrailblazeToolResult {
    *
    * The fallback runs both directions: a scripted caller with no [structuredContent] falls back
    * to [message]; conversely, a tool with no [message] gets one rendered automatically from
-   * [structuredContent] as compact JSON for the LLM/CLI/direct-YAML path — see
-   * `AgentMessages.toContentString`. A tool that only cares about the typed TS surface can
+   * [structuredContent] as JSON for the CLI (`renderToolResultOutput`), and the agent's
+   * tool-result text carries the whole result. A tool that only cares about the typed TS surface can
    * therefore populate [structuredContent] alone and leave [message] unset, rather than
    * hand-duplicating the same payload into both fields.
    */
@@ -49,6 +49,7 @@ sealed interface TrailblazeToolResult {
         get() = "Unknown tool call provided: $functionName with args: $functionArgs"
     }
 
+    /** No longer produced; kept so session logs recorded by the removed V1 agent still decode. */
     @Serializable
     data object EmptyToolCall : Error {
       override val errorMessage: String

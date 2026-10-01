@@ -39,18 +39,17 @@ import kotlin.reflect.full.findAnnotation
 /**
  * Koog AI Agent that owns the reasoning loop via a **custom Koog `strategy { }` graph**.
  *
- * This is the opt-in [xyz.block.trailblaze.mcp.AgentImplementation.KOOG_STRATEGY_GRAPH] entry
- * point. Instead of the library-provided [ai.koog.agents.core.agent.singleRunStrategy], it builds
- * an explicit tool-calling graph. That explicit graph is the seam we'll grow replan / recovery /
- * history-compression nodes into without touching any other agent's behavior.
+ * This is Trailblaze's agent. Instead of the library-provided
+ * [ai.koog.agents.core.agent.singleRunStrategy], it builds an explicit tool-calling graph. That
+ * explicit graph is the seam we'll grow replan / recovery / history-compression nodes into.
  *
  * ## How tools are sourced
  *
  * [createInProcess] is the only entry point: tools come from a Trailblaze-owned
  * [ai.koog.agents.core.tools.ToolRegistry] built via
  * `TrailblazeToolRepo.asToolRegistry { <per-call execution context> }`. Tool calls execute
- * in-process against the same executor / logging / session the legacy
- * [xyz.block.trailblaze.agent.TrailblazeRunner] uses, so session logs happen as a side effect.
+ * in-process against the session's own executor / logging, so session logs happen as a side
+ * effect.
  * No HTTP, no re-entrancy — safe to run in the same JVM (or on the same device) it drives.
  *
  * (An earlier MCP self-connection overload was removed: it DEADLOCKED whenever the agent shared a
@@ -79,8 +78,7 @@ import kotlin.reflect.full.findAnnotation
  * ```
  *
  * In words: every LLM turn is forced to call a tool (`ToolChoice.Required`) — the agent never
- * returns free text, exactly like the legacy [xyz.block.trailblaze.agent.TrailblazeRunner]. The
- * reasoning lives in the tool's structured fields, and the agent signals completion by calling the
+ * returns free text. The reasoning lives in the tool's structured fields, and the agent signals completion by calling the
  * `objectiveStatus` tool. So: prune the chat history (latest screen only), force a tool call; if
  * the call is `objectiveStatus`, execute it (capturing COMPLETED/FAILED) and finish; otherwise
  * execute the tool, prune again so the just-produced tool result is the "latest" full screen state,
@@ -109,8 +107,8 @@ import kotlin.reflect.full.findAnnotation
  *
  * Koog's `maxAgentIterations` counts *node executions* — every hop in the graph above, including
  * `executeTools` and the in-memory prune nodes — so it is a runaway guard for the graph, not a cost
- * budget. This loop runs three nodes per LLM turn, so `25` iterations bought about eight LLM calls
- * while the legacy runner's `25` meant twenty-five. Callers therefore pass an LLM-call budget
+ * budget. This loop runs three nodes per LLM turn, so `25` iterations would buy about eight LLM
+ * calls. Callers therefore pass an LLM-call budget
  * ([createInProcess]'s `maxLlmCalls`); the agent counts requests in [LlmCallBudgetLlmClient] and sets
  * Koog's iteration limit to [graphIterationCeiling], far enough above the budget that the LLM counter
  * always trips first.
@@ -118,8 +116,7 @@ import kotlin.reflect.full.findAnnotation
  * ## History pruning ("latest screen-state only")
  *
  * A core Trailblaze value prop is that the LLM only ever sees the *latest* view hierarchy, not an
- * accumulation of every screen it has visited — see the legacy [xyz.block.trailblaze.agent.TrailblazeRunner]
- * path, whose `getLimitedHistory()` truncates history to keep context flat. Koog's [AIAgent]
+ * accumulation of every screen it has visited. Koog's [AIAgent]
  * accumulates the full message history by default: every tool result (including the large
  * snapshot / view-hierarchy results) is appended as a tool-result message and re-sent on every
  * subsequent LLM call. Left unchecked, a multi-snapshot run sends every historical hierarchy.
@@ -175,7 +172,7 @@ import kotlin.reflect.full.findAnnotation
  * - [strategy] (`ai.koog.agents.core.dsl.builder.strategy`) — builds the `AIAgentGraphStrategy<String, String>`.
  * - [nodeLLMRequestOnlyCallingTools], [nodeExecuteTools], [nodeLLMSendToolResultsOnlyCallingTools]
  *   (`ai.koog.agents.core.dsl.extension`) — the predefined nodes. The `OnlyCallingTools` request
- *   variants set `LLMParams.ToolChoice.Required`, matching the legacy runner's forced-tool policy.
+ *   variants set `LLMParams.ToolChoice.Required`, the forced-tool policy.
  * - [onMessageParts] (`MessagePart.Tool.Call::class`) + `onCondition` + `transformed { ToolCalls(it) }`
  *   — the edge guard that routes a status-only response to the completion branch and everything
  *   else (mixed batches included, unfiltered) to the loop.
@@ -249,10 +246,7 @@ class KoogStrategyGraphAgent private constructor(
   }
 
   companion object {
-    /**
-     * Default per-objective LLM-call budget. Same number, and the same unit, as the legacy
-     * `TrailblazeRunner.DEFAULT_MAX_STEPS`, so `--max-llm-calls` means one thing on both agents.
-     */
+    /** Default per-objective LLM-call budget; what `--max-llm-calls` overrides. */
     const val DEFAULT_MAX_LLM_CALLS = 25
 
     /**
@@ -615,10 +609,6 @@ with status=COMPLETED (or FAILED) and an explanation; that is the only way to fi
     /**
      * Rewrites [prompt] so older screen payloads stop riding along in every request.
      *
-     * The legacy [xyz.block.trailblaze.agent.TrailblazeRunner] needs no equivalent: it never stores
-     * screen state in history at all, and its `getLimitedHistory()` is a FIFO count window rather
-     * than a latest-screen rule. This is the graph agent's own problem to solve.
-     *
      * ## The rule
      *
      * Tool results land in the prompt as [MessagePart.Tool.Result] parts (inside a [Message.User]).
@@ -724,8 +714,7 @@ with status=COMPLETED (or FAILED) and an explanation; that is the only way to fi
      * This is the production entry point used on the host. The caller (a host runner) builds the
      * registry from its session's [xyz.block.trailblaze.toolcalls.TrailblazeToolRepo] via
      * `toolRepo.asToolRegistry { <fresh per-call execution context> }`, so each tool the graph
-     * invokes runs through the same executor / logging / session the legacy
-     * [xyz.block.trailblaze.agent.TrailblazeRunner] uses — only the reasoning loop differs.
+     * invokes runs through the session's own executor / logging.
      *
      * There is no self-connection: the agent and the device it drives live in the same JVM, so its
      * tool calls don't re-enter the daemon over HTTP (the pattern that deadlocks an in-process run).

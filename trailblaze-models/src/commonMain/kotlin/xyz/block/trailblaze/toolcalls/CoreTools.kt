@@ -226,10 +226,6 @@ object CoreTools {
     "click",                   // AndroidWorld canonical
   )
 
-  /** Returns true if [toolName] is a text input action (type, inputText, type_into, etc.). */
-  fun isTextInputAction(toolName: String): Boolean =
-    TEXT_INPUT_NAMES.any { it.equals(toolName, ignoreCase = true) }
-
   /** Returns true if [toolName] is a tap/click action. */
   fun isTapAction(toolName: String): Boolean =
     TAP_NAMES.any { it.equals(toolName, ignoreCase = true) }
@@ -295,7 +291,6 @@ enum class ToolSource {
  * Metadata about a tool's capabilities and compatibility.
  *
  * This information is used by:
- * - [DeterministicTrailExecutor] to validate trail files before execution
  * - The agent to filter available tools based on current context
  * - UI to show tool compatibility information
  *
@@ -347,20 +342,6 @@ data class ToolCompatibility(
 
   companion object {
     /**
-     * Creates compatibility for a built-in mobile tool (Android + iOS).
-     */
-    fun builtinMobile(
-      name: String,
-      description: String? = null,
-    ) = ToolCompatibility(
-      name = name,
-      supportedPlatforms = setOf(TrailblazeDevicePlatform.ANDROID, TrailblazeDevicePlatform.IOS),
-      supportedExecutionModes = setOf(ToolExecutionMode.HOST, ToolExecutionMode.ON_DEVICE),
-      source = ToolSource.BUILTIN,
-      description = description,
-    )
-
-    /**
      * Creates compatibility for a host-only tool (e.g., Python scripts).
      */
     fun hostOnly(
@@ -377,153 +358,6 @@ data class ToolCompatibility(
       supportedExecutionModes = setOf(ToolExecutionMode.HOST),
       source = source,
       description = description,
-    )
-
-    /**
-     * Creates compatibility for an MCP-contributed tool.
-     */
-    fun mcpTool(
-      name: String,
-      platforms: Set<TrailblazeDevicePlatform>,
-      executionModes: Set<ToolExecutionMode>,
-      requiresNetwork: Boolean = true,
-      description: String? = null,
-    ) = ToolCompatibility(
-      name = name,
-      supportedPlatforms = platforms,
-      supportedExecutionModes = executionModes,
-      source = ToolSource.MCP_EXTERNAL,
-      requiresNetwork = requiresNetwork,
-      description = description,
-    )
-  }
-}
-
-/**
- * Registry of tool compatibility information.
- *
- * Provides a central place to look up tool metadata for validation
- * and compatibility checking.
- */
-class ToolCompatibilityRegistry {
-  private val tools = mutableMapOf<String, ToolCompatibility>()
-
-  /**
-   * Registers a tool's compatibility information.
-   */
-  fun register(compatibility: ToolCompatibility) {
-    tools[compatibility.name] = compatibility
-  }
-
-  /**
-   * Registers multiple tools.
-   */
-  fun registerAll(compatibilities: Collection<ToolCompatibility>) {
-    compatibilities.forEach { register(it) }
-  }
-
-  /**
-   * Gets compatibility info for a tool.
-   *
-   * @return ToolCompatibility or null if not registered
-   */
-  fun get(toolName: String): ToolCompatibility? = tools[toolName]
-
-  /**
-   * Checks if a tool is compatible with the given context.
-   *
-   * @return true if compatible or tool is not registered (unknown tools pass by default)
-   */
-  fun isCompatible(
-    toolName: String,
-    platform: TrailblazeDevicePlatform,
-    executionMode: ToolExecutionMode,
-    networkAvailable: Boolean = true,
-  ): Boolean {
-    val compatibility = tools[toolName] ?: return true // Unknown tools pass
-    return compatibility.isCompatibleWith(platform, executionMode, networkAvailable)
-  }
-
-  /**
-   * Gets all tools compatible with the given context.
-   */
-  fun getCompatibleTools(
-    platform: TrailblazeDevicePlatform,
-    executionMode: ToolExecutionMode,
-    networkAvailable: Boolean = true,
-  ): List<ToolCompatibility> {
-    return tools.values.filter { 
-      it.isCompatibleWith(platform, executionMode, networkAvailable) 
-    }
-  }
-
-  /**
-   * Validates that all tools in a list are compatible with the context.
-   *
-   * @return List of incompatible tool names, empty if all compatible
-   */
-  fun validateTools(
-    toolNames: List<String>,
-    platform: TrailblazeDevicePlatform,
-    executionMode: ToolExecutionMode,
-    networkAvailable: Boolean = true,
-  ): List<String> {
-    return toolNames.filter { toolName ->
-      val compatibility = tools[toolName]
-      compatibility != null && !compatibility.isCompatibleWith(platform, executionMode, networkAvailable)
-    }
-  }
-
-  companion object {
-    /**
-     * Creates a registry pre-populated with core Trailblaze tools.
-     */
-    fun withCoreTools(): ToolCompatibilityRegistry {
-      return ToolCompatibilityRegistry().apply {
-        registerAll(CORE_TOOL_COMPATIBILITIES)
-      }
-    }
-
-    /**
-     * Built-in compatibility information for core tools.
-     */
-    private val CORE_TOOL_COMPATIBILITIES = listOf(
-      // Navigation - available on all mobile platforms, all execution modes
-      ToolCompatibility.builtinMobile(CoreTools.NAVIGATE_BACK, "Navigate back to previous screen"),
-      ToolCompatibility.builtinMobile(CoreTools.GO_HOME, "Go to device home screen"),
-      ToolCompatibility.builtinMobile(CoreTools.PRESS_BACK, "Legacy: Navigate back"), // Legacy
-
-      // Interaction - core touch interactions
-      ToolCompatibility.builtinMobile(CoreTools.TAP_ON_ELEMENT, "Tap on UI element by selector"),
-      ToolCompatibility.builtinMobile(CoreTools.TAP, "Tap on UI element by ref ID"),
-      ToolCompatibility.builtinMobile(CoreTools.TAP_ON_POINT, "Tap at screen coordinates"),
-      ToolCompatibility.builtinMobile(CoreTools.LONG_PRESS, "Long press on UI element"),
-      ToolCompatibility.builtinMobile(CoreTools.SWIPE, "Swipe in a direction"),
-      ToolCompatibility.builtinMobile(CoreTools.SCROLL_UNTIL_VISIBLE, "Scroll until text is visible"),
-
-      // Input - text entry
-      ToolCompatibility.builtinMobile(CoreTools.INPUT_TEXT, "Input text into focused field"),
-      ToolCompatibility.builtinMobile(CoreTools.ERASE_TEXT, "Erase text from focused field"),
-      ToolCompatibility.builtinMobile(CoreTools.HIDE_KEYBOARD, "Hide on-screen keyboard"),
-      ToolCompatibility.builtinMobile(CoreTools.PRESS_KEY, "Press a specific key"),
-
-      // App lifecycle
-      ToolCompatibility.builtinMobile(CoreTools.LAUNCH_APP, "Deprecated: launch app with a launch mode"),
-      ToolCompatibility.builtinMobile(CoreTools.OPEN_APP, "Open app as-is and wait until it is on screen"),
-      ToolCompatibility.builtinMobile(CoreTools.STOP_APP, "Stop/kill app"),
-      ToolCompatibility.builtinMobile(CoreTools.OPEN_URL, "Open URL in browser or app"),
-
-      // Utility
-      ToolCompatibility.builtinMobile(CoreTools.WAIT, "Wait for specified duration"),
-      ToolCompatibility.builtinMobile(CoreTools.NETWORK_CONNECTION, "Control network connectivity"),
-
-      // Assertions
-      ToolCompatibility.builtinMobile(CoreTools.ASSERT_VISIBLE_WITH_TEXT, "Assert text is visible"),
-      ToolCompatibility.builtinMobile(CoreTools.ASSERT_NOT_VISIBLE_WITH_TEXT, "Assert text is not visible"),
-      ToolCompatibility.builtinMobile(CoreTools.ASSERT_WITH_AI, "AI-powered assertion"),
-
-      // Status
-      ToolCompatibility.builtinMobile(CoreTools.OBJECTIVE_STATUS, "Report objective status"),
     )
   }
 }

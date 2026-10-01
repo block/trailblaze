@@ -172,12 +172,20 @@ class TrailComparator {
 
   /**
    * Extracts natural language steps (prompts) from trail items, ignoring recordings.
+   *
+   * An authored trailhead `step:` is the first step: it runs as step 0, and a test-management case
+   * lists it as its step 1. Counting it means a trail reads the same whether that step sits in
+   * `trailhead:` or at the top of `trail:`. A tool-only trailhead has no text and adds nothing.
    */
   fun extractNaturalLanguageSteps(trailItems: List<TrailYamlItem>): List<String> {
-    return trailItems
+    val trailheadStep = trailItems
+      .filterIsInstance<TrailYamlItem.TrailheadTrailItem>()
+      .firstNotNullOfOrNull { it.trailhead.step }
+    val promptSteps = trailItems
       .filterIsInstance<TrailYamlItem.PromptsTrailItem>()
       .flatMap { it.promptSteps }
       .map { it.prompt }
+    return listOfNotNull(trailheadStep) + promptSteps
   }
 
   /**
@@ -272,17 +280,6 @@ class TrailComparator {
     return trailStepLists.drop(1).any { steps ->
       steps != reference
     }
-  }
-
-  /**
-   * Check if multiple trails (as TrailYamlItem lists) have conflicting natural language steps.
-   *
-   * @param trails A list of trail item lists from different trail files
-   * @return true if any trails have different steps, false if all trails match
-   */
-  fun hasConflictingTrails(trails: List<List<TrailYamlItem>>): Boolean {
-    val stepLists = trails.map { extractNaturalLanguageSteps(it) }
-    return hasConflictingSteps(stepLists)
   }
 
   /**

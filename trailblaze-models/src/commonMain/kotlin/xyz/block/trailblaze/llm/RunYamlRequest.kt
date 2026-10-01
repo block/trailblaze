@@ -18,11 +18,6 @@ import xyz.block.trailblaze.model.TrailblazeConfig
  * - Natural language prompts ([xyz.block.trailblaze.yaml.TrailYamlItem.PromptsTrailItem])
  * - Static tool sequences ([xyz.block.trailblaze.yaml.TrailYamlItem.ToolTrailItem])
  * - Configuration items ([xyz.block.trailblaze.yaml.TrailYamlItem.ConfigTrailItem])
- *
- * The [agentImplementation] controls which architecture processes the request:
- * - [AgentImplementation.TRAILBLAZE_RUNNER]: Legacy YAML-based TrailblazeRunner
- * - [AgentImplementation.MULTI_AGENT_V3]: Mobile-Agent-v3 inspired implementation
- * - [AgentImplementation.KOOG_STRATEGY_GRAPH]: Default Koog strategy-graph implementation
  */
 @OptIn(ExperimentalSerializationApi::class)
 @Serializable
@@ -59,16 +54,6 @@ data class RunYamlRequest(
    */
   val traceId: TraceId? = null,
   val driverType: TrailblazeDriverType? = null,
-
-  /**
-   * Which agent architecture to use for processing prompts.
-   *
-   * - [AgentImplementation.TRAILBLAZE_RUNNER]: Legacy YAML-based TrailblazeRunner
-   * - [AgentImplementation.MULTI_AGENT_V3]: Mobile-Agent-v3 inspired implementation
-   * - [AgentImplementation.KOOG_STRATEGY_GRAPH]: Default Koog strategy-graph implementation
-   */
-  @EncodeDefault(EncodeDefault.Mode.ALWAYS)
-  val agentImplementation: AgentImplementation = AgentImplementation.DEFAULT,
 
   /**
    * Whether the on-device handler should block the RPC response until execution finishes and
@@ -120,24 +105,14 @@ data class RunYamlRequest(
   val memorySnapshot: Map<String, String> = emptyMap(),
 
   /**
-   * Per-objective cap on requests sent to the model. Honored by
-   * [AgentImplementation.TRAILBLAZE_RUNNER] (counted in its inner loop) and by
-   * [AgentImplementation.KOOG_STRATEGY_GRAPH] (counted at its LLM client, not in graph
-   * iterations). When non-null, overrides each agent's own built-in default of 25 —
-   * `xyz.block.trailblaze.agent.TrailblazeRunner.DEFAULT_MAX_STEPS` and
-   * `KoogStrategyGraphAgent.DEFAULT_MAX_LLM_CALLS`. Surfaced as `--max-llm-calls` on the CLI
+   * Per-objective cap on requests sent to the model, counted at the agent's LLM client rather than
+   * in graph iterations. When non-null, overrides the built-in default of 25
+   * (`KoogStrategyGraphAgent.DEFAULT_MAX_LLM_CALLS`). Surfaced as `--max-llm-calls` on the CLI
    * so users on metered or expensive providers can cut off a stuck self-heal loop before it
    * racks up many round trips.
    *
    * The cap is per [xyz.block.trailblaze.yaml.PromptStep]/objective, not per trail — a trail
-   * with three prompt blocks issues up to 3 × maxLlmCalls requests in the worst case. The
-   * legacy runner's cycle/stuck detection still trips earlier when the LLM spins on the same
-   * tool call.
-   *
-   * Not honored by [AgentImplementation.MULTI_AGENT_V3], which manages its own iteration
-   * budget internally. The `init` block rejects the combination at construction time rather
-   * than silently dropping the cap, so direct RPC callers and tests can't bypass the
-   * invariant the CLI also enforces.
+   * with three prompt blocks issues up to 3 × maxLlmCalls requests in the worst case.
    */
   val maxLlmCalls: Int? = null,
 
@@ -243,7 +218,9 @@ data class RunYamlRequest(
    * Which of a multi-device trail's `config.devices:` CONFIGURATION entries this run binds — a
    * named entry with an inner `devices:` map, e.g. a paired-display setup. Null (the default) means
    * the run makes no selection: a trail declaring exactly one configuration binds it implicitly, a
-   * trail declaring none runs single-device, and a trail declaring more than one is rejected.
+   * trail declaring none runs single-device, and a trail declaring more than one is rejected. A
+   * trail that also declares single-device entries binds its configuration only when the run binds
+   * companion devices, and otherwise runs single-device.
    *
    * Takes precedence over the `TRAILBLAZE_DEVICE_CONFIGURATION` env var, which a daemon snapshots
    * from its own process environment at launch and therefore applies identically to every trail it
@@ -298,11 +275,15 @@ data class RunYamlRequest(
     require(maxLlmCalls == null || maxLlmCalls > 0) {
       "maxLlmCalls must be a positive integer when set, was $maxLlmCalls."
     }
-    require(maxLlmCalls == null || agentImplementation != AgentImplementation.MULTI_AGENT_V3) {
-      "maxLlmCalls is not honored by AgentImplementation.MULTI_AGENT_V3; pass null or use " +
-        "AgentImplementation.TRAILBLAZE_RUNNER or AgentImplementation.KOOG_STRATEGY_GRAPH."
-    }
   }
+
+  /**
+   * Always the one agent; not a constructor parameter because there is nothing to choose. Still
+   * written on the wire because a receiver built when the agent was selectable reads a missing
+   * field as its own default, which for older builds was the since-removed legacy runner.
+   */
+  @EncodeDefault(EncodeDefault.Mode.ALWAYS)
+  val agentImplementation: AgentImplementation = AgentImplementation.KOOG_STRATEGY_GRAPH
 
   /**
    * Sync dispatches can run for minutes (cold app launches, agentic AI reflection loops,

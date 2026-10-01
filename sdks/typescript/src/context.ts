@@ -68,6 +68,16 @@ export interface TrailblazeDevice {
    * before use.
    */
   instanceId?: string;
+  /**
+   * The port the device's Trailblaze server is bridged on — the Android runner's RPC server, or
+   * an iOS app's in-app Trailblaze server (which a launch argument tells to listen here). Same
+   * value as Kotlin's `TrailblazeDeviceId.getTrailblazeOnDeviceSpecificPort()`, computed by the
+   * host, so a tool can reach `http://localhost:<port>` via `fetch`.
+   *
+   * Absent on web devices (no such server), when the tool runs on the device itself (only the host
+   * knows the port), and from older daemons. Guard before use.
+   */
+  trailblazePort?: number;
 }
 
 /**
@@ -314,6 +324,9 @@ export function fromMeta(meta: unknown, logger?: TrailblazeLogger): TrailblazeCo
   // a missing/non-string value is simply absent, not an envelope error.
   const instanceId =
     typeof deviceRecord["instanceId"] === "string" ? (deviceRecord["instanceId"] as string) : undefined;
+  const portRaw = deviceRecord["trailblazePort"];
+  const trailblazePort =
+    typeof portRaw === "number" && Number.isInteger(portRaw) ? portRaw : undefined;
 
   // `_meta.trailblaze.memory` is a `Record<string, string>` snapshot of the host's
   // `AgentMemory.variables` at envelope build time. Wrap it in a `TrailblazeMemory` so
@@ -344,6 +357,7 @@ export function fromMeta(meta: unknown, logger?: TrailblazeLogger): TrailblazeCo
       heightPixels,
       driverType,
       instanceId,
+      trailblazePort,
     },
     target,
     memory,

@@ -719,6 +719,31 @@ class UnifiedTrailMergeTest {
   }
 
   @Test
+  fun `a windowed phone save drops its duplicate leg only inside the window`() {
+    // An older file already duplicates the android leg under android-phone everywhere.
+    val existing = UnifiedTrail(
+      config = UnifiedTrailConfig(id = "app/checkout", target = "app"),
+      trailhead = UnifiedTrailStep(
+        step = "Bootstrap",
+        recordings = mapOf("android" to listOf(tool("boot")), "android-phone" to listOf(tool("boot"))),
+      ),
+      trail = listOf("Open the cart" to "tapCart", "Pay" to "tapPay").map { (nl, name) ->
+        UnifiedTrailStep(step = nl, recordings = mapOf("android" to listOf(tool(name)), "android-phone" to listOf(tool(name))))
+      },
+    )
+    val recorded = listOf(
+      v1Config(driver = null, id = "app/checkout", target = "app"),
+      TrailYamlItem.PromptsTrailItem(listOf(directionStep("Pay", tool("tapPay")))),
+    )
+
+    val merged = UnifiedTrailAdapter.mergeRecordedClassifier(existing, recorded, "android-phone", selectedDeviceConfiguration = null, stepWindow = 1..1)
+
+    assertEquals(setOf("android", "android-phone"), merged.trail[0].recordings.keys, "outside the window: untouched")
+    assertEquals(setOf("android", "android-phone"), merged.trailhead?.recordings?.keys, "the trailhead is outside every window")
+    assertEquals(setOf("android"), merged.trail[1].recordings.keys)
+  }
+
+  @Test
   fun `a windowed recording leaves another classifier's legs alone inside the window too`() {
     val existing = UnifiedTrail(
       config = UnifiedTrailConfig(id = "app/checkout", target = "app"),

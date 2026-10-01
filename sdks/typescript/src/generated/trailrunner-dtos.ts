@@ -42,12 +42,7 @@ export type AgentActionType = "AIRPLANE_MODE" | "ENTER_TEXT" | "LAUNCH_APP" | "S
 
 export type AgentDriverAction = AddMedia | AirplaneMode | AssertCondition | BackPress | ClearAppState | EnterText | EraseText | GrantPermissions | HideKeyboard | KillApp | LaunchApp | LongPressPoint | OtherAction | PressHome | Scroll | StopApp | Swipe | TapPoint | WaitForSettle;
 
-export type AgentImplementation = "TRAILBLAZE_RUNNER" | "MULTI_AGENT_V3" | "KOOG_STRATEGY_GRAPH";
-
-export interface AgentOptionDto {
-  id: string;
-  display: string;
-}
+export type AgentImplementation = "KOOG_STRATEGY_GRAPH";
 
 export type AgentTaskStatus = AgentTaskStatusFailureMaxCallsLimitReached | InProgress | McpScreenAnalysis | ObjectiveComplete | ObjectiveFailed;
 
@@ -260,6 +255,46 @@ export interface CreateTrailRequest {
   yaml: string;
 }
 
+export interface DecisionAnswer {
+  type: DecisionQuestionType;
+  choice?: string | null;
+  score?: number | null;
+  legend?: Record<string, string> | null;
+  noul?: number | null;
+  probabilities?: Record<string, number> | null;
+  confidence?: number | null;
+}
+
+export interface DecisionCost {
+  inputCost: number;
+  outputCost: number;
+}
+
+export interface DecisionQuestion {
+  type: DecisionQuestionType;
+  instructions: string;
+  criteria?: unknown | null;
+}
+
+export type DecisionQuestionType = "choice" | "score" | "noul";
+
+export interface DecisionRequest {
+  state: unknown;
+  model: string;
+  questions: Record<string, DecisionQuestion>;
+}
+
+export interface DecisionResponse {
+  model: string;
+  answers: Record<string, DecisionAnswer>;
+  usage?: DecisionUsage | null;
+}
+
+export interface DecisionUsage {
+  input_tokens: number;
+  output_tokens: number;
+}
+
 export interface DelegatingTrailblazeToolLog {
   class: "xyz.block.trailblaze.logs.client.TrailblazeLog.DelegatingTrailblazeToolLog";
   toolName: string;
@@ -464,6 +499,14 @@ export interface ExternalAgentStartResponse {
 }
 
 export type ExternalAgentType = "claude" | "codex" | "solo";
+
+export interface ExtractedString {
+  text: string;
+  source: VisibleStringSource;
+  ref?: string | null;
+  bounds?: number[] | null;
+  visible?: boolean;
+}
 
 export interface Failed {
   class: "xyz.block.trailblaze.logs.model.SessionStatus.Ended.Failed";
@@ -729,8 +772,6 @@ export interface LlmSettingsDto {
   model: string;
   availableProviders?: LlmProviderOptionDto[];
   availableModels?: LlmModelOptionDto[];
-  agent?: string;
-  availableAgents?: AgentOptionDto[];
 }
 
 export interface LongPressPoint {
@@ -759,9 +800,12 @@ export interface MaestroDriverLog {
   viewHierarchy?: ViewHierarchyTreeNode | null;
   trailblazeNodeTree?: TrailblazeNode | null;
   driverMigrationTreeNode?: TrailblazeNode | null;
+  frameTrees?: TrailblazeNode[] | null;
   screenshotFile?: string | null;
   action: AgentDriverAction;
   captureCoverage?: CaptureCoverage | null;
+  visibleStrings?: ExtractedString[] | null;
+  captureId?: string | null;
   durationMs: number;
   session: string;
   timestamp: string;
@@ -1065,7 +1109,6 @@ export interface RunRequest {
   selfHeal?: boolean | null;
   useRecordedSteps?: boolean | null;
   maxLlmCalls?: number | null;
-  agent?: string | null;
   memory?: Record<string, string>;
   secrets?: Record<string, string>;
   captureVideo?: boolean | null;
@@ -1244,7 +1287,6 @@ export interface SettingsDto {
   llm: LlmSettingsDto;
   selfHealEnabled: boolean;
   requireSteps: boolean;
-  saveAnnotatedScreenshots: boolean;
   maxLlmCalls?: number | null;
   screenshotImageFormat?: string | null;
   screenshotMaxLongerSide?: number | null;
@@ -1272,11 +1314,9 @@ export interface SettingsPatchRequest {
   appDataDirectory?: string | null;
   selfHealEnabled?: boolean | null;
   requireSteps?: boolean | null;
-  saveAnnotatedScreenshots?: boolean | null;
   maxLlmCalls?: number | null;
   llmProvider?: string | null;
   llmModel?: string | null;
-  agent?: string | null;
   screenshotImageFormat?: string | null;
   screenshotMaxLongerSide?: number | null;
   screenshotMaxShorterSide?: number | null;
@@ -1567,6 +1607,22 @@ export interface TrailblazeAgentTaskStatusChangeLog {
 
 export type TrailblazeClockDomain = "host" | "device";
 
+export interface TrailblazeDecisionRequestLog {
+  class: "xyz.block.trailblaze.logs.client.TrailblazeLog.TrailblazeDecisionRequestLog";
+  engine: string;
+  request: DecisionRequest;
+  response?: DecisionResponse | null;
+  errorMessage?: string | null;
+  outcome?: string | null;
+  cost?: DecisionCost | null;
+  traceId?: string | null;
+  durationMs: number;
+  session: string;
+  timestamp: string;
+  clock?: TrailblazeClockDomain | null;
+  hostReceivedAt?: string | null;
+}
+
 export interface TrailblazeDeviceId {
   instanceId: string;
   trailblazeDevicePlatform: TrailblazeDevicePlatform;
@@ -1646,11 +1702,13 @@ export interface TrailblazeLlmRequestLog {
   requestContext?: LlmRequestContext | null;
   llmRequestLabel?: string | null;
   screenshotIsAnnotated?: boolean | null;
+  visibleStrings?: ExtractedString[] | null;
+  captureId?: string | null;
   clock?: TrailblazeClockDomain | null;
   hostReceivedAt?: string | null;
 }
 
-export type TrailblazeLog = AccessibilityActionLog | DelegatingTrailblazeToolLog | MaestroCommandLog | MaestroDriverLog | McpAgentIterationLog | McpAgentRunLog | McpAgentToolLog | McpAskLog | McpSamplingLog | McpToolCallRequestLog | McpToolCallResponseLog | ObjectiveCompleteLog | ObjectiveStartLog | SelfHealInvokedLog | TrailblazeAgentTaskStatusChangeLog | TrailblazeLlmRequestLog | TrailblazeProgressLog | TrailblazeSessionStatusChangeLog | TrailblazeSnapshotLog | TrailblazeToolCatalogLog | TrailblazeToolLog;
+export type TrailblazeLog = AccessibilityActionLog | DelegatingTrailblazeToolLog | MaestroCommandLog | MaestroDriverLog | McpAgentIterationLog | McpAgentRunLog | McpAgentToolLog | McpAskLog | McpSamplingLog | McpToolCallRequestLog | McpToolCallResponseLog | ObjectiveCompleteLog | ObjectiveStartLog | SelfHealInvokedLog | TrailblazeAgentTaskStatusChangeLog | TrailblazeDecisionRequestLog | TrailblazeLlmRequestLog | TrailblazeProgressLog | TrailblazeSessionStatusChangeLog | TrailblazeSnapshotLog | TrailblazeToolCatalogLog | TrailblazeToolLog;
 
 export interface TrailblazeNode {
   nodeId?: number;
@@ -1695,6 +1753,7 @@ export interface TrailblazeSnapshotLog {
   driverMigrationTreeNode?: TrailblazeNode | null;
   viewHierarchyText?: string | null;
   captureCoverage?: CaptureCoverage | null;
+  visibleStrings?: ExtractedString[] | null;
   deviceWidth: number;
   deviceHeight: number;
   session: string;
@@ -1881,6 +1940,8 @@ export interface ViewHierarchyTreeNode {
   text?: string | null;
 }
 
+export type VisibleStringSource = "text" | "editableText" | "contentDescription" | "hint" | "state" | "error" | "title" | "value" | "help" | "tooltip" | "labeledBy" | "roleDescription" | "paneTitle" | "customAction";
+
 export interface WaitForSettle {
   class: "xyz.block.trailblaze.api.AgentDriverAction.WaitForSettle";
   timeoutMs: number;
@@ -2055,6 +2116,9 @@ export interface web {
   nthIndex?: number;
   isInteractive?: boolean;
   isLandmark?: boolean;
+  placeholder?: string | null;
+  url?: string | null;
+  title?: string | null;
 }
 
 /**

@@ -376,6 +376,12 @@ export interface CreateMockContextOptions {
      * and non-mobile sessions don't carry it.
      */
     instanceId?: string;
+    /**
+     * The device's Trailblaze server port (`TrailblazeDevice.trailblazePort`). Set
+     * this to exercise a tool that reaches that server over `fetch`. Left undefined unless a test
+     * sets it, mirroring web devices, on-device runs, and older daemons.
+     */
+    trailblazePort?: number;
   };
   target?: TrailblazeTarget;
   memory?: Record<string, unknown>;
@@ -528,6 +534,7 @@ export function createMockContext(opts: CreateMockContextOptions): TrailblazeCon
     // Mirrors the in-process QuickJS envelope's `instanceId` (simulator UDID / emulator serial);
     // left undefined unless a test sets it.
     instanceId: opts.device?.instanceId,
+    trailblazePort: opts.device?.trailblazePort,
   };
 
   return {

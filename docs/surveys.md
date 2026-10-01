@@ -111,6 +111,29 @@ target's when its trail named the target *or* it drove one of the target's app i
 run without a target are still placed. Use `appIds` when a footprint is specific to one build,
 such as a debug-only bundle.
 
+### Surveys in a trailmap
+
+A target's surveys can ship inside its trailmap, in a `surveys/` directory beside `tools/`:
+
+```
+trailmaps/acme/
+  trailmap.yaml
+  tools/
+  surveys/
+    checkout.survey.ts
+```
+
+Surveys for any target go in the workspace config dir's own `surveys/`. A run inside the
+workspace loads both kinds without being told where they are, so the repo that owns a target
+owns its surveys and nothing has to list them. `*.survey.ts` files elsewhere in a trailmap are
+not loaded. A survey there still declares `targets` itself: the sessions page
+re-runs survey source in the browser, where a scope inferred from the file's location would be
+lost. Export names stay unique across every survey loaded, trailmap or not.
+
+A survey imports the SDK as `@trailblaze/scripting/surveys` wherever it lives. The loader
+supplies that module itself, so a trailmap's `surveys/` needs no tsconfig `paths` mapping or
+installed package to run; add a mapping only if you want editor types.
+
 ## What a session exposes
 
 `session.summary` is the verdict and identity: outcome, platform, app id and version, trail id,
@@ -127,7 +150,7 @@ Each of the following is a queryable collection with `find`, `findLast`, `filter
 | `session.tools` | `TrailblazeToolLog` records | `name`, `successful`, `args` (subset match), `deviceName`, `where` |
 | `session.objectives` | paired `ObjectiveStart`/`ObjectiveComplete` records | `prompt`, `status`, `where` |
 | `session.logs` | every log record | `type` (short class name), `contains`, `where` |
-| `session.screenText` | `visible-strings.ndjson` | `text`, `source` |
+| `session.screenText` | the strings each capture log recorded (`visibleStrings`); older sessions fall back to `visible-strings.ndjson` | `text`, `source`, `captureId`, `visible`, `where` |
 | `session.deviceLog` | `device.log` / `logcat.txt` | `text` |
 | `session.trace` | `trace.json` spans | `name`, `category`, `where` |
 
@@ -142,10 +165,11 @@ gives the report a clickable location.
 ## Running
 
 ```bash
-bun sdks/typescript/src/surveys/cli.ts \
-  --surveys path/to/surveys \
-  --sessions ~/.trailblaze/logs \
-  --format markdown --out report.json
+# from anywhere inside a workspace: every survey it carries, over ~/.trailblaze/logs
+bun sdks/typescript/src/surveys/cli.ts --target acme
+
+# over a downloaded batch, JSON to a file
+bun sdks/typescript/src/surveys/cli.ts --target acme ./sessions --out report.json
 ```
 
 `--sessions` accepts session directories, directories of sessions, session zips as CI uploads
@@ -154,19 +178,23 @@ them, or directories of zips (extracted to a temp dir, or `--extract-dir`). `--f
 the full JSON report. `--feature` and `--tag` narrow which surveys run; `--platform`, `--device` (a device
 classifier such as `iphone`, `ipad`, `tablet`), `--app-id`, `--target`, and `--outcome` narrow
 which sessions are analysed, judged on each session's own summary rather than on where the files
-came from. `--trailmaps <dir>` loads the target catalog that makes `--target` and survey
-`targets` cover a target's app ids. The process exits
+came from. The workspace is found the way the trailblaze CLI finds it (the closest
+`trailblaze-config/` or `trails/config/` holding a `trailblaze.yaml`, or `TRAILBLAZE_CONFIG_DIR`),
+and its trailmaps make `--target` and survey `targets` cover a target's app ids. `--target` also
+drops surveys scoped to other targets. `--surveys` and `--trailmaps` replace the workspace with
+explicit paths. The process exits
 non-zero if any survey threw, and each throw is recorded against the session it happened on
 rather than aborting the batch.
 
 Programmatic use is the same surface the CLI is built on:
 
 ```ts
-import { runSurveys, loadSurveys, loadTargetCatalog, discoverSessions, renderMarkdown } from "@trailblaze/scripting/surveys";
+import { runSurveys, findWorkspaceConfigDir, loadWorkspace, discoverSessions, renderMarkdown } from "@trailblaze/scripting/surveys";
 
-const surveys = (await loadSurveys(["./surveys"])).map((c) => c.definition);
+const workspace = await loadWorkspace(findWorkspaceConfigDir()!);
+const surveys = workspace.surveys.map((c) => c.definition);
 const sessions = await discoverSessions(["./sessions"]);
-const targets = loadTargetCatalog(["./trailmaps"]);
+const targets = workspace.targets;
 const report = await runSurveys({ surveys, sessions, targets, where: (s) => s.platform === "ios" });
 console.log(renderMarkdown(report));
 ```

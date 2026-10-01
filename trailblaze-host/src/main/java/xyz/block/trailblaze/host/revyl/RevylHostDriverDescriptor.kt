@@ -25,7 +25,7 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 import kotlinx.datetime.Clock
 import xyz.block.trailblaze.agent.TrailblazeElementComparator
-import xyz.block.trailblaze.agent.TrailblazeRunner
+import xyz.block.trailblaze.agent.TrailblazeSystemPrompt
 import xyz.block.trailblaze.api.TestAgentRunner
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
@@ -36,7 +36,6 @@ import xyz.block.trailblaze.http.DynamicLlmClient
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionStatus
-import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.mcp.agent.KoogTestAgentRunner
 import xyz.block.trailblaze.recordings.TrailRecordings
 import xyz.block.trailblaze.revyl.RevylSession
@@ -260,36 +259,19 @@ class RevylHostDriverDescriptor(
         toolRepo = toolRepo,
       )
 
-      // Brain selection (legacy or KOOG). Recordings replay uniformly via the runner-util below
-      // regardless of agent — only unrecorded steps reach the selected brain.
-      val trailblazeRunner: TestAgentRunner =
-        if (runYamlRequest.agentImplementation == AgentImplementation.KOOG_STRATEGY_GRAPH) {
-          KoogTestAgentRunner(
-            agent = agent,
-            toolRepo = toolRepo,
-            screenStateProvider = screenStateProvider,
-            elementComparator = elementComparator,
-            llmClient = dynamicLlmClient.createLlmClient(),
-            trailblazeLlmModel = runYamlRequest.trailblazeLlmModel,
-            logger = loggingRule.logger,
-            sessionProvider = { loggingRule.session ?: error("Session not available - ensure test is running") },
-            maxLlmCalls = runYamlRequest.maxLlmCalls,
-            systemPromptTemplate = TrailblazeRunner.composeSystemPrompt(),
-          )
-        } else {
-          TrailblazeRunner(
-            screenStateProvider = screenStateProvider,
-            agent = agent,
-            llmClient = dynamicLlmClient.createLlmClient(),
-            trailblazeLlmModel = runYamlRequest.trailblazeLlmModel,
-            trailblazeToolRepo = toolRepo,
-            trailblazeLogger = loggingRule.logger,
-            sessionProvider = {
-              loggingRule.session ?: error("Session not available - ensure test is running")
-            },
-            maxSteps = runYamlRequest.maxLlmCalls ?: TrailblazeRunner.DEFAULT_MAX_STEPS,
-          )
-        }
+      // Recordings replay via the runner-util below; only unrecorded steps reach the agent.
+      val trailblazeRunner: TestAgentRunner = KoogTestAgentRunner(
+        agent = agent,
+        toolRepo = toolRepo,
+        screenStateProvider = screenStateProvider,
+        elementComparator = elementComparator,
+        llmClient = dynamicLlmClient.createLlmClient(),
+        trailblazeLlmModel = runYamlRequest.trailblazeLlmModel,
+        logger = loggingRule.logger,
+        sessionProvider = { loggingRule.session ?: error("Session not available - ensure test is running") },
+        maxLlmCalls = runYamlRequest.maxLlmCalls,
+        systemPromptTemplate = TrailblazeSystemPrompt.compose(),
+      )
 
       val trailblazeYaml = createTrailblazeYaml(
         customTrailblazeToolClasses = revylToolSet.toolClasses,

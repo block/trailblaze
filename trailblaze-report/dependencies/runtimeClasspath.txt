@@ -254,6 +254,12 @@ org.jetbrains.kotlinx:kotlinx-serialization-json-io-jvm:1.11.0
 org.jetbrains.kotlinx:kotlinx-serialization-json-io:1.11.0
 org.jetbrains.kotlinx:kotlinx-serialization-json-jvm:1.11.0
 org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0
+org.jetbrains.runtime:jbr-api:1.5.0
+org.jetbrains.skiko:skiko-awt-runtime-linux-arm64:0.144.6
+org.jetbrains.skiko:skiko-awt-runtime-linux-x64:0.144.6
+org.jetbrains.skiko:skiko-awt-runtime-macos-arm64:0.144.6
+org.jetbrains.skiko:skiko-awt:0.144.6
+org.jetbrains.skiko:skiko:0.144.6
 org.jetbrains:annotations:26.0.2-1
 org.reactivestreams:reactive-streams:1.0.3
 org.slf4j:slf4j-api:2.0.18

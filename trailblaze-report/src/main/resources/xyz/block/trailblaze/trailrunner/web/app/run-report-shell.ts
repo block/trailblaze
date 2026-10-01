@@ -34,7 +34,8 @@
 // driver (report/), and every surface must reach the SAME decode/detection implementation.
 import { ATTACHMENT_MATERIALIZE_MAX_TOTAL_BYTES, ATTACHMENT_MIME, buildEventStream, collectStreamAttachmentRefs, isSafeSessionRelativePath, MAX_ATTACHMENTS_PER_SESSION, MAX_EVENT_STREAM_BYTES, MAX_EVENT_STREAMS_TOTAL_CHARS } from '../../../report/run-report-events';
 import { MAX_TRACE_BYTES, slimTracerSpans } from '../../../report/run-report-trace-spans';
-import { extractLlmLogs, extractTrace, normalizedToHostClock, originalYamlFromLogs, toSessionPayloads, traceScreenshotFiles } from './run-report-extract';
+import { extractVisibleStrings, visibleStringsShotFiles } from '../../../report/run-report-visible-strings';
+import { extractLlmLogs, extractTrace, normalizedToHostClock, originalYamlFromLogs, toSessionPayloads, traceScreenshotFiles, captureFrameFiles } from './run-report-extract';
 import { VIEWER_ROUTE_KEYS } from './run-report-route';
 
 const ZIP_PARAM = 'zip';
@@ -47,7 +48,7 @@ const ANALYSIS_PARAM = 'analysis';
 // The two attachment-policy values ride here for exactly that reason: the pipeline defines neither
 // itself (run-report-events.ts is the single home), so an object without them materializes no
 // attachment at all, silently.
-export const REPORT_DERIVE = { extractTrace, extractLlmLogs, normalizedToHostClock, originalYamlFromLogs, traceScreenshotFiles, buildEventStream, collectStreamAttachmentRefs, ATTACHMENT_MIME, MAX_ATTACHMENTS_PER_SESSION, ATTACHMENT_MATERIALIZE_MAX_TOTAL_BYTES, isSafeSessionRelativePath, MAX_EVENT_STREAM_BYTES, MAX_EVENT_STREAMS_TOTAL_CHARS, MAX_TRACE_BYTES, slimTracerSpans };
+export const REPORT_DERIVE = { extractTrace, extractLlmLogs, normalizedToHostClock, originalYamlFromLogs, traceScreenshotFiles, captureFrameFiles, buildEventStream, collectStreamAttachmentRefs, ATTACHMENT_MIME, MAX_ATTACHMENTS_PER_SESSION, ATTACHMENT_MATERIALIZE_MAX_TOTAL_BYTES, isSafeSessionRelativePath, MAX_EVENT_STREAM_BYTES, MAX_EVENT_STREAMS_TOTAL_CHARS, MAX_TRACE_BYTES, slimTracerSpans, extractVisibleStrings, visibleStringsShotFiles };
 
 // The permalink for one or more archive URLs — a repeated `zip` param, one per archive, so a link
 // can carry the same trail's runs across several devices and render them as one report. Each value

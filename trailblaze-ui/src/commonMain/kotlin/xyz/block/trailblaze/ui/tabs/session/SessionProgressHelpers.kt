@@ -354,17 +354,6 @@ internal fun buildScreenshotTimelineItems(
     .sortedBy { it.timestamp }
 }
 
-internal fun buildObjectiveScreenshotItems(
-  logs: List<TrailblazeLog>,
-  objective: ObjectiveProgress,
-): List<ScreenshotTimelineItem> {
-  val startMs = objective.startedAt?.toEpochMilliseconds()
-  val endMs = objective.completedAt?.toEpochMilliseconds()
-  return buildScreenshotTimelineItems(logs).filter { item ->
-    isInTimeWindow(item.timestamp.toEpochMilliseconds(), startMs, endMs)
-  }
-}
-
 internal fun buildProgressItemScreenshotItems(
   logs: List<TrailblazeLog>,
   item: ProgressItem,
@@ -480,6 +469,7 @@ internal fun latestActivityLabel(log: TrailblazeLog): String {
     is TrailblazeLog.McpToolCallRequestLog -> "MCP tool call: ${log.toolName}"
     is TrailblazeLog.McpToolCallResponseLog -> "MCP tool response: ${log.toolName}"
     is TrailblazeLog.McpAskLog -> "MCP ask"
+    is TrailblazeLog.TrailblazeDecisionRequestLog -> log.outcome ?: "Decision request"
     is TrailblazeLog.TrailblazeProgressLog -> log.description
     is TrailblazeLog.TrailblazeToolCatalogLog -> "Loaded ${log.toolOptions.size} tools"
   }
@@ -714,91 +704,6 @@ internal fun screenshotCaption(item: ScreenshotTimelineItem): String {
       }
     }
   }
-}
-
-/** Detail lines for the preview info card. */
-internal fun screenshotDetailLines(
-  item: ScreenshotTimelineItem,
-  sessionStartTime: Instant,
-): List<Pair<String, String>> {
-  val lines = mutableListOf<Pair<String, String>>()
-  val elapsed =
-    formatDuration(item.timestamp.toEpochMilliseconds() - sessionStartTime.toEpochMilliseconds())
-  lines.add("Time" to elapsed)
-
-  val action = item.action
-  when (action) {
-    is AgentDriverAction.TapPoint -> {
-      lines.add("Action" to "Tap")
-      lines.add("Coordinates" to "(${action.x}, ${action.y})")
-    }
-    is AgentDriverAction.LongPressPoint -> {
-      lines.add("Action" to "Long Press")
-      lines.add("Coordinates" to "(${action.x}, ${action.y})")
-    }
-    is AgentDriverAction.Swipe -> {
-      lines.add("Action" to "Swipe ${action.direction}")
-      if (action.startX != null && action.startY != null) {
-        lines.add("From" to "(${action.startX}, ${action.startY})")
-      }
-      if (action.endX != null && action.endY != null) {
-        lines.add("To" to "(${action.endX}, ${action.endY})")
-      }
-    }
-    is AgentDriverAction.EnterText -> {
-      lines.add("Action" to "Enter Text")
-      lines.add("Text" to "\"${action.text}\"")
-      if (action.hideKeyboardAfter) lines.add("Then" to "Hide keyboard")
-    }
-    is AgentDriverAction.AssertCondition -> {
-      lines.add("Action" to "Assert")
-      lines.add("Condition" to action.conditionDescription)
-      lines.add("Result" to if (action.succeeded) "Passed" else "Failed")
-      action.textToDisplay?.let { lines.add("Element" to it) }
-    }
-    is AgentDriverAction.BackPress -> lines.add("Action" to "Back Press")
-    is AgentDriverAction.LaunchApp -> {
-      lines.add("Action" to "Launch App")
-      lines.add("App" to action.appId)
-    }
-    is AgentDriverAction.StopApp -> {
-      lines.add("Action" to "Stop App")
-      lines.add("App" to action.appId)
-    }
-    is AgentDriverAction.KillApp -> {
-      lines.add("Action" to "Kill App")
-      lines.add("App" to action.appId)
-    }
-    is AgentDriverAction.ClearAppState -> {
-      lines.add("Action" to "Clear App State")
-      lines.add("App" to action.appId)
-    }
-    is AgentDriverAction.AddMedia -> {
-      lines.add("Action" to "Add Media")
-      lines.add("Files" to action.mediaFiles.joinToString(", "))
-    }
-    is AgentDriverAction.AirplaneMode ->
-      lines.add("Action" to "Airplane Mode ${if (action.enable) "On" else "Off"}")
-    is AgentDriverAction.GrantPermissions -> {
-      lines.add("Action" to "Grant Permissions")
-      lines.add("App" to action.appId)
-    }
-    is AgentDriverAction.PressHome -> lines.add("Action" to "Press Home")
-    is AgentDriverAction.HideKeyboard -> lines.add("Action" to "Hide Keyboard")
-    is AgentDriverAction.EraseText -> {
-      lines.add("Action" to "Erase Text")
-      lines.add("Characters" to "${action.characters}")
-    }
-    is AgentDriverAction.Scroll ->
-      lines.add("Action" to "Scroll ${if (action.forward) "Forward" else "Backward"}")
-    is AgentDriverAction.WaitForSettle -> {
-      lines.add("Action" to "Wait for Settle")
-      lines.add("Timeout" to "${action.timeoutMs}ms")
-    }
-    is AgentDriverAction.OtherAction -> lines.add("Action" to action.type.name)
-    null -> lines.add("Type" to item.label)
-  }
-  return lines
 }
 
 private fun swipeArrow(direction: String): String {

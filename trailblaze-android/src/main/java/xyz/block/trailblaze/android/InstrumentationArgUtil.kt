@@ -4,7 +4,6 @@ import androidx.test.platform.app.InstrumentationRegistry
 import xyz.block.trailblaze.devices.TrailblazeDevicePort
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
-import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.util.Console
 
 object InstrumentationArgUtil {
@@ -85,6 +84,13 @@ object InstrumentationArgUtil {
     "${logsEndpoint()}/reverse-proxy"
   }
 
+  /**
+   * False when the run passes `TRAILBLAZE_USE_RECORDED_STEPS=false` (named like the env var the host
+   * CLI steps read), so every step goes to the agent instead of replaying its recording.
+   */
+  fun useRecordedSteps(): Boolean =
+    instrumentationArguments.getString("TRAILBLAZE_USE_RECORDED_STEPS")?.trim()?.lowercase() != "false"
+
   fun isAiEnabled(): Boolean {
     val aiEnabled = instrumentationArguments.getString("trailblaze.aiEnabled", "true").toBoolean()
     return aiEnabled
@@ -131,27 +137,6 @@ object InstrumentationArgUtil {
     // and BaseHostTrailblazeTest.resolveSelfHealFromEnvOrConfig) so the same input string behaves
     // the same way on every platform.
     return instrumentationArguments.getString("trailblaze.selfHeal")?.lowercase()?.toBooleanStrictOrNull()
-  }
-
-  /**
-   * Returns the [AgentImplementation] from instrumentation args, or [AgentImplementation.DEFAULT].
-   *
-   * Pass via: `-e trailblaze.agent MULTI_AGENT_V3`
-   * In CI: set `TRAILBLAZE_AGENT=MULTI_AGENT_V3` on the Buildkite step (mapped to the
-   * instrumentation arg in root `build.gradle.kts`).
-   */
-  fun agentImplementation(): AgentImplementation {
-    return parseAgentImplementation(instrumentationArguments.getString("trailblaze.agent"))
-  }
-
-  internal fun parseAgentImplementation(value: String?): AgentImplementation {
-    value ?: return AgentImplementation.DEFAULT
-    return try {
-      AgentImplementation.valueOf(value)
-    } catch (e: IllegalArgumentException) {
-      Console.log("Unknown agent implementation: $value, falling back to ${AgentImplementation.DEFAULT}")
-      AgentImplementation.DEFAULT
-    }
   }
 
   /**

@@ -10,6 +10,7 @@ import xyz.block.trailblaze.api.AgentDriverAction
 import xyz.block.trailblaze.api.DriverNodeDetail
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TrailblazeNodeSelectorGenerator
+import xyz.block.trailblaze.api.TrailblazeNodeSelectorResolver
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.logToolExecution
 import xyz.block.trailblaze.logs.client.TrailblazeLog
@@ -20,6 +21,7 @@ import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.network.InflightRequestTracker
 import xyz.block.trailblaze.playwright.tools.PlaywrightExecutableTool
 import xyz.block.trailblaze.playwright.tools.PlaywrightNativeClickTool
+import xyz.block.trailblaze.playwright.tools.PlaywrightNativeFillSecretTool
 import xyz.block.trailblaze.playwright.tools.PlaywrightNativeHoverTool
 import xyz.block.trailblaze.playwright.tools.PlaywrightNativeNavigateTool
 import xyz.block.trailblaze.playwright.tools.PlaywrightNativePressKeyTool
@@ -104,10 +106,38 @@ class PlaywrightTrailblazeAgent(
   // threads, and they belong to the same replay.
   private val scriptedRunDepth = AtomicInteger(0)
 
+  /** What a scripted run captures before each action; see [WebReplayCapture]. */
+  var replayCapture: WebReplayCapture = WebReplayCapture.fromEnv()
+
+  /**
+   * Every value `web_fillSecret` has typed in [filledSecretsSession], so replay captures can keep
+   * them out. Held in memory only and never logged. A host reuses one agent across MCP sessions,
+   * so a new session starts with none (see [sessionSecrets]).
+   */
+  private val filledSecrets: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+  private var filledSecretsSession: Any? = null
+
+  /** [filledSecrets], emptied first when the session running now isn't the one they were typed in. */
+  private fun sessionSecrets(): MutableSet<String> {
+    val session = try { sessionProvider.invoke().sessionId } catch (_: Exception) { null }
+    synchronized(filledSecrets) {
+      if (session != filledSecretsSession) {
+        filledSecrets.clear()
+        filledSecretsSession = session
+      }
+    }
+    return filledSecrets
+  }
+
+  /** Whether this agent has handed a capture to [replayLogWriter] that a drain must wait for. */
+  private val replayLogsPending = java.util.concurrent.atomic.AtomicBoolean(false)
+
   /**
    * Runs [block] the way a Playwright test runs: each tool returns as soon as Playwright's own
-   * call does, with no post-action settle and no per-action screenshot or element tree. The
-   * next action's auto-wait (a locator click, an `isVisible` assertion) does the waiting instead.
+   * call does, with no post-action settle. The next action's auto-wait (a locator click, an
+   * `isVisible` assertion) does the waiting instead. Each action keeps only [replayCapture]'s
+   * record of the page before it — by default the boxed accessibility tree, about 10ms at the
+   * median — written off this thread.
    *
    * For recorded replays and `tools:` blocks — nothing reads the per-action captures there,
    * and the session video shows the run. LLM steps stay outside it: the model reads the tree,
@@ -118,7 +148,8 @@ class PlaywrightTrailblazeAgent(
     try {
       return block()
     } finally {
-      scriptedRunDepth.decrementAndGet()
+      // The outermost run drains its captures, so they are on disk before the session ends.
+      if (scriptedRunDepth.decrementAndGet() == 0) drainReplayLogs()
     }
   }
 
@@ -237,24 +268,44 @@ class PlaywrightTrailblazeAgent(
       // [runScripted]) skips both for every tool.
       val scripted = scriptedRunDepth.get() > 0
       val awaitsSettle = memoryResolvedTool.awaitsSettle && !scripted
-      val preScreenState = if (awaitsSettle) {
-        try { browserManager.captureScreenStateForLogging() } catch (_: Exception) { null }
-      } else {
-        null
+      // A scripted run keeps the boxed accessibility tree instead: one snapshot call, no
+      // settle, and the tree the recorded selectors resolve against.
+      val replayCaptured = scripted && memoryResolvedTool.awaitsSettle && replayCapture != WebReplayCapture.OFF
+      val preScreenState = when {
+        awaitsSettle -> try { browserManager.captureScreenStateForLogging() } catch (_: Exception) { null }
+        replayCaptured -> try {
+          browserManager.captureTreeForReplay(
+            withScreenshot = replayCapture == WebReplayCapture.TREE_JPEG,
+            secrets = sessionSecrets().toSet(),
+          )
+        } catch (_: Exception) {
+          null
+        }
+        else -> null
       }
 
       // Resolve element coordinates BEFORE execution for logging. Clicks may navigate
       // away, after which the element no longer exists on the page. Only the overlay on the
-      // pre-action screenshot uses them, so there is nothing to resolve without one.
-      val preResolvedCenter =
-        if (preScreenState != null) resolveToolCenter(memoryResolvedTool, context) else 0 to 0
+      // pre-action screenshot uses them, so there is nothing to resolve without one. A replay
+      // capture resolves the recorded selector against its own tree, with no page round trip.
+      val preResolvedCenter = when {
+        preScreenState == null -> 0 to 0
+        replayCaptured -> treeCenter(memoryResolvedTool, preScreenState)
+        else -> resolveToolCenter(memoryResolvedTool, context)
+      }
 
       // Log AgentDriverLog with pre-action screenshot BEFORE execution so the
       // timeline shows the tap coordinates on the pre-click screenshot. Deliberately the
       // authored instance: the driver-action label has always shown the args as written
       // (tokens included), which also keeps remembered secrets out of the driver-log label.
       val timeBeforeExecution = Clock.System.now()
-      logAgentDriverAction(tool, preScreenState, timeBeforeExecution, preResolvedCenter, context.traceId)
+      // A replay capture is stamped when its tree was read, since the report takes its video
+      // frame from that moment; after a slow capture, the tool's start would pair the tree with
+      // a later frame.
+      logAgentDriverAction(
+        tool, preScreenState, (preScreenState as? PlaywrightTreeScreenState)?.capturedAt ?: timeBeforeExecution,
+        preResolvedCenter, context.traceId, async = replayCaptured,
+      )
 
       // Run the tool inside the request-tracking settle. Playwright's actionability
       // checks (visible/stable/enabled/editable) inside locator.fill/click/hover/...
@@ -264,6 +315,10 @@ class PlaywrightTrailblazeAgent(
         TrailblazeTracer.traceSuspend("executeWithPlaywright:$toolName", "tool") {
           memoryResolvedTool.executeWithPlaywright(browserManager.currentPage, context)
         }
+      }
+      // Remembered before the fill, so a fill that throws partway still keeps its value out.
+      if (memoryResolvedTool is PlaywrightNativeFillSecretTool && memoryResolvedTool.value.isNotEmpty()) {
+        sessionSecrets() += memoryResolvedTool.value
       }
       val result = if (awaitsSettle) browserManager.dispatchAndAwaitSettle(execute) else execute()
 
@@ -404,10 +459,41 @@ class PlaywrightTrailblazeAgent(
     timestamp: kotlinx.datetime.Instant,
     preResolvedCenter: Pair<Int, Int>,
     traceId: TraceId?,
+    async: Boolean = false,
   ) {
     if (preScreenState == null) return
+    if (async) {
+      // The session and the action are read here; only the writing moves off this thread.
+      val session = try { sessionProvider.invoke() } catch (_: Exception) { return }
+      replayLogsPending.set(true)
+      replayLogWriter.execute { writeAgentDriverLog(session, tool, preScreenState, timestamp, preResolvedCenter, traceId) }
+      return
+    }
     try {
-      val session = sessionProvider.invoke()
+      writeAgentDriverLog(sessionProvider.invoke(), tool, preScreenState, timestamp, preResolvedCenter, traceId)
+    } catch (e: Exception) {
+      Console.log("Warning: Failed to log AgentDriverAction: ${e.message}")
+    }
+  }
+
+  private fun drainReplayLogs() {
+    if (!replayLogsPending.getAndSet(false)) return
+    try {
+      replayLogWriter.submit {}.get(30, java.util.concurrent.TimeUnit.SECONDS)
+    } catch (e: Exception) {
+      Console.log("Warning: replay captures still writing after 30s: ${e.message}")
+    }
+  }
+
+  private fun writeAgentDriverLog(
+    session: xyz.block.trailblaze.logs.client.TrailblazeSession,
+    tool: PlaywrightExecutableTool,
+    preScreenState: ScreenState,
+    timestamp: kotlinx.datetime.Instant,
+    preResolvedCenter: Pair<Int, Int>,
+    traceId: TraceId?,
+  ) {
+    try {
       val screenshotFilename = if (preScreenState.screenshotBytes != null) {
         trailblazeLogger.logScreenState(session, preScreenState)
       } else {
@@ -417,8 +503,11 @@ class PlaywrightTrailblazeAgent(
       val action = mapToolToAgentDriverAction(tool, preResolvedCenter)
 
       val log = TrailblazeLog.AgentDriverLog(
-        viewHierarchy = preScreenState.viewHierarchy,
+        // A replay capture's tree already carries every box, so the legacy copy would only double
+        // the log.
+        viewHierarchy = if (preScreenState is PlaywrightTreeScreenState) null else preScreenState.viewHierarchy,
         trailblazeNodeTree = preScreenState.trailblazeNodeTree,
+        frameTrees = (preScreenState as? PlaywrightTreeScreenState)?.frameTrees?.ifEmpty { null },
         screenshotFile = screenshotFilename,
         action = action,
         durationMs = 0,
@@ -496,6 +585,29 @@ class PlaywrightTrailblazeAgent(
   }
 
   /**
+   * The center of the one node the tool's recorded target picks in [screenState]'s tree — its
+   * node selector, or else its ARIA descriptor ref — or (0, 0) when it picks none or several: the
+   * dot marks where the action lands, so a guess is worse than no dot.
+   */
+  private fun treeCenter(tool: PlaywrightExecutableTool, screenState: ScreenState): Pair<Int, Int> {
+    val tree = screenState.trailblazeNodeTree ?: return 0 to 0
+    return try {
+      val selector = tool.targetNodeSelector
+      val node = if (selector != null) {
+        (TrailblazeNodeSelectorResolver.resolve(tree, selector) as? TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch)?.node
+      } else {
+        val ref = tool.targetRef?.trim() ?: return 0 to 0
+        tree.aggregate()
+          .filter { (it.driverDetail as? DriverNodeDetail.Web)?.ariaDescriptor == ref }
+          .singleOrNull()
+      }
+      node?.bounds?.let { it.centerX to it.centerY } ?: (0 to 0)
+    } catch (_: Exception) {
+      0 to 0
+    }
+  }
+
+  /**
    * Resolves center coordinates for a tool's target element BEFORE execution.
    * This must happen pre-execution because clicks can cause navigation, after which
    * the target element no longer exists on the page.
@@ -527,6 +639,8 @@ class PlaywrightTrailblazeAgent(
           val (resolved, _) = PlaywrightExecutableTool.validateAndResolveRef(
             browserManager.currentPage, ref, "", context, nodeSelector,
             timeoutMs = OVERLAY_CENTER_TIMEOUT_MS,
+            // The error is discarded here, so don't spend another snapshot explaining it.
+            explainMiss = false,
           )
           resolved ?: return 0 to 0
         }
@@ -549,6 +663,17 @@ class PlaywrightTrailblazeAgent(
     } catch (_: Exception) {
       0 to 0
     }
+  }
+}
+
+/**
+ * Writes scripted runs' per-action captures off the Playwright thread, so the next action does not
+ * wait on serializing a tree and posting it to the log server. One thread, shared by every agent in
+ * the process, keeps a run's captures in order; readers sort a session's logs by timestamp anyway.
+ */
+private val replayLogWriter by lazy {
+  java.util.concurrent.Executors.newSingleThreadExecutor { runnable ->
+    Thread(runnable, "playwright-replay-log").apply { isDaemon = true }
   }
 }
 

@@ -92,20 +92,6 @@ class AgentTierCostTracker {
   }
 
   /**
-   * Convenience method to record an inner agent call.
-   */
-  fun recordInnerCall(tokenUsage: TokenUsage, model: TrailblazeLlmModel) {
-    recordCall(AgentTier.INNER, tokenUsage, model)
-  }
-
-  /**
-   * Convenience method to record an outer agent call.
-   */
-  fun recordOuterCall(tokenUsage: TokenUsage, model: TrailblazeLlmModel) {
-    recordCall(AgentTier.OUTER, tokenUsage, model)
-  }
-
-  /**
    * Returns the current cost breakdown by tier.
    */
   fun getCostBreakdown(): TierCostBreakdown = TierCostBreakdown(
@@ -118,11 +104,6 @@ class AgentTierCostTracker {
     outerAgentOutputTokens = outerAgentOutputTokens,
     outerAgentCallCount = outerAgentCallCount,
   )
-
-  /**
-   * Returns the total cost across both tiers.
-   */
-  fun getTotalCost(): Double = innerAgentCost + outerAgentCost
 
   /**
    * Resets all tracked costs and token counts.

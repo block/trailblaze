@@ -57,8 +57,7 @@ class AssertVisibleTrailblazeToolTest {
     }
     val message = ex.message.orEmpty()
     assertContains(message, "zz99")
-    // Prefix is load-bearing for StaleRefRecovery.STALE_REF_REGEX; the older "snapshot"
-    // pointer was dropped because there is no `snapshot` LLM tool — see AssertVisibleTrailblazeTool.
+    // The older "snapshot" pointer was dropped because there is no `snapshot` LLM tool — see AssertVisibleTrailblazeTool.
     assertContains(message, "not found on current screen")
     assertContains(message, "view hierarchy")
   }

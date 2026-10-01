@@ -430,6 +430,18 @@ class AndroidHostAdbUtilsTest {
   }
 
   @Test
+  fun decisionEngineKeyArgValuesAreRedactedInLoggedCommand() {
+    val command =
+      "am instrument -e 'TRAILBLAZE_DECISION_MOVES' 'race' -e 'TYPESAFE_API_KEY' 'SECRET_A' " +
+        "-e 'TRAILBLAZE_DECISION_ENGINE_KEY' 'SECRET_B' " +
+        "-e 'TRAILBLAZE_DECISION_ENGINE_URL' 'https://engine.test/v1?key=SECRET_C' app/Runner"
+    assertThat(AndroidHostAdbUtils.redactSecretsForLog(command)).isEqualTo(
+      "am instrument -e 'TRAILBLAZE_DECISION_MOVES' 'race' -e 'TYPESAFE_API_KEY' <redacted> " +
+        "-e 'TRAILBLAZE_DECISION_ENGINE_KEY' <redacted> -e 'TRAILBLAZE_DECISION_ENGINE_URL' <redacted> app/Runner",
+    )
+  }
+
+  @Test
   fun commandsWithoutAuthTokenArgsArePassedThroughUnchanged() {
     val command = "getprop ro.build.version.sdk"
     assertThat(AndroidHostAdbUtils.redactSecretsForLog(command)).isEqualTo(command)
@@ -755,6 +767,60 @@ class AndroidHostAdbUtilsTest {
       attemptResult(AndroidHostAdbUtils.ShellAttemptOutcome.FAILED, error = IOException("reset"))
     }
     assertThat(calls).isEqualTo(1)
+  }
+
+  // ── onDeviceRpcServerUpFromProbe ─────────────────────────────────────────
+
+  // Captured from an API 34 emulator (trimmed after the `st` column). Port 54624 is 0xD560.
+  private val tcpHeader = "  sl  local_address rem_address   st tx_queue rx_queue"
+  private val tcp6Header = "  sl  local_address                         remote_address                        st tx_queue"
+  private val listenerOn54624 =
+    "   1: 00000000000000000000000000000000:D560 00000000000000000000000000000000:0000 0A 00000000:00000000"
+  private val otherListener =
+    "   0: 00000000000000000000000000000000:CCED 00000000000000000000000000000000:0000 0A 00000000:00000000"
+
+  /** A client's socket still connected to the port, from the side that owns the port. */
+  private val establishedOn54624 =
+    "   7: 0000000000000000FFFF00000100007F:D560 0000000000000000FFFF00000100007F:BE09 01 00000000:00000000"
+
+  /** A client connected to the port: the port is its REMOTE address, not a listener. */
+  private val clientTo54624 = "   0: 0F02000A:BE09 0F02000A:D560 01 00000000:00000000"
+
+  private fun probe(pid: String, vararg tcp6Rows: String): String =
+    listOf(pid, tcpHeader, clientTo54624, tcp6Header, otherListener, *tcp6Rows).joinToString("\n")
+
+  @Test
+  fun rpcServerIsUpWhenTheRunnerProcessRunsAndItsPortListens() {
+    assertThat(AndroidHostAdbUtils.onDeviceRpcServerUpFromProbe(probe("2369", listenerOn54624), 54624)).isTrue()
+  }
+
+  /**
+   * After a reboot Android restarts the accessibility service the runner hosts: the process is
+   * back, instrumentation and its server are not. A process check alone reads this as ready.
+   */
+  @Test
+  fun aRunnerProcessWithNothingListeningIsNotUp() {
+    assertThat(AndroidHostAdbUtils.onDeviceRpcServerUpFromProbe(probe("1040"), 54624)).isFalse()
+    assertThat(
+      AndroidHostAdbUtils.onDeviceRpcServerUpFromProbe(probe("1040", establishedOn54624), 54624),
+    ).isFalse()
+  }
+
+  @Test
+  fun aListenerWithoutTheRunnerProcessIsNotUp() {
+    assertThat(AndroidHostAdbUtils.onDeviceRpcServerUpFromProbe(probe("", listenerOn54624), 54624)).isFalse()
+  }
+
+  @Test
+  fun anotherPortsListenerDoesNotCount() {
+    assertThat(AndroidHostAdbUtils.onDeviceRpcServerUpFromProbe(probe("2369", listenerOn54624), 52524)).isFalse()
+  }
+
+  /** An unreadable socket table must not read as "down" — that relaunches a healthy runner per command. */
+  @Test
+  fun anUnreadableSocketTableFallsBackToTheProcessCheck() {
+    assertThat(AndroidHostAdbUtils.onDeviceRpcServerUpFromProbe("2369\n", 54624)).isTrue()
+    assertThat(AndroidHostAdbUtils.onDeviceRpcServerUpFromProbe("\n", 54624)).isFalse()
   }
 
   // ── helpers ──────────────────────────────────────────────────────────────

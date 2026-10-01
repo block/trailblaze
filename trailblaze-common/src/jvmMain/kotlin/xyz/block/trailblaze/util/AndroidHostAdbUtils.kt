@@ -134,10 +134,12 @@ object AndroidHostAdbUtils {
       Console.log("[AndroidHostAdbUtils] short-call timeout overridden via TRAILBLAZE_ADB_TIMEOUT_MS=$it")
     } ?: 10_000L
 
-  // LLM provider tokens reach the device as `trailblaze.llm.auth.token.<provider>` args; redact
-  // their values so CI shell-command log artifacts don't leak live credentials.
+  // LLM provider tokens reach the device as `trailblaze.llm.auth.token.<provider>` args, and the
+  // decision engine's key as `TYPESAFE_API_KEY` or `TRAILBLAZE_DECISION_ENGINE_KEY`, and its URL
+  // (which can carry a key in userinfo or its query); redact their values so CI shell-command log
+  // artifacts don't leak live credentials.
   private val AUTH_TOKEN_ARG_REGEX =
-    Regex("""('?trailblaze\.llm\.auth\.token\.[^'\s]+'?\s+)((?:'[^']*'|\\'|[^\s'])+)""")
+    Regex("""('?(?:trailblaze\.llm\.auth\.token\.[^'\s]+|TYPESAFE_API_KEY|TRAILBLAZE_DECISION_ENGINE_KEY|TRAILBLAZE_DECISION_ENGINE_URL)'?\s+)((?:'[^']*'|\\'|[^\s'])+)""")
 
   // Also strip base64 file bodies: `writeFileAs` carries a file's bytes inside the command line,
   // and those bodies (seeded auth/session files) are the ones tools already mask in session logs.
@@ -586,18 +588,6 @@ object AndroidHostAdbUtils {
     }
   } catch (e: Exception) {
     throw RuntimeException("Failed to start reverse port forwarding: ${e.message}", e)
-  }
-
-  fun removePortReverse(deviceId: TrailblazeDeviceId, localPort: Int) {
-    runCatching {
-      runProcessBuilderWithTimeout(
-        createAdbCommandProcessBuilder(
-          deviceId = deviceId,
-          args = listOf("reverse", "--remove", "tcp:$localPort"),
-        ),
-        timeoutMs = DEFAULT_SHORT_CALL_TIMEOUT_MS,
-      )
-    }
   }
 
   private fun isPortReverseAlreadyActive(
@@ -1167,6 +1157,58 @@ object AndroidHostAdbUtils {
     )
     Console.log("pidof $appId: $output")
     return output.trim().isNotEmpty()
+  }
+
+  /**
+   * Whether [appId]'s process is running AND something on the device listens on [rpcPort] — the
+   * on-device RPC server a host client reaches through `adb forward tcp:<rpcPort>`. One adb round
+   * trip, the same as [isAppRunning].
+   *
+   * A running process alone does not prove the server is up. The bundled runner also hosts the
+   * Trailblaze accessibility service, and Android restarts an enabled accessibility service after
+   * a reboot, so the runner's process comes back with no instrumentation and nothing listening.
+   *
+   * Bounded by the short-call timeout, not the host-shell one: the probe runs on a failing RPC's
+   * path, and right after a reboot adbd can hang rather than refuse, which would hold that RPC for
+   * minutes. Throws when no answer comes back — an unanswered probe is not a "not up".
+   */
+  fun isOnDeviceRpcServerUp(deviceId: TrailblazeDeviceId, appId: String, rpcPort: Int): Boolean {
+    val output = execAdbShellCommandWithTimeout(
+      deviceId = deviceId,
+      args = listOf("pidof", appId, ";", "cat", "/proc/net/tcp", "/proc/net/tcp6", "2>/dev/null"),
+    ) ?: throw IOException("No answer from ${deviceId.instanceId} to the RPC server probe for $appId")
+    return onDeviceRpcServerUpFromProbe(output, rpcPort).also {
+      Console.log("RPC server for $appId on port $rpcPort: ${if (it) "up" else "not up"}")
+    }
+  }
+
+  private const val PROC_NET_TCP_HEADER = "local_address"
+
+  /** `st` column value for a listening socket in `/proc/net/tcp` and `/proc/net/tcp6`. */
+  private const val PROC_NET_TCP_LISTEN = "0A"
+
+  /**
+   * Reads the output of [isOnDeviceRpcServerUp]'s probe: the `pidof` output, then the device's
+   * `/proc/net/tcp` and `/proc/net/tcp6` tables, each opening with its `local_address` header.
+   *
+   * A socket table this can't read — a device that refuses the shell user — falls back to the
+   * process check alone, which is what callers relied on before. Reporting "not up" there would
+   * relaunch a healthy runner on every command.
+   */
+  internal fun onDeviceRpcServerUpFromProbe(probeOutput: String, rpcPort: Int): Boolean {
+    val lines = probeOutput.lines()
+    val tableStart = lines.indexOfFirst { it.contains(PROC_NET_TCP_HEADER) }
+    val pidLines = if (tableStart < 0) lines else lines.subList(0, tableStart)
+    if (pidLines.all { it.isBlank() }) return false
+    if (tableStart < 0) return true
+    val localPortHex = ":%04X".format(rpcPort)
+    return lines.subList(tableStart, lines.size).any { line ->
+      // `sl local_address rem_address st ...` — e.g. `1: 00000000000000000000000000000000:D560 ... 0A`.
+      val columns = line.trim().split(Regex("\\s+"))
+      columns.size > 3 &&
+        columns[1].endsWith(localPortHex, ignoreCase = true) &&
+        columns[3].equals(PROC_NET_TCP_LISTEN, ignoreCase = true)
+    }
   }
 
   fun launchAppWithAdbMonkey(

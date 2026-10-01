@@ -610,15 +610,6 @@ object MaestroYamlSerializer {
     }
   }
 
-  private fun renderElementSelectorDataAsListItem(
-    selectorData: ElementSelectorData,
-    tabs: Int,
-    yamlStringBuilder: StringBuilder,
-  ) {
-    yamlStringBuilder.appendLine(indent(tabs, "-"))
-    renderElementSelectorData(selectorData, tabs + 1, yamlStringBuilder)
-  }
-
   private fun renderElementSelectorData(
     selectorData: ElementSelectorData,
     tabs: Int,

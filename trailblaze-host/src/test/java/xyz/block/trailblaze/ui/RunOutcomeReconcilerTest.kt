@@ -10,7 +10,7 @@ import xyz.block.trailblaze.logs.model.SessionStatus
 /**
  * Pins the daemon-delegated pass/fail reconciliation: the on-disk [SessionStatus] is the source
  * of truth, so a session that ended Succeeded must NOT be demoted by a post-run connect/teardown
- * error (the V1 on-device-RPC dead-server case), and a genuinely-failed session must still fail.
+ * error (the on-device-agent dead-server case), and a genuinely-failed session must still fail.
  */
 class RunOutcomeReconcilerTest {
 

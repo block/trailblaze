@@ -5,8 +5,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 
 /**
  * Return shape of the `runTrailblazeYaml` callback the on-device
- * `xyz.block.trailblaze.mcp.handlers.RunYamlRequestHandler` invokes for `TRAILBLAZE_RUNNER`
- * dispatches.
+ * `xyz.block.trailblaze.mcp.handlers.RunYamlRequestHandler` invokes for every dispatch.
  *
  * Carries:
  *  - [session] — the [TrailblazeSession] the handler should consider terminal for this RPC. Same

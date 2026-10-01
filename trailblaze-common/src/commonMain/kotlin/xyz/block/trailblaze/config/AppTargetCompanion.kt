@@ -16,13 +16,6 @@ import kotlin.reflect.KClass
 interface AppTargetCompanion {
 
   /**
-   * Additional tool [KClass]es this companion contributes for name resolution.
-   * Called during loader bootstrap so the [ToolNameResolver] can map YAML tool
-   * name strings to concrete classes.
-   */
-  fun getAdditionalToolClasses(): Set<KClass<out TrailblazeTool>> = emptySet()
-
-  /**
    * Custom iOS driver factory. Only called when the `.app.yaml` has
    * `has_custom_ios_driver: true`.
    *

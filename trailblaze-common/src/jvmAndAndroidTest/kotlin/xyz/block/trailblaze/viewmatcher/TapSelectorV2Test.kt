@@ -3,8 +3,11 @@ package xyz.block.trailblaze.viewmatcher
 import org.junit.Test
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
+import xyz.block.trailblaze.utils.Ext.toViewHierarchyTreeNode
 import xyz.block.trailblaze.viewmatcher.matching.CenterPointMatcher
+import xyz.block.trailblaze.viewmatcher.matching.ElementMatcherUsingMaestro
 import xyz.block.trailblaze.viewmatcher.models.OrderedSpatialHints
+import xyz.block.trailblaze.viewmatcher.models.deterministicTapTarget
 import xyz.block.trailblaze.viewmatcher.models.RelativePosition
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -1047,5 +1050,63 @@ class TapSelectorV2Test {
 
     // Should succeed - IndexStrategy always provides a fallback
     assertNotNull(result)
+  }
+
+  /**
+   * An iOS Settings cell whose nested cell repeats its id and label, with a disabled chevron. The
+   * search matches through Maestro's tree format, and a disabled node used to come back enabled
+   * from it, so no match ever equaled the cell and the index fallback threw "should never happen".
+   */
+  @Test
+  fun `a target with a disabled descendant is found through the Maestro round trip`() {
+    fun node(
+      id: Long,
+      x1: Int,
+      y1: Int,
+      x2: Int,
+      y2: Int,
+      text: String? = null,
+      resourceId: String? = null,
+      enabled: Boolean = true,
+      children: List<ViewHierarchyTreeNode> = emptyList(),
+    ) = ViewHierarchyTreeNode(
+      nodeId = id,
+      accessibilityText = text,
+      resourceId = resourceId,
+      x1 = x1,
+      y1 = y1,
+      x2 = x2,
+      y2 = y2,
+      centerPoint = "${(x1 + x2) / 2},${(y1 + y2) / 2}",
+      enabled = enabled,
+      children = children,
+    )
+    val nestedCell = node(
+      3, 36, 203, 343, 223, "iOS Version, 26.5", "SW_VERSION_SPECIFIER",
+      children = listOf(node(4, 36, 203, 124, 223, "iOS Version"), node(5, 309, 203, 343, 223, "26.5")),
+    )
+    val target = node(
+      2, 20, 186, 382, 239, "iOS Version, 26.5", "SW_VERSION_SPECIFIER",
+      children = listOf(nestedCell, node(6, 351, 206, 362, 220, "chevron", enabled = false)),
+    )
+    val root = node(1, 0, 0, 402, 874, children = listOf(target))
+
+    val result = TapSelectorV2.findBestTrailblazeElementSelectorForTargetNodeWithStrategy(
+      root = root,
+      target = target,
+      trailblazeDevicePlatform = TrailblazeDevicePlatform.IOS,
+      widthPixels = 402,
+      heightPixels = 874,
+      spatialHints = null,
+    )
+
+    val tapped = ElementMatcherUsingMaestro.getMatchingElementsFromSelector(
+      rootTreeNode = root,
+      trailblazeElementSelector = result.selector,
+      trailblazeDevicePlatform = TrailblazeDevicePlatform.IOS,
+      widthPixels = 402,
+      heightPixels = 874,
+    ).deterministicTapTarget()
+    assertEquals(target.bounds, tapped?.toViewHierarchyTreeNode()?.bounds, "selector: ${result.selector}")
   }
 }

@@ -267,9 +267,9 @@ io.ktor:ktor-websocket-serialization-jvm:3.5.0
 io.ktor:ktor-websocket-serialization:3.5.0
 io.ktor:ktor-websockets-jvm:3.5.0
 io.ktor:ktor-websockets:3.5.0
-io.micrometer:micrometer-commons:1.15.12
-io.micrometer:micrometer-core:1.15.12
-io.micrometer:micrometer-observation:1.15.12
+io.micrometer:micrometer-commons:1.16.7
+io.micrometer:micrometer-core:1.16.7
+io.micrometer:micrometer-observation:1.16.7
 io.modelcontextprotocol:kotlin-sdk-client-jvm:0.13.0
 io.modelcontextprotocol:kotlin-sdk-client:0.13.0
 io.modelcontextprotocol:kotlin-sdk-core-jvm:0.13.0
@@ -350,10 +350,10 @@ net.objecthunter:exp4j:0.4.8
 net.thauvin.erik.urlencoder:urlencoder-lib-jvm:1.6.0
 net.thauvin.erik.urlencoder:urlencoder-lib:1.6.0
 org.apache.commons:commons-compress:1.21
-org.apache.logging.log4j:log4j-api:2.25.3
-org.apache.logging.log4j:log4j-core:2.25.3
-org.apache.logging.log4j:log4j-layout-template-json:2.25.3
-org.apache.logging.log4j:log4j-slf4j2-impl:2.25.3
+org.apache.logging.log4j:log4j-api:2.25.5
+org.apache.logging.log4j:log4j-core:2.25.5
+org.apache.logging.log4j:log4j-layout-template-json:2.25.5
+org.apache.logging.log4j:log4j-slf4j2-impl:2.25.5
 org.checkerframework:checker-compat-qual:2.5.5
 org.checkerframework:checker-qual:3.33.0
 org.codehaus.mojo:animal-sniffer-annotations:1.21

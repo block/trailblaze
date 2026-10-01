@@ -103,6 +103,20 @@ class ToolboxCommand : Callable<Int>, QuietUnlessVerbose {
   var verbose: Boolean = false
 
   /**
+   * Accepted and ignored: `toolbox` lists tools and never launches a browser. Taking it keeps a
+   * flag set shared with `tool` and `snapshot` (`-d web --headless=true`) from failing here with
+   * "Unknown option". Hidden so help doesn't advertise an option that does nothing. Parses like
+   * [HeadlessOption]'s `--headless`; `ToolboxHeadlessOptionTest` pins that.
+   */
+  @Option(
+    names = ["--headless"],
+    hidden = true,
+    arity = "1",
+    description = ["Accepted as a no-op; toolbox never launches a browser."],
+  )
+  var ignoredHeadless: Boolean? = null
+
+  /**
    * Closes the internal [Console.log] channel for this command unless `--verbose`, applied at
    * dispatch so the early-return paths are covered too — see [QuietUnlessVerbose].
    */

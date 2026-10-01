@@ -118,6 +118,31 @@ describe('collectShots — embed mode', () => {
     ]);
   });
 
+  test('a farm capture recorded under a URL is handed to the browser, in either mode, and never fetched', async () => {
+    const url = 'https://artifacts.example.com/a?key=run%2Ffarm.png';
+    for (const mode of ['embed', 'link']) {
+      const net = imageFetch();
+      const shots = await Payload.collectShots([], 's1', mode, null, {
+        fetch: net.fetch, traceScreenshotFiles,
+        visibleStringsShotFiles: () => [url],
+      }, [{ captureId: 'farm.png', captureUrl: url, deviceWidth: 1, deviceHeight: 1, strings: [] }]);
+      expect(shots).toEqual({ [url]: url });
+      expect(net.calls).toEqual([]);
+    }
+  });
+
+  test('a frame saved from the recording is embedded when the session has it, and never linked', async () => {
+    const net = imageFetch();
+    const embedded = await Payload.collectShots([], 's1', 'embed', null, {
+      fetch: (url: string) => (url.endsWith('/capture-saved.webp') ? net.fetch(url) : Promise.resolve({ ok: false, status: 404 })),
+      traceScreenshotFiles,
+    }, null, ['capture-saved.webp', 'capture-unsaved.webp']);
+    expect(Object.keys(embedded)).toEqual(['capture-saved.webp']);
+    // A link can't tell a missing file from a present one, so it names none.
+    const linked = await Payload.collectShots([], 's1', 'link', null, { traceScreenshotFiles }, null, ['capture-saved.webp']);
+    expect(linked).toEqual({});
+  });
+
   test('reports progress from 0 to the total frame count', async () => {
     const progress: number[][] = [];
     await Payload.collectShots(TRACE, 's1', 'embed', (done: number, total: number) => progress.push([done, total]), {
@@ -496,7 +521,7 @@ describe('fetchSideChannels', () => {
       },
       originalYamlFromLogs: () => null,
     });
-    expect(side).toEqual({ recordingYaml: null, originalYaml: null, events: null, spans: null });
+    expect(side).toEqual({ recordingYaml: null, originalYaml: null, events: null, spans: null, visibleStrings: null, frameFiles: [] });
   });
 
   test('a thrown request yields nulls rather than rejecting', async () => {
@@ -504,7 +529,7 @@ describe('fetchSideChannels', () => {
       fetch: () => { throw new Error('daemon went away'); },
       originalYamlFromLogs: () => null,
     });
-    expect(side).toEqual({ recordingYaml: null, originalYaml: null, events: null, spans: null });
+    expect(side).toEqual({ recordingYaml: null, originalYaml: null, events: null, spans: null, visibleStrings: null, frameFiles: [] });
   });
 
   test('flattens the event-stream DTO and derives the original YAML from the logs', async () => {
@@ -575,7 +600,7 @@ describe('fetchSideChannels', () => {
     const slimTracerSpans = (parsed: any[]) => parsed.filter((e) => e.ph === 'X').map(({ name, cat, ts, dur, tid, pid }) => ({ name, cat, ts, dur, tid, pid }));
     const fetchWithTrace = (contentLength: string | null) => async (url: string) => {
       if (url === '/static/sess_1/trace.json') {
-        return { ok: true, headers: { get: (h: string) => (h === 'content-length' ? contentLength : null) }, text: async () => JSON.stringify(traceEvents) };
+        return { ok: true, headers: { get: (h: string) => (h === 'content-length' ? contentLength : null) }, arrayBuffer: async () => new TextEncoder().encode(JSON.stringify(traceEvents)).buffer };
       }
       if (url.endsWith('/export')) return { ok: false, status: 404 };
       if (url.endsWith('/events')) return okJson({ streams: [] });
@@ -586,6 +611,10 @@ describe('fetchSideChannels', () => {
 
     const capped = await Payload.fetchSideChannels('sess_1', { fetch: fetchWithTrace('99999999'), originalYamlFromLogs: () => null, slimTracerSpans, MAX_TRACE_BYTES: 1024 }, []);
     expect(capped.spans).toBeNull();
+
+    // No Content-Length to go on: the cap is still held against the bytes that arrive.
+    const undeclared = await Payload.fetchSideChannels('sess_1', { fetch: fetchWithTrace(null), originalYamlFromLogs: () => null, slimTracerSpans, MAX_TRACE_BYTES: 64 }, []);
+    expect(undeclared.spans).toBeNull();
 
     // A session that recorded no trace 404s; a run-report-core without the slimmer never asks.
     const calls: string[] = [];
@@ -691,6 +720,54 @@ describe('buildSessionInput', () => {
   };
 
   const summary = { id: 'sess_1', title: 'Run', status: 'passed', dur: '2.0s', timestampMs: 0 };
+
+  test('carries the strings read off the logs, and links the frames they name that the trace does not', async () => {
+    const lines = [{ captureId: 'typing.png', deviceWidth: 10, deviceHeight: 20, strings: [{ text: 'Code', source: 'text', visible: true }] }];
+    const captureLog = { screenshotFile: 'typing.png', visibleStrings: lines[0].strings };
+    const input = await Payload.buildSessionInput({
+      s: summary, trace: TRACE, llmLogs: [], sessionId: 'sess_1', mode: 'link', logs: [captureLog],
+      deps: {
+        fetch: sideChannelFetch([]),
+        traceScreenshotFiles,
+        originalYamlFromLogs: () => null,
+        extractVisibleStrings: (logs: unknown[]) => (logs[0] === captureLog ? lines : null),
+        visibleStringsShotFiles: (ls: typeof lines) => ls.map((l) => l.captureId),
+      },
+    });
+    expect(input.visibleStrings).toBe(lines);
+    expect(input.shots['typing.png']).toBe('/static/sess_1/typing.png');
+    expect(input.shots['a.png']).toBe('/static/sess_1/a.png');
+
+    // Logs with no strings on them (recorded before the field existed): no tab, nothing else changes.
+    const older = await Payload.buildSessionInput({
+      s: summary, trace: TRACE, llmLogs: [], sessionId: 'sess_1', mode: 'link', logs: [{ screenshotFile: 'a.png' }],
+      deps: {
+        fetch: sideChannelFetch([]), traceScreenshotFiles, originalYamlFromLogs: () => null,
+        extractVisibleStrings: () => null, visibleStringsShotFiles: () => ['typing.png'],
+      },
+    });
+    expect(older.visibleStrings).toBeNull();
+    expect(Object.keys(older.shots)).not.toContain('typing.png');
+  });
+
+  test('a caller that brings no logs gets them fetched once, for both channels read off them', async () => {
+    const captureLog = { screenshotFile: 'typing.png', visibleStrings: [] };
+    const fetched: string[] = [];
+    const seen: unknown[] = [];
+    const side = await Payload.fetchSideChannels('sess_1', {
+      fetch: async (url: string) => {
+        fetched.push(url);
+        if (url.endsWith('/logs')) return { ok: true, json: async () => [captureLog] };
+        return sideChannelFetch([])(url);
+      },
+      originalYamlFromLogs: (logs: unknown[]) => { seen.push(logs[0]); return 'trail: []'; },
+      extractVisibleStrings: (logs: unknown[]) => { seen.push(logs[0]); return [{ captureId: 'typing.png', deviceWidth: 0, deviceHeight: 0, strings: [] }]; },
+    });
+    expect(fetched.filter((u) => u.endsWith('/logs'))).toHaveLength(1);
+    expect(seen).toEqual([captureLog, captureLog]);
+    expect(side.originalYaml).toBe('trail: []');
+    expect(side.visibleStrings).toHaveLength(1);
+  });
 
   test('link mode leaves the hierarchies unpacked — no *Gz side channel on the input', async () => {
     const calls: string[] = [];

@@ -716,6 +716,62 @@ describe("session events and the attachments they reference", () => {
     expect(without.sessions[0].spans).toBeNull();
   });
 
+  // The strings ride on the capture logs themselves, and the frames they name come with them even
+  // when the Timeline never shows them, so every screen in the Strings tab has its screenshot.
+  test("reads each capture log's strings and embeds the frames they name that the trace does not", async () => {
+    const dir = SESSION_ID + "/";
+    const FARM_URL = "https://artifacts.example.com/a?key=run%2Ffarm.png";
+    const capture = (n: number, screenshotFile: string) => ({
+      class: "xyz.block.trailblaze.logs.client.TrailblazeLog.AgentDriverLog", screenshotFile, timestamp: `2026-09-25T09:21:3${n}Z`,
+      deviceWidth: 10, deviceHeight: 20, visibleStrings: [{ text: "Send", source: "text", bounds: [1, 2, 3, 4], visible: true }],
+    });
+    const zip = buildZip([
+      { name: dir + "001_Log.json", text: JSON.stringify(startedLog()) },
+      { name: dir + "002_AgentDriverLog.json", text: JSON.stringify(capture(1, "timeline.png")) },
+      { name: dir + "003_AgentDriverLog.json", text: JSON.stringify(capture(2, "typing.png")) },
+      { name: dir + "004_AgentDriverLog.json", text: JSON.stringify(capture(3, "gone.png")) },
+      // A farm capture: recorded under its artifact URL, never downloaded into the archive.
+      { name: dir + "005_AgentDriverLog.json", text: JSON.stringify(capture(4, FARM_URL)) },
+      { name: dir + "timeline.png", data: new Uint8Array([1]) },
+      { name: dir + "typing.png", data: new Uint8Array([2]) },
+      { name: dir + "sprites.png", data: new Uint8Array([3]) },
+    ]);
+    const derive = { ...derivationOnly, extractTrace: () => [{ screenshotFile: "timeline.png", label: "tap" }] };
+    const built = await Zip.buildSessionInputsFromZipBytes(zip, { render: derive, inflateRaw, generatedAt: "T" });
+    const [session] = built.sessions;
+    expect(session.visibleStrings.map((s: { captureId: string }) => s.captureId)).toEqual(["timeline.png", "typing.png", "gone.png", "farm.png"]);
+    expect(Object.keys(session.shots).sort()).toEqual([FARM_URL, "timeline.png", "typing.png"]);
+    expect(session.shots[FARM_URL]).toBe(FARM_URL);
+    const captured: { input?: any } = {};
+    await Zip.buildReportHtmlFromZipBytes(zip, { render: { ...derive, buildRunReportHtml: (input: unknown) => { captured.input = input; return ""; } }, inflateRaw, generatedAt: "T" });
+    expect(captured.input.visibleStrings).toEqual(session.visibleStrings);
+
+    // A session recorded before the logs carried strings has no tab and no extra frames.
+    const older = await Zip.buildSessionInputsFromZipBytes(buildZip([
+      { name: dir + "001_Log.json", text: JSON.stringify(startedLog()) },
+      { name: dir + "timeline.png", data: new Uint8Array([1]) },
+      { name: dir + "typing.png", data: new Uint8Array([2]) },
+    ]), { render: derive, inflateRaw, generatedAt: "T" });
+    expect(older.sessions[0].visibleStrings).toBeNull();
+    expect(Object.keys(older.sessions[0].shots)).toEqual(["timeline.png"]);
+  });
+
+  test("carries the frames saved from the recording for captures with no screenshot, where the archive has them", async () => {
+    const dir = SESSION_ID + "/";
+    const capture = (n: number, captureId: string) => ({
+      class: "xyz.block.trailblaze.logs.client.TrailblazeLog.AgentDriverLog", captureId, timestamp: `2026-09-25T09:21:3${n}Z`, deviceWidth: 10, deviceHeight: 20,
+    });
+    const zip = buildZip([
+      { name: dir + "001_Log.json", text: JSON.stringify(startedLog()) },
+      { name: dir + "002_AgentDriverLog.json", text: JSON.stringify(capture(1, "capture-saved")) },
+      { name: dir + "003_AgentDriverLog.json", text: JSON.stringify(capture(2, "capture-unsaved")) },
+      { name: dir + "capture-saved.webp", data: new TextEncoder().encode("RIFF\0\0\0\0WEBP") },
+    ]);
+    const built = await Zip.buildSessionInputsFromZipBytes(zip, { render: { ...derivationOnly, extractTrace: () => [] }, inflateRaw, generatedAt: "T" });
+    expect(Object.keys(built.sessions[0].shots)).toEqual(["capture-saved.webp"]);
+    expect(built.sessions[0].shots["capture-saved.webp"]).toStartWith("data:image/webp;base64,");
+  });
+
   test("resolves referenced media attachments to object URLs; non-media and missing files stay out", async () => {
     const built = await Zip.buildSessionInputsFromZipBytes(eventsZip(), { render: derivationOnly, inflateRaw, generatedAt: "T" });
     const [session] = built.sessions;
@@ -1030,6 +1086,10 @@ describe("finding the run's recording in the archive", () => {
     const clips = await Zip.sessionVideoClips(zip, session, { inflateRaw });
     expect(clips.map((c: any) => [c.device, c.mime, c.startMs, c.endMs])).toEqual([["seller", "video/webm", 200, 800], ["buyer", "video/mp4", 250, 800]]);
     clips.forEach((c: any) => expect(c.url).toStartWith("blob:"));
+    // Each clip carries its file's bytes for the viewer's frame index, kept out of any copy or JSON of the payload.
+    expect(clips.map((c: any) => Array.from(c.bytes))).toEqual([[1, 1], [2, 2]]);
+    expect(Object.keys(clips[0])).not.toContain("bytes");
+    expect(JSON.stringify(clips[0])).not.toContain("bytes");
     expect(await Zip.sessionVideoClip(zip, session, { inflateRaw })).toMatchObject({ device: "seller", mime: "video/webm" });
     // Every minted URL is on the sweep list, so the next archive can hand the bytes back.
     expect(Zip.sessionObjectUrls([{ videoClip: clips[0], videoClips: clips }])).toEqual(clips.map((c: any) => c.url));

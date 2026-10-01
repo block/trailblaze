@@ -10,7 +10,6 @@ import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.TraceId
-import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.mcp.DeviceAppProbeFailedException
 import xyz.block.trailblaze.mcp.TrailblazeMcpBridge
 import xyz.block.trailblaze.mcp.TrailblazeMcpMode
@@ -1299,7 +1298,7 @@ class DeviceTestBridge(
     installedApps
   }
   override fun getAvailableAppTargets(): Set<TrailblazeHostAppTarget> = availableAppTargets
-  override suspend fun runYaml(yaml: String, startNewSession: Boolean, agentImplementation: AgentImplementation) = ""
+  override suspend fun runYaml(yaml: String, startNewSession: Boolean) = ""
   override fun getCurrentlySelectedDeviceId(): TrailblazeDeviceId? = lastSelectedDeviceId
   override suspend fun getCurrentScreenState(): ScreenState? = null
   override fun getDirectScreenStateProvider(skipScreenshot: Boolean): ((ScreenshotScalingConfig) -> ScreenState)? = null

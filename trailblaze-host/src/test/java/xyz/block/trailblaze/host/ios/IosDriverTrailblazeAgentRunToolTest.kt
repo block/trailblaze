@@ -4,6 +4,7 @@ import assertk.assertThat
 import assertk.assertions.contains
 import assertk.assertions.doesNotContain
 import assertk.assertions.hasSize
+import assertk.assertions.isEqualTo
 import assertk.assertions.isInstanceOf
 import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Clock
@@ -49,25 +50,82 @@ class IosDriverTrailblazeAgentRunToolTest {
 
   private class FakeIosDeviceManager : IosDeviceManager {
     val executedActions = mutableListOf<IosDriverAction>()
+    val actionsInsideSpan = mutableListOf<IosDriverAction>()
+    var screenStateReads = 0
+      private set
+    private var openSpans = 0
 
-    override fun getScreenState(): ScreenState = error("not needed by these tests")
+    override fun getScreenState(): ScreenState {
+      screenStateReads++
+      error("not needed by these tests")
+    }
 
     override fun execute(action: IosDriverAction): IosDeviceManager.ExecutionResult {
       executedActions.add(action)
+      if (openSpans > 0) actionsInsideSpan.add(action)
       return IosDeviceManager.ExecutionResult()
+    }
+
+    override fun shareScreenReads(): AutoCloseable {
+      openSpans++
+      return AutoCloseable { openSpans-- }
     }
   }
 
   private fun buildAgent(
     deviceManager: FakeIosDeviceManager,
     toolRepo: TrailblazeToolRepo?,
+    logDriverActions: Boolean = true,
   ): IosDriverTrailblazeAgent = IosDriverTrailblazeAgent(
     deviceManager = deviceManager,
     trailblazeLogger = TrailblazeLogger.createNoOp(),
     trailblazeDeviceInfoProvider = { testDeviceInfo },
     sessionProvider = { TrailblazeSession(sessionId = SessionId("test"), startTime = Clock.System.now()) },
     trailblazeToolRepo = toolRepo,
+    logDriverActions = logDriverActions,
   )
+
+  private fun runAssertVisible(deviceManager: FakeIosDeviceManager, logDriverActions: Boolean) {
+    val agent = buildAgent(
+      deviceManager = deviceManager,
+      toolRepo = TrailblazeToolRepo.withDynamicToolSets(
+        customToolClasses = TrailblazeToolSet.NonLlmTrailblazeTools,
+        driverType = TrailblazeDriverType.IOS_AXE,
+      ),
+      logDriverActions = logDriverActions,
+    )
+    val result = runBlocking {
+      agent.runTool(
+        tool = OtherTrailblazeTool(
+          toolName = "assertVisibleWithText",
+          raw = buildJsonObject { put("text", "Welcome") },
+        ),
+        context = buildContext(agent),
+      )
+    }
+    assertThat(result).isInstanceOf(TrailblazeToolResult.Success::class)
+  }
+
+  @Test
+  fun `the driver actions of one tool call run inside one shared-read span`() {
+    val deviceManager = FakeIosDeviceManager()
+    runAssertVisible(deviceManager, logDriverActions = true)
+
+    assertThat(deviceManager.executedActions).hasSize(1)
+    assertThat(deviceManager.actionsInsideSpan).hasSize(1)
+  }
+
+  @Test
+  fun `with driver-action logging off, no screen is captured for a log`() {
+    val logged = FakeIosDeviceManager()
+    runAssertVisible(logged, logDriverActions = true)
+    assertThat(logged.screenStateReads).isEqualTo(1)
+
+    val unlogged = FakeIosDeviceManager()
+    runAssertVisible(unlogged, logDriverActions = false)
+    assertThat(unlogged.screenStateReads).isEqualTo(0)
+    assertThat(unlogged.executedActions).hasSize(1)
+  }
 
   private fun buildContext(agent: IosDriverTrailblazeAgent): TrailblazeToolExecutionContext =
     TrailblazeToolExecutionContext(

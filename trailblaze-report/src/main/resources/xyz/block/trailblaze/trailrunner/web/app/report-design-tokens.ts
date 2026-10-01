@@ -49,6 +49,9 @@ export const REPORT_DESIGN_TOKENS_CSS = `
   --txt: var(--neutral-12); --sub: var(--neutral-11); --sub2: var(--neutral-12);
   --pass: var(--status-passed-mark); --fail: var(--status-failed-mark); --amber: var(--status-self-healed-mark);
   --run: var(--accent-11); --purple: var(--violet-11); --ai: var(--violet-9); --ai-surface: var(--violet-3);
+  /* Decision requests: typed questions answered with probabilities, not generated text. Teal so
+     they never read as an LLM call (violet). */
+  --decision: #0f7b6c; --decision-surface: #e3f5f1;
   --trail-mark: var(--forest-9); --trail-text: var(--forest-11); --trail-surface: var(--forest-3);
   --timeline-objective-mark: var(--neutral-8);
   --event: var(--cyan-11); --focus: var(--accent-9); --player-line: var(--neutral-6);
@@ -104,6 +107,7 @@ export const REPORT_DESIGN_TOKENS_CSS = `
   --txt: var(--neutral-12); --sub: var(--neutral-11); --sub2: var(--neutral-12);
   --pass: var(--status-passed-mark); --fail: var(--status-failed-mark); --amber: var(--status-self-healed-mark);
   --run: #6aa6ff; --purple: #b08cff; --ai: #c29aff; --ai-surface: var(--violet-3);
+  --decision: #45cdb8; --decision-surface: #14282a;
   --trail-mark: var(--forest-9); --trail-text: var(--forest-11); --trail-surface: var(--forest-3);
   --timeline-objective-mark: var(--neutral-8);
   --event: #5ed3ff; --focus: #91bdff; --player-line: var(--neutral-6);

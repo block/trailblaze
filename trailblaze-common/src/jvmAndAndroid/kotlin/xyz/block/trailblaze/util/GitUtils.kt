@@ -84,9 +84,6 @@ object GitUtils {
    */
   fun getGitRootViaCommand(): String? = runGitCommand("rev-parse", "--show-toplevel")
 
-  // Helper to get git root directory
-  private fun getGitRoot(): File? = runGitCommand("rev-parse", "--show-toplevel")?.let { File(it) }
-
   fun getLatestRemoteCommitHash(remoteName: String = "origin", branchName: String = "main"): String? =
     runGitCommand("ls-remote", remoteName, "refs/heads/$branchName")?.split("\t")?.firstOrNull()
 

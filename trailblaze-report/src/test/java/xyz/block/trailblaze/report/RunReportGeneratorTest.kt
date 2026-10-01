@@ -2,6 +2,7 @@ package xyz.block.trailblaze.report
 
 import java.io.File
 import java.nio.file.Files
+import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -17,6 +18,7 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import xyz.block.trailblaze.api.AgentDriverAction
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
@@ -240,6 +242,136 @@ class RunReportGeneratorTest {
     } finally {
       tmp.deleteRecursively()
     }
+  }
+
+  /**
+   * A session pulled back from a device farm has its recording beside its logs but no frames: no
+   * Trailblaze code ran on the host to save them. Generating its report is what saves them, so the
+   * report and the session dir both carry a picture for every capture.
+   *
+   * Skipped (vacuous pass) when bun, ffmpeg or ffprobe isn't available.
+   */
+  @Test
+  fun generate_savesAVideoFrameForACaptureWithNoScreenshot() {
+    val bun = BunBinaryResolver.resolveBunBinary() ?: return
+    if (!onPath("ffmpeg") || !onPath("ffprobe")) return
+    val tmp = Files.createTempDirectory("rrg-frames-").toFile()
+    try {
+      val logsRepo = LogsRepo(logsDir = tmp, watchFileSystem = false)
+      val sessionId = SessionId("framessession")
+      writePassedSession(logsRepo, sessionId)
+      logsRepo.saveLogToDisk(
+        TrailblazeLog.AgentDriverLog(
+          viewHierarchy = null,
+          trailblazeNodeTree = null,
+          screenshotFile = null,
+          action = AgentDriverAction.BackPress,
+          durationMs = 10,
+          session = sessionId,
+          timestamp = Instant.fromEpochMilliseconds(1_700_000_001_000L),
+          deviceHeight = 720,
+          deviceWidth = 1280,
+          captureId = "capture-no-shot",
+        ),
+      )
+      val sessionDir = logsRepo.getSessionDir(sessionId)
+      run(
+        "ffmpeg", "-v", "error", "-f", "lavfi", "-i", "color=green:s=128x72:d=4:r=10",
+        "-c:v", "mpeg4", "-pix_fmt", "yuv420p", File(sessionDir, "video.mp4").absolutePath,
+      )
+      File(sessionDir, "capture_metadata.json").writeText(
+        """{"artifacts":[{"filename":"video.mp4","type":"VIDEO",""" +
+          """"startTimestampMs":1700000000000,"endTimestampMs":1700000004000}]}""",
+      )
+
+      val report = RunReportGenerator(bunBinary = bun)
+        .generateFromSnapshots(logsRepo, SessionLogSnapshot.captureAll(logsRepo, listOf(sessionId)), imageBaseUrl = "")
+
+      val frame = File(sessionDir, "capture-no-shot.webp")
+      assertTrue(frame.isFile, "the frame is saved in the session dir")
+      assertNotNull(report)
+      assertTrue(report.readText().contains("capture-no-shot.webp"), "the report carries the saved frame")
+
+      // The next report over the same session reuses the frame rather than decoding it again.
+      frame.setLastModified(1_000_000L)
+      val again = RunReportGenerator(bunBinary = bun)
+        .generateFromSnapshots(logsRepo, SessionLogSnapshot.captureAll(logsRepo, listOf(sessionId)), imageBaseUrl = "")
+      assertNotNull(again)
+      assertEquals(1_000_000L, frame.lastModified(), "a saved frame is not written again")
+      assertTrue(again.readText().contains("capture-no-shot.webp"))
+    } finally {
+      tmp.deleteRecursively()
+    }
+  }
+
+  /**
+   * A report built while a session is still running: the recording is on disk but its window is
+   * not, since the recorder publishes capture_metadata.json only once it stops. The report still
+   * builds, and saves no frame it could not place.
+   *
+   * Skipped (vacuous pass) when bun isn't resolvable.
+   */
+  @Test
+  fun generate_ofASessionStillRecording_savesNoFrameAndStillBuilds() {
+    val bun = BunBinaryResolver.resolveBunBinary() ?: return
+    val tmp = Files.createTempDirectory("rrg-inprogress-").toFile()
+    try {
+      val logsRepo = LogsRepo(logsDir = tmp, watchFileSystem = false)
+      val sessionId = SessionId("inprogresssession")
+      writePassedSession(logsRepo, sessionId)
+      logsRepo.saveLogToDisk(
+        TrailblazeLog.AgentDriverLog(
+          viewHierarchy = null,
+          trailblazeNodeTree = null,
+          screenshotFile = null,
+          action = AgentDriverAction.BackPress,
+          durationMs = 10,
+          session = sessionId,
+          timestamp = Instant.fromEpochMilliseconds(1_700_000_001_000L),
+          deviceHeight = 720,
+          deviceWidth = 1280,
+          captureId = "capture-while-recording",
+        ),
+      )
+      val sessionDir = logsRepo.getSessionDir(sessionId)
+      File(sessionDir, "video.webm").writeText("still being written")
+
+      val report = RunReportGenerator(bunBinary = bun)
+        .generateFromSnapshots(logsRepo, SessionLogSnapshot.captureAll(logsRepo, listOf(sessionId)))
+
+      assertNotNull(report)
+      assertTrue(!File(sessionDir, "capture-while-recording.webp").exists())
+    } finally {
+      tmp.deleteRecursively()
+    }
+  }
+
+  // Output goes to a file rather than a pipe, so the timeout holds even for a process that never
+  // closes its stdout.
+  private fun run(vararg command: String) {
+    val log = Files.createTempFile("rrg-run-", ".log").toFile()
+    try {
+      val process = ProcessBuilder(*command).redirectErrorStream(true).redirectOutput(log).start()
+      val finished = process.waitFor(60, TimeUnit.SECONDS)
+      if (!finished) process.destroyForcibly()
+      assertTrue(finished && process.exitValue() == 0, "${command.toList()}: ${log.readText()}")
+    } finally {
+      log.delete()
+    }
+  }
+
+  private fun onPath(name: String): Boolean = try {
+    val process = ProcessBuilder(name, "-version").redirectErrorStream(true)
+      .redirectOutput(ProcessBuilder.Redirect.DISCARD).start()
+    // A tool that is installed but slow to answer on a loaded agent must fail the test, not skip it:
+    // only a tool that isn't there skips. AssertionError is not an Exception, so it gets out.
+    if (!process.waitFor(60, TimeUnit.SECONDS)) {
+      process.destroyForcibly()
+      throw AssertionError("$name -version did not answer within 60s")
+    }
+    process.exitValue() == 0
+  } catch (_: Exception) {
+    false
   }
 
   /** Minimal started-then-succeeded session: enough for a report to have one row to render. */

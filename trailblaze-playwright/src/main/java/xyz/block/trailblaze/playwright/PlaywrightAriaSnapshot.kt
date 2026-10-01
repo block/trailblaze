@@ -3,6 +3,7 @@ package xyz.block.trailblaze.playwright
 import com.microsoft.playwright.Locator
 import com.microsoft.playwright.Page
 import com.microsoft.playwright.options.AriaRole
+import xyz.block.trailblaze.api.TrailblazeNode
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.util.Console
 
@@ -48,6 +49,71 @@ object PlaywrightAriaSnapshot {
       }
     return AriaSnapshotResult(yaml = yaml, page = page)
   }
+
+  /**
+   * A default-mode ARIA snapshot with every element node's box, in one call. Playwright takes
+   * each box from the element that produced the node, so unlike a DOM walk matched back by
+   * role and name it locates every node — paragraphs, options and links included.
+   *
+   * Boxes are viewport coordinates (`getBoundingClientRect`), the space the screenshot is in.
+   * Text lines have no element of their own, so they carry no box. Returns null when the
+   * snapshot fails.
+   */
+  fun captureBoxedAriaSnapshot(page: Page, timeoutMs: Double = 0.0): BoxedAriaSnapshot? =
+    try {
+      val options = Locator.AriaSnapshotOptions().setBoxes(true)
+      if (timeoutMs > 0) options.setTimeout(timeoutMs)
+      splitBoxes(page.locator(":root").ariaSnapshot(options))
+    } catch (e: Exception) {
+      Console.log("Failed to capture boxed ARIA snapshot: ${e.message}")
+      null
+    }
+
+  /**
+   * An ARIA snapshot with its boxes lifted out: [lines] is the non-blank YAML exactly as a
+   * snapshot taken without boxes renders it, and [boxes] holds each line's box by index.
+   */
+  class BoxedAriaSnapshot(
+    val lines: List<String>,
+    val boxes: List<TrailblazeNode.Bounds?>,
+  ) {
+    val yaml: String get() = lines.joinToString("\n")
+  }
+
+  /**
+   * Playwright writes the box as the last token of a node's key, so removing it leaves the line
+   * a box-less snapshot writes: the key's YAML quoting never depends on that token. The key ends
+   * at the line's end, at the `:` before a value or children, or at the quote closing a quoted
+   * key; a box-shaped string anywhere else is page text and stays. Text and `/url`-style
+   * property lines have no element, so they never carry one. Zero-size boxes (a
+   * `display: contents` wrapper) are dropped, since they locate nothing.
+   */
+  internal fun splitBoxes(yaml: String): BoxedAriaSnapshot {
+    val lines = ArrayList<String>()
+    val boxes = ArrayList<TrailblazeNode.Bounds?>()
+    for (line in yaml.lines()) {
+      if (line.isBlank()) continue
+      val match = if (UNBOXED_LINE.containsMatchIn(line)) null else keyBox(line)
+      if (match == null) {
+        lines += line
+        boxes += null
+        continue
+      }
+      lines += line.removeRange(match.range)
+      val (x, y, w, h) = match.destructured.toList().map { it.toInt() }
+      boxes += if (w > 0 && h > 0) TrailblazeNode.Bounds(x, y, x + w, y + h) else null
+    }
+    return BoxedAriaSnapshot(lines, boxes)
+  }
+
+  private fun keyBox(line: String): MatchResult? = BOX_PATTERN.findAll(line).firstOrNull { match ->
+    val next = line.getOrNull(match.range.last + 1)
+    next == null || next == ':' || next == '\''
+  }
+
+  private val UNBOXED_LINE = Regex("""^\s*-\s+'?(?:text:|/)""")
+
+  private val BOX_PATTERN = Regex(""" \[box=(-?\d+),(-?\d+),(-?\d+),(-?\d+)]""")
 
   /**
    * Resolves an element ref string to a Playwright Locator.
@@ -351,12 +417,26 @@ object PlaywrightAriaSnapshot {
     }
 
     var nextNodeId = 1L
-    val root = parseAriaLines(lines, 0, nextNodeId) { nextNodeId = it }
+    val root = parseAriaLines(lines, null, 0, nextNodeId) { nextNodeId = it }
     return root ?: ViewHierarchyTreeNode(nodeId = 1, className = "document")
   }
 
+  /** [ariaSnapshotToViewHierarchy] with each node's box set from [snapshot]. */
+  fun ariaSnapshotToViewHierarchy(snapshot: BoxedAriaSnapshot): ViewHierarchyTreeNode {
+    if (snapshot.lines.isEmpty()) {
+      return ViewHierarchyTreeNode(nodeId = 1, className = "document", text = "(empty page)")
+    }
+    var nextNodeId = 1L
+    val root = parseAriaLines(snapshot.lines, snapshot.boxes, 0, nextNodeId) { nextNodeId = it }
+    return root ?: ViewHierarchyTreeNode(nodeId = 1, className = "document")
+  }
+
+  private fun ViewHierarchyTreeNode.withBox(box: TrailblazeNode.Bounds?): ViewHierarchyTreeNode =
+    if (box == null) this else copy(x1 = box.left, y1 = box.top, x2 = box.right, y2 = box.bottom)
+
   private fun parseAriaLines(
     lines: List<String>,
+    boxes: List<TrailblazeNode.Bounds?>?,
     startIndex: Int,
     startNodeId: Long,
     onNodeIdUpdate: (Long) -> Unit,
@@ -391,7 +471,7 @@ object PlaywrightAriaSnapshot {
         val subChildren = mutableListOf<ViewHierarchyTreeNode>()
         var j = i + 1
         while (j < childEnd) {
-          val subNode = parseAriaLines(lines, j, nodeId) { nodeId = it; onNodeIdUpdate(it) }
+          val subNode = parseAriaLines(lines, boxes, j, nodeId) { nodeId = it; onNodeIdUpdate(it) }
           if (subNode != null) {
             subChildren.add(subNode)
             j = findChildEnd(lines, j)
@@ -410,7 +490,7 @@ object PlaywrightAriaSnapshot {
             clickable = childParsed.ariaRole in CLICKABLE_ROLES,
             focusable = childParsed.ariaRole in FOCUSABLE_ROLES,
             children = subChildren,
-          ),
+          ).withBox(boxes?.getOrNull(i)),
         )
         i = childEnd
       } else {
@@ -426,7 +506,7 @@ object PlaywrightAriaSnapshot {
       clickable = rootParsed.ariaRole in CLICKABLE_ROLES,
       focusable = rootParsed.ariaRole in FOCUSABLE_ROLES,
       children = children,
-    )
+    ).withBox(boxes?.getOrNull(startIndex))
   }
 
   private fun findChildEnd(lines: List<String>, index: Int): Int {
@@ -494,6 +574,23 @@ object PlaywrightAriaSnapshot {
 
     // Fallback: treat entire line as text
     return AriaLineParsed(role = "text", ariaRole = AriaRole.GENERIC, name = trimmed.ifBlank { null })
+  }
+
+  /**
+   * Descriptors named like [descriptor] that [afterYaml] has under a different role and
+   * [beforeYaml] didn't, in document order — e.g. `combobox "Search"` for a `searchbox "Search"`
+   * that turned into one. Parsed the same way as [ElementRef.descriptor], so both sides agree on
+   * format. Empty when [descriptor] isn't `role "name"`.
+   */
+  internal fun roleChanges(beforeYaml: String?, afterYaml: String, descriptor: String): List<String> {
+    val (role, name) = ROLE_NAME_PATTERN.matchEntire(descriptor.trim())?.destructured ?: return emptyList()
+    fun sameNameOtherRole(yaml: String): Set<String> =
+      yaml.lineSequence()
+        .map(::parseAriaLine)
+        .filter { it.role != "text" && it.role != role && it.name == name }
+        .map(::buildAriaDescriptor)
+        .toSet()
+    return (sameNameOtherRole(afterYaml) - beforeYaml?.let(::sameNameOtherRole).orEmpty()).toList()
   }
 
   // -- Pre-compiled regex patterns (avoids recompilation on every call) --
@@ -592,7 +689,8 @@ object PlaywrightAriaSnapshot {
    * the content to only what the LLM needs:
    * - **Meaningful elements** get IDs (e.g., `[e1] button "Submit"`) — interactive
    *   controls, headings, images, text content, alerts, etc.
-   * - **Landmark sections** appear as indentation context headers (e.g., `navigation:`)
+   * - **Landmark sections** appear as indentation context headers (e.g., `navigation:`); a named
+   *   landmark is listed once, as its own `[eN] navigation "Site"` line
    *   but only when they contain meaningful descendants.
    * - **Purely structural containers** (generic, group, etc.) are omitted entirely.
    *
@@ -666,6 +764,9 @@ object PlaywrightAriaSnapshot {
       }
 
       if (pl.isMeaningful) {
+        // A landmark that is itself meaningful (a named list, navigation, form...) is listed
+        // once, as its own `[eN]` line below; a header for it too would print it twice.
+        if (pl.isLandmark) emittedLandmarks.add(i)
         // Emit any ancestor landmarks that haven't been emitted yet
         for (idx in landmarkStack) {
           if (idx !in emittedLandmarks && parsedLines[idx].isLandmark) {

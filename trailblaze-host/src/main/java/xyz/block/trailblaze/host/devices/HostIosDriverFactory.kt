@@ -84,6 +84,24 @@ internal object HostIosDriverFactory {
   fun driverWrapperKey(appTarget: TrailblazeHostAppTarget?): String? =
     appTarget?.takeIf { it.hasCustomIosDriver }?.id
 
+  /**
+   * Stops the XCTest runner hosts this JVM started when it exits. Without it every `trailblaze stop`
+   * leaves one `xcodebuild` per simulator behind, and the next daemon's runner is killed by it.
+   * Registered by the first driver build, so only a JVM that drives iOS pays for it.
+   */
+  private val stopOwnRunnerHostsOnExit: Lazy<Unit> = lazy {
+    Runtime.getRuntime().addShutdownHook(
+      Thread({ IosXcTestRunnerProcesses.stopRunnerHostsStartedBy() }, "ios-xctest-runner-shutdown"),
+    )
+  }
+
+  /**
+   * Whether an XCTest runner is still answering on [port]. The driver's own `isShutdown()` stays
+   * false when the runner is killed from outside, so this is the only signal that it is gone.
+   */
+  fun isRunnerReachable(port: Int): Boolean =
+    HostDriverPortUtils.isPortReachable(defaultXctestHost, port, timeoutMs = 500)
+
   fun createIOS(
     deviceId: String,
     openDriver: Boolean,
@@ -102,8 +120,7 @@ internal object HostIosDriverFactory {
       isReusable = { driver ->
         // isShutdown() is an in-process flag and stays false when the XCTest runner is reaped
         // externally (SIGKILL, OS reap, crash), so confirm the port still accepts connections.
-        val reusable = !driver.isShutdown() &&
-          HostDriverPortUtils.isPortReachable(defaultXctestHost, targetPort, timeoutMs = 500)
+        val reusable = !driver.isShutdown() && isRunnerReachable(targetPort)
         if (!reusable) {
           Console.log(
             "Discarding cached iOS driver for device $deviceId - port $targetPort is unreachable " +
@@ -131,6 +148,16 @@ internal object HostIosDriverFactory {
           "Creating iOS driver for device $deviceId on port $targetPort with target wrapper " +
             "'${wrapperKey ?: "<none>"}'",
         )
+        val reinstall = firstInitialization || reinstallDriver
+        // Before the port is cleared: killing a runner whose xcodebuild is still alive makes that
+        // xcodebuild relaunch it, which terminates the runner this build is about to start. A
+        // same-port rebuild without reinstall keeps this daemon's runner if it still answers:
+        // Maestro reattaches to it rather than cold-starting xcodebuild.
+        IosXcTestRunnerProcesses.stopRunnerHostsFor(
+          udid = deviceId,
+          spareOwn = !reinstall && lastBuiltVariant?.port == targetPort && isRunnerReachable(targetPort),
+        )
+        stopOwnRunnerHostsOnExit.value
         // A device moved to a new port may find a stale runner listening there, which a wait for
         // release would never clear.
         if (lastBuiltVariant?.port != targetPort) {
@@ -148,7 +175,7 @@ internal object HostIosDriverFactory {
           deviceId = deviceId,
           openDriver = openDriver,
           targetPort = targetPort,
-          reinstallDriver = firstInitialization || reinstallDriver,
+          reinstallDriver = reinstall,
           platformConfiguration = platformConfiguration,
           deviceType = deviceType,
           appTarget = appTarget,

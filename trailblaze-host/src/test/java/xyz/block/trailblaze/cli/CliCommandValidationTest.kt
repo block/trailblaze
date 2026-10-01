@@ -10,7 +10,6 @@ import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.docs.Scenario
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget
-import xyz.block.trailblaze.mcp.AgentImplementation
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
@@ -36,84 +35,6 @@ class CliCommandValidationTest {
   @Rule
   @JvmField
   val quietMode = QuietModeRule()
-
-  @Test
-  fun `trail without agent resolves the Koog default`() {
-    val cmd = TrailCommand()
-
-    CommandLine(cmd).parseArgs("any.trail.yaml")
-
-    assertNull(cmd.agent)
-    assertEquals(AgentImplementation.KOOG_STRATEGY_GRAPH, cmd.resolveEffectiveAgent { null })
-  }
-
-  @Test
-  fun `trail accepts an explicit legacy agent`() {
-    val cmd = TrailCommand()
-
-    CommandLine(cmd).parseArgs("--agent", "TRAILBLAZE_RUNNER", "any.trail.yaml")
-
-    assertEquals(AgentImplementation.TRAILBLAZE_RUNNER, cmd.resolveEffectiveAgent { null })
-  }
-
-  @Test
-  fun `trail persisted legacy agent wins when flag is absent`() {
-    val cmd = TrailCommand()
-
-    CommandLine(cmd).parseArgs("any.trail.yaml")
-
-    assertEquals(
-      AgentImplementation.TRAILBLAZE_RUNNER,
-      cmd.resolveEffectiveAgent { AgentImplementation.TRAILBLAZE_RUNNER },
-    )
-  }
-
-  @Test
-  fun `trail explicit agent wins over persisted agent`() {
-    val cmd = TrailCommand()
-
-    CommandLine(cmd).parseArgs("--agent", "KOOG_STRATEGY_GRAPH", "any.trail.yaml")
-
-    assertEquals(
-      AgentImplementation.KOOG_STRATEGY_GRAPH,
-      cmd.resolveEffectiveAgent { AgentImplementation.TRAILBLAZE_RUNNER },
-    )
-  }
-
-  @Test
-  fun `a delegated run with nothing chosen sends no agent so the daemon supplies the default`() {
-    // Putting the framework default on the request would override whatever the running daemon
-    // holds, including a selection the desktop app has applied in memory but not yet persisted.
-    // Only values the user actually chose go on the wire; the daemon fills the default tier.
-    val cmd = TrailCommand()
-
-    CommandLine(cmd).parseArgs("any.trail.yaml")
-
-    assertNull(cmd.resolveDelegatedAgent { null })
-  }
-
-  @Test
-  fun `a delegated run carries the saved agent so a running daemon cannot miss it`() {
-    // `trailblaze config agent` writes the settings file from a separate process and the daemon
-    // never re-reads it, so the client has to forward a saved choice for it to take effect.
-    val cmd = TrailCommand()
-
-    CommandLine(cmd).parseArgs("any.trail.yaml")
-
-    assertEquals(
-      AgentImplementation.TRAILBLAZE_RUNNER,
-      cmd.resolveDelegatedAgent { AgentImplementation.TRAILBLAZE_RUNNER },
-    )
-  }
-
-  @Test
-  fun `an explicit agent still reaches a delegated run`() {
-    val cmd = TrailCommand()
-
-    CommandLine(cmd).parseArgs("--agent", "TRAILBLAZE_RUNNER", "any.trail.yaml")
-
-    assertEquals(AgentImplementation.TRAILBLAZE_RUNNER, cmd.resolveDelegatedAgent { null })
-  }
 
   @Test
   fun `root parses --stop as a daemon shutdown request`() {
@@ -459,34 +380,6 @@ class CliCommandValidationTest {
   }
 
   @Test
-  fun `trail --max-llm-calls with --agent MULTI_AGENT_V3 returns USAGE`() {
-    val cmd = TrailCommand()
-    val cmdLine = CommandLine(cmd)
-    cmdLine.parseArgs("--max-llm-calls", "5", "--agent", "MULTI_AGENT_V3", "any.trail.yaml")
-
-    val exitCode = cmd.call()
-
-    assertEquals(TrailblazeExitCode.MISUSE.code, exitCode)
-  }
-
-  @Test
-  fun `trail with persisted max-llm-calls plus --agent V3 returns USAGE`() {
-    // Regression: the V3 incompatibility check originally only fired when the CLI flag was
-    // set, so a non-null cap reaching the resolver via env / workspace / persisted tiers
-    // would silently slip past USAGE validation and trip RunYamlRequest.init with an
-    // IllegalArgumentException. The check now runs on the resolved value, catching every
-    // tier — exercised here through the persisted-config tier (easiest to set up in a unit
-    // test without mutating the JVM environment).
-    withIsolatedAppDataDir {
-      CliConfigHelper.updateConfig { it.copy(maxLlmCalls = 12) }
-
-      val cmd = TrailCommand()
-      CommandLine(cmd).parseArgs("--agent", "MULTI_AGENT_V3", "any.trail.yaml")
-      assertEquals(TrailblazeExitCode.MISUSE.code, cmd.call())
-    }
-  }
-
-  @Test
   fun `trail --max-llm-calls is null when the flag is not passed`() {
     val cmd = TrailCommand()
     val cmdLine = CommandLine(cmd)
@@ -569,10 +462,10 @@ class CliCommandValidationTest {
       [
         "trailblaze config llm anthropic/claude-sonnet-5",
         "trailblaze config self-heal true",
-        "trailblaze config agent MULTI_AGENT_V3",
+        "trailblaze config max-llm-calls 40",
       ],
     description =
-      "Read or write CLI configuration keys. Valid keys: llm, self-heal, agent, android-driver, ios-driver, mode, device, target. Values are validated before persisting.",
+      "Read or write CLI configuration keys. Valid keys: llm, self-heal, max-llm-calls, android-driver, ios-driver, mode, device, target. Values are validated before persisting.",
     category = "Configuration",
   )
   @Test

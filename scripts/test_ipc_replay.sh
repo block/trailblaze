@@ -488,6 +488,35 @@ else
     _bad "curl reads the request body, YAML included, from stdin"
   fi
   rm -rf "$_fwd_dir"
+
+  # The waiting notice: only the commands that can run for minutes say so. A curl that outlasts a
+  # zero-second threshold makes the notice fire; its stderr is what the caller would see.
+  _notice_for() {
+    bash -c "$_fwd_source"'
+      curl() { cat > /dev/null; sleep 1; return 7; }
+      TRAILBLAZE_IPC_FORWARDABLE_SUBCOMMANDS="snapshot ask config tool" TRAILBLAZE_IPC_NOTICE_SECONDS=0
+      TRAILBLAZE_PORT=1
+      ipc_try_forward "$@"
+    ' _ "$@" 2>&1 > /dev/null
+  }
+  _got=$(_notice_for tool tap ref=k973)
+  if grep -Fq 'A tool that installs or launches an app can take minutes.' <<< "$_got"; then
+    _ok "a slow 'tool' forward says a tool can take minutes"
+  else
+    _bad "a slow 'tool' forward says a tool can take minutes: $_got"
+  fi
+  _got=$(_notice_for ask "what is on screen")
+  if grep -Fq "'ask' can take minutes." <<< "$_got"; then
+    _ok "a slow 'ask' forward says ask can take minutes"
+  else
+    _bad "a slow 'ask' forward says ask can take minutes: $_got"
+  fi
+  _got=$(_notice_for snapshot)
+  if grep -Fq 'Waiting for the Trailblaze daemon' <<< "$_got" && ! grep -Fq 'take minutes' <<< "$_got"; then
+    _ok "a slow 'snapshot' forward waits without claiming it can take minutes"
+  else
+    _bad "a slow 'snapshot' forward waits without claiming it can take minutes: $_got"
+  fi
 fi
 echo
 if [ "$_failures" -eq 0 ]; then

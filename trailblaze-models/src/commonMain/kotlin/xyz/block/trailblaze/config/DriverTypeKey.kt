@@ -90,10 +90,4 @@ object DriverTypeKey {
   fun resolveAll(keys: List<String>): Set<TrailblazeDriverType> =
     keys.flatMap { resolve(it) }.toSet()
 
-  /**
-   * Returns all YAML keys that include the given [driverType].
-   * Useful for reverse-mapping a driver type to matching YAML sections.
-   */
-  fun keysContaining(driverType: TrailblazeDriverType): Set<String> =
-    KEY_MAP.filterValues { driverType in it }.keys
 }

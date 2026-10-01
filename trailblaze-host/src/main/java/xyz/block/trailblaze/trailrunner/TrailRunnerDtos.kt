@@ -797,7 +797,6 @@ data class RunRequest(
   val selfHeal: Boolean? = null,
   val useRecordedSteps: Boolean? = null,
   val maxLlmCalls: Int? = null,
-  val agent: String? = null,
   val memory: Map<String, String> = emptyMap(),
   val secrets: Map<String, String> = emptyMap(),
   val captureVideo: Boolean? = null,
@@ -930,21 +929,11 @@ data class LlmModelOptionDto(
 )
 
 @Serializable
-data class AgentOptionDto(
-  val id: String,
-  val display: String,
-)
-
-@Serializable
 data class LlmSettingsDto(
   val provider: String,
   val model: String,
   val availableProviders: List<LlmProviderOptionDto> = emptyList(),
   val availableModels: List<LlmModelOptionDto> = emptyList(),
-  // The agent implementation that drives runs/recordings (separate from the LLM, but surfaced
-  // alongside it so the UI's run controls show both "which model" and "which agent" together).
-  val agent: String = "",
-  val availableAgents: List<AgentOptionDto> = emptyList(),
 )
 
 @Serializable
@@ -969,7 +958,6 @@ data class SettingsDto(
   val llm: LlmSettingsDto,
   val selfHealEnabled: Boolean,
   val requireSteps: Boolean,
-  val saveAnnotatedScreenshots: Boolean,
   val maxLlmCalls: Int? = null,
   val screenshotImageFormat: String? = null,
   val screenshotMaxLongerSide: Int? = null,
@@ -1006,11 +994,9 @@ data class SettingsPatchRequest(
   val appDataDirectory: String? = null,
   val selfHealEnabled: Boolean? = null,
   val requireSteps: Boolean? = null,
-  val saveAnnotatedScreenshots: Boolean? = null,
   val maxLlmCalls: Int? = null,
   val llmProvider: String? = null,
   val llmModel: String? = null,
-  val agent: String? = null,
   val screenshotImageFormat: String? = null,
   val screenshotMaxLongerSide: Int? = null,
   val screenshotMaxShorterSide: Int? = null,
@@ -1201,17 +1187,6 @@ data class RunToolSetDto(
 // NOTE: ProposedStep moved to :trailblaze-host (OSS) as part of the TrailRunnerExtension seam
 // (same package — no import needed). See TrailRunnerExtensionDtos.kt.
 
-// Structured LLM result for the plan-only proposer (Koog executeStructured target).
-// IMPORTANT schema constraints for OpenAI strict structured-output mode:
-//  - No default values — every property must appear in the schema's `required` array, and a Kotlin
-//    default makes the field optional (rejected with "'required' … Missing 'steps'").
-//  - This is a list of PRIMITIVE strings, NOT a list of objects, on purpose: Koog emits a nested
-//    object type as a `$ref` carrying a sibling `$id`, which OpenAI strict mode rejects ("$ref
-//    cannot have keywords {'$id'}"). A primitive-string array inlines cleanly with no `$ref`.
-//    Each entry is "do: <action>" or "verify: <assertion>"; we parse the prefix into [ProposedStep].
-@Serializable
-data class ProposedStepsResult(val steps: List<String>)
-
 @Serializable
 data class ProposeRequest(
   val objective: String,
@@ -1300,7 +1275,6 @@ data class RecordBundleRequest(
   val deviceIds: List<TrailblazeDeviceId>,
   // Optional recording properties set in the Configure-recording dialog; forwarded to each run.
   val maxLlmCalls: Int? = null,
-  val agent: String? = null,
   val captureVideo: Boolean? = null,
   val selfHeal: Boolean? = null,
   // "Fresh install" trailhead: clear the app's state before recording (prepends a mobile_clearAppData
@@ -1338,7 +1312,6 @@ data class RecordTrailRangeRequest(
   // dialog offers, not just video: the dialog's controls are shared between Play and Record, so a
   // toggle Record dropped would read as a control that does nothing.
   val maxLlmCalls: Int? = null,
-  val agent: String? = null,
   val selfHeal: Boolean? = null,
   val captureVideo: Boolean? = null,
   val captureLogcat: Boolean? = null,

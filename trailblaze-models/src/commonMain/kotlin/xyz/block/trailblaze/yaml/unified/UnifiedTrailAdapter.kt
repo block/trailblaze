@@ -349,8 +349,9 @@ object UnifiedTrailAdapter {
    * [lowerToTrailItems] receives it. Omitting it on a configuration trail answers `false` however
    * completely the trail is recorded: its legs are keyed by the configuration NAME, which no
    * classifier chain reaches. A gate that acts on that answer — `requireRecordings` — then drops
-   * a trail the executor would have replayed end to end. A pre-flight caller with no session reads
-   * the selection off the trail ([UnifiedTrailConfig.soleMultiDeviceConfigurationName]).
+   * a trail the executor would have replayed end to end. A pre-flight caller with no session
+   * predicts the selection from the trail and whether its run binds companions
+   * ([UnifiedTrailConfig.implicitMultiDeviceConfigurationName]).
    *
    * A separate overload rather than a default argument, for the same reason
    * [describeRecordingResolution] has one: this module's published ABI is locked down, and
@@ -1109,10 +1110,65 @@ object UnifiedTrailAdapter {
     } else {
       existing?.trailhead?.withoutClassifier(classifier)
     }
-    return UnifiedTrail(
+    val merged = UnifiedTrail(
       config = mergedConfig,
       trailhead = mergeRecordedTrailhead(baseTrailhead, recordedTrailhead, classifier),
       trail = mergedSteps,
+    )
+    return if (keyNamesConfiguration) merged else withoutLegsAnAncestorAlreadyHolds(merged, classifier, stepWindow)
+  }
+
+  /**
+   * [trail] without the parts of [classifier]'s slot that a broader leg already provides.
+   *
+   * A device reads the closest leg in its classifier chain, so an `android-phone` run of a trail
+   * recorded under `android:` replays that leg, and a save from it records the same tools. Written
+   * back verbatim, every step would gain an `android-phone` copy of its `android` leg — a duplicate
+   * that then drifts from the leg it copied. So each step (and the trailhead) keeps this
+   * classifier's leg only where its tools differ from the leg the device would otherwise read, and
+   * the device entry is kept only where its driver or locale differs.
+   *
+   * Only when the device's driver and locale resolve the same either way: tools recorded under
+   * another driver are that driver's, and folding a step into a leg recorded for a different one
+   * would replay it under a pin neither recording used — so a different driver keeps the whole
+   * slot. Other fields on the broader entry (a description, a target) don't change what replays.
+   *
+   * Only against this key's own lineage, never `all`. Every device whose replay chain
+   * ([TrailblazeClassifierLineage.resolutionChain]) reaches this key walks the rest of its lineage
+   * next, so dropping a leg that matches the closest one there changes nothing any device replays.
+   * `all` comes only after each segment's lineage: an `android-phone` device reads `phone:` before
+   * `all:`, so an `android` leg dropped for matching `all:` would hand that device the `phone:` leg.
+   *
+   * A windowed save ([stepWindow]) prunes only the steps it wrote, never the trailhead.
+   */
+  private fun withoutLegsAnAncestorAlreadyHolds(
+    trail: UnifiedTrail,
+    classifier: String,
+    stepWindow: IntRange?,
+  ): UnifiedTrail {
+    val ancestors = TrailblazeClassifierLineage.chainFor(TrailblazeDeviceClassifier(classifier))
+      .map { it.classifier }
+      .filter { it != classifier && it != TrailblazeClassifierLineage.UNIVERSAL_ROOT }
+    val configurationNames = trail.config.multiDeviceConfigurationNames
+    val devices = trail.config.devices.orEmpty()
+    val ownDevice = devices[classifier]
+    val inheritedDevice = resolveClosestMatch(devices - classifier, ancestors, configurationNames)
+    if (ownDevice != null &&
+      (ownDevice.driver != inheritedDevice?.driver || ownDevice.locale != inheritedDevice?.locale)
+    ) {
+      return trail
+    }
+
+    fun UnifiedTrailStep.pruned(): UnifiedTrailStep {
+      val own = recordings[classifier] ?: return this
+      val inherited = resolveClosestMatch(recordings - classifier, ancestors, configurationNames)
+      return if (own == inherited) withoutClassifier(classifier) else this
+    }
+    return trail.copy(
+      // Reaching here, an own entry pins what the inherited one does, so it's redundant too.
+      config = if (ownDevice == null) trail.config else trail.config.copy(devices = (devices - classifier).ifEmpty { null }),
+      trailhead = if (stepWindow == null) trail.trailhead?.pruned() else trail.trailhead,
+      trail = trail.trail.mapIndexed { i, step -> if (stepWindow == null || i in stepWindow) step.pruned() else step },
     )
   }
 

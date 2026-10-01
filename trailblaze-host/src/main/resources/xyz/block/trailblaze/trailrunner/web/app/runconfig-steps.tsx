@@ -169,10 +169,6 @@ function BehaviorSection(p) {
       <CompactField label="Model">
         <ModelPicker />
       </CompactField>
-      <CompactField label="Agent" flag="--agent">
-        <RcSelect value={p.agent} onChange={p.setAgent} style={{ minWidth: 200 }}
-          options={[['TRAILBLAZE_RUNNER', 'TRAILBLAZE_RUNNER'], ['MULTI_AGENT_V3', 'MULTI_AGENT_V3'], ['KOOG_STRATEGY_GRAPH', 'KOOG_STRATEGY_GRAPH']]} />
-      </CompactField>
       <CompactField label="AI call limit" flag="--max-llm-calls">
         <RcInput value={p.maxLlmCalls} onChange={p.setMaxLlmCalls} type="number" style={{ width: 90 }} />
       </CompactField>

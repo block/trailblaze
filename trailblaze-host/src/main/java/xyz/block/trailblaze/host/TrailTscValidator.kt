@@ -688,12 +688,17 @@ object TrailTscValidator {
    *   member's surface. The `switchDevice` call itself is attributed to the member active BEFORE it,
    *   which is the device that dispatches it.
    * - **A leg keyed by a plain classifier, on a trail declaring exactly one configuration**, is a
-   *   FALLBACK leg of that same configuration, not a separate single-device run: the trail always
-   *   binds the configuration (`selectConfigurationName`), and the lowering puts the selected
+   *   FALLBACK leg of that configuration whenever it binds: the lowering puts the selected
    *   configuration at the head of the resolution chain, letting a classifier key match when the
    *   configuration key is absent (`UnifiedTrailAdapter`). The session is the same one, so such a leg
    *   is replayed with the same member roster and the same active device — a `switchDevice` recorded
    *   in it reroutes the tools after it, exactly as `activeAgent()` does at run time.
+   * - **On a mixed trail** — one that also declares single-device entries — the configuration binds
+   *   only when the run binds companions (`UnifiedTrailConfig.implicitMultiDeviceConfigurationName`),
+   *   so the same classifier leg is ALSO replayed single-device by a run without them. It is checked
+   *   in both contexts: against the roster as above, and against the trail's `config.target:`. In a
+   *   step that also records the configuration's own key, only the single-device context applies:
+   *   the paired run always takes the configuration-keyed slot.
    * - **Any other leg** — no configuration declared, or several, where which one binds is a run-time
    *   selection — has no roster to replay against and falls back to the trail's `config.target:`.
    *
@@ -729,11 +734,22 @@ object TrailTscValidator {
   private fun attributeRecordedCalls(trail: UnifiedTrail): Attribution {
     val sessionTarget = trail.config.target
     val configurations = trail.config.devices.orEmpty().filterValues { it.isConfiguration }
-    // A trail declaring exactly one configuration always binds it, and the lowering puts the
-    // selected configuration at the HEAD of the resolution chain (UnifiedTrailAdapter) — so a leg
-    // keyed by a plain classifier is a fallback leg of that same configuration, running on the same
-    // session. It gets the same member roster and the same active-device state, handovers included.
+    // When a trail's sole configuration binds, the lowering puts it at the HEAD of the resolution
+    // chain (UnifiedTrailAdapter) — so a leg keyed by a plain classifier is a fallback leg of that
+    // same configuration, running on the same session. It gets the same member roster and the same
+    // active-device state, handovers included. On a mixed trail the configuration binds only when
+    // companions are bound, so its classifier legs are ALSO its single-device legs: those are checked
+    // against the session target too, since either run can replay them.
     val soleConfigurationName = configurations.entries.singleOrNull()?.key
+    val classifierLegsAlsoRunSingleDevice = trail.config.declaresSingleDeviceEntries
+    fun sessionTargetCall(leg: RecordedLeg, tool: TrailblazeToolYamlWrapper) = AttributedCall(
+      target = sessionTarget,
+      deviceName = null,
+      stepIndex = leg.stepIndex,
+      stepLabel = leg.stepLabel,
+      classifier = leg.classifier,
+      tool = tool,
+    )
 
     // Which member each configuration is currently on. The first declared member is the start
     // device, and this is SESSION state: a handover in step N is still in force in step N+1, the way
@@ -753,25 +769,23 @@ object TrailTscValidator {
     // let an unreachable slot's `switchDevice` decide which surface the next step is checked against.
     for ((_, step) in recordedLegs(trail).groupBy { it.stepIndex }) {
       val resultsByConfiguration = mutableMapOf<String, MutableList<Pair<Boolean, String?>>>()
+      // On a mixed trail a classifier leg beside a configuration-keyed slot never runs paired: the
+      // configuration key heads the chain and always wins, so only the single-device run reaches it.
+      val configurationSlotShadowsClassifierLegs = classifierLegsAlsoRunSingleDevice &&
+        step.any { it.classifier == soleConfigurationName }
       for (leg in step) {
-        val configurationName =
-          if (leg.classifier in configurations) leg.classifier else soleConfigurationName
+        val isConfigurationLeg = leg.classifier in configurations
+        val configurationName = when {
+          isConfigurationLeg -> leg.classifier
+          configurationSlotShadowsClassifierLegs -> null
+          else -> soleConfigurationName
+        }
         val members = configurationName?.let { configurations.getValue(it).devices.orEmpty() }.orEmpty()
         if (configurationName == null || members.isEmpty()) {
-          // No configuration governs this leg: either the trail declares none, or it declares several
-          // and which one binds is a run-time selection, so there is no roster to replay against.
-          leg.tools.forEach { tool ->
-            calls.add(
-              AttributedCall(
-                target = sessionTarget,
-                deviceName = null,
-                stepIndex = leg.stepIndex,
-                stepLabel = leg.stepLabel,
-                classifier = leg.classifier,
-                tool = tool,
-              ),
-            )
-          }
+          // No configuration governs this leg: the trail declares none; it declares several and which
+          // one binds is a run-time selection, so there is no roster to replay against; or it is a
+          // mixed trail's classifier leg that only the single-device run can reach.
+          leg.tools.forEach { tool -> calls.add(sessionTargetCall(leg, tool)) }
           continue
         }
         // Every member resolving to the same target decides the target no matter which one is active,
@@ -780,10 +794,14 @@ object TrailTscValidator {
         val memberTargets = members.values.mapTo(mutableSetOf()) { it.target ?: sessionTarget }
 
         var activeMember: String? = activeMemberByConfiguration[configurationName]
-        for (tool in leg.tools) {
+        // Which of this leg's tools the paired replay already checked against the session target, so a
+        // mixed trail's single-device pass below doesn't stage the same call twice.
+        val checkedOnSessionTarget = mutableSetOf<Int>()
+        for ((toolIndex, tool) in leg.tools.withIndex()) {
           val member = activeMember
           if (member == null) {
             if (memberTargets.size == 1) {
+              if (memberTargets.first() == sessionTarget) checkedOnSessionTarget += toolIndex
               calls.add(
                 AttributedCall(
                   target = memberTargets.first(),
@@ -806,9 +824,11 @@ object TrailTscValidator {
             }
             continue
           }
+          val memberTarget = members.getValue(member).target ?: sessionTarget
+          if (memberTarget == sessionTarget) checkedOnSessionTarget += toolIndex
           calls.add(
             AttributedCall(
-              target = members.getValue(member).target ?: sessionTarget,
+              target = memberTarget,
               deviceName = member,
               stepIndex = leg.stepIndex,
               stepLabel = leg.stepLabel,
@@ -829,8 +849,13 @@ object TrailTscValidator {
             else -> member
           }
         }
+        if (!isConfigurationLeg && classifierLegsAlsoRunSingleDevice) {
+          leg.tools.forEachIndexed { toolIndex, tool ->
+            if (toolIndex !in checkedOnSessionTarget) calls.add(sessionTargetCall(leg, tool))
+          }
+        }
         resultsByConfiguration.getOrPut(configurationName) { mutableListOf() }
-          .add((leg.classifier == configurationName) to activeMember)
+          .add(isConfigurationLeg to activeMember)
       }
       // Commit the winning slot's device, carrying an undetermined one forward with it: an
       // unresolvable handover does not become resolvable because the step ended. A configuration-keyed

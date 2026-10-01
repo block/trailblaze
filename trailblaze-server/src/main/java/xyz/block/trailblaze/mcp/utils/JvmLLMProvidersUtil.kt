@@ -110,7 +110,4 @@ object JvmLLMProvidersUtil {
       }
     }.toSet()
   }
-
-  fun getAvailableTrailblazeLlmProviders(modelLists: Set<TrailblazeLlmModelList>): Set<TrailblazeLlmProvider> =
-    modelLists.map { it.provider }.filter { isProviderAvailableOnJvm(it) }.toSet()
 }

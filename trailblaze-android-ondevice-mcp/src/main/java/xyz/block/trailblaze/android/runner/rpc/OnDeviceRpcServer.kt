@@ -41,12 +41,8 @@ import xyz.block.trailblaze.rules.TrailblazeLoggingRule
 
 /**
  * On-device RPC server for MCP.
- * Uses explicit session management via TrailblazeSessionManager.
- *
- * Routes requests based on [RunYamlRequest.agentImplementation]:
- * - TRAILBLAZE_RUNNER: Uses [runTrailblazeYaml] callback (traditional YAML-based agent)
- * - MULTI_AGENT_V3: Not supported on-device; falls back to TRAILBLAZE_RUNNER.
- *   V3 is intended to run on the host.
+ * Uses explicit session management via TrailblazeSessionManager. Every [RunYamlRequest] runs
+ * through the [runTrailblazeYaml] callback.
  *
  * ## Progress Reporting
  *
@@ -58,7 +54,7 @@ import xyz.block.trailblaze.rules.TrailblazeLoggingRule
  * @param loggingRule Source of the session manager, logger, and failure-screenshot provider.
  *   The rule's [TrailblazeLoggingRule.failureScreenStateProvider] must be wired by the caller
  *   before the first request so failure snapshots are captured on exceptions.
- * @param runTrailblazeYaml Callback to execute via TrailblazeRunner (YAML processing)
+ * @param runTrailblazeYaml Callback that runs a request's trail YAML on-device
  * @param trailblazeDeviceInfoProvider Provider for device info including classifiers - used in session start logs
  * @param progressManager Optional manager for tracking and emitting progress events
  */
@@ -125,7 +121,7 @@ class OnDeviceRpcServer(
           call.respondText("""{ "status" : "Running on port $port" }""", ContentType.Application.Json)
         }
 
-        // Register unified request handler that routes based on agentImplementation
+        // Register the trail-execution request handler
         registerRpcHandler(runYamlHandler)
 
         // Register GetScreenState handler for MCP subagent screen state queries.
@@ -185,14 +181,4 @@ class OnDeviceRpcServer(
       }
     }.start(wait = wait)
   }
-
-  /**
-   * Returns the progress session manager for external access.
-   *
-   * This allows external code to:
-   * - Listen to progress events via [ProgressSessionManager.progressEvents]
-   * - Query session status via [ProgressSessionManager.getExecutionStatus]
-   * - Register as event listeners via [ProgressSessionManager.onProgressEvent]
-   */
-  fun getProgressManager(): ProgressSessionManager = progressManager
 }

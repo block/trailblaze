@@ -134,29 +134,57 @@ data class UnifiedTrailConfig(
     get() = devices?.filterValues { it.isConfiguration }?.keys ?: emptySet()
 
   /**
-   * The configuration a **pre-flight** surface must assume this trail will bind: its single
-   * declared configuration, or null when it declares none or more than one.
+   * This trail's single declared configuration, or null when it declares none or more than one.
    *
-   * A session is told which configuration it selected; a surface that reasons about a trail before
-   * any session exists — a CI `requireRecordings` gate, a skip gate, a planning banner — is not.
-   * Passing null there is not neutral: every configuration-keyed leg, pin, and skip is invisible to
-   * classifier lineage, so the trail reads as unrecorded and unskipped no matter what it declares.
-   *
-   * The rule mirrors `MultiDeviceConfigurationResolver.resolve`, which is what actually binds a
-   * session, and it must keep mirroring it: this value only means anything because it predicts
-   * that decision. The resolver discards ordinary single-device entries
-   * (`filterValues { it.isConfiguration }`) and binds the sole surviving configuration, so
-   * **ordinary entries alongside a configuration do not withhold the selection** — a trail
-   * declaring `pos-pair` plus an `android-phone` pin still runs as `pos-pair`. Predicting null for
-   * that shape would reproduce, for mixed trails, the same unrecorded/unskipped misreading this
-   * property exists to prevent.
-   *
-   * The one abstention is more than one configuration: such a trail is refused at session start,
-   * so there is no decision to predict. Returning null leaves the pre-existing invisible-legs
-   * behavior rather than guessing which one would have run.
+   * Shape only — NOT whether a run binds it. Predicting a run's selection wants
+   * [implicitMultiDeviceConfigurationName].
    */
   val soleMultiDeviceConfigurationName: String?
     get() = multiDeviceConfigurationNames.singleOrNull()
+
+  /**
+   * True when [devices] declares at least one ordinary single-device entry (one with no inner
+   * `devices:` map) — including alongside a configuration, which is the MIXED shape: one trail
+   * carrying a multi-device leg next to per-classifier legs.
+   */
+  val declaresSingleDeviceEntries: Boolean
+    get() = devices.orEmpty().values.any { !it.isConfiguration }
+
+  /**
+   * The configuration a run binds when nothing names one explicitly, or null when it binds none.
+   *
+   * [bindsCompanionDevices] is whether the run binds any device beyond its launch device — a
+   * non-empty per-request bindings map or `TRAILBLAZE_DEVICE_BINDINGS`. For a CI surface that is
+   * whether the lane boots companions, because booting one is what exports its binding.
+   *
+   * - **No configuration** — null.
+   * - **Configuration only** — the configuration, bindings or not. A run without them is refused
+   *   for its unbound members rather than degrading to a single-device run of a trail that has no
+   *   single-device legs.
+   * - **Mixed** ([declaresSingleDeviceEntries]) — the configuration only when the run binds
+   *   companions; otherwise an ordinary single-device session on the trail's classifier legs.
+   * - **More than one configuration** — null, and [requiresExplicitMultiDeviceConfiguration] says
+   *   whether that null is a single-device run or a refusal.
+   *
+   * The ONE statement of this rule: the runtime (`MultiDeviceConfigurationResolver`), MCP runs and
+   * every pre-flight surface (CI `requireRecordings`/`skip:` gates, the CLI planner) call it, so a
+   * surface cannot judge a trail by legs its runs never replay.
+   */
+  fun implicitMultiDeviceConfigurationName(bindsCompanionDevices: Boolean): String? =
+    soleMultiDeviceConfigurationName?.takeIf { bindsConfigurationWhenUnnamed(bindsCompanionDevices) }
+
+  /**
+   * Whether a run that names no configuration must name one: the trail declares several and the
+   * run would bind one of them. Such a run is refused rather than guessed at — binding the first
+   * would run a different device set than whoever declared the others expected. False for a mixed
+   * trail run without companions, which is single-device whatever it declares.
+   */
+  fun requiresExplicitMultiDeviceConfiguration(bindsCompanionDevices: Boolean): Boolean =
+    multiDeviceConfigurationNames.size > 1 && bindsConfigurationWhenUnnamed(bindsCompanionDevices)
+
+  private fun bindsConfigurationWhenUnnamed(bindsCompanionDevices: Boolean): Boolean =
+    multiDeviceConfigurationNames.isNotEmpty() &&
+      (bindsCompanionDevices || !declaresSingleDeviceEntries)
 
   companion object {
     /**

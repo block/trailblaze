@@ -343,6 +343,11 @@ button.btn.play { border-color: var(--run); background: var(--accent-surface); c
 .llmbreaktotal { margin-top: 8px; font-size: 10.5px; color: var(--sub); }
 .llmbreaknote { margin-top: 6px; font-size: 10.5px; line-height: 1.5; color: var(--sub2); }
 .llmtablewrap { margin-top: 20px; overflow-x: auto; }
+.llmsplit { margin-top: 20px; overflow-x: auto; }
+.llmsplit .llmsplitrow th { font-size: 11.5px; color: var(--txt); border-bottom: 1px solid var(--line); }
+.llmsplit .llmsplitrow.decision th { color: var(--decision); }
+.llmsplit .llmsplitrow.total th, .llmsplit .llmsplitrow.total td { font-weight: var(--font-weight-emphasis); border-bottom: none; }
+.llmsplithead { margin-top: 8px; font-size: 13px; line-height: 1.45; font-weight: var(--font-weight-emphasis); }
 .llmtable { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 11.5px; }
 .llmtable th { text-align: left; font-size: 10.5px; color: var(--sub); font-weight: var(--font-weight-emphasis); padding: 6px 8px; border-bottom: 1px solid var(--line2); white-space: nowrap; }
 .llmtable td { padding: 6px 8px; border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; vertical-align: top; }
@@ -368,6 +373,13 @@ button.btn.play { border-color: var(--run); background: var(--accent-surface); c
 .steprow:hover { background: color-mix(in srgb,var(--ai) 12%,var(--ai-surface)); }
 .steprow:hover > .step.llmturn { background: transparent; }
 .steprow .txopenbtn { align-self: center; margin: 0 10px 0 4px; }
+/* Decision requests: teal, never the LLM violet — typed questions answered with probabilities. */
+.steprow.decision { background: var(--decision-surface); }
+.steprow.decision:hover { background: color-mix(in srgb,var(--decision) 12%,var(--decision-surface)); }
+.step .ic.decision { color: var(--decision); }
+.step .ic.decision svg { width: 14px; height: 14px; display: block; }
+.decisionchip { display: inline-block; margin-right: 6px; padding: 0 6px; border-radius: 999px; background: var(--decision-surface); color: var(--decision); font-size: var(--type-micro); font-weight: var(--font-weight-emphasis); letter-spacing: .04em; text-transform: uppercase; vertical-align: 1px; }
+.llmchip { display: inline-block; margin-right: 6px; padding: 0 6px; border-radius: 999px; background: var(--ai-surface); color: var(--purple); font-size: var(--type-micro); font-weight: var(--font-weight-emphasis); letter-spacing: .04em; text-transform: uppercase; vertical-align: 1px; }
 .llmtable td.txcell { text-align: center; }
 .srlabel { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 /* Objective groups — the per-request table groups by the objective each call ran under, with
@@ -447,6 +459,10 @@ button.btn.txnavbutton { width: 30px; min-width: 30px; min-height: 30px; padding
 .txavatar.llm { background: rgba(181,140,255,.22); color: var(--ai); }
 .txavatar.user { background: rgba(77,139,255,.22); color: var(--run); }
 .txavatar.sys { background: var(--bg3); color: var(--sub); }
+.txmsg.voice-decision { max-width: 86%; margin-right: auto; background: color-mix(in srgb,var(--decision) 8%,transparent); border-color: color-mix(in srgb,var(--decision) 34%,transparent); border-bottom-left-radius: 4px; }
+.txmsg.voice-decision pre { background: transparent; }
+.txavatar.decision { background: color-mix(in srgb,var(--decision) 22%,transparent); color: var(--decision); }
+.txrole.answer { color: var(--decision); }
 /* Verbatim escape hatch for cleaned tool-result envelopes. */
 .txraw summary { font-size: 10px; color: var(--sub2); cursor: pointer; padding: 4px 10px 6px; list-style: none; }
 .txraw summary::-webkit-details-marker { display: none; }
@@ -494,8 +510,7 @@ pre { margin: 0; font-size: 11px; line-height: 1.5; color: var(--sub2); white-sp
 .zoom { position: fixed; inset: 0; background: rgba(2,6,12,.9); display: flex; align-items: center; justify-content: center; gap: 32px; cursor: zoom-out; z-index: 99; backdrop-filter: blur(4px); overflow: hidden; }
 .zoom img { max-width: 92vw; max-height: 92vh; border-radius: 10px; border: 1px solid var(--line2); }
 /* Magnifying past the fitted size overflows .zoomwrap's own (unscaled) box — CSS transforms don't
-   reflow it — so the excess is clipped by .zoom's full-viewport bounds exactly like the trail map's
-   canvas clips its world. */
+   reflow it — so the excess is clipped by .zoom's full-viewport bounds. */
 .zoomctrls { position: absolute; top: 10px; right: 10px; display: inline-flex; gap: 4px; z-index: 1; }
 .zoomctrlbtn { width: 28px; min-height: 28px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid rgba(255,255,255,.2); border-radius: var(--r-sm); background: rgba(34,40,50,.86); color: #fff; font: inherit; font-size: 14px; font-weight: var(--font-weight-emphasis); line-height: 1; cursor: pointer; }
 .zoomresetbtn { width: auto; padding: 0 10px; font-size: 12px; }
@@ -841,6 +856,46 @@ svg.swipe { position: absolute; inset: 0; width: 100%; height: 100%; pointer-eve
 .vctl .quietlink { white-space: nowrap; }
 .scrub { position: relative; z-index: 20; flex-shrink: 0; display: flex; align-items: center; gap: 12px; padding: 7px var(--page-x); border-top: 1px solid var(--line); background: var(--header); user-select: none; }
 .scrubclock { color: var(--sub); font-size: var(--type-micro); text-align: center; font-variant-numeric: tabular-nums; }
+.scrubtrack { touch-action: pan-y; }
+/* ── Event tracks under the scrubber ── The panel opens from the Tracks button and every track in it
+   starts shut: a closed track is its name and count, an open one draws its events on the scrubber's
+   own axis. Open, the scrubber becomes a grid and the tracks sit in its rows as a subgrid, so each
+   rail spans exactly the columns the scrubber's rail does and a mark lines up with the playhead. */
+/* The tracks disclosure: a bare chevron at the rail's far left, the same glyph each track name opens with. */
+.tltracksbtn { flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; padding: 0; border: 0; border-radius: var(--r-sm); background: transparent; color: var(--sub2); cursor: pointer; }
+.tltracksbtn:hover { background: var(--button-hover); color: var(--txt); }
+.tltracksbtn:focus-visible { outline: 2px solid var(--focus); outline-offset: 0; }
+.tltracksbtn .tltrackchev { width: 10px; height: 10px; transform: none; }
+.tltracksbtn.open .tltrackchev { transform: rotate(90deg); }
+/* A run with tracks lays the bar out on the grid the tracks share, in BOTH states: the names column
+   is a fixed width, so opening the tracks doesn't shift the rail over to make room for them. */
+.scrub.hastracks { display: grid; grid-template-columns: 20px 100px minmax(0, 1fr) auto auto; column-gap: 12px; row-gap: 0; align-items: center; }
+.scrub.hastracks > .tltracksbtn { justify-self: start; }
+.tltracksbtn + .scrubclock { justify-self: end; }
+/* On a phone the reserved names column would leave the rail no width at all: the clock column
+   sizes to the clock, and the track names squeeze into what that leaves (they ellipsize). */
+@media (max-width: 640px) { .scrub.hastracks { grid-template-columns: 20px auto minmax(0, 1fr) auto auto; column-gap: 8px; } .tltrackcount { display: none; } }
+.tltracks { grid-column: 1 / -1; display: grid; grid-template-columns: subgrid; row-gap: 3px; align-items: center; max-height: min(42vh, 440px); overflow-y: auto; margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--line); }
+.tltrackname { grid-column: 1 / 3; justify-self: stretch; display: flex; align-items: center; gap: 4px; min-width: 0; height: 18px; padding: 0 2px; border: 0; border-radius: 3px; background: transparent; color: var(--sub2); font: inherit; font-size: var(--type-micro); line-height: 1; white-space: nowrap; text-align: left; cursor: pointer; }
+.tltrackname:hover { color: var(--txt); }
+.tltrackname:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.tltrackname.closed { height: 12px; color: var(--sub); }
+.tltrackchev { width: 8px; height: 8px; flex: none; transform: rotate(90deg); transition: transform .12s ease; }
+.tltrackname.closed .tltrackchev { transform: none; }
+.tltrackdot { width: 6px; height: 6px; flex: none; border-radius: 50%; background: var(--stream-color); }
+.tltracklabel { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.tltrackcount { margin-left: auto; padding-left: 6px; color: var(--sub); font-variant-numeric: tabular-nums; }
+.tltrackrail { grid-column: 3; position: relative; height: 18px; border-radius: 3px; background: color-mix(in srgb, var(--txt) 4%, transparent); }
+.tltrackrail.closed { height: 12px; background: color-mix(in srgb, var(--txt) 2%, transparent); }
+.tltrackrail:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.tlmark { position: absolute; top: 3px; bottom: 3px; width: 2px; margin-left: -1px; border-radius: 1px; background: var(--stream-color); opacity: .85; cursor: pointer; }
+.tlmark.span { margin-left: 0; opacity: .6; }
+.tlmark.warn { background: var(--amber); opacity: 1; }
+.tlmark.error { background: var(--status-failed-mark); opacity: 1; }
+.tlmark:hover { opacity: 1; top: 1px; bottom: 1px; z-index: 1; }
+.tlmark.sel { opacity: 1; top: 0; bottom: 0; z-index: 2; box-shadow: 0 0 0 1.5px var(--txt); }
+.tltrackhead { position: absolute; top: -2px; bottom: -2px; width: 1.5px; margin-left: -.75px; background: var(--run); pointer-events: none; z-index: 3; }
+@media (prefers-reduced-motion: reduce) { .tltrackchev { transition: none; } }
 .scrubtrack { position: relative; flex: 1; height: 28px; cursor: pointer; }
 .scrubtrack:focus { outline: none; }
 .scrubtrack:focus-visible { outline: 1px dashed var(--sub2); outline-offset: 2px; border-radius: var(--r-md); }
@@ -880,6 +935,8 @@ svg.swipe { position: absolute; inset: 0; width: 100%; height: 100%; pointer-eve
 .timelineevent:first-child { border-top: 0; }
 .timelineevent.e { border-left: 3px solid var(--fail); }
 .timelineevent.w { border-left: 3px solid var(--amber); }
+/* The event a Timeline track mark opened, outlined so the reader sees which row the click landed on. */
+.timelineevent.tracksel { box-shadow: inset 0 0 0 1.5px var(--stream-color); }
 .timelineevent summary { min-height: 40px; display: grid; grid-template-columns: 9px max-content minmax(0,1fr) auto 10px; align-items: center; gap: 10px; padding: 7px 10px; color: var(--sub2); cursor: pointer; list-style: none; }
 .timelineevent summary::-webkit-details-marker { display: none; }
 .timelineevent summary:hover { background: var(--button-hover); }
@@ -966,14 +1023,19 @@ svg.swipe { position: absolute; inset: 0; width: 100%; height: 100%; pointer-eve
      --page-x, so controls insetting by --page-x alone would sit 8px wider in BOTH states. */
   .timelinemain .timelinecontrols { margin-right: calc(var(--page-x) + 8px); }
   .timelinemain .timelinescroll { min-height: 0; flex: 1; overflow-x: hidden; overflow-y: auto; scrollbar-gutter: stable; padding-right: var(--page-x); }
-  .timelinemain .preview { position: static; grid-row: auto; min-height: 0; height: 100%; display: flex; align-items: center; justify-content: center; }
-  .timelinemain .devicecolumn { max-height: 100%; }
+  /* The frame is sized from the pane it sits in (container units), not from the viewport minus a
+     guess at everything else on the page: the bar under the pane grows when event tracks open, and
+     a viewport budget would then crop the frame. --tl-frame-h is the pane less the player's 2px
+     border top and bottom, and less the Inspect UI button and its gap when that's shown. */
+  .timelinemain .preview { position: static; grid-row: auto; min-height: 0; height: 100%; display: flex; align-items: center; justify-content: center; container-type: size; }
+  .timelinemain .devicecolumn { max-height: 100%; --tl-frame-h: calc(100cqh - 4px); }
+  .timelinemain .devicecolumn.hasinspect { --tl-frame-h: calc(100cqh - 46px); }
   .timelinemain .deviceplayer { max-height: 100%; min-height: 0; align-self: center; }
   .timelinemain .devicecolumn.hasinspect .deviceplayer { max-height: calc(100% - 42px); }
-  .timelinemain .shotwrap { max-height: calc(100vh - 330px); min-height: 0; }
-  .timelinemain .shot { width: auto; height: auto; max-height: calc(100vh - 330px); object-fit: contain; }
-  .timelinemain .devicecolumn.hasinspect .shotwrap, .timelinemain .devicecolumn.hasinspect .shot { max-height: calc(100vh - 372px); }
-  .timelinemain .noshot { height: auto; min-height: 0; aspect-ratio: 1/2; }
+  .timelinemain .shotwrap { max-height: var(--tl-frame-h); min-height: 0; }
+  .timelinemain .shot { width: auto; height: auto; max-height: var(--tl-frame-h); object-fit: contain; }
+  .timelinemain .tlvframe { height: var(--tl-frame-h); min-height: 0; }
+  .timelinemain .noshot { height: auto; min-height: 0; max-height: var(--tl-frame-h); aspect-ratio: 1/2; }
 }
 @media (max-width: 760px) {
   .indexcontext { grid-template-columns: minmax(0,1fr); align-items: start; }
@@ -1013,6 +1075,54 @@ svg.swipe { position: absolute; inset: 0; width: 100%; height: 100%; pointer-eve
 .lfilter input { background: var(--bg2); border: 1px solid var(--line2); color: var(--txt); border-radius: var(--r-md); padding: 6px 10px; font-size: 12.5px; min-width: 220px; }
 .lfilter input:focus { border-color: var(--run); }
 .lfilter .count { font-size: 11px; color: var(--sub); margin-left: auto; font-variant-numeric: tabular-nums; }
+/* Strings tab: filter row, string list on the left, filmstrip + screenshot with boxes on the right. */
+.viewpage.stringsview { max-width: none; }
+.stringsview .k-copy { --str-kind: var(--run); } .stringsview .k-changing { --str-kind: var(--amber); }
+.stringsview .k-a11y { --str-kind: var(--status-self-healed-mark); }
+.strchip i, .strtag i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; background: var(--str-kind); }
+.strchip:not(.on) { opacity: .55; }
+.strmodes { display: inline-flex; gap: 4px; margin-left: 8px; }
+.strlayout { display: grid; grid-template-columns: minmax(240px, 380px) minmax(0, 1fr); gap: var(--space-3); height: 76vh; min-height: 420px; }
+.strlist { position: relative; overflow: auto; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--bg); }
+.strrow { display: flex; gap: 8px; width: 100%; align-items: flex-start; padding: 6px 10px; border: 0; border-top: 1px solid var(--line); background: none; color: var(--txt); font: inherit; font-size: 12.5px; text-align: left; cursor: pointer; }
+.strrow:first-child { border-top: 0; }
+.strrow:hover { background: var(--bg2); }
+.strrow.sel { background: var(--accent-surface); }
+.strbar { width: 3px; align-self: stretch; border-radius: 2px; flex: none; background: var(--str-kind); }
+.strtext { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.strcropcol { flex: none; width: 120px; height: 24px; display: flex; align-items: center; }
+.strcrop { display: block; flex: none; background-repeat: no-repeat; background-color: #fff; outline: 1px solid var(--line); }
+.strvar { color: var(--sub); font-size: 11px; }
+.strmeta { color: var(--sub); font-size: 11px; white-space: nowrap; text-align: right; }
+.strstage { display: flex; flex-direction: column; min-width: 0; min-height: 0; gap: var(--space-3); }
+.strstrip { position: relative; display: flex; gap: 6px; overflow-x: auto; flex: none; padding-bottom: 4px; }
+.strthumb { position: relative; flex: none; height: 110px; min-width: 52px; padding: 0; border: 2px solid transparent; border-radius: var(--r-sm); overflow: hidden; background: var(--bg3); cursor: pointer; }
+.strthumb.on { border-color: var(--run); }
+.strthumb img { height: 100%; display: block; }
+.strthumblabel { position: absolute; left: 0; right: 0; bottom: 0; padding: 1px 4px; background: rgba(0,0,0,.62); color: #fff; font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.strnoshot { display: block; padding: 8px 6px; color: var(--sub); font-size: 10px; }
+.strmain { display: flex; gap: var(--space-4); flex: 1; min-height: 0; container-type: size; }
+/* The largest box of the screen's shape (--ar, width over height) that fits 60% of the row's width
+   and all of its height. A fixed height with a capped width would squash a landscape screen. */
+.strshot { position: relative; width: min(60cqw, 100cqh * var(--ar, .5625)); align-self: flex-start; flex: none; border-radius: var(--r-md); overflow: hidden; background: var(--bg3); }
+.strshot img { width: 100%; height: 100%; display: block; }
+.strfromvideo { position: absolute; top: 6px; left: 6px; z-index: 1; padding: 1px 6px; border-radius: var(--r-sm); background: rgba(0,0,0,.62); color: #fff; font-size: 10px; pointer-events: none; }
+.strshotmissing span { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 16px; color: var(--sub); font-size: 12px; text-align: center; }
+.strboxes { position: absolute; inset: 0; }
+.strbox { position: absolute; padding: 0; margin: 0; background: none; font: inherit; border: 1px solid color-mix(in srgb, var(--str-kind, var(--run)) 70%, transparent); border-radius: 2px; cursor: pointer; }
+.strbox:focus-visible { outline: 2px solid var(--run); outline-offset: 1px; z-index: 2; }
+.strbox:hover { background: color-mix(in srgb, var(--str-kind, var(--run)) 16%, transparent); }
+.strbox.off { border-style: dashed; }
+.strbox.sel { border: 2px solid var(--fail); background: color-mix(in srgb, var(--fail) 16%, transparent); z-index: 1; cursor: default; }
+.strbox.sel.off { border-style: dashed; }
+.strinfo { flex: 1; min-width: 200px; overflow: auto; font-size: 12.5px; }
+.strtitle { margin: 0 0 6px; font-size: 14px; font-weight: var(--font-weight-emphasis); overflow-wrap: anywhere; }
+.strtags { margin: 0 0 8px; display: flex; gap: 4px; flex-wrap: wrap; }
+.strtag { display: inline-flex; align-items: center; gap: 4px; padding: 0 6px; border: 1px solid var(--line2); border-radius: 999px; font-size: 11px; }
+.strhint { color: var(--sub); margin: 0 0 8px; }
+.strfacts { border-collapse: collapse; width: 100%; margin-bottom: 10px; }
+.strfacts td { padding: 3px 6px; border-bottom: 1px solid var(--line); vertical-align: top; overflow-wrap: anywhere; }
+.strfacts td:first-child { color: var(--sub); white-space: nowrap; }
 .badge.selfheal { background: var(--warning-surface); color: var(--amber); }
 .zoom .zoomwrap { position: relative; touch-action: none; cursor: zoom-in; }
 .zoom .zoomwrap.zoomed { cursor: grab; }
@@ -1161,9 +1271,9 @@ html[data-tb-embedded] { --page-x: 18px; }
 html[data-tb-autoplay] *, html[data-tb-autoplay] *::before, html[data-tb-autoplay] *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 
 /* ── Trail projections: the same trail across devices, one vertical lane per run ──────────────── */
-/* The toolbar of the Replay / Grid / Map tabs. It rides in the run report's header, under the tab
-   nav, because the stages below own their own layout outright — the Map is a pannable canvas and
-   Replay is a grid, and neither can host a row of controls without the controls scrolling away. */
+/* The toolbar of the Replay / Grid tabs. It rides in the run report's header, under the tab nav,
+   because Replay owns its layout outright — a grid that cannot host a row of controls without the
+   controls scrolling away. */
 .trailcontext { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); flex-wrap: wrap; margin-top: var(--space-3); padding-bottom: var(--space-3); }
 .trailsub { font-size: var(--type-caption); color: var(--sub); }
 .trailkeys { color: var(--sub2); white-space: nowrap; }
@@ -1176,11 +1286,6 @@ html[data-tb-autoplay] *, html[data-tb-autoplay] *::before, html[data-tb-autopla
 .traillanechip:hover { border-color: var(--focus); }
 .traillanechip:not(.on) { color: var(--sub2); background: transparent; }
 .traillanechip:not(.on) .idxstatusdot { opacity: .35; }
-.trailmodes { display: inline-flex; border: 1px solid var(--line2); border-radius: var(--r-sm); overflow: hidden; }
-.trailmodebtn { min-height: 30px; padding: 4px 12px; border: 0; background: var(--bg2); color: var(--sub2); font: inherit; font-size: var(--type-caption); font-weight: var(--font-weight-emphasis); cursor: pointer; }
-.trailmodebtn + .trailmodebtn { border-left: 1px solid var(--line2); }
-.trailmodebtn:hover { color: var(--txt); }
-.trailmodebtn.active { background: var(--bg3); color: var(--txt); }
 .trailmain { padding: 0; }
 .trailscroll { padding: 0 var(--page-x) var(--space-6); min-width: fit-content; }
 .trailgrid { display: grid; grid-template-columns: minmax(230px, 300px) repeat(var(--trail-lanes), minmax(280px, 440px)); column-gap: var(--space-4); align-items: stretch; }
@@ -1230,61 +1335,6 @@ html[data-tb-autoplay] *, html[data-tb-autoplay] *::before, html[data-tb-autopla
 .trailopenbtn:hover { color: var(--txt); background: var(--button-hover); }
 .trailopenbtn:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
 
-/* Map projection: the trail as a waypoint chain over a dotted field. One node per authored step
-   holds every device's screenshot side by side; the page never scrolls in this mode — the camera
-   pans and zooms instead. */
-.trailmain.trailmapmain { flex: 1; min-height: 0; display: flex; overflow: hidden; }
-.trailcanvas { position: relative; flex: 1; min-width: 0; overflow: hidden; cursor: grab; touch-action: none; user-select: none; -webkit-user-select: none; background-image: radial-gradient(color-mix(in srgb, var(--txt) 16%, transparent) 1px, transparent 1.4px); background-size: 22px 22px; }
-.trailcanvas.panning { cursor: grabbing; }
-.trailworld { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
-.trailworld.wpflow { display: flex; flex-direction: column; align-items: center; width: max-content; padding: 16px 64px 88px; }
-/* Horizontal pivot: the trail flows left→right, one column of device cards per step. */
-.trailworld.wpflow.wphoriz { flex-direction: row; align-items: center; padding: 64px 88px 64px 24px; }
-.wphoriz .wpframes { flex-direction: column; align-items: flex-start; gap: 40px; }
-/* Across the page a hub sits in the gutter BETWEEN two columns of devices, so it can only grow as
-   far as that gutter allows — a taller counter-scale would cover the screenshots on either side. */
-.wphoriz .wphub { margin: 0 110px; max-width: 300px; transform: scale(min(var(--wp-inv, 1), 2)); }
-.wpwires { position: absolute; left: 0; top: 0; pointer-events: none; overflow: visible; }
-/* The wires ARE the structure this view claims — fan out to the devices, merge back into the next
-   step — so they are drawn to be followed at a glance, not as hairlines that dissolve into the
-   card borders. A wire into a failed device carries the failure's colour. */
-.wpwires path { fill: none; stroke: color-mix(in srgb, var(--sub) 85%, transparent); stroke-width: 2.2; }
-.wpwires marker path { fill: color-mix(in srgb, var(--sub) 95%, transparent); stroke: none; }
-[data-theme="dark"] .wpwires path { stroke: color-mix(in srgb, var(--sub) 100%, transparent); stroke-width: 2.4; }
-.wpwires path.wpwire.failed { stroke: color-mix(in srgb, var(--status-failed-mark) 85%, transparent); }
-.wpwires marker.failed path { fill: var(--status-failed-mark); }
-.wpnode { display: grid; gap: 14px; padding: 16px 18px 14px; background: var(--raised); border: 1px solid var(--line); border-radius: 16px; box-shadow: 0 6px 24px color-mix(in srgb, var(--txt) 8%, transparent); }
-.wpstart { justify-items: center; text-align: center; gap: 6px; padding: 18px 32px 16px; max-width: 760px; }
-.wpstartkicker { font-size: var(--type-micro); font-weight: var(--font-weight-emphasis); letter-spacing: .08em; text-transform: uppercase; color: var(--sub2); }
-.wpstarttitle { margin: 0; font-size: 20px; line-height: 1.3; }
-.wpstartdevices { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px 16px; margin-top: 6px; }
-.wpdevchip { display: inline-flex; align-items: center; gap: 6px; font-size: var(--type-caption); color: var(--txt); }
-.wpdevdur { color: var(--sub); font-variant-numeric: tabular-nums; }
-.wpdot { width: 9px; height: 9px; border-radius: 50%; background: var(--sub); flex: none; box-sizing: border-box; }
-.wpdot.passed { background: var(--status-passed-mark); }
-.wpdot.failed { background: var(--status-failed-mark); }
-.wpdot.selfheal { background: var(--status-self-healed-mark); }
-.wpdot.missing { background: transparent; border: 1.5px dashed var(--line2); }
-/* The step hub counter-scales as the camera pulls back (--wp-inv, capped), so the trail's own
-   words stay readable at overview zoom instead of becoming pills between rows of thumbnails.
-   It grows into the gap the flow already leaves around it, and sits above the frames. */
-/* The arrow-key cursor: the hub the camera just flew to. A ring, not a fill — the hub text is the
-   map's spine and recolouring it would fight the outcome colours around it. */
-.wphub.wpfocus { border-color: var(--run); box-shadow: 0 0 0 3px color-mix(in srgb, var(--run) 25%, transparent), 0 6px 24px color-mix(in srgb, var(--txt) 8%, transparent); }
-.wphub { position: relative; z-index: 3; display: flex; align-items: flex-start; gap: 12px; max-width: 640px; margin: 96px 0; padding: 14px 20px; background: var(--raised); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 6px 24px color-mix(in srgb, var(--txt) 8%, transparent); transform: scale(var(--wp-inv, 1)); transform-origin: center; }
-.wphub .galchip { flex: none; margin-top: 1px; }
-.wpnodelabel { font-size: 14.5px; font-weight: var(--font-weight-emphasis); color: var(--txt); line-height: 1.45; }
-.wpframes { display: flex; align-items: flex-start; gap: 88px; }
-.wpframe { position: relative; z-index: 1; display: flex; flex-direction: column; gap: 8px; min-width: 200px; padding: 12px 14px; background: var(--raised); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 6px 24px color-mix(in srgb, var(--txt) 8%, transparent); }
-.wpframe.missing { opacity: .55; background: transparent; border-style: dashed; box-shadow: none; justify-content: center; }
-.wpframe.failed { border-color: var(--status-failed-mark); box-shadow: 0 6px 24px color-mix(in srgb, var(--status-failed-mark) 22%, transparent); }
-.wpframehead { display: flex; align-items: center; gap: 7px; font-size: var(--type-micro); font-weight: var(--font-weight-emphasis); color: var(--sub2); }
-.wpframe.failed .wpframedev { color: var(--status-failed-mark); }
-.wpshots { display: flex; flex-wrap: wrap; gap: 8px; max-width: 1100px; }
-.wpshot { height: 420px; min-width: 150px; display: flex; align-items: center; justify-content: center; background: color-mix(in srgb, var(--txt) 4%, transparent); border: 1px solid var(--line2); border-radius: 10px; overflow: hidden; }
-.wpshots.all .wpshot { height: 300px; }
-.wpshot .galshot { height: 100%; display: flex; cursor: zoom-in; }
-.wpshot img { height: 100%; width: auto; display: block; background: #000; }
 /* A screenshot that hasn't arrived yet shimmers, and one that failed to load says so. Plenty of
    real captures are near-white splash screens, so a blank frame has to be distinguishable from a
    frame that isn't there — otherwise every slow load reads as a broken report. */
@@ -1294,15 +1344,38 @@ html[data-tb-autoplay] *, html[data-tb-autoplay] *::before, html[data-tb-autopla
 .galshot.broken img { opacity: 0; }
 .galshot.broken::after { content: 'image unavailable'; position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 0 10px; text-align: center; font-size: var(--type-micro); color: var(--sub); border: 1px dashed var(--line2); border-radius: inherit; }
 @keyframes shotshimmer { from { background-position: 100% 0; } to { background-position: -100% 0; } }
-.wpnotreached { font-size: var(--type-micro); color: var(--sub); padding: 0 28px; }
-.wpvariant { font-size: var(--type-micro); color: var(--sub); font-style: italic; line-height: 1.4; max-width: 260px; }
-.wppace { display: block; height: 3px; border-radius: 2px; background: color-mix(in srgb, var(--txt) 9%, transparent); overflow: hidden; }
-.wppacefill { display: block; height: 100%; border-radius: 2px; background: var(--sub); }
-.wppacefill.passed { background: var(--status-passed-mark); }
-.wppacefill.failed { background: var(--status-failed-mark); }
-.wppacefill.selfheal { background: var(--status-self-healed-mark); }
-.wpframefoot { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: var(--type-micro); color: var(--sub); font-variant-numeric: tabular-nums; }
-.trailfitbtn { width: auto; padding: 0 10px; font-size: var(--type-micro); font-weight: var(--font-weight-emphasis); }
+/* A still whose session was recorded plays its step on hover or keyboard focus: the session's one
+   <video> is moved over the image (inside its 1px border) and shown once its first frame is ready,
+   so the cell never flashes a stale frame. ▶ marks the cells that can. */
+.galshot[data-clip-run] { position: relative; }
+.galshot .shotclip { position: absolute; top: 1px; left: 1px; width: calc(100% - 2px); height: calc(100% - 2px); object-fit: contain; opacity: 0; pointer-events: none; border-radius: inherit; }
+.galshot.clipplaying .shotclip { opacity: 1; }
+/* A step player's controls: nothing is drawn over a still until it is hovered or focused, and then
+   only this bar along its bottom edge. */
+.shotclipbar { display: flex; align-items: center; gap: 6px; padding: 4px 6px; color: #fff; font-size: 10.5px; line-height: 1; font-variant-numeric: tabular-nums; cursor: default; }
+.galshot .shotclipbar { position: absolute; left: 1px; right: 1px; bottom: 1px; z-index: 1; border-radius: 0 0 var(--r-sm) var(--r-sm); background: rgba(12,14,18,.8); animation: shotclipin .15s ease-out; }
+@keyframes shotclipin { from { opacity: 0; } to { opacity: 1; } }
+.shotclipbtn { flex-shrink: 0; min-width: 20px; height: 20px; padding: 0 5px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: var(--r-sm); background: rgba(255,255,255,.14); color: #fff; font: inherit; font-weight: var(--font-weight-emphasis); cursor: pointer; }
+.shotclipbtn:hover:not(:disabled) { background: rgba(255,255,255,.26); }
+.shotclipbtn:disabled { opacity: .5; cursor: default; }
+.shotclipbtn:focus-visible, .shotclipseek:focus-visible { outline: 2px solid #6aa6ff; outline-offset: 1px; }
+.shotclipseek { flex: 1 1 auto; min-width: 24px; height: 14px; margin: 0; accent-color: #fff; cursor: pointer; }
+.shotcliptime { flex-shrink: 0; white-space: nowrap; opacity: .9; }
+/* A cell too narrow for the readout keeps the controls you act with. */
+@container (max-width: 150px) { .galshot .shotcliptime { display: none; } }
+.galshot[data-clip-run] { container-type: inline-size; }
+.shotcliphint { flex-shrink: 0; color: var(--sub); font-size: var(--type-micro); font-weight: var(--font-weight-emphasis); letter-spacing: .02em; white-space: nowrap; }
+.galcaphead { display: flex; align-items: center; justify-content: space-between; gap: 6px; min-width: 0; }
+.trailframecap .shotcliphint { margin-left: 4px; }
+/* The zoom's player sits under the screenshot, not over it. */
+.zoom.hasclip .zoomwrap { margin-bottom: 52px; }
+.zoom.hasclip img { max-height: calc(92vh - 60px); }
+.zoom .shotclipbar.zoomclipbar { position: absolute; top: calc(100% + 10px); left: 50%; width: max(100%, 380px); max-width: 92vw; box-sizing: border-box; transform: translateX(-50%); gap: 8px; padding: 6px 8px; border: 1px solid rgba(255,255,255,.14); border-radius: var(--r-md); background: rgba(34,40,50,.9); font-size: 12px; }
+.zoomclipbar .shotclipbtn { height: 26px; min-width: 26px; padding: 0 8px; }
+.zoomclipbar .shotclipplay svg { width: 11px; height: 11px; }
+.zoomclipbar .shotclipseek { min-width: 120px; }
+.zoomlayer .shotclip { position: absolute; top: 1px; left: 1px; width: calc(100% - 2px); height: calc(100% - 2px); object-fit: contain; opacity: 0; pointer-events: none; border-radius: 10px; background: #000; }
+.zoomlayer.clipshown .shotclip { opacity: 1; }
 /* ── Replay: the trail played back with every device on one clock ──
    The stage is a fixed row of device columns that never scrolls sideways during playback (a column
    sliding under the viewport edge mid-run would break the comparison the view exists for), so the
@@ -1395,7 +1468,7 @@ html[data-tb-autoplay] *, html[data-tb-autoplay] *::before, html[data-tb-autopla
    height shifts every row below it in one column and nothing in the other, and the misalignment
    looks like a drawing bug rather than a missing declaration. A lane that captured memory adds a
    taller second row to both columns, which is why the rows size themselves. */
-.rpstrip { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 10px; --rp-row: 16px; --rp-memrow: 24px; --rp-rows-cap: max(80px, min(40cqh, 100cqh - var(--rp-stage-min) - var(--rp-strip-chrome))); }
+.rpstrip { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 10px; --rp-row: 16px; --rp-memrow: 24px; --rp-memrow-closed: 12px; --rp-rows-cap: max(80px, min(40cqh, 100cqh - var(--rp-stage-min) - var(--rp-strip-chrome))); }
 .rpstripnames, .rprails { display: grid; grid-auto-rows: auto; row-gap: 5px; }
 /* Placed explicitly so the more-rows fade below can share row 1 without auto-placement moving
    the names out from under it. */
@@ -1469,10 +1542,23 @@ html[data-tb-autoplay] *, html[data-tb-autoplay] *::before, html[data-tb-autopla
 .rpstripname:hover { color: var(--txt); }
 .rpstripname.selected { color: var(--txt); font-weight: var(--font-weight-emphasis); }
 /* The memory rail's name: what the line measures and where it topped out — the one figure that
-   compares across devices without reading the line. Deliberately NOT a .rpstripname: it picks no
-   device, so it must not take that class's pointer cursor and hover, which promise a click. */
-.rpstripmem { display: flex; align-items: center; padding-left: 10px; font-size: var(--type-micro); color: var(--sub); white-space: nowrap; font-variant-numeric: tabular-nums; }
+   compares across devices without reading the line. Its click opens or closes the track, so it is
+   a button with its own hover; deliberately NOT a .rpstripname, whose click picks a device and
+   whose .selected state would mark this row as one. */
+.rpstripmem { display: flex; align-items: center; gap: 3px; padding: 0 0 0 10px; border: 0; background: transparent; font: inherit; font-size: var(--type-micro); line-height: 1; color: var(--sub); white-space: nowrap; font-variant-numeric: tabular-nums; cursor: pointer; text-align: left; }
+.rpstripmem:hover { color: var(--txt); }
+.rpstripmem:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; border-radius: 3px; }
 .rpstripmem.nearlimit { color: var(--status-failed-mark); }
+/* A data track starts collapsed: a thin labelled row that says the data exists without drawing it.
+   Its name is the disclosure toggle; the chevron points down once the track is open. An "app
+   stopped running" mark stays drawn on the collapsed row: it is an outcome, not detail. */
+.rptrackchev { width: 8px; height: 8px; flex: none; transform: rotate(90deg); transition: transform .12s ease; }
+.rpstripmem.closed .rptrackchev { transform: none; }
+.rpstripmem.closed, .rpmemrail.closed { height: var(--rp-memrow-closed); }
+.rpstripmem.closed { opacity: .8; }
+.rpmemrail.closed { background: color-mix(in srgb, var(--txt) 2%, transparent); }
+.rpmemrail.closed > :not(.rpmemdied) { display: none; }
+@media (prefers-reduced-motion: reduce) { .rptrackchev { transition: none; } }
 /* The memory rail: the app's heap on the SAME axis as the steps above it. The playhead and hover
    line span it because they span the rails container. Clicking seeks, like any rail. */
 .rpmemrail { position: relative; background: color-mix(in srgb, var(--txt) 3%, transparent); border-radius: 3px; cursor: pointer; --rp-mem: #5e9bff; }

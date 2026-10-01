@@ -1271,7 +1271,6 @@ function RecordConfigDialog({ devices, bundleTarget, busy, trailheads, defaultTr
             </Row>
           )}
           <Row label="Model" hint="LLM that drives the AI steps while recording"><ModelPicker /></Row>
-          <Row label="Agent" hint="agent runner that drives the recording"><AgentPicker /></Row>
           <Row label="Capture video"><Switch on={captureVideo} onClick={() => setCaptureVideo((v) => !v)} /></Row>
           <Row label="Self-heal" hint="let the agent recover from a failed step"><Switch on={selfHeal} onClick={() => setSelfHeal((v) => !v)} /></Row>
           <Row label="Max LLM calls" hint="budget per device">

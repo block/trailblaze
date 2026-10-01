@@ -51,6 +51,10 @@ object SimctlCli {
   fun getAppContainer(udid: String, bundleId: String, timeoutSeconds: Long = 10): Result =
     run(SimctlCommand.argv("get_app_container", udid, bundleId, "app"), timeoutSeconds)
 
+  /** Path of the app's writable data container. */
+  fun getAppDataContainer(udid: String, bundleId: String, timeoutSeconds: Long = 10): Result =
+    run(SimctlCommand.argv("get_app_container", udid, bundleId, "data"), timeoutSeconds)
+
   fun openUrl(udid: String, url: String, timeoutSeconds: Long = 10): Result =
     run(SimctlCommand.argv("openurl", udid, url), timeoutSeconds)
 
@@ -93,7 +97,7 @@ object SimctlCli {
     // still-dying process can flush state back to disk after the wipe. That matters MORE here —
     // there is no reinstall behind this wipe to overwrite whatever got flushed.
     ensureStopped(udid, bundleId)
-    val container = run(SimctlCommand.argv("get_app_container", udid, bundleId, "data"), 10)
+    val container = getAppDataContainer(udid, bundleId)
     if (!container.success) return container
     val dataPath = Paths.get(container.stdout.trim())
     if (!Files.isDirectory(dataPath)) {

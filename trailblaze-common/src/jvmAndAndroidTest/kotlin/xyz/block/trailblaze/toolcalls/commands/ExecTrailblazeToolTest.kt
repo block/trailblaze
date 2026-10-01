@@ -195,9 +195,9 @@ class ExecTrailblazeToolTest {
 
   /**
    * Pin both halves of the host contract, which are separate facts:
-   * - [HostLocalExecutableTrailblazeTool] — dropping the marker would break the routing in
-   *   `HostAccessibilityRpcClient` (which short-circuits host-locals to in-process dispatch instead
-   *   of trying to RPC them to a device that has no JVM to fork from).
+   * - [HostLocalExecutableTrailblazeTool] — dropping the marker would break the host dispatch
+   *   routing (which short-circuits host-locals to in-process dispatch instead of trying to RPC
+   *   them to a device that has no JVM to fork from).
    * - `requiresHost = true` — forking a subprocess has no on-device meaning at all, so the tool
    *   cannot run off a host machine. This is what the generated contract page reports as
    *   `Host-only: yes`, and it's the half the marker does not carry.

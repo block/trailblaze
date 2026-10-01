@@ -138,9 +138,8 @@ class LazyYamlScriptedToolRegistration private constructor(
     val inner = Json.decodeFromString(serializer, argumentsJson) as QuickJsTrailblazeTool
     // Wrap the deserialized `QuickJsTrailblazeTool` so its outer `execute(...)` sets the
     // binding's active context before delegating to the host dispatch — same rationale
-    // as the `executeTool` lambda above. This is the path pre-action dispatch takes
-    // (`HostAccessibilityRpcClient.executePreAction(...)` calls `tool.execute(context)`
-    // directly, bypassing the koog `executeTool` lambda).
+    // as the `executeTool` lambda above. This is the path a caller takes when it invokes
+    // `tool.execute(context)` directly, bypassing the koog `executeTool` lambda.
     return ContextSettingScriptedTool(inner = inner, binding = binding)
   }
 
@@ -148,7 +147,7 @@ class LazyYamlScriptedToolRegistration private constructor(
    * Wrapper that sets the binding's [SessionScopedHostBinding.activeContext] for the
    * duration of the inner [QuickJsTrailblazeTool]'s execute. Implements
    * [HostLocalExecutableTrailblazeTool] so callers' host-local routing decisions
-   * (`HostAccessibilityRpcClient`, `BaseTrailblazeAgent`) recognize the wrapper as
+   * (`HostOnDeviceRpcTrailblazeAgent`, `BaseTrailblazeAgent`) recognize the wrapper as
    * host-only the same way they recognize the inner tool — without this, wrapping would
    * hide the host-local marker and the tool would be RPC'd to the device.
    *

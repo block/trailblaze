@@ -11,7 +11,6 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.TraceId
-import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.mcp.TrailblazeMcpBridge
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetScreenStateResponse
 import xyz.block.trailblaze.mcp.toolsets.ToolSetCategory
@@ -318,7 +317,7 @@ class ConfigurableMockBridge : TrailblazeMcpBridge {
   override fun getAvailableAppTargets(): Set<TrailblazeHostAppTarget> =
     throw NotImplementedError("Not needed for executor tests")
 
-  override suspend fun runYaml(yaml: String, startNewSession: Boolean, agentImplementation: AgentImplementation) =
+  override suspend fun runYaml(yaml: String, startNewSession: Boolean) =
     throw NotImplementedError("Not needed for executor tests")
 
   override fun getCurrentlySelectedDeviceId(): TrailblazeDeviceId? =

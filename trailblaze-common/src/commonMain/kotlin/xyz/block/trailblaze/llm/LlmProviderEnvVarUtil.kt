@@ -36,15 +36,4 @@ object LlmProviderEnvVarUtil {
     val key = getEnvironmentVariableKeyForProviderConfig(config, provider)
     return key?.let { readPlatformEnvVar(it) }
   }
-
-  /**
-   * Gets the environment variable value, but will throw an [IllegalStateException] if it is not
-   * available.
-   */
-  fun requireEnvironmentVariableValueForProvider(provider: TrailblazeLlmProvider): String {
-    val envVarName = getEnvironmentVariableKeyForProvider(provider)
-      ?: throw IllegalStateException("No environment variable configured for provider ${provider.id}")
-    return readPlatformEnvVar(envVarName)
-      ?: throw IllegalStateException("[$envVarName] environment variable is not set for ${provider.id}")
-  }
 }

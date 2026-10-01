@@ -422,6 +422,33 @@ class HostAndroidDeviceConnectUtilsTest {
   }
 
   @Test
+  fun turningDecisionsOnRelaunchesTheRunnerLaunchedWithoutThem() = runBlocking {
+    // The decision settings reach the device only as launch args, so a runner launched with them
+    // off would otherwise run every later session with decisions silently off.
+    val device = deviceId.copy(instanceId = "emulator-5620")
+    val handedForceRestart = mutableListOf<Boolean>()
+    suspend fun connect(decisionArgs: Map<String, String>) {
+      HostAndroidDeviceConnectUtils.connectWithRoutePinnedForTest(
+        deviceId = device,
+        httpsPort = TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTPS_PORT,
+        additionalInstrumentationArgs = mapOf(LlmAuthResolver.resolve("openai") to "token-a"),
+        decisionArgs = decisionArgs,
+      ) { effectiveForceRestart ->
+        handedForceRestart.add(effectiveForceRestart)
+        DeviceConnectionStatus.WithTargetDevice.TrailblazeInstrumentationRunning(device)
+      }
+    }
+    val on = mapOf("TRAILBLAZE_DECISION_MOVES" to "race", "TYPESAFE_API_KEY" to "k")
+
+    connect(emptyMap())
+    connect(on)
+    connect(on)
+    connect(emptyMap())
+
+    assertThat(handedForceRestart.toList()).containsExactly(false, true, false, true)
+  }
+
+  @Test
   fun aRelaunchThatCarriedNoTokenIsNotRememberedAsStillHoldingTheOldOne() = runBlocking {
     // The dangerous direction of the same question. A relaunch a caller forces for its own reasons
     // — zombie recovery passes forceRestart = true — hands the runner whatever args this connect
@@ -530,7 +557,7 @@ class HostAndroidDeviceConnectUtilsTest {
     connectWithToken("token-a")
     connectWithToken("token-b")
 
-    assertThat(progress.joinToString(" | ")).contains("refreshed LLM credential")
+    assertThat(progress.joinToString(" | ")).contains("relaunching instrumentation")
   }
 
   @Test

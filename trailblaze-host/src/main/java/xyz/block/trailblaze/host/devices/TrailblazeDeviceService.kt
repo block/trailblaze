@@ -46,12 +46,13 @@ object TrailblazeDeviceService {
     // One owner's lease on the shared cached driver, not the driver itself: closing it releases this
     // connection's hold and the XCUITest connection survives for whoever else is still driving the
     // device - see [HostIosDriverFactory.createIOS].
+    val driverHostPort = trailblazeDeviceId.getMaestroOnDeviceSpecificPort()
     val iosDriver: Driver = HostIosDriverFactory.createIOS(
       deviceId = connectedDevice.instanceId,
       openDriver = true,
       reinstallDriver = false,
       deviceType = connectedDevice.deviceType,
-      driverHostPort = trailblazeDeviceId.getMaestroOnDeviceSpecificPort(),
+      driverHostPort = driverHostPort,
       platformConfiguration = null,
       appTarget = appTarget,
     )
@@ -60,6 +61,7 @@ object TrailblazeDeviceService {
         maestroDriver = iosDriver,
         trailblazeDriverType = TrailblazeDriverType.IOS_HOST,
         instanceId = connectedDevice.instanceId,
+        driverHostPort = driverHostPort,
       )
     } catch (e: Throwable) {
       // MaestroConnectedDevice reads deviceInfo() in its constructor, which is a live XCUITest

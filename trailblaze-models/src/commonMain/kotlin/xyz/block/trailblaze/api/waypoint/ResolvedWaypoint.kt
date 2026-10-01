@@ -55,18 +55,3 @@ fun WaypointDefinition.resolveFor(
     example = variants.firstNotNullOfOrNull { it.example },
   )
 }
-
-/**
- * Convenience overload taking a device's broad-first classifier segments (e.g. `[android, phone]`
- * or `[ios, iphone]`). Resolves them through [TrailblazeClassifierLineage.resolutionChain] — which
- * joins them into the device's compound identity and expands to the most-specific-first chain — then
- * resolves against the first (most-specific) classifier.
- */
-fun WaypointDefinition.resolveForDevice(
-  deviceClassifiers: List<TrailblazeDeviceClassifier>,
-): ResolvedWaypoint {
-  val expanded = TrailblazeClassifierLineage.resolutionChain(deviceClassifiers)
-  val primary = expanded.firstOrNull()
-    ?: return ResolvedWaypoint(id = id, classifier = TrailblazeDeviceClassifier(""), description = description, route = route)
-  return resolveFor(primary, expanded)
-}

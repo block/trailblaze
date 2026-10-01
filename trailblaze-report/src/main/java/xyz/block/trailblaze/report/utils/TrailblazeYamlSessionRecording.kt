@@ -73,14 +73,4 @@ object TrailblazeYamlSessionRecording {
       sessionTrailConfig = sessionTrailConfig,
     )
   }
-
-  // Function that looks for the final status change log that has an Ended status
-  // This indicates that we should be able to generate the recording
-  private fun List<TrailblazeLog>.isSessionEnded(): Boolean {
-    val endedLog = lastOrNull { log ->
-      log is TrailblazeLog.TrailblazeSessionStatusChangeLog &&
-        log.sessionStatus is SessionStatus.Ended
-    }
-    return endedLog != null
-  }
 }

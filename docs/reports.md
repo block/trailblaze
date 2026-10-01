@@ -200,15 +200,14 @@ the viewer script.
   count, so LLM cost and call count come from the results file when it carries them, and tool
   counts and token totals read `—`.
 
-## Comparing runs: Replay, Grid and Map
+## Comparing runs: Replay and Grid
 
 A report can put several runs on one stage, as lanes side by side — the same trail across devices,
-a retry beside the run it followed, or any two runs you want to look at together. Three projections
+a retry beside the run it followed, or any two runs you want to look at together. Two projections
 read across those lanes rather than down one run:
 
 - **Replay** plays every lane back on one shared wall clock.
 - **Grid** lays the lanes out as a matrix, one column per run and one row per step.
-- **Map** draws the lanes as a waypoint chain leaving each shared step.
 
 They live in two places, depending on what you are looking at:
 
@@ -220,23 +219,21 @@ They live in two places, depending on what you are looking at:
   cell carries a checkbox: tick any runs and open them together, whether or not the report groups
   them. A run index row whose trail ran on more than one device opens that trail's runs the same
   way, in one click. Compare's **Screens** tab is the Grid — for a pick of exactly two runs it is
-  the side-by-side screen diff instead — and its **Replay** tab is the same playback. The Map is
-  not offered for a pick: it draws one trail's lanes, and a pick is whatever you ticked, so a
-  `?view=trail&…&mode=map` link for several runs opens their Screens.
+  the side-by-side screen diff instead — and its **Replay** tab is the same playback.
 
 What a row of the stage MEANS depends on what you picked:
 
 - **One trail's runs** line up on the trail's authored steps, so row 3 is step 3 on every lane and
   reading across a row compares the same step. A lane that never reached it says so.
 - **Runs of different trails** have no shared step to line up on, so a row is simply each lane's
-  own k-th step: rows carry no shared label, each cell keeps its own wording, and the Map — which
-  draws lanes leaving one shared step — isn't offered.
+  own k-th step: rows carry no shared label, and each cell keeps its own wording.
 
 The stage travels in the URL, so it can be shared or reloaded: `?run=2&tab=replay` (or `tab=steps`
-for the Grid, `tab=map`) for a run's own trail, `?view=compare&pick=0,2,5` for a set you picked.
+for the Grid) for a run's own trail, `?view=compare&pick=0,2,5` for a set you picked.
 The indices are positions in *that* report — a report regenerated with different runs opens on
 whichever of them it still has, or falls back to the run index. Links written when the projections
-were a page of their own (`?view=trail&…`) still land on the same thing.
+were a page of their own (`?view=trail&…`) still land on the same thing, and links to the retired
+Map tab (`tab=map`, `mode=map`) open the Grid.
 
 ### Comparing across reports
 

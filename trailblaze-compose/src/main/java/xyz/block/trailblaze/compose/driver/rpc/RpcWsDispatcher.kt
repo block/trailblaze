@@ -311,9 +311,3 @@ private suspend fun handleRequest(
 inline fun <reified TResponse : Any, reified TRequest : RpcRequest<TResponse>> RpcWsHandlerRegistry.also(
   handler: RpcHandler<TRequest, TResponse>,
 ): RpcWsHandlerRegistry = also { register(handler) }
-
-/**
- * For symmetry with [toRpcPath]. Used by tests that want the registry to expose its
- * registered set without dragging in [KClass] reflection at the call site.
- */
-fun Set<KClass<*>>.toRegisteredRpcPaths(): Set<String> = mapTo(mutableSetOf()) { it.toRpcPath() }
