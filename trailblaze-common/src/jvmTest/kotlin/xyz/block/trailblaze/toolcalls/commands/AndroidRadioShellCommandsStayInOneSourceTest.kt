@@ -51,7 +51,7 @@ class AndroidRadioShellCommandsStayInOneSourceTest {
         "`networkConnection` means on the driver that owns it. Call " +
         "NetworkConnectionTrailblazeTool.androidRadioShellCommand(radio, on), " +
         "androidAirplaneModeShellCommand(enabled), or " +
-        "androidMaestroAirplaneModeRadioCommands(airplaneModeEnabled) from a Maestro " +
+        "maestroSetAirplaneModeRadioCommands(airplaneModeEnabled) from a Maestro " +
         "`setAirplaneMode`, instead:\n" +
         offenders.joinToString("\n") { "  - $it" },
     )

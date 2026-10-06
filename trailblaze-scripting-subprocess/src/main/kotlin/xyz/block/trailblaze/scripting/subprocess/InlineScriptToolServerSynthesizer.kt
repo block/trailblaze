@@ -222,6 +222,28 @@ object InlineScriptToolServerSynthesizer {
           base = unionFromJsonSchemaBranches(key, schema.anyOf);
         } else if (Array.isArray(schema.oneOf) && schema.oneOf.length > 0) {
           base = unionFromJsonSchemaBranches(key, schema.oneOf);
+        } else if (Array.isArray(schema.type)) {
+          // A TS `T | null` (e.g. `planToken?: string | null`) serializes to
+          // `type: ["string", "null"]`. Map one concrete type plus "null" to that type made
+          // nullable; any wider type array stays unsupported.
+          const concreteTypes = schema.type.filter((type) => type !== "null");
+          if (concreteTypes.length !== 1) {
+            throw new Error(
+              `Inline tool inputSchema property "${'$'}{key}" uses unsupported JSON Schema type "${'$'}{schema.type}".`,
+            );
+          }
+          // A nullable literal union (`"free" | null`) also lists null in `enum`; strip it so
+          // the concrete branch sees a pure string enum, and allow null only when both permit it.
+          const concreteSchema = { ...schema, type: concreteTypes[0] };
+          let enumAllowsNull = true;
+          if (Array.isArray(schema.enum)) {
+            enumAllowsNull = schema.enum.includes(null);
+            concreteSchema.enum = schema.enum.filter((value) => value !== null);
+          }
+          base = jsonSchemaPropertyToZod(key, concreteSchema, true);
+          if (concreteTypes.length < schema.type.length && enumAllowsNull) {
+            base = base.nullable();
+          }
         } else if (Array.isArray(schema.enum) && schema.enum.length > 0) {
           if (!schema.enum.every((value) => typeof value === "string")) {
             throw new Error(`Inline tool inputSchema property "${'$'}{key}" only supports string enums.`);
@@ -246,6 +268,11 @@ object InlineScriptToolServerSynthesizer {
               break;
             case "boolean":
               base = z.boolean();
+              break;
+            case "null":
+              // The null branch of a nullable union (`string[] | null`, `Obj | null`), which
+              // serializes as `anyOf: [..., {type: "null"}]`.
+              base = z.null();
               break;
             case "array":
               base = z.array(

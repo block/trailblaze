@@ -1,7 +1,7 @@
 ---
 name: trailblaze-author
 description: |
-  Use when turning a captured human demonstration (a Trail Runner
+  Use when turning a captured human demonstration (a Trailblaze App
   demonstration bundle: demo.yaml + actions.ndjson + per-action
   screenshots and view hierarchies) into a durable, independently
   runnable Trailblaze trail. Trigger when a prompt hands you a
@@ -47,9 +47,9 @@ framework source. When you do need to explore the codebase or read many files
 at once, hand that read-only legwork to a cheaper-model subagent and keep the
 authoring and verification on yourself.
 
-After every change you make to a trail file, emit a `trail_output` so Trail
-Runner can show the current file. Tool calls that need a human decision pause
-in Trail Runner until the human approves them, so a slow tool call is waiting on
+After every change you make to a trail file, emit a `trail_output` so the
+Trailblaze App can show the current file. Tool calls that need a human decision pause
+in Trailblaze App until the human approves them, so a slow tool call is waiting on
 a person, not hung; keep working the plan and it will resume once approved.
 
 ## Phase 1 - Understand

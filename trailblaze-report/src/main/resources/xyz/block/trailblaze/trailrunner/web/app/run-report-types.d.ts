@@ -32,6 +32,7 @@ interface RunMeta {
   deviceType?: string;
   platform?: string;
   trailId?: string;
+  trailSourceUrl?: string;
   steps?: number;
   ranAt?: string;
   duration?: string;

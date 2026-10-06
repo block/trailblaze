@@ -24,7 +24,14 @@ export interface CallToolAction {
   arguments_json: string;
 }
 
-export type JsScriptingCallbackAction = CallToolAction;
+/** Runs a host function (`ctx.host.<name>(args)`). Mirrors `JsScriptingCallbackAction.CallHost`. */
+export interface CallHostAction {
+  type: "call_host";
+  function_name: string;
+  arguments_json: string;
+}
+
+export type JsScriptingCallbackAction = CallToolAction | CallHostAction;
 
 /**
  * Request envelope sent to `/scripting/callback`. Mirrors the Kotlin `JsScriptingCallbackRequest` exactly,
@@ -63,7 +70,15 @@ export interface CallbackError {
   message: string;
 }
 
-export type JsScriptingCallbackResult = CallToolResult | CallbackError;
+/** Result of a [CallHostAction]. Mirrors `JsScriptingCallbackResult.CallHostResult`. */
+export interface CallHostResult {
+  type: "call_host_result";
+  success: boolean;
+  value?: unknown;
+  error_message?: string;
+}
+
+export type JsScriptingCallbackResult = CallToolResult | CallHostResult | CallbackError;
 
 /** Outer response envelope — just wraps a [JsScriptingCallbackResult] per the Kotlin `JsScriptingCallbackResponse`. */
 export interface JsScriptingCallbackResponse {
@@ -190,6 +205,23 @@ export type TrailblazeToolMethods = {
     : (
         args: TrailblazeToolMap[K] extends { args: infer A } ? A : never,
       ) => Promise<TrailblazeToolMap[K] extends { result: infer R } ? R : never>;
+};
+
+/**
+ * Host functions a script can call as `ctx.host.<name>(args)` — Kotlin plumbing (credential
+ * lookups, provisioning calls) that is deliberately not a tool: the LLM can't see it, recordings
+ * can't capture it, the session and report don't log it as a step, and calling it keeps the
+ * cached screen. Augmented by the generated per-trailmap `client.d.ts` with one
+ * `{ args; result }` entry per function the trailmap's dependency closure registers.
+ */
+// eslint-disable-next-line @typescript-eslint/no-empty-interface
+export interface TrailblazeHostFunctionMap {}
+
+/** Typed `ctx.host.<name>(args)` methods derived from [TrailblazeHostFunctionMap]. */
+export type TrailblazeHostMethods = {
+  [K in keyof TrailblazeHostFunctionMap]: (
+    args: TrailblazeHostFunctionMap[K] extends { args: infer A } ? A : never,
+  ) => Promise<TrailblazeHostFunctionMap[K] extends { result: infer R } ? R : never>;
 };
 
 /**
@@ -326,6 +358,13 @@ interface TrailblazeClientImpl {
    * static type just won't show it.
    */
   tools: TrailblazeToolMethods;
+
+  /**
+   * Host functions — `client.host.<name>(args)`, surfaced to typed tools as `ctx.host`. Resolves
+   * to the function's result, or rejects with the function's failure message. See
+   * [TrailblazeHostFunctionMap].
+   */
+  host: TrailblazeHostMethods;
 }
 
 /**
@@ -427,8 +466,72 @@ export function createClient(ctx: TrailblazeContext | undefined): TrailblazeClie
   const impl: TrailblazeClientImpl = {
     callTool: dispatch as TrailblazeClientImpl["callTool"],
     tools: createToolsProxy(dispatch),
+    host: createHostProxy((name, args) => callHost(ctx, name, args)),
   };
   return impl;
+}
+
+/**
+ * Builds the `client.host.<name>(args)` Proxy. Same reserved-name guards as the tools Proxy, so
+ * `await client.host` or `String(client.host)` never dispatches a call.
+ */
+function createHostProxy(
+  callHostImpl: (name: string, args: Record<string, unknown>) => Promise<unknown>,
+): TrailblazeHostMethods {
+  return new Proxy({} as TrailblazeHostMethods, {
+    get(_target, prop, _receiver) {
+      if (typeof prop !== "string") return undefined;
+      if (TOOLS_PROXY_RESERVED_PROPS.has(prop)) return undefined;
+      if (prop.trim() === "") {
+        throw new Error(
+          `client.host[${JSON.stringify(prop)}]: host function name must not be empty or whitespace-only.`,
+        );
+      }
+      return (args: Record<string, unknown>) => callHostImpl(prop, args ?? {});
+    },
+  });
+}
+
+/** Surface of the synchronous in-process `__trailblazeHost` binding the QuickJS host installs. */
+type TrailblazeHostBinding = (name: string, argsJson: string) => string;
+
+async function callHost(
+  ctx: TrailblazeContext | undefined,
+  name: string,
+  args: Record<string, unknown>,
+): Promise<unknown> {
+  const argsJson = JSON.stringify(args);
+  const inProcess = (globalThis as { __trailblazeHost?: TrailblazeHostBinding }).__trailblazeHost;
+  if (typeof inProcess === "function") {
+    const envelope = JSON.parse(inProcess(name, argsJson)) as { ok?: boolean; value?: unknown; error?: string };
+    if (envelope.ok !== true) {
+      throw new Error(`ctx.host.${name} failed: ${envelope.error || "(no message)"}`);
+    }
+    return envelope.value;
+  }
+  if (ctx === undefined || !ctx.baseUrl) {
+    throw new Error(
+      `ctx.host.${name} requires a live Trailblaze session (a TrailblazeContext with baseUrl), ` +
+        `but the tool was invoked without one. In unit tests, use createMockClient().stubHost(...).`,
+    );
+  }
+  const request: JsScriptingCallbackRequest = {
+    version: 1,
+    session_id: ctx.sessionId,
+    invocation_id: ctx.invocationId,
+    action: { type: "call_host", function_name: name, arguments_json: argsJson },
+  };
+  const result = await postCallback(request, `ctx.host.${name}`, ctx.baseUrl);
+  if (result.type === "error") {
+    throw new Error(`ctx.host.${name} callback error: ${result.message}`);
+  }
+  if (result.type !== "call_host_result") {
+    throw new Error(`ctx.host.${name} got an unexpected "${result.type}" result.`);
+  }
+  if (!result.success) {
+    throw new Error(`ctx.host.${name} failed: ${result.error_message || "(no message)"}`);
+  }
+  return result.value;
 }
 
 /**
@@ -737,6 +840,29 @@ async function dispatchViaHttp(
   toolName: string,
   baseUrl: string,
 ): Promise<TrailblazeCallToolResult> {
+  const { envelope, url } = await postCallbackEnvelope(request, `trailblaze.client.callTool("${toolName}")`, baseUrl);
+  return unwrapCallbackResponse(envelope, toolName, url);
+}
+
+/** POSTs [request] to `/scripting/callback` and returns its `result`, failing with [label]. */
+async function postCallback(
+  request: JsScriptingCallbackRequest,
+  label: string,
+  baseUrl: string,
+): Promise<JsScriptingCallbackResult> {
+  const { envelope, url } = await postCallbackEnvelope(request, label, baseUrl);
+  const result = envelope?.result;
+  if (result == null || typeof result !== "object") {
+    throw new Error(`${label} response from ${url} has no "result" object: ${JSON.stringify(envelope)}`);
+  }
+  return result;
+}
+
+async function postCallbackEnvelope(
+  request: JsScriptingCallbackRequest,
+  label: string,
+  baseUrl: string,
+): Promise<{ envelope: JsScriptingCallbackResponse; url: string }> {
   // `new URL(path, baseUrl)` handles trailing-slash and absolute-path joining per WHATWG — no
   // double-slashing, no missed-slash, works regardless of whether `ctx.baseUrl` ends in `/`.
   // Simpler than a hand-rolled `joinUrl` helper that needed branch coverage of its own.
@@ -750,7 +876,7 @@ async function dispatchViaHttp(
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     throw new Error(
-      `trailblaze.client.callTool("${toolName}") failed to build request URL from baseUrl "${baseUrl}": ${message}`,
+      `${label} failed to build request URL from baseUrl "${baseUrl}": ${message}`,
     );
   }
 
@@ -777,10 +903,10 @@ async function dispatchViaHttp(
     const message = e instanceof Error ? e.message : String(e);
     if (e instanceof DOMException && e.name === "AbortError") {
       throw new Error(
-        `trailblaze.client.callTool("${toolName}") aborted after ${CLIENT_FETCH_TIMEOUT_MS}ms waiting for ${url}`,
+        `${label} aborted after ${CLIENT_FETCH_TIMEOUT_MS}ms waiting for ${url}`,
       );
     }
-    throw new Error(`trailblaze.client.callTool("${toolName}") fetch failed: ${message}`);
+    throw new Error(`${label} fetch failed: ${message}`);
   } finally {
     clearTimeout(timer);
   }
@@ -790,7 +916,7 @@ async function dispatchViaHttp(
     // only`, etc.). The body has the human-readable reason.
     const body = await safeReadText(response);
     throw new Error(
-      `trailblaze.client.callTool("${toolName}") HTTP ${response.status} from ${url}: ${body}`,
+      `${label} HTTP ${response.status} from ${url}: ${body}`,
     );
   }
 
@@ -800,10 +926,10 @@ async function dispatchViaHttp(
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     throw new Error(
-      `trailblaze.client.callTool("${toolName}") failed to parse response body as JSON: ${message}`,
+      `${label} failed to parse response body as JSON: ${message}`,
     );
   }
-  return unwrapCallbackResponse(envelope, toolName, url);
+  return { envelope, url };
 }
 
 /**
@@ -842,6 +968,12 @@ function unwrapCallbackResponse(
     // on-device where there's no daemon involved at all.
     throw new Error(
       `trailblaze.client.callTool("${toolName}") callback error from ${source}: ${result.message}`,
+    );
+  }
+  if (result.type !== "call_tool_result") {
+    throw new Error(
+      `trailblaze.client.callTool("${toolName}") response from ${source} has an unexpected ` +
+        `"${result.type}" result: ${JSON.stringify(envelope)}`,
     );
   }
   if (!result.success) {

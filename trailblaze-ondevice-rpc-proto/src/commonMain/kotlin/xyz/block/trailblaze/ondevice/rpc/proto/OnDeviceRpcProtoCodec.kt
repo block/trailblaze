@@ -152,6 +152,7 @@ object OnDeviceRpcProtoCodec {
       sensitive_arg_names = sensitiveArgNames,
       traceparent = traceParent,
       device_classifier_override = deviceClassifierOverride,
+      trail_source_url = trailSourceUrl,
     )
 
   fun RunYamlRequest.toModel(): ModelRunYamlRequest =
@@ -180,6 +181,7 @@ object OnDeviceRpcProtoCodec {
       sensitiveArgNames = sensitive_arg_names,
       traceParent = traceparent,
       deviceClassifierOverride = device_classifier_override,
+      trailSourceUrl = trail_source_url,
     )
 
   fun ModelRunYamlResponse.toProto(): RunYamlResponse =

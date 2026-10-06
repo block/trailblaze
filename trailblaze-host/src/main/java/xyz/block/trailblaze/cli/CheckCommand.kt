@@ -434,7 +434,7 @@ class CheckCommand : Callable<Int> {
    *
    * **Local on purpose.** A grep across the host module's `.relativize(` call
    * sites (`PerTrailmapTsconfigEmitter`, `WorkspaceTypeScriptSetup`,
-   * `WaypointLocateCommand`, `CompileCommand`, `TrailsBrowserTabComposable`) shows
+   * `WaypointLocateCommand`, `CompileCommand`) shows
    * each one uses raw `Path.relativize` without a `..`-prefix or
    * `IllegalArgumentException` fallback because they all assume the source IS
    * under the anchor (a guaranteed precondition in their call sites). This

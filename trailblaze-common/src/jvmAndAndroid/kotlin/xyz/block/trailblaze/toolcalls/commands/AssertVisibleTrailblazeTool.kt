@@ -3,6 +3,7 @@ package xyz.block.trailblaze.toolcalls.commands
 import ai.koog.agents.core.tools.annotations.LLMDescription
 import kotlinx.serialization.Serializable
 import xyz.block.trailblaze.api.DriverNodeDetail
+import xyz.block.trailblaze.api.TrailblazeNode
 import xyz.block.trailblaze.api.TrailblazeNodeSelectorGenerator
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.api.describe
@@ -34,22 +35,16 @@ import xyz.block.trailblaze.viewmatcher.TapSelectorV2.findBestTrailblazeElementS
 @Serializable
 @TrailblazeToolClass("assertVisible", isVerification = true, isRecordable = false)
 @LLMDescription(
-  "Assert an element is visible on screen by its ref ID from the snapshot. Use the " +
-    "short hash ref shown in square brackets (e.g., y778 from [y778] \"Network & internet\"). " +
-    "These refs are stable across captures of the same screen. Optionally pass " +
-    "`expectedText` to also verify the element's rendered text — use it whenever the case " +
-    "asks to verify a specific value (e.g. \"verify the checkout button shows \$5.00\", " +
-    "\"expect status to be Active\") instead of just confirming the element exists.",
+  "Assert an element is visible by its snapshot ref (e.g. y778 from [y778] \"Network & internet\"). " +
+    "Checks the current snapshot only; it does not wait for an element to appear. Set " +
+    "`expectedText` to also check its text when verifying a specific value.",
 )
 data class AssertVisibleTrailblazeTool(
-  @param:LLMDescription("The element ref from the snapshot (e.g., 'y778')")
+  @param:LLMDescription("Element ref from the snapshot, e.g. 'y778'.")
   val ref: String,
   @param:LLMDescription(
-    "Optional. When set, asserts the resolved element's rendered text equals this value " +
-      "after whitespace trimming (case-sensitive). Pass the stable rendered text verbatim — " +
-      "e.g. \"Charge \$5.00\", not \"the checkout button\". Exclude volatile state that " +
-      "changes run-to-run (live item counts like \"3 items\", timestamps, quantities); pin " +
-      "only the part that stays constant. Leave null when only the element's presence matters.",
+    "The element's exact rendered text (trimmed, case-sensitive), e.g. \"Charge \$5.00\". Don't " +
+      "pin text that changes run to run (counts, timestamps). Omit to check presence only.",
   )
   val expectedText: String? = null,
   override val reasoning: String? = null,
@@ -58,12 +53,6 @@ data class AssertVisibleTrailblazeTool(
   override fun toExecutableTrailblazeTools(
     executionContext: TrailblazeToolExecutionContext,
   ): List<ExecutableTrailblazeTool> {
-    // Strip volatile state (e.g. live item counts) out of the captured expectedText before it
-    // becomes a strict EXACT pin. A captured "Review sale\n3 items" would fail replay whenever
-    // the live count differs; emitting the stable head with PREFIX keeps the value-pin without
-    // the brittleness. No volatile token → forward verbatim as EXACT (byte-identical to before).
-    val resolvedText = VolatileTextDetector.resolve(expectedText)
-
     val screenState = executionContext.screenState
       ?: throw TrailblazeToolExecutionException(
         message = "assertVisible: No screen state available",
@@ -87,6 +76,12 @@ data class AssertVisibleTrailblazeTool(
           "Use a ref from the current view hierarchy instead.",
         tool = this,
       )
+
+    // Strip volatile state (e.g. live item counts) out of the captured expectedText before it
+    // becomes a strict EXACT pin. A captured "Review sale\n3 items" would fail replay whenever
+    // the live count differs; emitting the stable head with PREFIX keeps the value-pin without
+    // the brittleness. No volatile token → forward verbatim as EXACT (byte-identical to before).
+    val resolvedText = VolatileTextDetector.resolve(expectedText)
 
     val center = targetNode.centerPoint()
       ?: throw TrailblazeToolExecutionException(

@@ -55,6 +55,25 @@ class CliExecEndpointTest {
     assertTrue(body.forwarded)
   }
 
+  /** Launchers forward to [CliEndpoints.EXEC_V2]; older launchers still post to [CliEndpoints.EXEC]. */
+  @Test fun `both exec routes run the command`() = testApplication {
+    application {
+      routing {
+        CliExecEndpoint.register(this) { req ->
+          CliExecResponse(stdout = req.args.joinToString(" "), stderr = "", exitCode = 0, forwarded = true)
+        }
+      }
+    }
+    for (route in listOf(CliEndpoints.EXEC, CliEndpoints.EXEC_V2)) {
+      val response = client.post(route) {
+        contentType(ContentType.Application.Json)
+        setBody("""{"args":["snapshot"]}""")
+      }
+      assertEquals(HttpStatusCode.OK, response.status, route)
+      assertEquals("snapshot", json.decodeFromString(CliExecResponse.serializer(), response.bodyAsText()).stdout, route)
+    }
+  }
+
   @Test fun `success path deserializes env field and surfaces it to the callback`() = testApplication {
     // Pins the wire contract for env forwarding: the bash shim sends the
     // user's allowlisted shell env vars (currently just TRAILBLAZE_DEVICE)

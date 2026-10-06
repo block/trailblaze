@@ -17,6 +17,7 @@ import android.os.SystemClock
 import android.text.Spanned
 import android.text.style.ClickableSpan
 import android.view.Display
+import android.view.KeyEvent
 import android.view.View
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
@@ -27,6 +28,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.coroutines.resume
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -1147,8 +1149,9 @@ class TrailblazeAccessibilityService : AccessibilityService() {
      * [imeWindowBoundsInScreen] folds both into `null`, and a caller that treats `null` as
      * "degraded, fall back to `dumpsys input_method`" then shells out on every tap where the
      * keyboard simply is not up — the common case. Only [ImeWindowLookup.Unavailable] warrants the
-     * fallback: enumeration threw or returned nothing (a foreground app always has a window), or
-     * the IME window is present without laid-out bounds.
+     * fallback: enumeration threw or returned nothing (a foreground app always has a window). An
+     * IME window present without laid-out bounds is [ImeWindowLookup.Undrawn], so each caller can
+     * choose how much to trust it.
      *
      * ## Scope: the default display only
      *
@@ -1171,7 +1174,7 @@ class TrailblazeAccessibilityService : AccessibilityService() {
         ?: return ImeWindowLookup.Absent
       val rect = android.graphics.Rect()
       imeWindow.getBoundsInScreen(rect)
-      return if (rect.isEmpty) ImeWindowLookup.Unavailable else ImeWindowLookup.Found(rect)
+      return if (rect.isEmpty) ImeWindowLookup.Undrawn else ImeWindowLookup.Found(rect)
     }
 
     /**
@@ -1185,70 +1188,66 @@ class TrailblazeAccessibilityService : AccessibilityService() {
     fun isImeShownAuthoritative(): Boolean = isImeShownViaDumpsys()
 
     /**
-     * Tracks whether the most recent [hideKeyboard] call put the soft IME into
-     * `SHOW_MODE_HIDDEN`. Cleared on the next dispatched action (via
+     * The show mode in force before [hideKeyboard] switched to `SHOW_MODE_HIDDEN`, or null when no
+     * hide is pending. Kept rather than assumed to be `SHOW_MODE_AUTO`, so a device set to
+     * `SHOW_MODE_IGNORE_HARD_KEYBOARD` gets that back. Cleared on the next dispatched action (via
      * [restoreSoftKeyboardIfPending]) so the suppression is scoped to "the moment after
      * hideKeyboard" rather than sticking globally until the service unbinds.
      */
-    private val softKeyboardHideRequested = AtomicBoolean(false)
+    private val showModeBeforeHide = AtomicReference<Int?>(null)
 
     /**
-     * Reads `TRAILBLAZE_IME_DISMISS_VIA_SHOW_MODE`. When set, [hideKeyboard] routes the
-     * dismissal through `SoftKeyboardController.setShowMode(SHOW_MODE_HIDDEN)` instead of
-     * a synthetic BACK key — bypassing Compose `BackHandler` callbacks that otherwise eat
-     * the BACK before the IME framework can hide the keyboard. Read on every call so an
-     * oncall can flip it on a running daemon without restarting.
+     * Puts back the show mode a prior [hideKeyboard] replaced with `SHOW_MODE_HIDDEN`. Called at
+     * the start of [AccessibilityDeviceManager]'s next dispatch, when the host drains the
+     * session, and from [onDestroy]. No-op when no hide is pending or the service is gone.
      */
-    private fun imeDismissViaShowModeEnabled(): Boolean {
-      val raw = System.getenv("TRAILBLAZE_IME_DISMISS_VIA_SHOW_MODE")?.lowercase()
-      return raw == "1" || raw == "true"
-    }
-
-    /**
-     * Restores the soft keyboard to `SHOW_MODE_AUTO` if a prior [hideKeyboard] put it in
-     * `SHOW_MODE_HIDDEN`. Called at the start of [AccessibilityDeviceManager]'s next
-     * dispatch and from [onDestroy]. No-op when no hide is pending or the service is gone.
-     */
-    internal fun restoreSoftKeyboardIfPending() {
-      if (!softKeyboardHideRequested.compareAndSet(true, false)) return
+    fun restoreSoftKeyboardIfPending() {
+      val showMode = showModeBeforeHide.getAndSet(null) ?: return
       val service = accessibilityServiceInstance ?: return
       try {
-        service.softKeyboardController.setShowMode(AccessibilityService.SHOW_MODE_AUTO)
+        service.softKeyboardController.setShowMode(showMode)
       } catch (e: Exception) {
-        Console.log("[hideKeyboard] restore to SHOW_MODE_AUTO failed: ${e.message}")
+        Console.log("[hideKeyboard] restore to show mode $showMode failed: ${e.message}")
       }
     }
 
-    fun hideKeyboard(): Boolean {
-      // Gate dismissal on an authoritative IME-up check. Two signals, in order:
-      //   1. [isImeWindowVisible] — strict windows-only, in-process and cheap.
-      //   2. `dumpsys input_method` — authoritative shell fallback for environments where
-      //      [getServiceWindows] is degraded (empty / SecurityException) under
-      //      FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES.
+    fun hideKeyboard(): HideKeyboardOutcome {
+      // Gate dismissal on whether a keyboard is actually on screen — see [imeNeedsDismissal]
+      // for why `dumpsys input_method` is consulted only when windows can't be enumerated.
       // Intentionally does NOT consider the focused-editable signal: that lingers on the
       // editable after the IME is dismissed and would cause back-to-back hideKeyboard
       // calls to navigate back out of the current screen.
-      if (!isImeWindowVisible() && !isImeShownViaDumpsys()) return true
-      val service = requireService()
-      if (imeDismissViaShowModeEnabled()) {
-        // SHOW_MODE_HIDDEN talks straight to ImeVisibilityStateComputer over the
-        // accessibility client binder — never dispatches a KeyEvent, so the modal's
-        // BackHandler / OnBackPressedCallback can't swallow the dismissal. Sticky until
-        // restored; [restoreSoftKeyboardIfPending] flips it back on the next dispatch.
-        val accepted =
-          try {
-            service.softKeyboardController.setShowMode(AccessibilityService.SHOW_MODE_HIDDEN)
-          } catch (e: Exception) {
-            Console.log("[hideKeyboard] setShowMode threw: ${e.message}")
-            false
-          }
-        if (accepted) {
-          softKeyboardHideRequested.set(true)
-          return true
-        }
-        Console.log("[hideKeyboard] SHOW_MODE_HIDDEN rejected — falling back to GLOBAL_ACTION_BACK")
+      if (!imeNeedsDismissal(imeWindowOnScreen(lookupImeWindow()), ::isImeShownViaDumpsys)) {
+        return HideKeyboardOutcome.NOTHING_TO_DISMISS
       }
-      return service.performGlobalAction(GLOBAL_ACTION_BACK)
+      val service = requireService()
+      // SHOW_MODE_HIDDEN, not BACK: BACK is not a keyboard-only key. On API 35 a BACK with the
+      // keyboard up also closes the screen underneath (the stock Contacts editor exits or shows
+      // "Discard changes?"), and a modal's BackHandler / OnBackPressedCallback can swallow it
+      // before the IME sees it. Show mode sends no KeyEvent at all. Sticky until restored;
+      // [restoreSoftKeyboardIfPending] flips it back on the next dispatch or session drain.
+      // Both controller calls go over the accessibility binder and can throw; either failure
+      // takes the BACK fallback below rather than escaping hideKeyboard.
+      val showModeBefore =
+        try {
+          val controller = service.softKeyboardController
+          val before = controller.showMode
+          if (controller.setShowMode(AccessibilityService.SHOW_MODE_HIDDEN)) before else null
+        } catch (e: Exception) {
+          Console.log("[hideKeyboard] show-mode call threw: ${e.message}")
+          null
+        }
+      if (showModeBefore != null) {
+        // A second hide before any restore must not record HIDDEN as the mode to go back to.
+        showModeBeforeHide.compareAndSet(null, showModeBefore)
+        return HideKeyboardOutcome.DISMISSAL_SENT
+      }
+      Console.log("[hideKeyboard] SHOW_MODE_HIDDEN rejected — falling back to GLOBAL_ACTION_BACK")
+      return if (service.performGlobalAction(GLOBAL_ACTION_BACK)) {
+        HideKeyboardOutcome.DISMISSAL_SENT
+      } else {
+        HideKeyboardOutcome.REJECTED
+      }
     }
 
     /**
@@ -1326,7 +1325,7 @@ class TrailblazeAccessibilityService : AccessibilityService() {
       val latch = CountDownLatch(1)
       val success = AtomicBoolean(false)
 
-      requireService()
+      val accepted = requireService()
         .dispatchGesture(
           gesture,
           object : GestureResultCallback() {
@@ -1343,10 +1342,17 @@ class TrailblazeAccessibilityService : AccessibilityService() {
           },
           null,
         )
+      // A rejected dispatch never gets a callback, so waiting out the timeout would only delay
+      // the same failure.
+      if (!accepted) {
+        Console.log("Gesture was rejected by the system.")
+        return@traceDetail false
+      }
 
+      val timeoutMs = gestureCompletionTimeoutMs(gestureLengthMs(gesture))
       try {
-        if (!latch.await(2, TimeUnit.SECONDS)) {
-          Console.log("Gesture timed out after 2 seconds.")
+        if (!latch.await(timeoutMs, TimeUnit.MILLISECONDS)) {
+          Console.log("Gesture timed out after ${timeoutMs}ms.")
           success.set(false)
         }
       } catch (e: InterruptedException) {
@@ -1357,6 +1363,31 @@ class TrailblazeAccessibilityService : AccessibilityService() {
       Thread.sleep(postGestureSettleTimeMs)
       success.get()
     }
+
+    /**
+     * How long a gesture may take to report completion beyond its own length before it counts as
+     * not dispatched. A cancelled gesture reports `onCancelled` promptly, so this only matters when
+     * the completion callback is LATE — and a late callback is not a failed gesture. On a slow
+     * device-farm emulator the system can take several seconds to report a tap that already
+     * landed: one run's tap stayed visibly pressed for ~7s before the screen it opened appeared,
+     * and the old flat 2s wait failed that tap. The cost is only paid when a callback never
+     * arrives at all.
+     */
+    private const val GESTURE_COMPLETION_SLACK_MS = 10_000L
+
+    /** End of the gesture's last stroke, in ms from dispatch. */
+    private fun gestureLengthMs(gesture: GestureDescription): Long =
+      (0 until gesture.strokeCount).maxOfOrNull { i ->
+        gesture.getStroke(i).let { it.startTime + it.duration }
+      } ?: 0L
+
+    /**
+     * How long to wait for a gesture of [gestureLengthMs] to report completion. Scales with the
+     * gesture: a flat timeout fails every long-press or swipe longer than itself, however healthy
+     * the device.
+     */
+    internal fun gestureCompletionTimeoutMs(gestureLengthMs: Long): Long =
+      gestureLengthMs + GESTURE_COMPLETION_SLACK_MS
 
     fun tap(x: Int, y: Int): Boolean {
       val path = Path().apply { moveTo(x.toFloat(), y.toFloat()) }
@@ -1978,11 +2009,11 @@ class TrailblazeAccessibilityService : AccessibilityService() {
         is SetTextOutcome.Unconfirmed -> {
           when (outcome.plan) {
             UnconfirmedSetTextPlan.TYPE_KEYSTROKES -> Unit
-            UnconfirmedSetTextPlan.GIVE_UP -> {
+            UnconfirmedSetTextPlan.AWAIT_WEBVIEW_READBACK -> {
               Console.log(
                 "inputText (length=${text.length}) ACTION_SET_TEXT did not take effect in " +
-                  "WebView (waited ${SET_TEXT_VERIFY_TIMEOUT_MS}ms); not synthesizing " +
-                  "keystrokes to avoid duplicate entry."
+                  "WebView (no change read back within ${WEBVIEW_READBACK_TIMEOUT_MS}ms, or the " +
+                  "field went away); not synthesizing keystrokes to avoid duplicate entry."
               )
               return@traceDetail false
             }
@@ -2042,18 +2073,13 @@ class TrailblazeAccessibilityService : AccessibilityService() {
             )
           val expected = existing + text
           if (!dispatchSetTextValue(editableNode, expected)) return SetTextOutcome.NotDispatched
-          if (awaitNodeTextChangedFrom(editableNode, existing, SET_TEXT_VERIFY_TIMEOUT_MS)) {
-            SetTextOutcome.Landed
-          } else {
-            // Both inputs come from the dispatched node, not a re-find of whatever holds focus
-            // after the wait. The ancestor walk is paid only here.
-            SetTextOutcome.Unconfirmed(
-              planUnconfirmedSetText(
-                inWebView = isInWebView(editableNode),
-                isPassword = editableNode.isPassword,
-              )
-            )
-          }
+          // Every input comes from the dispatched node, not a re-find of whatever holds focus
+          // after the wait.
+          confirmSetText(
+            inWebView = { isInWebView(editableNode) },
+            isPassword = editableNode.isPassword,
+            awaitChange = { timeoutMs -> awaitNodeTextChangedFrom(editableNode, existing, timeoutMs) },
+          )
         } finally {
           editableNode.recycle()
         }
@@ -2062,25 +2088,10 @@ class TrailblazeAccessibilityService : AccessibilityService() {
       }
     }
 
-    /** What [tryDispatchActionSetText] could prove about its `ACTION_SET_TEXT` dispatch. */
-    private sealed interface SetTextOutcome {
-      /** No focused editable, or the node refused the action outright. Nothing was entered. */
-      data object NotDispatched : SetTextOutcome
-
-      /** The node read back as changed, so the write reached the field. */
-      data object Landed : SetTextOutcome
-
-      /**
-       * Accepted, but the node's text never moved off its pre-dispatch value — silently rejected
-       * (masked payment fields do this), the app is holding the write, or the value is unreadable.
-       * [plan] is decided from the dispatched node.
-       */
-      data class Unconfirmed(val plan: UnconfirmedSetTextPlan) : SetTextOutcome
-    }
-
     /**
      * Polls [node] until its own text differs from [before], calling
-     * [AccessibilityNodeInfo.refresh] before each read.
+     * [AccessibilityNodeInfo.refresh] before each read. A failed refresh means the node is gone (the
+     * page navigated, the field re-rendered), so no later read can succeed and the poll stops.
      *
      * **The refresh is the point** (and the reason [findFocusedEditableNode] refreshes too). A node
      * from a tree walk is served from the accessibility client's cache, which is invalidated by
@@ -2099,17 +2110,15 @@ class TrailblazeAccessibilityService : AccessibilityService() {
       node: AccessibilityNodeInfo,
       before: String,
       timeoutMs: Long,
-    ): Boolean = TrailblazeTracer.traceDetail("awaitNodeTextChanged", ACCESSIBILITY_TRACE_CAT) {
+    ): Readback = TrailblazeTracer.traceDetail("awaitNodeTextChanged", ACCESSIBILITY_TRACE_CAT) {
       val deadline = Clock.System.now().toEpochMilliseconds() + timeoutMs
       do {
-        if (node.refresh()) {
-          val current =
-            resolveExistingEditableText(node.text?.toString(), node.isShowingHintText)
-          if (current != before) return@traceDetail true
-        }
+        if (!node.refresh()) return@traceDetail Readback.NODE_GONE
+        val current = resolveExistingEditableText(node.text?.toString(), node.isShowingHintText)
+        if (current != before) return@traceDetail Readback.CHANGED
         Thread.sleep(VERIFY_POLL_INTERVAL_MS)
       } while (Clock.System.now().toEpochMilliseconds() < deadline)
-      false
+      Readback.UNCHANGED
     }
 
     /** Dispatches `ACTION_SET_TEXT` with [value] (the FULL field content — SET_TEXT replaces). */
@@ -2270,7 +2279,8 @@ class TrailblazeAccessibilityService : AccessibilityService() {
           // `performAction` answering true does not prove the field took the value, and a caller
           // turns this Boolean into `inputText` success — so read back before claiming the repair.
           if (!dispatchSetTextValue(editableNode, corrected)) return false
-          return awaitNodeTextChangedFrom(editableNode, settled, SET_TEXT_VERIFY_TIMEOUT_MS)
+          return awaitNodeTextChangedFrom(editableNode, settled, SET_TEXT_VERIFY_TIMEOUT_MS) ==
+            Readback.CHANGED
         } finally {
           editableNode.recycle()
         }
@@ -2346,16 +2356,6 @@ class TrailblazeAccessibilityService : AccessibilityService() {
      * into at all, which was already going to accomplish nothing.
      */
     private const val FOCUSED_EDITABLE_WAIT_TIMEOUT_MS = 2000L
-
-    /**
-     * How long [tryDispatchActionSetText] polls the refreshed dispatch node before reporting
-     * [SetTextOutcome.Unconfirmed]. One window covers every field, WebView included: the separate
-     * multi-second windows this replaced were sized to ride out the stale-cache read described on
-     * [awaitNodeTextChangedFrom], which waiting never resolves. What is left to wait for is the app
-     * applying the write. Kept short because it sits in front of the keystroke fallback a masked
-     * field needs.
-     */
-    private const val SET_TEXT_VERIFY_TIMEOUT_MS = 1000L
 
     /**
      * Read spacing inside [awaitFocusedEditableTextSettled]. Wider than [VERIFY_POLL_INTERVAL_MS]
@@ -2435,6 +2435,100 @@ class TrailblazeAccessibilityService : AccessibilityService() {
       return false
     }
 
+    /**
+     * Empties the focused editable field, for `inputText`'s `clearFirst`. Returns whether the field
+     * then reads back empty.
+     *
+     * `ACTION_SET_TEXT` with nothing comes first because it replaces the whole field without
+     * needing to know what is in it — a password field in a WebView reads back `""` whatever it
+     * holds, so a clear that counted characters would erase none there. A field that ignores the
+     * set (masked fields that only take key events) is then emptied from its end one delete key per
+     * character it reads back; a native password field reads back one mask character per real
+     * one, so the count holds there too. A WebView password field that refuses the set fails:
+     * its empty readback can't tell an emptied field from one still holding the old secret.
+     */
+    fun clearFocusedText(): Boolean = TrailblazeTracer.traceDetail(
+      name = "clearFocusedText",
+      cat = ACCESSIBILITY_TRACE_CAT,
+    ) {
+      if (Looper.myLooper() == Looper.getMainLooper()) {
+        throw IllegalStateException("Cannot run from main thread")
+      }
+      // Dispatch even when the field reads empty: the WebView password field above does too.
+      awaitFocusedEditableText() ?: run {
+        Console.log(
+          "clearFocusedText: no editable, focused node found in hierarchy " +
+            "(waited ${FOCUSED_EDITABLE_WAIT_TIMEOUT_MS}ms for one to take focus)"
+        )
+        return@traceDetail false
+      }
+      val dispatch = dispatchClearOnFocusedEditable() ?: return@traceDetail false
+      val readsEmpty =
+        awaitFocusedEditableEmpty(if (dispatch.accepted) SET_TEXT_VERIFY_TIMEOUT_MS else 0L)
+      when (planClearAfterSetText(dispatch.accepted, readsEmpty, dispatch.unreadable)) {
+        ClearPlan.CLEARED -> return@traceDetail true
+        ClearPlan.UNVERIFIABLE -> {
+          Console.log(
+            "clearFocusedText: the focused WebView password field refused ACTION_SET_TEXT, and " +
+              "its value can't be read back, so there is no telling whether it still holds text."
+          )
+          return@traceDetail false
+        }
+        ClearPlan.DELETE_KEYS -> Unit
+      }
+      val remaining = readFocusedEditableText() ?: return@traceDetail false
+      if (remaining.isEmpty()) return@traceDetail true
+      Console.log(
+        "clearFocusedText: ACTION_SET_TEXT left ${remaining.length} characters; deleting them " +
+          "one key at a time."
+      )
+      InstrumentationUtil.withUiDevice {
+        pressKeyCode(KeyEvent.KEYCODE_MOVE_END)
+        repeat(remaining.length) { pressKeyCode(KeyEvent.KEYCODE_DEL) }
+      }
+      val cleared = awaitFocusedEditableEmpty(VERIFY_POLL_TIMEOUT_MS)
+      if (!cleared) {
+        Console.log("clearFocusedText: the field still holds text after deleting it key by key.")
+      }
+      cleared
+    }
+
+    /** What dispatching an empty `ACTION_SET_TEXT` to the focused editable found. */
+    private class ClearDispatch(val accepted: Boolean, val unreadable: Boolean)
+
+    /** Dispatches an empty `ACTION_SET_TEXT` on the focused editable; null when there is none. */
+    private fun dispatchClearOnFocusedEditable(): ClearDispatch? {
+      val root = getApplicationWindowRoot() ?: return null
+      return try {
+        val editableNode = findFocusedEditableNode(root) ?: return null
+        try {
+          ClearDispatch(
+            accepted = dispatchSetTextValue(editableNode, ""),
+            unreadable = editableNode.isPassword && isInWebView(editableNode),
+          )
+        } finally {
+          editableNode.recycle()
+        }
+      } finally {
+        root.recycle()
+      }
+    }
+
+    /**
+     * Polls the focused editable until it reads back empty (a hint-showing field counts as empty),
+     * for up to [timeoutMs]. False when the time runs out or the focused editable goes away.
+     */
+    private fun awaitFocusedEditableEmpty(timeoutMs: Long): Boolean =
+      TrailblazeTracer.traceDetail("awaitFocusedEditableEmpty", ACCESSIBILITY_TRACE_CAT) {
+        val deadline = Clock.System.now().toEpochMilliseconds() + timeoutMs
+        do {
+          val current = readFocusedEditableText() ?: return@traceDetail false
+          if (current.isEmpty()) return@traceDetail true
+          Thread.sleep(VERIFY_POLL_INTERVAL_MS)
+        } while (Clock.System.now().toEpochMilliseconds() < deadline)
+        false
+      }
+
     fun eraseText(charactersToErase: Int): Boolean {
       // Same window-routing fix as [inputText]: the EditText is in the app window, not the IME.
       val root = getApplicationWindowRoot() ?: return false
@@ -2496,8 +2590,11 @@ internal enum class UnconfirmedSetTextPlan {
   /** Fall back to keystroke synthesis, which verifies on its own. */
   TYPE_KEYSTROKES,
 
-  /** Report the input as not entered. */
-  GIVE_UP,
+  /**
+   * Keep reading back for the WebView readback window, because Chromium's accessibility tree can
+   * trail the page by seconds. Still unchanged at the end means not entered.
+   */
+  AWAIT_WEBVIEW_READBACK,
 
   /**
    * Report the input as entered: the field's value cannot be read, so there is nothing to wait for.
@@ -2516,7 +2613,8 @@ internal enum class UnconfirmedSetTextPlan {
  *   `ACTION_SET_TEXT` and only take key events. A native password field reads back its masked
  *   characters, so it is verifiable and stays on this path.
  * - **Inside a WebView**, never type: keystroke synthesis cannot clear a Chromium input, so it could
- *   only add a second copy. A plain field that did not change gave up.
+ *   only add a second copy. A plain field keeps being read back, because Chromium can report a
+ *   field's new value seconds after the page shows it; one that never changes was not entered.
  * - **A WebView password field** never exposes its value (it reads back empty whatever it holds),
  *   so "did not change" proves nothing. The dispatch was accepted, which is the most that can be
  *   known, and it counts as entered — the no-selector path always reported it that way.
@@ -2528,8 +2626,115 @@ internal fun planUnconfirmedSetText(
   when {
     !inWebView -> UnconfirmedSetTextPlan.TYPE_KEYSTROKES
     isPassword -> UnconfirmedSetTextPlan.ACCEPT_UNREADABLE
-    else -> UnconfirmedSetTextPlan.GIVE_UP
+    else -> UnconfirmedSetTextPlan.AWAIT_WEBVIEW_READBACK
   }
+
+/** What `clearFocusedText` does once its empty `ACTION_SET_TEXT` was dispatched or refused. */
+internal enum class ClearPlan {
+  /** The field is empty. */
+  CLEARED,
+
+  /** The field still reads as holding text: delete it one key at a time. */
+  DELETE_KEYS,
+
+  /** The set was refused and the field's value can't be read, so nothing proves it is empty. */
+  UNVERIFIABLE,
+}
+
+/**
+ * Decides what `clearFocusedText` does after dispatching `ACTION_SET_TEXT` with nothing. A field
+ * reading empty proves it is empty, except a WebView password field ([unreadable]), which reads
+ * back empty whatever it holds: there, only an [accepted] set proves the clear. Side-effect-free
+ * so it is unit-testable without an `AccessibilityNodeInfo` (see [PlanClearAfterSetTextTest]).
+ */
+internal fun planClearAfterSetText(
+  accepted: Boolean,
+  readsEmpty: Boolean,
+  unreadable: Boolean,
+): ClearPlan =
+  when {
+    unreadable -> if (accepted) ClearPlan.CLEARED else ClearPlan.UNVERIFIABLE
+    readsEmpty -> ClearPlan.CLEARED
+    else -> ClearPlan.DELETE_KEYS
+  }
+
+/** What one poll of a dispatched node's text observed. */
+internal enum class Readback {
+  /** The text moved off its pre-dispatch value. */
+  CHANGED,
+
+  /** The text never moved within the poll's window. */
+  UNCHANGED,
+
+  /** The node stopped existing (the page navigated, the field re-rendered), so no read can succeed. */
+  NODE_GONE,
+}
+
+/** What `tryDispatchActionSetText` could prove about its `ACTION_SET_TEXT` dispatch. */
+internal sealed interface SetTextOutcome {
+  /** No focused editable, or the node refused the action outright. Nothing was entered. */
+  data object NotDispatched : SetTextOutcome
+
+  /** The node read back as changed, so the write reached the field. */
+  data object Landed : SetTextOutcome
+
+  /**
+   * Accepted, but the node's text never moved off its pre-dispatch value — silently rejected
+   * (masked payment fields do this), the app is holding the write, or the value is unreadable.
+   * [plan] is decided from the dispatched node.
+   */
+  data class Unconfirmed(val plan: UnconfirmedSetTextPlan) : SetTextOutcome
+}
+
+/**
+ * How long `tryDispatchActionSetText` polls the refreshed dispatch node before deciding the
+ * write is unconfirmed. Waiting does not resolve the stale-cache read described on
+ * `awaitNodeTextChangedFrom` (the refresh does); what is left to wait for is the app applying
+ * the write. Kept short because it sits in front of the keystroke fallback a masked field
+ * needs. A WebView field keeps reading for [WEBVIEW_READBACK_TIMEOUT_MS].
+ */
+internal const val SET_TEXT_VERIFY_TIMEOUT_MS = 1000L
+
+/**
+ * How long, counted from the dispatch, an unconfirmed write to a WebView field (not a password
+ * field) keeps being read back before it is reported as not entered.
+ *
+ * Chromium's accessibility tree trails the page: the renderer serializes it to the browser
+ * asynchronously, so on a busy page (one that has just loaded) a refreshed node can report the
+ * old value for seconds after the field already shows the new one. A refresh cannot help,
+ * because the stale value is Chromium's own. On CI replays of a web sign-in page the readback
+ * caught up at 4 to 4.6s, was still empty at 4.5s while the screenshot showed the text, and
+ * once arrived about 7s after the write (the video showed the text at 1.4s). 15s is about
+ * twice the worst seen. The poll returns as soon as the change appears, so only a write that
+ * never lands pays the full window, and nothing cheaper is safe: a WebView field gets no
+ * keystroke fallback.
+ */
+internal const val WEBVIEW_READBACK_TIMEOUT_MS = 15_000L
+
+/**
+ * Confirms an accepted `ACTION_SET_TEXT` by reading the dispatched node back through [awaitChange],
+ * which polls for up to the given milliseconds. Side-effect-free so the two-stage wait is
+ * unit-testable without an `AccessibilityNodeInfo` (see [ConfirmSetTextTest]).
+ *
+ * Every field gets [SET_TEXT_VERIFY_TIMEOUT_MS]. A plain WebView field still unchanged then keeps
+ * reading until [WEBVIEW_READBACK_TIMEOUT_MS] from the dispatch, because Chromium reports a value
+ * seconds after the page shows it ([planUnconfirmedSetText]). A node that is gone ends the wait at
+ * once. [inWebView] is only consulted for an unconfirmed write, because it walks the ancestors.
+ */
+internal fun confirmSetText(
+  inWebView: () -> Boolean,
+  isPassword: Boolean,
+  awaitChange: (timeoutMs: Long) -> Readback,
+): SetTextOutcome {
+  val first = awaitChange(SET_TEXT_VERIFY_TIMEOUT_MS)
+  if (first == Readback.CHANGED) return SetTextOutcome.Landed
+  val plan = planUnconfirmedSetText(inWebView = inWebView(), isPassword = isPassword)
+  val caughtUp =
+    plan == UnconfirmedSetTextPlan.AWAIT_WEBVIEW_READBACK &&
+      first == Readback.UNCHANGED &&
+      awaitChange(WEBVIEW_READBACK_TIMEOUT_MS - SET_TEXT_VERIFY_TIMEOUT_MS) == Readback.CHANGED
+  return if (caughtUp) SetTextOutcome.Landed else SetTextOutcome.Unconfirmed(plan)
+}
 
 /**
  * Decides whether a post-`inputText` field reading [currentText] is the expected
@@ -2640,6 +2845,49 @@ internal sealed interface ImeWindowLookup {
   /** Windows enumerated fine and none of them is an IME window. */
   object Absent : ImeWindowLookup
 
-  /** Windows could not be enumerated (or the IME window has no bounds); consult another signal. */
+  /** An IME window is enumerated but has empty bounds, so it draws nothing. */
+  object Undrawn : ImeWindowLookup
+
+  /** Windows could not be enumerated; consult another signal. */
   object Unavailable : ImeWindowLookup
 }
+
+/** What [TrailblazeAccessibilityService.hideKeyboard] did. */
+enum class HideKeyboardOutcome {
+  /** No keyboard was on screen, so nothing was sent. */
+  NOTHING_TO_DISMISS,
+
+  /** A dismissal was sent: `SHOW_MODE_HIDDEN`, or `GLOBAL_ACTION_BACK` when that was rejected. */
+  DISMISSAL_SENT,
+
+  /** The accessibility service rejected `GLOBAL_ACTION_BACK`. */
+  REJECTED,
+}
+
+/**
+ * Whether [lookup] shows a keyboard on screen, for [imeNeedsDismissal]: `null` only when windows
+ * could not be enumerated. An [ImeWindowLookup.Undrawn] window counts as no keyboard — it draws
+ * nothing, so nothing would consume a BACK. If it is a keyboard caught mid-layout instead, skipping
+ * the BACK leaves it up, which the pre-tap occlusion check handles; a BACK the app receives instead
+ * closes the screen.
+ */
+internal fun imeWindowOnScreen(lookup: ImeWindowLookup): Boolean? = when (lookup) {
+  is ImeWindowLookup.Found -> true
+  ImeWindowLookup.Absent, ImeWindowLookup.Undrawn -> false
+  ImeWindowLookup.Unavailable -> null
+}
+
+/**
+ * Whether `hideKeyboard` has a keyboard to dismiss, given [imeWindowOnScreen] — `true` for an IME
+ * window with bounds, `false` when no enumerated IME window draws anything, `null` when windows
+ * could not be enumerated.
+ *
+ * `dumpsys input_method` is consulted only in the `null` case. Its `mInputShown=true` means the
+ * framework considers an input method shown, not that anything is drawn: on an emulator image
+ * with a hardware keyboard the IME reports shown with no input view, so no window appears and
+ * nothing would consume a BACK. Trusting dumpsys over an enumeration that came back without an
+ * IME window sent that BACK to the app, which closed the screen the text had just been typed into.
+ * This is the same rule the pre-tap occlusion check applies to [ImeWindowLookup.Absent].
+ */
+internal fun imeNeedsDismissal(imeWindowOnScreen: Boolean?, imeShownViaDumpsys: () -> Boolean): Boolean =
+  imeWindowOnScreen ?: imeShownViaDumpsys()

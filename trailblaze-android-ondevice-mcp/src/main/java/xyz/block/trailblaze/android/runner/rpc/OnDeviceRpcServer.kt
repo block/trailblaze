@@ -17,7 +17,6 @@ import io.ktor.server.websocket.WebSockets
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import xyz.block.trailblaze.AgentMemory
-import kotlinx.coroutines.Job
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
@@ -87,7 +86,6 @@ class OnDeviceRpcServer(
 
   // Use a dedicated coroutine scope for background jobs
   private val backgroundScope = CoroutineScope(Dispatchers.IO)
-  private var currPromptJob: Job? = null
 
   fun startServer(port: Int, wait: Boolean = true) {
     val server = embeddedServer(
@@ -102,8 +100,6 @@ class OnDeviceRpcServer(
       val runYamlHandler = RunYamlRequestHandler(
         loggingRule = loggingRule,
         backgroundScope = backgroundScope,
-        getCurrentJob = { currPromptJob },
-        setCurrentJob = { job -> currPromptJob = job },
         runTrailblazeYaml = runTrailblazeYaml,
         trailblazeDeviceInfoProvider = trailblazeDeviceInfoProvider,
         progressManager = progressManager,

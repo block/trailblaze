@@ -31,8 +31,6 @@ import xyz.block.trailblaze.mcp.BoundDeviceRosterMember
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
-import xyz.block.trailblaze.ui.composables.DefaultDeviceClassifierIconProvider
-import xyz.block.trailblaze.ui.models.AppIconProvider
 import xyz.block.trailblaze.ui.models.TrailblazeServerState.SavedTrailblazeAppConfig
 
 /**
@@ -108,8 +106,6 @@ class DeviceRosterSessionTest {
       defaultHostAppTarget = TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget,
       currentTrailblazeLlmModelProvider = { error("LLM not available in tests") },
       initialAppTargets = setOf(target),
-      appIconProvider = AppIconProvider.DefaultAppIconProvider,
-      deviceClassifierIconProvider = DefaultDeviceClassifierIconProvider,
       runYamlLambda = { error("YAML runner not available in tests") },
       installedAppIdsProviderBlocking = { emptySet() },
       appVersionInfoProviderBlocking = { _, _ -> null },

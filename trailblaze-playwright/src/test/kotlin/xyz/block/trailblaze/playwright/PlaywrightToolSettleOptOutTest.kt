@@ -14,6 +14,8 @@ import kotlinx.datetime.Clock
 import org.junit.After
 import org.junit.Before
 import org.junit.Test
+import java.io.ByteArrayInputStream
+import javax.imageio.ImageIO
 import xyz.block.trailblaze.api.DriverNodeMatch
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
@@ -165,6 +167,43 @@ class PlaywrightToolSettleOptOutTest {
     assertThat(driverLog.timestamp).isEqualTo(states.single().capturedAt)
   }
 
+  /**
+   * The report shows a logged screenshot beside the session's video at the log's time. Playwright
+   * waits for a busy page before it captures, so a screenshot asked for while the page is busy
+   * shows the screen after the wait, not the one on screen when it was asked for.
+   */
+  @Test
+  fun `a pre-action screenshot is logged at a moment the page showed it`() = runBlocking {
+    page.setContent("<html><body style=\"background: rgb(255, 0, 0)\"></body></html>")
+    val logs = mutableListOf<TrailblazeLog>()
+    val states = mutableListOf<PlaywrightScreenState>()
+    manager.loggingState = {
+      page.evaluate(
+        """() => {
+          window.__shown = [[Date.now(), 'red']];
+          setTimeout(() => {
+            const end = Date.now() + 300;
+            while (Date.now() < end) {}
+            document.body.style.background = 'rgb(0, 255, 0)';
+            window.__shown.push([Date.now(), 'green']);
+          }, 0);
+        }""",
+      )
+      Thread.sleep(50) // the page is now inside its busy task
+      PlaywrightScreenState(page, 1280, 800, screenshotScalingConfig = null).also { states += it }
+    }
+    val agent = buildAgent(logger = TrailblazeLogger(logEmitter = { logs += it }, screenStateLogger = { "" }))
+    agent.runTrailblazeTools(tools = listOf(DefaultSettlingTool), elementComparator = noOpComparator).result
+
+    val loggedAtMs = logs.filterIsInstance<TrailblazeLog.AgentDriverLog>().single().timestamp.toEpochMilliseconds()
+    @Suppress("UNCHECKED_CAST")
+    val shown = page.evaluate("() => window.__shown") as List<List<Any>>
+    val onScreenAtLog = shown.last { (it[0] as Number).toLong() <= loggedAtMs }[1]
+    val pixel = ImageIO.read(ByteArrayInputStream(states.single().screenshotBytes)).getRGB(10, 10)
+    val inScreenshot = if ((pixel shr 8 and 0xFF) > (pixel shr 16 and 0xFF)) "green" else "red"
+    assertThat(onScreenAtLog).isEqualTo(inScreenshot)
+  }
+
   /** Recorded tools carry a selector, not a ref; the post-action capture only turns a ref into one. */
   @Test
   fun `a click by selector is captured before the action and not again after it`() = runBlocking {
@@ -207,8 +246,12 @@ class PlaywrightToolSettleOptOutTest {
 
     override fun captureScreenStateForLogging(): ScreenState {
       screenshots++
-      error("the agent must tolerate a failed capture; the count is what this test reads")
+      return loggingState?.invoke()
+        ?: error("the agent must tolerate a failed capture; the count is what this test reads")
     }
+
+    /** What a logging capture hands back; a failed capture unless a test supplies one. */
+    var loggingState: (() -> ScreenState)? = null
 
     override fun captureTreeForReplay(withScreenshot: Boolean, secrets: Set<String>): ScreenState? {
       treeCaptures += withScreenshot

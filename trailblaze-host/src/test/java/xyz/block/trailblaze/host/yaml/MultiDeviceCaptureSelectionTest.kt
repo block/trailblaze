@@ -2,6 +2,7 @@ package xyz.block.trailblaze.host.yaml
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
@@ -90,5 +91,38 @@ class MultiDeviceCaptureSelectionTest {
         nameOf = { it },
       )
     assertEquals(devices, selection.armed)
+  }
+
+  @Test
+  fun `a browser is armed only when named or when the run asked for capture outright`() {
+    // Browser capture records bodies and full URLs, so the phones' capture opt-in must not bring it.
+    assertFalse(
+      MultiDeviceCaptureSelection.webDeviceOptedIn(
+        "dashboard",
+        explicitCapture = false,
+        allowedNames = emptySet(),
+      )
+    )
+    assertFalse(
+      MultiDeviceCaptureSelection.webDeviceOptedIn(
+        "dashboard",
+        explicitCapture = false,
+        allowedNames = setOf("seller"),
+      )
+    )
+    assertTrue(
+      MultiDeviceCaptureSelection.webDeviceOptedIn(
+        "dashboard",
+        explicitCapture = false,
+        allowedNames = setOf("seller", "dashboard"),
+      )
+    )
+    assertTrue(
+      MultiDeviceCaptureSelection.webDeviceOptedIn(
+        "dashboard",
+        explicitCapture = true,
+        allowedNames = emptySet(),
+      )
+    )
   }
 }

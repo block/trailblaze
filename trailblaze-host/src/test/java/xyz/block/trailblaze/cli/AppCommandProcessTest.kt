@@ -1,13 +1,30 @@
 package xyz.block.trailblaze.cli
 
+import org.junit.After
+import org.junit.Rule
+import org.junit.rules.TemporaryFolder
+import picocli.CommandLine
 import xyz.block.trailblaze.ui.TrailblazePortManager
-import xyz.block.trailblaze.ui.DESKTOP_GUI_READY_FILE_ENV_VAR
-import xyz.block.trailblaze.ui.signalDesktopGuiReady
 import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
 class AppCommandProcessTest {
+
+  @get:Rule
+  val tempFolder = TemporaryFolder()
+
+  private val priorAppDataDir = System.getProperty("trailblaze.appdata.dir")
+
+  @After
+  fun restoreAppDataDirProperty() {
+    if (priorAppDataDir == null) {
+      System.clearProperty("trailblaze.appdata.dir")
+    } else {
+      System.setProperty("trailblaze.appdata.dir", priorAppDataDir)
+    }
+  }
+
   @Test
   fun `Trail Runner launch receives the effective daemon port`() {
     val launcher = File(System.getProperty("java.io.tmpdir"), "trailblaze")
@@ -17,82 +34,27 @@ class AppCommandProcessTest {
     assertEquals("53053", builder.environment()[TrailblazePortManager.HTTP_PORT_ENV_VAR])
   }
 
+  /**
+   * The shell launcher cannot read `trailblaze-settings.json`, so it would poll the default port
+   * while the daemon binds the saved one. Bare `app` goes through the JVM for exactly this.
+   */
   @Test
-  fun `desktop GUI startup accepts only a registered window`() {
-    val result = waitForDesktopGuiStartup(
-      isWindowReady = { true },
-      isSpawnAlive = { true },
-      spawnExitCode = { error("a live process has no exit code") },
-    )
+  fun `bare app opens Trail Runner on a saved non-default port`() {
+    val appDataDir = tempFolder.newFolder("appdata")
+    System.setProperty("trailblaze.appdata.dir", appDataDir.absolutePath)
+    CliConfigHelper.writeConfig(CliConfigHelper.defaultConfig().copy(serverPort = 51_234))
 
-    assertEquals(DesktopGuiStartupResult.Ready, result)
-  }
-
-  @Test
-  fun `desktop GUI startup rejects a child that exits before registering a window`() {
-    val result = waitForDesktopGuiStartup(
-      isWindowReady = { false },
-      isSpawnAlive = { false },
-      spawnExitCode = { 17 },
-    )
-
-    assertEquals(DesktopGuiStartupResult.Exited(17), result)
-  }
-
-  @Test
-  fun `desktop GUI startup rejects a clean no-op without a window`() {
-    val result = waitForDesktopGuiStartup(
-      isWindowReady = { false },
-      isSpawnAlive = { false },
-      spawnExitCode = { 0 },
-    )
-
-    assertEquals(DesktopGuiStartupResult.Exited(0), result)
-  }
-
-  @Test
-  fun `desktop GUI startup accepts a window handed off as the child exits`() {
-    var windowIsReady = false
-    val result = waitForDesktopGuiStartup(
-      isWindowReady = { windowIsReady },
-      isSpawnAlive = {
-        windowIsReady = true
-        false
-      },
-      spawnExitCode = { 0 },
-      sleep = {},
-    )
-
-    assertEquals(DesktopGuiStartupResult.Ready, result)
-  }
-
-  @Test
-  fun `desktop GUI startup times out when a live child never registers a window`() {
-    var nowMs = 0L
-    val result = waitForDesktopGuiStartup(
-      isWindowReady = { false },
-      isSpawnAlive = { true },
-      spawnExitCode = { error("a live process has no exit code") },
-      maxWaitMs = 1_000,
-      pollIntervalMs = 100,
-      nowMs = { nowMs },
-      sleep = { nowMs += it },
-    )
-
-    assertEquals(DesktopGuiStartupResult.TimedOut, result)
-  }
-
-  @Test
-  fun `desktop GUI readiness signal creates the parent marker`() {
-    val marker = File.createTempFile("trailblaze-desktop-ready-", ".marker")
-    marker.delete()
-
-    try {
-      signalDesktopGuiReady(mapOf(DESKTOP_GUI_READY_FILE_ENV_VAR to marker.absolutePath))
-
-      assertEquals(true, marker.isFile)
-    } finally {
-      marker.delete()
+    val reentry = tempFolder.newFile("reentry.txt")
+    val launcher = tempFolder.newFile("trailblaze").apply {
+      writeText("#!/bin/bash\nprintf '%s %s' \"\$TRAILBLAZE_PORT\" \"\$*\" > '${reentry.absolutePath}'\n")
+      setExecutable(true)
     }
+    val root = CommandLine(TrailblazeCliCommand({ error("unused") }, { error("unused") }))
+    root.subcommands.getValue("app").getCommand<AppCommand>().launcherFinder = { launcher }
+
+    val exitCode = root.execute("app")
+
+    assertEquals(TrailblazeExitCode.SUCCESS.code, exitCode)
+    assertEquals("51234 trailrunner", reentry.readText())
   }
 }

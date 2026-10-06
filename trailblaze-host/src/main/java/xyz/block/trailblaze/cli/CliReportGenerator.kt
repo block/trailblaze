@@ -372,7 +372,7 @@ open class CliReportGenerator {
     is SessionStatus.Ended.Cancelled -> status.cancellationMessage
     is SessionStatus.Ended.TimeoutReached -> status.message
     is SessionStatus.Ended.MaxCallsLimitReached ->
-      "Max LLM calls limit reached (${status.maxCalls}) for: ${status.objectivePrompt}"
+      status.message ?: "Max LLM calls limit reached (${status.maxCalls}) for: ${status.objectivePrompt}"
     else -> null
   }
 
@@ -580,6 +580,7 @@ open class CliReportGenerator {
       completed_at_epoch_ms = completedAt?.toEpochMilliseconds(),
       accessibility_truncation = AccessibilityTruncationSummary.fromLogs(logs),
       trail_id = sessionInfo.trailConfig?.id,
+      trail_source_url = sessionInfo.trailSourceUrl?.takeIf { it.isNotBlank() },
     )
   } catch (e: Exception) {
     Console.error("Warning: failed to build result for session ${sessionId.value}: ${e.message}")
@@ -601,7 +602,7 @@ open class CliReportGenerator {
     is SessionStatus.Ended.Cancelled -> status.cancellationMessage
     is SessionStatus.Ended.TimeoutReached -> status.message
     is SessionStatus.Ended.MaxCallsLimitReached ->
-      "Max LLM calls limit reached (${status.maxCalls}) for: ${status.objectivePrompt}"
+      status.message ?: "Max LLM calls limit reached (${status.maxCalls}) for: ${status.objectivePrompt}"
     else -> null
   }
 

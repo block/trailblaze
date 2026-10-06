@@ -213,12 +213,25 @@ open class PlaywrightDeviceScreenStream(
     jpegQuality: Int,
     onPumpAlive: (() -> Unit)? = null,
     onFrame: suspend (ByteArray) -> Unit,
+  ): Nothing = streamTimedScreencastJpegFrames(jpegQuality, onPumpAlive) { jpeg, _ -> onFrame(jpeg) }
+
+  /**
+   * [streamScreencastJpegFrames], with each frame's capture instant (host epoch ms) — Chrome's own
+   * swap time, which a consumer must use to place the frame in time: the instant this process gets
+   * to the frame can be far later (see [PlaywrightScreencast.FrameClock]). Pass the same
+   * [frameClock] to every stream of one browser, so a re-attach keeps the clock it already learned.
+   */
+  internal suspend fun streamTimedScreencastJpegFrames(
+    jpegQuality: Int,
+    onPumpAlive: (() -> Unit)? = null,
+    frameClock: PlaywrightScreencast.FrameClock = PlaywrightScreencast.FrameClock(),
+    onFrame: suspend (jpeg: ByteArray, capturedAtMs: Long) -> Unit,
   ): Nothing =
     coroutineScope {
       val outbound =
-        Channel<ByteArray>(capacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+        Channel<TimedScreencastFrame>(capacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
       val sender = launch {
-        for (frame in outbound) onFrame(frame)
+        for (frame in outbound) onFrame(frame.bytes, frame.capturedAtMs)
       }
       // Bind to the page present when streaming starts. Popups reassign currentPage, but a CDP
       // session is page-scoped; the mirror follows the page it began on for this connection.
@@ -234,9 +247,11 @@ open class PlaywrightDeviceScreenStream(
         // A malformed / non-base64 payload is a bad single frame, not a dead stream — skip it
         // rather than letting the decode throw out of the Playwright event pump.
         val bytes = runCatching { frame.dataBase64.decodeBase64Bytes() }.getOrNull() ?: return@Consumer
-        outbound.trySend(bytes)
+        val receivedAtMs = System.currentTimeMillis()
+        outbound.trySend(TimedScreencastFrame(bytes, frameClock.capturedAtMs(frame, receivedAtMs)))
         // Publish the frame so the poll fallback / JPEG stream serve it instead of a screenshot.
-        latestScreencastFrame.set(TimedScreencastFrame(bytes, System.currentTimeMillis()))
+        // Aged from receipt: the cap guards against a wedged pump, which receipt time measures.
+        latestScreencastFrame.set(TimedScreencastFrame(bytes, receivedAtMs))
         // Ack so Chrome emits the next frame. Runs on the Playwright thread inside the pump;
         // Chrome's one-in-flight throttling keeps this from recursing past the current frame. An
         // ack failure means the CDP session is gone — record it so the pump loop fails the stream.

@@ -7,6 +7,7 @@ import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.host.HostYamlRunResult
 import xyz.block.trailblaze.host.TrailblazeHostYamlRunner
+import xyz.block.trailblaze.host.TrailblazeHostYamlRunner.trailSessionMetadata
 import xyz.block.trailblaze.host.devices.HostProbe
 import xyz.block.trailblaze.host.driver.DeviceListingVisibility
 import xyz.block.trailblaze.host.driver.HostDriverDescriptor
@@ -271,6 +272,8 @@ class RevylHostDriverDescriptor(
         sessionProvider = { loggingRule.session ?: error("Session not available - ensure test is running") },
         maxLlmCalls = runYamlRequest.maxLlmCalls,
         systemPromptTemplate = TrailblazeSystemPrompt.compose(),
+        alwaysShownTools = runOnHostParams.targetTestApp
+          ?.getAlwaysShownToolNamesForDriver(runOnHostParams.trailblazeDriverType).orEmpty(),
       )
 
       val trailblazeYaml = createTrailblazeYaml(
@@ -311,6 +314,7 @@ class RevylHostDriverDescriptor(
         onProgressMessage = onProgressMessage,
         screenshotProvider = screenStateProvider,
         noLogging = runOnHostParams.noLogging,
+        metadata = runYamlRequest.trailSessionMetadata(),
         cleanup = {
           withContext(NonCancellable) {
             finishScriptingRuntimeCleanup(subprocessRuntimes) {
@@ -377,6 +381,7 @@ class RevylHostDriverDescriptor(
                 rawYaml = runYamlRequest.yaml,
                 hasRecordedSteps = trailblazeYaml.hasRecordedSteps(trailItems),
                 trailblazeDeviceId = trailblazeDeviceId,
+                trailSourceUrl = runYamlRequest.trailSourceUrl,
                 resolvedInitialMemory = resolvedInitialMemory,
                 sensitiveMemoryKeys = sensitiveMemoryKeys,
               ),

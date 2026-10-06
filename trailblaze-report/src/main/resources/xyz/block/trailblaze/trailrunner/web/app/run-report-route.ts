@@ -16,12 +16,13 @@
 // Four keys are retired, and are listed only so a link written before their view went away is
 // still canonicalized rather than ignored: `filter` (the Self-healed index filter), `mode`
 // and `trail` (the standalone trail page's projection and scope), and `dir` (the removed Map tab's
-// orientation). `all` and `align` are NOT retired — they still carry the trail tabs' own layout.
+// orientation). `all`, `align` and `layout` are NOT retired — they carry the trail tabs' own layout
+// (`layout=strip` lays the Grid out as one row per device).
 // `basesession`/`vssession` name a compare side by session id rather than by index — how one
 // report links into another, whose run order it cannot know. They are inbound only: the viewer
 // resolves them to indices and writes `base`/`vs` back.
 export const VIEWER_ROUTE_KEYS = [
   'view', 'runs', 'run', 'tab', 'step', 'kid', 'at', 'streams', 'types', 'llm', 'inspect',
   'stream', 'organize', 'eventstep', 'place', 'eventq', 'eventall', 'group', 'sort', 'search',
-  'filter', 'mode', 'dir', 'all', 'align', 'trail', 'pick', 'base', 'vs', 'basesession', 'vssession', 'lane',
+  'filter', 'mode', 'dir', 'all', 'align', 'layout', 'trail', 'pick', 'base', 'vs', 'basesession', 'vssession', 'lane',
 ];

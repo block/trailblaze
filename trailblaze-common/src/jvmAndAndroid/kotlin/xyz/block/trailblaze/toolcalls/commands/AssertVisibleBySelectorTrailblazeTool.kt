@@ -530,37 +530,6 @@ data class AssertVisibleBySelectorTrailblazeTool(
     return if (isSecret) HIDDEN_VALUE else text
   }
 
-  private fun TrailblazeNode.namedTextSlots(): List<Pair<String, String?>> = when (val d = driverDetail) {
-    is DriverNodeDetail.AndroidAccessibility -> listOf(
-      "text" to d.text,
-      "hintText" to d.hintText,
-      "contentDescription" to d.contentDescription,
-      "labeledByText" to d.labeledByText,
-    )
-    is DriverNodeDetail.AndroidView -> listOf(
-      "text" to d.text,
-      "hintText" to d.hintText,
-      "contentDescription" to d.contentDescription,
-    )
-    is DriverNodeDetail.AndroidMaestro -> listOf(
-      "text" to d.text,
-      "hintText" to d.hintText,
-      "accessibilityText" to d.accessibilityText,
-    )
-    is DriverNodeDetail.Compose -> listOf(
-      "editableText" to d.editableText,
-      "text" to d.text,
-      "contentDescription" to d.contentDescription,
-    )
-    is DriverNodeDetail.IosMaestro -> listOf(
-      "text" to d.text,
-      "hintText" to d.hintText,
-      "accessibilityText" to d.accessibilityText,
-    )
-    is DriverNodeDetail.IosAxe -> listOf("label" to d.label, "value" to d.value, "title" to d.title)
-    is DriverNodeDetail.Web -> listOf("ariaName" to d.ariaName)
-  }
-
   /**
    * The slots of [namedTextSlots] that hold a password field's typed value — the same slots
    * `VisibleStrings` keeps out of the log. AXe marks a secure field by role as often as by subrole.
@@ -627,6 +596,37 @@ data class AssertVisibleBySelectorTrailblazeTool(
   }
 
   companion object {
+    private fun TrailblazeNode.namedTextSlots(): List<Pair<String, String?>> = when (val d = driverDetail) {
+      is DriverNodeDetail.AndroidAccessibility -> listOf(
+        "text" to d.text,
+        "hintText" to d.hintText,
+        "contentDescription" to d.contentDescription,
+        "labeledByText" to d.labeledByText,
+      )
+      is DriverNodeDetail.AndroidView -> listOf(
+        "text" to d.text,
+        "hintText" to d.hintText,
+        "contentDescription" to d.contentDescription,
+      )
+      is DriverNodeDetail.AndroidMaestro -> listOf(
+        "text" to d.text,
+        "hintText" to d.hintText,
+        "accessibilityText" to d.accessibilityText,
+      )
+      is DriverNodeDetail.Compose -> listOf(
+        "editableText" to d.editableText,
+        "text" to d.text,
+        "contentDescription" to d.contentDescription,
+      )
+      is DriverNodeDetail.IosMaestro -> listOf(
+        "text" to d.text,
+        "hintText" to d.hintText,
+        "accessibilityText" to d.accessibilityText,
+      )
+      is DriverNodeDetail.IosAxe -> listOf("label" to d.label, "value" to d.value, "title" to d.title)
+      is DriverNodeDetail.Web -> listOf("ariaName" to d.ariaName)
+    }
+
     /**
      * Every Unicode space separator — all 17 members of category `Zs`. A reader cannot tell any of
      * them apart from a plain space, so a literal text assertion typed with U+0020 has to match

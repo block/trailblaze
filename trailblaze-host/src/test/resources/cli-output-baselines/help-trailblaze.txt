@@ -18,7 +18,7 @@ Trailblaze - AI-powered device automation
   verify       Check a condition on screen and pass/fail (exit code 0/1, ideal
                  for CI)
   snapshot     Capture the current screen's UI tree (fast, no AI, no actions)
-  tool         Run a Trailblaze tool by name (e.g., tap, inputText)
+  tool         Run a Trailblaze tool by name (e.g., tap, type)
   toolbox      Browse available tools by target app and platform
   run, trail   Run a trail file (.trail.yaml) — execute a scripted test on a
                  device.
@@ -44,8 +44,8 @@ Trailblaze - AI-powered device automation
   device       List and connect devices (Android, iOS, Web)
   show         Open the multi-device live grid (/devices/all) in your default
                  browser
-  app          Launch the legacy Trailblaze desktop app (use --v2 for Trail
-                 Runner or --headless for a daemon-only background service).
+  app          Open Trailblaze App, starting the daemon if it is not running
+                 (use --headless to start only the daemon).
   mcp          Start a Model Context Protocol (MCP) server for AI agent
                  integration
   check        Validate a trailmap: materialize manifests, type-check its
@@ -54,7 +54,7 @@ Trailblaze - AI-powered device automation
                  a test APK that drives it.
   skill        Print or install the bundled agent skill that teaches a coding
                  agent this CLI
-  companion    Attach a coding agent to Trail Runner while it authors a trail.
+  companion    Attach a coding agent to Trailblaze App while it authors a trail.
 Docs: https://block.github.io/trailblaze
 Driving Trailblaze from a coding agent? `trailblaze skill` prints or installs
 the bundled agent skill.

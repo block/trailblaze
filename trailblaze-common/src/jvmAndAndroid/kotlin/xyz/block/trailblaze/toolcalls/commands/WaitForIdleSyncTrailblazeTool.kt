@@ -14,16 +14,12 @@ import xyz.block.trailblaze.toolcalls.isSuccess
 @Serializable
 @TrailblazeToolClass("wait")
 @LLMDescription(
-  """
-Settle on a loading screen: block until the UI goes quiet, up to a ceiling. This returns as soon
-as the UI is idle, so on an already-static screen it returns almost immediately rather than
-waiting the full time — it is a ceiling, not a duration. Use when you see a loading screen —
-prefer this over pressing the back button. If you are waiting for something specific to appear,
-assert on that element instead: a quiet UI does not mean the thing you expect has arrived.
-    """,
+  "Wait on a loading screen until the UI goes idle, up to a ceiling; returns as soon as it is " +
+    "idle. Prefer this over pressing back while something loads. To wait out a spinner, use " +
+    "assertNotVisibleWithText.",
 )
 data class WaitForIdleSyncTrailblazeTool(
-  @LLMDescription("Ceiling on how long to settle for, in seconds — not a guaranteed duration. Default Value: 5 seconds.")
+  @LLMDescription("Max seconds to wait (a ceiling, not a fixed pause). Default 5.")
   val timeToWaitInSeconds: Int = 5,
 ) : MapsToMaestroCommands() {
   override fun toMaestroCommands(): List<Command> = listOf(

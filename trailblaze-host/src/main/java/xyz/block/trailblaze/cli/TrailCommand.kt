@@ -11,6 +11,7 @@ import picocli.CommandLine.Option
 import picocli.CommandLine.Parameters
 import xyz.block.trailblaze.capture.CaptureOptions
 import xyz.block.trailblaze.compose.driver.rpc.ComposeRpcServer
+import xyz.block.trailblaze.config.ServedTrailmaps
 import xyz.block.trailblaze.config.project.TrailDiscovery
 import xyz.block.trailblaze.config.project.TrailblazeWorkspaceConfigResolver
 import xyz.block.trailblaze.desktop.LlmTokenStatus
@@ -56,9 +57,12 @@ import xyz.block.trailblaze.report.models.SkippedTrail
 import xyz.block.trailblaze.report.strings.VisibleStringsLog
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.report.utils.TrailblazeYamlSessionRecording.generateUnifiedRecordedYaml
+import xyz.block.trailblaze.exception.TrailblazeException
+import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.ui.TrailblazeDesktopApp
 import xyz.block.trailblaze.ui.TrailblazeDeviceManager
 import xyz.block.trailblaze.ui.resolveRunTargetApp
+import xyz.block.trailblaze.ui.shadowedTrailmapsRefusal
 import xyz.block.trailblaze.ui.unresolvedDeclaredTargetWarning
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.util.TrailYamlTemplateResolver
@@ -486,7 +490,7 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
 
   @Option(
     names = ["--no-logging"],
-    description = ["Disable session logging — no files written to logs/, session does not appear in Sessions tab"]
+    description = ["Disable session logging — no files written to logs/, run does not appear in Trailblaze App's Runs list"]
   )
   var noLogging: Boolean = false
 
@@ -593,9 +597,9 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
     description = [
       "Auto-capture network requests/responses to <session-dir>/network.ndjson on " +
         "supported devices (web today; mobile devices added as engines land). " +
-        "Mirrors the desktop-app \"Capture Network Traffic\" toggle. On by default; " +
-        "use --no-capture-network to disable. When neither flag is passed, inherits the " +
-        "desktop app's saved setting.",
+        "Mirrors the \"Network traffic\" capture default in Trailblaze App Settings. On by default; " +
+        "use --no-capture-network to disable. When neither flag is passed, inherits that " +
+        "saved setting.",
     ],
     negatable = true,
   )
@@ -1001,6 +1005,12 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
         ) ?: deviceClassifierRejection(
           requestsDeviceClassifier = resolvedDeviceClassifierOverride.isNotEmpty(),
           daemonCapabilities = capabilities,
+        ) ?: workspaceTrailmapsRejection(
+          callerHasWorkspaceTrailmaps = ServedTrailmaps.hasWorkspaceTrailmaps(
+            CliCallerContext.callerCwd(),
+            callerConfigDir(),
+          ),
+          daemonCapabilities = capabilities,
         )
         delegationRejection?.let { rejection ->
           reportCliError(
@@ -1396,46 +1406,14 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
               continue
             }
 
-            val request = CliRunRequest(
+            val request = delegatedRunRequest(
+              file = file,
               yamlContent = yamlContent,
-              trailFilePath = file.absolutePath,
               testName = testName,
-              driverType = driverType,
-              deviceId = resolvedDeviceSpec,
-              deviceClassifierOverride = resolvedDeviceClassifierOverride.map { it.classifier },
-              llmProvider = llmProvider,
-              llmModel = llmModel,
+              deviceSpec = resolvedDeviceSpec,
               useRecordedSteps = effectiveUseRecordedSteps,
-              showBrowser = !resolvedBrowserHeadless(),
-              noLogging = noLogging,
-              selfHeal = selfHeal,
-              captureVideo = resolvedCaptureVideo(),
-              turbo = turbo,
-              captureLogcat = captureLogcat || captureAll,
-              captureIosLogs = captureIosLogs || captureAll,
-              captureMemory = captureMemory || captureAll,
-              // Tri-state: forward the explicit flag value when the user passed
-              // --capture-network / --no-capture-network, else null so the daemon inherits its
-              // saved "Capture Network Traffic" setting (TrailblazeDesktopApp resolves
-              // `request.captureNetworkTraffic ?: appConfig`). --capture-all forces it on.
-              captureNetworkTraffic = if (captureAll) true else captureNetwork,
-              maxLlmCalls = resolveEffectiveMaxLlmCalls(),
-              initialMemorySeeds = parsedMemorySeeds(),
-              initialMemorySensitiveSeeds = parsedSensitiveSeeds(),
               initialArgs = initialArgs,
-              deviceConfiguration = deviceConfiguration,
-              deviceBindings = delegatedDeviceBindings(
-                yamlContent = yamlContent,
-                explicitBindings = parsedDeviceBinds(),
-                rawEnvironmentBindings = System.getenv(DEVICE_BINDINGS_ENV_VAR),
-              ),
-              snapshotBaseline = resolvedSnapshotBaseline(),
-              snapshotBaselineThresholdPercent = snapshotBaselineThreshold,
-              // Anchor the daemon's workspace `defaults.target` (rung-3) resolution at OUR cwd, not
-              // the daemon's launch dir, so a run with no `config.target` targets the same app
-              // `config get target` reports here. `run` isn't a forwarded subcommand, so this
-              // executes in the user's CLI JVM — callerCwd() is the user's shell cwd.
-              callerWorkspaceDir = CliCallerContext.callerCwd().toAbsolutePath().toString(),
+              originalYaml = rawYaml,
             )
 
             var lastProgress: String? = null
@@ -1925,6 +1903,7 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
       testName = testName,
       yaml = yamlContent,
       trailFilePath = file.absolutePath,
+      trailSourceUrl = GitTrailSourceUrl.capture(file, rawYaml),
       targetAppName = trailConfig?.target,
       useRecordedSteps = effectiveUseRecordedSteps,
       trailblazeDeviceId = targetDevice.trailblazeDeviceId,
@@ -2033,6 +2012,17 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
       Console.log("Target app: ${targetTestApp?.displayName ?: "None (using built-in tools only)"}")
     }
 
+    // The same check the daemon makes on a delegated run: this process loaded the workspace itself,
+    // but a workspace trailmap that failed to load leaves a bundled copy filling in for it.
+    val callerWorkspaceDir = CliCallerContext.callerCwd().toAbsolutePath().toString()
+    val refusalFor = { target: TrailblazeHostAppTarget? ->
+      shadowedTrailmapsRefusal(callerWorkspaceDir, target, callerConfigDir())
+    }
+    refusalFor(targetTestApp)?.let {
+      Console.error(it)
+      return TrailblazeExitCode.INFRA_FAILED.code to emptyList()
+    }
+
     val params = DesktopAppRunYamlParams(
       forceStopTargetApp = false,
       runYamlRequest = runYamlRequest,
@@ -2040,8 +2030,12 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
       unresolvedDeclaredTarget = unresolvedDeclaredTarget,
       sessionStartAdvisories = sessionStartAdvisories,
       // Same registry the session target resolves against above, so a multi-device
-      // configuration's per-device `target:` override resolves here too.
-      findTargetById = { id -> config.availableAppTargets.findById(id) },
+      // configuration's per-device `target:` override resolves here too, and is checked the same way.
+      findTargetById = { id ->
+        config.availableAppTargets.findById(id)?.also { target ->
+          refusalFor(target)?.let { throw TrailblazeException(it) }
+        }
+      },
       onProgressMessage = { message ->
         Console.info(message)
         lastProgress = message
@@ -2896,6 +2890,64 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
   }
 
   /**
+   * The request a delegated run sends the daemon for one trail on one device. Everything the
+   * daemon cannot see for itself — this shell's env, cwd, and flags — must be resolved here.
+   */
+  internal fun delegatedRunRequest(
+    file: File,
+    yamlContent: String,
+    testName: String,
+    deviceSpec: String?,
+    useRecordedSteps: Boolean,
+    initialArgs: Map<String, String>,
+    envReader: (String) -> String? = System::getenv,
+    originalYaml: String? = null,
+  ): CliRunRequest = CliRunRequest(
+    yamlContent = yamlContent,
+    trailFilePath = file.absolutePath,
+    trailSourceUrl = originalYaml?.let { GitTrailSourceUrl.capture(file, it, envReader) },
+    testName = testName,
+    driverType = driverType,
+    deviceId = deviceSpec,
+    deviceClassifierOverride = resolvedDeviceClassifierOverride.map { it.classifier },
+    llmProvider = llmProvider,
+    llmModel = llmModel,
+    useRecordedSteps = useRecordedSteps,
+    showBrowser = !resolvedBrowserHeadless(),
+    noLogging = noLogging,
+    selfHeal = resolveSelfHealOverride(envReader),
+    captureVideo = resolvedCaptureVideo(),
+    turbo = turbo,
+    captureLogcat = captureLogcat || captureAll,
+    captureIosLogs = captureIosLogs || captureAll,
+    captureMemory = captureMemory || captureAll,
+    // Tri-state: forward the explicit flag value when the user passed
+    // --capture-network / --no-capture-network, else null so the daemon inherits its
+    // saved "Capture Network Traffic" setting (TrailblazeDesktopApp resolves
+    // `request.captureNetworkTraffic ?: appConfig`). --capture-all forces it on.
+    captureNetworkTraffic = if (captureAll) true else captureNetwork,
+    maxLlmCalls = resolveEffectiveMaxLlmCalls(),
+    initialMemorySeeds = parsedMemorySeeds(),
+    initialMemorySensitiveSeeds = parsedSensitiveSeeds(),
+    initialArgs = initialArgs,
+    deviceConfiguration = deviceConfiguration,
+    deviceBindings = delegatedDeviceBindings(
+      yamlContent = yamlContent,
+      explicitBindings = parsedDeviceBinds(),
+      rawEnvironmentBindings = envReader(DEVICE_BINDINGS_ENV_VAR),
+    ),
+    snapshotBaseline = resolvedSnapshotBaseline(),
+    snapshotBaselineThresholdPercent = snapshotBaselineThreshold,
+    // Anchor the daemon's workspace `defaults.target` (rung-3) resolution at OUR cwd, not
+    // the daemon's launch dir, so a run with no `config.target` targets the same app
+    // `config get target` reports here. `run` isn't a forwarded subcommand, so this
+    // executes in the user's CLI JVM — callerCwd() is the user's shell cwd.
+    callerWorkspaceDir = CliCallerContext.callerCwd().toAbsolutePath().toString(),
+    // The daemon resolves our workspace for its trailmap check, and cannot read our env.
+    callerConfigDir = envReader(TrailblazeWorkspaceConfigResolver.CONFIG_DIR_ENV_VAR),
+  )
+
+  /**
    * Resolves the effective `self-heal` setting for this run, honoring the usual precedence:
    *   1. `--self-heal` CLI flag (explicit per-run intent).
    *   2. `TRAILBLAZE_SELF_HEAL_ENABLED` env var (CI / pipeline intent — a CI pipeline runner
@@ -2906,12 +2958,23 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
    * Companion resolver for JUnit runs: [xyz.block.trailblaze.host.rules.BaseHostTrailblazeTest]`
    * .resolveSelfHealFromEnvOrConfig()`, which is a 2-tier (env → config) subset — tests have no
    * CLI flag to honor.
+   *
+   * Delegated runs split this chain: the client sends tiers 1–2 ([resolveSelfHealOverride]) and
+   * the daemon applies tiers 3–4 ([resolveSelfHeal]).
    */
-  internal fun resolveEffectiveSelfHeal(): Boolean =
-    selfHeal
-      ?: System.getenv("TRAILBLAZE_SELF_HEAL_ENABLED")?.lowercase()?.toBooleanStrictOrNull()
-      ?: CliConfigHelper.readConfig()?.selfHealEnabled
-      ?: false
+  internal fun resolveEffectiveSelfHeal(
+    envReader: (String) -> String? = System::getenv,
+    persistedConfigReader: () -> Boolean? = ::readPersistedSelfHeal,
+  ): Boolean = resolveSelfHeal(resolveSelfHealOverride(envReader), persistedConfigReader)
+
+  /**
+   * The `--self-heal` flag, else this shell's `TRAILBLAZE_SELF_HEAL_ENABLED`; null when neither
+   * is set. A delegated run must send this rather than the bare flag: the daemon is a separate
+   * process that never sees this shell's env, so without it a persisted `config self-heal`
+   * outranks the env var.
+   */
+  internal fun resolveSelfHealOverride(envReader: (String) -> String? = System::getenv): Boolean? =
+    selfHeal ?: envReader(SELF_HEAL_ENV_VAR)?.lowercase()?.toBooleanStrictOrNull()
 
   /**
    * Resolves the effective per-objective LLM call cap for this run, honoring:
@@ -3353,6 +3416,21 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
       if (CliDaemonCapabilities.DEVICE_CLASSIFIER in capabilities) return null
       return "the running daemon predates --device-classifier, so it would ignore the flag and " +
         "select recordings using only the connected device's physical classifiers"
+    }
+
+    /**
+     * Refuses delegating from a workspace with its own trailmaps to a daemon that predates the
+     * check keeping them in use: it drops the caller's workspace and runs whatever copy it loaded.
+     */
+    internal fun workspaceTrailmapsRejection(
+      callerHasWorkspaceTrailmaps: Boolean,
+      daemonCapabilities: () -> Set<String>?,
+    ): String? {
+      if (!callerHasWorkspaceTrailmaps) return null
+      val capabilities = daemonCapabilities() ?: return null
+      if (CliDaemonCapabilities.WORKSPACE_TRAILMAPS in capabilities) return null
+      return "the running daemon predates the check that runs this workspace's own trailmaps, so " +
+        "it could run a bundled or another checkout's copy instead"
     }
 
     /**

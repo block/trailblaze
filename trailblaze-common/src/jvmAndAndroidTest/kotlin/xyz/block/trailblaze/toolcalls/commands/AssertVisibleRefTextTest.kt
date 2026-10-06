@@ -1,10 +1,12 @@
 package xyz.block.trailblaze.toolcalls.commands
 
 import kotlin.test.assertContains
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Clock
+import kotlinx.serialization.json.Json
 import maestro.orchestra.Command
 import org.junit.Test
 import xyz.block.trailblaze.AgentMemory
@@ -16,6 +18,7 @@ import xyz.block.trailblaze.api.IosCompactElementList
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TrailblazeNode
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
+import xyz.block.trailblaze.api.TrailblazeNodeSelectorResolver
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.api.toViewHierarchyTreeNode
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
@@ -201,6 +204,85 @@ class AssertVisibleRefTextTest {
 
     assertIs<TrailblazeToolResult.Error>(result)
   }
+
+  // region Multi-line text
+
+  /**
+   * The sample app's Forms result reads `Name: Jane Doe\nEmail: `. The snapshot prints the line
+   * break as `\n`, so the agent's quote is the element's real text and the exact check passes.
+   */
+  @Test
+  fun `android ref quoting the snapshot's multi-line label passes`(): Unit = runBlocking {
+    val tree = androidSubmissionResult()
+    val quote = agentQuoteOf(tree, id = "result")
+    assertEquals("Name: Jane Doe\nEmail:", quote)
+
+    val result = captureThenReplay(tree, ref = "s1", expectedText = quote, ios = false)
+
+    assertIs<TrailblazeToolResult.Success>(result, "got: $result")
+  }
+
+  @Test
+  fun `android ref quoting text the element does not carry still fails`(): Unit = runBlocking {
+    val result = captureThenReplay(
+      androidSubmissionResult(),
+      ref = "s1",
+      expectedText = "Name: John Doe\nEmail:",
+      ios = false,
+    )
+
+    assertIs<TrailblazeToolResult.Error>(result)
+  }
+
+  /** A line break is part of the text: a quote with a space there is a different text. */
+  @Test
+  fun `a quote with a space where the element has a line break fails`(): Unit = runBlocking {
+    val result = captureThenReplay(
+      androidSubmissionResult(),
+      ref = "s1",
+      expectedText = "Name: Jane Doe Email:",
+      ios = false,
+    )
+
+    assertIs<TrailblazeToolResult.Error>(result)
+  }
+
+  /**
+   * The negative check matches an element's whole text, so a quote of a one-line rendering never
+   * matched the two-line element and the check passed with the text on screen. Quoting the label
+   * the snapshot prints now finds the element, and the check fails.
+   */
+  @Test
+  fun `assertNotVisibleWithText quoting a multi-line label that is on screen fails`(): Unit = runBlocking {
+    val tree = androidSubmissionResult()
+
+    val result = AssertNotVisibleWithTextTrailblazeTool(text = agentQuoteOf(tree, id = "result"))
+      .execute(context(tree, ios = false, agent = ResolvingAgent(tree)))
+
+    assertIs<TrailblazeToolResult.Error>(result, "the text is on screen, got: $result")
+  }
+
+  @Test
+  fun `assertNotVisibleWithText quoting text that is not on screen passes`(): Unit = runBlocking {
+    val tree = androidSubmissionResult()
+
+    val result = AssertNotVisibleWithTextTrailblazeTool(text = "Name: John Doe\nEmail:")
+      .execute(context(tree, ios = false, agent = ResolvingAgent(tree)))
+
+    assertIs<TrailblazeToolResult.Success>(result, "got: $result")
+  }
+
+  /**
+   * The quoted label of the element with resource id [id], as an agent's tool argument carries it:
+   * copied into a JSON string, where the snapshot's `\n` is a line break.
+   */
+  private fun agentQuoteOf(tree: TrailblazeNode, id: String): String {
+    val line = AndroidCompactElementList.build(tree).text.lines().single { "[id=$id]" in it }
+    val label = Regex("\"(.*)\" \\[id=").find(line)?.groupValues?.get(1) ?: error("no quoted label in: $line")
+    return Json.decodeFromString<String>("\"$label\"")
+  }
+
+  // endregion
 
   /**
    * Two rows share their own label and differ only by a child, so a child anchor is the natural
@@ -427,6 +509,25 @@ class AssertVisibleRefTextTest {
     ),
   )
 
+  private fun androidSubmissionResult(): TrailblazeNode = TrailblazeNode(
+    nodeId = 1,
+    bounds = TrailblazeNode.Bounds(0, 0, 1000, 1000),
+    driverDetail = DriverNodeDetail.AndroidAccessibility(),
+    children = listOf(
+      TrailblazeNode(
+        nodeId = 2,
+        ref = "s1",
+        bounds = TrailblazeNode.Bounds(100, 200, 900, 300),
+        driverDetail = DriverNodeDetail.AndroidAccessibility(
+          className = "android.widget.TextView",
+          resourceId = "result",
+          text = "Name: Jane Doe\nEmail: ",
+          isVisibleToUser = true,
+        ),
+      ),
+    ),
+  )
+
   private fun androidRepeatedRows(): TrailblazeNode {
     fun row(id: Long, ref: String, top: Int, detail: String) = TrailblazeNode(
       nodeId = id,
@@ -515,6 +616,29 @@ class AssertVisibleRefTextTest {
       commands: List<Command>,
       traceId: TraceId?,
     ): TrailblazeToolResult = TrailblazeToolResult.Success()
+  }
+
+  /** Resolves a not-visible check against [tree] the way the accessibility driver does on device. */
+  private inner class ResolvingAgent(private val tree: TrailblazeNode) : MaestroTrailblazeAgent(
+    trailblazeLogger = TrailblazeLogger.createNoOp(),
+    trailblazeDeviceInfoProvider = { deviceInfo(TrailblazeDevicePlatform.ANDROID) },
+    sessionProvider = TrailblazeSessionProvider {
+      TrailblazeSession(sessionId = SessionId("test-session"), startTime = Clock.System.now())
+    },
+  ) {
+    override suspend fun executeNodeSelectorAssertNotVisible(
+      nodeSelector: TrailblazeNodeSelector,
+      timeoutMs: Long?,
+      traceId: TraceId?,
+    ): TrailblazeToolResult = when (TrailblazeNodeSelectorResolver.resolve(tree, nodeSelector)) {
+      is TrailblazeNodeSelectorResolver.ResolveResult.NoMatch -> TrailblazeToolResult.Success()
+      else -> TrailblazeToolResult.Error.ExceptionThrown(errorMessage = "matched ${nodeSelector.description()}")
+    }
+
+    override suspend fun executeMaestroCommands(
+      commands: List<Command>,
+      traceId: TraceId?,
+    ): TrailblazeToolResult = error("the not-visible check must resolve against the tree, not fall back to Maestro")
   }
 
   // endregion

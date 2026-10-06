@@ -104,10 +104,9 @@ class DeviceManagerToolSet(
     /** Connect to the web browser (Playwright) */
     WEB,
     /**
-     * Connect to the Compose desktop driver (the running Trailblaze desktop window's
-     * own UI via the in-process Compose RPC server). Hidden platform: addresses as
-     * `desktop/self`, only available when the desktop app is running with the
-     * self-test server enabled.
+     * Connect to the Compose desktop driver (a running Compose desktop app that embeds a
+     * Compose RPC server). Hidden platform: addresses as `desktop/self`, only available
+     * while that app's RPC server is answering.
      */
     DESKTOP,
     /** Show info about the currently connected device */
@@ -428,15 +427,14 @@ class DeviceManagerToolSet(
 
       DeviceAction.DESKTOP -> {
         // Compose desktop has exactly one logical instance ("self") — the running
-        // Trailblaze desktop window's own UI. The device summary is published by
-        // `TrailblazeDeviceManager.loadDevicesSuspend` only when the in-process
+        // Compose app behind the RPC port. The device summary is published by
+        // `TrailblazeDeviceManager.loadDevicesSuspend` only when that app's
         // ComposeRpcServer is responding, so finding the device here doubles as
         // a reachability check.
         val desktopDevice = mcpBridge.getAvailableDevices()
           .find { it.platform == TrailblazeDevicePlatform.DESKTOP }
           ?: return "Error: No Compose desktop driver available. " +
-            "Is the Trailblaze desktop app running with self-test server enabled? " +
-            "Start it with `trailblaze app`."
+            "Is a Compose desktop app with a Compose RPC server running?"
 
         connectToDeviceUnified(desktopDevice.trailblazeDeviceId, testName)
       }

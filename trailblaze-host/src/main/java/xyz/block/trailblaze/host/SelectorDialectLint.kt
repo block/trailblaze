@@ -5,6 +5,7 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import xyz.block.trailblaze.agent.trail.toJsonArgs
+import xyz.block.trailblaze.api.SelectorDialect
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
@@ -105,11 +106,16 @@ object SelectorDialectLint {
   /** Env kill-switch: `1`/`true` (case-insensitive) skips the gate entirely. */
   const val DISABLE_ENV_VAR: String = "TRAILBLAZE_DISABLE_SELECTOR_DIALECT_GATE"
 
-  /** Serialized Maestro-dialect selector slot key → the platform it belongs to. */
-  private val MAESTRO_DIALECT_KEY_PLATFORM: Map<String, TrailblazeDevicePlatform> = mapOf(
-    "androidMaestro" to TrailblazeDevicePlatform.ANDROID,
-    "iosMaestro" to TrailblazeDevicePlatform.IOS,
-  )
+  /**
+   * Serialized Maestro-dialect selector slot key → the platform it belongs to.
+   *
+   * Derived from [SelectorDialect] rather than listed here, so a new Maestro-derived dialect is
+   * covered by this gate the moment it exists.
+   */
+  private val MAESTRO_DIALECT_KEY_PLATFORM: Map<String, TrailblazeDevicePlatform> =
+    SelectorDialect.entries
+      .filter { it.resolvesViaMaestroPipeline }
+      .associate { it.yamlKey to it.platform }
 
   /**
    * Drivers that CANNOT match a Maestro-dialect selector of their own platform at all.
@@ -147,14 +153,10 @@ object SelectorDialectLint {
    * platform claim (the same dialect serves Android and Compose Multiplatform hosts), so mapping it
    * to one platform would mint false positives.
    */
-  private val DIALECT_KEY_PLATFORM: Map<String, TrailblazeDevicePlatform> = mapOf(
-    "androidAccessibility" to TrailblazeDevicePlatform.ANDROID,
-    "androidView" to TrailblazeDevicePlatform.ANDROID,
-    "androidMaestro" to TrailblazeDevicePlatform.ANDROID,
-    "iosMaestro" to TrailblazeDevicePlatform.IOS,
-    "iosAxe" to TrailblazeDevicePlatform.IOS,
-    "web" to TrailblazeDevicePlatform.WEB,
-  )
+  private val DIALECT_KEY_PLATFORM: Map<String, TrailblazeDevicePlatform> =
+    SelectorDialect.entries
+      .filter { it != SelectorDialect.COMPOSE }
+      .associate { it.yamlKey to it.platform }
 
   /**
    * Tools whose dispatch survives a dialect it can't resolve natively, so a wrong-dialect selector

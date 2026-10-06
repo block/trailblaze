@@ -215,6 +215,8 @@ abstract class MaestroTrailblazeAgent(
    * Override in drivers that can focus a node directly (today: the Android accessibility driver).
    *
    * `inputText` calls this after tapping the field, so an override only has to focus and type.
+   * With [clearFirst], the override empties that same field before typing, so it ends up holding
+   * only [text].
    *
    * @return A [TrailblazeToolResult] if the driver handled the action, or null to fall back to
    *   typing into the field the tap focused.
@@ -223,8 +225,21 @@ abstract class MaestroTrailblazeAgent(
     nodeSelector: TrailblazeNodeSelector,
     text: String,
     hideKeyboardAfter: Boolean,
+    clearFirst: Boolean,
     traceId: TraceId?,
   ): TrailblazeToolResult? = null
+
+  /**
+   * Empties the focused text field, for `inputText`'s `clearFirst`.
+   *
+   * Override in drivers with a clear that doesn't depend on knowing the field's length (today: the
+   * Android accessibility driver sets the field's text directly, and the AXe iOS driver selects all
+   * and deletes).
+   *
+   * @return A [TrailblazeToolResult] if the driver handled the clear, or null to fall back to
+   *   erasing a counted number of characters.
+   */
+  open suspend fun clearFocusedTextField(traceId: TraceId?): TrailblazeToolResult? = null
 
   /**
    * Waits until the on-device UI tree changes relative to a baseline captured at call entry,

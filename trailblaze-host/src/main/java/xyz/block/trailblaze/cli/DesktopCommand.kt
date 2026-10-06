@@ -6,8 +6,7 @@ import java.util.concurrent.Callable
 
 /**
  * Hidden CLI surface for the Compose desktop driver — the [xyz.block.trailblaze.compose.driver.rpc.ComposeRpcServer]
- * that the desktop app already runs on `127.0.0.1:52600` (gated by
- * `TrailblazeServerState.AppConfig.enableSelfTestServer`, default `true`).
+ * a Compose Desktop app under test runs on `127.0.0.1:52600`.
  *
  * Why hidden: the Compose driver is mature enough to demo (snapshot the live desktop
  * window, drive it via the tool RPC) but not yet a first-class device platform — it
@@ -30,7 +29,7 @@ import java.util.concurrent.Callable
   hidden = true,
   mixinStandardHelpOptions = true,
   description = [
-    "Internal Compose desktop driver — snapshot/drive the running Trailblaze desktop window.",
+    "Internal Compose desktop driver — snapshot/drive a running Compose Desktop app.",
   ],
   subcommands = [
     DesktopSnapshotCommand::class,

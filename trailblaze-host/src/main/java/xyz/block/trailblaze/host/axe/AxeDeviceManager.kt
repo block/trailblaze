@@ -72,6 +72,27 @@ class AxeDeviceManager(
      */
     private const val READINESS_MIN_CONTENT_NODE_COUNT = 3
 
+    /** AX roles of the fields a key press types into. */
+    private val TEXT_INPUT_ROLES = setOf("AXTextField", "AXSecureTextField", "AXTextArea", "AXSearchField")
+
+    /**
+     * The first text input whose value differs between [before] and [after] a delete key, as its
+     * two values, or null when none moved. An empty field reports its placeholder and a delete
+     * leaves it be, so a moved value is text the clear left behind. Pure so it is unit-testable
+     * without stubbing `AxeCli`.
+     */
+    internal fun textInputsChangedByDelete(before: TrailblazeNode, after: TrailblazeNode): Pair<String?, String?>? {
+      fun values(tree: TrailblazeNode) = tree.aggregate()
+        .mapNotNull { it.driverDetail as? DriverNodeDetail.IosAxe }
+        .filter { it.role in TEXT_INPUT_ROLES }
+        .map { it.value }
+      val beforeValues = values(before)
+      val afterValues = values(after)
+      // A field appearing or going away is not a delete's doing; nothing to compare.
+      if (beforeValues.size != afterValues.size) return null
+      return beforeValues.zip(afterValues).firstOrNull { (b, a) -> b != a }
+    }
+
     /**
      * Pure coord math for a directional swipe — extracted so it's unit-testable without
      * needing to stub `AxeCli`. Returns `[startX, startY, endX, endY]` for a swipe that
@@ -351,6 +372,22 @@ class AxeDeviceManager(
       is IosDriverAction.EraseText -> {
         repeat(action.characters) {
           AxeCli.key(udid, IosDriverAction.PressKey.BACKSPACE.keycode).throwIfError("eraseText")
+        }
+        ExecutionResult()
+      }
+      IosDriverAction.ClearText -> {
+        AxeCli.selectAll(udid).throwIfError("clearText select all")
+        AxeCli.key(udid, IosDriverAction.PressKey.BACKSPACE.keycode).throwIfError("clearText delete")
+        // A field that ignored Cmd+A lost one character and still holds the rest. One more delete
+        // tells them apart: it changes nothing in an emptied field.
+        val beforeCheck = readTree() ?: readTree() ?: error("clearText: could not read the screen to check the clear")
+        AxeCli.key(udid, IosDriverAction.PressKey.BACKSPACE.keycode).throwIfError("clearText check")
+        val afterCheck = readTree() ?: readTree() ?: error("clearText: could not read the screen to check the clear")
+        textInputsChangedByDelete(beforeCheck, afterCheck)?.let { (before, after) ->
+          error(
+            "clearText: select all + delete left text in a field — one more delete changed it from " +
+              "'$before' to '$after'. The field may not take Cmd+A, or focus is not in it.",
+          )
         }
         ExecutionResult()
       }

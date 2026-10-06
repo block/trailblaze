@@ -21,7 +21,6 @@ import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.ui.TrailblazeSettingsRepo
-import xyz.block.trailblaze.ui.models.AppIconProvider
 import xyz.block.trailblaze.ui.models.TrailblazeServerState.SavedTrailblazeAppConfig
 import xyz.block.trailblaze.ui.recordings.RecordedTrailsRepo
 import xyz.block.trailblaze.ui.recordings.RecordedTrailsRepoJvm
@@ -239,14 +238,12 @@ class TrailblazeCliExecuteForDaemonTest {
     defaultLlmModel = TrailblazeLlmModel.fallback(TrailblazeLlmProvider.NONE, TrailblazeLlmProvider.NONE.id),
     defaultProviderModelList = NoneTrailblazeLlmModelList,
   ) {
-    override val customEnvVarNames: List<String> = emptyList()
     override fun getAllSupportedLlmModelLists(): Set<TrailblazeLlmModelList> = setOf(NoneTrailblazeLlmModelList)
     override fun getCurrentlyAvailableLlmModelLists(): Set<TrailblazeLlmModelList> = setOf(NoneTrailblazeLlmModelList)
     override val logsDir: File = File(dir, "logs").also { it.mkdirs() }
     override val logsRepo: LogsRepo = LogsRepo(logsDir = logsDir, watchFileSystem = false)
     override val defaultAppDataDir: File = dir
     override val recordedTrailsRepo: RecordedTrailsRepo = RecordedTrailsRepoJvm(File(dir, "trails"))
-    override val appIconProvider: AppIconProvider = AppIconProvider.DefaultAppIconProvider
     override val defaultAppTarget: TrailblazeHostAppTarget = TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget
     override val availableAppTargets: Set<TrailblazeHostAppTarget>
       get() = targets ?: error("a command forwarded to the daemon must not run app-target discovery again")

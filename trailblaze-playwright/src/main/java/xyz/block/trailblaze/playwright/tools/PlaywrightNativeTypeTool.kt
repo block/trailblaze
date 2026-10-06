@@ -12,21 +12,12 @@ import xyz.block.trailblaze.util.Console
 
 @Serializable
 @TrailblazeToolClass("web_type")
-@LLMDescription(
-  """
-Type text into a web input element identified by its element ID, ARIA descriptor, or CSS selector.
-By default this clears the field first and fills in the new text.
-Set clearFirst to false to append text instead.
-""",
-)
+@LLMDescription("Type text into a web input. Clears the field first unless clearFirst is false.")
 data class PlaywrightNativeTypeTool(
-  @param:LLMDescription("The text to type into the element.") val text: String,
-  @param:LLMDescription(
-    "Element ID (e.g., 'e5'), ARIA descriptor (e.g., 'textbox \"Email\"'), " +
-      "or CSS selector with css= prefix (e.g., 'css=#email-input').",
-  )
+  @param:LLMDescription("Text to type.") val text: String,
+  @param:LLMDescription("Element ID ('e5'), ARIA descriptor ('textbox \"Email\"'), or 'css=<selector>'.")
   val ref: String? = null,
-  @param:LLMDescription("If true (default), clear the field before typing. If false, append to existing text.")
+  @param:LLMDescription("Clear the field before typing (default true); false appends.")
   val clearFirst: Boolean = true,
   override val reasoning: String? = null,
   val nodeSelector: TrailblazeNodeSelector? = null,

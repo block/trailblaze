@@ -153,6 +153,13 @@ abstract class TrailblazeHostAppTarget(
   open fun getExcludedScriptedToolNamesForDriver(driverType: TrailblazeDriverType): Set<ToolName> = emptySet()
 
   /**
+   * Tool names the LLM is always shown on this driver, even on a turn where the decision engine
+   * hides tools. Default empty; YAML-backed targets populate from their per-platform
+   * `always_shown_tools` lists.
+   */
+  open fun getAlwaysShownToolNamesForDriver(driverType: TrailblazeDriverType): Set<String> = emptySet()
+
+  /**
    * Toolset ids the target *declares* for the given driver — the positive list of toolset
    * names from `platforms.<key>.tool_sets:` in the target YAML, before any catalog
    * resolution. Drives trailmap-positive LLM tool resolution: callers pass the result to
@@ -305,31 +312,6 @@ abstract class TrailblazeHostAppTarget(
    */
   fun allInstrumentationTargets(): List<TrailblazeOnDeviceInstrumentationTarget> =
     listOfNotNull(getTrailblazeOnDeviceInstrumentationTarget(), getAndroidTestInstrumentationTarget())
-
-  /**
-   * Returns comprehensive information about this app target as formatted text including:
-   * - Driver types with their platforms and custom tool counts
-   * - Installed app IDs for all platforms
-   */
-  fun getAppInfoText(supportedDrivers: Set<TrailblazeDriverType>): String = buildString {
-    // Print installed app information
-    appendLine("Apps Ids by Platform:")
-    appendLine("-".repeat(40))
-
-    TrailblazeDevicePlatform.entries.forEach { platform ->
-      val appIds = getPossibleAppIdsForPlatform(platform)
-      if (!appIds.isNullOrEmpty()) {
-        appendLine("• ${platform.displayName}: ${appIds.joinToString(",")}")
-      }
-    }
-
-    // Print Android on-device target information
-    appendLine("\nAndroid On-Device Target:")
-    appendLine("-".repeat(40))
-    val androidTarget = getTrailblazeOnDeviceInstrumentationTarget()
-    appendLine("• Test App ID: ${androidTarget.testAppId}")
-    appendLine("• Test Class: ${androidTarget.fqTestName}")
-  }
 
   data object DefaultTrailblazeHostAppTarget : TrailblazeHostAppTarget(
     id = "default",

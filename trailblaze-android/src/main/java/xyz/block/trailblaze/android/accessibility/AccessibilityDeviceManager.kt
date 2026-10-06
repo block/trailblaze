@@ -311,6 +311,10 @@ class AccessibilityDeviceManager(
         eraseText(action.characters)
         ExecutionResult()
       }
+      is AccessibilityAction.ClearText -> {
+        clearFocusedText()
+        ExecutionResult()
+      }
       is AccessibilityAction.PressBack -> {
         pressBack()
         ExecutionResult()
@@ -398,10 +402,15 @@ class AccessibilityDeviceManager(
    * blocking [awaitSettle] primitive inline. The settle runs whether [action] returns normally
    * or throws (see [DriverDispatch] kdoc for the exception contract).
    */
-  override suspend fun <R> dispatchAndAwaitSettle(action: suspend () -> R): R = try {
-    action()
-  } finally {
-    TrailblazeTracer.traceDetail("awaitSettle", DRIVER_TRACE_CAT) { awaitSettle() }
+  override suspend fun <R> dispatchAndAwaitSettle(action: suspend () -> R): R {
+    // Same keyboard restore as [dispatchAndAwaitSettleBlocking]: callers through this seam
+    // (scripted tools) dispatch too, and must not inherit a hidden keyboard.
+    TrailblazeAccessibilityService.restoreSoftKeyboardIfPending()
+    return try {
+      action()
+    } finally {
+      TrailblazeTracer.traceDetail("awaitSettle", DRIVER_TRACE_CAT) { awaitSettle() }
+    }
   }
 
   /**
@@ -415,8 +424,8 @@ class AccessibilityDeviceManager(
    * in recorded replay) and for the `TRAILBLAZE_SETTLE_VIA_WAIT_FOR_IDLE=1` kill-switch.
    */
   private inline fun <R> dispatchAndAwaitSettleBlocking(action: () -> R): R {
-    // If a prior hideKeyboard() left the soft IME in SHOW_MODE_HIDDEN, restore SHOW_MODE_AUTO
-    // before the next dispatch so subsequent inputText/tap actions see a normally-behaving IMF.
+    // If a prior hideKeyboard() left the soft IME in SHOW_MODE_HIDDEN, restore the previous show
+    // mode before the next dispatch so subsequent inputText/tap actions see a normally-behaving IMF.
     TrailblazeAccessibilityService.restoreSoftKeyboardIfPending()
     return try {
       action()
@@ -501,9 +510,10 @@ class AccessibilityDeviceManager(
    *
    * The two shapes differ in what they do with [inputText]'s result. A selector-bearing action
    * throws when the text never landed: it named the field, so "focused it and typed nothing"
-   * cannot be reported as success. The no-selector path keeps discarding the result — that is
-   * long-standing replay behavior across every trail on this driver, and flipping it here would
-   * turn a silent no-op into a failure for trails this change is supposed to leave alone.
+   * cannot be reported as success. So does `clearFirst`: it just emptied the field, so typing
+   * nothing would pass a step that only erased. The plain no-selector path keeps discarding the
+   * result — that is long-standing replay behavior across every trail on this driver, and flipping
+   * it would turn a silent no-op into a failure for trails this change is supposed to leave alone.
    *
    * The focus race this discarded result used to hide is gone:
    * `TrailblazeAccessibilityService.inputText` now waits for a field to take focus, so an
@@ -512,11 +522,19 @@ class AccessibilityDeviceManager(
    */
   private fun executeInputText(action: AccessibilityAction.InputText): ExecutionResult {
     val nodeSelector = action.nodeSelector ?: run {
-      inputText(action.text)
+      if (action.clearFirst) clearFocusedText()
+      if (!inputText(action.text) && action.clearFirst) {
+        error(
+          "Cleared the focused field but the text never landed in it: the field rejected both " +
+            "ACTION_SET_TEXT and keystroke synthesis — see the preceding inputText log line.",
+        )
+      }
       if (action.hideKeyboardAfter) hideKeyboardAfterTyping(::hideKeyboard)
       return ExecutionResult()
     }
     val focused = focusOnElement(nodeSelector, action.timeoutMs)
+    // After the focus, so the field emptied is the one the text lands in.
+    if (action.clearFirst) clearFocusedText()
     if (!inputText(action.text)) {
       error(
         "Focused ${nodeSelector.description()} but the text never landed in it. The field took " +
@@ -594,6 +612,21 @@ class AccessibilityDeviceManager(
       "Cannot type into ${nodeSelector.description()}: $lastObstacle (gave up after " +
         "${timeoutMs}ms). Name the editable field, or something whose tap focuses one.",
     )
+  }
+
+  /**
+   * Empties the focused editable field and waits for the UI to settle, throwing when the field
+   * still holds text: `clearFirst` asked for it to hold only the new text, and typing onto what's
+   * left would pass a step whose field reads wrong.
+   */
+  private fun clearFocusedText() {
+    val cleared = dispatchAndAwaitSettleBlocking { TrailblazeAccessibilityService.clearFocusedText() }
+    if (!cleared) {
+      error(
+        "Could not clear the focused text field: there was none, it still holds text, or its " +
+          "value can't be read to confirm it is empty — see the preceding clearFocusedText log line.",
+      )
+    }
   }
 
   /** Erases characters from the focused editable node and waits for the UI to settle. */
@@ -687,7 +720,7 @@ class AccessibilityDeviceManager(
   /**
    * Matches the retired UiAutomator driver's setAirplaneMode(). The radios and the enable/disable
    * polarity both come from
-   * [NetworkConnectionTrailblazeTool.androidMaestroAirplaneModeRadioCommands], so every Android
+   * [NetworkConnectionTrailblazeTool.maestroSetAirplaneModeRadioCommands], so every Android
    * driver switches the same set. That is the radios-off stand-in, not real airplane mode — see
    * that driver's override for why this surface keeps the stand-in even though the
    * `networkConnection` tool no longer does.
@@ -700,7 +733,7 @@ class AccessibilityDeviceManager(
    * a radio that did not move, which is a fleet-wide behavior change and not this one.
    */
   private fun executeSetAirplaneMode(enabled: Boolean) {
-    NetworkConnectionTrailblazeTool.androidMaestroAirplaneModeRadioCommands(enabled).forEach { (_, command) ->
+    NetworkConnectionTrailblazeTool.maestroSetAirplaneModeRadioCommands(enabled).forEach { (_, command) ->
       AdbCommandUtil.execShellCommand(command)
     }
   }
@@ -756,24 +789,32 @@ class AccessibilityDeviceManager(
   // --- Keyboard ---
 
   /**
-   * Dismisses the soft IME via [TrailblazeAccessibilityService.hideKeyboard]. The dispatch
-   * step (sending GLOBAL_ACTION_BACK through the accessibility service) is fatal on
-   * failure — that means the accessibility service rejected the action, which is real
-   * framework misuse.
+   * Dismisses the soft IME via [TrailblazeAccessibilityService.hideKeyboard], which uses
+   * `SHOW_MODE_HIDDEN` and only falls back to GLOBAL_ACTION_BACK when the IMF rejects that.
+   * The dispatch step is fatal on failure — that means the accessibility service rejected
+   * the BACK fallback, which is real framework misuse.
    *
-   * The post-check (waiting for the IME window to actually leave) is best-effort: a
-   * Compose `BackHandler` registered on a modal can consume BACK before the IME framework
-   * sees it, and the IME stays up. The framework asked for a hide and did everything it
+   * The post-check (waiting for the IME window to actually leave) is best-effort: on the
+   * BACK fallback a Compose `BackHandler` registered on a modal can consume BACK before the
+   * IME framework sees it, and the IME stays up. The framework asked for a hide and did everything it
    * can. Log a warning and return — the caller decides what to do next. The downstream
    * safety net for this is [executeTapOnElement]'s pre-tap IME-occlusion check, which
    * catches the silent-mis-tap case at the actual point of impact (the tap), not at the
    * housekeeping that came before it.
    */
   fun hideKeyboard() {
-    TrailblazeTracer.traceDetail("hideKeyboard", DRIVER_TRACE_CAT) {
-      val dispatched = dispatchAndAwaitSettleBlocking { TrailblazeAccessibilityService.hideKeyboard() }
-      if (!dispatched) {
-        error("hideKeyboard failed: GLOBAL_ACTION_BACK was rejected by the accessibility service")
+    dismissKeyboard()
+  }
+
+  /** [hideKeyboard], returning whether a dismissal was sent (false: no keyboard was drawn). */
+  private fun dismissKeyboard(): Boolean = TrailblazeTracer.traceDetail("hideKeyboard", DRIVER_TRACE_CAT) {
+      when (dispatchAndAwaitSettleBlocking { TrailblazeAccessibilityService.hideKeyboard() }) {
+        // No keyboard on screen: skip the post-check, whose dumpsys gate would report a
+        // hardware-keyboard image's IME as still shown.
+        HideKeyboardOutcome.NOTHING_TO_DISMISS -> return@traceDetail false
+        HideKeyboardOutcome.REJECTED ->
+          error("hideKeyboard failed: GLOBAL_ACTION_BACK was rejected by the accessibility service")
+        HideKeyboardOutcome.DISMISSAL_SENT -> Unit
       }
       // Post-check polls the cheap in-process windows enumeration for fast-fail, then
       // gates the final answer on the authoritative `dumpsys input_method` signal —
@@ -788,8 +829,8 @@ class AccessibilityDeviceManager(
             "occlusion check will fail there with a clear error.",
         )
       }
+      true
     }
-  }
 
   /** Returns true if an editable field is currently focused. */
   fun isKeyboardVisible(): Boolean = TrailblazeAccessibilityService.isKeyboardVisible()
@@ -896,8 +937,8 @@ class AccessibilityDeviceManager(
       "[ime-occlusion] resolved tap target ($x, $y) is occluded by the IME ($firstSignal) " +
         "— re-attempting dismissal before failing.",
     )
-    try {
-      hideKeyboard()
+    val dismissalSent = try {
+      dismissKeyboard()
     } catch (e: Exception) {
       // Even GLOBAL_ACTION_BACK refused — propagate so caller sees the real reason.
       error(
@@ -907,11 +948,17 @@ class AccessibilityDeviceManager(
     }
     val secondSignal = imeOcclusionSignal(x, y)
     if (secondSignal != null) {
+      val likelyCause = if (dismissalSent) {
+        "a modal screen whose BackHandler consumes GLOBAL_ACTION_BACK before the IME " +
+          "framework sees it"
+      } else {
+        "no BACK was sent, because the keyboard window draws nothing, yet `dumpsys " +
+          "input_method` reports the IME shown"
+      }
       error(
         "Tap target '$targetDescription' at ($x, $y) is occluded by the soft IME " +
           "($secondSignal), which would not dismiss. Tap would land on the keyboard " +
-          "instead of the intended target. (Likely cause: a modal screen whose " +
-          "BackHandler consumes GLOBAL_ACTION_BACK before the IME framework sees it.)",
+          "instead of the intended target. (Likely cause: $likelyCause.)",
       )
     }
     Console.log(
@@ -931,8 +978,11 @@ class AccessibilityDeviceManager(
     val imeBounds = rect?.let { TrailblazeNode.Bounds(it.left, it.top, it.right, it.bottom) }
     // dumpsys is a ~300ms shell exec; pay it only when the windows list could not answer at
     // all, not whenever the keyboard happens to be down.
-    val imeShownAuthoritative = lookup is ImeWindowLookup.Unavailable &&
-      TrailblazeAccessibilityService.isImeShownAuthoritative()
+    // An Undrawn IME window keeps the conservative dumpsys answer here: it may be a keyboard
+    // mid-layout that is about to cover the point.
+    val imeShownAuthoritative =
+      (lookup is ImeWindowLookup.Unavailable || lookup is ImeWindowLookup.Undrawn) &&
+        TrailblazeAccessibilityService.isImeShownAuthoritative()
     // Only the unmeasurable-but-shown branch consults the screen size, to rule out a tap the
     // bottom-docked keyboard cannot reach — so only read the display in that case rather than on
     // every tap. Null on failure rather than a guessed size, which keeps the conservative answer.

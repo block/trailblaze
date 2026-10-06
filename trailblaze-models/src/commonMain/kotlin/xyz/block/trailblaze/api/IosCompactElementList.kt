@@ -120,6 +120,8 @@ object IosCompactElementList {
     val shortClass = detail.className?.substringAfterLast('.') ?: ""
     val rawLabel = resolveLabel(detail)
     val label = rawLabel?.truncate(MAX_LABEL_LENGTH)
+    // The same text as printed, line breaks escaped. Every decision below reads [label].
+    val shown = resolveLabel(detail, SnapshotText::render)?.truncateRendered(MAX_LABEL_LENGTH)
     val isContainer = isContainer(detail, shortClass)
     val indent = "  ".repeat(depth)
 
@@ -172,7 +174,7 @@ object IosCompactElementList {
     if (isContainer && hasVisibleDescendants(node)) {
       val containerLabel =
         if (shortClass.isNotEmpty()) shortClass
-        else if (label != null && !isDuplicate) "\"$label\""
+        else if (label != null && !isDuplicate) "\"$shown\""
         else {
           for (child in node.children) {
             buildRecursive(child, depth, lines, elementNodeIds, textNodeIds, elementBounds, refMapping, refTracker, emittedLabels, label, includeBounds, includeOffscreen, includeAllElements, screenHeight, screenWidth, offscreenCounter, refAncestorCenter = refAncestorCenter, emittedPoints = emittedPoints, underHiddenAncestor = underHiddenAncestor)
@@ -187,8 +189,8 @@ object IosCompactElementList {
       }
     } else if (!isDuplicate && (includeAllElements || isMeaningful(detail, label))) {
       val descriptor =
-        if (label != null && shortClass.isNotEmpty()) "$shortClass \"$label\""
-        else if (label != null) "\"$label\""
+        if (label != null && shortClass.isNotEmpty()) "$shortClass \"$shown\""
+        else if (label != null) "\"$shown\""
         else if (shortClass.isNotEmpty()) shortClass
         // Label-less AND class-less, but it carries an identifier (most often an
         // accessibilityIdentifier → resourceId): a SwiftUI TextField with no placeholder is the
@@ -284,7 +286,7 @@ object IosCompactElementList {
           if (underHiddenAncestor && CompactElementListUtils.isOffscreen(child, screenHeight, screenWidth, underHiddenAncestor)) {
             offscreenCounter()
           } else if (childLabel !in emittedLabels) {
-            lines.add("$indent  \"$childLabel\"")
+            lines.add("$indent  \"${resolveLabel(childDetail, SnapshotText::render)?.truncateRendered(MAX_LABEL_LENGTH)}\"")
             emittedLabels.add(childLabel)
             textNodeIds.add(child.nodeId)
           }
@@ -340,31 +342,44 @@ object IosCompactElementList {
    *   cleanly — this was the trapped data that made Host rows render as
    *   `"(408) 555-5270"` with no idea it was the *mobile* number.
    *
-   * Fallback when no category is present: text > hintText > accessibilityText. Whitespace
-   * normalized.
+   * Fallback when no category is present: text > hintText > accessibilityText. Each text is
+   * written by [print]: [SnapshotText.flatten] (the default) for the label every decision and ref
+   * reads, [SnapshotText.render] for the text a line prints.
    */
-  private fun resolveLabel(detail: DriverNodeDetail.IosMaestro): String? {
-    val text = detail.text?.takeIf { it.isNotBlank() }?.normalize()
-    val hint = detail.hintText?.takeIf { it.isNotBlank() }?.normalize()
-    val ax = detail.accessibilityText?.takeIf { it.isNotBlank() }?.normalize()
+  private fun resolveLabel(
+    detail: DriverNodeDetail.IosMaestro,
+    print: (String) -> String = SnapshotText::flatten,
+  ): String? {
+    val text = detail.text?.takeIf { it.isNotBlank() }
+    val hint = detail.hintText?.takeIf { it.isNotBlank() }
+    val ax = detail.accessibilityText?.takeIf { it.isNotBlank() }
 
+    fun differsFromText(other: String) = text == null || SnapshotText.flatten(other) != SnapshotText.flatten(text)
     val category = when {
-      hint != null && hint != text -> hint
-      ax != null && ax != text -> ax
+      hint != null && differsFromText(hint) -> hint
+      ax != null && differsFromText(ax) -> ax
       else -> null
     }
     if (category != null && text != null) {
-      return "$category: $text"
+      return "${print(category)}: ${print(text)}"
     }
-    return text ?: hint ?: ax
+    return (text ?: hint ?: ax)?.let(print)
   }
-
-  private fun String.normalize(): String =
-    replace('\n', ' ').replace(Regex("\\s+"), " ").trim()
 
   /** Truncates a string to [maxLength] with "..." suffix. */
   private fun String.truncate(maxLength: Int): String {
     return if (length <= maxLength) this else substring(0, maxLength - 1) + "…"
+  }
+
+  /**
+   * [truncate] for [SnapshotText.render] output: the cut moves back one character rather than
+   * leave half of an escape (`\n`, `\\`) before the ellipsis.
+   */
+  private fun String.truncateRendered(maxLength: Int): String {
+    if (length <= maxLength) return this
+    var cut = maxLength - 1
+    if (substring(0, cut).takeLastWhile { it == '\\' }.length % 2 == 1) cut--
+    return substring(0, cut) + "…"
   }
 
   /**

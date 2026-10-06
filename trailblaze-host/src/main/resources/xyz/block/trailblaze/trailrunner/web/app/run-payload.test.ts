@@ -427,6 +427,12 @@ describe('fetchRerunCommand', () => {
 });
 
 describe('runMeta', () => {
+  test('retains the saved source permalink through the live and share report metadata', () => {
+    const url = `https://github.com/example/trails/blob/${'a'.repeat(40)}/case/trail.yaml`;
+    const s = Payload.normalizeSummary({ id: 'source-run', trailSourceUrl: url });
+    expect(Payload.runMeta({ s }).trailSourceUrl).toBe(url);
+    expect(Payload.runMeta({ s: Payload.normalizeSummary({ id: 'legacy-run' }) }).trailSourceUrl).toBeUndefined();
+  });
   const summary = {
     id: 'sess_1',
     title: 'Add item to cart',

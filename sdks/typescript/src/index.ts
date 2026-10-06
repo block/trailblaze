@@ -35,6 +35,8 @@ export type {
 export type {
   TrailblazeCallToolResult,
   TrailblazeClient,
+  TrailblazeHostFunctionMap,
+  TrailblazeHostMethods,
   TrailblazeToolEntry,
   TrailblazeToolMap,
 } from "./client.js";

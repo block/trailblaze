@@ -368,6 +368,7 @@ open class GenerateTestResultsCliCommand(
             priority = sessionInfo.trailConfig?.priority,
             accessibility_truncation = AccessibilityTruncationSummary.fromLogs(logs),
             trail_id = sessionInfo.trailConfig?.id,
+            trail_source_url = sessionInfo.trailSourceUrl?.takeIf { it.isNotBlank() },
           )
         )
       } catch (e: Exception) {
@@ -594,7 +595,7 @@ open class GenerateTestResultsCliCommand(
     is SessionStatus.Ended.Cancelled -> status.cancellationMessage
     is SessionStatus.Ended.TimeoutReached -> status.message
     is SessionStatus.Ended.MaxCallsLimitReached ->
-      "Max LLM calls limit reached (${status.maxCalls}) for: ${status.objectivePrompt}"
+      status.message ?: "Max LLM calls limit reached (${status.maxCalls}) for: ${status.objectivePrompt}"
 
     else -> null
   }

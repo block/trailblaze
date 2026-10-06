@@ -1,0 +1,285 @@
+package xyz.block.trailblaze.ui.models
+
+import kotlinx.serialization.Serializable
+import xyz.block.trailblaze.api.ScreenshotScalingConfig
+import xyz.block.trailblaze.api.TrailblazeImageFormat
+import xyz.block.trailblaze.devices.TrailblazeDevicePort
+import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
+import xyz.block.trailblaze.devices.TrailblazeDriverType
+import xyz.block.trailblaze.llm.TrailblazeLlmProvider
+import xyz.block.trailblaze.model.SELF_HEAL_DEFAULT
+
+@Serializable
+data class TrailblazeServerState(
+  val appConfig: SavedTrailblazeAppConfig,
+) {
+  @Serializable
+  data class SavedTrailblazeAppConfig(
+    val selectedTrailblazeDriverTypes: Map<TrailblazeDevicePlatform, TrailblazeDriverType>,
+    val alwaysOnTop: Boolean = false,
+    val serverPort: Int = HTTP_PORT,
+    val serverHttpsPort: Int = HTTPS_PORT,
+    val serverUrl: String = "http://localhost:$HTTP_PORT",
+    val selectedTargetAppId: String? = null,
+    val themeMode: ThemeMode = ThemeMode.System,
+    // Default to the NONE sentinel so the OSS distro never auto-claims a user's
+    // OPENAI_API_KEY / ANTHROPIC_API_KEY / etc. — external CLI users driving
+    // Trailblaze through Claude Code, Codex, etc. opt in explicitly via
+    // `trailblaze config llm <provider/model>` or per-run `--llm`. Downstream
+    // distributions can override this in their own DesktopAppConfig subclass
+    // when they ship a managed default.
+    val llmProvider: String = TrailblazeLlmProvider.NONE.id,
+    val llmModel: String = TrailblazeLlmProvider.NONE.id,
+    val selfHealEnabled: Boolean = SELF_HEAL_DEFAULT,
+    /**
+     * Experimental: serve host-driven agent-loop screenshots from the device's live video stream
+     * instead of a per-capture direct screenshot. One toggle covers Android, iOS, and web — they
+     * share the stream engine, and platforms whose feed isn't available decline per capture and
+     * fall back to direct screenshots. Tri-state: `null`
+     * (default) means off; an explicit `true`/`false` from
+     * `trailblaze config stream-screenshots <value>` is a non-default value, so it survives
+     * serialization (`encodeDefaults = false` omits only `null`) and keeps meaning what the user
+     * said even if the framework default ever changes. The per-platform
+     * `TRAILBLAZE_<PLATFORM>_STREAM_SCREENSHOT` / `_AB` env vars still take precedence (env is
+     * the one-off / CI / A/B-validation override; this is the discoverable persistent toggle).
+     */
+    val streamScreenshotsEnabled: Boolean? = null,
+    /**
+     * Experimental: record the iOS Simulator session video from Trailblaze's baguette H.264 stream
+     * (wall-clock-accurate PTS so the report can overlay events) instead of the shipping
+     * `xcrun simctl io recordVideo` recorder. Tri-state like [streamScreenshotsEnabled]: `null`
+     * (default) means off — iOS keeps the simctl recorder; an explicit `true`/`false` from
+     * `trailblaze config ios-baguette-video <value>` is a non-default value that survives
+     * serialization and keeps meaning what the user said. `TRAILBLAZE_IOS_BAGUETTE_VIDEO=1` takes
+     * precedence (env is the one-off / CI / on-device-validation override; this is the discoverable
+     * persistent toggle). A machine without baguette installed declines and falls back to simctl
+     * regardless, so opting in is safe everywhere.
+     */
+    val iosBaguetteVideoEnabled: Boolean? = null,
+    /**
+     * Experimental: disable OS-level animations on the device for the duration of each session
+     * (Android animation scales via adb; iOS Simulator `UIAnimationDragCoefficient` via simctl),
+     * restoring the previous values at session end. Tri-state like [streamScreenshotsEnabled]:
+     * `null` (default) means off — devices are never touched; an explicit `true`/`false` from
+     * `trailblaze config disable-animations <value>` is a non-default value that survives
+     * serialization and keeps meaning what the user said. `TRAILBLAZE_DISABLE_ANIMATIONS=1` takes
+     * precedence (env is the one-off / CI override; this is the discoverable persistent toggle).
+     * A device where the mutation can't apply declines per session, so opting
+     * in is safe everywhere.
+     */
+    val disableAnimationsEnabled: Boolean? = null,
+    /**
+     * Experimental "turbo" mode for the Android accessibility driver: let the app under test say
+     * when it is idle, instead of waiting for its screen to go quiet from the outside. Each
+     * post-action wait then ends at whichever answer arrives first, so turbo can only move a
+     * deadline earlier — same driver, same selectors, same recordings.
+     *
+     * Tri-state like [disableAnimationsEnabled]: `null` (default) means off and no device is ever
+     * touched; an explicit `true`/`false` from `trailblaze config turbo <value>` is the user's
+     * choice and survives serialization. `TRAILBLAZE_TURBO=1` takes precedence (env is the
+     * one-off / CI override; this is the discoverable persistent toggle).
+     *
+     * Opting in is safe everywhere because a session where it cannot apply declines: the helper
+     * has to be signed with the same certificate as the app, so a release or beta build settles at
+     * normal speed and says why.
+     */
+    val turboEnabled: Boolean? = null,
+    // Logs directory path (null means use default: ~/.trailblaze/logs)
+    val logsDirectory: String? = null,
+    // Trails directory path (null means use default: ~/.trailblaze/trails)
+    val trailsDirectory: String? = null,
+    // True when a person picked [trailsDirectory] (Settings → Change, or `trailblaze app`
+    // activating a repo). A pick that happens to equal the derived default still counts as a
+    // choice; a legacy materialized default, written without this flag, keeps yielding to the
+    // workspace's `trails:` declaration.
+    val trailsDirectoryChosen: Boolean = false,
+    // The config folder of the repo `trailblaze app` activated, saved with the [trailsDirectory] its
+    // `trails:` declared. Trailmaps and targets load from here, so they follow the repo even when
+    // its declared trails folder lives outside it. Null for a folder picked in Settings.
+    val trailsDirectoryConfigDir: String? = null,
+    // Per-project Trailblaze config directory — layered on top of the classpath-bundled
+    // framework config. When null, the settings repo discovers `trails/config/` via the
+    // workspace walk-up rule, then falls back to null (classpath-only).
+    // `TRAILBLAZE_CONFIG_DIR` env var wins over this when set.
+    val trailblazeConfigDirectory: String? = null,
+    // Root app data directory path (null means use default: ~/.trailblaze)
+    val appDataDirectory: String? = null,
+    // Tab visibility settings
+    val showTrailsTab: Boolean = true, // Default true for backward compatibility
+    val showDevicesTab: Boolean = false, // Default hidden - can be enabled in Settings
+    val testingEnvironment: TestingEnvironment? = null,
+    // Web browser visibility for MCP sessions (true = show browser window, false = headless)
+    // Defaults to true so users can see the browser as tests run.
+    val showWebBrowser: Boolean = true,
+    /**
+     * Desktop-app's stored viewport / device emulation spec for the Playwright web
+     * browser. Accepts the same forms as the `trailblaze device create web --emulate`
+     * / `--viewport` CLI flags and the desktop viewport picker: a Playwright
+     * `devices` preset (e.g. `"iPhone 14"`) or raw `WIDTHxHEIGHT` (e.g. `"375x812"`).
+     * Null = use the Playwright default (1280x800 desktop). Applied at browser
+     * launch — close and re-launch to pick up a change. Use the `web_resize` tool
+     * to change the viewport box mid-session without rebuilding the context.
+     */
+    val webViewport: String? = null,
+    /**
+     * Record device screen video for each session. Off by default: recordings are large on disk
+     * and their timing signatures drift on some hosts — so video is opt-in rather than a cost
+     * every run pays. This is the persistent, discoverable
+     * opt-in (`trailblaze config capture-video true`) that reaches every entry point without a
+     * per-run flag, including interactive `trailblaze session start` and MCP sessions, which have
+     * no positive video flag of their own. Per-run `--capture-video` / `--no-capture-video` and
+     * `TRAILBLAZE_CAPTURE_VIDEO` both override it.
+     */
+    val captureVideo: Boolean = false,
+    // Capture settings. Logcat on by default (filtered to the app under test, written to device.log).
+    val captureLogcat: Boolean = true,
+    // Capture the iOS Simulator system log. On by default: IosLogCapture scopes the stream to
+    // the app under test at --level info (logcat-equivalent), not the system-wide firehose.
+    val captureIosLogs: Boolean = true,
+    // Sample the app under test's memory for the whole session, on Android and the iOS Simulator,
+    // and record a `memory` event around each tool call and whenever the figure moves. On by
+    // default: every reading runs on a background worker, so nothing waits on one, and a steady
+    // screen writes nothing between tools.
+    val captureMemory: Boolean = true,
+    /**
+     * When true, every supported session auto-starts the framework network
+     * capture engine — events stream to `<session-dir>/network.ndjson` with no
+     * per-trail capture-start call required. Currently honored by Playwright
+     * (web + Electron); on-device mobile engines plug into the same flag (a no-op
+     * until an activator is registered). On by default so network traffic is
+     * available in the run timeline and report without having to remember to opt
+     * in; turn it off here (or via `--no-capture-network`) if the per-event I/O
+     * cost on the engine's callback thread matters for a given run.
+     */
+    val captureNetworkTraffic: Boolean = true,
+    /**
+     * When true, the desktop app connects the device's analytics agent for the
+     * duration of a run so events emitted during the trail can be surfaced in the
+     * run timeline. Only yields events for an instrumented build; a plain app
+     * captures nothing. Off by default. The actual capture mechanism is wired in
+     * by the desktop app (kept out of this generic model).
+     */
+    val captureAnalytics: Boolean = false,
+    // CLI working mode: "trail" for authoring reproducible trails, "blaze" for exploration
+    val cliMode: String? = null,
+    // CLI device platform: "ANDROID", "IOS", or "WEB" — used as default when -d is not passed
+    val cliDevicePlatform: String? = null,
+    // Agent execution location: true = host controls via RPC, false = agent runs entirely on-device
+    val preferHostAgent: Boolean = true,
+    /**
+     * Persisted per-machine cap on LLM calls per objective. Set via `trailblaze config max-llm-calls <N>`. The CLI flag, the
+     * `TRAILBLAZE_MAX_LLM_CALLS` env var, and workspace `trailblaze.yaml`
+     * `defaults.max-llm-calls` all take precedence over this field; it kicks in only when
+     * the higher tiers are silent. Null = inherit from those tiers (or fall back to the
+     * agent's built-in default when they are all silent). See
+     * `TrailCommand.resolveEffectiveMaxLlmCalls` for the full chain.
+     */
+    val maxLlmCalls: Int? = null,
+    /**
+     * Per-machine screenshot scaling overrides. Each field is null when the user has not
+     * customized it; `screenshotScalingConfig()` materializes a full
+     * [ScreenshotScalingConfig] by filling in unset fields from the framework defaults.
+     * Workspace `trailblaze.yaml` `defaults.screenshot` still wins for any LLM model that
+     * resolves through the workspace config.
+     */
+    val screenshotImageFormat: TrailblazeImageFormat? = null,
+    val screenshotMaxLongerSide: Int? = null,
+    val screenshotMaxShorterSide: Int? = null,
+    val screenshotCompressionQuality: Float? = null,
+    /**
+     * When true, action commands (`tool`, `step`, `ask`, `verify`) reject calls
+     * without a per-step natural-language description (`-s`/`--step`). The
+     * description is the durable contract self-heal uses to retry a recorded
+     * step when the UI changes. Off by default (permissive) so first-time tire-
+     * kicking doesn't hit a wall; downstream distributions can flip the default
+     * by setting this to true in their own desktop-app config subclass.
+     */
+    val requireSteps: Boolean = false,
+  ) {
+    /**
+     * Materializes the user's effective [ScreenshotScalingConfig], substituting framework
+     * defaults for any field the user hasn't overridden.
+     */
+    fun screenshotScalingConfig(): ScreenshotScalingConfig {
+      val base = ScreenshotScalingConfig.DEFAULT
+      // Coerce/validate persisted overrides so a hand-edited or corrupt settings file
+      // can't hand an out-of-range quality to the image encoders or feed non-positive
+      // dimensions into BufferedImageUtils.scale().
+      val safeLonger = screenshotMaxLongerSide?.takeIf { it > 0 } ?: base.maxDimension1
+      val safeShorter = screenshotMaxShorterSide?.takeIf { it > 0 } ?: base.maxDimension2
+      val safeQuality = screenshotCompressionQuality?.coerceIn(0f, 1f) ?: base.compressionQuality
+      return ScreenshotScalingConfig(
+        maxDimension1 = safeLonger,
+        maxDimension2 = safeShorter,
+        imageFormat = screenshotImageFormat ?: base.imageFormat,
+        compressionQuality = safeQuality,
+      )
+    }
+
+    /** True when the user has customized at least one screenshot scaling field. */
+    fun hasAnyScreenshotOverride(): Boolean =
+      screenshotImageFormat != null ||
+        screenshotMaxLongerSide != null ||
+        screenshotMaxShorterSide != null ||
+        screenshotCompressionQuality != null
+
+    /**
+     * Like [screenshotScalingConfig] but returns `null` when the user has overridden nothing,
+     * preserving the "unset" signal for [EffectiveScreenshotScalingConfig.setEffectiveDefault].
+     * That lets the web path ([EffectiveScreenshotScalingConfig.effectiveForWeb]) distinguish
+     * "no user config → use the web default" from "user explicitly set values that happen to
+     * equal the framework defaults → honor them". [effective] is unaffected (`null` still resolves
+     * to [ScreenshotScalingConfig.DEFAULT], which is what a fully-unset config materializes to).
+     */
+    fun screenshotScalingConfigOrNull(): ScreenshotScalingConfig? =
+      if (hasAnyScreenshotOverride()) screenshotScalingConfig() else null
+
+    /**
+     * A persisted per-platform driver that has since been retired becomes that platform's default,
+     * or is dropped when the platform has none. Left in place it does worse than fail a run: the
+     * selected-driver map doubles as the set of drivers whose devices the app lists, so a stale
+     * selection makes every device of that platform vanish after the upgrade that retired the
+     * driver — and `trailblaze config show` prints the retired driver as current while no row is
+     * marked selected.
+     *
+     * Lives on the config rather than in either reader because BOTH readers of the settings file
+     * have to apply it: the desktop/daemon repo's load, and the CLI's direct decode when no daemon
+     * is up. [onReplaced] is how a caller with a logger reports the swap — this module has none.
+     */
+    fun withRetiredDriversReplaced(
+      onReplaced: (
+        platform: TrailblazeDevicePlatform,
+        retired: TrailblazeDriverType,
+        replacement: TrailblazeDriverType?,
+      ) -> Unit = { _, _, _ -> },
+    ): SavedTrailblazeAppConfig {
+      val retired = selectedTrailblazeDriverTypes.filterValues { it in TrailblazeDriverType.RETIRED_DRIVERS }
+      if (retired.isEmpty()) return this
+      val replaced = selectedTrailblazeDriverTypes.toMutableMap()
+      retired.forEach { (platform, driver) ->
+        val replacement = TrailblazeDriverType.defaultForPlatform(platform)
+        onReplaced(platform, driver, replacement)
+        if (replacement != null) replaced[platform] = replacement else replaced.remove(platform)
+      }
+      return copy(selectedTrailblazeDriverTypes = replaced)
+    }
+  }
+
+  @Serializable
+  enum class ThemeMode {
+    Light,
+    Dark,
+    System
+  }
+
+  @Serializable
+  enum class TestingEnvironment(val displayName: String) {
+    MOBILE("Mobile"),
+    WEB("Web"),
+  }
+
+  companion object {
+    const val HTTP_PORT = TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTP_PORT
+    const val HTTPS_PORT = TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTPS_PORT
+  }
+}

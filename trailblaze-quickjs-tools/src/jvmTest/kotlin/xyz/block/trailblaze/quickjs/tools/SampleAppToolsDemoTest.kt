@@ -18,16 +18,16 @@ import org.junit.Assume.assumeTrue
  * End-to-end demo proving the three sample-app tool flavors compose correctly with the new
  * QuickJS-tool architecture:
  *
- *  1. **Pure JS** — `examples/android-sample-app/trails/config/trailmaps/sampleapp/tools/quickjs-tools/pure.js`.
+ *  1. **Pure JS** — `examples/android-sample-app/trails/config/quickjs-tools/pure.js`.
  *     No TypeScript, no SDK imports, no build step. Loaded into QuickJS as-is; populates
  *     `globalThis.__trailblazeTools` directly via plain JS.
  *  2. **On-device-compatible TS** —
- *     `examples/android-sample-app/trails/config/trailmaps/sampleapp/tools/quickjs-tools/typed.ts`.
+ *     `examples/android-sample-app/trails/config/quickjs-tools/typed.ts`.
  *     Imports `@trailblaze/scripting` aliased to the slim in-process profile. Bundled by the
  *     `trailblaze.author-tool-bundle` Gradle plugin; the produced `.bundle.js` is read via
  *     the `trailblaze.test.sampleAppTypedBundle` system property and evaluated in QuickJS.
  *  3. **Host-only TS** —
- *     `examples/android-sample-app/trails/config/trailmaps/sampleapp/tools/host-tools/tools.ts`.
+ *     `examples/android-sample-app/trails/config/host-tools/tools.ts`.
  *     Uses `node:fs`, so it can't run in QuickJS. Documented as a source file; the future
  *     integration PR will exercise it via the existing subprocess infrastructure.
  *
@@ -44,9 +44,9 @@ class SampleAppToolsDemoTest {
   // in either, no per-layout literal needed.
   private val frameworkRoot: File = locateFrameworkRoot()
   private val sampleAppQuickJsToolsDir: File get() =
-    File(frameworkRoot, "examples/android-sample-app/trails/config/trailmaps/sampleapp/tools/quickjs-tools")
+    File(frameworkRoot, "examples/android-sample-app/trails/config/quickjs-tools")
   private val sampleAppHostToolsDir: File get() =
-    File(frameworkRoot, "examples/android-sample-app/trails/config/trailmaps/sampleapp/tools/host-tools")
+    File(frameworkRoot, "examples/android-sample-app/trails/config/host-tools")
 
   private val hosts = mutableListOf<QuickJsToolHost>()
 

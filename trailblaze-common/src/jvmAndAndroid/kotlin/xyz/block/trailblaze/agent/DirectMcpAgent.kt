@@ -62,7 +62,7 @@ import xyz.block.trailblaze.util.Console
  * ```kotlin
  * val agent = DirectMcpAgent(
  *   samplingSource = localLlmSamplingSource,
- *   trailblazeAgent = androidMaestroAgent,
+ *   trailblazeAgent = accessibilityAgent,
  *   screenStateProvider = { captureScreenState() },
  * )
  * val result = agent.run("Tap the login button")

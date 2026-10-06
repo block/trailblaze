@@ -23,10 +23,9 @@ enum class TrailblazeDevicePlatform(
   WEB("Web Browser"),
 
   /**
-   * The host-side Compose desktop window itself, exposed via the
-   * [xyz.block.trailblaze.compose.driver.rpc.ComposeRpcServer] that the desktop app runs
-   * on `127.0.0.1:52600` (gated by `TrailblazeServerState.AppConfig.enableSelfTestServer`,
-   * default `true`). Hidden from default listings; surface via `--all`.
+   * A host-side Compose Desktop app under test, exposed via the
+   * [xyz.block.trailblaze.compose.driver.rpc.ComposeRpcServer] it runs on `127.0.0.1:52600`.
+   * Hidden from default listings; surface via `--all`.
    */
   DESKTOP("Compose Desktop", hidden = true),
   ;

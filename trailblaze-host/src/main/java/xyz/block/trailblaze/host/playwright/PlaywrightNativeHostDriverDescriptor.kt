@@ -13,6 +13,7 @@ import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.devices.WebInstanceIds
 import xyz.block.trailblaze.host.HostYamlRunResult
 import xyz.block.trailblaze.host.TrailblazeHostYamlRunner
+import xyz.block.trailblaze.host.TrailblazeHostYamlRunner.trailSessionMetadata
 import xyz.block.trailblaze.host.driver.DeviceListingVisibility
 import xyz.block.trailblaze.host.driver.HostDeviceInventory
 import xyz.block.trailblaze.host.driver.HostDriverDescriptor
@@ -223,6 +224,7 @@ class PlaywrightNativeHostDriverDescriptor : HostDriverDescriptor {
       onProgressMessage = onProgressMessage,
       screenshotProvider = playwrightTest.browserManager::getScreenState,
       noLogging = runOnHostParams.noLogging,
+      metadata = runYamlRequest.trailSessionMetadata(),
       cleanup = {
         withContext(NonCancellable) {
           finishScriptingRuntimeCleanup(subprocessRuntimes) {
@@ -255,6 +257,7 @@ class PlaywrightNativeHostDriverDescriptor : HostDriverDescriptor {
         initialMemorySeeds = runYamlRequest.initialMemorySeeds,
         initialMemorySensitiveSeeds = runYamlRequest.initialMemorySensitiveSeeds,
         initialArgs = runYamlRequest.initialArgs,
+        trailSourceUrl = runYamlRequest.trailSourceUrl,
         onStepProgress = { step, total, text ->
           onProgressMessage("Step $step/$total: $text")
         },

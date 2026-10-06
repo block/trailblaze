@@ -64,6 +64,19 @@ interface PlaywrightExecutableTool : ExecutableTrailblazeTool {
   val awaitsSettle: Boolean get() = true
 
   /**
+   * Whether this tool can renumber the refs it targeted.
+   *
+   * Enrichment normally prefers a fresh post-action screen state, because an element may only
+   * appear after the tool completes. A tool that REORDERS the page breaks that assumption: refs
+   * are positional, so resolving the source `eN` afterwards names whatever moved into that slot,
+   * and the recorded selector then replays against a different element. For those tools the
+   * pre-action state is the only one that can still name what was acted on.
+   *
+   * Default false — reordering is the exception, not the rule.
+   */
+  val renumbersRefs: Boolean get() = false
+
+  /**
    * Executes this tool against the given Playwright page.
    *
    * @param page The current Playwright page to execute actions against.
@@ -286,7 +299,7 @@ interface PlaywrightExecutableTool : ExecutableTrailblazeTool {
           effectiveRef?.takeIf { explainMiss }?.let { roleChangedHint(page, it, context) }.orEmpty()
         null to TrailblazeToolResult.Error.ExceptionThrown(
           "No element found matching '$identifier' ($description) within ${timeoutMs.toLong()}ms.$roleChanged " +
-            "Use web_snapshot to refresh the page state.",
+            "The page may have changed; pick the element again from the current element list.",
         )
       } catch (e: PlaywrightException) {
         // Page closed, frame detached, navigation interrupted mid-wait — surface as a tool
@@ -348,5 +361,35 @@ interface PlaywrightExecutableTool : ExecutableTrailblazeTool {
      */
     internal var elementResolutionTimeoutMs: Double = 10_000.0
 
+    /**
+     * Why an action on [locator] timed out, when Playwright's own actionability checks can say
+     * so exactly: it is not visible, it is disabled, or another element covers it (named by
+     * [PlaywrightScreenState.describeCover]). Null when none of these holds — it was still
+     * moving, say — or the page ran no script within [DIAGNOSIS_TIMEOUT_MS], so the caller
+     * keeps Playwright's own message.
+     */
+    fun describeWhyNotActionable(page: Page, locator: Locator): String? = try {
+      // Every check below runs page script; on a frozen page it would block the tool.
+      page.waitForFunction("() => true", null, Page.WaitForFunctionOptions().setTimeout(DIAGNOSIS_TIMEOUT_MS))
+      when {
+        !locator.isVisible() -> "it is not visible"
+        !locator.isEnabled(Locator.IsEnabledOptions().setTimeout(DIAGNOSIS_TIMEOUT_MS)) -> "it is disabled"
+        else -> locator.elementHandle(Locator.ElementHandleOptions().setTimeout(DIAGNOSIS_TIMEOUT_MS))?.let { handle ->
+          try {
+            PlaywrightScreenState.describeCover(page, handle)?.let { cover ->
+              "it is covered: a click at its center lands on $cover. " +
+                "Act on an element in that layer, or close it first"
+            }
+          } finally {
+            handle.dispose()
+          }
+        }
+      }
+    } catch (_: Exception) {
+      // Best effort: any failure keeps the caller on Playwright's own message.
+      null
+    }
+
+    private const val DIAGNOSIS_TIMEOUT_MS = 1_000.0
   }
 }

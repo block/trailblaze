@@ -52,8 +52,8 @@ data class CliRunRequest(
   val noLogging: Boolean = false,
   /**
    * Override the persisted `trailblaze config self-heal` setting for this run.
-   * `null` = inherit the saved config; `true`/`false` = explicit CLI override
-   * (from `--self-heal` / `--no-self-heal`).
+   * `null` = inherit the saved config; `true`/`false` = the client's `--self-heal` flag, else
+   * its `TRAILBLAZE_SELF_HEAL_ENABLED` (the daemon cannot read the client's env).
    */
   val selfHeal: Boolean? = null,
   /** Override capture video setting (null = default: video off, opt-in per run). */
@@ -114,6 +114,12 @@ data class CliRunRequest(
    */
   val callerWorkspaceDir: String? = null,
   /**
+   * The run caller's `TRAILBLAZE_CONFIG_DIR`, which names its workspace wherever it runs from. The
+   * daemon never sees the caller's env, so without this a caller whose workspace is named only by
+   * that variable would be checked against its cwd's workspace instead. Null when unset.
+   */
+  val callerConfigDir: String? = null,
+  /**
    * How much of this run the daemon should record — `off`, `normal` or `verbose`, as resolved by
    * the caller's `TRAILBLAZE_TRACE_LEVEL` / `trailblaze.trace.level`.
    *
@@ -159,6 +165,8 @@ data class CliRunRequest(
    * `TRAILBLAZE_SNAPSHOT_BASELINE_THRESHOLD`, else the built-in default (2.0).
    */
   val snapshotBaselineThresholdPercent: Double? = null,
+  /** Immutable GitHub permalink for the source trail YAML, when the caller has one. */
+  val trailSourceUrl: String? = null,
 ) {
   /**
    * Validates that at least one execution mode is specified:

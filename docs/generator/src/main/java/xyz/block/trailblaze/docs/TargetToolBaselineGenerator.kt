@@ -1,7 +1,12 @@
 package xyz.block.trailblaze.docs
 
+import ai.koog.agents.core.tools.ToolParameterDescriptor
+import ai.koog.agents.core.tools.ToolParameterType
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonPrimitive
 import xyz.block.trailblaze.config.AppTargetCompanion
@@ -11,11 +16,11 @@ import xyz.block.trailblaze.config.InlineScriptToolConfig
 import xyz.block.trailblaze.config.ResolvedToolSet
 import xyz.block.trailblaze.config.ScriptedToolNameDiscoverer
 import xyz.block.trailblaze.config.ToolNameResolver
-import xyz.block.trailblaze.config.project.toInlineScriptToolConfigs
 import xyz.block.trailblaze.config.ToolSetYamlLoader
 import xyz.block.trailblaze.config.ToolYamlConfig
 import xyz.block.trailblaze.config.ToolYamlLoader
 import xyz.block.trailblaze.config.YamlBackedHostAppTarget
+import xyz.block.trailblaze.config.toTrailblazeToolDescriptor
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.llm.config.ClasspathConfigResourceSource
 import xyz.block.trailblaze.toolcalls.ResolvedTargetIdempotentWrite
@@ -27,6 +32,7 @@ import xyz.block.trailblaze.toolcalls.ToolName
 import xyz.block.trailblaze.toolcalls.allToolNameStrings
 import xyz.block.trailblaze.toolcalls.allToolNames
 import xyz.block.trailblaze.toolcalls.getExcludedToolSurfaceForDriver
+import xyz.block.trailblaze.toolcalls.toKoogToolDescriptor
 import xyz.block.trailblaze.toolcalls.toolName
 import java.io.File
 
@@ -40,6 +46,8 @@ import java.io.File
  *      per-target via `target.tools:` (rather than through a toolset) renders `-` there and is
  *      identified by the `Kind` + `Source` columns instead. Checked into the repo and diffed in
  *      CI so any toolset/target YAML change that affects the surface is immediately visible.
+ *      A `Tokens` column and a per-driver total size the description text each tool sends the
+ *      LLM, so a PR that grows a description shows the token delta in its diff.
  *   2. **`<id>/tools/<toolName>.md`** — per-tool sidecar (one file per tool in the matrix)
  *      rendered by [ResolvedTargetToolDetailRenderer], the same renderer the workspace
  *      `trailblaze check` command emits per-target sidecars from. Sharing the renderer
@@ -145,6 +153,8 @@ class TargetToolBaselineGenerator(
 
     for (target in targets.sortedBy { it.id }) {
       val config = configsById[target.id]
+      // Every page ends with the banner, early-exit pages included: it is how
+      // [pruneOrphanedTargets] tells a generated page from a hand-authored one.
       val markdown = generateTargetMarkdown(
         target = target,
         allToolSets = toolSets,
@@ -153,11 +163,37 @@ class TargetToolBaselineGenerator(
         resolver = resolver,
         yamlDefinedByName = yamlDefinedByName,
         trailmapDir = trailmapDirsByTargetId[target.id],
-      )
+      ) + DocsGenerator.THIS_DOC_IS_GENERATED_MESSAGE + "\n"
       ResolvedTargetIdempotentWrite.writeIfChanged(
         File(targetsDir, "TARGET_${target.id}.md"),
         markdown,
       )
+    }
+    pruneOrphanedTargets(targetsDir, targets.map { it.id }.toSet())
+  }
+
+  /**
+   * Deletes the generated matrix and sidecars of every target under [targetsDir] that is not in
+   * [keepIds], so a target that is renamed, removed, or no longer discovered stops leaving a stale
+   * page behind that the docs diff gate can't see. Only generator-owned files are touched: a
+   * `TARGET_<id>.md` that doesn't end with the generated-doc banner every generated page carries,
+   * and sidecars without the sidecar banner, survive.
+   */
+  internal fun pruneOrphanedTargets(targetsDir: File, keepIds: Set<String>) {
+    targetsDir.listFiles { f -> f.isFile && f.name.startsWith("TARGET_") && f.name.endsWith(".md") }
+      .orEmpty()
+      .filter { it.name.removePrefix("TARGET_").removeSuffix(".md") !in keepIds }
+      .filter { file ->
+        runCatching { file.readText() }.getOrNull()?.trimEnd()
+          ?.endsWith(DocsGenerator.THIS_DOC_IS_GENERATED_MESSAGE) == true
+      }
+      .forEach { it.delete() }
+    targetsDir.listFiles { f -> f.isDirectory && f.name !in keepIds }.orEmpty().forEach { dir ->
+      val toolsDir = File(dir, "tools")
+      pruneStaleSidecars(toolsDir, keepNames = emptySet())
+      // Removes only directories the prune left empty.
+      toolsDir.delete()
+      dir.delete()
     }
   }
 
@@ -205,6 +241,14 @@ class TargetToolBaselineGenerator(
         toolSetDriverScope.getOrPut(tsId) { mutableSetOf() }.addAll(drivers)
       }
     }
+    // The runtime adds every compatible always-enabled toolset whether or not the target lists it
+    // (TrailblazeToolSetCatalog.resolveForDriver), so scope those to every driver; the
+    // `isCompatibleWith` check below narrows each one to the drivers it actually reaches.
+    allToolSets.filter { (_, toolSet) ->
+      toolSet.config.alwaysEnabled && allDrivers.any { toolSet.isCompatibleWith(it) }
+    }.keys.forEach { tsId ->
+      toolSetDriverScope.getOrPut(tsId) { mutableSetOf() }.addAll(allDrivers)
+    }
 
     // Build: for each tool name → which drivers it's available on + which toolsets it belongs to
     data class ToolEntry(
@@ -251,7 +295,7 @@ class TargetToolBaselineGenerator(
       scriptedNames.forEach { name ->
         if (scriptedToolsByName.containsKey(name)) return@forEach
         val discovered = discoveredScriptedByName[ToolName(name)] ?: return@forEach
-        discovered.descriptor.toInlineScriptToolConfigs().firstOrNull { it.name == name }?.let {
+        discovered.toolConfigs().firstOrNull { it.name == name }?.let {
           scriptedToolsByName[name] = it
         }
       }
@@ -333,8 +377,11 @@ class TargetToolBaselineGenerator(
     val separatorSuffix =
       if (driverHeaders.isEmpty()) "" else driverHeaders.joinToString("|") { ":---:" } + "|"
 
-    appendLine("| Tool | Toolset(s) | Kind | Source |$headerSuffix")
-    appendLine("|------|------------|------|--------|$separatorSuffix")
+    // Description tokens per tool, null when the tool is hidden from the LLM.
+    val tokensByTool = toolDetails.mapValues { (_, detail) -> llmDescriptionTokens(detail) }
+
+    appendLine("| Tool | Toolset(s) | Kind | Source | Tokens |$headerSuffix")
+    appendLine("|------|------------|------|--------|-------:|$separatorSuffix")
 
     for (toolName in toolEntries.keys.sorted()) {
       val entry = toolEntries[toolName]!!
@@ -353,11 +400,30 @@ class TargetToolBaselineGenerator(
       } else {
         toolName
       }
-      appendLine("| $toolCell | $tsLabel | $kind | $source |$cellsSuffix")
+      val tokensCell = tokensByTool[toolName]?.toString() ?: "-"
+      appendLine("| $toolCell | $tsLabel | $kind | $source | $tokensCell |$cellsSuffix")
     }
     appendLine()
 
-    appendLine(DocsGenerator.THIS_DOC_IS_GENERATED_MESSAGE)
+    if (allDrivers.isNotEmpty()) {
+      appendLine("## LLM tool-description tokens")
+      appendLine()
+      appendLine(
+        "Tool + parameter description text each driver sends the LLM: the ✅ tools above that are " +
+          "visible to the LLM, including the always-enabled framework tools every session gets. " +
+          "Tokens ≈ characters / 4. These are host-driven session totals: an Android session whose " +
+          "agent runs on the device also drops tools marked `requiresHost`.",
+      )
+      appendLine()
+      appendLine("| Driver | Tools | Tokens |")
+      appendLine("|--------|------:|-------:|")
+      for (dt in allDrivers) {
+        val sent = toolEntries.filter { (_, entry) -> dt in entry.availableOn }.keys
+          .mapNotNull { tokensByTool[it] }
+        appendLine("| ${dt.yamlKey} (${dt.platform.name}) | ${sent.size} | ${sent.sum()} |")
+      }
+      appendLine()
+    }
   }
 
   /**
@@ -427,6 +493,54 @@ class TargetToolBaselineGenerator(
       )
     }
     return null
+  }
+
+  /**
+   * Estimated tokens of the description text [detail] sends the LLM — the tool description plus
+   * every parameter description, from the same descriptor the runtime advertises — or null when
+   * the tool is hidden from the LLM (or has no reachable metadata). Characters / 4, rounded up.
+   *
+   * A descriptor that fails to build throws rather than returning null, so a broken tool fails
+   * the generator instead of reading as hidden and dropping out of the totals.
+   */
+  internal fun llmDescriptionTokens(detail: ToolDetail?): Int? {
+    val texts: List<String> = when (detail) {
+      null -> return null
+      is ToolDetail.ClassBacked -> {
+        val descriptor = detail.kclass.toKoogToolDescriptor() ?: return null
+        // Data-class params lower to nested objects whose field descriptions the LLM also receives.
+        listOf(descriptor.description) +
+          (descriptor.requiredParameters + descriptor.optionalParameters).flatMap { it.descriptionTexts() }
+      }
+      is ToolDetail.YamlDefined -> {
+        if (detail.config.surfaceToLlm == false) return null
+        val descriptor = detail.config.toTrailblazeToolDescriptor()
+        listOfNotNull(descriptor.description) +
+          (descriptor.requiredParameters + descriptor.optionalParameters).mapNotNull { it.description }
+      }
+      is ToolDetail.Scripted -> {
+        val config = detail.config
+        val metaSurface = (config.meta?.get("trailblaze/surfaceToLlm") as? JsonPrimitive)?.booleanOrNull ?: true
+        if (!config.surfaceToLlm || !metaSurface) return null
+        // Top-level properties only: the runtime flattens a scripted tool's object and array params
+        // to strings (`toKoogToolDescriptor(strict = false)`), so nested descriptions never reach the LLM.
+        val properties = config.inputSchema["properties"] as? JsonObject
+        listOfNotNull(config.description) + properties.orEmpty().values.mapNotNull { property ->
+          ((property as? JsonObject)?.get("description") as? JsonPrimitive)?.contentOrNull
+        }
+      }
+    }
+    val chars = texts.sumOf { it.length }
+    return (chars + 3) / 4
+  }
+
+  private fun ToolParameterDescriptor.descriptionTexts(): List<String> = listOf(description) + type.nestedDescriptionTexts()
+
+  private fun ToolParameterType.nestedDescriptionTexts(): List<String> = when (this) {
+    is ToolParameterType.Object -> properties.flatMap { it.descriptionTexts() }
+    is ToolParameterType.List -> itemsType.nestedDescriptionTexts()
+    is ToolParameterType.AnyOf -> types.flatMap { it.descriptionTexts() }
+    else -> emptyList()
   }
 
   // Visible to tests so a unit test can pin the banner-vs-hand-authored distinction

@@ -6,8 +6,8 @@ import maestro.device.Device
 /**
  * Finds a connected device for a host-driven run without listing every device on every call.
  *
- * A full listing ([listAll]) runs `simctl list` over every runtime and asks `devicectl` for physical
- * devices, about 1.5–2s, serialized on the CoreSimulator lock. It is reused for [ttlMs]. Past that,
+ * A full listing ([listAll]) runs `simctl list` over every runtime (and Maestro's `devicectl` probe),
+ * about 1.5–2s, serialized on the CoreSimulator lock. It is reused for [ttlMs]. Past that,
  * a simulator an earlier listing found is confirmed with [bootedSimulatorIds] (`simctl list devices
  * booted`) instead: a UDID never changes type, so a remembered simulator only has to still be
  * booted. An agent usually thinks for longer than [ttlMs] between tool calls, so without this nearly

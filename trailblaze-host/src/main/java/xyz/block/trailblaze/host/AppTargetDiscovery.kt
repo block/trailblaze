@@ -14,6 +14,7 @@ import xyz.block.trailblaze.config.project.ToolsetEntry
 import xyz.block.trailblaze.config.project.TrailblazeProjectConfig
 import xyz.block.trailblaze.config.project.TrailblazeResolvedConfig
 import xyz.block.trailblaze.config.project.TrailblazeWorkspaceConfigResolver
+import xyz.block.trailblaze.config.project.TrailmapSource
 import xyz.block.trailblaze.config.project.ResolvedTrailblazeWorkspaceConfig
 import xyz.block.trailblaze.config.project.workspaceRootFromConfigDir
 import xyz.block.trailblaze.llm.config.ConfigResourceSource
@@ -147,6 +148,7 @@ object AppTargetDiscovery {
             toolNameResolver = resolver,
             availableToolSets = toolSets,
             companions = companions,
+            trailmapDirs = workspaceTrailmapDirs(resolvedConfig),
           )
         }
         .orEmpty()
@@ -451,6 +453,29 @@ object AppTargetDiscovery {
         else -> error("Expected resolved tool entries from trailblaze.yaml discovery")
       }
     }
+
+  /**
+   * Per target id, where its trailmap and every trailmap it depends on were loaded from: manifest
+   * id → on-disk directory, or null for a classpath copy. See [YamlBackedHostAppTarget.trailmapDirs].
+   */
+  private fun workspaceTrailmapDirs(
+    resolvedConfig: TrailblazeResolvedConfig,
+  ): Map<String, Map<String, File?>> {
+    val trailmapsById = resolvedConfig.resolvedTrailmaps.associateBy { it.manifest.id }
+    return resolvedConfig.resolvedTrailmaps.mapNotNull { trailmap ->
+      val targetId = trailmap.target?.id ?: return@mapNotNull null
+      val dirs = linkedMapOf<String, File?>()
+      val pending = ArrayDeque(listOf(trailmap.manifest.id))
+      while (pending.isNotEmpty()) {
+        val id = pending.removeFirst()
+        if (id in dirs) continue
+        val resolved = trailmapsById[id] ?: continue
+        dirs[id] = (resolved.source as? TrailmapSource.Filesystem)?.trailmapDir
+        pending.addAll(resolved.manifest.dependencies)
+      }
+      targetId to dirs
+    }.toMap()
+  }
 
   private fun mergeTargets(
     discoveredTargets: Set<TrailblazeHostAppTarget>,

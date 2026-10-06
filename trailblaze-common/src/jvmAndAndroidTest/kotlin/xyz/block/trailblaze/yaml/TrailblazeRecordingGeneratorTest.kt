@@ -40,6 +40,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.toLogPayload
 import xyz.block.trailblaze.toolcalls.toLogPayloads
 import xyz.block.trailblaze.toolcalls.commands.AssertVisibleBySelectorTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.AssertVisibleTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.AssertVisibleWithTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.InputTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.LaunchAppTrailblazeTool
@@ -211,6 +212,16 @@ class TrailblazeRecordingGeneratorTest {
     session = testSession,
     timestamp = now,
     traceId = null,
+  )
+
+  /** A tap that failed live — the call that ends a failed recorded attempt in the heal tests. */
+  private fun failedContinueTap() = toolLog(
+    TapOnByElementSelector(
+      reason = "Tap continue",
+      nodeSelector = TrailblazeNodeSelector.withMatch(DriverNodeMatch.AndroidAccessibility(textRegex = "Continue")),
+    ),
+    "tapOnElementBySelector",
+    successful = false,
   )
 
   /**
@@ -1151,33 +1162,97 @@ class TrailblazeRecordingGeneratorTest {
   }
 
   @Test
-  fun failedToolsAreStillIncludedInRecording() {
+  fun aToolThatFailedLiveIsNotRecorded() {
     val step = DirectionStep(step = "Tap button")
     val logs = listOf(
       objectiveStart(step),
-      TrailblazeLog.TrailblazeToolLog(
-        trailblazeTool = TapOnByElementSelector(
+      toolLog(
+        TapOnByElementSelector(
           reason = "Tap button",
           nodeSelector = TrailblazeNodeSelector.withMatch(DriverNodeMatch.AndroidAccessibility(textRegex = "Submit")),
-        ).toLogPayload(),
-        toolName = "tapOnElementBySelector",
+        ),
+        "tapOnElementBySelector",
         successful = false,
-        exceptionMessage = "Element not found",
-        traceId = null,
-        durationMs = 100,
-        session = testSession,
-        timestamp = now,
-        isRecordable = true,
       ),
       objectiveComplete(step),
     )
 
-    val yaml = logs.recordedYaml()
+    // The step stays, unrecorded, so replay hands it to AI instead of re-running a known failure.
+    val unified = trailblazeYaml.decodeUnifiedTrail(logs.recordedYaml())
+    assertThat(unified.trail.single().recordings).isEmpty()
+  }
 
-    assertThat(yaml).contains("tapOnElementBySelector")
-    val decoded = logs.generateRecordedTrailItems(trailblazeYaml)
-    val prompts = decoded[0] as TrailYamlItem.PromptsTrailItem
-    assertThat(prompts.promptSteps[0].recording!!.tools.size).isEqualTo(1)
+  @Test
+  fun aToolThatFailedLiveOutsideAnyObjectiveWindowIsNotRecorded() {
+    // Tool logs that land outside every objective window (the MCP path) take a separate route.
+    val logs = listOf(
+      toolLog(InputTextTrailblazeTool(text = "hello"), "inputText"),
+      failedContinueTap(),
+    )
+
+    val tools = logs.generateRecordedTrailItems(trailblazeYaml).single() as TrailYamlItem.ToolTrailItem
+    assertThat(tools.tools.map { it.name }).isEqualTo(listOf("inputText"))
+  }
+
+  @Test
+  fun anAssertionThatFailedThenPassedRecordsOnlyThePassingCall() {
+    // The live shape: the agent asserts a ref with an expectedText that misses (the node's text has
+    // a newline where the agent wrote a space), the executed assertVisibleBySelector logs a failure
+    // at both dispatch layers, then the agent retries without expectedText and passes. Replaying the
+    // failed call would fail the step every time, so only the passing one may be recorded.
+    val step = VerificationStep(verify = "Verify the submission shows Jane Doe")
+    val selector = TrailblazeNodeSelector.withMatch(
+      DriverNodeMatch.AndroidAccessibility(textRegex = "Name: Jane Doe\nEmail: "),
+    )
+    val failedAssert = AssertVisibleBySelectorTrailblazeTool(
+      reason = "Check the submission result",
+      nodeSelector = selector,
+      expectedText = "Name: Jane Doe Email:",
+    )
+    val passingAssert = AssertVisibleBySelectorTrailblazeTool(
+      reason = "Check the submission result",
+      nodeSelector = selector,
+    )
+    fun trace(origin: TraceId.Companion.TraceOrigin) = TraceId.generate(origin)
+    val logs = listOf(
+      objectiveStart(step),
+      delegatingToolLog(
+        AssertVisibleTrailblazeTool(ref = "a12", expectedText = "Name: Jane Doe Email:"),
+        "assertVisible",
+        executableTools = listOf(failedAssert),
+      ),
+      toolLog(
+        failedAssert,
+        "assertVisibleBySelector",
+        isVerification = true,
+        successful = false,
+        traceId = trace(TraceId.Companion.TraceOrigin.LLM),
+      ),
+      toolLog(
+        failedAssert,
+        "assertVisibleBySelector",
+        isVerification = true,
+        successful = false,
+        traceId = trace(TraceId.Companion.TraceOrigin.TOOL),
+      ),
+      delegatingToolLog(
+        AssertVisibleTrailblazeTool(ref = "a12"),
+        "assertVisible",
+        executableTools = listOf(passingAssert),
+      ),
+      toolLog(
+        passingAssert,
+        "assertVisibleBySelector",
+        isVerification = true,
+        traceId = trace(TraceId.Companion.TraceOrigin.TOOL),
+      ),
+      objectiveComplete(step),
+    )
+
+    val unified = trailblazeYaml.decodeUnifiedTrail(logs.recordedYaml())
+
+    assertThat(unified.trail.single().recordings.getValue("android").map { it.trailblazeTool })
+      .isEqualTo(listOf<TrailblazeTool>(passingAssert))
   }
 
   @Test
@@ -2112,10 +2187,11 @@ class TrailblazeRecordingGeneratorTest {
     ).toPromptStep()
     val followUpStep = DirectionStep(step = "Open the settings tab")
     val logs = listOf(
-      // Window 1: the recorded trailhead attempt — its tool fails mid-flight.
+      // Window 1: the recorded trailhead attempt — launchApp runs, then its next tool fails.
       objectiveStart(trailheadStep),
-      toolLog(LaunchAppTrailblazeTool("com.example"), "launchApp", successful = false),
-      objectiveCompleteFailed(trailheadStep, "Recording failed at launchApp: app crashed"),
+      toolLog(LaunchAppTrailblazeTool("com.example"), "launchApp"),
+      failedContinueTap(),
+      objectiveCompleteFailed(trailheadStep, "Recording failed at tapOnElementBySelector: Continue not found"),
       // Window 2: AI recovery re-opens the same trailhead objective and heals it.
       objectiveStart(trailheadStep),
       toolLog(InputTextTrailblazeTool(text = "user@example.com"), "inputText"),
@@ -2148,7 +2224,8 @@ class TrailblazeRecordingGeneratorTest {
     val th = decoded.filterIsInstance<TrailYamlItem.TrailheadTrailItem>().single().trailhead
     assertThat(th.step).isEqualTo("Launch the app signed in")
     assertThat(th.maxRetries).isEqualTo(2)
-    // Both windows' tools survive, in execution order: the failed recorded attempt, then the heal.
+    // Both windows' passing tools survive, in execution order: the recorded attempt's, then the
+    // heal's. The call that failed is not recorded.
     assertThat(th.tools!!.map { it.name })
       .isEqualTo(listOf("launchApp", "inputText", "tapOnElementBySelector"))
     // The follow-up step is untouched and sits after the trailhead.
@@ -2173,8 +2250,9 @@ class TrailblazeRecordingGeneratorTest {
     ).toPromptStep()
     val logs = listOf(
       objectiveStart(trailheadStep),
-      toolLog(LaunchAppTrailblazeTool("com.example"), "launchApp", successful = false),
-      objectiveCompleteFailed(trailheadStep, "Recording failed at launchApp: app crashed"),
+      toolLog(LaunchAppTrailblazeTool("com.example"), "launchApp"),
+      failedContinueTap(),
+      objectiveCompleteFailed(trailheadStep, "Recording failed at tapOnElementBySelector: Continue not found"),
       objectiveStart(trailheadStep),
       toolLog(InputTextTrailblazeTool(text = "user@example.com"), "inputText"),
       objectiveComplete(trailheadStep),
@@ -2208,8 +2286,9 @@ class TrailblazeRecordingGeneratorTest {
     ).toPromptStep()
     val logs = listOf(
       objectiveStart(trailheadStep),
-      toolLog(LaunchAppTrailblazeTool("com.example"), "launchApp", successful = false),
-      objectiveCompleteFailed(trailheadStep, "Recording failed at launchApp: app crashed"),
+      toolLog(LaunchAppTrailblazeTool("com.example"), "launchApp"),
+      failedContinueTap(),
+      objectiveCompleteFailed(trailheadStep, "Recording failed at tapOnElementBySelector: Continue not found"),
       objectiveStart(trailheadStep),
       objectiveComplete(trailheadStep),
     )
@@ -2267,10 +2346,12 @@ class TrailblazeRecordingGeneratorTest {
     ).toPromptStep()
     val logs = listOf(
       objectiveStart(trailheadStep),
-      toolLog(LaunchAppTrailblazeTool("com.example"), "launchApp", successful = false),
-      objectiveCompleteFailed(trailheadStep, "Recording failed at launchApp: app crashed"),
+      toolLog(LaunchAppTrailblazeTool("com.example"), "launchApp"),
+      failedContinueTap(),
+      objectiveCompleteFailed(trailheadStep, "Recording failed at tapOnElementBySelector: Continue not found"),
       objectiveStart(trailheadStep),
-      toolLog(InputTextTrailblazeTool(text = "user@example.com"), "inputText", successful = false),
+      toolLog(InputTextTrailblazeTool(text = "user@example.com"), "inputText"),
+      failedContinueTap(),
       objectiveCompleteFailed(trailheadStep, "First heal attempt gave up"),
       objectiveStart(trailheadStep),
       toolLog(
@@ -2324,6 +2405,32 @@ class TrailblazeRecordingGeneratorTest {
     val th = logs.generateRecordedTrailItems(trailblazeYaml)
       .filterIsInstance<TrailYamlItem.TrailheadTrailItem>().single().trailhead
     assertThat(th.tools!!.single().name).isEqualTo("launchApp")
+  }
+
+  @Test
+  fun aFailedCompositeKeepsTheNestedCallsThatRanOnTheDevice() {
+    // A composite that failed partway is not recorded, but the nested calls that succeeded inside it
+    // changed the app, so they stay in the recording and replay reaches the screen the agent
+    // recovered from. Dropping them with the parent would replay the recovery from the wrong screen.
+    val step = DirectionStep(step = "Sign in")
+    val base = now.toEpochMilliseconds()
+    fun at(offsetMs: Long) = kotlinx.datetime.Instant.fromEpochMilliseconds(base + offsetMs)
+    val nestedTap = TapOnByElementSelector(
+      reason = "Tap sign in",
+      nodeSelector = TrailblazeNodeSelector.withMatch(DriverNodeMatch.AndroidAccessibility(textRegex = "Sign in")),
+    )
+    val logs = listOf(
+      objectiveStart(step),
+      toolLog(nestedTap, "tapOnElementBySelector", timestamp = at(1_000), durationMs = 500),
+      toolLog(LaunchAppTrailblazeTool("com.example"), "launchApp", timestamp = at(0), durationMs = 60_000, successful = false),
+      toolLog(InputTextTrailblazeTool(text = "user@example.com"), "inputText", timestamp = at(70_000), durationMs = 500),
+      objectiveComplete(step),
+    )
+
+    val recorded = logs.generateRecordedTrailItems(trailblazeYaml)
+      .filterIsInstance<TrailYamlItem.PromptsTrailItem>().single()
+      .promptSteps.single().recording!!.tools.map { it.name }
+    assertThat(recorded).isEqualTo(listOf("tapOnElementBySelector", "inputText"))
   }
 
   @Test

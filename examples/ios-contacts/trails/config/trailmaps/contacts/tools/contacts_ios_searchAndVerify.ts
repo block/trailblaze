@@ -4,28 +4,15 @@ import { filterNonEmptyStrings, nonEmptyString } from "./contacts_ios_shared";
 export interface SearchAndVerifyArgs {
   /** Name to search for. */
   query?: string;
-  /**
-   * Visible name expected on the opened contact's detail screen. Defaults to
-   * `query`; pass explicitly when the query is a prefix and the destination
-   * row carries a fuller name.
-   */
+  /** Name of the result row to open and expect on its detail screen. Defaults to `query`. */
   expectedName?: string;
-  /**
-   * Optional list of field labels the contact must surface. Forwarded to
-   * `contacts_ios_verifyContactStructure`. Empty list skips field
-   * assertions.
-   */
+  /** Field labels the contact must show, e.g. "phone". Empty skips field checks. */
   requireFields?: string[];
 }
 
 /**
- * Search Contacts for a name AND verify the resulting contact's detail screen
- * is well-formed in a single tool call. Use this whenever the task combines
- * "search for X" with "verify the contact has Y", e.g. "search for Albert
- * Einstein and confirm the contact has a phone number". Composes the
- * existing `contacts_ios_searchContacts` and
- * `contacts_ios_verifyContactStructure` tools so callers get both behaviors
- * with one round-trip.
+ * Search Contacts for a name, open the first match, and verify its detail
+ * screen shows the name and any required fields, in one call.
  */
 // Composition pattern (not LLM-facing):
 // Does NOT call any iOS-primitive tool directly — delegates to two existing

@@ -62,7 +62,7 @@ class HomeEndpointTest {
     val body = client.get("/").bodyAsText()
 
     assertTrue("href=\"/trailrunner/\"" in body, "expected a direct Trail Runner link")
-    assertTrue("Open Trail Runner" in body, "expected Trail Runner to be the primary action")
+    assertTrue("Open Trailblaze App" in body, "expected the Trailblaze App to be the primary action")
     assertTrue("href=\"/report\"" in body, "expected the all-session report link")
     assertTrue("href=\"/devices\"" in body, "expected the devices link")
     assertTrue("href=\"/ping\"" in body, "expected the health-check link")

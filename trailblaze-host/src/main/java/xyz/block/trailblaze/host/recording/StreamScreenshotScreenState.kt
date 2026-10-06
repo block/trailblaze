@@ -1,6 +1,8 @@
 package xyz.block.trailblaze.host.recording
 
 import xyz.block.trailblaze.api.ScreenState
+import xyz.block.trailblaze.api.TrailblazeNode
+import xyz.block.trailblaze.host.screenstate.SecondaryTreeCarrier
 import xyz.block.trailblaze.setofmark.SetOfMarkAnnotator
 
 /**
@@ -17,9 +19,26 @@ import xyz.block.trailblaze.setofmark.SetOfMarkAnnotator
 class StreamScreenshotScreenState(
   private val delegate: ScreenState,
   private val streamJpegBytes: ByteArray,
-) : ScreenState by delegate {
+) : ScreenState by delegate, SecondaryTreeCarrier {
 
   override val screenshotBytes: ByteArray = streamJpegBytes
+
+  // The secondary capture already happened inside the delegate's build, before this frame was
+  // even awaited; forward it rather than re-reading it here against a newer screen.
+  private val carrier: SecondaryTreeCarrier? = delegate as? SecondaryTreeCarrier
+
+  override val secondaryTreeCaptureRan: Boolean
+    get() = carrier?.secondaryTreeCaptureRan == true
+
+  override val driverMigrationTreeNode: TrailblazeNode?
+    get() = carrier?.driverMigrationTreeNode
+
+  override val secondaryTreeFailure: String?
+    get() = carrier?.secondaryTreeFailure
+
+  /** The delegate's stamp, so a re-match against this state compares against the tree read. */
+  override val treeCapturedAtHostMs: Long
+    get() = carrier?.treeCapturedAtHostMs ?: 0L
 
   private val _annotatedScreenshotBytes: ByteArray by lazy {
     SetOfMarkAnnotator.annotate(

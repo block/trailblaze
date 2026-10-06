@@ -548,6 +548,8 @@ data class SessionSummary(
   val imported: Boolean = false,
   /** Consumer-injected key/values from the trail's `config.metadata`, for shared-report parity. */
   val metadata: Map<String, TrailMetadataValue>? = null,
+  /** Immutable GitHub permalink to the trail source that triggered this run, when known. */
+  val trailSourceUrl: String? = null,
 )
 
 @Serializable
@@ -950,7 +952,6 @@ data class SettingsDto(
   val serverHttpsPort: Int,
   val showTrailsTab: Boolean,
   val showDevicesTab: Boolean,
-  val showWaypointsTab: Boolean,
   val preferHostAgent: Boolean = true,
   val trailsDirectory: String? = null,
   val logsDirectory: String? = null,
@@ -987,7 +988,6 @@ data class SettingsPatchRequest(
   val serverHttpsPort: Int? = null,
   val showTrailsTab: Boolean? = null,
   val showDevicesTab: Boolean? = null,
-  val showWaypointsTab: Boolean? = null,
   val preferHostAgent: Boolean? = null,
   val trailsDirectory: String? = null,
   val logsDirectory: String? = null,

@@ -19,12 +19,110 @@ function truncate(s: unknown, n = 60): string {
 }
 
 /**
- * A session's device→host clock offsets in ms, keyed by the tool log's `deviceName`, plus the
- * session-wide value for logs that carry no usable key.
+ * A session's device→host clock offsets in ms, keyed by the device each log came from (see
+ * [logDeviceKey]), plus the session-wide value for logs that carry no usable key.
  */
 export interface DeviceClockOffsets {
   byDeviceName: Map<string | null, number>;
   sessionWideMs: number;
+  /** When each binding became the active one, host clock, ascending — see [deviceHandovers]. */
+  handovers: Array<{ atMs: number; name: string }>;
+  /** The device each trace ran on, for driver logs that arrive late — see [devicesByTraceId]. */
+  devicesByTraceId: Map<string, string | null>;
+}
+
+const nonEmptyName = (value: unknown): string | null => (typeof value === 'string' && value ? value : null);
+
+/**
+ * When each binding of a multi-device session became the active one, on the host clock: every
+ * host-clock tool log that names its device — `switchDevice` included, logged under its
+ * destination — in time order. A failed handover never moved the session, so it is skipped. Empty
+ * for a single-device session, which leaves every lookup exactly as it was before.
+ *
+ * Each log counts at its completion (`timestamp + durationMs`): the host stamps the binding active
+ * when a tool finished, so a wrapper that switched devices mid-way names the device it ended on.
+ */
+function deviceHandovers(logs: TrailblazeLogRecord[]): Array<{ atMs: number; name: string }> {
+  const out: Array<{ atMs: number; name: string }> = [];
+  for (const log of logs || []) {
+    if (!log || logClass(log) !== 'TrailblazeToolLog' || log.clock === 'device') continue;
+    const name = nonEmptyName(log.deviceName);
+    if (!name || (log.toolName === 'switchDevice' && log.successful === false)) continue;
+    const startMs = parseLogTimestamp(log.timestamp);
+    if (startMs != null) out.push({ atMs: startMs + durationOf(log), name });
+  }
+  return out.sort((a, b) => a.atMs - b.atMs);
+}
+
+/** The binding the latest handover at or before `receivedAt` named; null before the first. */
+function handoverAt(handovers: Array<{ atMs: number; name: string }>, receivedAt: number | null): string | null {
+  if (receivedAt == null) return null;
+  let lo = 0;
+  let hi = handovers.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (handovers[mid].atMs <= receivedAt) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo > 0 ? handovers[lo - 1].name : null;
+}
+
+const durationOf = (log: TrailblazeLogRecord): number =>
+  typeof log.durationMs === 'number' && Number.isFinite(log.durationMs) ? log.durationMs : 0;
+
+/**
+ * A tool log's device: its own `deviceName`, else the binding the latest handover named when the
+ * host received it (`hostReceivedAt`, host clock like the handovers). Device-emitted logs mostly
+ * carry no name — an RPC-dispatched tool is logged by a device that holds no bindings — and
+ * execution is sequential, so receipt time is what tells two unnamed devices apart.
+ */
+function toolLogDeviceKey(log: TrailblazeLogRecord, handovers: Array<{ atMs: number; name: string }>): string | null {
+  return nonEmptyName(log.deviceName) ?? handoverAt(handovers, parseLogTimestamp(log.hostReceivedAt));
+}
+
+/**
+ * The device each trace ran on, from the tool logs that carry it. A trace whose tool logs resolve
+ * to more than one device (a wrapper that switched mid-way) is left out.
+ */
+function devicesByTraceId(
+  logs: TrailblazeLogRecord[],
+  handovers: Array<{ atMs: number; name: string }>,
+): Map<string, string | null> {
+  const devices = new Map<string, string | null>();
+  const ambiguous = new Set<string>();
+  for (const log of logs || []) {
+    if (!log || logClass(log) !== 'TrailblazeToolLog') continue;
+    const traceId = nonEmptyName(log.traceId);
+    if (!traceId) continue;
+    const device = toolLogDeviceKey(log, handovers);
+    if (devices.has(traceId) && devices.get(traceId) !== device) ambiguous.add(traceId);
+    else devices.set(traceId, device);
+  }
+  for (const traceId of ambiguous) devices.delete(traceId);
+  return devices;
+}
+
+/**
+ * Which device a log came from. A tool log: [toolLogDeviceKey]. Any other log (a driver
+ * screenshot, which carries no name) takes its tool's device by `traceId` first — its upload can
+ * land after the next `switchDevice`, so its receipt time can name the wrong device — and receipt
+ * time otherwise. Null (the device the session started on) when nothing attributes it.
+ */
+function logDeviceKey(log: TrailblazeLogRecord, offsets: DeviceClockOffsets): string | null {
+  if (logClass(log) !== 'TrailblazeToolLog' && !nonEmptyName(log.deviceName)) {
+    const traceId = nonEmptyName(log.traceId);
+    if (traceId && offsets.devicesByTraceId.has(traceId)) return offsets.devicesByTraceId.get(traceId) ?? null;
+  }
+  return toolLogDeviceKey(log, offsets.handovers);
+}
+
+/**
+ * The offset that puts a device-stamped log on the host clock. A log nothing attributes takes the
+ * unnamed bucket — the device the session started on; a device this session never anchored falls
+ * back to session-wide.
+ */
+function logOffsetMs(log: TrailblazeLogRecord, offsets: DeviceClockOffsets): number {
+  return offsets.byDeviceName.get(logDeviceKey(log, offsets)) ?? offsets.sessionWideMs;
 }
 
 /**
@@ -44,7 +142,8 @@ function parseLogTimestamp(value: unknown): number | null {
  * finishes, so every sample is the true skew PLUS that upload's latency. The MINIMUM across a
  * device's samples is used because latency only ever adds: the least-delayed upload is the closest
  * measurement of pure skew, and a batched upload contributes nothing to a minimum. Per device, not
- * per session, because a multi-device session binds devices with independent clocks.
+ * per session, because a multi-device session binds devices with independent clocks — and a
+ * sample counts toward the device that sent it, by name or by handover ([toolLogDeviceKey]).
  *
  * Null when the session has no anchored device-clock tool log — an all-host session, logs written
  * before the marker existed, or device logs pulled off the device's own disk without ever reaching
@@ -57,14 +156,15 @@ function parseLogTimestamp(value: unknown): number | null {
  * and one derivation that drifts from another is the bug it exists to prevent.
  */
 function deviceClockOffsets(logs: TrailblazeLogRecord[]): DeviceClockOffsets | null {
+  const handovers = deviceHandovers(logs);
   const samplesByDevice = new Map<string | null, number[]>();
   for (const log of logs || []) {
     if (logClass(log) !== 'TrailblazeToolLog' || log.clock !== 'device') continue;
     const ts = parseLogTimestamp(log.timestamp);
     const receivedAt = parseLogTimestamp(log.hostReceivedAt);
     if (ts == null || receivedAt == null) continue;
-    const dur = typeof log.durationMs === 'number' && Number.isFinite(log.durationMs) ? log.durationMs : 0;
-    const key = typeof log.deviceName === 'string' && log.deviceName ? log.deviceName : null;
+    const dur = durationOf(log);
+    const key = toolLogDeviceKey(log, handovers);
     const samples = samplesByDevice.get(key);
     if (samples) samples.push(receivedAt - (ts + dur));
     else samplesByDevice.set(key, [receivedAt - (ts + dur)]);
@@ -77,7 +177,7 @@ function deviceClockOffsets(logs: TrailblazeLogRecord[]): DeviceClockOffsets | n
     byDeviceName.set(key, min);
     sessionWideMs = Math.min(sessionWideMs, min);
   }
-  return { byDeviceName, sessionWideMs };
+  return { byDeviceName, sessionWideMs, handovers, devicesByTraceId: devicesByTraceId(logs, handovers) };
 }
 
 /**
@@ -116,9 +216,7 @@ function normalizedToHostClock(logs: TrailblazeLogRecord[]): TrailblazeLogRecord
     if (!log || log.clock !== 'device') return log;
     const ts = parseLogTimestamp(log.timestamp);
     if (ts == null) return log;
-    const key = typeof log.deviceName === 'string' && log.deviceName ? log.deviceName : null;
-    const offset = logClass(log) === 'TrailblazeToolLog' ? offsets.byDeviceName.get(key) : undefined;
-    const shifted = ts + (offset ?? offsets.sessionWideMs);
+    const shifted = ts + logOffsetMs(log, offsets);
     return { ...log, timestamp: withSubMillis(log.timestamp as string, shifted), clock: 'host' };
   });
 }
@@ -253,7 +351,7 @@ function localRunAgentPrompt(meta: RunMeta | null | undefined): string | null {
     meta.platform ? `Platform: ${meta.platform}` : null,
   ].filter(Boolean).join('\n');
   const trail = meta.trailId ? `the ${meta.trailId} trail` : 'the same trail';
-  return `Run this Trailblaze test locally and report the result.\n\n${context ? `${context}\n\n` : ''}From the repository root, use either:\n- Trailblaze CLI: \`${meta.cmd}\`\n- Trail Runner: run \`./trailblaze app --v2\`, select ${trail}, and run it.\n\nUse the same target and platform as the original run. If local setup blocks execution, diagnose it, fix it when safe, and retry the test.`;
+  return `Run this Trailblaze test locally and report the result.\n\n${context ? `${context}\n\n` : ''}From the repository root, use either:\n- Trailblaze CLI: \`${meta.cmd}\`\n- Trailblaze App: run \`./trailblaze app\`, select ${trail}, and run it.\n\nUse the same target and platform as the original run. If local setup blocks execution, diagnose it, fix it when safe, and retry the test.`;
 }
 
 // A web capture logs the SAME ARIA snapshot as two parallel trees, whose bounds come from two
@@ -958,10 +1056,9 @@ function parseLlmResponse(resp: unknown): LlmResponsePart[] {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Input-token composition (parity with the legacy WASM report's LLM Usage tab).
+// Input-token composition.
 //
-// Parity anchor: LlmUsageComposable.kt (trailblaze-ui, xyz.block.trailblaze.ui.tabs.session)
-// renders, per request, the LlmInputTokenBreakdown that LlmTokenBreakdownEstimator
+// Source of truth: the per-request LlmInputTokenBreakdown that LlmTokenBreakdownEstimator
 // .estimateBreakdown (trailblaze-models, xyz.block.trailblaze.llm.LlmTokenBreakdownEstimator)
 // computed at agent runtime and stored on the log's llmRequestUsageAndCost. Extraction embeds
 // those numbers as a small `comp` object — never the messages themselves. When a log predates
@@ -1701,7 +1798,7 @@ function toSessionPayloads({ generatedAt, sessions }: { generatedAt?: string; se
 
 export {
   truncate, logClass, originalYamlFromLogs, yamlRootSection, declaredTrailSteps, localRunAgentPrompt, extractTrace, mergeWebHierarchyBounds,
-  deviceClockOffsets, normalizedToHostClock, parseLogTimestamp,
+  deviceClockOffsets, logOffsetMs, normalizedToHostClock, parseLogTimestamp,
   toolChildren, describeAction, parseLlmResponse, extractLlmLogs, estimateLlmComp, stepText, toolDetail,
   summarizeToolArgs, describeSelector, slimTraceForShare, slimLlmForShare, toSessionPayloads, traceScreenshotFiles, captureFrameFile, captureFrameFiles,
   isLlmTurnRow, traceStepCount, rowToolCallCount, traceToolCallCount, extractLlmTranscripts, transcriptCallMessages,

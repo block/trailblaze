@@ -8,6 +8,8 @@ import xyz.block.trailblaze.api.TrailblazeNode
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
 import xyz.block.trailblaze.host.axe.AxeCli
 import xyz.block.trailblaze.host.axe.AxeJsonMapper
+import xyz.block.trailblaze.host.screenstate.SecondaryTreeResult
+import xyz.block.trailblaze.util.Console
 
 /**
  * Enriches a Maestro-captured iOS [TrailblazeNode] tree with nodes from `axe describe-ui`.
@@ -81,23 +83,52 @@ object AxeTreeOverlay {
     udid: String,
     isAvailable: () -> Boolean = AxeCli::isAvailable,
     describeUi: (String) -> AxeCli.Result = AxeCli::describeUi,
-  ): TrailblazeNode? {
-    if (!isAvailable()) return null
+  ): TrailblazeNode? = captureAxeTreeResult(
+    udid = udid,
+    availability = { if (isAvailable()) AxeCli.Availability.AVAILABLE else AxeCli.Availability.MISSING },
+    describeUi = describeUi,
+  ).tree
+
+  /**
+   * [captureAxeTree] plus the reason it declined, for callers that report the cause to the user
+   * instead of silently continuing on the Maestro-only tree. The reason distinguishes the ways this
+   * fails: `axe` absent, below [AxeCli.MIN_VERSION], or not answering its `--version` probe; a
+   * describe-ui non-zero exit (which carries axe's own stderr, including its timeout message); and
+   * a throw out of the subprocess or the JSON parse.
+   *
+   * Only a missing or too-old binary is [SecondaryTreeResult.permanent]. A binary that isn't there
+   * stays not there, so a caller may stop asking; a `--version` probe or a describe-ui that timed
+   * out or exited non-zero on one moving screen says nothing about the next one.
+   */
+  fun captureAxeTreeResult(
+    udid: String,
+    availability: () -> AxeCli.Availability = AxeCli::availability,
+    describeUi: (String) -> AxeCli.Result = AxeCli::describeUi,
+  ): SecondaryTreeResult {
+    when (availability()) {
+      AxeCli.Availability.AVAILABLE -> Unit
+      AxeCli.Availability.MISSING -> return SecondaryTreeResult.unavailable("axe is not installed")
+      AxeCli.Availability.TOO_OLD ->
+        return SecondaryTreeResult.unavailable("axe is older than ${AxeCli.MIN_VERSION}")
+      AxeCli.Availability.UNKNOWN ->
+        return SecondaryTreeResult.failed("axe --version did not answer (timed out, failed or threw)")
+    }
     // Guard the whole read: a subprocess throw (ProcessBuilder.start under fd pressure, a drain
     // timeout) or a parse throw must decline to the Maestro-only tree, never fail the replay step.
     return try {
       val res = describeUi(udid)
       if (!res.success) {
-        System.err.println("[AxeTreeOverlay] axe describe-ui failed: ${res.stderr.trim()}")
-        null
+        val stderr = res.stderr.trim()
+        Console.error("[AxeTreeOverlay] axe describe-ui failed: $stderr")
+        SecondaryTreeResult.failed("axe describe-ui exited ${res.exitCode}: $stderr")
       } else {
-        AxeJsonMapper.parse(res.stdout)
+        SecondaryTreeResult(AxeJsonMapper.parse(res.stdout))
       }
     } catch (e: CancellationException) {
       throw e
     } catch (e: Exception) {
-      System.err.println("[AxeTreeOverlay] axe describe-ui errored: ${e.message}")
-      null
+      Console.error("[AxeTreeOverlay] axe describe-ui errored: ${e.message}")
+      SecondaryTreeResult.failed("axe describe-ui errored: ${e.message}")
     }
   }
 

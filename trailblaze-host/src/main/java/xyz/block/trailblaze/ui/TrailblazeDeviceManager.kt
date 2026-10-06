@@ -19,6 +19,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.serialization.json.JsonElement
 import java.util.concurrent.Callable
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentHashMap
@@ -34,6 +35,7 @@ import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.devices.WebInstanceIds
 import xyz.block.trailblaze.capture.CaptureOptions
+import xyz.block.trailblaze.capture.logcat.CrashEventArtifactWriter
 import xyz.block.trailblaze.host.animations.SessionAnimationDisabler
 import xyz.block.trailblaze.host.dexopt.SessionAppCompileEnsurer
 import xyz.block.trailblaze.host.turbo.SessionTurboAttacher
@@ -48,7 +50,6 @@ import xyz.block.trailblaze.host.driver.DescriptorDeviceDiscovery
 import xyz.block.trailblaze.host.driver.HostDeviceInventory
 import xyz.block.trailblaze.host.driver.HostScreenStateDeps
 import xyz.block.trailblaze.host.driver.HostDriverDescriptorRegistry
-import xyz.block.trailblaze.host.devices.WebBrowserState
 import xyz.block.trailblaze.host.recording.DeviceConnectionService
 import xyz.block.trailblaze.llm.RunYamlRequest
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
@@ -67,10 +68,8 @@ import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.model.findById
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
-import xyz.block.trailblaze.ui.composables.DeviceClassifierIconProvider
 import xyz.block.trailblaze.ui.devices.DeviceManagerState
 import xyz.block.trailblaze.ui.devices.DeviceState
-import xyz.block.trailblaze.ui.models.AppIconProvider
 import xyz.block.trailblaze.ui.models.TrailblazeServerState
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
 import xyz.block.trailblaze.yaml.fromTrailblazeTool
@@ -107,8 +106,6 @@ class TrailblazeDeviceManager(
    * empty the picker.
    */
   private val freshAppTargetsProvider: ((failFast: Boolean) -> Set<TrailblazeHostAppTarget>)? = null,
-  val appIconProvider: AppIconProvider,
-  val deviceClassifierIconProvider: DeviceClassifierIconProvider,
   private val runYamlLambda: (desktopAppRunYamlParams: DesktopAppRunYamlParams) -> Unit,
   private val installedAppIdsProviderBlocking: (TrailblazeDeviceId) -> Set<String>,
   private val appVersionInfoProviderBlocking: (TrailblazeDeviceId, String) -> AppVersionInfo? = { _, _ -> null },
@@ -266,15 +263,12 @@ class TrailblazeDeviceManager(
       lock = appTargetDiscoveryLock,
     )
 
-  /**
-   * Manages the web browser lifecycle for web testing.
-   * Use [launchWebBrowser] and [closeWebBrowser] to control the browser.
-   */
+  /** Manages the web browser lifecycle for web testing. */
   val webBrowserManager = WebBrowserManager()
 
   /**
-   * Shared connection service for both the desktop recording tab and the HTTP recording
-   * API. Centralizes the platform-specific connect logic so both surfaces stay in sync.
+   * Shared connection service for the HTTP recording API. Centralizes the platform-specific
+   * connect logic.
    */
   val connectionService = DeviceConnectionService(this)
 
@@ -286,45 +280,6 @@ class TrailblazeDeviceManager(
    * publish into the same registry, and the shared streaming endpoint can serve any of them.
    */
   val hostDeviceSessionManager = xyz.block.trailblaze.host.recording.rpc.HostDeviceSessionManager()
-
-  /**
-   * Exposes the web browser state for UI observation.
-   */
-  val webBrowserStateFlow: StateFlow<WebBrowserState> = webBrowserManager.browserStateFlow
-
-  /**
-   * Launches a web browser for testing asynchronously.
-   * The browser will appear as a device in the device list once running.
-   * Browser state can be observed via [webBrowserStateFlow].
-   */
-  fun launchWebBrowser() {
-    val savedViewport = settingsRepo.serverStateFlow.value.appConfig.webViewport
-    // Explicitly sync the slot's viewport spec so the desktop UI's stored value is
-    // authoritative — including the "clear back to default" case. Without this,
-    // [WebBrowserManager.launchBrowser] only writes when its `viewportSpec` arg is
-    // non-null, so a slot that earlier received e.g. `device create web --emulate
-    // "iPhone 14"` would inherit that stale spec on the next desktop-UI launch even
-    // after the user cleared the desktop viewport field.
-    webBrowserManager.setViewportSpec(
-      instanceId = WebBrowserManager.PLAYWRIGHT_NATIVE_INSTANCE_ID,
-      viewportSpec = savedViewport,
-    )
-    webBrowserManager.launchBrowser(viewportSpec = savedViewport) {
-      // Refresh device list to include the new browser
-      loadDevices()
-    }
-  }
-
-  /**
-   * Closes the web browser asynchronously.
-   * The browser will be removed from the device list.
-   */
-  fun closeWebBrowser() {
-    webBrowserManager.closeBrowser {
-      // Refresh device list to remove the browser
-      loadDevices()
-    }
-  }
 
   // Internal (not private) so WebModeGateMembershipTest can exercise the gate directly.
   internal val targetDeviceFilter: (List<TrailblazeConnectedDeviceSummary>) -> List<TrailblazeConnectedDeviceSummary> =
@@ -429,8 +384,8 @@ class TrailblazeDeviceManager(
    * On-demand per-device app inventory (installed app IDs + version info). Discovery no longer
    * probes this eagerly — the per-device probe (`pm list packages` / `simctl listapps`) was the
    * dominant cost of every enumeration whenever an iOS simulator was booted (OSS issue
-   * block/trailblaze#216). Consumers that need inventory pull it via [refreshAppInventory] /
-   * [refreshAppInventoryAsync]; discovery only [DeviceAppInventory.prune]s disconnected devices.
+   * block/trailblaze#216). Consumers that need inventory pull it via [refreshAppInventory];
+   * discovery only [DeviceAppInventory.prune]s disconnected devices.
    */
   private val appInventory = DeviceAppInventory(
     scope = loadDevicesScope,
@@ -563,7 +518,7 @@ class TrailblazeDeviceManager(
         ?: error(
           "Trail declares target '$trailConfigTarget' which is not registered in this daemon " +
             "(available: ${availableAppTargets.map { it.id }.sorted()}). " +
-            "Fix the trail's target:, create the target, or restart Trail Runner to pick up edits.",
+            "Fix the trail's target:, create the target, or restart Trailblaze App to pick up edits.",
         )
     } else {
       // A CLI session's `--target` / `TRAILBLAZE_TARGET` outranks the daemon-wide selection, as it
@@ -577,7 +532,7 @@ class TrailblazeDeviceManager(
           ?: error(
             "This session's target '$sessionTargetId' is not registered in this daemon " +
               "(available: ${availableAppTargets.map { it.id }.sorted()}). " +
-              "Pass a registered --target, or restart Trail Runner to pick up target edits.",
+              "Pass a registered --target, or restart Trailblaze App to pick up target edits.",
           )
       } else {
         getCurrentSelectedTargetApp()
@@ -1114,13 +1069,50 @@ class TrailblazeDeviceManager(
    */
   fun failSucceededSessionOnFinalization(sessionId: SessionId, failure: Throwable): String {
     val message = describeCaptureFailure(failure)
+    failSucceededSession(sessionId, message, failure.stackTraceToString())
+    return message
+  }
+
+  /**
+   * Fails a run's session that already ended succeeded when the app crashed during it, and returns
+   * the message to fail the run with; null when the session recorded no crash. The steps passed,
+   * but against an app that went down, so the run proved nothing. Call it once the session's
+   * capture has stopped: the crash index is only written then, which is also why, like a
+   * finalization failure, it replaces an end that is already written.
+   *
+   * Null too when the session already ended otherwise: an on-device run's result passes whatever
+   * its session's end, and a crash message would replace that run's own failure.
+   */
+  fun failSucceededSessionIfAppCrashed(sessionId: SessionId): String? {
+    val crash = CrashEventArtifactWriter.failure(logsRepo.getSessionDir(sessionId)) ?: return null
+    // The written end only: a run whose end never landed must still fail on its crash, not read as abandoned.
+    val end = logsRepo.persistedEndStatus(sessionId)
+    if (end != null && end !is SessionStatus.Ended.Succeeded && end !is SessionStatus.Ended.SucceededWithSelfHeal) {
+      return null
+    }
+    failSucceededSession(
+      sessionId,
+      crash.message,
+      exceptionStackTrace = null,
+      failureKind = CrashEventArtifactWriter.FAILURE_KIND,
+      failurePayload = crash.payload,
+    )
+    return crash.message
+  }
+
+  private fun failSucceededSession(
+    sessionId: SessionId,
+    message: String,
+    exceptionStackTrace: String?,
+    failureKind: String? = null,
+    failurePayload: JsonElement? = null,
+  ) {
     try {
-      logsRepo.failSucceededEnd(sessionId, message, failure.stackTraceToString())
+      logsRepo.failSucceededEnd(sessionId, message, exceptionStackTrace, failureKind, failurePayload)
     } catch (e: Exception) {
       // The run still fails: its result is marked a finalization failure, which disk can't override.
-      Console.log("Failed to record the finalization failure on session $sessionId: ${e.message}")
+      Console.log("Failed to record the run's failure on session $sessionId: ${e.message}")
     }
-    return message
   }
 
   /**
@@ -2186,30 +2178,6 @@ class TrailblazeDeviceManager(
     deviceId = trailblazeDeviceId,
     relevantAppIds = if (includeVersionInfo) relevantAppIdsForVersionInfo() else emptySet(),
   )
-
-  /**
-   * Fire-and-forget [refreshAppInventory] for each mobile device in [deviceIds] — the reactive
-   * trigger for UI that renders from the inventory flows (Run Configuration dialog, debug tab).
-   * Virtual devices (web, Compose desktop) have no installable apps and are skipped, and
-   * duplicate ids collapse (two driver rows can share one [TrailblazeDeviceId]).
-   *
-   * Retries a failed probe once. The UI triggers this from an effect keyed on the device list,
-   * so without a retry a single timeout would leave that device rendered as "app not
-   * installed" until the user happened to hit Refresh — where discovery used to re-attempt the
-   * probe on its next pass.
-   */
-  fun refreshAppInventoryAsync(deviceIds: Collection<TrailblazeDeviceId>) {
-    deviceIds
-      .toSet()
-      .filter { !it.trailblazeDevicePlatform.usesVirtualDevice }
-      .forEach { deviceId ->
-        loadDevicesScope.launch {
-          if (refreshAppInventory(deviceId) == null) {
-            refreshAppInventory(deviceId)
-          }
-        }
-      }
-  }
 
   /**
    * Version info is probed only for apps that belong to available app targets — probing every

@@ -11,7 +11,6 @@ import xyz.block.trailblaze.config.ToolYamlConfig
 import xyz.block.trailblaze.config.ToolYamlLoader
 import xyz.block.trailblaze.config.project.TrailmapSource
 import xyz.block.trailblaze.config.project.ResolvedTrailmap
-import xyz.block.trailblaze.config.project.toInlineScriptToolConfigs
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.scripting.mcp.TrailblazeToolMeta
 import kotlinx.serialization.json.JsonObject
@@ -1021,7 +1020,7 @@ object ResolvedTargetReportEmitter {
       toolsetScriptedToolNames.forEach { name ->
         if (byName.containsKey(name)) return@forEach
         val descriptor = discovered[ToolName(name)] ?: return@forEach
-        val config = descriptor.descriptor.toInlineScriptToolConfigs().firstOrNull { it.name == name }
+        val config = descriptor.toolConfigs().firstOrNull { it.name == name }
           ?: return@forEach
         // relPath is `<trailmap-id>/tools/...`; its first segment is the origin trailmap. The
         // scripted-sidecar pass derives `originTrailmapDir` from this id via [trailmapsById].
@@ -1146,6 +1145,7 @@ object ResolvedTargetReportEmitter {
       Triple("tool_sets", own.toolSets) { it.toolSets },
       Triple("tools", own.tools) { it.tools },
       Triple("excluded_tools", own.excludedTools) { it.excludedTools },
+      Triple("always_shown_tools", own.alwaysShownTools) { it.alwaysShownTools },
       Triple("drivers", own.drivers) { it.drivers },
       Triple("base_url", own.baseUrl) { it.baseUrl },
       Triple("min_build_version", own.minBuildVersion) { it.minBuildVersion },

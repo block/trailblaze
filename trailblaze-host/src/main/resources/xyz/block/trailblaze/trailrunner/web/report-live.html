@@ -2,7 +2,7 @@
 <!-- The daemon-served live report document: one run rendered by the SAME run-report viewer the
      exported .html and the CLI report use, but with screenshots LINKED to the daemon's /static/
      tree instead of embedded as base64. Reachable at /trailrunner/report-live.html?session=<id>,
-     and meant to be embedded by Trail Runner in a same-origin iframe.
+     and meant to be embedded by Trailblaze App in a same-origin iframe.
 
      `<base href="/trailrunner/">` is injected into index.html only, not into this resource, so every
      path below is root-absolute. -->
@@ -12,7 +12,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Run report</title>
 <script>
-  // Theming. EMBEDDED, the host owns it: Trail Runner's own 'tb-theme' decides, applied before first
+  // Theming. EMBEDDED, the host owns it: Trailblaze App's own 'tb-theme' decides, applied before first
   // paint using the app's own rule so the frame and the app around it can't disagree, and the viewer
   // drops its theme toggle under ?chrome=none so nothing in here can argue with that.
   //
@@ -61,7 +61,7 @@
   var sessionId = new URLSearchParams(location.search).get('session');
 
   // A readable sentence beats a blank frame: this document is embedded, so a silent failure would
-  // just look like Trail Runner hanging.
+  // just look like Trailblaze App hanging.
   function fail(message) {
     app.setAttribute('style', 'padding:28px;font:13.5px/1.6 system-ui,-apple-system,sans-serif;color:#9aa4b2');
     app.textContent = message;

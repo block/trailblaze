@@ -74,6 +74,15 @@ sealed interface IosDriverAction {
     override val description get() = "Erase $characters characters"
   }
 
+  /**
+   * Empties the focused field by selecting all of it and pressing [PressKey.BACKSPACE] once — two
+   * key events however long the field is, where [EraseText] is one per character. One more
+   * [PressKey.BACKSPACE] then checks it: a field it changes still held text, and the action fails.
+   */
+  data object ClearText : IosDriverAction {
+    override val description get() = "Clear the focused text field"
+  }
+
   // --- Hardware buttons ---
 
   data object PressHome : IosDriverAction { override val description get() = "Press home" }

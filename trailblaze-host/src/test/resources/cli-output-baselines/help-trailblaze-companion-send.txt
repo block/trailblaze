@@ -10,7 +10,7 @@ Usage: trailblaze companion send [-hV] [--app=<app>] [--payload=<payload>]
                                  [--text=<text>] [--title=<title>]
                                  [--variant=<variant>] [--item=<items>]...
                                  <runId> <directive>
-Send or retract Trail Runner UI guidance.
+Send or retract Trailblaze App UI guidance.
       <runId>               Companion run id.
       <directive>           Directive name.
       --app=<app>

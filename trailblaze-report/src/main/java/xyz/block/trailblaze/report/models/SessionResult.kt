@@ -358,4 +358,7 @@ data class SessionResult(
 
   /** The authored `config.id`, when present. */
   val trail_id: String? = null,
+
+  /** Immutable GitHub permalink for the source trail YAML, when the run had one. */
+  val trail_source_url: String? = null,
 )

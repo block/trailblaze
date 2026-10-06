@@ -4,7 +4,7 @@
 
 # `openApp`
 
-Open an app, or bring it to the front if it is already running, and wait for it to come up on screen (the result says if it was still busy when the wait ran out). Never clears data, restarts the app or changes permissions — it opens the app in whatever state it was left in. To start a test from a known state, use the target's trailhead tool instead.
+Open an app, or bring it to the front if running, and wait for it to appear. Never clears data, restarts the app or changes permissions. To start from a known state, use the target's trailhead tool instead.
 
 ## Source
 
@@ -22,7 +22,7 @@ Open an app, or bring it to the front if it is already running, and wait for it 
 ### Required parameters
 
 - `appId` — `String`
-  The app id: Android package name or iOS bundle id, e.g. 'com.android.settings'.
+  Android package name or iOS bundle id, e.g. 'com.android.settings'.
 
 ## Output
 

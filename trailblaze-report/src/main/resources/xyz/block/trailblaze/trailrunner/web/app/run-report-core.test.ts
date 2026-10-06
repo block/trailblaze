@@ -18,6 +18,7 @@ import { declaredTrailSteps, mergeWebHierarchyBounds, traceToolCallCount } from 
 import { hitTestNode, inspectorDetailsHtml, inspectorModel, inspectorRectsHtml, inspectorTreeHtml } from "./run-report-inspector";
 import { chunkJsonWithoutRuntimeAttachments } from "./run-report-payload";
 import { whenDocumentComplete } from "./run-report-viewer";
+import { trailSourceDetails } from "./report-format";
 // A real captured web hierarchy (405 nodes, both parallel trees), scrubbed of page content — see
 // its _source note. Excluded from the packaged JAR alongside the other test fixtures.
 import webMergeFixture from "./web-hierarchy-merge-fixtures.json";
@@ -40,6 +41,32 @@ const core = RUN_REPORT_CORE_MODULE as unknown as {
 };
 
 const T = "xyz.block.trailblaze.logs.client.TrailblazeLog";
+
+describe("trail source labels", () => {
+  test("reads the original path and full revision from a permalink", () => {
+    const sha = "a".repeat(40);
+    const url = `https://github.com/example/trails/blob/${sha}/cases/Case%20%231/trail.yaml`;
+    expect(trailSourceDetails(url)).toEqual({ url, repo: "trails", path: "cases/Case #1/trail.yaml", commit: sha });
+  });
+  test("does not display missing, mutable, or unsafe source links", () => {
+    for (const url of [undefined, "javascript:alert(1)", "https://github.com/example/trails/blob/main/trail.yaml", `https://github.com/example/trails/blob/${"a".repeat(40)}/bad%path`]) {
+      expect(trailSourceDetails(url)).toBeNull();
+    }
+  });
+  test("shows the pinned original file in the header and full permalink in details", () => {
+    const sha = "a".repeat(40);
+    const url = `https://github.com/example/trails/blob/${sha}/cases/trail.yaml`;
+    const payload = { sessions: [{ meta: { title: "Example", status: "passed", trailSourceUrl: url }, trace: [], llm: [], shots: {} }] };
+    const header = renderViewerState(payload).html;
+    expect(header).toContain(`href="${url}"`);
+    expect(header).toContain(`trails / cases/trail.yaml @ ${sha.slice(0, 12)}`);
+    const details = renderViewerState(payload, { tab: "info" }).html;
+    expect(details).toContain(`>${url}</a>`);
+    const legacy = { sessions: [{ ...payload.sessions[0], meta: { title: "Example", status: "passed" } }] };
+    expect(renderViewerState(legacy).html).not.toContain('Trail source:');
+    expect(renderViewerState(legacy, { tab: "info" }).html).not.toContain('Trail source');
+  });
+});
 
 describe("originalYamlFromLogs", () => {
   test("uses the source captured at session start instead of a later trail revision", () => {
@@ -213,7 +240,7 @@ describe("localRunAgentPrompt", () => {
     expect(prompt).toContain("Trail: sample/checkout");
     expect(prompt).toContain("Target: sample-ios");
     expect(prompt).toContain("`./trailblaze run trails/checkout.trail.yaml`");
-    expect(prompt).toContain("`./trailblaze app --v2`");
+    expect(prompt).toContain("`./trailblaze app`");
     expect(prompt).toContain("select the sample/checkout trail");
   });
 
@@ -7319,7 +7346,7 @@ describe("RUN_REPORT_VIEWER (rendered output)", () => {
     expect(out).not.toContain('id="copylocalprompt" disabled');
     const copied = renderViewerState(payload, { copyLocalPrompt: true }).copiedText;
     expect(copied).toContain("`./trailblaze run trails/checkout.trail.yaml`");
-    expect(copied).toContain("`./trailblaze app --v2`");
+    expect(copied).toContain("`./trailblaze app`");
   });
 
   test("the timeline separates trailhead setup from numbered trail steps", () => {
@@ -7437,6 +7464,36 @@ describe("RUN_REPORT_VIEWER (rendered output)", () => {
     expect(out).toContain('<div class="failureprose">Error: Element not found</div>');
   });
 
+  test("a crash failure's cause is the crash, not the logcat banner it quotes", () => {
+    const error = "App crashed: FATAL EXCEPTION: main (device.log line 812, 2 crash events in total)";
+    const out = renderViewer({ generatedAt: "now", sessions: [{ meta: { title: "Failed", status: "failed", error }, trace: [], llm: [], shots: {} }] });
+    expect(out).toContain('<div class="k">Cause</div><span class="failuretype" title="Derived from error message · reported type: Error">App crashed</span>');
+    expect(out).toContain(`<div class="failuremessage">${error}</div>`);
+  });
+
+  test("a crash failure is the session's, not a recovered failed row's in the passing trace", () => {
+    const error = "App crashed: FATAL EXCEPTION: main (device.log line 812)";
+    const trace = [
+      { i: 1, label: "Open checkout", tool: "agent step", note: null, ms: 0, ts: 1, ok: true, err: null, screenshotFile: null, objective: true, trailhead: false, count: null, mark: null, children: [] },
+      { i: 2, label: "assertVisible", tool: "text: Pay", note: null, ms: 10, ts: 2, ok: false, err: "Error: Element not found", screenshotFile: null, objective: false, trailhead: false, count: null, mark: null, children: [] },
+      { i: 3, label: "assertVisible", tool: "text: Pay", note: null, ms: 20, ts: 3, ok: true, err: null, screenshotFile: null, objective: false, trailhead: false, count: null, mark: null, children: [] },
+    ];
+    const out = renderViewer({ generatedAt: "now", sessions: [{ meta: { title: "Crashed", status: "failed", error, failureCode: "app_crashed" }, trace, llm: [], shots: {} }] });
+    expect(out).toContain('<span class="failuretype" title="Derived from error message · reported type: Error">App crashed</span>');
+    expect(out).toContain(`<div class="failuremessage">${error}</div>`);
+    expect(out).not.toContain("Element not found");
+  });
+
+  test("an all-caps nested cause is still the cause", () => {
+    const out = renderViewer({ generatedAt: "now", sessions: [{ meta: { title: "Failed", status: "failed", error: "Failed to tap Next. ERROR: Element not found" }, trace: [], llm: [], shots: {} }] });
+    expect(out).toContain('<div class="k">Cause</div><span class="failuretype" title="Derived from error message · reported type: Error">Element not found</span>');
+  });
+
+  test("a FATAL-prefixed cause that is not the crash banner is still the cause", () => {
+    const out = renderViewer({ generatedAt: "now", sessions: [{ meta: { title: "Failed", status: "failed", error: "Failed to tap Next. FATAL ERROR: Element not found" }, trace: [], llm: [], shots: {} }] });
+    expect(out).toContain('<div class="k">Cause</div><span class="failuretype" title="Derived from error message · reported type: Error">Element not found</span>');
+  });
+
   test("the Config tab compares only the authored and recorded config blocks", () => {
     const out = renderViewer({
       generatedAt: "now",
@@ -7537,6 +7594,42 @@ describe("RUN_REPORT_VIEWER (rendered output)", () => {
     expect(out).toContain('<div class="runidentity"><span class="idxstatus" role="img" aria-label="passed" title="passed"><span class="idxstatusdot passed" aria-hidden="true"></span></span><h1>Streams</h1></div>');
     const html = core.buildMultiReportHtml({ generatedAt: "now", sessions: [{ meta: { title: "Streams", status: "passed" }, trace, llmLogs: [], shots: {}, events }] });
     expect(html).toContain(".tlphasehead { position: sticky;");
+  });
+
+  test("a recorded crash is a main timeline event, not only an opt-in stream", () => {
+    const crash = { name: "crash", total: 1, truncated: false, events: [], rows: [{ t: 1704067200500, label: "FATAL EXCEPTION: main", tone: "error", badges: [{ text: "Java crash" }], raw: [{}] }] };
+    const network = { name: "network", total: 1, truncated: false, events: [{ t: 1704067200400, d: "{\"path\":\"/pay\"}" }] };
+    const trace = [
+      { i: 1, label: "Complete checkout", tool: null, note: null, ms: 0, ts: 1, ok: true, err: null, screenshotFile: null, objective: true, trailhead: false, count: null, mark: null, children: [] },
+    ];
+    const payload = (events: unknown[]) => ({ generatedAt: "now", sessions: [{ meta: { title: "Crashed", status: "failed" }, trace, llm: [], shots: {}, recordingYaml: null, events }] });
+
+    const out = renderViewer(payload([network, crash]));
+    // Offered as an event kind, counted from the crash stream, and on like every other kind.
+    expect(out).toContain('aria-label="Events, 5 of 5 selected"');
+    expect(out).toMatch(/data-tlkind="crash" checked><span class="streamoptiondot" aria-hidden="true"><\/span><span class="streamname">App crash<\/span><span class="streamcount">1<\/span>/);
+    // The crash row is in the timeline while every stream is still unselected; the network one is not.
+    expect(out).toContain('aria-label="Streams, 0 of 2 selected"');
+    expect(out).toContain("FATAL EXCEPTION: main");
+    expect(out).not.toContain("/pay");
+
+    // Deselecting the kind hides the crash again, back to an ordinary opt-in stream.
+    const hidden = renderViewerState(payload([network, crash]), { query: "?run=0&tab=timeline&types=tool,llm,assert,fail" });
+    expect(hidden.html).not.toContain("FATAL EXCEPTION: main");
+
+    // A run that recorded no crash keeps its four kinds.
+    expect(renderViewer(payload([network]))).toContain('aria-label="Events, 4 of 4 selected"');
+  });
+
+  test("a raw crash stream renders as the formatted crash row", () => {
+    // The shape Trail Runner's live run view and a browser-opened ZIP hand the viewer: no rows.
+    const crash = { name: "crash", total: 1, truncated: false, events: [{ t: 1704067200500, d: JSON.stringify({ kind: "fatal_exception", platform: "android", summary: "FATAL EXCEPTION: main", source: { path: "device.log", line: 812 } }) }] };
+    const trace = [
+      { i: 1, label: "Complete checkout", tool: null, note: null, ms: 0, ts: 1, ok: true, err: null, screenshotFile: null, objective: true, trailhead: false, count: null, mark: null, children: [] },
+    ];
+    const out = renderViewer({ generatedAt: "now", sessions: [{ meta: { title: "Crashed", status: "failed" }, trace, llm: [], shots: {}, recordingYaml: null, events: [crash] }] });
+
+    expect(out).toMatch(/<details class="timelineevent e"[^>]*>.*<span class="timelineeventlabel">FATAL EXCEPTION: main<\/span>.*Java crash/);
   });
 
   test("the scrubber centers its selected timeline row with reduced-motion support", () => {
@@ -12506,8 +12599,8 @@ describe("Trail projections — Replay and Grid (the same trail across devices, 
     expect(out).toContain('<span class="traillanename">android-phone</span>');
     expect(out).toContain('<span class="traillanename">ios-ipad</span>');
     // One shared row per authored step: the trailhead row plus "Sign in".
-    expect(out).toContain('<div class="trailsteplabel">Trailhead</div>');
-    expect(out).toContain('<div class="trailsteplabel">Sign in</div>');
+    expect(out).toContain('<div class="trailsteplabel" title="Trailhead">Trailhead</div>');
+    expect(out).toContain('<div class="trailsteplabel" title="Sign in">Sign in</div>');
     // Lane B never got to "Sign in": an honest gap, not a fabricated cell.
     expect(out).toContain("not reached");
     // Each cell deep-links into its own run's timeline at that step (lane:headerId).
@@ -12515,6 +12608,62 @@ describe("Trail projections — Replay and Grid (the same trail across devices, 
     // Lane B's trailhead failure colors its cell without touching lane A's.
     expect(out).toContain('class="trailcell failed"');
     expect(out).toContain('class="trailcell passed"');
+  });
+
+  test("layout=strip draws the Grid as a gallery, a row per device, and survives the route write", () => {
+    // The columns layout is the default: no gallery, and the switch reads off.
+    const columns = renderViewer(payload, { query: "?run=0&tab=steps" });
+    expect(columns).toContain('<div class="trailgrid" style="--trail-lanes:2">');
+    expect(columns).not.toContain("trailgallery");
+    expect(columns).toContain('id="trailstrip" aria-checked="false"');
+    expect(columns).toContain('id="trailall"');
+    // The strip: a header per device, then that device's step screenshots on the row under it, one
+    // column per step, so a step sits in the same column on every device.
+    const strip = renderViewerState(payload, { query: "?run=0&tab=steps&layout=strip" });
+    expect(strip.html).toContain('<div class="trailgallery" style="--trail-lanes:2;--trail-steps:');
+    expect(strip.html).toContain('<header class="tglanehead" style="grid-row:2">');
+    expect(strip.html).toContain('<header class="tglanehead" style="grid-row:4">');
+    expect(strip.html).toContain('style="grid-row:3;grid-column:1"');
+    expect(strip.html).toContain('style="grid-row:5;grid-column:1"');
+    expect(strip.html).toContain('class="tgstatus ');
+    // Each step's text is written once, in the row above every device.
+    expect(strip.html).toContain('<div class="tgstep" style="grid-column:1"');
+    expect(strip.html).toContain('class="tgsteptext"');
+    expect(strip.html).toContain("not reached");
+    expect(strip.html).toContain('id="trailstrip" aria-checked="true"');
+    // It draws each step's last frame only, so the switch for every frame is not offered.
+    expect(strip.html).not.toContain('id="trailall"');
+    expect(strip.readRoute()).toContain("layout=strip");
+    // Embedded, the strip is the whole frame: no tabs, no toolbar, no run footer.
+    const embedded = renderViewer(payload, { query: "?run=0&tab=steps&layout=strip&chrome=none" });
+    expect(embedded).toContain("trailgallery");
+    expect(embedded).not.toContain("detailheader");
+    expect(embedded).not.toContain("detailfooter");
+    expect(renderViewer(payload, { query: "?run=0&tab=steps&chrome=none" })).toContain("detailfooter");
+    // It is the Grid's setting alone: Replay neither offers the switch nor writes the key.
+    const replay = renderViewerState(payload, { query: "?run=0&tab=replay&layout=strip" });
+    expect(replay.html).not.toContain('id="trailstrip"');
+    expect(replay.html).not.toContain("trailgallery");
+    expect(replay.readRoute()).not.toContain("layout=");
+    // One device reads as captioned screenshots: its header, its screenshots, each step's text under
+    // its own screenshot rather than pinned above.
+    const one = renderViewer({ generatedAt: "now", sessions: [run("android-phone", laneATrace)] }, { query: "?run=0&tab=steps&layout=strip" });
+    expect(one).toContain('<header class="tglanehead" style="grid-row:1">');
+    expect(one).toContain('style="grid-row:2;grid-column:1"');
+    expect(one).toContain('<div class="tgstep below" style="grid-row:3;grid-column:1"');
+    // Inline-size containment would give every screenshot box no width of its own, so a landscape
+    // frame would be cut to the box's min-width.
+    expect(core.RUN_REPORT_CSS).toContain(".tgcard .galshot[data-clip-run] { container-type: normal; }");
+    // A box stretched to its column (widened by a landscape lane, or by the lane header), or held
+    // above a short still by its min sizes, would leave the still in its top-left corner and the
+    // step's video, centred in the box, playing beside or below it. No layout engine runs here, so
+    // this reads the rules' declarations, in any order.
+    const declarations = (selector: string) => {
+      const rule = core.RUN_REPORT_CSS.split("\n").find((line: string) => line.startsWith(`${selector} {`));
+      return (rule ?? "").slice(selector.length + 2, -1).split(";").map((d: string) => d.trim()).filter(Boolean);
+    };
+    expect(declarations(".tgcard .galshot")).toContain("width: fit-content");
+    expect(declarations(".tgcard .galshot .shotclip")).toContain("object-position: left top");
   });
 
   test("a crashed lane's failure lands on the step it died in, not on a green lane", () => {

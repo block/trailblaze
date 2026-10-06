@@ -9,10 +9,6 @@ import xyz.block.trailblaze.cli.CliRunDriverResolution
 import xyz.block.trailblaze.cli.CliRunDriverResolver
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDriverType
-import xyz.block.trailblaze.llm.TrailblazeLlmModels
-import xyz.block.trailblaze.llm.TrailblazeReferrer
-import xyz.block.trailblaze.ui.model.RunYamlRequestFactory
-import xyz.block.trailblaze.ui.models.TrailblazeServerState.SavedTrailblazeAppConfig
 import xyz.block.trailblaze.yaml.TrailConfig
 
 /**
@@ -236,46 +232,6 @@ class DesktopYamlRunnerDriverPinTest {
       )
       assertEquals(runnable, (resolution as CliRunDriverResolution.Resolved).driverType)
     }
-  }
-
-  /**
-   * The other side of that short-circuit: the desktop Run path must NOT fill the request rung.
-   * Picking a device in the UI is a device choice, not a driver request — when the factory stamped
-   * the device's own driver in, every desktop run arrived with the rung filled, the pin was never
-   * read, and a trail pinned to a retired driver ran on the device's driver instead of refusing.
-   */
-  @Test
-  fun `a desktop UI run leaves the request rung empty so a retired pin still refuses`() {
-    val yaml = """
-      config:
-        devices:
-          android: ANDROID_ONDEVICE_INSTRUMENTATION
-      trail:
-        - step: "Open the Lists tab"
-    """.trimIndent()
-
-    val request = RunYamlRequestFactory(
-      appConfig = SavedTrailblazeAppConfig(selectedTrailblazeDriverTypes = emptyMap()),
-      llmModel = TrailblazeLlmModels.GPT_4O_MINI,
-      effectiveTargetAppId = { null },
-    ).create(
-      // A runnable driver, differing from the pin — the value that used to win silently.
-      device = TrailblazeConnectedDeviceSummary(
-        trailblazeDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
-        instanceId = "emulator-5554",
-        description = "test emulator",
-      ),
-      yaml = yaml,
-      testName = "test",
-      referrer = TrailblazeReferrer.YAML_TAB,
-    )
-
-    assertNull("the desktop request must not pre-empt driver resolution", request.driverType)
-    val resolution = DesktopYamlRunner.trailPinnedDriverResolution(request.yaml, androidPhone)
-    assertTrue(
-      "expected the retired pin to be refused but was $resolution",
-      resolution is CliRunDriverResolution.Unrecognized,
-    )
   }
 
   @Test

@@ -1526,7 +1526,7 @@ class McpProxy(
         put("name", "approval_prompt")
         put(
           "description",
-          "Trail Runner permission approval. A human approves or denies this tool call in the Trail Runner UI.",
+          "Trailblaze App permission approval. A human approves or denies this tool call in the Trailblaze App UI.",
         )
         put(
           "inputSchema",
@@ -1572,7 +1572,7 @@ class McpProxy(
     val inputElement = args?.get("input")
     val toolUseId = args?.get("tool_use_id")?.jsonPrimitive?.contentOrNull
     val inputJson = inputElement?.let { Json.encodeToString(JsonElement.serializer(), it) }
-    log("Routing approval for '$toolName' to Trail Runner; waiting for the human to decide...")
+    log("Routing approval for '$toolName' to Trailblaze App; waiting for the human to decide...")
     val decision = postPermissionRequest(toolName, inputJson, toolUseId)
     val resultText = approvalDecisionResultText(
       behavior = decision.behavior,
@@ -1972,8 +1972,9 @@ internal fun findTrailblazeLauncher(): File? {
 /**
  * Argv for spawning a background daemon through [launcher].
  *
- * **`start` is spelled explicitly, not left implicit.** Bare `app` and `app start` are the
- * same command to picocli, but not to every layer a launcher can sit behind: an installed CLI
+ * **`start` is spelled explicitly, not left implicit.** `app --foreground --headless` and
+ * `app start --foreground --headless` are the same command to picocli, but not to every layer a
+ * launcher can sit behind: an installed CLI
  * may resolve to a wrapper that dispatches on its own command tree, and a wrapper that sees
  * `app` as a group — which it is, since `app` owns a `start` subcommand — answers a flags-only
  * `app --foreground --headless` with its own usage text and exit 0. The daemon then never

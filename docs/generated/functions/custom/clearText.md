@@ -4,13 +4,7 @@
 
 # `clearText`
 
-Clear all text from the currently focused text field. Use BEFORE `inputText` when you need
-to replace whatever's already in a field (search bar, amount field, form input). Takes no
-parameters — the tool reads the field's current length from the view hierarchy.
-
-Prefer this over `eraseText` whenever your intent is "wipe the field, then type fresh". Use
-`eraseText` only when you genuinely need to remove a specific number of trailing characters
-(e.g. backspacing one digit off an amount).
+Empty the focused text field, whatever its length, without typing anything. To replace a field's text, use `type` with clearFirst: true instead; use `eraseText` only to remove a specific number of characters.
 
 ## Source
 

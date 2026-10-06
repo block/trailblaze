@@ -683,6 +683,7 @@ class RunReportGenerator(
         put("metadata", metadata.toJsonObject())
       }
       sessionInfo.trailFilePath?.takeIf { it.isNotBlank() }?.let { put("cmd", "./trailblaze run $it") }
+      sessionInfo.trailSourceUrl?.let { put("trailSourceUrl", it) }
       failureReason(status)?.let { put("error", it) }
       failureCodeOf(failurePayloadOf(status))?.let { put("failureCode", it) }
       // Self-heal keeps its pass/fail badge (so tallies stay honest) and gains a separate marker
@@ -743,7 +744,7 @@ class RunReportGenerator(
       is SessionStatus.Ended.Cancelled -> status.cancellationMessage
       is SessionStatus.Ended.TimeoutReached -> status.message
       is SessionStatus.Ended.MaxCallsLimitReached ->
-        "Max LLM calls limit reached (${status.maxCalls}) for: ${status.objectivePrompt}"
+        status.message ?: "Max LLM calls limit reached (${status.maxCalls}) for: ${status.objectivePrompt}"
       else -> null
     }
 

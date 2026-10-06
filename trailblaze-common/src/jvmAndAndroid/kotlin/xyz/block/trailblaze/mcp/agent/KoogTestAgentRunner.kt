@@ -19,8 +19,11 @@ import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.prompt.withPerStepSystemPromptContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
+import xyz.block.trailblaze.toolcalls.TrailblazeToolSetCatalog
+import xyz.block.trailblaze.toolcalls.isVerificationToolInstance
 import xyz.block.trailblaze.utils.ElementComparator
 import xyz.block.trailblaze.yaml.PromptStep
+import xyz.block.trailblaze.yaml.VerificationStep
 
 /**
  * Adapter that exposes the Koog strategy-graph agent behind the [TestAgentRunner] interface, so it
@@ -66,6 +69,8 @@ class KoogTestAgentRunner(
   systemPromptTemplate: String,
   /** Where the decision engine's settings are read; see [runPromptsWithKoogStrategyGraph]. */
   private val decisionSettings: (String) -> String? = System::getenv,
+  /** Tools the LLM is shown even when the decision engine hides tools; see [runPromptsWithKoogStrategyGraph]. */
+  private val alwaysShownTools: Set<String> = emptySet(),
 ) : TestAgentRunner {
 
   /** Dynamic session context re-read before each step (e.g. roster + active device). */
@@ -88,17 +93,19 @@ class KoogTestAgentRunner(
    * Self-heal entry: a recorded replay failed and the trail asked to recover. KOOG simply re-blazes the
    * step against the *current* screen (where the recording left off). The [recordingResult] action
    * history isn't replayed into the prompt — Koog's perception is the live screen, not a transcript.
+   * A failed assertion is healed as a verification; see [healObjectiveStep].
    */
   override fun recover(
     promptStep: PromptStep,
     recordingResult: PromptRecordingResult.Failure,
-  ): AgentTaskStatus = runBlocking { blaze(promptStep) }
+  ): AgentTaskStatus = runBlocking { blaze(promptStep, healObjectiveStep(promptStep, recordingResult)) }
 
   override fun appendToSystemPrompt(context: String) {
     currentSystemPrompt = currentSystemPrompt + "\n" + context
   }
 
-  private suspend fun blaze(prompt: PromptStep): AgentTaskStatus {
+  /** Runs [objectiveStep] through the graph while the logs name [prompt], the step as written. */
+  private suspend fun blaze(prompt: PromptStep, objectiveStep: PromptStep = prompt): AgentTaskStatus {
     val startTime = Clock.System.now()
     // Fresh per objective, and owned HERE rather than inside the graph run: the case worth
     // instrumenting is the one where the run throws, and the record has to survive that.
@@ -121,7 +128,7 @@ class KoogTestAgentRunner(
     var thrown: Throwable? = null
     try {
       val result = runPromptsWithKoogStrategyGraph(
-        promptSteps = listOf(prompt),
+        promptSteps = listOf(objectiveStep),
         agent = agent,
         toolRepo = toolRepo,
         screenStateProvider = screenStateProvider,
@@ -137,6 +144,7 @@ class KoogTestAgentRunner(
         ),
         instrumentation = instrumentation,
         decisionSettings = decisionSettings,
+        alwaysShownTools = alwaysShownTools,
       )
       status = result.toAgentTaskStatus(prompt, startTime, instrumentation)
       return status
@@ -207,6 +215,33 @@ class KoogTestAgentRunner(
   companion object {
     /** `eventType` of the per-objective run readout, so an A/B comparison can grep one string. */
     const val KOOG_RUN_EVENT_TYPE = "KoogRun"
+  }
+}
+
+/**
+ * The step a self-heal hands the graph: [promptStep] itself, unless every recorded tool replay didn't
+ * get through (the failed one and all after it) is an assertion. Then only checks are left, so the heal
+ * runs as a [VerificationStep]: assertion tools only, and no COMPLETED until one passes. With the full
+ * surface, healing an asserting `step:` re-drove the flow it was checking: one tapped through the
+ * form it was meant to check and submitted it, and another reported COMPLETED from a screenshot alone.
+ * An action still left keeps the full surface: a verify-only heal would pass without ever running it.
+ * So does a memory assertion (`assertEquals`, `assertMath`, ...): the verify surface doesn't carry the
+ * memory toolset, so a verify-only heal could never re-run that check.
+ */
+private const val MEMORY_TOOLSET_ID = "memory"
+
+internal fun healObjectiveStep(
+  promptStep: PromptStep,
+  recordingResult: PromptRecordingResult.Failure,
+): PromptStep {
+  val unreplayed = promptStep.recording?.tools.orEmpty().drop(recordingResult.successfulTools.size)
+  val memoryTools = TrailblazeToolSetCatalog.entryToolClasses(MEMORY_TOOLSET_ID)
+  val onlyChecksLeft = unreplayed.isNotEmpty() &&
+    unreplayed.all { it.trailblazeTool.isVerificationToolInstance() && it.trailblazeTool::class !in memoryTools }
+  return if (promptStep !is VerificationStep && onlyChecksLeft) {
+    VerificationStep(verify = promptStep.prompt, maxRetries = promptStep.maxRetries)
+  } else {
+    promptStep
   }
 }
 

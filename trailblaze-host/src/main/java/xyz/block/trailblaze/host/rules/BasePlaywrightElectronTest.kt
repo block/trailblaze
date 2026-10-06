@@ -307,6 +307,7 @@ class BasePlaywrightElectronTest(
      */
     initialArgs: Map<String, String> = emptyMap(),
     onStepProgress: ((stepIndex: Int, totalSteps: Int, stepText: String) -> Unit)? = null,
+    trailSourceUrl: String? = null,
   ): SessionId = withContext(trailLoopDispatcher) {
     // Stable loop thread, NOT the Playwright thread — see [trailLoopDispatcher]. Playwright
     // API calls bridge onto the Playwright thread per-call.
@@ -365,6 +366,7 @@ class BasePlaywrightElectronTest(
               rawYaml = yaml,
               hasRecordedSteps = trailblazeYaml.hasRecordedSteps(trailItems),
               trailblazeDeviceId = trailblazeDeviceId,
+              trailSourceUrl = trailSourceUrl,
               resolvedInitialMemory = resolvedInitialMemory,
               sensitiveMemoryKeys = sensitiveMemoryKeys,
             ),
@@ -546,8 +548,8 @@ When interpreting objectives, if an objective begins with the word "expect", "ve
 "assert" (case-insensitive), you should use the objective_status tool to report the result.
 
 **NOTE:**
-- Use web_snapshot to refresh your view of the application when needed.
-- After clicks that change the view, use web_snapshot to see the updated state.
+- The element list is refreshed after every action. After a click that changes the view, target
+  elements from the new list; earlier IDs may no longer exist.
     """.trimIndent()
   }
 }

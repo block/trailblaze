@@ -9,6 +9,7 @@ import org.junit.After
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
+import xyz.block.trailblaze.config.YamlBackedHostAppTarget
 import xyz.block.trailblaze.config.project.TrailblazeWorkspaceConfigResolver
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.logs.client.TrailblazeSerializationInitializer
@@ -858,5 +859,70 @@ class AppTargetDiscoveryTest {
     // failFast changes the ERROR path only. An empty result is a legitimate answer, so a switch
     // into a bare workspace must still leave the picker with something to render.
     assertTrue(discovered.isNotEmpty())
+  }
+
+  /**
+   * A workspace target with `sharedtarget`'s id, both as a trailmap and as a prebuilt target file —
+   * the same shape the CLI's own bundled targets take. [systemPromptExists] false makes the trailmap
+   * fail to load, so the target file fills in for it. The trailmap depends on a library trailmap,
+   * `sharedlib`, from the same workspace.
+   */
+  private fun workspaceWithTrailmapAndPrebuiltTarget(systemPromptExists: Boolean): Pair<File, File> {
+    val workspace = tempFolder.newFolder("workspace")
+    File(workspace, "trails/config/trailmaps/sharedlib").apply { mkdirs() }
+      .resolve("trailmap.yaml").writeText("id: sharedlib\n")
+    val trailmapDir = File(workspace, "trails/config/trailmaps/sharedtarget").apply { mkdirs() }
+    File(trailmapDir, "trailmap.yaml").writeText(
+      """
+      id: sharedtarget
+      dependencies: [sharedlib]
+      target:
+        display_name: From Trailmap
+        system_prompt_file: prompt.md
+      """.trimIndent(),
+    )
+    if (systemPromptExists) File(trailmapDir, "prompt.md").writeText("Be careful.")
+    File(workspace, "trails/config/trailblaze.yaml").writeText("targets:\n  - sharedtarget\n")
+    File(workspace, "trails/config/targets").mkdirs()
+    File(workspace, "trails/config/targets/sharedtarget.yaml").writeText(
+      "id: sharedtarget\ndisplay_name: Prebuilt\n",
+    )
+    return workspace to trailmapDir
+  }
+
+  private fun discoverIn(workspace: File) = AppTargetDiscovery.discover(
+    workspaceConfigProvider = {
+      TrailblazeWorkspaceConfigResolver.resolve(workspace.toPath(), envReader = { null })
+    },
+  )
+
+  @Test
+  fun `a target loaded from a workspace trailmap records the directory of it and each dependency`() {
+    val (workspace, trailmapDir) = workspaceWithTrailmapAndPrebuiltTarget(systemPromptExists = true)
+
+    val target = discoverIn(workspace).single { it.id == "sharedtarget" } as YamlBackedHostAppTarget
+
+    assertEquals("From Trailmap", target.displayName)
+    assertEquals(
+      mapOf(
+        "sharedtarget" to trailmapDir.canonicalFile,
+        "sharedlib" to File(workspace, "trails/config/trailmaps/sharedlib").canonicalFile,
+      ),
+      target.trailmapDirs.mapValues { (_, dir) -> dir?.canonicalFile },
+    )
+  }
+
+  /**
+   * The stand-in is what made a broken workspace trailmap silent: it runs, under the same id, from
+   * files the author is not editing. Recording no directory for it is how a command tells.
+   */
+  @Test
+  fun `a target that fills in for a workspace trailmap that failed to load records no directories`() {
+    val (workspace, _) = workspaceWithTrailmapAndPrebuiltTarget(systemPromptExists = false)
+
+    val target = discoverIn(workspace).single { it.id == "sharedtarget" } as YamlBackedHostAppTarget
+
+    assertEquals("Prebuilt", target.displayName)
+    assertEquals(emptyMap(), target.trailmapDirs)
   }
 }

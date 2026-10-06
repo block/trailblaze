@@ -166,8 +166,12 @@ class LoggingDriver(
     delegate.isShutdown()
   }
 
-  override fun isUnicodeInputSupported(): Boolean = traceMaestroDriver("isUnicodeInputSupported") {
-    delegate.isUnicodeInputSupported()
+  override fun isDarkModeEnabled(): Boolean = traceMaestroDriver("isDarkModeEnabled") {
+    delegate.isDarkModeEnabled()
+  }
+
+  override fun setDarkMode(enabled: Boolean) = traceMaestroDriver("setDarkMode") {
+    delegate.setDarkMode(enabled)
   }
 
   override fun killApp(appId: String) = logActionWithoutScreenshot(AgentDriverAction.KillApp(appId)) {

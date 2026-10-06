@@ -11,6 +11,7 @@ import xyz.block.trailblaze.capture.CaptureSession
 import xyz.block.trailblaze.capture.ToolCallPhase
 import xyz.block.trailblaze.capture.model.CaptureArtifact
 import xyz.block.trailblaze.capture.model.CaptureFilenames
+import xyz.block.trailblaze.capture.video.AndroidVideoCapture
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.logs.model.SessionId
@@ -685,8 +686,9 @@ class SessionCaptureCoordinator(
    * shutdown hook (see [stopCapturesOnExit]) so a daemon exit (`trailblaze stop`, a CLI
    * source-change rebuild) doesn't leak stale `screenrecord` / `xcrun` processes.
    *
-   * Refuses new starts, and waits up to [perSessionTimeoutMs] for starts already under way to
-   * commit. Sessions then stop in parallel with a per-session timeout — the default JVM shutdown
+   * Refuses new starts, and waits up to [inFlightStartTimeoutMs] for starts already under way to
+   * commit. That wait outlasts an Android recorder's first-picture wait: until a start commits its
+   * stream nothing here can stop it, so giving up sooner leaves its ffmpeg and adb running. Sessions then stop in parallel with a per-session timeout — the default JVM shutdown
    * grace period is short, and a single wedged `stopAll()` (e.g. ffmpeg muxer stuck on
    * a missing keyframe) should not block the rest of the cleanup. Sessions that don't
    * stop in [perSessionTimeoutMs] are interrupted, and given [interruptGraceMs] to run the
@@ -696,13 +698,14 @@ class SessionCaptureCoordinator(
   fun shutdownAll(
     perSessionTimeoutMs: Long = SHUTDOWN_PER_SESSION_TIMEOUT_MS,
     interruptGraceMs: Long = SHUTDOWN_INTERRUPT_GRACE_MS,
+    inFlightStartTimeoutMs: Long = perSessionTimeoutMs + AndroidVideoCapture.FIRST_PICTURE_TIMEOUT_MS,
   ) {
     // Starts already under way finish first, so each is stopped below as a committed capture.
     val inFlight = synchronized(lock) {
       shuttingDown = true
       startsInFlight.toList()
     }
-    val startsDeadline = System.currentTimeMillis() + perSessionTimeoutMs
+    val startsDeadline = System.currentTimeMillis() + inFlightStartTimeoutMs
     for (start in inFlight) {
       val remaining = (startsDeadline - System.currentTimeMillis()).coerceAtLeast(0)
       runCatching { start.await(remaining, TimeUnit.MILLISECONDS) }

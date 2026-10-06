@@ -6,6 +6,7 @@ import org.gradle.api.Plugin
 import org.gradle.api.Project
 import org.gradle.api.file.Directory
 import org.gradle.api.file.DirectoryProperty
+import org.gradle.api.file.RegularFileProperty
 import org.gradle.api.provider.MapProperty
 import org.gradle.api.provider.Property
 import org.gradle.api.provider.Provider
@@ -13,6 +14,7 @@ import org.gradle.api.tasks.Copy
 import org.gradle.api.tasks.IgnoreEmptyDirectories
 import org.gradle.api.tasks.Input
 import org.gradle.api.tasks.InputDirectory
+import org.gradle.api.tasks.InputFile
 import org.gradle.api.tasks.InputFiles
 import org.gradle.api.tasks.Internal
 import org.gradle.api.tasks.Optional
@@ -180,7 +182,6 @@ class TrailblazeAndroidGradlePlugin : Plugin<Project> {
     // generate time.
     extension.onlyClassNames.convention(emptySet())
     extension.onlyMethodNames.convention(emptyMap())
-
     // Wire task inputs from the extension after defaults are in place. (Conventions on the
     // extension flow to the task only if we plumb them — the task is registered before the
     // extension so both can coexist on the extension's public surface.)
@@ -198,6 +199,7 @@ class TrailblazeAndroidGradlePlugin : Plugin<Project> {
       task.onlyMethodNames.set(extension.onlyMethodNames)
       task.authoringDirDescription.set(extension.authoringDirDescription)
       task.authoringSourceNote.set(extension.authoringSourceNote)
+      task.trailSourceUrlMapFile.set(extension.trailSourceUrlMapFile)
     }
 
     // Auto-wire AGP's `androidTest`-shaped Kotlin compile + lint tasks to depend on [generate], so
@@ -680,6 +682,9 @@ constructor(
    * silently emitting zero methods would mean "method not found" at test runtime, not build time).
    */
   abstract val onlyMethodNames: MapProperty<String, Set<String>>
+
+  /** Build-generated TSV mapping final asset paths to their original source URLs. */
+  abstract val trailSourceUrlMapFile: RegularFileProperty
 }
 
 /**
@@ -775,6 +780,11 @@ abstract class GenerateAndroidTrailJUnitShellsTask : DefaultTask() {
   @get:Input @get:Optional abstract val authoringDirDescription: Property<String>
 
   @get:Input @get:Optional abstract val authoringSourceNote: Property<String>
+
+  @get:InputFile
+  @get:Optional
+  @get:PathSensitive(PathSensitivity.NONE)
+  abstract val trailSourceUrlMapFile: RegularFileProperty
 
   @get:OutputDirectory abstract val generatedSourceDir: DirectoryProperty
 
@@ -901,6 +911,7 @@ abstract class GenerateAndroidTrailJUnitShellsTask : DefaultTask() {
     pkgDir.mkdirs()
 
     val methodAllowLists = onlyMethodNames.get()
+    val trailSourceUrls = Companion.readTrailSourceUrls(trailSourceUrlMapFile.orNull?.asFile)
     var generatedCount = 0
     val generatedClassNames = mutableListOf<String>()
     ownedClassDirs.forEach { classDir ->
@@ -967,7 +978,11 @@ abstract class GenerateAndroidTrailJUnitShellsTask : DefaultTask() {
           pkg,
           className,
           mode,
-          methods,
+          methods.map { method ->
+            method.copy(
+              trailSourceUrl = trailSourceUrls[Companion.assetPathFor(method, className)]
+            )
+          },
           authoringDirDescription.getOrElse(DEFAULT_AUTHORING_DIR),
           authoringSourceNote.orNull,
         )
@@ -1093,6 +1108,8 @@ abstract class GenerateAndroidTrailJUnitShellsTask : DefaultTask() {
     val isRecordingDir: Boolean,
     /** On-disk source relative to the assets dir, for validation / collision error messages. */
     val source: String,
+    /** Immutable GitHub permalink for the source trail, when the build can prove one. */
+    val trailSourceUrl: String? = null,
   )
 
   /**
@@ -1286,6 +1303,17 @@ abstract class GenerateAndroidTrailJUnitShellsTask : DefaultTask() {
           renderInlineRuleShell(packageName, className, mode.fqn, methods, authoringDir, sourceNote)
       }
 
+    /** The asset path passed to [runFromAsset] for a generated method. */
+    internal fun assetPathFor(method: TrailMethod, className: String): String =
+      if (method.isRecordingDir) "trails/$className/${method.methodName}"
+      else "trails/$className/${method.methodName}.trail.yaml"
+
+    private fun readTrailSourceUrls(mapFile: java.io.File?): Map<String, String> =
+      mapFile?.readLines()?.associate { line ->
+        val (path, url) = line.split('\t', limit = 2)
+        path to url
+      }.orEmpty()
+
     /**
      * The directory the generated header names when the consumer hasn't said otherwise — i.e. the
      * in-place layout, where the trails really are under the module's own assets tree.
@@ -1317,7 +1345,11 @@ abstract class GenerateAndroidTrailJUnitShellsTask : DefaultTask() {
       methods.forEach { method ->
         appendLine()
         appendLine()
-        append("  @Test fun ${method.methodName}() = runFromAsset()")
+        val argument =
+          method.trailSourceUrl?.let {
+            "trailSourceUrl = ${kotlinStringLiteral(it)}"
+          } ?: ""
+        append("  @Test fun ${method.methodName}() = runFromAsset($argument)")
       }
       appendLine()
       appendLine("}")
@@ -1356,16 +1388,20 @@ abstract class GenerateAndroidTrailJUnitShellsTask : DefaultTask() {
         // (classifier-specific recording → trail.yaml → blaze.yaml). Splits across multiple lines
         // if the single-line form would push past 95 chars to stay inside ktfmt's preferred width.
         val methodName = method.methodName
-        val assetPath =
-          if (method.isRecordingDir) "trails/$className/$methodName"
-          else "trails/$className/$methodName.trail.yaml"
-        val singleLine = "  @Test fun $methodName() = rule.runFromAsset(\"$assetPath\")"
+        val assetPath = assetPathFor(method, className)
+        val sourceUrlArgument =
+          method.trailSourceUrl?.let {
+            ", trailSourceUrl = ${kotlinStringLiteral(it)}"
+          } ?: ""
+        val invocation =
+          "rule.runFromAsset(${kotlinStringLiteral(assetPath)}$sourceUrlArgument)"
+        val singleLine = "  @Test fun $methodName() = $invocation"
         if (singleLine.length <= 95) {
           appendLine(singleLine)
         } else {
           appendLine("  @Test")
           appendLine("  fun $methodName() =")
-          appendLine("    rule.runFromAsset(\"$assetPath\")")
+          appendLine("    $invocation")
         }
       }
       appendLine("}")
@@ -1396,5 +1432,13 @@ abstract class GenerateAndroidTrailJUnitShellsTask : DefaultTask() {
       }
       sb.appendLine()
     }
+
+    private fun kotlinStringLiteral(value: String): String =
+      "\"" + value.replace("\\", "\\\\")
+        .replace("\"", "\\\"")
+        .replace("$", "\\$")
+        .replace("\n", "\\n")
+        .replace("\r", "\\r")
+        .replace("\t", "\\t") + "\""
   }
 }

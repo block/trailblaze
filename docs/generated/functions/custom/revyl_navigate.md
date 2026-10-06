@@ -22,7 +22,7 @@ Open a URL or deep link on the device.
 ### Required parameters
 
 - `url` — `String`
-  The URL or deep link to open.
+  URL or deep link.
 
 ### Optional parameters
 

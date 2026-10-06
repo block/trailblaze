@@ -97,6 +97,9 @@ object VisibleStringExtractor {
 
   private const val SYSTEM_UI_PACKAGE = "com.android.systemui"
   private const val SECURE_TEXT_FIELD = "AXSecureTextField"
+  private val AXE_TEXT_INPUT_TYPES = setOf("TextField", "SecureTextField", "SearchField", "TextView", "TextEditor")
+  private val AXE_DRAWN_LABEL_TYPES = setOf("StaticText", "Heading", "Button", "Link", "RadioButton")
+  private val AXE_DRAWN_VALUE_TYPES = AXE_TEXT_INPUT_TYPES + setOf("StaticText", "Heading")
   private val WHITESPACE_RUN = Regex("\\s+")
 
   /** Reading order: top to bottom, then left to right. Boundless nodes keep tree order, last. */
@@ -234,7 +237,7 @@ object VisibleStringExtractor {
   }
 
   private fun TrailblazeNode.readableStrings(visible: Boolean): List<ExtractedString> =
-    driverDetail.readableFields().toExtractedStrings(
+    driverDetail.readableFields(children).toExtractedStrings(
       ref = ref,
       // Inverted bounds mean a Compose `graphicsLayer` transform that `boundsInRoot` excludes,
       // so `width`/`height` come out negative. Recording that would put a nonsense rectangle in
@@ -330,7 +333,9 @@ object VisibleStringExtractor {
    * around on the input path. Left alone it files one placeholder as two strings, `TEXT` and
    * `HINT`, and a diff then reports the same copy twice.
    */
-  private fun DriverNodeDetail.readableFields(): List<Pair<VisibleStringSource, String?>> = when (this) {
+  private fun DriverNodeDetail.readableFields(
+    children: List<TrailblazeNode>,
+  ): List<Pair<VisibleStringSource, String?>> = when (this) {
     is DriverNodeDetail.AndroidAccessibility -> listOf(
       VisibleStringSource.TEXT to text.takeUnless { isPassword || isShowingHintText },
       VisibleStringSource.CONTENT_DESCRIPTION to contentDescription,
@@ -369,9 +374,16 @@ object VisibleStringExtractor {
     // `roleDescription` is left out: on AXe it is the system's name for the role ("button",
     // "group"), not app copy, and the element list shows the element type in its place. Android's
     // `roleDescription` is app-authored and stays.
+    //
+    // AXe has no property for painted text: `label` is the accessibility label whether or not the
+    // element draws it. Text, a heading, a control, or an empty input showing its placeholder draws
+    // its label when no labeled descendant does; an image's asset name, a scroll bar, or a
+    // container reading its children's copy as one sentence only speaks it. `value` is drawn in a
+    // text input or on text (a Contacts row's number) and is spoken state elsewhere, such as a
+    // slider's "0%" or a tab's selection.
     is DriverNodeDetail.IosAxe -> listOf(
-      VisibleStringSource.TEXT to label,
-      VisibleStringSource.VALUE to value
+      (if (drawsLabel(children)) VisibleStringSource.TEXT else VisibleStringSource.CONTENT_DESCRIPTION) to label,
+      (if (type in AXE_DRAWN_VALUE_TYPES) VisibleStringSource.VALUE else VisibleStringSource.STATE) to value
         .takeUnless { role == SECURE_TEXT_FIELD || subrole == SECURE_TEXT_FIELD },
       VisibleStringSource.TITLE to title,
       VisibleStringSource.HELP to help,
@@ -400,6 +412,13 @@ object VisibleStringExtractor {
       VisibleStringSource.TITLE to title,
     )
   }
+
+  private fun DriverNodeDetail.IosAxe.drawsLabel(children: List<TrailblazeNode>): Boolean =
+    (type in AXE_DRAWN_LABEL_TYPES || type in AXE_TEXT_INPUT_TYPES && value.isNullOrBlank()) &&
+      children.none { it.hasAxeLabel() }
+
+  private fun TrailblazeNode.hasAxeLabel(): Boolean =
+    !(driverDetail as? DriverNodeDetail.IosAxe)?.label.isNullOrBlank() || children.any { it.hasAxeLabel() }
 
   private fun String.normalizeWhitespace(): String =
     trim().split(WHITESPACE_RUN).joinToString(" ")

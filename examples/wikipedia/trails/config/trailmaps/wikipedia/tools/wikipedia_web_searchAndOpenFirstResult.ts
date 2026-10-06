@@ -12,18 +12,13 @@ export interface SearchAndOpenFirstResultArgs {
   query?: string;
   /** Heading text to assert on the opened article. Defaults to `query`. */
   expectedHeading?: string;
-  /** Submit the search form (default true). */
+  /** Submit the search and verify the article. Default true; false only types the query, e.g. to check suggestions. */
   openFirstResult?: boolean;
 }
 
 /**
- * Search Wikipedia from the header search box. Use this whenever the task
- * is to search Wikipedia for something — e.g. "search for Albert Einstein",
- * "look up Python on Wikipedia", "find articles about Mount Everest". Types
- * the query into the header search input, submits the form, and verifies
- * the resulting article's first heading. Pass `openFirstResult=false` to
- * only type the query without submitting (useful for autocomplete-suggestion
- * tests).
+ * Search Wikipedia from the header search box, submit, and verify the
+ * resulting article's heading.
  */
 // Two branches:
 //   1. `openFirstResult` true (default) — types the query, clicks the search

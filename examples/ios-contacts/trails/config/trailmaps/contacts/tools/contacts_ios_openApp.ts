@@ -7,21 +7,13 @@ import {
 } from "./contacts_ios_shared";
 
 export interface OpenAppArgs {
-  /**
-   * When true (default), tries to dismiss any keyboard left over from a prior
-   * run by tapping the search/cancel chip. Safe to set false if you know the
-   * app launches into a clean state.
-   */
+  /** Dismiss a keyboard left over from a prior run. Default true. */
   dismissKeyboard?: boolean;
 }
 
 /**
- * Open the iOS Contacts app from a cold start. Use this when the task is to
- * launch Contacts, open the Contacts app, go to Contacts, or otherwise begin
- * a Contacts flow. Force-restarts the app so a stale draft or in-progress
- * search from a prior run doesn't leak in. Verifies the contacts list root
- * rendered ("Contacts" navbar title visible). Optionally dismisses any leftover
- * keyboard so the next step sees the full list.
+ * Force-restart the iOS Contacts app, discarding any leftover draft or search,
+ * and verify the contacts list is showing.
  */
 // Implementation note: trailhead tool — gives downstream steps a deterministic
 // starting point regardless of what state a prior run left the app in (mid-edit,

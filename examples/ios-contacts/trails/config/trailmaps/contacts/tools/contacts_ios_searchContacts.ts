@@ -22,32 +22,17 @@ const ROW_WAIT_MS = 5000;
 const RESULTS_LIST_LABEL = "Search results";
 
 export interface SearchContactsArgs {
-  /** Query to type into the contacts list's pull-down search field. */
+  /** Text to type into the Contacts search field. */
   query?: string;
-  /**
-   * Row text the tool taps after typing the query. Defaults to `query`. Pass
-   * this explicitly when the query is a partial prefix of the row's visible
-   * label (e.g. `query="alb"` + `rowText="Albert Einstein"`).
-   */
+  /** Result row to tap. Defaults to `query`; set it when the query is a prefix, e.g. "Albert Einstein" for "alb". */
   rowText?: string;
-  /**
-   * When true (default), taps the first visible matching row to open the
-   * contact's detail screen. When false, leaves the search active so a caller
-   * can verify the autocomplete-style suggestion list itself.
-   */
+  /** Open the first matching contact. Default true; false leaves the results showing. */
   openFirstResult?: boolean;
 }
 
 /**
- * Search the iOS Contacts list for a name and (optionally) open the first
- * matching contact. Use this whenever the task is to search Contacts for a
- * person, look up a contact by name, find someone in Contacts, or jump to a
- * known contact's detail screen. Handles the iOS pull-down-to-reveal-search
- * gesture, types the query, and either taps the first match (default) or
- * leaves the search active so the caller can verify the suggestion list. When
- * `openFirstResult: true` and the query yields no matches, throws a
- * descriptive error so callers can distinguish "wrong query" from "wrong row
- * text".
+ * Restart Contacts, search for a name, and by default open the first matching
+ * contact. Fails if no row matches `rowText`.
  */
 // Implementation notes:
 // Two branches:

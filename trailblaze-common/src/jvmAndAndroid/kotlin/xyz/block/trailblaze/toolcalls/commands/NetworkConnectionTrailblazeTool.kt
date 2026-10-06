@@ -56,32 +56,22 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 @TrailblazeToolClass("networkConnection")
 @LLMDescription(
   """
-Sets the device's network radios and airplane mode. Every field is optional and a field left unset
-is not touched, so this can change one radio without disturbing the others.
-
-To take the device OFFLINE, set wifi, cellular and bluetooth all to false. To bring it back online,
-set them all to true.
-
-airplaneMode sets the real airplane-mode signal that apps read, which is NOT the same request as
-taking the radios down. Setting the radios off does not set that signal, so an app that checks
-airplane mode will not see one. Name whichever the trail is actually testing, or both.
-
-Asking for airplaneMode true AND a radio true is allowed only for a radio this device lets a user
-re-enable during airplane mode (wifi and bluetooth, normally; mobile data, normally not) — that is
-a real state, and it is refused by name when the device would just undo it.
+Set the device's network radios and airplane mode; unset fields are left unchanged. To go offline,
+set wifi, cellular and bluetooth all false; set them true to go back online. Neither implies the
+other: airplaneMode alone may not take the device offline, and radios off do not turn airplane
+mode on, so set whichever the trail tests, or both. airplaneMode true with a radio true is refused
+unless the device lets users re-enable that radio in airplane mode (usually wifi and bluetooth,
+not mobile data).
 """,
 )
 data class NetworkConnectionTrailblazeTool(
-  @param:LLMDescription("Whether wifi should be on. Android only. Omit to leave it alone.")
+  @param:LLMDescription("Wifi on or off. Android only.")
   val wifi: Boolean? = null,
-  @param:LLMDescription("Whether mobile data should be on. Android only. Omit to leave it alone.")
+  @param:LLMDescription("Mobile data on or off. Android only.")
   val cellular: Boolean? = null,
-  @param:LLMDescription("Whether bluetooth should be on. Android only. Omit to leave it alone.")
+  @param:LLMDescription("Bluetooth on or off. Android only.")
   val bluetooth: Boolean? = null,
-  @param:LLMDescription(
-    "Whether airplane mode should be on. Does not by itself take the device offline. " +
-      "Omit to leave it alone.",
-  )
+  @param:LLMDescription("Airplane mode on or off.")
   val airplaneMode: Boolean? = null,
 ) : ExecutableTrailblazeTool {
 
@@ -643,7 +633,7 @@ data class NetworkConnectionTrailblazeTool(
      * Named for the surface rather than for airplane mode because it does not set airplane mode,
      * and it sits one letter away from [androidAirplaneModeShellCommand], which does.
      */
-    fun androidMaestroAirplaneModeRadioCommands(airplaneModeEnabled: Boolean): Map<String, String> =
+    fun maestroSetAirplaneModeRadioCommands(airplaneModeEnabled: Boolean): Map<String, String> =
       AndroidRadio.entries.associate { radio ->
         radio.svcName to androidRadioShellCommand(radio, on = !airplaneModeEnabled)
       }

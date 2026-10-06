@@ -134,10 +134,10 @@ removed in a future release.
       --[no-]capture-network Auto-capture network requests/responses to
                                <session-dir>/network.ndjson on supported
                                devices (web today; mobile devices added as
-                               engines land). Mirrors the desktop-app "Capture
-                               Network Traffic" toggle. On by default; use
-                               --no-capture-network to disable. When neither
-                               flag is passed, inherits the desktop app's saved
+                               engines land). Mirrors the "Network traffic"
+                               capture default in Trailblaze App Settings. On
+                               by default; use --no-capture-network to disable.
+                               When neither flag is passed, inherits that saved
                                setting.
       --[no-]capture-video   Record device screen video for the session. Off by
                                default — video writes large files — pass
@@ -220,7 +220,8 @@ removed in a future release.
                                persistent daemon. The server shuts down when
                                the run completes.
       --no-logging           Disable session logging — no files written to
-                               logs/, session does not appear in Sessions tab
+                               logs/, run does not appear in Trailblaze App's
+                               Runs list
       --no-report            Skip HTML report generation after execution
       --[no-]save-recording  Save the recording back to the trail source
                                directory after a successful run. Default: on.

@@ -27,23 +27,16 @@ const DEFAULT_WAIT_MS = 30_000;
 
 /** Input for {@link sampleapp_waitForText}. */
 export interface WaitForTextInput {
-  /**
-   * The exact, visible text to wait for (e.g. "Content Loaded"). Matched as an anchored regex
-   * (`^…$`) against the live view hierarchy, with regex metacharacters escaped, so it matches the
-   * whole text of a node rather than a substring.
-   */
+  // Matched as an anchored (`^…$`), regex-escaped pattern against the live view hierarchy.
+  /** Exact visible text to wait for, e.g. "Content Loaded". Matches a node's whole text, not a substring. */
   text: string;
-  /**
-   * How long to wait, in milliseconds, before giving up. Defaults to 30000. The tool returns the
-   * moment the text appears, so this is an upper bound, not a sleep.
-   */
+  /** Maximum wait in milliseconds. Default 30000; returns as soon as the text appears. */
   timeoutMs?: number;
 }
 
 /**
- * Wait (up to `timeoutMs`) for an element whose text equals `text` to appear, then return. Throws a
- * clear timeout error if it never shows. Use this to make a step robust to a screen that loads with
- * a variable delay — it waits for the result to appear instead of sleeping a fixed amount of time.
+ * Wait for an element whose text equals `text` to appear, instead of sleeping a fixed time.
+ * Fails if it doesn't appear within `timeoutMs`.
  */
 // The spec MUST be an inline object literal here: this is a descriptor-less tool (no sibling
 // `.yaml`), so the build-time analyzer reads `supportedPlatforms` / `requiresContext` straight off

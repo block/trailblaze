@@ -1,17 +1,15 @@
-import org.jetbrains.compose.desktop.application.dsl.TargetFormat
-
 plugins {
   kotlin("jvm")
-  alias(libs.plugins.compose.compiler)
   alias(libs.plugins.kotlin.serialization)
-  alias(libs.plugins.jetbrains.compose.multiplatform)
   alias(libs.plugins.dependency.guard)
+  // Puts build-logic's classes (registerPackageUberJarForCurrentOs and registerCliRunTask below)
+  // on this script's classpath.
+  id("trailblaze.build-logic-classpath")
 }
 
-// JVM args required for Compose Desktop on macOS — Skiko's JNI native code needs
-// access to internal AWT classes. Without these, `java -jar` crashes with SIGSEGV.
-// The canonical source for these is scripts/trailblaze (used at runtime).
-// They're duplicated here for native distributions (DMG) and development run tasks.
+// JVM args for macOS — Skiko's JNI native code needs access to internal AWT classes. Without
+// these, `java -jar` crashes with SIGSEGV. The canonical source for these is scripts/trailblaze
+// (used at runtime). They're duplicated here for Gradle `JavaExec` tasks.
 val macOsJvmArgs = listOf(
   "--add-opens", "java.desktop/sun.awt=ALL-UNNAMED",
   "--add-opens", "java.desktop/sun.lwawt=ALL-UNNAMED",
@@ -21,10 +19,9 @@ val macOsJvmArgs = listOf(
 // Same Dispatchers.IO ceiling the JAR launcher sets (scripts/trailblaze), and for the same reason:
 // each scripted-tool subprocess pins one IO permit for its whole session, and exhausting the
 // 64-permit default does not fail - it hangs every daemon route while /ping keeps answering.
-// Neither the packaged DMG nor a Gradle `run` reads the launcher script, so both need it here or
-// they wedge where the shipped CLI does not. TRAILBLAZE_IO_PARALLELISM is read from the environment
-// that BUILDS the DMG (it is baked into the launcher the installer writes) and from the environment
-// that starts a `run` task.
+// A Gradle `JavaExec` task does not read the launcher script, so it needs it here or it wedges
+// where the shipped CLI does not. TRAILBLAZE_IO_PARALLELISM is read from the environment that
+// starts the task.
 //
 // Validated for the same reason the launcher script validates it, and against the same rule:
 // kotlinx parses the raw property with `toLongOrNull()` and calls error() on anything that is not
@@ -72,20 +69,12 @@ configurations.all {
 dependencies {
   implementation(project(":trailblaze-agent"))
   implementation(project(":trailblaze-common"))
-  implementation(project(":trailblaze-compose"))
   implementation(project(":trailblaze-host"))
   implementation(project(":trailblaze-revyl"))
   implementation(project(":trailblaze-models"))
   implementation(project(":trailblaze-report"))
   implementation(project(":trailblaze-server"))
-  implementation(project(":trailblaze-ui"))
 
-  implementation(compose.desktop.currentOs)
-  implementation(libs.compose.ui)
-  implementation(libs.compose.runtime)
-  implementation(libs.compose.foundation)
-  implementation(libs.compose.material3)
-  implementation(libs.compose.components.resources)
   implementation(libs.koog.prompt.executor.clients)
   implementation(libs.ktor.network.tls.certificates)
   implementation(libs.picocli) // For CLI interface
@@ -115,45 +104,19 @@ tasks.named("processResources") {
   dependsOn(copyAndroidTestApkToResources)
 }
 
-compose.desktop {
-  application {
-    mainClass = "xyz.block.trailblaze.desktop.Trailblaze"
-    jvmArgs += macOsJvmArgs
-    jvmArgs += ioParallelismJvmArg
+val packageUberJar = registerPackageUberJarForCurrentOs(
+  mainClass = "xyz.block.trailblaze.desktop.Trailblaze",
+  appJar = tasks.named<Jar>("jar"),
+  runtimeClasspath = configurations.getByName("runtimeClasspath"),
+  // Shared git-based version from the root build file.
+  version = rootProject.extra["gitVersion"] as String,
+)
 
-    nativeDistributions {
-      targetFormats(
-        TargetFormat.Dmg,
-      )
-
-      packageName = "Trailblaze"
-      // Use shared git-based version from root build file
-      packageVersion = rootProject.extra["gitVersion"] as String
-      description = "Trailblaze Desktop Application (Open Source)"
-      vendor = "Block, Inc."
-
-      macOS {
-        iconFile.set(project.file("../trailblaze-host/src/main/resources/icons/icon.icns"))
-        bundleID = "xyz.block.trailblaze.opensource.desktop"
-
-        // Minimum macOS version required
-        minimumSystemVersion = "11.0"
-
-        // App store category
-        appCategory = "public.app-category.developer-tools"
-
-        // Set to true when ready to sign
-        signing {
-          sign.set(false)
-        }
-      }
-    }
-
-    // ProGuard shrinking is configured as a standalone post-processing task below
-    // (not using the Compose plugin's built-in ProGuard, which lags behind Kotlin versions).
-    // Build with: ./gradlew :trailblaze-desktop:shrinkUberJar -Ptrailblaze.proguard=true
-  }
-}
+registerCliRunTask(
+  mainClass = "xyz.block.trailblaze.desktop.Trailblaze",
+  appJar = tasks.named<Jar>("jar"),
+  runtimeClasspath = configurations.getByName("runtimeClasspath"),
+)
 
 // ---------------------------------------------------------------------------
 // ProGuard shrinking (standalone task with correct kotlin-metadata-jvm version)
@@ -228,25 +191,6 @@ val shrinkUberJar by tasks.registering(JavaExec::class) {
 
 // Task to build release artifacts.
 // Use -Ptrailblaze.proguard=true to produce a ProGuard-shrunk JAR.
-// `packageUberJarForCurrentOS` emits a timestamped jar each run
-// (`Trailblaze-macos-arm64-<timestamp>.jar`) and doesn't clean stale jars from prior
-// incremental builds. If `compose/jars/` ends up with both an old and a new jar, the
-// `releaseArtifacts` Copy task below picks one non-deterministically — observed in
-// practice when invoking `releaseArtifacts` twice in a row with a source edit in
-// between: the old jar would sometimes win and silently install pre-edit bytecode.
-// Wipe the staging dir before the producer runs so only the current build's jar
-// reaches the copy. Configured at the top level rather than inside `releaseArtifacts`
-// because Gradle's task-container API forbids `.configure` calls on a named task from
-// inside another task's configuration block.
-tasks.matching { it.name == "packageUberJarForCurrentOS" }.configureEach {
-  doFirst {
-    val jarsDir = layout.buildDirectory.dir("compose/jars").get().asFile
-    if (jarsDir.exists()) {
-      jarsDir.listFiles { _, name -> name.endsWith(".jar") }?.forEach { it.delete() }
-    }
-  }
-}
-
 val releaseArtifacts by tasks.registering(Copy::class) {
   description = "Builds the release JAR artifact for distribution"
   group = "distribution"
@@ -265,7 +209,7 @@ val releaseArtifacts by tasks.registering(Copy::class) {
   duplicatesStrategy = DuplicatesStrategy.INCLUDE
 
   // Copy the launcher script alongside the JAR. In java -jar mode (the default),
-  // it passes the --add-opens JVM flags required for macOS Compose Desktop.
+  // it passes the --add-opens JVM flags Skiko needs on macOS.
   doLast {
     val launcher = project.file("../scripts/trailblaze")
     val dest = releaseDir.get().asFile.resolve("trailblaze")
@@ -274,50 +218,59 @@ val releaseArtifacts by tasks.registering(Copy::class) {
   }
 }
 
-afterEvaluate {
-  // The uber JAR exceeds 65 535 entries; enable zip64 so packaging succeeds.
-  tasks.named<org.gradle.jvm.tasks.Jar>("packageUberJarForCurrentOS") {
-    isZip64 = true
-    // Maestro ships its own Android instrumentation APKs as classpath resources, for
-    // `maestro.drivers.AndroidDriver` to install onto a device. Trailblaze never builds that
-    // driver -- Android runs through our own on-device runner APK -- and `AndroidDriver` is the
-    // only class in maestro-client that reads either file, so they are 12.6 MB of dead weight
-    // in every JAR download and Homebrew install.
-    exclude("maestro-app.apk", "maestro-server.apk")
-    // Skiko's macos-arm64 runtime artifact bundles BOTH Mac dylibs, so the Intel binary
-    // arrives even though nothing declares it. `TrailblazeDesktopUtil.assertSupportedPlatform()`
-    // exits on Intel macOS before anything can load it, so this is ~9 MB that can never run.
-    exclude("libskiko-macos-x64.dylib", "libskiko-macos-x64.dylib.sha256")
-    // GraalVM's shaded ICU locale tables (~13 MB, ~4 200 files, no classes) — data for a
-    // JavaScript engine that cannot run in the SHRUNK JAR. Maestro drags GraalJS in for `${...}`
-    // interpolation and for `evalScript`/`runScript`; Trailblaze evaluates scripted tools on
-    // QuickJS instead, and our YAML layer rejects both script commands. What settles it is the
-    // shipped artifact: ProGuard leaves ZERO `com/oracle/truffle/js/**` class files in it
-    // (4 886 in the dependency, 0 in the JAR, on `main` as well), so a `${...}` on the host
-    // already fails there today, with or without these tables.
-    //
-    // Gated on the shrinker for exactly that reason: it is only the ProGuard pass that makes this
-    // data unreachable. An UNSHRUNK JAR keeps the JS language, and `scripts/install-trailblaze-source.sh`
-    // — the source dev loop — builds this task with no `-Ptrailblaze.proguard`, so pruning
-    // unconditionally would leave a locally installed `./trailblaze` with a language that dies
-    // inside missing ICU on the first `${...}`, where `main` works. Gating keeps the full 13 MB
-    // win on the released JAR and every developer build byte-comparable to `main`.
-    //
-    // A PACKAGING exclude and not `configurations.all` for the same reason at one more remove: a
-    // dependency exclude reaches `run`, `JavaExec` and every test classpath as well, none of
-    // which are shrunk. And `org.graalvm.polyglot` stays in all shapes — `Orchestra.runFlow`
-    // constructs a `GraalJsEngine` before it dispatches anything, so removing polyglot breaks
-    // every host-side Maestro flow, the iOS driver among them, with
-    // `NoClassDefFoundError: org/graalvm/polyglot/PolyglotException`.
-    //
-    // The `inputs.property` is load-bearing, not decoration: a `Jar` task's exclude patterns are
-    // not part of its up-to-date check, so without it a shrunk build right after an unshrunk one
-    // reuses the unshrunk JAR verbatim and ships the ICU data it was supposed to drop. Verified
-    // by observing exactly that before the line was added.
-    inputs.property("trailblazeProguard", useProguard)
-    if (useProguard) exclude("org/graalvm/shadowed/**")
-  }
+packageUberJar.configure {
+  // Maestro ships its own Android instrumentation APKs as classpath resources, for
+  // `maestro.drivers.AndroidDriver` to install onto a device. Trailblaze never builds that
+  // driver -- Android runs through our own on-device runner APK -- and `AndroidDriver` is the
+  // only class in maestro-client that reads either file, so they are 12.6 MB of dead weight
+  // in every JAR download and Homebrew install.
+  exclude("maestro-app.apk", "maestro-server.apk")
+  // The WebP encoder ships libwebp for 11 platforms in one artifact. Keep the three
+  // `TrailblazeDesktopUtil.assertSupportedPlatform()` lets start (linux-x64, linux-arm64,
+  // macos-arm64); the rest can never load.
+  exclude(
+    "native/Windows/**",
+    "native/Mac/x86_64/**",
+    "native/Linux/arm/**",
+    "native/Linux/armv6/**",
+    "native/Linux/armv7/**",
+    "native/Linux/ppc64/**",
+    "native/Linux/x86/**",
+  )
+  // Maestro's XCUITest runner built for physical iPhones (~9 MB). Trailblaze supports only iOS
+  // simulators, which use `driver-iPhoneSimulator/`.
+  exclude("driver-iphoneos/**")
+  // GraalVM's shaded ICU locale tables (~13 MB, ~4 200 files, no classes) — data for a
+  // JavaScript engine that cannot run in the SHRUNK JAR. Maestro drags GraalJS in for `${...}`
+  // interpolation and for `evalScript`/`runScript`; Trailblaze evaluates scripted tools on
+  // QuickJS instead, and our YAML layer rejects both script commands. What settles it is the
+  // shipped artifact: ProGuard leaves ZERO `com/oracle/truffle/js/**` class files in it
+  // (4 886 in the dependency, 0 in the JAR, on `main` as well), so a `${...}` on the host
+  // already fails there today, with or without these tables.
+  //
+  // Gated on the shrinker for exactly that reason: it is only the ProGuard pass that makes this
+  // data unreachable. An UNSHRUNK JAR keeps the JS language, and `scripts/install-trailblaze-source.sh`
+  // — the source dev loop — builds this task with no `-Ptrailblaze.proguard`, so pruning
+  // unconditionally would leave a locally installed `./trailblaze` with a language that dies
+  // inside missing ICU on the first `${...}`, where `main` works. Gating keeps the full 13 MB
+  // win on the released JAR and every developer build byte-comparable to `main`.
+  //
+  // A PACKAGING exclude and not `configurations.all` for the same reason at one more remove: a
+  // dependency exclude reaches `run`, `JavaExec` and every test classpath as well, none of
+  // which are shrunk. And `org.graalvm.polyglot` stays in all shapes — `Orchestra.runFlow`
+  // constructs a `GraalJsEngine` before it dispatches anything, so removing polyglot breaks
+  // every host-side Maestro flow, the iOS driver among them, with
+  // `NoClassDefFoundError: org/graalvm/polyglot/PolyglotException`.
+  //
+  // The `inputs.property` is load-bearing, not decoration: a `Jar` task's exclude patterns are
+  // not part of its up-to-date check, so without it a shrunk build right after an unshrunk one
+  // reuses the unshrunk JAR verbatim and ships the ICU data it was supposed to drop. Verified
+  // by observing exactly that before the line was added.
+  inputs.property("trailblazeProguard", useProguard)
+  if (useProguard) exclude("org/graalvm/shadowed/**")
+}
 
+afterEvaluate {
   tasks.withType<JavaExec> {
     // Run from the repository root so relative paths in target configs (e.g., `trails/` directories
     // referenced by a target YAML) resolve correctly.

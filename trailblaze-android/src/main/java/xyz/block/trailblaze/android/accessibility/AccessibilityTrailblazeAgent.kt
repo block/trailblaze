@@ -268,7 +268,8 @@ class AccessibilityTrailblazeAgent(
    * Focuses the field matching [nodeSelector] and types into it via [AccessibilityAction.InputText].
    * A gesture tap on an editable does not guarantee focus moves to it, and typing afterwards would
    * land in whatever field kept it. A selector that doesn't resolve to an editable field types into
-   * the field the tap focused, and fails when there is none.
+   * the field the tap focused, and fails when there is none. With [clearFirst], that field is
+   * emptied once it holds focus, before the text goes in.
    *
    * Only accessibility-shaped selectors resolve against this tree; any other shape returns null so
    * the caller falls back to its tap-then-type path.
@@ -277,6 +278,7 @@ class AccessibilityTrailblazeAgent(
     nodeSelector: TrailblazeNodeSelector,
     text: String,
     hideKeyboardAfter: Boolean,
+    clearFirst: Boolean,
     traceId: TraceId?,
   ): TrailblazeToolResult? {
     if (nodeSelector.androidAccessibility == null) return null
@@ -286,6 +288,7 @@ class AccessibilityTrailblazeAgent(
           text = text,
           nodeSelector = nodeSelector,
           hideKeyboardAfter = hideKeyboardAfter,
+          clearFirst = clearFirst,
         ),
       ),
       traceId = traceId,
@@ -294,6 +297,16 @@ class AccessibilityTrailblazeAgent(
       deviceManager = deviceManager,
     )
   }
+
+  /** Empties the focused field via [AccessibilityAction.ClearText], which needs no character count. */
+  override suspend fun clearFocusedTextField(traceId: TraceId?): TrailblazeToolResult =
+    AccessibilityTrailRunner.runActions(
+      actions = listOf(AccessibilityAction.ClearText),
+      traceId = traceId,
+      trailblazeLogger = trailblazeLogger,
+      sessionProvider = sessionProvider,
+      deviceManager = deviceManager,
+    )
 
   /**
    * Asserts that an element matching the [nodeSelector] is visible using the accessibility tree.

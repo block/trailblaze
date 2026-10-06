@@ -9,12 +9,9 @@ export interface DeleteContactArgs {
 }
 
 /**
- * Delete a contact from the iOS Contacts app, by name. Use this whenever the
- * task is to delete a contact, remove a person from Contacts, or clean up a
- * contact created by a previous step. Idempotent — if the contact doesn't
- * exist the tool returns successfully without doing anything, so it's safe to
- * use as a teardown step. Confirms the action-sheet "Delete Contact" prompt
- * automatically.
+ * Delete an iOS contact by name, confirming the delete prompt. Succeeds
+ * without doing anything if the contact doesn't exist, so it is safe as a
+ * teardown step.
  */
 // Implementation notes:
 // Destructive flow: opens the named contact, enters edit mode, scrolls to the

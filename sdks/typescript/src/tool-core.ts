@@ -17,7 +17,7 @@
 
 import type { ErrorObject, ValidateFunction } from "ajv/dist/2020.js";
 
-import type { TrailblazeClient, TrailblazeToolMethods } from "./client.js";
+import type { TrailblazeClient, TrailblazeHostMethods, TrailblazeToolMethods } from "./client.js";
 import type { TrailblazeContext, TrailblazeDevice, TrailblazeTarget } from "./context.js";
 import type { TrailblazeSessionResources } from "./session-resources.js";
 import { attachMemoryDeltaToResult, createMemory, type TrailblazeMemory } from "./memory.js";
@@ -32,6 +32,12 @@ import { attachMemoryDeltaToResult, createMemory, type TrailblazeMemory } from "
 export interface ToolContext {
   /** Compose other Trailblaze tools through the typed `tools.<name>(args)` namespace. */
   tools: TrailblazeToolMethods;
+  /**
+   * Call Kotlin host functions — `host.<name>(args)` — for plumbing that isn't a tool (credential
+   * lookups, provisioning calls). Unlike `tools`, a host call isn't logged as a step and keeps the
+   * cached screen. See `TrailblazeHostFunctionMap`.
+   */
+  host: TrailblazeHostMethods;
   /**
    * Per-invocation memory surface. Reads see the host snapshot + this invocation's writes;
    * writes are flushed back to the host on a successful return via the result envelope's
@@ -151,6 +157,13 @@ export interface TrailblazeTypedToolSpec<TInput = Record<string, unknown>> {
    * than a silently-unmasked credential.
    */
   sensitiveArgNames?: readonly Extract<keyof TInput, string>[];
+  /**
+   * Where the handler runs. `"inProcess"` (the default when omitted) is the embedded QuickJS
+   * engine, the only runtime available on a device. `"subprocess"` is a host `bun` process, for a
+   * handler that itself needs Node APIs (`node:fs`, `node:child_process`); such a tool can't run
+   * on a device, so pair it with `requiresHost: true`. Same values as a descriptor's `runtime:`.
+   */
+  runtime?: "inProcess" | "subprocess";
   /**
    * Optional JSON Schema for the typed tool's input. When present AND the caller injected a
    * validator compiler (full path), the runtime adapter validates `args` BEFORE the handler;
@@ -318,6 +331,7 @@ export function defineTypedTool<TInput, TResult>(
     // on-device QuickJS host that only emitted the deprecated `driver` alias.
     const toolContext: ToolContext = {
       tools: client.tools,
+      host: client.host,
       memory,
       device: normalizeDevice(legacyCtx?.device),
       target: legacyCtx?.target,

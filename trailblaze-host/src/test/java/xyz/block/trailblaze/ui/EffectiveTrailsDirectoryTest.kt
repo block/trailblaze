@@ -7,6 +7,7 @@ import kotlin.test.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
+import xyz.block.trailblaze.config.project.TrailblazeWorkspaceConfigResolver
 import xyz.block.trailblaze.config.project.WorkspaceTrailsDeclaration
 import xyz.block.trailblaze.ui.models.TrailblazeServerState.SavedTrailblazeAppConfig
 
@@ -29,9 +30,14 @@ class EffectiveTrailsDirectoryTest {
   @get:Rule
   val tempFolder = TemporaryFolder()
 
-  private fun configWith(trailsDirectory: String?, appDataDirectory: String?) = SavedTrailblazeAppConfig(
+  private fun configWith(
+    trailsDirectory: String?,
+    appDataDirectory: String?,
+    chosen: Boolean = false,
+  ) = SavedTrailblazeAppConfig(
     selectedTrailblazeDriverTypes = emptyMap(),
     trailsDirectory = trailsDirectory,
+    trailsDirectoryChosen = chosen,
     appDataDirectory = appDataDirectory,
   )
 
@@ -79,6 +85,103 @@ class EffectiveTrailsDirectoryTest {
     )
 
     assertEquals(declared.absolutePath, effective)
+  }
+
+  @Test
+  fun `a picked directory equal to the derived default outranks the launch workspace's declaration`() {
+    // `trailblaze app` from clone B into a daemon launched in clone A stores B's declared
+    // `<B>/trails` and moves app data to `<B>/.trailblaze`, so the stored value equals the
+    // derived default. It is still B's pick: reading it as unchosen sent saves back to A.
+    val launchedIn = tempFolder.newFolder("clone-a", "trails")
+    val activated = tempFolder.newFolder("clone-b")
+    val activatedTrails = File(activated, "trails").apply { mkdirs() }
+
+    val effective = TrailblazeDesktopUtil.getEffectiveTrailsDirectory(
+      appConfig = configWith(activatedTrails.canonicalPath, File(activated, ".trailblaze").absolutePath, chosen = true),
+      workspaceTrailsDirProvider = { launchedIn },
+    )
+
+    assertEquals(activatedTrails.canonicalPath, effective)
+  }
+
+  @Test
+  fun `an unflagged default yields to the launch declaration even when its own workspace declares it`() {
+    // A legacy settings file materialized `<A>/trails` beside app data `<A>/.trailblaze`; A later
+    // declared `trails: trails`. Nobody picked it, so a daemon launched in declaring workspace B
+    // must still use B's.
+    val legacy = tempFolder.newFolder("clone-g")
+    File(legacy, "trailblaze-config").mkdirs()
+    File(legacy, "trailblaze-config/trailblaze.yaml").writeText("trails: trails\n")
+    val legacyTrails = File(legacy, "trails").apply { mkdirs() }
+    val launchedIn = tempFolder.newFolder("clone-h", "trails")
+
+    val effective = TrailblazeDesktopUtil.getEffectiveTrailsDirectory(
+      appConfig = configWith(legacyTrails.canonicalPath, File(legacy, ".trailblaze").absolutePath),
+      workspaceTrailsDirProvider = { launchedIn },
+    )
+
+    assertEquals(launchedIn.absolutePath, effective)
+  }
+
+  @Test
+  fun `the launch workspace's declaration is in effect when nothing is chosen`() {
+    val launchedIn = declaringClone("clone-c")
+
+    val inEffect = TrailblazeDesktopUtil.effectiveWorkspaceConfigDir(
+      appConfig = configWith(trailsDirectory = null, appDataDirectory = appDataDir("ad6").absolutePath),
+      launchDeclaration = launchedIn,
+    )
+
+    assertEquals(launchedIn.configDir.canonicalFile, inEffect?.canonicalFile)
+  }
+
+  @Test
+  fun `after activating another workspace its declaration is in effect, not the launch workspace's`() {
+    // Trailmaps, targets and `defaults.target` anchor on this, so it is what makes them follow
+    // `trailblaze app` from clone B into a daemon launched in clone A.
+    val launchedIn = declaringClone("clone-d")
+    val activated = declaringClone("clone-e")
+
+    val inEffect = TrailblazeDesktopUtil.effectiveWorkspaceConfigDir(
+      appConfig = configWith(
+        activated.trailsDir.canonicalPath,
+        File(activated.configDir.parentFile, ".trailblaze").absolutePath,
+        chosen = true,
+      ),
+      launchDeclaration = launchedIn,
+    )
+
+    assertEquals(activated.configDir.canonicalFile, inEffect?.canonicalFile)
+  }
+
+  @Test
+  fun `a chosen directory that no workspace declares has no declaration in effect`() {
+    // Null hands the config-dir lookup to its walk-up from the chosen directory, rather than
+    // keeping the launch workspace's config for trails that live somewhere else.
+    val launchedIn = declaringClone("clone-f")
+    val chosen = tempFolder.newFolder("my-own-trails")
+
+    val inEffect = TrailblazeDesktopUtil.effectiveWorkspaceConfigDir(
+      appConfig = configWith(chosen.absolutePath, appDataDir("ad7").absolutePath),
+      launchDeclaration = launchedIn,
+    )
+
+    assertEquals(null, inEffect)
+  }
+
+  /** A clone whose `trailblaze-config/trailblaze.yaml` declares `trails: trails`, as resolved. */
+  private fun declaringClone(name: String): WorkspaceTrailsDeclaration {
+    val root = tempFolder.newFolder(name)
+    File(root, "trailblaze-config").mkdirs()
+    File(root, "trailblaze-config/trailblaze.yaml").writeText("trails: trails\n")
+    File(root, "trails").mkdirs()
+    return requireNotNull(
+      TrailblazeWorkspaceConfigResolver.workspaceTrailsDeclaration(
+        fromPath = root.toPath(),
+        consumer = "test",
+        envReader = { null },
+      ),
+    )
   }
 
   @Test

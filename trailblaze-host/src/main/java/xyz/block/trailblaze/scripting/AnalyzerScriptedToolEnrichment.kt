@@ -2,14 +2,13 @@ package xyz.block.trailblaze.scripting
 
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
-import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import xyz.block.trailblaze.config.InlineScriptToolConfig
-import xyz.block.trailblaze.config.TrailheadMetadata
+import xyz.block.trailblaze.config.project.GeneratedScriptedToolDef
+import xyz.block.trailblaze.config.project.ScriptedToolDefProjection
 import xyz.block.trailblaze.config.project.ScriptedToolEnrichment
 import xyz.block.trailblaze.config.project.ScriptedToolProperty
 import xyz.block.trailblaze.config.project.TrailmapScriptedToolFile
@@ -26,9 +25,9 @@ import java.io.File
  * [TrailmapScriptedToolFile.requiresEnrichment] for the full list — and each picks a
  * different rule for which analyzer export(s) to consume:
  *
- *  1. **Meta-only** (`script:` + optional `_meta:` only) — the `.ts` must export exactly
- *     one typed tool; the analyzer-derived name becomes the registered tool name. Multi-
- *     export `.ts` files are rejected because the YAML can't disambiguate.
+ *  1. **Meta-only** (`script:` + optional `_meta:` only) — the analyzer-derived name becomes
+ *     the registered tool name. A meta-only YAML's `.ts` must export exactly one typed tool;
+ *     a bare `.ts` with no YAML registers every export it declares.
  *  2. **Partial single-tool** (YAML carries `name:` but no `description:` / `inputSchema:`)
  *     — the analyzer extracts ALL exports; the one whose name matches the YAML's `name:`
  *     wins. The YAML's name is the disambiguator, so multi-export `.ts` files are fine.
@@ -266,13 +265,23 @@ class AnalyzerScriptedToolEnrichment(
         reason = reason,
       )
     }
+    // An unknown spec `runtime` fails the descriptor here, as a Failed result, rather than
+    // throwing from the config construction below.
+    for (def in defs) {
+      runCatching { ScriptedToolDefProjection.specRuntimeOf(def.name, def.spec) }.onFailure { e ->
+        return ScriptedToolEnrichment.EnrichmentResult.Failed(
+          relativePath = deferred.relativePath,
+          reason = "${scriptFile.name}: ${e.message}",
+        )
+      }
+    }
 
     // Three authoring shapes route through this enrichment path; each picks which
     // analyzer exports to consume differently:
     //
-    //  1. Meta-only (descriptor.name == null && descriptor.tools == null) → the `.ts`
-    //     must export exactly one typed tool, and that export's name becomes the
-    //     registered tool name.
+    //  1. Meta-only (descriptor.name == null && descriptor.tools == null) → each export's
+    //     name becomes a registered tool name. A meta-only YAML allows one export; a bare
+    //     `.ts` registers all of them.
     //  2. Partial single-tool (descriptor.name != null && descriptor.tools == null) →
     //     find the analyzer export whose name matches descriptor.name. Multi-export
     //     `.ts` files are fine here; the YAML's `name:` is the disambiguator.
@@ -350,10 +359,19 @@ class AnalyzerScriptedToolEnrichment(
         )
       }
       else -> {
-        // Meta-only (the original `_meta:`-only authoring shape). Exactly-one-export
-        // contract: the YAML can't disambiguate so multi-export `.ts` files are
-        // rejected to avoid the silent last-write-wins failure mode.
-        if (defs.size > 1) {
+        // Meta-only: a `_meta:`-only YAML, or a bare `.ts` with no YAML at all. A bare `.ts`
+        // registers every export under its own name. A meta-only YAML must point at a single
+        // export: its file-wide `_meta:` would otherwise apply to every export at once.
+        val bareSource = deferred.relativePath.endsWith(".ts")
+        // Another export in this file failed analysis. Fail the file, as an uncaptured spec does,
+        // rather than register the survivors and silently drop the broken export.
+        extraReasonByPath[normalizedScriptPath]?.let { reason ->
+          return ScriptedToolEnrichment.EnrichmentResult.Failed(
+            relativePath = deferred.relativePath,
+            reason = "${scriptFile.name}: $reason",
+          )
+        }
+        if (defs.size > 1 && !bareSource) {
           val names = defs.map { it.name }.sorted().joinToString(", ")
           return ScriptedToolEnrichment.EnrichmentResult.Failed(
             relativePath = deferred.relativePath,
@@ -364,17 +382,16 @@ class AnalyzerScriptedToolEnrichment(
               "to select which export(s) to register.",
           )
         }
-        val def = defs.single()
         // A meta-only descriptor (no YAML name/description/inputSchema/_meta) delegates EVERYTHING
         // to the `.ts`. If the author used the (spec, handler) overload with a non-inline spec
         // reference, the analyzer dropped the whole spec — there's no YAML to supply
         // supportedPlatforms / surfaceToLlm, so the tool would silently ship un-gated. Fail loud
         // (the general case is only a warning; here the spec is the sole metadata source). This is
         // the safety net for agents vibe-authoring descriptor-less `.ts` tools.
-        if (def.uncapturedSpec) {
+        defs.firstOrNull { it.uncapturedSpec }?.let { def ->
           return ScriptedToolEnrichment.EnrichmentResult.Failed(
             relativePath = deferred.relativePath,
-            reason = "${scriptFile.name}: trailblaze.tool(spec, handler) was called with a " +
+            reason = "${scriptFile.name}: '${def.name}' called trailblaze.tool(spec, handler) with a " +
               "non-inline spec reference (e.g. `const SPEC = {...}` or a factory call), so its " +
               "supportedPlatforms / surfaceToLlm / requiresHost were not captured. A descriptor-less " +
               "tool has no YAML to supply them, so this would advertise an un-gated tool. Inline the " +
@@ -382,46 +399,15 @@ class AnalyzerScriptedToolEnrichment(
               "`trailblaze.tool<I>({ supportedPlatforms: [\"ios\"] }, async (args, ctx) => { ... })`.",
           )
         }
-        val analyzerSurfaceToLlm = (def.spec?.get("surfaceToLlm") as? JsonPrimitive)?.booleanOrNull ?: true
-        val analyzerIsRecordable = (def.spec?.get("isRecordable") as? JsonPrimitive)?.booleanOrNull ?: true
-        val effectiveSurfaceToLlm = descriptor.surfaceToLlm && analyzerSurfaceToLlm
-        val effectiveIsRecordable = descriptor.isRecordable && analyzerIsRecordable
-        // Combined (descriptor AND analyzer) value into mergeMeta so the on-device `_meta` matches
-        // the typed slot — see the buildPartialConfig rationale above.
-        val merged = mergeMeta(
-          descriptorMeta = descriptor.meta,
-          requiresHost = descriptor.requiresHost,
-          supportedPlatforms = descriptor.supportedPlatforms,
-          analyzerSpec = def.spec,
-          surfaceToLlm = effectiveSurfaceToLlm,
-          isRecordable = effectiveIsRecordable,
-        )
-        listOf(
-          InlineScriptToolConfig(
+        // Shared with the generated `.tooldefs.json` path, so a descriptor-less tool resolves to
+        // the same config whether the analyzer ran live or at build time.
+        defs.map { def ->
+          ScriptedToolDefProjection.descriptorlessConfig(
+            def = def.toGeneratedDef(),
             script = scriptFile.absolutePath,
-            name = def.name,
-            // Description precedence: spec `description` (NEW middle tier) over the analyzer's
-            // TSDoc-derived `def.description`. A meta-only descriptor carries no YAML
-            // `description:` (that's the partial-descriptor shape), so the YAML override tier is
-            // absent here — see [specDescriptionOf] and the precedence note on `buildPartialConfig`.
-            description = specDescriptionOf(def.spec) ?: def.description,
-            requiresHost = descriptor.requiresHost ||
-              (def.spec?.get("requiresHost") as? JsonPrimitive)?.booleanOrNull == true,
-            surfaceToLlm = effectiveSurfaceToLlm,
-            isRecordable = effectiveIsRecordable,
-            runtime = descriptor.runtime,
-            meta = merged,
-            // Inline any `$ref` (named enum / Record / nested type) the analyzer emitted so the
-            // downstream subprocess synthesizer + in-process descriptor see a self-contained
-            // schema — see [ScriptedToolSchemaRefFlattener].
-            inputSchema = ScriptedToolSchemaRefFlattener.flatten(def.inputSchemaObject),
-            // The analyzer read the tool's `<I>` generic, so this schema IS the complete
-            // argument contract — including `properties: {}` for a genuinely no-arg tool,
-            // which the arg-shape gates may therefore enforce strictly.
-            inputSchemaExhaustive = true,
-            trailhead = trailheadOf(def.name, def.spec),
-          ),
-        )
+            descriptor = descriptor,
+          )
+        }
       }
     }
     return ScriptedToolEnrichment.EnrichmentResult.Resolved(
@@ -438,14 +424,14 @@ class AnalyzerScriptedToolEnrichment(
    *    resolution + per-trailmap dup detection).
    *  - `description` — three-tier precedence (most-authoritative first): YAML's
    *    [entryDescription] when non-null, else the typed spec's `description`
-   *    ([specDescriptionOf]), else the analyzer's TSDoc-extracted description.
+   *    ([ScriptedToolDefProjection.specDescriptionOf]), else the analyzer's TSDoc-extracted description.
    *  - `inputSchema` — YAML's [entryInputSchema] when non-empty, else the analyzer's
    *    `<I>`-generic-extracted JSON Schema.
-   *  - `_meta` — merged via [mergeMeta] from descriptor-side keys (file-wide + per-entry
+   *  - `_meta` — merged via [ScriptedToolDefProjection.mergeMeta] from descriptor-side keys (file-wide + per-entry
    *    overrides) and the analyzer's typed spec.
    *  - `requiresHost` — true if any of (file-wide `requiresHost:`, per-entry
    *    `requiresHost:`, analyzer spec's `requiresHost`) opt in. Additive — matches
-   *    [mergeMeta]'s union semantics.
+   *    [ScriptedToolDefProjection.mergeMeta]'s union semantics.
    *
    * Per-entry [entryMeta] / [entryRequiresHost] / [entrySupportedPlatforms] are
    * non-null only for partial multi-tool entries; partial single-tool descriptors
@@ -465,7 +451,7 @@ class AnalyzerScriptedToolEnrichment(
     entrySensitiveArgNames: List<String>?,
     def: ScriptedToolDefinition,
   ): InlineScriptToolConfig {
-    val description = entryDescription ?: specDescriptionOf(def.spec) ?: def.description
+    val description = entryDescription ?: ScriptedToolDefProjection.specDescriptionOf(def.spec) ?: def.description
     // YAML inputSchema is the author's flat `Map<String, ScriptedToolProperty>` shape.
     // When present, translate it into the JSON-Schema object the runtime expects (same
     // translation the legacy `TrailmapScriptedToolFile.toInlineScriptToolConfig()` uses,
@@ -518,7 +504,7 @@ class AnalyzerScriptedToolEnrichment(
     // direction writes a credential to a shipped artifact.
     val effectiveSensitiveArgNames =
       entrySensitiveArgNames?.takeIf { it.isNotEmpty() } ?: descriptor.sensitiveArgNames
-    val mergedMetaBase = mergeMeta(
+    val mergedMetaBase = ScriptedToolDefProjection.mergeMeta(
       descriptorMeta = descriptor.meta,
       requiresHost = effectiveRequiresHost,
       supportedPlatforms = effectiveSupportedPlatforms,
@@ -547,14 +533,14 @@ class AnalyzerScriptedToolEnrichment(
       requiresHost = effectiveRequiresHost || analyzerRequiresHost,
       surfaceToLlm = effectiveSurfaceToLlm,
       isRecordable = effectiveIsRecordable,
-      runtime = descriptor.runtime,
+      runtime = descriptor.runtime ?: ScriptedToolDefProjection.specRuntimeOf(entryName, def.spec),
       meta = merged,
       inputSchema = inputSchema,
       // Exhaustive on both branches of the `inputSchema` selection above: either the author
       // declared a full `inputSchema:` (which wins over the analyzer), or the analyzer read the
       // tool's `<I>` generic. Both are the tool's complete argument contract.
       inputSchemaExhaustive = true,
-      trailhead = trailheadOf(entryName, def.spec),
+      trailhead = ScriptedToolDefProjection.trailheadOf(entryName, def.spec),
     )
   }
 
@@ -639,219 +625,6 @@ class AnalyzerScriptedToolEnrichment(
   }
 
   /**
-   * Merge sources of namespaced `_meta:` keys for a meta-only descriptor in
-   * descending precedence:
-   *
-   *   1. Descriptor-side `_meta:` map (explicit author keys in the YAML).
-   *   2. Descriptor-side top-level shortcut fields (`requiresHost: true`,
-   *      `supportedPlatforms: [...]` on the descriptor).
-   *   3. Analyzer-extracted [TrailblazeTypedToolSpec] from the sibling `.ts`
-   *      (`supportedPlatforms`, `requiresContext`, `requiresHost`, `supportedDrivers`).
-   *
-   * **Precedence rationale.** Author intent that's authored *on the descriptor*
-   * (YAML) is more specific than the type-side defaults captured by the analyzer —
-   * an author who writes `_meta: { trailblaze/supportedPlatforms: [android] }` on
-   * the descriptor presumably intends to override whatever the `.ts` declared,
-   * even if both spell their intent at different levels of the stack. The
-   * analyzer's spec acts as a fill-in for fields the descriptor leaves
-   * unspecified — exactly the role trailmap-level defaults would play, but per-tool
-   * rather than per-trailmap and authored in TypeScript rather than YAML.
-   *
-   * **Why analyzer fields go through the namespaced `trailblaze/...` projection.**
-   * The runtime's [TrailblazeToolMeta.fromJsonObject] reads namespaced keys
-   * (`trailblaze/supportedPlatforms`, `trailblaze/requiresContext`, etc.). The
-   * SDK's [TrailblazeTypedToolSpec] uses bare field names for ergonomics
-   * (`supportedPlatforms`, `requiresContext`). This projection bridges the two —
-   * the SDK author surface stays clean, the runtime wire shape stays unchanged,
-   * and the analyzer's mapping is the seam.
-   *
-   * The analyzer-derived description lives on [InlineScriptToolConfig.description]
-   * (set by `resolveOrFail`), not in this namespaced `_meta:` map — there's no
-   * `trailblaze/description` key, and the wire-side consumers read descriptions
-   * off the tool descriptor envelope directly.
-   */
-  private fun mergeMeta(
-    descriptorMeta: JsonObject?,
-    requiresHost: Boolean,
-    supportedPlatforms: List<String>?,
-    analyzerSpec: JsonObject?,
-    surfaceToLlm: Boolean = true,
-    isRecordable: Boolean = true,
-    sensitiveArgNames: List<String>? = null,
-  ): JsonObject? {
-    val explicit = descriptorMeta ?: JsonObject(emptyMap())
-    val needsSupportedPlatforms = !supportedPlatforms.isNullOrEmpty()
-    val needsRequiresHost = requiresHost
-    // surfaceToLlm / isRecordable default `true`; only the `false` opt-out folds a key.
-    val needsSurfaceToLlm = !surfaceToLlm
-    val needsIsRecordable = !isRecordable
-    val analyzerProjected = projectAnalyzerSpec(analyzerSpec)
-    val analyzerHasContent = analyzerProjected.isNotEmpty()
-    // UNION across all three sources (`.ts` spec, explicit `_meta:`, descriptor shortcut) rather
-    // than the last-write-wins precedence the other keys use. Every other key answers "which gate
-    // applies"; this one answers "which args are secret", and a source that overrode another could
-    // only ever un-mask an arg some author had already declared sensitive. Mirrors the additive
-    // union `requiresHost` takes, for the same fail-safe reason.
-    val unionSensitiveArgNames = buildSet {
-      (analyzerProjected["trailblaze/sensitiveArgNames"] as? JsonArray)
-        ?.mapNotNull { (it as? JsonPrimitive)?.takeIf(JsonPrimitive::isString)?.content }
-        ?.let(::addAll)
-      (explicit["trailblaze/sensitiveArgNames"] as? JsonArray)
-        ?.mapNotNull { (it as? JsonPrimitive)?.takeIf(JsonPrimitive::isString)?.content }
-        ?.let(::addAll)
-      sensitiveArgNames?.let(::addAll)
-    }
-    val needsSensitiveArgNames = unionSensitiveArgNames.isNotEmpty()
-    if (
-      explicit.isEmpty() &&
-      !needsSupportedPlatforms &&
-      !needsRequiresHost &&
-      !needsSurfaceToLlm &&
-      !needsIsRecordable &&
-      !needsSensitiveArgNames &&
-      !analyzerHasContent
-    ) {
-      return null
-    }
-    return buildJsonObject {
-      // Analyzer fill-ins go FIRST so descriptor-side keys (added later) override
-      // them on conflict — `buildJsonObject.put` is last-write-wins.
-      analyzerProjected.forEach { (k, v) -> put(k, v) }
-      // Descriptor-side explicit `_meta:` map next.
-      explicit.forEach { (k, v) -> put(k, v) }
-      // Descriptor-side top-level shortcuts last so they override both analyzer
-      // fill-ins AND any conflicting key the author copied into their explicit
-      // `_meta:` map (matches the legacy `mergeMetaShortcuts` precedence).
-      if (needsSupportedPlatforms) {
-        val arr = buildJsonArray {
-          supportedPlatforms.orEmpty().forEach { add(JsonPrimitive(it)) }
-        }
-        put("trailblaze/supportedPlatforms", arr)
-      }
-      if (needsRequiresHost) {
-        put("trailblaze/requiresHost", JsonPrimitive(true))
-      }
-      if (needsSurfaceToLlm) {
-        put("trailblaze/surfaceToLlm", JsonPrimitive(false))
-      }
-      if (needsIsRecordable) {
-        put("trailblaze/isRecordable", JsonPrimitive(false))
-      }
-      if (needsSensitiveArgNames) {
-        // Sorted so the emitted `_meta` is deterministic across runs regardless of which source
-        // contributed which name.
-        put(
-          "trailblaze/sensitiveArgNames",
-          buildJsonArray { unionSensitiveArgNames.sorted().forEach { add(JsonPrimitive(it)) } },
-        )
-      }
-    }
-  }
-
-  /**
-   * Extract the typed spec's `description` field — the NEW middle tier in the description
-   * precedence (YAML sidecar `description:` > spec `description` > TSDoc-derived). Unlike the
-   * gate fields (`supportedPlatforms`, `surfaceToLlm`, …) which project into `_meta` via
-   * [projectAnalyzerSpec], `description` is the tool's PRIMARY descriptor field, so it routes
-   * straight into [InlineScriptToolConfig.description] at the two resolution sites
-   * (`resolveOrFail`'s meta-only branch and [buildPartialConfig]).
-   *
-   * Returns `null` (treated upstream as "fall through to the next tier") when the spec is absent,
-   * has no `description` key, or carries a non-string / blank value. The analyzer's inline-literal
-   * extractor only captures a string literal here; the `isString` + `isNotBlank` guards defend
-   * against a malformed `as any` value (e.g. `description: true`) silently winning over the TSDoc.
-   */
-  private fun specDescriptionOf(spec: JsonObject?): String? =
-    (spec?.get("description") as? JsonPrimitive)
-      ?.takeIf { it.isString }
-      ?.content
-      ?.takeIf { it.isNotBlank() }
-
-  /**
-   * Extract the typed spec's `trailhead` field into a [TrailheadMetadata] — the same shape a
-   * `*.trailhead.yaml` sidecar's `trailhead:` block produces (see [ToolYamlConfig.trailhead]).
-   * Like [specDescriptionOf], this is a primary-descriptor field: it routes straight into
-   * [InlineScriptToolConfig.trailhead] at both resolution sites rather than through
-   * [projectAnalyzerSpec]'s `_meta` projection, since trailhead-ness isn't a dispatch gate.
-   *
-   * Mirrors [xyz.block.trailblaze.config.ToolYamlConfig.validate]'s trailhead invariant (`to`
-   * required unless `dynamic: true`) leniently: a malformed shape (neither `to` nor `dynamic`,
-   * or both at once) logs a warning and is treated as "not a trailhead" / "dynamic wins" rather
-   * than failing the whole tool — consistent with the analyzer's general "skip the unresolvable
-   * bit, keep going" posture (RECOGNIZED_SPEC_FIELDS' typo policy) rather than the YAML loader's
-   * hard-fail `require()`, since TypeScript's own type checker already guards authors against
-   * most of this at the call site.
-   */
-  private fun trailheadOf(toolName: String, spec: JsonObject?): TrailheadMetadata? {
-    val raw = spec?.get("trailhead") as? JsonObject ?: return null
-    val to = (raw["to"] as? JsonPrimitive)?.takeIf { it.isString }?.content?.takeIf { it.isNotBlank() }
-    val dynamic = (raw["dynamic"] as? JsonPrimitive)?.booleanOrNull ?: false
-    return when {
-      to != null && dynamic -> {
-        Console.log(
-          "[AnalyzerScriptedToolEnrichment] tool '$toolName': spec's 'trailhead' block sets both " +
-            "'to' and 'dynamic: true' — mutually exclusive (see TrailheadMetadata). Dropping 'to' " +
-            "and treating as dynamic. Raw value: $raw",
-        )
-        TrailheadMetadata(dynamic = true)
-      }
-      to == null && !dynamic -> {
-        Console.log(
-          "[AnalyzerScriptedToolEnrichment] tool '$toolName': spec declares a 'trailhead' block " +
-            "with neither a non-blank 'to' nor 'dynamic: true' — not a real bootstrap " +
-            "destination, dropping trailhead role for this tool. Raw value: $raw",
-        )
-        null
-      }
-      else -> TrailheadMetadata(to = to, dynamic = dynamic)
-    }
-  }
-
-  /**
-   * Project the analyzer's bare-field-name spec object (`supportedPlatforms`,
-   * `requiresContext`, ...) into the namespaced `_meta:` shape the runtime
-   * (`TrailblazeToolMeta.fromJsonObject`) reads (`trailblaze/supportedPlatforms`,
-   * `trailblaze/requiresContext`, ...).
-   *
-   * Returns an empty map when [analyzerSpec] is null or carries no recognized
-   * fields. Unrecognized field names are silently dropped — the JS extractor's
-   * `RECOGNIZED_SPEC_FIELDS` set is the source of truth for what's allowed;
-   * defending against the same set on the Kotlin side would just duplicate the
-   * authoring contract.
-   */
-  private fun projectAnalyzerSpec(analyzerSpec: JsonObject?): Map<String, JsonElement> {
-    if (analyzerSpec == null || analyzerSpec.isEmpty()) return emptyMap()
-    val projected = mutableMapOf<String, JsonElement>()
-    // SISTER-IMPL-TAG: typed-tool-spec-fields. The bare-field-name set
-    // (`supportedPlatforms`, `requiresContext`, `requiresHost`, `supportedDrivers`,
-    // `surfaceToLlm`, `isRecordable`, `sensitiveArgNames`) is defined in THREE places that must stay in
-    // lockstep when a new field is added to `TrailblazeTypedToolSpec`:
-    //  1. `sdks/typescript/src/tool-core.ts`             (the SDK's TS surface)
-    //  2. `sdks/typescript/tools/extract-tool-defs.mjs`  (`RECOGNIZED_SPEC_FIELDS`)
-    //  3. This function (Kotlin projection into namespaced `_meta` keys)
-    // The runtime parsers (`TrailblazeToolMeta.fromJsonObject` for MCP/subprocess,
-    // `QuickJsToolMeta.fromSpec` for in-process) read the namespaced keys, so adding
-    // a field here without updating them there means the value flows through `_meta`
-    // but the runtime ignores it. There is no compile-time enforcement that the sites
-    // agree — adding a parity test (or extracting a shared constant in a model module)
-    // is tracked as a follow-up.
-    //
-    // `description` and `trailhead` are deliberately ABSENT below: both are primary-descriptor
-    // fields, not `_meta` gates, so they route into `InlineScriptToolConfig.description` /
-    // `InlineScriptToolConfig.trailhead` via [specDescriptionOf] / [trailheadOf] (called at the
-    // resolution sites) instead of being projected here. The two runtime `_meta` parsers above
-    // correctly never read either.
-    analyzerSpec["supportedPlatforms"]?.let { projected["trailblaze/supportedPlatforms"] = it }
-    analyzerSpec["requiresContext"]?.let { projected["trailblaze/requiresContext"] = it }
-    analyzerSpec["requiresHost"]?.let { projected["trailblaze/requiresHost"] = it }
-    analyzerSpec["supportedDrivers"]?.let { projected["trailblaze/supportedDrivers"] = it }
-    analyzerSpec["surfaceToLlm"]?.let { projected["trailblaze/surfaceToLlm"] = it }
-    analyzerSpec["isRecordable"]?.let { projected["trailblaze/isRecordable"] = it }
-    analyzerSpec["sensitiveArgNames"]?.let { projected["trailblaze/sensitiveArgNames"] = it }
-    return projected
-  }
-
-  /**
    * Canonical-form an arbitrary absolute path so the analyzer's `sourcePath` field and the
    * descriptor's resolved `script:` File can be matched. Both sides go through
    * `Path.normalize()` which collapses `..` / `.` segments via pure string math (no I/O),
@@ -867,4 +640,12 @@ class AnalyzerScriptedToolEnrichment(
    */
   private fun normalizePath(absolutePath: String): String =
     File(absolutePath).toPath().normalize().toString().replace('\\', '/')
+
+  private fun ScriptedToolDefinition.toGeneratedDef() = GeneratedScriptedToolDef(
+    name = name,
+    description = description,
+    inputSchema = inputSchemaObject,
+    spec = spec,
+    uncapturedSpec = uncapturedSpec,
+  )
 }

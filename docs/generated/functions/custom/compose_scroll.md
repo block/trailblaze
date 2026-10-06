@@ -4,9 +4,7 @@
 
 # `compose_scroll`
 
-Scroll a scrollable container to bring content into view.
-Identify the container using its element ID or text.
-Leave all identifiers empty to scroll the first scrollable container found.
+Scroll a container to an item index. Identify the container by elementId, testTag, or text; omit all to use the first scrollable container.
 
 ## Source
 
@@ -24,13 +22,13 @@ Leave all identifiers empty to scroll the first scrollable container found.
 ### Optional parameters
 
 - `elementId` — `String`
-  Element ID from the view hierarchy, e.g., 'e2'.
+  Container element ID, e.g. 'e2'.
 - `testTag` — `String`
-  Accessibility identifier of the scrollable container.
+  Container testTag.
 - `text` — `String`
-  The text content to scroll towards.
+  Container text, exact whole-text match.
 - `index` — `Integer`
-  Index to scroll to within the scrollable container. Defaults to 0.
+  Item index to scroll to (default 0).
 
 ## Output
 

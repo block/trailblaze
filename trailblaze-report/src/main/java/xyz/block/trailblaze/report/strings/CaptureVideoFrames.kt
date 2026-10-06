@@ -1,16 +1,16 @@
 package xyz.block.trailblaze.report.strings
 
 import kotlinx.serialization.json.Json
-import org.jetbrains.skia.EncodedImageFormat
-import org.jetbrains.skia.Image
 import xyz.block.trailblaze.api.ScreenshotScalingConfig
 import xyz.block.trailblaze.capture.CaptureMetadata
 import xyz.block.trailblaze.capture.video.VideoStills
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.normalizedToHostClock
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.util.WebpEncoder
 import java.io.File
 import java.util.UUID
+import javax.imageio.ImageIO
 
 /**
  * Gives every screenshot-less capture in a session a picture: the frame the session's recording
@@ -182,15 +182,14 @@ object CaptureVideoFrames {
   }
 
   /**
-   * [png] as a WebP at the screenshot quality, or null when Skia can't read or encode it. Skia, as
-   * the host's screenshots use, because ffmpeg builds commonly ship without a WebP encoder.
+   * [png] as a WebP at the screenshot quality, or null when it can't be read or encoded. Encoded
+   * here, as the host's screenshots are, because ffmpeg builds commonly ship without a WebP encoder.
    */
   private fun webpOf(png: File): ByteArray? = try {
-    Image.makeFromEncoded(png.readBytes()).use { image ->
-      image.encodeToData(EncodedImageFormat.WEBP, (SCREENSHOT.compressionQuality * 100).toInt())?.use { it.bytes }
-    }
+    val image = ImageIO.read(png) ?: error("not a readable image")
+    WebpEncoder.encode(image, SCREENSHOT.compressionQuality)
   } catch (e: Throwable) {
-    // Throwable: a Skia that can't load its native library throws an Error, and that is the one
+    // Throwable: an encoder that can't load its native library throws an Error, and that is the one
     // failure worth a line in the log, since it takes every frame with it.
     Console.log("[CaptureVideoFrames] could not encode ${png.name} as WebP: ${e::class.simpleName}: ${e.message}")
     null

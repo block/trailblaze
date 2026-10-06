@@ -6,6 +6,10 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.model.SessionId
+import xyz.block.trailblaze.scripting.LazyYamlScriptedToolRegistration
+import xyz.block.trailblaze.scripting.host.TrailblazeHostFunctionDispatcher
+import xyz.block.trailblaze.scripting.host.TrailblazeHostFunctionDispatcher.toEnvelopeJson
+import xyz.block.trailblaze.scripting.host.TrailblazeHostFunctionRegistry
 import xyz.block.trailblaze.scripting.callback.JsScriptingCallbackArgumentValidator
 import xyz.block.trailblaze.toolcalls.DelegatingTrailblazeTool
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
@@ -65,6 +69,7 @@ import xyz.block.trailblaze.util.Console
 class SessionScopedHostBinding(
   private val toolRepo: TrailblazeToolRepo,
   private val sessionId: SessionId,
+  private val hostFunctions: TrailblazeHostFunctionRegistry = TrailblazeHostFunctionRegistry.bundled,
 ) : HostBinding {
 
   /**
@@ -91,12 +96,21 @@ class SessionScopedHostBinding(
    * outer call still holds the host's non-reentrant `evalMutex` deadlocks (and would clobber
    * the outer call's `__trailblazeLastResult` global). Composing a tool in a *different*
    * bundle (different host) or a host/driver tool (no QuickJS re-entry, e.g. `maestro`) is
-   * unaffected. Null on the host daemon path
-   * ([LazyYamlScriptedToolRegistration][xyz.block.trailblaze.scripting.LazyYamlScriptedToolRegistration]),
-   * which isolates each tool in its own host so same-host re-entry can't arise there.
+   * unaffected. Also set by
+   * [LazyYamlScriptedToolRegistration][xyz.block.trailblaze.scripting.LazyYamlScriptedToolRegistration]
+   * on the host daemon path: each tool has its own host there, but a tool composing itself
+   * (e.g. a nested `block_runIf`) still re-enters it.
    */
   @Volatile
   var ownHost: QuickJsToolHost? = null
+
+  override suspend fun callHostFunction(name: String, argsJson: String): String {
+    val context = activeContext ?: ToolExecutionContextThreadLocal.get()
+      ?: return hostFunctionErrorEnvelopeJson(
+        "ctx.host.$name: no execution context installed for this session",
+      )
+    return TrailblazeHostFunctionDispatcher.call(name, argsJson, context, hostFunctions).toEnvelopeJson()
+  }
 
   override suspend fun callFromBundle(name: String, argsJson: String): String {
     // Prefer the directly-set [activeContext] (used by the in-process scripted-tool
@@ -154,12 +168,14 @@ class SessionScopedHostBinding(
       // Preserved as a distinct catch so the log line distinguishes "args didn't decode"
       // from "lookup itself failed" (e.g. a custom KSerializer threw an unchecked
       // exception). The Throwable branch below catches the unchecked-exception case.
+      // Only the first line: kotlinx appends `JSON input: <the args>`, which can carry credentials.
+      val reason = e.message.orEmpty().lineSequence().first()
       Console.log(
         "[SessionScopedHostBinding] CALL_DECODE_FAIL tool=$name session=${sessionId.value} " +
-          "reason=${e.message}",
+          "reason=$reason",
       )
       return errorEnvelope(
-        "trailblaze.call('$name'): failed to decode args — ${e.message}",
+        "trailblaze.call('$name'): failed to decode args — $reason",
       )
     } catch (e: Throwable) {
       // Catches IllegalStateException (the standard "not found" path is null-returned by
@@ -190,10 +206,9 @@ class SessionScopedHostBinding(
     // host would re-enter [QuickJsToolHost.callTool] while the outer call still holds the
     // host's non-reentrant evalMutex — a deadlock. Refuse with a structured envelope instead.
     // Cross-bundle composition (different host) and host/driver tools (not a
-    // [QuickJsTrailblazeTool]) fall through and dispatch normally. `ownHost` is null on the
-    // host daemon path, so this guard is a no-op there.
+    // [QuickJsTrailblazeTool]) fall through and dispatch normally.
     val reentryHost = ownHost
-    if (reentryHost != null && resolved is QuickJsTrailblazeTool && resolved.host === reentryHost) {
+    if (reentryHost != null && resolved.quickJsHost() === reentryHost) {
       Console.log(
         "[SessionScopedHostBinding] SAME_HOST_REENTRY tool=$name session=${sessionId.value} " +
           "— refusing same-bundle compose (would deadlock the shared QuickJS engine)",
@@ -277,6 +292,13 @@ class SessionScopedHostBinding(
       }
       else -> TrailblazeToolResult.Error.UnknownTrailblazeTool(command = tool)
     }
+  }
+
+  /** The QuickJS host [this] dispatches into, seeing through the host path's context-setting wrapper. */
+  private fun TrailblazeTool.quickJsHost(): QuickJsToolHost? = when (this) {
+    is QuickJsTrailblazeTool -> host
+    is LazyYamlScriptedToolRegistration.ContextSettingScriptedTool -> inner.host
+    else -> null
   }
 
   /**

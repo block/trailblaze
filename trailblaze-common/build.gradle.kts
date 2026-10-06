@@ -37,6 +37,17 @@ abstract class BundleFrameworkScriptedToolsTask @Inject constructor(objects: Obj
   @get:Internal
   abstract val sdkDir: DirectoryProperty
 
+  /** The tools' descriptor YAMLs, tracked because a `.ts` no descriptor names gets a `.tooldefs.json`. */
+  @get:InputFiles
+  @get:PathSensitive(PathSensitivity.RELATIVE)
+  @get:IgnoreEmptyDirectories
+  val descriptorFiles: ConfigurableFileCollection = objects.fileCollection()
+
+  @get:Optional
+  @get:InputFile
+  @get:PathSensitive(PathSensitivity.RELATIVE)
+  abstract val toolDefsExtractor: RegularFileProperty
+
   @get:Optional
   @get:InputFile
   @get:PathSensitive(PathSensitivity.RELATIVE)
@@ -65,7 +76,9 @@ abstract class BundleFrameworkScriptedToolsTask @Inject constructor(objects: Obj
   @TaskAction
   fun bundle() {
     val sources = inputSources.files.sortedBy { it.name }
+    val descriptorless = sources.filter { ScriptedToolDefsExtraction.isDescriptorless(it) }
     val expectedBundlesByDir = sources.groupBy({ it.parentFile }, { "${it.nameWithoutExtension}.bundle.js" })
+    val expectedToolDefsByDir = descriptorless.groupBy({ it.parentFile }, { "${it.nameWithoutExtension}$TOOL_DEFS_SUFFIX" })
     // Swept per directory, not per source: a directory whose last `.ts` was deleted still has a
     // bundle to remove, and it has no sources left to find it from.
     val toolDirectories = trailmapsRoot.get().asFile.listFiles()
@@ -77,6 +90,12 @@ abstract class BundleFrameworkScriptedToolsTask @Inject constructor(objects: Obj
       toolsDir.listFiles { f -> f.isFile && f.name.endsWith(".bundle.js") && f.name !in expectedBundles }
         ?.forEach { stale ->
           logger.lifecycle("Removing stale framework tool bundle ${stale.name} (no matching source)")
+          stale.delete()
+        }
+      val expectedToolDefs = expectedToolDefsByDir[toolsDir].orEmpty().toSet()
+      toolsDir.listFiles { f -> f.isFile && f.name.endsWith(TOOL_DEFS_SUFFIX) && f.name !in expectedToolDefs }
+        ?.forEach { stale ->
+          logger.lifecycle("Removing stale framework tool definitions ${stale.name} (no descriptorless source)")
           stale.delete()
         }
     }
@@ -104,6 +123,38 @@ abstract class BundleFrameworkScriptedToolsTask @Inject constructor(objects: Obj
         tempDir = temporaryWorkDir.get().asFile,
       )
     }
+    if (descriptorless.isNotEmpty()) writeToolDefs(descriptorless)
+  }
+
+  /** Writes `<tool>.tooldefs.json` beside each descriptor-less `.ts` (see [ScriptedToolDefsExtraction]). */
+  private fun writeToolDefs(sources: List<File>) {
+    val extractor = requireNotNull(toolDefsExtractor.orNull?.asFile) {
+      "Tool-definition extractor not found — expected sdks/typescript/tools/extract-tool-defs.mjs."
+    }
+    val defsBySource = ScriptedToolDefsExtraction.extract(
+      extractor = extractor,
+      sdkDir = sdkDir.get().asFile,
+      sources = sources,
+      logFile = temporaryWorkDir.get().asFile.resolve("extract-tool-defs.stderr.log"),
+    )
+    // `extract` passes over a `.ts` with no typed export as a helper module. The framework's tool
+    // dirs hold only tools, so here one means a tool the analyzer can't see, which would ship a
+    // bundle nothing can reach.
+    sources.firstOrNull { it !in defsBySource }?.let { src ->
+      throw GradleException(
+        "${src.name} has no `export const X = trailblaze.tool<I>(...)` and no descriptor YAML naming it, " +
+          "so nothing declares a tool for it. Add the typed export, or a descriptor YAML.",
+      )
+    }
+    defsBySource.forEach { (src, json) ->
+      val out = File(src.parentFile, ScriptedToolDefsExtraction.fileNameFor(src.name))
+      logger.lifecycle("Writing ${out.name}")
+      out.writeText(json)
+    }
+  }
+
+  companion object {
+    const val TOOL_DEFS_SUFFIX = ScriptedToolDefsExtraction.SUFFIX
   }
 
   private fun ensureSdkNodeModules(sdk: File, logFile: File) {
@@ -432,12 +483,14 @@ kotlin {
         // construction: Android has no java.awt and loads screenshot pixels via BitmapFactory
         // instead. Its own transitives are excluded further down.
         implementation(libs.zxing.javase)
-        // WebP decoding for ImageIO. Not optional: `ScreenshotScalingConfig.DEFAULT` encodes
-        // screenshots as WebP, the JDK ships no WebP reader, and this is the source the barcode
-        // tool decodes — without this plugin on the classpath `ImageIO.read` returns null for
-        // every screenshot a driver hands it. Registers itself through the ImageIO SPI, so the
-        // read path stays plain `ImageIO.read` (see ScreenshotLuminanceSource.jvm.kt).
-        implementation(libs.imageio.webp)
+        // WebP both ways, through libwebp over JNI; the JDK has neither. Encoding goes through
+        // WebpEncoder. Decoding is not optional: `ScreenshotScalingConfig.DEFAULT` encodes
+        // screenshots as WebP, and without this reader on the classpath `ImageIO.read` returns null
+        // for every screenshot a driver hands it. The reader registers through the ImageIO SPI, so
+        // the read path stays plain `ImageIO.read` (see ScreenshotLuminanceSource.jvm.kt). Keep it
+        // the only WebP plugin: the CLI JAR keeps one `META-INF/services` file per name, so a second
+        // plugin's reader would be registered or dropped depending on classpath order.
+        implementation(libs.webp.imageio)
         // ktor-server (JVM only): RpcRouteExt's `registerRpcHandler` is a Ktor server route
         // extension shared by the host-side modules that run the daemon's embedded server. Scoped
         // to jvmMain so the on-device Android build does not inherit a server framework.
@@ -568,11 +621,15 @@ tasks.register<BundleFrameworkScriptedToolsTask>("bundleFrameworkScriptedTools")
   inputSources.from(frameworkToolSources)
   outputBundles.from(
     provider {
-      frameworkToolSources.files.map { source ->
-        File(source.parentFile, "${source.nameWithoutExtension}.bundle.js")
+      frameworkToolSources.files.flatMap { source ->
+        listOf(
+          File(source.parentFile, "${source.nameWithoutExtension}.bundle.js"),
+          File(source.parentFile, "${source.nameWithoutExtension}${BundleFrameworkScriptedToolsTask.TOOL_DEFS_SUFFIX}"),
+        )
       }
     },
   )
+  descriptorFiles.from(frameworkTrailmapsRoot.asFileTree.matching { include("*/tools/*.yaml") })
   trailmapsRoot.set(frameworkTrailmapsRoot)
   temporaryWorkDir.set(layout.buildDirectory.dir("tmp/framework-scripted-tools"))
   frameworkRoot?.let { root ->
@@ -585,6 +642,7 @@ tasks.register<BundleFrameworkScriptedToolsTask>("bundleFrameworkScriptedTools")
       },
     )
     scriptingSdkSrc.set(layout.file(provider { File(sdkDirectory, "src/in-process.ts") }))
+    toolDefsExtractor.set(layout.file(provider { File(sdkDirectory, "tools/extract-tool-defs.mjs") }))
     scriptingWrapperTemplate.set(
       layout.file(provider { File(sdkDirectory, "tools/in-process-wrapper-template.mjs") }),
     )

@@ -357,6 +357,9 @@ object AccessibilityTrailRunner {
       is AccessibilityAction.EraseText ->
         AgentDriverAction.EraseText(characters = action.characters)
 
+      is AccessibilityAction.ClearText ->
+        AgentDriverAction.OtherAction(type = AgentActionType.ERASE_TEXT)
+
       is AccessibilityAction.PressBack ->
         AgentDriverAction.BackPress
 

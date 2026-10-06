@@ -4,7 +4,7 @@
 
 # `web_verifyTextAbsentForDuration`
 
-Verifies exact text remains absent for a bounded duration while a required readiness element stays visible.
+Assert exact text stays absent for durationMs (1 to 30000) while the ref element stays visible. Fails if the page navigates.
 
 ## Source
 
@@ -28,7 +28,7 @@ Verifies exact text remains absent for a bounded duration while a required readi
 
 - `exact` — `Boolean`
 - `ref` — `String`
-  Readiness element ID (for example 'e5'), ARIA descriptor, or css= selector that must remain visible.
+  Element that must stay visible: ID ('e5'), ARIA descriptor ('heading "Orders"'), or 'css=<selector>'.
 
 ## Output
 

@@ -4,6 +4,7 @@ import dadb.AdbShellPacket
 import dadb.Dadb
 import xyz.block.trailblaze.device.AndroidShellBounds
 import dadb.adbserver.AdbServer
+import dadb.orThrow
 import xyz.block.trailblaze.android.tools.shellEscape
 import xyz.block.trailblaze.device.InstalledApp
 import xyz.block.trailblaze.device.parseInstalledAppsFromDumpsys
@@ -19,6 +20,7 @@ import xyz.block.trailblaze.model.AppVersionInfo
 import xyz.block.trailblaze.util.TrailblazeProcessBuilderUtils.runProcess
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.FileNotFoundException
 import java.io.FileOutputStream
 import java.io.IOException
 import java.io.OutputStream
@@ -54,11 +56,12 @@ internal fun <K, T : AutoCloseable> evictExactClient(clients: ConcurrentHashMap<
  * recovery. The used client is `null` in that case, so the eviction that follows is a no-op
  * rather than a removal of some other caller's client.
  *
- * A device-side sync FAIL (pulling/pushing an unreadable or missing remote path) also arrives as
- * an [IOException], but the transport is healthy - the device answered, the answer was "no".
- * Evicting and retrying would run every denied transfer twice and churn the shared client under
- * concurrent callers (observed: the installed-apps badge fetcher logging an eviction per system
- * APK it isn't allowed to pull). It propagates as the terminal failure it is.
+ * A device-side refusal (a failed install, uninstall, push or pull) is not a transport failure:
+ * the device answered, the answer was "no". Callers turn dadb's result into an
+ * [dadb.AdbOperationFailedException] via `orThrow()`, which is not an [IOException], so it
+ * propagates as the terminal failure it is. Evicting and retrying would run every denied transfer
+ * or install twice and churn the shared client under concurrent callers (observed: the
+ * installed-apps badge fetcher logging an eviction per system APK it isn't allowed to pull).
  *
  * Generic and free of [dadb.Dadb] so the retry boundary is testable without a device.
  */
@@ -105,18 +108,19 @@ internal fun <C, T> runOnResolvedClientOnce(
 )
 
 /**
- * Whether [e] means the transport broke, as opposed to the device answering "no". A sync FAIL is
- * the device refusing a pull/push of an unreadable path over a healthy transport.
+ * Whether [e] means the transport broke, as opposed to the device answering "no" or a host-side
+ * file problem. dadb reports a refusal as a result, never an [IOException]. A
+ * [FileNotFoundException] is the local file an install, push or pull reads or writes (missing, or
+ * not writable): reconnecting cannot fix it.
  */
-internal fun isTransportFailure(e: Throwable?): Boolean =
-  e is IOException && !e.message.orEmpty().startsWith("Sync failed")
+internal fun isTransportFailure(e: Throwable?): Boolean = e is IOException && e !is FileNotFoundException
 
 object AndroidHostAdbUtils {
 
   // One Dadb client per device serial. Cached for the JVM lifetime; the underlying ADB connection
   // is reused across calls (handshake amortized). If a device disconnects mid-run the cached client
-  // throws on next use; we evict and reconnect lazily.
-  private val dadbClients = ConcurrentHashMap<String, Dadb>()
+  // throws on next use; we evict and reconnect lazily. Internal so tests can serve a fake client.
+  internal val dadbClients = ConcurrentHashMap<String, Dadb>()
 
   // Tracks active port forwards (host port → AutoCloseable) so removePortForward can tear them
   // down. The AutoCloseable owns the forward's lifetime (removes it via the adb binary on close).
@@ -343,16 +347,24 @@ object AndroidHostAdbUtils {
     return args
   }
 
+  /** Uninstalls [appPackageId]. A failure is non-fatal and only logged. */
   fun uninstallApp(
     deviceId: TrailblazeDeviceId,
     appPackageId: String,
   ) {
-    try {
-      withDadb(deviceId) { it.uninstall(appPackageId) }
-    } catch (e: Exception) {
-      // Match the previous behavior: errors during uninstall are non-fatal and surface via logs.
-      Console.log("uninstall($appPackageId) failed: ${e.message}")
-    }
+    tryUninstallApp(deviceId, appPackageId)
+  }
+
+  /**
+   * [uninstallApp] reporting whether it worked. Kept apart so the published `uninstallApp` keeps
+   * its `Unit` signature for callers compiled against it.
+   */
+  internal fun tryUninstallApp(deviceId: TrailblazeDeviceId, appPackageId: String): Boolean = try {
+    withDadb(deviceId) { it.uninstall(appPackageId).orThrow() }
+    true
+  } catch (e: Exception) {
+    Console.log("uninstall($appPackageId) failed: ${e.message}")
+    false
   }
 
   /**
@@ -896,7 +908,7 @@ object AndroidHostAdbUtils {
    * Pulls a file from the device. Returns true on success.
    */
   fun pullFile(deviceId: TrailblazeDeviceId, remotePath: String, localFile: File): Boolean = try {
-    withDadb(deviceId) { it.pull(localFile, remotePath) }
+    withDadb(deviceId) { it.pull(localFile, remotePath).orThrow() }
     true
   } catch (e: Exception) {
     Console.log("pull $remotePath -> ${localFile.absolutePath} failed: ${e.message}")
@@ -907,7 +919,7 @@ object AndroidHostAdbUtils {
    * Pushes a file to the device. Returns true on success.
    */
   fun pushFile(deviceId: TrailblazeDeviceId, localFile: File, remotePath: String): Boolean = try {
-    withDadb(deviceId) { it.push(localFile, remotePath) }
+    withDadb(deviceId) { it.push(localFile, remotePath).orThrow() }
     true
   } catch (e: Exception) {
     Console.log("push ${localFile.absolutePath} -> $remotePath failed: ${e.message}")
@@ -1211,6 +1223,101 @@ object AndroidHostAdbUtils {
     }
   }
 
+  /** What [probeOnDeviceRunnerForReuse] found: whether a running runner can be driven as it is. */
+  enum class OnDeviceRunnerState {
+    /** No runner process, or nothing listening on its RPC port — see [isOnDeviceRpcServerUp]. */
+    NOT_RUNNING,
+
+    /**
+     * The runner serves RPC, but the probe could not confirm that the `am instrument` process that
+     * launched it is alive — usually because it has exited, which leaves UiAutomation dead (every
+     * screenshot fails with `DeadObjectException`, every shell command returns nothing), but also
+     * when the probe's answer was ambiguous. Relaunched either way.
+     */
+    LAUNCHER_NOT_CONFIRMED,
+
+    /**
+     * The runner serves RPC and its `am instrument` launcher is alive. A live launcher is
+     * necessary for UiAutomation to work, not proof that it does — see [probeOnDeviceRunnerForReuse].
+     */
+    REUSABLE,
+  }
+
+  /**
+   * [isOnDeviceRpcServerUp] plus whether the runner's `am instrument` launcher is alive, in the
+   * same adb round trip. For the connect path deciding whether to reuse a running runner instead
+   * of relaunching it.
+   *
+   * A runner's UiAutomation connection lives in the `am instrument -w` process that launched it,
+   * not in the runner: the platform creates it there, in a shell-uid process, which is what lets
+   * the runner run shell-privileged commands. That process is the device end of the host's
+   * `adb shell` stream, and adbd kills it when the stream closes — so when the host process that
+   * launched the runner exits (a `--no-daemon` run ending, a daemon restarting), the runner keeps
+   * its process, its RPC server and its `dumpsys activity` entry, and loses UiAutomation. Neither
+   * a process check nor a port check sees that.
+   *
+   * A live launcher does not prove UiAutomation works: something else on the device can still
+   * break the runner's connection with the launcher alive. Those cases are left to the runner's
+   * in-process stale-handle recovery.
+   *
+   * [instrumentationPackage] is the package of the instrumentation component, the `<package>/`
+   * that ends the `am instrument` command line.
+   */
+  fun probeOnDeviceRunnerForReuse(
+    deviceId: TrailblazeDeviceId,
+    appId: String,
+    instrumentationPackage: String,
+    rpcPort: Int,
+  ): OnDeviceRunnerState {
+    val output = execAdbShellCommandWithTimeout(
+      deviceId = deviceId,
+      args = listOf(
+        "pidof", appId, ";",
+        "cat", "/proc/net/tcp", "/proc/net/tcp6", "2>/dev/null", ";",
+        "printf", "$INSTRUMENTATION_LAUNCHER_MARKER\\n".shellEscape(), ";",
+        "pgrep", "-f", instrumentationLauncherPattern(instrumentationPackage).shellEscape(), "2>/dev/null",
+      ),
+    ) ?: throw IOException("No answer from ${deviceId.instanceId} to the runner reuse probe for $appId")
+    return onDeviceRunnerStateFromProbe(output, rpcPort).also {
+      Console.log("On-device runner $appId on port $rpcPort: $it")
+    }
+  }
+
+  private const val INSTRUMENTATION_LAUNCHER_MARKER = "trailblaze-instrumentation-launcher"
+
+  /**
+   * A `pgrep -f` pattern for the `am instrument` process of [instrumentationPackage]. `am
+   * instrument` execs `app_process /system/bin com.android.commands.am.Am instrument ...`, ending
+   * in `<package>/<runner class>`.
+   *
+   * Every `.` is written `[.]` so the pattern cannot match the probe's own `sh -c` command line,
+   * which carries the pattern text rather than the dotted names it matches.
+   */
+  internal fun instrumentationLauncherPattern(instrumentationPackage: String): String {
+    fun literal(text: String) = text.replace(".", "[.]")
+    return "${literal("com.android.commands.am.Am")} instrument .*${literal(instrumentationPackage)}/"
+  }
+
+  /**
+   * Reads [probeOnDeviceRunnerForReuse]'s output: [onDeviceRpcServerUpFromProbe]'s probe, then
+   * the marker line, then the pids `pgrep` found.
+   *
+   * A missing marker, or no pid after it, reads as [OnDeviceRunnerState.LAUNCHER_NOT_CONFIRMED].
+   * Wrongly concluding that costs one relaunch; wrongly concluding the opposite fails the run's
+   * first device action.
+   */
+  internal fun onDeviceRunnerStateFromProbe(probeOutput: String, rpcPort: Int): OnDeviceRunnerState {
+    val lines = probeOutput.lines()
+    val markerAt = lines.indexOfFirst { it.trim() == INSTRUMENTATION_LAUNCHER_MARKER }
+    val serverProbe = if (markerAt < 0) lines else lines.subList(0, markerAt)
+    if (!onDeviceRpcServerUpFromProbe(serverProbe.joinToString("\n"), rpcPort)) {
+      return OnDeviceRunnerState.NOT_RUNNING
+    }
+    val launcherAlive = markerAt >= 0 &&
+      lines.subList(markerAt + 1, lines.size).any { line -> line.isNotBlank() && line.trim().all(Char::isDigit) }
+    return if (launcherAlive) OnDeviceRunnerState.REUSABLE else OnDeviceRunnerState.LAUNCHER_NOT_CONFIRMED
+  }
+
   fun launchAppWithAdbMonkey(
     deviceId: TrailblazeDeviceId,
     appId: String,
@@ -1444,7 +1551,7 @@ object AndroidHostAdbUtils {
    */
   fun installApkFile(apkFile: File, trailblazeDeviceId: TrailblazeDeviceId): Boolean = try {
     Console.log("adb install ${apkFile.absolutePath}")
-    withDadb(trailblazeDeviceId) { it.install(apkFile, "-r", "-t") }
+    withDadb(trailblazeDeviceId) { it.install(apkFile, "-r", "-t").orThrow() }
     true
   } catch (e: Exception) {
     val stalelySignedPackage = mismatchedPackageFromInstallError(e.message)
@@ -1455,7 +1562,7 @@ object AndroidHostAdbUtils {
       )
       uninstallApp(trailblazeDeviceId, stalelySignedPackage)
       try {
-        withDadb(trailblazeDeviceId) { it.install(apkFile, "-r", "-t") }
+        withDadb(trailblazeDeviceId) { it.install(apkFile, "-r", "-t").orThrow() }
         true
       } catch (retry: Exception) {
         Console.log("APK reinstall after uninstalling the stale package still failed: ${retry.message}")

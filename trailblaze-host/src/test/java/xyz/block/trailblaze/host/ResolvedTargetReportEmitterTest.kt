@@ -117,6 +117,62 @@ class ResolvedTargetReportEmitterTest {
   }
 
   @Test
+  fun `always_shown_tools is attributed to the trailmap that set it, inherited or declared`() {
+    val frameworkTrailmap = ResolvedTrailmap(
+      manifest = TrailblazeTrailmapManifest(
+        id = "trailblaze",
+        defaults = mapOf(
+          "web" to PlatformConfig(alwaysShownTools = listOf("web_scroll")),
+          "ios" to PlatformConfig(alwaysShownTools = listOf("framework_swipe")),
+        ),
+      ),
+      source = TrailmapSource.Classpath(resourceDir = "trails/config/trailmaps/trailblaze"),
+      target = null,
+      toolsets = emptyList(),
+      tools = emptyList(),
+      waypoints = emptyList(),
+    )
+    val ownPlatforms = mapOf(
+      "web" to PlatformConfig(appIds = listOf("com.example.consumer")),
+      "ios" to PlatformConfig(appIds = listOf("com.example.consumer"), alwaysShownTools = listOf("app_swipe")),
+    )
+    val consumerTrailmap = ResolvedTrailmap(
+      manifest = TrailblazeTrailmapManifest(
+        id = "consumer",
+        target = TrailmapTargetConfig(displayName = "Consumer", platforms = ownPlatforms),
+        dependencies = listOf("trailblaze"),
+      ),
+      source = TrailmapSource.Filesystem(newDir("consumer")),
+      target = AppTargetYamlConfig(
+        id = "consumer",
+        displayName = "Consumer",
+        platforms = mapOf(
+          "web" to PlatformConfig(appIds = listOf("com.example.consumer"), alwaysShownTools = listOf("web_scroll")),
+          "ios" to ownPlatforms.getValue("ios"),
+        ),
+      ),
+      toolsets = emptyList(),
+      tools = emptyList(),
+      waypoints = emptyList(),
+    )
+
+    val outDir = newDir("out")
+    ResolvedTargetReportEmitter.emit(
+      resolvedTargets = listOf(consumerTrailmap.target!!),
+      resolvedTrailmaps = listOf(frameworkTrailmap, consumerTrailmap),
+      outputDir = outDir,
+    )
+    val traced = File(outDir, "consumer.report.md").readLines().filter { "always_shown_tools" in it }
+
+    assertTrue("expected web's always_shown_tools inherited from `trailblaze`, got:\n$traced") {
+      traced.any { "web_scroll" in it && "inherited from `trailblaze`" in it }
+    }
+    assertTrue("expected ios's always_shown_tools declared by the consumer, got:\n$traced") {
+      traced.any { "app_swipe" in it && "declared by `consumer/trailmap.yaml`" in it }
+    }
+  }
+
+  @Test
   fun `target overriding platforms_web_tool_sets attributes to own trailmap`() {
     val frameworkTrailmap = ResolvedTrailmap(
       manifest = TrailblazeTrailmapManifest(

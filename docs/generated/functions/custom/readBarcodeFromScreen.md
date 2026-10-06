@@ -4,11 +4,7 @@
 
 # `readBarcodeFromScreen`
 
-Scans the current screen for a barcode or QR code and decodes it, storing the decoded text in
-memory under the given variable name so later steps can use it.
-Reads QR Code, Data Matrix, Aztec and PDF417. Set includeLinearFormats to also read the striped
-retail symbologies (UPC, EAN, Code 128/39/93, ITF, Codabar).
-Fails if there is no readable barcode on screen, so it doubles as an assertion that one is shown.
+Decode a QR, Data Matrix, Aztec or PDF417 code on screen and store its text in memory under `variable`. Fails if no readable code is shown, so it also works as an assertion.
 
 ## Source
 
@@ -26,15 +22,12 @@ Fails if there is no readable barcode on screen, so it doubles as an assertion t
 ### Required parameters
 
 - `variable` — `String`
-  The memory variable name to store the decoded barcode text under, e.g. "barcodeValue".
+  Memory variable to store the decoded text under, e.g. "barcodeValue".
 
 ### Optional parameters
 
 - `includeLinearFormats` — `Boolean`
-  Also scan for striped retail barcodes (UPC, EAN, Code 128/39/93, ITF, Codabar). Off by default:
-those readers look for runs of light and dark bars, which ordinary UI and image compression
-produce by accident, so on a full screen they can return a confidently wrong number. Turn this on
-when you know a striped barcode is what is on screen.
+  Also read striped barcodes (UPC, EAN, Code 128/39/93, ITF, Codabar). Off by default because ordinary UI can cause false reads; enable only when one is on screen.
 
 ## Output
 

@@ -294,6 +294,23 @@ type AnalysisCodeFinding = {
   relationship: 'direct_source_fact' | 'temporal_correlation' | 'hypothesis';
   what_would_confirm: string;
 };
+type AnalysisDiagnostic = {
+  status: 'classified' | 'unavailable';
+  label: string;
+  primary_diagnosis?: string;
+  intermittency?: 'OBSERVED' | 'NOT_ESTABLISHED';
+  confidence?: number;
+};
+type AnalysisActionLink = {
+  label: string;
+  href: string;
+};
+type AnalysisSubject = {
+  key: string;
+  label: string;
+  context: string;
+  diagnostic?: AnalysisDiagnostic;
+};
 type AnalysisProblem = {
   id: string;
   title: string;
@@ -301,13 +318,14 @@ type AnalysisProblem = {
   confidence: string;
   attention_summary: string;
   context_summary: string;
-  affected_subjects: Array<{ key: string; label: string; context: string }>;
+  affected_subjects: AnalysisSubject[];
   observations: string[];
   interpretation: string;
   uncertainty: string;
-  next_action_or_evidence_needed: { kind: string; text: string };
+  next_action_or_evidence_needed: { kind: string; text: string; links?: AnalysisActionLink[] };
   evidence: AnalysisEvidence[];
   code_findings?: AnalysisCodeFinding[];
+  diagnostic_summary?: string;
   history_summary: string;
   related_history: AnalysisHistory[];
 };
@@ -327,6 +345,46 @@ const safeHttpsHref = (value: unknown): string => {
   try { const url = new URL(String(value || '')); return url.protocol === 'https:' ? url.href : ''; } catch (e) { return ''; }
 };
 
+// Diagnostic annotations are optional enrichment. A malformed annotation must not make the
+// otherwise usable triage document disappear, so required annotation fields reject the annotation
+// while malformed optional fields are simply omitted.
+function analysisDiagnostic(value: unknown): AnalysisDiagnostic | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const item = value as Partial<AnalysisDiagnostic>;
+  if ((item.status !== 'classified' && item.status !== 'unavailable') || !nonEmpty(item.label)) return undefined;
+  const diagnostic: AnalysisDiagnostic = { status: item.status, label: item.label };
+  if (nonEmpty(item.primary_diagnosis)) diagnostic.primary_diagnosis = item.primary_diagnosis;
+  if (item.intermittency === 'OBSERVED' || item.intermittency === 'NOT_ESTABLISHED') diagnostic.intermittency = item.intermittency;
+  if (typeof item.confidence === 'number' && Number.isFinite(item.confidence) && item.confidence >= 0 && item.confidence <= 1) {
+    diagnostic.confidence = item.confidence;
+  }
+  return diagnostic;
+}
+
+function analysisSubject(value: unknown): AnalysisSubject | null {
+  if (!value || typeof value !== 'object') return null;
+  const item = value as Partial<AnalysisSubject>;
+  if (!nonEmpty(item.key) || !nonEmpty(item.label) || !nonEmpty(item.context)) return null;
+  const diagnostic = analysisDiagnostic(item.diagnostic);
+  return {
+    key: item.key,
+    label: item.label,
+    context: item.context,
+    ...(diagnostic ? { diagnostic } : {}),
+  };
+}
+
+function analysisActionLinks(value: unknown): AnalysisActionLink[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const links = value.flatMap((raw) => {
+    if (!raw || typeof raw !== 'object') return [];
+    const item = raw as Partial<AnalysisActionLink>;
+    const href = safeHttpsHref(item.href);
+    return nonEmpty(item.label) && href ? [{ label: item.label, href }] : [];
+  });
+  return links.length ? links : undefined;
+}
+
 function analysisProblem(value: unknown): AnalysisProblem | null {
   if (!value || typeof value !== 'object') return null;
   const item = value as Partial<AnalysisProblem>;
@@ -337,7 +395,8 @@ function analysisProblem(value: unknown): AnalysisProblem | null {
     || !item.next_action_or_evidence_needed || !nonEmpty(item.next_action_or_evidence_needed.kind) || !nonEmpty(item.next_action_or_evidence_needed.text)
     || !Array.isArray(item.affected_subjects) || !Array.isArray(item.observations)
     || !Array.isArray(item.evidence) || !Array.isArray(item.related_history)) return null;
-  if (!item.affected_subjects.every((subject) => subject && nonEmpty(subject.key) && nonEmpty(subject.label) && nonEmpty(subject.context))
+  const subjects = item.affected_subjects.map(analysisSubject);
+  if (subjects.some((subject) => subject === null)
     || !item.observations.every(nonEmpty)
     || !item.evidence.every((evidence) => evidence && nonEmpty(evidence.id) && nonEmpty(evidence.kind)
       && nonEmpty(evidence.label) && nonEmpty(evidence.supports) && nonEmpty(evidence.source_run)
@@ -359,8 +418,17 @@ function analysisProblem(value: unknown): AnalysisProblem | null {
         && ['direct_source_fact', 'temporal_correlation', 'hypothesis'].includes(finding.relationship))))) return null;
   const keyEvidence = item.evidence.filter((evidence) => evidence.key);
   if (keyEvidence.length < 1 || keyEvidence.length > 3) return null;
+  const action = item.next_action_or_evidence_needed;
+  const actionLinks = analysisActionLinks(action.links);
   return {
     ...item,
+    next_action_or_evidence_needed: {
+      kind: action.kind,
+      text: action.text,
+      ...(actionLinks ? { links: actionLinks } : {}),
+    },
+    affected_subjects: subjects as AnalysisSubject[],
+    diagnostic_summary: nonEmpty(item.diagnostic_summary) ? item.diagnostic_summary : undefined,
     history_summary: nonEmpty(item.history_summary)
       ? item.history_summary
       : 'Prior-run context is unavailable for this problem.',
@@ -417,16 +485,40 @@ function codeFindingHtml(item: AnalysisCodeFinding): string {
     + `${source}</li>`;
 }
 
+function subjectDiagnosticHtml(item: AnalysisDiagnostic): string {
+  const confidence = item.confidence === undefined
+    ? ''
+    : `<span class="tb-analysis-diagnostic-confidence">Classifier confidence: ${escapeHtml(item.confidence)}</span>`;
+  return `<span class="tb-analysis-subject-diagnostic"><span class="tb-analysis-diagnostic-label">Diagnostic classification: ${escapeHtml(item.label)}</span>${confidence}</span>`;
+}
+
+function diagnosticSummaryHtml(summary: unknown): string {
+  return nonEmpty(summary)
+    ? `<p class="tb-analysis-diagnostic-summary"><b>Diagnostic classification:</b> <span>${escapeHtml(summary)}</span></p>`
+    : '';
+}
+
+function contextWithoutAffectedCount(problem: AnalysisProblem): string {
+  return problem.context_summary.replace(/^\d+ affected run(?:\(s\)|s?)(?:\s*·\s*)?/i, '');
+}
+
+function actionLinksHtml(problem: AnalysisProblem): string {
+  const links = problem.next_action_or_evidence_needed.links || [];
+  if (!links.length) return '';
+  return `<div class="tb-analysis-action-links" aria-label="Self-heal pull requests">${links.map((link) => `<a href="${escapeHtml(safeHttpsHref(link.href))}" target="_blank" rel="noopener noreferrer">${escapeHtml(link.label)}</a>`).join('')}</div>`;
+}
+
 function overviewHtml(manifest: AnalysisManifest, href: string): string {
   const cards = manifest.problem_sets.map((problem) => {
     const tone = /^[a-z][a-z0-9-]{0,31}$/.test(problem.status.tone) ? problem.status.tone : 'info';
     const actionLabel = problem.next_action_or_evidence_needed.kind === 'evidence_needed' ? 'Evidence needed' : 'Next action';
+    const context = contextWithoutAffectedCount(problem);
     return `<article class="tb-analysis-card tb-analysis-${tone}">`
-      + `<header><span class="tb-analysis-status">${escapeHtml(problem.status.label)}</span><span>${problem.affected_subjects.length} affected run(s)</span></header>`
+      + `<header><span class="tb-analysis-status">${escapeHtml(problem.status.label)}</span><span>${problem.affected_subjects.length} affected run(s)${context ? ` <span class="tb-analysis-meta">· ${escapeHtml(context)}</span>` : ''}</span></header>`
+      + diagnosticSummaryHtml(problem.diagnostic_summary)
       + `<h2><a href="${escapeHtml(analysisProblemHref(href, problem.id))}">${escapeHtml(problem.title)}</a></h2>`
       + `<p class="tb-analysis-card-summary">${escapeHtml(problem.attention_summary)}</p>`
-      + `<p class="tb-analysis-meta">${escapeHtml(problem.context_summary)}</p>`
-      + `<div class="tb-analysis-card-action"><h3>${actionLabel}</h3><p>${escapeHtml(problem.next_action_or_evidence_needed.text)}</p></div>`
+      + `<div class="tb-analysis-card-action"><h3>${actionLabel}</h3><p>${escapeHtml(problem.next_action_or_evidence_needed.text)}</p>${actionLinksHtml(problem)}</div>`
       + `<a class="tb-analysis-open" href="${escapeHtml(analysisProblemHref(href, problem.id))}">Open problem and evidence <span aria-hidden="true">↗</span></a></article>`;
   }).join('');
   return `<main class="tb-analysis" aria-labelledby="tb-analysis-title">`
@@ -444,7 +536,7 @@ function focusedProblemHtml(manifest: AnalysisManifest, problem: AnalysisProblem
   const tone = /^[a-z][a-z0-9-]{0,31}$/.test(problem.status.tone) ? problem.status.tone : 'info';
   const actionLabel = problem.next_action_or_evidence_needed.kind === 'evidence_needed' ? 'Evidence needed' : 'Next action';
   const titlePeriod = /[.!?…]$/.test(problem.title.trimEnd()) ? '' : '<span class="tb-analysis-period" aria-hidden="true">.</span>';
-  const subjects = problem.affected_subjects.map((subject) => `<li><b>${escapeHtml(subject.label)}</b><span>${escapeHtml(subject.context)}</span></li>`).join('');
+  const subjects = problem.affected_subjects.map((subject) => `<li><div class="tb-analysis-subject-heading"><b>${escapeHtml(subject.label)}</b><span>${escapeHtml(subject.context)}</span></div>${subject.diagnostic ? subjectDiagnosticHtml(subject.diagnostic) : ''}</li>`).join('');
   const observations = problem.observations.map((observation) => `<li>${escapeHtml(observation)}</li>`).join('');
   const keyEvidence = problem.evidence.filter((item) => item.key);
   const otherEvidence = problem.evidence.filter((item) => !item.key);
@@ -463,11 +555,11 @@ function focusedProblemHtml(manifest: AnalysisManifest, problem: AnalysisProblem
     + `<nav class="tb-analysis-toolbar" aria-label="Analysis navigation"><a href="${escapeHtml(analysisProblemHref(href, 'all'))}">← Run overview</a>`
     + `<button type="button" data-tb-copy-link>Copy problem link</button><span data-tb-copy-status class="tb-shell-sr" role="status" aria-live="polite"></span></nav>`
     + `<article class="tb-analysis-focus tb-analysis-${tone}"><header class="tb-analysis-hero"><div class="tb-analysis-hero-meta"><span class="tb-analysis-status">${escapeHtml(problem.status.label)}</span>`
-    + `<span class="tb-analysis-meta">Problem ${at + 1} of ${manifest.problem_sets.length}</span><span class="tb-analysis-meta">${escapeHtml(problem.context_summary)}</span></div>`
+    + `<span class="tb-analysis-meta">Problem ${at + 1} of ${manifest.problem_sets.length}</span><span class="tb-analysis-meta">${escapeHtml(problem.context_summary)}</span></div>${diagnosticSummaryHtml(problem.diagnostic_summary)}`
     + `<p class="tb-analysis-eyebrow">Analysis / ${escapeHtml(manifest.summary.run_label)}</p>`
     + `<h1 id="tb-analysis-title" tabindex="-1">${escapeHtml(problem.title)}${titlePeriod}</h1>`
     + `<p class="tb-analysis-attention">${escapeHtml(problem.attention_summary)}</p></header>`
-    + `<div class="tb-analysis-priority"><section class="tb-analysis-action"><h2>${actionLabel}</h2><p>${escapeHtml(problem.next_action_or_evidence_needed.text)}</p></section>`
+    + `<div class="tb-analysis-priority"><section class="tb-analysis-action"><h2>${actionLabel}</h2><p>${escapeHtml(problem.next_action_or_evidence_needed.text)}</p>${actionLinksHtml(problem)}</section>`
     + `<section class="tb-analysis-key-evidence"><h2>Key evidence</h2><ul class="tb-analysis-evidence-list">${keyEvidence.map(evidenceHtml).join('')}</ul></section></div>`
     + `<div class="tb-analysis-detail-grid"><section><h2>Affected runs</h2><ul class="tb-analysis-subjects">${subjects}</ul></section>`
     + `<section><h2>Observed facts</h2><ul>${observations}</ul></section>`
@@ -613,7 +705,9 @@ export function RUN_REPORT_SHELL(): void {
   // column, and an inline `display: block` outranks it, collapsing the viewer's own layout.
   const showReport = () => { shell.classList.remove('tb-shell-panel-visible'); panel.style.display = 'none'; app.style.display = ''; };
   const spinner = (msg: string) => showPanel(`<div class="tb-shell-spinner"></div><div class="tb-shell-sub">${escapeHtml(msg)}</div>`);
-  const failure = (msg: string) => { setCollapsed(false); showPanel(`<div class="tb-shell-err" role="alert">${escapeHtml(msg)}</div><div class="tb-shell-sub">${idleHtml}</div>`); };
+  // Embedded, the reader cannot load anything else, so a failure says what went wrong and stops.
+  const embedded = document.documentElement.hasAttribute('data-tb-embed');
+  const failure = (msg: string) => { setCollapsed(false); showPanel(`<div class="tb-shell-err" role="alert">${escapeHtml(msg)}</div>${embedded ? '' : `<div class="tb-shell-sub">${idleHtml}</div>`}`); };
 
   // `shareable` says whether the CURRENT report came from a URL; the link itself is read at click
   // time, never captured here. The viewer rewrites location.search as the user moves between runs,

@@ -294,3 +294,93 @@ describe("unwrapToolResult", () => {
     expect(_unwrapToolResult<string>(emptyString)).toBe("");
   });
 });
+
+describe("client.host", () => {
+  // A real loopback server standing in for the daemon's `/scripting/callback`, so the test
+  // asserts the wire request the SDK sends and how it reads the reply.
+  async function withCallbackServer(
+    reply: (request: Record<string, unknown>) => unknown,
+    run: (baseUrl: string, received: Record<string, unknown>[]) => Promise<void>,
+  ): Promise<void> {
+    const received: Record<string, unknown>[] = [];
+    const server = Bun.serve({
+      port: 0,
+      async fetch(req) {
+        const body = (await req.json()) as Record<string, unknown>;
+        received.push(body);
+        return Response.json({ result: reply(body) });
+      },
+    });
+    try {
+      await run(`http://127.0.0.1:${server.port}`, received);
+    } finally {
+      server.stop(true);
+    }
+  }
+
+  test("sends a call_host action and resolves to the function's value", async () => {
+    await withCallbackServer(
+      () => ({ type: "call_host_result", success: true, value: { email: "a@example.com" } }),
+      async (baseUrl, received) => {
+        const client = createClient({ ...fakeCtx, baseUrl });
+        const value = await (client.host as Record<string, (a: unknown) => Promise<unknown>>).lookup({ key: "k" });
+        expect(value).toEqual({ email: "a@example.com" });
+        expect(received).toEqual([
+          {
+            version: 1,
+            session_id: "test-session",
+            invocation_id: "test-invocation",
+            action: { type: "call_host", function_name: "lookup", arguments_json: '{"key":"k"}' },
+          },
+        ]);
+      },
+    );
+  });
+
+  test("rejects with the function's failure message", async () => {
+    await withCallbackServer(
+      () => ({ type: "call_host_result", success: false, error_message: "no such account" }),
+      async (baseUrl) => {
+        const client = createClient({ ...fakeCtx, baseUrl });
+        await expect(
+          (client.host as Record<string, (a: unknown) => Promise<unknown>>).lookup({}),
+        ).rejects.toThrow("ctx.host.lookup failed: no such account");
+      },
+    );
+  });
+
+  test("uses the in-process __trailblazeHost binding when the runtime installs one", async () => {
+    const calls: [string, string][] = [];
+    (globalThis as Record<string, unknown>).__trailblazeHost = (name: string, argsJson: string) => {
+      calls.push([name, argsJson]);
+      return JSON.stringify({ ok: true, value: 42 });
+    };
+    try {
+      const client = createClient(undefined);
+      const value = await (client.host as Record<string, (a: unknown) => Promise<unknown>>).answer({ q: 1 });
+      expect(value).toBe(42);
+      expect(calls).toEqual([["answer", '{"q":1}']]);
+    } finally {
+      delete (globalThis as Record<string, unknown>).__trailblazeHost;
+    }
+  });
+
+  test("never dispatches for JS-protocol probes", () => {
+    const client = createClient(fakeCtx);
+    expect((client.host as Record<string, unknown>).then).toBeUndefined();
+  });
+
+  test("createMockClient records host calls and returns stubbed values", async () => {
+    const { createMockClient } = await import("./testing.js");
+    const mock = createMockClient();
+    mock.stubHost("lookup", { value: { token: "t" } });
+    mock.stubHost("broken", { error: "boom" });
+    const host = mock.host as Record<string, (a: unknown) => Promise<unknown>>;
+
+    expect(await host.lookup({ key: "k" })).toEqual({ token: "t" });
+    await expect(host.broken({})).rejects.toThrow("ctx.host.broken failed: boom");
+    await expect(host.unstubbed({})).rejects.toThrow("no stub registered");
+    expect(mock.hostCalls.map((c) => c.tool)).toEqual(["lookup", "broken", "unstubbed"]);
+    expect(mock.calls).toEqual([]);
+  });
+});

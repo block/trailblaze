@@ -3,9 +3,9 @@
 # Trailblaze launcher
 #
 # Usage:
-#   ./trailblaze app                 - Launch the legacy desktop app
-#   ./trailblaze app --v2            - Open Trail Runner in its native desktop window
-#   ./trailblaze trailrunner         - Compatibility alias for `app --v2`
+#   ./trailblaze app                 - Open Trail Runner in its native desktop window
+#   ./trailblaze trailrunner         - Open Trail Runner on TRAILBLAZE_PORT (`app` re-enters it)
+#   ./trailblaze app start           - Start the daemon in the background (no window)
 #   ./trailblaze stop                - Stop the daemon (kills it if it will not exit on request)
 #   ./trailblaze status [--json]     - Show the daemon: PID, uptime, devices, runs; --json for scripts
 #   ./trailblaze app --headless      - Start headless daemon
@@ -357,9 +357,13 @@ EOF
             cat <<EOF
 Usage: trailblaze trailrunner
 
-Open Trail Runner in its native desktop window; the same as \`trailblaze app --v2\`. Starts the
-Trailblaze daemon on port ${TRAILBLAZE_PORT} if none is running (set TRAILBLAZE_PORT to pick
-another), makes the git repository containing the current directory the active workspace, then
+The entry point \`trailblaze app\` uses; run \`trailblaze app\` instead. The name predates
+the Trailblaze App rename and is kept for existing callers.
+
+Open the Trailblaze App in its native desktop window. Starts the Trailblaze daemon
+on port ${TRAILBLAZE_PORT} if none is running (set TRAILBLAZE_PORT to pick another; unlike
+\`trailblaze app\`, this does not read a saved serverPort), makes the git repository containing
+the current directory the active workspace, then
 opens http://localhost:${TRAILBLAZE_PORT}/trailrunner/ — on macOS in a native shell compiled with
 Xcode's command-line tools, elsewhere through xdg-open. Takes no options.
 EOF
@@ -1372,7 +1376,7 @@ ipc_try_forward() {
     # `--yaml` list that may hold a password, and curl's argv is visible in `ps` for as long as
     # the command runs. printf is a builtin, so no process argv ever holds it.
     response=$(printf '%s' "$payload" | curl -sS --connect-timeout 2 --max-time "$ipc_max_time" \
-        -X POST "http://localhost:${TRAILBLAZE_PORT}/cli/exec" \
+        -X POST "http://localhost:${TRAILBLAZE_PORT}/cli/exec/v2" \
         -H "Content-Type: application/json" \
         -H "Accept: application/vnd.trailblaze.cli-replay, application/json" \
         --data-binary @- 2>/dev/null)
@@ -1399,12 +1403,6 @@ ipc_try_forward() {
 
     ipc_replay_framed "$response" || ipc_replay_response "$response" || return 1
     exit "$IPC_REPLAY_EXIT_CODE"
-}
-
-show_window() {
-    curl -s -X POST "http://localhost:${TRAILBLAZE_PORT}/cli/show-window" \
-        -H "Content-Type: application/json" \
-        -d '{}' > /dev/null 2>&1
 }
 
 fetch_daemon_status_json() {
@@ -1714,33 +1712,33 @@ get_status() {
     echo "  Log:       ${TRAILBLAZE_DAEMON_LOG}"
 }
 
-# Open Trail Runner in its native desktop shell. Bare `app` and `app start`
-# continue to launch the legacy Compose desktop app; `--v2` is the explicit
-# opt-in while the replacement is still being validated.
+# Open Trail Runner in its native desktop shell. Reached by `trailrunner`, which bare `app` and the
+# older `app --v2` re-enter from the JVM once it has resolved the port (a saved `serverPort`
+# outranks TRAILBLAZE_PORT, and only the JVM reads it).
 open_trailrunner_window() {
     # Companion re-enters this launcher after connecting so it gets the same native shell as
     # `trailblaze trailrunner`, but opens directly on the newly attached run. This variable is
     # launcher-to-launcher plumbing, not a user-facing configuration knob.
     local url="${TRAILBLAZE_TRAILRUNNER_URL:-http://localhost:${TRAILBLAZE_PORT}/trailrunner/}"
-    echo "Opening Trail Runner at $url" >&2
+    echo "Opening the Trailblaze App at $url" >&2
 
     if [[ "$(uname)" == "Darwin" ]]; then
         local shell_url="http://localhost:${TRAILBLAZE_PORT}/trailrunner/native/TrailblazeTrailRunner.swift"
         local shell_dir="${HOME}/.trailblaze/bin"
         local shell_src="${shell_dir}/TrailblazeTrailRunner.swift"
-        local shell_bin="${shell_dir}/Trail Runner"
+        local shell_bin="${shell_dir}/Trailblaze App"
         mkdir -p "$shell_dir"
 
         if ! curl -sf -o "${shell_src}.new" "$shell_url"; then
-            echo "ERROR: could not fetch the Trail Runner shell from $shell_url." >&2
+            echo "ERROR: could not fetch the Trailblaze App shell from $shell_url." >&2
             echo "       Open $url in a browser, or restart the daemon and retry." >&2
             return 1
         fi
         if [ ! -f "$shell_src" ] || ! cmp -s "${shell_src}.new" "$shell_src" || [ ! -x "$shell_bin" ]; then
             mv "${shell_src}.new" "$shell_src"
-            echo "Compiling native Trail Runner shell..." >&2
+            echo "Compiling native Trailblaze App shell..." >&2
             if ! xcrun swiftc -O -o "$shell_bin" "$shell_src" -framework Cocoa -framework WebKit; then
-                echo "ERROR: failed to compile Trail Runner with 'xcrun swiftc'." >&2
+                echo "ERROR: failed to compile the Trailblaze App with 'xcrun swiftc'." >&2
                 echo "       Install Xcode command-line tools, then retry. You can still open $url." >&2
                 return 1
             fi
@@ -1749,19 +1747,24 @@ open_trailrunner_window() {
         fi
         # Keep the current window alive until its replacement has been fetched and compiled.
         # Closing it immediately before launch also leaves one authoritative app window focused.
-        pkill -f "bin/Trail Runner .*:${TRAILBLAZE_PORT}/" 2>/dev/null || true
+        # The shell was named "Trail Runner" before it became the Trailblaze App; match both so a
+        # window from an older install is replaced too.
+        pkill -f "bin/(Trailblaze App|Trail Runner) .*:${TRAILBLAZE_PORT}/" 2>/dev/null || true
         nohup "$shell_bin" "$url" >/dev/null 2>&1 &
         disown
-    elif command -v xdg-open >/dev/null 2>&1; then
-        xdg-open "$url"
+    elif command -v xdg-open >/dev/null 2>&1 && xdg-open "$url" >/dev/null 2>&1; then
+        :
     else
+        # No browser to hand off to (or xdg-open failed on a box with no display). The daemon is
+        # up either way, so print the URL rather than failing.
         echo "Open this URL in your browser: $url" >&2
     fi
 }
 
 # Make the repo containing the caller's current directory the active Trail Runner workspace. The
 # daemon is long-lived, so inheriting cwd only works on its first launch; this explicit handoff also
-# makes a later `trailblaze app` from another checkout switch the already-running app. The daemon
+# makes a later `trailblaze app` from another checkout switch the already-running app. A repo whose
+# trailblaze.yaml declares `trails:` gets that directory as its trails root; otherwise the daemon
 # scans this whole root recursively (including layouts such as `jobs/**/trails`).
 activate_trailrunner_workspace() {
     local repo_root
@@ -1807,6 +1810,14 @@ launch_trailrunner_app() {
         fi
         release_daemon_startup
         echo "Trailblaze daemon ready." >&2
+    fi
+    # A daemon started by `trailblaze mcp --http` / `--direct` answers /ping but serves no Trail
+    # Runner, so opening the window would show a 404.
+    if ! curl -sf -o /dev/null --max-time 5 "http://localhost:${TRAILBLAZE_PORT}/trailrunner/"; then
+        echo "ERROR: the Trailblaze daemon on port ${TRAILBLAZE_PORT} does not serve the Trailblaze App" >&2
+        echo "       (it was likely started by \`trailblaze mcp\`). Stop it with \`trailblaze app --stop\`," >&2
+        echo "       then rerun." >&2
+        return 1
     fi
     # Companion already selected and validated its workspace before connecting. Activating cwd
     # here could switch a long-lived daemon away from that root between connect and first render.
@@ -1932,9 +1943,9 @@ fi
 # Flat string for functions that need it (backward compat)
 ARGS="${ARGS_ARRAY[*]}"
 
+# Bare `app` and `app --v2` go to the JVM first: it resolves the daemon port (including a saved
+# `serverPort`, which this script cannot read) and re-enters here as `trailrunner` with it.
 if [ "${#ARGS_ARRAY[@]}" -eq 1 ] && [ "${ARGS_ARRAY[0]}" = "trailrunner" ]; then
-    NATIVE_APP_MODE=true
-elif [ "${#ARGS_ARRAY[@]}" -eq 2 ] && [ "${ARGS_ARRAY[0]}" = "app" ] && [ "${ARGS_ARRAY[1]}" = "--v2" ]; then
     NATIVE_APP_MODE=true
 fi
 

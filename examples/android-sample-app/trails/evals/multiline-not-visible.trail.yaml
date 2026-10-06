@@ -1,0 +1,41 @@
+# Eval: does assertNotVisibleWithText catch a multi-line element whose text the agent copied from
+# the screen? The Forms submission result reads "Name: Jane Doe\nEmail: " and stays on screen, so a
+# correct not-visible check on it FAILS. sampleapp_assertTextStillShown inverts that check: it
+# passes only when assertNotVisibleWithText finds the text, and on a false pass it taps Clear All,
+# so the recorded last step fails.
+#
+# Run in replay mode with self-heal off, NOT with --no-use-recorded-steps: the unrecorded steps go
+# to the agent (that is the eval), and the recorded last step replays without it. From this
+# example's directory:
+#
+#   trailblaze run trails/evals/multiline-not-visible.trail.yaml
+#
+# Needs an LLM, so it is run by hand rather than in CI.
+config:
+  id: sample-app/evals/multiline-not-visible
+  target: sampleapp
+  devices:
+    android-phone:
+      driver: ANDROID_ONDEVICE_ACCESSIBILITY
+
+trailhead:
+  step: "Launch the sample app"
+  recording:
+    android-phone:
+      launchApp:
+        appId: xyz.block.trailblaze.examples.sampleapp
+
+trail:
+  - step: "Navigate to the \"Forms\" tab"
+  - step: "Type \"Jane Doe\" into the \"Name\" field"
+  - step: "Tap the \"Submit\" button"
+  - step: >-
+      Use sampleapp_assertTextStillShown with the full text of the submission result (the text
+      below "Submission Result:"), copied exactly from the screen
+  - verify: "The submission result is still on screen"
+    recording:
+      android-phone:
+        - assertVisibleBySelector:
+            nodeSelector:
+              androidAccessibility:
+                textRegex: "Name: Jane Doe[\\s\\S]*"

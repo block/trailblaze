@@ -48,6 +48,31 @@ class AxeTreeOverlayTest {
     assertNotNull(tree)
   }
 
+  @Test
+  fun `a missing or too-old axe is permanent, so the run stops asking`() {
+    for (availability in listOf(AxeCli.Availability.MISSING, AxeCli.Availability.TOO_OLD)) {
+      val result = AxeTreeOverlay.captureAxeTreeResult(
+        udid = "SIM-UDID",
+        availability = { availability },
+        describeUi = { error("describe-ui must not run when axe is $availability") },
+      )
+      assertNull(result.tree)
+      assertTrue(result.permanent, "$availability should be permanent")
+    }
+  }
+
+  @Test
+  fun `a version probe that did not answer is transient, not a missing axe`() {
+    // A one-off `axe --version` timeout must count toward the retry streak, not end the run.
+    val result = AxeTreeOverlay.captureAxeTreeResult(
+      udid = "SIM-UDID",
+      availability = { AxeCli.Availability.UNKNOWN },
+      describeUi = { error("describe-ui must not run on an unanswered probe") },
+    )
+    assertNull(result.tree)
+    assertEquals(false, result.permanent)
+  }
+
   // --- mergeAxeIntoMaestroTree ---
 
   @Test

@@ -8,7 +8,7 @@
 Usage: trailblaze tool [-hvV] [--text-only] [-d=<device>]
                        [--headless=<headless>] [-s=<step>] [--target=<target>]
                        [--yaml=<yaml>] [<toolName>] [<argPairs>...]
-Run a Trailblaze tool by name (e.g., tap, inputText)
+Run a Trailblaze tool by name (e.g., tap, type)
       [<toolName>]        Tool name (e.g., web_click, tap)
       [<argPairs>...]     Tool arguments as key=value pairs (e.g., ref="Sign
                             In")

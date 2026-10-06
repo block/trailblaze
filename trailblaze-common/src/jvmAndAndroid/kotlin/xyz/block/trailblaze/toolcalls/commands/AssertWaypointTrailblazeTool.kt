@@ -47,26 +47,16 @@ import xyz.block.trailblaze.waypoint.WaypointRegistryResolver
   requiresHost = true,
 )
 @LLMDescription(
-  """
-Assert that the current screen has reached a named waypoint (a known place in the app, e.g.
-`square/ios/more-tab-no-sheet`). Waits up to `timeoutMs` for the screen to settle into that
-waypoint — all of its `required` selectors present and none of its `forbidden` selectors present.
-Succeeds when the waypoint matches; fails with the missing-required / present-forbidden diff if it
-does not match within the timeout. Reach for this to lock in that a step (or a branchy navigation
-tool) landed where it intended, instead of trusting that a tap/swipe "succeeded".
-""",
+  "Assert the screen has reached a named waypoint (a known place in the app): all its required " +
+    "selectors present and none of its forbidden ones. Waits up to `timeoutMs`; on failure reports " +
+    "what is missing or present.",
 )
 data class AssertWaypointTrailblazeTool(
-  @LLMDescription("Id of the waypoint to assert, e.g. `square/ios/more-tab-no-sheet`.")
+  @LLMDescription("Waypoint id, e.g. `myapp/ios/settings`.")
   val waypoint: String,
-  @LLMDescription(
-    "Total milliseconds to wait for the screen to settle into the waypoint before failing. " +
-      "Default 5000.",
-  )
+  @LLMDescription("Max wait in ms for the waypoint to match. Default 5000.")
   val timeoutMs: Long = WaypointAssertion.DEFAULT_TIMEOUT_MS,
-  @LLMDescription(
-    "Milliseconds between waypoint re-evaluations while waiting. Default 250.",
-  )
+  @LLMDescription("Ms between checks while waiting. Default 250.")
   val pollIntervalMs: Long = WaypointAssertion.DEFAULT_POLL_INTERVAL_MS,
 ) : HostLocalExecutableTrailblazeTool {
 

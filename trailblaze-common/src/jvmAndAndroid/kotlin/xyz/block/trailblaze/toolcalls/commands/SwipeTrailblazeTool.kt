@@ -17,26 +17,15 @@ import xyz.block.trailblaze.util.Console
 
 @Serializable
 @TrailblazeToolClass("swipe")
-@LLMDescription(
-  """
-Swipe the screen in the specified direction to navigate long lists or pages. Start and end points
-are calculated automatically from the direction and screen dimensions.
-    """,
-)
+@LLMDescription("Swipe the screen in a direction, e.g. to move through long lists or pages.")
 data class SwipeTrailblazeTool(
   @param:LLMDescription(
-    """The direction of the finger swipe gesture (not the scroll direction).
-To see more content BELOW (scroll down), use 'UP' (finger swipes upward).
-To see more content ABOVE (scroll up), use 'DOWN' (finger swipes downward).
-Default is 'DOWN'.""",
+    "Finger direction, not scroll direction: UP reveals content below, DOWN reveals content " +
+      "above. Default DOWN.",
   )
   @Serializable(with = LenientSwipeDirectionSerializer::class)
   val direction: SwipeDirection = SwipeDirection.DOWN,
-  @param:LLMDescription(
-    """
-The text value to swipe on. If not provided, the swipe will be performed on the center of the screen.
-  """,
-  )
+  @param:LLMDescription("Text of the element to swipe on. Omit to swipe from the screen center.")
   val swipeOnElementText: String? = null,
   override val reasoning: String? = null,
 ) : ExecutableTrailblazeTool, ReasoningTrailblazeTool {

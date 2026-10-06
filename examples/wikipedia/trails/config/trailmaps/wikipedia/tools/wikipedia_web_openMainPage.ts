@@ -2,16 +2,12 @@ import { trailblaze } from "@trailblaze/scripting";
 import { WIKIPEDIA_MAIN_PAGE } from "./wikipedia_shared";
 
 export interface OpenMainPageArgs {
-  /** When true (default), tries to close any visible fundraising banner. */
+  /** Close the fundraising banner if showing. Default true. */
   dismissBanner?: boolean;
 }
 
 /**
- * Open Wikipedia's Main_Page. Use this when the task asks to navigate to
- * Wikipedia, open Wikipedia, go to the Wikipedia home page, or start from
- * the main Wikipedia page. Loads en.wikipedia.org/wiki/Main_Page and waits
- * for it to render. Optionally dismisses any fundraising banner that's
- * currently showing so subsequent steps don't have to reason about it.
+ * Open the English Wikipedia home page (Main_Page) and wait for it to render.
  */
 // (spec, handler) overload: the inline spec object carries `supportedPlatforms`
 // + `requiresContext` so the runtime `_meta` gates are populated entirely from

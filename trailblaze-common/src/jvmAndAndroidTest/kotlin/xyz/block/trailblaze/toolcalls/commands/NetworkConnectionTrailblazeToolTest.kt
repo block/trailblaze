@@ -78,12 +78,12 @@ class NetworkConnectionTrailblazeToolTest {
     assertEquals(
       listOf("svc wifi disable", "svc data disable", "svc bluetooth disable"),
       NetworkConnectionTrailblazeTool
-        .androidMaestroAirplaneModeRadioCommands(airplaneModeEnabled = true).values.toList(),
+        .maestroSetAirplaneModeRadioCommands(airplaneModeEnabled = true).values.toList(),
     )
     assertEquals(
       listOf("svc wifi enable", "svc data enable", "svc bluetooth enable"),
       NetworkConnectionTrailblazeTool
-        .androidMaestroAirplaneModeRadioCommands(airplaneModeEnabled = false).values.toList(),
+        .maestroSetAirplaneModeRadioCommands(airplaneModeEnabled = false).values.toList(),
     )
   }
 

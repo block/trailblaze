@@ -13,24 +13,12 @@ import xyz.block.trailblaze.yaml.serializers.CaseInsensitiveEnumSerializer
 
 @Serializable
 @TrailblazeToolClass("web_navigate")
-@LLMDescription(
-  """
-Navigate the browser to a URL, or go back/forward in browser history.
-Use action GOTO (default) with a url to navigate to a new page.
-Use action BACK or FORWARD to move through browser history.
-A relative file path (e.g., 'fixtures/index.html') resolves against the trail file's own
-directory first, and only falls back to the process working directory when nothing is there.
-""",
-)
+@LLMDescription("Go to a URL (GOTO), or move BACK/FORWARD in browser history.")
 data class PlaywrightNativeNavigateTool(
-  @param:LLMDescription(
-    "GOTO navigates to a URL, BACK/FORWARD moves through browser history.",
-  )
+  @param:LLMDescription("GOTO (default), BACK, or FORWARD.")
   val action: NavigationAction = NavigationAction.GOTO,
   @param:LLMDescription(
-    "The URL to navigate to. Required when action is GOTO. " +
-      "Supports full URLs (https://..., file://...) or a relative file path, which is " +
-      "resolved against the trail file's own directory before the process working directory.",
+    "URL for GOTO: a full URL (https://, file://) or a file path relative to the trail file.",
   )
   val url: String = "",
   override val reasoning: String? = null,

@@ -1,13 +1,8 @@
 package xyz.block.trailblaze.desktop
 
-import androidx.compose.foundation.layout.ColumnScope
-import androidx.compose.runtime.Composable
 import xyz.block.trailblaze.config.project.TrailblazeWorkspaceConfigResolver
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
-import xyz.block.trailblaze.host.devices.WebBrowserManager
 import xyz.block.trailblaze.host.ios.MobileDeviceUtils
-import xyz.block.trailblaze.host.rules.TrailblazeHostDynamicLlmClientProvider
-import xyz.block.trailblaze.http.TrailblazeHttpClientFactory
 import xyz.block.trailblaze.llm.LlmProviderEnvVarUtil
 import xyz.block.trailblaze.llm.config.BuiltInLlmModelRegistry
 import xyz.block.trailblaze.llm.config.TrailblazeConfigPaths
@@ -15,26 +10,15 @@ import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.llm.TrailblazeLlmModelList
 import xyz.block.trailblaze.llm.TrailblazeLlmProvider
 import xyz.block.trailblaze.model.AppVersionInfo
-import xyz.block.trailblaze.model.DesktopAppRunYamlParams
 import xyz.block.trailblaze.host.driver.HostDriverDescriptor
 import xyz.block.trailblaze.host.driver.HostDriverDescriptorRegistry
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.trailrunner.DefaultTrailRunnerExtension
 import xyz.block.trailblaze.trailrunner.TrailRunnerExtension
-import xyz.block.trailblaze.host.rules.TrailblazeHostDynamicLlmTokenProvider
-import xyz.block.trailblaze.llm.providers.TrailblazeDynamicLlmTokenProvider
-import kotlinx.coroutines.flow.StateFlow
-import xyz.block.trailblaze.logs.server.McpServerDebugState
-import xyz.block.trailblaze.ui.TrailblazeBuiltInTabs
 import xyz.block.trailblaze.ui.TrailblazeDesktopUtil
 import xyz.block.trailblaze.ui.TrailblazeDeviceManager
 import xyz.block.trailblaze.ui.TrailblazeSettingsRepo
-import xyz.block.trailblaze.ui.composables.DefaultDeviceClassifierIconProvider
-import xyz.block.trailblaze.ui.composables.DeviceClassifierIconProvider
-import xyz.block.trailblaze.ui.model.TrailblazeAppTab
-import xyz.block.trailblaze.ui.models.AppIconProvider
-import xyz.block.trailblaze.ui.models.TrailblazeServerState
 import xyz.block.trailblaze.ui.recordings.RecordedTrailsRepo
 import java.io.File
 
@@ -47,11 +31,6 @@ abstract class TrailblazeDesktopAppConfig(
   /** The default model list. */
   private val defaultProviderModelList: TrailblazeLlmModelList,
 ) {
-
-  /**
-   * Environment variables that should be surfaced in UI/settings for this configuration.
-   */
-  abstract val customEnvVarNames: List<String>
 
   /**
    * Gets the status of LLM tokens for a specific provider.
@@ -106,25 +85,6 @@ abstract class TrailblazeDesktopAppConfig(
   }
 
   /**
-   * LLM token provider used by the recording tab to authenticate LLM calls.
-   * Override in subclasses to provide custom auth (e.g., OAuth/token providers).
-   * Defaults to the open source provider which reads from environment variables.
-   */
-  open val llmTokenProvider: TrailblazeDynamicLlmTokenProvider
-    get() = TrailblazeHostDynamicLlmTokenProvider
-
-  /**
-   * Additional global settings content to render in the Settings tab.
-   */
-  open val globalSettingsContent: @Composable ColumnScope.(TrailblazeServerState) -> Unit = {}
-
-  /**
-   * Additional content to render on the Home tab.
-   * Override in subclasses to inject custom sections (e.g., authentication cards).
-   */
-  open val homeAdditionalContent: @Composable ColumnScope.() -> Unit = {}
-
-  /**
    * Additional instrumentation args to pass to YAML runs for this configuration.
    */
   open suspend fun additionalInstrumentationArgs(): Map<String, String> = emptyMap()
@@ -148,15 +108,6 @@ abstract class TrailblazeDesktopAppConfig(
 
   abstract val defaultAppDataDir: File
   abstract val recordedTrailsRepo: RecordedTrailsRepo
-
-  abstract val appIconProvider: AppIconProvider
-
-  /**
-   * Provider for device classifier icons. Downstream builds can override to add
-   * custom icons for project-specific device categories.
-   */
-  open val deviceClassifierIconProvider: DeviceClassifierIconProvider =
-    DefaultDeviceClassifierIconProvider
 
   /**
    * The drivers this app plugs in — see [HostDriverDescriptor].
@@ -220,10 +171,11 @@ abstract class TrailblazeDesktopAppConfig(
     // the walk-up would find no `trailblaze-config/` at all and fall back to
     // `<declared-dir>/config` — a directory that doesn't exist — silently emptying target,
     // trailmap, and scripted-tool discovery for the very workspace that asked to be used.
-    TrailblazeDesktopUtil.launchWorkspaceDeclaration()?.let { return it.configDir }
-    val trailsDir = File(
-      TrailblazeDesktopUtil.getEffectiveTrailsDirectory(trailblazeSettingsRepo.serverStateFlow.value.appConfig),
-    )
+    // The declaration is the one behind the trails dir IN EFFECT, not the launch cwd's, so a
+    // workspace switch on a running daemon moves the config dir along with the trails dir.
+    val appConfig = trailblazeSettingsRepo.serverStateFlow.value.appConfig
+    TrailblazeDesktopUtil.effectiveWorkspaceConfigDir(appConfig)?.let { return it }
+    val trailsDir = File(TrailblazeDesktopUtil.getEffectiveTrailsDirectory(appConfig))
     if (!trailsDir.isDirectory) return null
     return resolveWorkspaceConfigDir(trailsDir)
   }
@@ -333,236 +285,6 @@ abstract class TrailblazeDesktopAppConfig(
     return providerLists.firstOrNull()?.entries?.firstOrNull()
   }
 
-  /**
-   * Returns the list of tabs for this desktop app configuration.
-   * Override in subclasses to customize which tabs are shown.
-   *
-   * @param deviceManager runtime device manager
-   * @param yamlRunner runner for YAML executions
-   * @param additionalInstrumentationArgs provider for instrumentation args (defaults to config implementation)
-   */
-  open fun getTabs(
-    deviceManager: TrailblazeDeviceManager,
-    yamlRunner: (DesktopAppRunYamlParams) -> Unit,
-    additionalInstrumentationArgsProvider: suspend () -> Map<String, String> = { additionalInstrumentationArgs() },
-    mcpServerDebugStateFlow: StateFlow<McpServerDebugState>? = null,
-    recommendTrailblazeAsAgent: Boolean = false,
-  ): List<TrailblazeAppTab> {
-    return getStandardTabs(
-      deviceManager = deviceManager,
-      yamlRunner = yamlRunner,
-      additionalInstrumentationArgsProvider = additionalInstrumentationArgsProvider,
-      globalSettingsContent = globalSettingsContent,
-      customEnvVarNames = customEnvVarNames,
-      webBrowserManager = deviceManager.webBrowserManager,
-      mcpServerDebugStateFlow = mcpServerDebugStateFlow,
-      recommendTrailblazeAsAgent = recommendTrailblazeAsAgent,
-      onTestLlmConnection = { model -> testLlmConnection(model) },
-    )
-  }
-
-  /**
-   * Tests the LLM connection by sending a simple prompt and reporting the result along with
-   * full HTTP diagnostics (request URL, headers, response status, headers, body) to help
-   * debug provider connectivity issues. Uses [llmTokenProvider] for auth, so subclasses that
-   * override it (e.g. for OAuth) get correct credentials automatically.
-   */
-  protected suspend fun testLlmConnection(model: TrailblazeLlmModel): Result<String> {
-    val report = StringBuilder()
-    report.appendLine("Provider: ${model.trailblazeLlmProvider.display}")
-    report.appendLine("Model: ${model.modelId}")
-
-    val diagnosticClient = TrailblazeHttpClientFactory.createDiagnosticHttpClient(timeoutInSeconds = 30)
-    val client =
-      TrailblazeHostDynamicLlmClientProvider(
-        trailblazeLlmModel = model,
-        trailblazeDynamicLlmTokenProvider = llmTokenProvider,
-        baseClient = diagnosticClient.httpClient,
-      )
-
-    return try {
-      val startTime = System.currentTimeMillis()
-      val responses =
-        client.createLlmClient().execute(
-          prompt =
-            ai.koog.prompt.Prompt(
-              messages =
-                listOf(
-                  ai.koog.prompt.message.Message.User(
-                    content = "Respond with OK",
-                    metaInfo =
-                      ai.koog.prompt.message.RequestMetaInfo.create(ai.koog.utils.time.KoogClock.System),
-                  ),
-                ),
-              id = "llm-connection-test",
-            ),
-          model = model.toKoogLlmModel(),
-          tools = emptyList(),
-        )
-      val elapsedMs = System.currentTimeMillis() - startTime
-      report.appendLine("Response time: ${elapsedMs}ms")
-      report.appendLine("Response: ${responses.textContent().ifBlank { "(empty)" }}")
-      report.appendLine()
-      report.appendLine("--- Request ---")
-      report.append(diagnosticClient.interceptor.requestLog)
-      report.appendLine()
-      report.appendLine("--- Response ---")
-      report.append(diagnosticClient.interceptor.responseLog)
-      Result.success(report.toString())
-    } catch (e: Exception) {
-      report.appendLine("Error: ${e.message}")
-      var cause = e.cause
-      while (cause != null) {
-        report.appendLine("Caused by: ${cause.javaClass.simpleName}: ${cause.message}")
-        cause = cause.cause
-      }
-      if (diagnosticClient.interceptor.requestLog.isNotEmpty()) {
-        report.appendLine()
-        report.appendLine("--- Request ---")
-        report.append(diagnosticClient.interceptor.requestLog)
-      }
-      if (diagnosticClient.interceptor.responseLog.isNotEmpty()) {
-        report.appendLine()
-        report.appendLine("--- Response ---")
-        report.append(diagnosticClient.interceptor.responseLog)
-      }
-      Result.failure(RuntimeException(report.toString(), e))
-    } finally {
-      diagnosticClient.httpClient.close()
-    }
-  }
-
-  /**
-   * Creates the standard set of tabs (Sessions, Trails, Devices, YAML, Settings).
-   * Subclasses can call this and add/remove tabs as needed.
-   *
-   * @param isProviderLocked Whether the LLM provider dropdown starts locked.
-   *   When true, the provider dropdown is disabled and a lock icon is shown to unlock it.
-   *   Defaults to false (unlocked) for open source builds.
-   */
-  protected fun getStandardTabs(
-    deviceManager: TrailblazeDeviceManager,
-    yamlRunner: (DesktopAppRunYamlParams) -> Unit,
-    additionalInstrumentationArgsProvider: suspend () -> Map<String, String>,
-    globalSettingsContent: @Composable ColumnScope.(TrailblazeServerState) -> Unit,
-    customEnvVarNames: List<String>,
-    openGoose: (() -> Unit)? = null,
-    isProviderLocked: Boolean = false,
-    webBrowserManager: WebBrowserManager? = null,
-    mcpServerDebugStateFlow: StateFlow<McpServerDebugState>? = null,
-    recommendTrailblazeAsAgent: Boolean = false,
-    onTestLlmConnection: (suspend (TrailblazeLlmModel) -> Result<String>)? = null,
-  ): List<TrailblazeAppTab> {
-    return buildList {
-      add(
-        TrailblazeBuiltInTabs.homeTab(
-          trailblazeSettingsRepo = trailblazeSettingsRepo,
-          deviceManager = deviceManager,
-          additionalHomeContent = homeAdditionalContent,
-        )
-      )
-      add(
-        TrailblazeBuiltInTabs.sessionsTab(
-          logsRepo = logsRepo,
-          trailblazeSettingsRepo = trailblazeSettingsRepo,
-          deviceManager = deviceManager,
-          recordedTrailsRepo = recordedTrailsRepo,
-        )
-      )
-      if (mcpServerDebugStateFlow != null) {
-        add(
-          TrailblazeBuiltInTabs.mcpTab(
-            mcpServerDebugStateFlow = mcpServerDebugStateFlow,
-            trailblazeSettingsRepo = trailblazeSettingsRepo,
-            recommendTrailblazeAsAgent = recommendTrailblazeAsAgent,
-          )
-        )
-      }
-      add(
-        TrailblazeBuiltInTabs.trailsTab(
-          trailblazeSettingsRepo = trailblazeSettingsRepo,
-          deviceManager = deviceManager,
-          currentTrailblazeLlmModelProvider = { getCurrentLlmModel() },
-          yamlRunner = yamlRunner,
-          additionalInstrumentationArgs = additionalInstrumentationArgsProvider,
-        )
-      )
-      add(
-        TrailblazeBuiltInTabs.waypointsTab(
-          trailblazeSettingsRepo = trailblazeSettingsRepo,
-          deviceManager = deviceManager,
-          logsRepo = logsRepo,
-        ),
-      )
-      add(
-        TrailblazeBuiltInTabs.devicesTab(
-          deviceManager = deviceManager,
-          trailblazeSettingsRepo = trailblazeSettingsRepo,
-        )
-      )
-      add(
-        TrailblazeBuiltInTabs.recordTab(
-          deviceManager = deviceManager,
-          currentTrailblazeLlmModelProvider = { getCurrentLlmModel() },
-          llmTokenProvider = llmTokenProvider,
-          // Save Trail writes to `<trailsDir>/_recorded/recording-<timestamp>.trail.yaml`.
-          // Path is derived from the active trails directory (same one the Trails tab
-          // browses) so the saved file shows up there immediately. Until we add a
-          // proper save-as dialog this is the right default — it gets the YAML on
-          // disk where the user can find it, rename it, move it into the per-target
-          // tree, etc. Returns the absolute path so the calling composable can show
-          // a confirmation with the actual location.
-          onSaveTrail = { yaml ->
-            val trailsDir = java.io.File(
-              TrailblazeDesktopUtil.getEffectiveTrailsDirectory(
-                trailblazeSettingsRepo.serverStateFlow.value.appConfig,
-              ),
-            )
-            val timestamp = kotlinx.datetime.Clock.System.now()
-              .toString()
-              .replace(":", "-")
-              .replace(".", "-")
-            val outFile = java.io.File(
-              java.io.File(trailsDir, "_recorded"),
-              "recording-$timestamp.trail.yaml",
-            )
-            try {
-              outFile.parentFile?.mkdirs()
-              outFile.writeText(yaml)
-              xyz.block.trailblaze.util.Console.log("Recording saved to: ${outFile.absolutePath}")
-              outFile.absolutePath
-            } catch (e: Exception) {
-              xyz.block.trailblaze.util.Console.log("Save Trail failed: ${e.message ?: e::class.simpleName}")
-              null
-            }
-          },
-        )
-      )
-      add(
-        TrailblazeBuiltInTabs.yamlTab(
-          deviceManager = deviceManager,
-          trailblazeSettingsRepo = trailblazeSettingsRepo,
-          currentTrailblazeLlmModelProvider = { getCurrentLlmModel() },
-          yamlRunner = yamlRunner,
-          additionalInstrumentationArgs = additionalInstrumentationArgsProvider,
-        )
-      )
-      add(
-        TrailblazeBuiltInTabs.settingsTab(
-          trailblazeSettingsRepo = trailblazeSettingsRepo,
-          logsRepo = logsRepo,
-          globalSettingsContent = globalSettingsContent,
-          availableModelLists = getCurrentlyAvailableLlmModelLists(),
-          customEnvVarNames = customEnvVarNames,
-          openGoose = openGoose ?: { TrailblazeDesktopUtil.openGoose(port = trailblazeSettingsRepo.portManager.httpPort) },
-          isProviderLocked = isProviderLocked,
-          playwrightInstallState = webBrowserManager?.playwrightInstaller?.installState,
-          onInstallPlaywright = webBrowserManager?.let { { it.playwrightInstaller.installBrowsers() } },
-          onTestLlmConnection = onTestLlmConnection,
-        )
-      )
-    }
-  }
 }
 
 /**

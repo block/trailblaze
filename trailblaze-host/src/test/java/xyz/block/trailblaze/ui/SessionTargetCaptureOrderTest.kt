@@ -28,8 +28,6 @@ import xyz.block.trailblaze.model.DesktopAppRunYamlParams
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
-import xyz.block.trailblaze.ui.composables.DefaultDeviceClassifierIconProvider
-import xyz.block.trailblaze.ui.models.AppIconProvider
 import xyz.block.trailblaze.ui.models.TrailblazeServerState.SavedTrailblazeAppConfig
 
 /**
@@ -120,8 +118,6 @@ class SessionTargetCaptureOrderTest {
         )
       },
       initialAppTargets = setOf(daemonWide, sessionTarget),
-      appIconProvider = AppIconProvider.DefaultAppIconProvider,
-      deviceClassifierIconProvider = DefaultDeviceClassifierIconProvider,
       runYamlLambda = runYamlLambda,
       installedAppIdsProviderBlocking = installedAppIdsOnDevice,
       appVersionInfoProviderBlocking = { _, _ -> null },

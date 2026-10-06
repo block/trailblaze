@@ -40,21 +40,15 @@ const REFERENCES_PROBE = selectors.web({
 });
 
 export interface VerifyArticleStructureArgs {
-  /** Visible text to assert in #firstHeading. */
+  /** Heading text to assert; omit to skip. */
   expectedHeading?: string;
-  /** Scroll-to-bottom + assert References heading (default true). */
+  /** Scroll down and assert a References section. Default true. */
   requireReferences?: boolean;
 }
 
 /**
- * Verify the currently loaded page is a well-formed Wikipedia article. Use
- * this whenever the task is to verify an article's structure or layout —
- * confirm a Wikipedia article rendered, check that an article has body
- * content, confirm it has a References section, or sanity-check that
- * navigation actually landed on an article (not a search-results or
- * disambiguation page). Asserts #firstHeading is visible, the body wrapper
- * is visible, and optionally scrolls to confirm the "References" section
- * is present.
+ * Verify the current page is a rendered Wikipedia article: heading and body
+ * visible, and optionally a References section.
  */
 // Checks are split across branches so individual failures map back to
 // specific structural concerns:

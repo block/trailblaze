@@ -368,6 +368,7 @@ open class BasePlaywrightNativeTest(
      */
     initialArgs: Map<String, String> = emptyMap(),
     onStepProgress: ((stepIndex: Int, totalSteps: Int, stepText: String) -> Unit)? = null,
+    trailSourceUrl: String? = null,
   ): SessionId = withContext(trailLoopDispatcher) {
     // Run the agent loop on its own stable thread (NOT the Playwright thread — see
     // [trailLoopDispatcher]). After callLlm() suspends and resumes, the coroutine resumes
@@ -452,6 +453,7 @@ open class BasePlaywrightNativeTest(
               rawYaml = yaml,
               hasRecordedSteps = trailblazeYaml.hasRecordedSteps(trailItems),
               trailblazeDeviceId = trailblazeDeviceId,
+              trailSourceUrl = trailSourceUrl,
               resolvedInitialMemory = resolvedInitialMemory,
               sensitiveMemoryKeys = sensitiveMemoryKeys,
             ),
@@ -672,8 +674,8 @@ When interpreting objectives, if an objective begins with the word "expect", "ve
 "assert" (case-insensitive), you should use the objective_status tool to report the result.
 
 **NOTE:**
-- Use web_snapshot to refresh your view of the page when needed.
-- After navigation or clicks that change the page, use web_snapshot to see the updated state.
+- The element list is refreshed after every action. After navigation or a click that changes the page,
+  target elements from the new list; earlier IDs may no longer exist.
     """.trimIndent()
   }
 }

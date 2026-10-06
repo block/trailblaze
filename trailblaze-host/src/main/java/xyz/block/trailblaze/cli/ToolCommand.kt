@@ -27,7 +27,7 @@ import java.util.concurrent.Callable
 @Command(
   name = "tool",
   mixinStandardHelpOptions = true,
-  description = ["Run a Trailblaze tool by name (e.g., tap, inputText)"],
+  description = ["Run a Trailblaze tool by name (e.g., tap, type)"],
 )
 class ToolCommand : Callable<Int>, QuietUnlessVerbose {
 

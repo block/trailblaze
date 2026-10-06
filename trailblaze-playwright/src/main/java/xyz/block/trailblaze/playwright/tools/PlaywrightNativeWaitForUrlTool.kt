@@ -21,19 +21,13 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 @TrailblazeToolClass("web_waitForUrl")
 @LLMDescription(
   """
-Wait until the current page's URL matches the given regex pattern. Returns the matched URL.
-Use after web_navigate or web_click when the navigation is async and the next step depends
-on the final URL (e.g. waiting for a post-login redirect to settle).
+Wait until the page URL matches a regex, e.g. for a post-login redirect to settle. Returns the URL.
 """,
 )
 data class PlaywrightNativeWaitForUrlTool(
-  @param:LLMDescription(
-    "Java regex pattern the URL must match (e.g. \".*(dashboard|home|orders).*\").",
-  )
+  @param:LLMDescription("Java regex found anywhere in the URL, e.g. \"/(dashboard|home)\".")
   val pattern: String,
-  @param:LLMDescription(
-    "Maximum time to wait in milliseconds. Defaults to 30000ms.",
-  )
+  @param:LLMDescription("Max milliseconds to wait (default 30000).")
   val timeoutMs: Long = 30_000,
 ) : PlaywrightExecutableTool {
 

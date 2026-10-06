@@ -35,6 +35,7 @@ import xyz.block.trailblaze.yaml.TrailArgBinder
 import xyz.block.trailblaze.yaml.TrailblazeYaml
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * Whether [yaml] carries recorded steps for the device described by [deviceClassifiers], swallowing
@@ -104,8 +105,6 @@ private fun defaultProbeUiAutomationWedge(): Boolean =
  */
 class RunYamlRequestHandler(
   private val backgroundScope: CoroutineScope,
-  private val getCurrentJob: () -> Job?,
-  private val setCurrentJob: (Job?) -> Unit,
   /** Source of the session manager, logger, and [TrailblazeLoggingRule.failureScreenStateProvider]
    *  for capturing failure screenshots. The rule must have its provider wired before the first
    *  request — see the callers of [OnDeviceRpcServer]. */
@@ -152,9 +151,15 @@ class RunYamlRequestHandler(
 
   private val sessionManager = loggingRule.sessionManager
 
-  /** Tracks the session associated with the currently running job, so we can end the correct
-   *  session when a new request arrives and cancels the previous one. */
-  @Volatile private var currentRunningSession: TrailblazeSession? = null
+  /** The current job with its session and outcome, so a new request can tell whether that job is
+   *  still running and which session to end when it interrupts it. */
+  private class CurrentRun(
+    val session: TrailblazeSession,
+    val outcome: CompletableDeferred<Outcome>,
+    val job: Job,
+  )
+
+  private val currentRun = AtomicReference<CurrentRun?>(null)
 
   /**
    * How many requests this handler has entered. A run that has to finish unwinding in the
@@ -264,6 +269,7 @@ class RunYamlRequestHandler(
         trailblazeDeviceInfo = deviceInfo,
         trailblazeDeviceId = request.trailblazeDeviceId,
         rawYaml = request.yaml,
+        trailSourceUrl = request.trailSourceUrl,
       )
     }
 
@@ -291,36 +297,6 @@ class RunYamlRequestHandler(
     }
 
     return try {
-      // Cancel any currently running job before starting a new session.
-      // We use currentRunningSession to track which session belongs to the previous job,
-      // so we end the correct (old) session — not the newly created one.
-      getCurrentJob()?.let { job ->
-        if (job.isActive) {
-          val previousSession = currentRunningSession
-          // Launch cancellation in background to avoid blocking the response
-          backgroundScope.launch {
-            job.cancelAndJoin()
-          }
-          // Send end log for the interrupted (previous) session with cancellation status.
-          //
-          // The ONE terminal path here that deliberately does NOT go through the rule's exporting
-          // wrapper: this session's replacement already emitted its start log above, so the
-          // process-wide span recorder no longer holds only the interrupted run's spans. Exporting
-          // now would file whatever is buffered under the OLD session id and drain it, costing the
-          // run that is just starting its whole trace. An interrupted run losing its spans is the
-          // cheaper of the two losses.
-          if (previousSession != null) {
-            sessionManager.endSession(
-              session = previousSession,
-              endedStatus = SessionStatus.Ended.Cancelled(
-                durationMs = 0L,
-                cancellationMessage = "Session cancelled after the user started a new session.",
-              ),
-            )
-          }
-        }
-      }
-
       val startTimeMs = System.currentTimeMillis()
 
       // Outcome is signalled by the launched block on every terminal path (success, failure,
@@ -469,8 +445,45 @@ class RunYamlRequestHandler(
         }
       }
 
-      currentRunningSession = session
-      setCurrentJob(job)
+      // Replace the current run in one swap, so each run is superseded by exactly one request, and
+      // that request sees the run's own job, session and outcome together. Requests can overlap:
+      // the WebSocket route handles each frame in its own coroutine.
+      currentRun.getAndSet(CurrentRun(session, outcome, job))?.let { previousRun ->
+        // A job reports its outcome as its last act, so one that has reported is only returning
+        // from its launch block. The host sends a session's next tool as soon as the previous
+        // reply lands, which can beat that return while `isActive` still reads true.
+        if (previousRun.job.isActive && !previousRun.outcome.isCompleted) {
+          val previousSession = previousRun.session
+          Console.log(
+            "Cancelling the still-running run of session ${previousSession.sessionId.value}: " +
+              "request '${request.testName}' arrived for session ${session.sessionId.value}",
+          )
+          // Launch cancellation in background to avoid blocking the response
+          backgroundScope.launch {
+            previousRun.job.cancelAndJoin()
+          }
+          // Send end log for the interrupted (previous) session with cancellation status.
+          //
+          // The ONE terminal path here that deliberately does NOT go through the rule's exporting
+          // wrapper: this session's replacement already emitted its start log above, so the
+          // process-wide span recorder no longer holds only the interrupted run's spans. Exporting
+          // now would file whatever is buffered under the OLD session id and drain it, costing the
+          // run that is just starting its whole trace. An interrupted run losing its spans is the
+          // cheaper of the two losses.
+          //
+          // Not when the new request is for the same session: that session carries on in it, and
+          // ending it here would mark a live session terminal.
+          if (previousSession.sessionId != session.sessionId) {
+            sessionManager.endSession(
+              session = previousSession,
+              endedStatus = SessionStatus.Ended.Cancelled(
+                durationMs = 0L,
+                cancellationMessage = "Session cancelled after the user started a new session.",
+              ),
+            )
+          }
+        }
+      }
 
       if (request.awaitCompletion) {
         // The launched job lives in the standalone backgroundScope; tie it to this await so an

@@ -24,10 +24,16 @@ object CliEndpoints {
 
   /** Request daemon shutdown */
   const val SHUTDOWN = "/cli/shutdown"
-  
-  /** Show/bring window to front */
-  const val SHOW_WINDOW = "/cli/show-window"
 
   /** Execute a CLI subcommand in-process on the daemon (IPC fast path). */
   const val EXEC = "/cli/exec"
+
+  /**
+   * [EXEC] under the route the launcher forwards to. A forwarded command runs the DAEMON's code, so
+   * it must only reach a daemon that makes the checks this CLI relies on: today, refusing to run
+   * another copy of a trailmap the caller's workspace has. A daemon that predates them answers 404,
+   * and the launcher runs the command in its own JVM instead, which restarts a stale daemon once
+   * idle. Move to a new route when a forwarded command starts relying on another such check.
+   */
+  const val EXEC_V2 = "/cli/exec/v2"
 }

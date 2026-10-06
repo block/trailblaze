@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="trailblaze-host/src/main/resources/icons/icon.png" alt="Trailblaze" width="120" height="120">
+<img src="docs/images/trailblaze-icon.png" alt="Trailblaze" width="120" height="120">
 
 # Trailblaze
 
@@ -168,11 +168,10 @@ trailmap template with typed custom tools you can copy:
 | [`examples/wikipedia`](examples/wikipedia/) | Web | Canonical web reference — typed tools driving live `en.wikipedia.org`. |
 | [`examples/playwright-native`](examples/playwright-native/) | Web | Smallest end-to-end scripted-tool setup, with a bundled sample app. |
 
-## Desktop app
+## Trailblaze App
 
 ```bash
-trailblaze app         # legacy visual trail authoring and session browsing
-trailblaze app --v2    # Trail Runner workspace and trace viewer
+trailblaze app         # Trailblaze App workspace and trace viewer
 ```
 
 ## Active prototype: Waypoints

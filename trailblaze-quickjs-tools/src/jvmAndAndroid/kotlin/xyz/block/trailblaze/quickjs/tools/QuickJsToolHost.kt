@@ -466,6 +466,31 @@ class QuickJsToolHost internal constructor(
                   host.hostCallThread.set(null)
                 }
               }
+              // `ctx.host.<name>(args)`: a host function, which is plumbing rather than a tool, so it
+              // takes its own binding instead of riding `trailblaze.call`. Same synchronous shape
+              // and the same rule: no exception crosses the native boundary.
+              quickJs.function(HOST_FUNCTION_BINDING) { args ->
+                val name = args.getOrNull(0) as? String
+                  ?: error("$HOST_FUNCTION_BINDING called without a host function name string")
+                val argsJson = args.getOrNull(1) as? String
+                  ?: error("$HOST_FUNCTION_BINDING called without an argsJson string")
+                host.hostCallThread.set(Thread.currentThread())
+                try {
+                  runBlocking {
+                    try {
+                      hostBinding.callHostFunction(name, argsJson)
+                    } catch (e: CancellationException) {
+                      throw e
+                    } catch (e: Throwable) {
+                      hostFunctionErrorEnvelopeJson(
+                        "ctx.host.$name failed: ${e::class.simpleName ?: "Error"}: ${e.message ?: e.toString()}",
+                      )
+                    }
+                  }
+                } finally {
+                  host.hostCallThread.set(null)
+                }
+              }
             }
             // `console.log`/`error`/`warn`/`info` shim — author code from any Node-flavored
             // source expects `console` to exist. Bundles that hit `console.foo(...)` route
@@ -557,6 +582,9 @@ class QuickJsToolHost internal constructor(
     /** Name of the host binding installed for `trailblaze.call(name, args)` round-trips. */
     const val HOST_CALL_BINDING: String = "__trailblazeCall"
 
+    /** Name of the binding installed for `ctx.host.<name>(args)` host function calls. */
+    const val HOST_FUNCTION_BINDING: String = "__trailblazeHost"
+
     /**
      * Default destination for bundle-side `console.*` output: stderr via `System.err.println`.
      * Visible to a developer running a host-embedded engine without any extra wiring; on-device
@@ -586,6 +614,14 @@ data class RegisteredToolSpec(
  */
 fun interface HostBinding {
   suspend fun callFromBundle(name: String, argsJson: String): String
+
+  /**
+   * Runs `ctx.host.<name>(args)` — a host function, not a tool — and returns the
+   * `{"ok":true,"value":…}` / `{"ok":false,"error":"…"}` envelope. Bindings that can't reach host
+   * functions (test doubles) keep this default, which fails the call with a clear message.
+   */
+  suspend fun callHostFunction(name: String, argsJson: String): String =
+    hostFunctionErrorEnvelopeJson("ctx.host.$name: host functions are not available in this runtime")
 }
 
 /**
@@ -678,3 +714,13 @@ private fun hostCallErrorEnvelopeJson(toolName: String, error: Throwable): Strin
   }
   return JSON.encodeToString(JsonObject.serializer(), envelope)
 }
+
+/** The failure half of the host function envelope [HostBinding.callHostFunction] returns. */
+internal fun hostFunctionErrorEnvelopeJson(message: String): String =
+  JSON.encodeToString(
+    JsonObject.serializer(),
+    buildJsonObject {
+      put("ok", false)
+      put("error", message)
+    },
+  )

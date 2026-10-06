@@ -40,10 +40,7 @@ import xyz.block.trailblaze.tracing.TrailblazeTracer
 @LLMDescription("Tap an Android element by selector. Works for both classic Views and composables.")
 data class AndroidTestTapTool(
   val nodeSelector: TrailblazeNodeSelector,
-  @param:LLMDescription(
-    "Hold the press past the long-press timeout instead of tapping, for a gesture the app only " +
-      "reacts to when held — entering an edit mode, opening a context menu.",
-  )
+  @param:LLMDescription("Long press instead of tap, e.g. to open a context menu.")
   val longPress: Boolean = false,
   @param:LLMDescription(RESOLVE_TIMEOUT_DESCRIPTION) val timeoutMs: Long? = null,
 ) : AndroidTestExecutableTool {
@@ -181,8 +178,8 @@ data class AndroidTestAssertNotVisibleTool(
 @Serializable
 @TrailblazeToolClass("androidTest_scrollUntilVisible")
 @LLMDescription(
-  "Scroll until an Android element is on screen, by selector. Use when the element is below the " +
-    "fold — a lazy list does not put off-screen rows in the hierarchy, so waiting never finds them."
+  "Scroll until an Android element is on screen, by selector. Use when it is below the fold: lazy " +
+    "lists omit off-screen rows, so waiting never finds them."
 )
 data class AndroidTestScrollUntilVisibleTool(
   val nodeSelector: TrailblazeNodeSelector,
@@ -645,9 +642,8 @@ private fun TrailblazeNode.isPlaced(): Boolean {
 private const val RESOLVE_TIMEOUT_MS = 8_000L
 
 private const val RESOLVE_TIMEOUT_DESCRIPTION =
-  "How long to wait for the selector to match, in milliseconds. Defaults to 8000. Raise it only " +
-    "for a step that waits on work the app owns and does not declare as idle — a first-run data " +
-    "sync, for example. It costs nothing when the element arrives sooner."
+  "Max ms to wait for the selector to match. Default 8000; raise only for slow app work the app " +
+    "does not report as idle, such as a first-run data sync."
 private const val RESOLVE_POLL_MS = 50L
 
 /** Enough to identify the screen and find a missed element; short of dumping a whole long list. */

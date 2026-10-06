@@ -4,7 +4,7 @@
 
 # `revyl_doubleTap`
 
-Double-tap a UI element on the device screen. Describe the element in natural language. Use for zoom-in gestures on maps, image viewers, or any double-tap UI pattern.
+Double-tap an element, e.g. to zoom a map or image.
 
 ## Source
 

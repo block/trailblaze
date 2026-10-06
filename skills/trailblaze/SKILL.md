@@ -168,7 +168,7 @@ load whichever matches the task at hand.
 ## Companion mode
 
 An agent-attached authoring session: your coding agent is the single writer of a trail folder's
-files, and Trail Runner opens a read-only live view of that folder for the human to watch and
+files, and Trailblaze App opens a read-only live view of that folder for the human to watch and
 steer. Start one with `trailblaze companion start --folder <rel> --title "<what you're building>"
 --agent claude|codex`, then tail what the human does with `trailblaze companion listen <runId>`.
 
@@ -183,16 +183,16 @@ session about it.
 Two events matter most on the listen stream:
 
 - **`recording-saved`** - a recording landed in your folder, whether from a companion save or
-  Trail Runner's own board record flow; it fans out to every companion session watching that
+  Trailblaze App's own board record flow; it fans out to every companion session watching that
   folder, not just the one that wrote it.
-- **`run-started` / `run-finished`** - a human ran a trail from Trail Runner's UI whose path is
+- **`run-started` / `run-finished`** - a human ran a trail from Trailblaze App's UI whose path is
   inside your folder; both carry the run's `sessionId` and your `folder`, and `run-finished` adds
-  `status: succeeded|failed|cancelled`. Only Trail Runner's own run endpoints announce, and only
+  `status: succeeded|failed|cancelled`. Only Trailblaze App's own run endpoints announce, and only
   for primary-root trail/bundle ids - a raw-YAML replay (e.g. via MCP) bypasses that dispatch
   seam and stays silent.
 
 Shared-brain requests: if the human clicks "Review my trail" (or asks for proposed steps) in
-Trail Runner while your listen stream is open, the daemon queues the ask on you instead of calling
+Trailblaze App while your listen stream is open, the daemon queues the ask on you instead of calling
 its own LLM - watch for a `human_action` event titled `agent-request` with `{requestId, kind,
 payload}` (kind `review-trail` or `propose-steps`). Do the review by editing the trail folder's
 files yourself, then settle it with `trailblaze companion respond <runId> --request <id> --status

@@ -10,7 +10,7 @@ package xyz.block.trailblaze.capture.video
  * relationship to how long the session actually took. The report timeline aligns video playback
  * time to wall-clock event timestamps, so that mismatch makes the scrubber drift.
  *
- * This object turns `(frame arrival timestamps, session start, session end)` into an
+ * This object turns `(frame capture timestamps, session start, session end)` into an
  * [ffmpeg concat-demuxer](https://ffmpeg.org/ffmpeg-formats.html#concat-1) script where each
  * frame's `duration` is exactly how long that frame was on screen. Feeding that script through a
  * constant-frame-rate resample (`-vf fps=N`) yields an MP4 whose duration equals the session
@@ -22,7 +22,11 @@ package xyz.block.trailblaze.capture.video
  */
 internal object ScreencastTimeline {
 
-  /** One captured frame: the JPEG already written to [path], and when it arrived (host epoch ms). */
+  /**
+   * One captured frame: the JPEG already written to [path], and when the screen showed it (host
+   * epoch ms). For a web screencast that is the browser's swap time, which can precede the
+   * recording's start; the timeline places such a frame at 0.
+   */
   internal data class Frame(val path: String, val capturedAtMs: Long)
 
   /**

@@ -5,6 +5,8 @@ import com.google.zxing.LuminanceSource
 import com.google.zxing.NotFoundException
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.Serializable
+import xyz.block.trailblaze.api.ScreenState
+import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.ReadOnlyTrailblazeTool
@@ -28,26 +30,20 @@ import xyz.block.trailblaze.util.Console
 @Serializable
 @TrailblazeToolClass("readBarcodeFromScreen")
 @LLMDescription(
-  """
-Scans the current screen for a barcode or QR code and decodes it, storing the decoded text in
-memory under the given variable name so later steps can use it.
-Reads QR Code, Data Matrix, Aztec and PDF417. Set includeLinearFormats to also read the striped
-retail symbologies (UPC, EAN, Code 128/39/93, ITF, Codabar).
-Fails if there is no readable barcode on screen, so it doubles as an assertion that one is shown.
-  """,
+  "Decode a QR, Data Matrix, Aztec or PDF417 code on screen and store its text in memory under " +
+    "`variable`. Fails if no readable code is shown, so it also works as an assertion.",
 )
 data class ReadBarcodeFromScreenTrailblazeTool(
-  @param:LLMDescription(
-    "The memory variable name to store the decoded barcode text under, e.g. \"barcodeValue\".",
-  )
+  @param:LLMDescription("Memory variable to store the decoded text under, e.g. \"barcodeValue\".")
   val variable: String,
+  /**
+   * Off by default: linear readers look for runs of light and dark bars, which ordinary UI and
+   * image compression produce by accident, so on a full screen they can return a confidently wrong
+   * number.
+   */
   @param:LLMDescription(
-    """
-Also scan for striped retail barcodes (UPC, EAN, Code 128/39/93, ITF, Codabar). Off by default:
-those readers look for runs of light and dark bars, which ordinary UI and image compression
-produce by accident, so on a full screen they can return a confidently wrong number. Turn this on
-when you know a striped barcode is what is on screen.
-    """,
+    "Also read striped barcodes (UPC, EAN, Code 128/39/93, ITF, Codabar). Off by default because " +
+      "ordinary UI can cause false reads; enable only when one is on screen.",
   )
   val includeLinearFormats: Boolean = false,
 ) : ExecutableTrailblazeTool, ReadOnlyTrailblazeTool {
@@ -82,6 +78,8 @@ when you know a striped barcode is what is on screen.
         command = this,
       )
     }
+
+    logScannedScreen(toolExecutionContext, screenState)
 
     val formats = BarcodeDecoder.TWO_DIMENSIONAL_FORMATS +
       if (includeLinearFormats) BarcodeDecoder.LINEAR_FORMATS else emptyList()
@@ -153,6 +151,51 @@ when you know a striped barcode is what is on screen.
         stackTrace = e.stackTraceToString(),
       )
     }
+  }
+
+  /**
+   * Puts the exact screenshot this read scanned into the session log, so the report shows the code
+   * that was read. The step's other screenshots can predate it: a code drawn a moment after the
+   * screen's text appears is missing from the assertion that waited for that text.
+   *
+   * Logged before decoding, on every outcome: a failed read is when the scanned image matters
+   * most, so the name states what was attempted, not that it worked.
+   *
+   * The display name carries the variable, never the value. The image itself is not redacted — no
+   * screenshot is — so a code read into a secret variable is visible here, as it already is in
+   * every other screenshot of that screen.
+   *
+   * A snapshot log carries the view hierarchy, which `AxeScreenState` throws on when
+   * `axe describe-ui` failed. The screenshot is captured separately and is the evidence here, so
+   * it is logged with an empty hierarchy instead of not at all.
+   */
+  private fun logScannedScreen(context: TrailblazeToolExecutionContext, screenState: ScreenState) {
+    val loggable = try {
+      screenState.viewHierarchy
+      screenState
+    } catch (cancellation: CancellationException) {
+      throw cancellation
+    } catch (e: Exception) {
+      WithoutViewHierarchy(screenState)
+    }
+    try {
+      context.trailblazeLogger.logSnapshot(
+        session = context.sessionProvider.invoke(),
+        screenState = loggable,
+        displayName = "Screen scanned for $variable",
+        traceId = context.traceId,
+      )
+    } catch (cancellation: CancellationException) {
+      throw cancellation
+    } catch (e: Exception) {
+      // Evidence, not behavior: a log write that fails must not fail the read.
+      Console.log("readBarcodeFromScreen: could not log the scanned screenshot (${e.message})")
+    }
+  }
+
+  /** [delegate] with an empty view hierarchy in place of one that could not be read. */
+  private class WithoutViewHierarchy(delegate: ScreenState) : ScreenState by delegate {
+    override val viewHierarchy = ViewHierarchyTreeNode()
   }
 
   /**

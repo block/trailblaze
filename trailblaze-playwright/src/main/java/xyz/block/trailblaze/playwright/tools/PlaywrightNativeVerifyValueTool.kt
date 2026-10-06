@@ -14,29 +14,18 @@ import xyz.block.trailblaze.yaml.serializers.CaseInsensitiveEnumSerializer
 
 @Serializable
 @TrailblazeToolClass("web_verifyValue", isVerification = true)
-@LLMDescription(
-  """
-Verify the value of an element on the page. Supports checking:
-- TEXT: the text content of any element
-- VALUE: the input value of a form field (input, textarea, select)
-- ATTRIBUTE: the value of an HTML attribute
-""",
-)
+@LLMDescription("Assert an element's text, form-field value, or HTML attribute value.")
 data class PlaywrightNativeVerifyValueTool(
-  @param:LLMDescription(
-    "Element ID (e.g., 'e5'), ARIA descriptor (e.g., 'textbox \"Email\"'), " +
-      "or CSS selector with css= prefix (e.g., 'css=#email-input').",
-  )
+  @param:LLMDescription("Element ID ('e5'), ARIA descriptor ('textbox \"Email\"'), or 'css=<selector>'.")
   val ref: String? = null,
   @param:LLMDescription(
-    "What property of the element to verify. " +
-      "TEXT checks visible text content, VALUE checks form field input values, " +
-      "ATTRIBUTE checks a specific HTML attribute.",
+    "TEXT: element text contains expected (falls back to the field value). " +
+      "VALUE: input/textarea/select value equals it. ATTRIBUTE: the named attribute equals it.",
   )
   val type: VerifyValueType = VerifyValueType.TEXT,
-  @param:LLMDescription("The expected value to verify against.")
+  @param:LLMDescription("Expected value.")
   val expected: String,
-  @param:LLMDescription("The attribute name to check (required when type is ATTRIBUTE).")
+  @param:LLMDescription("Attribute name, when type is ATTRIBUTE.")
   val attribute: String = "",
   override val reasoning: String? = null,
   val nodeSelector: TrailblazeNodeSelector? = null,

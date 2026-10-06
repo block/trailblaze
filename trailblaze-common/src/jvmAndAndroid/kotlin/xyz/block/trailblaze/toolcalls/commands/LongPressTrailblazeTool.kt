@@ -20,14 +20,12 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 @Serializable
 @TrailblazeToolClass(name = "longPress", isRecordable = false)
 @LLMDescription(
-  "Press and hold (long press / tap-and-hold) an element by its ref ID from the snapshot. " +
-    "Use the short hash ref shown in square brackets (e.g., y778 from [y778] \"Profile photo\"). " +
-    "Use this instead of `tap` whenever the interaction needs a hold: opening a context menu, " +
-    "revealing reorder or drag handles, hold-to-delete confirmations, entering multi-select " +
-    "mode, or any press-and-hold gesture. Refs are stable across captures of the same screen.",
+  "Press and hold an element by its snapshot ref (e.g. y778 from [y778] \"Profile photo\"). Use " +
+    "instead of `tap` when the interaction needs a hold, e.g. a context menu, drag handles, or " +
+    "multi-select.",
 )
 data class LongPressTrailblazeTool(
-  @param:LLMDescription("The element ref from the snapshot (e.g., 'y778')")
+  @param:LLMDescription("Element ref from the snapshot, e.g. 'y778'.")
   val ref: String,
   override val reasoning: String? = null,
 ) : DelegatingTrailblazeTool, ReasoningTrailblazeTool {

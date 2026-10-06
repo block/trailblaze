@@ -79,12 +79,12 @@ abstract class AndroidTestTrailblazeTest {
   }
 
   /** Runs [trailAssetPath], or the trail asset named by this test's class + method when null. */
-  fun runFromAsset() {
+  fun runFromAsset(trailSourceUrl: String? = null) {
     val explicitPath = trailAssetPath
     if (explicitPath == null) {
-      trailblazeRule.runFromAsset()
+      trailblazeRule.runFromAsset(trailSourceUrl = trailSourceUrl)
     } else {
-      trailblazeRule.runFromAsset(explicitPath)
+      trailblazeRule.runFromAsset(explicitPath, trailSourceUrl = trailSourceUrl)
     }
   }
 

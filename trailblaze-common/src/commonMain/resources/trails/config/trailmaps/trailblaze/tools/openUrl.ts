@@ -1,5 +1,10 @@
 import { trailblaze } from "@trailblaze/scripting";
 
+interface OpenUrlInput {
+  /** The URL to open that starts with https */
+  url: string;
+}
+
 /**
  * Opens the browser to the provided URL.
  *
@@ -22,13 +27,8 @@ import { trailblaze } from "@trailblaze/scripting";
  * URLs, so interpolating here would be a no-op. Add `ctx.memory.interpolate(input.url)` if a trail
  * ever needs a tokenized URL.
  */
-interface OpenUrlInput {
-  /** The URL to open that starts with https. */
-  url: string;
-}
-
 export const openUrl = trailblaze.tool<OpenUrlInput>(
-  { supportedPlatforms: ["android", "ios"] },
+  { description: "Opens the browser to the provided url.", supportedPlatforms: ["android", "ios"] },
   async (input, ctx) => {
     const url = String(input.url ?? "").trim();
     if (!url) {

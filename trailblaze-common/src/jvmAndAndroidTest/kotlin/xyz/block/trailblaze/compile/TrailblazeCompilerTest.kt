@@ -240,6 +240,168 @@ class TrailblazeCompilerTest {
   }
 
   @Test
+  fun `compile errors on unknown tool reference in always_shown_tools`() {
+    // A misspelled always-shown tool matches nothing at runtime, so the tool it meant stays
+    // hidden on turns where tools are hidden, with no message.
+    val trailmapsDir = File(workDir, "trailmaps").apply { mkdirs() }
+    File(trailmapsDir, "myapp").mkdirs()
+    File(trailmapsDir, "myapp/trailmap.yaml").writeText(
+      """
+      id: myapp
+      target:
+        display_name: My App
+        platforms:
+          ios:
+            app_ids:
+              - com.example.myapp
+            always_shown_tools:
+              - app_swpie
+      """.trimIndent(),
+    )
+
+    val result = TrailblazeCompiler.compile(
+      trailmapsDir = trailmapsDir,
+      outputDir = File(workDir, "out"),
+      referenceSource = staticReferenceSource(tools = setOf("app_swipe")),
+    )
+
+    assertTrue(!result.isSuccess, "Expected compile to fail on unknown always-shown tool")
+    assertTrue(
+      result.errors.any { "app_swpie" in it && "always_shown_tools" in it },
+      "Expected error to name the unknown always-shown tool; got: ${result.errors}",
+    )
+  }
+
+  @Test
+  fun `compile accepts the target's own scripted tool in always_shown_tools`() {
+    // The loader hoists a scripted tool out of `platforms.<p>.tools:` before validation, so it
+    // is never in the YAML tool pool. Rejecting it here stopped the daemon starting at all.
+    val trailmapsDir = File(workDir, "trailmaps").apply { mkdirs() }
+    val appDir = File(trailmapsDir, "myapp").apply { mkdirs() }
+    File(appDir, "trailmap.yaml").writeText(
+      """
+      id: myapp
+      target:
+        display_name: My App
+        platforms:
+          ios:
+            app_ids:
+              - com.example.myapp
+            tools:
+              - app_swipe
+            always_shown_tools:
+              - app_swipe
+      """.trimIndent(),
+    )
+    writeScriptedTool(appDir, name = "app_swipe", platforms = "[ios]")
+
+    val result = TrailblazeCompiler.compile(
+      trailmapsDir = trailmapsDir,
+      outputDir = File(workDir, "out"),
+      referenceSource = staticReferenceSource(),
+    )
+
+    assertTrue(result.isSuccess, "Expected a scripted always-shown tool to resolve, got: ${result.errors}")
+  }
+
+  @Test
+  fun `compile accepts a dependency's exported scripted tool in always_shown_tools`() {
+    val trailmapsDir = File(workDir, "trailmaps").apply { mkdirs() }
+    val packDir = File(trailmapsDir, "pack").apply { mkdirs() }
+    File(packDir, "trailmap.yaml").writeText(
+      """
+      id: pack
+      target:
+        display_name: Pack
+        tools:
+          - pack_swipe
+      exports:
+        - pack_swipe
+      """.trimIndent(),
+    )
+    writeScriptedTool(packDir, name = "pack_swipe", platforms = "[android, ios]")
+    File(trailmapsDir, "myapp").mkdirs()
+    File(trailmapsDir, "myapp/trailmap.yaml").writeText(
+      """
+      id: myapp
+      dependencies:
+        - pack
+      target:
+        display_name: My App
+        platforms:
+          ios:
+            app_ids:
+              - com.example.myapp
+            always_shown_tools:
+              - pack_swipe
+      """.trimIndent(),
+    )
+
+    val result = TrailblazeCompiler.compile(
+      trailmapsDir = trailmapsDir,
+      outputDir = File(workDir, "out"),
+      referenceSource = staticReferenceSource(),
+    )
+
+    assertTrue(result.isSuccess, "Expected an exported scripted always-shown tool to resolve, got: ${result.errors}")
+  }
+
+  @Test
+  fun `compile accepts a framework scripted tool in always_shown_tools`() {
+    // A toolset delivers a scripted tool by its static `name:` (`core_interaction` lists
+    // `openUrl`), so the tool reaches a target without passing through its `tools:`.
+    val trailmapsDir = File(workDir, "trailmaps").apply { mkdirs() }
+    File(trailmapsDir, "myapp").mkdirs()
+    File(trailmapsDir, "myapp/trailmap.yaml").writeText(
+      """
+      id: myapp
+      target:
+        display_name: My App
+        platforms:
+          ios:
+            app_ids:
+              - com.example.myapp
+            always_shown_tools:
+              - open_link
+      """.trimIndent(),
+    )
+    val frameworkSource = object : ConfigResourceSource {
+      override fun discoverAndLoad(directoryPath: String, suffix: String): Map<String, String> =
+        emptyMap()
+
+      override fun discoverAndLoadRecursive(directoryPath: String, suffix: String): Map<String, String> =
+        mapOf(
+          "framework/tools/open_link.yaml" to """
+            script: ./open_link.ts
+            name: open_link
+            description: Opens a link.
+          """.trimIndent(),
+        ).filterKeys { it.endsWith(suffix) }
+    }
+
+    val result = TrailblazeCompiler.compile(
+      trailmapsDir = trailmapsDir,
+      outputDir = File(workDir, "out"),
+      referenceSource = frameworkSource,
+    )
+
+    assertTrue(result.isSuccess, "Expected a framework scripted always-shown tool to resolve, got: ${result.errors}")
+  }
+
+  private fun writeScriptedTool(trailmapDir: File, name: String, platforms: String) {
+    val toolsDir = File(trailmapDir, "tools").apply { mkdirs() }
+    File(toolsDir, "$name.yaml").writeText(
+      """
+      script: ./$name.js
+      name: $name
+      description: Scripted test tool.
+      supportedPlatforms: $platforms
+      """.trimIndent(),
+    )
+    File(toolsDir, "$name.js").writeText("export default async () => \"ok\";\n")
+  }
+
+  @Test
   fun `compile errors on unknown driver`() {
     // Drivers are an enum-defined set (DriverTypeKey.knownKeys), not classpath-discovered.
     // A typo like `playwright-nativ` would resolve to no drivers at runtime and silently

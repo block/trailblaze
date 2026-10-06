@@ -96,6 +96,7 @@ Targets are declared in `targets/*.yaml`. Each target has an `id`, a `display_na
 | `platforms.<platform>.tool_sets` | Toolset ids enabled for that platform section. |
 | `platforms.<platform>.tools` | Extra tool names added directly for that platform section. |
 | `platforms.<platform>.excluded_tools` | Tool names explicitly removed for that platform section after `tool_sets` and `tools` are merged in. Use when a target ships its own implementation of a default tool (e.g. a `swipe` replacement that needs target-specific gestures) and wants the LLM to see only the custom variant. Names match the `@TrailblazeToolClass` registration string. |
+| `platforms.<platform>.always_shown_tools` | Tool names the LLM is always shown on that platform, even on a turn where the decision engine hides the tools it judges the move won't need (`TRAILBLAZE_DECISION_MOVES_HIDE_TOOLS`). Use for an app's own tools a step needs often, such as one that replaces an excluded default tool. |
 | `platforms.<platform>.drivers` | Narrow the section to specific drivers instead of the platform shorthand. |
 | `platforms.<platform>.min_build_version` | Optional minimum build gate. |
 
@@ -143,6 +144,9 @@ target:
     # is the pure-YAML `loading/wait-for-content` trail, which uses only built-in tools.
     - sampleapp_waitForText
     - sampleapp_launchToLoadedContent
+    # Inverted not-visible check behind the agent eval `evals/multiline-not-visible.trail.yaml`,
+    # which needs an LLM and is run by hand.
+    - sampleapp_assertTextStillShown
 ```
 
 ## Authoring Toolsets
@@ -177,7 +181,7 @@ Toolsets are declared in `trailmaps/<id>/toolsets/*.yaml`. They are pure YAML gr
 | `android_primitives` | Yes | `android-ondevice-accessibility`, `android-test` | 9 |
 | `compose_core` | No | `compose` | 6 |
 | `compose_verification` | No | `compose` | 3 |
-| `core_interaction` | Yes | `android-ondevice-accessibility`, `ios-axe`, `ios-host` | 22 |
+| `core_interaction` | Yes | `android-ondevice-accessibility`, `ios-axe`, `ios-host` | 23 |
 | `ios_primitives` | Yes | `ios-axe`, `ios-host` | 2 |
 | `memory` | No | `all drivers` | 9 |
 | `meta` | Yes | `all drivers` | 1 |
@@ -188,7 +192,7 @@ Toolsets are declared in `trailmaps/<id>/toolsets/*.yaml`. They are pure YAML gr
 | `revyl_core` | No | `revyl-android`, `revyl-ios` | 7 |
 | `revyl_verification` | No | `revyl-android`, `revyl-ios` | 1 |
 | `verification` | No | `android-ondevice-accessibility`, `ios-axe`, `ios-host` | 3 |
-| `web_core` | No | `playwright-electron`, `playwright-native` | 16 |
+| `web_core` | No | `playwright-electron`, `playwright-native` | 17 |
 | `web_framework` | Yes | `playwright-electron`, `playwright-native` | 5 |
 | `web_verification` | No | `playwright-electron`, `playwright-native` | 7 |
 

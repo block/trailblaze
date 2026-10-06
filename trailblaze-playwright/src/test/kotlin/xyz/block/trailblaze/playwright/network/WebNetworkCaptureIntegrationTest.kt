@@ -3,9 +3,11 @@ package xyz.block.trailblaze.playwright.network
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
+import xyz.block.trailblaze.events.SessionEvents
 import xyz.block.trailblaze.network.InflightRequestTracker
 import java.io.File
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertSame
@@ -134,6 +136,75 @@ class WebNetworkCaptureIntegrationTest {
     assertTrue(lines[1].contains("***REDACTED***"), "set-cookie value should be the placeholder: ${lines[1]}")
     // The actual cookie value must not appear in the persisted line.
     assertFalse(lines[1].contains("sid=1"), "cookie value must not be persisted")
+  }
+
+  @Test
+  fun `a device-labelled capture writes that device's events stream and no unattributed log`() {
+    val ctx = PlaywrightTestProxies.FakeBrowserContext()
+    val dir = tmp.newFolder()
+
+    WebNetworkCapture.start(ctx.proxy, "s", dir, deviceLabel = "dashboard")
+    val req = PlaywrightTestProxies.fakeRequest(
+      method = "GET",
+      url = "https://app.example.com/dashboard/sales",
+      headers = emptyMap(),
+    )
+    ctx.fireRequest(req)
+    ctx.fireResponse(PlaywrightTestProxies.fakeResponse(req, status = 200, body = ByteArray(0)))
+    WebNetworkCapture.stop(ctx.proxy)
+
+    val stream = File(dir, "events/network.dashboard.ndjson")
+    // The name the report's Streams menu shows, and the suffix it attributes the stream by.
+    assertEquals("network.dashboard", SessionEvents.parseFileName(stream.name))
+    val lines = stream.readLines().filter { it.isNotBlank() }
+    assertEquals(2, lines.size)
+    assertTrue(lines[0].contains("/dashboard/sales"), "first line should be the request: ${lines[0]}")
+    assertFalse(File(dir, "network.ndjson").exists(), "a labelled device must not write the unlabelled log")
+  }
+
+  @Test
+  fun `restarting the same session under another label moves capture to the new device's stream`() {
+    val ctx = PlaywrightTestProxies.FakeBrowserContext()
+    val dir = tmp.newFolder()
+    val unlabelled = WebNetworkCapture.start(ctx.proxy, "s", dir)
+    val labelled = WebNetworkCapture.start(ctx.proxy, "s", dir, deviceLabel = "dashboard")
+    assertFalse(unlabelled.isActive())
+    assertEquals(1, ctx.requestListeners.size)
+    assertEquals(File(dir, "events/network.dashboard.ndjson"), labelled.ndjsonPath())
+    WebNetworkCapture.stop(ctx.proxy)
+  }
+
+  @Test
+  fun `a device named json is refused because its stream would read back unattributed`() {
+    val ctx = PlaywrightTestProxies.FakeBrowserContext()
+    assertFailsWith<IllegalArgumentException> {
+      WebNetworkCapture.start(ctx.proxy, "s", tmp.newFolder(), deviceLabel = "json")
+    }
+    assertEquals(0, ctx.requestListeners.size)
+  }
+
+  @Test
+  fun `a device name ending in json is refused because its stream would read back as another`() {
+    val ctx = PlaywrightTestProxies.FakeBrowserContext()
+    // `network.dashboard.json.ndjson` reads back as `network.dashboard`.
+    assertFailsWith<IllegalArgumentException> {
+      WebNetworkCapture.start(ctx.proxy, "s", tmp.newFolder(), deviceLabel = "dashboard.json")
+    }
+    assertEquals(0, ctx.requestListeners.size)
+  }
+
+  @Test
+  fun `stopping a capture the browser has rolled past leaves the newer session capturing`() {
+    val ctx = PlaywrightTestProxies.FakeBrowserContext()
+    val older = WebNetworkCapture.start(ctx.proxy, "session-a", tmp.newFolder(), deviceLabel = "web")
+    val newer = WebNetworkCapture.start(ctx.proxy, "session-b", tmp.newFolder(), deviceLabel = "web")
+
+    assertFalse(WebNetworkCapture.stop(ctx.proxy, older))
+
+    assertTrue(newer.isActive())
+    assertEquals(1, ctx.requestListeners.size)
+    assertTrue(WebNetworkCapture.stop(ctx.proxy, newer))
+    assertEquals(0, ctx.requestListeners.size)
   }
 
   @Test

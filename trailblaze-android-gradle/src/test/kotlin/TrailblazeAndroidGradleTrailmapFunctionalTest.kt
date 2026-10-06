@@ -1,4 +1,5 @@
 import java.io.File
+import java.nio.file.Files
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -64,11 +65,12 @@ class TrailblazeAndroidGradleTrailmapFunctionalTest {
 
     val result = gradleRunner(projectDir, "dumpRegistered").build()
     assertEquals(TaskOutcome.SUCCESS, result.task(":dumpRegistered")?.outcome)
-    // Discovery is alphabetical; bundle + stage tasks are registered per tool.
+    // Discovery is alphabetical; bundle + stage tasks are registered per tool, and one tool-defs
+    // stage per trailmap because neither tool has a descriptor YAML.
     assertTrue("expected the per-tool bundle + stage tasks to be registered: ${result.output}") {
       result.output.contains(
         "REGISTERED=bundleTrailmapPBuzzToolBundle,bundleTrailmapPFizzToolBundle," +
-          "stageTrailmapPBuzzToolBundleAsset,stageTrailmapPFizzToolBundleAsset"
+          "stageTrailmapPBuzzToolBundleAsset,stageTrailmapPFizzToolBundleAsset,stageTrailmapPToolDefs\n"
       )
     }
   }
@@ -384,18 +386,193 @@ class TrailblazeAndroidGradleTrailmapFunctionalTest {
     assertTrue("expected bundle+stage tasks for both trailmaps: ${result.output}") {
       result.output.contains(
         "REGISTERED=bundleTrailmapAlphaFizzToolBundle,bundleTrailmapBetaBuzzToolBundle," +
-          "stageTrailmapAlphaFizzToolBundleAsset,stageTrailmapBetaBuzzToolBundleAsset"
+          "stageTrailmapAlphaFizzToolBundleAsset,stageTrailmapAlphaToolDefs," +
+          "stageTrailmapBetaBuzzToolBundleAsset,stageTrailmapBetaToolDefs\n"
       )
     }
   }
 
+  @Test
+  fun `a tool with no descriptor YAML has its definitions staged beside its bundle`() {
+    assumeToolDefsExtractable()
+    val projectDir =
+      newFixtureProject(
+        androidFixtureBuildScript(
+          """
+        trailblazeAndroid {
+          sdkDir.set(file("${frameworkSdkDir.absolutePath}"))
+          trailmap {
+            id = "p"
+            toolsDir = file("tools")
+          }
+        }
+        """
+        ),
+        tempDirs,
+      )
+    writeTool(projectDir, "onlyTool.ts", ANALYZABLE_TOOL_SOURCE)
+
+    val result = gradleRunner(projectDir, "stageTrailmapPToolDefs").build()
+    assertEquals(TaskOutcome.SUCCESS, result.task(":stageTrailmapPToolDefs")?.outcome)
+
+    val staged = File(projectDir, "$STAGING_ROOT/trails/config/trailmaps/p/tools/onlyTool.tooldefs.json")
+    assertTrue("expected staged tool definitions at $staged") { staged.isFile }
+    val text = staged.readText()
+    // What a device reads in place of a descriptor: the name, the `<I>` schema and the spec gates.
+    assertTrue("missing tool name: $text") { text.contains("\"name\": \"onlyTool\"") }
+    assertTrue("missing input property: $text") { text.contains("\"message\"") }
+    assertTrue("missing spec gate: $text") { text.contains("\"supportedPlatforms\"") }
+    // Machine-specific; would make the asset differ per checkout.
+    assertTrue("leaked sourcePath: $text") { !text.contains("sourcePath") }
+  }
+
+  @Test
+  fun `tools with a descriptor YAML and helper modules get no definitions file`() {
+    assumeToolDefsExtractable()
+    val projectDir =
+      newFixtureProject(
+        androidFixtureBuildScript(
+          """
+        trailblazeAndroid {
+          sdkDir.set(file("${frameworkSdkDir.absolutePath}"))
+          trailmap {
+            id = "p"
+            toolsDir = file("tools")
+          }
+        }
+        """
+        ),
+        tempDirs,
+      )
+    writeTool(projectDir, "onlyTool.ts", ANALYZABLE_TOOL_SOURCE)
+    // Declared by its YAML, which wins at runtime, so a generated file would be dead weight.
+    writeTool(projectDir, "described.ts", ANALYZABLE_TOOL_SOURCE.replace("onlyTool", "described"))
+    writeTool(projectDir, "described.yaml", "script: ./described.ts\nname: described\n")
+    // Imported by tools, not a tool itself.
+    writeTool(projectDir, "shared.ts", "export const GREETING = \"hi\";\n")
+
+    val result = gradleRunner(projectDir, "stageTrailmapPToolDefs").build()
+    assertEquals(TaskOutcome.SUCCESS, result.task(":stageTrailmapPToolDefs")?.outcome)
+
+    val stagedTools = File(projectDir, "$STAGING_ROOT/trails/config/trailmaps/p/tools")
+    assertEquals(
+      listOf("onlyTool.tooldefs.json"),
+      stagedTools.listFiles { f -> f.name.endsWith(".tooldefs.json") }.orEmpty().map { it.name }.sorted(),
+    )
+  }
+
+  @Test
+  fun `restaging removes the definitions of a tool that was deleted or gained a descriptor YAML`() {
+    assumeToolDefsExtractable()
+    val projectDir =
+      newFixtureProject(
+        androidFixtureBuildScript(
+          """
+        trailblazeAndroid {
+          sdkDir.set(file("${frameworkSdkDir.absolutePath}"))
+          trailmap {
+            id = "p"
+            toolsDir = file("tools")
+          }
+        }
+        """
+        ),
+        tempDirs,
+      )
+    writeTool(projectDir, "onlyTool.ts", ANALYZABLE_TOOL_SOURCE)
+    writeTool(projectDir, "other.ts", ANALYZABLE_TOOL_SOURCE.replace("onlyTool", "other"))
+    val stagedTools = File(projectDir, "$STAGING_ROOT/trails/config/trailmaps/p/tools")
+    fun stagedDefs() =
+      stagedTools.listFiles { f -> f.name.endsWith(".tooldefs.json") }.orEmpty().map { it.name }.sorted()
+
+    gradleRunner(projectDir, "stageTrailmapPToolDefs").build()
+    assertEquals(listOf("onlyTool.tooldefs.json", "other.tooldefs.json"), stagedDefs())
+
+    // Without a clean: one tool deleted, the other now declared by a YAML. Neither may stay
+    // discoverable from a leftover file, even though no descriptor-less tool remains to extract.
+    File(projectDir, "tools/onlyTool.ts").delete()
+    writeTool(projectDir, "other.yaml", "script: ./other.ts\nname: other\n")
+    gradleRunner(projectDir, "stageTrailmapPToolDefs").build()
+    assertEquals(emptyList(), stagedDefs())
+  }
+
+  @Test
+  fun `a change to the analyzer's dependencies reruns extraction`() {
+    assumeToolDefsExtractable()
+    // The real SDK, except for a lockfile this test may edit.
+    val sdk = File.createTempFile("trailblaze-sdk", "").apply { delete(); mkdirs() }
+    frameworkSdkDir.listFiles().orEmpty().forEach { entry ->
+      val link = File(sdk, entry.name)
+      if (entry.name == "bun.lock") entry.copyTo(link) else Files.createSymbolicLink(link.toPath(), entry.toPath())
+    }
+    try {
+      assertExtractionRerunsOnLockfileChange(sdk)
+    } finally {
+      // Unlink before deleting: `deleteRecursively` follows symlinks into the real SDK.
+      sdk.listFiles().orEmpty().forEach { Files.deleteIfExists(it.toPath()) }
+      sdk.delete()
+    }
+  }
+
+  private fun assertExtractionRerunsOnLockfileChange(sdk: File) {
+    val projectDir =
+      newFixtureProject(
+        androidFixtureBuildScript(
+          """
+        trailblazeAndroid {
+          sdkDir.set(file("${sdk.absolutePath}"))
+          trailmap {
+            id = "p"
+            toolsDir = file("tools")
+          }
+        }
+        """
+        ),
+        tempDirs,
+      )
+    writeTool(projectDir, "onlyTool.ts", ANALYZABLE_TOOL_SOURCE)
+
+    gradleRunner(projectDir, "stageTrailmapPToolDefs").build()
+    assertEquals(
+      TaskOutcome.UP_TO_DATE,
+      gradleRunner(projectDir, "stageTrailmapPToolDefs").build().task(":extractTrailmapPToolDefs")?.outcome,
+    )
+
+    // No tool edited; only the analyzer's resolved dependencies changed.
+    File(sdk, "bun.lock").appendText("\n")
+    assertEquals(
+      TaskOutcome.SUCCESS,
+      gradleRunner(projectDir, "stageTrailmapPToolDefs").build().task(":extractTrailmapPToolDefs")?.outcome,
+    )
+  }
+
   // ---- Fixtures ----
+
+  /**
+   * Extraction runs the analyzer under `bun` and needs the SDK's `typescript` dependency installed.
+   * Skips locally without them, but fails in CI: CI installs both before this check, so a
+   * skip there would report green over extraction coverage that never ran.
+   */
+  private fun assumeToolDefsExtractable() {
+    val typescript = File(frameworkSdkDir, "node_modules/typescript")
+    val bun = runCatching { ProcessBuilder("bun", "--version").start().waitFor() == 0 }.getOrDefault(false)
+    val missing = listOfNotNull(
+      "typescript not installed at ${typescript.absolutePath}".takeUnless { typescript.isDirectory },
+      "`bun` not on PATH".takeUnless { bun },
+    )
+    if (System.getenv("CI") == "true") {
+      assertEquals(emptyList(), missing, "tool-definition extraction can't run on this CI agent")
+    }
+    assumeTrue("Skipping tool-definition extraction test: ${missing.joinToString()}", missing.isEmpty())
+  }
 
   private fun writeTool(projectDir: File, fileName: String, contents: String) {
     File(File(projectDir, "tools").apply { mkdirs() }, fileName).writeText(contents)
   }
 
   companion object {
+    private const val STAGING_ROOT = "build/intermediates/trailblaze/trailmap-tool-bundle-assets"
+
     /**
      * A minimal in-process scripted-tool source. Has the inline `export const … = trailblaze.tool<…>(…)`
      * marker `inProcessToolSources` requires for descriptor-less discovery, with no sibling YAML.
@@ -403,6 +580,19 @@ class TrailblazeAndroidGradleTrailmapFunctionalTest {
     private val TYPED_TOOL_SOURCE: String =
       """
       export const onlyTool = trailblaze.tool<{ message: string }>(
+        { supportedPlatforms: ["android"] },
+        async (input) => "ok",
+      )
+    """
+        .trimIndent()
+
+    /** [TYPED_TOOL_SOURCE] with the named input interface the analyzer requires to read a schema. */
+    private val ANALYZABLE_TOOL_SOURCE: String =
+      """
+      interface OnlyToolInput {
+        message: string
+      }
+      export const onlyTool = trailblaze.tool<OnlyToolInput>(
         { supportedPlatforms: ["android"] },
         async (input) => "ok",
       )

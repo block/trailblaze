@@ -24,6 +24,7 @@ import java.io.File
 import xyz.block.trailblaze.exception.TrailblazeException
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
 import xyz.block.trailblaze.host.HostMaestroTrailblazeAgent
+import xyz.block.trailblaze.host.HostMigrationCapture
 import xyz.block.trailblaze.host.HostYamlRunResult
 import xyz.block.trailblaze.host.devices.DeviceLocaleConfigurator
 import xyz.block.trailblaze.host.MaestroHostRunnerImpl
@@ -457,11 +458,43 @@ abstract class BaseHostTrailblazeTest(
       sessionProvider = { loggingRule.session ?: error("Session not available - ensure test is running") },
       maxLlmCalls = null,
       systemPromptTemplate = TrailblazeSystemPrompt.compose(platformPrompt = systemPromptTemplate),
+      alwaysShownTools = appTarget?.getAlwaysShownToolNamesForDriver(trailblazeDriverType).orEmpty(),
     )
   }
 
   private val trailblazeYaml = TrailblazeYaml.Default
   private var currentToolTraceId: TraceId? = null
+
+  /**
+   * Per-tool migration snapshots for the in-host replay path (iOS / web). Same hooks the RPC
+   * path installs; capture goes through the synchronous [screenStateProvider] so there's no
+   * thread hop for the shared tool batch below to lose.
+   */
+  private val migrationHooks by lazy { migrationCaptureHooks() }
+
+  /**
+   * Assembles the hook args. Internal rather than inlined above so the gating decision — which is
+   * the part that can be wrong — is reachable without standing up a device.
+   *
+   * [hasProducer] is asked only per recorded tool, and only when [enabled], so a run with the
+   * switch off never forces [connectedDevice] just to answer a question it doesn't need answered.
+   */
+  internal fun migrationCaptureHooks(
+    enabled: Boolean = HostMigrationCapture.enabled(),
+    hasProducer: () -> Boolean = { HostMigrationCapture.hasHostProducer(connectedDevice) },
+  ): HostMigrationCapture.RecordedToolHooks? = HostMigrationCapture.recordedToolHooks(
+    enabled = enabled,
+    hasProducer = hasProducer,
+    captureScreenState = { screenStateProvider() },
+    sessionProvider = { loggingRule.session },
+    logSnapshot = { session, screenState, displayName ->
+      loggingRule.logger.logSnapshot(
+        session = session,
+        screenState = screenState,
+        displayName = displayName,
+      )
+    },
+  )
 
   private val trailblazeRunnerUtil by lazy {
     TrailblazeRunnerUtil(
@@ -482,6 +515,8 @@ abstract class BaseHostTrailblazeTest(
       trailblazeLogger = loggingRule.logger,
       sessionProvider = { loggingRule.session ?: error("Session not available - ensure test is running") },
       sessionUpdater = { loggingRule.setSession(it) },
+      onBeforeRecordedTool = migrationHooks?.onBefore,
+      onAfterRecordedTool = migrationHooks?.onAfter,
       // Replay each step's recorded tools inside one shared execution context + snapshot frame —
       // see AndroidTrailblazeRule's identical wiring for why (cross-tool device state survival).
       sharedToolBatch = { block -> trailblazeAgent.runInSharedToolBatch(block) },
@@ -620,6 +655,7 @@ abstract class BaseHostTrailblazeTest(
      * tiers (string args may carry memory tokens, so memory must land first).
      */
     initialArgs: Map<String, String> = emptyMap(),
+    trailSourceUrl: String? = null,
   ): HostYamlRunResult {
     // Preserve the caller's cleanup contract even when decoding later resolves the trail to skip.
     if (forceStopApp) {
@@ -705,6 +741,7 @@ abstract class BaseHostTrailblazeTest(
               rawYaml = yaml,
               hasRecordedSteps = trailblazeYaml.hasRecordedSteps(trailItems),
               trailblazeDeviceId = trailblazeDeviceId,
+              trailSourceUrl = trailSourceUrl,
               resolvedInitialMemory = resolvedInitialMemory,
               sensitiveMemoryKeys = sensitiveMemoryKeys,
               targetAppInfo = MobileDeviceUtils.resolveTargetAppInfo(

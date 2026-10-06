@@ -366,6 +366,38 @@ class SessionCaptureCoordinatorTest {
     assertEquals(1, stream2.stopCalls.get())
   }
 
+  /**
+   * An Android recorder on a device that streams no pictures holds its start for its whole
+   * first-picture wait, far longer than a stop takes. The wait for starts has its own budget, so a
+   * start that outlasts the per-session stop deadline is still stopped rather than abandoned.
+   */
+  @Test
+  fun `shutdownAll waits for a start that outlasts the per-session stop deadline`() {
+    val starting = CountDownLatch(1)
+    val stopCalls = AtomicInteger(0)
+    val slowStart = object : CaptureStream {
+      override val type = CaptureType.VIDEO
+      override fun start(sessionDir: File, deviceId: String, appId: String?) {
+        starting.countDown()
+        Thread.sleep(300)
+      }
+      override fun stop(options: CaptureOptions): CaptureArtifact? {
+        stopCalls.incrementAndGet()
+        return null
+      }
+    }
+    val (coord, _) = coordinatorWith(factory = { opts, _ -> CaptureSession(listOf(slowStart), opts) })
+    val start = Thread {
+      coord.startForSession(sessionId(), "android-1", TrailblazeDevicePlatform.ANDROID, CaptureOptions())
+    }.apply { start() }
+    assertTrue(starting.await(60, TimeUnit.SECONDS), "the capture never started")
+
+    coord.shutdownAll(perSessionTimeoutMs = 50, inFlightStartTimeoutMs = 60_000)
+
+    assertEquals(1, stopCalls.get(), "a start slower than one stop's deadline was abandoned, still running")
+    start.join(60_000)
+  }
+
   private val coordAlternator = AtomicInteger(0)
 
   /**

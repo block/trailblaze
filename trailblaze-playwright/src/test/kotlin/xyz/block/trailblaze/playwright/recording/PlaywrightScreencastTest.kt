@@ -74,5 +74,48 @@ class PlaywrightScreencastTest {
     assertNull(PlaywrightScreencast.parseScreencastFrame(jsonOf("""{"data":"/9j/x","sessionId":"nope"}""")))
   }
 
+  @Test
+  fun `parseScreencastFrame reads the swap time Chrome stamps in metadata as epoch ms`() {
+    val frame = PlaywrightScreencast.parseScreencastFrame(
+      jsonOf("""{"data":"x","sessionId":1,"metadata":{"timestamp":1759400000.1234}}"""),
+    )
+    assertEquals(1_759_400_000_123L, frame?.swappedAtMs)
+  }
+
+  @Test
+  fun `FrameClock places a frame at its swap, not at when it was read`() {
+    val clock = PlaywrightScreencast.FrameClock()
+    // A frame read promptly teaches the clock this browser's delivery delay: 2 ms.
+    assertEquals(9_002L, clock.capturedAtAt(swappedAtMs = 9_000L, receivedAtMs = 9_002L))
+    // A frame read 300 ms late, while the Playwright thread was busy, still lands at its swap.
+    assertEquals(10_002L, clock.capturedAtAt(swappedAtMs = 10_000L, receivedAtMs = 10_302L))
+  }
+
+  @Test
+  fun `FrameClock moves a remote browser's swap times onto this host's clock`() {
+    for (browserClockSkewMs in listOf(-5_000L, 5_000L, 120_000L)) {
+      val clock = PlaywrightScreencast.FrameClock()
+      // Host instants a frame was shown, and how long each waited to be read.
+      val shownAt = listOf(100_000L, 101_000L, 102_000L)
+      val delays = listOf(40L, 2L, 300L)
+      val stamps = shownAt.zip(delays).map { (shown, delay) ->
+        clock.capturedAtAt(swappedAtMs = shown + browserClockSkewMs, receivedAtMs = shown + delay)
+      }
+      // Once a prompt frame has been seen, every frame is within that frame's delay of when it showed.
+      assertEquals(listOf(101_002L, 102_002L), stamps.drop(1), "skew $browserClockSkewMs")
+      // Before then the clock can't tell delay from skew; the first frame is stamped on receipt.
+      assertEquals(100_040L, stamps.first(), "skew $browserClockSkewMs")
+    }
+  }
+
+  @Test
+  fun `FrameClock stamps a frame with no swap time on receipt`() {
+    val frame = PlaywrightScreencast.ScreencastFrame("x", 1, swappedAtMs = null)
+    assertEquals(5_000L, PlaywrightScreencast.FrameClock().capturedAtMs(frame, receivedAtMs = 5_000L))
+  }
+
+  private fun PlaywrightScreencast.FrameClock.capturedAtAt(swappedAtMs: Long, receivedAtMs: Long): Long =
+    capturedAtMs(PlaywrightScreencast.ScreencastFrame("x", 1, swappedAtMs), receivedAtMs)
+
   private fun jsonOf(raw: String): JsonObject = JsonParser.parseString(raw).asJsonObject
 }

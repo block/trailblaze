@@ -503,12 +503,12 @@ async function switchWorkspace(path) {
 
 // Single source of truth for the workspace UI copy + the persistent "restart for app targets" state,
 // so every switch surface (chip, trails sidebar, Settings) reads identical wording and signals.
-const WORKSPACE_BLURB = 'The folder Trail Runner works from. Your trails, trailmaps, tools, and recordings all come from here.';
+const WORKSPACE_BLURB = 'The folder Trailblaze App works from. Your trails, trailmaps, tools, and recordings all come from here.';
 const WORKSPACE_EMPTY_NOTICE = 'This folder has no trails yet, so the trails list will be empty until you add some.';
 function workspaceRestartNotice(added) {
   const ids = (added || []).filter(Boolean);
   const suffix = ids.length ? ` (${ids.join(', ')})` : '';
-  return `Restart Trail Runner to load this workspace's app targets${suffix}.`;
+  return `Restart Trailblaze App to load this workspace's app targets${suffix}.`;
 }
 // Persisted in sessionStorage so the badge survives SPA re-renders and shows regardless of which
 // surface triggered the switch; a daemon restart reloads the page and clears it. Pass null to clear.

@@ -104,7 +104,7 @@ class TrailblazeSerializationInitializerTest {
   companion object {
     private val EXPECTED_PLAYWRIGHT_TOOLS = listOf(
       "web_click", "web_type", "web_navigate",
-      "web_scroll", "web_hover", "web_pressKey",
+      "web_scroll", "web_hover", "web_drag", "web_pressKey",
       "web_selectOption", "web_wait", "web_snapshot",
       "web_requestDetails", "web_verifyElementVisible",
       "web_verifyTextVisible", "web_verifyValue",

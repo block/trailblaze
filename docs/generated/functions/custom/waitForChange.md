@@ -4,13 +4,7 @@
 
 # `waitForChange`
 
-Wait until the UI has settled after your action. Use this instead of a fixed-duration wait when
-you've triggered an action (a new screen loads, content updates, a list scrolls) and want to block
-until the UI is quiet again. Returns immediately if the UI is already settled when this runs.
-Known limit: it returns as soon as the UI is quiet, so it cannot wait out a change that has not
-started yet. For that, poll the actual state — assertNotVisibleWithText to wait a loading indicator
-out, or take a fresh snapshot and assertVisible a ref that is present (assertVisible checks the
-current snapshot and does not itself wait for an element to appear).
+Wait for the UI to settle after an action (a screen loads, content updates, a list scrolls). Returns as soon as the UI is quiet, so it cannot wait out a change that has not started yet. To wait out a spinner, use assertNotVisibleWithText.
 
 ## Source
 
@@ -28,11 +22,11 @@ current snapshot and does not itself wait for an element to appear).
 ### Optional parameters
 
 - `timeoutMs` — `Integer`
-  Maximum time to wait for the screen to change, in milliseconds. Default 8000.
+  Max wait in ms. Default 8000.
 - `quietWindowMs` — `Integer`
-  Time with no further UI events required to consider the screen settled, in milliseconds. Default 300.
+  Time with no UI events that counts as settled, in ms. Default 300.
 - `requireChange` — `Boolean`
-  When true, timing out with no change is an error. When false, a timeout is treated as a generous settle and succeeds. Default true.
+  If true, timing out before the UI changes and settles fails; if false, it succeeds. Default true.
 
 ## Output
 

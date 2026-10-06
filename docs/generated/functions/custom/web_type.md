@@ -4,9 +4,7 @@
 
 # `web_type`
 
-Type text into a web input element identified by its element ID, ARIA descriptor, or CSS selector.
-By default this clears the field first and fills in the new text.
-Set clearFirst to false to append text instead.
+Type text into a web input. Clears the field first unless clearFirst is false.
 
 ## Source
 
@@ -24,14 +22,14 @@ Set clearFirst to false to append text instead.
 ### Required parameters
 
 - `text` — `String`
-  The text to type into the element.
+  Text to type.
 
 ### Optional parameters
 
 - `ref` — `String`
-  Element ID (e.g., 'e5'), ARIA descriptor (e.g., 'textbox "Email"'), or CSS selector with css= prefix (e.g., 'css=#email-input').
+  Element ID ('e5'), ARIA descriptor ('textbox "Email"'), or 'css=<selector>'.
 - `clearFirst` — `Boolean`
-  If true (default), clear the field before typing. If false, append to existing text.
+  Clear the field before typing (default true); false appends.
 - `reasoning` — `String`
 
 ## Output

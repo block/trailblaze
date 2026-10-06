@@ -27,6 +27,7 @@
 import type {
   TrailblazeCallToolResult,
   TrailblazeClient,
+  TrailblazeHostMethods,
   TrailblazeToolMap,
   TrailblazeToolMethods,
 } from "./client.js";
@@ -189,7 +190,17 @@ export type MockTrailblazeClient = TrailblazeClient & {
    */
   stub(toolName: string, response: MockStubResponse): void;
 
-  /** Clear both recorded calls and registered stubs. */
+  /** Recorded `client.host.<name>(args)` calls in invocation order; `tool` is the function name. */
+  hostCalls: MockCall[];
+
+  /**
+   * Register the result `client.host[name](...)` resolves to, or `{ error }` to make it reject
+   * with the production wording (`ctx.host.<name> failed: <error>`). A call with no stub rejects,
+   * so a test never silently runs against an `undefined` credential.
+   */
+  stubHost(name: string, response: { value: unknown } | { error: string }): void;
+
+  /** Clear recorded calls and registered stubs, tool and host alike. */
   reset(): void;
 };
 
@@ -230,9 +241,31 @@ export function createMockClient(): MockTrailblazeClient {
 
   const tools = createMockToolsProxy(dispatch);
 
+  const hostCalls: MockCall[] = [];
+  const hostStubs = new Map<string, { value: unknown } | { error: string }>();
+  const host = new Proxy({} as TrailblazeHostMethods, {
+    get(_target, prop) {
+      if (typeof prop !== "string" || MOCK_TOOLS_PROXY_RESERVED_PROPS.has(prop)) return undefined;
+      return async (args: Record<string, unknown>) => {
+        hostCalls.push({ tool: prop, args: args ?? {} });
+        const stub = hostStubs.get(prop);
+        if (stub === undefined) {
+          throw new Error(`ctx.host.${prop} failed: no stub registered (createMockClient().stubHost)`);
+        }
+        if ("error" in stub) throw new Error(`ctx.host.${prop} failed: ${stub.error}`);
+        return stub.value;
+      };
+    },
+  });
+
   const mock: MockTrailblazeClient = {
     tools,
+    host,
     calls,
+    hostCalls,
+    stubHost(name, response): void {
+      hostStubs.set(name, response);
+    },
     stub(toolName: string, response: MockStubResponse): void {
       if (toolName.trim() === "") {
         throw new Error(
@@ -246,6 +279,8 @@ export function createMockClient(): MockTrailblazeClient {
       // reference earlier sees the cleared state instead of holding a stale snapshot.
       calls.length = 0;
       stubs.clear();
+      hostCalls.length = 0;
+      hostStubs.clear();
     },
   };
   return mock;
@@ -503,8 +538,18 @@ export function createQueuedFindMatchesClient(): QueuedFindMatchesClient {
     },
   });
 
+  const host = new Proxy({} as TrailblazeHostMethods, {
+    get(_target, prop) {
+      if (typeof prop !== "string" || prop === "then" || prop === "catch" || prop === "finally") return undefined;
+      return async () => {
+        throw new Error(`ctx.host.${prop} failed: this mock client does not stub host functions`);
+      };
+    },
+  });
+
   return {
     tools,
+    host,
     calls,
     queueFindMatches(responses) {
       findMatchesQueue.push(...responses);

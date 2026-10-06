@@ -5,3 +5,14 @@ export function formatUsd(cost: number): string {
   if (amount === 0 || amount >= 0.01) return `$${cost.toFixed(2)}`;
   return `$${cost.toFixed(6)}`;
 }
+
+export function trailSourceDetails(raw: unknown): { url: string; repo: string; path: string; commit: string } | null {
+  if (typeof raw !== 'string') return null;
+  const match = /^https:\/\/github\.com\/([A-Za-z0-9][A-Za-z0-9._-]*)\/([A-Za-z0-9][A-Za-z0-9._-]*)\/blob\/([0-9a-f]{40})\/([^?#]+)$/.exec(raw);
+  if (!match) return null;
+  try {
+    return { url: raw, repo: match[2], path: decodeURIComponent(match[4]), commit: match[3] };
+  } catch (_) {
+    return null;
+  }
+}

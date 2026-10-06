@@ -277,6 +277,24 @@ class YamlBackedHostAppTargetTest {
   }
 
   @Test
+  fun `always shown tools resolve per platform, by name`() {
+    val target = AppTargetYamlLoader.loadFromYaml(
+      """
+      id: test
+      display_name: Test
+      platforms:
+        ios:
+          excluded_tools: [swipe]
+          always_shown_tools: [app_swipe, app_enterPasscode]
+      """.trimIndent(),
+      toolNameResolver = resolver,
+    )
+
+    assertEquals(setOf("app_swipe", "app_enterPasscode"), target.getAlwaysShownToolNamesForDriver(TrailblazeDriverType.IOS_HOST))
+    assertTrue(target.getAlwaysShownToolNamesForDriver(TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION).isEmpty())
+  }
+
+  @Test
   fun `excluded YAML-defined tools route to the YAML exclusion bucket`() {
     // Mirrors the inclusion side: a target YAML can list a YAML-defined tool name
     // (e.g. `pressBack`) under `excluded_tools` and the resolver classifies it into

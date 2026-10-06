@@ -69,6 +69,12 @@ class PlaywrightScreencastFeed(
     }
   }
 
+  /**
+   * One browser, one clock: kept across re-attaches, so a new stream doesn't relearn it from a
+   * first frame that may have waited to be read.
+   */
+  private val frameClock = PlaywrightScreencast.FrameClock()
+
   private fun startPump() {
     val newScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     scope = newScope
@@ -79,10 +85,12 @@ class PlaywrightScreencastFeed(
       while (isActive) {
         val stream = PlaywrightDeviceScreenStream(pageManager)
         try {
-          stream.streamScreencastJpegFrames(jpegQuality) { jpeg ->
-            val ts = System.currentTimeMillis()
+          // Each frame is stamped when Chrome showed it, not when it got here: the recording places
+          // every frame by this stamp, and arrival can trail the screen by however long the
+          // Playwright thread was busy (see PlaywrightScreencast.FrameClock).
+          stream.streamTimedScreencastJpegFrames(jpegQuality, frameClock = frameClock) { jpeg, capturedAtMs ->
             // trySend-style fan-out: a subscriber's failure never kills the pump or its peers.
-            subscribers.forEach { runCatching { it(jpeg, ts) } }
+            subscribers.forEach { runCatching { it(jpeg, capturedAtMs) } }
           }
         } catch (e: CancellationException) {
           // Normal shutdown — the last subscriber detached and the scope was cancelled. Not an

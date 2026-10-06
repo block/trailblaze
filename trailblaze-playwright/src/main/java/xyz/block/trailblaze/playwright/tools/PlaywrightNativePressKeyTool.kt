@@ -11,17 +11,9 @@ import xyz.block.trailblaze.util.Console
 
 @Serializable
 @TrailblazeToolClass("web_pressKey")
-@LLMDescription(
-  """
-Press a keyboard key or key combination.
-Supports keys like 'Enter', 'Tab', 'Escape', 'Backspace', 'ArrowDown', 'ArrowUp',
-and combinations like 'Control+A', 'Meta+C', 'Shift+Tab'.
-""",
-)
+@LLMDescription("Press a key or key combination.")
 data class PlaywrightNativePressKeyTool(
-  @param:LLMDescription(
-    "The key or key combination to press (e.g., 'Enter', 'Tab', 'Control+A', 'Meta+C').",
-  )
+  @param:LLMDescription("Playwright key name, e.g. 'Enter', 'Escape', 'ArrowDown', 'Control+A', 'Shift+Tab'.")
   val key: String,
   override val reasoning: String? = null,
 ) : PlaywrightExecutableTool, ReasoningTrailblazeTool {

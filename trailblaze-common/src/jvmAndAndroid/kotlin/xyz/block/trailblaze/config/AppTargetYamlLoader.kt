@@ -6,6 +6,7 @@ import xyz.block.trailblaze.llm.config.TrailblazeConfigPaths
 import xyz.block.trailblaze.llm.config.platformConfigResourceSource
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.util.Console
+import java.io.File
 
 /**
  * Loads `.app.yaml` files into [YamlBackedHostAppTarget] instances.
@@ -80,12 +81,16 @@ object AppTargetYamlLoader {
 
   /**
    * Loads app targets from already-parsed configs.
+   *
+   * @param trailmapDirs per target id, where its trailmap and their dependencies were loaded from.
+   *   See [YamlBackedHostAppTarget.trailmapDirs].
    */
   fun loadAllFromConfigs(
     configs: List<AppTargetYamlConfig>,
     toolNameResolver: ToolNameResolver,
     availableToolSets: Map<String, ResolvedToolSet> = emptyMap(),
     companions: Map<String, AppTargetCompanion> = emptyMap(),
+    trailmapDirs: Map<String, Map<String, File?>> = emptyMap(),
   ): Set<TrailblazeHostAppTarget> {
     return configs
       .mapNotNull { config ->
@@ -95,6 +100,7 @@ object AppTargetYamlLoader {
             toolNameResolver = toolNameResolver,
             availableToolSets = availableToolSets,
             companion = companions[config.id],
+            trailmapDirs = trailmapDirs[config.id].orEmpty(),
           )
         } catch (e: Exception) {
           Console.log(

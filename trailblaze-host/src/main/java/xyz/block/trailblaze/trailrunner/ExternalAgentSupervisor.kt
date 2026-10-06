@@ -118,9 +118,9 @@ private val COMPANION_RESERVED_TITLES = setOf(
 )
 
 private val TRAILRUNNER_UI_CONTRACT = """
-You are running as an external coding-agent CLI supervised by Trail Runner, helping a human author
+You are running as an external coding-agent CLI supervised by Trailblaze App, helping a human author
 Trailblaze trails: automated UI tests written as short, observable steps against a real device.
-Trail Runner does not execute your tools; your own CLI decides which tools/MCP servers to call.
+Trailblaze App does not execute your tools; your own CLI decides which tools/MCP servers to call.
 
 How to help, whatever the task:
 - Interview before you build. If the goal is even slightly underspecified, ask 2-3 pointed questions
@@ -141,7 +141,7 @@ How to help, whatever the task:
 
 When the task is to compose or build a trail, run it as a guided session, a stage at a time:
 1. Pin the intent, and ask which trailhead to start from - a trailhead is the named entry state the
-   trail begins in. Ask this with the ask_user command and params.source "trailheads": Trail Runner
+   trail begins in. Ask this with the ask_user command and params.source "trailheads": Trailblaze App
    fills in this workspace's trailheads as clickable options, so lead with that question and let the
    human pick one.
 2. Scaffold the trail as soon as the trailhead is chosen: agree where it lives (see "Your trail
@@ -160,8 +160,8 @@ When the task is to compose or build a trail, run it as a guided session, a stag
    tool (action=RUN) - it executes the recorded steps without AI. Then hand the final proof to the
    human: emit open_trail for the saved trail and invite them to press Run there - the app records
    those runs so they can audit a green result themselves instead of taking your word for it.
-   You MAY run the trailblaze CLI through your shell tool - approval prompts now surface in Trail
-   Runner for the human to approve, so the command no longer dead-ends. A pending approval pauses the
+   You MAY run the trailblaze CLI through your shell tool - approval prompts now surface in the
+   Trailblaze App for the human to approve, so the command no longer dead-ends. A pending approval pauses the
    tool call until the human decides, so do not treat a slow tool call as a hang. Still, prefer the
    trailblaze MCP tools when an equivalent exists.
 Do your part of a stage, then wait for them.
@@ -189,7 +189,7 @@ Giving your output — the ONE clear way to hand back a result:
 - This is how the human sees your result: the trail opens in the details panel and your summary is
   shown as an output card. Emit it on every meaningful change, not only at the very end.
 
-When changing what else the human should see in Trail Runner would help, emit one standalone line:
+When changing what else the human should see in Trailblaze App would help, emit one standalone line:
 TRAILRUNNER_UI {"version":1,"action":"navigate","route":"runs","params":{"sel":"<session id>"}}
 
 Supported actions:
@@ -197,7 +197,7 @@ Supported actions:
 - open_session: set sessionId. Runs, active and completed alike, all live on the runs route.
 - open_trail: set trailId.
 - trail_output: set trailId and message; optional params.status and params.files. Your primary result channel - declares a trail you produced or changed without navigating away.
-- ask_user: set message (the question) to ask the human a question with clickable answers. Give the choices in params.options as a pipe-separated list, OR set params.source to "trailheads" to have Trail Runner fill the workspace's trailheads as the options. Clicking an answer replies to you; the human can also type instead. Use it for the starting-point question and any either/or decision. Clicking an option ONLY sends its text back as the human's reply - it cannot grant permissions, run commands, or change any setting, so never offer an option that implies the system will perform an action (e.g. "Approve X access").
+- ask_user: set message (the question) to ask the human a question with clickable answers. Give the choices in params.options as a pipe-separated list, OR set params.source to "trailheads" to have Trailblaze App fill the workspace's trailheads as the options. Clicking an answer replies to you; the human can also type instead. Use it for the starting-point question and any either/or decision. Clicking an option ONLY sends its text back as the human's reply - it cannot grant permissions, run commands, or change any setting, so never offer an option that implies the system will perform an action (e.g. "Approve X access").
 - show_message: set message and optional severity info, success, warning, or error.
 - focus_external_agent: set params.runId to the external-agent run to focus.
 
@@ -321,7 +321,7 @@ internal object ExternalAgentSupervisor {
     // endCompanion so it serializes with companionEvent and finishes idempotently - a bare
     // finish here could append past a racing disconnect's terminal events or flip its status.
     if (run.companion != null) {
-      endCompanion(run, "stopped from Trail Runner")
+      endCompanion(run, "stopped from Trailblaze App")
       return true
     }
     run.process?.let { process ->
@@ -1700,7 +1700,7 @@ internal object ExternalAgentSupervisor {
     val run = runs[id]
     requireNotNull(run) { "external agent run not found: $id" }
     require(run.agentType != ExternalAgentType.SOLO) { "this is a solo session - there is no agent to reply to" }
-    require(run.companion == null) { "this session is driven by an external agent outside Trail Runner - reply in that agent's own CLI" }
+    require(run.companion == null) { "this session is driven by an external agent outside Trailblaze App - reply in that agent's own CLI" }
     val text = prompt.trim()
     require(text.isNotEmpty()) { "prompt is required" }
     require(run.status != ExternalAgentSessionStatus.RUNNING) {
@@ -2227,7 +2227,7 @@ internal fun generationPreamble(demo: DemoRunState, bundleDir: File, trailsRoot:
     appendLine()
     appendLine("Method:")
     appendLine("- For schema, target/toolbox lookups, and listing existing trails, use the `trailblaze` CLI already on your PATH (a build matched to the running daemon) and the materialized trailblaze skill's references. Never invoke `./trailblaze` from the workspace root - it rebuilds and can restart the daemon mid-run. Do NOT grep through individual trail files to reverse-engineer the format.")
-    appendLine("- Prefer the trailblaze MCP and CLI surfaces over raw file spelunking - run and verify with the trail MCP tool (action=RUN) - so your work shows up as meaningful Trail Runner steps.")
+    appendLine("- Prefer the trailblaze MCP and CLI surfaces over raw file spelunking - run and verify with the trail MCP tool (action=RUN) - so your work shows up as meaningful Trailblaze App steps.")
     appendLine("- Emit the trail_output line after each meaningful change, not only at the end, so the human watches the trail fill in live.")
     appendLine("- You are a high-capability coordinator. For parallel read-only legwork (reading bundle evidence across many actions, checking selector uniqueness across hierarchies, scanning existing trails for conventions), delegate to your agent/subagent tool with cheaper models (haiku or sonnet) run in parallel. Keep authoring decisions, selector choices, and verification on yourself.")
     appendLine()
@@ -3200,7 +3200,7 @@ private fun ExternalAgentRunRequest.uiContextPrompt(): String {
     ctx.platform?.let { "platform=$it" },
     ctx.deviceId?.let { "deviceId=${it.instanceId}/${it.trailblazeDevicePlatform}" },
   )
-  return if (parts.isEmpty()) "" else "\n\nCurrent Trail Runner UI context: ${parts.joinToString(", ")}"
+  return if (parts.isEmpty()) "" else "\n\nCurrent Trailblaze App UI context: ${parts.joinToString(", ")}"
 }
 
 private fun ExternalAgentType.executable(): String = when (this) {

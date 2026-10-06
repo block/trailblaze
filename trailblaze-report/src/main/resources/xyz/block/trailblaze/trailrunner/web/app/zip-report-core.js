@@ -440,7 +440,8 @@
       case 'Ended.TimeoutReached':
         return status.message || null;
       case 'Ended.MaxCallsLimitReached':
-        return 'Max LLM calls limit reached (' + status.maxCalls + ') for: ' + status.objectivePrompt;
+        // `message` names the limit that ended the step; logs written before it have none.
+        return status.message || 'Max LLM calls limit reached (' + status.maxCalls + ') for: ' + status.objectivePrompt;
       default:
         return null;
     }
@@ -529,6 +530,7 @@
     if (config && config.metadata && Object.keys(config.metadata).length) meta.metadata = config.metadata;
     var trailFilePath = started && started.trailFilePath;
     if (trailFilePath && trailFilePath.trim() !== '') meta.cmd = './trailblaze run ' + trailFilePath;
+    if (started && started.trailSourceUrl) meta.trailSourceUrl = started.trailSourceUrl;
     var error = failureReason(status);
     if (error) meta.error = error;
     var code = failureCode(status);

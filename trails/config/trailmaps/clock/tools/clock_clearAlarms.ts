@@ -1,15 +1,8 @@
 import { trailblaze } from "@trailblaze/scripting";
 
 /**
- * Wipes all alarms, timers, and stopwatch state from the AOSP Desk Clock app via
- * `pm clear` followed by `am force-stop`, so the next launch starts from a fresh
- * data directory. Useful as a setup primitive for trails that need a known-clean
- * Clock state without the side effect of leaving the app open.
- *
- * No arguments — the framework resolves the app id from the `clock` trailmap manifest's
- * `app_ids:` list against installed apps on the connected device. Composes only the
- * dual-mode `android_adbShell` primitive, so this tool works on both host- and
- * on-device-dispatched sessions.
+ * Clear all Clock app data (alarms, timers, stopwatch) and leave the app closed, so the
+ * next launch starts fresh.
  */
 // Implementation notes — a simpler companion to `clock_android_launchApp.ts`: no launch,
 // no relaunch, just a single `pm clear` followed by a force-stop.

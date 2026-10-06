@@ -12,8 +12,8 @@ Start a companion authoring session.
       --agent=<agent>     Agent type: claude or codex.
       --folder=<folder>   Trail folder relative to the workspace root.
   -h, --help              Show this help message and exit.
-      --label=<label>     Agent label shown in Trail Runner.
-      --title=<title>     Human-readable title shown in Trail Runner.
+      --label=<label>     Agent label shown in Trailblaze App.
+      --title=<title>     Human-readable title shown in Trailblaze App.
       --trails-dir=<trailsDir>
                           Workspace root (default: current directory).
   -V, --version           Print version information and exit.

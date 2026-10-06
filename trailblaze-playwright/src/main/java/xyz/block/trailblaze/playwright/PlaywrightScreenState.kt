@@ -20,6 +20,7 @@ import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.setofmark.SetOfMarkAnnotator
 import xyz.block.trailblaze.tracing.TrailblazeTracer
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.util.WebpEncoder
 import java.awt.Image
 import java.awt.image.BufferedImage
 import java.io.ByteArrayInputStream
@@ -27,6 +28,8 @@ import java.io.ByteArrayOutputStream
 import javax.imageio.IIOImage
 import javax.imageio.ImageIO
 import javax.imageio.ImageWriteParam
+import kotlinx.datetime.Clock
+import kotlinx.datetime.Instant
 
 /**
  * ScreenState implementation for Playwright-native web testing.
@@ -110,7 +113,7 @@ class PlaywrightScreenState(
   }
 
   /** See [PlaywrightAriaSnapshot.buildAiRefsByRoleName]. */
-  private val aiRefsByRoleName: Map<String, List<String>> by lazy {
+  private val aiRefsByRoleName: Map<String, List<String?>> by lazy {
     PlaywrightAriaSnapshot.buildAiRefsByRoleName(aiAriaSnapshotYaml)
   }
 
@@ -315,12 +318,19 @@ class PlaywrightScreenState(
       }
     } catch (_: Exception) {}
 
+    // The element the snapshot marked focused, checked against the live focus in the evaluate
+    // below: the snapshot was taken earlier, and focus may have moved since.
+    val snapshotFocus = focusedListEntry()
+    val snapshotFocusHandle = snapshotFocus?.let { (_, aiRef) ->
+      resolveElementHandles(listOf("focused" to aiRef), Long.MAX_VALUE).second.firstOrNull()
+    }
+
     // Page state, focused element, and dialog detection — captured in a single JS evaluate
     // to minimize round-trips to the browser.
     try {
       @Suppress("UNCHECKED_CAST")
       val pageState = page.evaluate(
-        """() => {
+        """(snapshotFocus) => {
           // Loading / ready state
           const readyState = document.readyState;
 
@@ -335,7 +345,9 @@ class PlaywrightScreenState(
               || el.getAttribute('name')
               || el.getAttribute('placeholder')
               || '';
-            focus = { tag, role, type, name };
+            let deepest = el;
+            while (deepest.shadowRoot && deepest.shadowRoot.activeElement) deepest = deepest.shadowRoot.activeElement;
+            focus = { tag, role, type, name, matchesSnapshot: snapshotFocus != null && snapshotFocus === deepest };
           }
 
           // Open dialogs / modals
@@ -360,6 +372,7 @@ class PlaywrightScreenState(
 
           return { readyState, focus, dialogs };
         }""",
+        snapshotFocusHandle,
       ) as? Map<String, Any?>
       if (pageState != null) {
         // Loading state
@@ -381,7 +394,10 @@ class PlaywrightScreenState(
             if (type.isNotBlank()) append(" type=$type")
             if (name.isNotBlank()) append(" \"$name\"")
           }
-          appendLine("Focused: $descriptor")
+          // The ref and name the element list gives it, so a model asked to focus a field can
+          // see that it has: the DOM attributes above miss a name from a `<label>`.
+          val listed = snapshotFocus?.first?.takeIf { focusInfo["matchesSnapshot"] == true }
+          appendLine("Focused: ${listed ?: descriptor}")
         }
 
         // Open dialogs
@@ -392,8 +408,32 @@ class PlaywrightScreenState(
           appendLine("Dialog open: $dialogList")
         }
       }
-    } catch (_: Exception) {}
+    } catch (_: Exception) {
+    } finally {
+      try {
+        snapshotFocusHandle?.dispose()
+      } catch (_: Exception) {
+      }
+    }
   }.trimEnd()
+
+  /**
+   * The element list's `[eN] role "name"` for the element the AI-mode snapshot marks focused,
+   * paired with its AI ref. Null when it isn't listed or has no ref to check it by.
+   */
+  private fun focusedListEntry(): Pair<String, String>? {
+    val (key, nth) = PlaywrightAriaSnapshot.focusedNodeCorrelation(aiAriaSnapshotYaml) ?: return null
+    val aiRef = aiRefsByRoleName[key]?.getOrNull(nth) ?: return null
+    val occurrences = mutableMapOf<String, Int>()
+    for ((id, ref) in elementIdMapping) {
+      val (role, name) = parseAriaDescriptor(ref.descriptor)
+      val refKey = PlaywrightAriaSnapshot.roleNameCorrelationKey(role, name)
+      val refNth = occurrences.getOrDefault(refKey, 0)
+      occurrences[refKey] = refNth + 1
+      if (refKey == key && refNth == nth) return "[$id] ${ref.descriptor}" to aiRef
+    }
+    return null
+  }
 
   /**
    * Resolves an element ID (e.g., "e5") to its [PlaywrightAriaSnapshot.ElementRef].
@@ -1078,6 +1118,16 @@ class PlaywrightScreenState(
     }
   }
 
+  /**
+   * When the screenshot's picture was taken: null until [screenshotBytes] is first read, which
+   * can be long after construction. Playwright captures at the end of its call, after waiting
+   * for the page (a page still loading holds it for hundreds of ms), so this is when the call
+   * returned, not when it began.
+   */
+  @Volatile
+  var screenshotTakenAt: Instant? = null
+    private set
+
   /** Raw PNG screenshot from Playwright, before any scaling. */
   private val rawScreenshotBytes: ByteArray? by lazy {
     TrailblazeTracer.trace("screenshot", "screenState") {
@@ -1087,7 +1137,7 @@ class PlaywrightScreenState(
             .setFullPage(false)
             .setAnimations(ScreenshotAnimations.DISABLED)
             .setTimeout(captureTimeoutMs),
-        )
+        ).also { screenshotTakenAt = Clock.System.now() }
       } catch (_: Exception) {
         null
       }
@@ -1111,14 +1161,13 @@ class PlaywrightScreenState(
    * map a label to an element.
    *
    * Bounds are read out of [elementVisibility], which powers offscreen + occlusion
-   * detection too — so this doesn't pay its own per-element round-trips. For elements
+   * detection too — so this doesn't pay its own per-element round-trips. Elements
    * [elementVisibility] couldn't resolve (no AI-mode ref correlation — see
-   * [PlaywrightAriaSnapshot.buildAiRefsByRoleName] — or the resolution budget ran out),
-   * we fall back to per-element `locator.boundingBox()` so the overlay still renders
-   * via Playwright's accessibility-aware locator path. That fallback skips an element no
-   * locator matches (`boundingBox` would wait out its timeout for it) and stops at
-   * [ENRICHMENT_BUDGET_MS]: an article with hundreds of unmatched links otherwise held
-   * every LLM request for minutes.
+   * [PlaywrightAriaSnapshot.buildAiRefsByRoleName] — or the resolution budget ran out)
+   * go through [hitTestUnresolved], the same viewport and hit-target check reached via
+   * their locators instead. A label is drawn only where that check says a click would land:
+   * a box measured without it can sit on top of a modal, over whatever the covered element
+   * happens to be under, and the LLM reads the label as naming that control.
    *
    * Filtered to [PlaywrightAriaSnapshot.ElementRef.imageAnnotatable] elements only,
    * **minus** anything in [ElementVisibility.offscreen] or [ElementVisibility.occluded]
@@ -1129,37 +1178,14 @@ class PlaywrightScreenState(
    */
   override val annotationElements: List<AnnotationElement>? by lazy {
     val visibility = elementVisibility
+    val annotatable = elementIdMapping.filter { (id, ref) ->
+      ref.imageAnnotatable && id !in visibility.offscreen && id !in visibility.occluded
+    }
+    val fallbackBounds = hitTestUnresolved(annotatable.filterKeys { it !in visibility.bounds })
     val out = mutableListOf<AnnotationElement>()
     var nodeId = 1L
-    val deadlineMs = System.currentTimeMillis() + enrichmentBudgetMs
-    for ((id, ref) in elementIdMapping) {
-      if (!ref.imageAnnotatable) continue
-      if (id in visibility.offscreen) continue
-      if (id in visibility.occluded) continue
-
-      val bounds = visibility.bounds[id] ?: run {
-        // Ref-based resolution didn't cover this element (no AI-mode ref correlation,
-        // or the resolution budget ran out). Fall back to the locator-based path —
-        // accessibility-aware bbox.
-        if (budgetExceeded(deadlineMs, "set-of-mark annotation")) return@run null
-        try {
-          val locator = PlaywrightAriaSnapshot.resolveElementRef(page, ref)
-          if (locator.count() == 0) return@run null
-          val box = locator.boundingBox(
-            Locator.BoundingBoxOptions().setTimeout(captureTimeoutMs),
-          ) ?: return@run null
-          if (box.width <= 0 || box.height <= 0) return@run null
-          TrailblazeNode.Bounds(
-            left = box.x.toInt(),
-            top = box.y.toInt(),
-            right = (box.x + box.width).toInt(),
-            bottom = (box.y + box.height).toInt(),
-          )
-        } catch (_: Exception) {
-          null
-        }
-      } ?: continue
-
+    for (id in annotatable.keys) {
+      val bounds = visibility.bounds[id] ?: fallbackBounds[id] ?: continue
       out.add(
         AnnotationElement(
           nodeId = nodeId++,
@@ -1169,6 +1195,46 @@ class PlaywrightScreenState(
       )
     }
     out.takeIf { it.isNotEmpty() }
+  }
+
+  /**
+   * Bounds of the [refs] a click would reach: resolved through their locators, then run
+   * through [BATCH_VIEWPORT_CHECK_JS], dropping anything offscreen or covered. Skips an element
+   * no locator matches (resolving it would wait out its timeout) and stops at
+   * [enrichmentBudgetMs]: an article with hundreds of unmatched links otherwise held every LLM
+   * request for minutes. An element the check never reached gets no bounds.
+   */
+  @Suppress("UNCHECKED_CAST")
+  private fun hitTestUnresolved(
+    refs: Map<String, PlaywrightAriaSnapshot.ElementRef>,
+  ): Map<String, TrailblazeNode.Bounds> {
+    if (refs.isEmpty()) return emptyMap()
+    val deadlineMs = System.currentTimeMillis() + enrichmentBudgetMs
+    val ids = mutableListOf<String>()
+    val handles = mutableListOf<ElementHandle>()
+    for ((id, ref) in refs) {
+      if (budgetExceeded(deadlineMs, "set-of-mark annotation")) break
+      try {
+        val locator = PlaywrightAriaSnapshot.resolveElementRef(page, ref)
+        if (locator.count() == 0) continue
+        locator.elementHandle(Locator.ElementHandleOptions().setTimeout(captureTimeoutMs))?.let {
+          ids.add(id)
+          handles.add(it)
+        }
+      } catch (e: Exception) {
+        Console.log("[PlaywrightScreenState] set-of-mark fallback could not resolve $id: ${e.message}")
+      }
+    }
+    if (ids.isEmpty()) return emptyMap()
+    val result = try {
+      runBatchViewportCheck(ids, handles)
+    } catch (e: Exception) {
+      Console.log("[PlaywrightScreenState] set-of-mark fallback hit test failed; ${ids.size} label(s) dropped: ${e.message}")
+      null
+    } ?: return emptyMap()
+    val hidden = ((result["offscreen"] as? List<String>).orEmpty() + (result["occluded"] as? List<String>).orEmpty()).toSet()
+    val rawBounds = result["bounds"] as? Map<String, Map<String, Any?>> ?: return emptyMap()
+    return rawBounds.filterKeys { it !in hidden }.mapNotNull { (id, b) -> b.toBoundsOrNull()?.let { id to it } }.toMap()
   }
 
   /**
@@ -1631,6 +1697,58 @@ class PlaywrightScreenState(
      * size-mismatch log in [computeViewHierarchyBoundsBatched]) before tightening it.
      */
     private const val ENRICHMENT_BUDGET_MS = 5_000L
+
+    /**
+     * What covers [element], judged by the same hit-target check the element list uses: the
+     * element a click at its center lands on, and the dialog that element sits in, e.g.
+     * `<div role="presentation"> inside <app-modal role="dialog" aria-label="Create item">`.
+     * Null when a click there reaches [element], or [element] is outside the viewport.
+     */
+    @Suppress("UNCHECKED_CAST")
+    internal fun describeCover(page: Page, element: ElementHandle): String? {
+      val viewport = page.evaluate("() => [innerWidth, innerHeight]") as List<Number>
+      val verdict = page.evaluate(
+        BATCH_VIEWPORT_CHECK_JS,
+        mapOf("elements" to listOf(element), "ids" to listOf("target"), "vw" to viewport[0], "vh" to viewport[1]),
+      ) as? Map<String, Any?> ?: return null
+      if ("target" !in (verdict["occluded"] as? List<String>).orEmpty()) return null
+      return element.evaluate(DESCRIBE_COVER_JS) as? String
+    }
+
+    /**
+     * Names the element on top at the target's in-viewport center — descending into open
+     * shadow roots, as the hit-target check does — and its nearest `<dialog>`, `role=dialog`
+     * or `role=alertdialog` ancestor, each as a tag with its `id`, `role` and `aria-label`, each
+     * value cut to 60 characters.
+     */
+    private val DESCRIBE_COVER_JS = """(target) => {
+      const r = target.getBoundingClientRect();
+      const x = (Math.max(r.left, 0) + Math.min(r.right, innerWidth)) / 2;
+      const y = (Math.max(r.top, 0) + Math.min(r.bottom, innerHeight)) / 2;
+      let top = document.elementFromPoint(x, y);
+      while (top && top.shadowRoot) {
+        const inner = top.shadowRoot.elementFromPoint(x, y);
+        if (!inner || inner === top) break;
+        top = inner;
+      }
+      if (!top) return null;
+      const tag = (el) => {
+        let s = '<' + el.localName;
+        for (const a of ['id', 'role', 'aria-label']) {
+          const v = el.getAttribute(a);
+          // Page text goes to the model verbatim; keep one attribute from swamping the error.
+          if (v) s += ' ' + a + '="' + (v.length > 60 ? v.slice(0, 60) + '…' : v) + '"';
+        }
+        return s + '>';
+      };
+      const isDialog = (el) => el.localName === 'dialog'
+        || el.getAttribute('role') === 'dialog' || el.getAttribute('role') === 'alertdialog';
+      let dialog = top;
+      while (dialog && !isDialog(dialog)) {
+        dialog = dialog.parentElement || (dialog.parentNode && dialog.parentNode.host) || null;
+      }
+      return dialog && dialog !== top ? tag(top) + ' inside ' + tag(dialog) : tag(top);
+    }"""
 
     /** Ends an element list whose bounds and selectors stopped at the budget. */
     internal const val ELEMENT_LIST_CUT_SHORT_NOTE =
@@ -2172,7 +2290,7 @@ class PlaywrightScreenState(
           }
 
           TrailblazeImageFormat.WEBP -> {
-            return this.encodeWebPWithSkia(quality)
+            return WebpEncoder.encode(this, quality)
           }
 
           TrailblazeImageFormat.JPEG -> {
@@ -2210,49 +2328,6 @@ class PlaywrightScreenState(
           }
         }
         return outputStream.toByteArray()
-      }
-    }
-
-    /** Encodes a BufferedImage to WebP using Skia (via Skiko). */
-    private fun BufferedImage.encodeWebPWithSkia(quality: Float): ByteArray {
-      val rgbImage = if (this.type == BufferedImage.TYPE_INT_ARGB) {
-        this
-      } else {
-        val converted = BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB)
-        val g = converted.createGraphics()
-        g.drawImage(this, 0, 0, null)
-        g.dispose()
-        converted
-      }
-
-      val argbPixels = rgbImage.getRGB(0, 0, width, height, null, 0, width)
-      val bytes = ByteArray(width * height * 4)
-      for (i in argbPixels.indices) {
-        val pixel = argbPixels[i]
-        val offset = i * 4
-        bytes[offset] = (pixel and 0xFF).toByte()             // B
-        bytes[offset + 1] = (pixel shr 8 and 0xFF).toByte()   // G
-        bytes[offset + 2] = (pixel shr 16 and 0xFF).toByte()  // R
-        bytes[offset + 3] = (pixel shr 24 and 0xFF).toByte()  // A
-      }
-
-      val imageInfo = org.jetbrains.skia.ImageInfo.makeN32(
-        width, height, org.jetbrains.skia.ColorAlphaType.UNPREMUL,
-      )
-      // Note: duplicates BufferedImageUtils.encodeWithSkia() — kept separate because
-      // trailblaze-playwright does not depend on trailblaze-host.
-      val skiaImage = org.jetbrains.skia.Image.makeRaster(imageInfo, bytes, width * 4)
-      try {
-        val encoded = skiaImage.encodeToData(
-          org.jetbrains.skia.EncodedImageFormat.WEBP, (quality * 100).toInt(),
-        ) ?: error("Skia failed to encode image as WEBP")
-        try {
-          return encoded.bytes
-        } finally {
-          encoded.close()
-        }
-      } finally {
-        skiaImage.close()
       }
     }
   }

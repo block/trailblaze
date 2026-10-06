@@ -4,16 +4,9 @@
 
 # `assertNotVisibleWithText`
 
-Asserts that an element with the provided text is NOT visible on the screen. The text argument is required.
-Only provide additional fields if the text provided exactly matches elsewhere on the screen.
-Only use this tool if the user is explicitly asking to verify an element that is a TextView, Button, or any views that can display text.
-IF the view that is being referenced does not display text, DO NOT use this tool.
-In this case, the additional fields will be used to identify the specific view to assert visibility for.
-
-NOTE:
-- This will wait for the item to appear if it is not visible yet.
-- You may need to scroll down the page or close the keyboard if it is not visible in the screenshot.
-- Use this tool whenever an objective begins with the word expect, verify, confirm, or assert (case-insensitive).
+Assert no element with this text is on screen. Waits for a matching element to disappear (e.g. a
+loading spinner) before failing. Text must match an element's whole text, case-insensitively, so
+use 'Loading.*' for "Loading...". Only for elements that display text.
 
 ## Source
 
@@ -31,17 +24,14 @@ NOTE:
 ### Required parameters
 
 - `text` — `String`
-  The text to match on. This is required.
-NOTE:
-- The text can be a regular expression.
-- If more than one view matches the text, other optional properties are required to disambiguate.
+  Text to match; may be a regex. If several elements match, set the other fields to disambiguate.
 
 ### Optional parameters
 
 - `index` — `Integer`
-  0-based index of the view to select among those that match all other criteria.
+  0-based index among the elements matching the other fields.
 - `id` — `String`
-  Regex for selecting the view by id. This is helpful to disambiguate when multiple views have the same text.
+  Resource id regex, to disambiguate elements with the same text.
 - `enabled` — `Boolean`
 - `selected` — `Boolean`
 

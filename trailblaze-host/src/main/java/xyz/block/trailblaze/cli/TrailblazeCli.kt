@@ -17,7 +17,6 @@ import xyz.block.trailblaze.ui.TrailblazeDesktopApp
 import xyz.block.trailblaze.ui.TrailblazeDesktopUtil
 import xyz.block.trailblaze.ui.TrailblazePortManager
 import xyz.block.trailblaze.util.Console
-import xyz.block.trailblaze.util.canRunDesktopGui
 import kotlinx.coroutines.CancellationException
 import java.util.concurrent.Callable
 import java.util.concurrent.atomic.AtomicBoolean
@@ -47,8 +46,8 @@ internal const val RECORDING_LOG_STABILITY_POLL_MS = 2_000L
  * Usage:
  *   trailblaze                     - Show help
  *   trailblaze --stop              - Stop the daemon
- *   trailblaze app                 - Launch desktop GUI
- *   trailblaze app --headless      - Start headless daemon
+ *   trailblaze app                 - Open Trail Runner
+ *   trailblaze app start           - Start the daemon
  *   trailblaze config target myapp                                 - Set target app
  *   trailblaze app --stop          - Stop the daemon
  *   trailblaze app --status        - Check daemon status
@@ -56,7 +55,7 @@ internal const val RECORDING_LOG_STABILITY_POLL_MS = 2_000L
  *   trailblaze step "description"  - Run one step via the built-in AI agent (requires an LLM)
  *   trailblaze ask "question"      - Ask the built-in agent about what's on screen (requires an LLM)
  *   trailblaze session end         - End the CLI session
- *   trailblaze mcp                 - Start MCP server (STDIO transport + tray icon)
+ *   trailblaze mcp                 - Start MCP server (STDIO transport)
  *   trailblaze report              - Generate HTML report for all sessions
  *   trailblaze device               - List connected devices
  *   trailblaze show                - Open the multi-device live grid (/devices/all) in your default browser
@@ -106,17 +105,15 @@ object TrailblazeCli {
     configProvider: () -> TrailblazeDesktopAppConfig,
     extraSubcommands: () -> List<Any> = ::emptyList,
   ) {
-    // Every Trailblaze process is a macOS agent app (LSUIElement) unless it deliberately
-    // shows a window. Read at AWT initialization, so it must be set before ANY code path
-    // loads an AWT class: a CLI command or headless daemon that touches AWT would otherwise
-    // initialize as a regular GUI app, which macOS activates — stealing keyboard focus from
-    // whatever the user is typing. The one headed path (`trailblaze app` without --headless)
-    // clears this in MainTrailblazeApp before its first AWT touch.
+    // Every Trailblaze process is a macOS agent app (LSUIElement). Read at AWT initialization,
+    // so it must be set before ANY code path loads an AWT class: a CLI command or daemon that
+    // touches AWT would otherwise initialize as a regular GUI app, which macOS activates —
+    // stealing keyboard focus from whatever the user is typing.
     System.setProperty(TrailblazeDesktopUtil.AWT_AGENT_APP_PROPERTY, "true")
 
     // Fail fast on Intel macOS / Windows with a clear "platform unsupported"
-    // message — runs before any code path could touch Skiko's JNI loader and
-    // surface a cryptic LibraryLoadException instead.
+    // message — runs before any code path could touch a native library the JAR
+    // leaves out for those hosts and fail with a cryptic load error instead.
     TrailblazeDesktopUtil.assertSupportedPlatform()
 
     // Install the workspace-config-dir resolver into the model-level holder so the
@@ -403,6 +400,7 @@ object TrailblazeCli {
       CliCallerContext.withCallerEnv(request.env) {
         CliCallerContext.withCallerCwd(callerCwd) {
         CliCallerContext.withServingPort(servingPort) {
+        CliCallerContext.withServedTargets(resolvedProviders.appTargetsProvider) {
         CliOutCapture.withCapture(
           transcript.sink(CliExecStream.STDOUT),
           transcript.sink(CliExecStream.STDERR),
@@ -449,6 +447,7 @@ object TrailblazeCli {
             )
             TrailblazeExitCode.INFRA_FAILED.code
           }
+        }
         }
         }
         }
@@ -627,7 +626,7 @@ class TrailblazeCliCommand(
       return shutdownDaemonAndWait(getRunningDaemonPortUnchecked())
     }
 
-    // No subcommand → show help. Use `trailblaze app` to launch the desktop GUI.
+    // No subcommand → show help. Use `trailblaze app` to open Trail Runner.
     //
     // Mirror the renderer AND subcommand wiring that `TrailblazeCli.run` and `executeForDaemon`
     // apply to their `CommandLine` instances. Without the renderer, bare `trailblaze` (no args)
@@ -645,17 +644,11 @@ class TrailblazeCliCommand(
   }
 
   /**
-   * Core desktop launch logic used by [AppCommand].
+   * Run the daemon in this process until it is stopped. Used by `trailblaze app start
+   * --foreground` (the daemon auto-start spawn) and by the launcher-less IDE fallbacks in
+   * [AppCommand].
    */
-  internal fun launchDesktop(headless: Boolean): Int {
-    // The desktop GUI requires macOS with a display — auto-fallback to headless on other platforms
-    val effectiveHeadless = if (!headless && !canRunDesktopGui()) {
-      Console.log("Desktop GUI not available on this platform — starting in headless mode.")
-      true
-    } else {
-      headless
-    }
-
+  internal fun launchDaemonInForeground(): Int {
     // Before the probe: a device's `adb forward` on the configured port answers /ping, so
     // attaching without this check would hide a port no daemon can ever bind.
     TrailblazeDevicePort.requireDaemonPortsOutsideDeviceAllocationRange(
@@ -663,25 +656,7 @@ class TrailblazeCliCommand(
       httpsPort = getEffectiveHttpsPort(),
     )
 
-    // Check if Trailblaze is already running.
-    // Note: "show window" is handled by AppCommand.launchInBackground() before this method
-    // is called. This path runs in --foreground mode (background process or launcher-not-found
-    // fallback), so just attach to an existing daemon if present.
-    val daemonAlreadyRunning = DaemonClient(port = getEffectivePort()).use { daemon ->
-      if (!daemon.isRunningBlocking()) return@use false
-
-      val response = daemon.showWindowBlocking()
-      if (response.success) {
-        Console.log("Window shown.")
-        return TrailblazeExitCode.SUCCESS.code
-      }
-
-      // Daemon is running but has no window (e.g., started by `trailblaze mcp`).
-      // Start the desktop GUI alongside the existing daemon — it will skip starting
-      // a second HTTP server since the daemon is already handling that.
-      Console.log("Trailblaze server is running. Starting desktop GUI...")
-      true
-    }
+    val daemonAlreadyRunning = DaemonClient(port = getEffectivePort()).use { it.isRunningBlocking() }
 
     // Apply port overrides to settings if any non-default ports are active
     val app = appProvider()
@@ -689,10 +664,9 @@ class TrailblazeCliCommand(
       app.applyPortOverrides(httpPort = getEffectivePort(), httpsPort = getEffectiveHttpsPort())
     }
 
-    // Start the app (GUI or headless based on flag). When no daemon was running above, this
-    // process must own the port — losing the bind race exits instead of leaving a duplicate
-    // tray icon.
-    app.startTrailblazeDesktopApp(headless = effectiveHeadless, daemonAlreadyRunning = daemonAlreadyRunning)
+    // When no daemon was running above, this process must own the port — losing the bind race
+    // exits instead of leaving a second process that serves nothing.
+    app.startTrailblazeDesktopApp(daemonAlreadyRunning = daemonAlreadyRunning)
     return TrailblazeExitCode.SUCCESS.code
   }
 }

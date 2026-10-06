@@ -134,6 +134,7 @@ class TrailblazeSessionManager(
    * @param trailblazeDeviceInfo Device info including classifiers
    * @param trailblazeDeviceId Optional device ID
    * @param rawYaml Optional raw YAML content
+   * @param trailSourceUrl Immutable GitHub permalink for the source trail YAML
    */
   fun emitSessionStartLog(
     session: TrailblazeSession,
@@ -145,6 +146,7 @@ class TrailblazeSessionManager(
     trailblazeDeviceInfo: TrailblazeDeviceInfo,
     trailblazeDeviceId: TrailblazeDeviceId? = null,
     rawYaml: String? = null,
+    trailSourceUrl: String? = null,
   ) {
     // Fall back to session metadata when explicit params are blank (e.g. when the
     // caller doesn't have test context but TrailblazeLoggingRule stored it on the session).
@@ -160,6 +162,7 @@ class TrailblazeSessionManager(
       trailblazeDeviceInfo = trailblazeDeviceInfo,
       trailblazeDeviceId = trailblazeDeviceId,
       rawYaml = rawYaml,
+      trailSourceUrl = trailSourceUrl,
     )
 
     val startLog = TrailblazeLog.TrailblazeSessionStatusChangeLog(
@@ -252,6 +255,7 @@ class TrailblazeSessionManager(
         durationMs = session.calculateDuration(),
         maxCalls = exception.maxCalls,
         objectivePrompt = exception.objectivePrompt,
+        message = exception.message,
       )
     }
 

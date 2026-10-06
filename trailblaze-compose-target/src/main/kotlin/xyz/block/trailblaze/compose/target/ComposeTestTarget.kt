@@ -3,6 +3,7 @@ package xyz.block.trailblaze.compose.target
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.semantics.SemanticsNode
 import xyz.block.trailblaze.api.DriverDispatch
+import xyz.block.trailblaze.api.dispatchThenSettle
 
 /**
  * Abstraction over a Compose UI test target.
@@ -16,9 +17,7 @@ import xyz.block.trailblaze.api.DriverDispatch
  * Production consumers will see these on their classpath. If the weight becomes a concern, the
  * `DriverDispatch` interface could be carved out into a lighter `trailblaze-driver-api` module.
  *
- * Implementations:
- * - [ComposeUiTestTarget]: Wraps `ComposeUiTest` for existing test harnesses.
- * - [LiveWindowComposeTarget]: Wraps a live `ComposeWindow` for self-testing.
+ * Implementation: [ComposeUiTestTarget], which wraps `ComposeUiTest` for existing test harnesses.
  */
 interface ComposeTestTarget : DriverDispatch {
 
@@ -69,12 +68,21 @@ interface ComposeTestTarget : DriverDispatch {
    * the blocking [waitForIdle] settle primitive inline. The suspend signature exists so
    * tools (whose `executeWithCompose` is already suspend) can call it without ceremony.
    *
-   * The `try { ... } finally { waitForIdle() }` shape ensures the settle wait runs whether
-   * [action] returns normally or throws — see [DriverDispatch] kdoc for the rationale.
+   * The settle wait runs whether [action] returns normally or throws. A `ComposeTimeoutException`
+   * from it after the action landed is logged rather than failing the dispatch, so a click that
+   * already changed the UI is never reported as failed. Any other exception [waitForIdle] throws —
+   * it rethrows exceptions the app raised on the UI thread — still fails it. See [DriverDispatch]
+   * kdoc. (Compose Desktop's own `ComposeUiTest.waitForIdle()` has no timeout; it waits until idle.)
    */
-  override suspend fun <R> dispatchAndAwaitSettle(action: suspend () -> R): R = try {
-    action()
-  } finally {
-    waitForIdle()
-  }
+  override suspend fun <R> dispatchAndAwaitSettle(action: suspend () -> R): R =
+    dispatchThenSettle(action, settle = ::waitForIdle, isSettleTimeout = ::isComposeIdleTimeout)
 }
+
+/**
+ * Whether [error] is Compose test reporting that the UI never went idle. Matched by class name
+ * because this module only compile-depends on `compose-ui-test`, and a production target may not
+ * ship it at all.
+ */
+internal fun isComposeIdleTimeout(error: Throwable): Boolean =
+  generateSequence(error) { it.cause?.takeIf { cause -> cause !== it } }
+    .any { it.javaClass.name == "androidx.compose.ui.test.ComposeTimeoutException" }

@@ -22,16 +22,6 @@ sealed interface PromptStep {
   val maxRetries: Int?
 }
 
-fun PromptStep.toDetailedString() {
-  buildString {
-    appendLine("Type: ${this::class.simpleName}")
-    appendLine("Prompt: $prompt")
-    appendLine("Recordable: $recordable")
-    appendLine("Recording: $recording")
-    appendLine("MaxRetries: $maxRetries")
-  }
-}
-
 @Serializable
 data class DirectionStep(
   val step: String,

@@ -15,10 +15,11 @@ import com.google.gson.JsonObject
 internal object PlaywrightScreencast {
 
   /**
-   * A decoded `Page.screencastFrame` event: the still-base64 JPEG payload plus the
-   * `sessionId` Chrome expects echoed back in the ack before it emits the next frame.
+   * A decoded `Page.screencastFrame` event: the still-base64 JPEG payload, the `sessionId` Chrome
+   * expects echoed back in the ack before it emits the next frame, and — when Chrome reports it —
+   * the instant it swapped the frame onto the screen (`metadata.timestamp`, as epoch ms).
    */
-  data class ScreencastFrame(val dataBase64: String, val sessionId: Int)
+  data class ScreencastFrame(val dataBase64: String, val sessionId: Int, val swappedAtMs: Long? = null)
 
   /**
    * Params for `Page.startScreencast`.
@@ -61,7 +62,47 @@ internal object PlaywrightScreencast {
     } catch (_: NumberFormatException) {
       return null
     }
-    return ScreencastFrame(dataBase64 = data, sessionId = sessionId)
+    return ScreencastFrame(dataBase64 = data, sessionId = sessionId, swappedAtMs = swappedAtMs(event))
+  }
+
+  /** `metadata.timestamp` — seconds since the epoch, fractional — as epoch ms, or null when absent. */
+  private fun swappedAtMs(event: JsonObject): Long? {
+    val metadata = event.get("metadata")?.takeIf { it.isJsonObject }?.asJsonObject ?: return null
+    val seconds = metadata.get("timestamp")?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isNumber }
+      ?.asDouble ?: return null
+    return if (seconds > 0 && seconds.isFinite()) (seconds * 1000).toLong() else null
+  }
+
+  /**
+   * Places one screencast's frames on the host clock at the instant Chrome showed them, rather than
+   * when they were read. Use one per screencast: it learns that browser's clock.
+   *
+   * Receipt time is late by however long the frame waited to be read. Playwright Java reads CDP
+   * events only while its connection thread is blocked inside a Playwright call, so a frame swapped
+   * while that thread is busy with anything else — a tool encoding its screenshot, building a tree,
+   * writing a log — waits for the next call, and is stamped that much late. Measured: a frame
+   * painted during 150 ms of such work was stamped 147 ms late, every time. A recording placed by
+   * those stamps shows each change late by the same amount, so a step lands on the screen before
+   * the one it acted on.
+   *
+   * Chrome's swap time is on the browser's clock, which is not this host's when the browser runs
+   * elsewhere (a remote CDP endpoint). Each frame's receipt minus its swap is the clock offset plus
+   * that frame's delay, so the smallest seen is the offset plus the *least* delay any frame had, and
+   * a frame is placed at its swap time plus that. For a local browser that is within a few ms of
+   * the swap; for a remote one it is the swap moved onto this host's clock. Until a frame arrives
+   * promptly the estimate is high, so the first frames can be as late as receipt — never later.
+   */
+  class FrameClock {
+    /** Smallest (receipt − swap) seen so far, in ms. */
+    private var offsetMs: Long? = null
+
+    /** When [frame] showed the screen, in host epoch ms; [receivedAtMs] when it carries no swap time. */
+    fun capturedAtMs(frame: ScreencastFrame, receivedAtMs: Long): Long {
+      val swappedAt = frame.swappedAtMs ?: return receivedAtMs
+      val offset = minOf(offsetMs ?: Long.MAX_VALUE, receivedAtMs - swappedAt)
+      offsetMs = offset
+      return swappedAt + offset
+    }
   }
 
   /** Balances frame smoothness against per-frame size for a local-daemon WebSocket. */

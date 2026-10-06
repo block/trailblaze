@@ -15,18 +15,20 @@ import xyz.block.trailblaze.util.Console
 
 @Serializable
 @TrailblazeToolClass("tapOnPoint")
-@LLMDescription("""Tap or long press on the UI at the provided coordinates.""")
+@LLMDescription(
+  "Tap or long press at device screen coordinates, in the units of element bounds (not screenshot " +
+    "pixels).",
+)
 data class TapOnPointTrailblazeTool(
-  @param:LLMDescription("The center X coordinate for the clickable element")
-  override val x: Int,
-  @param:LLMDescription("The center Y coordinate for the clickable element")
-  override val y: Int,
-  @param:LLMDescription("A standard tap is default, but return 'true' to perform a long press instead.")
+  @param:LLMDescription("X coordinate (element center).")
+  val x: Int,
+  @param:LLMDescription("Y coordinate (element center).")
+  val y: Int,
+  @param:LLMDescription("Long press instead of tap.")
   val longPress: Boolean = false,
   override val reasoning: String? = null,
 ) : MapsToMaestroCommands(),
-  ReasoningTrailblazeTool,
-  xyz.block.trailblaze.toolcalls.RawCoordinateTapTool {
+  ReasoningTrailblazeTool {
 
   override fun toMaestroCommands(): List<Command> = listOf(
     TapOnPointV2Command(

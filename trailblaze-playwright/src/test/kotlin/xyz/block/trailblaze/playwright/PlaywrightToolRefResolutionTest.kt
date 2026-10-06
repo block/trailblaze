@@ -223,7 +223,7 @@ class PlaywrightToolRefResolutionTest {
   }
 
   @Test
-  fun `non-existent ref returns error mentioning playwright_snapshot`() {
+  fun `non-existent ref returns error pointing at the current element list`() {
     page.setContent(testHtml)
 
     val screenState = PlaywrightScreenState(
@@ -239,7 +239,7 @@ class PlaywrightToolRefResolutionTest {
     assertNull(locator)
     assertNotNull(error)
     assertIs<TrailblazeToolResult.Error.ExceptionThrown>(error)
-    assertContains(error.errorMessage, "web_snapshot")
+    assertContains(error.errorMessage, "current element list")
   }
 
   @Test
@@ -261,7 +261,7 @@ class PlaywrightToolRefResolutionTest {
     assertNull(locator)
     assertIs<TrailblazeToolResult.Error.ExceptionThrown>(error)
     assertContains(error.errorMessage, "combobox \"Search Wikipedia\"")
-    assertContains(error.errorMessage, "web_snapshot")
+    assertContains(error.errorMessage, "current element list")
   }
 
   @Test

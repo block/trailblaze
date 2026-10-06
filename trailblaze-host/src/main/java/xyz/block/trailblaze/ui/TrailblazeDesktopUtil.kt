@@ -3,9 +3,6 @@ package xyz.block.trailblaze.ui
 import com.charleskorn.kaml.Yaml
 import com.charleskorn.kaml.YamlConfiguration
 import com.charleskorn.kaml.YamlMap
-import com.sun.jna.NativeLibrary
-import com.sun.jna.NativeLong
-import com.sun.jna.Pointer
 import xyz.block.trailblaze.bundle.yaml.YamlEmitter
 import xyz.block.trailblaze.config.project.TrailblazeWorkspaceConfigResolver
 import xyz.block.trailblaze.config.project.WorkspaceTrailsDeclaration
@@ -18,42 +15,37 @@ import xyz.block.trailblaze.ui.goose.gooseRecipeJson
 import xyz.block.trailblaze.ui.goose.TrailblazeGooseExtension
 import xyz.block.trailblaze.ui.models.TrailblazeServerState
 import java.awt.Desktop
-import java.awt.Taskbar
 import java.io.File
 import java.io.FileWriter
 import java.net.URI
 import java.net.URLEncoder
 import java.nio.file.Paths
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
-import javax.imageio.ImageIO
 import kotlin.io.encoding.Base64
 import kotlin.io.encoding.ExperimentalEncodingApi
 import xyz.block.trailblaze.util.Console
 
 object TrailblazeDesktopUtil {
 
-  private val trailblazeAppIcon by lazy {
-    ImageIO.read(TrailblazeDesktopUtil::class.java.classLoader.getResource("icons/icon.png"))
-  }
-
   /**
    * Aborts startup with a clear error if the current OS+arch is not one we ship
-   * Skiko native libraries for in the uber JAR. Without this check, an unsupported
-   * host would fail several layers deep inside Skiko's JNI loader the first time
-   * anything touched WebP screenshot encoding — typically as
-   * `LibraryLoadException: Cannot find libskiko-<os>-<arch>.so.sha256`.
+   * native libraries for in the uber JAR. Without this check, an unsupported host
+   * would fail several layers deep inside a JNI loader the first time anything
+   * touched WebP screenshot encoding.
    *
-   * Supported: macOS Apple Silicon (arm64), Linux x64, Linux arm64.
-   * Unsupported: Intel macOS, Windows, FreeBSD, and any other OS/arch — deliberately
-   * omitted from the per-OS `skiko-awt-runtime-*` declarations in this module's build
-   * to keep the uber JAR small.
+   * Supported: macOS Apple Silicon (arm64), Linux x64, Linux arm64. Linux also needs glibc 2.27 or
+   * newer, which the WebP encoder's natives are built against; this gate does not check it.
+   * Unsupported: Intel macOS, Windows, FreeBSD, and any other OS/arch — the uber JAR
+   * leaves out the WebP encoder's natives for them to stay small.
    *
    * Reads `os.name` / `os.arch` directly rather than going through `DesktopOsType`'s
    * mac/Windows/Linux trichotomy: the latter classifies every non-Mac/non-Windows host
    * as Linux, which would let a FreeBSD or Linux-PowerPC host pass this gate and fail
    * later inside the JNI loader instead of here. We also require an explicit
-   * `x86_64` / `amd64` / `aarch64` / `arm64` value so unusual Linux architectures
-   * (s390x, ppc64le, riscv64) are rejected up front.
+   * `x86_64` / `amd64` / `aarch64` value so unusual Linux architectures (s390x, ppc64le,
+   * riscv64) are rejected up front. `arm64` is rejected too: the WebP encoder's loader maps it to
+   * native directories the JAR does not ship (HotSpot reports `aarch64` on both supported arm hosts).
    *
    * On failure: prints the message to stderr via [Console.error] and `exitProcess(1)`
    * — same pattern as [xyz.block.trailblaze.host.WorkspaceCompileBootstrap.bootstrapOrExit] —
@@ -72,7 +64,7 @@ object TrailblazeDesktopUtil {
     val isMacKernel = osNameLower.contains("mac")
     val isLinuxKernel = osNameLower.contains("linux")
     val isX86_64 = osArchLower == "x86_64" || osArchLower == "amd64"
-    val isArm64 = osArchLower == "aarch64" || osArchLower == "arm64"
+    val isArm64 = osArchLower == "aarch64"
 
     val supported = (isMacKernel && isArm64) || (isLinuxKernel && (isX86_64 || isArm64))
     if (supported) return
@@ -82,8 +74,8 @@ object TrailblazeDesktopUtil {
         appendLine("Trailblaze does not support this platform: $osName ($osArch).")
         appendLine("Supported platforms:")
         appendLine("  - macOS Apple Silicon (arm64)")
-        appendLine("  - Linux x64 (x86_64 / amd64)")
-        append("  - Linux arm64 (aarch64)")
+        appendLine("  - Linux x64 (x86_64 / amd64), glibc 2.27+")
+        append("  - Linux arm64 (aarch64), glibc 2.27+")
       },
     )
     kotlin.system.exitProcess(1)
@@ -249,7 +241,8 @@ object TrailblazeDesktopUtil {
    *
    * Precedence:
    *  1. An explicit user choice — [TrailblazeServerState.SavedTrailblazeAppConfig.trailsDirectory],
-   *     when it names something other than [defaultTrailsDirectory].
+   *     when it is flagged as picked (`trailsDirectoryChosen`) or names something other than
+   *     [defaultTrailsDirectory].
    *  2. A `trails:` declaration in the workspace this process launched in
    *     ([launchWorkspaceDeclaration]).
    *  3. [defaultTrailsDirectory].
@@ -259,12 +252,12 @@ object TrailblazeDesktopUtil {
    * workspace. Rung 2 also fires only on an explicit declaration, so a workspace that doesn't
    * opt in changes nothing for anyone.
    *
-   * **Why rung 1 is "non-null AND not the default" rather than just non-null.** Settings files
+   * **Why an unflagged value must also differ from the default.** Settings files
    * written before `trailsDirectory` stopped being materialized carry the derived default as if
    * it were a choice (see `CliConfigHelper.hydrateDefaults`). Treating that as an override would
    * make rung 2 unreachable for every existing install — the whole point of the field being
-   * nullable. A value equal to the default is indistinguishable from never having chosen, and
-   * behaves identically either way except for letting the workspace answer.
+   * nullable. Only a pick made through the settings patch is flagged, so an unflagged value
+   * equal to the default is read as never having chosen.
    *
    * @param appConfig The current app configuration
    * @return The effective trails directory
@@ -331,11 +324,69 @@ object TrailblazeDesktopUtil {
   private fun explicitTrailsDirectoryOrNull(
     appConfig: TrailblazeServerState.SavedTrailblazeAppConfig,
     default: String,
-  ): String? = appConfig.trailsDirectory
-    ?.takeIf { it.isNotBlank() }
+  ): String? {
+    val stored = appConfig.trailsDirectory?.takeIf { it.isNotBlank() } ?: return null
+    // A recorded pick wins even when it equals the default. Activating a repo
+    // (`PUT /api/workspace`) stores its declared `<root>/trails` and moves app data to
+    // `<root>/.trailblaze`, so the two are equal — read as unchosen, the LAUNCH workspace's
+    // declaration would win and send saves back to the clone the daemon started in.
+    if (appConfig.trailsDirectoryChosen) return stored
     // Compared canonically: the persisted value and the derived default are both produced by
     // `canonicalPath`, but a hand-edited settings file need not be.
-    ?.takeIf { runCatching { File(it).canonicalPath != File(default).canonicalPath }.getOrDefault(it != default) }
+    val isDefault = runCatching { File(stored).canonicalPath == File(default).canonicalPath }
+      .getOrDefault(stored == default)
+    return stored.takeUnless { isDefault }
+  }
+
+  /**
+   * The workspace config folder behind the trails directory in effect, or null when no workspace
+   * declares that directory. Config-dir and `defaults.target` lookups anchor on this rather than
+   * on [launchWorkspaceDeclaration], so trailmaps and targets follow a workspace switch the same
+   * way the trails directory does.
+   */
+  internal fun effectiveWorkspaceConfigDir(appConfig: TrailblazeServerState.SavedTrailblazeAppConfig): File? =
+    effectiveWorkspaceConfigDir(appConfig, launchWorkspaceDeclaration())
+
+  /** Testable overload: [launchDeclaration] stands in for the launch cwd's declaration. */
+  internal fun effectiveWorkspaceConfigDir(
+    appConfig: TrailblazeServerState.SavedTrailblazeAppConfig,
+    launchDeclaration: WorkspaceTrailsDeclaration?,
+  ): File? {
+    val effective = File(
+      getEffectiveTrailsDirectory(appConfig, workspaceTrailsDirProvider = { launchDeclaration?.trailsDir }),
+    )
+    // Saved by `trailblaze app`, so it holds even when the repo's declared folder is outside it,
+    // where walking up from that folder would never find the repo.
+    val activatedConfigDir = appConfig.trailsDirectoryConfigDir?.takeIf { it.isNotBlank() }
+    val activatedTrailsDir = appConfig.trailsDirectory?.takeIf { it.isNotBlank() }
+    if (activatedConfigDir != null && activatedTrailsDir != null && sameFile(File(activatedTrailsDir), effective)) {
+      return File(activatedConfigDir)
+    }
+    if (launchDeclaration != null && sameFile(launchDeclaration.trailsDir, effective)) return launchDeclaration.configDir
+    return ownWorkspaceDeclarationOrNull(effective)?.configDir
+  }
+
+  private fun sameFile(a: File, b: File): Boolean =
+    runCatching { a.canonicalPath == b.canonicalPath }.getOrDefault(a.absolutePath == b.absolutePath)
+
+  /**
+   * The declaration of the workspace [dir] sits in, when that declaration names [dir] itself.
+   * Positives are memoized (this runs on every config-dir read); a miss re-resolves for the same
+   * reason [launchWorkspaceDeclaration] doesn't cache one.
+   */
+  private fun ownWorkspaceDeclarationOrNull(dir: File): WorkspaceTrailsDeclaration? {
+    val key = runCatching { dir.canonicalPath }.getOrNull() ?: return null
+    ownDeclarations[key]?.let { return it }
+    val declaration = TrailblazeWorkspaceConfigResolver.workspaceTrailsDeclaration(
+      fromPath = dir.toPath(),
+      consumer = "desktop trails directory",
+      // The question is about [dir]'s own workspace, not whichever one the env var names.
+      envReader = { null },
+    )?.takeIf { sameFile(it.trailsDir, dir) } ?: return null
+    return declaration.also { ownDeclarations[key] = it }
+  }
+
+  private val ownDeclarations = ConcurrentHashMap<String, WorkspaceTrailsDeclaration>()
 
   /**
    * Where trails live when nobody has said otherwise: `<app data dir>/../trails`.
@@ -372,10 +423,9 @@ object TrailblazeDesktopUtil {
    * workspace's *config* dir, where the trails directory is irrelevant, and the trails rung can
    * lose to an explicit choice — so [logDeclarationOutcomeOnce] logs at the decision instead.
    *
-   * A consequence worth knowing either way: an ALREADY-RUNNING daemon does not re-anchor when
-   * you launch from a different repo, because `trailblaze app` hands off to the existing window
-   * rather than starting a process with the new cwd. Restart it (`trailblaze app --stop`) to
-   * switch workspaces.
+   * Launch-time only: `trailblaze app` from another repo hands the RUNNING daemon that repo via
+   * `PUT /api/workspace` instead of restarting it, so this keeps naming the first repo. Lookups
+   * that must follow a switch go through [effectiveWorkspaceConfigDir].
    */
   internal fun launchWorkspaceDeclaration(): WorkspaceTrailsDeclaration? {
     memoizedLaunchDeclaration?.let { return it }
@@ -389,48 +439,6 @@ object TrailblazeDesktopUtil {
 
   @Volatile
   private var memoizedLaunchDeclaration: WorkspaceTrailsDeclaration? = null
-
-  /**
-   * Sets the taskbar icon for macOS.
-   *
-   * This method sets the icon shown in the macOS Dock and app switcher.
-   * It uses the image located at "icons/icon.png" in the classpath.
-   */
-  fun setAppConfigForTrailblaze() {
-    if (Taskbar.isTaskbarSupported()) {
-      // This sets the icon shown in the macOS Dock and app switcher
-      Taskbar.getTaskbar().iconImage = trailblazeAppIcon
-    }
-  }
-
-  /**
-   * Shows or hides Trailblaze in the macOS Dock and app switcher.
-   *
-   * A hidden Trailblaze window should behave as a menu-bar accessory: the daemon and tray icon
-   * keep running, but there is no inert Dock icon. Switching back to the regular activation
-   * policy before showing the window restores normal Dock and app-switcher behavior.
-   *
-   * AWT exposes APIs for setting the Dock icon image, but not for changing the application's
-   * activation policy. Use the Objective-C runtime to call `NSApplication.setActivationPolicy`.
-   * Other desktop platforms intentionally keep their existing taskbar behavior.
-   */
-  internal fun setDockIconVisible(visible: Boolean) {
-    if (DesktopOsType.current() != DesktopOsType.MAC_OS) return
-
-    try {
-      MacOsApplication.setActivationPolicy(
-        if (visible) MacOsApplication.REGULAR else MacOsApplication.ACCESSORY,
-      )
-      if (visible) {
-        // Switching from accessory back to regular recreates the Dock tile with the JVM
-        // executable's generic icon. Reapply Trailblaze's image after the policy transition.
-        setAppConfigForTrailblaze()
-      }
-    } catch (e: Exception) {
-      // Losing the dynamic Dock behavior should not take down the daemon or its tray icon.
-      Console.log("Unable to update the macOS Dock icon visibility: ${e.message}")
-    }
-  }
 
   /**
    * Open [url] in the OS default browser. Returns `true` on success, `false` if the
@@ -648,33 +656,5 @@ object TrailblazeDesktopUtil {
     val gooseUrl = "goose://recipe?config=$recipeEncoded"
     Console.log(gooseUrl)
     openInDefaultBrowser(gooseUrl)
-  }
-
-  private object MacOsApplication {
-    const val REGULAR = 0L
-    const val ACCESSORY = 1L
-
-    private val objectiveC by lazy { NativeLibrary.getInstance("objc") }
-    private val getClass by lazy { objectiveC.getFunction("objc_getClass") }
-    private val registerSelector by lazy { objectiveC.getFunction("sel_registerName") }
-    private val sendMessage by lazy { objectiveC.getFunction("objc_msgSend") }
-
-    fun setActivationPolicy(policy: Long) {
-      val applicationClass = getClass.invokePointer(arrayOf("NSApplication"))
-      check(applicationClass != Pointer.NULL) { "NSApplication class is unavailable" }
-
-      val application = sendMessage.invokePointer(
-        arrayOf(applicationClass, selector("sharedApplication")),
-      )
-      check(application != Pointer.NULL) { "NSApplication.sharedApplication is unavailable" }
-
-      val succeeded = sendMessage.invokeInt(
-        arrayOf(application, selector("setActivationPolicy:"), NativeLong(policy)),
-      ) != 0
-      check(succeeded) { "NSApplication rejected activation policy $policy" }
-    }
-
-    private fun selector(name: String): Pointer =
-      registerSelector.invokePointer(arrayOf(name))
   }
 }

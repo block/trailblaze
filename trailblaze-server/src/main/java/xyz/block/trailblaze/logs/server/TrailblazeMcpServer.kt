@@ -209,15 +209,6 @@ class TrailblazeMcpServer(
   val targetTestAppProvider: () -> TrailblazeHostAppTarget,
   val homeCallbackHandler: ((parameters: Map<String, List<String>>) -> Result<String>)? = null,
   val additionalToolsProvider: (TrailblazeMcpSessionContext, Server) -> ToolRegistry = { _, _ -> ToolRegistry {} },
-  /**
-   * Optional callback to show the desktop window (for CLI integration). Written by the Compose
-   * UI thread after startup and read by Ktor HTTP threads — the show-window endpoint's
-   * "success=false until installed" contract depends on that cross-thread read, hence @Volatile.
-   */
-  @Volatile
-  var onShowWindowRequest: (() -> Unit)? = null,
-  /** Optional callback to shutdown the application (for CLI integration) */
-  var onShutdownRequest: (() -> Unit)? = null,
   /** Optional callback to handle CLI run requests (for CLI integration) */
   var onRunRequest: (suspend (CliRunRequest, onProgress: (String) -> Unit) -> CliRunResponse)? = null,
   /**
@@ -2254,28 +2245,17 @@ class TrailblazeMcpServer(
         homeCallbackHandler = homeCallbackHandler,
         trailRunnerPath = trailRunnerPath,
         installContentNegotiation = false,
-        // Always register CLI callbacks - onShowWindowRequest is checked dynamically
+        // Always register CLI callbacks
         cliCallbacks = CliEndpointCallbacks(
           onRunRequest = { request, onProgress ->
             onRunRequest?.invoke(request, onProgress)
               ?: CliRunResponse(success = false, error = "Run handler not configured")
           },
           onShutdownRequest = {
-            // The desktop app installs a callback that exits through Compose. Headless daemons have
-            // none, and this runs on the request's event-loop thread, where a direct System.exit
-            // deadlocks against Ktor's shutdown hook (see DaemonExit) — the port closes but the
-            // JVM and its subprocesses never die.
-            onShutdownRequest?.invoke() ?: DaemonExit.exitOffCallerThread()
-          },
-          onShowWindowRequest = {
-            // The UI installs this callback after Compose startup. Report honestly whether a
-            // window handler ran — a null callback (headless server, or UI still booting) must
-            // surface as success=false so `trailblaze app` attach detection and the
-            // duplicate-instance window handoff don't treat a no-op as "window shown".
-            onShowWindowRequest?.let { showWindow ->
-              showWindow()
-              true
-            } ?: false
+            // This runs on the request's event-loop thread, where a direct System.exit deadlocks
+            // against Ktor's shutdown hook (see DaemonExit) — the port closes but the JVM and its
+            // subprocesses never die.
+            DaemonExit.exitOffCallerThread()
           },
           onCliExecRequest = onCliExecRequest?.let { handler ->
             { request -> handler(request) }
@@ -2318,6 +2298,8 @@ class TrailblazeMcpServer(
               // loaded — no chance of a stale file misrepresenting the daemon.
               workspaceContentHash =
                 xyz.block.trailblaze.config.project.WorkspaceContentHasher.lastCapturedHash,
+              servedTrailmaps =
+                xyz.block.trailblaze.config.ServedTrailmaps.of(mcpBridge.getAvailableAppTargets()),
               pid = ProcessHandle.current().pid(),
             )
           },

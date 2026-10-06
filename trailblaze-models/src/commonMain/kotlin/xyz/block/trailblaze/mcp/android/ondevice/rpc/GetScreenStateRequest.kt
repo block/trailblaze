@@ -54,11 +54,11 @@ data class GetScreenStateRequest(
   val includeAnnotatedScreenshot: Boolean = false,
   val includeAllElements: Boolean = false,
   /**
-   * If true, the handler must return `Failure` when the accessibility service is not bound
-   * instead of silently falling back to UiAutomator. Used by readiness polling (waitForReady)
-   * for accessibility-driver flows so a UiAutomator fallback can't fake readiness while the
-   * accessibility framework is still binding. Default false preserves the existing behavior
-   * for normal screen-state queries that can use either backend.
+   * If true, the handler must return `Failure` when the accessibility service is not bound,
+   * even in migration mode, where the accessibility runner would otherwise capture a UiAutomator
+   * primary. Used by readiness polling (waitForReady) for accessibility-driver flows so that
+   * capture can't fake readiness while the accessibility framework is still binding. Outside
+   * migration mode the runner refuses an unbound service whatever this says.
    */
   val requireAndroidAccessibilityService: Boolean = false,
   /**

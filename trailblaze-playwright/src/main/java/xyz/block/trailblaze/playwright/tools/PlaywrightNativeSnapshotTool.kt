@@ -13,14 +13,9 @@ import xyz.block.trailblaze.util.Console
 
 @Serializable
 @TrailblazeToolClass("web_snapshot")
-@LLMDescription(
-  """
-Take a snapshot of the current page state and save it with the provided screen name.
-This captures a screenshot and the page's accessibility tree for logging and debugging.
-""",
-)
+@LLMDescription("Save a named screenshot and accessibility tree of the current page to the logs.")
 data class PlaywrightNativeSnapshotTool(
-  @param:LLMDescription("Name for the screen being captured (e.g., 'login_page', 'dashboard').")
+  @param:LLMDescription("Screen name, e.g. 'login_page'.")
   val screenName: String,
   override val reasoning: String? = null,
 ) : PlaywrightExecutableTool, ReasoningTrailblazeTool {

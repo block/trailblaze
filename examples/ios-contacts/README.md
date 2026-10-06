@@ -114,9 +114,8 @@ export interface OpenContactArgs {
 }
 
 /**
- * Open a specific contact by name from the iOS Contacts list. Use this
- * whenever the task is to open a contact, view a contact, navigate to
- * someone's contact card, or look up a particular person ...
+ * Open a contact by name (restarting Contacts first) and verify its detail
+ * screen shows the name. Fails if the contact doesn't exist.
  */
 export const contacts_ios_openContact = trailblaze.tool<OpenContactArgs>(
   { supportedPlatforms: ["ios"], requiresContext: true },  // ← spec object: gates + hints
@@ -192,8 +191,8 @@ export interface MyNewToolArgs {
 }
 
 /**
- * <One paragraph in plain English, including the task patterns the LLM
- * should match against. NO "USE THIS TOOL" — describe what it DOES.>
+ * <One or two plain-English sentences on what it DOES, plus any side effect
+ * or failure mode the LLM needs. No "Use this whenever..." phrasing lists.>
  */
 export const contacts_ios_myNewTool = trailblaze.tool<MyNewToolArgs>(
   { supportedPlatforms: ["ios"], requiresContext: true },
@@ -243,19 +242,18 @@ fires on restart.
 
 ### Tool-description discipline (load-bearing)
 
-The TSDoc above each exported `const` is read by the LLM at session start
-as the **only** way it learns what your tool does. Two non-obvious rules:
+The TSDoc above each exported `const`, and on each input field, is sent to
+the LLM on every request and is the **only** way it learns what your tool
+does. Keep it tight:
 
-- **Don't say "USE THIS TOOL FOR X".** The LLM picks tools by matching its
-  understanding of the task against the description. Telling it to "use"
-  the tool reduces the description to a single keyword and loses the
-  surrounding context. Describe what the tool *does* and include the task
-  patterns it matches — "Open a contact / view a contact card / navigate
-  to someone's contact" — not "USE THIS WHEN OPENING A CONTACT".
-- **Match real user phrasing.** If a trail says "open Albert Einstein's
-  contact" but the tool description only mentions "navigate to a contact's
-  detail screen", the LLM may not connect them. Include the synonyms
-  (open, view, navigate to, look up) that real prompts will use.
+- **Lead with what the tool does**, in a sentence or two — "Delete an iOS
+  contact by name, confirming the delete prompt."
+- **Keep what the LLM needs to call it correctly:** side effects (restarts
+  the app, deletes data), when it fails, and what sets it apart from a
+  similar tool.
+- **Cut the rest:** "Use this whenever..." lists of phrasings, and
+  implementation notes. Put maintainer notes in `//` comments, which are
+  not sent to the LLM.
 
 You can sanity-check picking by running a trail in `--verbose` mode and
 watching which tool the agent chose for each step.

@@ -1,7 +1,11 @@
 package xyz.block.trailblaze.playwright.tools
 
 import ai.koog.agents.core.tools.annotations.LLMDescription
+import com.microsoft.playwright.Locator
 import com.microsoft.playwright.Page
+import com.microsoft.playwright.Request
+import com.microsoft.playwright.TimeoutError
+import java.util.function.Consumer
 import kotlinx.serialization.Serializable
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
 import xyz.block.trailblaze.toolcalls.ReasoningTrailblazeTool
@@ -12,18 +16,9 @@ import xyz.block.trailblaze.util.Console
 
 @Serializable
 @TrailblazeToolClass("web_click")
-@LLMDescription(
-  """
-Click on a web element identified by its element ID, ARIA descriptor, or CSS selector.
-Use the element ID from the page elements list (e.g., 'e5'), an ARIA descriptor (e.g., 'button "Submit"'),
-or a CSS selector prefixed with 'css=' (e.g., 'css=#my-button', 'css=[data-testid="submit"]').
-""",
-)
+@LLMDescription("Click a web element.")
 data class PlaywrightNativeClickTool(
-  @param:LLMDescription(
-    "Element ID (e.g., 'e5'), ARIA descriptor (e.g., 'button \"Submit\"'), " +
-      "or CSS selector with css= prefix (e.g., 'css=#my-id', 'css=[data-testid=\"btn\"]').",
-  )
+  @param:LLMDescription("Element ID ('e5'), ARIA descriptor ('button \"Submit\"'), or 'css=<selector>'.")
   val ref: String? = null,
   override val reasoning: String? = null,
   val nodeSelector: TrailblazeNodeSelector? = null,
@@ -40,11 +35,14 @@ data class PlaywrightNativeClickTool(
     val description = PlaywrightExecutableTool.describeTarget(nodeSelector, ref)
     reasoning?.let { Console.log("### Reasoning: $it") }
     Console.log("### Clicking on: $description")
+    var target: Locator? = null
+    var navigationUrl: String? = null
     return try {
       val urlBefore = page.url()
       val (locator, error) =
         PlaywrightExecutableTool.validateAndResolveRef(page, ref, description, context, nodeSelector)
       if (error != null) return error
+      target = locator
       // Use Playwright's locator-driven click rather than `page.mouse().click(coords)`.
       // This inherits the full actionability gate (visible, stable, **receives events**,
       // enabled) so clicks that would silently land on the wrong element (e.g. an
@@ -52,7 +50,21 @@ data class PlaywrightNativeClickTool(
       // out loudly with a diagnostic instead of firing into the void. The agent already
       // pre-resolves the click center in `resolveToolCenter` for the screenshot overlay,
       // so we don't need to compute coords here.
-      locator!!.click()
+      // A click that starts a navigation also waits for it to load, so a timeout can come after
+      // the click landed. Diagnosing the target then would describe the page it opened instead.
+      // Only the page's own navigations count: an iframe that reloads itself says nothing here.
+      // `frame()` throws for a request sent before its frame exists, which is never the main frame.
+      val onRequest = Consumer<Request> {
+        if (it.isNavigationRequest && runCatching { it.frame() }.getOrNull() == page.mainFrame()) {
+          navigationUrl = it.url()
+        }
+      }
+      page.onRequest(onRequest)
+      try {
+        locator!!.click()
+      } finally {
+        page.offRequest(onRequest)
+      }
 
       val urlAfter = page.url()
       val navigated = urlBefore != urlAfter
@@ -66,6 +78,17 @@ data class PlaywrightNativeClickTool(
       }
       Console.log("### Click result: $feedback")
       TrailblazeToolResult.Success(message = feedback)
+    } catch (e: TimeoutError) {
+      // Playwright's message is its retry log, often thousands of characters that bury the reason.
+      val url = navigationUrl
+      val reason = if (url == null) target?.let { PlaywrightExecutableTool.describeWhyNotActionable(page, it) } else null
+      TrailblazeToolResult.Error.ExceptionThrown(
+        when {
+          url != null -> "Click on '$description' timed out while the page was loading $url, which did not finish in time."
+          reason != null -> "Click failed on '$description': timed out because $reason."
+          else -> "Click failed on '$description': ${e.message}"
+        },
+      )
     } catch (e: Exception) {
       TrailblazeToolResult.Error.ExceptionThrown("Click failed on '$description': ${e.message}")
     }

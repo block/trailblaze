@@ -9,22 +9,16 @@ import {
 const DEFAULT_TITLE = "Wikipedia";
 
 export interface OpenArticleArgs {
-  /** Article title to open (spaces → underscores in URL). */
+  /** Article title, as written; spaces are fine. */
   title?: string;
   /** Visible heading text to assert. Defaults to `title`. */
   expectedHeading?: string;
-  /** When true (default), tries to close any visible fundraising banner. */
+  /** Close the fundraising banner if showing. Default true. */
   dismissBanner?: boolean;
 }
 
 /**
- * Open a specific Wikipedia article by its title. Use this whenever the task
- * is to read, open, navigate to, or view a particular Wikipedia article —
- * e.g. "open the Albert Einstein article", "go to the Python (programming
- * language) page", "navigate to the Shakespeare article". Spaces in the
- * title are normalized to underscores (Wikipedia's URL convention) so you
- * can pass the title verbatim. Verifies the article rendered by checking
- * the #firstHeading element is visible.
+ * Open an English Wikipedia article by title and verify its heading matches.
  */
 // Verification asserts both that `#firstHeading` is visible AND that its text
 // matches `expectedHeading`. The element-visible check pins the assertion to

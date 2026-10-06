@@ -14,14 +14,12 @@ import xyz.block.trailblaze.ui.TrailblazeDeviceManager
 
 /**
  * Runs an arbitrary trail YAML against a connected device — the web Tool Palette's
- * "Run on Device" button. Mirrors the **exact** dispatch decisions
- * [xyz.block.trailblaze.ui.tabs.recording.dispatchYamlOnDevice] makes on the desktop, so
- * web parity is real instead of "close enough":
+ * "Run on Device" button. Dispatch depends on the device's screen stream:
  *
  *  - **[OnDeviceRpcDeviceScreenStream] (Android)** → [OnDeviceRpcDeviceScreenStream.dispatchYaml],
  *    a direct on-device RPC that bypasses session bookkeeping. Returns when the on-device runner
- *    accepts the request; the next frame poll picks up the result. Same fast-path the desktop's
- *    Replay button uses to avoid the ~2s session-bookkeeping latency.
+ *    accepts the request; the next frame poll picks up the result. This fast path avoids the ~2s
+ *    session-bookkeeping latency.
  *
  *  - **[PlaywrightDeviceScreenStream] (Web)** → [TrailblazeDeviceManager.runYaml] with
  *    `sendSessionEndLog = false` + `getOrCreateSessionResolution`. Critical: without

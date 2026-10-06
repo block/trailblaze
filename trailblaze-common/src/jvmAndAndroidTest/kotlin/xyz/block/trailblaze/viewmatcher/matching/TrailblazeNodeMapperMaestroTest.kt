@@ -239,18 +239,15 @@ class TrailblazeNodeMapperMaestroTest {
   }
 
   // ---- Platform-dispatched conversion -------------------------------------
-  // Pins the contract for `TreeNode.toTrailblazeNode(platform)`: Android and iOS produce
-  // populated trees through their respective per-platform mappers; web/desktop return null
-  // because Maestro doesn't drive those (the recorder skips them, the screen-state path
-  // skips them). A future "I added a Maestro path for X" needs to extend the helper, and
-  // this test is the place where that decision becomes visible.
+  // Pins the contract for `TreeNode.toTrailblazeNode(platform)`: only iOS produces a tree,
+  // because the host has no Maestro driver for any other platform. A future "I added a Maestro
+  // path for X" needs to extend the helper, and this test is the place where that decision
+  // becomes visible.
 
   @Test
-  fun `toTrailblazeNode returns Android tree for ANDROID platform`() {
+  fun `toTrailblazeNode returns null for ANDROID platform`() {
     val tree = TreeNode(attributes = mutableMapOf("text" to "Hello"))
-    val result = tree.toTrailblazeNode(Platform.ANDROID)
-    assertNotNull(result)
-    assertIs<DriverNodeDetail.AndroidMaestro>(result.driverDetail)
+    assertNull(tree.toTrailblazeNode(Platform.ANDROID))
   }
 
   @Test

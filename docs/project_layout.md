@@ -125,6 +125,22 @@ config:
 
 Use a language-and-region tag when the language variant matters (`fr-CA`, `es-MX`). The setting is supported on Android devices that expose `cmd locale set-device-locale`, Android emulators whose root shell can apply the documented `persist.sys.locale` fallback, and iOS Simulators. A requested locale that cannot be applied fails the run instead of silently using the device's previous language. The language remains on the device after the run, and omitting `locale` does not restore an earlier value. As with other device-global setup, don't run trails requesting different languages concurrently on the same device; the last setup wins. Named members inside a multi-device configuration reject `locale` until setup can apply it to every bound device.
 
+### Host-only devices
+
+Set `requiresHost: true` on a top-level, single-device `config.devices` entry when that device's leg must run with Trailblaze on the host (the CLI or daemon driving the device), never as an on-device instrumentation test bundled into a standalone test APK. Use it for a trail that needs something only the host can provide, such as a host-only tool or host files:
+
+```yaml
+config:
+  id: export-receipt
+  target: storefront
+  devices:
+    android-phone:
+      requiresHost: true
+    ios: {}
+```
+
+It resolves through the classifier lineage field by field: the closest entry that sets it wins, so `android: { requiresHost: true }` covers `android-phone` even when `android-phone` has its own entry pinning a driver. Set `requiresHost: false` on a narrower entry to opt that device back out. A standalone test APK refuses a trail whose entry for its device sets it, and a CI pipeline that sends tests to on-device runners can use the flag to keep those trails on the host. Multi-device configurations always run on the host, so they and their named devices reject the field.
+
 ### The workspace-anchor rule
 
 `trailblaze.yaml` is the workspace config filename, not a trail file. Trailblaze treats the
@@ -216,8 +232,10 @@ standalone `trailblaze-config/` directory at the workspace root instead. The top
 `trails/` directory with `trails/config/trailblaze.yaml` remains fully supported as the
 legacy layout.
 
-If your trails live under a differently-named directory, name it in `trailblaze.yaml` so the
-desktop app and Trail Runner browse it on launch instead of guessing `trails/`:
+If your trails live under a differently-named directory, name it in `trailblaze.yaml` instead
+of relying on the `trails/` guess. `trailblaze app` started in the repo uses it; a trails
+directory you pick in Settings afterwards outranks it (see
+[Declaring a trails directory](configuration.md#declaring-a-trails-directory)):
 
 ```yaml
 trails: legacy-trails

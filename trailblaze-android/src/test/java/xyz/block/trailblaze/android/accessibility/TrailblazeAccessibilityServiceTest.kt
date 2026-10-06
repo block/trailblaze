@@ -328,3 +328,27 @@ class TrailblazeAccessibilityServiceTest {
     assertTrue(elapsedMs < 5_000, "early exit must not run to timeout (took ${elapsedMs}ms)")
   }
 }
+
+/**
+ * [TrailblazeAccessibilityService.Companion.gestureCompletionTimeoutMs]: how long a dispatched
+ * gesture may take to report completion before it is failed as not dispatched.
+ */
+class GestureCompletionTimeoutTest {
+
+  @Test
+  fun `a tap waits out a several-second late completion`() {
+    // A farm emulator reported a tap ~7s after dispatch, though the tap had landed. The old flat
+    // 2s wait failed it.
+    assertTrue(TrailblazeAccessibilityService.gestureCompletionTimeoutMs(100L) > 7_000L)
+  }
+
+  @Test
+  fun `a gesture longer than the slack still gets the full slack after it ends`() {
+    // A flat timeout fails every long-press or swipe longer than itself.
+    val tapTimeout = TrailblazeAccessibilityService.gestureCompletionTimeoutMs(0L)
+    assertEquals(
+      30_000L + tapTimeout,
+      TrailblazeAccessibilityService.gestureCompletionTimeoutMs(30_000L),
+    )
+  }
+}

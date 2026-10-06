@@ -69,6 +69,7 @@ trails/
 ├── forms/                       # Natural-language authoring trails (text-input, args, generated-user)
 ├── catalog/ lists/ loading/ swipe/ settings/ taps/   # More authoring trails, grouped by feature
 ├── mcp-tools-demo/              # Trails exercising MCP-backed tools
+├── evals/                       # Agent evals, run locally (see each trail's header)
 └── android-ondevice-accessibility/     # Recorded per-driver variants (accessibility driver)
 ```
 

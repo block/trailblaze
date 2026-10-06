@@ -1,4 +1,4 @@
-# Trail Runner web — Playwright smoke test
+# Trailblaze App web — Playwright smoke test
 
 `devices.spec.ts` is a hermetic Playwright smoke test for the typed daemon-RPC bundle: it serves
 only `daemon.bundle.js`, mocks the daemon endpoint, and asserts the bundle publishes a working

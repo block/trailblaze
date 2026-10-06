@@ -4,6 +4,7 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import kotlinx.datetime.Clock
 import kotlinx.datetime.Instant
+import kotlinx.serialization.json.JsonElement
 import xyz.block.trailblaze.api.ImageFormatDetector
 import xyz.block.trailblaze.api.TrailblazeImageFormat
 import xyz.block.trailblaze.logs.TrailblazeLogsDataProvider
@@ -735,6 +736,16 @@ class LogsRepo(
   }
 
   /**
+   * The end written for [sessionId], from its status logs only; null until one lands. Unlike
+   * [getSessionInfoSummary], never the timeout it synthesizes for a session idle at Started.
+   */
+  fun persistedEndStatus(sessionId: SessionId): SessionStatus.Ended? =
+    readSessionStatusLogs(readLogFilesFromDisk(sessionId))
+      .filter { it.sessionStatus is SessionStatus.Ended }
+      .maxByOrNull { it.timestamp }
+      ?.sessionStatus as? SessionStatus.Ended
+
+  /**
    * When [sessionId]'s first and newest logs were written, in epoch millis, read from file times so
    * no log is parsed. Null when the session has no logs yet.
    *
@@ -839,6 +850,7 @@ class LogsRepo(
               // only thing that does.
               endTimestamp = abandonedTimestamp,
               trailFilePath = startedStatus?.trailFilePath,
+              trailSourceUrl = startedStatus?.trailSourceUrl,
               hasRecordedSteps = startedStatus?.hasRecordedSteps ?: false,
               selectedDeviceConfiguration = startedStatus?.selectedDeviceConfiguration,
               deviceClockOffsetMs = deviceClockOffsetMs,
@@ -876,6 +888,7 @@ class LogsRepo(
       endTimestamp = (lastSessionStatusLog.sessionStatus as? SessionStatus.Ended)
         ?.let { lastSessionStatusLog.timestamp },
       trailFilePath = startedStatus?.trailFilePath,
+      trailSourceUrl = startedStatus?.trailSourceUrl,
       hasRecordedSteps = startedStatus?.hasRecordedSteps ?: false,
       selectedDeviceConfiguration = startedStatus?.selectedDeviceConfiguration,
       deviceClockOffsetMs = deviceClockOffsetMs,
@@ -949,7 +962,12 @@ class LogsRepo(
   /** Failures recorded by [failSucceededEnd] for sessions whose end had not landed yet. */
   private val pendingEndFailures = mutableMapOf<SessionId, EndFailure>()
 
-  private data class EndFailure(val exceptionMessage: String, val exceptionStackTrace: String?)
+  private data class EndFailure(
+    val exceptionMessage: String,
+    val exceptionStackTrace: String?,
+    val failureKind: String?,
+    val failurePayload: JsonElement?,
+  )
 
   /**
    * Fails a session that ended succeeded, by writing a failure after that end: the one exception
@@ -961,11 +979,20 @@ class LogsRepo(
    * the session's latest status, which may carry a device's clock running ahead of this host's: the
    * latest status is the one every reader takes as the session's outcome.
    *
+   * [failureKind] and [failurePayload] classify the failure as [SessionStatus.Ended.Failed]'s own
+   * fields do, for a failure the framework recognizes (an app crash); null for an unclassified one.
+   *
    * @return whether the failure was written now; false when it waits for the end, or never applies.
    */
-  fun failSucceededEnd(sessionId: SessionId, exceptionMessage: String, exceptionStackTrace: String?): Boolean {
+  fun failSucceededEnd(
+    sessionId: SessionId,
+    exceptionMessage: String,
+    exceptionStackTrace: String?,
+    failureKind: String? = null,
+    failurePayload: JsonElement? = null,
+  ): Boolean {
     if (readOnly) return false
-    val failure = EndFailure(exceptionMessage, exceptionStackTrace)
+    val failure = EndFailure(exceptionMessage, exceptionStackTrace, failureKind, failurePayload)
     synchronized(terminalStatusLock) {
       val statusLogs = readSessionStatusLogs(readLogFilesFromDisk(sessionId))
       val ends = statusLogs.map { it.sessionStatus }.filterIsInstance<SessionStatus.Ended>()
@@ -984,11 +1011,15 @@ class LogsRepo(
       durationMs = end.durationMs,
       exceptionMessage = failure.exceptionMessage,
       exceptionStackTrace = failure.exceptionStackTrace,
+      failureKind = failure.failureKind,
+      failurePayload = failure.failurePayload,
     )
     is SessionStatus.Ended.SucceededWithSelfHeal -> SessionStatus.Ended.FailedWithSelfHeal(
       durationMs = end.durationMs,
       exceptionMessage = failure.exceptionMessage,
       exceptionStackTrace = failure.exceptionStackTrace,
+      failureKind = failure.failureKind,
+      failurePayload = failure.failurePayload,
     )
     else -> null
   }

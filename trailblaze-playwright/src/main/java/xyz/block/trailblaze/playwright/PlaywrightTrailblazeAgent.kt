@@ -21,6 +21,7 @@ import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.network.InflightRequestTracker
 import xyz.block.trailblaze.playwright.tools.PlaywrightExecutableTool
 import xyz.block.trailblaze.playwright.tools.PlaywrightNativeClickTool
+import xyz.block.trailblaze.playwright.tools.PlaywrightNativeDragTool
 import xyz.block.trailblaze.playwright.tools.PlaywrightNativeFillSecretTool
 import xyz.block.trailblaze.playwright.tools.PlaywrightNativeHoverTool
 import xyz.block.trailblaze.playwright.tools.PlaywrightNativeNavigateTool
@@ -293,6 +294,12 @@ class PlaywrightTrailblazeAgent(
         replayCaptured -> treeCenter(memoryResolvedTool, preScreenState)
         else -> resolveToolCenter(memoryResolvedTool, context)
       }
+      // A drag onto an ELEMENT carries no x/y, so the logged swipe would end nowhere and the
+      // report would drop the drag overlay entirely. Resolve where the drop lands, before the
+      // drag can move it.
+      val preResolvedDropCenter = (memoryResolvedTool as? PlaywrightNativeDragTool)
+        ?.takeIf { preScreenState != null && !replayCaptured }
+        ?.let { resolveDropCenter(it, context) }
 
       // Log AgentDriverLog with pre-action screenshot BEFORE execution so the
       // timeline shows the tap coordinates on the pre-click screenshot. Deliberately the
@@ -304,7 +311,7 @@ class PlaywrightTrailblazeAgent(
       // a later frame.
       logAgentDriverAction(
         tool, preScreenState, (preScreenState as? PlaywrightTreeScreenState)?.capturedAt ?: timeBeforeExecution,
-        preResolvedCenter, context.traceId, async = replayCaptured,
+        preResolvedCenter, preResolvedDropCenter, context.traceId, async = replayCaptured,
       )
 
       // Run the tool inside the request-tracking settle. Playwright's actionability
@@ -338,10 +345,19 @@ class PlaywrightTrailblazeAgent(
       val enrichedTool = if (result.isSuccess()) {
         val needsEnrichment = memoryResolvedTool.targetRef != null && !scripted
         if (needsEnrichment) {
-          val postScreenState = try { browserManager.captureScreenStateForLogging() } catch (_: Exception) { null }
-          val postEnriched = postScreenState?.let { enrichToolWithNodeSelector(memoryResolvedTool, context, it) }
-          if (postEnriched != null && postEnriched !== memoryResolvedTool) postEnriched
-          else enrichToolWithNodeSelector(memoryResolvedTool, context, null)
+          if (memoryResolvedTool.renumbersRefs) {
+            // Refs are positional. A tool that reorders the page renumbers the very ref it was
+            // given, so resolving it afterwards would record whatever moved into that slot —
+            // a selector that replays against a different element. Only the pre-action state
+            // still names what was acted on, so the post-action capture is skipped entirely
+            // rather than tried first.
+            enrichToolWithNodeSelector(memoryResolvedTool, context, null)
+          } else {
+            val postScreenState = try { browserManager.captureScreenStateForLogging() } catch (_: Exception) { null }
+            val postEnriched = postScreenState?.let { enrichToolWithNodeSelector(memoryResolvedTool, context, it) }
+            if (postEnriched != null && postEnriched !== memoryResolvedTool) postEnriched
+            else enrichToolWithNodeSelector(memoryResolvedTool, context, null)
+          }
         } else {
           memoryResolvedTool
         }
@@ -458,6 +474,7 @@ class PlaywrightTrailblazeAgent(
     preScreenState: ScreenState?,
     timestamp: kotlinx.datetime.Instant,
     preResolvedCenter: Pair<Int, Int>,
+    preResolvedDropCenter: Pair<Int, Int>?,
     traceId: TraceId?,
     async: Boolean = false,
   ) {
@@ -466,11 +483,11 @@ class PlaywrightTrailblazeAgent(
       // The session and the action are read here; only the writing moves off this thread.
       val session = try { sessionProvider.invoke() } catch (_: Exception) { return }
       replayLogsPending.set(true)
-      replayLogWriter.execute { writeAgentDriverLog(session, tool, preScreenState, timestamp, preResolvedCenter, traceId) }
+      replayLogWriter.execute { writeAgentDriverLog(session, tool, preScreenState, timestamp, preResolvedCenter, preResolvedDropCenter, traceId) }
       return
     }
     try {
-      writeAgentDriverLog(sessionProvider.invoke(), tool, preScreenState, timestamp, preResolvedCenter, traceId)
+      writeAgentDriverLog(sessionProvider.invoke(), tool, preScreenState, timestamp, preResolvedCenter, preResolvedDropCenter, traceId)
     } catch (e: Exception) {
       Console.log("Warning: Failed to log AgentDriverAction: ${e.message}")
     }
@@ -491,6 +508,7 @@ class PlaywrightTrailblazeAgent(
     preScreenState: ScreenState,
     timestamp: kotlinx.datetime.Instant,
     preResolvedCenter: Pair<Int, Int>,
+    preResolvedDropCenter: Pair<Int, Int>?,
     traceId: TraceId?,
   ) {
     try {
@@ -500,7 +518,11 @@ class PlaywrightTrailblazeAgent(
         null
       }
 
-      val action = mapToolToAgentDriverAction(tool, preResolvedCenter)
+      val action = mapToolToAgentDriverAction(tool, preResolvedCenter, preResolvedDropCenter)
+      // A logging capture takes its screenshot on the read above, after [timestamp] was stamped.
+      // The report pairs the picture with the session's video at the log's time, so the log
+      // takes the picture's moment.
+      val loggedAt = (preScreenState as? PlaywrightScreenState)?.screenshotTakenAt ?: timestamp
 
       val log = TrailblazeLog.AgentDriverLog(
         // A replay capture's tree already carries every box, so the legacy copy would only double
@@ -511,7 +533,7 @@ class PlaywrightTrailblazeAgent(
         screenshotFile = screenshotFilename,
         action = action,
         durationMs = 0,
-        timestamp = timestamp,
+        timestamp = loggedAt,
         session = session.sessionId,
         deviceWidth = preScreenState.deviceWidth,
         deviceHeight = preScreenState.deviceHeight,
@@ -530,6 +552,7 @@ class PlaywrightTrailblazeAgent(
   private fun mapToolToAgentDriverAction(
     tool: PlaywrightExecutableTool,
     preResolvedCenter: Pair<Int, Int>,
+    preResolvedDropCenter: Pair<Int, Int>? = null,
   ): AgentDriverAction {
     val (x, y) = preResolvedCenter
     return when (tool) {
@@ -537,6 +560,23 @@ class PlaywrightTrailblazeAgent(
         AgentDriverAction.TapPoint(x = x, y = y)
       is PlaywrightNativeHoverTool ->
         AgentDriverAction.TapPoint(x = x, y = y)
+      is PlaywrightNativeDragTool -> {
+        // The same precedence the drag itself uses: an element drop target wins over x/y. A call
+        // carrying both must not be drawn landing on the point the drag ignored.
+        val end = when {
+          tool.dropRef != null -> preResolvedDropCenter
+          tool.x != null && tool.y != null -> tool.x to tool.y
+          else -> null
+        }
+        AgentDriverAction.Swipe(
+          direction = "DRAG",
+          durationMs = 0,
+          startX = x,
+          startY = y,
+          endX = end?.first,
+          endY = end?.second,
+        )
+      }
       is PlaywrightNativeTypeTool ->
         AgentDriverAction.EnterText(text = tool.text)
       is PlaywrightNativeScrollTool ->
@@ -608,6 +648,33 @@ class PlaywrightTrailblazeAgent(
   }
 
   /**
+   * Where a drag with an element drop target will land, resolved BEFORE the drag runs, so the
+   * logged swipe has both endpoints and the report can draw the overlay. Honours the drop offsets,
+   * so the dot sits where the release happens. Null when the drop target is a viewport point (the
+   * tool's own x/y are logged then) or cannot be resolved inside the overlay budget.
+   */
+  private fun resolveDropCenter(
+    tool: PlaywrightNativeDragTool,
+    context: TrailblazeToolExecutionContext,
+  ): Pair<Int, Int>? {
+    val dropRef = tool.dropRef ?: return null
+    return try {
+      val (resolved, _) = PlaywrightExecutableTool.validateAndResolveRef(
+        browserManager.currentPage, dropRef, "drop target", context,
+        timeoutMs = OVERLAY_CENTER_TIMEOUT_MS,
+      )
+      val box = resolved?.first()?.boundingBox(
+        Locator.BoundingBoxOptions().setTimeout(OVERLAY_CENTER_TIMEOUT_MS),
+      ) ?: return null
+      val dropX = box.x + (tool.dropOffsetX?.toDouble() ?: (box.width / 2))
+      val dropY = box.y + (tool.dropOffsetY?.toDouble() ?: (box.height / 2))
+      dropX.toInt() to dropY.toInt()
+    } catch (_: Exception) {
+      null
+    }
+  }
+
+  /**
    * Resolves center coordinates for a tool's target element BEFORE execution.
    * This must happen pre-execution because clicks can cause navigation, after which
    * the target element no longer exists on the page.
@@ -627,6 +694,7 @@ class PlaywrightTrailblazeAgent(
       val (ref, nodeSelector) = when (tool) {
         is PlaywrightNativeClickTool -> tool.ref to tool.nodeSelector
         is PlaywrightNativeHoverTool -> tool.ref to tool.nodeSelector
+        is PlaywrightNativeDragTool -> tool.ref to tool.nodeSelector
         is PlaywrightNativeSelectOptionTool -> tool.ref to tool.nodeSelector
         is PlaywrightNativeVerifyElementVisibleTool -> tool.ref to tool.nodeSelector
         is PlaywrightNativeVerifyListVisibleTool -> tool.ref to tool.nodeSelector

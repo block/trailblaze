@@ -3,6 +3,7 @@ package xyz.block.trailblaze.compile
 import java.io.File
 import xyz.block.trailblaze.config.AppTargetYamlConfig
 import xyz.block.trailblaze.config.DriverTypeKey
+import xyz.block.trailblaze.config.ScriptedToolNameDiscoverer
 import xyz.block.trailblaze.config.ToolSetYamlConfig
 import xyz.block.trailblaze.config.ToolYamlConfig
 import xyz.block.trailblaze.config.TrailblazeConfigYaml
@@ -42,8 +43,8 @@ import xyz.block.trailblaze.util.Console
  * intentionally does not:
  * - **App-trailmap gap detection.** Any trailmap that declared `target:` but failed
  *   dependency resolution is reported by name, not silently dropped.
- * - **Reference validation.** Every `tool_sets:`, `drivers:`, `tools:`, and
- *   `excluded_tools:` entry on every resolved platform is checked against the
+ * - **Reference validation.** Every `tool_sets:`, `drivers:`, `tools:`,
+ *   `excluded_tools:`, and `always_shown_tools:` entry on every resolved platform is checked against the
  *   discovered pool. Typos surface at compile time, not at runtime as a
  *   silently-missing capability.
  * - **Orphan cleanup.** Files in the output directory that this compiler
@@ -317,7 +318,7 @@ object TrailblazeCompiler {
 
   /**
    * Walks every resolved target's per-platform reference fields (`tool_sets:`,
-   * `drivers:`, `tools:`, `excluded_tools:`) and returns an error message for
+   * `drivers:`, `tools:`, `excluded_tools:`, `always_shown_tools:`) and returns an error message for
    * each name that doesn't appear in the appropriate pool. Returns an empty
    * list when every reference resolves.
    *
@@ -367,10 +368,19 @@ object TrailblazeCompiler {
       )
       trailmapTools + classpathTrailmapTools
     }
+    // Scripted tools are never in [toolPool]. A toolset can deliver the ones that declare a
+    // static `name:` (`openUrl` in `core_interaction`); the rest reach a target through its
+    // own `tools:`, checked per target below.
+    val scriptedToolPool: Set<String> = referenceSource
+      ?.let { ScriptedToolNameDiscoverer.discoverAllNames(it).map { name -> name.toolName }.toSet() }
+      .orEmpty()
     val driverPool: Set<String> = DriverTypeKey.knownKeys
 
     val errors = mutableListOf<String>()
     for (target in resolved.targets) {
+      // The loader hoists scripted tools out of `platforms.<p>.tools:` into the target's own
+      // `tools:`, folding in the ones its dependencies export.
+      val scriptedToolNames = target.tools.orEmpty().map { it.name }.toSet() + scriptedToolPool
       target.platforms?.forEach { (platform, platformConfig) ->
         if (toolsetPool != null) {
           platformConfig.toolSets?.forEach { name ->
@@ -388,6 +398,13 @@ object TrailblazeCompiler {
           platformConfig.excludedTools?.forEach { name ->
             if (name !in toolPool) {
               errors += unresolvedRefError(target.id, platform, "excluded_tools", name, "tool")
+            }
+          }
+          // A misspelled name matches no tool, so the tool it meant stays hidden with no message.
+          // The tools worth always showing are usually the app's own scripted ones.
+          platformConfig.alwaysShownTools?.forEach { name ->
+            if (name !in toolPool && name !in scriptedToolNames) {
+              errors += unresolvedRefError(target.id, platform, "always_shown_tools", name, "tool")
             }
           }
         }

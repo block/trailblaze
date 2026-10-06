@@ -255,6 +255,15 @@ under `sdkDir`:
 | `src/in-process.ts` | The slim in-process SDK entry esbuild aliases `@trailblaze/scripting` to |
 | `tools/in-process-wrapper-template.mjs` | The wrapper template that registers each tool |
 
+A trailmap with a `.ts` tool that has no descriptor YAML also needs the analyzer, which writes
+the `<tool>.tooldefs.json` a device reads to find that tool by name:
+
+| Requirement | What it is |
+| --- | --- |
+| `tools/extract-tool-defs.mjs` under `sdkDir` | The analyzer. Without it no `.tooldefs.json` is written, and such a tool is reachable only through a target's `tools:` list |
+| `node_modules/typescript`, `node_modules/ts-json-schema-generator` under `sdkDir` | Its dependencies, populated by the same `bun install` |
+| `bun` on `PATH` | Runs the analyzer. A trailmap whose `.ts` tools all have descriptor YAMLs doesn't need it |
+
 Inside the Trailblaze framework source tree, leave `sdkDir` unset — the walk-up finds it. Outside
 that tree, set `sdkDir` explicitly; until `@trailblaze/scripting` publishes to npm, vendor a copy:
 

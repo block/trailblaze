@@ -245,7 +245,7 @@ function DemonstrateFlow({ run, runs, supported, go, active, onReload }) {
       // The generation endpoint is the S3 server slice; if it isn't in this daemon build yet, say so
       // plainly instead of surfacing a raw 404.
       setGenErr(r && r.status === 404
-        ? 'Trail generation is not available in this Trail Runner build yet.'
+        ? 'Trail generation is not available in this Trailblaze App build yet.'
         : ((r && r.error) || 'Could not start trail generation.'));
       return;
     }

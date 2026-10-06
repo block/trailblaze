@@ -34,12 +34,12 @@ object HomeEndpoint {
     val hasTrailRunner = trailRunnerPath != null
     val heroClass = if (hasTrailRunner) "hero" else "hero report-only"
     val heroDescription = if (hasTrailRunner) {
-      "Create, record, and run natural-language UI tests in Trail Runner, or inspect the sessions produced by this daemon."
+      "Create, record, and run natural-language UI tests in Trailblaze App, or inspect the sessions produced by this daemon."
     } else {
       "Review reports, storyboards, connected devices, and the sessions produced by this daemon."
     }
     val trailRunnerButton = trailRunnerPath?.let { path ->
-      """<a class="button primary" href="${htmlEscape(path)}">Open Trail Runner <span aria-hidden="true">&rarr;</span></a>"""
+      """<a class="button primary" href="${htmlEscape(path)}">Open Trailblaze App <span aria-hidden="true">&rarr;</span></a>"""
     }.orEmpty()
     val reportButtonClass = if (hasTrailRunner) "button" else "button primary"
     // `/report` covers the most recent DEFAULT_SESSION_LIMIT sessions; say so rather than

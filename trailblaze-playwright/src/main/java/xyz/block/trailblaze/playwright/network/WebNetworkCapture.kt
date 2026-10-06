@@ -4,6 +4,7 @@ import com.microsoft.playwright.BrowserContext
 import com.microsoft.playwright.Request
 import com.microsoft.playwright.Response
 import kotlinx.serialization.json.Json
+import xyz.block.trailblaze.events.SessionEvents
 import xyz.block.trailblaze.network.BodyRef
 import xyz.block.trailblaze.network.InflightRequestTracker
 import xyz.block.trailblaze.network.NetworkEvent
@@ -64,8 +65,8 @@ class WebNetworkCapture private constructor(
   private val sessionId: String,
   private val sessionDir: File,
   private val tracker: InflightRequestTracker?,
+  private val ndjsonFile: File,
 ) {
-  private val ndjsonFile: File = File(sessionDir, NDJSON_FILENAME)
   private val bodiesDir: File = File(sessionDir, BODIES_DIRNAME)
   private val active: AtomicBoolean = AtomicBoolean(false)
   private val ndjsonLock = Any()
@@ -115,9 +116,9 @@ class WebNetworkCapture private constructor(
     val requestBodyOriginalSize: Long = requestBodyBytes?.size?.toLong() ?: 0L,
   )
 
-  /** True iff this capture was constructed for the given session. */
-  internal fun matches(otherSessionId: String, otherSessionDir: File): Boolean =
-    sessionId == otherSessionId && sessionDir == otherSessionDir
+  /** True iff this capture was constructed for the given session and output file. */
+  internal fun matches(otherSessionId: String, otherSessionDir: File, otherNdjsonFile: File): Boolean =
+    sessionId == otherSessionId && sessionDir == otherSessionDir && ndjsonFile == otherNdjsonFile
 
   /**
    * Attaches the BrowserContext listeners and opens the NDJSON writer. Throws
@@ -128,8 +129,9 @@ class WebNetworkCapture private constructor(
   private fun attach(ctx: BrowserContext) {
     if (!active.compareAndSet(false, true)) return
     try {
-      if (!sessionDir.exists() && !sessionDir.mkdirs()) {
-        throw IOException("Could not create session directory: ${sessionDir.absolutePath}")
+      val ndjsonDir = ndjsonFile.parentFile
+      if (!ndjsonDir.exists() && !ndjsonDir.mkdirs()) {
+        throw IOException("Could not create capture directory: ${ndjsonDir.absolutePath}")
       }
       // Touch the NDJSON file so a read immediately after start (no traffic yet)
       // distinguishes "started, idle" from "never started".
@@ -147,12 +149,16 @@ class WebNetworkCapture private constructor(
       isDaemon = true
       start()
     }
+    // Before listening, so the backlog from before this capture reaches no listener.
+    dispatchPendingEvents(ctx)
     ctx.onRequest(onRequestListener)
     ctx.onResponse(onResponseListener)
     ctx.onRequestFailed(onRequestFailedListener)
   }
 
   private fun detach(ctx: BrowserContext) {
+    // While still active, so this capture records its own traffic the client has not dispatched.
+    if (active.get()) dispatchPendingEvents(ctx)
     if (!active.compareAndSet(true, false)) return
     // off* takes the same Consumer instance to remove the registration.
     ctx.offRequest(onRequestListener)
@@ -187,7 +193,26 @@ class WebNetworkCapture private constructor(
 
   fun isActive(): Boolean = active.get()
 
+  /**
+   * Makes one round trip to the browser so the client dispatches every event already sent to it.
+   * The Playwright client dispatches events only while a call is in flight, so a browser nobody
+   * has called since the last session holds every request it made in between. A listener attached
+   * before that backlog is dispatched would record it as this capture's traffic, stamped with this
+   * capture's start time. The URL filter matches no cookie, so the call returns nothing.
+   * Best-effort: a browser that cannot answer has nothing to dispatch.
+   */
+  private fun dispatchPendingEvents(ctx: BrowserContext) {
+    runCatching { ctx.cookies(DISPATCH_PROBE_URL) }
+      .onFailure { logSwallowed("dispatchPendingEvents", it) }
+  }
+
   fun ndjsonPath(): File = ndjsonFile
+
+  /**
+   * The session directory body blobs are relative to (`bodies/...`). Not [ndjsonPath]'s parent: a
+   * device's capture in a multi-device session writes its stream under `events/`.
+   */
+  fun sessionDirectory(): File = sessionDir
 
   private fun handleRequest(request: Request) {
     if (!active.get()) return
@@ -576,6 +601,9 @@ class WebNetworkCapture private constructor(
 
   companion object {
     const val NDJSON_FILENAME: String = "network.ndjson"
+
+    /** Stream-name stem of a device-labelled capture: `events/network.<device>.ndjson`. */
+    const val NETWORK_STREAM_NAME: String = "network"
     const val BODIES_DIRNAME: String = "bodies"
 
     /** Bodies up to and including this size inline as text in the NDJSON line. */
@@ -596,6 +624,9 @@ class WebNetworkCapture private constructor(
     /** Max time [detach] waits for the drainer to flush the queued tail before its own safety drain. */
     private const val DRAIN_JOIN_TIMEOUT_MS: Long = 2_000L
 
+    /** Reserved `.invalid` host: no browser holds a cookie for it. */
+    private const val DISPATCH_PROBE_URL: String = "https://dispatch-probe.invalid/"
+
     /**
      * Soft cap on un-drained queued events. A page flooding requests faster than disk can
      * drain would otherwise grow this unbounded (each entry can carry up to [MAX_BLOB_BYTES]
@@ -614,6 +645,28 @@ class WebNetworkCapture private constructor(
     private val instances: WeakHashMap<BrowserContext, WebNetworkCapture> = WeakHashMap()
 
     /**
+     * Where a capture writes its events. A single-device session ([deviceLabel] null) keeps the
+     * root `network.ndjson` the Network tab reads. A device in a multi-device session writes the
+     * events stream `events/network.<deviceLabel>.ndjson` instead: there is no "the" network log in
+     * a session with several devices, and the label is how the report's Streams menu attributes
+     * the traffic to the device it came from — the same suffix every other device's streams carry.
+     */
+    fun ndjsonFileFor(sessionDir: File, deviceLabel: String?): File {
+      if (deviceLabel == null) return File(sessionDir, NDJSON_FILENAME)
+      val streamName = "$NETWORK_STREAM_NAME.$deviceLabel"
+      val fileName = SessionEvents.fileName(streamName)
+      // `<name>.json.ndjson` reads back as the stream `<name>`, so a device named `json` (or
+      // `dashboard.json`) would publish its traffic under another stream's name. Refuse any label
+      // whose file does not read back as the stream it was written for, rather than mislabel it.
+      require(SessionEvents.parseFileName(fileName) == SessionEvents.sanitizeName(streamName)) {
+        "Device '$deviceLabel' cannot label a network capture: the events format reserves a " +
+          "trailing '.${SessionEvents.LEGACY_STYLE_SEGMENT}' segment. Rename the device in the " +
+          "trail's `config.devices` entry."
+      }
+      return File(File(sessionDir, SessionEvents.DIR_NAME), fileName)
+    }
+
+    /**
      * Idempotently starts capture for [ctx]. Returns the live capture, attaching
      * listeners on first call (or after [stop]). If a previous capture exists
      * for this context but was constructed for a different session (e.g. MCP
@@ -621,6 +674,9 @@ class WebNetworkCapture private constructor(
      * the old listeners are detached and a fresh capture is created so events
      * route to the correct session directory. A repeat start with the same
      * session is a no-op.
+     *
+     * [deviceLabel] names the device this browser is in a multi-device session; see
+     * [ndjsonFileFor].
      */
     @Synchronized
     fun start(
@@ -628,15 +684,17 @@ class WebNetworkCapture private constructor(
       sessionId: String,
       sessionDir: File,
       tracker: InflightRequestTracker? = null,
+      deviceLabel: String? = null,
     ): WebNetworkCapture {
+      val ndjsonFile = ndjsonFileFor(sessionDir, deviceLabel)
       val existing = instances[ctx]
-      if (existing != null && existing.matches(sessionId, sessionDir)) {
+      if (existing != null && existing.matches(sessionId, sessionDir, ndjsonFile)) {
         if (!existing.isActive()) existing.attach(ctx)
         return existing
       }
       // Either no existing capture, or session rolled over — replace.
       existing?.detach(ctx)
-      val capture = WebNetworkCapture(sessionId, sessionDir, tracker)
+      val capture = WebNetworkCapture(sessionId, sessionDir, tracker, ndjsonFile)
       instances[ctx] = capture
       capture.attach(ctx)
       return capture
@@ -646,6 +704,24 @@ class WebNetworkCapture private constructor(
     @Synchronized
     fun stop(ctx: BrowserContext): Boolean {
       val capture = instances[ctx] ?: return false
+      if (!capture.isActive()) return false
+      capture.detach(ctx)
+      return true
+    }
+
+    /**
+     * Detaches [capture] only if it is still [ctx]'s capture. A caller that started a capture and
+     * stops it later uses this: by then another session may have rolled the browser over to its
+     * own capture, which a plain [stop] would end instead. Returns true if [capture] got stopped.
+     *
+     * The stopped capture is also unregistered: such a caller borrows a browser that outlives its
+     * session, and a later session on it that captures nothing must not find this one's file
+     * through [get] (a network assertion would pass on the earlier session's traffic).
+     */
+    @Synchronized
+    fun stop(ctx: BrowserContext, capture: WebNetworkCapture): Boolean {
+      if (instances[ctx] !== capture) return false
+      instances.remove(ctx)
       if (!capture.isActive()) return false
       capture.detach(ctx)
       return true

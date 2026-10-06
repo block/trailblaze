@@ -29,7 +29,10 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import kotlinx.serialization.json.jsonPrimitive
+import xyz.block.trailblaze.llm.CachedTokenExtractor
 import xyz.block.trailblaze.llm.TrailblazeLlmModels
 import xyz.block.trailblaze.llm.TrailblazeLlmProvider
 import xyz.block.trailblaze.logs.client.TrailblazeLog
@@ -79,13 +82,22 @@ class NextMoveDecisionLlmClientTest {
     }
   }
 
-  /** The wrapped LLM. [hang] makes it wait until cancelled, so a race can only end by the engine. */
-  private class FakeLlm(private val hang: Boolean = false) : LLMClient() {
+  /**
+   * The wrapped LLM. [hang] makes it wait until cancelled, so a race can only end by the engine.
+   * Call n returns [answers]'s nth, past its end [LLM_ANSWER].
+   */
+  private class FakeLlm(private val hang: Boolean = false, private val answers: List<Message.Assistant> = emptyList()) : LLMClient() {
     var calls = 0
+    var shownTools: List<String> = emptyList()
+    val shown = mutableListOf<List<ToolDescriptor>>()
+    val prompts = mutableListOf<Prompt>()
     val cancelled = CompletableDeferred<Boolean>()
 
     override suspend fun execute(prompt: Prompt, model: LLModel, tools: List<ToolDescriptor>): Message.Assistant {
       calls++
+      shownTools = tools.map { it.name }
+      shown += tools
+      prompts += prompt
       if (hang) {
         try {
           awaitCancellation()
@@ -93,7 +105,7 @@ class NextMoveDecisionLlmClientTest {
           cancelled.complete(true)
         }
       }
-      return LLM_ANSWER
+      return answers.getOrElse(calls - 1) { LLM_ANSWER }
     }
 
     override fun llmProvider(): LLMProvider = TrailblazeLlmProvider.NONE_KOOG_LLM_PROVIDER
@@ -112,8 +124,8 @@ class NextMoveDecisionLlmClientTest {
   ) = NextMoveDecisionLlmClient(llm, engine, "fake", mode, 0.95, objective, verification, { screen }, engineTimeoutMs)
 
   // The bound only turns a hang into a failure; nothing here is meant to take more than a moment.
-  private fun run(client: LLMClient, prompt: Prompt = prompt("Tap the Items tab")) =
-    runBlocking { withTimeout(HANG_CONTAINMENT_MS) { client.execute(prompt, MODEL, TOOLS) } }
+  private fun run(client: LLMClient, prompt: Prompt = prompt("Tap the Items tab"), tools: List<ToolDescriptor> = TOOLS) =
+    runBlocking { withTimeout(HANG_CONTAINMENT_MS) { client.execute(prompt, MODEL, tools) } }
 
   @Test
   fun `a sure tap is made without the LLM, which is cancelled in a race`() {
@@ -122,9 +134,14 @@ class NextMoveDecisionLlmClientTest {
     val answer = run(client(ScriptedEngine("tap:a12", delayMs = 50), llm))
     assertThat(answer.call().tool).isEqualTo("tap")
     assertThat(answer.call().arg("ref")).isEqualTo("a12")
-    // The LLM sees this move after the screen has changed, so it names what was tapped.
-    assertThat(answer.call().arg("reasoning")!!).contains("[a12] Button \"Items\"")
+    // The LLM sees this move after the screen has changed, so it names what was tapped, and reads
+    // it as its own: the tap is done, and tapping the element again would repeat it.
+    val reasoning = answer.call().arg("reasoning")!!
+    assertThat(reasoning).contains("Tapped [a12] Button \"Items\". Next:")
+    assertThat(reasoning).contains("Tapping [a12] again would tap it a second time")
     assertThat(AnsweredWithoutLlm.of(answer)).isEqualTo(AnsweredWithoutLlm.DECISION)
+    // The dropped request was sent, so the LLM-call budget still counts it.
+    assertThat(AnsweredWithoutLlm.llmRequestSent(answer)).isTrue()
     assertThat(llm.calls).isEqualTo(1)
     assertThat(llm.cancelled.isCompleted).isTrue()
   }
@@ -138,6 +155,7 @@ class NextMoveDecisionLlmClientTest {
     )
     assertThat(answer.call().tool).isEqualTo("objectiveStatus")
     assertThat(answer.call().arg("status")).isEqualTo("COMPLETED")
+    assertThat(AnsweredWithoutLlm.llmRequestSent(answer)).isFalse()
     assertThat(llm.calls).isEqualTo(0)
   }
 
@@ -389,6 +407,7 @@ class NextMoveDecisionLlmClientTest {
     val on = mapOf(
       "TRAILBLAZE_DECISION_MOVES" to "race",
       "TRAILBLAZE_DECISION_MOVES_THRESHOLD" to "0.9",
+      "TRAILBLAZE_DECISION_MOVES_DONE_THRESHOLD" to "0.8",
       "TRAILBLAZE_DECISION_MODEL" to "jev-x",
       "TYPESAFE_API_KEY" to "hosted-key",
       "OPENAI_API_KEY" to "unrelated",
@@ -418,6 +437,366 @@ class NextMoveDecisionLlmClientTest {
     for (bad in listOf("abc", "1.5", "-1")) assertThat(actsAt(0.96, bad)).isTrue()
   }
 
+  /** Answers each tree question with its pick in the turn's map; any other question with its first option, unsure. */
+  private class TreeEngine(private vararg val turns: Map<String, Pair<String, Double>>) : DecisionEngine {
+    override val name = "fake-engine"
+    override val maxChoiceOptions = DecisionQuestion.MAX_CHOICE_OPTIONS
+    val requests = mutableListOf<DecisionRequest>()
+
+    override suspend fun decide(request: DecisionRequest): DecisionResponse {
+      requests += request
+      // Request n is answered from [turns]'s nth, past its end from the last.
+      val picks = turns[minOf(requests.size, turns.size) - 1]
+      val answers = request.questions.mapValues { (q, question) ->
+        val ids = question.choiceOptions.keys
+        val (choice, p) = picks[q] ?: (ids.first() to 0.5)
+        require(choice in ids) { "scripted $q pick '$choice' is not among $ids" }
+        val probabilities = ids.associateWith { if (it == choice) p else (1 - p) / (ids.size - 1) }
+        DecisionAnswer(DecisionQuestionType.CHOICE, choice = choice, probabilities = probabilities)
+      }
+      return DecisionResponse("fake-1", answers)
+    }
+  }
+
+  private fun tree(
+    engine: DecisionEngine,
+    llm: LLMClient,
+    objective: String = "Tap the Items tab",
+    verification: Boolean = false,
+    hideTools: Boolean = false,
+    screen: String = SCREEN,
+    alwaysShownTools: Set<String> = emptySet(),
+    showAllToolsAfter: Int? = null,
+    doneThreshold: Double? = null,
+  ) = NextMoveDecisionLlmClient(
+    llm, engine, "fake", NextMoveDecisionLlmClient.Mode.FIRST, 0.95, objective, verification, { screen },
+    HANG_CONTAINMENT_MS, NextMoveDecisionLlmClient.Questions.TREE, hideTools, alwaysShownTools, showAllToolsAfter,
+    doneThreshold,
+  )
+
+  private fun sure(vararg path: Pair<String, String>, p: Double = 0.99) = path.associate { (q, pick) -> q to (pick to p) }
+
+  @Test
+  fun `the tree taps when every answer on its path is sure, from one request`() {
+    val llm = FakeLlm()
+    val engine = TreeEngine(sure("move" to "change", "change" to "tap", "tap" to "a12"))
+    val answer = run(tree(engine, llm))
+    assertThat(answer.call().tool).isEqualTo("tap")
+    assertThat(answer.call().arg("ref")).isEqualTo("a12")
+    assertThat(answer.call().arg("reasoning")!!).contains("Tapped [a12] Button \"Items\". Next:")
+    assertThat(llm.calls).isEqualTo(0)
+    assertThat(engine.requests.single().questions.keys).containsAll("move", "change", "tap", "scroll")
+  }
+
+  @Test
+  fun `the tree scrolls with the finger direction that brings the content asked for into view`() {
+    val llm = FakeLlm()
+    val engine = TreeEngine(sure("move" to "change", "change" to "scroll", "scroll" to "down", p = 0.92))
+    val answer = run(tree(engine, llm, objective = "Scroll down to Settings"), prompt("Scroll down to Settings"))
+    assertThat(answer.call().tool).isEqualTo("swipe")
+    assertThat(answer.call().arg("direction")).isEqualTo("UP")
+    assertThat(llm.calls).isEqualTo(0)
+  }
+
+  @Test
+  fun `the tree leaves a fourth scroll the same way in a row to the LLM`() {
+    val step = "Scroll down to Settings"
+    val engine = TreeEngine(sure("move" to "change", "change" to "scroll", "scroll" to "down"))
+    val up = "swipe" to """{"direction":"UP"}"""
+    val llm = FakeLlm()
+    run(tree(engine, llm, objective = step), prompt(step, up, up, up))
+    assertThat(llm.calls).isEqualTo(1)
+    // A scroll the other way in between starts the count again.
+    val after = FakeLlm()
+    val answer = run(tree(engine, after, objective = step), prompt(step, up, "swipe" to """{"direction":"DOWN"}""", up, up))
+    assertThat(answer.call().tool).isEqualTo("swipe")
+    assertThat(after.calls).isEqualTo(0)
+  }
+
+  @Test
+  fun `the tree types only text the step quotes`() {
+    val step = "Type \"Jane Doe\" into the name field"
+    val llm = FakeLlm()
+    val engine = TreeEngine(sure("move" to "change", "change" to "type", "type" to "q0", "field" to "empty"))
+    val answer = run(tree(engine, llm, objective = step, screen = FOCUSED_SCREEN), prompt(step))
+    assertThat(answer.call().tool).isEqualTo("inputText")
+    assertThat(answer.call().arg("text")).isEqualTo("Jane Doe")
+    assertThat(engine.requests.single().questions.getValue("type").choiceOptions)
+      .isEqualTo(mapOf("q0" to "\"Jane Doe\"", "none" to "Some other text"))
+    assertThat(engine.requests.single().questions.keys).contains("field")
+    // A step that quotes nothing is never typed into.
+    val unquoted = FakeLlm()
+    run(
+      tree(TreeEngine(sure("move" to "change", "change" to "type")), unquoted, objective = "Type a name", screen = FOCUSED_SCREEN),
+      prompt("Type a name"),
+    )
+    assertThat(unquoted.calls).isEqualTo(1)
+  }
+
+  @Test
+  fun `the tree types only into a focused field it is sure is empty, never the same text twice in a step, and with type where offered`() {
+    val step = "Type \"Jane Doe\" into the name field"
+    val engine = TreeEngine(sure("move" to "change", "change" to "type", "type" to "q0", "field" to "empty"))
+    // Typing goes to the focused field: with none, it could land nowhere or in the wrong one.
+    val unfocused = FakeLlm()
+    run(tree(engine, unfocused, objective = step), prompt(step))
+    assertThat(unfocused.calls).isEqualTo(1)
+    // Typing appends, so a second "Jane Doe" would leave "Jane DoeJane Doe".
+    val typed = FakeLlm()
+    run(tree(engine, typed, objective = step, screen = FOCUSED_SCREEN), prompt(step, "inputText" to """{"text":"Jane Doe"}"""))
+    assertThat(typed.calls).isEqualTo(1)
+    // The screen shows an empty field's hint the way it shows a value, so the engine is asked.
+    val filled = FakeLlm()
+    val notEmpty = TreeEngine(sure("move" to "change", "change" to "type", "type" to "q0", "field" to "filled"))
+    run(tree(notEmpty, filled, objective = step, screen = FOCUSED_SCREEN), prompt(step))
+    assertThat(filled.calls).isEqualTo(1)
+    val viaType = FakeLlm()
+    val answer = run(
+      tree(engine, viaType, objective = step, screen = FOCUSED_SCREEN),
+      prompt(step),
+      tools = TOOLS + ToolDescriptor("type", "type the text"),
+    )
+    assertThat(answer.call().tool).isEqualTo("type")
+    assertThat(answer.call().arg("text")).isEqualTo("Jane Doe")
+    assertThat(viaType.calls).isEqualTo(0)
+  }
+
+  @Test
+  fun `quoted text is taken from double, curly and standalone single quotes, not apostrophes`() {
+    assertThat(NextMoveDecisionLlmClient.quotedIn("Tap 'All add-ons', type \"Jane\" and “Bob”; don't stop"))
+      .isEqualTo(listOf("All add-ons", "Jane", "Bob"))
+  }
+
+  @Test
+  fun `the tree leaves the turn to the LLM when any answer on its path is unsure`() {
+    val unsureElement = FakeLlm()
+    val picks = sure("move" to "change", "change" to "tap") + ("tap" to ("a12" to 0.94))
+    run(tree(TreeEngine(picks), unsureElement))
+    assertThat(unsureElement.calls).isEqualTo(1)
+    val unsureMove = FakeLlm()
+    run(tree(TreeEngine(sure("change" to "scroll", "scroll" to "down") + ("move" to ("change" to 0.85))), unsureMove))
+    assertThat(unsureMove.calls).isEqualTo(1)
+  }
+
+  @Test
+  fun `the tree reports done only on a plain action step`() {
+    val tapped = arrayOf("tap" to """{"ref":"a12"}""")
+    val plain = FakeLlm()
+    val answer = run(tree(TreeEngine(sure("move" to "finished", p = 0.91)), plain), prompt("Tap the Items tab", *tapped))
+    assertThat(answer.call().tool).isEqualTo("objectiveStatus")
+    assertThat(answer.call().arg("status")).isEqualTo("COMPLETED")
+    val conditional = FakeLlm()
+    val step = "If the Items tab shows, tap it"
+    run(tree(TreeEngine(sure("move" to "finished")), conditional, objective = step), prompt(step, *tapped))
+    assertThat(conditional.calls).isEqualTo(1)
+  }
+
+  @Test
+  fun `the tree taps on a conditional step, and never asks on a verification step`() {
+    val step = "If the Items tab shows, tap it"
+    val conditional = FakeLlm()
+    val answer = run(tree(TreeEngine(sure("move" to "change", "change" to "tap", "tap" to "a12")), conditional, objective = step), prompt(step))
+    assertThat(answer.call().tool).isEqualTo("tap")
+    val verify = FakeLlm()
+    val engine = TreeEngine(sure("move" to "change", "change" to "tap", "tap" to "a12"))
+    run(tree(engine, verify, verification = true))
+    assertThat(verify.calls).isEqualTo(1)
+    assertThat(engine.requests.isEmpty()).isTrue()
+  }
+
+  @Test
+  fun `with hidden tools on, the LLM sees only the kept tools when the tree rules every other tool out`() {
+    val tools = TOOLS + ToolDescriptor("shop_addItemToCart", "add an item")
+    // Sure the move is a tap, unsure which element: the LLM moves, and needs no app shortcut.
+    val ruledOut = sure("move" to "change", "change" to "tap", p = 0.995)
+    val hidden = FakeLlm()
+    run(tree(TreeEngine(ruledOut), hidden, hideTools = true), tools = tools)
+    assertThat(hidden.calls).isEqualTo(1)
+    assertThat(hidden.shownTools).isEqualTo(TOOLS.map { it.name } + "showTools")
+    // An app shortcut still possible, or the setting off: every tool is shown.
+    val possible = FakeLlm()
+    run(tree(TreeEngine(sure("move" to "change", "change" to "tap", p = 0.6)), possible, hideTools = true), tools = tools)
+    assertThat(possible.shownTools).isEqualTo(tools.map { it.name })
+    val off = FakeLlm()
+    run(tree(TreeEngine(ruledOut), off), tools = tools)
+    assertThat(off.shownTools).isEqualTo(tools.map { it.name })
+    // A browser's tools are not the kept ones, so a browser run is shown every tool.
+    val webTools = listOf("web_click", "web_navigate", "objectiveStatus").map { ToolDescriptor(it, "$it the thing") }
+    val web = FakeLlm()
+    run(tree(TreeEngine(ruledOut), web, hideTools = true), tools = webTools)
+    assertThat(web.shownTools).isEqualTo(webTools.map { it.name })
+  }
+
+  @Test
+  fun `with hidden tools on, the LLM is listed the other tools, and one it asks for is callable in the same turn`() {
+    val cart = ToolDescriptor("shop_addItemToCart", "Adds the named item to the cart. Prefer it over tapping.")
+    val tools = TOOLS + cart
+    val ruledOut = sure("move" to "change", "change" to "tap", p = 0.995)
+    val askFor = assistant(
+      MessagePart.Tool.Call("ask-1", "showTools", """{"names":"shop_addItemToCart, nope"}"""), tokens = 100 to 5,
+      metadata = buildJsonObject { put("cache_read_input_tokens", 80) },
+    )
+    val move = assistant(
+      MessagePart.Tool.Call("move-1", "shop_addItemToCart", """{"item":"Latte"}"""), tokens = 120 to 7,
+      metadata = buildJsonObject {
+        put("cache", "kept")
+        put("cached_tokens", 90)
+        put("cache_creation_input_tokens", 10)
+      },
+    )
+    val llm = FakeLlm(answers = listOf(askFor, move))
+    val answer = run(tree(TreeEngine(ruledOut), llm, hideTools = true), tools = tools)
+    // The first call lists the other tool by its first sentence.
+    val list = llm.shown[0].single { it.name == "showTools" }.description
+    assertThat(list).contains("- shop_addItemToCart: Adds the named item to the cart")
+    assertThat(list).doesNotContain("Prefer it")
+    // The ask is answered without the agent, and the LLM is asked again with that tool callable.
+    assertThat(llm.calls).isEqualTo(2)
+    assertThat(llm.shown[1].map { it.name }).isEqualTo(TOOLS.map { it.name } + "shop_addItemToCart")
+    val result = llm.prompts[1].messages.last().parts.filterIsInstance<MessagePart.Tool.Result>().single()
+    assertThat(result.id).isEqualTo("ask-1")
+    assertThat(result.output).isEqualTo("Now callable: shop_addItemToCart.")
+    // The agent gets the move, with the turn's tokens counted from both calls.
+    assertThat(answer.call().tool).isEqualTo("shop_addItemToCart")
+    assertThat(answer.metaInfo.inputTokensCount).isEqualTo(220)
+    assertThat(answer.metaInfo.outputTokensCount).isEqualTo(12)
+    // The session log records what the LLM was shown and asked for, beside the response's own metadata.
+    val tags = answer.metaInfo.metadata!!
+    assertThat(tags["trailblaze.toolsShown"]?.jsonPrimitive?.content).isEqualTo("${TOOLS.size + 1}")
+    assertThat(tags["trailblaze.toolsAsked"]?.jsonPrimitive?.content).isEqualTo("shop_addItemToCart,nope")
+    assertThat(tags["cache"]?.jsonPrimitive?.content).isEqualTo("kept")
+    // So does the cached input of both calls, which pricing the summed counts would otherwise miss.
+    assertThat(CachedTokenExtractor.extractCacheReadTokens(tags)).isEqualTo(170L)
+    assertThat(CachedTokenExtractor.extractCacheCreationTokens(tags)).isEqualTo(10L)
+  }
+
+  @Test
+  fun `with hidden tools on, an ask naming no listed tool makes every tool callable, and a move needs no second call`() {
+    val tools = TOOLS + ToolDescriptor("shop_addItemToCart", "add an item")
+    val ruledOut = sure("move" to "change", "change" to "tap", p = 0.995)
+    val unknown = FakeLlm(answers = listOf(assistant(MessagePart.Tool.Call("ask-1", "showTools", """{"names":"teleport"}"""))))
+    run(tree(TreeEngine(ruledOut), unknown, hideTools = true), tools = tools)
+    assertThat(unknown.calls).isEqualTo(2)
+    assertThat(unknown.shown[1].map { it.name }).isEqualTo(tools.map { it.name })
+    val moved = FakeLlm(
+      answers = listOf(
+        assistant(MessagePart.Tool.Call("tap-1", "tap", """{"ref":"a12"}"""), metadata = buildJsonObject { put("cached_tokens", 40) }),
+      ),
+    )
+    val answer = run(tree(TreeEngine(ruledOut), moved, hideTools = true), tools = tools)
+    assertThat(moved.calls).isEqualTo(1)
+    assertThat(answer.call().tool).isEqualTo("tap")
+    assertThat(answer.metaInfo.metadata!!["trailblaze.toolsShown"]?.jsonPrimitive?.content).isEqualTo("${TOOLS.size + 1}")
+    assertThat(answer.metaInfo.metadata!!.containsKey("trailblaze.toolsAsked")).isFalse()
+    assertThat(CachedTokenExtractor.extractCacheReadTokens(answer.metaInfo.metadata)).isEqualTo(40L)
+  }
+
+  @Test
+  fun `hidden tools are turned on by true or 1`() {
+    val tools = TOOLS + ToolDescriptor("shop_addItemToCart", "add an item")
+    fun hides(value: String): Boolean {
+      val llm = FakeLlm()
+      val env = mapOf(
+        "TRAILBLAZE_DECISION_MOVES" to "first", "TRAILBLAZE_DECISION_MOVES_QUESTIONS" to "tree",
+        "TRAILBLAZE_DECISION_MOVES_HIDE_TOOLS" to value, "TYPESAFE_API_KEY" to "k",
+      )
+      val ruledOut = TreeEngine(sure("move" to "change", "change" to "tap", p = 0.995))
+      run(NextMoveDecisionLlmClient.wrapIfEnabled(llm, "Tap the Items tab", false, { SCREEN }, env::get) { _, _ -> ruledOut }, tools = tools)
+      return llm.shown.single().any { it.name == "showTools" }
+    }
+    assertThat(hides("true")).isTrue()
+    assertThat(hides("1")).isTrue()
+    assertThat(hides("false")).isFalse()
+  }
+
+  @Test
+  fun `with hidden tools on, a tool the target always shows stays callable, and the rest are listed`() {
+    val swipe = ToolDescriptor("app_swipe", "Swipes with the app's own margins")
+    val cart = ToolDescriptor("shop_addItemToCart", "add an item")
+    val ruledOut = sure("move" to "change", "change" to "tap", p = 0.995)
+    val llm = FakeLlm()
+    run(tree(TreeEngine(ruledOut), llm, hideTools = true, alwaysShownTools = setOf("app_swipe")), tools = TOOLS + swipe + cart)
+    assertThat(llm.shownTools).isEqualTo(TOOLS.map { it.name } + "app_swipe" + "showTools")
+    val list = llm.shown[0].single { it.name == "showTools" }.description
+    assertThat(list).contains("- shop_addItemToCart:")
+    assertThat(list).doesNotContain("app_swipe")
+  }
+
+  @Test
+  fun `with hidden tools on, a step past its LLM-turn limit shows the LLM every tool`() {
+    val tools = TOOLS + ToolDescriptor("shop_addItemToCart", "add an item")
+    val ruledOut = sure("move" to "change", "change" to "tap", p = 0.995)
+    val llm = FakeLlm()
+    val client = tree(TreeEngine(ruledOut), llm, hideTools = true, showAllToolsAfter = 2)
+    repeat(3) { run(client, tools = tools) }
+    assertThat(llm.shown.map { shown -> shown.size }).isEqualTo(listOf(TOOLS.size + 1, TOOLS.size + 1, tools.size))
+    // A turn the LLM had every tool on anyway still counts toward the limit.
+    val mixed = FakeLlm()
+    val engine = TreeEngine(sure("move" to "change", "change" to "tap", p = 0.6), ruledOut)
+    val step = tree(engine, mixed, hideTools = true, showAllToolsAfter = 1)
+    repeat(2) { run(step, tools = tools) }
+    assertThat(mixed.shown.map { shown -> shown.size }).isEqualTo(listOf(tools.size, tools.size))
+  }
+
+  @Test
+  fun `with hidden tools on, a turn with no text screen counts toward the LLM-turn limit`() {
+    val tools = TOOLS + ToolDescriptor("shop_addItemToCart", "add an item")
+    val ruledOut = sure("move" to "change", "change" to "tap", p = 0.995)
+    val llm = FakeLlm()
+    var screen = ""
+    val client = NextMoveDecisionLlmClient(
+      llm, TreeEngine(ruledOut), "fake", NextMoveDecisionLlmClient.Mode.FIRST, 0.95, "Tap the Items tab", false, { screen },
+      HANG_CONTAINMENT_MS, NextMoveDecisionLlmClient.Questions.TREE, hideTools = true, showAllToolsAfter = 1,
+    )
+    run(client, tools = tools)
+    screen = SCREEN
+    run(client, tools = tools)
+    assertThat(llm.shown.map { shown -> shown.size }).isEqualTo(listOf(tools.size, tools.size))
+  }
+
+  private fun assistant(call: MessagePart.Tool.Call, tokens: Pair<Int, Int>? = null, metadata: JsonObject? = null) = Message.Assistant(
+    listOf<MessagePart.ResponsePart>(call),
+    ResponseMetaInfo(KoogClock.System.now(), inputTokensCount = tokens?.first, outputTokensCount = tokens?.second, metadata = metadata),
+  )
+
+  @Test
+  fun `done has its own threshold, which defaults to the tap threshold`() {
+    fun actsOn(pick: String, p: Double, settings: Map<String, String>): Boolean {
+      val env = mapOf("TRAILBLAZE_DECISION_MOVES" to "first", "TYPESAFE_API_KEY" to "k") + settings
+      val llm = FakeLlm()
+      val client = NextMoveDecisionLlmClient.wrapIfEnabled(llm, "Tap the Items tab", false, { SCREEN }, env::get) { _, _ ->
+        ScriptedEngine(pick, p = p)
+      }
+      // The LLM's answer here is plain text; a move the engine makes is a tool call.
+      return run(client, prompt("Tap the Items tab", "tap" to """{"ref":"b34"}""")).parts.any { it is MessagePart.Tool.Call }
+    }
+    val done = NextMoveDecisionLlmClient.DONE
+    val split = mapOf("TRAILBLAZE_DECISION_MOVES_THRESHOLD" to "0.9", "TRAILBLAZE_DECISION_MOVES_DONE_THRESHOLD" to "0.8")
+    assertThat(actsOn(done, 0.85, split)).isTrue()
+    assertThat(actsOn("tap:a12", 0.85, split)).isFalse()
+    assertThat(actsOn("tap:a12", 0.92, split)).isTrue()
+    assertThat(actsOn(done, 0.75, split)).isFalse()
+    // Unset or not a probability: done needs what a tap needs.
+    val tapOnly = mapOf("TRAILBLAZE_DECISION_MOVES_THRESHOLD" to "0.9")
+    assertThat(actsOn(done, 0.85, tapOnly)).isFalse()
+    assertThat(actsOn(done, 0.92, tapOnly)).isTrue()
+    assertThat(actsOn(done, 0.85, tapOnly + ("TRAILBLAZE_DECISION_MOVES_DONE_THRESHOLD" to "abc"))).isFalse()
+  }
+
+  @Test
+  fun `the tree's done uses the done threshold when it is set, and its own bar otherwise`() {
+    fun answer(p: Double, doneThreshold: Double?) =
+      run(
+        tree(TreeEngine(sure("move" to "finished", p = p)), FakeLlm(), doneThreshold = doneThreshold),
+        prompt("Tap the Items tab", "tap" to """{"ref":"b34"}"""),
+      )
+    fun ended(answer: Message.Assistant) = answer.parts.filterIsInstance<MessagePart.Tool.Call>().singleOrNull()?.tool == "objectiveStatus"
+    assertThat(ended(answer(0.85, doneThreshold = 0.8))).isTrue()
+    assertThat(ended(answer(0.85, doneThreshold = null))).isFalse()
+    assertThat(ended(answer(0.92, doneThreshold = null))).isTrue()
+    assertThat(ended(answer(0.92, doneThreshold = 0.95))).isFalse()
+  }
+
   private fun Message.Assistant.call() = parts.filterIsInstance<MessagePart.Tool.Call>().single()
 
   private fun MessagePart.Tool.Call.arg(name: String) =
@@ -434,6 +813,7 @@ class NextMoveDecisionLlmClientTest {
       [a12] Button "Items"
       [b34] Tab "Settings" [selected]
     """.trimIndent()
+    val FOCUSED_SCREEN = SCREEN + "\n[c56] EditText \"Name\" [focused]"
 
     /** [results] is each move's tool result, in order; a move past its end gets "ok". */
     fun prompt(step: String, vararg history: Pair<String, String>, results: List<String> = emptyList()): Prompt {

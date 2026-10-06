@@ -28,3 +28,6 @@ target:
     # is the pure-YAML `loading/wait-for-content` trail, which uses only built-in tools.
     - sampleapp_waitForText
     - sampleapp_launchToLoadedContent
+    # Inverted not-visible check behind the agent eval `evals/multiline-not-visible.trail.yaml`,
+    # which needs an LLM and is run by hand.
+    - sampleapp_assertTextStillShown

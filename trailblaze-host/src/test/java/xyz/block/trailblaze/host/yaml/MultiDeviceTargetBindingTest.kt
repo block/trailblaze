@@ -65,6 +65,20 @@ class MultiDeviceTargetBindingTest {
   }
 
   @Test
+  fun `a companion's always-shown tools stay shown, for each of the session's drivers`() {
+    val web = TrailblazeDriverType.PLAYWRIGHT_NATIVE
+    val bound = MultiDeviceTargetBinding.boundTargets(
+      startDeviceTarget = fakeTarget("seller", alwaysShown = mapOf(driverType to setOf("seller_swipe"))),
+      companionTargets = listOf(fakeTarget("buyer", alwaysShown = mapOf(driverType to setOf("buyer_swipe"), web to setOf("buyer_scroll")))),
+    )
+
+    assertThat(MultiDeviceTargetBinding.alwaysShownTools(bound, listOf(driverType)))
+      .containsOnly("seller_swipe", "buyer_swipe")
+    assertThat(MultiDeviceTargetBinding.alwaysShownTools(bound, listOf(driverType, web)))
+      .containsOnly("seller_swipe", "buyer_swipe", "buyer_scroll")
+  }
+
+  @Test
   fun `bound targets keep the start device first`() {
     val start = fakeTarget("seller")
     val companion = fakeTarget("buyer")
@@ -310,7 +324,11 @@ class MultiDeviceTargetBindingTest {
     id: String,
     vararg customTools: KClass<out TrailblazeTool>,
     toolSetIds: List<String> = emptyList(),
+    alwaysShown: Map<TrailblazeDriverType, Set<String>> = emptyMap(),
   ): TrailblazeHostAppTarget = object : TrailblazeHostAppTarget(id = id, displayName = id) {
+    override fun getAlwaysShownToolNamesForDriver(driverType: TrailblazeDriverType): Set<String> =
+      alwaysShown[driverType].orEmpty()
+
     override fun getPossibleAppIdsForPlatform(platform: TrailblazeDevicePlatform): List<String> =
       listOf("com.example.$id")
 

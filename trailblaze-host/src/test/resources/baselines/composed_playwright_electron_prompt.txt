@@ -60,5 +60,5 @@ When interpreting objectives, if an objective begins with the word "expect", "ve
 "assert" (case-insensitive), you should use the objective_status tool to report the result.
 
 **NOTE:**
-- Use web_snapshot to refresh your view of the application when needed.
-- After clicks that change the view, use web_snapshot to see the updated state.
+- The element list is refreshed after every action. After a click that changes the view, target
+  elements from the new list; earlier IDs may no longer exist.

@@ -38,6 +38,29 @@ __client.tools = new Proxy({}, {
   },
 });
 
+// `ctx.host.<name>(args)`: a host function, which is not a tool. `__trailblazeHost` returns
+// `{"ok":true,"value":…}` or `{"ok":false,"error":"…"}` and never throws.
+__client.host = new Proxy({}, {
+  get: (_t, name) => {
+    if (typeof name !== 'string') return undefined;
+    if (name === 'then' || name === 'catch' || name === 'finally' ||
+        name === 'constructor' || name === 'prototype' || name === '__proto__' ||
+        name === 'toString' || name === 'valueOf' || name === 'toJSON') {
+      return undefined;
+    }
+    return async (args) => {
+      if (typeof __trailblazeHost !== 'function') {
+        throw new Error("ctx.host." + name + " failed: host functions are not available in this runtime");
+      }
+      const envelope = JSON.parse(__trailblazeHost(name, JSON.stringify(args == null ? {} : args)));
+      if (!envelope || envelope.ok !== true) {
+        throw new Error("ctx.host." + name + " failed: " + ((envelope && envelope.error) || "(no error message)"));
+      }
+      return envelope.value;
+    };
+  },
+});
+
 function __normalizeResult(result) {
   if (result == null) return { content: [] };
   // Author hand-rolled an MCP envelope — pass through, structuredContent included or not.

@@ -1467,4 +1467,35 @@ class IosCompactElementListTest {
     assertFalse(result.text.contains("\"3\""), result.text)
     assertFalse(ghostText.nodeId in result.textNodeIds, "the ghost's text would count as visible")
   }
+
+  @Test
+  fun `a multi-line text prints its line breaks as escapes on one line`() {
+    val label = node(detail = DriverNodeDetail.IosMaestro(className = "UILabel", text = "Name: Jane Doe\nEmail: "))
+    val result = IosCompactElementList.build(node(children = listOf(label)))
+
+    assertContains(result.text, "\"Name: Jane Doe\\nEmail:\"")
+  }
+
+  @Test
+  fun `a long label is never cut through the middle of an escape`() {
+    val text = "a".repeat(78) + "\n" + "b".repeat(20)
+    val label = node(detail = DriverNodeDetail.IosMaestro(className = "UILabel", text = text))
+    val result = IosCompactElementList.build(node(children = listOf(label)))
+
+    assertContains(result.text, "\"${"a".repeat(78)}…\"")
+  }
+
+  /** Refs are hashed from the text with its whitespace collapsed, so printing line breaks does not move them. */
+  @Test
+  fun `a multi-line text keeps the ref its one-line form gets`() {
+    fun refOf(text: String): String {
+      val label = node(
+        detail = DriverNodeDetail.IosMaestro(className = "UIButton", text = text, clickable = true),
+        bounds = TrailblazeNode.Bounds(0, 100, 300, 150),
+      )
+      return IosCompactElementList.build(node(children = listOf(label))).refMapping.keys.single()
+    }
+
+    assertEquals(refOf("Name: Jane Doe Email:"), refOf("Name: Jane Doe\nEmail: "))
+  }
 }

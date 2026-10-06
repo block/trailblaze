@@ -643,6 +643,104 @@ class VisibleStringExtractorTest {
     )
   }
 
+  /** Shapes like a typical rewards screen: AXe labels every element, and only some of them draw it. */
+  @Test
+  fun `an axe label is text only where the element draws it`() {
+    val screen = axeRoot(
+      axe(label = "Add funds", type = "Button", bounds = TrailblazeNode.Bounds(16, 403, 197, 455)),
+      axe(
+        label = "Gold tier, \$499.00 away",
+        type = "Button",
+        bounds = TrailblazeNode.Bounds(16, 470, 386, 540),
+        children = listOf(
+          axe(label = "Gold tier", bounds = TrailblazeNode.Bounds(24, 480, 200, 500)),
+          axe(label = "\$499.00 away", bounds = TrailblazeNode.Bounds(24, 505, 200, 525)),
+        ),
+      ),
+      axe(label = "More for you", type = "Heading", bounds = TrailblazeNode.Bounds(16, 560, 200, 590)),
+      axe(label = "iconCard16", type = "Image", bounds = TrailblazeNode.Bounds(16, 600, 32, 616)),
+    )
+
+    assertEquals(
+      listOf(
+        "Add funds" to VisibleStringSource.TEXT,
+        "Gold tier, \$499.00 away" to VisibleStringSource.CONTENT_DESCRIPTION,
+        "Gold tier" to VisibleStringSource.TEXT,
+        "\$499.00 away" to VisibleStringSource.TEXT,
+        "More for you" to VisibleStringSource.TEXT,
+        "iconCard16" to VisibleStringSource.CONTENT_DESCRIPTION,
+      ),
+      VisibleStringExtractor.extract(screen, 402, 874).map { it.text to it.source },
+    )
+  }
+
+  @Test
+  fun `an axe value is drawn in a multiline input and on text`() {
+    val screen = axeRoot(
+      node(
+        DriverNodeDetail.IosAxe(type = "StaticText", label = "home", value = "(555) 010-0000"),
+        bounds = TrailblazeNode.Bounds(16, 100, 386, 140),
+      ),
+      node(
+        DriverNodeDetail.IosAxe(type = "TextView", label = "Note", value = "For dinner"),
+        bounds = TrailblazeNode.Bounds(16, 200, 386, 300),
+      ),
+      node(
+        DriverNodeDetail.IosAxe(type = "TextEditor", label = "Message", value = "See you soon"),
+        bounds = TrailblazeNode.Bounds(16, 320, 386, 420),
+      ),
+    )
+
+    assertEquals(
+      listOf(
+        "home" to VisibleStringSource.TEXT,
+        "(555) 010-0000" to VisibleStringSource.VALUE,
+        "Note" to VisibleStringSource.CONTENT_DESCRIPTION,
+        "For dinner" to VisibleStringSource.VALUE,
+        "Message" to VisibleStringSource.CONTENT_DESCRIPTION,
+        "See you soon" to VisibleStringSource.VALUE,
+      ),
+      VisibleStringExtractor.extract(screen, 402, 874).map { it.text to it.source },
+    )
+  }
+
+  /** Newer AXe reports an empty field's placeholder as its label, with no value. */
+  @Test
+  fun `an empty axe input draws its label as the placeholder`() {
+    val screen = axeRoot(
+      node(DriverNodeDetail.IosAxe(type = "TextField", label = "Search"), bounds = TrailblazeNode.Bounds(16, 60, 386, 96)),
+    )
+
+    assertEquals(
+      listOf("Search" to VisibleStringSource.TEXT),
+      VisibleStringExtractor.extract(screen, 402, 874).map { it.text to it.source },
+    )
+  }
+
+  @Test
+  fun `an axe value is drawn in a text input and is spoken state elsewhere`() {
+    val screen = axeRoot(
+      node(
+        DriverNodeDetail.IosAxe(type = "TextField", label = "CVV", value = "3-Digit CVV"),
+        bounds = TrailblazeNode.Bounds(16, 200, 386, 240),
+      ),
+      node(
+        DriverNodeDetail.IosAxe(type = "Slider", label = "Vertical scroll bar, 3 pages", value = "0%"),
+        bounds = TrailblazeNode.Bounds(390, 100, 402, 800),
+      ),
+    )
+
+    assertEquals(
+      listOf(
+        "Vertical scroll bar, 3 pages" to VisibleStringSource.CONTENT_DESCRIPTION,
+        "0%" to VisibleStringSource.STATE,
+        "CVV" to VisibleStringSource.CONTENT_DESCRIPTION,
+        "3-Digit CVV" to VisibleStringSource.VALUE,
+      ),
+      VisibleStringExtractor.extract(screen, 402, 874).map { it.text to it.source },
+    )
+  }
+
   @Test
   fun `an android role description is app-authored and is still reported`() {
     val screen = root(

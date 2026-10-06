@@ -16,16 +16,13 @@ import xyz.block.trailblaze.util.Console
  */
 @Serializable
 @TrailblazeToolClass("revyl_type")
-@LLMDescription(
-  "Type text into an input field. Optionally specify a target field " +
-    "(e.g. 'email field', 'password input').",
-)
+@LLMDescription("Type text into the focused field, or into a target field.")
 data class RevylNativeTypeTool(
-  @param:LLMDescription("The text to type into the field.")
+  @param:LLMDescription("Text to type.")
   val text: String,
-  @param:LLMDescription("Optional target field, described in natural language.")
+  @param:LLMDescription("Target field in natural language, e.g. 'email field'.")
   val target: String = "",
-  @param:LLMDescription("If true, clear the field before typing.")
+  @param:LLMDescription("Clear the field before typing.")
   val clearFirst: Boolean = false,
   override val reasoning: String? = null,
 ) : RevylExecutableTool() {

@@ -9,7 +9,7 @@ import javax.imageio.ImageIO
 
 /**
  * Reads PNG and JPEG through the JDK's own ImageIO readers, and WebP — the default screenshot
- * format — through the TwelveMonkeys reader plugin that `build.gradle.kts` puts on the JVM
+ * format — through the webp-imageio (libwebp) reader plugin that `build.gradle.kts` puts on the JVM
  * classpath. The plugin registers itself via the ImageIO SPI, so there is nothing to wire here
  * beyond depending on it.
  */

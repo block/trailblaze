@@ -37,9 +37,8 @@ data class JsScriptingCallbackRequest(
 }
 
 /**
- * Discriminated union of actions a subprocess can request via a callback. Today only
- * [CallTool] exists — additional variants (tap, inputText, memorize, …) can be added when the
- * typed-commands surface gets filled out. Adding a variant is additive and does not bump
+ * Discriminated union of actions a subprocess can request via a callback. [CallTool]
+ * runs a tool; [CallHost] runs a host function. Adding a variant is additive and does not bump
  * [JsScriptingCallbackRequest.version] as long as existing consumers remain valid.
  */
 @Serializable
@@ -54,6 +53,18 @@ sealed interface JsScriptingCallbackAction {
   @SerialName("call_tool")
   data class CallTool(
     @SerialName("tool_name") val toolName: String,
+    @SerialName("arguments_json") val argumentsJson: String,
+  ) : JsScriptingCallbackAction
+
+  /**
+   * Run a host function — `ctx.host.<name>(args)` — which is plumbing, not a tool: no tool lookup,
+   * no tool log, no cached-screen invalidation, and no reentrance-depth accounting since a host
+   * function can't call back into a script.
+   */
+  @Serializable
+  @SerialName("call_host")
+  data class CallHost(
+    @SerialName("function_name") val functionName: String,
     @SerialName("arguments_json") val argumentsJson: String,
   ) : JsScriptingCallbackAction
 }
@@ -91,6 +102,18 @@ sealed interface JsScriptingCallbackResult {
     @SerialName("text_content") val textContent: String = "",
     @SerialName("error_message") val errorMessage: String = "",
     @SerialName("structured_content") val structuredContent: JsonElement? = null,
+  ) : JsScriptingCallbackResult
+
+  /**
+   * Result of a [JsScriptingCallbackAction.CallHost]: the function's encoded result in [value] on
+   * success, or a message the script surfaces in [errorMessage] on failure.
+   */
+  @Serializable
+  @SerialName("call_host_result")
+  data class CallHostResult(
+    val success: Boolean,
+    val value: JsonElement? = null,
+    @SerialName("error_message") val errorMessage: String = "",
   ) : JsScriptingCallbackResult
 
   /**

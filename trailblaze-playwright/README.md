@@ -14,7 +14,7 @@ Three toolsets ship under `src/main/resources/trails/config/trailmaps/web/toolse
 
 | Toolset | LLM-facing? | Tools |
 |---------|-------------|-------|
-| `web_core` | Yes | `web_click`, `web_type`, `web_navigate`, `web_scroll`, `web_hover`, `web_pressKey`, `web_selectOption`, `web_wait`, `web_snapshot`, `web_requestDetails`, `web_resize`, `web_currentUrl`, `web_waitForUrl`, `web_applyCookies`, `web_getStorageState`, `web_fillSecret` |
+| `web_core` | Yes | `web_click`, `web_type`, `web_navigate`, `web_scroll`, `web_hover`, `web_drag`, `web_pressKey`, `web_selectOption`, `web_wait`, `web_snapshot`, `web_requestDetails`, `web_resize`, `web_currentUrl`, `web_waitForUrl`, `web_applyCookies`, `web_getStorageState`, `web_fillSecret` |
 | `web_verification` | Yes | `web_verifyTextVisible`, `web_verifyElementVisible`, `web_verifyValue`, `web_verifyListVisible`, `web_assertNetworkEvent`, `web_verifyTextAbsentForDuration`, `assertWaypoint` |
 | `web_framework` | **No** (`always_enabled`) | `web_evaluate`, `web_beginResponseObservation`, `web_assertResponseObserved`, `web_cancelResponseObservation`, `web_requireTextInViewport` |
 
@@ -46,7 +46,7 @@ but designed to be **LLM-first and recordable** for the Trailblaze agent loop.
 | `browser_snapshot`         | `web_snapshot`                         | Done   |
 | `browser_wait_for`         | `web_wait` (seconds), `web_waitForUrl` (URL regex) | Partial |
 | `browser_mouse_wheel`      | `web_scroll`                           | Done   |
-| `browser_drag`             | --                                     | TODO   |
+| `browser_drag`             | `web_drag`                             | Done   |
 | `browser_file_upload`      | --                                     | TODO   |
 | `browser_fill_form`        | --                                     | TODO   |
 | `browser_handle_dialog`    | --                                     | TODO   |

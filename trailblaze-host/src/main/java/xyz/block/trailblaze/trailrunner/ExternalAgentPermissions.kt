@@ -125,7 +125,7 @@ internal enum class PermissionOutcome {
   ;
 
   fun toDecision(inputJson: String?): PermissionDecision = when (this) {
-    DENY -> PermissionDecision.Deny("Denied by the human in Trail Runner")
+    DENY -> PermissionDecision.Deny("Denied by the human in Trailblaze App")
     RUN_ENDED -> PermissionDecision.Deny("The run ended before this was approved")
     else -> PermissionDecision.Allow(inputJson)
   }

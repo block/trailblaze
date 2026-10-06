@@ -12,11 +12,11 @@ import kotlin.test.assertTrue
 
 /**
  * The only thing that uses this package is `ElementMatcherUsingMaestro` in `trailblaze-common`, and
- * it gets here through kotlin-reflect: the class by fully-qualified name, then two PRIVATE functions
- * by name and parameter count. Nothing about that coupling is visible to the compiler — rename
- * `Orchestra`, move its package, rename `buildFilter` or `findElementViewHierarchy`, change either
- * one's arity or its `suspend`-ness, or add a constructor parameter without a default, and the build
- * stays green while every recorded selector stops resolving on a real device.
+ * it gets here through kotlin-reflect: the class by fully-qualified name, then the PRIVATE
+ * `buildFilter` by name and parameter count. Nothing about that coupling is visible to the compiler —
+ * rename `Orchestra`, move its package, rename `buildFilter`, change its arity or make it `suspend`,
+ * or add a constructor parameter without a default, and the build stays green while every recorded
+ * selector stops resolving on a real device.
  *
  * That class only ever picks this fork up when it runs on-device: on the host the lookup misses and
  * it falls back to Maestro's own `Orchestra`. So on-device is the only place the breakage shows,
@@ -27,9 +27,10 @@ import kotlin.test.assertTrue
 class OrchestraReflectiveContractTest {
 
   /**
-   * A two-branch tree: "Continue" sits inside the panel, "Cancel" outside it. Enough structure for
-   * both a plain selector and a `childOf` one, which is what picks between the two reflected
-   * functions.
+   * A two-branch tree: one "Continue" sits inside the panel, a second "Continue" and "Cancel" sit
+   * outside it. The duplicate is what makes a `childOf` selector prove scoping: matched against the
+   * whole screen, "Continue" is ambiguous; scoped to the panel, it's the one inside. `childOf` runs
+   * `buildFilter` once for the parent and once for the target.
    */
   private val root = ViewHierarchyTreeNode(
     nodeId = 1,
@@ -70,6 +71,16 @@ class OrchestraReflectiveContractTest {
         x2 = 300,
         y2 = 1600,
       ),
+      ViewHierarchyTreeNode(
+        nodeId = 5,
+        className = "android.widget.TextView",
+        text = "Continue",
+        clickable = true,
+        x1 = 100,
+        y1 = 1700,
+        x2 = 300,
+        y2 = 1800,
+      ),
     ),
   )
 
@@ -101,19 +112,19 @@ class OrchestraReflectiveContractTest {
 
   @Test
   fun `the matcher resolves a plain selector through this fork's buildFilter`() {
-    val matches = match(TrailblazeElementSelector(textRegex = "Continue"))
+    val matches = match(TrailblazeElementSelector(textRegex = "Cancel"))
 
     assertTrue(
       matches is ElementMatches.SingleMatch,
-      "Expected the reflectively-invoked buildFilter to match exactly the one \"Continue\" node, " +
+      "Expected the reflectively-invoked buildFilter to match exactly the one \"Cancel\" node, " +
         "but got $matches. If this fails with \"Could not find buildFilter method\", the private " +
         "function ElementMatcherUsingMaestro looks up by name and arity was renamed or resigned.",
     )
-    assertEquals("Continue", matches.node.attributes["text"])
+    assertEquals("Cancel", matches.node.attributes["text"])
   }
 
   @Test
-  fun `the matcher resolves a childOf selector through this fork's findElementViewHierarchy`() {
+  fun `the matcher scopes a childOf selector to the parent's subtree`() {
     val matches = match(
       TrailblazeElementSelector(
         textRegex = "Continue",
@@ -123,18 +134,15 @@ class OrchestraReflectiveContractTest {
 
     assertTrue(
       matches is ElementMatches.SingleMatch,
-      "Expected the reflectively-invoked findElementViewHierarchy to scope the search to the " +
-        "panel and match its one \"Continue\" node, but got $matches. A childOf selector is the " +
-        "only thing that reaches that function, so this is the test that covers it.",
+      "Expected the childOf parent to scope the search to the panel and match its one " +
+        "\"Continue\" node, but got $matches. Two matches means childOf was ignored and the " +
+        "\"Continue\" outside the panel matched too.",
     )
-    assertEquals("Continue", matches.node.attributes["text"])
+    assertEquals("[100,100][300,200]", matches.node.attributes["bounds"], "Matched the \"Continue\" outside the panel.")
   }
 
   @Test
   fun `a childOf selector whose parent is absent matches nothing rather than matching loosely`() {
-    // Also pins the reflective SHAPE of the parent lookup: the matcher invokes
-    // findElementViewHierarchy with an explicit 0L timeout argument, so this exercises that
-    // three-parameter signature on the absent-parent path as well as the found one.
     val attempt = runCatching {
       match(
         TrailblazeElementSelector(
@@ -160,8 +168,8 @@ class OrchestraReflectiveContractTest {
         generateSequence(failure) { it.cause }.any { it is MaestroException.ElementNotFound },
         "The absent-parent lookup must fail as Maestro's own ElementNotFound (or return " +
           "NoMatches). Any other throwable means the reflective contract itself broke — an " +
-          "ExceptionInInitializerError here is a renamed/re-arityed buildFilter or " +
-          "findElementViewHierarchy, not a selector that matched nothing. Got: $failure",
+          "ExceptionInInitializerError here is a renamed/re-arityed buildFilter, not a selector " +
+          "that matched nothing. Got: $failure",
       )
     }
   }

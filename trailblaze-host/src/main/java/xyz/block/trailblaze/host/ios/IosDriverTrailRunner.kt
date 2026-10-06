@@ -275,6 +275,9 @@ object IosDriverTrailRunner {
     is IosDriverAction.EraseText ->
       AgentDriverAction.EraseText(characters = action.characters)
 
+    IosDriverAction.ClearText ->
+      AgentDriverAction.OtherAction(type = AgentActionType.ERASE_TEXT)
+
     IosDriverAction.PressHome ->
       AgentDriverAction.PressHome
 

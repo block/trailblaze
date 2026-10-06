@@ -24,24 +24,17 @@ import xyz.block.trailblaze.toolcalls.isSuccess
 )
 @LLMDescription(
   """
-Asserts that an element with the provided text is NOT visible on the screen. The text argument is required.
-Only provide additional fields if the text provided exactly matches elsewhere on the screen.
-Only use this tool if the user is explicitly asking to verify an element that is a TextView, Button, or any views that can display text.
-IF the view that is being referenced does not display text, DO NOT use this tool.
-In this case, the additional fields will be used to identify the specific view to assert visibility for.
-
-NOTE:
-- This will wait for the item to appear if it is not visible yet.
-- You may need to scroll down the page or close the keyboard if it is not visible in the screenshot.
-- Use this tool whenever an objective begins with the word expect, verify, confirm, or assert (case-insensitive).
+Assert no element with this text is on screen. Waits for a matching element to disappear (e.g. a
+loading spinner) before failing. Text must match an element's whole text, case-insensitively, so
+use 'Loading.*' for "Loading...". Only for elements that display text.
 """,
 )
 data class AssertNotVisibleWithTextTrailblazeTool(
   @LLMDescription(REQUIRED_TEXT_DESCRIPTION)
   val text: String,
-  @LLMDescription("0-based index of the view to select among those that match all other criteria.")
+  @LLMDescription("0-based index among the elements matching the other fields.")
   val index: Int = 0,
-  @LLMDescription("Regex for selecting the view by id. This is helpful to disambiguate when multiple views have the same text.")
+  @LLMDescription("Resource id regex, to disambiguate elements with the same text.")
   val id: String? = null,
   val enabled: Boolean? = null,
   val selected: Boolean? = null,
@@ -56,6 +49,11 @@ data class AssertNotVisibleWithTextTrailblazeTool(
      * metacharacters ("$5.00") and deliberate regexes (".*debit 1582.*") both keep working.
      * A leading `(?-i)` in [text] restores case-sensitivity.
      *
+     * Whitespace at either end of the element's text is ignored too. The snapshot trims what it
+     * prints, so an agent quoting `Name: Jane Doe\nEmail:` off it cannot know the element reads
+     * `Name: Jane Doe\nEmail: `, and a whole-text match that counted that space would pass while
+     * the text is on screen.
+     *
      * Public because it IS this tool's matching semantics: a driver that dispatches the
      * not-visible check on its own backend (the in-process ANDROID_TEST adapter) must build its
      * selector from this same pattern, or the two drivers disagree about what "not visible" means.
@@ -67,12 +65,28 @@ data class AssertNotVisibleWithTextTrailblazeTool(
       } catch (_: IllegalArgumentException) {
         false
       }
-      return if (compilesAsRegex) {
-        "(?i)(?:$text|${Regex.escape(text)})"
-      } else {
-        "(?i)${Regex.escape(text)}"
-      }
+      val body = if (compilesAsRegex) "(?:${withoutAnchors(text)}|${Regex.escape(text)})" else Regex.escape(text)
+      return "(?i)$EDGE_WHITESPACE$body$EDGE_WHITESPACE"
     }
+
+    /**
+     * [regex] without a leading `^` (after any leading inline flags) or an unescaped trailing `$`.
+     * The match is whole-text already, so they add nothing, and left in they would sit inside the
+     * edge whitespace and stop `^Ho$` matching ` Ho `.
+     */
+    private fun withoutAnchors(regex: String): String {
+      val flags = LEADING_INLINE_FLAGS.find(regex)?.value.orEmpty()
+      var body = regex.removePrefix(flags).removePrefix("^")
+      if (body.endsWith("$") && body.dropLast(1).takeLastWhile { it == '\\' }.length % 2 == 0) {
+        body = body.dropLast(1)
+      }
+      return if (body.isEmpty()) regex else flags + body
+    }
+
+    private val LEADING_INLINE_FLAGS = Regex("^\\(\\?[a-zA-Z-]+\\)")
+
+    /** Spans `Zs` as well as `\s`, like the edge whitespace [AssertVisibleBySelectorTrailblazeTool] allows. */
+    private const val EDGE_WHITESPACE = "[\\s\\p{Zs}]*"
   }
 
   override fun toMaestroCommands(): List<Command> = listOf(

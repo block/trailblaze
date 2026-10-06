@@ -27,7 +27,6 @@ import xyz.block.trailblaze.logs.server.endpoints.CliRunRequest
 import xyz.block.trailblaze.logs.server.endpoints.CliRunResponse
 import xyz.block.trailblaze.logs.server.endpoints.CliRunStatusResponse
 import xyz.block.trailblaze.logs.server.endpoints.CliShutdownResponse
-import xyz.block.trailblaze.logs.server.endpoints.CliShowWindowResponse
 import xyz.block.trailblaze.logs.server.endpoints.CliStatusResponse
 import xyz.block.trailblaze.logs.server.endpoints.RunState
 import xyz.block.trailblaze.tracing.TrailblazeTracer
@@ -39,7 +38,7 @@ import xyz.block.trailblaze.util.Console
  * The daemon runs the Trailblaze desktop app and exposes HTTP endpoints
  * for CLI commands to interact with. Uses Ktor HttpClient for HTTP requests.
  *
- * Core methods ([isRunning], [getStatus], [shutdown], [showWindow], [cancelRun], [run])
+ * Core methods ([isRunning], [getStatus], [shutdown], [cancelRun], [run])
  * are suspend functions that call the Ktor client directly. For callers outside
  * coroutine contexts (picocli Callable.call(), shutdown hooks, etc.), blocking
  * convenience wrappers are provided (e.g. [isRunningBlocking]).
@@ -192,28 +191,6 @@ class DaemonClient(
     }
   }
 
-  /** Request the daemon to show its window (bring to foreground). */
-  suspend fun showWindow(): CliShowWindowResponse {
-    return try {
-      val response = client.post("$baseUrl${CliEndpoints.SHOW_WINDOW}") {
-        contentType(ContentType.Application.Json)
-        setBody("{}")
-      }
-
-      val responseBody = response.bodyAsText()
-      if (response.status.isSuccess()) {
-        json.decodeFromString(CliShowWindowResponse.serializer(), responseBody)
-      } else {
-        CliShowWindowResponse(
-          success = false,
-          message = "HTTP ${response.status.value}: $responseBody",
-        )
-      }
-    } catch (e: Exception) {
-      CliShowWindowResponse(success = false, message = e.message ?: "Connection failed")
-    }
-  }
-
   // ---------------------------------------------------------------------------
   // Blocking convenience wrappers (for non-coroutine callers)
   // ---------------------------------------------------------------------------
@@ -241,9 +218,6 @@ class DaemonClient(
 
   /** Blocking wrapper for [shutdown]. */
   fun shutdownBlocking(): CliShutdownResponse = runBlocking { shutdown() }
-
-  /** Blocking wrapper for [showWindow]. */
-  fun showWindowBlocking(): CliShowWindowResponse = runBlocking { showWindow() }
 
   // ---------------------------------------------------------------------------
   // Utilities

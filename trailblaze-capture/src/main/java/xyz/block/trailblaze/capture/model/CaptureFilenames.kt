@@ -38,8 +38,8 @@ object CaptureFilenames {
   /**
    * Basename of a companion device's recording in a multi-device session: `video-<name>`, for the
    * name the trail's configuration gave the device (`video-buyer`). The start device keeps the
-   * plain [VIDEO_BASENAME], so every reader that knows only one recording per session — the desktop
-   * app's "Watch Video", the zip loader, the test-farm slicer — still finds the display the trail
+   * plain [VIDEO_BASENAME], so every reader that knows only one recording per session — the zip
+   * loader, the test-farm slicer — still finds the display the trail
    * started on, and the companions' files are additions rather than a rename.
    *
    * The name is operator text from YAML, so it is reduced to `[A-Za-z0-9._-]` before it becomes a

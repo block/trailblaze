@@ -1,5 +1,7 @@
 package xyz.block.trailblaze.host
 
+import com.charleskorn.kaml.Yaml
+import com.charleskorn.kaml.YamlConfiguration
 import java.io.File
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -7,6 +9,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import xyz.block.trailblaze.config.InlineScriptToolConfig
 import xyz.block.trailblaze.config.project.ScriptedToolEnrichment
+import xyz.block.trailblaze.config.project.TrailblazeProjectConfigLoader
 import xyz.block.trailblaze.config.project.TrailmapScriptedToolFile
 import xyz.block.trailblaze.scripting.AnalyzerScriptedToolEnrichment
 import xyz.block.trailblaze.util.Console
@@ -64,6 +67,8 @@ object BundledScriptedToolAnalyzeMain {
   }
 
   /** Top-level `id: <value>` line in a trailmap manifest (column 0, optional quotes/comment). */
+  private val yaml = Yaml(configuration = YamlConfiguration(strictMode = false))
+
   private val TRAILMAP_ID_LINE = Regex("""^id:\s*["']?([A-Za-z0-9_.\-]+)["']?\s*(#.*)?$""")
 
   /**
@@ -141,10 +146,7 @@ object BundledScriptedToolAnalyzeMain {
           // Recursive so descriptor-less `.ts` tools organized into `tools/<subdir>/` (by
           // platform/category) are analyzed — otherwise a `target.tools:` entry for a subfoldered
           // bare `.ts` resolves to nothing downstream. Mirrors the recursive trailmap walk above.
-          val descriptorlessTs = toolsDir.walkTopDown()
-            .filter { it.isFile && it.isDescriptorlessTypedToolFile() }
-            .sortedBy { it.relativeTo(toolsDir).invariantSeparatorsPath }
-            .toList()
+          val descriptorlessTs = descriptorlessToolSources(toolsDir)
           if (descriptorlessTs.isEmpty()) return@forEach
 
           val trailmapId = readTrailmapId(manifest)
@@ -223,14 +225,40 @@ object BundledScriptedToolAnalyzeMain {
     // `tools/` root or under a `tools/<subdir>/` organizational folder).
     val sibling = File(parentFile, n.removeSuffix(".ts") + ".yaml")
     if (sibling.exists()) return false
-    // A descriptor-less `.ts` is a meta-only tool source only when it declares EXACTLY ONE typed
-    // export: zero = a shared helper module; two-or-more = a multi-export file the meta-only path
-    // can't disambiguate (it needs a YAML `tools:` descriptor), so it's not a descriptor-less source.
-    // Keeps recursive discovery from feeding multi-export subdir reference examples (e.g. the
-    // android-sample-app `host-tools/`/`quickjs-tools/` files) into enrichment, which would throw.
-    // SISTER-IMPL-TAG: typed-tool-binding-pattern.
-    return TYPED_TOOL_BINDING_PATTERN.findAll(readText()).count() == 1
+    // Zero typed exports = a shared helper module. One or more = a tool source registering every
+    // export. SISTER-IMPL-TAG: typed-tool-binding-pattern.
+    return TYPED_TOOL_BINDING_PATTERN.containsMatchIn(readText())
   }
+
+  /** The `.ts` files under [toolsDir] that no YAML descriptor covers and that export a typed tool. */
+  internal fun descriptorlessToolSources(toolsDir: File): List<File> {
+    val covered = yamlCoveredScripts(toolsDir)
+    return toolsDir.walkTopDown()
+      .filter { it.isFile && it.absoluteFile !in covered && it.isDescriptorlessTypedToolFile() }
+      .sortedBy { it.relativeTo(toolsDir).invariantSeparatorsPath }
+      .toList()
+  }
+
+  /**
+   * Every script a YAML descriptor under [toolsDir] names in `script:`, resolved against that
+   * YAML's directory — the loader's rule. A descriptor that selects some of a file's exports
+   * owns the file, so its other exports must not register here as descriptor-less tools. A YAML
+   * that doesn't decode covers nothing, as in the loader.
+   */
+  private fun yamlCoveredScripts(toolsDir: File): Set<File> =
+    toolsDir.walkTopDown()
+      .filter { f ->
+        f.isFile && f.name.endsWith(".yaml") &&
+          TrailblazeProjectConfigLoader.OPERATIONAL_TOOL_YAML_SUFFIXES.none { f.name.endsWith(it) }
+      }
+      .mapNotNull { yamlFile ->
+        val script = runCatching {
+          yaml.decodeFromString(TrailmapScriptedToolFile.serializer(), yamlFile.readText()).script
+        }.getOrNull() ?: return@mapNotNull null
+        File(script).takeIf { it.isAbsolute }
+          ?: File(yamlFile.parentFile, script).toPath().normalize().toFile().absoluteFile
+      }
+      .toSet()
 
   private fun readTrailmapId(manifest: File): String? =
     manifest.readLines().firstNotNullOfOrNull { line ->

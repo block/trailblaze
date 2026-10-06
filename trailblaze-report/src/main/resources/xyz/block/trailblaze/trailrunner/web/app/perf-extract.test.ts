@@ -1100,12 +1100,15 @@ describe('bottom-up aggregation', () => {
 describe('clock-normalization parity fixtures', () => {
   interface LogCase {
     id: string;
-    type: 'tool' | 'status';
+    type: 'tool' | 'snapshot' | 'status';
     clock: string;
     timestampMs: number;
     durationMs?: number;
     deviceName?: string;
     hostReceivedAtMs?: number;
+    toolName?: string;
+    successful?: boolean;
+    traceId?: string;
     expectedHostMs: number;
   }
   const fixtures = require('../../../report/clock-normalization-parity-fixtures.json') as {
@@ -1117,7 +1120,9 @@ describe('clock-normalization parity fixtures', () => {
   };
 
   function fixtureLog(spec: LogCase): TrailblazeLogRecord {
-    const cls = spec.type === 'tool' ? 'TrailblazeToolLog' : 'TrailblazeSessionStatusChangeLog';
+    const cls = { tool: 'TrailblazeToolLog', snapshot: 'TrailblazeSnapshotLog', status: 'TrailblazeSessionStatusChangeLog' }[
+      spec.type
+    ];
     const log: TrailblazeLogRecord = {
       class: `xyz.block.trailblaze.logs.client.TrailblazeLog.${cls}`,
       timestamp: new Date(spec.timestampMs).toISOString(),
@@ -1126,6 +1131,11 @@ describe('clock-normalization parity fixtures', () => {
     if (spec.durationMs != null) log.durationMs = spec.durationMs;
     if (spec.deviceName != null) log.deviceName = spec.deviceName;
     if (spec.hostReceivedAtMs != null) log.hostReceivedAt = new Date(spec.hostReceivedAtMs).toISOString();
+    if (spec.traceId != null) log.traceId = spec.traceId;
+    if (spec.type === 'tool') {
+      log.toolName = spec.toolName ?? 'tapOn';
+      log.successful = spec.successful ?? true;
+    }
     return log;
   }
 

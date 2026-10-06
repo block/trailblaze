@@ -21,25 +21,21 @@ import xyz.block.trailblaze.util.Console
  * MCP transport with verbose request logging would still see the value. The framework
  * does not currently log MCP request bodies; this tool's masking covers the in-process
  * surfaces we control.
+ *
+ * Prefer plain web_type for non-sensitive values: the recording is more useful when the value is
+ * visible. The value should come from a trusted source (secrets store, fixture file, etc.).
  */
 @Serializable
 @TrailblazeToolClass("web_fillSecret")
 @LLMDescription(
   """
-INTERNAL — fills a form field with a value that must NOT be logged (passwords, tokens, OTPs).
-Prefer plain web_type for any value that isn't sensitive, since the LLM-facing recording is
-more useful when the value is visible. Use only from scripted tools where the value is loaded
-from a trusted source (secrets store, fixture file, etc.).
+For scripted tools: fill a field with a value that must not be logged (password, token, OTP). Use web_type for anything else.
 """,
 )
 data class PlaywrightNativeFillSecretTool(
-  @param:LLMDescription(
-    "Element ID, ARIA descriptor (e.g., 'textbox \"Password\"'), or CSS selector with css= prefix.",
-  )
+  @param:LLMDescription("Element ID ('e5'), ARIA descriptor ('textbox \"Password\"'), or 'css=<selector>'.")
   val ref: String,
-  @param:LLMDescription(
-    "The secret value to fill. Never logged anywhere on the host side.",
-  )
+  @param:LLMDescription("Secret value to fill; never logged.")
   val value: String,
 ) : PlaywrightExecutableTool {
   override val targetRef: String?

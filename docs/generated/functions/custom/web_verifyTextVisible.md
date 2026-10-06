@@ -4,8 +4,7 @@
 
 # `web_verifyTextVisible`
 
-Verify that specific text is visible on the current page.
-This is a test assertion — it will fail the test if the text is not found.
+Assert text is visible on the current page.
 
 ## Source
 
@@ -23,7 +22,7 @@ This is a test assertion — it will fail the test if the text is not found.
 ### Required parameters
 
 - `text` — `String`
-  The text content to verify is visible on the page.
+  Text expected to be visible; case-insensitive substring match.
 
 ### Optional parameters
 

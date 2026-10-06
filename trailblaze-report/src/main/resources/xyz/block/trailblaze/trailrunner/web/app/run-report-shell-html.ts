@@ -178,6 +178,12 @@ body:has(> #tb-shell) > #app { flex: 1 1 auto; height: auto; min-height: 0; }
   border: 0; border-bottom: 1px solid var(--line); background: var(--header); color: var(--sub); cursor: pointer;
 }
 #tb-shell.tb-shell-min #tb-shell-handle { display: flex; }
+/* Embedded (?chrome=none) the host chose the archives, so the loader has nothing to offer its
+   reader: no bar, no list of zip URLs, no handle to reopen them. Only the panel's spinner or error
+   shows. Marked from <head>, so the bar never paints for a frame first. */
+html[data-tb-embed] #tb-shell #tb-shell-bar,
+html[data-tb-embed] #tb-shell #tb-shell-list,
+html[data-tb-embed] #tb-shell #tb-shell-handle { display: none; }
 #tb-shell-handle svg { width: 12px; height: 12px; }
 #tb-shell-handle:hover { color: var(--txt); background: var(--raised); }
 #tb-shell-panel {
@@ -225,13 +231,18 @@ body:has(> #tb-shell) > #app { flex: 1 1 auto; height: auto; min-height: 0; }
 .tb-analysis-card { position: relative; display: grid; align-content: start; gap: 18px; padding: 28px; border: 1px solid var(--tb-analysis-line); border-radius: 20px; background: var(--tb-analysis-card); overflow: hidden; }
 .tb-analysis-card::before, .tb-analysis-action::before { position: absolute; inset: 0 auto auto 0; width: 100%; height: 3px; background: linear-gradient(90deg, var(--tb-analysis-tone), var(--tb-analysis-grad-mid) 55%, var(--tb-analysis-grad-end)); content: ''; }
 .tb-analysis-card header, .tb-analysis-toolbar, .tb-analysis-siblings { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
-.tb-analysis-card header { color: var(--tb-analysis-muted); font-size: 12px; }
-.tb-analysis-card h2 { font-size: clamp(23px, 3vw, 32px); line-height: 1.14; }
+.tb-analysis-card header { flex-wrap: wrap; padding: 0 0 12px; border-bottom: 1px solid var(--tb-analysis-line); background: transparent; color: var(--tb-analysis-muted); font-size: 12px; }
+.tb-analysis-card h2 { font-size: clamp(22px, 2.1vw, 26px); line-height: 1.16; }
 .tb-analysis-card h2 a { color: var(--tb-analysis-text); }
 .tb-analysis-card-summary { color: var(--tb-analysis-deck); font-size: 15px; line-height: 1.5; }
+.tb-analysis-diagnostic-summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; margin: -2px 0 0; padding: 8px 10px; border-left: 3px solid color-mix(in srgb, var(--tb-analysis-tone) 70%, var(--tb-analysis-line)); border-radius: 8px; background: color-mix(in srgb, var(--tb-analysis-tone) 6%, var(--tb-analysis-card)); color: var(--tb-analysis-deck); font-size: 13px; line-height: 1.4; }
+.tb-analysis-diagnostic-summary b { color: var(--tb-analysis-muted); font-size: 11px; letter-spacing: .07em; text-transform: uppercase; }
+.tb-analysis-diagnostic-summary > span { color: var(--tb-analysis-text); }
 .tb-analysis-card-action { display: grid; gap: 7px; padding-top: 18px; border-top: 1px solid var(--tb-analysis-line); }
 .tb-analysis-card h3, .tb-analysis-kind { color: var(--tb-analysis-muted); font-size: 11px; text-transform: uppercase; letter-spacing: .1em; }
 .tb-analysis-card-action p { color: var(--tb-analysis-deck); }
+.tb-analysis-action-links { display: flex; flex-wrap: wrap; gap: 8px 14px; }
+.tb-analysis-action-links a { font-size: 13px; font-weight: 600; }
 .tb-analysis-open { display: inline-flex; align-items: center; gap: 10px; margin-top: 6px; width: fit-content; font-weight: 600; }
 .tb-analysis-open span { font-size: 18px; }
 .tb-analysis-critical { --tb-analysis-tone: var(--tb-analysis-red); }
@@ -260,7 +271,12 @@ body:has(> #tb-shell) > #app { flex: 1 1 auto; height: auto; min-height: 0; }
 .tb-analysis-detail-grid > section > h2, .tb-analysis-lower > h2 { padding-bottom: 14px; border-bottom: 1px solid var(--tb-analysis-line); }
 .tb-analysis-subjects, .tb-analysis-evidence-list, .tb-analysis-focus ol, .tb-analysis-focus ul { display: grid; gap: 10px; margin: 0; padding-left: 20px; }
 .tb-analysis-subjects li, .tb-analysis-focus li { overflow-wrap: anywhere; }
-.tb-analysis-subjects li span, .tb-analysis-focus ol li span, .tb-analysis-focus ul li span { margin-left: 8px; color: var(--tb-analysis-muted); }
+.tb-analysis-focus ol li span, .tb-analysis-focus ul li span { margin-left: 8px; color: var(--tb-analysis-muted); }
+.tb-analysis-subjects li > .tb-analysis-subject-heading { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; }
+.tb-analysis-subjects li > .tb-analysis-subject-heading span { margin-left: 0; color: var(--tb-analysis-muted); }
+.tb-analysis-subjects li .tb-analysis-subject-diagnostic { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin: 6px 0 0; color: var(--tb-analysis-deck); font-size: 12px; }
+.tb-analysis-subjects li .tb-analysis-diagnostic-label { margin-left: 0; color: var(--tb-analysis-text); font-weight: 600; }
+.tb-analysis-subjects li .tb-analysis-diagnostic-confidence { margin-left: 0; color: var(--tb-analysis-muted); font-size: 11px; font-weight: 400; }
 .tb-analysis-evidence-list { list-style: none; padding-left: 0 !important; }
 .tb-analysis-evidence-list li + li { padding-top: 15px; border-top: 1px solid var(--tb-analysis-line); }
 .tb-analysis-evidence { padding: 2px 0 10px; }
@@ -321,6 +337,7 @@ function buildViewerShellHtml(): string {
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Trailblaze Report Viewer</title>
 <script>(()=>{let theme='dark';try{const saved=localStorage.getItem('trailblaze-report-theme');theme=saved==='light'||saved==='dark'?saved:(matchMedia('(prefers-color-scheme: light)').matches?'light':'dark')}catch(e){theme=typeof matchMedia==='function'&&matchMedia('(prefers-color-scheme: light)').matches?'light':'dark'}document.documentElement.dataset.theme=theme})()</script>
+<script>if(location.search.slice(1).split('&').includes('chrome=none'))document.documentElement.dataset.tbEmbed=''</script>
 <style>${RUN_REPORT_CSS}</style>
 <style>${VIEWER_SHELL_CSS}</style>
 </head>

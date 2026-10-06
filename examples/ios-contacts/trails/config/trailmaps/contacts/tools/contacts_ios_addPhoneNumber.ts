@@ -4,18 +4,15 @@ import { LABELS, nonEmptyString } from "./contacts_ios_shared";
 const DEFAULT_PHONE = "5551234567";
 
 export interface AddPhoneNumberArgs {
-  /** Contact whose detail screen we edit. */
+  /** Name of the contact to edit. */
   name?: string;
-  /** Phone number to type. Formatting preserved verbatim. */
+  /** Phone number to type, verbatim. */
   phoneNumber?: string;
 }
 
 /**
- * Add a new phone number to an existing iOS contact. Use this whenever the
- * task is to add a phone, attach a number to a contact, edit a contact to
- * include a phone, or update a contact with a new number. Opens the contact,
- * enters edit mode, taps "add phone", types the number, and saves. Verifies
- * the contact's detail screen renders after the save round-trip.
+ * Add a phone number to an existing iOS contact and save it. Fails if the
+ * contact doesn't exist.
  */
 // Implementation notes (NOT in the TSDoc above — the LLM doesn't need them).
 // Multi-step form interaction that crosses three screens (list → detail → edit)

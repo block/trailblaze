@@ -120,14 +120,14 @@ class DirectMcpToolExecutorTest {
   fun `VERIFICATION category is isolated from CORE_INTERACTION tools`() {
     // Progressive-disclosure clients (e.g. StepToolSet hint="VERIFY") request just
     // VERIFICATION + OBSERVATION and expect a read-only surface. Interaction tools
-    // like tap/inputText must not leak in via alwaysEnabled auto-inclusion.
+    // like tap/type must not leak in via alwaysEnabled auto-inclusion.
     val executor = createExecutor(setOf(ToolSetCategory.VERIFICATION, ToolSetCategory.OBSERVATION))
     val names = executor.getAvailableToolNames()
 
     assertTrue("assertNotVisibleWithText" in names, "Should include verify tool")
     assertTrue("takeSnapshot" in names, "Should include observation tool")
     assertFalse("tap" in names, "Should NOT include CORE_INTERACTION tools")
-    assertFalse("inputText" in names, "Should NOT include CORE_INTERACTION tools")
+    assertFalse("type" in names, "Should NOT include CORE_INTERACTION tools")
   }
 
   // endregion
@@ -211,7 +211,7 @@ class DirectMcpToolExecutorTest {
     }
 
   @Test
-  fun `executeToolByName handles inputText`() =
+  fun `executeToolByName handles type`() =
     runTest {
       val mockBridge =
         ConfigurableMockBridge().apply {
@@ -223,10 +223,10 @@ class DirectMcpToolExecutorTest {
           put("text", "hello@example.com")
         }
 
-      val result = executor.executeToolByName("inputText", args)
+      val result = executor.executeToolByName("type", args)
 
       assertIs<ToolExecutionResult.Success>(result)
-      assertEquals("inputText", result.toolName)
+      assertEquals("type", result.toolName)
     }
 
   @Test

@@ -58,7 +58,7 @@
 // the same derivation to place a step on the recording's host-clock window, and two copies that
 // drift are the exact failure it exists to prevent. Re-exported below for this module's readers.
 import type { DeviceClockOffsets } from './run-report-extract';
-import { deviceClockOffsets, logClass, parseLogTimestamp as parsePerfTimestamp, stepText, summarizeToolArgs, truncate } from './run-report-extract';
+import { deviceClockOffsets, logClass, logOffsetMs, parseLogTimestamp as parsePerfTimestamp, stepText, summarizeToolArgs, truncate } from './run-report-extract';
 
 /**
  * Containment tolerance, ms, for log-vs-log nesting: a wrapper's child can overhang either edge
@@ -98,9 +98,7 @@ function logHostMs(log: TrailblazeLogRecord, offsets: DeviceClockOffsets | null)
   const ts = parsePerfTimestamp(log.timestamp);
   if (ts == null) return null;
   if (!offsets || !isDeviceClockLog(log)) return ts;
-  const key = typeof log.deviceName === 'string' && log.deviceName ? log.deviceName : null;
-  const offset = logClass(log) === 'TrailblazeToolLog' ? offsets.byDeviceName.get(key) : undefined;
-  return ts + (offset ?? offsets.sessionWideMs);
+  return ts + logOffsetMs(log, offsets);
 }
 
 /** The requested timeout, ms: any top-level numeric raw-arg key matching /timeout/i. */

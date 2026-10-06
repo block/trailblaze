@@ -94,6 +94,7 @@ class InputTextSelectorTest {
       nodeSelector: TrailblazeNodeSelector,
       text: String,
       hideKeyboardAfter: Boolean,
+      clearFirst: Boolean,
       traceId: TraceId?,
     ): TrailblazeToolResult? {
       val result = focusAndTypeResult ?: return null

@@ -250,9 +250,7 @@ class TrailmapCatalogBuilderTest {
         |export const demo4_second = trailblaze.tool<I, O>({}, async () => ({ ok: true }));
       """.trimMargin(),
     )
-    // A multi-export .ts needs a sidecar descriptor naming each exported tool — the analyzer
-    // needs the file loaded once and each entry registered, it doesn't infer names from
-    // `export const` alone.
+    // A sidecar descriptor naming each exported tool: every entry points back at the one `.ts`.
     File(toolsDir, "demo4_shared.yaml").writeText(
       """
       script: ./demo4_shared.ts

@@ -35,6 +35,7 @@ import xyz.block.trailblaze.llm.RunYamlRequest
 import xyz.block.trailblaze.llm.TrailblazeReferrer
 import xyz.block.trailblaze.playwright.PlaywrightPageManager
 import xyz.block.trailblaze.playwright.PlaywrightTrailblazeAgent
+import xyz.block.trailblaze.logs.client.SessionMetadata
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeSession
@@ -237,14 +238,15 @@ object TrailblazeHostYamlRunner {
     onProgressMessage: (String) -> Unit,
     screenshotProvider: () -> ScreenState,
     noLogging: Boolean = false,
+    metadata: SessionMetadata = SessionMetadata(),
     cleanup: suspend () -> Unit = {},
     execute: suspend (TrailblazeSession) -> SessionId?,
   ): SessionId? {
     val sessionManager = loggingRule.sessionManager
     val session = if (overrideSessionId != null) {
-      sessionManager.createSessionWithId(overrideSessionId)
+      sessionManager.createSessionWithId(overrideSessionId, metadata)
     } else {
-      sessionManager.startSession(testName)
+      sessionManager.startSession(testName, metadata)
     }
     loggingRule.setSession(session)
 
@@ -381,6 +383,17 @@ object TrailblazeHostYamlRunner {
    * another, for no reason a reader could see.
    */
   internal fun RunYamlRequest.trailDirectory(): File? = trailFilePath?.let { File(it).parentFile }
+
+  /**
+   * Session metadata naming the trail this request runs, so a tool can tell which trail it serves
+   * through [TrailblazeSession.metadata]. Config extraction failing leaves the id null rather than
+   * throwing: the run decodes the same YAML again inside the session, where its failure is logged.
+   */
+  internal fun RunYamlRequest.trailSessionMetadata(): SessionMetadata = SessionMetadata(
+    trailId = runCatching { createTrailblazeYaml().extractTrailConfig(yaml)?.id }
+      .getOrNull()
+      ?.takeIf { it.isNotBlank() },
+  )
 
   /**
    * Runs the agent on the host with tool execution delegated to an
@@ -913,85 +926,45 @@ object TrailblazeHostYamlRunner {
       sessionProvider = { loggingRule.session ?: error("Session not available") },
       maxLlmCalls = runYamlRequest.maxLlmCalls,
       systemPromptTemplate = TrailblazeSystemPrompt.compose(),
+      alwaysShownTools = MultiDeviceTargetBinding.alwaysShownTools(
+        boundTargets,
+        listOfNotNull(driverType, TrailblazeDriverType.PLAYWRIGHT_NATIVE.takeIf { hasWebCompanion }),
+      ),
     ).apply {
       perStepSystemPromptContextProvider = multiDevicePromptContextProvider
     }
 
-    // Per-tool screen capture for Maestro→accessibility migration. Read from env var
-    // (`TRAILBLAZE_CAPTURE_SECONDARY_TREE=true`) since the host runner doesn't currently
-    // surface the on-device instrumentation arg map. The same env var is also bridged to
-    // the on-device APK via [BlockTrailblazeDesktopAppConfig.additionalInstrumentationArgs],
-    // so both sides see the toggle from a single source of truth.
-    val migrationCaptureEnabled =
-      System.getenv("TRAILBLAZE_CAPTURE_SECONDARY_TREE")?.equals("true", ignoreCase = true) == true
-    val onBeforeRecordedTool: (suspend (TrailblazeTool) -> Unit)? = if (migrationCaptureEnabled) {
-      lambda@{ tool: TrailblazeTool ->
-        // Only fire the capture for the selector-bearing tools a driver migration cares
-        // about. Recordings include launch / custom flow / verify tools that a migration
-        // pass doesn't touch — a snapshot per non-target tool would inflate session-log
-        // size for no benefit.
-        val isMigrationTarget = tool is xyz.block.trailblaze.toolcalls.commands.TapOnByElementSelector ||
-          tool is xyz.block.trailblaze.toolcalls.commands.AssertVisibleBySelectorTrailblazeTool
-        if (!isMigrationTarget) return@lambda
-        try {
-          val session = loggingRule.session ?: return@lambda
-          // captureScreenState() goes through the on-device RPC; the on-device side reads
-          // its own `trailblaze.captureSecondaryTree` arg and (when set) returns a screen
-          // state with a true UiAutomator viewHierarchy alongside the accessibility-tree
-          // trailblazeNodeTree. Both end up in the snapshot log. Suspended directly (not
-          // wrapped in runBlocking) so single-thread dispatchers don't deadlock. Reads the
-          // ACTIVE device so migration captures follow a switchDevice handover.
-          val screen = activeAgent().captureScreenState()
-          if (screen != null) {
-            loggingRule.logger.logSnapshot(
-              session = session,
-              screenState = screen,
-              displayName = "preTool: ${tool::class.simpleName ?: "unknown"}",
-            )
-          }
-        } catch (e: kotlinx.coroutines.CancellationException) {
-          // Cooperative cancellation: trail abort / timeout must propagate. The
-          // outer try/catch in TrailblazeRunnerUtil rethrows this for the same reason.
-          throw e
-        } catch (e: Exception) {
-          // Hook is observational; never let a capture failure kill the recording.
-          Console.log("[migration-capture] pre-tool snapshot failed: ${e.message}")
-        }
-      }
-    } else null
-
-    // Post-tool capture is asserts-only. AssertVisibleBySelector waits up to ~30s for the
-    // target to become visible; the pre-tool snapshot fires before that wait and often
-    // catches a mid-transition frame where the asserted element isn't yet in the tree.
-    // After the assert succeeds, the element IS on screen, and a post-tool snapshot
-    // reliably has it — `migrate-trail` prefers `postTool: AssertVisibleBySelectorTrailblazeTool`
-    // for assert-class tools and falls back to the pre-tool snapshot when no post exists.
-    // Taps are intentionally excluded: a tap's post-state is the NEXT screen, where the
-    // tapped target is no longer present — useless for resolving the original selector.
-    val onAfterRecordedTool: (suspend (TrailblazeTool) -> Unit)? = if (migrationCaptureEnabled) {
-      lambda@{ tool: TrailblazeTool ->
-        if (tool !is xyz.block.trailblaze.toolcalls.commands.AssertVisibleBySelectorTrailblazeTool) {
-          return@lambda
-        }
-        try {
-          val session = loggingRule.session ?: return@lambda
-          val screen = activeAgent().captureScreenState()
-          if (screen != null) {
-            loggingRule.logger.logSnapshot(
-              session = session,
-              screenState = screen,
-              displayName = "postTool: ${tool::class.simpleName ?: "unknown"}",
-            )
-          }
-        } catch (e: kotlinx.coroutines.CancellationException) {
-          throw e
-        } catch (e: Exception) {
-          Console.log("[migration-capture] post-tool snapshot failed: ${e.message}")
-        }
-      }
-    } else {
-      null
-    }
+    // Per-tool screen capture for driver migration. Read from env var since the host runner
+    // doesn't currently surface the on-device instrumentation arg map. The same env var is also
+    // bridged to the on-device APK via [BlockTrailblazeDesktopAppConfig.additionalInstrumentationArgs],
+    // so both sides see the toggle from a single source of truth — and [MaestroHostRunnerImpl]
+    // reads it through the same helper, so the two host-side reads can't drift.
+    //
+    // captureScreenState() goes through the on-device RPC; the on-device side reads its own
+    // `trailblaze.captureSecondaryTree` arg and (when set) returns a screen state with a true
+    // UiAutomator viewHierarchy alongside the accessibility-tree trailblazeNodeTree. Both end up
+    // in the snapshot log. Suspended directly (not wrapped in runBlocking) so single-thread
+    // dispatchers don't deadlock. Reads the ACTIVE device so migration captures follow a
+    // switchDevice handover.
+    val migrationHooks = HostMigrationCapture.recordedToolHooks(
+      // This path drives Android over RPC, where the on-device accessibility driver IS the
+      // producer: its screen state carries the UiAutomator tree alongside the accessibility one.
+      // Asked per tool against the ACTIVE device, because a `switchDevice` to a companion with no
+      // producer (web) would otherwise log single-tree snapshots for the rest of the run.
+      hasProducer = {
+        activeAgent().agent.trailblazeDeviceInfoProvider().trailblazeDriverType.platform ==
+          TrailblazeDevicePlatform.ANDROID
+      },
+      captureScreenState = { activeAgent().captureScreenState() },
+      sessionProvider = { loggingRule.session },
+      logSnapshot = { session, screenState, displayName ->
+        loggingRule.logger.logSnapshot(
+          session = session,
+          screenState = screenState,
+          displayName = displayName,
+        )
+      },
+    )
 
     val runnerUtil = TrailblazeRunnerUtil(
       trailblazeRunner = runner,
@@ -1034,16 +1007,17 @@ object TrailblazeHostYamlRunner {
       trailblazeLogger = loggingRule.logger,
       sessionProvider = { loggingRule.session ?: error("Session not available") },
       sessionUpdater = { loggingRule.setSession(it) },
-      onBeforeRecordedTool = onBeforeRecordedTool,
-      onAfterRecordedTool = onAfterRecordedTool,
-      // Deliberately NOT wired here, unlike the other host runners in this file:
+      onBeforeRecordedTool = migrationHooks?.onBefore,
+      onAfterRecordedTool = migrationHooks?.onAfter,
+      // `sharedToolBatch` is deliberately NOT wired here, unlike the other host runners in this
+      // file:
       // 1. `agent.executeToolViaRpc` sends each recorded tool as its own single-tool
       //    `RunYamlRequest`, so the on-device `AndroidDeviceCommandExecutor` (and its
       //    clipboard cache) resets between tools on the DEVICE regardless of what this
       //    host-side context shares — there's no cross-tool device state for this bracket
       //    to preserve, unlike the in-process runners.
-      // 2. When `migrationCaptureEnabled`, `onBeforeRecordedTool`/`onAfterRecordedTool`
-      //    call `agent.captureScreenState()`, a suspend RPC call whose continuation is not
+      // 2. When migration capture is enabled, the pre/post-tool hooks call
+      //    `agent.captureScreenState()`, a suspend RPC call whose continuation is not
       //    guaranteed to resume on the entering thread. `ToolBatchScope` is thread-scoped
       //    (see its kdoc's THREAD_HOP note) and can't recover from that hop — it would leak
       //    the pushed SnapshotCache frame / installed ThreadLocal on the original thread.
@@ -1061,6 +1035,7 @@ object TrailblazeHostYamlRunner {
         runBlocking { activeAgent().captureScreenState() } ?: error("No screen state available")
       },
       noLogging = noLogging,
+      metadata = runYamlRequest.trailSessionMetadata(),
       cleanup = {
         withContext(NonCancellable) {
           finishScriptingRuntimeCleanup(subprocessRuntimes) {
@@ -1111,6 +1086,7 @@ object TrailblazeHostYamlRunner {
               rawYaml = runYamlRequest.yaml,
               hasRecordedSteps = trailblazeYaml.hasRecordedSteps(trailItems),
               trailblazeDeviceId = trailblazeDeviceId,
+              trailSourceUrl = runYamlRequest.trailSourceUrl,
               resolvedInitialMemory = resolvedInitialMemory,
               sensitiveMemoryKeys = sensitiveMemoryKeys,
               // The START device's target: a session reports one target, and the start device is
@@ -1543,8 +1519,8 @@ object TrailblazeHostYamlRunner {
    * slot (with the broken tool) and the retry lands as an extra duplicate step, so saving that back
    * into the trail keeps the break and shifts the step count. Keeping only successful attempts
    * folds the retry into the step it healed. In a session that did not fail, every failed attempt
-   * was healed, so nothing else is dropped. A failed session is recorded unchanged, so its
-   * recording still shows the attempt that broke.
+   * was healed, so nothing else is dropped. A failed session is not folded: each attempt keeps its
+   * own step. The generator never records a call that failed, in either case.
    *
    * "Did not fail" means no end status the session recorded is a failure — a session with no end
    * status yet counts. Some producers write the recording on their success path BEFORE the session

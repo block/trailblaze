@@ -2,10 +2,11 @@ package xyz.block.trailblaze.compose.target
 
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.semantics.SemanticsNode
+import androidx.compose.ui.test.ComposeTimeoutException
+import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.runBlocking
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
-import kotlin.test.assertTrue
 import org.junit.Test
 
 /**
@@ -15,7 +16,9 @@ import org.junit.Test
  * Exercises:
  * - happy path: action runs first, `waitForIdle` runs after, result propagates;
  * - exception path: `waitForIdle` still runs when the action throws (the cross-driver
- *   contract — see [xyz.block.trailblaze.api.DriverDispatch] kdoc).
+ *   contract — see [xyz.block.trailblaze.api.DriverDispatch] kdoc);
+ * - settle timeout: a `ComposeTimeoutException` after a successful action returns the action's
+ *   result, while any other settle failure (an app exception the settle rethrows) still fails.
  *
  * Lives in `trailblaze-compose` (not `trailblaze-compose-target`) because the test
  * infrastructure (kotlin-test-junit4 + assertk) is already wired here, keeping the
@@ -91,24 +94,103 @@ class ComposeTestTargetDispatchTest {
   }
 
   @Test
-  fun `dispatchAndAwaitSettle - finally exception wins when both throw`() {
+  fun `dispatchAndAwaitSettle returns the action's result when the settle after it times out`() {
+    val target = object : StubComposeTestTarget() {
+      override fun waitForIdle() {
+        events.add("settle")
+        throw ComposeTimeoutException("UI never went idle")
+      }
+    }
+
+    // The action has already changed the app; a settle timeout afterwards must not report it
+    // as failed, or the recording drops a step that really happened.
+    val result = runBlocking {
+      target.dispatchAndAwaitSettle {
+        target.events.add("action")
+        "clicked"
+      }
+    }
+
+    assertEquals("clicked", result)
+    assertEquals(listOf("action", "settle"), target.events)
+  }
+
+  @Test
+  fun `dispatchAndAwaitSettle - action exception wins when both throw`() {
     val target = object : StubComposeTestTarget() {
       override fun waitForIdle() {
         throw IllegalStateException("settle-failed")
       }
     }
 
-    // When both action and settle throw, Kotlin's try/finally semantics surface the *finally*
-    // exception. Pinning this so a future refactor doesn't accidentally invert it without an
-    // explicit decision.
     val thrown = assertFailsWith<IllegalStateException> {
       runBlocking {
         target.dispatchAndAwaitSettle<Unit> { error("action-failed") }
       }
     }
-    assertTrue(
-      thrown.message == "settle-failed",
-      "finally-exception is the visible one; got '${thrown.message}'",
+    assertEquals("action-failed", thrown.message, "the action's failure is the visible one")
+    assertEquals(
+      listOf("settle-failed"),
+      thrown.suppressed.map { it.message },
+      "the settle's failure rides along as suppressed",
     )
+  }
+
+  @Test
+  fun `dispatchAndAwaitSettle propagates cancellation from the settle`() {
+    val target = object : StubComposeTestTarget() {
+      override fun waitForIdle() {
+        throw CancellationException("cancelled")
+      }
+    }
+
+    assertFailsWith<CancellationException> {
+      runBlocking { target.dispatchAndAwaitSettle { "ok" } }
+    }
+  }
+
+  @Test
+  fun `dispatchAndAwaitSettle - an app exception the settle rethrows still fails`() {
+    // waitForIdle rethrows exceptions the app raised on the UI thread. That is the app breaking,
+    // not a timeout, and swallowing it would let a run pass with a crashed app.
+    val target = object : StubComposeTestTarget() {
+      override fun waitForIdle() {
+        throw AssertionError("app assertion after the click")
+      }
+    }
+
+    val thrown = assertFailsWith<AssertionError> {
+      runBlocking { target.dispatchAndAwaitSettle { "clicked" } }
+    }
+    assertEquals("app assertion after the click", thrown.message)
+  }
+
+  @Test
+  fun `dispatchAndAwaitSettle - action exception wins over a settle Error`() {
+    val target = object : StubComposeTestTarget() {
+      override fun waitForIdle() {
+        throw AssertionError("settle-assertion")
+      }
+    }
+
+    val thrown = assertFailsWith<IllegalStateException> {
+      runBlocking { target.dispatchAndAwaitSettle<Unit> { error("action-failed") } }
+    }
+    assertEquals("action-failed", thrown.message)
+    assertEquals(listOf("settle-assertion"), thrown.suppressed.map { it.message })
+  }
+
+  @Test
+  fun `dispatchAndAwaitSettle - settle cancellation wins over an action failure`() {
+    val target = object : StubComposeTestTarget() {
+      override fun waitForIdle() {
+        throw CancellationException("cancelled")
+      }
+    }
+
+    val thrown = assertFailsWith<CancellationException> {
+      runBlocking { target.dispatchAndAwaitSettle<Unit> { error("action-failed") } }
+    }
+    assertEquals(listOf("action-failed"), thrown.suppressed.map { it.message })
   }
 }

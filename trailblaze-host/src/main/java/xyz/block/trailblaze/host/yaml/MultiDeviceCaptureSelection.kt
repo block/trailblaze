@@ -31,6 +31,17 @@ internal object MultiDeviceCaptureSelection {
     raw.orEmpty().split(',').map { it.trim() }.filter { it.isNotEmpty() }.toSet()
 
   /**
+   * Whether a web device may be armed. A browser's capture records request and response bodies and
+   * full URLs, so it is never armed implicitly: only when the run asked for network capture outright
+   * ([explicitCapture], `--capture-network`) or [allowedNames] names the device. This only admits a
+   * candidate: a non-empty [allowedNames] still narrows every device in [select], so a list that
+   * leaves a browser out keeps it unarmed even under `--capture-network`. A capture
+   * activator's own opt-in (for a lane's phones) does not bring the browser beside them along.
+   */
+  fun webDeviceOptedIn(name: String, explicitCapture: Boolean, allowedNames: Set<String>): Boolean =
+    explicitCapture || name in allowedNames
+
+  /**
    * @param candidates the devices capture could attach to — already filtered to the platforms this
    *   capture path supports, so an allowlist entry naming an unsupported device still reports as
    *   unknown rather than silently looking armed.

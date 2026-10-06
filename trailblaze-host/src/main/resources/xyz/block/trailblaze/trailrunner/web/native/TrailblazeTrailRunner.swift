@@ -14,7 +14,7 @@ if CommandLine.arguments.count > 1 && CommandLine.arguments[1] == "--pick-direct
   panel.canChooseFiles = false
   panel.allowsMultipleSelection = false
   panel.prompt = "Choose"
-  panel.message = "Choose a Trail Runner workspace"
+  panel.message = "Choose a Trailblaze workspace"
   if !initialDir.isEmpty { panel.directoryURL = URL(fileURLWithPath: initialDir) }
   if panel.runModal() == .OK, let path = panel.url?.path {
     FileHandle.standardOutput.write(Data(path.utf8))
@@ -51,11 +51,11 @@ let appMenuItem = NSMenuItem()
 mainMenu.addItem(appMenuItem)
 let appMenu = NSMenu()
 appMenu.addItem(
-  withTitle: "About Trail Runner",
+  withTitle: "About Trailblaze App",
   action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
 appMenu.addItem(NSMenuItem.separator())
 appMenu.addItem(
-  withTitle: "Hide Trail Runner", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
+  withTitle: "Hide Trailblaze App", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
 let hideOthersItem = NSMenuItem(
   title: "Hide Others", action: #selector(NSApplication.hideOtherApplications(_:)),
   keyEquivalent: "h")
@@ -66,7 +66,7 @@ appMenu.addItem(
   keyEquivalent: "")
 appMenu.addItem(NSMenuItem.separator())
 appMenu.addItem(
-  withTitle: "Quit Trail Runner", action: #selector(NSApplication.terminate(_:)),
+  withTitle: "Quit Trailblaze App", action: #selector(NSApplication.terminate(_:)),
   keyEquivalent: "q")
 appMenuItem.submenu = appMenu
 
@@ -112,7 +112,7 @@ let window = NSWindow(
   backing: .buffered,
   defer: false
 )
-window.title = "Trail Runner"
+window.title = "Trailblaze App"
 window.titleVisibility = .hidden
 window.titlebarAppearsTransparent = true
 window.appearance = NSAppearance(named: .darkAqua)

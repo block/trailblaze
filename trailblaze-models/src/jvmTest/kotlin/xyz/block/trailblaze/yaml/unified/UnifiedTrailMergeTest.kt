@@ -353,6 +353,158 @@ class UnifiedTrailMergeTest {
   }
 
   @Test
+  fun `re-recording a device keeps the requiresHost its author declared`() {
+    // requiresHost is authored, never recorded. Rebuilding the entry from the recording alone
+    // would silently let the trail run on-device again after its next re-record.
+    val acc = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY
+    val existing = UnifiedTrail(
+      config = UnifiedTrailConfig(
+        id = "x",
+        target = "y",
+        devices = mapOf("android" to TrailblazeDeviceDefinition(driver = acc, requiresHost = true)),
+      ),
+      trail = listOf(UnifiedTrailStep(step = "Step 1", recordings = mapOf("android" to listOf(toolNamed("a1"))))),
+    )
+
+    fun reRecord(driver: String?) = UnifiedTrailAdapter.mergeRecordedClassifier(
+      existing,
+      recordedItems(config = v1Config(driver = driver, id = "x", target = "y"), steps = listOf(directionStep("Step 1", tool("a1new")))),
+      "android",
+    ).config.devices
+
+    assertEquals(mapOf("android" to TrailblazeDeviceDefinition(driver = acc, requiresHost = true)), reRecord(acc.name))
+    assertEquals(
+      mapOf("android" to TrailblazeDeviceDefinition(requiresHost = true)),
+      reRecord(null),
+      "a recording with no driver still leaves the authored flag in place",
+    )
+  }
+
+  @Test
+  fun `re-recording a narrower device keeps the requiresHost it inherits`() {
+    // The flag sits on `android`, not on the recorded key. Rebuilding `android-phone` from the
+    // recording must leave the flag unset there so the device still inherits it — a written-out
+    // false would win closest-wins and let the phone leg run on-device.
+    val existing = UnifiedTrail(
+      config = UnifiedTrailConfig(
+        id = "x",
+        target = "y",
+        devices = mapOf(
+          "android" to TrailblazeDeviceDefinition(
+            driver = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
+            requiresHost = true,
+          ),
+        ),
+      ),
+      trail = listOf(UnifiedTrailStep(step = "Step 1", recordings = mapOf("android" to listOf(toolNamed("a1"))))),
+    )
+    val phone = listOf(TrailblazeDeviceClassifier("android"), TrailblazeDeviceClassifier("phone"))
+
+    listOf("ANDROID_ONDEVICE_ACCESSIBILITY", "ANDROID_ONDEVICE_INSTRUMENTATION").forEach { driver ->
+      val merged = UnifiedTrailAdapter.mergeRecordedClassifier(
+        existing,
+        recordedItems(config = v1Config(driver = driver, id = "x", target = "y"), steps = listOf(directionStep("Step 1", tool("p1")))),
+        "android-phone",
+      )
+      assertTrue(
+        UnifiedTrailAdapter.resolveRequiresHost(merged.config, phone),
+        "android-phone recorded with $driver must still require the host; devices=${merged.config.devices}",
+      )
+    }
+  }
+
+  @Test
+  fun `re-recording a device keeps an explicit requiresHost false`() {
+    // `android-phone: { requiresHost: false }` opts the phone out of the `android` flag. A recording
+    // with no driver or locale must not drop that entry and hand the phone back to host-only.
+    val existing = UnifiedTrail(
+      config = UnifiedTrailConfig(
+        id = "x",
+        target = "y",
+        devices = mapOf(
+          "android" to TrailblazeDeviceDefinition(requiresHost = true),
+          "android-phone" to TrailblazeDeviceDefinition(requiresHost = false),
+        ),
+      ),
+      trail = listOf(UnifiedTrailStep(step = "Step 1", recordings = mapOf("android" to listOf(toolNamed("a1"))))),
+    )
+
+    val merged = UnifiedTrailAdapter.mergeRecordedClassifier(
+      existing,
+      recordedItems(config = v1Config(driver = null, id = "x", target = "y"), steps = listOf(directionStep("Step 1", tool("p1")))),
+      "android-phone",
+    )
+
+    assertEquals(TrailblazeDeviceDefinition(requiresHost = false), merged.config.devices?.get("android-phone"))
+    assertFalse(
+      UnifiedTrailAdapter.resolveRequiresHost(
+        merged.config,
+        listOf(TrailblazeDeviceClassifier("android"), TrailblazeDeviceClassifier("phone")),
+      ),
+    )
+  }
+
+  @Test
+  fun `re-recording a device keeps a requiresHost false that overrides all`() {
+    // The prune compares against the device's own lineage, which stops short of `all`. Treating
+    // "nothing declared there" as false folded this entry away and handed the phone to `all: true`.
+    val existing = UnifiedTrail(
+      config = UnifiedTrailConfig(
+        id = "x",
+        target = "y",
+        devices = mapOf(
+          "all" to TrailblazeDeviceDefinition(requiresHost = true),
+          "android-phone" to TrailblazeDeviceDefinition(requiresHost = false),
+        ),
+      ),
+      trail = listOf(UnifiedTrailStep(step = "Step 1", recordings = mapOf("android" to listOf(toolNamed("a1"))))),
+    )
+
+    val merged = UnifiedTrailAdapter.mergeRecordedClassifier(
+      existing,
+      recordedItems(config = v1Config(driver = null, id = "x", target = "y"), steps = listOf(directionStep("Step 1", tool("p1")))),
+      "android-phone",
+    )
+
+    assertEquals(TrailblazeDeviceDefinition(requiresHost = false), merged.config.devices?.get("android-phone"))
+    assertFalse(
+      UnifiedTrailAdapter.resolveRequiresHost(
+        merged.config,
+        listOf(TrailblazeDeviceClassifier("android"), TrailblazeDeviceClassifier("phone")),
+      ),
+    )
+  }
+
+  @Test
+  fun `a narrower device entry that only adds requiresHost is not pruned as redundant`() {
+    // Same driver as the broader `android` entry, so before requiresHost counted as a difference
+    // the save folded `android-phone` away — and the flag with it.
+    val acc = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY
+    val existing = UnifiedTrail(
+      config = UnifiedTrailConfig(
+        id = "x",
+        target = "y",
+        devices = mapOf(
+          "android" to TrailblazeDeviceDefinition(driver = acc),
+          "android-phone" to TrailblazeDeviceDefinition(driver = acc, requiresHost = true),
+        ),
+      ),
+      trail = listOf(UnifiedTrailStep(step = "Step 1", recordings = mapOf("android" to listOf(toolNamed("a1"))))),
+    )
+    val recorded = recordedItems(
+      config = v1Config(driver = acc.name, id = "x", target = "y"),
+      steps = listOf(directionStep("Step 1", tool("a1"))),
+    )
+
+    val merged = UnifiedTrailAdapter.mergeRecordedClassifier(existing, recorded, "android-phone")
+
+    assertEquals(
+      TrailblazeDeviceDefinition(driver = acc, requiresHost = true),
+      merged.config.devices?.get("android-phone"),
+    )
+  }
+
+  @Test
   fun `dropping the only driver pin collapses config devices to null`() {
     val existing = UnifiedTrail(
       config = UnifiedTrailConfig(id = "x", target = "y", devices = mapOf("android" to devicePin("ANDROID_ONDEVICE_INSTRUMENTATION"))),

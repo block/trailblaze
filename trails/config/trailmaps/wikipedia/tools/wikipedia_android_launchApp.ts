@@ -1,15 +1,7 @@
 import { trailblaze } from "@trailblaze/scripting";
 
 /**
- * Force-stops the Wikipedia (en) app and re-launches it via the package's default
- * launcher activity, so the next step starts from a clean app state. Equivalent to a
- * Maestro `launchApp({ launchMode: FORCE_RESTART })` against `org.wikipedia`, but composed
- * entirely from the dual-mode `android_adbShell` primitive so the same tool works on host-
- * and on-device-dispatched scripted-tool sessions.
- *
- * Use this as the first step of any wikipedia trail that wants a fresh launch state. No
- * arguments — the framework resolves the app id from the `wikipedia` trailmap manifest's
- * `app_ids:` list against installed apps on the connected device.
+ * Force-stop and relaunch the Wikipedia app. App data is kept.
  */
 // Implementation notes — see the sibling clock_android_launchApp.ts for the full rationale
 // on `android_adbShell` over the Maestro-shaped `launchApp`, on `am start` over `monkey`,

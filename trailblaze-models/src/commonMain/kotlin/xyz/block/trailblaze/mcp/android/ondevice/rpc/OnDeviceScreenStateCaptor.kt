@@ -9,7 +9,7 @@ import xyz.block.trailblaze.api.TrailblazeNode
  * `GetScreenStateRequestHandler` owns the wire shaping (base64 vs binary, which screenshot
  * variants to render) and the failure mapping; HOW a frame is captured is the one part of that
  * handler that differs per driver, so it is injected. The accessibility runner captures through
- * the bound accessibility service (falling back to UiAutomator); the in-process ANDROID_TEST
+ * the bound accessibility service (UiAutomator only in migration mode); the in-process ANDROID_TEST
  * driver captures through its own instrumentation-side hierarchy. Lives beside the request/response
  * types in trailblaze-models so a driver module can implement it without depending on the RPC
  * server module — and the server module without depending on any driver.

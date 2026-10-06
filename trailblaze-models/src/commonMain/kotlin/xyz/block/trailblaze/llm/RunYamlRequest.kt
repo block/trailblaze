@@ -258,6 +258,12 @@ data class RunYamlRequest(
    * forwards them to on-device execution so its recording selection and session metadata agree.
    */
   val deviceClassifierOverride: List<String> = emptyList(),
+
+  /**
+   * Immutable GitHub permalink for the source trail YAML that initiated this request. Kept
+   * separate from [trailFilePath] because device-side RPC runs intentionally omit that path.
+   */
+  val trailSourceUrl: String? = null,
 ) : RpcRequest<RunYamlResponse> {
   init {
     require(awaitCompletion || memorySnapshot.isEmpty()) {

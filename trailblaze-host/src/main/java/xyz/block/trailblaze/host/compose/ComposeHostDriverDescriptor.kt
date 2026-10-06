@@ -22,6 +22,7 @@ import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.exception.TrailblazeException
 import xyz.block.trailblaze.host.HostYamlRunResult
 import xyz.block.trailblaze.host.TrailblazeHostYamlRunner
+import xyz.block.trailblaze.host.TrailblazeHostYamlRunner.trailSessionMetadata
 import xyz.block.trailblaze.host.driver.DeviceListingVisibility
 import xyz.block.trailblaze.host.driver.HostDeviceInventory
 import xyz.block.trailblaze.host.driver.HostDriverDescriptor
@@ -268,6 +269,8 @@ class ComposeHostDriverDescriptor(
       // The Compose-desktop system prompt (not the generic mobile prompt), so the agent gets the
       // Compose semantics-tree + takeSnapshot guidance.
       systemPromptTemplate = BaseComposeTest.COMPOSE_SYSTEM_PROMPT,
+      alwaysShownTools = runOnHostParams.targetTestApp
+        ?.getAlwaysShownToolNamesForDriver(TrailblazeDriverType.COMPOSE).orEmpty(),
     )
 
     val trailblazeYaml = createTrailblazeYaml(
@@ -307,6 +310,7 @@ class ComposeHostDriverDescriptor(
       onProgressMessage = onProgressMessage,
       screenshotProvider = screenStateProvider,
       noLogging = runOnHostParams.noLogging,
+      metadata = runYamlRequest.trailSessionMetadata(),
       cleanup = {
         withContext(NonCancellable) {
           finishScriptingRuntimeCleanup(subprocessRuntimes) {
@@ -382,6 +386,7 @@ class ComposeHostDriverDescriptor(
               rawYaml = runYamlRequest.yaml,
               hasRecordedSteps = trailblazeYaml.hasRecordedSteps(trailItems),
               trailblazeDeviceId = trailblazeDeviceId,
+              trailSourceUrl = runYamlRequest.trailSourceUrl,
               resolvedInitialMemory = resolvedInitialMemory,
               sensitiveMemoryKeys = sensitiveMemoryKeys,
             ),

@@ -19,7 +19,7 @@ const EXTERNAL_AGENT_COMPOSE_RECIPE = [
   'Stage 1 - Frame the trail, centered on the starting point. Interview me before touching anything;',
   'ask 2-3 questions, one message at a time, and wait for each answer.',
   '- FIRST, ask which TRAILHEAD to start from - the named entry state the trail begins in. Ask it with',
-  '  the ask_user command and params.source "trailheads" so Trail Runner shows this workspace\'s',
+  '  the ask_user command and params.source "trailheads" so Trailblaze App shows this workspace\'s',
   '  trailheads as clickable options for me to pick:',
   '  TRAILRUNNER_UI {"version":1,"action":"ask_user","message":"Which starting point should this trail begin from?","params":{"source":"trailheads"}}',
   '  If I pick one, that trailhead is the trail\'s entry (step 0). If none fit, ask me to describe the',
@@ -865,7 +865,7 @@ function AgentNewConversationBody({ go, agentsHook }) {
       <main className="tb-create-content">
         <div className="tb-create-agent-kicker"><Ico n="bot" s={17} c="var(--tb-ai)" /> EXTERNAL AGENT</div>
         <h1>Build a trail with your agent</h1>
-        <p>Your coding agent authors the trail in this workspace. Trail Runner becomes its companion for live devices, recordings, and verification.</p>
+        <p>Your coding agent authors the trail in this workspace. Trailblaze App becomes its companion for live devices, recordings, and verification.</p>
         <ExternalAgentPromptPanel onCopied={onCopied} onPickTarget={() => setPickingTarget(true)} waiting={waiting} />
       </main>
 

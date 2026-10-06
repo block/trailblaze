@@ -38,6 +38,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
 import xyz.block.trailblaze.toolcalls.commands.InputTextTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.TypeTrailblazeTool
 
 /**
  * Direct coverage of [JsScriptingCallbackDispatcher.dispatch]. The HTTP endpoint test
@@ -89,7 +90,7 @@ class CallbackDispatcherTest {
   private fun makeRepo(): TrailblazeToolRepo = TrailblazeToolRepo(
     TrailblazeToolSet.DynamicTrailblazeToolSet(
       "callback-dispatcher-test-toolset",
-      setOf(InputTextTrailblazeTool::class),
+      setOf(InputTextTrailblazeTool::class, TypeTrailblazeTool::class),
     ),
   )
 
@@ -338,8 +339,9 @@ class CallbackDispatcherTest {
     // A NEAR-MISS name is required for this to have any power — `unknownToolSuggestions`
     // only offers candidates within edit distance min(3, len/3), so a wildly wrong name like
     // `tool_that_does_not_exist` yields ZERO suggestions and would pass even if the
-    // suggestion-bearing lookup were dropped entirely. `inputTex` is one deletion away from
-    // the registered `inputText`.
+    // suggestion-bearing lookup were dropped entirely. `typ` is one deletion away from
+    // the registered `type`. (Not a near-miss of `inputText`: suggestions name only tools the LLM
+    // sees, and `inputText` is hidden from it.)
     //
     // Also pins the log tag: an unknown NAME must not be reported as DESERIALIZE_FAILED,
     // which is reserved for payloads that failed to decode against a schema that does exist.
@@ -348,20 +350,20 @@ class CallbackDispatcherTest {
     val output = try {
       captureConsoleLog {
         val result = JsScriptingCallbackDispatcher.dispatch(
-          buildCallToolRequest(sessionId.value, handle.invocationId, "inputTex", """{"text":"hi"}"""),
+          buildCallToolRequest(sessionId.value, handle.invocationId, "typ", """{"text":"hi"}"""),
         )
         val cap = result as? JsScriptingCallbackResult.CallToolResult ?: error("Expected CallToolResult, got: $result")
         assertThat(cap.success).isEqualTo(false)
         val message = cap.errorMessage ?: error("Expected errorMessage on unknown tool")
-        assertThat(message).contains("Could not find Trailblaze tool for name: inputTex")
-        assertThat(message).contains("Did you mean `inputText`?")
+        assertThat(message).contains("Could not find Trailblaze tool for name: typ")
+        assertThat(message).contains("Did you mean `type`?")
         assertThat(message).contains("Accepted arguments")
         assertThat(message).doesNotContain("Failed to deserialize")
       }
     } finally {
       handle.close()
     }
-    assertThat(output).contains("[JsScriptingCallbackDispatcher] UNKNOWN_TOOL tool 'inputTex'")
+    assertThat(output).contains("[JsScriptingCallbackDispatcher] UNKNOWN_TOOL tool 'typ'")
     assertThat(output).doesNotContain("DESERIALIZE_FAILED")
   }
 

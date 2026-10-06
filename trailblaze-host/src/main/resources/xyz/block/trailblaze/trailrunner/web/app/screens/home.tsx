@@ -24,7 +24,7 @@ const COMPANION_STATEMENT_SEED = 'Validates that a user can ';
 // thread before it attaches or writes anything.
 function companionAgentPrompt(statement, root) {
   return [
-    "Help me author a Trailblaze trail - a natural-language UI test that gets recorded into deterministic YAML - using Trail Runner's companion mode.",
+    "Help me author a Trailblaze trail - a natural-language UI test that gets recorded into deterministic YAML - using Trailblaze App's companion mode.",
     '',
     'Trail intent: ' + statement.trim(),
     '',
@@ -33,7 +33,7 @@ function companionAgentPrompt(statement, root) {
     'Then:',
     '1. Run `trailblaze companion --agent-help` and follow that contract.',
     '2. From the workspace root (' + (root || '<your workspace root>') + '), attach with `trailblaze companion start --folder <trail-folder> --title "<short title>"`.',
-    '3. Author the trail folder on disk, narrating with companion events as you go - I will follow along in the Trail Runner window and record steps on a device when you arm a recording.',
+    '3. Author the trail folder on disk, narrating with companion events as you go - I will follow along in the Trailblaze App window and record steps on a device when you arm a recording.',
     '4. Disconnect when the trail is done.',
   ].join('\n');
 }
@@ -112,7 +112,7 @@ function ExternalAgentPromptPanel({ onCopied, onPickTarget, waiting = false }) {
       {copied && (
         <div className="tb-create-handoff" role="status">
           <Ico n={waiting ? 'loader-circle' : 'check-circle-2'} s={16} c={waiting ? 'var(--tb-running)' : 'var(--tb-pass)'} spin={waiting} />
-          <div><strong>{waiting ? 'Waiting for your agent' : 'Brief copied'}</strong><span>Paste it into Codex, Claude Code, or another agent running in this workspace. Trail Runner will open its companion when it connects.</span></div>
+          <div><strong>{waiting ? 'Waiting for your agent' : 'Brief copied'}</strong><span>Paste it into Codex, Claude Code, or another agent running in this workspace. Trailblaze App will open its companion when it connects.</span></div>
           <Ico n="bot" s={18} c="var(--tb-ai)" />
         </div>
       )}
@@ -201,8 +201,8 @@ function HomeContent({ go }) {
     <div style={{ minHeight: '100%', boxSizing: 'border-box' }}>
       <div style={{ maxWidth: 900, margin: '0 auto', padding: 'clamp(44px, 12vh, 148px) 30px 40px' }}>
         <ScreenHead
-          title="Trail Runner"
-          right={<HelpButton title="How Trail Runner works" onClick={() => setShowHelp(true)} />}
+          title="Trailblaze App"
+          right={<HelpButton title="How Trailblaze App works" onClick={() => setShowHelp(true)} />}
         />
 
         <div style={{ marginTop: 24 }}>
@@ -216,7 +216,7 @@ function HomeContent({ go }) {
 
       {showHelp && (
         <HelpOverlay
-          title="How Trail Runner works"
+          title="How Trailblaze App works"
           sub="Trailblaze tests your app's UI with natural language. The loop: describe a flow, let the AI drive a real device once, keep the recording, and replay it forever - deterministic and free. Every screen here is one stage of that loop."
           onClose={() => setShowHelp(false)}
         >

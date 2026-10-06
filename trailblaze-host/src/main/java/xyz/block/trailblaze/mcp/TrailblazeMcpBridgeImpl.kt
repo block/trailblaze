@@ -2758,12 +2758,17 @@ class TrailblazeMcpBridgeImpl(
     val resolvedLogsRepo = logsRepo
     if (test.config.captureNetworkTraffic && resolvedLogsRepo != null) {
       runCatching {
-        WebNetworkCapture.start(
-          ctx = test.browserManager.currentPage.context(),
-          sessionId = syntheticSession.sessionId.value,
-          sessionDir = resolvedLogsRepo.getSessionDir(syntheticSession.sessionId),
-          tracker = agent.inflightRequestTracker,
-        )
+        // Bridged: `currentPage` can lazily create the page, and attaching makes a browser round
+        // trip that dispatches queued events — both are Playwright API calls, which must run on
+        // its thread.
+        test.browserManager.onPlaywrightThread {
+          WebNetworkCapture.start(
+            ctx = test.browserManager.currentPage.context(),
+            sessionId = syntheticSession.sessionId.value,
+            sessionDir = resolvedLogsRepo.getSessionDir(syntheticSession.sessionId),
+            tracker = agent.inflightRequestTracker,
+          )
+        }
       }.onFailure {
         Console.log("MCP: Auto-start of web network capture failed: ${it.message}")
       }

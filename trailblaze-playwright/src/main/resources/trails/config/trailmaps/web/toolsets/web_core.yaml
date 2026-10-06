@@ -10,6 +10,7 @@ tools:
   - web_navigate
   - web_scroll
   - web_hover
+  - web_drag
   - web_pressKey
   - web_selectOption
   - web_wait

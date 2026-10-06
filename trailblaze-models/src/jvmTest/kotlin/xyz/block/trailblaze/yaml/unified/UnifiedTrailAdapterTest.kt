@@ -681,6 +681,31 @@ class UnifiedTrailAdapterTest {
   }
 
   @Test
+  fun `requiresHost resolves per field through the classifier lineage`() {
+    val config = UnifiedTrailConfig(
+      id = "x",
+      target = "y",
+      devices = linkedMapOf(
+        "android" to TrailblazeDeviceDefinition(requiresHost = true),
+        // A narrower entry that leaves the flag unset still inherits it; only an explicit false
+        // opts a device back out.
+        "android-phone" to devicePin("ANDROID_ONDEVICE_ACCESSIBILITY"),
+        "android-tablet" to TrailblazeDeviceDefinition(requiresHost = false),
+        "ios" to devicePin("IOS_HOST"),
+      ),
+    )
+
+    fun requiresHost(vararg segments: String) =
+      UnifiedTrailAdapter.resolveRequiresHost(config, segments.map { classifier(it) })
+
+    assertTrue(requiresHost("android", "phone"), "a driver-only entry does not hide the android flag")
+    assertTrue(requiresHost("android", "foldable"), "an undeclared android device inherits it")
+    assertFalse(requiresHost("android", "tablet"))
+    assertFalse(requiresHost("ios"))
+    assertFalse(requiresHost("web"), "an undeclared device never requires the host")
+  }
+
+  @Test
   fun `lowered output has exactly one config item followed by one prompts item`() {
     val unified = UnifiedTrail(
       config = UnifiedTrailConfig(id = "x", target = "y"),

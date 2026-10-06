@@ -138,9 +138,19 @@ object PlaywrightAriaSnapshot {
    *
    * For example, if both the nav and footer have `link "Hardware"`, the
    * nav element gets nthIndex=0 and the footer element gets nthIndex=1.
+   *
+   * A role-only descriptor (`checkbox`) counts only the nodes the snapshot printed without a
+   * name, so it is matched against those alone. `getByRole("checkbox")` would also match every
+   * named checkbox and send `.nth()` to a different element.
    */
   fun resolveElementRef(page: Page, elementRef: ElementRef): Locator {
-    val locator = resolveByRoleName(page, elementRef.descriptor)
+    val role = ROLE_ONLY_PATTERN.matchEntire(elementRef.descriptor.trim().replace(TRAILING_ATTRS_PATTERN, ""))
+      ?.groupValues?.get(1)
+    val locator = if (role != null) {
+      page.getByRole(ariaRoleFromString(role), Page.GetByRoleOptions().setName(UNPRINTED_NAME_PATTERN))
+    } else {
+      resolveByRoleName(page, elementRef.descriptor)
+    }
     return locator.nth(elementRef.nthIndex)
   }
 
@@ -360,19 +370,68 @@ object PlaywrightAriaSnapshot {
    * synthetic one. Callers must skip querying this map for such nodes too (see
    * `PlaywrightScreenState`) and fall back to per-node locator resolution for them, the
    * same as they already do today for any node the batch can't resolve.
+   *
+   * The nth slot must mean the same element in both captures, so this map holds exactly
+   * the nodes DEFAULT mode lists:
+   *  - **A node with no ref keeps its slot, as null.** AI mode gives a ref only to a node
+   *    that is visible and receives pointer events; DEFAULT mode lists the rest too.
+   *    Dropping them would move every later same-(role, name) node onto its neighbour's ref.
+   *  - **An `[aria-hidden]` node and its subtree are skipped.** AI mode also lists visible
+   *    nodes that are hidden from the accessibility tree, and marks only the node carrying
+   *    the attribute; DEFAULT mode omits that whole subtree.
+   *  - **An iframe's content is skipped.** AI mode expands it inline; DEFAULT mode lists
+   *    the iframe as a leaf. The frame prefix on a ref can't tell the two apart: after a
+   *    cross-site navigation the main frame's own refs are prefixed too (`f25e11`).
    */
-  fun buildAiRefsByRoleName(aiYaml: String): Map<String, List<String>> {
-    if (aiYaml.isBlank()) return emptyMap()
-    val result = mutableMapOf<String, MutableList<String>>()
-    for (line in aiYaml.lines()) {
-      if (line.isBlank()) continue
-      val ref = REF_PATTERN.find(line)?.groupValues?.get(1) ?: continue
-      val parsed = parseAriaLine(line)
-      if (parsed.role == "generic" && parsed.name == null) continue
-      val key = roleNameCorrelationKey(parsed.role, parsed.name)
-      result.getOrPut(key) { mutableListOf() }.add(ref)
+  fun buildAiRefsByRoleName(aiYaml: String): Map<String, List<String?>> {
+    val result = mutableMapOf<String, MutableList<String?>>()
+    forEachCorrelatableAiLine(aiYaml) { key, annotations ->
+      result.getOrPut(key) { mutableListOf() }.add(REF_PATTERN.find(annotations)?.groupValues?.get(1))
     }
     return result
+  }
+
+  /**
+   * The (role, name) key and nth occurrence of the node AI mode marks `[active]` — the one
+   * holding keyboard focus — counted the same way as [buildAiRefsByRoleName]. Null when no
+   * listed node has focus. When focus is inside an iframe, AI mode marks the iframe too, and
+   * the iframe is what this returns, since the frame's content isn't counted.
+   */
+  fun focusedNodeCorrelation(aiYaml: String): Pair<String, Int>? {
+    val occurrences = mutableMapOf<String, Int>()
+    var focused: Pair<String, Int>? = null
+    forEachCorrelatableAiLine(aiYaml) { key, annotations ->
+      val nth = occurrences.getOrDefault(key, 0)
+      occurrences[key] = nth + 1
+      if (ACTIVE_ANNOTATION in annotations) focused = key to nth
+    }
+    return focused
+  }
+
+  /** Walks the nodes [buildAiRefsByRoleName] counts, in order, with each one's bracket annotations. */
+  private fun forEachCorrelatableAiLine(aiYaml: String, action: (key: String, annotations: String) -> Unit) {
+    if (aiYaml.isBlank()) return
+    // Indent of the iframe or aria-hidden node whose subtree is being skipped; -1 when none.
+    var skipBelowIndent = -1
+    for (line in aiYaml.lines()) {
+      if (line.isBlank()) continue
+      val indent = line.indexOfFirst { it != ' ' && it != '-' }
+      if (skipBelowIndent >= 0) {
+        if (indent > skipBelowIndent) continue
+        skipBelowIndent = -1
+      }
+      // A line YAML had to quote starts with `'`.
+      val key = line.trimStart(' ', '-').removePrefix("'")
+      val annotations = AI_LINE_ANNOTATIONS_PATTERN.find(key)?.groupValues?.get(1).orEmpty()
+      if (ARIA_HIDDEN_ANNOTATION in annotations) {
+        skipBelowIndent = indent
+        continue
+      }
+      val parsed = parseAriaLine(line)
+      if (parsed.role == "iframe") skipBelowIndent = indent
+      if (parsed.role == "generic" && parsed.name == null) continue
+      action(roleNameCorrelationKey(parsed.role, parsed.name), annotations)
+    }
   }
 
   /**
@@ -604,6 +663,12 @@ object PlaywrightAriaSnapshot {
   /** Matches a bare role keyword, e.g. `navigation`. */
   private val ROLE_ONLY_PATTERN = Regex("""^(\w+)$""")
 
+  /**
+   * Accessible names an ARIA snapshot prints no name for: the empty name, and any name over
+   * 900 characters (Playwright's `createKey` drops those).
+   */
+  private val UNPRINTED_NAME_PATTERN = java.util.regex.Pattern.compile("""^(?:|[\s\S]{901,})$""")
+
   /** Matches unquoted role+name, e.g. `textbox Email or phone number`. */
   private val ROLE_UNQUOTED_NAME_PATTERN = Regex("""^(\w+)\s+(.+)$""")
 
@@ -631,18 +696,24 @@ object PlaywrightAriaSnapshot {
   private val CONTAINER_ROLE_PATTERN = Regex("""^(\w+)(?:\s*\[[^\]]*])*:?\s*$""")
 
   /**
-   * Matches an `AriaSnapshotMode.AI` ref annotation and captures its id, e.g. `e5` from
-   * `[ref=e5]`. Deliberately anchored to bare `e\d+` — NOT `\w+` — so it does not match
-   * frame-nested refs, which Playwright prefixes with the owning frame's sequence number
-   * (e.g. `f1e2` for the second ref inside the first iframe). AI-mode snapshots expand
-   * `<iframe>` content inline, but the default-mode snapshot used to build the compact
-   * list / viewHierarchy tree never descends into iframes (it shows a leaf `- iframe`
-   * node), so a frame-nested ref must never enter [buildAiRefsByRoleName]'s correlation
-   * map — if it did, an (role, name, nth) lookup could resolve into iframe content instead
-   * of the intended main-frame element. Don't loosen this pattern without also filtering
-   * frame-nested refs some other way.
+   * Matches an `AriaSnapshotMode.AI` ref annotation and captures its id: `e5`, or `f25e5`
+   * when Playwright prefixes the owning frame's sequence number. That prefix appears on the
+   * main frame too once it has navigated cross-site, so it can't be used to tell iframe
+   * content apart — [buildAiRefsByRoleName] does that by tree position instead.
    */
-  private val REF_PATTERN = Regex("""\[ref=(e\d+)]""")
+  private val REF_PATTERN = Regex("""\[ref=((?:f\d+)?e\d+)]""")
+
+  /**
+   * Captures the bracket annotations of an AI-mode line — the part after the role and the
+   * optional quoted (or `/regex/`) name, before any `:`. Scoping to this part keeps a name
+   * that literally contains `[ref=e5]` or `[aria-hidden]` from being read as an annotation.
+   */
+  private val AI_LINE_ANNOTATIONS_PATTERN =
+    Regex("""^\w+(?:\s+"(?:[^"\\]|\\.)*"|\s+/.*?/)?((?:\s*\[[^\]]*])*)""")
+
+  private const val ARIA_HIDDEN_ANNOTATION = "[aria-hidden]"
+
+  private const val ACTIVE_ANNOTATION = "[active]"
 
   // -- Compact ARIA element list for LLM consumption --
 

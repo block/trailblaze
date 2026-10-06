@@ -1,7 +1,11 @@
 package xyz.block.trailblaze.ui
 
+import java.nio.file.InvalidPathException
+import java.nio.file.Paths
+import xyz.block.trailblaze.config.ServedTrailmaps
 import xyz.block.trailblaze.logs.server.endpoints.CliRunResponse
 import xyz.block.trailblaze.model.TrailExecutionResult
+import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 
 /**
  * Failure responses for `/cli/run` requests the daemon REJECTS as invalid before attempting a
@@ -48,3 +52,41 @@ internal fun cliRunRunnerRejectionResponse(result: TrailExecutionResult): CliRun
   } else {
     null
   }
+
+/**
+ * Why [target] must not run for a caller in [callerWorkspaceDir]: the caller's workspace has its own
+ * copy of the target's trailmap, or of one it depends on, and this daemon would run another copy —
+ * the bundled one, or another checkout's. Running would use the daemon's copy and could pass on code
+ * the caller never wrote; see [ServedTrailmaps]. Checks the target instance itself, not the live
+ * registry, so a workspace reload mid-setup cannot swap in an unchecked copy. Null when nothing is
+ * shadowed, or [callerWorkspaceDir] is absent (an older CLI or a non-CLI submission) or unparseable.
+ * [callerConfigDir] is the caller's `TRAILBLAZE_CONFIG_DIR`; see [ServedTrailmaps].
+ */
+internal fun shadowedTrailmapsRefusal(
+  callerWorkspaceDir: String?,
+  target: TrailblazeHostAppTarget?,
+  callerConfigDir: String? = null,
+): String? {
+  target ?: return null
+  val callerDir = callerWorkspaceDir?.takeIf { it.isNotBlank() }?.let {
+    try {
+      Paths.get(it)
+    } catch (_: InvalidPathException) {
+      null
+    }
+  } ?: return null
+  val shadowed = ServedTrailmaps.shadowedFor(callerDir, target.id, ServedTrailmaps.originsOf(target), callerConfigDir)
+  return if (shadowed.isEmpty()) null else ServedTrailmaps.refusal(shadowed)
+}
+
+/**
+ * [shadowedTrailmapsRefusal] as the run's failure response. [CliRunResponse.ERROR_KIND_INFRA]: the
+ * trail never ran, and the fix is the daemon's setup, not the trail.
+ */
+internal fun cliRunShadowedTrailmapsResponse(
+  callerWorkspaceDir: String?,
+  target: TrailblazeHostAppTarget?,
+  callerConfigDir: String? = null,
+): CliRunResponse? = shadowedTrailmapsRefusal(callerWorkspaceDir, target, callerConfigDir)?.let {
+  CliRunResponse(success = false, error = it, errorKind = CliRunResponse.ERROR_KIND_INFRA)
+}

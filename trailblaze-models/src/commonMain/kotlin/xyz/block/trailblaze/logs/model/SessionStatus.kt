@@ -55,6 +55,11 @@ sealed interface SessionStatus {
      * device's classifier chain — so the save path reads it from here to key the merge.
      */
     val selectedDeviceConfiguration: String? = null,
+    /**
+     * Immutable GitHub permalink for the source trail YAML that initiated this session.
+     * Independent of [trailFilePath], which may be null for a device-side RPC run.
+     */
+    val trailSourceUrl: String? = null,
   ) : SessionStatus
 
   @Serializable
@@ -144,14 +149,27 @@ sealed interface SessionStatus {
     ) : Ended
 
     /**
-     * Session failed due to reaching the maximum number of LLM calls allowed per objective
+     * Session failed due to reaching the maximum number of LLM calls allowed per objective, or of
+     * decision engine moves; [message] says which. Null in logs written before it was recorded.
      */
     @Serializable
     data class MaxCallsLimitReached(
       override val durationMs: Long,
       val maxCalls: Int,
       val objectivePrompt: String,
-    ) : Ended
+      val message: String? = null,
+    ) : Ended {
+      /** The constructor and [copy] from before [message], kept for callers compiled against them. */
+      @Deprecated("Binary compatibility", level = DeprecationLevel.HIDDEN)
+      constructor(durationMs: Long, maxCalls: Int, objectivePrompt: String) : this(durationMs, maxCalls, objectivePrompt, null)
+
+      @Deprecated("Binary compatibility", level = DeprecationLevel.HIDDEN)
+      fun copy(
+        durationMs: Long = this.durationMs,
+        maxCalls: Int = this.maxCalls,
+        objectivePrompt: String = this.objectivePrompt,
+      ): MaxCallsLimitReached = MaxCallsLimitReached(durationMs, maxCalls, objectivePrompt, message)
+    }
   }
 }
 

@@ -5,6 +5,8 @@ import kotlin.io.path.createTempDirectory
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlinx.coroutines.runBlocking
+import xyz.block.trailblaze.config.project.TrailblazeWorkspaceConfigResolver
+import xyz.block.trailblaze.config.project.WorkspaceTrailsDeclaration
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.report.utils.LogsRepo
@@ -28,6 +30,10 @@ class SettingsPatchWorkspaceSwitchTest {
    * directories — real ones because the patch only accepts a trails directory that exists on disk.
    */
   private fun withHarness(
+    initialTrailsDirectory: (newWorkspace: (String) -> String) -> SavedTrailblazeAppConfig = { newWorkspace ->
+      SavedTrailblazeAppConfig(selectedTrailblazeDriverTypes = emptyMap(), trailsDirectory = newWorkspace("before"))
+    },
+    launchDeclaration: () -> WorkspaceTrailsDeclaration? = { null },
     block: suspend (
       patch: suspend (SettingsPatchRequest) -> Unit,
       reloads: () -> Int,
@@ -39,10 +45,7 @@ class SettingsPatchWorkspaceSwitchTest {
       val newWorkspace = { name: String -> File(root, name).apply { mkdirs() }.absolutePath }
       val repo = TrailblazeSettingsRepo(
         settingsFile = File(root, "trailblaze-settings.json"),
-        initialConfig = SavedTrailblazeAppConfig(
-          selectedTrailblazeDriverTypes = emptyMap(),
-          trailsDirectory = newWorkspace("before"),
-        ),
+        initialConfig = initialTrailsDirectory(newWorkspace),
         defaultHostAppTarget = TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget,
         allTargetApps = { setOf(TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget) },
         supportedDriverTypes = setOf(TrailblazeDriverType.DEFAULT_ANDROID),
@@ -61,7 +64,14 @@ class SettingsPatchWorkspaceSwitchTest {
       var reloads = 0
       runBlocking {
         block(
-          { request -> buildSettingsPatchResponse(deps, request, reloadAppTargets = { reloads++ }) },
+          { request ->
+            buildSettingsPatchResponse(
+              deps,
+              request,
+              reloadAppTargets = { reloads++ },
+              launchDeclaration = launchDeclaration,
+            )
+          },
           { reloads },
           newWorkspace,
         )
@@ -115,6 +125,43 @@ class SettingsPatchWorkspaceSwitchTest {
       patch(SettingsPatchRequest(trailsDirectory = ""))
 
       assertEquals(1, reloads())
+    }
+  }
+
+  @Test
+  fun `re-sending a stored default as a pick reloads when it switches the workspace`() {
+    // A legacy `<A>/trails` beside app data `<A>/.trailblaze` is unflagged, so the launch
+    // workspace B's declaration is in effect. Activating A stores the same string, flagged — the
+    // stored path is unchanged but the workspace in effect moves to A.
+    val scratch = createTempDirectory("tb-launch").toFile()
+    try {
+      val launchRoot = File(scratch, "launch-repo").apply { mkdirs() }
+      File(launchRoot, "trailblaze-config").mkdirs()
+      File(launchRoot, "trailblaze-config/trailblaze.yaml").writeText("trails: trails\n")
+      File(launchRoot, "trails").mkdirs()
+      val launch = TrailblazeWorkspaceConfigResolver.workspaceTrailsDeclaration(
+        fromPath = launchRoot.toPath(),
+        consumer = "test",
+        envReader = { null },
+      )
+      var legacyTrails = ""
+      withHarness(
+        initialTrailsDirectory = { newWorkspace ->
+          legacyTrails = File(newWorkspace("legacy-repo/trails")).canonicalPath
+          SavedTrailblazeAppConfig(
+            selectedTrailblazeDriverTypes = emptyMap(),
+            trailsDirectory = legacyTrails,
+            appDataDirectory = File(File(legacyTrails).parentFile, ".trailblaze").path,
+          )
+        },
+        launchDeclaration = { launch },
+      ) { patch, reloads, _ ->
+        patch(SettingsPatchRequest(trailsDirectory = legacyTrails))
+
+        assertEquals(1, reloads())
+      }
+    } finally {
+      scratch.deleteRecursively()
     }
   }
 }

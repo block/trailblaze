@@ -6,48 +6,63 @@
 # small wording / spacing changes can be intentional or accidental.
 # ----------------------------------------------------------------------
 Usage: trailblaze waypoint migrate-trail [-hV] [--write]
-       [--classifier=<classifier>] --session=<sessionDir> <trailFile>
-Mechanically migrate a trail's Maestro-shape selectors to accessibility shape.
+       [--classifier=<classifier>] [--from=<fromDialectKey>]
+       --session=<sessionDir> [--to=<toDialectKey>] <trailFile>
+Mechanically migrate a trail's selectors from one driver's dialect to another's.
 Every `tapOnElementBySelector` / `assertVisibleBySelector` whose `nodeSelector`
-still
-carries androidMaestro matchers is rewritten to androidAccessibility shape,
-using the
-captured session logs to deterministically resolve each selector through the
-same
-matcher the runtime uses for taps.
+is still
+written in the source dialect is rewritten into the target dialect, using a
+recorded
+session that captured BOTH drivers' trees to resolve each selector the same way
+the
+runtime resolved it, then describe the element it landed on in the new dialect.
+The pair is read from the capture (e.g. androidMaestro -> androidAccessibility,
+iosMaestro -> iosAxe); `--from` / `--to` assert it rather than choose it.
 Defaults to dry-run (unified diff on stdout). Use `--write` to apply the
 migration in
 place. Pair with a recorded session log directory (`--session`) for the same
 trail.
-      <trailFile>   Path to the trail YAML file to migrate.
+      <trailFile>           Path to the trail YAML file to migrate.
       --classifier=<classifier>
-                    For a unified-format trail file only: which classifier's
-                      recordings to
-                    migrate (e.g. `android-phone`, `ios-tablet`). A session is
-                      captured
-                    against one device at a time, so migrate-trail always
-                      operates on one
-                    classifier per invocation — unified format just changes
-                      where that
-                    classifier's tool list lives (nested under this trail's
-                      `recording:`
-                    map instead of its own file). If omitted, inferred from the
-                      session
-                    logs' device classifier when exactly one available
-                      classifier matches;
-                    otherwise this is required. Ignored for legacy-format trail
-                      files.
-  -h, --help        Show this help message and exit.
+                            For a unified-format trail file only: which
+                              classifier's recordings to
+                            migrate (e.g. `android-phone`, `ios-tablet`). A
+                              session is captured
+                            against one device at a time, so migrate-trail
+                              always operates on one
+                            classifier per invocation — unified format just
+                              changes where that
+                            classifier's tool list lives (nested under this
+                              trail's `recording:`
+                            map instead of its own file). If omitted, inferred
+                              from the session
+                            logs' device classifier when exactly one available
+                              classifier matches;
+                            otherwise this is required. Ignored for
+                              legacy-format trail files.
+      --from=<fromDialectKey>
+                            Assert the SOURCE selector dialect (e.g.
+                              `androidMaestro`, `iosMaestro`). The pair is
+                            always inferred from the session capture; this
+                              fails the run when the capture says
+                            something else, so a batch migration can't quietly
+                              rewrite the wrong dialect.
+  -h, --help                Show this help message and exit.
       --session=<sessionDir>
-                    Session log directory from a dual-tree recorded run of this
-                      trail
-                    (trailblaze.captureSecondaryTree=true). Accepts
-                      *_TrailblazeLlmRequestLog.json,
-                    *_TrailblazeSnapshotLog.json, and *_AgentDriverLog.json
-                      files; only logs carrying
-                    viewHierarchy + trailblazeNodeTree +
-                      driverMigrationTreeNode are usable.
-  -V, --version     Print version information and exit.
-      --write       Overwrite the trail file in place with the migrated YAML.
-                      Default is dry-run:
-                    print a unified diff for review without changing the file.
+                            Session log directory from a dual-tree recorded run
+                              of this trail
+                            (trailblaze.captureSecondaryTree=true). Accepts
+                              *_TrailblazeLlmRequestLog.json,
+                            *_TrailblazeSnapshotLog.json, and *_AgentDriverLog.
+                              json files; only logs carrying
+                            viewHierarchy + trailblazeNodeTree +
+                              driverMigrationTreeNode are usable.
+      --to=<toDialectKey>   Assert the TARGET selector dialect (e.g.
+                              `androidAccessibility`, `iosAxe`). Same
+                            contract as `--from`: an assertion about the
+                              capture, not a choice.
+  -V, --version             Print version information and exit.
+      --write               Overwrite the trail file in place with the migrated
+                              YAML. Default is dry-run:
+                            print a unified diff for review without changing
+                              the file.

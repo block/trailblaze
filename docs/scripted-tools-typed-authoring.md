@@ -80,10 +80,7 @@ export interface OpenArticleArgs {
 }
 
 /**
- * Open a Wikipedia article by title. Use this whenever the task is to
- * navigate to a specific article — e.g. "open the Albert Einstein article",
- * "go to the Python article". Asserts the destination's #firstHeading is
- * visible.
+ * Open a Wikipedia article by title and verify its heading is visible.
  */
 export const wikipedia_web_openArticle = trailblaze.tool<OpenArticleArgs>(
   { supportedPlatforms: ["web"], requiresContext: true },
@@ -231,7 +228,7 @@ export interface SearchAndOpenFirstResultArgs {
   query?: string;
   /** Heading text to assert on the opened article. Defaults to `query`. */
   expectedHeading?: string;
-  /** Submit the search form (default true). */
+  /** Submit the search and verify the article. Default true; false only types the query. */
   openFirstResult?: boolean;
 }
 ```
@@ -291,8 +288,9 @@ in the legacy YAML descriptor. Every field is optional:
 | `description?: string` | Optional LLM-facing description. When set, takes precedence over the TSDoc above the `export const` (and a YAML sidecar's `description:`, if any, still takes precedence over both — see [Where the description comes from](#where-the-description-comes-from)). Use when you want a tighter agent-facing string than the TSDoc and don't want to maintain a sidecar YAML. |
 | `supportedPlatforms?: ("web" \| "android" \| "ios" \| "desktop")[]` | Registration gate. Tool is only registered for sessions whose platform matches. Empty/omitted = all platforms. |
 | `requiresContext?: boolean` | UX hint surfaced in tool catalogs — "this tool needs a live device session to be useful" (e.g. it dispatches UI tools that won't work without a connected emulator / browser). Not a registration filter; informational only. |
-| `requiresHost?: boolean` | On-device *visibility* gate — skip registering this (in-process) tool on-device. NOT a runtime selector: it does not give the tool Node APIs. A tool that needs `node:fs` / `node:child_process` / native modules selects the subprocess runtime with `runtime: subprocess` in its descriptor (host-only by nature); see the [Runtime](#runtime-quickjs-in-process-by-default) section. |
+| `requiresHost?: boolean` | On-device *visibility* gate — skip registering this (in-process) tool on-device. NOT a runtime selector: it does not give the tool Node APIs. A tool that needs `node:fs` / `node:child_process` / native modules selects the subprocess runtime with the `runtime` field below (host-only by nature); see the [Runtime](#runtime-quickjs-in-process-by-default) section. |
 | `supportedDrivers?: string[]` | Registration gate, finer-grained than `supportedPlatforms`. Use when a tool depends on driver-specific capabilities (e.g. `"playwright-native"` only). |
+| `runtime?: "inProcess" \| "subprocess"` | Where the handler runs; the same values as a descriptor's `runtime:`, which wins when both are set. `"inProcess"` (embedded QuickJS) is the default. Must be a string literal: an unreadable or unknown value fails the build rather than silently running in-process. For `"subprocess"`, still set `runtime: subprocess` in a descriptor YAML as well: the in-process APK packagers decide what to bundle from the descriptor and don't read the spec. |
 | `sensitiveArgNames?: (keyof TInput)[]` | Argument names whose values are masked in the tool-execution log — see [Keeping a credential out of the session log](#keeping-a-credential-out-of-the-session-log) for exactly what that covers. Not a registration gate. |
 
 ### Keeping a credential out of the session log
@@ -505,6 +503,52 @@ The agent sees one tool-call worth of latency — the whole composition runs ins
 QuickJS invocation. Each sub-tool's selector knowledge, retry behavior, and assertion
 shape stays in one place; the wrapper just chooses which primitives to run.
 
+## Calling Kotlin helpers via `ctx.host.<name>(args)`
+
+Some helpers a script needs can only run in Kotlin: reading a sensitive value from agent memory,
+calling an internal RPC client, or reading the host's environment. Expose these as **host
+functions** instead of hidden tools. A tool call is a step: it's written to the session log and
+report (arguments and result included), and it drops the cached screen. A host function call is
+neither. The LLM can't see it, and recordings can't capture it.
+
+```ts
+const account = await ctx.host.myapp_resolveAccount({ key: "defaults/admin" });
+await ctx.tools.inputText({ text: account.email });
+```
+
+Calls are typed by the same generated `trailblaze-client.d.ts`. A host function resolves to its
+typed result object, not JSON text, and throws an `Error` carrying the function's message on
+failure.
+
+**Writing one.** A host function is a `@Serializable` Kotlin class whose properties are its
+arguments. It implements `TrailblazeHostFunction<R>` and names itself and its result type with
+`@TrailblazeHostFunctionClass`:
+
+```kotlin
+@Serializable
+@TrailblazeHostFunctionClass(name = "myapp_resolveAccount", result = Account::class)
+internal data class ResolveAccount(val key: String) : TrailblazeHostFunction<Account> {
+  override suspend fun invoke(context: TrailblazeToolExecutionContext): Account =
+    AccountStore.load(key) ?: throw TrailblazeHostFunctionException("No account '$key'.")
+}
+```
+
+Register it with `trails/config/trailmaps/<trailmap>/host/<name>.host.yaml`:
+
+```yaml
+id: myapp_resolveAccount
+class: com.example.myapp.ResolveAccount
+```
+
+Scripts in that trailmap, and in every trailmap that depends on it, get a typed binding. The
+function runs on the JVM that runs the script: the host daemon, or the device when a trail runs
+entirely inside a test APK. Argument keys the class doesn't declare fail the call, at any level
+of nesting. A host call counts against the same recursion cap as a tool call. Never put a secret
+in an exception message, because the script sees it.
+
+Make something a tool only when a trail or the LLM must call it, or its calls must show up as
+steps.
+
 ## Worked examples
 
 ### Wikipedia: a typed web tool with conditional UI
@@ -521,14 +565,13 @@ export interface SearchAndOpenFirstResultArgs {
   query?: string;
   /** Heading text to assert on the opened article. Defaults to `query`. */
   expectedHeading?: string;
-  /** Submit the search form (default true). */
+  /** Submit the search and verify the article. Default true; false only types the query. */
   openFirstResult?: boolean;
 }
 
 /**
- * Search Wikipedia from the header search box. Use this whenever the task
- * is to search Wikipedia for something — e.g. "search for Albert Einstein",
- * "look up Python on Wikipedia", "find articles about Mount Everest"...
+ * Search Wikipedia from the header search box, submit, and verify the
+ * resulting article's heading.
  */
 export const wikipedia_web_searchAndOpenFirstResult = trailblaze.tool<SearchAndOpenFirstResultArgs>(
   { supportedPlatforms: ["web"], requiresContext: true },
@@ -746,6 +789,9 @@ The mock helpers satisfy the handler signature:
   shapes against that array. `client.stub(toolName, { textContent, errorMessage })`
   registers a canned response — a non-empty `errorMessage` makes the call throw with
   production's wording, which exercises `try/catch` recovery branches.
+- **`client.stubHost(name, { value } | { error })`** sets what `ctx.host.<name>(...)` resolves
+  to or rejects with. Calls are recorded in `client.hostCalls`. A host call with no stub
+  rejects, so a test never silently runs against an `undefined` credential.
 - **`createMockContext({ platform, sessionId?, target?, memory? })`** — returns a
   context with a no-op logger and sensible test defaults.
 
@@ -806,9 +852,9 @@ runtime globals (`URL`, `fetch`, `AbortController`, `console`); Node-flavored bu
 If your tool needs full Node-compatible APIs — `node:fs`, persistent state, native
 modules — select the **host subprocess** runtime by setting `runtime: subprocess` in the
 tool's descriptor. The framework spawns a Bun subprocess for that tool's invocations,
-where the Node surface exists; the rest of your trailmap stays in-process. `runtime` is a
-descriptor field, not part of the typed `trailblaze.tool(...)` spec, so the tool carries a
-`<name>.yaml` descriptor that sets it:
+where the Node surface exists; the rest of your trailmap stays in-process. Set it in a
+`<name>.yaml` descriptor: the spec's `runtime` field selects it too, but the in-process APK
+packagers read only the descriptor, so without one they'd bundle the tool for the device:
 
 ```yaml
 # myapp_writeArtifact.yaml

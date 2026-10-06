@@ -2,7 +2,9 @@ package xyz.block.trailblaze.viewmatcher.matching
 
 import maestro.DeviceInfo
 import maestro.Maestro
+import maestro.MaestroException
 import maestro.ViewHierarchy
+import maestro.orchestra.ElementSelector
 import maestro.orchestra.filter.FilterWithDescription
 import xyz.block.trailblaze.api.TrailblazeElementSelector
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
@@ -12,10 +14,8 @@ import xyz.block.trailblaze.toolcalls.commands.TrailblazeElementSelectorExt.toMa
 import xyz.block.trailblaze.tracing.TrailblazeTracer
 import xyz.block.trailblaze.viewmatcher.models.ElementMatches
 import xyz.block.trailblaze.yaml.TrailblazeYaml
-import kotlin.reflect.full.callSuspend
 import kotlin.reflect.full.memberFunctions
 import kotlin.reflect.jvm.isAccessible
-import kotlinx.coroutines.runBlocking
 
 /**
  * This class allows us to call Maestro's internal implementations for element matching to guarantee uniqueness
@@ -47,14 +47,6 @@ object ElementMatcherUsingMaestro {
     .find { it.name == "buildFilter" && it.parameters.size == 2 }
     ?.also { it.isAccessible = true }
     ?: throw IllegalStateException("Could not find buildFilter method")
-
-  /**
-   * Private method in Orchestra used via reflection to find element view hierarchy
-   */
-  private val findElementViewHierarchyMethod = orchestraKClass.memberFunctions
-    .find { it.name == "findElementViewHierarchy" && it.parameters.size == 3 }
-    ?.also { it.isAccessible = true }
-    ?: throw IllegalStateException("Could not find findElementViewHierarchy method")
 
   /**
    * Gets all matching elements in the exact order that Orchestra/Maestro would match them
@@ -99,33 +91,30 @@ object ElementMatcherUsingMaestro {
     val args = mutableMapOf<kotlin.reflect.KParameter, Any?>()
     paramsByName["maestro"]?.let { args[it] = maestro }
     // Only the host fallback (upstream maestro.orchestra.Orchestra) has these constructor params;
-    // its defaults are 17s / 7s. Today neither reflected entrypoint polls on them — buildFilter
-    // composes pure filters and findElementViewHierarchy is handed an explicit 0L — so this is
-    // insurance against a Maestro bump moving a lookup behind the constructor default, which
-    // would only ever surface as a migrate-trail scan taking hours. No-ops on the vendored fork.
+    // its defaults are 17s / 7s. Today buildFilter doesn't poll on them — it composes pure
+    // filters — so this is insurance against a Maestro bump moving a lookup behind the
+    // constructor default, which would only ever surface as a migrate-trail scan taking hours.
+    // No-ops on the vendored fork.
     paramsByName["lookupTimeoutMs"]?.let { args[it] = 0L }
     paramsByName["optionalLookupTimeoutMs"]?.let { args[it] = 0L }
     val orchestra = constructor.callBy(args)
     val elementSelector = trailblazeElementSelector.toMaestroElementSelector()
     assert(elementSelector.description() == trailblazeElementSelector.description())
 
-    // Replicate Orchestra's findElement logic for childOf handling
-    // Source: https://github.com/mobile-dev-inc/Maestro/blob/42ae01049fc1e3466ad4ba45414b7bb25a19c899/maestro-orchestra/src/main/java/maestro/orchestra/Orchestra.kt#L1168-L1182
-    val searchHierarchy: ViewHierarchy = if (elementSelector.childOf != null) {
-      // When childOf is specified, we need to find the parent element first and search within it.
-      // findElementViewHierarchy became a suspend fun in Maestro 2.6.1 (our vendored on-device
-      // Orchestra matches that signature), so invoke it through reflection's suspend-aware
-      // callSuspend inside runBlocking. We're resolving against a static snapshot with a 0L
-      // timeout, so this never actually blocks on device I/O.
-      runBlocking {
-        findElementViewHierarchyMethod.callSuspend(orchestra, elementSelector.childOf, 0L) as ViewHierarchy
-      }
-    } else {
-      viewHierarchy
-    }
+    // childOf scopes the search to the first element matching the parent selector (recursively,
+    // for a parent that has its own childOf) — the same resolution Maestro's Orchestra.findElement
+    // does. It's done here with buildFilter alone, so the only private Orchestra function this
+    // matcher depends on is buildFilter.
+    val searchHierarchy: ViewHierarchy = elementSelector.childOf?.let { parentSelector ->
+      resolveParentHierarchy(orchestra, parentSelector, viewHierarchy)
+        ?: throw MaestroException.ElementNotFound(
+          "Parent element not found: ${parentSelector.description()}",
+          viewHierarchy.root,
+          debugMessage = "No element matched the childOf parent, so its children were never searched.",
+        )
+    } ?: viewHierarchy
     return try {
-      val computedFilterWithDescription =
-        buildFilterMethod.call(orchestra, elementSelector) as FilterWithDescription
+      val computedFilterWithDescription = buildFilter(orchestra, elementSelector)
       val allElements = searchHierarchy.aggregate()
       val matchingNodes = computedFilterWithDescription.filterFunc(allElements)
       when (matchingNodes.size) {
@@ -136,5 +125,20 @@ object ElementMatcherUsingMaestro {
     } catch (e: Exception) {
       throw RuntimeException("Exception thrown while using selector $trailblazeElementSelector", e)
     }
+  }
+
+  private fun buildFilter(orchestra: Any, selector: ElementSelector): FilterWithDescription =
+    buildFilterMethod.call(orchestra, selector) as FilterWithDescription
+
+  /** The subtree of the first element matching [selector], or null when nothing matches. */
+  private fun resolveParentHierarchy(
+    orchestra: Any,
+    selector: ElementSelector?,
+    hierarchy: ViewHierarchy,
+  ): ViewHierarchy? {
+    if (selector == null) return hierarchy
+    val grandparentHierarchy = resolveParentHierarchy(orchestra, selector.childOf, hierarchy) ?: return null
+    return buildFilter(orchestra, selector).filterFunc(grandparentHierarchy.aggregate()).firstOrNull()
+      ?.let { ViewHierarchy(it) }
   }
 }

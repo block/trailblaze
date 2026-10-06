@@ -4,9 +4,7 @@
 
 # `compose_click`
 
-Click on a UI element.
-Identify the element using its element ID from the view hierarchy (e.g., 'e5'),
-or by text content.
+Click an element, identified by elementId (preferred), testTag, or text.
 
 ## Source
 
@@ -24,13 +22,13 @@ or by text content.
 ### Optional parameters
 
 - `elementId` — `String`
-  Element ID from the view hierarchy, e.g., 'e5'. Preferred method.
+  Element ID, e.g. 'e5'.
 - `testTag` — `String`
-  Accessibility identifier of the element to click.
+  Element testTag.
 - `text` — `String`
-  The text content of the element to click.
+  Element text, exact whole-text match.
 - `element` — `String`
-  Human-readable description of the element being clicked, for logging.
+  Short description of the element, for logs.
 
 ## Output
 

@@ -296,6 +296,7 @@ class AndroidTestTrailblazeRule(
     yamlAssetPath: String = TrailblazeYamlUtil.calculateTrailblazeYamlAssetPathFromStackTrace(
       AndroidTestInstrumentation::assetExists,
     ),
+    trailSourceUrl: String? = null,
   ) {
     val resolvedPath = TrailRecordings.findBestTrailResourcePath(
       path = yamlAssetPath,
@@ -306,17 +307,29 @@ class AndroidTestTrailblazeRule(
     run(
       trailYaml = AndroidTestInstrumentation.readAssetAsString(resolvedPath),
       trailFilePath = resolvedPath,
+      trailSourceUrl = trailSourceUrl,
     )
   }
 
-  /** Replays [trailYaml] directly. [runFromAsset] is the path a generated shell takes. */
-  fun run(trailYaml: String, trailFilePath: String? = null) {
+  /**
+   * Replays [trailYaml] directly. [runFromAsset] is the path a generated shell takes. Refuses a
+   * trail whose device entry declares `requiresHost` — this runs on the device with no host behind
+   * it; host-driven runs arrive through [runRpcEnvelope] instead.
+   */
+  fun run(
+    trailYaml: String,
+    trailFilePath: String? = null,
+    trailSourceUrl: String? = null,
+  ) {
     val classifiers = loggingRule.trailblazeDeviceInfoProvider().classifiers
+    trailblazeYaml.requiresHostRefusal(trailYaml, classifiers, trailFilePath)
+      ?.let { throw TrailblazeException(it) }
     val trailItems = trailblazeYaml.decodeTrail(trailYaml, deviceClassifiers = classifiers)
     runDecoded(
       trailItems = trailItems,
       trailYaml = trailYaml,
       trailFilePath = trailFilePath,
+      trailSourceUrl = trailSourceUrl,
       sendSessionStartLog = true,
       externalMemory = null,
     )
@@ -347,6 +360,7 @@ class AndroidTestTrailblazeRule(
     trailFilePath: String?,
     sendSessionStartLog: Boolean,
     externalMemory: AgentMemory?,
+    trailSourceUrl: String? = null,
   ): TrailblazeToolResult.Success? {
     val classifiers = loggingRule.trailblazeDeviceInfoProvider().classifiers
     val trailItems =
@@ -355,6 +369,7 @@ class AndroidTestTrailblazeRule(
       trailItems = trailItems,
       trailYaml = trailYaml,
       trailFilePath = trailFilePath,
+      trailSourceUrl = trailSourceUrl,
       sendSessionStartLog = sendSessionStartLog,
       externalMemory = externalMemory,
     )
@@ -399,6 +414,7 @@ class AndroidTestTrailblazeRule(
     trailItems: List<TrailYamlItem>,
     trailYaml: String,
     trailFilePath: String?,
+    trailSourceUrl: String?,
     sendSessionStartLog: Boolean,
     externalMemory: AgentMemory?,
   ): TrailblazeToolResult.Success? {
@@ -438,6 +454,7 @@ class AndroidTestTrailblazeRule(
             rawYaml = trailYaml,
             hasRecordedSteps = trailblazeYaml.hasRecordedSteps(trailItems),
             trailblazeDeviceId = loggingRule.trailblazeDeviceInfoProvider().trailblazeDeviceId,
+            trailSourceUrl = trailSourceUrl,
           ),
           session = session.sessionId,
           timestamp = Clock.System.now(),

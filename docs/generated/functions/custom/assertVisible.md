@@ -4,7 +4,7 @@
 
 # `assertVisible`
 
-Assert an element is visible on screen by its ref ID from the snapshot. Use the short hash ref shown in square brackets (e.g., y778 from [y778] "Network & internet"). These refs are stable across captures of the same screen. Optionally pass `expectedText` to also verify the element's rendered text — use it whenever the case asks to verify a specific value (e.g. "verify the checkout button shows $5.00", "expect status to be Active") instead of just confirming the element exists.
+Assert an element is visible by its snapshot ref (e.g. y778 from [y778] "Network & internet"). Checks the current snapshot only; it does not wait for an element to appear. Set `expectedText` to also check its text when verifying a specific value.
 
 ## Source
 
@@ -22,12 +22,12 @@ Assert an element is visible on screen by its ref ID from the snapshot. Use the 
 ### Required parameters
 
 - `ref` — `String`
-  The element ref from the snapshot (e.g., 'y778')
+  Element ref from the snapshot, e.g. 'y778'.
 
 ### Optional parameters
 
 - `expectedText` — `String`
-  Optional. When set, asserts the resolved element's rendered text equals this value after whitespace trimming (case-sensitive). Pass the stable rendered text verbatim — e.g. "Charge $5.00", not "the checkout button". Exclude volatile state that changes run-to-run (live item counts like "3 items", timestamps, quantities); pin only the part that stays constant. Leave null when only the element's presence matters.
+  The element's exact rendered text (trimmed, case-sensitive), e.g. "Charge $5.00". Don't pin text that changes run to run (counts, timestamps). Omit to check presence only.
 - `reasoning` — `String`
 
 ## Output

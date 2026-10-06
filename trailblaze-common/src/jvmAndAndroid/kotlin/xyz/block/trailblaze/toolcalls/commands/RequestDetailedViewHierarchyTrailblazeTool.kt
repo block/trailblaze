@@ -42,13 +42,9 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
   isRecordable = false,
 )
 @LLMDescription(
-  "List the FULL view hierarchy: every element, including non-interactable ones (static labels, " +
-    "headings, text) AND elements scrolled off-screen — all of which are omitted from the compact " +
-    "screen view you normally see. Each element is shown with its [ref] id; off-screen ones are " +
-    "marked `(offscreen)` (scroll them into view before tapping). Tap any on-screen element with " +
-    "the `tap` tool by ref, exactly as from the normal screen view. Call this when an element you " +
-    "expect isn't in the current screen view, when you need surrounding static text for context, " +
-    "or to discover what's reachable by scrolling — BEFORE blindly scrolling or guessing.",
+  "List the full view hierarchy, including static text and off-screen elements the compact view " +
+    "omits. Off-screen ones are marked `(offscreen)`; scroll them into view before tapping. Use " +
+    "when an expected element is missing, before blindly scrolling.",
 )
 data class RequestDetailedViewHierarchyTrailblazeTool(
   override val reasoning: String? = null,

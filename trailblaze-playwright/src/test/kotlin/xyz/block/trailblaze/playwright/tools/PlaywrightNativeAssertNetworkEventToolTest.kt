@@ -101,6 +101,50 @@ class PlaywrightNativeAssertNetworkEventToolTest {
   }
 
   @Test
+  fun `finds an on-disk blob body for a device's capture in a multi-device session`() {
+    runBlocking {
+      val ctx = PlaywrightTestProxies.FakeBrowserContext()
+      // A labelled capture writes its stream under `events/`; its blobs stay in the session root.
+      WebNetworkCapture.start(ctx.proxy, "s", tmp.newFolder(), deviceLabel = "dashboard")
+
+      val padding = "x".repeat(WebNetworkCapture.INLINE_BODY_LIMIT_BYTES + 512)
+      ctx.fireRequest(
+        PlaywrightTestProxies.fakeRequest(
+          method = "POST",
+          url = "https://analytics.example.com/track",
+          headers = mapOf("content-type" to "application/json"),
+          postBody = """{"event":"blob-signal","pad":"$padding"}""".toByteArray(),
+        ),
+      )
+      WebNetworkCapture.stop(ctx.proxy)
+
+      val result = PlaywrightNativeAssertNetworkEventTool("blob-signal")
+        .executeWithPlaywright(fakePage(ctx.proxy), noOpContext())
+
+      assertIs<TrailblazeToolResult.Success>(result)
+    }
+  }
+
+  @Test
+  fun `an ended device capture is not mistaken for a later session's`() {
+    runBlocking {
+      val ctx = PlaywrightTestProxies.FakeBrowserContext()
+      val ended = WebNetworkCapture.start(ctx.proxy, "s", tmp.newFolder(), deviceLabel = "dashboard")
+      ctx.fireRequest(
+        PlaywrightTestProxies.fakeRequest(url = "https://analytics.example.com/track/adjust-stock"),
+      )
+      // The session that borrowed this browser ends; the browser lives on for the next session,
+      // which captures nothing.
+      WebNetworkCapture.stop(ctx.proxy, ended)
+
+      val result = PlaywrightNativeAssertNetworkEventTool("adjust-stock")
+        .executeWithPlaywright(fakePage(ctx.proxy), noOpContext())
+
+      assertIs<TrailblazeToolResult.Error>(result)
+    }
+  }
+
+  @Test
   fun `returns Error when event name is absent from all captured requests`() {
     runBlocking {
       val ctx = PlaywrightTestProxies.FakeBrowserContext()

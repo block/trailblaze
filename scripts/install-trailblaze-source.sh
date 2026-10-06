@@ -122,10 +122,10 @@ fi
 # desktop module ships the launcher as a sibling, not an embedded resource).
 #
 # `-Ptrailblaze.variant=source` overrides the default in gradle.properties so
-# the JAR's bundled version.properties announces itself as `(source)` in the
-# GUI tray menu and `trailblaze --version`. This keeps a developer's locally-
-# built install visibly distinct from an officially-published Homebrew/release
-# binary which carry the inherited `Internal` variant.
+# the JAR's bundled version.properties announces itself as `(source)` in
+# `trailblaze --version`. This keeps a developer's locally-built install
+# visibly distinct from an officially-published Homebrew/release binary which
+# carry the inherited `Internal` variant.
 echo "--- Building trailblaze release artifacts (${TRAILBLAZE_MODULE}:releaseArtifacts)"
 cd "$REPO_ROOT"
 

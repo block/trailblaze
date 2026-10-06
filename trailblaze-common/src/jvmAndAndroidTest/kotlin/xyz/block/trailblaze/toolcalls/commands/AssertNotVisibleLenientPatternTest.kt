@@ -57,4 +57,33 @@ class AssertNotVisibleLenientPatternTest {
     assertTrue(matches("+47 Points", "+47 points"))
     assertFalse(matches("[unclosed", "unclosed"))
   }
+
+  @Test
+  fun `a line break in the text matches only a line break`() {
+    assertTrue(matches("Name: Jane Doe\nEmail:", "Name: Jane Doe\nEmail:"))
+    assertFalse(matches("Name: Jane Doe Email:", "Name: Jane Doe\nEmail:"))
+  }
+
+  /** The snapshot trims what it prints, so a quote of it never carries the element's edge whitespace. */
+  @Test
+  fun `whitespace at either end of the screen text is ignored`() {
+    assertTrue(matches("Name: Jane Doe\nEmail:", "Name: Jane Doe\nEmail: "))
+    assertTrue(matches("Total", "\u00A0Total\n"))
+    assertTrue(matches("\$5.00", " \$5.00 "))
+    assertFalse(matches("Total", "Total due"))
+  }
+
+  @Test
+  fun `an anchored regex still ignores whitespace at either end`() {
+    assertTrue(matches("^Ho$", " Ho "))
+    assertTrue(matches("(?-i)^Ho$", "Ho\n"))
+    assertFalse(matches("(?-i)^Ho$", "HO"))
+    assertFalse(matches("^Ho$", "Hoo"))
+  }
+
+  @Test
+  fun `an escaped trailing dollar stays literal`() {
+    assertTrue(matches("Total 5\\$", "Total 5$ "))
+    assertFalse(matches("Total 5\\$", "Total 5"))
+  }
 }

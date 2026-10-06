@@ -38,9 +38,10 @@ sealed class TrailExecutionResult {
    * `TrailblazeExitCode.MISUSE`, the daemon's `CliRunResponse.ERROR_KIND_MISUSE`); a misuse
    * rejection also guarantees no session was created for the run.
    *
-   * [sessionFinalizationFailed] marks a trail that passed but whose session then could not be
-   * finalized (e.g. a required capture recorded nothing). The session's end on disk may still
-   * read succeeded, so a caller that reconciles against it must keep this failure.
+   * [sessionFinalizationFailed] marks a trail that passed but was failed while its session was
+   * finalized (e.g. a required capture recorded nothing, or the app's log showed it crashed). The
+   * session's end on disk may still read succeeded, so a caller that reconciles against it must
+   * keep this failure.
    */
   data class Failed(
     val errorMessage: String?,

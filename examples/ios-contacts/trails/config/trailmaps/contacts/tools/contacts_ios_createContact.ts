@@ -9,20 +9,13 @@ export interface CreateContactArgs {
   firstName?: string;
   /** Last name to type. */
   lastName?: string;
-  /**
-   * Phone number to type. Formatting (spaces, dashes, parens) is preserved
-   * verbatim — iOS does its own visual reformat after Save.
-   */
+  /** Phone number to type, verbatim. iOS reformats it for display after Save. */
   phoneNumber?: string;
 }
 
 /**
- * Create a brand-new contact in the iOS Contacts app. Use this whenever the
- * task is to add a contact, create a contact, save a new person, or otherwise
- * populate the contacts list with someone new. Opens the new-contact draft,
- * types first + last name (and optionally a phone number), and saves. Verifies
- * the save round-trip completed by asserting the contact's full name is
- * visible on the post-save detail screen iOS navigates to.
+ * Create and save a new iOS contact, then verify its full name shows on the
+ * detail screen.
  */
 // Implementation note: each field tap goes through `tapOnElementWithText` against
 // the field's placeholder label rather than a generic "first text field"

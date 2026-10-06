@@ -129,6 +129,16 @@ class IosDriverTrailblazeAgent(
     sessionProvider = sessionProvider,
   )
 
+  /** Select-all + delete: two key events, where erasing by count costs one AXe process per character. */
+  override suspend fun clearFocusedTextField(traceId: TraceId?): TrailblazeToolResult =
+    IosDriverTrailRunner.runActions(
+      actions = listOf(IosDriverAction.ClearText),
+      traceId = traceId,
+      deviceManager = deviceManager,
+      trailblazeLogger = driverActionLogger,
+      sessionProvider = sessionProvider,
+    )
+
   override suspend fun executeNodeSelectorAssertVisible(
     nodeSelector: TrailblazeNodeSelector,
     timeoutMs: Long?,

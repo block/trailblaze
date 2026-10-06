@@ -665,6 +665,35 @@ object UnifiedTrailAdapter {
     deviceClassifiers: List<TrailblazeDeviceClassifier>,
   ): Boolean = resolveDeviceDefinition(config, deviceClassifiers) != null
 
+  /**
+   * Whether this device's leg must not run on-device: the closest entry in the classifier chain
+   * that SETS [TrailblazeDeviceDefinition.requiresHost] decides, and an entry that leaves it unset
+   * is skipped rather than read as false. False when no entry sets it.
+   */
+  fun resolveRequiresHost(
+    config: UnifiedTrailConfig,
+    deviceClassifiers: List<TrailblazeDeviceClassifier>,
+  ): Boolean = closestDeclaredRequiresHost(
+    config.devices,
+    TrailblazeClassifierLineage.resolutionChain(deviceClassifiers).map { it.classifier },
+    config.multiDeviceConfigurationNames,
+  ) == true
+
+  /**
+   * The [TrailblazeDeviceDefinition.requiresHost] of the closest entry along [resolutionChain] that
+   * sets one, or null when none does. Per field, so a narrower entry pinning only a driver does not
+   * hide a broader entry's flag.
+   */
+  private fun closestDeclaredRequiresHost(
+    devices: Map<String, TrailblazeDeviceDefinition>?,
+    resolutionChain: List<String>,
+    configurationNames: Set<String>,
+  ): Boolean? = resolveClosestMatch(
+    devices?.filterValues { it.requiresHost != null },
+    resolutionChain,
+    configurationNames,
+  )?.requiresHost
+
   /** Resolve the device language declared for this classifier chain, closest-wins. */
   internal fun resolveLocale(
     config: UnifiedTrailConfig,
@@ -967,7 +996,9 @@ object UnifiedTrailAdapter {
       ?: UnifiedTrailConfig()
 
     // Replace this classifier's device entry: strip it, then re-add if the recording carried a
-    // driver or locale. Collapse an emptied map back to null so an unconfigured trail stays that
+    // driver or locale, or the authored entry set requiresHost. That flag is authored, never
+    // recorded, so a re-record carries the exact entry's value over — true or false. An unset
+    // flag stays unset, so the device keeps inheriting a broader entry's. Collapse an emptied map back to null so an unconfigured trail stays that
     // way. The recorded v1 `driver:` is a string; the device model is typed, so an unknown name
     // fails loud here rather than writing an unparseable pin into the file.
     //
@@ -1014,7 +1045,14 @@ object UnifiedTrailAdapter {
           null
         }
       }
-      val mergedDevices = recordedDeviceDefinition
+      val authoredRequiresHost = baseConfig.devices?.get(classifier)?.requiresHost
+      val keptDeviceDefinition =
+        if (authoredRequiresHost != null) {
+          (recordedDeviceDefinition ?: TrailblazeDeviceDefinition()).copy(requiresHost = authoredRequiresHost)
+        } else {
+          recordedDeviceDefinition
+        }
+      val mergedDevices = keptDeviceDefinition
         ?.let { (devicesStripped ?: emptyMap()) + (classifier to it) }
         ?: devicesStripped
       baseConfig.copy(devices = mergedDevices)
@@ -1126,7 +1164,7 @@ object UnifiedTrailAdapter {
    * back verbatim, every step would gain an `android-phone` copy of its `android` leg — a duplicate
    * that then drifts from the leg it copied. So each step (and the trailhead) keeps this
    * classifier's leg only where its tools differ from the leg the device would otherwise read, and
-   * the device entry is kept only where its driver or locale differs.
+   * the device entry is kept only where its driver, locale, or requiresHost differs.
    *
    * Only when the device's driver and locale resolve the same either way: tools recorded under
    * another driver are that driver's, and folding a step into a leg recorded for a different one
@@ -1153,8 +1191,13 @@ object UnifiedTrailAdapter {
     val devices = trail.config.devices.orEmpty()
     val ownDevice = devices[classifier]
     val inheritedDevice = resolveClosestMatch(devices - classifier, ancestors, configurationNames)
+    // Null when the lineage declares nothing: dropping the entry would then hand the device to `all`
+    // or another segment, so a declared value is kept unless the lineage declares the same one.
+    val inheritedRequiresHost = closestDeclaredRequiresHost(devices - classifier, ancestors, configurationNames)
     if (ownDevice != null &&
-      (ownDevice.driver != inheritedDevice?.driver || ownDevice.locale != inheritedDevice?.locale)
+      (ownDevice.driver != inheritedDevice?.driver ||
+        ownDevice.locale != inheritedDevice?.locale ||
+        (ownDevice.requiresHost != null && ownDevice.requiresHost != inheritedRequiresHost))
     ) {
       return trail
     }

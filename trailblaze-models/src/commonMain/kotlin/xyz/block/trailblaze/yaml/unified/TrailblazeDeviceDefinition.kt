@@ -35,6 +35,7 @@ import xyz.block.trailblaze.util.Console
  *     android-tablet:
  *       driver: ANDROID_ONDEVICE_ACCESSIBILITY   # single-device entry: the KEY is the classifier
  *       locale: es                                # optional device language for this entry
+ *       requiresHost: true                        # never run this device's leg on-device
  *     ios: {}                                    # declare the classifier, pin nothing
  *     web:                                       # the same, written as an empty value
  *     pos-pair:                                  # multi-device configuration (inner devices:)
@@ -59,6 +60,8 @@ import xyz.block.trailblaze.util.Console
  * - A **named device** inside a configuration says what it is via [classifier]; steps address
  *   it by its NAME (`switchDevice`), never by classifier or serial. [locale] is not accepted on
  *   these members until multi-device setup can apply it to every bound device before the run.
+ * - [requiresHost] is accepted only on a top-level single-device entry: a multi-device session is
+ *   always driven from the host, so it has nothing to say on a configuration or its members.
  */
 @Serializable
 data class TrailblazeDeviceDefinition(
@@ -102,6 +105,21 @@ data class TrailblazeDeviceDefinition(
    * fields.
    */
   val locale: String? = null,
+  /**
+   * This device's leg must run with Trailblaze on the HOST (the CLI or daemon driving the device
+   * over adb / the simulator), never as an on-device instrumentation test packaged into a
+   * standalone test APK. Set it on a trail that needs what only the host can do — boot or reach a
+   * second device, read host files, call host-only tools — so a runner that dispatches on-device
+   * refuses the trail instead of running it somewhere it cannot pass.
+   *
+   * Top-level single-device entries only. Unlike [driver] and [locale], it resolves per FIELD:
+   * a device reads the closest entry in its classifier lineage that sets it, skipping narrower
+   * entries that leave it unset. So `android: { requiresHost: true }` covers `android-phone` even
+   * when `android-phone` has its own entry pinning a driver, and only an explicit
+   * `requiresHost: false` opts a narrower device back out. Unset everywhere means false: where the
+   * trail runs is the runner's choice.
+   */
+  val requiresHost: Boolean? = null,
 ) {
   /** True when this entry is a multi-device configuration (it carries an inner [devices] map). */
   val isConfiguration: Boolean get() = devices != null
@@ -248,6 +266,10 @@ object TrailblazeDeviceDefinitionMapSerializer : KSerializer<Map<String, Trailbl
           "map) and cannot also declare `driver:`/`classifier:`/`target:`/`locale:` — those " +
           "belong on its named devices."
       }
+      require(definition.requiresHost == null) {
+        "config.devices configuration '$key' declares requiresHost, but a multi-device " +
+          "session always runs on the host — remove it."
+      }
       require(inner.isNotEmpty()) {
         "config.devices configuration '$key' declares an empty `devices:` map — " +
           "name at least one device (the first entry is where the trail starts)."
@@ -256,6 +278,10 @@ object TrailblazeDeviceDefinitionMapSerializer : KSerializer<Map<String, Trailbl
         require(member.devices == null) {
           "config.devices configuration '$key' nests another configuration under '$name' — " +
             "configurations don't nest."
+        }
+        require(member.requiresHost == null) {
+          "config.devices configuration '$key' declares requiresHost on named device '$name', " +
+            "but a multi-device session always runs on the host — remove it."
         }
         require(member.locale == null) {
           "config.devices configuration '$key' declares locale on named device '$name', but " +

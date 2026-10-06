@@ -11,19 +11,12 @@ import kotlin.reflect.full.findAnnotation
 import kotlin.reflect.full.isSubclassOf
 
 object TrailblazeTools {
-  const val REQUIRED_TEXT_DESCRIPTION = """
-The text to match on. This is required.
-NOTE:
-- The text can be a regular expression.
-- If more than one view matches the text, other optional properties are required to disambiguate.
-      """
+  const val REQUIRED_TEXT_DESCRIPTION =
+    "Text to match; may be a regex. If several elements match, set the other fields to disambiguate."
 
-  const val REQUIRED_ACCESSIBILITY_TEXT_DESCRIPTION = """
-The accessibilityText to match on. This is required.
-NOTE:
-- The text can be a regular expression.
-- If more than one view matches the text, other optional properties are required to disambiguate.
-      """
+  const val REQUIRED_ACCESSIBILITY_TEXT_DESCRIPTION =
+    "Accessibility text to match; may be a regex. If several elements match, set the other " +
+      "fields to disambiguate."
 
 }
 

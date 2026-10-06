@@ -54,6 +54,17 @@ object MultiDeviceTargetBinding {
     .flatMapTo(mutableSetOf()) { it.getCustomToolsForDriver(driverType) }
 
   /**
+   * The tools the LLM is shown even on a turn where the decision engine hides tools: the union of
+   * every bound target's `always_shown_tools` for [driverTypes]. One agent drives every device in
+   * a session, so after it switches to a companion, that device's target's tools must stay shown.
+   */
+  fun alwaysShownTools(
+    boundTargets: List<TrailblazeHostAppTarget>,
+    driverTypes: Collection<TrailblazeDriverType>,
+  ): Set<String> = boundTargets
+    .flatMapTo(mutableSetOf()) { target -> driverTypes.flatMap { target.getAlwaysShownToolNamesForDriver(it) } }
+
+  /**
    * What the session tool repo must carry ON TOP of the start device's target, so a step recorded
    * on a companion can actually dispatch.
    *

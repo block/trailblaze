@@ -5,7 +5,6 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
-import maestro.orchestra.LaunchAppCommand
 import xyz.block.trailblaze.device.AndroidDeviceCommandExecutor
 import xyz.block.trailblaze.device.androidPackageNameViolation
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
@@ -32,8 +31,7 @@ import xyz.block.trailblaze.util.IosHostSimctlUtils
  *   resume), for up to [AndroidOpenAppReadiness.IDLE_TIMEOUT_MS]. See [AndroidOpenAppReadiness].
  * - **iOS:** `simctl launch` has no drawn signal, so the screen is captured before the launch and
  *   polled after it until it has changed and then held still, for up to a few seconds. See
- *   [awaitIosScreenReady]. On a physical iPhone, which simctl does not reach, the driver launches
- *   the app instead, with no data clear, restart or permission change.
+ *   [awaitIosScreenReady].
  *
  * The settle waits are bounded and do not fail the tool: an app whose main thread never goes idle
  * (a constant animation) or whose screen never holds still (a spinner, a clock) is still open and
@@ -43,13 +41,12 @@ import xyz.block.trailblaze.util.IosHostSimctlUtils
 @Serializable
 @TrailblazeToolClass("openApp")
 @LLMDescription(
-  "Open an app, or bring it to the front if it is already running, and wait for it to come up on " +
-    "screen (the result says if it was still busy when the wait ran out). Never clears data, restarts the app or changes permissions — it opens the app in whatever " +
-    "state it was left in. To start a test from a known state, use the target's trailhead tool " +
-    "instead.",
+  "Open an app, or bring it to the front if running, and wait for it to appear. Never clears " +
+    "data, restarts the app or changes permissions. To start from a known state, use the " +
+    "target's trailhead tool instead.",
 )
 data class OpenAppTrailblazeTool(
-  @param:LLMDescription("The app id: Android package name or iOS bundle id, e.g. 'com.android.settings'.")
+  @param:LLMDescription("Android package name or iOS bundle id, e.g. 'com.android.settings'.")
   val appId: String,
 ) : ExecutableTrailblazeTool {
 
@@ -137,27 +134,16 @@ data class OpenAppTrailblazeTool(
 
   private suspend fun openOnIos(context: TrailblazeToolExecutionContext): TrailblazeToolResult {
     val deviceId = context.trailblazeDeviceInfo.trailblazeDeviceId.instanceId
+    if (deviceId !in IosHostSimctlUtils.listBootedDeviceIds()) {
+      return TrailblazeToolResult.Error.ExceptionThrown(
+        errorMessage = "$deviceId is not a booted iOS simulator, so openApp cannot open '$appId' " +
+          "there. Only simulators are supported on iOS.",
+        command = this,
+      )
+    }
     val capture = context.screenStateProvider?.let { provider -> { provider().viewHierarchy } }
     val baseline = capture?.invoke()
-    if (deviceId in IosHostSimctlUtils.listBootedDeviceIds()) {
-      IosHostSimctlUtils.launchApp(deviceId = deviceId, appId = appId)
-    } else {
-      // Not a booted simulator, so a physical iPhone that simctl cannot reach; the driver can.
-      // An empty permissions map changes none — Maestro grants every permission when it is null.
-      val agent = context.maestroTrailblazeAgent
-        ?: return TrailblazeToolResult.Error.ExceptionThrown(
-          errorMessage = "$deviceId is not a booted simulator and this session has no driver to " +
-            "launch through, so openApp cannot open '$appId' here.",
-          command = this,
-        )
-      val launched = agent.runMaestroCommands(
-        maestroCommands = listOf(
-          LaunchAppCommand(appId = appId, clearState = false, stopApp = false, permissions = emptyMap()),
-        ),
-        traceId = context.traceId,
-      )
-      if (launched !is TrailblazeToolResult.Success) return launched
-    }
+    IosHostSimctlUtils.launchApp(deviceId = deviceId, appId = appId)
     if (capture == null) {
       return TrailblazeToolResult.Success(
         message = "Opened $appId. This session has no screen capture, so readiness was not checked.",

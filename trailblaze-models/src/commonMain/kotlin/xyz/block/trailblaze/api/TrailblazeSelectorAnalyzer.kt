@@ -19,9 +19,7 @@ import kotlinx.serialization.json.Json
  * [TrailblazeSelectorAnalysis] family, typed on the TS side by the generated
  * `selectors.ts` bindings.
  *
- * The resolve-and-verify semantics mirror `InspectTrailblazeNodeSelectorHelper` in
- * `:trailblaze-ui` (the Kotlin/Wasm inspector): beyond match counting, each option's
- * resolved center is **hit-tested** against the tree so an overlapping child that would
+ * Beyond match counting, each option's resolved center is **hit-tested** against the tree so an overlapping child that would
  * intercept the tap is caught ([TrailblazeNode.hitTest]).
  */
 internal object TrailblazeSelectorAnalyzer {

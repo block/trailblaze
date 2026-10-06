@@ -27,6 +27,7 @@ import xyz.block.trailblaze.host.networkcapture.AndroidNetworkCaptureRegistry
 import xyz.block.trailblaze.host.capture.SessionCaptureCoordinator
 import xyz.block.trailblaze.host.capture.finalizeHostSessionResources
 import xyz.block.trailblaze.host.networkcapture.CompositeAndroidNetworkCaptureActivator
+import xyz.block.trailblaze.host.networkcapture.WebCompanionNetworkCapture
 import xyz.block.trailblaze.host.networkcapture.androidCaptureRequiresTraffic
 import xyz.block.trailblaze.host.networkcapture.androidCaptureTargetAppIds
 import xyz.block.trailblaze.host.ios.MobileDeviceUtils
@@ -1183,6 +1184,14 @@ class DesktopYamlRunner(
               sessionFinalizationFailed = true,
             )
           }
+          // The crash index is written as capture stops, so it is complete only now. A run that
+          // already failed keeps its own failure; its crash still shows on the timeline.
+          if (captureAction == RunEndCaptureAction.FINALIZE && executionResult is TrailExecutionResult.Success) {
+            trailblazeDeviceManager.failSucceededSessionIfAppCrashed(resolvedSessionId)?.let { crashMessage ->
+              Console.log("💥 $crashMessage")
+              executionResult = TrailExecutionResult.Failed(crashMessage, sessionFinalizationFailed = true)
+            }
+          }
         }
         // After this run's own capture stop: ending the device's last run releases the sessions a
         // new session replaced while this one ran, which may include this run's own.
@@ -1844,7 +1853,7 @@ class DesktopYamlRunner(
     deviceBindings: List<CaptureDeviceBinding> = emptyList(),
   ): String? {
     if (deviceBindings.isNotEmpty()) {
-      return startMultiDeviceAndroidNetworkCapture(
+      return startMultiDeviceNetworkCapture(
         runYamlRequest = runYamlRequest,
         sessionIdOverride = sessionIdOverride,
         deviceBindings = deviceBindings,
@@ -1892,27 +1901,29 @@ class DesktopYamlRunner(
   }
 
   /**
-   * Arms one capture bridge per Android device a multi-device configuration bound, each labelled
-   * with the device's configuration name so its evidence lands in its own stream.
+   * Arms network capture on every device a multi-device configuration bound, each labelled with the
+   * device's configuration name so its evidence lands in its own stream: one capture bridge per
+   * Android device, and Playwright capture on each web browser (`events/network.<name>.ndjson`).
    *
    * One device failing to arm does NOT abort the others: a pair session where only one display's
-   * app carries a capture client should still capture that display. Web bindings are skipped — a
-   * host-owned browser has no adb device to attach to.
+   * app carries a capture client should still capture that display.
    *
-   * [MultiDeviceCaptureSelection.CAPTURE_DEVICES_ENV_VAR] narrows this to named devices.
+   * [MultiDeviceCaptureSelection.CAPTURE_DEVICES_ENV_VAR] narrows this to named devices, web ones
+   * included. With no list, a web device is armed only when the run asked for capture outright.
    */
-  private fun startMultiDeviceAndroidNetworkCapture(
+  private fun startMultiDeviceNetworkCapture(
     runYamlRequest: RunYamlRequest,
     sessionIdOverride: SessionId,
     deviceBindings: List<CaptureDeviceBinding>,
     unresolvedDeclaredTarget: String?,
     onProgressMessage: (String) -> Unit,
   ): String? {
-    val activator = AndroidNetworkCaptureRegistry.activator ?: return null
+    val activator = AndroidNetworkCaptureRegistry.activator
     // Opt-in first: everything below either logs or attaches, and a log line saying which devices
-    // are being armed reads as capture having been armed even when this gate then refuses.
+    // are being armed reads as capture having been armed even when this gate then refuses. A web
+    // device additionally needs its own opt-in; see MultiDeviceCaptureSelection.webDeviceOptedIn.
     val androidProxyOptIn = CompositeAndroidNetworkCaptureActivator.proxyCaptureEnabledFromEnv()
-    val activatorOptIn = activator.isSessionCaptureOptedIn(sessionIdOverride.value)
+    val activatorOptIn = activator?.isSessionCaptureOptedIn(sessionIdOverride.value) == true
     if (!runYamlRequest.config.captureNetworkTraffic && !androidProxyOptIn && !activatorOptIn) {
       return null
     }
@@ -1923,18 +1934,27 @@ class DesktopYamlRunner(
     val selection =
       MultiDeviceCaptureSelection.select(
         candidates = deviceBindings.filter {
-          it.deviceId.trailblazeDevicePlatform == TrailblazeDevicePlatform.ANDROID
+          when (it.deviceId.trailblazeDevicePlatform) {
+            TrailblazeDevicePlatform.ANDROID -> activator != null
+            TrailblazeDevicePlatform.WEB -> MultiDeviceCaptureSelection.webDeviceOptedIn(
+              name = it.name,
+              explicitCapture = runYamlRequest.config.captureNetworkTraffic,
+              allowedNames = allowedDeviceNames,
+            )
+            else -> false
+          }
         },
         allowedNames = allowedDeviceNames,
         nameOf = { it.name },
       )
-    val androidBindings = selection.armed
+    val (webBindings, androidBindings) =
+      selection.armed.partition { it.deviceId.trailblazeDevicePlatform == TrailblazeDevicePlatform.WEB }
     if (allowedDeviceNames.isNotEmpty()) {
       // Both directions are logged because both are silent otherwise: a skipped device just has no
       // stream in the report, and a misspelled name disarms capture for the whole session.
       Console.log(
         "${MultiDeviceCaptureSelection.CAPTURE_DEVICES_ENV_VAR} limits network capture to " +
-          "${allowedDeviceNames.sorted()}; arming ${androidBindings.map { it.name }} of bound " +
+          "${allowedDeviceNames.sorted()}; arming ${selection.armed.map { it.name }} of bound " +
           "devices ${deviceBindings.map { it.name }}",
       )
       if (selection.unknownNames.isNotEmpty()) {
@@ -1945,12 +1965,38 @@ class DesktopYamlRunner(
         )
       }
     }
-    if (androidBindings.isEmpty()) return null
+    if (selection.armed.isEmpty()) return null
     val sessionDir = trailblazeDeviceManager.logsRepo.getSessionDir(sessionIdOverride)
     var anyStarted = false
+    webBindings.forEach { binding ->
+      runCatching {
+        val pageManager = trailblazeDeviceManager.webBrowserManager
+          .getPageManager(binding.deviceId.instanceId)
+          ?: error("no browser is running for ${binding.deviceId.instanceId}")
+        WebCompanionNetworkCapture.start(
+          sessionId = sessionIdOverride.value,
+          sessionDir = sessionDir,
+          pageManager = pageManager,
+          deviceLabel = binding.name,
+        )
+        anyStarted = true
+        onProgressMessage(
+          "Web network capture started for device '${binding.name}' " +
+            "(${binding.deviceId.instanceId}) in session ${sessionIdOverride.value}",
+        )
+      }
+        .onFailure {
+          Console.log(
+            "Auto-start of web network capture failed for device '${binding.name}' " +
+              "(${binding.deviceId.instanceId}) in ${sessionIdOverride.value}: ${it.message}"
+          )
+        }
+    }
+    // Non-null whenever any Android binding was selected: the candidate filter above admits
+    // Android devices only when an activator is registered.
     androidBindings.forEach { binding ->
       runCatching {
-        activator.start(
+        checkNotNull(activator).start(
           sessionId = sessionIdOverride.value,
           sessionDir = sessionDir,
           deviceId = binding.deviceId,

@@ -4,8 +4,7 @@
 
 # `web_wait`
 
-Wait for a specified number of seconds before continuing.
-Use this when you need to wait for animations, network requests, or page transitions to complete.
+Pause for a fixed number of seconds, e.g. for an animation or page load to finish.
 
 ## Source
 
@@ -23,7 +22,7 @@ Use this when you need to wait for animations, network requests, or page transit
 ### Optional parameters
 
 - `seconds` — `Integer`
-  Number of seconds to wait (e.g., 1, 2, 5). Maximum 30 seconds.
+  Seconds to wait, 1 to 30 (default 1).
 - `reasoning` — `String`
 
 ## Output

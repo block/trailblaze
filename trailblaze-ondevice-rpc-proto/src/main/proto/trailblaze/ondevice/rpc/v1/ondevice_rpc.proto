@@ -111,6 +111,9 @@ message RunYamlRequest {
   // Host-validated classifier refinements such as [android, phone, es]. The device uses these for
   // recording selection and session metadata instead of re-detecting only its physical shape.
   repeated string device_classifier_override = 23;
+  // Immutable GitHub permalink for the source trail YAML. Independent of trail_file_path, which
+  // is intentionally omitted on some device-side RPC runs.
+  optional string trail_source_url = 24;
 }
 
 message RunYamlResponse {

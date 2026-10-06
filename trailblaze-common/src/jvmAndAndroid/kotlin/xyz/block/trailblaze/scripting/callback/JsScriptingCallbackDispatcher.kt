@@ -4,6 +4,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import xyz.block.trailblaze.scripting.host.TrailblazeHostFunctionDispatcher
+import xyz.block.trailblaze.scripting.host.TrailblazeHostFunctionRegistry
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.util.Console
@@ -51,9 +53,11 @@ object JsScriptingCallbackDispatcher {
     request: JsScriptingCallbackRequest,
     maxDepth: Int = resolveMaxDepth(),
     timeoutMs: Long = resolveTimeoutMs(),
+    hostFunctions: TrailblazeHostFunctionRegistry = TrailblazeHostFunctionRegistry.bundled,
   ): JsScriptingCallbackResult {
     val actionSummary = when (val action = request.action) {
       is JsScriptingCallbackAction.CallTool -> "call_tool name=${action.toolName}"
+      is JsScriptingCallbackAction.CallHost -> "call_host name=${action.functionName}"
     }
     // START log — one per dispatch, tagged with session + invocation so every hop can be
     // correlated via `grep <sessionId>` in logcat/daemon logs.
@@ -93,20 +97,25 @@ object JsScriptingCallbackDispatcher {
       )
     }
 
+    // The depth gate bounds script -> Kotlin -> script recursion. A host function is gated like a
+    // tool: it gets the full execution context, so it could dispatch a scripted tool too.
     if (entry.depth >= maxDepth) {
       Console.log(
         "[JsScriptingCallbackDispatcher] REJECTED depth ${entry.depth} >= max $maxDepth for invocation " +
           "${request.invocationId} (session ${request.sessionId})",
       )
-      return JsScriptingCallbackResult.CallToolResult(
-        success = false,
-        errorMessage = "Callback reentrance depth ${entry.depth} reached max $maxDepth; " +
-          "refusing further dispatch.",
-      )
+      val refusal = "Callback reentrance depth ${entry.depth} reached max $maxDepth; refusing further dispatch."
+      return when (request.action) {
+        is JsScriptingCallbackAction.CallTool ->
+          JsScriptingCallbackResult.CallToolResult(success = false, errorMessage = refusal)
+        is JsScriptingCallbackAction.CallHost ->
+          JsScriptingCallbackResult.CallHostResult(success = false, errorMessage = refusal)
+      }
     }
 
     val result = when (val action = request.action) {
       is JsScriptingCallbackAction.CallTool -> dispatchCallTool(entry, action, timeoutMs)
+      is JsScriptingCallbackAction.CallHost -> dispatchCallHost(entry, action, timeoutMs, hostFunctions)
     }
     // END log — pairs with START so a tester can confirm a full round-trip happened. Result
     // summary is a one-liner; detailed error branches already log above at the point of
@@ -124,6 +133,7 @@ object JsScriptingCallbackDispatcher {
           "call_tool_result success=false structured=$structured"
         }
       }
+      is JsScriptingCallbackResult.CallHostResult -> "call_host_result success=${result.success}"
       is JsScriptingCallbackResult.Error -> "error"
     }
     Console.log(
@@ -188,6 +198,41 @@ object JsScriptingCallbackDispatcher {
     val raw = System.getProperty(CALLBACK_MAX_DEPTH_PROPERTY)
       ?: return JsScriptingInvocationRegistry.MAX_CALLBACK_DEPTH
     return raw.toIntOrNull()?.takeIf { it > 0 } ?: JsScriptingInvocationRegistry.MAX_CALLBACK_DEPTH
+  }
+
+  private suspend fun dispatchCallHost(
+    entry: JsScriptingInvocationRegistry.Entry,
+    action: JsScriptingCallbackAction.CallHost,
+    timeoutMs: Long,
+    hostFunctions: TrailblazeHostFunctionRegistry,
+  ): JsScriptingCallbackResult.CallHostResult = try {
+    // Same depth stamp as a tool callback, so a scripted tool the function dispatches registers one
+    // level deeper and stays under the cap.
+    val outcome = withContext(JsScriptingCallbackDispatchDepth(entry.depth + 1)) {
+      withTimeout(timeoutMs) {
+        TrailblazeHostFunctionDispatcher.call(
+          action.functionName,
+          action.argumentsJson,
+          entry.executionContext,
+          hostFunctions,
+        )
+      }
+    }
+    when (outcome) {
+      is TrailblazeHostFunctionDispatcher.Outcome.Success ->
+        JsScriptingCallbackResult.CallHostResult(success = true, value = outcome.value)
+      is TrailblazeHostFunctionDispatcher.Outcome.Failure ->
+        JsScriptingCallbackResult.CallHostResult(success = false, errorMessage = outcome.message)
+    }
+  } catch (e: TimeoutCancellationException) {
+    Console.log(
+      "[JsScriptingCallbackDispatcher] TIMEOUT host function '${action.functionName}' after ${timeoutMs}ms " +
+        "(session ${entry.sessionId.value})",
+    )
+    JsScriptingCallbackResult.CallHostResult(
+      success = false,
+      errorMessage = "Host function '${action.functionName}' timed out after ${timeoutMs}ms",
+    )
   }
 
   private suspend fun dispatchCallTool(

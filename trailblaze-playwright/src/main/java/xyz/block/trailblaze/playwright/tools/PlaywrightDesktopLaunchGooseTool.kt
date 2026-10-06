@@ -22,10 +22,7 @@ import xyz.block.trailblaze.util.Console
 @TrailblazeToolClass("playwright_desktop_launchGoose")
 @LLMDescription(
   """
-Launch and connect to the Goose desktop application.
-Verifies that the Goose Electron app is running and accessible via Playwright.
-Call this tool as the first step when testing the Goose desktop app.
-Returns the current page URL and title confirming the app is ready for interaction.
+Confirm the Goose desktop app is running and connected; returns its page URL and title. Call first when testing Goose.
 """,
 )
 data class PlaywrightDesktopLaunchGooseTool(

@@ -21,8 +21,7 @@ import xyz.block.trailblaze.util.Console
  *   duration multiplier) into the simulator's global preferences domain via `simctl spawn`.
  *   Preferences are read at app-process launch, so this takes effect for apps launched after
  *   session start (the normal trailhead flow); an app already running keeps its animations for
- *   the rest of its process lifetime. On a physical iOS device `simctl spawn` fails and the
- *   session proceeds untouched. Deliberately NOT the Reduce Motion accessibility setting — apps
+ *   the rest of its process lifetime. Deliberately NOT the Reduce Motion accessibility setting — apps
  *   legitimately branch on that (crossfades instead of pushes), which would mean testing a
  *   different app.
  *

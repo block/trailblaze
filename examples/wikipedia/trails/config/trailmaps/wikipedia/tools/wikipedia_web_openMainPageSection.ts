@@ -40,20 +40,14 @@ function isOnMainPage(currentUrl: string | null): boolean {
 }
 
 export interface OpenMainPageSectionArgs {
-  /** Section short code: tfa | itn | dyk | otd. */
+  /** `tfa` (featured article), `itn` (in the news), `dyk` (did you know), or `otd` (on this day). */
   section?: string;
-  /** Open Main_Page first if not there (default true). */
+  /** Open Main_Page first if not already there. Default true. */
   ensureOnMainPage?: boolean;
 }
 
 /**
- * Verify one of Wikipedia's four Main_Page sections is present and visible.
- * Use this whenever the task is to verify a main-page section: "Did you
- * know", "In the news", "On this day", or "From today's featured article"
- * (also known as DYK, ITN, OTD, TFA). Pass the section short code to pick
- * which one. The tool anchors verification on the section's stable wrapper
- * element id (`#mp-dyk` etc.) — which survives Wikipedia's day-to-day copy
- * drift — rather than the visible heading text (which rotates daily).
+ * Verify one of Wikipedia's Main_Page sections is visible.
  */
 // Anchors verification on the section's stable wrapper id (`#mp-tfa` /
 // `#mp-itn` / `#mp-dyk` / `#mp-otd`) — those have outlasted multiple skin

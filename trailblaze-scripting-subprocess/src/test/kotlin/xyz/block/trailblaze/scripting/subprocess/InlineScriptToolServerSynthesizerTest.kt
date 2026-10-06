@@ -1205,6 +1205,156 @@ class InlineScriptToolServerSynthesizerTest {
     }
   }
 
+  @Test fun `nullable type-array input property accepts the type, null, and omission`() {
+    runBlocking {
+      assumeTrue(
+        "bun must be on PATH to exercise the synthesized inline tool host path",
+        runtimeAvailable(),
+      )
+      authorFile.writeText(
+        """
+        export async function launchLike(args, ctx, client) {
+          return JSON.stringify(args);
+        }
+        """.trimIndent() + "\n",
+      )
+      // Mirrors TS args `planToken?: string | null` and `tier?: "free" | "pro" | null`, which
+      // serialize to a `type` array (the literal union also lists null in `enum`), plus
+      // `tags?: string[] | null` and `filter?: { name: string } | null`, which serialize to
+      // `anyOf` with a `{type: "null"}` branch. Each of these used to throw during schema
+      // conversion and tear down every tool on the server.
+      val generated = InlineScriptToolServerSynthesizer.synthesize(
+        tools = listOf(
+          InlineScriptToolConfig(
+            script = authorFile.absolutePath,
+            name = "launchLike",
+            description = "Tool with nullable inputs.",
+            inputSchema = Json.parseToJsonElement(
+              """
+              {
+                "type": "object",
+                "properties": {
+                  "planToken": {"type": ["string", "null"]},
+                  "tier": {"type": ["string", "null"], "enum": ["free", "pro", null]},
+                  "tags": {"anyOf": [{"type": "array", "items": {"type": "string"}}, {"type": "null"}]},
+                  "filter": {
+                    "anyOf": [
+                      {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]},
+                      {"type": "null"}
+                    ]
+                  }
+                }
+              }
+              """.trimIndent(),
+            ).jsonObject,
+          ),
+        ),
+        outputDir = generatedDir,
+      )
+
+      val spawned = McpSubprocessSpawner.spawn(config = generated.single(), context = baseContext)
+      val stderrLog = File(tmpDir, "nullable-tool.stderr.log")
+      val session = runCatching {
+        McpSubprocessSession.connect(
+          spawnedProcess = spawned,
+          stderrCapture = StderrCapture(stderrLog),
+        )
+      }.getOrElse { t ->
+        val stderr = if (stderrLog.isFile) stderrLog.readText() else "(no stderr captured)"
+        throw AssertionError("Nullable-schema inline tool failed during connect. stderr:\n$stderr", t)
+      }
+      try {
+        suspend fun call(arguments: String) = session.client.callTool(
+          CallToolRequest(
+            params = CallToolRequestParams(
+              name = "launchLike",
+              arguments = Json.parseToJsonElement(arguments).jsonObject,
+            ),
+          ),
+        )
+        suspend fun textOf(arguments: String) =
+          (call(arguments).content.firstOrNull() as? TextContent)?.text
+
+        assertThat(textOf("""{"planToken": "tok"}""")).isEqualTo("""{"planToken":"tok"}""")
+        assertThat(textOf("""{"planToken": null}""")).isEqualTo("""{"planToken":null}""")
+        assertThat(textOf("""{}""")).isEqualTo("""{}""")
+        assertThat(textOf("""{"tier": "free"}""")).isEqualTo("""{"tier":"free"}""")
+        assertThat(textOf("""{"tier": null}""")).isEqualTo("""{"tier":null}""")
+        assertThat(textOf("""{"tags": ["a"]}""")).isEqualTo("""{"tags":["a"]}""")
+        assertThat(textOf("""{"tags": null}""")).isEqualTo("""{"tags":null}""")
+        assertThat(textOf("""{"filter": {"name": "x"}}""")).isEqualTo("""{"filter":{"name":"x"}}""")
+        assertThat(textOf("""{"filter": null}""")).isEqualTo("""{"filter":null}""")
+
+        // The concrete type and enum still validate.
+        assertThat(call("""{"planToken": 7}""").isError).isEqualTo(true)
+        assertThat(call("""{"tier": "gold"}""").isError).isEqualTo(true)
+        assertThat(call("""{"tags": "a"}""").isError).isEqualTo(true)
+      } finally {
+        session.shutdown()
+        // Hang containment, not a performance budget.
+        val exited = spawned.process.waitFor(60, TimeUnit.SECONDS)
+        if (!exited) {
+          spawned.process.destroyForcibly()
+          spawned.process.waitFor(60, TimeUnit.SECONDS)
+        }
+        assertThat(exited).isEqualTo(true)
+      }
+    }
+  }
+
+  @Test fun `type array with more than one concrete type still fails server startup`() {
+    runBlocking {
+      assumeTrue(
+        "bun must be on PATH to exercise the synthesized inline tool host path",
+        runtimeAvailable(),
+      )
+      authorFile.writeText(
+        """
+        export async function wideTool(args, ctx, client) {
+          return "unreachable";
+        }
+        """.trimIndent() + "\n",
+      )
+      // Only `T | null` is supported; a wider type array must stay loud rather than
+      // silently degrade to an unvalidated input.
+      val generated = InlineScriptToolServerSynthesizer.synthesize(
+        tools = listOf(
+          InlineScriptToolConfig(
+            script = authorFile.absolutePath,
+            name = "wideTool",
+            description = "Tool with a multi-type input.",
+            inputSchema = Json.parseToJsonElement(
+              """
+              {
+                "type": "object",
+                "properties": {
+                  "value": {"type": ["string", "number", "null"]}
+                }
+              }
+              """.trimIndent(),
+            ).jsonObject,
+          ),
+        ),
+        outputDir = generatedDir,
+      )
+
+      val spawned = McpSubprocessSpawner.spawn(config = generated.single(), context = baseContext)
+      try {
+        val connected = runCatching {
+          McpSubprocessSession.connect(
+            spawnedProcess = spawned,
+            stderrCapture = StderrCapture(File(tmpDir, "wide-tool.stderr.log")),
+          )
+        }
+        connected.getOrNull()?.shutdown()
+        assertThat(connected.isFailure).isEqualTo(true)
+      } finally {
+        spawned.process.destroyForcibly()
+        spawned.process.waitFor(60, TimeUnit.SECONDS)
+      }
+    }
+  }
+
   @Test fun `synthesized wrapper preserves the unsupported-type guardrail`() {
     // Real union/empty-{} support must NOT degrade the converter into a blanket pass-through:
     // a genuinely-unsupported JSON Schema type must still throw. The converter functions are

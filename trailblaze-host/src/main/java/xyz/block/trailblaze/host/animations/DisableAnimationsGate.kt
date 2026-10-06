@@ -15,9 +15,8 @@ import xyz.block.trailblaze.host.isTrailblazeFlagEnabled
  * - `TRAILBLAZE_DISABLE_ANIMATIONS=1` — env override for one-off / CI use.
  *
  * Env values `1` / `true` (case-insensitive) enable, matching the other Trailblaze env toggles.
- * Enabling only *requests* the setup — a device where the mutation can't be applied (e.g. a
- * physical iOS device, where `simctl spawn` doesn't exist) declines per session and the run
- * proceeds with animations untouched, so a global opt-in is safe.
+ * Enabling only *requests* the setup — a device where the mutation can't be applied declines per
+ * session and the run proceeds with animations untouched, so a global opt-in is safe.
  */
 object DisableAnimationsGate {
   fun enabled(): Boolean =

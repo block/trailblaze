@@ -28,8 +28,8 @@ import xyz.block.trailblaze.util.Console
 //      `assets/icons/ios_<bundle_id>.png` / `favicon_<host>.png`). This is what lets a fresh /
 //      open-source workspace light up its target list just by dropping files into
 //      `assets/icons/`, with no per-target authoring.
-//   2. The bundled `app_icon_<id>.png` classpath resource the desktop app ships (see
-//      BlockAppTargets.BlockAppIconProvider) — the internal-build fallback.
+//   2. A bundled `app_icon_<id>.png` classpath resource a downstream build ships — the
+//      internal-build fallback.
 // Nothing resolves → 404 (the UI falls back to a generic glyph).
 //
 // An optional `?platform=android|ios|web` query param scopes step 1 to that platform's explicit

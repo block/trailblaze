@@ -12,19 +12,11 @@ import xyz.block.trailblaze.util.Console
 
 @Serializable
 @TrailblazeToolClass("web_selectOption")
-@LLMDescription(
-  """
-Select one or more options from a <select> dropdown element identified by its element ID, ARIA descriptor, or CSS selector.
-Provide the option values or labels to select.
-""",
-)
+@LLMDescription("Select one or more options in a <select> dropdown.")
 data class PlaywrightNativeSelectOptionTool(
-  @param:LLMDescription(
-    "Element ID (e.g., 'e5'), ARIA descriptor (e.g., 'combobox \"Category\"'), " +
-      "or CSS selector with css= prefix (e.g., 'css=#my-select').",
-  )
+  @param:LLMDescription("Element ID ('e5'), ARIA descriptor ('combobox \"Category\"'), or 'css=<selector>'.")
   val ref: String? = null,
-  @param:LLMDescription("The option values or visible text labels to select.")
+  @param:LLMDescription("Option values or visible labels to select.")
   val values: List<String>,
   override val reasoning: String? = null,
   val nodeSelector: TrailblazeNodeSelector? = null,

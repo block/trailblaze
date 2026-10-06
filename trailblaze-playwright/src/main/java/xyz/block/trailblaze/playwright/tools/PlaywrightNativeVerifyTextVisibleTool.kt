@@ -12,14 +12,9 @@ import xyz.block.trailblaze.util.Console
 
 @Serializable
 @TrailblazeToolClass("web_verifyTextVisible", isVerification = true)
-@LLMDescription(
-  """
-Verify that specific text is visible on the current page.
-This is a test assertion — it will fail the test if the text is not found.
-""",
-)
+@LLMDescription("Assert text is visible on the current page.")
 data class PlaywrightNativeVerifyTextVisibleTool(
-  @param:LLMDescription("The text content to verify is visible on the page.")
+  @param:LLMDescription("Text expected to be visible; case-insensitive substring match.")
   val text: String,
   override val reasoning: String? = null,
 ) : PlaywrightExecutableTool, ReasoningTrailblazeTool {

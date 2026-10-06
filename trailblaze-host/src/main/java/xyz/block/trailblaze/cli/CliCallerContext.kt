@@ -2,6 +2,8 @@ package xyz.block.trailblaze.cli
 
 import java.nio.file.Path
 import java.nio.file.Paths
+import xyz.block.trailblaze.config.ServedTrailmaps
+import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 
 /**
  * Thread-local context for the *caller's* current working directory.
@@ -197,4 +199,24 @@ internal object CliCallerContext {
    * version, its workspace — can be read here without the round trip.
    */
   fun isServedBy(port: Int): Boolean = servingPortLocal.get() == port
+
+  /** Reads the serving daemon's live targets, when this command arrived through `/cli/exec`. */
+  private val servedTargetsLocal = ThreadLocal<(() -> Set<TrailblazeHostAppTarget>)?>()
+
+  /** Run [block] with [targets] as the serving daemon's live targets. Null leaves them unknown. */
+  fun <T> withServedTargets(targets: (() -> Set<TrailblazeHostAppTarget>)?, block: () -> T): T {
+    val prev = servedTargetsLocal.get()
+    servedTargetsLocal.set(targets)
+    try {
+      return block()
+    } finally {
+      servedTargetsLocal.set(prev)
+    }
+  }
+
+  /**
+   * Where the serving daemon loaded each live target from — see [ServedTrailmaps.of]. Null when
+   * this command did not arrive through `/cli/exec`.
+   */
+  fun servedTrailmaps(): Map<String, Map<String, String?>>? = servedTargetsLocal.get()?.let { ServedTrailmaps.of(it()) }
 }

@@ -4,29 +4,11 @@
 
 # `web_requestDetails`
 
-Request additional detail in the next view hierarchy snapshot.
-Call this when you need more information than the default compact element list provides.
-The next turn's view hierarchy will include the requested details for ALL elements,
-then automatically revert to the compact format on subsequent turns.
-
-Available detail types:
-- BOUNDS: Include bounding box coordinates {x,y,w,h} for each element.
-  Useful for spatial reasoning, determining element positions, checking viewport visibility,
-  or disambiguating visually similar elements by location.
-- CSS_SELECTORS: Include CSS selectors for elements and surface hidden elements.
-  Adds [css=...] annotations to existing elements that have an HTML id or data-testid.
-  Also discovers elements that are invisible in the default compact list (e.g., unnamed
-  divs with id or data-testid attributes) and lists them with their CSS selectors.
-  Use the css= prefix in ref fields to target these elements (e.g., ref: 'css=#my-panel').
-- OFFSCREEN_ELEMENTS: Include all elements regardless of viewport position.
-  By default, elements outside the viewport are filtered out to save tokens. Request this
-  to see all elements with offscreen ones annotated as (offscreen). Useful when you need
-  to find elements that require scrolling to reach.
-- OCCLUDED_ELEMENTS: Include elements visually covered by something on top (modal,
-  popup, toast, autocomplete dropdown). By default these are filtered out because clicks
-  on them time out — Playwright's actionability check refuses to fire on a non-topmost
-  element. Request this when you suspect a popup/modal is hiding the elements you need
-  and you want to see what's underneath before deciding whether to dismiss the overlay.
+Add detail to the NEXT snapshot only (all elements), then revert to the compact list.
+- BOUNDS: {x,y,w,h} per element, for spatial reasoning or telling similar elements apart.
+- CSS_SELECTORS: [css=...] for elements with an id or data-testid, including ones hidden from the compact list; target them with ref 'css=#id'.
+- OFFSCREEN_ELEMENTS: include elements outside the viewport, marked (offscreen).
+- OCCLUDED_ELEMENTS: include elements covered by a modal/popup/toast (clicks on them time out).
 
 ## Source
 
@@ -44,7 +26,7 @@ Available detail types:
 ### Required parameters
 
 - `include` — `array<enum(BOUNDS | CSS_SELECTORS | OFFSCREEN_ELEMENTS | OCCLUDED_ELEMENTS)>`
-  List of detail types to include in the next view hierarchy. Supported: BOUNDS, CSS_SELECTORS, OFFSCREEN_ELEMENTS, OCCLUDED_ELEMENTS (or any combination). Example: ["OFFSCREEN_ELEMENTS"] to see all elements including those outside the viewport.
+  Detail types to include.
 
 ### Optional parameters
 

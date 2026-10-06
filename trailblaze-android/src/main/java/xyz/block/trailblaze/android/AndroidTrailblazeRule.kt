@@ -82,6 +82,10 @@ internal enum class ScreenStateKind { UIAUTOMATOR, ACCESSIBILITY }
  * the accessibility driver, every selector generated from it would `NoMatch` at dispatch time —
  * the failure mode reported in the OSS bug.
  *
+ * Outside migration mode there is no UiAutomator fallback: a run whose agent is not the
+ * accessibility agent, or whose accessibility service is not running, fails here by name instead
+ * of quietly capturing a tree the agent cannot resolve against.
+ *
  * Migration mode is the exception: when `trailblaze.captureSecondaryTree=true` we're replaying
  * pre-migration Maestro selectors and need them to resolve against the UiAutomator shape, so the
  * primary stays UiAutomator regardless of driver. The accessibility tree rides on the
@@ -103,13 +107,27 @@ internal fun chooseScreenStateKind(
   isAccessibilityDriver: Boolean,
   isMigrationMode: Boolean,
   isAccessibilityServiceRunning: Boolean,
-): ScreenStateKind = if (
-  isAccessibilityDriver && !isMigrationMode && isAccessibilityServiceRunning
-) {
-  ScreenStateKind.ACCESSIBILITY
-} else {
-  ScreenStateKind.UIAUTOMATOR
+): ScreenStateKind = when {
+  isMigrationMode -> ScreenStateKind.UIAUTOMATOR
+  !isAccessibilityDriver -> throw TrailblazeException(
+    "AndroidTrailblazeRule has no screen state for a non-accessibility agent outside migration " +
+      "mode: the on-device Maestro runtime is retired. Use the " +
+      "${TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY.name} agent.",
+  )
+  !isAccessibilityServiceRunning -> throw TrailblazeException(ACCESSIBILITY_SERVICE_NOT_RUNNING)
+  else -> ScreenStateKind.ACCESSIBILITY
 }
+
+/**
+ * Why a capture with the accessibility service down fails, and how to recover. Shared by the rule
+ * and the RPC captor so both paths name the same cause and fix. Distinct from the RPC readiness
+ * poll's "not yet bound": this is a service that should be running and isn't, usually because
+ * UiDevice or shell work tore it down mid-run.
+ */
+internal const val ACCESSIBILITY_SERVICE_NOT_RUNNING: String =
+  "TrailblazeAccessibilityService is not running, so the screen cannot be captured. UiDevice or " +
+    "shell work reconnects UiAutomation and tears the service down; re-bind it with " +
+    "OnDeviceAccessibilityServiceSetup.ensureAccessibilityServiceReady() after that work."
 
 /**
  * On-Device Android Trailblaze Rule Implementation.
@@ -409,7 +427,23 @@ open class AndroidTrailblazeRule(
    */
   protected open val uiAutomatorScreenStateMaxAttempts: Int = 1
 
-  protected val screenStateProvider: () -> ScreenState = screenStateProviderOverride ?: {
+  protected val screenStateProvider: () -> ScreenState = screenStateProviderOverride?.let { override ->
+    {
+      // An override does its own capture, but the default provider's refusals still apply: a
+      // non-accessibility agent outside migration mode (the on-device Maestro runtime is retired),
+      // and a lost service. The on-device runner passes the accessibility agent's own capture here,
+      // and without the check a lost service fails with the service's generic "enable it in
+      // Settings" error, which names neither the cause nor the re-bind fix, and is not the
+      // [TrailblazeException] the failure screenshot falls back on. The kind is unused: the
+      // override decides the shape.
+      chooseScreenStateKind(
+        isAccessibilityDriver = trailblazeAgent.usesAccessibilityDriver,
+        isMigrationMode = InstrumentationArgUtil.shouldCaptureSecondaryTree(),
+        isAccessibilityServiceRunning = TrailblazeAccessibilityService.isServiceRunning(),
+      )
+      override()
+    }
+  } ?: {
     // Source of truth is the *agent* the rule will dispatch through, not the driver type
     // label. A caller can pass [agentOverride] with a non-accessibility agent while
     // [driverTypeOverride] stays at the now-default ANDROID_ONDEVICE_ACCESSIBILITY; reading the
@@ -463,7 +497,22 @@ open class AndroidTrailblazeRule(
   }
 
   init {
-    trailblazeLoggingRule.failureScreenStateProvider = screenStateProvider
+    // Failure and final screenshots are read for their pixels, never resolved against. So when the
+    // accessibility service is down — the case [screenStateProvider] now refuses to paper over —
+    // they fall back to a UiAutomator capture, and a run that failed because the service died
+    // still records what the screen showed.
+    trailblazeLoggingRule.failureScreenStateProvider = {
+      try {
+        screenStateProvider()
+      } catch (e: TrailblazeException) {
+        if (TrailblazeAccessibilityService.isServiceRunning()) throw e
+        AndroidOnDeviceUiAutomatorScreenState(
+          includeScreenshot = true,
+          maxAttempts = uiAutomatorScreenStateMaxAttempts.coerceAtLeast(1),
+          deviceClassifiers = trailblazeLoggingRule.trailblazeDeviceInfoProvider().classifiers,
+        )
+      }
+    }
   }
 
   // Lazy so rule instances (one per test method) that never compare an element skip the
@@ -485,7 +534,7 @@ open class AndroidTrailblazeRule(
    * After the parent rule chain completes its setup (UiDevice, status-bar hiding, etc.),
    * enable the on-device [TrailblazeAccessibilityService]. Called unconditionally — not only
    * when the resolved driver is [TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY] — because
-   * UiAutomator2 (the instrumentation driver's view-hierarchy source) reads the same OS
+   * UiAutomator2 (migration mode's view-hierarchy source) reads the same OS
    * accessibility node tree that Jetpack Compose only populates when
    * `AccessibilityManager.isEnabled()` returns true in the app process. UiAutomation defaults
    * to `flags = 0` (suppresses all accessibility services), which forces `isEnabled()` to false
@@ -493,7 +542,7 @@ open class AndroidTrailblazeRule(
    * children. Calling [OnDeviceAccessibilityServiceSetup.ensureAccessibilityServiceReady]
    * reconnects UiAutomation with `FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES`, binds the
    * service, and flips `isEnabled()` so Compose builds its semantic tree — required for the
-   * instrumentation driver on any Compose-heavy app, not only for the accessibility driver.
+   * migration-mode capture on any Compose-heavy app, not only for the accessibility driver.
    *
    * For accessibility-driver runs the binding is also required so the
    * [AccessibilityTrailblazeAgent] constructed in [trailblazeAgent] can issue taps/swipes
@@ -518,7 +567,7 @@ open class AndroidTrailblazeRule(
     applyPerTrailDriverOverrides(description)
     onBeforeTest(description)
     // Bind unconditionally — needed for both the accessibility driver (taps/swipes) and the
-    // instrumentation driver (Compose semantic-tree exposure under UiAutomator2). See kdoc above.
+    // migration-mode UiAutomator capture (Compose semantic-tree exposure). See kdoc above.
     OnDeviceAccessibilityServiceSetup.ensureAccessibilityServiceReady()
     // Turbo, when the run asked for it: attach the in-process idle detector so this run's settle
     // gates race a true-idle signal. AFTER the accessibility bind, matching the ordering the farm
@@ -707,6 +756,7 @@ open class AndroidTrailblazeRule(
      * be joined here rather than deferred into a next action that may never come.
      */
     sendSessionEndLog: Boolean,
+    trailSourceUrl: String? = null,
   ): TrailblazeToolResult.Success? {
     // Resolve device classifiers BEFORE decoding so a v3 trail lowers with the
     // right closest-wins recording for this on-device runner. v1 inputs ignore
@@ -771,6 +821,7 @@ open class AndroidTrailblazeRule(
             hasRecordedSteps = trailblazeYaml.hasRecordedSteps(trailItems),
             trailblazeDeviceId = trailblazeDeviceId,
             targetAppInfo = targetAppInfoForSession,
+            trailSourceUrl = trailSourceUrl,
           ),
           session = currentSession.sessionId,
           timestamp = Clock.System.now(),
@@ -975,6 +1026,34 @@ open class AndroidTrailblazeRule(
     trailFilePath: String?,
     useRecordedSteps: Boolean,
   ) {
+    refuseIfRequiresHost(testYaml, trailFilePath)
+    runWithSource(
+      testYaml = testYaml,
+      trailFilePath = trailFilePath,
+      useRecordedSteps = useRecordedSteps,
+      trailSourceUrl = null,
+    )
+  }
+
+  /**
+   * Refuse a trail whose device entry declares `requiresHost`: [run] and [runFromAsset] execute on
+   * the device with no host behind them. Host-driven runs reach the device through [runSuspend],
+   * so they never pass through here.
+   */
+  private fun refuseIfRequiresHost(yaml: String, trailName: String?) {
+    trailblazeYaml.requiresHostRefusal(
+      yaml,
+      trailblazeLoggingRule.trailblazeDeviceInfoProvider().classifiers,
+      trailName,
+    )?.let { throw TrailblazeException(it) }
+  }
+
+  private fun runWithSource(
+    testYaml: String,
+    trailFilePath: String?,
+    useRecordedSteps: Boolean,
+    trailSourceUrl: String?,
+  ) {
     // [TrailblazeRule.run] returns Unit — discard `runSuspend`'s `Success` payload (only the
     // RPC handler path threads that back through the response envelope).
     runBlocking {
@@ -986,6 +1065,7 @@ open class AndroidTrailblazeRule(
         // The JUnit run IS the session: its teardown emits SessionEnded, so this dispatch owns
         // both ends and never defers the driver-log join.
         sendSessionEndLog = true,
+        trailSourceUrl = trailSourceUrl,
       )
     }
   }
@@ -1031,6 +1111,8 @@ open class AndroidTrailblazeRule(
     // The instrumentation process inherits none of the host's environment, so decision settings
     // arrive as instrumentation arguments named like the env vars (`-e TRAILBLAZE_DECISION_MOVES first`).
     decisionSettings = { name -> InstrumentationArgUtil.getInstrumentationArg(name) ?: System.getenv(name) },
+    // Read when the runner is first used, after the driver override is set (see trailblazeToolRepo).
+    alwaysShownTools = target?.getAlwaysShownToolNamesForDriver(trailblazeLoggingRule.driverTypeOverride).orEmpty(),
   )
 
   @Deprecated("Prefer the suspend version.")
@@ -1130,6 +1212,7 @@ open class AndroidTrailblazeRule(
     forceStopApp: Boolean = true,
     useRecordedSteps: Boolean = InstrumentationArgUtil.useRecordedSteps(),
     targetAppId: String? = null,
+    trailSourceUrl: String? = null,
   ) {
     val computedAssetPath: String = TrailRecordings.findBestTrailResourcePath(
       path = yamlAssetPath,
@@ -1138,6 +1221,7 @@ open class AndroidTrailblazeRule(
     ) ?: throw TrailblazeException("Asset not found: $yamlAssetPath")
     Console.log("Running from asset: $computedAssetPath")
     val yamlContent = AndroidAssetsUtil.readAssetAsString(computedAssetPath)
+    refuseIfRequiresHost(yamlContent, computedAssetPath)
     val appIdToForceStop = targetAppId ?: defaultForceStopAppId
     val localeForFreshProcess = if (forceStopApp) {
       null
@@ -1151,13 +1235,14 @@ open class AndroidTrailblazeRule(
     if (shouldForceStopTargetApp(forceStopApp, localeForFreshProcess) && appIdToForceStop != null) {
       AdbCommandUtil.forceStopApp(appIdToForceStop)
     }
-    run(
+    runWithSource(
       testYaml = yamlContent,
       useRecordedSteps = useRecordedSteps,
       // The resolved (classifier-specific) file, not the caller's raw argument — the raw argument
       // can be a recording directory, and this value reaches the session-start log, the skip
       // message, and the trail-name fallback for trails with no title.
       trailFilePath = computedAssetPath,
+      trailSourceUrl = trailSourceUrl,
     )
   }
 

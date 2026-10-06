@@ -37,10 +37,8 @@ import xyz.block.trailblaze.util.HostAndroidDeviceConnectUtils
 import java.io.IOException
 
 /**
- * Establishes live connections to devices for the recording surface. Shared between the
- * desktop [xyz.block.trailblaze.ui.tabs.recording.RecordingTabComposable] and the HTTP
- * [xyz.block.trailblaze.host.recording.rpc.DeviceApiEndpoint] so both surfaces use
- * identical connection logic.
+ * Establishes live connections to devices for the recording surface served by the HTTP
+ * [xyz.block.trailblaze.host.recording.rpc.DeviceApiEndpoint].
  *
  * Thread-safe: [connectToDevice] is a suspend function and all state mutations inside it
  * are confined to IO.
@@ -414,7 +412,7 @@ class DeviceConnectionService(private val deviceManager: TrailblazeDeviceManager
       is ConnectTarget.Unregistered -> BoundTarget.Unavailable(
         "Target app '${choice.id}' is not registered in this daemon " +
           "(available: ${registered.map { it.id }.sorted()}). " +
-          "Create the target, or restart Trail Runner to pick up edits.",
+          "Create the target, or restart Trailblaze App to pick up edits.",
       )
     }
   }

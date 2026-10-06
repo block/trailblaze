@@ -149,6 +149,8 @@ class CliReportGeneratorTest {
             trailblazeDeviceInfo = deviceInfo,
             trailblazeDeviceId = deviceInfo.trailblazeDeviceId,
             rawYaml = null,
+            trailSourceUrl =
+              "https://github.com/example/trails/blob/0123456789abcdef0123456789abcdef01234567/trails/estate/C4242-checkout.trail.yaml",
           ),
           session = sessionId,
           timestamp = started,
@@ -239,6 +241,8 @@ class CliReportGeneratorTest {
             trailblazeDeviceInfo = deviceInfo,
             trailblazeDeviceId = deviceInfo.trailblazeDeviceId,
             rawYaml = null,
+            trailSourceUrl =
+              "https://github.com/example/trails/blob/0123456789abcdef0123456789abcdef01234567/trails/estate/C4242-checkout.trail.yaml",
           ),
           session = sessionId,
           timestamp = started,
@@ -282,6 +286,10 @@ class CliReportGeneratorTest {
         report.results.single { it.session_id == sessionId }.trail_file_path,
       )
       val trailResult = report.results.single { it.session_id == sessionId }
+      assertEquals(
+        "https://github.com/example/trails/blob/0123456789abcdef0123456789abcdef01234567/trails/estate/C4242-checkout.trail.yaml",
+        trailResult.trail_source_url,
+      )
       assertEquals("estate/checkout", trailResult.trail_id)
       assertEquals(nestedMetadata, trailResult.metadata)
       assertNull(report.results.single { it.session_id == harnessId }.trail_file_path)

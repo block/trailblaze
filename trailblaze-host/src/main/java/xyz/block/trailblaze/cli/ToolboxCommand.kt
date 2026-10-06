@@ -738,7 +738,7 @@ class ToolboxCommand : Callable<Int>, QuietUnlessVerbose {
           objective = "Tap the Sign In button",
         ),
         ToolExample(
-          tool = "inputText text=user@test.com",
+          tool = "type ref=p412 text=user@test.com",
           objective = "Enter email address",
         ),
         ToolExample(

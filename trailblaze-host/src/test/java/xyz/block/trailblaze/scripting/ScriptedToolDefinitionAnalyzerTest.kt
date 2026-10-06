@@ -17,6 +17,7 @@ import xyz.block.trailblaze.llm.config.WorkspaceConfigDirHolder
 import xyz.block.trailblaze.util.BunBinaryResolver
 import java.io.File
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -1441,6 +1442,96 @@ class ScriptedToolDefinitionAnalyzerTest {
   }
 
   @Test
+  fun `with-spec overload — runtime and a concatenated description are extracted`() = runBlocking {
+    // A tool with no descriptor YAML carries its runtime and a long description in the spec; a
+    // `"a" + "b"` chain is how a long description wraps without a template literal's line breaks.
+    assumeAnalyzerRunnable()
+    val toolsDir = tempFolder.newFolder("with-spec-runtime-trailmap-tools")
+    writeTsFixture(
+      toolsDir,
+      "hostOnlyTool.ts",
+      """
+        |${declareTypedToolStub()}
+        |interface I { x: string; }
+        |interface O { y: string; }
+        |
+        |export const hostOnlyTool = trailblaze.tool<I, O>(
+        |  { description: "Writes a file " + "on the host.", runtime: "subprocess" as const, requiresHost: true },
+        |  async () => ({ y: "" }),
+        |);
+      """.trimMargin(),
+    )
+
+    val spec = analyzer.analyze(toolsDir).single().spec ?: fail("expected non-null spec; got bare-handler shape")
+    assertEquals(JsonPrimitive("subprocess"), spec["runtime"])
+    assertEquals(JsonPrimitive("Writes a file on the host."), spec["description"])
+  }
+
+  @Test
+  fun `with-spec overload — an unreadable or unknown runtime is an error, not a silent in-process tool`() = runBlocking {
+    // Every other spec field is skipped when unreadable; `runtime` picks the execution engine, so
+    // dropping it would run a subprocess tool in-process without the Node APIs it needs.
+    assumeAnalyzerRunnable()
+    val badSpecs = listOf(
+      "reference" to "runtime: RUNTIME",
+      "misspelling" to "runtime: \"subproces\"",
+      // `const runtime = "subprocess"; tool({ runtime }, ...)`: no property assignment to read.
+      "shorthand" to "runtime",
+      // A spread may carry a `runtime` the analyzer can't see; only an inline one after it decides.
+      "spread" to "...BASE",
+      "spread-after-runtime" to "runtime: \"inProcess\", ...BASE",
+    )
+    for ((label, specBody) in badSpecs) {
+      val toolsDir = tempFolder.newFolder("bad-runtime-$label-trailmap-tools")
+      writeTsFixture(
+        toolsDir,
+        "badRuntimeTool.ts",
+        """
+          |${declareTypedToolStub()}
+          |declare const RUNTIME: string;
+          |declare const runtime: "subprocess";
+          |declare const BASE: { runtime: "subprocess" };
+          |interface I { x: string; }
+          |interface O { y: string; }
+          |
+          |export const badRuntimeTool = trailblaze.tool<I, O>(
+          |  { $specBody },
+          |  async () => ({ y: "" }),
+          |);
+        """.trimMargin(),
+      )
+      val error = assertFailsWith<ScriptedToolDefinitionException>(label) { analyzer.analyze(toolsDir) }
+      assertTrue(
+        error.errors.any { it.toolName == "badRuntimeTool" && it.message.contains("runtime") },
+        "$label: expected a runtime error naming the tool; got: ${error.errors}",
+      )
+    }
+  }
+
+  @Test
+  fun `with-spec overload — an inline runtime after a spread decides the runtime`() = runBlocking {
+    assumeAnalyzerRunnable()
+    val toolsDir = tempFolder.newFolder("spread-then-runtime-trailmap-tools")
+    writeTsFixture(
+      toolsDir,
+      "spreadTool.ts",
+      """
+        |${declareTypedToolStub()}
+        |declare const BASE: { supportedPlatforms: string[] };
+        |interface I { x: string; }
+        |interface O { y: string; }
+        |
+        |export const spreadTool = trailblaze.tool<I, O>(
+        |  { ...BASE, runtime: "subprocess" },
+        |  async () => ({ y: "" }),
+        |);
+      """.trimMargin(),
+    )
+    val spec = analyzer.analyze(toolsDir).single().spec ?: fail("expected the inline runtime to be captured")
+    assertEquals(JsonPrimitive("subprocess"), spec["runtime"])
+  }
+
+  @Test
   fun `with-spec overload — description is extracted when authored`() = runBlocking {
     // `description` is a recognized `TrailblazeTypedToolSpec` field (RECOGNIZED_SPEC_FIELDS). The
     // analyzer captures the spec's `description` into `ScriptedToolDefinition.spec["description"]`
@@ -1643,8 +1734,9 @@ class ScriptedToolDefinitionAnalyzerTest {
         |const PLATFORMS = ["web"];
         |
         |export const partialTool = trailblaze.tool<I, O>(
-        |  // Inline boolean is captured; spread + identifier reference are skipped.
-        |  { ...SHARED, requiresHost: true, supportedPlatforms: PLATFORMS },
+        |  // Inline boolean is captured; spread + identifier reference are skipped. The inline
+        |  // `runtime` after the spread is required: `runtime` alone is never left to a spread.
+        |  { ...SHARED, requiresHost: true, supportedPlatforms: PLATFORMS, runtime: "inProcess" },
         |  async () => ({ y: "" }),
         |);
       """.trimMargin(),

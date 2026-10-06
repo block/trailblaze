@@ -85,11 +85,29 @@ class UiAutomationHandleErrorsTest {
   }
 
   @Test
-  fun `silent-shell wedge message is a recoverable signature but not the non-recoverable one`() {
-    // Recoverable → retry runs first; the non-recoverable signature is reserved for retry failure.
-    val message = UiAutomationHandleErrors.silentShellWedgeMessage("pm clear com.example.app")
-    assertTrue(UiAutomationHandleErrors.isStaleHandleSignature(message))
-    assertFalse(UiAutomationHandleErrors.isNonRecoverableStaleHandleSignature(message))
+  fun `a silent-shell wedge is never retried, and relaunches the runner only when it cannot reconnect`() {
+    // Matching a stale-handle signature is what makes `withUiAutomation` replay the work, and the
+    // command may already have run before the shell went silent.
+    fun message(outcome: UiAutomationHandleErrors.SilentShellOutcome) =
+      UiAutomationHandleErrors.silentShellMessage("input keyevent 4", outcome)
+    UiAutomationHandleErrors.SilentShellOutcome.entries.forEach {
+      assertFalse(it.name, UiAutomationHandleErrors.isStaleHandleSignature(message(it)))
+    }
+    assertFalse(
+      UiAutomationHandleErrors.isNonRecoverableStaleHandleSignature(
+        message(UiAutomationHandleErrors.SilentShellOutcome.HANDLE_DROPPED),
+      ),
+    )
+    assertTrue(
+      UiAutomationHandleErrors.isNonRecoverableStaleHandleSignature(
+        message(UiAutomationHandleErrors.SilentShellOutcome.RECONNECT_FAILED),
+      ),
+    )
+    assertTrue(
+      UiAutomationHandleErrors.isNonRecoverableStaleHandleSignature(
+        message(UiAutomationHandleErrors.SilentShellOutcome.CACHE_CLEAR_FAILED),
+      ),
+    )
   }
 
   @Test

@@ -22,8 +22,8 @@ import xyz.block.trailblaze.config.project.TrailmapScriptedToolFile
  *     `tools[].name`, with `script:` resolved against the descriptor's directory. A meta-only
  *     descriptor (no name, no tools — the analyzer-enriched shape) falls back to harvesting
  *     every `export const <name> = trailblaze.tool` binding from its script.
- *  2. Bare `.ts` files no descriptor covers, registered only when the file declares exactly
- *     one typed binding (0 = helper module, 2+ = needs a YAML descriptor) — the loader's rule.
+ *  2. Bare `.ts` files no descriptor covers: every typed binding is a tool (0 = helper
+ *     module) — the loader's rule.
  *
  * Divergence from the sisters, on purpose: nothing here THROWS on author errors (malformed
  * YAML, duplicate names). This scanner runs against historical refs that may predate a fix, and
@@ -108,26 +108,19 @@ object ScriptedToolSourceSnapshotScanner {
         }
       }
 
-      // Pass 2: bare `.ts` files no descriptor covers, single typed binding only.
+      // Pass 2: bare `.ts` files no descriptor covers, one tool per typed binding. A file with no
+      // binding is a helper module, not a tool — correctly invisible.
       for (tsFile in files.filter { f ->
         f.name.endsWith(".ts") && !f.name.endsWith(".test.ts") && !f.name.endsWith(".d.ts") &&
           f.absoluteFile !in descriptorCoveredScripts
       }) {
-        val names = typedBindingNames(tsFile)
-        when {
-          names.size == 1 -> {
-            val name = names.single()
-            val key = ToolKey(trailmap = trailmapDir.name, name = name)
-            val previous = toolSources.putIfAbsent(key, ToolSource(script = tsFile))
-            if (previous != null && previous.script != tsFile) {
-              warnings += "trailmap '${trailmapDir.name}': duplicate tool name '$name' " +
-                "(${previous.script.path} and ${tsFile.path}); first wins"
-            }
+        for (name in typedBindingNames(tsFile)) {
+          val key = ToolKey(trailmap = trailmapDir.name, name = name)
+          val previous = toolSources.putIfAbsent(key, ToolSource(script = tsFile))
+          if (previous != null && previous.script != tsFile) {
+            warnings += "trailmap '${trailmapDir.name}': duplicate tool name '$name' " +
+              "(${previous.script.path} and ${tsFile.path}); first wins"
           }
-          names.size > 1 ->
-            warnings += "${tsFile.path}: declares ${names.size} typed tool bindings but has no YAML " +
-              "descriptor — the loader would not register it, so this scan doesn't either"
-          // 0 bindings: a helper module, not a tool — correctly invisible.
         }
       }
     }

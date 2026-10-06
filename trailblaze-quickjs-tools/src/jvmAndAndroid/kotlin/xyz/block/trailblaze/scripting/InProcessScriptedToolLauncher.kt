@@ -3,7 +3,6 @@ package xyz.block.trailblaze.scripting
 import xyz.block.trailblaze.config.InlineScriptToolConfig
 import xyz.block.trailblaze.config.ScriptedToolNameDiscoverer
 import xyz.block.trailblaze.config.ScriptedToolRuntime
-import xyz.block.trailblaze.config.project.toInlineScriptToolConfigs
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.quickjs.tools.QuickJsEngineExtension
@@ -90,7 +89,7 @@ object InProcessScriptedToolLauncher {
         )
         return@mapNotNull null
       }
-      val config = discovered.descriptor.toInlineScriptToolConfigs().firstOrNull { ToolName(it.name) == name }
+      val config = discovered.toolConfigs().firstOrNull { ToolName(it.name) == name }
       if (config == null) {
         Console.log(
           "$logPrefix descriptor for '${name.toolName}' produced no matching tool config — skipping.",

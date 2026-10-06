@@ -162,8 +162,6 @@ Rules of thumb:
 - **End with `openApp`.** It returns once the app is up: first frame drawn and in front on
   Android, then a few seconds at most for it to go idle (Android) or settle (iOS). An app that is
   still busy after that is reported, not failed; the next step's wait for its element takes over.
-- **On a physical iPhone** `openApp` launches through the driver, since simctl only reaches
-  simulators.
 - **On iOS, `ios_terminate` before `mobile_clearAppData`.** Android's clear kills the app; iOS's
   only deletes files, so a running app keeps its in-memory state and `openApp` brings it back.
 - **Grant iOS permissions before `openApp`.** simctl kills a running app when a grant changes.

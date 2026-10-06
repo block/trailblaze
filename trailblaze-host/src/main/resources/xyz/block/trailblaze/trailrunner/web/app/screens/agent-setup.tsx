@@ -17,7 +17,7 @@ function AgentSetupScreen({ go }) {
           <Btn sm ico="arrow-left" onClick={() => go('create')}>Back</Btn>
         </div>
         <RailHeader ico="settings-2" iconColor="var(--tb-ai)" title="Configure agents"
-          sub="Trail Runner drives coding-agent CLIs installed on this machine. Model access is configured in each CLI, not in Trail Runner." />
+          sub="Trailblaze App drives coding-agent CLIs installed on this machine. Model access is configured in each CLI, not in Trailblaze App." />
 
         {agentsHook.loading && !supported.length && <div style={{ marginTop: 20 }}><Skeleton rows={4} /></div>}
 
@@ -26,7 +26,7 @@ function AgentSetupScreen({ go }) {
         </div>
 
         <p className="tb-sub" style={{ marginTop: 26, fontSize: 12, lineHeight: 1.6, maxWidth: 640 }}>
-          After installing or signing in to a CLI, restart the Trail Runner daemon so it re-detects
+          After installing or signing in to a CLI, restart the Trailblaze daemon so it re-detects
           the executable. More providers can be added to the daemon's agent registry over time —
           anything listed there appears here and in the agent picker automatically.
         </p>

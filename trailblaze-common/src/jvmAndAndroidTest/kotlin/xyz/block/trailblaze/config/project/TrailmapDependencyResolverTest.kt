@@ -404,6 +404,7 @@ class TrailmapDependencyResolverTest {
           toolSets = listOf("framework_set"),
           tools = listOf("framework_tool"),
           excludedTools = listOf("framework_excluded"),
+          alwaysShownTools = listOf("framework_shown"),
           drivers = listOf("playwright-native", "playwright-electron"),
           baseUrl = "https://framework.example",
           minBuildVersion = "1",
@@ -433,6 +434,7 @@ class TrailmapDependencyResolverTest {
     assertEquals(listOf("framework_set"), web.toolSets, "inherited")
     assertEquals(listOf("framework_tool"), web.tools, "inherited")
     assertEquals(listOf("framework_excluded"), web.excludedTools, "inherited")
+    assertEquals(listOf("framework_shown"), web.alwaysShownTools, "inherited")
     assertEquals("https://framework.example", web.baseUrl, "inherited")
     assertEquals("1", web.minBuildVersion, "inherited")
   }

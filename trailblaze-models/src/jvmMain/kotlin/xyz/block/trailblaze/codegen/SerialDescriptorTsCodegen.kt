@@ -66,7 +66,21 @@ object SerialDescriptorTsCodegen {
     roots: List<SerialDescriptor>,
     header: String,
     classDiscriminator: String = TrailblazeJson.POLYMORPHIC_CLASS_DISCRIMINATOR,
-  ): String {
+  ): String = generateWithRootTypes(roots, header, classDiscriminator).source
+
+  /** [generate]'s output plus the TypeScript type expression for each root, in [roots] order. */
+  data class Generated(val source: String, val rootTypes: List<String>)
+
+  /**
+   * Like [generate], and also returns how to refer to each root from TypeScript — the
+   * (collision-disambiguated) declared name for an object, enum or union, or an inline type such
+   * as `string` or `Foo[]` for one that declares nothing.
+   */
+  fun generateWithRootTypes(
+    roots: List<SerialDescriptor>,
+    header: String,
+    classDiscriminator: String = TrailblazeJson.POLYMORPHIC_CLASS_DISCRIMINATOR,
+  ): Generated {
     val walk = Walk()
     roots.forEach { walk.collect(it, viaSealedBase = false) }
 
@@ -76,11 +90,12 @@ object SerialDescriptorTsCodegen {
       .sortedBy { names.getValue(it.serialName.removeSuffix("?")) }
       .map { renderNamed(it, names, walk, classDiscriminator) }
 
-    return buildString {
+    val source = buildString {
       append(header)
       append('\n')
       append(blocks.joinToString("\n"))
     }
+    return Generated(source, roots.map { renderType(it, names) })
   }
 
   /** Accumulated state of one transitive descriptor walk. */

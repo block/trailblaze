@@ -50,6 +50,13 @@ data class CliStatusResponse(
    */
   val workspaceContentHash: String? = null,
   /**
+   * Where each of the daemon's live targets was loaded from: target id → (manifest id of its
+   * trailmap and of each dependency → canonical directory, or null for a copy bundled with the CLI).
+   * See `ServedTrailmaps.of`. A command whose target the caller's workspace has its own copy of
+   * refuses rather than run against the daemon's. `null` from a daemon that predates the field.
+   */
+  val servedTrailmaps: Map<String, Map<String, String?>>? = null,
+  /**
    * Number of active workloads owned by this daemon: trail runs plus attached Companion sessions.
    * Filled in server-side — the desktop app's status provider doesn't set it. External tooling
    * checks this before stopping the daemon so a rebuild or version swap cannot silently kill work.
@@ -141,6 +148,13 @@ object CliDaemonCapabilities {
   /** The daemon exposes Trail Runner's Companion authoring routes. */
   const val COMPANION = "companion"
 
+  /**
+   * The daemon refuses to run a target from another copy of a trailmap the caller's workspace has,
+   * reading [CliRunRequest.callerWorkspaceDir] for a run. A daemon without this drops that field and
+   * runs whatever copy it loaded — a bundled one, say — so a trail passes on code nobody is editing.
+   */
+  const val WORKSPACE_TRAILMAPS = "workspace-trailmaps"
+
   /** Every capability this build honors. */
   val ALL: Set<String> = setOf(
     PER_RUN_DEVICE_BINDINGS,
@@ -149,6 +163,7 @@ object CliDaemonCapabilities {
     DEVICE_CLASSIFIER,
     WEB_LOCALE,
     COMPANION,
+    WORKSPACE_TRAILMAPS,
   )
 }
 

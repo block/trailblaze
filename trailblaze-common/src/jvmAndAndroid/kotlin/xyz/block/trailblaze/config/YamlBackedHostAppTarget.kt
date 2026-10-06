@@ -9,6 +9,7 @@ import xyz.block.trailblaze.model.TrailblazeOnDeviceInstrumentationTarget
 import xyz.block.trailblaze.toolcalls.ToolName
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.util.Console
+import java.io.File
 import kotlin.reflect.KClass
 
 /**
@@ -16,12 +17,18 @@ import kotlin.reflect.KClass
  * with an optional [AppTargetCompanion] for behavioral logic.
  *
  * Tool names are resolved lazily on first access to avoid boot-order issues.
+ *
+ * @property trailmapDirs Where this target's trailmap and every trailmap it depends on were loaded
+ *   from: manifest id → directory, or null for a copy bundled with the CLI. Empty for a target that
+ *   came from no trailmap (a prebuilt target file). Lets a command tell whether the trailmaps it is
+ *   about to run are the ones in the caller's workspace — see `ServedTrailmaps`.
  */
 class YamlBackedHostAppTarget(
   val config: AppTargetYamlConfig,
   private val toolNameResolver: ToolNameResolver,
   private val availableToolSets: Map<String, ResolvedToolSet> = emptyMap(),
   private val companion: AppTargetCompanion? = null,
+  val trailmapDirs: Map<String, File?> = emptyMap(),
 ) : TrailblazeHostAppTarget(
   id = config.id,
   displayName = config.displayName,
@@ -213,6 +220,12 @@ class YamlBackedHostAppTarget(
     driverType: TrailblazeDriverType,
   ): Set<ToolName> =
     resolvedExcludedToolsByDriver.scriptedNames[driverType] ?: emptySet()
+
+  override fun getAlwaysShownToolNamesForDriver(driverType: TrailblazeDriverType): Set<String> =
+    config.platforms.orEmpty()
+      .filter { (platformKey, platformConfig) -> driverType in platformConfig.resolveDriverTypes(platformKey) }
+      .flatMap { (_, platformConfig) -> platformConfig.alwaysShownTools.orEmpty() }
+      .toSet()
 
   override fun getDeclaredToolSetIdsForDriver(driverType: TrailblazeDriverType): List<String> {
     val ids = mutableListOf<String>()

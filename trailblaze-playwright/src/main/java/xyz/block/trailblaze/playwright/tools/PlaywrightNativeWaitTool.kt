@@ -11,14 +11,9 @@ import xyz.block.trailblaze.util.Console
 
 @Serializable
 @TrailblazeToolClass("web_wait")
-@LLMDescription(
-  """
-Wait for a specified number of seconds before continuing.
-Use this when you need to wait for animations, network requests, or page transitions to complete.
-""",
-)
+@LLMDescription("Pause for a fixed number of seconds, e.g. for an animation or page load to finish.")
 data class PlaywrightNativeWaitTool(
-  @param:LLMDescription("Number of seconds to wait (e.g., 1, 2, 5). Maximum 30 seconds.")
+  @param:LLMDescription("Seconds to wait, 1 to 30 (default 1).")
   val seconds: Int = 1,
   override val reasoning: String? = null,
 ) : PlaywrightExecutableTool, ReasoningTrailblazeTool {

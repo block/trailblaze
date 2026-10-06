@@ -75,6 +75,27 @@ sealed interface DriverNodeDetail {
    */
   val isInteractive: Boolean
 
+  /**
+   * Every non-blank human-readable label this node carries, most-specific first.
+   *
+   * Dialect-neutral counterpart to the per-variant `resolveText()`: where that picks ONE value to
+   * show, this returns all of them, because a caller comparing a recorded selector's text against
+   * a node in a DIFFERENT dialect cannot know which field the other dialect put the same words in
+   * — an Android label lands in `text`, the AXe capture of that label lands in `label`, an iOS
+   * hint lands in `hintText`.
+   *
+   * Used by the driver-migration selector rewrite to keep a recorded selector's text intent
+   * pointing at the same element after the dialect changes.
+   */
+  fun textCandidates(): List<String>
+
+  /**
+   * Every non-blank stable identifier this node carries — resource ids, test tags, AX unique ids —
+   * most-stable first. Same contract and same reason as [textCandidates].
+   */
+  fun identifierCandidates(): List<String>
+
+
   // ---------------------------------------------------------------------------
   // Android via AccessibilityNodeInfo (Maestro-free path)
   // ---------------------------------------------------------------------------
@@ -402,6 +423,10 @@ sealed interface DriverNodeDetail {
     override val isInteractive: Boolean
       get() = isClickable || isEditable || isCheckable || isFocusable || isScrollable
 
+    override fun textCandidates(): List<String> = nonBlank(text, contentDescription, hintText, labeledByText)
+
+    override fun identifierCandidates(): List<String> = nonBlank(resourceId, uniqueId, composeTestTag)
+
     /**
      * Resolves text priority: text > hintText > contentDescription (same as Maestro).
      *
@@ -638,6 +663,10 @@ sealed interface DriverNodeDetail {
     override val isInteractive: Boolean
       get() = isClickable || isEditable || isChecked != null || isFocusable || isScrollable
 
+    override fun textCandidates(): List<String> = nonBlank(text, contentDescription, hintText)
+
+    override fun identifierCandidates(): List<String> = nonBlank(resourceId, tag)
+
     /**
      * Resolves text priority: text > hintText > contentDescription (same as the a11y shape).
      *
@@ -720,6 +749,10 @@ sealed interface DriverNodeDetail {
     override val isInteractive: Boolean
       get() = clickable || focusable || scrollable
 
+    override fun textCandidates(): List<String> = nonBlank(text, accessibilityText, hintText)
+
+    override fun identifierCandidates(): List<String> = nonBlank(resourceId)
+
     /**
      * Resolves text priority: text > hintText > accessibilityText (Maestro convention).
      *
@@ -799,6 +832,10 @@ sealed interface DriverNodeDetail {
           !cssSelector.isNullOrBlank() ||
           !dataTestId.isNullOrBlank()
 
+    override fun textCandidates(): List<String> = nonBlank(ariaName, ariaDescriptor)
+
+    override fun identifierCandidates(): List<String> = nonBlank(dataTestId)
+
     companion object {
       val MATCHABLE_PROPERTIES: Set<String> = setOf(
         "ariaRole", "ariaName", "ariaDescriptor",
@@ -866,6 +903,10 @@ sealed interface DriverNodeDetail {
 
     override val isInteractive: Boolean
       get() = clickable || focusable || scrollable
+
+    override fun textCandidates(): List<String> = nonBlank(text, accessibilityText, hintText)
+
+    override fun identifierCandidates(): List<String> = nonBlank(resourceId)
 
     /**
      * Resolves text priority: text > hintText > accessibilityText (Maestro convention).
@@ -955,7 +996,18 @@ sealed interface DriverNodeDetail {
     override val isInteractive: Boolean
       get() = customActions.isNotEmpty() || (role != null && role in INTERACTIVE_ROLES)
 
-    /** Resolves text priority: label > value > title. */
+    /**
+     * Text priority: label > value > title > help.
+     *
+     * [help] is last, and is here even though no native `iosAxe` selector can match on it: the
+     * `iosMaestro` bridge matches a recorded `hintTextRegex` against it, so a hint whose only
+     * carrier on this node is AXHelp would otherwise score zero on a cross-dialect rewrite and
+     * lose to a node that merely happens to sit closer to the tap.
+     */
+    override fun textCandidates(): List<String> = nonBlank(label, value, title, help)
+
+    override fun identifierCandidates(): List<String> = nonBlank(uniqueId)
+
     fun resolveText(): String? =
       label?.takeIf { it.isNotBlank() }
         ?: value?.takeIf { it.isNotBlank() }
@@ -1134,6 +1186,10 @@ sealed interface DriverNodeDetail {
     override val isInteractive: Boolean
       get() = hasClickAction || hasScrollAction || hasLongClickAction || hasSetTextAction
 
+    override fun textCandidates(): List<String> = nonBlank(text, editableText, contentDescription)
+
+    override fun identifierCandidates(): List<String> = nonBlank(testTag)
+
     /**
      * Resolves text priority: editableText > text > contentDescription.
      *
@@ -1156,3 +1212,9 @@ sealed interface DriverNodeDetail {
     }
   }
 }
+
+/**
+ * Drops nulls and blanks, preserving argument order. Shared by every [DriverNodeDetail] variant's
+ * [DriverNodeDetail.textCandidates] / [DriverNodeDetail.identifierCandidates].
+ */
+private fun nonBlank(vararg values: String?): List<String> = values.filterNotNull().filter { it.isNotBlank() }

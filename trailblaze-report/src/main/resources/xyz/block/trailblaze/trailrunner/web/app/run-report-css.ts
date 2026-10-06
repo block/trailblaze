@@ -730,6 +730,8 @@ span.idxrow, span.idxattemptrow, span.idxcellopen { cursor: default; }
 .idxattemptstatus.passed { color: var(--pass); }
 .detailheader { padding-top: var(--space-4); }
 .detailheader h1 { font-size: 20px; }
+.trailsource { margin-top: var(--space-2); color: var(--sub); font-size: var(--type-caption); overflow-wrap: anywhere; }
+.trailsource a { color: var(--sub2); }
 .detailheader nav { margin-top: var(--space-3); }
 /* header's bottom padding is 0 because the tab nav supplies that space. A header rendered without
    tabs (the still-loading run view) has to supply it itself or the title sits on the border. */
@@ -1331,6 +1333,54 @@ html[data-tb-autoplay] *, html[data-tb-autoplay] *::before, html[data-tb-autopla
 .trailvariant { font-size: var(--type-micro); color: var(--sub); font-style: italic; line-height: 1.4; }
 .trailcellmeta { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .trailcellstats { font-size: var(--type-micro); color: var(--sub); font-variant-numeric: tabular-nums; }
+/* The Grid's strip layout (layout=strip), a screenshot gallery: a header per device
+   over its screenshots in one row. Everything is placed explicitly (the step text on row 1, device
+   n's header on row 2n+2 and its screenshots on 2n+3, one column per step), so the steps line up
+   across devices and each step's text is written once. The step row sticks to the top and a device
+   header pins its text to the left edge, so both stay readable however far the strip is scrolled.
+   The step text is held to its column's width rather than widening it. */
+/* Each screenshot is sized by its own shape, so text reads at about one size on any device: a
+   portrait phone or terminal frame is held to 430px tall (about 200px wide), a landscape tablet
+   frame to 530px wide (about 300px tall). Before an image loads
+   its box holds the shorter of the two. */
+.trailgallery { --tg-shot-h: 430px; --tg-shot-w: 530px; --tg-shot-min-h: 300px; display: grid; grid-template-columns: repeat(var(--trail-steps), max-content); column-gap: 12px; }
+/* An embedding host fits its frame to the gallery, so the page's bottom gutter would be empty frame. */
+.trailscroll:has(> .trailgallery) { padding-bottom: var(--space-2); }
+.tglanehead { grid-column: 1 / -1; padding: 14px 0 8px; }
+.tglanehead:not(:first-child) { margin-top: 4px; border-top: 1px solid var(--line); }
+.tglaneheadin { position: sticky; left: var(--page-x); display: inline-flex; align-items: baseline; gap: 8px; white-space: nowrap; }
+.tglaneheadin .traillanename { color: var(--txt); font-weight: var(--font-weight-emphasis); }
+.tgstatus { text-transform: capitalize; display: inline-flex; align-items: center; gap: 4px; font-size: var(--type-micro); font-weight: var(--font-weight-emphasis); }
+.tgstatus::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.tgstatus.passed { color: var(--status-passed-mark); }
+.tgstatus.selfheal { color: var(--status-self-healed-mark); }
+.tgstatus.failed { color: var(--status-failed-mark); }
+.tgmeta { color: var(--sub); font-size: var(--type-micro); }
+.tgcard { position: relative; margin-bottom: 14px; border-radius: 9px; scroll-margin-left: var(--page-x); }
+.tgcard .trailframe { margin: 0; }
+/* A box hugs its own screenshot, not its column: a column is as wide as the widest frame any lane
+   shows at that step (a landscape tablet beside phones), and a stretched box strands the still at
+   its left while the step's video, centred in the box, plays beside it. The min sizes still leave
+   a box larger than a short or narrow still, so the video is pinned to the corner the still sits in. */
+.tgcard .galshot { box-sizing: border-box; width: fit-content; min-width: 150px; min-height: var(--tg-shot-min-h); overflow: hidden; border: 1px solid var(--line); border-radius: 9px; background: var(--bg2); }
+.tgcard .galshot img { display: block; width: auto; height: auto; max-width: var(--tg-shot-w); max-height: calc(var(--tg-shot-h) - 2px); }
+.tgcard .galshot .shotclip { object-position: left top; }
+/* The lane header gives the run's outcome; a step that failed or self-healed says so on its own
+   card, as the columns layout's cells do. */
+.tgcard.failed .galshot { border: 2px solid var(--danger-border); }
+.tgcard.selfheal .galshot { border: 2px solid var(--warning-border); }
+/* The gallery sizes each column from its screenshot, and inline-size containment would make every
+   box report no width of its own: each fell back to min-width, cutting a landscape tablet frame to
+   its left edge. The clip-time label it gates for narrow boxes just stays on. */
+.tgcard .galshot[data-clip-run] { container-type: normal; }
+/* A step with no screenshot keeps a narrow column: wide enough for its step text, no wider. */
+.tgcard.missing, .tgcard:has(> .tgnoshot) { align-self: stretch; margin-bottom: 14px; }
+.tgcard.missing, .tgnoshot { box-sizing: border-box; display: flex; align-items: center; justify-content: center; width: 100px; height: 100%; min-height: var(--tg-shot-min-h); padding: 0 8px; border: 1px dashed var(--line2); border-radius: 9px; color: var(--sub); font-size: var(--type-micro); text-align: center; }
+.tgstep { position: sticky; top: 0; z-index: 2; grid-row: 1; box-sizing: border-box; width: 0; min-width: calc(100% + 12px); margin-right: -12px; padding: 10px 12px 10px 0; background: var(--bg); border-bottom: 1px solid var(--line); scroll-margin-left: var(--page-x); }
+.tgstep .galchip { display: inline-block; margin-bottom: 4px; }
+.tgsteptext { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; color: var(--txt); font-size: 12px; line-height: 1.4; }
+.tgstep.below { position: static; padding-top: 0; border-bottom: 0; background: none; }
+.trailrowfocus .tgstep .galchip { outline: 2px solid var(--run); outline-offset: 2px; }
 .trailopenbtn { border: 0; background: transparent; padding: 2px 4px; color: var(--sub); font: inherit; font-size: var(--type-micro); font-weight: var(--font-weight-emphasis); cursor: pointer; border-radius: var(--r-sm); white-space: nowrap; }
 .trailopenbtn:hover { color: var(--txt); background: var(--button-hover); }
 .trailopenbtn:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }

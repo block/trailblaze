@@ -22,6 +22,7 @@ import xyz.block.trailblaze.yaml.serializers.TrailblazeToolYamlWrapperSerializer
 import xyz.block.trailblaze.yaml.unified.TrailDocument
 import xyz.block.trailblaze.yaml.unified.UnifiedTrail
 import xyz.block.trailblaze.yaml.unified.UnifiedTrailAdapter
+import xyz.block.trailblaze.recordings.TrailRecordings
 import xyz.block.trailblaze.yaml.unified.UnifiedTrailConfig
 import xyz.block.trailblaze.yaml.unified.UnifiedTrailEmitter
 import xyz.block.trailblaze.yaml.unified.UnifiedTrailStep
@@ -610,6 +611,23 @@ class TrailblazeYaml internal constructor(
     val configNode = rootNode.entries.entries.firstOrNull { it.key.content == "config" }?.value
       ?: return UnifiedTrailConfig()
     return yamlInstance.decodeFromYamlNode(UnifiedTrailConfig.serializer(), configNode)
+  }
+
+  /**
+   * Why a standalone on-device runner must refuse [yaml], or null when it may run it. Refused when
+   * [yaml] is a unified trail whose `config.devices` resolves
+   * [xyz.block.trailblaze.yaml.unified.TrailblazeDeviceDefinition.requiresHost] for this device: a
+   * trail bundled into a test APK runs with no host behind it. Host-driven runs never ask.
+   */
+  fun requiresHostRefusal(
+    yaml: String,
+    deviceClassifiers: List<TrailblazeDeviceClassifier>,
+    trailName: String?,
+  ): String? {
+    if (!TrailRecordings.isUnifiedTrailContent(yaml)) return null
+    if (!UnifiedTrailAdapter.resolveRequiresHost(decodeUnifiedTrailConfig(yaml), deviceClassifiers)) return null
+    return "${trailName ?: "This trail"} declares `requiresHost` for this device, so it cannot run " +
+      "as an on-device instrumentation test. Run it with Trailblaze on the host instead."
   }
 
   /**

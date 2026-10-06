@@ -399,7 +399,7 @@ function NavRail({ route, go, badges = {}, workspaceNavigation = [], openPalette
   return (
     <div className={'tb-rail' + (compact ? ' collapsed' : '')}>
       <div className="tb-brand" style={{ justifyContent: compact ? 'center' : 'space-between' }}>
-        <span className="name">Trail Runner</span>
+        <span className="name">Trailblaze App</span>
         <RailHoverTip compact={compact} tip="Expand sidebar">
           <button type="button" onClick={toggleRail}
             title={compact ? undefined : 'Collapse sidebar'} aria-label={compact ? 'Expand sidebar' : 'Collapse sidebar'}
@@ -649,9 +649,9 @@ function DaemonDownBanner({ retry }) {
     <div role="alert" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 14px', background: 'rgba(255,90,90,.14)', borderBottom: '1px solid var(--tb-hairline)', flex: '0 0 auto' }}>
       <Ico n="unplug" s={15} c="var(--tb-danger-text)" />
       <div style={{ flex: 1, minWidth: 0 }}>
-        <span style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--tb-danger-text)' }}>Can't reach the Trail Runner daemon.</span>
+        <span style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--tb-danger-text)' }}>Can't reach the Trailblaze daemon.</span>
         <span className="tb-sub" style={{ fontSize: 12, marginLeft: 8 }}>
-          Requests are timing out; data on screen may be stale. Reconnecting automatically - if this persists, restart Trail Runner.
+          Requests are timing out; data on screen may be stale. Reconnecting automatically - if this persists, restart Trailblaze App.
         </span>
       </div>
       <Btn sm ico="refresh-cw" onClick={retry}>Retry now</Btn>

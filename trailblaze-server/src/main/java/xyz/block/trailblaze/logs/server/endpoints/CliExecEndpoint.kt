@@ -212,7 +212,8 @@ object CliExecEndpoint {
     routing: Routing,
     onExec: suspend (CliExecRequest) -> CliExecResponse,
   ) = with(routing) {
-    post(CliEndpoints.EXEC) {
+    // [CliEndpoints.EXEC] stays for launchers that predate [CliEndpoints.EXEC_V2].
+    for (route in listOf(CliEndpoints.EXEC, CliEndpoints.EXEC_V2)) post(route) {
       val remoteAddress = call.request.local.remoteAddress
       if (!isLoopback(remoteAddress)) {
         Console.log("[cli/exec] BLOCKED non-loopback request from $remoteAddress")

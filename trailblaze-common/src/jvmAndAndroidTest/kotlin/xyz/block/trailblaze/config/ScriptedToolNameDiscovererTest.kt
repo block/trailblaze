@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.config
 
+import kotlinx.serialization.json.jsonObject
 import org.junit.Test
 import xyz.block.trailblaze.config.project.TrailmapScriptedToolFile
 import xyz.block.trailblaze.llm.config.ConfigResourceSource
@@ -181,6 +182,138 @@ class ScriptedToolNameDiscovererTest {
         error.message?.contains("collision") == true,
       "Expected a name-collision diagnostic naming the tool, got: ${error.message}",
     )
+  }
+
+  /** A generated `.tooldefs.json` for one tool, as the framework build writes it. */
+  private fun toolDefsFor(name: String, description: String, extraSpec: String = ""): String = """
+    {"tools": [{
+      "name": "$name",
+      "inputSchema": {"type": "object", "properties": {"url": {"type": "string", "description": "Where to go"}}, "required": ["url"]},
+      "spec": {"description": "$description", "supportedPlatforms": ["android"]$extraSpec}
+    }]}
+  """.trimIndent()
+
+  @Test
+  fun `a tool with only a generated tooldefs file resolves to its full config`() {
+    val source = resourceSourceOf(
+      mapOf(
+        "trailblaze/tools/openThing.tooldefs.json" to
+          toolDefsFor("openThing", "Opens the thing.", """, "surfaceToLlm": false, "runtime": "inProcess""""),
+      ),
+    )
+    val discovered = ScriptedToolNameDiscoverer.discoverDescriptorsByName(source).getValue(ToolName("openThing"))
+    val config = discovered.toolConfigs().single()
+
+    assertEquals("Opens the thing.", config.description)
+    assertEquals(ScriptedToolRuntime.IN_PROCESS, config.runtime)
+    assertFalse(config.surfaceToLlm)
+    assertEquals(setOf("url"), config.inputSchema.getValue("properties").jsonObject.keys)
+    assertEquals(
+      "${TrailblazeConfigPaths.TRAILMAPS_DIR}/trailblaze/tools/openThing.bundle.js",
+      ScriptedToolNameDiscoverer.bundleResourcePath(discovered),
+    )
+    assertEquals(setOf(ToolName("openThing")), ScriptedToolNameDiscoverer.discoverAllNames(source))
+  }
+
+  @Test
+  fun `a generated tooldefs file listing several tools resolves each to the one shared bundle`() {
+    val source = resourceSourceOf(
+      mapOf(
+        "square/tools/card_reader.tooldefs.json" to """
+          {"tools": [
+            {"name": "connectReader", "inputSchema": {"type": "object"}, "spec": {"description": "Connect."}},
+            {"name": "insertCard", "inputSchema": {"type": "object"}, "spec": {"description": "Insert."}}
+          ]}
+        """.trimIndent(),
+      ),
+    )
+    val byName = ScriptedToolNameDiscoverer.discoverDescriptorsByName(source)
+
+    assertEquals(setOf(ToolName("connectReader"), ToolName("insertCard")), byName.keys)
+    assertEquals("Connect.", byName.getValue(ToolName("connectReader")).toolConfigs().single().description)
+    assertEquals("Insert.", byName.getValue(ToolName("insertCard")).toolConfigs().single().description)
+    byName.values.forEach { discovered ->
+      assertEquals(
+        "${TrailblazeConfigPaths.TRAILMAPS_DIR}/square/tools/card_reader.bundle.js",
+        ScriptedToolNameDiscoverer.bundleResourcePath(discovered),
+      )
+    }
+  }
+
+  @Test
+  fun `a descriptor YAML wins over a generated tooldefs file naming the same tool`() {
+    val source = resourceSourceOf(
+      mapOf(
+        "trailblaze/tools/openThing.yaml" to """
+          script: ./openThing.ts
+          name: openThing
+          description: From the YAML.
+        """.trimIndent(),
+        "trailblaze/tools/openThing.tooldefs.json" to toolDefsFor("openThing", "From the generated file."),
+      ),
+    )
+    val config = ScriptedToolNameDiscoverer.discoverDescriptorsByName(source)
+      .getValue(ToolName("openThing")).toolConfigs().single()
+    assertEquals("From the YAML.", config.description)
+  }
+
+  @Test
+  fun `a descriptor YAML backing the same script replaces the generated file, whatever it names the tool`() {
+    // A workspace YAML layered over a framework tool's path: the framework's generated file must
+    // not keep the old name alive beside the override, and a meta-only YAML removes it too.
+    for (yaml in listOf("script: ./openThing.ts\nname: customOpenThing\n", "script: ./openThing.ts\n")) {
+      val source = resourceSourceOf(
+        mapOf(
+          "trailblaze/tools/openThing.yaml" to yaml,
+          "trailblaze/tools/openThing.tooldefs.json" to toolDefsFor("openThing", "From the generated file."),
+        ),
+      )
+      assertFalse(ToolName("openThing") in ScriptedToolNameDiscoverer.discoverDescriptorsByName(source), yaml)
+      assertFalse(ToolName("openThing") in ScriptedToolNameDiscoverer.discoverAllNames(source), yaml)
+    }
+  }
+
+  @Test
+  fun `a descriptor YAML and a generated file naming the same tool for different scripts fail as a collision`() {
+    val source = resourceSourceOf(
+      mapOf(
+        "appone/tools/doThing.yaml" to "script: ./doThing.ts\nname: shared_doThing\n",
+        "apptwo/tools/doThing.tooldefs.json" to toolDefsFor("shared_doThing", "Two."),
+      ),
+    )
+    val error = assertFailsWith<IllegalArgumentException> {
+      ScriptedToolNameDiscoverer.discoverDescriptorsByName(source)
+    }
+    assertTrue(
+      error.message?.contains("appone/tools/doThing.yaml") == true &&
+        error.message?.contains("apptwo/tools/doThing.tooldefs.json") == true,
+      "Expected the collision to name both files, got: ${error.message}",
+    )
+  }
+
+  @Test
+  fun `two generated tooldefs files naming the same tool fail as a collision`() {
+    val source = resourceSourceOf(
+      mapOf(
+        "appone/tools/shared.tooldefs.json" to toolDefsFor("shared_doThing", "One."),
+        "apptwo/tools/shared.tooldefs.json" to toolDefsFor("shared_doThing", "Two."),
+      ),
+    )
+    val error = assertFailsWith<IllegalArgumentException> {
+      ScriptedToolNameDiscoverer.discoverDescriptorsByName(source)
+    }
+    assertTrue(error.message?.contains("shared_doThing") == true, "got: ${error.message}")
+  }
+
+  @Test
+  fun `a generated tool with an unknown runtime is skipped, not fatal`() {
+    val source = resourceSourceOf(
+      mapOf(
+        "trailblaze/tools/bad.tooldefs.json" to toolDefsFor("bad", "Bad.", """, "runtime": "subproces""""),
+        "trailblaze/tools/good.tooldefs.json" to toolDefsFor("good", "Good."),
+      ),
+    )
+    assertEquals(setOf(ToolName("good")), ScriptedToolNameDiscoverer.discoverDescriptorsByName(source).keys)
   }
 
   @Test

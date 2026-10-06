@@ -4,8 +4,7 @@
 
 # `web_verifyElementVisible`
 
-Verify that an element identified by its element ID, ARIA descriptor, or CSS selector is visible on the page.
-This is a test assertion — it will fail the test if the element is not visible.
+Assert an element is visible on the page.
 
 ## Source
 
@@ -23,7 +22,7 @@ This is a test assertion — it will fail the test if the element is not visible
 ### Optional parameters
 
 - `ref` — `String`
-  Element ID (e.g., 'e5'), ARIA descriptor (e.g., 'button "Submit"'), or CSS selector with css= prefix (e.g., 'css=#my-element').
+  Element ID ('e5'), ARIA descriptor ('button "Submit"'), or 'css=<selector>'.
 - `reasoning` — `String`
 
 ## Output

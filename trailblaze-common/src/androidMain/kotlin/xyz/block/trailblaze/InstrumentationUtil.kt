@@ -96,6 +96,12 @@ object InstrumentationUtil {
     runWithStaleUiAutomationRecovery { work(uiAutomation) }
   }
 
+  /**
+   * Holds the [withUiAutomation] monitor across several [withUiAutomation] calls, so nothing else
+   * runs between them. The monitor is reentrant, and each inner call still gets its own recovery.
+   */
+  fun <T> holdingUiAutomationMonitor(work: () -> T): T = synchronized(uiAutomationLock) { work() }
+
   fun <T> withUiDevice(work: UiDevice.() -> T): T = synchronized(uiDevice) {
     runWithStaleUiAutomationRecovery { work(uiDevice) }
   }

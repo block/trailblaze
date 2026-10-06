@@ -30,15 +30,13 @@ import xyz.block.trailblaze.viewmatcher.strategies.IndexStrategy
 @Serializable
 @TrailblazeToolClass(name = "tap", isRecordable = false)
 @LLMDescription(
-  "Tap an element by its ref ID from the snapshot. Use the short hash ref shown in " +
-    "square brackets (e.g., y778 from [y778] \"Network & internet\"). " +
-    "These refs are stable across captures of the same screen. " +
-    "To enter a value on a number pad, PIN pad, or keypad, tap each digit button.",
+  "Tap an element by its snapshot ref (e.g. y778 from [y778] \"Network & internet\"). On a " +
+    "number pad, PIN pad or keypad, tap each digit.",
 )
 data class TapTrailblazeTool(
-  @param:LLMDescription("The element ref from the snapshot (e.g., 'y778')")
+  @param:LLMDescription("Element ref from the snapshot, e.g. 'y778'.")
   val ref: String,
-  @param:LLMDescription("Set to true for a long press instead of a tap.")
+  @param:LLMDescription("Long press instead of tap.")
   val longPress: Boolean = false,
   override val reasoning: String? = null,
 ) : DelegatingTrailblazeTool, ReasoningTrailblazeTool {

@@ -10,6 +10,7 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.datetime.Instant
 import xyz.block.trailblaze.api.DriverNodeMatch
+import xyz.block.trailblaze.api.SelectorDialect
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
@@ -67,45 +68,84 @@ class WaypointMigrateTrailCommandTest {
     tempDirs.forEach { it.deleteRecursively() }
   }
 
-  private fun maestroSelector(text: String) = TrailblazeNodeSelector(
-    androidMaestro = DriverNodeMatch.AndroidMaestro(textRegex = text),
+  /**
+   * Every dialect pair with a dual-tree producer today. Dialect-specific tests run against all of
+   * them, so a helper that quietly assumes the Android shapes fails on the iOS leg.
+   */
+  private val pairs = listOf(
+    MigrationPair(SelectorDialect.ANDROID_MAESTRO, SelectorDialect.ANDROID_ACCESSIBILITY),
+    MigrationPair(SelectorDialect.IOS_MAESTRO, SelectorDialect.IOS_AXE),
   )
 
-  private fun accessibilitySelector(text: String) = TrailblazeNodeSelector(
-    androidAccessibility = DriverNodeMatch.AndroidAccessibility(textRegex = text),
-  )
+  /** A minimal one-leaf selector in [dialect], anchored on [text]. */
+  private fun leafSelector(dialect: SelectorDialect, text: String) = when (dialect) {
+    SelectorDialect.ANDROID_MAESTRO -> TrailblazeNodeSelector(
+      androidMaestro = DriverNodeMatch.AndroidMaestro(textRegex = text),
+    )
+    SelectorDialect.ANDROID_ACCESSIBILITY -> TrailblazeNodeSelector(
+      androidAccessibility = DriverNodeMatch.AndroidAccessibility(textRegex = text),
+    )
+    SelectorDialect.IOS_MAESTRO -> TrailblazeNodeSelector(
+      iosMaestro = DriverNodeMatch.IosMaestro(textRegex = text),
+    )
+    SelectorDialect.IOS_AXE -> TrailblazeNodeSelector(
+      iosAxe = DriverNodeMatch.IosAxe(labelRegex = text),
+    )
+    else -> error("No test shape for dialect $dialect")
+  }
+
+  private fun sourceSelector(pair: MigrationPair, text: String) = leafSelector(pair.source, text)
+
+  private fun targetSelector(pair: MigrationPair, text: String) = leafSelector(pair.target, text)
+
+  /** A source-dialect leaf carrying both a text and an identifier anchor. */
+  private fun sourceLeafWithId(pair: MigrationPair, text: String, id: String) = when (pair.source) {
+    SelectorDialect.ANDROID_MAESTRO -> TrailblazeNodeSelector(
+      androidMaestro = DriverNodeMatch.AndroidMaestro(textRegex = text, resourceIdRegex = id),
+    )
+    SelectorDialect.IOS_MAESTRO -> TrailblazeNodeSelector(
+      iosMaestro = DriverNodeMatch.IosMaestro(textRegex = text, resourceIdRegex = id),
+    )
+    else -> error("No test shape for source dialect ${pair.source}")
+  }
 
   // ----- needsMigration -----------------------------------------------------------
 
   @Test
-  fun `needsMigration is true for androidMaestro leaves and false for accessibility or null`() {
+  fun `needsMigration is true for a source-dialect leaf and false for a target-dialect leaf or null`() = pairs.forEach { pair ->
     val cmd = WaypointMigrateTrailCommand()
-    assertTrue(cmd.needsMigration(maestroSelector("Foo")))
-    // The common recorded shape: the maestro leaf nested under a structural combinator.
+    assertTrue(cmd.needsMigration(sourceSelector(pair, "Foo"), pair), "$pair")
+    // The common recorded shape: the dialect leaf nested under a structural combinator.
     assertTrue(
-      cmd.needsMigration(TrailblazeNodeSelector(containsChild = maestroSelector("Foo"))),
+      cmd.needsMigration(TrailblazeNodeSelector(containsChild = sourceSelector(pair, "Foo")), pair),
+      "$pair",
     )
-    assertFalse(cmd.needsMigration(null))
-    assertFalse(cmd.needsMigration(accessibilitySelector("Foo")))
+    assertFalse(cmd.needsMigration(null, pair), "$pair")
+    assertFalse(cmd.needsMigration(targetSelector(pair, "Foo"), pair), "$pair")
     assertFalse(
-      cmd.needsMigration(TrailblazeNodeSelector(containsChild = accessibilitySelector("Foo"))),
+      cmd.needsMigration(TrailblazeNodeSelector(containsChild = targetSelector(pair, "Foo")), pair),
+      "$pair",
+    )
+    // A selector in some OTHER platform's dialect is not this pair's business.
+    assertFalse(
+      cmd.needsMigration(TrailblazeNodeSelector(web = DriverNodeMatch.Web(ariaNameRegex = "Foo")), pair),
+      "$pair",
     )
     // Mixed-shape selector (both leaves present anywhere in the tree) counts as already
-    // migrated — rewriting it would clobber accessibility content someone hand-authored.
+    // migrated — rewriting it would clobber target-dialect content someone hand-authored.
     assertFalse(
       cmd.needsMigration(
-        TrailblazeNodeSelector(
-          androidAccessibility = DriverNodeMatch.AndroidAccessibility(textRegex = "Foo"),
-          containsChild = maestroSelector("Bar"),
-        ),
+        targetSelector(pair, "Foo").copy(containsChild = sourceSelector(pair, "Bar")),
+        pair,
       ),
+      "$pair",
     )
   }
 
-  // ----- collectMaestroSelectorsUnified -------------------------------------------
+  // ----- collectSourceSelectorsUnified --------------------------------------------
 
   @Test
-  fun `collectMaestroSelectorsUnified emits zero entries on a trail with no selector tools`() {
+  fun `collectSourceSelectorsUnified emits zero entries on a trail with no selector tools`() = pairs.forEach { pair ->
     val cmd = WaypointMigrateTrailCommand()
     val trail = UnifiedTrail(
       config = UnifiedTrailConfig(),
@@ -116,12 +156,12 @@ class WaypointMigrateTrailCommandTest {
         ),
       ),
     )
-    val result = cmd.collectMaestroSelectorsUnified(trail, "android")
+    val result = cmd.collectSourceSelectorsUnified(trail, "android", pair)
     assertTrue(result.isEmpty(), "Expected no entries; got: $result")
   }
 
   @Test
-  fun `collectMaestroSelectorsUnified emits tapOnElementBySelector entries in YAML order`() {
+  fun `collectSourceSelectorsUnified emits tapOnElementBySelector entries in YAML order`() = pairs.forEach { pair ->
     val cmd = WaypointMigrateTrailCommand()
     val trail = UnifiedTrail(
       config = UnifiedTrailConfig(),
@@ -132,7 +172,7 @@ class WaypointMigrateTrailCommandTest {
             "android" to listOf(
               wrap(
                 "tapOnElementBySelector",
-                TapOnByElementSelector(nodeSelector = maestroSelector("Foo")),
+                TapOnByElementSelector(nodeSelector = sourceSelector(pair, "Foo")),
               ),
             ),
           ),
@@ -143,22 +183,22 @@ class WaypointMigrateTrailCommandTest {
             "android" to listOf(
               wrap(
                 "tapOnElementBySelector",
-                TapOnByElementSelector(nodeSelector = maestroSelector("Bar")),
+                TapOnByElementSelector(nodeSelector = sourceSelector(pair, "Bar")),
               ),
             ),
           ),
         ),
       ),
     )
-    val result = cmd.collectMaestroSelectorsUnified(trail, "android")
+    val result = cmd.collectSourceSelectorsUnified(trail, "android", pair)
     assertEquals(2, result.size)
-    assertEquals("Foo", result[0].maestroSelector.textRegex)
+    assertEquals("Foo", result[0].loweredSelector.textRegex)
     assertEquals("tapOnElementBySelector", result[0].toolName)
-    assertEquals("Bar", result[1].maestroSelector.textRegex)
+    assertEquals("Bar", result[1].loweredSelector.textRegex)
   }
 
   @Test
-  fun `collectMaestroSelectorsUnified lowers nested combinators to the element selector shape`() {
+  fun `collectSourceSelectorsUnified lowers nested combinators to the element selector shape`() = pairs.forEach { pair ->
     // The dominant recorded shape in the instrumentation-driver trails: the androidMaestro
     // leaf sits under `containsChild` on the wrapper selector. The lowering must preserve
     // that structure so the Maestro matcher resolves the same node the runtime would.
@@ -174,12 +214,7 @@ class WaypointMigrateTrailCommandTest {
                 "tapOnElementBySelector",
                 TapOnByElementSelector(
                   nodeSelector = TrailblazeNodeSelector(
-                    containsChild = TrailblazeNodeSelector(
-                      androidMaestro = DriverNodeMatch.AndroidMaestro(
-                        textRegex = "Create appointment",
-                        resourceIdRegex = "some.package:id/button",
-                      ),
-                    ),
+                    containsChild = sourceLeafWithId(pair, "Create appointment", "some.package:id/button"),
                   ),
                 ),
               ),
@@ -188,16 +223,16 @@ class WaypointMigrateTrailCommandTest {
         ),
       ),
     )
-    val result = cmd.collectMaestroSelectorsUnified(trail, "android")
+    val result = cmd.collectSourceSelectorsUnified(trail, "android", pair)
     assertEquals(1, result.size)
-    val lowered = result[0].maestroSelector
+    val lowered = result[0].loweredSelector
     assertNull(lowered.textRegex)
     assertEquals("Create appointment", lowered.containsChild?.textRegex)
     assertEquals("some.package:id/button", lowered.containsChild?.idRegex)
   }
 
   @Test
-  fun `collectMaestroSelectorsUnified mixes tapOnElementBySelector and assertVisibleBySelector in document order`() {
+  fun `collectSourceSelectorsUnified mixes tapOnElementBySelector and assertVisibleBySelector in document order`() = pairs.forEach { pair ->
     val cmd = WaypointMigrateTrailCommand()
     val trail = UnifiedTrail(
       config = UnifiedTrailConfig(),
@@ -208,24 +243,24 @@ class WaypointMigrateTrailCommandTest {
             "android" to listOf(
               wrap(
                 "tapOnElementBySelector",
-                TapOnByElementSelector(nodeSelector = maestroSelector("T1")),
+                TapOnByElementSelector(nodeSelector = sourceSelector(pair, "T1")),
               ),
               wrap(
                 "assertVisibleBySelector",
-                AssertVisibleBySelectorTrailblazeTool(nodeSelector = maestroSelector("A1")),
+                AssertVisibleBySelectorTrailblazeTool(nodeSelector = sourceSelector(pair, "A1")),
               ),
               wrap(
                 "tapOnElementBySelector",
-                TapOnByElementSelector(nodeSelector = maestroSelector("T2")),
+                TapOnByElementSelector(nodeSelector = sourceSelector(pair, "T2")),
               ),
             ),
           ),
         ),
       ),
     )
-    val result = cmd.collectMaestroSelectorsUnified(trail, "android")
+    val result = cmd.collectSourceSelectorsUnified(trail, "android", pair)
     assertEquals(3, result.size)
-    assertEquals(listOf("T1", "A1", "T2"), result.map { it.maestroSelector.textRegex })
+    assertEquals(listOf("T1", "A1", "T2"), result.map { it.loweredSelector.textRegex })
     assertEquals(
       listOf("tapOnElementBySelector", "assertVisibleBySelector", "tapOnElementBySelector"),
       result.map { it.toolName },
@@ -233,7 +268,7 @@ class WaypointMigrateTrailCommandTest {
   }
 
   @Test
-  fun `collectMaestroSelectorsUnified skips already-migrated and selector-less tools`() {
+  fun `collectSourceSelectorsUnified skips already-migrated and selector-less tools`() = pairs.forEach { pair ->
     // Already-migrated tools carry an androidAccessibility-shape nodeSelector; tools with
     // no nodeSelector at all have nothing to migrate. Both are no-ops for the migration —
     // confirm collect drops them so the pairing index stays in sync with what's actually
@@ -248,7 +283,7 @@ class WaypointMigrateTrailCommandTest {
             "android" to listOf(
               wrap(
                 "tapOnElementBySelector",
-                TapOnByElementSelector(nodeSelector = accessibilitySelector("Done")),
+                TapOnByElementSelector(nodeSelector = targetSelector(pair, "Done")),
               ),
               wrap(
                 "tapOnElementBySelector",
@@ -256,22 +291,22 @@ class WaypointMigrateTrailCommandTest {
               ),
               wrap(
                 "tapOnElementBySelector",
-                TapOnByElementSelector(nodeSelector = maestroSelector("Pending")),
+                TapOnByElementSelector(nodeSelector = sourceSelector(pair, "Pending")),
               ),
             ),
           ),
         ),
       ),
     )
-    val result = cmd.collectMaestroSelectorsUnified(trail, "android")
+    val result = cmd.collectSourceSelectorsUnified(trail, "android", pair)
     assertEquals(1, result.size)
-    assertEquals("Pending", result[0].maestroSelector.textRegex)
+    assertEquals("Pending", result[0].loweredSelector.textRegex)
   }
 
   // ----- countUnmigratableNotVisibleUnified ---------------------------------------
 
   @Test
-  fun `countUnmigratableNotVisibleUnified counts Maestro-shape not-visible asserts and ignores migrated ones`() {
+  fun `countUnmigratableNotVisibleUnified counts source-dialect not-visible asserts and ignores migrated ones`() = pairs.forEach { pair ->
     // Not-visible asserts can't be coordinate-resolved (the element is absent from the
     // capture), so they're reported for hand-authoring rather than collected as migration
     // targets — and they must NOT perturb the collect/rewrite pairing index.
@@ -285,33 +320,33 @@ class WaypointMigrateTrailCommandTest {
             "android" to listOf(
               wrap(
                 "assertNotVisibleBySelector",
-                AssertNotVisibleBySelectorTrailblazeTool(nodeSelector = maestroSelector("Gone")),
+                AssertNotVisibleBySelectorTrailblazeTool(nodeSelector = sourceSelector(pair, "Gone")),
               ),
               wrap(
                 "assertNotVisibleBySelector",
-                AssertNotVisibleBySelectorTrailblazeTool(nodeSelector = accessibilitySelector("AlreadyMigrated")),
+                AssertNotVisibleBySelectorTrailblazeTool(nodeSelector = targetSelector(pair, "AlreadyMigrated")),
               ),
               wrap(
                 "tapOnElementBySelector",
-                TapOnByElementSelector(nodeSelector = maestroSelector("Tap")),
+                TapOnByElementSelector(nodeSelector = sourceSelector(pair, "Tap")),
               ),
             ),
           ),
         ),
       ),
     )
-    assertEquals(1, cmd.countUnmigratableNotVisibleUnified(trail, "android"))
+    assertEquals(1, cmd.countUnmigratableNotVisibleUnified(trail, "android", pair))
     // The not-visible assert is not a collect target — pairing index only sees the tap.
     assertEquals(
       listOf("Tap"),
-      cmd.collectMaestroSelectorsUnified(trail, "android").map { it.maestroSelector.textRegex },
+      cmd.collectSourceSelectorsUnified(trail, "android", pair).map { it.loweredSelector.textRegex },
     )
   }
 
   // ----- unified-format helpers -----------------------------------------------------
 
   @Test
-  fun `collectMaestroSelectorsUnified only walks the target classifier's recordings`() {
+  fun `collectSourceSelectorsUnified only walks the target classifier's recordings`() = pairs.forEach { pair ->
     val cmd = WaypointMigrateTrailCommand()
     val trail = UnifiedTrail(
       config = UnifiedTrailConfig(),
@@ -320,22 +355,22 @@ class WaypointMigrateTrailCommandTest {
           step = "tap foo",
           recordings = mapOf(
             "android-phone" to listOf(
-              wrap("tapOnElementBySelector", TapOnByElementSelector(nodeSelector = maestroSelector("Foo"))),
+              wrap("tapOnElementBySelector", TapOnByElementSelector(nodeSelector = sourceSelector(pair, "Foo"))),
             ),
             "android-tablet" to listOf(
-              wrap("tapOnElementBySelector", TapOnByElementSelector(nodeSelector = maestroSelector("Bar"))),
+              wrap("tapOnElementBySelector", TapOnByElementSelector(nodeSelector = sourceSelector(pair, "Bar"))),
             ),
           ),
         ),
       ),
     )
-    assertEquals(listOf("Foo"), cmd.collectMaestroSelectorsUnified(trail, "android-phone").map { it.maestroSelector.textRegex })
-    assertEquals(listOf("Bar"), cmd.collectMaestroSelectorsUnified(trail, "android-tablet").map { it.maestroSelector.textRegex })
-    assertTrue(cmd.collectMaestroSelectorsUnified(trail, "ios-tablet").isEmpty())
+    assertEquals(listOf("Foo"), cmd.collectSourceSelectorsUnified(trail, "android-phone", pair).map { it.loweredSelector.textRegex })
+    assertEquals(listOf("Bar"), cmd.collectSourceSelectorsUnified(trail, "android-tablet", pair).map { it.loweredSelector.textRegex })
+    assertTrue(cmd.collectSourceSelectorsUnified(trail, "ios-tablet", pair).isEmpty())
   }
 
   @Test
-  fun `countUnmigratableNotVisibleUnified scopes to the target classifier`() {
+  fun `countUnmigratableNotVisibleUnified scopes to the target classifier`() = pairs.forEach { pair ->
     val cmd = WaypointMigrateTrailCommand()
     val trail = UnifiedTrail(
       config = UnifiedTrailConfig(),
@@ -344,17 +379,17 @@ class WaypointMigrateTrailCommandTest {
           step = "assert gone",
           recordings = mapOf(
             "android-phone" to listOf(
-              wrap("assertNotVisibleBySelector", AssertNotVisibleBySelectorTrailblazeTool(nodeSelector = maestroSelector("Gone"))),
+              wrap("assertNotVisibleBySelector", AssertNotVisibleBySelectorTrailblazeTool(nodeSelector = sourceSelector(pair, "Gone"))),
             ),
             "android-tablet" to listOf(
-              wrap("assertNotVisibleBySelector", AssertNotVisibleBySelectorTrailblazeTool(nodeSelector = accessibilitySelector("AlreadyMigrated"))),
+              wrap("assertNotVisibleBySelector", AssertNotVisibleBySelectorTrailblazeTool(nodeSelector = targetSelector(pair, "AlreadyMigrated"))),
             ),
           ),
         ),
       ),
     )
-    assertEquals(1, cmd.countUnmigratableNotVisibleUnified(trail, "android-phone"))
-    assertEquals(0, cmd.countUnmigratableNotVisibleUnified(trail, "android-tablet"))
+    assertEquals(1, cmd.countUnmigratableNotVisibleUnified(trail, "android-phone", pair))
+    assertEquals(0, cmd.countUnmigratableNotVisibleUnified(trail, "android-tablet", pair))
   }
 
   @Test
@@ -371,7 +406,7 @@ class WaypointMigrateTrailCommandTest {
   }
 
   @Test
-  fun `migrateUnifiedTrail rewrites only the target classifier's tools`() {
+  fun `migrateUnifiedTrail rewrites only the target classifier's tools`() = pairs.forEach { pair ->
     val cmd = WaypointMigrateTrailCommand()
     val trail = UnifiedTrail(
       config = UnifiedTrailConfig(),
@@ -379,10 +414,10 @@ class WaypointMigrateTrailCommandTest {
         step = "launch",
         recordings = mapOf(
           "android-phone" to listOf(
-            wrap("tapOnElementBySelector", TapOnByElementSelector(nodeSelector = maestroSelector("Foo"))),
+            wrap("tapOnElementBySelector", TapOnByElementSelector(nodeSelector = sourceSelector(pair, "Foo"))),
           ),
           "android-tablet" to listOf(
-            wrap("tapOnElementBySelector", TapOnByElementSelector(nodeSelector = maestroSelector("Foo"))),
+            wrap("tapOnElementBySelector", TapOnByElementSelector(nodeSelector = sourceSelector(pair, "Foo"))),
           ),
         ),
       ),
@@ -391,23 +426,23 @@ class WaypointMigrateTrailCommandTest {
           step = "tap bar",
           recordings = mapOf(
             "android-phone" to listOf(
-              wrap("tapOnElementBySelector", TapOnByElementSelector(nodeSelector = maestroSelector("Bar"))),
+              wrap("tapOnElementBySelector", TapOnByElementSelector(nodeSelector = sourceSelector(pair, "Bar"))),
             ),
           ),
         ),
       ),
     )
-    val migratedTrailheadSelector = accessibilitySelector("Foo")
-    val migratedStepSelector = accessibilitySelector("Bar")
+    val migratedTrailheadSelector = targetSelector(pair, "Foo")
+    val migratedStepSelector = targetSelector(pair, "Bar")
     val migrations = mapOf(0 to migratedTrailheadSelector, 1 to migratedStepSelector)
     val result = cmd.migrateUnifiedTrail(
-      trail, "android-phone", migrations, WaypointMigrateTrailCommand.IndexedCursor(),
+      trail, "android-phone", migrations, WaypointMigrateTrailCommand.IndexedCursor(), pair,
     )
 
     val phoneTrailheadTool = result.trailhead!!.recordings["android-phone"]!![0].trailblazeTool as TapOnByElementSelector
     assertEquals(migratedTrailheadSelector, phoneTrailheadTool.nodeSelector)
     val tabletTrailheadTool = result.trailhead!!.recordings["android-tablet"]!![0].trailblazeTool as TapOnByElementSelector
-    assertEquals("Foo", tabletTrailheadTool.nodeSelector?.androidMaestro?.textRegex)
+    assertEquals(sourceSelector(pair, "Foo"), tabletTrailheadTool.nodeSelector)
     val phoneStepTool = result.trail[0].recordings["android-phone"]!![0].trailblazeTool as TapOnByElementSelector
     assertEquals(migratedStepSelector, phoneStepTool.nodeSelector)
   }

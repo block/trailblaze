@@ -39,7 +39,8 @@ import java.io.File
  * **Why one [QuickJsToolHost] per registration**: the host's `evalMutex` is non-reentrant. If
  * one scripted tool's body calls `client.callTool("otherScriptedTool", …)` and both shared a
  * single host, the nested call would deadlock on the same mutex. Per-registration hosts mean
- * the nested call hits a *different* host's mutex, so re-entry is safe by construction.
+ * the nested call hits a *different* host's mutex. A tool composing ITSELF still lands on its own
+ * host, so the binding's same-host guard refuses that (see [SessionScopedHostBinding.ownHost]).
  *
  * **Naming note**: the "Lazy" prefix is from the planning doc and implies on-first-dispatch
  * host construction. In practice the host is constructed eagerly via [create] at session
@@ -170,8 +171,8 @@ class LazyYamlScriptedToolRegistration private constructor(
    * Without it, a scripted tool's declared credential arg would be masked on the on-device path and
    * leak on the host path — the wrapper surfaces [rawToolArguments] verbatim.
    */
-  private class ContextSettingScriptedTool(
-    private val inner: QuickJsTrailblazeTool,
+  internal class ContextSettingScriptedTool(
+    internal val inner: QuickJsTrailblazeTool,
     private val binding: SessionScopedHostBinding,
   ) : xyz.block.trailblaze.toolcalls.HostLocalExecutableTrailblazeTool,
     xyz.block.trailblaze.toolcalls.RawArgumentTrailblazeTool,
@@ -757,6 +758,8 @@ class LazyYamlScriptedToolRegistration private constructor(
         // available in both runtimes.
         engineExtension = engineExtension,
       )
+      // Lets the binding refuse this tool composing itself, which would re-enter this same host.
+      binding.ownHost = host
       return LazyYamlScriptedToolRegistration(toolConfig, host, binding)
     }
 

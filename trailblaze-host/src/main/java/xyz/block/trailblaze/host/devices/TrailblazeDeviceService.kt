@@ -6,6 +6,7 @@ import kotlinx.coroutines.withContext
 import maestro.Driver
 import maestro.device.Device
 import maestro.device.DeviceService
+import maestro.device.Platform
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDevicePort.getMaestroOnDeviceSpecificPort
@@ -14,6 +15,7 @@ import xyz.block.trailblaze.host.axe.AxeCli
 import xyz.block.trailblaze.host.axe.AxeJsonMapper
 import xyz.block.trailblaze.host.toTrailblazeDevicePlatform
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
+import xyz.block.trailblaze.util.AndroidHostAdbUtils
 import xyz.block.trailblaze.util.IosHostSimctlUtils
 
 object TrailblazeDeviceService {
@@ -25,9 +27,16 @@ object TrailblazeDeviceService {
    */
   private const val CACHE_TTL_MS = 30_000L
 
+  // iOS only, deliberately: Android devices come from AndroidHostAdbUtils, the one adb client every
+  // other Android host path already uses, rather than a second listing through Maestro's own dadb
+  // connections. listIOSConnectedDevices keeps physical iPhones
+  // visible to a by-id lookup so HostIosDriverFactory can say why they're refused.
   private val connectedDevices = ConnectedDeviceLookup(
     ttlMs = CACHE_TTL_MS,
-    listAll = { DeviceService.listConnectedDevices() },
+    listAll = {
+      DeviceService.listIOSDevices().filterIsInstance<Device.Connected>() +
+        DeviceService.listIOSConnectedDevices()
+    },
     bootedSimulatorIds = { IosHostSimctlUtils.listBootedDeviceIds() },
   )
 
@@ -140,13 +149,31 @@ object TrailblazeDeviceService {
     return connected
   }
 
-  fun listConnectedTrailblazeDevices(): Set<TrailblazeDeviceId> {
-    return connectedDevices.all().map {
+  /**
+   * [devices] without physical iPhones, which Trailblaze does not support: only simulators are
+   * offered on iOS. Lookup by id still sees an iPhone, so asking for one by its id fails in
+   * [HostIosDriverFactory.createIOS] with a message that says why, not "device not found".
+   */
+  internal fun supportedDevices(devices: List<Device.Connected>): List<Device.Connected> =
+    devices.filterNot { it.platform == Platform.IOS && it.deviceType == Device.DeviceType.REAL }
+
+  fun listConnectedTrailblazeDevices(): Set<TrailblazeDeviceId> = combineConnectedDevices(
+    iosDevices = connectedDevices.all(),
+    androidDevices = AndroidHostAdbUtils.listConnectedAdbDevices(),
+  )
+
+  /** The listing seam: iOS from Maestro (physical iPhones dropped), Android from adb. */
+  internal fun combineConnectedDevices(
+    iosDevices: List<Device.Connected>,
+    androidDevices: List<TrailblazeDeviceId>,
+  ): Set<TrailblazeDeviceId> {
+    val ios = supportedDevices(iosDevices).map {
       TrailblazeDeviceId(
         instanceId = it.instanceId,
         trailblazeDevicePlatform = it.platform.toTrailblazeDevicePlatform(),
       )
-    }.toSet()
+    }
+    return (ios + androidDevices).toSet()
   }
 
   /**

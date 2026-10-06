@@ -32,7 +32,7 @@ import xyz.block.trailblaze.model.TrailblazeConfig
 import xyz.block.trailblaze.model.findById
 import xyz.block.trailblaze.tracing.TraceLevel
 import xyz.block.trailblaze.tracing.TrailblazeTracer
-import xyz.block.trailblaze.ui.images.NetworkImageLoader
+import xyz.block.trailblaze.exception.TrailblazeException
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.yaml.TrailblazeYaml
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
@@ -54,15 +54,13 @@ abstract class TrailblazeDesktopApp(
   abstract val deviceManager: TrailblazeDeviceManager
 
   /**
-   * Starts the desktop app (Compose UI / tray icon) and, unless [daemonAlreadyRunning], the
-   * daemon HTTP server.
+   * Runs the daemon HTTP server in this process, blocking until it stops — or returns at once
+   * when [daemonAlreadyRunning] and that daemon still answers.
    *
-   * @param daemonAlreadyRunning true when the daemon for this port is already running — owned by
-   *   another process this instance attaches to, or started in-process before the UI (the
-   *   `trailblaze mcp` legacy STDIO path). When false, this process must win the port bind or
-   *   exit instead of lingering as a duplicate tray icon.
+   * @param daemonAlreadyRunning true when a daemon for this port was already running when the
+   *   caller checked. When false, this process must win the port bind or exit.
    */
-  abstract fun startTrailblazeDesktopApp(headless: Boolean = false, daemonAlreadyRunning: Boolean = false)
+  abstract fun startTrailblazeDesktopApp(daemonAlreadyRunning: Boolean = false)
 
   /**
    * Creates the CLI report generator used by `trailblaze run`.
@@ -85,9 +83,7 @@ abstract class TrailblazeDesktopApp(
    */
   fun applyPortOverrides(httpPort: Int, httpsPort: Int) {
     portManager.setRuntimeOverrides(httpPort, httpsPort)
-    // Update the global server URL used by NetworkImageLoader for screenshot loading
-    NetworkImageLoader.currentServerBaseUrl = portManager.serverUrl
-    // And the callback-endpoint URL subprocess MCP tools hit. Must mirror port-override changes
+    // Update the callback-endpoint URL subprocess MCP tools hit. Must mirror port-override changes
     // or subprocesses spawned after an override would see the pre-override URL.
     xyz.block.trailblaze.scripting.callback.JsScriptingCallbackBaseUrl.set(portManager.serverUrl)
   }
@@ -210,10 +206,18 @@ abstract class TrailblazeDesktopApp(
       ?: request.runYamlRequest?.yaml
       ?: return@withContext cliRunNoYamlResponse()
 
+    // ONE read of the device manager's LIVE target set for the whole setup: a workspace switch
+    // replaces it, and every target this run resolves must come from the same set.
+    val appTargets = deviceManager.availableAppTargets
+
     // Resolve templates up front so device selection and execution read the same trail content.
     // Unconditional: bare submissions (no trailFilePath) resolve against the daemon's environment;
     // CLI-delegated ones arrive pre-resolved so this is a no-op — see [resolveSubmittedTrailYaml].
     val resolvedYaml = resolveSubmittedTrailYaml(yamlContent, request.trailFilePath)
+    // Preserve the immutable source permalink across both CLI/daemon request shapes. Older
+    // callers may put it on the fully-resolved request, while raw CLI requests carry it beside
+    // the trail path.
+    val trailSourceUrl = request.trailSourceUrl ?: request.runYamlRequest?.trailSourceUrl
 
     // Resolve driver type from request or trail config
     val trailConfig = try {
@@ -239,7 +243,10 @@ abstract class TrailblazeDesktopApp(
     // submissions too (DaemonClient's RunYamlRequest overload — the CLI's file-run delegate
     // uses raw yamlContent mode instead and pre-resolves); for a caller that did pre-resolve,
     // the copy is byte-identical.
-    val resolvedRunRequest = request.runYamlRequest?.copy(yaml = resolvedYaml)
+    val resolvedRunRequest = request.runYamlRequest?.copy(
+      yaml = resolvedYaml,
+      trailSourceUrl = trailSourceUrl,
+    )
     val targetDevice = if (resolvedRunRequest != null) {
       // Fully resolved mode — find the device matching the request's device ID
       val devices = deviceManager.loadDevicesSuspend(applyDriverFilter = false)
@@ -305,12 +312,10 @@ abstract class TrailblazeDesktopApp(
     val effectiveUseRecordedSteps = request.useRecordedSteps
       ?: TrailblazeYaml().hasRecordedSteps(resolvedYaml)
 
-    // Honor the CLI's --self-heal override when provided; fall back to the daemon's
-    // persisted `trailblaze config self-heal` setting; otherwise stay opt-out.
-    val effectiveSelfHeal =
-      request.selfHeal
-        ?: xyz.block.trailblaze.cli.CliConfigHelper.readConfig()?.selfHealEnabled
-        ?: false
+    // request.selfHeal is the client's --self-heal flag or TRAILBLAZE_SELF_HEAL_ENABLED (this
+    // daemon never sees the client's env); only when both are unset does the persisted
+    // `trailblaze config self-heal` decide.
+    val effectiveSelfHeal = xyz.block.trailblaze.cli.resolveSelfHeal(request.selfHeal)
 
     // Pin a SessionId per delegated trail run so the post-completion status check
     // can target THIS run's session. See SessionId.pinnedFor for the parallel-safety
@@ -321,6 +326,7 @@ abstract class TrailblazeDesktopApp(
       testName = testName,
       yaml = resolvedYaml,
       trailFilePath = request.trailFilePath,
+      trailSourceUrl = trailSourceUrl,
       targetAppName = trailConfig?.target,
       useRecordedSteps = effectiveUseRecordedSteps,
       trailblazeDeviceId = targetDevice.trailblazeDeviceId,
@@ -398,10 +404,10 @@ abstract class TrailblazeDesktopApp(
     val resolvedTargetTestApp = resolveRunTargetApp(
       configTarget = trailConfig?.target,
       callerWorkspaceDir = request.callerWorkspaceDir,
-      // The device manager's LIVE set, not `desktopAppConfig.availableAppTargets` (the frozen
-      // startup seed) — a workspace switch reloads the former, so reading the seed here would
-      // reject a target the picker is already offering.
-      findTargetById = { deviceManager.availableAppTargets.findById(it) },
+      // The device manager's LIVE set (read once above), not `desktopAppConfig.availableAppTargets`
+      // (the frozen startup seed) — a workspace switch reloads the former, so reading the seed here
+      // would reject a target the picker is already offering.
+      findTargetById = { appTargets.findById(it) },
       resolveForCallerCwd = { deviceManager.getCurrentSelectedTargetAppForCallerCwd(it) },
       onDeclaredTargetUnresolved = { declared, fallback ->
         val message = unresolvedDeclaredTargetWarning(declared, fallback)
@@ -412,6 +418,13 @@ abstract class TrailblazeDesktopApp(
       },
     )
 
+    // The caller's own trailmaps win over every other copy: refuse rather than run this target from
+    // the bundled copy or another checkout's.
+    cliRunShadowedTrailmapsResponse(request.callerWorkspaceDir, resolvedTargetTestApp, request.callerConfigDir)?.let {
+      Console.error(it.error.orEmpty())
+      return@withContext it
+    }
+
     val params = DesktopAppRunYamlParams(
       forceStopTargetApp = request.forceStopTargetApp,
       runYamlRequest = runYamlRequest,
@@ -419,8 +432,15 @@ abstract class TrailblazeDesktopApp(
       unresolvedDeclaredTarget = unresolvedDeclaredTarget,
       // A multi-device configuration's per-device `target:` override resolves against the same
       // LIVE registry as the session target above. Unlike `config.target`, an unresolved id here
-      // is a hard error rather than a fallback — see [DesktopAppRunYamlParams.findTargetById].
-      findTargetById = { deviceManager.availableAppTargets.findById(it) },
+      // is a hard error rather than a fallback — see [DesktopAppRunYamlParams.findTargetById] — and
+      // so is one the caller's workspace has its own copy of.
+      findTargetById = { id ->
+        appTargets.findById(id)?.also { target ->
+          shadowedTrailmapsRefusal(request.callerWorkspaceDir, target, request.callerConfigDir)?.let {
+            throw TrailblazeException(it)
+          }
+        }
+      },
       sessionStartAdvisories = sessionStartAdvisories,
       noLogging = request.noLogging,
       captureVideo = request.captureVideo,

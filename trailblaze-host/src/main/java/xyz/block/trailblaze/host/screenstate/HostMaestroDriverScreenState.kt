@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.host.screenstate
 
+import kotlinx.coroutines.CancellationException
 import maestro.DeviceInfo
 import maestro.Driver
 import maestro.device.Platform
@@ -53,7 +54,18 @@ class HostMaestroDriverScreenState(
    * it already had.
    */
   private val trailblazeDeviceId: TrailblazeDeviceId? = null,
-) : ScreenState {
+  /**
+   * Driver-migration side capture, or null when dual-tree capture is off.
+   *
+   * Invoked inline and blocking, on this same thread, immediately after the primary tree read —
+   * that is the point: a migration hit-tests a coordinate from one tree against the other, so the
+   * two must describe the same instant, and anything that hands the read to another thread or
+   * defers it past the screenshot breaks that. Blocking here is free: every caller is already off
+   * the main flow (the runner's `runBlocking`, or the logging driver's own blocking provider), and
+   * the `axe` subprocess this normally wraps blocks either way.
+   */
+  secondaryTreeCapture: (() -> SecondaryTreeResult)? = null,
+) : ScreenState, SecondaryTreeCarrier {
 
   private val deviceInfo: DeviceInfo = maestroDriver.deviceInfo()
   override val deviceWidth: Int = deviceInfo.widthGrid
@@ -71,17 +83,27 @@ class HostMaestroDriverScreenState(
    * "com.example.myapp"). The iOS tree has a 0x0 container as its root with the application
    * node as its first child, so we check the root itself first and then `root[0]`.
    *
-   * Null for Android devices (which surface the foreground package via other means).
+   * Null off iOS: the host drives no other platform through Maestro.
    */
   private var foregroundAppId: String? = null
 
+  // These run in declaration order, BEFORE the init block below — that ordering is the
+  // whole point. A migration compares the two trees element for element, so the secondary tree
+  // has to be read in the same instant as the primary one: after the driver tree and before the
+  // screenshot (200-500 ms) or any stream-frame wait gives the screen a chance to change.
+  // Single-fetch: Maestro's XCTest accessibility snapshot is atomic — no settling needed.
+  // The XCTest runner returns a point-in-time snapshot of the accessibility tree; it won't
+  // be "half-updated." If the screen is mid-animation, the agent will re-capture after its
+  // next action anyway.
+  private val rawTree: TreeNode = maestroDriver.contentDescriptor(false)
+  override val treeCapturedAtHostMs: Long = System.currentTimeMillis()
+  private val secondaryTreeResult: SecondaryTreeResult = runSecondaryCapture(secondaryTreeCapture)
+  override val secondaryTreeCaptureRan: Boolean = secondaryTreeCapture != null
+  override val driverMigrationTreeNode: TrailblazeNode? get() = secondaryTreeResult.tree
+  override val secondaryTreeFailure: String? get() = secondaryTreeResult.failureReason
+
   init {
-    // Single-fetch: Maestro's XCTest accessibility snapshot is atomic — no settling needed.
-    // The XCTest runner returns a point-in-time snapshot of the accessibility tree; it won't
-    // be "half-updated." If the screen is mid-animation, the agent will re-capture after its
-    // next action anyway.
     Console.log("[ScreenState] maestroDriver class: ${maestroDriver.javaClass.simpleName}")
-    val rawTree = maestroDriver.contentDescriptor(false)
     Console.log("[ScreenState] rawTree children: ${rawTree.children.size}")
     // Keep unfiltered tree for iOS orientation detection (status bar has 0x0 bounds
     // and gets stripped by filterOutOfBounds)
@@ -96,11 +118,7 @@ class HostMaestroDriverScreenState(
     // is shared via `toTrailblazeNode(platform)`; foreground-app-id extraction stays inline
     // here because the recording path doesn't need it.
     stableTrailblazeNodeTree = rawTree.toTrailblazeNode(deviceInfo.platform)
-    foregroundAppId = when (deviceInfo.platform) {
-      Platform.IOS -> extractIosBundleId(rawTree)
-      Platform.ANDROID -> extractAndroidPackageId(rawTree)
-      else -> null
-    }
+    foregroundAppId = if (deviceInfo.platform == Platform.IOS) extractIosBundleId(rawTree) else null
 
     // Publish the orientation for the session recorder. Deliberately outside the screenshot branch
     // below: this is read from the view hierarchy, which fast mode still captures, and a recording
@@ -144,7 +162,6 @@ class HostMaestroDriverScreenState(
     val tree = stableTrailblazeNodeTree ?: return null
     return when (deviceInfo.platform) {
       Platform.IOS -> CompactScreenElements.buildForIos(tree, details, screenHeight = deviceHeight, screenWidth = deviceWidth)
-      Platform.ANDROID -> CompactScreenElements.buildForAndroid(tree, details, screenHeight = deviceHeight, screenWidth = deviceWidth)
       else -> null
     }
   }
@@ -288,6 +305,23 @@ class HostMaestroDriverScreenState(
 
   companion object {
     /**
+     * Runs the side capture defensively. A migration aid must never be able to take down the
+     * capture it rides along on, so ANY throw — including an [Error] such as a stack overflow out
+     * of a deep tree walk — degrades to "no secondary tree" with the cause recorded. Cancellation
+     * is the one thing that still propagates, so an aborted trail unwinds.
+     */
+    private fun runSecondaryCapture(capture: (() -> SecondaryTreeResult)?): SecondaryTreeResult {
+      if (capture == null) return SecondaryTreeResult(null, null)
+      return try {
+        capture()
+      } catch (e: CancellationException) {
+        throw e
+      } catch (t: Throwable) {
+        SecondaryTreeResult.failed(t.message ?: t::class.simpleName ?: "capture threw")
+      }
+    }
+
+    /**
      * The "full hierarchy" detail set: bypass the meaningful-element filter ([SnapshotDetail.ALL_ELEMENTS])
      * AND include off-screen elements ([SnapshotDetail.OFFSCREEN]). Used to widen [trailblazeNodeTree]'s
      * ref map and reused by the detail-aware [viewHierarchyTextRepresentation] — kept in one place so
@@ -414,28 +448,6 @@ class HostMaestroDriverScreenState(
       return candidates.firstOrNull { id ->
         !id.isNullOrBlank() && id.contains('.') && !id.contains(':')
       }
-    }
-
-    /**
-     * Extracts the Android foreground app package from the raw Maestro tree.
-     *
-     * UiAutomator resource IDs use the format `"com.example.app:id/view_name"`.
-     * We walk the tree looking for the first resource-id with a package prefix
-     * (contains both '.' and ':') and extract the package portion.
-     */
-    internal fun extractAndroidPackageId(root: TreeNode): String? {
-      fun findPackage(node: TreeNode): String? {
-        val resId = node.attributes["resource-id"]
-        if (!resId.isNullOrBlank() && ':' in resId && '.' in resId) {
-          return resId.substringBefore(':')
-        }
-        for (child in node.children) {
-          val result = findPackage(child)
-          if (result != null) return result
-        }
-        return null
-      }
-      return findPackage(root)
     }
 
     internal sealed class StatusBarPosition {

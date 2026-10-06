@@ -1,10 +1,13 @@
 package xyz.block.trailblaze.toolcalls
 
+import ai.koog.agents.core.tools.ToolParameterType
 import ai.koog.agents.core.tools.annotations.LLMDescription
+import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonObject
 import org.junit.Test
 import xyz.block.trailblaze.toolcalls.commands.TapOnByElementSelector
 
@@ -83,6 +86,30 @@ class SurfaceFlagFilteringTest {
     // letting the exception propagate to `PerTrailmapClientDtsEmitter`'s `mapNotNull`, which
     // would crash codegen for the entire trailmap.
     assertNull(UnsupportedParamShapeTool::class.toScriptedToolDescriptor())
+  }
+
+  @Serializable
+  private data class FreeFormStep(
+    @Suppress("unused") val operation: String,
+    @Suppress("unused") val args: JsonObject = JsonObject(emptyMap()),
+  )
+
+  @Serializable
+  @TrailblazeToolClass(name = "test_free_form_json_param", surfaceToLlm = false)
+  @LLMDescription("Test tool whose nested param carries a free-form JSON object.")
+  private class FreeFormJsonParamTool(
+    @Suppress("unused") val steps: List<FreeFormStep> = emptyList(),
+  ) : TrailblazeTool
+
+  @Test
+  fun `toScriptedToolDescriptor lowers a JsonObject field to an object that accepts any keys`() {
+    // A free-form JSON payload used to make asToolType throw, which dropped the whole tool from
+    // the per-trailmap client.d.ts, so a scripted tool composing it failed tsc.
+    val descriptor = assertNotNull(FreeFormJsonParamTool::class.toScriptedToolDescriptor())
+    val steps = descriptor.optionalParameters.single { it.name == "steps" }.type as ToolParameterType.List
+    val step = steps.itemsType as ToolParameterType.Object
+    val args = step.properties.single { it.name == "args" }.type
+    assertEquals(ToolParameterType.Object(properties = emptyList(), additionalProperties = true), args)
   }
 
   @TrailblazeToolClass(name = "test_no_llm_description")

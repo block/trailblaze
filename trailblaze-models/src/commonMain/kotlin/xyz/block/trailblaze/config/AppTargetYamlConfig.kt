@@ -180,6 +180,14 @@ data class PlatformConfig(
    * show the right icon per device row instead of one icon for the whole target.
    */
   val icon: String? = null,
+  /**
+   * Tools the LLM is always shown, even on a turn where the decision engine hides the tools it
+   * judges the move won't need (`TRAILBLAZE_DECISION_MOVES_HIDE_TOOLS`). For an app's own tools a
+   * step needs often, such as one that replaces a general tool this platform excludes.
+   *
+   * Appended at the end so existing positional component accessors stay stable.
+   */
+  @SerialName("always_shown_tools") val alwaysShownTools: List<String>? = null,
 ) {
 
   /**
@@ -315,7 +323,7 @@ data class InlineScriptToolConfig(
  * Bridges YAML maps into [JsonObject] so target-level inline tool declarations can author
  * `inputSchema:` in natural YAML without dropping to a quoted JSON string.
  */
-internal object JsonObjectYamlSerializer : KSerializer<JsonObject> {
+object JsonObjectYamlSerializer : KSerializer<JsonObject> {
   private val fallback = MapSerializer(String.serializer(), JsonElementSerializer)
 
   override val descriptor: SerialDescriptor = JsonObject.serializer().descriptor

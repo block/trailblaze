@@ -13,18 +13,15 @@ import xyz.block.trailblaze.yaml.serializers.CaseInsensitiveEnumSerializer
 @TrailblazeToolClass(name = CoreTools.OBJECTIVE_STATUS, isRecordable = false)
 @LLMDescription(
   """
-Use this tool to report the status of the current objective.
-First determine if all of the objective's goals have been met, and if they have not return an 'in_progress' status.
-If all of the goals have been met successfully, return a 'completed' status.
-If you have tried multiple options to complete the objective and are still unsuccessful, then return a 'failed' status.
-Returning 'failed' should be a last resort once all options have been tested.
-      """,
+Report the current objective's status: 'in_progress' until all its goals are met, 'completed' once
+they are, 'failed' only as a last resort after trying multiple options.
+""",
 )
 data class ObjectiveStatusTrailblazeTool(
-  @param:LLMDescription("A message explaining what was accomplished or the current progress for this objective")
+  @param:LLMDescription("What was accomplished or the progress so far.")
   val explanation: String,
 
-  @param:LLMDescription("Status of this objective: 'IN_PROGRESS' (still working on it), 'COMPLETED' (fully done), or 'FAILED'")
+  @param:LLMDescription("IN_PROGRESS, COMPLETED, or FAILED.")
   val status: Status,
 ) : TrailblazeTool
 

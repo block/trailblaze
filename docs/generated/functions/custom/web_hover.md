@@ -4,8 +4,7 @@
 
 # `web_hover`
 
-Hover over a web element identified by its element ID, ARIA descriptor, or CSS selector.
-Useful for triggering hover states, tooltips, or dropdown menus.
+Hover over a web element, e.g. to open a tooltip or hover menu.
 
 ## Source
 
@@ -23,7 +22,7 @@ Useful for triggering hover states, tooltips, or dropdown menus.
 ### Optional parameters
 
 - `ref` — `String`
-  Element ID (e.g., 'e5'), ARIA descriptor (e.g., 'link "About"'), or CSS selector with css= prefix (e.g., 'css=#my-id').
+  Element ID ('e5'), ARIA descriptor ('link "About"'), or 'css=<selector>'.
 - `reasoning` — `String`
 
 ## Output

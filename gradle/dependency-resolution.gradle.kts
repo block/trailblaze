@@ -40,13 +40,12 @@ subprojects {
     }
   }
 
-  // Pin Skiko to the catalog (Compose Multiplatform) version. Coil transitively pulls in an
-  // older skiko built against a different Compose; force it back so the two agree.
-  plugins.withId("org.jetbrains.compose") {
-    configurations.all {
-      resolutionStrategy {
-        force("org.jetbrains.skiko:skiko:$skikoVersion")
-      }
+  // Pin Skiko to the catalog version, which must match what Compose Multiplatform expects. Skiko
+  // does the WebP screenshot encoding in modules that never apply the Compose plugin (the CLI, the
+  // daemon), so the pin is not gated on that plugin: gated, it would silently stop holding there.
+  configurations.all {
+    resolutionStrategy {
+      force("org.jetbrains.skiko:skiko:$skikoVersion")
     }
   }
 

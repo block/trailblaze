@@ -159,6 +159,34 @@ class GenerateTestResultsCliCommandTest {
   }
 
   @Test
+  fun `source URL is carried into the per-session result`() {
+    val logsDir = Files.createTempDirectory("trailblaze-report-source-url-test").toFile()
+    val outputFile = File(logsDir, "results.json")
+    val sourceUrl =
+      "https://github.com/example/trails/blob/0123456789abcdef0123456789abcdef01234567/trails/checkout.trail.yaml"
+    try {
+      writePassedSession(
+        logsDir = logsDir,
+        sessionId = SessionId("source-url-session"),
+        deviceInfo = webDeviceInfo(),
+        trailFilePath = "trails/checkout.trail.yaml",
+        trailSourceUrl = sourceUrl,
+      )
+
+      captureStdout {
+        GenerateTestResultsCliCommand().main(
+          arrayOf(logsDir.absolutePath, outputFile.absolutePath, "--output-format", "JSON"),
+        )
+      }
+
+      val report = json.decodeFromString<CiSummaryReport>(outputFile.readText())
+      assertEquals(sourceUrl, report.results.single().trail_source_url)
+    } finally {
+      logsDir.deleteRecursively()
+    }
+  }
+
+  @Test
   fun `config_id is read from the environment so every leg of a config reports the same value`() {
     // CONFIG_ID and DEVICE_KEY are separate env vars, so every leg of a config reports the same
     // config_id and one predicate gathers them all.
@@ -2901,6 +2929,7 @@ class GenerateTestResultsCliCommandTest {
     sessionId: SessionId,
     deviceInfo: TrailblazeDeviceInfo,
     trailFilePath: String,
+    trailSourceUrl: String? = null,
   ) {
     writeLog(
       logsDir = logsDir,
@@ -2916,6 +2945,7 @@ class GenerateTestResultsCliCommandTest {
           trailblazeDeviceInfo = deviceInfo,
           trailblazeDeviceId = deviceInfo.trailblazeDeviceId,
           rawYaml = null,
+          trailSourceUrl = trailSourceUrl,
         ),
         session = sessionId,
         timestamp = Instant.parse("2026-08-26T10:00:00Z"),

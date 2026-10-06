@@ -1,45 +1,29 @@
 package xyz.block.trailblaze.ui
 
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.withContext
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.SessionId
-import xyz.block.trailblaze.logs.model.SessionInfo
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.DrainSessionRequest
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.OnDeviceRpcClient
 import xyz.block.trailblaze.model.TrailblazeOnDeviceInstrumentationTarget
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.transport.AndroidWireTransport
-import xyz.block.trailblaze.ui.tabs.session.LiveSessionDataProvider
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.util.HostAndroidDeviceConnectUtils
 
 
-/**
- * JVM adapter that makes LogsRepo compatible with LiveSessionDataProvider.
- * Now much simpler - just exposes the reactive Flows directly!
- */
+/** Stops a running session on behalf of the Trail Runner Stop button. */
 class JvmLiveSessionDataProvider(
   private val logsRepo: LogsRepo,
   private val deviceManager: TrailblazeDeviceManager,
-) : LiveSessionDataProvider {
+) {
 
-  // Just expose LogsRepo's reactive SessionInfo flow directly!
-  // LogsRepo handles watching for session changes and status updates.
-  override fun getSessionsFlow(): StateFlow<List<SessionInfo>> {
-    return logsRepo.sessionInfoFlow
-  }
-
-  override fun getSessionLogsFlow(sessionId: SessionId): StateFlow<List<TrailblazeLog>> {
-    return logsRepo.getSessionLogsFlow(sessionId)
-  }
-
-  override suspend fun cancelSession(sessionId: SessionId): Boolean {
+  suspend fun cancelSession(sessionId: SessionId): Boolean {
     return try {
       // Get session info (much faster than loading all logs). The cached flow can lag a freshly
       // started run (its logs are on disk before the watcher refreshes the cache), so fall back to
@@ -172,10 +156,6 @@ class JvmLiveSessionDataProvider(
       e.printStackTrace()
       // Don't fail cancellation if log write fails
     }
-  }
-
-  override suspend fun getLogsForSession(sessionId: SessionId): List<TrailblazeLog> {
-    return logsRepo.getLogsForSession(sessionId)
   }
 
   companion object {

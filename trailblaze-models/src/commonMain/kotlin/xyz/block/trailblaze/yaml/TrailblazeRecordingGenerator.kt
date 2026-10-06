@@ -333,11 +333,12 @@ fun List<TrailblazeLog>.generateRecordedTrailItems(
           val objectiveComplete = logs[completeIndex] as ObjectiveCompleteLog
 
           // Collect the recordable TrailblazeToolLog entries assigned to this window (by span
-          // overlap, keyed on the window's start index — see [assignToolLogsToWindows]).
+          // overlap, keyed on the window's start index — see [assignToolLogsToWindows]). A call that
+          // failed live is never recorded: replaying it fails deterministically, even when the agent
+          // recovered with a different call and the step passed.
           val toolLogsInWindow = toolIndicesByWindow[currentLogIndex].orEmpty()
             .map { logs[it] as TrailblazeLog.TrailblazeToolLog }
-            .filter { it.isRecordable }
-            .filter { !successfulObjectivesOnly || it.successful }
+            .filter { it.isRecordable && it.successful }
           val selectedToolLogs = toolLogsInWindow
             .filter { it.isTopLevelToolCall }
             .ifEmpty { dropNestedToolCalls(toolLogsInWindow, deviceOffsets) }
@@ -423,7 +424,7 @@ fun List<TrailblazeLog>.generateRecordedTrailItems(
           // asynchronously and land outside the objective window in the sorted log list. A tool
           // log that IS assigned to a window is consumed there and must not be re-emitted here.
           val consumedByWindow = currentLogIndex in toolWindowAssignment
-          if (!consumedByWindow && currentLog.isRecordable && (!successfulObjectivesOnly || currentLog.successful)) {
+          if (!consumedByWindow && currentLog.isRecordable && currentLog.successful) {
             val wrapper = wrapTrailblazeTool(currentLog.authoredTrailblazeTool, currentLog.toolName)
             val candidateFingerprint = if (currentLog.isVerification) {
               fingerprintForDedup(wrapper, trailblazeYaml)
@@ -603,8 +604,8 @@ private fun samePrompt(left: PromptStep, right: PromptStep): Boolean = when {
  * multiple windows for the same step 0 — the failed recorded attempt closes its window before AI
  * recovery opens its own start/complete pair — and the strict parser allows exactly one trailhead
  * item per trail. Merge semantics: first window's step text/maxRetries (identical across windows),
- * tools concatenated in execution order (the same information-preserving choice as keeping failed
- * tools in recordings), null-preserving so "not recorded" (null) is never manufactured into a
+ * tools concatenated in execution order (failed calls were already dropped when the window was
+ * collected), null-preserving so "not recorded" (null) is never manufactured into a
  * declared-empty list. Assumes trailhead windows precede all prompt windows (step 0 runs — and
  * heals — before step 1), so the merged item keeps its parser-legal position before any prompts.
  */

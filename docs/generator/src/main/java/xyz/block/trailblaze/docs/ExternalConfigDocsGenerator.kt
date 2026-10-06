@@ -249,6 +249,7 @@ class ExternalConfigDocsGenerator(
         appendLine("| `platforms.<platform>.tool_sets` | Toolset ids enabled for that platform section. |")
         appendLine("| `platforms.<platform>.tools` | Extra tool names added directly for that platform section. |")
         appendLine("| `platforms.<platform>.excluded_tools` | Tool names explicitly removed for that platform section after `tool_sets` and `tools` are merged in. Use when a target ships its own implementation of a default tool (e.g. a `swipe` replacement that needs target-specific gestures) and wants the LLM to see only the custom variant. Names match the `@TrailblazeToolClass` registration string. |")
+        appendLine("| `platforms.<platform>.always_shown_tools` | Tool names the LLM is always shown on that platform, even on a turn where the decision engine hides the tools it judges the move won't need (`TRAILBLAZE_DECISION_MOVES_HIDE_TOOLS`). Use for an app's own tools a step needs often, such as one that replaces an excluded default tool. |")
         appendLine("| `platforms.<platform>.drivers` | Narrow the section to specific drivers instead of the platform shorthand. |")
         appendLine("| `platforms.<platform>.min_build_version` | Optional minimum build gate. |")
         appendLine()

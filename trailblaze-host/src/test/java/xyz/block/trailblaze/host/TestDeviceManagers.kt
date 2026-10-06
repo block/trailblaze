@@ -7,8 +7,6 @@ import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.ui.TrailblazeAnalytics
 import xyz.block.trailblaze.ui.TrailblazeDeviceManager
 import xyz.block.trailblaze.ui.TrailblazeSettingsRepo
-import xyz.block.trailblaze.ui.composables.DefaultDeviceClassifierIconProvider
-import xyz.block.trailblaze.ui.models.AppIconProvider
 import xyz.block.trailblaze.ui.models.TrailblazeServerState.SavedTrailblazeAppConfig
 
 /**
@@ -32,8 +30,6 @@ fun minimalDeviceManager(
   defaultHostAppTarget = TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget,
   currentTrailblazeLlmModelProvider = { error("LLM not available in tests") },
   initialAppTargets = emptySet(),
-  appIconProvider = AppIconProvider.DefaultAppIconProvider,
-  deviceClassifierIconProvider = DefaultDeviceClassifierIconProvider,
   runYamlLambda = { error("YAML runner not available in tests") },
   installedAppIdsProviderBlocking = { emptySet() },
   appVersionInfoProviderBlocking = { _, _ -> null },

@@ -11,6 +11,9 @@ Entries tagged as **Decision** record significant architectural or technical cho
 
 | Date | Title | Type |
 | :--- | :--- | :--- |
+| 2026-10-04 | [Trailblaze vs Manual Testing: The Remaining Gaps](2026-10-04-trailblaze-vs-manual-testing.md) | Devlog |
+| 2026-10-04 | [Host Functions Are Not Tools](2026-10-04-host-functions-are-not-tools.md) | Decision |
+| 2026-10-02 | [One Typing Tool, Picked by Ref](2026-10-02-one-typing-tool-by-ref.md) | Decision |
 | 2026-09-30 | [Take Report Pictures from the Video](2026-09-30-video-instead-of-screenshots.md) | Decision |
 | 2026-09-29 | [What a Screenshot Costs per Capture](2026-09-29-what-a-screenshot-costs-per-capture.md) | Devlog |
 | 2026-09-29 | [Write Tools in TypeScript: a Scripted Tool Costs a Fifth of a Millisecond](2026-09-29-typescript-tools-cost-a-fifth-of-a-millisecond.md) | Decision |

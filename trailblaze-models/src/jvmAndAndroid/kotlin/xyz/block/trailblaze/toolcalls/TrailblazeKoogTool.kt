@@ -4,11 +4,14 @@ import ai.koog.agents.core.tools.Tool
 import ai.koog.agents.core.tools.ToolDescriptor
 import ai.koog.agents.core.tools.ToolParameterDescriptor
 import ai.koog.agents.core.tools.ToolParameterType
+import ai.koog.serialization.JSONObject
 import ai.koog.serialization.JSONSerializer
 import ai.koog.serialization.KSerializerTypeToken
 import ai.koog.serialization.annotations.InternalKoogSerializationApi
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.builtins.serializer
+import kotlinx.serialization.descriptors.StructureKind
+import kotlinx.serialization.descriptors.elementNames
 import kotlinx.serialization.serializer
 import kotlin.reflect.KClass
 import kotlin.reflect.full.starProjectedType
@@ -42,10 +45,36 @@ open class TrailblazeKoogTool<T : TrailblazeTool>(
     executeTool = executeTool,
   )
 
+  /**
+   * True when the tool doesn't declare `reasoning`. The system prompt asks the LLM to fill
+   * `reasoning` on every call, but most tools don't declare it, and the strict decoder rejects the
+   * extra key, so the call is lost and the turn spent. Declared means either in the advertised
+   * [descriptor] (scripted and subprocess tools, whose serializers carry no fields) or as a field
+   * of the args class. YAML-backed tools decode through a map and accept any key, so they never
+   * need this.
+   */
+  private val dropsReasoning: Boolean =
+    REASONING_KEY !in (descriptor.requiredParameters + descriptor.optionalParameters).map { it.name } &&
+      argsSerializer.descriptor.let { serial ->
+        (serial.kind == StructureKind.CLASS || serial.kind == StructureKind.OBJECT) &&
+          REASONING_KEY !in serial.elementNames
+      }
+
+  override fun decodeArgs(rawArgs: JSONObject, serializer: JSONSerializer): T {
+    val args = if (dropsReasoning && REASONING_KEY in rawArgs.entries) {
+      JSONObject(rawArgs.entries - REASONING_KEY)
+    } else {
+      rawArgs
+    }
+    return super.decodeArgs(args, serializer)
+  }
+
   override suspend fun execute(args: T): String = executeTool(args)
   override fun encodeResultToString(result: String, serializer: JSONSerializer): String = result
 
   companion object {
+    private const val REASONING_KEY = "reasoning"
+
     fun ToolParameterDescriptor.toTrailblazeToolParameterDescriptor(): TrailblazeToolParameterDescriptor =
       TrailblazeToolParameterDescriptor(
         name = this.name,

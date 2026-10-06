@@ -111,6 +111,11 @@ dependencies {
   // Coroutines are compileOnly above (the consumer harness owns the version); the JVM unit tests
   // for TestThreadWorkQueue need a real runtime, on the same consumer floor.
   testImplementation(consumerFloorCoroutines)
+  // Compile-only in main for the same reason. AndroidTestTargetDispatchTest implements the target
+  // interface, whose signatures name Espresso and Compose test types; Espresso is on the runtime
+  // classpath too because `isIdleTimeout` type-checks against its exception classes.
+  testImplementation("androidx.test.espresso:espresso-core:3.7.0")
+  testCompileOnly("androidx.compose.ui:ui-test-junit4:1.9.0")
   // The Compose compiler plugin (enabled for the androidTest fixture below) runs on every
   // compilation in the module and requires the runtime on each compile classpath. The unit
   // tests contain no composables, so compileOnly satisfies the plugin without shipping anything.

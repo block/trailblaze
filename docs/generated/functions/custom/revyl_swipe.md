@@ -4,7 +4,7 @@
 
 # `revyl_swipe`
 
-Swipe on the device screen in a direction (up, down, left, right). Optionally start from a specific element.
+Swipe in a direction, optionally starting from an element.
 
 ## Source
 
@@ -22,12 +22,12 @@ Swipe on the device screen in a direction (up, down, left, right). Optionally st
 ### Required parameters
 
 - `direction` — `String`
-  Swipe direction: 'up', 'down', 'left', or 'right'.
+  'up', 'down', 'left', or 'right'.
 
 ### Optional parameters
 
 - `target` — `String`
-  Optional element to start the swipe from.
+  Element to start from, in natural language.
 - `reasoning` — `String`
 
 ## Output

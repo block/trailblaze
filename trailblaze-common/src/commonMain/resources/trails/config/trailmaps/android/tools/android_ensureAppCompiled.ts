@@ -50,7 +50,9 @@ const KNOWN_COMPILER_FILTERS = [
   "speed",
   "everything-profile",
   "everything",
-];
+] as const;
+
+type CompilerFilter = (typeof KNOWN_COMPILER_FILTERS)[number];
 
 const DEXOPT_SECTION_HEADER = /^Dexopt state:\s*$/;
 /** `  [com.example.app]` — one package's entry inside `Dexopt state:`. */
@@ -175,15 +177,42 @@ export function parseDexoptState(dump: string, appId: string): DexoptEntry[] | u
   return found ? entries : undefined;
 }
 
+// Defaults live in the tool body, since a schema can't express one, so each description states its own.
 interface EnsureAppCompiledInput {
+  /**
+   * The Android package id to check (e.g. `com.example.app`). Defaults to the session's resolved
+   * target app.
+   */
   appId?: string;
-  compilerFilter?: string;
+  /**
+   * ART compiler filter for the compile, when one is needed. `verify` (the default) is the
+   * cheapest filter that stops per-launch verification and is all ART allows for a debuggable
+   * build; `speed-profile` / `speed` do more work for release builds.
+   */
+  compilerFilter?: CompilerFilter;
+  /**
+   * Recompile even when the app already has compiled artifacts — e.g. to move a release build to
+   * a different filter. Defaults to false.
+   */
   force?: boolean;
+  /** Only report the dexopt state; never compile. Defaults to false. */
   checkOnly?: boolean;
 }
 
 export const android_ensureAppCompiled = trailblaze.tool<EnsureAppCompiledInput>(
-  { supportedPlatforms: ["android"], requiresContext: true },
+  {
+    description:
+      "Reads ART's dexopt state for an Android app (`dumpsys package`) and, when the app has no compiled " +
+      "artifacts (`status=run-from-apk`), runs `pm compile` so cold starts stop verifying the whole APK " +
+      "every launch. A healthy app costs one read and nothing else. Call before the first launch of the " +
+      "app under test.",
+    supportedPlatforms: ["android"],
+    requiresContext: true,
+    // Author-named rather than agent-picked: a trail lists this as a setup step. Hiding it also keeps
+    // it off every target's advertised surface, which discovery is global over.
+    surfaceToLlm: false,
+    runtime: "inProcess",
+  },
   async (input, ctx) => {
     const appId = input.appId?.trim() || ctx.target?.resolveAppId();
     if (!appId) {
@@ -195,8 +224,9 @@ export const android_ensureAppCompiled = trailblaze.tool<EnsureAppCompiledInput>
     if (!PACKAGE_NAME.test(appId)) {
       throw new Error(`android_ensureAppCompiled: '${appId}' is not a valid Android package name.`);
     }
-    const compilerFilter = input.compilerFilter ?? DEFAULT_COMPILER_FILTER;
-    if (!KNOWN_COMPILER_FILTERS.includes(compilerFilter)) {
+    // Checked at runtime too: a trail's arguments reach the tool unvalidated.
+    const compilerFilter: string = input.compilerFilter ?? DEFAULT_COMPILER_FILTER;
+    if (!(KNOWN_COMPILER_FILTERS as readonly string[]).includes(compilerFilter)) {
       throw new Error(
         `android_ensureAppCompiled: unknown compilerFilter '${compilerFilter}'. Known filters: ` +
           KNOWN_COMPILER_FILTERS.join(", "),

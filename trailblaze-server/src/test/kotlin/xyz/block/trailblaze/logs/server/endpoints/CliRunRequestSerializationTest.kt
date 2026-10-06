@@ -36,6 +36,24 @@ class CliRunRequestSerializationTest {
   }
 
   @Test
+  fun `trail source URL round-trips through JSON`() {
+    val sourceUrl =
+      "https://github.com/example/trails/blob/0123456789abcdef0123456789abcdef01234567/trails/checkout.trail.yaml"
+    val request = CliRunRequest(
+      yamlContent = "- step: sign in",
+      trailFilePath = "/workspace/trails/checkout.trail.yaml",
+      trailSourceUrl = sourceUrl,
+    )
+
+    val decoded = json.decodeFromString(
+      CliRunRequest.serializer(),
+      json.encodeToString(CliRunRequest.serializer(), request),
+    )
+
+    assertEquals(sourceUrl, decoded.trailSourceUrl)
+  }
+
+  @Test
   fun `payload from an older CLI without the field decodes to null`() {
     // An older CLI shim that predates the field sends no callerWorkspaceDir key at all; the daemon
     // must default it to null (which its resolver maps to the daemon-anchored fallback).
@@ -44,6 +62,15 @@ class CliRunRequestSerializationTest {
     val decoded = json.decodeFromString(CliRunRequest.serializer(), legacyPayload)
 
     assertNull(decoded.callerWorkspaceDir)
+  }
+
+  @Test
+  fun `payload from an older CLI without a trail source URL decodes to null`() {
+    val legacyPayload = """{"yamlContent":"- step: sign in","trailFilePath":"/workspace/trails/checkout.trail.yaml"}"""
+
+    val decoded = json.decodeFromString(CliRunRequest.serializer(), legacyPayload)
+
+    assertNull(decoded.trailSourceUrl)
   }
 
   @Test

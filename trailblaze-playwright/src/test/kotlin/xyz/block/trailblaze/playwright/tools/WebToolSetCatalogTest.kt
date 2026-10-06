@@ -29,6 +29,7 @@ class WebToolSetCatalogTest {
       PlaywrightNativeTypeTool::class,
       PlaywrightNativePressKeyTool::class,
       PlaywrightNativeHoverTool::class,
+      PlaywrightNativeDragTool::class,
       PlaywrightNativeSelectOptionTool::class,
       PlaywrightNativeWaitTool::class,
       PlaywrightNativeScrollTool::class,

@@ -8,8 +8,10 @@ import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.reflect.KClass
 import kotlinx.coroutines.runBlocking
+import xyz.block.trailblaze.bundle.HostFunctionDts
 import xyz.block.trailblaze.bundle.ToolFrameworkMetadata
 import xyz.block.trailblaze.bundle.WorkspaceClientDtsGenerator
+import xyz.block.trailblaze.codegen.SerialDescriptorTsCodegen
 import xyz.block.trailblaze.config.AppTargetYamlConfig
 import xyz.block.trailblaze.config.InlineScriptToolConfig
 import xyz.block.trailblaze.config.PlatformConfig
@@ -20,7 +22,6 @@ import xyz.block.trailblaze.config.project.TrailmapSource
 import xyz.block.trailblaze.config.project.ResolvedTrailmap
 import xyz.block.trailblaze.config.project.TrailblazeTrailmapManifest
 import xyz.block.trailblaze.config.project.TrailmapTargetConfig
-import xyz.block.trailblaze.config.project.toInlineScriptToolConfigs
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.logs.client.TrailblazeSerializationInitializer
 import xyz.block.trailblaze.scripting.ScriptedToolDefinition
@@ -28,6 +29,7 @@ import xyz.block.trailblaze.scripting.ScriptedToolDefinitionAnalyzer
 import xyz.block.trailblaze.util.BunBinaryResolver
 import xyz.block.trailblaze.scripting.ScriptedToolDefinitionCache
 import xyz.block.trailblaze.scripting.ScriptedToolDefinitionException
+import xyz.block.trailblaze.scripting.host.TrailblazeHostFunctionRegistry
 import xyz.block.trailblaze.toolcalls.HandCuratedRecordableTools
 import xyz.block.trailblaze.toolcalls.SelectorParamTs
 import xyz.block.trailblaze.toolcalls.ToolName
@@ -123,6 +125,7 @@ object PerTrailmapClientDtsEmitter {
      * one named argument and makes "no workspace" a decision rather than an omission.
      */
     workspaceRoot: Path?,
+    hostFunctions: TrailblazeHostFunctionRegistry = TrailblazeHostFunctionRegistry.bundled,
   ): List<Path> {
     if (resolvedTrailmaps.isEmpty()) return emptyList()
     val trailmapsById = resolvedTrailmaps.associateBy { it.manifest.id }
@@ -185,6 +188,7 @@ object PerTrailmapClientDtsEmitter {
         typedToolOverrides = typedOverrides,
         frameworkMetadataByName = kotlinTools.frameworkMetadataByName,
         extraParamsByToolName = kotlinTools.selectorParamsByName,
+        hostFunctions = hostFunctionDtsFor(dependencyClosureIds(trailmap, trailmapsById), hostFunctions),
       )
       // Emit the machine-readable arg-type sidecar next to the .d.ts so the trail-recording
       // validator can coerce recorded args to their declared types (see
@@ -384,6 +388,58 @@ object PerTrailmapClientDtsEmitter {
       trailmap.manifest.id to defs
     }
   }
+
+  /** [trailmap]'s id plus every id reachable through `dependencies:`, resolved or not. */
+  private fun dependencyClosureIds(
+    trailmap: ResolvedTrailmap,
+    trailmapsById: Map<String, ResolvedTrailmap>,
+  ): Set<String> {
+    val closure = linkedSetOf(trailmap.manifest.id)
+    val frontier = ArrayDeque(trailmap.manifest.dependencies)
+    while (frontier.isNotEmpty()) {
+      val depId = frontier.removeFirst()
+      if (!closure.add(depId)) continue
+      trailmapsById[depId]?.manifest?.dependencies?.let(frontier::addAll)
+    }
+    return closure
+  }
+
+  /**
+   * The `ctx.host.<name>` bindings for scripts in a trailmap whose dependency closure is
+   * [closureIds]: every host function a trailmap in the closure registers, typed from its Kotlin
+   * args and result classes. Non-fatal — a failure drops the host bindings, never the tool surface.
+   */
+  private fun hostFunctionDtsFor(
+    closureIds: Set<String>,
+    registry: TrailblazeHostFunctionRegistry,
+  ): HostFunctionDts = try {
+    val functions = registry.all.values.filter { it.trailmapId in closureIds }
+    if (functions.isEmpty()) {
+      HostFunctionDts.NONE
+    } else {
+      val roots = functions.flatMap { listOf(it.argsSerializer.descriptor, it.resultSerializer.descriptor) }
+      val generated = SerialDescriptorTsCodegen.generateWithRootTypes(roots, header = "")
+      HostFunctionDts(
+        entries = functions.mapIndexed { index, function ->
+          HostFunctionDts.Entry(
+            name = function.name,
+            description = function.annotation.description,
+            argsTsType = generated.rootTypes[index * 2],
+            resultTsType = generated.rootTypes[index * 2 + 1],
+          )
+        },
+        typeDeclarations = generated.source,
+        declaredTypeNames = DECLARED_TS_TYPE.findAll(generated.source).map { it.groupValues[1] }.toSet(),
+      )
+    }
+  } catch (e: Exception) {
+    Console.error(
+      "[PerTrailmapClientDtsEmitter] skipped ctx.host bindings: ${e::class.simpleName}: ${e.message}",
+    )
+    HostFunctionDts.NONE
+  }
+
+  private val DECLARED_TS_TYPE = Regex("""^export (?:interface|type) ([A-Za-z_$][A-Za-z0-9_$]*)""", RegexOption.MULTILINE)
 
   /**
    * Build the typed-tool override map for [trailmap]'s emitted `trailblaze-client.d.ts`. The map is the
@@ -803,7 +859,7 @@ object PerTrailmapClientDtsEmitter {
    * and a web-only trailmap with any toolset would gain mobile-only names its Playwright session
    * never registers (accepting recordings replay would reject).
    *
-   * Names resolve to configs via [ScriptedToolNameDiscoverer] → [toInlineScriptToolConfigs], the
+   * Names resolve to configs via [ScriptedToolNameDiscoverer.DiscoveredDescriptor.toolConfigs], the
    * same descriptor bridge the launchers dispatch through. A name with no discoverable descriptor
    * is skipped with one warning per emit (see [warnedMissingNames]); the runtime-mode filter is
    * deliberately NOT applied — subprocess-runtime tools are still recordable on the host, so the
@@ -837,7 +893,7 @@ object PerTrailmapClientDtsEmitter {
         }
         return@mapNotNull null
       }
-      val config = discovered.descriptor.toInlineScriptToolConfigs().firstOrNull { it.name == name.toolName }
+      val config = discovered.toolConfigs().firstOrNull { it.name == name.toolName }
       if (config == null && warnedMissingNames.add(name)) {
         Console.error(
           "[PerTrailmapClientDtsEmitter] descriptor '${discovered.relPath}' produced no tool " +

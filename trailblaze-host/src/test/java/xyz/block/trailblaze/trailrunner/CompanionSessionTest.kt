@@ -181,7 +181,7 @@ class CompanionSessionTest {
     // Ended, not CANCELLED-with-extra-terminal-events: Stop routes through the disconnect path.
     assertEquals(ExternalAgentSessionStatus.COMPLETED, ExternalAgentSupervisor.run(run.id)?.status)
     val ended = ExternalAgentSupervisor.events(run.id).orEmpty().first { it.title == "Companion session ended" }
-    assertTrue(ended.text.orEmpty().contains("stopped from Trail Runner"))
+    assertTrue(ended.text.orEmpty().contains("stopped from Trailblaze App"))
     // A CLI disconnect racing in afterwards stays a no-op.
     ExternalAgentSupervisor.disconnectCompanion(run.id, note = null).getOrThrow()
     assertEquals(1, ExternalAgentSupervisor.events(run.id).orEmpty().count { it.title == "Companion session ended" })

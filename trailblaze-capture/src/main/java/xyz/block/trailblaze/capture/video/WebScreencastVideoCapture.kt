@@ -30,7 +30,9 @@ import xyz.block.trailblaze.util.Console
  *    [fallback] → delegate wholesale to it** (the report-export path, which drives a browser with
  *    no live screencast, takes this route so it keeps working unchanged). A feed present →
  *    subscribe to its JPEG frames, writing each (throttled) frame to a temp dir under the session
- *    directory stamped with its host-clock arrival time. With no [fallback], see below.
+ *    directory stamped with the host-clock instant the browser showed it (its swap time, not
+ *    when it arrived here; see [WebScreencastFeedRegistry.Feed.subscribe]). With no [fallback], see
+ *    below.
  *  - [stop] detaches, then muxes the collected frames into the recording named by [basename]
  *    (`video.webm` for the session's own device, VP9, in the process-wide [RecordingFormat]) via
  *    the ffmpeg concat demuxer at a constant frame rate (see [ScreencastTimeline] for the
@@ -93,7 +95,7 @@ class WebScreencastVideoCapture(
    */
   private var framesClosed = false
 
-  /** Last stored frame's arrival time; used to throttle bursty screencast output. */
+  /** Last stored frame's capture time; used to throttle bursty screencast output. */
   private var lastStoredAtMs: Long = 0
   private var droppedToThrottle = 0
   private var droppedToCap = 0
@@ -161,10 +163,22 @@ class WebScreencastVideoCapture(
     val dir = framesDir ?: return
     synchronized(framesLock) {
       if (framesClosed) return
+      // Frames arrive in the order the screen showed them, so one stamped before the frame kept
+      // last means that one was stamped late — before the feed had learned the browser's clock,
+      // a frame that waited to be read carries its wait. It was on screen no later than this
+      // frame: pull it, and any kept frame stamped after this one, back to this stamp, and keep
+      // this frame rather than throttling it against a stamp that was wrong.
+      val lastWasStampedLate = lastStoredAtMs != 0L && hostTimestampMs < lastStoredAtMs
+      if (lastWasStampedLate) {
+        for (i in frames.indices.reversed()) {
+          if (frames[i].capturedAtMs <= hostTimestampMs) break
+          frames[i] = frames[i].copy(capturedAtMs = hostTimestampMs)
+        }
+      }
       // Throttle bursty runs: a page transition can emit many frames within a few ms. One frame
       // per THROTTLE_MIN_INTERVAL_MS is smooth enough for a report scrubber while bounding count.
       // The first frame is always kept (lastStoredAtMs == 0).
-      if (lastStoredAtMs != 0L && hostTimestampMs - lastStoredAtMs < THROTTLE_MIN_INTERVAL_MS) {
+      if (!lastWasStampedLate && lastStoredAtMs != 0L && hostTimestampMs - lastStoredAtMs < THROTTLE_MIN_INTERVAL_MS) {
         droppedToThrottle++
         return
       }

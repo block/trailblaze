@@ -116,7 +116,7 @@ object GitRefTree {
     Thread(runnable, "git-stream-drain").apply { isDaemon = true }
   }
 
-  private fun runGit(workingDir: File, vararg args: String): Result<String> = runCatching {
+  internal fun runGit(workingDir: File, vararg args: String): Result<String> = runCatching {
     val process = ProcessBuilder("git", *args)
       .directory(workingDir)
       .start()

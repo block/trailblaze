@@ -1,5 +1,17 @@
 package xyz.block.trailblaze.report
 
+import java.net.URLEncoder
+
+fun gitHubTrailSourceUrl(cloneUrl: String?, commit: String?, path: String): String? {
+  val base = GitRepoUrls.webBaseUrl(cloneUrl)?.takeIf { it.startsWith("https://github.com/") }
+    ?: return null
+  if (commit == null || !Regex("[0-9a-f]{40}").matches(commit)) return null
+  val segments = path.split('/')
+  if (segments.any { it.isEmpty() || it == "." || it == ".." }) return null
+  val encodedPath = segments.joinToString("/") { URLEncoder.encode(it, Charsets.UTF_8).replace("+", "%20") }
+  return "$base/blob/$commit/$encodedPath"
+}
+
 /**
  * Turns a git clone URL into the web URL a report can link to.
  *

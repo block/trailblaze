@@ -113,25 +113,34 @@ const TRAILBLAZE_SDK_PACKAGE =
  * SISTER-IMPL-TAG: typed-tool-spec-fields. The bare-field-name set must stay
  * in lockstep with:
  *   - `sdks/typescript/src/tool-core.ts`                  (the SDK's TS surface — `TrailblazeTypedToolSpec`)
- *   - `trailblaze-host/.../AnalyzerScriptedToolEnrichment.kt`
+ *   - `trailblaze-common/.../ScriptedToolDefProjection.kt`
  *     `projectAnalyzerSpec`                              (Kotlin projection into `_meta`)
  *   - `.../TrailblazeToolMeta.fromJsonObject`            (MCP/subprocess runtime parser)
  *   - `.../QuickJsToolMeta.fromSpec`                     (in-process runtime parser)
  * Adding a new field to `TrailblazeTypedToolSpec` requires updating all these
  * sites; there is no compile-time check that they agree.
  *
- * **`description` and `trailhead` are exceptions — primary-descriptor fields, NOT
- * `_meta` keys.** Both are captured here like any other recognized field, but on the
- * Kotlin side `AnalyzerScriptedToolEnrichment` routes them elsewhere instead of
- * projecting them into `_meta`: `description` into the resolved tool description
- * (YAML sidecar `description:` > spec `description` > TSDoc), `trailhead` into
- * `InlineScriptToolConfig.trailhead` (the same `TrailheadMetadata` shape a
- * `*.trailhead.yaml` sidecar's `trailhead:` block produces). So `projectAnalyzerSpec`
- * deliberately does NOT forward either, and the two runtime `_meta` parsers above
- * never read them — neither is a dispatch gate, so they never need to affect
- * registration or execution, only discovery surfaces (`toolbox trailheads`, the
- * Trail Runner "Use as Trailhead" picker).
+ * **`description`, `trailhead` and `runtime` are exceptions — primary-descriptor fields, NOT
+ * `_meta` keys.** All three are captured here like any other recognized field, but
+ * `ScriptedToolDefProjection` routes them into the tool config directly instead of projecting
+ * them into `_meta`:
+ *   - `description` → the resolved tool description (YAML `description:` > spec > TSDoc);
+ *   - `trailhead` → `InlineScriptToolConfig.trailhead` (the shape a `*.trailhead.yaml` sidecar's
+ *     `trailhead:` block produces), read only by discovery surfaces (`toolbox trailheads`, the
+ *     Trail Runner "Use as Trailhead" picker);
+ *   - `runtime` → `InlineScriptToolConfig.runtime` (a descriptor's `runtime:` still wins), which
+ *     DOES select the execution engine — in-process QuickJS or a Bun subprocess. That is why an
+ *     unreadable or unknown `runtime` is an error (see [specRuntimeError]) rather than a skip.
+ * So `projectAnalyzerSpec` forwards none of the three, and the runtime `_meta` parsers above
+ * never read them. A new field goes in `projectAnalyzerSpec` when it is a `_meta` gate, or in
+ * `ScriptedToolDefProjection.descriptorlessConfig` when it is a config field.
  */
+/**
+ * The values a spec `runtime` may take; mirrors `TrailblazeTypedToolSpec.runtime`. At module top
+ * for the same temporal-dead-zone reason as [RECOGNIZED_SPEC_FIELDS].
+ */
+const SPEC_RUNTIMES = ["inProcess", "subprocess"];
+
 const RECOGNIZED_SPEC_FIELDS = new Set([
   "description",
   "supportedPlatforms",
@@ -142,6 +151,7 @@ const RECOGNIZED_SPEC_FIELDS = new Set([
   "isRecordable",
   "sensitiveArgNames",
   "trailhead",
+  "runtime",
 ]);
 
 /**
@@ -389,6 +399,11 @@ for (const arg of args) {
       // spec — supportedPlatforms / surfaceToLlm / … — was dropped. Surface it so the Kotlin layer
       // can warn (or hard-fail a descriptor-less tool) instead of silently shipping an un-gated tool.
       const uncapturedSpec = !spec && specArgIsUncapturedReference(init);
+      const runtimeError = specRuntimeError(init);
+      if (runtimeError) {
+        errors.push({ file: absFile, name, message: `tool '${name}': ${runtimeError}` });
+        continue;
+      }
 
       const { line } = sourceFile.getLineAndCharacterOfPosition(decl.getStart(sourceFile));
 
@@ -764,6 +779,42 @@ function extractToolSpec(callExpression) {
 }
 
 /**
+ * Why the inline spec's `runtime` can't be used, or null when it is absent or valid. Unlike the
+ * other fields, an unreadable `runtime` is an error rather than a skip: dropping it silently runs
+ * the tool in-process, where the Node APIs a subprocess tool needs don't exist.
+ */
+function specRuntimeError(callExpression) {
+  const arg0 = callExpression.arguments?.[0];
+  if (!arg0 || !ts.isObjectLiteralExpression(arg0)) return null;
+  const expected = SPEC_RUNTIMES.map((r) => `"${r}"`).join(" or ");
+  const props = arg0.properties;
+  const isRuntime = (p) =>
+    (ts.isPropertyAssignment(p) || ts.isShorthandPropertyAssignment(p)) &&
+    (ts.isIdentifier(p.name) || ts.isStringLiteral(p.name)) &&
+    p.name.text === "runtime";
+  // Later properties win in an object literal, so only the last `runtime`, or a spread after it,
+  // decides the value.
+  const lastRuntime = props.findLastIndex(isRuntime);
+  const lastSpread = props.findLastIndex((p) => ts.isSpreadAssignment(p));
+  if (lastSpread > lastRuntime) {
+    return `the spec spreads \`${props[lastSpread].expression.getText()}\`, which may set \`runtime\` where the analyzer can't read it. Add an inline \`runtime:\` (${expected}) after the spread.`;
+  }
+  if (lastRuntime < 0) return null;
+  const prop = props[lastRuntime];
+  if (ts.isShorthandPropertyAssignment(prop)) {
+    return `spec \`runtime\` must be written inline as \`runtime: ${expected}\`; the analyzer can't read the shorthand \`{ runtime }\`.`;
+  }
+  const value = literalValueOf(prop.initializer);
+  if (value === undefined) {
+    return `spec \`runtime\` must be a string literal (${expected}); the analyzer can't read \`${prop.initializer.getText()}\`.`;
+  }
+  if (!SPEC_RUNTIMES.includes(value)) {
+    return `spec \`runtime\` is ${JSON.stringify(value)}, expected ${expected}.`;
+  }
+  return null;
+}
+
+/**
  * True when the call uses the `(spec, handler)` overload but its spec argument is a non-inline
  * reference the analyzer can't read — `trailblaze.tool<I>(SPEC, handler)` with `const SPEC = {...}`,
  * `tool(Specs.foo, handler)`, or `tool(makeSpec(), handler)`. In every such case the ENTIRE spec
@@ -798,7 +849,7 @@ function specArgIsUncapturedReference(callExpression) {
  * Recognized shapes (matched against the value-shapes used by the recognized
  * `TrailblazeTypedToolSpec` fields — boolean / string / string[] for most,
  * plus the one nested-object shape `trailhead: { to, dynamic }`):
- *   - `"text"` / `'text'` → string
+ *   - `"text"` / `'text'` → string, including a `"a" + "b"` chain of them
  *   - `true` / `false` → boolean
  *   - `[expr, expr, ...]` → array (recursively; an element that doesn't
  *     resolve to a literal causes the whole array to return `undefined`)
@@ -825,6 +876,30 @@ function literalValueOf(node, depth = 0) {
   if (depth >= MAX_LITERAL_DEPTH) return undefined;
   if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
     return node.text;
+  }
+  // `"a" + "b"`: lets a long description wrap across source lines without a template literal,
+  // which would keep the line breaks.
+  // Walked iteratively so a long chain doesn't count against [MAX_LITERAL_DEPTH].
+  if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken) {
+    const parts = [];
+    let current = node;
+    while (ts.isBinaryExpression(current) && current.operatorToken.kind === ts.SyntaxKind.PlusToken) {
+      parts.unshift(current.right);
+      current = current.left;
+    }
+    parts.unshift(current);
+    let joined = "";
+    for (const part of parts) {
+      const value = literalValueOf(part, depth + 1);
+      if (typeof value !== "string") return undefined;
+      joined += value;
+    }
+    return joined;
+  }
+  if (ts.isParenthesizedExpression(node)) return literalValueOf(node.expression, depth + 1);
+  // `"subprocess" as const` / `[...] satisfies X`: the annotation doesn't change the value.
+  if (ts.isAsExpression(node) || ts.isSatisfiesExpression(node)) {
+    return literalValueOf(node.expression, depth + 1);
   }
   if (node.kind === ts.SyntaxKind.TrueKeyword) return true;
   if (node.kind === ts.SyntaxKind.FalseKeyword) return false;

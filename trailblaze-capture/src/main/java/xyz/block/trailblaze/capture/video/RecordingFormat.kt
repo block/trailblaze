@@ -16,8 +16,7 @@ import xyz.block.trailblaze.util.Console
  * loses a live recording's timing when it re-encodes (see [forLiveMux]): the recording is
  * then H.264 in an mp4 (`-c copy` where the source is already H.264, libx264 otherwise) and the
  * report plays that instead. Nothing else about the session changes with the format — the
- * artifact's window, the report's timeline math and the desktop app's "Watch Video" hand-off all
- * read the recording the same way.
+ * artifact's window and the report's timeline math read the recording the same way.
  */
 enum class RecordingFormat(
   val fileExtension: String,

@@ -10,6 +10,7 @@ import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.host.axe.AxeDeviceManager
 import xyz.block.trailblaze.host.ios.IosDeviceManager
 import xyz.block.trailblaze.host.screenstate.HostMaestroDriverScreenState
+import xyz.block.trailblaze.host.screenstate.SecondaryTreeResult
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
 
@@ -60,12 +61,27 @@ class MaestroConnectedDevice(
   fun getLoggingDriver(
     trailblazeLogger: TrailblazeLogger,
     sessionProvider: TrailblazeSessionProvider,
+    /**
+     * Applied to every screen state this driver logs an action with. Identity by default; the
+     * iOS host runner passes its dual-tree wrap here, because command logs (tap / swipe / input)
+     * come from THIS provider rather than the runner's own — without the decorator a tap log,
+     * the one a tap migration reads, would carry no secondary tree.
+     */
+    screenStateDecorator: (ScreenState) -> ScreenState = { it },
+    /**
+     * Driver-migration side capture, run inside the screen state build so the secondary tree
+     * is read in the same instant as the driver's own tree. Null when capture is off.
+     */
+    secondaryTreeCapture: (() -> SecondaryTreeResult)? = null,
   ): LoggingDriver = LoggingDriver(
     delegate = maestroDriver,
     screenStateProvider = {
-      HostMaestroDriverScreenState(
-        maestroDriver = maestroDriver,
-        trailblazeDeviceId = trailblazeDeviceId,
+      screenStateDecorator(
+        HostMaestroDriverScreenState(
+          maestroDriver = maestroDriver,
+          trailblazeDeviceId = trailblazeDeviceId,
+          secondaryTreeCapture = secondaryTreeCapture,
+        ),
       )
     },
     trailblazeLogger = trailblazeLogger,

@@ -6,7 +6,6 @@ import picocli.CommandLine.Command
 import picocli.CommandLine.Option
 import xyz.block.trailblaze.mcp.TrailblazeMcpMode
 import xyz.block.trailblaze.util.Console
-import xyz.block.trailblaze.util.canRunDesktopGui
 import java.util.concurrent.Callable
 import kotlin.system.exitProcess
 
@@ -14,12 +13,11 @@ import kotlin.system.exitProcess
  * Start the MCP server with a specified transport.
  *
  * By default, starts an STDIO server for MCP client integrations
- * (e.g., Claude Code, Claude Desktop, Firebender, Goose) with a menu bar
- * tray icon so you can open the Trailblaze desktop app and view logs.
+ * (e.g., Claude Code, Claude Desktop, Firebender, Goose).
  * Use `--http` to start a standalone Streamable HTTP server instead.
  *
  * Examples:
- *   trailblaze mcp                  - Start STDIO MCP server with tray icon
+ *   trailblaze mcp                  - Start STDIO MCP server
  *   trailblaze mcp --http           - Start Streamable HTTP MCP server
  *   trailblaze mcp --http -p 8080   - Start HTTP MCP server on port 8080
  */
@@ -159,53 +157,17 @@ class McpCommand : Callable<Int> {
       // false if another process already had it running.
       val ownsDaemon = app.ensureServerRunning()
 
-      if (ownsDaemon && canRunDesktopGui()) {
-        // This process owns the daemon — show tray icon with window hidden.
-        // The Compose Desktop event loop must run on the main thread (macOS AppKit
-        // requirement), so we launch the STDIO server on a background thread.
-        // NON-daemon so the JVM stays alive even if the desktop app exits early.
-        val stdioThread = Thread {
-          runBlocking {
-            app.trailblazeMcpServer.startStdioMcpServer(
-              stdout = stdoutForTransport,
-            )
-          }
-          // Client disconnected — request graceful shutdown via the Compose event loop.
-          // onShutdownRequest is wired to exitApplication() inside the Compose app block,
-          // which cleanly tears down the UI, runs shutdown hooks, and exits the process.
-          app.trailblazeMcpServer.onShutdownRequest?.invoke() ?: exitProcess(0)
-        }
-        stdioThread.isDaemon = false // Must be non-daemon: if the desktop app crashes or
-        // exits early, the JVM must stay alive to keep the STDIO pipe open for MCP.
-        stdioThread.name = "mcp-stdio"
-        stdioThread.start()
-
-        // Start the desktop app on the main thread (tray icon visible, window hidden).
-        // The HTTP server is already running via ensureServerRunning(), so
-        // startTrailblazeDesktopApp will detect the daemon and skip starting another.
-        // Wrapped in try-catch: if the desktop app crashes, the STDIO server must keep
-        // running (the non-daemon thread above keeps the JVM alive).
-        try {
-          app.startTrailblazeDesktopApp(headless = true, daemonAlreadyRunning = true)
-        } catch (e: Exception) {
-          Console.error("[MCP] Desktop app exited with error: ${e.message}")
-          Console.error("[MCP] STDIO MCP server continues running without tray icon.")
-          // Block the main thread so the JVM doesn't exit.
-          // The STDIO thread will call exitProcess(0) when the client disconnects.
-          stdioThread.join()
-        }
-      } else {
-        // Secondary STDIO client (daemon owned by another process), or no display.
-        // Run STDIO server directly — no tray icon needed.
-        if (!ownsDaemon) {
-          Console.log("Daemon already running on port ${parent.getEffectivePort()} — running as headless STDIO client")
-        }
-        runBlocking {
-          app.trailblazeMcpServer.startStdioMcpServer(
-            stdout = stdoutForTransport,
-          )
-        }
+      if (!ownsDaemon) {
+        Console.log("Daemon already running on port ${parent.getEffectivePort()} — running as STDIO client")
       }
+      runBlocking {
+        app.trailblazeMcpServer.startStdioMcpServer(
+          stdout = stdoutForTransport,
+        )
+      }
+      // Client disconnected. A process that started the daemon's HTTP server would otherwise
+      // keep serving it with no client attached, so exit and take the server with it.
+      if (ownsDaemon) exitProcess(0)
     } else {
       // Default: STDIO-to-HTTP proxy mode — lightweight proxy that forwards JSON-RPC
       // to the Trailblaze daemon. Reconnects transparently on daemon restarts.

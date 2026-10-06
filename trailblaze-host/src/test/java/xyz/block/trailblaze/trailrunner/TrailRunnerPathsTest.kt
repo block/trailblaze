@@ -127,4 +127,13 @@ class TrailRunnerPathsTest {
     )
     assertNull(toSessionSummary(info).deviceInstanceId)
   }
+
+  @Test
+  fun `a session summary carries the trail source URL`() {
+    val sourceUrl =
+      "https://github.com/example/trails/blob/0123456789abcdef0123456789abcdef01234567/trails/checkout.trail.yaml"
+    val info = sessionOn("source", "android", "phone").copy(trailSourceUrl = sourceUrl)
+
+    assertEquals(sourceUrl, toSessionSummary(info).trailSourceUrl)
+  }
 }

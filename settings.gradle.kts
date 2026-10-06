@@ -88,7 +88,6 @@ include(
   ":trailblaze-scripting-mcp-common",
   ":trailblaze-scripting-subprocess",
   ":trailblaze-selector-engine-js",
-  ":trailblaze-ui",
   ":trailblaze-report",
   ":trailblaze-server",
   ":trailblaze-tracing",

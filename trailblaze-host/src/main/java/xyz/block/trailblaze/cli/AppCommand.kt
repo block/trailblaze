@@ -4,15 +4,9 @@ import picocli.CommandLine
 import picocli.CommandLine.Command
 import picocli.CommandLine.Option
 import xyz.block.trailblaze.devices.TrailblazeDevicePort
-import xyz.block.trailblaze.ui.TrailblazeDesktopUtil
 import xyz.block.trailblaze.ui.TrailblazePortManager
-import xyz.block.trailblaze.ui.DESKTOP_GUI_READY_FILE_ENV_VAR
-import xyz.block.trailblaze.ui.WINNER_SHOW_WINDOW_POLL_MS
-import xyz.block.trailblaze.ui.WINNER_SHOW_WINDOW_WAIT_MS
 import xyz.block.trailblaze.util.Console
-import xyz.block.trailblaze.util.canRunDesktopGui
 import java.io.File
-import java.nio.file.Files
 import java.util.concurrent.Callable
 import kotlin.time.Duration.Companion.seconds
 
@@ -22,49 +16,14 @@ internal fun trailRunnerLaunchProcessBuilder(launcher: File, port: Int): Process
     inheritIO()
   }
 
-internal sealed interface DesktopGuiStartupResult {
-  data object Ready : DesktopGuiStartupResult
-
-  data class Exited(val exitCode: Int) : DesktopGuiStartupResult
-
-  data object TimedOut : DesktopGuiStartupResult
-}
-
-internal fun waitForDesktopGuiStartup(
-  isWindowReady: () -> Boolean,
-  isSpawnAlive: () -> Boolean,
-  spawnExitCode: () -> Int,
-  maxWaitMs: Long = WINNER_SHOW_WINDOW_WAIT_MS,
-  pollIntervalMs: Long = WINNER_SHOW_WINDOW_POLL_MS,
-  nowMs: () -> Long = System::currentTimeMillis,
-  sleep: (Long) -> Unit = Thread::sleep,
-): DesktopGuiStartupResult {
-  val deadline = nowMs() + maxWaitMs
-  while (true) {
-    if (isWindowReady()) return DesktopGuiStartupResult.Ready
-    if (!isSpawnAlive()) {
-      return if (isWindowReady()) {
-        DesktopGuiStartupResult.Ready
-      } else {
-        DesktopGuiStartupResult.Exited(spawnExitCode())
-      }
-    }
-
-    val remainingMs = deadline - nowMs()
-    if (remainingMs <= 0) return DesktopGuiStartupResult.TimedOut
-    sleep(minOf(pollIntervalMs, remainingMs))
-  }
-}
-
 /**
- * Launch the legacy desktop app, opt in to Trail Runner, stop the daemon, or check its status.
+ * Open Trail Runner, start or stop the daemon, or check its status.
  *
  * Examples:
- *   trailblaze app                   - Launch the legacy Compose desktop app
- *   trailblaze app --v2              - Open Trail Runner in its native desktop window
- *   trailblaze app start             - Same as `trailblaze app` (explicit verb)
- *   trailblaze app --headless        - Start headless daemon (no GUI)
- *   trailblaze app start --headless  - Same, spelled with the explicit verb
+ *   trailblaze app                   - Open Trail Runner (starts the daemon if needed)
+ *   trailblaze app start             - Start the daemon in the background
+ *   trailblaze app --headless        - Same as `trailblaze app start`
+ *   trailblaze app start --foreground - Run the daemon in this terminal
  *   trailblaze app --stop            - Stop the daemon
  *   trailblaze app --status          - Check if daemon is running
  */
@@ -73,10 +32,10 @@ internal fun waitForDesktopGuiStartup(
   mixinStandardHelpOptions = true,
   subcommands = [AppStartCommand::class],
   description = [
-    "Launch the legacy Trailblaze desktop app (use --v2 for Trail Runner or --headless for a daemon-only background service).",
+    "Open Trailblaze App, starting the daemon if it is not running (use --headless to start only the daemon).",
     // `start` is deliberately unpublished as a subcommand (see [AppStartCommand]), so this is
     // the only place the reference docs learn that the spelling docs and error hints use is real.
-    "`trailblaze app start` is an accepted synonym for this command.",
+    "`trailblaze app start` starts only the daemon, the same as `trailblaze app --headless`.",
   ]
 )
 open class AppCommand : Callable<Int> {
@@ -86,7 +45,7 @@ open class AppCommand : Callable<Int> {
 
   @Option(
     names = ["--headless"],
-    description = ["Start in headless mode (daemon only, no GUI)"]
+    description = ["Start only the daemon, without opening Trailblaze App"]
   )
   var headless: Boolean = false
 
@@ -104,54 +63,49 @@ open class AppCommand : Callable<Int> {
 
   @Option(
     names = ["--foreground"],
-    description = ["Run in foreground (blocks terminal). Use for debugging with an attached IDE."]
+    description = ["Run the daemon in the foreground (blocks terminal). Use for debugging with an attached IDE."]
   )
   var foreground: Boolean = false
 
-  @Option(
-    names = ["--v2"],
-    description = ["Open Trail Runner in its native desktop window"]
-  )
+  /** The spelling that opened Trail Runner while it was opt-in. Kept so existing habits and links work. */
+  @Option(names = ["--v2"], hidden = true)
   var v2: Boolean = false
 
+  /** Where [launchTrailRunner] finds the launcher to re-enter. Swapped only by tests. */
+  internal var launcherFinder: () -> File? = ::findTrailblazeLauncher
+
   override fun call(): Int {
-    if (v2 && (stop || status)) {
-      Console.error("--v2 cannot be combined with daemon or legacy-app options.")
+    if (v2 && (stop || status || headless || foreground)) {
+      Console.error("--v2 cannot be combined with daemon options.")
       return TrailblazeExitCode.MISUSE.code
     }
     return when {
       stop -> doStop()
       status -> doStatus()
-      else -> startApp()
+      headless || foreground -> startDaemon()
+      else -> launchTrailRunner()
     }
   }
 
   /**
-   * The "start the app" behavior shared by bare `trailblaze app` and the explicit
-   * `trailblaze app start`. Kept separate from [call] so the subcommand can reach it
-   * without re-entering the `--stop` / `--status` dispatch.
+   * Start the daemon without opening Trail Runner — shared by `trailblaze app --headless` and
+   * `trailblaze app start`. Kept separate from [call] so the subcommand can reach it without
+   * re-entering the `--stop` / `--status` dispatch.
    */
-  internal fun startApp(): Int {
-    if (v2 && (headless || foreground)) {
-      Console.error("--v2 cannot be combined with daemon or legacy-app options.")
-      return TrailblazeExitCode.MISUSE.code
-    }
-    return when {
-      v2 -> launchTrailRunner()
-      foreground -> parent.launchDesktop(headless)
-      else -> launchInBackground()
-    }
-  }
+  internal fun startDaemon(): Int =
+    if (foreground) parent.launchDaemonInForeground() else launchInBackground()
 
   /**
-   * Shell launchers normally consume `--v2` before picocli starts. This fallback keeps direct
-   * JVM and wrapper-dispatched invocations honest by re-entering the same launcher's established
-   * `trailrunner` alias rather than duplicating native-shell orchestration in Kotlin.
+   * Shell launchers normally open Trail Runner for bare `app` before picocli starts. This
+   * fallback keeps direct JVM and wrapper-dispatched invocations honest by re-entering the same
+   * launcher's `trailrunner` alias rather than duplicating native-shell orchestration in Kotlin.
    */
   private fun launchTrailRunner(): Int {
-    val launcher = findTrailblazeLauncher() ?: run {
-      Console.error("Trail Runner requires the trailblaze launcher, but no launcher was found.")
-      return TrailblazeExitCode.INFRA_FAILED.code
+    val launcher = launcherFinder() ?: run {
+      // IDE/direct-JVM runs have no launcher to open the native shell with. Serve Trail Runner
+      // from this process instead, so the URL below is live for as long as the run lasts.
+      Console.log("Trailblaze App: http://localhost:${parent.getEffectivePort()}/trailrunner/")
+      return parent.launchDaemonInForeground()
     }
     return try {
       val launcherExitCode = trailRunnerLaunchProcessBuilder(launcher, parent.getEffectivePort())
@@ -160,19 +114,16 @@ open class AppCommand : Callable<Int> {
       if (launcherExitCode == 0) {
         TrailblazeExitCode.SUCCESS.code
       } else {
-        Console.error("Failed to open Trail Runner (launcher exit code $launcherExitCode).")
+        Console.error("Failed to open Trailblaze App (launcher exit code $launcherExitCode).")
         TrailblazeExitCode.INFRA_FAILED.code
       }
     } catch (e: Exception) {
-      Console.error("Failed to open Trail Runner: ${e.message}")
+      Console.error("Failed to open Trailblaze App: ${e.message}")
       TrailblazeExitCode.INFRA_FAILED.code
     }
   }
 
-  /**
-   * Spawn the app as a background process and return control to the terminal.
-   * The spawned process uses `--foreground` to run in-process.
-   */
+  /** Start the daemon as a background process and return control to the terminal. */
   private fun launchInBackground(): Int {
     val port = parent.getEffectivePort()
     // Before the probe below: a device's `adb forward` on the configured port answers /ping, and
@@ -181,174 +132,13 @@ open class AppCommand : Callable<Int> {
       httpPort = port,
       httpsPort = parent.getEffectiveHttpsPort(),
     )
-    if (headless) {
-      // IDE/direct-JVM runs do not have the distribution launcher. Keep their established
-      // in-process fallback instead of routing through the launcher-based daemon helper.
-      if (findTrailblazeLauncher() == null) return parent.launchDesktop(headless)
-      return if (ensureDaemonServerRunning(port, respectAutoStartDisable = false)) {
-        TrailblazeExitCode.SUCCESS.code
-      } else {
-        TrailblazeExitCode.INFRA_FAILED.code
-      }
-    }
-
-    // Single DaemonClient instance for all checks in this method.
-    return DaemonClient(port = port).use { daemon ->
-      var attachingDesktopGui = false
-      // If already running, show window or report status
-      if (daemon.isRunningBlocking()) {
-        if (daemon.showWindowBlocking().success) {
-          Console.log("Trailblaze is already running on port $port.")
-          return@use TrailblazeExitCode.SUCCESS.code
-        }
-        // Trail Runner starts a headless daemon. If that daemon cannot show a Compose window,
-        // continue into the normal foreground child launch; launchDesktop will attach the GUI
-        // to the existing server instead of attempting to bind a second one.
-        Console.log("Trailblaze server is running. Starting desktop GUI...")
-        attachingDesktopGui = true
-      }
-
-      if (attachingDesktopGui && !canRunDesktopGui()) {
-        Console.log("Desktop GUI not available on this platform — Trailblaze daemon remains running on port $port.")
-        return@use TrailblazeExitCode.SUCCESS.code
-      }
-
-      // Find the launcher script to spawn as a background process
-      val launcher = findTrailblazeLauncher() ?: run {
-        // Can't find launcher (e.g., running from IDE without a shell script) — fall back to
-        // in-process mode so the app still starts.
-        return@use parent.launchDesktop(headless)
-      }
-
-      // Route the child's stdout/stderr to ~/.trailblaze/daemon.log instead of
-      // discarding. The daemon runs detached so we can't wait on its pipes, and
-      // without a log file the parent has no way to surface startup failures —
-      // `waitForDaemon` just times out with zero context. Appended so repeated
-      // launches in a CI agent retain history. Path centralized in
-      // TrailblazeDesktopUtil to keep daemon, MCP proxy, and tooling agreeing
-      // on a single canonical location.
-      val daemonLogFile = TrailblazeDesktopUtil.getDaemonLogFile()
-
-      Console.log("Starting Trailblaze${if (headless) " daemon" else ""}...")
-      Console.log("Daemon log: ${daemonLogFile.absolutePath}")
-      val spawnArgv = daemonSpawnArgv(launcher, foreground = true, headless = headless)
-      val desktopGuiReadyDir = try {
-        if (attachingDesktopGui) {
-          Files.createTempDirectory("trailblaze-desktop-ready-").toFile()
-        } else {
-          null
-        }
-      } catch (e: Exception) {
-        Console.error("Failed to prepare desktop GUI startup: ${e.message}")
-        return@use TrailblazeExitCode.INFRA_FAILED.code
-      }
-      val desktopGuiReadyFile = desktopGuiReadyDir?.resolve("ready")
-      val child = try {
-        val pb = ProcessBuilder(spawnArgv)
-        if (port != TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTP_PORT) {
-          pb.environment()[TrailblazePortManager.HTTP_PORT_ENV_VAR] = port.toString()
-        }
-        desktopGuiReadyFile?.let { readyFile ->
-          pb.environment()[DESKTOP_GUI_READY_FILE_ENV_VAR] = readyFile.absolutePath
-        }
-        pb.redirectOutput(ProcessBuilder.Redirect.appendTo(daemonLogFile))
-        pb.redirectError(ProcessBuilder.Redirect.appendTo(daemonLogFile))
-        pb.start()
-      } catch (e: Exception) {
-        desktopGuiReadyFile?.delete()
-        desktopGuiReadyDir?.delete()
-        Console.error("Failed to start: ${e.message}")
-        return@use TrailblazeExitCode.INFRA_FAILED.code
-      }
-
-      if (attachingDesktopGui) {
-        Console.appendInfo("Waiting for Trailblaze desktop GUI to start")
-        val startupResult = try {
-          waitForDesktopGuiStartup(
-            isWindowReady = {
-              desktopGuiReadyFile?.isFile == true || daemon.showWindowBlocking().success
-            },
-            isSpawnAlive = { child.isAlive },
-            spawnExitCode = { child.exitValue() },
-          )
-        } catch (e: InterruptedException) {
-          Thread.currentThread().interrupt()
-          desktopGuiReadyFile?.delete()
-          desktopGuiReadyDir?.delete()
-          Console.info("")
-          Console.error("Interrupted while waiting for the Trailblaze desktop GUI to start.")
-          return@use TrailblazeExitCode.INFRA_FAILED.code
-        }
-        desktopGuiReadyFile?.delete()
-        desktopGuiReadyDir?.delete()
-        Console.info("")
-        when (startupResult) {
-          DesktopGuiStartupResult.Ready -> {
-            Console.log("Trailblaze desktop GUI started on port $port.")
-            return@use TrailblazeExitCode.SUCCESS.code
-          }
-          is DesktopGuiStartupResult.Exited -> {
-            Console.error(
-              "Trailblaze desktop GUI exited before its window became ready " +
-                "(exit code ${startupResult.exitCode}).",
-            )
-          }
-          DesktopGuiStartupResult.TimedOut -> {
-            Console.error(
-              "Trailblaze desktop GUI did not become ready within " +
-                "${WINNER_SHOW_WINDOW_WAIT_MS / 1000}s.",
-            )
-          }
-        }
-        Console.error("Daemon log: ${daemonLogFile.absolutePath}")
-        return@use TrailblazeExitCode.INFRA_FAILED.code
-      }
-
-      // Wait for daemon to be ready (progress dots so the user knows it's working)
-      Console.appendInfo("Waiting for Trailblaze daemon to be ready")
-      val started = daemon.waitForDaemon(isSpawnAlive = { child.isAlive }) { Console.appendInfo(".") }
-      Console.info("") // newline after dots
-      if (started) {
-        Console.log("Trailblaze${if (headless) " daemon" else ""} started on port $port.")
-      } else {
-        // Re-check: another process may have raced us and already started the daemon,
-        // but our spawn failed silently. If the daemon is now running, treat it as
-        // success rather than reporting a confusing error.
-        if (daemon.isRunningBlocking()) {
-          Console.log("Trailblaze${if (headless) " daemon" else ""} started on port $port.")
-        } else {
-          // Distinguish "the child died" from "the child is still working on it". These need
-          // opposite responses — a dead child means the spawn itself is broken (bad argv, a
-          // launcher that isn't ours, a crash on init), and telling that user to allow more
-          // time sends them to wait for something that already gave up.
-          if (!child.isAlive) {
-            // Not necessarily immediate — `isSpawnAlive` also trips on a child that dies partway
-            // through the wait, so the message has to hold for both.
-            Console.error(
-              "Trailblaze exited before the daemon became ready on port $port " +
-                "(exit code ${child.exitValue()}).",
-            )
-            // Report the argv actually spawned, not a rebuild of it: a hand-written
-            // approximation here drifts from `daemonSpawnArgv` silently, and this line exists
-            // precisely to show which launcher resolved and what it was handed.
-            Console.error("Spawned: ${spawnArgv.joinToString(" ")}")
-          } else {
-            Console.error(
-              "Trailblaze did not start within ${DaemonClient.MAX_WAIT_FOR_DAEMON_MS / 1000}s. " +
-                "If a source build is in progress it may need more time.",
-            )
-          }
-          Console.error("Daemon log: ${daemonLogFile.absolutePath}")
-          // Carry --headless through: a user who asked for a daemon shouldn't be handed a
-          // recovery command that opens a window.
-          Console.error(
-            "Run `trailblaze app start --foreground${if (headless) " --headless" else ""}` " +
-              "to see startup output directly.",
-          )
-          return@use TrailblazeExitCode.INFRA_FAILED.code
-        }
-      }
+    // IDE/direct-JVM runs do not have the distribution launcher. Keep their established
+    // in-process fallback instead of routing through the launcher-based daemon helper.
+    if (findTrailblazeLauncher() == null) return parent.launchDaemonInForeground()
+    return if (ensureDaemonServerRunning(port, respectAutoStartDisable = false)) {
       TrailblazeExitCode.SUCCESS.code
+    } else {
+      TrailblazeExitCode.INFRA_FAILED.code
     }
   }
 
@@ -363,7 +153,7 @@ open class AppCommand : Callable<Int> {
       if (!daemon.isRunningBlocking()) {
         Console.log("Trailblaze daemon is not running.")
         Console.log("")
-        Console.log("Start the daemon with: trailblaze app")
+        Console.log("Start the daemon with: trailblaze app start")
         return@use TrailblazeExitCode.SUCCESS.code
       }
 
@@ -388,13 +178,14 @@ open class AppCommand : Callable<Int> {
 }
 
 /**
- * `trailblaze app start` — an explicit verb for what bare `trailblaze app` already does.
+ * `trailblaze app start` — start the daemon without opening Trail Runner.
  *
  * The rest of the codebase (docs, KDoc, and the `is the daemon running?` recovery hints in
- * [reportDaemonUnreachable]) has always spelled daemon startup `app start`, so this makes the
- * documented invocation real rather than rewording every reference. `--headless` and
- * `--foreground` are re-declared here so they work on either side of the verb —
- * `app --headless start` and `app start --headless` are equivalent.
+ * [reportDaemonUnreachable]) spells daemon startup `app start`, and the daemon auto-start spawns
+ * `app start --foreground --headless`. `--headless` and `--foreground` are re-declared here so
+ * they work on either side of the verb — `app --foreground start` and `app start --foreground`
+ * are equivalent. `--headless` is accepted for that spawn line and changes nothing: `start`
+ * never opens a window.
  *
  * **`hidden` is load-bearing, not cosmetic — do not un-hide it.** `trailblaze
  * --describe-commands` ([describeCommands]) publishes the picocli tree for wrapper CLIs to build
@@ -404,15 +195,15 @@ open class AppCommand : Callable<Int> {
  * CLI's `trailblaze` on PATH may well be such a wrapper, so the moment this subcommand became
  * visible, every flags-only `trailblaze app …` form — `--headless`, `--stop`, `--status` —
  * started answering with wrapper usage instead of doing anything, and daemon auto-start
- * silently spawned a child that wrote that usage text to `daemon.log` and died. Hiding a pure
- * synonym keeps `app` a leaf in the published tree while leaving `app start` fully parseable
+ * silently spawned a child that wrote that usage text to `daemon.log` and died. Hiding the
+ * subcommand keeps `app` a leaf in the published tree while leaving `app start` fully parseable
  * here.
  */
 @Command(
   name = "start",
   mixinStandardHelpOptions = true,
   hidden = true,
-  description = ["Start the legacy Trailblaze app (same as `trailblaze app`)"]
+  description = ["Start the Trailblaze daemon without opening Trailblaze App"]
 )
 class AppStartCommand : Callable<Int> {
 
@@ -421,7 +212,7 @@ class AppStartCommand : Callable<Int> {
 
   @Option(
     names = ["--headless"],
-    description = ["Start in headless mode (daemon only, no GUI)"]
+    description = ["Accepted for compatibility; `start` never opens a window"]
   )
   var headless: Boolean = false
 
@@ -438,8 +229,7 @@ class AppStartCommand : Callable<Int> {
     }
     // OR rather than assign: the same flag may have been given before the verb, which picocli
     // binds to the parent instead.
-    if (headless) app.headless = true
     if (foreground) app.foreground = true
-    return app.startApp()
+    return app.startDaemon()
   }
 }

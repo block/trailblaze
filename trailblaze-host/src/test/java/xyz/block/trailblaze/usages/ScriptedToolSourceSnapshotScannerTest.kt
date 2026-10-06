@@ -10,7 +10,7 @@ import kotlin.test.assertTrue
 /**
  * Behavioral contract of the dir-parameterized scripted-tool discovery: it registers exactly what
  * the runtime loader would register (YAML-declared names, meta-only descriptors via typed
- * bindings, bare `.ts` with exactly one binding) and turns every author anomaly into a warning
+ * bindings, every typed binding of a bare `.ts`) and turns every author anomaly into a warning
  * instead of aborting — it must survive historical git refs that predate a fix.
  */
 class ScriptedToolSourceSnapshotScannerTest {
@@ -92,15 +92,13 @@ class ScriptedToolSourceSnapshotScannerTest {
   }
 
   @Test
-  fun `a bare ts file registers only with exactly one typed binding`() {
+  fun `a bare ts file registers every typed binding it declares`() {
     write(
       "demo-map/tools/single.ts",
       "export const demo_single = trailblaze.tool({ execute: async () => {} })",
     )
     // 0 bindings: a helper module the loader would never register — correctly invisible.
     write("demo-map/tools/helpers.ts", "export function formatPrice(cents: number) { return cents / 100 }")
-    // 2 bindings without a descriptor: the loader refuses these, so the scan must too — but as
-    // a warning, because on a historical ref this may be exactly the authoring mistake under study.
     write(
       "demo-map/tools/pair.ts",
       """
@@ -111,16 +109,16 @@ class ScriptedToolSourceSnapshotScannerTest {
 
     val snapshot = ScriptedToolSourceSnapshotScanner.snapshot(trailmapsDir)
 
-    assertEquals(setOf("demo_single"), snapshot.toolNames)
+    assertEquals(setOf("demo_single", "demo_first", "demo_second"), snapshot.toolNames)
+    val pair = File(trailmapsDir, "demo-map/tools/pair.ts")
+    assertEquals(pair, snapshot.toolSources.getValue(ToolKey("demo-map", "demo_first")).script)
+    assertEquals(pair, snapshot.toolSources.getValue(ToolKey("demo-map", "demo_second")).script)
     assertEquals(
       null,
       snapshot.toolSources.getValue(ToolKey("demo-map", "demo_single")).descriptor,
       "bare typed-binding tools have no descriptor",
     )
-    assertTrue(
-      snapshot.warnings.any { it.contains("pair.ts") },
-      "the ambiguous file must be named so an author can add its descriptor: ${snapshot.warnings}",
-    )
+    assertEquals(emptyList(), snapshot.warnings)
   }
 
   @Test

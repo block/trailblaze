@@ -23,6 +23,11 @@ import xyz.block.trailblaze.config.project.TrailmapTargetConfig
 import xyz.block.trailblaze.config.project.ResolvedTrailmap
 import xyz.block.trailblaze.config.project.TrailblazeTrailmapManifest
 import xyz.block.trailblaze.devices.TrailblazeDriverType
+import xyz.block.trailblaze.llm.config.ConfigResourceSource
+import xyz.block.trailblaze.scripting.host.TrailblazeHostFunction
+import xyz.block.trailblaze.scripting.host.TrailblazeHostFunctionClass
+import xyz.block.trailblaze.scripting.host.TrailblazeHostFunctionRegistry
+import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import kotlinx.serialization.json.buildJsonArray
 import xyz.block.trailblaze.scripting.ScriptedToolDefinition
 import xyz.block.trailblaze.scripting.ScriptedToolDefinitionAnalyzer
@@ -1562,6 +1567,59 @@ class PerTrailmapClientDtsEmitterTest {
     assertFalse(File(otherWorkspaceTrailmap, "tools").exists(), "files were generated into the other workspace")
   }
 
+  @Test
+  fun `host functions surface in the declaring trailmap and its dependents only`() {
+    fun trailmap(id: String, dir: File, dependencies: List<String> = emptyList()) = ResolvedTrailmap(
+      manifest = TrailblazeTrailmapManifest(
+        id = id,
+        target = TrailmapTargetConfig(displayName = id),
+        dependencies = dependencies,
+      ),
+      source = TrailmapSource.Filesystem(dir),
+      target = AppTargetYamlConfig(id = id, displayName = id, tools = emptyList()),
+      toolsets = emptyList(),
+      tools = emptyList(),
+      waypoints = emptyList(),
+    )
+    val libDir = newTrailmapDir("accounts")
+    val appDir = newTrailmapDir("storefront")
+    val otherDir = newTrailmapDir("other")
+    val registry = TrailblazeHostFunctionRegistry(
+      object : ConfigResourceSource {
+        override fun discoverAndLoad(directoryPath: String, suffix: String) = emptyMap<String, String>()
+        override fun discoverAndLoadRecursive(directoryPath: String, suffix: String) = mapOf(
+          "accounts/host/emitterTest_lookup.host.yaml" to
+            "id: emitterTest_lookup\nclass: ${EmitterTestLookup::class.java.name}\n",
+          "accounts/host/emitter-test-dashed.host.yaml" to
+            "id: emitter-test-dashed\nclass: ${EmitterTestDashed::class.java.name}\n",
+        )
+      },
+    )
+
+    PerTrailmapClientDtsEmitter.emit(
+      listOf(trailmap("accounts", libDir), trailmap("storefront", appDir, listOf("accounts")), trailmap("other", otherDir)),
+      workspaceRoot = null,
+      hostFunctions = registry,
+    )
+
+    val app = Files.readString(File(appDir, "tools/trailblaze-client.d.ts").toPath())
+    assertTrue(app) {
+      app.contains("  interface TrailblazeHostFunctionMap {\n") &&
+        app.contains("    /** Look up an account. */\n") &&
+        app.contains(
+          "    emitterTest_lookup: { args: TrailblazeHostTypes.EmitterTestLookup; " +
+            "result: TrailblazeHostTypes.EmitterTestAccount };\n",
+        ) &&
+        // A name that isn't a valid identifier is quoted, so the declaration still parses.
+        app.contains("    \"emitter-test-dashed\": { args: TrailblazeHostTypes.EmitterTestDashed; ") &&
+        app.contains("declare namespace TrailblazeHostTypes {\n") &&
+        app.contains("  export interface EmitterTestAccount {\n    email: string;\n  }\n")
+    }
+    assertTrue(Files.readString(File(libDir, "tools/trailblaze-client.d.ts").toPath()).contains("emitterTest_lookup:"))
+    val other = Files.readString(File(otherDir, "tools/trailblaze-client.d.ts").toPath())
+    assertFalse(other.contains("TrailblazeHostFunctionMap"), other)
+  }
+
   private fun newTrailmapDir(id: String): File {
     val parent = createTempDirectory("per-trailmap-client-dts-test").toFile()
     tempDirs += parent
@@ -1583,4 +1641,23 @@ class PerTrailmapClientDtsEmitterTest {
     assertTrue("expected a closing `};` for the `$toolName` entry") { end >= 0 }
     return rendered.substring(start, end)
   }
+}
+
+@Serializable
+internal data class EmitterTestAccount(val email: String)
+
+@Serializable
+@TrailblazeHostFunctionClass(
+  name = "emitterTest_lookup",
+  result = EmitterTestAccount::class,
+  description = "Look up an account.",
+)
+internal data class EmitterTestLookup(val key: String) : TrailblazeHostFunction<EmitterTestAccount> {
+  override suspend fun invoke(context: TrailblazeToolExecutionContext) = EmitterTestAccount("$key@example.com")
+}
+
+@Serializable
+@TrailblazeHostFunctionClass(name = "emitter-test-dashed", result = EmitterTestAccount::class)
+internal class EmitterTestDashed : TrailblazeHostFunction<EmitterTestAccount> {
+  override suspend fun invoke(context: TrailblazeToolExecutionContext) = EmitterTestAccount("dashed@example.com")
 }

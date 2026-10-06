@@ -4,7 +4,7 @@
 
 # `tapOnPoint`
 
-Tap or long press on the UI at the provided coordinates.
+Tap or long press at device screen coordinates, in the units of element bounds (not screenshot pixels).
 
 ## Source
 
@@ -22,14 +22,14 @@ Tap or long press on the UI at the provided coordinates.
 ### Required parameters
 
 - `x` — `Integer`
-  The center X coordinate for the clickable element
+  X coordinate (element center).
 - `y` — `Integer`
-  The center Y coordinate for the clickable element
+  Y coordinate (element center).
 
 ### Optional parameters
 
 - `longPress` — `Boolean`
-  A standard tap is default, but return 'true' to perform a long press instead.
+  Long press instead of tap.
 - `reasoning` — `String`
 
 ## Output

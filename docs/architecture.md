@@ -14,8 +14,7 @@ This document describes the software architecture and key design decisions of th
 | **Gradle (Kotlin DSL)**   | Build system with version catalogs (`libs.versions.toml`)                |
 | **Kotlin Serialization**  | JSON serialization for tools, logs, and API communication                |
 | **Kotlin Coroutines**     | Async execution for tool calls and LLM interactions                      |
-| **Compose Multiplatform** | Desktop application UI                                                   |
-| **Compose Material 3**    | UI component library and theming                                         |
+| **Compose Multiplatform** | The Compose desktop driver, which drives Compose apps under test         |
 | **Ktor**                  | HTTP client for LLM API calls, server for log aggregation                |
 
 ### Why Kotlin?
@@ -44,20 +43,13 @@ consistent behavior.
 
 - **Maestro** - The device interaction library is JVM-only, so driver implementations live in `jvmMain` or `androidMain`
 - **File I/O** - Some file operations use JVM-specific APIs
-- **Desktop UI** - Compose Desktop targets JVM
 
 When adding new code, prefer `commonMain` unless there's a specific platform requirement.
 
-### UI with Compose Material 3
+### UI
 
-The Desktop application uses Compose Multiplatform with Material 3:
-
-- **Material 3 Components** - Buttons, cards, dialogs, navigation, etc.
-- **Dynamic Theming** - Support for light/dark modes
-- **Material Icons Extended** - Comprehensive icon library
-- **Multiplatform Markdown Renderer** - For displaying test documentation
-
-UI code lives primarily in `trailblaze-ui` (shared components) and `trailblaze-desktop` (application shell).
+The user-facing UI is Trailblaze App, a web app the daemon serves at `/trailrunner/`. `trailblaze app`
+opens it.
 
 ### Build Structure
 
@@ -70,13 +62,12 @@ The project uses Gradle with Kotlin DSL and a multi-module structure (selected m
 ├── trailblaze-agent/             # Core agent logic
 ├── trailblaze-android/           # Android on-device driver
 ├── trailblaze-common/            # Shared utilities and tools
-├── trailblaze-desktop/           # Desktop application
+├── trailblaze-desktop/           # CLI + daemon entry point
 ├── trailblaze-host/              # Host-mode driver
 ├── trailblaze-models/            # Data models (Kotlin Multiplatform)
 ├── trailblaze-playwright/        # Web driver (Playwright)
 ├── trailblaze-report/            # Reporting utilities
-├── trailblaze-server/            # Log server
-└── trailblaze-ui/                # Shared UI components
+└── trailblaze-server/            # Log server
 ```
 
 ## Overview

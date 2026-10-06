@@ -4,7 +4,7 @@
 
 # `revyl_back`
 
-Press the device back button to go to the previous screen. On Android, triggers the system back. On iOS, navigates back using the app's UI navigation.
+Go back to the previous screen: system back on Android, the app's back navigation on iOS.
 
 ## Source
 

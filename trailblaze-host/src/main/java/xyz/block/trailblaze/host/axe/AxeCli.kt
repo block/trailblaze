@@ -73,6 +73,7 @@ object AxeCli {
 
   private const val LEFT_COMMAND_KEYCODE = 227
   private const val V_KEYCODE = 25
+  private const val A_KEYCODE = 4
   private const val PROCESS_CLEANUP_MAX_MS = 250L
   private val keypadDigitHidCodes = mapOf(
     '0' to 98,
@@ -426,6 +427,21 @@ object AxeCli {
   fun button(udid: String, button: String, timeoutSeconds: Long = 10): Result =
     run(listOf(axeBin, "button", button, "--udid", udid), timeoutSeconds)
 
+  /**
+   * Selects all of the focused field's text with Cmd+A — AXe's HID events arrive as a hardware
+   * keyboard, which UIKit answers with the standard select-all, secure fields included.
+   */
+  fun selectAll(udid: String, timeoutSeconds: Long = 10): Result = run(selectAllArgs(udid), timeoutSeconds)
+
+  internal fun selectAllArgs(udid: String): List<String> =
+    listOf(
+      axeBin,
+      "key-combo",
+      "--modifiers", LEFT_COMMAND_KEYCODE.toString(),
+      "--key", A_KEYCODE.toString(),
+      "--udid", udid,
+    )
+
   /** Presses a single HID keycode (e.g. 40 = Enter, 42 = Backspace). */
   fun key(udid: String, keycode: Int, timeoutSeconds: Long = 10): Result =
     run(listOf(axeBin, "key", keycode.toString(), "--udid", udid), timeoutSeconds)
@@ -435,29 +451,69 @@ object AxeCli {
    * checks executability directly; for bare names (e.g. `AXE_BIN=axe`) relies on PATH. Either
    * way, an executable binary below [MIN_VERSION] still reports unavailable (see
    * [computeAvailability]) since it drives off incomplete accessibility trees.
-   *
-   * Result is memoized for the JVM lifetime — AXe isn't going to be installed/uninstalled or
-   * upgraded mid-session, and this is called on every device-list refresh + every connect. A
-   * user who installs or upgrades AXe mid-daemon can restart the daemon to pick it up.
    */
-  fun isAvailable(): Boolean = cachedAvailability ?: computeAvailability().also { cachedAvailability = it }
+  fun isAvailable(): Boolean = availability() == Availability.AVAILABLE
 
-  @Volatile private var cachedAvailability: Boolean? = null
+  /**
+   * What [isAvailable] decided, and whether the answer can change. [Availability.MISSING] and
+   * [Availability.TOO_OLD] are memoized for the JVM lifetime — AXe isn't going to be installed or
+   * upgraded mid-session, and this is called on every device-list refresh + every connect. A user
+   * who installs or upgrades AXe mid-daemon can restart the daemon to pick it up.
+   *
+   * [Availability.UNKNOWN] is never memoized: a `--version` probe that timed out, exited non-zero
+   * or threw on a binary that IS there says nothing about the next probe, and caching it would
+   * report a working axe as missing for the rest of the daemon's life.
+   */
+  fun availability(): Availability = availabilityCache.get()
 
-  private fun computeAvailability(): Boolean {
-    if (File(axeBin).isAbsolute && !File(axeBin).canExecute()) {
-      return false
-    }
-    val versionOutput = probeVersionOutput() ?: return false
+  enum class Availability {
+    AVAILABLE,
+
+    /** No executable at [axeBin] (absolute) or on `PATH` (bare name). */
+    MISSING,
+
+    /** Present, but below [MIN_VERSION] or reporting no recognizable version. */
+    TOO_OLD,
+
+    /** Present, but the `--version` probe timed out, exited non-zero or threw. */
+    UNKNOWN,
+  }
+
+  private val availabilityCache = AvailabilityCache(::computeAvailability)
+
+  /** Memoizes [compute]'s answer once it is definitive; [Availability.UNKNOWN] is asked again. */
+  internal class AvailabilityCache(private val compute: () -> Availability) {
+    @Volatile private var cached: Availability? = null
+
+    fun get(): Availability = cached ?: compute().also { if (it != Availability.UNKNOWN) cached = it }
+  }
+
+  private fun computeAvailability(): Availability {
+    if (!binaryExists()) return Availability.MISSING
+    val versionOutput = probeVersionOutput() ?: return Availability.UNKNOWN
     val found = parseAxeVersion(versionOutput)
     if (found == null || compareVersions(found, MIN_VERSION) < 0) {
       Console.log(
         "[AxeCli] axe version too old (found ${found ?: "unrecognized"}, requires >= $MIN_VERSION) " +
           "— older versions return incomplete accessibility trees. Run: brew upgrade axe",
       )
-      return false
+      return Availability.TOO_OLD
     }
-    return true
+    return Availability.AVAILABLE
+  }
+
+  /**
+   * Whether an executable exists where the probe would run it. Resolved here rather than read off a
+   * failed `ProcessBuilder.start`, because a start can also fail transiently (fd or process-table
+   * pressure), and only a binary that isn't there may be memoized as missing.
+   */
+  private fun binaryExists(): Boolean {
+    val bin = File(axeBin)
+    if (bin.isAbsolute || axeBin.contains(File.separatorChar)) return bin.canExecute()
+    return System.getenv("PATH").orEmpty()
+      .split(File.pathSeparatorChar)
+      .filter { it.isNotEmpty() }
+      .any { File(it, axeBin).canExecute() }
   }
 
   private fun probeVersionOutput(): String? = try {

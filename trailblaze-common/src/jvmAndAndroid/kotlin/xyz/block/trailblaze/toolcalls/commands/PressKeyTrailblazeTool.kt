@@ -16,13 +16,9 @@ import xyz.block.trailblaze.yaml.serializers.CaseInsensitiveEnumSerializer
 @TrailblazeToolClass("pressKey")
 @LLMDescription(
   """
-Press a special key that isn't used for regular text input. Examples:
-- BACK: navigate to the previous page or state (Android only).
-- ENTER: submit the current form or text input.
-- HOME: go to the device's home screen / send the current app to the background.
-- BACKSPACE: delete the character before the caret in the currently focused field.
-- TAB: move focus to the next field.
-- ESCAPE: dismiss the keyboard or current modal.
+Press a special key: BACK (previous screen, Android only), ENTER (submit), HOME (home screen,
+backgrounding the app), BACKSPACE (delete before the caret), TAB (next field), ESCAPE (dismiss
+keyboard or modal).
 """,
 )
 data class PressKeyTrailblazeTool(

@@ -4,25 +4,18 @@ import { LABELS, nonEmptyString } from "./contacts_ios_shared";
 const DEFAULT_CONTACT_NAME = "John Appleseed";
 
 export interface OpenContactArgs {
-  /** Visible name of the contact to open (e.g. "Albert Einstein"). */
+  /** Visible name of the contact to open, e.g. "Albert Einstein". */
   name?: string;
-  /**
-   * Visible text to assert on the contact detail screen after opening. Defaults
-   * to `name`, which works for the common case where the contact's display
-   * name is what shows in the navbar.
-   */
+  /** Text to assert on the detail screen after opening. Defaults to `name`. */
   expectedHeading?: string;
 }
 
 /**
- * Open a specific contact by name from the iOS Contacts list. Use this whenever
- * the task is to open a contact, view a contact, navigate to someone's
- * contact card, or look up a particular person — e.g. "open the John Appleseed
- * contact", "go to Albert Einstein's contact card". Verifies the contact's
- * detail screen rendered by asserting the contact name is visible in the
- * navbar. If the contact doesn't exist the underlying search throws — callers
- * who want a "create if missing" pattern should wrap this with a `tryOrFalse`.
+ * Open a contact by name (restarting Contacts first) and verify its detail
+ * screen shows the name. Fails if the contact doesn't exist.
  */
+// Scripted callers wanting "create if missing" can wrap this in `tryOrFalse`.
+//
 // Implementation note: trailhead tool that composes the search tool so the iOS
 // Contacts pull-down-to-search interaction stays in one place — this tool just
 // states the workflow ("get me to this contact") and delegates the how.

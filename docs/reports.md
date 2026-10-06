@@ -207,7 +207,11 @@ a retry beside the run it followed, or any two runs you want to look at together
 read across those lanes rather than down one run:
 
 - **Replay** plays every lane back on one shared wall clock.
-- **Grid** lays the lanes out as a matrix, one column per run and one row per step.
+- **Grid** lays the lanes out as a matrix, one column per run and one row per step. Its **Strip**
+  switch turns it into a gallery: each run's header over a row of its screenshots, one per step,
+  scrolling sideways under a pinned row of step text (a single run captions each screenshot
+  instead). A step sits in the same column for every device. Embedded with `chrome=none`, the strip is the whole frame: no loader bar, tabs, toolbar
+  or run footer.
 
 They live in two places, depending on what you are looking at:
 
@@ -229,7 +233,7 @@ What a row of the stage MEANS depends on what you picked:
   own k-th step: rows carry no shared label, and each cell keeps its own wording.
 
 The stage travels in the URL, so it can be shared or reloaded: `?run=2&tab=replay` (or `tab=steps`
-for the Grid) for a run's own trail, `?view=compare&pick=0,2,5` for a set you picked.
+for the Grid, and `tab=steps&layout=strip` for its strip) for a run's own trail, `?view=compare&pick=0,2,5` for a set you picked.
 The indices are positions in *that* report — a report regenerated with different runs opens on
 whichever of them it still has, or falls back to the run index. Links written when the projections
 were a page of their own (`?view=trail&…`) still land on the same thing, and links to the retired

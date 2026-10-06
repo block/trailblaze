@@ -37,9 +37,14 @@ class WebNetworkCaptureUnitTest {
   private fun newCapture(sessionDir: File = tmp.newFolder()): WebNetworkCapture {
     @Suppress("UNCHECKED_CAST")
     val ctor = WebNetworkCapture::class.java.declaredConstructors
-      .single { it.parameterCount == 3 } as Constructor<WebNetworkCapture>
+      .single { it.parameterCount == 4 } as Constructor<WebNetworkCapture>
     ctor.isAccessible = true
-    return ctor.newInstance("session-test", sessionDir, null)
+    return ctor.newInstance(
+      "session-test",
+      sessionDir,
+      null,
+      WebNetworkCapture.ndjsonFileFor(sessionDir, deviceLabel = null),
+    )
   }
 
   // The drainer's failure modes live behind `private` and only reachable through a real

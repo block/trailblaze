@@ -3,9 +3,13 @@
 package xyz.block.trailblaze.mcp.handlers
 
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
@@ -27,8 +31,11 @@ import xyz.block.trailblaze.llm.RunYamlRequest
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.llm.TrailblazeLlmProvider
 import xyz.block.trailblaze.llm.TrailblazeReferrer
+import xyz.block.trailblaze.logs.client.LogEmitter
+import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeSession
 import xyz.block.trailblaze.logs.model.SessionId
+import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcResult
 import xyz.block.trailblaze.mcp.progress.ProgressSessionManager
 import xyz.block.trailblaze.model.TrailblazeConfig
@@ -887,6 +894,130 @@ class RunYamlRequestHandlerTest {
     assertTrue(traces.contains(second), "Expected the live run's own trace, got $traces")
   }
 
+  /**
+   * The race behind a false "user started a new session" cancel. A run reports its outcome as its last act, so the host can send the
+   * session's next tool while the reporting job is still returning from its launch block. That
+   * job is still `isActive` then, and treating it as an interrupted run ended the shared session as
+   * Cancelled while it was succeeding. A child holding the job open stands in for that return.
+   */
+  @Test
+  fun `a same-session request does not cancel a run that already reported its outcome`() = runTest {
+    val logs = mutableListOf<TrailblazeLog>()
+    val shared = SessionId("shared_session")
+    val firstRunTeardown = CompletableDeferred<Unit>()
+    var firstRunJob: Job? = null
+    var calls = 0
+    val handler = createHandler(
+      runTrailblazeYaml = { _, session, _ ->
+        if (calls++ == 0) {
+          // currentCoroutineContext(), not the TestScope receiver's coroutineContext: this has to
+          // be the handler's launched job.
+          val runContext = currentCoroutineContext()
+          firstRunJob = runContext[Job]
+          CoroutineScope(runContext).launch { firstRunTeardown.await() }
+        }
+        RunYamlCallbackResult(session = session)
+      },
+      logs = logs,
+    )
+    // Shaped like the host's per-tool dispatch: one shared session, which the host ends itself.
+    val sharedRequest = testRequest.copy(
+      config = testRequest.config.copy(overrideSessionId = shared, sendSessionEndLog = false),
+      awaitCompletion = true,
+    )
+
+    val first = handler.handle(sharedRequest)
+    assertTrue(firstRunJob!!.isActive, "The first run's job must still be active for this race")
+    val second = handler.handle(sharedRequest)
+    firstRunTeardown.complete(Unit)
+    advanceUntilIdle()
+
+    assertTrue(first is RpcResult.Success && first.data.success == true, "First run: $first")
+    assertTrue(second is RpcResult.Success && second.data.success == true, "Second run: $second")
+    assertFalse(firstRunJob!!.isCancelled, "The run that already succeeded was cancelled")
+    assertEquals(emptyList(), logs.sessionEndsFor(shared), "The live session was ended")
+  }
+
+  /**
+   * A run that has NOT reported yet is still interrupted by the next request, but when that request
+   * is for the same session the session is not over: the new request carries it on, so ending it
+   * as Cancelled would mark a live session terminal.
+   */
+  @Test
+  fun `a same-session request cancels a still-running run without ending the session`() = runTest {
+    val logs = mutableListOf<TrailblazeLog>()
+    val shared = SessionId("shared_session")
+    val hungRunReleased = CompletableDeferred<Unit>()
+    var calls = 0
+    val handler = createHandler(
+      runTrailblazeYaml = { _, session, _ ->
+        if (calls++ == 0) {
+          try {
+            awaitCancellation()
+          } finally {
+            hungRunReleased.complete(Unit)
+          }
+        }
+        RunYamlCallbackResult(session = session)
+      },
+      logs = logs,
+    )
+    val sharedRequest = testRequest.copy(
+      config = testRequest.config.copy(overrideSessionId = shared, sendSessionEndLog = false),
+    )
+
+    handler.handle(sharedRequest.copy(awaitCompletion = false))
+    advanceUntilIdle()
+    val second = handler.handle(sharedRequest.copy(awaitCompletion = true))
+    advanceUntilIdle()
+
+    assertTrue(second is RpcResult.Success && second.data.success == true, "Second run: $second")
+    assertTrue(hungRunReleased.isCompleted, "The still-running run was not cancelled")
+    assertEquals(emptyList(), logs.sessionEndsFor(shared), "The live session was ended")
+  }
+
+  /** A request for a different session still interrupts the running one and ends its session. */
+  @Test
+  fun `a new-session request cancels a still-running run and ends its session`() = runTest {
+    val logs = mutableListOf<TrailblazeLog>()
+    val old = SessionId("old_session")
+    val hungRunReleased = CompletableDeferred<Unit>()
+    val handler = createHandler(
+      runTrailblazeYaml = { request, session, _ ->
+        if (request.config.overrideSessionId == old) {
+          try {
+            awaitCancellation()
+          } finally {
+            hungRunReleased.complete(Unit)
+          }
+        }
+        RunYamlCallbackResult(session = session)
+      },
+      logs = logs,
+    )
+
+    handler.handle(
+      testRequest.copy(config = testRequest.config.copy(overrideSessionId = old), awaitCompletion = false),
+    )
+    advanceUntilIdle()
+    handler.handle(
+      testRequest.copy(
+        config = testRequest.config.copy(overrideSessionId = SessionId("new_session")),
+        awaitCompletion = true,
+      ),
+    )
+    advanceUntilIdle()
+
+    assertTrue(hungRunReleased.isCompleted, "The still-running run was not cancelled")
+    val ended = logs.sessionEndsFor(old).single()
+    assertTrue(ended is SessionStatus.Ended.Cancelled, "Expected Cancelled, got $ended")
+  }
+
+  private fun List<TrailblazeLog>.sessionEndsFor(sessionId: SessionId): List<SessionStatus> =
+    filterIsInstance<TrailblazeLog.TrailblazeSessionStatusChangeLog>()
+      .filter { it.session == sessionId && it.sessionStatus is SessionStatus.Ended }
+      .map { it.sessionStatus }
+
   // ── test infrastructure ──────────────────────────────────────────────────
 
   private fun TestScope.createHandler(
@@ -896,16 +1027,15 @@ class RunYamlRequestHandlerTest {
     probeUiAutomationWedge: () -> Boolean = { false },
     /** Collects the sessions the rule exported a trace for — see the trace-export tests. */
     tracesWrittenFor: MutableList<SessionId>? = null,
+    /** Collects every log the rule emits; see the replacement-request tests. */
+    logs: MutableList<TrailblazeLog>? = null,
   ): RunYamlRequestHandler {
     // StandardTestDispatcher lets the test control when the launched block runs, which is
     // what makes the virtual-time advanceTimeBy in the timeout test actually trigger the
     // withTimeoutOrNull inside handle().
-    val loggingRule = TestLoggingRule(tracesWrittenFor = tracesWrittenFor)
-    var currentJob: kotlinx.coroutines.Job? = null
+    val loggingRule = TestLoggingRule(tracesWrittenFor = tracesWrittenFor, logs = logs)
     return RunYamlRequestHandler(
       backgroundScope = TestScope(StandardTestDispatcher(testScheduler)),
-      getCurrentJob = { currentJob },
-      setCurrentJob = { currentJob = it },
       loggingRule = loggingRule,
       runTrailblazeYaml = runTrailblazeYaml,
       trailblazeDeviceInfoProvider = { deviceId ->
@@ -929,17 +1059,19 @@ class RunYamlRequestHandlerTest {
    * Minimal [TrailblazeLoggingRule] concrete subclass with `noLogging = true` so none of
    * the HTTP/disk log-emission paths fire during tests.
    *
-   * A [tracesWrittenFor] list opts into logging (the rule skips trace export entirely when
+   * A [tracesWrittenFor] or [logs] list opts into logging (the rule skips trace export entirely when
    * `noLogging`), with a fast-fail `logsBaseUrl` so the server ping is refused immediately rather
    * than waiting out its timeout, and disk log writes dropped.
    */
   private class TestLoggingRule(
     tracesWrittenFor: MutableList<SessionId>? = null,
+    logs: MutableList<TrailblazeLog>? = null,
   ) : TrailblazeLoggingRule(
-    noLogging = tracesWrittenFor == null,
+    noLogging = tracesWrittenFor == null && logs == null,
     logsBaseUrl = "http://127.0.0.1:1",
     writeLogToDisk = { _, _ -> },
     writeTraceToDisk = { sessionId, _ -> tracesWrittenFor?.add(sessionId) },
+    additionalLogEmitter = logs?.let { collected -> LogEmitter { collected.add(it) } },
   ) {
     override val trailblazeDeviceInfoProvider: () -> TrailblazeDeviceInfo = {
       TrailblazeDeviceInfo(

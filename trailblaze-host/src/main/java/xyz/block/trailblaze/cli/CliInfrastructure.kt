@@ -8,6 +8,7 @@ import xyz.block.trailblaze.cli.TrailblazeExitCode.INFRA_FAILED
 import xyz.block.trailblaze.cli.TrailblazeExitCode.MISUSE
 import xyz.block.trailblaze.cli.TrailblazeExitCode.SUCCESS
 import xyz.block.trailblaze.config.AppTargetYamlLoader
+import xyz.block.trailblaze.config.ServedTrailmaps
 import xyz.block.trailblaze.config.project.TrailblazeProjectConfigLoader
 import xyz.block.trailblaze.config.project.TrailblazeWorkspaceConfigResolver
 import xyz.block.trailblaze.config.project.WorkspaceContentHasher
@@ -15,6 +16,7 @@ import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDevicePort
 import xyz.block.trailblaze.devices.WebInstanceIds
 import xyz.block.trailblaze.host.devices.HostDriverPortUtils
+import xyz.block.trailblaze.logs.server.endpoints.CliDaemonCapabilities
 import xyz.block.trailblaze.logs.server.endpoints.CliStatusResponse
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.tracing.TrailblazeTracer
@@ -1772,12 +1774,7 @@ internal suspend fun connectOrStartDaemonOneShot(
   onStarved: (String) -> Unit = ::reportDaemonStarved,
 ): CliMcpClient? {
   requireConnectablePort(port)
-  if (!checkDaemonBeforeConnect(port)) {
-    reportDaemonUnreachable(
-      "stale daemon (wrong version) did not stop on shutdown request",
-    )
-    return null
-  }
+  if (!checkDaemonBeforeConnect(port)) return null
 
   return try {
     CliMcpClient.connectOneShot(port)
@@ -1824,12 +1821,7 @@ internal suspend fun connectOrStartDaemonReusable(
   sessionScope: String? = null,
 ): CliMcpClient? {
   requireConnectablePort(port)
-  if (!checkDaemonBeforeConnect(port)) {
-    reportDaemonUnreachable(
-      "stale daemon (wrong version) did not stop on shutdown request",
-    )
-    return null
-  }
+  if (!checkDaemonBeforeConnect(port, targetAppId)) return null
 
   return try {
     TrailblazeTracer.traceSuspend("mcpSession", CliCommandTrace.CATEGORY) {
@@ -1861,6 +1853,7 @@ internal suspend fun connectOrStartDaemonReusable(
       }
       DaemonAutoStartOutcome.STARTED, DaemonAutoStartOutcome.ALREADY_RUNNING -> Unit
     }
+    if (refusesStartedDaemon(port, targetAppId)) return null
     try {
       CliMcpClient.connectReusable(
         port = port,
@@ -1879,22 +1872,27 @@ internal suspend fun connectOrStartDaemonReusable(
 
 /**
  * The checks a command makes on the daemon at [port] before opening its MCP session: restart it if
- * it runs another version, then warn if it serves another workspace than the caller's.
+ * it runs another version, refuse if it would run [targetAppId] from another copy of a trailmap the
+ * caller's workspace has (see [ServedTrailmaps]), then warn if it serves another workspace than the
+ * caller's. A command that names no target uses no trailmap, so it skips the refusal.
  *
  * A command forwarded through `/cli/exec` runs inside the daemon it connects to. Its version is this
  * process's version, and its workspace is what this process loaded, so both are read here: over HTTP,
  * each status request also scans every attached device. A separate process fetches the status once
- * and uses it for both checks.
+ * and uses it for every check.
  *
- * @return false if a stale daemon would not stop, so the caller must not connect.
+ * @return false, having reported why, when the caller must not connect.
  */
 internal fun checkDaemonBeforeConnect(
   port: Int,
+  targetAppId: String? = null,
   fetchStatus: (Int) -> CliStatusResponse? = ::fetchDaemonStatus,
   thisDaemon: () -> DaemonWorkspace = DaemonWorkspace::ofThisProcess,
   warn: (WorkspaceMismatch) -> Unit = ::warnWorkspaceMismatch,
+  refuse: (String) -> Unit = ::refuseShadowedTrailmaps,
 ): Boolean {
   if (CliCallerContext.isServedBy(port)) {
+    if (refusesShadowedTrailmaps(targetAppId, CliCallerContext.servedTrailmaps(), refuse)) return false
     TrailblazeTracer.trace("workspaceCheck", CliCommandTrace.CATEGORY) {
       findWorkspaceMismatch(thisDaemon(), CliCallerContext.callerCwd())?.let(warn)
     }
@@ -1902,13 +1900,27 @@ internal fun checkDaemonBeforeConnect(
   }
   val status = TrailblazeTracer.trace("daemonStatus", CliCommandTrace.CATEGORY) { fetchStatus(port) }
   when (TrailblazeTracer.trace("versionCheck", CliCommandTrace.CATEGORY) { restartIfStale(port, status) }) {
-    StaleDaemonOutcome.STUCK -> return false
+    StaleDaemonOutcome.STUCK -> {
+      reportDaemonUnreachable("stale daemon (wrong version) did not stop on shutdown request")
+      return false
+    }
     // The next connect starts a fresh daemon from the caller's directory, so there is nothing to compare.
     StaleDaemonOutcome.RESTARTED -> return true
     StaleDaemonOutcome.KEPT -> Unit
   }
-  // No status means no daemon: the caller is about to start one from its own directory.
+  // No status means no daemon: the caller is about to start one from its own directory, and checks
+  // it once it is up ([refusesStartedDaemon]).
   status ?: return true
+  // A daemon kept on another version (it has runs in flight, or this is a developer build) may
+  // predate the trailmap check altogether, and then reports no origins to compare.
+  if (targetAppId != null &&
+    CliDaemonCapabilities.WORKSPACE_TRAILMAPS !in status.capabilities &&
+    ServedTrailmaps.declaresTarget(CliCallerContext.callerCwd(), targetAppId, callerConfigDir())
+  ) {
+    refuse(ServedTrailmaps.unverifiableRefusal(targetAppId))
+    return false
+  }
+  if (refusesShadowedTrailmaps(targetAppId, status.servedTrailmaps, refuse)) return false
   TrailblazeTracer.trace("workspaceCheck", CliCommandTrace.CATEGORY) {
     findWorkspaceMismatch(
       DaemonWorkspace(status.workspaceAnchor, status.workspaceContentHash),
@@ -1916,6 +1928,49 @@ internal fun checkDaemonBeforeConnect(
     )?.let(warn)
   }
   return true
+}
+
+/**
+ * Reports, through [refuse], the trailmaps in the caller's workspace that a daemon serving [served]
+ * would run [targetAppId] from another copy of. True when there are any, so the command must stop.
+ */
+private fun refusesShadowedTrailmaps(
+  targetAppId: String?,
+  served: Map<String, Map<String, String?>>?,
+  refuse: (String) -> Unit = ::refuseShadowedTrailmaps,
+): Boolean {
+  val shadowed = ServedTrailmaps.shadowedIn(CliCallerContext.callerCwd(), targetAppId, served, callerConfigDir())
+  if (shadowed.isEmpty()) return false
+  refuse(ServedTrailmaps.refusal(shadowed))
+  return true
+}
+
+/**
+ * The trailmap check for a daemon this command just auto-started. It started from the caller's
+ * directory, so [checkDaemonBeforeConnect] had nothing to compare, but it can still serve another
+ * copy: one whose workspace trailmap failed to load, with a bundled or prebuilt copy filling in.
+ * True, having reported why, when the command must stop.
+ */
+internal fun refusesStartedDaemon(
+  port: Int,
+  targetAppId: String?,
+  fetchStatus: (Int) -> CliStatusResponse? = ::fetchDaemonStatus,
+  refuse: (String) -> Unit = ::refuseShadowedTrailmaps,
+): Boolean {
+  targetAppId ?: return false
+  return refusesShadowedTrailmaps(targetAppId, fetchStatus(port)?.servedTrailmaps, refuse)
+}
+
+/**
+ * The `TRAILBLAZE_CONFIG_DIR` the caller set: this process's own in a separate CLI, and only what the
+ * launcher forwarded in a command running inside the daemon, never the daemon's own.
+ */
+internal fun callerConfigDir(): String? =
+  CliCallerContext.callerEnv(TrailblazeWorkspaceConfigResolver.CONFIG_DIR_ENV_VAR)
+
+/** Not an advisory banner: printed in quiet mode too, because the command is not going to run. */
+private fun refuseShadowedTrailmaps(message: String) {
+  Console.error(message)
 }
 
 private fun fetchDaemonStatus(port: Int): CliStatusResponse? = try {

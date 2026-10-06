@@ -6,7 +6,7 @@ config:
       driver: ANDROID_ONDEVICE_ACCESSIBILITY
 
 trailhead:
-  step: Launch the sample app
+  step: "Launch the sample app"
   recording:
     android-phone:
       launchApp:
@@ -17,18 +17,29 @@ trail:
     recording:
       android-phone:
         - tapOnElementBySelector:
-            reason: The 'Forms' tab is identified by the node containing the 'Forms' text. Tapping this node should navigate to the 'Forms' tab as requested by the objective.
+            reason: The app's main navigation is visible. The Forms tab is present as ref s726, while Taps is currently selected. I have completed locating the Forms tab; next I will tap it and then verify the Forms screen is shown.
+            nodeSelector:
+              containsChild:
+                androidAccessibility:
+                  textRegex: Forms
+        - assertVisibleBySelector:
+            reason: The Forms tab was tapped successfully and the current screen shows the Forms content with Name, Email, Submit, and Clear All controls. The Forms tab remains selected. No further navigation is needed; I am verifying the selected Forms tab.
             nodeSelector:
               androidAccessibility:
-                classNameRegex: android.view.View
-                collectionItemRowIndex: 0
                 collectionItemColumnIndex: 1
+            expectedText: Forms
 
   - step: "Tap the \"Name\" field and type \"Jane Doe\""
     recording:
       android-phone:
+        - tapOnElementBySelector:
+            reason: The screen shows the top green-outlined text field labeled by ref w96, which is the Name field. No steps have been completed yet. I will tap the Name field first, then type the requested name into the focused field.
+            nodeSelector:
+              androidAccessibility:
+                hintTextRegex: Name
         - inputText:
             text: Jane Doe
+            reasoning: The Name field w96 is currently focused, as confirmed by the prior screen state. The field has been tapped successfully; the only remaining step is to enter the exact requested text Jane Doe.
             selector:
               androidAccessibility:
                 hintTextRegex: Name
@@ -36,39 +47,57 @@ trail:
   - step: "Tap the \"Email\" field and type \"jane@example.com\""
     recording:
       android-phone:
+        - tapOnElementBySelector:
+            reason: 'The detailed hierarchy identifies the Email field as ref p820. Completed: located the Email field. Next: tap it to focus, then enter jane@example.com.'
+            nodeSelector:
+              androidAccessibility:
+                hintTextRegex: Email
         - inputText:
             text: jane@example.com
+            reasoning: 'The Email field p820 is focused, as confirmed in the latest screen state. Completed: identified and focused Email. Next: type the exact requested address into the focused field.'
             selector:
               androidAccessibility:
                 hintTextRegex: Email
+        - assertVisibleBySelector:
+            reason: 'The Email field is visibly populated with the exact requested value jane@example.com and remains focused. Completed: tapped Email and entered the address. Next: verify the rendered field value, which is the final objective.'
+            nodeSelector:
+              androidAccessibility:
+                classNameRegex: android.widget.EditText
+              index: 1
+            expectedText: jane@example.com
 
   - step: "Tap the \"Submit\" button"
     recording:
       android-phone:
         - tapOnElementBySelector:
-            reason: The element with nodeId 14 contains the 'Submit' text and is clickable, which matches the objective to tap the 'Submit' button.
+            reason: The detailed hierarchy shows the Submit button as [s228]. No steps have been completed yet. The next step is to tap Submit, then inspect the resulting screen to verify submission.
             nodeSelector:
-              androidAccessibility:
-                textRegex: Submit
+              containsChild:
+                androidAccessibility:
+                  textRegex: Submit
 
   - step: "Verify \"Jane Doe\" and \"jane@example.com\" appear in the submission result"
     recording:
       android-phone:
         - assertVisibleBySelector:
-            reason: 'This node contains the text ''Name: Jane Doe\nEmail: jane@example.com'', which confirms both ''Jane Doe'' and ''jane@example.com'' appear in the submission result.'
+            reason: The form fields already contain the requested values, and the submission result is visible with both values. No interaction is needed; I am verifying the exact result text now.
             nodeSelector:
               androidAccessibility:
                 textRegex: |-
-                  \QName: Jane Doe
-                  Email: jane@example.com\E
+                  Name: Jane Doe
+                  Email: jane@example.com
+            expectedText: |-
+              Name: Jane Doe
+              Email: jane@example.com
 
   - step: "Tap \"Clear All\" and verify \"Jane Doe\" is no longer visible"
     recording:
       android-phone:
         - tapOnElementBySelector:
-            reason: Tapping the 'Clear All' button is the required action to attempt clearing out the form and submission result, as per the objective.
+            reason: 'The hierarchy shows the Clear All button at [b651], and Jane Doe is currently visible in the Name field and submission result. Completed: located the target control and confirmed the pre-action state. Next: tap Clear All, wait for the UI to settle, then assert that Jane Doe is no longer visible.'
             nodeSelector:
-              androidAccessibility:
-                textRegex: Clear All
+              containsChild:
+                androidAccessibility:
+                  textRegex: Clear All
         - assertNotVisibleWithText:
             text: Jane Doe

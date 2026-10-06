@@ -80,6 +80,8 @@ data class SessionInfo(
    * failing to link.
    */
   val endTimestamp: Instant? = null,
+  /** Immutable GitHub permalink for the source trail YAML, when the run had one. */
+  val trailSourceUrl: String? = null,
 ) {
   // Title resolution priority:
   //  1. trailConfig.title  — explicit human-readable title in YAML
@@ -199,5 +201,6 @@ fun List<TrailblazeLog>.getSessionInfo(): SessionInfo? {
     llmUsageSummary = this.computeUsageSummary(),
     selectedDeviceConfiguration = sessionStartedInfo?.selectedDeviceConfiguration,
     deviceClockOffsetMs = offsets?.sessionWideOffsetMs,
+    trailSourceUrl = sessionStartedInfo?.trailSourceUrl,
   )
 }

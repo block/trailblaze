@@ -1,15 +1,7 @@
 import { trailblaze } from "@trailblaze/scripting";
 
 /**
- * Force-stops the AOSP Desk Clock app and re-launches it via the package's default
- * launcher activity, so the next step starts from a clean app state. Equivalent to a
- * Maestro `launchApp({ launchMode: FORCE_RESTART })` against `com.android.deskclock`,
- * but composed entirely from the dual-mode `android_adbShell` primitive so the same tool
- * works on host- and on-device-dispatched scripted-tool sessions.
- *
- * Use this as the first step of any clock trail that wants a fresh launch state. No
- * arguments — the framework resolves the app id from the `clock` trailmap manifest's
- * `app_ids:` list against installed apps on the connected device.
+ * Force-stop and relaunch the Clock app. Keeps existing alarms; `clock_clearAlarms` wipes them.
  */
 // Implementation notes — a worked example of the typed `trailblaze.tool()` authoring path
 // and of composing the dual-mode `android_adbShell` framework primitive.

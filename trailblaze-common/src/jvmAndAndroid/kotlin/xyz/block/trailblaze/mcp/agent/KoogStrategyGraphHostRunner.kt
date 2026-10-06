@@ -62,6 +62,8 @@ import xyz.block.trailblaze.yaml.VerificationStep
  * @param decisionSettings where the decision engine's settings and key are read
  *   (`TRAILBLAZE_DECISION_MOVES` and friends). The process environment by default; an on-device run
  *   has none of the host's, so it passes its instrumentation arguments instead.
+ * @param alwaysShownTools tools the LLM is shown even on a turn where the decision engine hides
+ *   tools: the target's `always_shown_tools` for this driver.
  */
 suspend fun runPromptsWithKoogStrategyGraph(
   promptSteps: List<PromptStep>,
@@ -79,6 +81,7 @@ suspend fun runPromptsWithKoogStrategyGraph(
   onStepProgress: ((stepIndex: Int, totalSteps: Int, stepText: String) -> Unit)? = null,
   instrumentation: KoogRunInstrumentation? = null,
   decisionSettings: (String) -> String? = System::getenv,
+  alwaysShownTools: Set<String> = emptySet(),
 ): TrailblazeToolResult {
   val objective = promptSteps.joinToString(separator = "\n") { it.prompt }
   onStepProgress?.invoke(1, 1, objective)
@@ -310,8 +313,8 @@ suspend fun runPromptsWithKoogStrategyGraph(
   val loggingLlmClient = LoggingLlmClient(
     // Opt-in (TRAILBLAZE_DECISION_MOVES): a decision engine makes the moves it is sure of. Inside the
     // logger so each of its decision requests, and each move it makes, lands in this session's log.
-    // Below the LLM-call budget on purpose: an engine move counts as a turn, so decisions never give
-    // an objective more turns than it gets without them, and the budget still stops a looping engine.
+    // Below the LLM-call budget, which gives an engine move's call back and counts it against the
+    // engine's own budget of the same size; see [LlmCallBudgetLlmClient].
     delegate = NextMoveDecisionLlmClient.wrapIfEnabled(
       // Innermost: a request that never reached the model (DNS miss, refused connect) is retried here,
       // so it is logged and budgeted once.
@@ -320,6 +323,7 @@ suspend fun runPromptsWithKoogStrategyGraph(
       verification = isVerificationBlock(promptSteps),
       screenText = { sharedScreenProvider().viewHierarchyTextRepresentation },
       env = decisionSettings,
+      alwaysShownTools = alwaysShownTools,
     ),
     logger = logger,
     session = session,

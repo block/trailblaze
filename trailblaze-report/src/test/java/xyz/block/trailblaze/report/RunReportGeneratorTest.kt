@@ -409,6 +409,15 @@ class RunReportGeneratorTest {
   }
 
   @Test
+  fun sessionMetaJson_preservesTheCapturedSourceWithoutAFilePath() {
+    val passed = SessionStatus.Ended.Succeeded(1)
+    val url = "https://github.com/example/trails/blob/${"a".repeat(40)}/case/trail.yaml"
+    val meta = RunReportGenerator.sessionMetaJson(info(passed).copy(trailFilePath = null, trailSourceUrl = url), passed, noSelfHeal)
+    assertEquals(url, meta["trailSourceUrl"]!!.jsonPrimitive.content)
+    assertNull(RunReportGenerator.sessionMetaJson(info(passed), passed, noSelfHeal)["trailSourceUrl"])
+  }
+
+  @Test
   fun sessionMetaJson_carriesTitleStatusDurationAndRerunCommand() {
     val meta = RunReportGenerator.sessionMetaJson(info(SessionStatus.Ended.Succeeded(12_345)), SessionStatus.Ended.Succeeded(12_345), noSelfHeal)
     // The run's own id rides along, so another document can name this run stably by id.

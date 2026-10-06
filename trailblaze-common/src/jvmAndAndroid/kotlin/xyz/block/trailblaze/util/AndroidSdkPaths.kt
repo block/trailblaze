@@ -1,11 +1,8 @@
 package xyz.block.trailblaze.util
 
 /**
- * Single source of truth for locating the Android SDK on the host machine.
- *
- * Both [AdbPathResolver] (CLI / MCP adb resolution) and `ToolAvailabilityChecker`
- * (desktop UI status panel) use this helper, so the two never drift on which paths
- * are considered "well-known".
+ * Single source of truth for locating the Android SDK on the host machine, used by
+ * [AdbPathResolver] (CLI / MCP adb resolution).
  */
 object AndroidSdkPaths {
 

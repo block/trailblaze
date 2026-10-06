@@ -80,10 +80,16 @@ dev_source_hash() {
     # Untracked files: list names + sizes so new files are detected. Same
     # scope as the diff filter above (grep regex instead of pathspec, since
     # this leg's input is a plain filename list) — keep both in sync.
+    # GNU stat first, BSD stat second — never the other way round. To GNU stat, `-f` means
+    # "file system status", so `stat -f '%N %z' file` on Linux prints the volume's free-block
+    # counts to stdout (and exits 1, so the fallback ALSO runs). Those counts change every
+    # second, which made the hash differ on every call whenever one untracked in-scope file
+    # existed — and every call then rebuilt the JAR and stopped the daemon. macOS stat has no
+    # `--format`, fails silently, and falls through to `-f`.
     git ls-files --others --exclude-standard \
       | grep -E '\.(kt|kts|java|properties|toml|xml|pro)$|(^|/)src/.*/resources/.*\.(yaml|yml|json|html|ts|tsx|js|jsx|mjs|cjs)$|(^|/)sdks/typescript/(src|tools)/|(^|/)sdks/typescript/(package\.json|bun\.lock|runtime-globals\.d\.ts)$' \
       | grep -vE '(^|/)\.trailblaze/' \
-      | while read -r f; do stat -f '%N %z' "$f" 2>/dev/null || stat --format='%n %s' "$f" 2>/dev/null; done
+      | while read -r f; do stat --format='%n %s' "$f" 2>/dev/null || stat -f '%N %z' "$f" 2>/dev/null; done
     } | if command -v sha256sum >/dev/null 2>&1; then sha256sum; else shasum -a 256; fi | cut -d' ' -f1
   )
 }
@@ -320,8 +326,8 @@ dev_ensure_jar() {
   return 0
 }
 
-# Delete old timestamped JARs (and their CDS .jsa siblings) kept around by the
-# Compose plugin — we only ever use the newest one, and each old JAR/JSA pair
+# Delete old timestamped JARs (and their CDS .jsa siblings) left by earlier
+# builds — we only ever use the newest one, and each old JAR/JSA pair
 # is ~270MB + ~30MB of stale debris.
 dev_prune_stale_siblings() {
   local jar_dir="$1"

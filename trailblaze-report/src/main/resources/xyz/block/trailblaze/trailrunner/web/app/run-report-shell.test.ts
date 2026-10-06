@@ -116,6 +116,17 @@ describe("buildViewerShellHtml", () => {
     expect(shell).not.toMatch(/id="tb-shell-handle"[^>]* hidden/);
   });
 
+  test("embedded with chrome=none, the loader chrome never shows", () => {
+    // The host picked the archives, so the URL bar, the zip list and the reopen handle are noise in
+    // its frame. Marked from <head>, before the body parses, so the bar cannot paint first.
+    const head = shell.slice(0, shell.indexOf("</head>"));
+    expect(head).toContain("includes('chrome=none')");
+    expect(head).toContain("dataset.tbEmbed");
+    for (const id of ["tb-shell-bar", "tb-shell-list", "tb-shell-handle"]) {
+      expect(shell).toContain(`html[data-tb-embed] #tb-shell #${id}`);
+    }
+  });
+
   test("says up front that loading by URL depends on the archive host's CORS header", () => {
     // The two load paths have different requirements: a dropped file needs no network, while `?zip=`
     // is a cross-origin fetch that only works when the host opts in. The loader already names the
@@ -229,6 +240,147 @@ describe("structured analysis deep links", () => {
     expect(html).toContain("Compare a run before and after this commit.");
     expect(html).toContain(`href="https://github.com/example/checkout-app/commit/${"a".repeat(40)}"`);
     expect(html).toContain('data-tb-copy-status class="tb-shell-sr"');
+    expect(html).not.toContain("Diagnostic classification:");
+  });
+
+  test("renders published self-heal PR links in the overview and focused action", () => {
+    const withHealPr = {
+      ...payload,
+      problem_sets: [{
+        ...payload.problem_sets[0],
+        status: { tone: "notice", label: "Change available" },
+        next_action_or_evidence_needed: {
+          ...payload.problem_sets[0].next_action_or_evidence_needed,
+          links: [{ label: "Open self-heal PR", href: "https://github.com/example/trails/pull/123" }],
+        },
+      }, payload.problem_sets[1]],
+    };
+    const overview = renderAnalysisView(withHealPr, "all");
+    expect(overview).toContain("Open self-heal PR");
+    expect(overview).toContain('href="https://github.com/example/trails/pull/123"');
+    const focused = renderAnalysisView(withHealPr, "checkout");
+    expect(focused).toContain("Open self-heal PR");
+    expect(focused).toContain('target="_blank" rel="noopener noreferrer"');
+  });
+
+  test("ignores malformed action links while preserving the analysis", () => {
+    const malformed = {
+      ...payload,
+      problem_sets: [{
+        ...payload.problem_sets[0],
+        next_action_or_evidence_needed: {
+          ...payload.problem_sets[0].next_action_or_evidence_needed,
+          links: [
+            { label: "Unsafe scheme", href: "javascript:alert(1)" },
+            { label: "Missing URL" },
+          ],
+        },
+      }, payload.problem_sets[1]],
+    };
+    const html = renderAnalysisView(malformed, "checkout");
+    expect(html).toContain("Inspect the checkout step.");
+    expect(html).not.toContain("Unsafe scheme");
+    expect(html).not.toContain("javascript:");
+  });
+
+  test("renders optional diagnostics per affected run and in the problem summary", () => {
+    const annotated = {
+      ...payload,
+      problem_sets: [
+        {
+          ...payload.problem_sets[0],
+          diagnostic_summary: "The available evidence points to a product change.",
+          affected_subjects: [{
+            ...payload.problem_sets[0].affected_subjects[0],
+            diagnostic: {
+              status: "classified",
+              label: "Product regression (intermittency observed)",
+              primary_diagnosis: "PRODUCT_REGRESSION",
+              intermittency: "OBSERVED",
+              confidence: 0.875,
+            },
+          }],
+        },
+        {
+          ...payload.problem_sets[1],
+          affected_subjects: [{
+            ...payload.problem_sets[1].affected_subjects[0],
+            diagnostic: { status: "unavailable", label: "Classification unavailable" },
+          }],
+        },
+      ],
+    };
+    const overview = renderAnalysisView(annotated, "all");
+    expect(overview).toContain("Diagnostic classification:");
+    expect(overview).toContain("The available evidence points to a product change.");
+    expect(overview.indexOf("1 affected run(s)")).toBeLessThan(overview.indexOf("Diagnostic classification:"));
+    expect(overview.indexOf("Diagnostic classification:")).toBeLessThan(overview.indexOf("Checkout &lt;changed&gt;"));
+    expect(overview.indexOf("Diagnostic classification:")).toBeLessThan(overview.indexOf("Open problem and evidence"));
+    expect(overview).not.toContain("1 affected run · high confidence");
+    expect(overview).toContain("high confidence");
+    const countOnlyOverview = renderAnalysisView({
+      ...annotated,
+      problem_sets: annotated.problem_sets.map((problem) => ({
+        ...problem,
+        context_summary: `${problem.affected_subjects.length} affected run(s)`,
+      })),
+    }, "all");
+    expect((countOnlyOverview.match(/1 affected run\(s\)/g) || []).length).toBe(2);
+    const checkout = renderAnalysisView(annotated, "checkout");
+    expect(checkout).toContain("Diagnostic classification: Product regression (intermittency observed)");
+    expect(checkout).toContain("Classifier confidence: 0.875");
+    expect(checkout.indexOf("1 affected run · high confidence")).toBeLessThan(checkout.indexOf("Diagnostic classification:"));
+    expect(checkout.indexOf("Diagnostic classification:")).toBeLessThan(checkout.indexOf("Key evidence"));
+    const settings = renderAnalysisView(annotated, "settings");
+    expect(settings).toContain("Diagnostic classification: Classification unavailable");
+    expect(settings).toContain("Classification unavailable");
+  });
+
+  test("renders unresolved intermittency and fails soft on malformed optional annotations", () => {
+    const unknownObserved = {
+      ...payload,
+      problem_sets: [{
+        ...payload.problem_sets[0],
+        affected_subjects: [{
+          ...payload.problem_sets[0].affected_subjects[0],
+          diagnostic: {
+            status: "classified",
+            label: "Flaky; cause unresolved",
+            primary_diagnosis: "UNKNOWN",
+            intermittency: "OBSERVED",
+          },
+        }],
+      }, payload.problem_sets[1]],
+    };
+    expect(renderAnalysisView(unknownObserved, "checkout")).toContain("Diagnostic classification: Flaky; cause unresolved");
+
+    const unknownCause = {
+      ...unknownObserved,
+      problem_sets: [{
+        ...unknownObserved.problem_sets[0],
+        affected_subjects: [{
+          ...unknownObserved.problem_sets[0].affected_subjects[0],
+          diagnostic: { status: "classified", label: "Unknown cause", primary_diagnosis: "UNKNOWN" },
+        }],
+      }, unknownObserved.problem_sets[1]],
+    };
+    expect(renderAnalysisView(unknownCause, "checkout")).toContain("Diagnostic classification: Unknown cause");
+
+    const malformed = {
+      ...payload,
+      problem_sets: [{
+        ...payload.problem_sets[0],
+        diagnostic_summary: 42,
+        affected_subjects: [{
+          ...payload.problem_sets[0].affected_subjects[0],
+          diagnostic: { status: "not-valid", label: "should be ignored", confidence: "high" },
+        }],
+      }, payload.problem_sets[1]],
+    };
+    const html = renderAnalysisView(malformed, "checkout");
+    expect(html).not.toContain("Diagnostic classification:");
+    expect(html).not.toContain("should be ignored");
+    expect(html).toContain("Affected run 1");
   });
 
   test("renders all problem sets and rejects missing or malformed selections", () => {

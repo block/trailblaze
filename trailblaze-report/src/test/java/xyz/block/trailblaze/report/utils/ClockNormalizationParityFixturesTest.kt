@@ -7,12 +7,14 @@ import kotlin.test.fail
 import kotlinx.datetime.Instant
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.deviceClockOffsets
 import xyz.block.trailblaze.logs.client.normalizedMs
 import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionStatus
+import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.logs.model.TrailblazeClockDomain
 
 /**
@@ -30,7 +32,7 @@ import xyz.block.trailblaze.logs.model.TrailblazeClockDomain
  */
 class ClockNormalizationParityFixturesTest {
 
-  /** `deviceName` absent means the log carries none; `durationMs` absent means 0. */
+  /** `deviceName` / `traceId` absent means the log carries none; `durationMs` absent means 0. */
   @Serializable
   private data class LogCase(
     val id: String,
@@ -40,6 +42,9 @@ class ClockNormalizationParityFixturesTest {
     val durationMs: Long? = null,
     val deviceName: String? = null,
     val hostReceivedAtMs: Long? = null,
+    val toolName: String = "tapOn",
+    val successful: Boolean = true,
+    val traceId: String? = null,
     val expectedHostMs: Long,
   )
 
@@ -98,10 +103,10 @@ class ClockNormalizationParityFixturesTest {
     val timestamp = Instant.fromEpochMilliseconds(timestampMs)
     return when (type) {
       "tool" -> TrailblazeLog.TrailblazeToolLog(
-        trailblazeTool = OtherTrailblazeTool(toolName = "tapOn"),
-        toolName = "tapOn",
-        successful = true,
-        traceId = null,
+        trailblazeTool = OtherTrailblazeTool(toolName = toolName),
+        toolName = toolName,
+        successful = successful,
+        traceId = traceId?.let(::traceIdOf),
         durationMs = durationMs ?: 0L,
         session = SESSION,
         timestamp = timestamp,
@@ -116,9 +121,24 @@ class ClockNormalizationParityFixturesTest {
         clock = domain,
         hostReceivedAt = hostReceivedAtMs?.let { Instant.fromEpochMilliseconds(it) },
       )
-      else -> fail("Unknown fixture log type '$type' (expected 'tool' or 'status')")
+      "snapshot" -> TrailblazeLog.TrailblazeSnapshotLog(
+        displayName = id,
+        screenshotFile = "$id.png",
+        viewHierarchy = ViewHierarchyTreeNode(),
+        deviceWidth = 0,
+        deviceHeight = 0,
+        session = SESSION,
+        timestamp = timestamp,
+        traceId = traceId?.let(::traceIdOf),
+        clock = domain,
+        hostReceivedAt = hostReceivedAtMs?.let { Instant.fromEpochMilliseconds(it) },
+      )
+      else -> fail("Unknown fixture log type '$type' (expected 'tool', 'snapshot' or 'status')")
     }
   }
+
+  /** [TraceId]'s constructor is internal to the models module; its wire form is the bare string. */
+  private fun traceIdOf(value: String): TraceId = Json.decodeFromString(TraceId.serializer(), "\"$value\"")
 
   private fun toolNamed(deviceName: String?) = TrailblazeLog.TrailblazeToolLog(
     trailblazeTool = OtherTrailblazeTool(toolName = "tapOn"),

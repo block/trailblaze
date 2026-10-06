@@ -22,11 +22,11 @@ import xyz.block.trailblaze.yaml.unified.UnifiedTrailStep
  * - **Covered:** everything `TrailblazeYaml` itself writes a trail through, and the one pluggable
  *   slot a v1 emitter historically came back through (a contextual `TrailYamlItem` serializer) —
  *   judged by what it emits, not by whether it is registered.
- * - **Not covered: string-building emitters that never touch `TrailblazeYaml`.** Four still exist
+ * - **Not covered: string-building emitters that never touch `TrailblazeYaml`.** Three still exist
  *   and are tracked in #5773 — `WaypointShortcutVerifyCommand.buildTrailYaml` and
- *   `BlazeRoutes.prependTrailheadTool` / `prependClearAppData` (`:trailblaze-host`),
- *   `WebGesture.toTrailYaml` (`:trailblaze-ui`), and `RecordingYamlCodec.renderTrailheadBlock`
- *   (this module, but it string-builds rather than encoding). Three of those live in modules this
+ *   `BlazeRoutes.prependTrailheadTool` / `prependClearAppData` (`:trailblaze-host`), and
+ *   `RecordingYamlCodec.renderTrailheadBlock` (this module, but it string-builds rather than
+ *   encoding). Two of those live in modules this
  *   test cannot see. The trail *save-back* paths are not among them: `TrailFileManager` and
  *   `RecordedTrailsRepoJvm` both write unified through `UnifiedRecordingWriter`.
  * - **The durable on-disk half** is `TrailYamlValidationTest`, which parses every committed

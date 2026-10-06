@@ -37,13 +37,12 @@ export interface DismissBannerIfPresentArgs {
 }
 
 /**
- * Dismiss any visible Wikipedia fundraising / fundraiser banner. Use this
- * whenever the task is to close a banner, dismiss a popup, or clear out
- * Wikipedia's donate prompt. If no banner is currently visible the tool is
- * a no-op that returns successfully, so it's safe to call unconditionally
- * at the start of a flow. Probes with a sub-second visibility check before
- * attempting the click so the no-banner path is near-instant.
+ * Close Wikipedia's fundraising banner if one is showing; does nothing
+ * otherwise, so it is safe to call at the start of a flow.
  */
+// Probes with a sub-second visibility check before clicking, so the
+// no-banner path is near-instant.
+//
 // Single type arg — the analyzer defaults `TResult` to `string`, matching the SDK's
 // `<TInput, TResult = string>` default. Authoring `<Args, string>` would require a
 // named type alias for the primitive (the analyzer rejects inline primitive type

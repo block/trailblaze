@@ -4,27 +4,15 @@ import { nonEmptyString } from "./wikipedia_shared";
 export interface SearchAndVerifyArgs {
   /** Query to type into the header search box. */
   query?: string;
-  /**
-   * Heading text to assert on the opened article. Defaults to `query`, which
-   * works for exact-match articles like "Python (programming language)".
-   */
+  /** Heading text to assert on the opened article. Defaults to `query`. */
   expectedHeading?: string;
-  /**
-   * Whether to also scroll-and-assert the References section is present.
-   * Defaults to false because not every article has one.
-   */
+  /** Also assert a References section. Default false; not every article has one. */
   requireReferences?: boolean;
 }
 
 /**
- * Search Wikipedia for a topic AND verify the resulting article is
- * well-formed — heading + body, optionally References — in a single tool
- * call. Use this whenever the task combines "search for X" with "verify
- * the article rendered correctly", e.g. "search Wikipedia for Python and
- * confirm the article loaded with a body and References section". Composes
- * the existing `wikipedia_web_searchAndOpenFirstResult` and
- * `wikipedia_web_verifyArticleStructure` tools so callers get both behaviors
- * with one round-trip.
+ * Search Wikipedia, open the result, and verify it is a well-formed article
+ * (heading, body, optionally References) in one call.
  */
 // Composition example — does NOT call any `web_*` builtin directly. Instead
 // delegates to two existing scripted tools in this trailmap:

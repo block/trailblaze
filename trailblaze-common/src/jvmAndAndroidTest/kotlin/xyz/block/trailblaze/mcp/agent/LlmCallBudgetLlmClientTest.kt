@@ -14,10 +14,13 @@ import ai.koog.prompt.params.LLMParams
 import ai.koog.prompt.streaming.StreamFrame
 import ai.koog.utils.time.KoogClock
 import assertk.assertThat
+import assertk.assertions.contains
+import assertk.assertions.doesNotContain
 import assertk.assertions.isEqualTo
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.runBlocking
+import xyz.block.trailblaze.decision.AnsweredWithoutLlm
 import xyz.block.trailblaze.exception.MaxCallsLimitReachedException
 import xyz.block.trailblaze.llm.TrailblazeLlmModels
 import xyz.block.trailblaze.llm.TrailblazeLlmProvider
@@ -32,7 +35,12 @@ import kotlin.test.assertFailsWith
 class LlmCallBudgetLlmClientTest {
 
   /** Counts what actually reaches the model; the assertions are about this, not about the decorator's own counter. */
-  private class CountingLlmClient : LLMClient() {
+  private class CountingLlmClient(
+    /** Calls (1-based) answered as a decision engine move, as the decision client marks one. */
+    private val engineAnswers: Set<Int> = emptySet(),
+    /** Engine moves that won a race, after an LLM request for the turn was sent and dropped. */
+    private val racedAnswers: Set<Int> = emptySet(),
+  ) : LLMClient() {
     var executes = 0
     var multipleChoices = 0
     var streams = 0
@@ -41,7 +49,9 @@ class LlmCallBudgetLlmClientTest {
     override fun llmProvider(): LLMProvider = TrailblazeLlmProvider.NONE_KOOG_LLM_PROVIDER
     override suspend fun execute(prompt: Prompt, model: LLModel, tools: List<ToolDescriptor>): Message.Assistant {
       executes++
-      return Message.Assistant(content = "ok", metaInfo = ResponseMetaInfo.create(KoogClock.System))
+      val engine = AnsweredWithoutLlm.metadata(AnsweredWithoutLlm.DECISION, llmRequestSent = executes in racedAnswers)
+        .takeIf { executes in engineAnswers || executes in racedAnswers }
+      return Message.Assistant(content = "ok", metaInfo = ResponseMetaInfo(KoogClock.System.now(), metadata = engine))
     }
     override suspend fun executeMultipleChoices(prompt: Prompt, model: LLModel, tools: List<ToolDescriptor>): LLMChoice {
       multipleChoices++
@@ -127,6 +137,57 @@ class LlmCallBudgetLlmClientTest {
       client.execute(prompt(), model, emptyList())
       val refused = assertFailsWith<MaxCallsLimitReachedException> { client.execute(prompt(), model, emptyList()) }
       assertThat(refused.objectivePrompt).isEqualTo("second")
+    }
+
+    assertThat(model_.executes).isEqualTo(2)
+  }
+
+  @Test
+  fun `a decision engine move spends its own budget, not an LLM call`() {
+    // Calls 1-3 are engine moves: the LLM's 2 calls are all still available after them.
+    val model_ = CountingLlmClient(engineAnswers = setOf(1, 2, 3))
+    val client = LlmCallBudgetLlmClient(delegate = model_, maxLlmCalls = 2)
+    client.beginObjective("add a latte")
+
+    runBlocking {
+      client.execute(prompt(), model, emptyList())
+      client.execute(prompt(), model, emptyList())
+      assertThat(client.engineMovesMade).isEqualTo(2)
+      assertThat(client.llmCallsMade).isEqualTo(0)
+      // A third engine move goes over the engine's own budget of the same size, and says so.
+      val refused = assertFailsWith<MaxCallsLimitReachedException> { client.execute(prompt(), model, emptyList()) }
+      assertThat(refused.message!!).contains("Decision engine")
+      repeat(2) { client.execute(prompt(), model, emptyList()) }
+      assertFailsWith<MaxCallsLimitReachedException> { client.execute(prompt(), model, emptyList()) }
+    }
+
+    assertThat(client.llmCallsMade).isEqualTo(2)
+    assertThat(model_.executes).isEqualTo(5)
+  }
+
+  @Test
+  fun `a move that won a race still spends the LLM call that was sent for it`() {
+    val model_ = CountingLlmClient(racedAnswers = setOf(1))
+    val client = LlmCallBudgetLlmClient(delegate = model_, maxLlmCalls = 2)
+
+    runBlocking {
+      repeat(2) { client.execute(prompt(), model, emptyList()) }
+      val refused = assertFailsWith<MaxCallsLimitReachedException> { client.execute(prompt(), model, emptyList()) }
+      assertThat(refused.message!!).doesNotContain("Decision engine")
+    }
+
+    assertThat(model_.executes).isEqualTo(2)
+  }
+
+  @Test
+  fun `with the LLM calls spent, a turn the engine would take is refused before it starts`() {
+    // Call 3 would be an engine move, but the turn could fall to the LLM, so it needs a call left.
+    val model_ = CountingLlmClient(engineAnswers = setOf(3))
+    val client = LlmCallBudgetLlmClient(delegate = model_, maxLlmCalls = 2)
+
+    runBlocking {
+      repeat(2) { client.execute(prompt(), model, emptyList()) }
+      assertFailsWith<MaxCallsLimitReachedException> { client.execute(prompt(), model, emptyList()) }
     }
 
     assertThat(model_.executes).isEqualTo(2)

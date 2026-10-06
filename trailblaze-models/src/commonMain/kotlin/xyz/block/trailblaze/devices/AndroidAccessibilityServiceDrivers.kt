@@ -47,7 +47,7 @@ object AndroidAccessibilityServiceDrivers {
    */
   fun includes(driverType: TrailblazeDriverType?): Boolean = when (driverType) {
     TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY -> true
-    // Android, but not through the service: Maestro dispatched on the device, and in-process
+    // Android, but not through the service: the retired instrumentation driver, and in-process
     // Espresso against the app's own hierarchy.
     TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
     TrailblazeDriverType.ANDROID_TEST,

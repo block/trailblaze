@@ -17,6 +17,7 @@ import xyz.block.trailblaze.device.InstalledApp
 import xyz.block.trailblaze.device.redactBulkPayloadsForLog
 import xyz.block.trailblaze.device.PM_LIST_PACKAGES_ARGV
 import xyz.block.trailblaze.device.PmClearOutcome
+import xyz.block.trailblaze.device.readShellCheckingLiveness
 import xyz.block.trailblaze.device.readWithDeadline
 import xyz.block.trailblaze.device.validateClearAppDataAppId
 import xyz.block.trailblaze.device.verifyPmClearSucceeded
@@ -30,8 +31,6 @@ import xyz.block.trailblaze.util.UiAutomationHandleErrors
  * This works when running as an instrumentation test on an Android device.
  */
 object AdbCommandUtil {
-
-  private const val SHELL_LIVENESS_TOKEN = "trailblaze-shell-liveness"
 
   /**
    * Hang detection for a single shell command: the point at which the command is treated as never
@@ -81,30 +80,20 @@ object AdbCommandUtil {
     // runs on every device action, so it happens once per command rather than once per use.
     val loggableCommand = redactBulkPayloadsForLog(shellCommand)
     Console.log("adb shell $loggableCommand")
-    val startedAtMs = SystemClock.elapsedRealtime()
-    val output = runShellCommand(shellCommand, loggableCommand, timeoutMs)
-    // A dead UiAutomation connection makes the shell call return "" instead of throwing, so every
-    // command looks successful while doing nothing. Empty output is also normal for many commands
-    // (`cp`, `input keyevent`), so double-check with a probe that always prints: if even that comes
-    // back empty, the connection is wedged — throw so the standard reconnect-and-retry runs.
-    //
-    // The probe gets what is LEFT of [timeoutMs], never a second full one: both reads hold the
-    // process-wide UiAutomation monitor, so two bounds would let one call run for twice the
-    // deadline its caller sized — long enough for the background memory sampler's host RPC to
-    // expire while device actions are still queued behind it. A spent budget skips the probe and
-    // returns the empty answer, which is the honest reading for a caller that is out of time; a
-    // wedge that is really there answers "" on the next command too, and that one has its own
-    // budget to probe with.
-    if (output.isEmpty()) {
-      val remainingMs = AndroidShellBounds.remainingAfter(timeoutMs, SystemClock.elapsedRealtime() - startedAtMs)
-      val livenessProbe = "echo $SHELL_LIVENESS_TOKEN"
-      if (remainingMs <= 0) {
-        Console.log("shell read budget (${timeoutMs}ms) spent by `$loggableCommand`; skipping the liveness probe")
-      } else if (!runShellCommand(livenessProbe, livenessProbe, remainingMs).contains(SHELL_LIVENESS_TOKEN)) {
-        throw IllegalStateException(UiAutomationHandleErrors.silentShellWedgeMessage(loggableCommand))
-      }
+    // Hold the monitor across the command, the liveness probe and any reconnect, so nothing else
+    // runs on a connection this call is about to drop. The budget starts once the monitor is held:
+    // it bounds how long this call holds it, so time queued behind another holder does not count.
+    return InstrumentationUtil.holdingUiAutomationMonitor {
+      readShellCheckingLiveness(
+        shellCommand = shellCommand,
+        loggableCommand = loggableCommand,
+        timeoutMs = timeoutMs,
+        nowMs = SystemClock::elapsedRealtime,
+        read = { command, loggable, budgetMs -> runShellCommand(command, loggable, budgetMs) },
+        dropHandle = InstrumentationUtil::clearInstrumentationUiAutomationCache,
+        log = Console::log,
+      )
     }
-    return output
   }
 
   /**

@@ -16,6 +16,7 @@ import java.util.concurrent.TimeUnit
 import org.hamcrest.Matcher
 import xyz.block.trailblaze.android.test.hierarchy.AndroidComposeHierarchyCollector
 import xyz.block.trailblaze.api.DriverDispatch
+import xyz.block.trailblaze.api.dispatchThenSettle
 
 /**
  * Native Android test surface used by the Android test Trailblaze driver.
@@ -98,13 +99,16 @@ interface AndroidTestTarget : DriverDispatch {
    */
   fun waitForIdle(ceilingMs: Long? = null)
 
-  /** Views are synchronized by Espresso and Compose by the existing Compose test rule. */
+  /**
+   * Views are synchronized by Espresso and Compose by the existing Compose test rule.
+   *
+   * An idle timeout from [waitForIdle] after the action landed is logged rather than failing the
+   * dispatch, so an implementation that lets one escape never reports a tap that already changed
+   * the app as failed. Any other exception — an app exception Espresso rethrows — still fails it.
+   * See [DriverDispatch].
+   */
   override suspend fun <R> dispatchAndAwaitSettle(action: suspend () -> R): R =
-    try {
-      action()
-    } finally {
-      waitForIdle()
-    }
+    dispatchThenSettle(action, settle = { waitForIdle() }, isSettleTimeout = { it.isIdleTimeout() })
 }
 
 /**
@@ -257,33 +261,6 @@ class RuleBackedAndroidTestTarget(
   }
 
   /**
-   * Whether [this] is Espresso or Compose reporting that the app never went idle, as opposed to a
-   * real failure of the thing being waited on.
-   *
-   * Matched by type where the type is public API, and by message otherwise: Compose's own timeout
-   * is thrown as a bare `ComposeTimeoutException`/`IllegalStateException` naming the busy idling
-   * resources, and Espresso wraps its own inside a `RuntimeException` on some paths. A narrow
-   * message test is worth more than an exact type list that silently stops matching after a
-   * dependency bump — the failure mode of missing one is the crash this exists to prevent.
-   */
-  private fun Throwable.isIdleTimeout(): Boolean {
-    var cause: Throwable? = this
-    while (cause != null) {
-      if (cause is IdlingResourceTimeoutException || cause is AppNotIdleException) return true
-      val message = cause.message.orEmpty()
-      if (
-        message.contains("Idling resource timed out") ||
-        message.contains("idling resource(s) that are not idle") ||
-        message.contains("ComposeIdlingResource is busy")
-      ) {
-        return true
-      }
-      cause = cause.cause?.takeIf { it !== cause }
-    }
-    return false
-  }
-
-  /**
    * Whether [this] is Compose test reporting that the screen has no Compose content at all, as
    * opposed to a real failure of the thing being read.
    *
@@ -306,4 +283,31 @@ class RuleBackedAndroidTestTarget(
     }
     return false
   }
+}
+
+/**
+ * Whether [this] is Espresso or Compose reporting that the app never went idle, as opposed to a
+ * real failure of the thing being waited on.
+ *
+ * Matched by type where the type is public API, and by message otherwise: Compose's own timeout
+ * is thrown as a bare `ComposeTimeoutException`/`IllegalStateException` naming the busy idling
+ * resources, and Espresso wraps its own inside a `RuntimeException` on some paths. A narrow
+ * message test is worth more than an exact type list that silently stops matching after a
+ * dependency bump — the failure mode of missing one is the crash this exists to prevent.
+ */
+internal fun Throwable.isIdleTimeout(): Boolean {
+  var cause: Throwable? = this
+  while (cause != null) {
+    if (cause is IdlingResourceTimeoutException || cause is AppNotIdleException) return true
+    val message = cause.message.orEmpty()
+    if (
+      message.contains("Idling resource timed out") ||
+      message.contains("idling resource(s) that are not idle") ||
+      message.contains("ComposeIdlingResource is busy")
+    ) {
+      return true
+    }
+    cause = cause.cause?.takeIf { it !== cause }
+  }
+  return false
 }

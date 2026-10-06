@@ -9,7 +9,6 @@ import xyz.block.trailblaze.llm.config.ClasspathConfigResourceSource
 import xyz.block.trailblaze.llm.config.CompositeConfigResourceSource
 import xyz.block.trailblaze.llm.config.ConfigResourceSource
 import xyz.block.trailblaze.llm.config.FilesystemConfigResourceSource
-import xyz.block.trailblaze.ui.tabs.waypoints.loadWaypoints
 import java.io.File
 import java.nio.file.Path
 import java.nio.file.Paths

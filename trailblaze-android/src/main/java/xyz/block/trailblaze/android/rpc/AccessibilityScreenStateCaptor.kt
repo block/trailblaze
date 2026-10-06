@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.android.rpc
 
+import xyz.block.trailblaze.android.ACCESSIBILITY_SERVICE_NOT_RUNNING
 import xyz.block.trailblaze.android.InstrumentationArgUtil
 import xyz.block.trailblaze.android.accessibility.AccessibilityServiceScreenState
 import xyz.block.trailblaze.android.accessibility.MigrationTreeCapture
@@ -17,22 +18,45 @@ import xyz.block.trailblaze.util.Console
 /**
  * The accessibility runner's [OnDeviceScreenStateCaptor]: capture through the bound
  * [TrailblazeAccessibilityService] when it is running (a rich [TrailblazeNode] tree with
- * AndroidAccessibility detail), falling back to UiAutomator for instrumentation mode. This is the
- * capture path `GetScreenStateRequestHandler` hardcoded before the captor seam existed — moved
- * here verbatim so the RPC server module carries no driver dependency.
+ * AndroidAccessibility detail). An unbound service is a failure, never a UiAutomator capture:
+ * that tree cannot resolve accessibility selectors (see [unboundServiceFailure]). Migration mode alone keeps the
+ * UiAutomator primary, because migrate-trail resolves the recorded selectors against it.
  */
 object AccessibilityScreenStateCaptor : OnDeviceScreenStateCaptor {
 
+  /** The readiness poll's signal: `waitForReady` keeps polling while it sees this. Keep it stable. */
+  internal const val NOT_YET_BOUND: String = "Accessibility service not yet bound"
+
+  /**
+   * What a capture with the service unbound must throw, or null when it may proceed (service
+   * running, or migration mode, whose UiAutomator primary is what migrate-trail resolves against).
+   *
+   * Both answers are the typed not-ready exception, which the handler returns as a one-line failure
+   * with no stack trace: a readiness poll hits it up to 120 times on cold start, and the recording
+   * mirror re-polls every frame while the service is down. What differs is the message. A
+   * readiness poll ([requireService]) gets the stable [NOT_YET_BOUND] it waits on; any other
+   * capture gets [ACCESSIBILITY_SERVICE_NOT_RUNNING], because a service that was bound and died
+   * mid-run is not a cold start and must say how to recover.
+   */
+  internal fun unboundServiceFailure(
+    serviceRunning: Boolean,
+    requireService: Boolean,
+    migrationMode: Boolean,
+  ): Exception? = when {
+    serviceRunning -> null
+    requireService -> OnDeviceScreenStateNotReadyException(NOT_YET_BOUND)
+    migrationMode -> null
+    else -> OnDeviceScreenStateNotReadyException(ACCESSIBILITY_SERVICE_NOT_RUNNING)
+  }
+
   override suspend fun capture(request: GetScreenStateRequest): OnDeviceCapturedScreenState {
     val useAccessibility = TrailblazeAccessibilityService.isServiceRunning()
-    if (request.requireAndroidAccessibilityService && !useAccessibility) {
-      // Readiness polling for accessibility-driver flows must not accept a UiAutomator-fallback
-      // success. Throw so the handler surfaces a Failure and `waitForReady` keeps polling until
-      // the service actually binds. The message is the poll's signal — keep it stable. The typed
-      // exception is what keeps this expected cold-start answer off the handler's stack-trace
-      // logging path, which a 60s poll would otherwise hit 120 times.
-      throw OnDeviceScreenStateNotReadyException("Accessibility service not yet bound")
-    }
+    val migrationMode = InstrumentationArgUtil.shouldCaptureSecondaryTree()
+    unboundServiceFailure(
+      serviceRunning = useAccessibility,
+      requireService = request.requireAndroidAccessibilityService,
+      migrationMode = migrationMode,
+    )?.let { throw it }
     Console.log("📱 AccessibilityScreenStateCaptor: Capturing screen state (accessibility=$useAccessibility, screenshot=${request.includeScreenshot}, scale=${request.screenshotMaxDimension1}x${request.screenshotMaxDimension2})")
 
     // Build scaling config from request parameters
@@ -43,8 +67,8 @@ object AccessibilityScreenStateCaptor : OnDeviceScreenStateCaptor {
       compressionQuality = request.screenshotCompressionQuality,
     )
 
-    // Use the accessibility driver's screen state when available — it provides a rich
-    // TrailblazeNode tree. Fall back to UiAutomator for instrumentation mode.
+    // The accessibility driver's screen state provides a rich TrailblazeNode tree; the
+    // UiAutomator branch is reached only in migration mode with the service unbound.
     // Wait for the UI to settle first so we capture a stable screen (e.g., after
     // navigation or data loading), not a mid-transition state.
     val screenState: ScreenState = if (useAccessibility) {
@@ -63,7 +87,7 @@ object AccessibilityScreenStateCaptor : OnDeviceScreenStateCaptor {
         // Without this propagation, host-side `captureScreenState()` calls would always
         // get the accessibility-shape projection even when the migration capture is
         // requested via instrumentation args, breaking 100% Maestro-fidelity migration.
-        captureSecondaryTree = InstrumentationArgUtil.shouldCaptureSecondaryTree(),
+        captureSecondaryTree = migrationMode,
         includeTree = request.includeTree,
       )
     } else {
@@ -89,7 +113,7 @@ object AccessibilityScreenStateCaptor : OnDeviceScreenStateCaptor {
     // we still re-capture (cheap) to keep both code paths uniform and avoid divergence
     // if the primary tree's filtering policy changes.
     val driverMigrationTreeNode: TrailblazeNode? =
-      if (InstrumentationArgUtil.shouldCaptureSecondaryTree()) {
+      if (migrationMode) {
         MigrationTreeCapture.captureOrNull()
       } else {
         null

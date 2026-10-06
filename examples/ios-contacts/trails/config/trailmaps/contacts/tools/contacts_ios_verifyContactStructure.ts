@@ -4,26 +4,18 @@ import { filterNonEmptyStrings, nonEmptyString, textIsVisible } from "./contacts
 const DEFAULT_NAME = "John Appleseed";
 
 export interface VerifyContactStructureArgs {
-  /** Contact name to assert in the navbar / heading. */
+  /** Contact name expected in the heading. */
   name?: string;
   /**
-   * Optional list of additional field labels the contact must surface — common
-   * values: "phone", "mobile", "email", "home", "work". Each entry is passed
-   * to `assertVisibleWithAccessibilityText` as the `textRegex` value, so it's
-   * interpreted as a regex against accessibility text (case-sensitive by
-   * default — wrap with `(?i)` for case-insensitive). Empty list (the
-   * default) skips the field-presence assertions.
+   * Field labels the contact must show, e.g. "phone", "email". Each is a
+   * regex matched against a label's whole text. Empty skips field checks.
    */
   requireFields?: string[];
 }
 
 /**
- * Verify the currently-open iOS contact detail screen conforms to an expected
- * shape — name heading visible, plus an optional list of required field
- * labels ("phone", "email", "home", etc.). Use this whenever the task is to
- * confirm a contact rendered correctly, check a contact has certain fields,
- * or assert a contact's shape. Pass an empty `requireFields` list for a
- * lightweight "did the detail screen render?" check.
+ * On an already-open iOS contact detail screen, assert the contact name and
+ * each required field label are visible.
  */
 // Implementation notes:
 // Composite assertion against the currently-open contact's detail screen.

@@ -436,13 +436,23 @@ object HostAndroidDeviceConnectUtils {
     // Android restarts the accessibility service the runner hosts, so the process is back with no
     // instrumentation behind it, and reusing it would sit out the whole readiness probe before
     // the zombie restart.
-    val alreadyRunning = !forceRestart &&
-      trailblazeOnDeviceInstrumentationTarget.processLivenessProvesInstrumentationAttached &&
-      AndroidHostAdbUtils.isOnDeviceRpcServerUp(
+    //
+    // And its `am instrument` launcher must still be alive: that process owns the runner's
+    // UiAutomation connection, and it dies with the host process that launched it. A runner left
+    // behind by a finished `--no-daemon` run serves RPC and fails every device action.
+    val runnerState = if (
+      !forceRestart && trailblazeOnDeviceInstrumentationTarget.processLivenessProvesInstrumentationAttached
+    ) {
+      AndroidHostAdbUtils.probeOnDeviceRunnerForReuse(
         deviceId = trailblazeDeviceId,
         appId = trailblazeOnDeviceInstrumentationTarget.instrumentationProcessAppId,
+        instrumentationPackage = trailblazeOnDeviceInstrumentationTarget.testAppId,
         rpcPort = trailblazeDeviceId.getTrailblazeOnDeviceSpecificPort(),
       )
+    } else {
+      null
+    }
+    val alreadyRunning = runnerState == AndroidHostAdbUtils.OnDeviceRunnerState.REUSABLE
 
     if (alreadyRunning) {
       // Even if running, verify the installed APK matches the bundled version.
@@ -464,7 +474,12 @@ object HostAndroidDeviceConnectUtils {
     }
 
     // Server not running, force restart requested, or APK outdated — clean slate setup
-    if (!alreadyRunning) {
+    if (runnerState == AndroidHostAdbUtils.OnDeviceRunnerState.LAUNCHER_NOT_CONFIRMED) {
+      sendProgressMessage(
+        "On-device server is running but the process that launched it could not be confirmed " +
+          "alive, so its UiAutomation may be dead — restarting it.",
+      )
+    } else if (!alreadyRunning) {
       sendProgressMessage("On-device server not running — starting fresh...")
     }
     // One `pm list packages` read, shared by the force-stop gate below and the installedExternally
