@@ -6,6 +6,10 @@ date: 2026-01-28
 
 # Trailblaze Decision 016: Desktop Application (Moving Away from IDE-based Execution)
 
+> **Superseded.** The Compose Multiplatform app described below has been replaced by a TypeScript
+> web UI served by the daemon. See
+> [A TypeScript Web UI Instead of Compose](2026-10-06-typescript-web-ui-over-compose.md).
+
 ## Context
 
 Early Trailblaze prototypes ran as an IntelliJ/Android Studio plugin. This made sense initially: QE engineers and mobile developers already have Android Studio open, and plugins can access IDE features like project context, device management, and integrated tooling.

@@ -9,6 +9,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Test
 import xyz.block.trailblaze.api.AgentDriverAction
 import xyz.block.trailblaze.api.DriverNodeDetail
+import xyz.block.trailblaze.api.ScreenTextReader
 import xyz.block.trailblaze.api.TrailblazeNode
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.withVisibleStrings
@@ -58,8 +59,18 @@ class VisibleStringsLogTest {
     )
   }
 
-  private fun render(logs: List<TrailblazeLog>, collapseRepeats: Boolean = true): List<JsonObject> =
-    VisibleStringsLog.render(session, sessionInfo = null, logs = logs, collapseRepeats = collapseRepeats)
+  private fun render(
+    logs: List<TrailblazeLog>,
+    collapseRepeats: Boolean = true,
+    readers: Map<String, ScreenTextReader>? = null,
+  ): List<JsonObject> =
+    VisibleStringsLog.render(
+      session,
+      sessionInfo = null,
+      logs = logs,
+      collapseRepeats = collapseRepeats,
+      readerFor = readers?.let { byScreenshot -> { screenshot, _, _ -> byScreenshot.getValue(screenshot) } },
+    )
       .orEmpty()
       .trim()
       .lines()
@@ -68,6 +79,52 @@ class VisibleStringsLogTest {
 
   private fun JsonObject.strings(): List<String> =
     this["strings"]?.jsonArray?.map { it.jsonObject.getValue("text").jsonPrimitive.content } ?: emptyList()
+
+  /** An iOS screen with an icon-only button and a button that draws its label. */
+  private val iosHome = TrailblazeNode(
+    nodeId = 100,
+    driverDetail = DriverNodeDetail.IosAxe(type = "Application"),
+    bounds = TrailblazeNode.Bounds(0, 0, 1080, 1920),
+    children = listOf(
+      TrailblazeNode(
+        nodeId = 101,
+        driverDetail = DriverNodeDetail.IosAxe(label = "Scan", type = "Button"),
+        bounds = TrailblazeNode.Bounds(600, 200, 720, 320),
+      ),
+      TrailblazeNode(
+        nodeId = 102,
+        driverDetail = DriverNodeDetail.IosAxe(label = "Pay", type = "Button"),
+        bounds = TrailblazeNode.Bounds(540, 1600, 1040, 1740),
+      ),
+    ),
+  )
+
+  private fun JsonObject.sourceOf(text: String): String? = this["strings"]?.jsonArray
+    ?.map { it.jsonObject }
+    ?.firstOrNull { it.getValue("text").jsonPrimitive.content == text }
+    ?.getValue("source")?.jsonPrimitive?.content
+
+  @Test
+  fun `a capture OCR read is marked checked, and one it could not read is not`() {
+    val read = ScreenTextReader { boxes -> boxes.map { if (it.top == 1600) listOf("Pay") else emptyList() } }
+    val lines = render(
+      listOf(
+        driverLog("ios-read.png", iosHome).withVisibleStrings(),
+        driverLog("ios-unreadable.png", iosHome).withVisibleStrings(),
+        driverLog("android.png", screen("Checkout")).withVisibleStrings(),
+      ),
+      collapseRepeats = false,
+      readers = mapOf("ios-read.png" to read, "ios-unreadable.png" to ScreenTextReader { null }, "android.png" to read),
+    ).drop(1)
+
+    val (checked, unchecked, android) = lines
+    assertEquals("true", checked["ocrChecked"]?.jsonPrimitive?.content)
+    assertEquals("contentDescription", checked.sourceOf("Scan"))
+    assertEquals("text", checked.sourceOf("Pay"))
+    assertNull(unchecked["ocrChecked"])
+    assertEquals("text", unchecked.sourceOf("Scan"))
+    assertNull(android["ocrChecked"])
+  }
 
   @Test
   fun `every capture becomes a line keyed by its screenshot`() {

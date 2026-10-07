@@ -331,7 +331,7 @@ object TrailblazeToolSetCatalog {
    * that can run on it. For progressive opt-in to specific toolsets, use [resolveForDriver];
    * for target-scoped composition, use [TrailblazeHostAppTarget.resolveToolScopeForDriver].
    *
-   * Avoids advertising mobile-only tools (e.g. `hideKeyboard`, `tapOnPoint` from
+   * Avoids advertising mobile-only tools (e.g. `hideKeyboard`, `swipe` from
    * `core_interaction.yaml`) in Playwright / Compose / Revyl sessions, and vice versa.
    */
   fun defaultToolClassesForDriver(

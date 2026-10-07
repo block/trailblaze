@@ -311,9 +311,9 @@ class TrailblazeMcpServerTargetScopedToolsTest {
     /**
      * Device-control tools an MCP client expects to find in `tools/list` once a device is
      * connected. Named literally because that's the external contract — a client calls them
-     * by these exact names, and the Android MCP-dispatch CI check asserts the same two.
+     * by these exact names.
      */
-    val DEVICE_CONTROL_TOOL_NAMES = setOf("tap", "tapOnPoint")
+    val DEVICE_CONTROL_TOOL_NAMES = setOf("tap", "longPress")
   }
 
   private class FakeSignInTool : TrailblazeTool

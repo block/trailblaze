@@ -1,8 +1,11 @@
 package xyz.block.trailblaze.scripting.subprocess
 
 import io.modelcontextprotocol.kotlin.sdk.types.RequestMeta
+import io.modelcontextprotocol.kotlin.sdk.types.ToolSchema
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.scripting.callback.JsScriptingInvocationRegistry
@@ -108,7 +111,12 @@ class SubprocessToolRegistration(
     registered.inputSchema.toTrailblazeToolDescriptor(
       name = registered.advertisedName.toolName,
       description = registered.description,
-    ).copy(source = source)
+    ).copy(source = source).apply {
+      // Full schema so coerceArgsToDescriptorTypes can re-type nested args (e.g. `overrides[].value`),
+      // as LazyYamlScriptedToolRegistration does for in-process tools. Set after `copy`, which
+      // drops body properties.
+      inputSchema = registered.inputSchema.toJsonSchema()
+    }
 
   override fun buildKoogTool(
     trailblazeToolContextProvider: () -> TrailblazeToolExecutionContext,
@@ -143,4 +151,10 @@ class SubprocessToolRegistration(
     )
     return Json.decodeFromString(serializer, argumentsJson)
   }
+}
+
+/** The [ToolSchema] as JSON Schema, or null when it declares no properties. */
+private fun ToolSchema.toJsonSchema(): JsonObject? {
+  if (properties.isNullOrEmpty()) return null
+  return Json.encodeToJsonElement(ToolSchema.serializer(), this).jsonObject
 }

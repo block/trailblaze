@@ -7,6 +7,8 @@ import kotlin.test.assertFalse
 import org.junit.Test
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
+import xyz.block.trailblaze.model.CustomTrailblazeTools
+import xyz.block.trailblaze.model.TrailblazeConfig
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.toolcalls.ToolName
 import xyz.block.trailblaze.toolcalls.ToolSetCatalogEntry
@@ -266,7 +268,24 @@ class DynamicToolSetTest {
     assertTrue("assertEquals" in names, "memory tool 'assertEquals' must be in DefaultLlmTrailblazeTools")
     assertTrue("assertNotVisibleWithText" in names, "verification tool must be in DefaultLlmTrailblazeTools")
     assertTrue("tap" in names, "core_interaction tool must be in DefaultLlmTrailblazeTools")
-    assertTrue("tapOnPoint" in names, "device_control tool must be in DefaultLlmTrailblazeTools")
+  }
+
+  @Test
+  fun `the LLM is not offered tapOnPoint by default but a recorded tapOnPoint still decodes`() {
+    // Offered beside `tap`, a model picks x/y over refs and misses; the framework computes the
+    // point from a ref instead. Recorded trails still carry tapOnPoint steps, so it stays decodable.
+    val offered = TrailblazeToolSetCatalog
+      .defaultToolClassesForDriver(TrailblazeDriverType.IOS_HOST)
+      .map { it.toolName().toolName }
+    assertFalse("tapOnPoint" in offered, "tapOnPoint must not be in the default LLM toolbox")
+    assertTrue("tap" in offered, "tap by ref is the LLM's tap")
+
+    val decodable = CustomTrailblazeTools(
+      registeredAppSpecificLlmTools = emptySet(),
+      config = TrailblazeConfig.DEFAULT,
+      driverType = TrailblazeDriverType.IOS_HOST,
+    ).allForSerializationTools().map { it.toolName().toolName }
+    assertTrue("tapOnPoint" in decodable, "a recorded tapOnPoint step must still decode")
   }
 
   @Test

@@ -532,6 +532,24 @@ class YamlBackedHostAppTargetTest {
   }
 
   @Test
+  fun `a target opts its LLM into tapOnPoint by listing it under platforms tools`() {
+    fun toolbox(platformTools: String) = AppTargetYamlLoader.loadFromYaml(
+      """
+      id: test
+      display_name: Test
+      platforms:
+        ios:
+          tool_sets: [core_interaction]
+          $platformTools
+      """.trimIndent(),
+      toolNameResolver = resolver,
+    ).getAgentToolboxForDriver(driverType = TrailblazeDriverType.IOS_HOST).allToolNames.map { it.toolName }
+
+    assertFalse("tapOnPoint" in toolbox(""), "core_interaction alone must not offer tapOnPoint")
+    assertTrue("tapOnPoint" in toolbox("tools: [tapOnPoint]"), "listing it must offer tapOnPoint")
+  }
+
+  @Test
   fun `drivers narrowing within platform section`() {
     val toolSet = ResolvedToolSet(
       config = ToolSetYamlConfig(id = "hw", tools = listOf("tap")),

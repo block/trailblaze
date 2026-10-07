@@ -9,8 +9,13 @@ import assertk.assertions.prop
 import io.modelcontextprotocol.kotlin.sdk.types.ToolSchema
 import kotlinx.datetime.Clock
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
 import xyz.block.trailblaze.scripting.mcp.TrailblazeToolMeta
 import xyz.block.trailblaze.AgentMemory
@@ -27,6 +32,7 @@ import xyz.block.trailblaze.toolcalls.ToolName
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet.DynamicTrailblazeToolSet
+import xyz.block.trailblaze.toolcalls.coerceArgsToDescriptorTypes
 import kotlin.test.AfterTest
 import kotlin.test.Test
 
@@ -62,6 +68,63 @@ class SubprocessToolRegistrationTest {
     assertThat(registration.trailblazeDescriptor.name).isEqualTo("myapp_login")
     assertThat(registration.trailblazeDescriptor.description).isEqualTo("Log in")
     assertThat(registration.trailblazeDescriptor.requiredParameters.single().name).isEqualTo("email")
+  }
+
+  @Test fun `trailblazeDescriptor carries the advertised schema as JSON Schema`() {
+    val registered = RegisteredSubprocessTool(
+      advertisedName = ToolName("myapp_login"),
+      description = null,
+      inputSchema = schemaWithEmail,
+      meta = TrailblazeToolMeta(),
+    )
+    val schema = SubprocessToolRegistration(registered, stubProvider()).trailblazeDescriptor.inputSchema!!
+
+    assertThat(schema["type"]!!.jsonPrimitive.content).isEqualTo("object")
+    assertThat(schema["properties"]).isEqualTo(schemaWithEmail.properties)
+    assertThat(schema["required"]!!.jsonArray.single().jsonPrimitive.content).isEqualTo("email")
+  }
+
+  @Test fun `trailblazeDescriptor keeps no schema for a no-arg tool`() {
+    val registered = RegisteredSubprocessTool(
+      advertisedName = ToolName("myapp_ping"),
+      description = null,
+      inputSchema = emptySchema,
+      meta = TrailblazeToolMeta(),
+    )
+    assertThat(SubprocessToolRegistration(registered, stubProvider()).trailblazeDescriptor.inputSchema).isNull()
+  }
+
+  @Test fun `trailblazeDescriptor keeps the advertised schema so nested args coerce on dispatch`() {
+    // `trailblaze tool --yaml` decodes `value: "true"` as a boolean; only the full schema lets
+    // dispatch re-type it inside `overrides[]`.
+    val registered = RegisteredSubprocessTool(
+      advertisedName = ToolName("myapp_setFeatureFlag"),
+      description = null,
+      inputSchema = ToolSchema(
+        properties = buildJsonObject {
+          putJsonObject("overrides") {
+            put("type", "array")
+            putJsonObject("items") {
+              put("type", "object")
+              putJsonObject("properties") {
+                putJsonObject("value") { put("type", "string") }
+              }
+            }
+          }
+        },
+        required = listOf("overrides"),
+      ),
+      meta = TrailblazeToolMeta(),
+    )
+    val descriptor = SubprocessToolRegistration(registered, stubProvider()).trailblazeDescriptor
+
+    val decoded = buildJsonObject {
+      putJsonArray("overrides") { add(buildJsonObject { put("value", true) }) }
+    }
+    val value = coerceArgsToDescriptorTypes(decoded, descriptor)["overrides"]!!
+      .jsonArray.single().jsonObject["value"]!!.jsonPrimitive
+    assertThat(value.isString).isEqualTo(true)
+    assertThat(value.content).isEqualTo("true")
   }
 
   @Test fun `decodeToolCall returns a SubprocessTrailblazeTool bound to this source`() {

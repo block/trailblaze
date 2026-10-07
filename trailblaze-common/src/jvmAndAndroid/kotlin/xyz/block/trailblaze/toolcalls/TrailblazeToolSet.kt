@@ -16,6 +16,7 @@ import xyz.block.trailblaze.toolcalls.commands.SwipeWithRelativeCoordinatesTool
 import xyz.block.trailblaze.toolcalls.commands.TapOnByElementSelector
 import xyz.block.trailblaze.toolcalls.commands.TapOnElementWithAccessiblityTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.TapOnElementWithTextTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.TapOnPointTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.memory.RememberNumberBySelectorTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.memory.RememberTextBySelectorTrailblazeTool
 import kotlin.reflect.KClass
@@ -58,6 +59,8 @@ abstract class TrailblazeToolSet(
       RememberTextBySelectorTrailblazeTool::class,
       RememberNumberBySelectorTrailblazeTool::class,
       TapOnByElementSelector::class,
+      // Raw x/y tap: recorded and scripted, but not offered to the LLM unless a target opts in
+      TapOnPointTrailblazeTool::class,
       SwipeWithRelativeCoordinatesTool::class,
       AndroidSystemUiDemoModeTrailblazeTool::class,
       ClearAppDataTrailblazeTool::class,

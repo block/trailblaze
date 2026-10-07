@@ -310,6 +310,8 @@ type AnalysisSubject = {
   label: string;
   context: string;
   diagnostic?: AnalysisDiagnostic;
+  report_href?: string;
+  status?: { tone: string; label: string };
 };
 type AnalysisProblem = {
   id: string;
@@ -330,6 +332,8 @@ type AnalysisProblem = {
   related_history: AnalysisHistory[];
 };
 type AnalysisManifest = {
+  fix_category_launcher_url?: string;
+  build_url?: string;
   summary: {
     headline: string;
     run_label: string;
@@ -366,11 +370,16 @@ function analysisSubject(value: unknown): AnalysisSubject | null {
   const item = value as Partial<AnalysisSubject>;
   if (!nonEmpty(item.key) || !nonEmpty(item.label) || !nonEmpty(item.context)) return null;
   const diagnostic = analysisDiagnostic(item.diagnostic);
+  const reportHref = safeHttpsHref(item.report_href);
+  const status = item.status && nonEmpty(item.status.label)
+    && ['critical', 'warning', 'notice', 'neutral', 'info'].includes(item.status.tone) ? item.status : undefined;
   return {
     key: item.key,
     label: item.label,
     context: item.context,
     ...(diagnostic ? { diagnostic } : {}),
+    ...(reportHref ? { report_href: reportHref } : {}),
+    ...(status ? { status } : {}),
   };
 }
 
@@ -437,7 +446,7 @@ function analysisProblem(value: unknown): AnalysisProblem | null {
 
 function analysisManifest(payload: unknown): AnalysisManifest {
   if (!payload || typeof payload !== 'object') throw new Error('The analysis document is malformed.');
-  const root = payload as { schema_version?: unknown; summary?: Partial<AnalysisManifest['summary']>; problem_sets?: unknown };
+  const root = payload as { schema_version?: unknown; summary?: Partial<AnalysisManifest['summary']>; problem_sets?: unknown; fix_category_launcher_url?: unknown; build_url?: unknown };
   const summary = root.summary;
   if (root.schema_version !== 2 || !summary || !nonEmpty(summary.headline) || !nonEmpty(summary.run_label)
     || typeof summary.affected_subject_count !== 'number' || typeof summary.problem_set_count !== 'number'
@@ -446,7 +455,56 @@ function analysisManifest(payload: unknown): AnalysisManifest {
   if (problems.some((problem) => problem === null)) throw new Error('The analysis document is malformed.');
   const all = problems as AnalysisProblem[];
   if (summary.problem_set_count !== all.length) throw new Error('The analysis document is malformed.');
-  return { summary: summary as AnalysisManifest['summary'], problem_sets: all };
+  return { summary: summary as AnalysisManifest['summary'], problem_sets: all,
+    fix_category_launcher_url: safeHttpsHref(root.fix_category_launcher_url) || undefined,
+    build_url: safeHttpsHref(root.build_url) || undefined };
+}
+
+function fixCategoryButton(manifest: AnalysisManifest, category: string): string {
+  if (!manifest.fix_category_launcher_url) return '';
+  return `<button type="button" data-tb-fix-category="${escapeHtml(category)}">Fix this category</button><span data-tb-fix-status role="status" aria-live="polite"></span>`;
+}
+
+type CategoryLaunchMessage = { source: unknown; origin: string; data: { type?: string; nonce?: string } };
+type CategoryLaunchBrowser = {
+  crypto: Pick<Crypto, 'randomUUID'>;
+  location: Pick<Location, 'origin'>;
+  open(url: string, target: string): { postMessage(message: unknown, targetOrigin: string): void } | null;
+  addEventListener(type: 'message', listener: (event: CategoryLaunchMessage) => void): void;
+  removeEventListener(type: 'message', listener: (event: CategoryLaunchMessage) => void): void;
+};
+
+export async function gzipAnalysisSnapshot(analysisJson: string): Promise<string> {
+  const stream = new Blob([analysisJson]).stream().pipeThrough(new CompressionStream('gzip'));
+  const bytes = new Uint8Array(await new Response(stream).arrayBuffer());
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+
+export function launchCategoryFix(launcherUrl: string, analysis: string, category: string, pageUrl: string, browser: CategoryLaunchBrowser, buildUrl?: string, analysisGzip?: string): void {
+  if (new URL(analysis).protocol !== 'https:' || new URL(analysis).origin !== browser.location.origin
+    || new URL(pageUrl).origin !== browser.location.origin) {
+    throw new Error('Category repair requires an HTTPS analysis published by this report host.');
+  }
+  const launcher = new URL(launcherUrl);
+  if (launcher.protocol !== 'https:') throw new Error('The category launcher must use HTTPS.');
+  const nonce = browser.crypto.randomUUID();
+  launcher.searchParams.set('source_origin', browser.location.origin);
+  launcher.searchParams.set('nonce', nonce);
+  let popup: ReturnType<CategoryLaunchBrowser['open']> = null;
+  const receive = (event: CategoryLaunchMessage) => {
+    if (!popup || event.source !== popup || event.origin !== launcher.origin
+      || event.data?.type !== 'trailblaze-fix-category-ready' || event.data?.nonce !== nonce) return;
+    popup.postMessage({ type: 'trailblaze-fix-category-launch', nonce, context: { analysis, category, pageUrl, ...(buildUrl ? { buildUrl } : {}), ...(analysisGzip !== undefined ? { analysisGzip } : {}) } }, launcher.origin);
+    browser.removeEventListener('message', receive);
+  };
+  browser.addEventListener('message', receive);
+  popup = browser.open(launcher.href, '_blank');
+  if (!popup) {
+    browser.removeEventListener('message', receive);
+    throw new Error('The browser blocked the launch window. Allow pop-ups for this report and click again.');
+  }
 }
 
 export function analysisProblemHref(href: string, problemId: string): string {
@@ -508,6 +566,25 @@ function actionLinksHtml(problem: AnalysisProblem): string {
   return `<div class="tb-analysis-action-links" aria-label="Self-heal pull requests">${links.map((link) => `<a href="${escapeHtml(safeHttpsHref(link.href))}" target="_blank" rel="noopener noreferrer">${escapeHtml(link.label)}</a>`).join('')}</div>`;
 }
 
+function runReportTabHref(href: string, tab: 'recording' | 'replay'): string {
+  const url = new URL(href);
+  url.searchParams.set('tab', tab);
+  return url.href;
+}
+
+function trailRunButtonsHtml(problem: AnalysisProblem): string {
+  const runs = problem.affected_subjects.map((subject) => `<li><div class="tb-analysis-run-name"><h3>${escapeHtml(subject.label)}</h3>`
+    + `<div class="tb-analysis-run-meta"><span class="tb-analysis-meta">${escapeHtml(subject.context)}</span>`
+    + (subject.status ? `<span class="tb-analysis-status tb-analysis-${subject.status.tone}">${escapeHtml(subject.status.label)}</span>` : '')
+    + `</div>${subject.diagnostic ? subjectDiagnosticHtml(subject.diagnostic) : ''}</div><div class="tb-analysis-run-buttons">`
+    + (subject.report_href
+      ? `<a class="tb-analysis-run-button" href="${escapeHtml(runReportTabHref(subject.report_href, 'recording'))}" target="_blank" rel="noopener noreferrer" aria-label="${escapeHtml(`View trail: ${subject.label}`)}">View trail ↗</a>`
+        + `<a class="tb-analysis-run-button tb-analysis-run-button-primary" href="${escapeHtml(runReportTabHref(subject.report_href, 'replay'))}" target="_blank" rel="noopener noreferrer" aria-label="${escapeHtml(`Watch replay: ${subject.label}`)}">Watch replay ↗</a>`
+      : '<span class="tb-analysis-meta">Report unavailable</span>')
+    + '</div></li>').join('');
+  return `<section class="tb-analysis-failed-trails"><h2>Failed trails</h2><ul class="tb-analysis-run-cards">${runs}</ul></section>`;
+}
+
 function overviewHtml(manifest: AnalysisManifest, href: string): string {
   const cards = manifest.problem_sets.map((problem) => {
     const tone = /^[a-z][a-z0-9-]{0,31}$/.test(problem.status.tone) ? problem.status.tone : 'info';
@@ -518,7 +595,7 @@ function overviewHtml(manifest: AnalysisManifest, href: string): string {
       + diagnosticSummaryHtml(problem.diagnostic_summary)
       + `<h2><a href="${escapeHtml(analysisProblemHref(href, problem.id))}">${escapeHtml(problem.title)}</a></h2>`
       + `<p class="tb-analysis-card-summary">${escapeHtml(problem.attention_summary)}</p>`
-      + `<div class="tb-analysis-card-action"><h3>${actionLabel}</h3><p>${escapeHtml(problem.next_action_or_evidence_needed.text)}</p>${actionLinksHtml(problem)}</div>`
+      + `<div class="tb-analysis-card-action"><h3>${actionLabel}</h3><p>${escapeHtml(problem.next_action_or_evidence_needed.text)}</p>${actionLinksHtml(problem)}${fixCategoryButton(manifest, problem.id)}</div>`
       + `<a class="tb-analysis-open" href="${escapeHtml(analysisProblemHref(href, problem.id))}">Open problem and evidence <span aria-hidden="true">↗</span></a></article>`;
   }).join('');
   return `<main class="tb-analysis" aria-labelledby="tb-analysis-title">`
@@ -536,7 +613,6 @@ function focusedProblemHtml(manifest: AnalysisManifest, problem: AnalysisProblem
   const tone = /^[a-z][a-z0-9-]{0,31}$/.test(problem.status.tone) ? problem.status.tone : 'info';
   const actionLabel = problem.next_action_or_evidence_needed.kind === 'evidence_needed' ? 'Evidence needed' : 'Next action';
   const titlePeriod = /[.!?…]$/.test(problem.title.trimEnd()) ? '' : '<span class="tb-analysis-period" aria-hidden="true">.</span>';
-  const subjects = problem.affected_subjects.map((subject) => `<li><div class="tb-analysis-subject-heading"><b>${escapeHtml(subject.label)}</b><span>${escapeHtml(subject.context)}</span></div>${subject.diagnostic ? subjectDiagnosticHtml(subject.diagnostic) : ''}</li>`).join('');
   const observations = problem.observations.map((observation) => `<li>${escapeHtml(observation)}</li>`).join('');
   const keyEvidence = problem.evidence.filter((item) => item.key);
   const otherEvidence = problem.evidence.filter((item) => !item.key);
@@ -559,10 +635,10 @@ function focusedProblemHtml(manifest: AnalysisManifest, problem: AnalysisProblem
     + `<p class="tb-analysis-eyebrow">Analysis / ${escapeHtml(manifest.summary.run_label)}</p>`
     + `<h1 id="tb-analysis-title" tabindex="-1">${escapeHtml(problem.title)}${titlePeriod}</h1>`
     + `<p class="tb-analysis-attention">${escapeHtml(problem.attention_summary)}</p></header>`
-    + `<div class="tb-analysis-priority"><section class="tb-analysis-action"><h2>${actionLabel}</h2><p>${escapeHtml(problem.next_action_or_evidence_needed.text)}</p>${actionLinksHtml(problem)}</section>`
-    + `<section class="tb-analysis-key-evidence"><h2>Key evidence</h2><ul class="tb-analysis-evidence-list">${keyEvidence.map(evidenceHtml).join('')}</ul></section></div>`
-    + `<div class="tb-analysis-detail-grid"><section><h2>Affected runs</h2><ul class="tb-analysis-subjects">${subjects}</ul></section>`
-    + `<section><h2>Observed facts</h2><ul>${observations}</ul></section>`
+    + `<div class="tb-analysis-priority"><section class="tb-analysis-action"><h2>${actionLabel}</h2><p>${escapeHtml(problem.next_action_or_evidence_needed.text)}</p>${actionLinksHtml(problem)}${fixCategoryButton(manifest, problem.id)}</section>`
+    + `${trailRunButtonsHtml(problem)}</div>`
+    + `<section class="tb-analysis-lower tb-analysis-key-evidence"><h2>Key evidence</h2><ul class="tb-analysis-evidence-list">${keyEvidence.map(evidenceHtml).join('')}</ul></section>`
+    + `<div class="tb-analysis-detail-grid"><section><h2>Observed facts</h2><ul>${observations}</ul></section>`
     + `<section class="tb-analysis-interpretation"><h2>Interpretation <span class="tb-analysis-meta">· ${escapeHtml(problem.confidence)} confidence</span></h2><p>${escapeHtml(problem.interpretation)}</p></section>`
     + `<section class="tb-analysis-uncertainty"><h2>Uncertainty</h2><p>${escapeHtml(problem.uncertainty)}</p></section></div>`
     + ((problem.code_findings || []).length ? `<section class="tb-analysis-lower"><h2>Code findings</h2><ul class="tb-analysis-evidence-list">${problem.code_findings!.map(codeFindingHtml).join('')}</ul></section>` : '')
@@ -574,6 +650,10 @@ function focusedProblemHtml(manifest: AnalysisManifest, problem: AnalysisProblem
 // are restricted to HTTPS, so fetched content cannot inject markup or active URL schemes.
 export function renderAnalysisView(payload: unknown, selectedProblem: string, href = 'https://viewer.invalid/?analysis=manifest'): string {
   const manifest = analysisManifest(payload);
+  const analysis = analysisParamsFrom(href);
+  if (!analysis || new URL(analysis.url).origin !== new URL(href).origin) {
+    manifest.fix_category_launcher_url = undefined;
+  }
   if (selectedProblem === 'all') return overviewHtml(manifest, href);
   const problem = manifest.problem_sets.find((item) => item.id === selectedProblem);
   if (!problem) throw new Error('That problem set is not present in this analysis.');
@@ -1041,10 +1121,37 @@ export function RUN_REPORT_SHELL(): void {
     void fetch(analysis.url)
       .then((response) => {
         if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
-        return response.json();
+        return response.text();
       })
-      .then((payload) => {
+      .then(async (analysisJson) => {
+        const payload = JSON.parse(analysisJson);
+        const manifest = analysisManifest(payload);
         showPanel(renderAnalysisView(payload, analysis.problem, currentHref));
+        const fixButtons = panel.querySelectorAll<HTMLButtonElement>('[data-tb-fix-category]');
+        fixButtons.forEach((button) => { button.disabled = true; });
+        let analysisGzip: string | undefined;
+        let snapshotError: unknown;
+        if (fixButtons.length) {
+          try { analysisGzip = await gzipAnalysisSnapshot(analysisJson); }
+          catch (error) { snapshotError = error; }
+        }
+        fixButtons.forEach((button) => {
+          if (snapshotError) {
+            if (button.nextElementSibling) button.nextElementSibling.textContent = `Repair launch unavailable: ${errorDetail(snapshotError)}`;
+            return;
+          }
+          button.disabled = false;
+          button.onclick = () => {
+            const status = button.nextElementSibling;
+            try {
+              launchCategoryFix(manifest.fix_category_launcher_url!, analysis.url,
+                button.dataset.tbFixCategory!, analysisProblemHref(currentHref, button.dataset.tbFixCategory!), window, manifest.build_url, analysisGzip);
+              if (status) status.textContent = 'Opening the authenticated launcher…';
+            } catch (error) {
+              if (status) status.textContent = errorDetail(error);
+            }
+          };
+        });
         const heading = panel.querySelector<HTMLElement>('#tb-analysis-title');
         if (heading) heading.focus({ preventScroll: true });
         const copy = panel.querySelector<HTMLButtonElement>('[data-tb-copy-link]');

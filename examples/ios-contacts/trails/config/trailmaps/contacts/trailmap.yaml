@@ -47,5 +47,3 @@ target:
         - navigation
         - verification
         - observation
-      excluded_tools:
-        - tapOnPoint

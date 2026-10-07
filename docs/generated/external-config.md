@@ -181,7 +181,7 @@ Toolsets are declared in `trailmaps/<id>/toolsets/*.yaml`. They are pure YAML gr
 | `android_primitives` | Yes | `android-ondevice-accessibility`, `android-test` | 9 |
 | `compose_core` | No | `compose` | 6 |
 | `compose_verification` | No | `compose` | 3 |
-| `core_interaction` | Yes | `android-ondevice-accessibility`, `ios-axe`, `ios-host` | 23 |
+| `core_interaction` | Yes | `android-ondevice-accessibility`, `ios-axe`, `ios-host` | 22 |
 | `ios_primitives` | Yes | `ios-axe`, `ios-host` | 2 |
 | `memory` | No | `all drivers` | 9 |
 | `meta` | Yes | `all drivers` | 1 |

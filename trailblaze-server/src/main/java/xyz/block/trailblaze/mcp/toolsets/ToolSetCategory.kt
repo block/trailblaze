@@ -33,9 +33,8 @@ enum class ToolSetCategory(
    */
   CORE_INTERACTION(
     displayName = "Core Interaction",
-    description = "Essential UI interaction tools: tap, swipe, type, and coordinate taps. " +
-      "This is the minimal toolset for basic device control. Prefer `tap` by ref id over " +
-      "`tapOnPoint` unless coordinates are genuinely required.",
+    description = "Essential UI interaction tools: tap by ref, swipe, and type. " +
+      "This is the minimal toolset for basic device control.",
     useCases = listOf(
       "Simple navigation tasks",
       "Tapping buttons and links",
@@ -167,9 +166,8 @@ object ToolSetCategoryMapping {
   /**
    * Gets the TrailblazeTool classes for a category. Routes every category through
    * [TrailblazeToolSetCatalog.entryToolClasses] so MCP sees the same tool surface as the YAML
-   * catalog — no Kotlin-only special cases. `tapOnPoint` is part of `core_interaction`; targets
-   * that want to disable it for their own app surface can use YAML `excluded_tools:` at the
-   * target level (e.g. `excluded_tools: [tapOnPoint]` in a target YAML).
+   * catalog — no Kotlin-only special cases. `tapOnPoint` is not part of `core_interaction`; a
+   * target that wants it opts in with `tools: [tapOnPoint]` under `platforms.<p>`.
    */
   fun getToolClasses(category: ToolSetCategory): Set<KClass<out TrailblazeTool>> {
     return when (category) {

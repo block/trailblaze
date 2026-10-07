@@ -93,7 +93,7 @@ For failure:
 
 RULES:
 - Respond with EXACTLY ONE JSON object
-- Look at the view hierarchy to find element coordinates for tapOnPoint
+- Look at the view hierarchy to find the ref of the element to tap
 - Call complete/failed when the objective is achieved or cannot be achieved
 - If stuck after several attempts, respond with failed"""
   }

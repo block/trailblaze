@@ -85,11 +85,11 @@ When given an objective, analyze the available tools and call the appropriate on
 Available tools include:
 - viewHierarchy: Get the current UI structure
 - getScreenshot: Capture the current screen
-- tapOnPoint: Tap at specific coordinates
+- tap: Tap an element by its ref
 - inputText: Type text
 - swipe: Swipe gesture
 
-Look at the view hierarchy to understand the screen and find element coordinates.
+Look at the view hierarchy to understand the screen and find element refs.
 Call tools to interact with the UI until the objective is complete."""
 
     /**

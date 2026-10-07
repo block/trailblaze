@@ -3797,6 +3797,10 @@ public final class xyz/block/trailblaze/api/ScreenState$DefaultImpls {
 	public static fun viewHierarchyTextRepresentation (Lxyz/block/trailblaze/api/ScreenState;Ljava/util/Set;)Ljava/lang/String;
 }
 
+public abstract interface class xyz/block/trailblaze/api/ScreenTextReader {
+	public abstract fun read (Ljava/util/List;)Ljava/util/List;
+}
+
 public final class xyz/block/trailblaze/api/ScreenshotScalingConfig {
 	public static final field Companion Lxyz/block/trailblaze/api/ScreenshotScalingConfig$Companion;
 	public fun <init> ()V
@@ -4412,6 +4416,7 @@ public final class xyz/block/trailblaze/api/ViewHierarchyTreeNode$Companion {
 
 public final class xyz/block/trailblaze/api/VisibleStringExtractor {
 	public static final field INSTANCE Lxyz/block/trailblaze/api/VisibleStringExtractor;
+	public final fun confirmDrawnLabels (Ljava/util/List;Lxyz/block/trailblaze/api/TrailblazeNode;Lxyz/block/trailblaze/api/ScreenTextReader;)Ljava/util/List;
 	public final fun extract (Lxyz/block/trailblaze/api/TrailblazeNode;II)Ljava/util/List;
 	public final fun extract (Lxyz/block/trailblaze/api/TrailblazeNode;IILjava/util/List;)Ljava/util/List;
 	public final fun extract (Lxyz/block/trailblaze/api/ViewHierarchyTreeNode;)Ljava/util/List;

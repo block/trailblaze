@@ -5,7 +5,11 @@ import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonNames
+import xyz.block.trailblaze.api.DriverNodeDetail
 import xyz.block.trailblaze.api.ExtractedString
+import xyz.block.trailblaze.api.ScreenTextReader
+import xyz.block.trailblaze.api.TrailblazeNode
+import xyz.block.trailblaze.api.VisibleStringExtractor
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.visibleStringsOrExtracted
 import xyz.block.trailblaze.logs.model.SessionId
@@ -100,6 +104,16 @@ data class VisibleStringsScreenLine(
    * lost rather than some.
    */
   val partialCapture: Boolean? = null,
+  /**
+   * True when OCR read this capture's screenshot and checked its iOS labels, so a label it could
+   * judge that is filed as `text` here was seen drawn in one of its boxes (see
+   * `VisibleStringExtractor.confirmDrawnLabels`). Labels it cannot judge keep the element-type
+   * rule even here: under 3 letters or digits, in a script other than Latin or Cyrillic, or with
+   * no box on screen. Absent when no OCR read ran (any other driver, a non-macOS host, or OCR
+   * failed or timed out). A reader that corrects old captures by geometry must leave the labels a
+   * checked capture judged alone, or it re-demotes labels OCR saw drawn.
+   */
+  val ocrChecked: Boolean? = null,
   /** The [captureId] of the earlier capture whose strings are identical to this one's in every
    *  field — text, source, ref, bounds and visibility — and whose line holds them; this one's are
    *  omitted. A reader copies them back verbatim, so anything less than equal would be wrong. */
@@ -114,6 +128,10 @@ data class VisibleStringsScreenLine(
  * An export, not the record: every screen-capture log already carries its strings, filled in as it
  * was emitted (see `withVisibleStrings`). A log from before that field existed is read from its
  * tree instead, so this still covers sessions recorded long before either existed.
+ *
+ * The export adds one thing the record lacks: on macOS, each iOS AXe capture's labels are checked
+ * against its screenshot ([VisibleStringsScreenLine.ocrChecked]). That read takes up to a second a
+ * screenshot, and far longer while Vision loads, which a run cannot afford as each log is written.
  */
 object VisibleStringsLog {
 
@@ -162,6 +180,7 @@ object VisibleStringsLog {
       logs = logs,
       collapseRepeats = collapseRepeats,
       frames = filled.frames,
+      readerFor = { screenshot, width, height -> VisionScreenTextReader(File(sessionDir, screenshot), width, height) },
     ) ?: return null
     return File(sessionDir, FILE_NAME).apply { writeText(lines) }
   }
@@ -170,6 +189,8 @@ object VisibleStringsLog {
    * Returns the file's contents, or null when the session holds no readable capture.
    *
    * @param frames the frame file of each screenshot-less capture that has one, by capture id.
+   * @param readerFor the OCR reader for one screenshot, given its name and the device's
+   *   dimensions; null checks no iOS labels.
    */
   fun render(
     sessionId: SessionId,
@@ -177,6 +198,7 @@ object VisibleStringsLog {
     logs: List<TrailblazeLog>,
     collapseRepeats: Boolean = true,
     frames: Map<String, String> = emptyMap(),
+    readerFor: ((screenshot: String, deviceWidth: Int, deviceHeight: Int) -> ScreenTextReader)? = null,
   ): String? {
     // One line per capture. A driver log and the LLM request made on the same screen can name
     // the same image; they are one capture, and the first to name it speaks for it. A capture with
@@ -190,7 +212,8 @@ object VisibleStringsLog {
     // copying the first capture's strings, so a scroll or a string going offscreen must not count.
     val seenScreens = mutableMapOf<List<ExtractedString>, String>()
     val screenLines = captures.map { capture ->
-      val strings = capture.strings
+      val confirmed = readerFor?.let { capture.drawnLabelsConfirmed(it) }
+      val strings = confirmed ?: capture.strings
       val screenContentHash = screenContentHash(strings.orEmpty())
       VisibleStringsScreenLine(
         captureId = capture.captureId!!,
@@ -207,6 +230,7 @@ object VisibleStringsLog {
         // A capture with no tree lost all of it, which is the strongest form of this claim and
         // true on every platform, so it does not wait on the Android-only coverage assessment.
         partialCapture = if (strings == null) true else capture.partialCapture,
+        ocrChecked = true.takeIf { confirmed != null },
         // `putIfAbsent`, so a repeat always names the FIRST capture that carried these strings.
         // With `put`, the third showing of a screen would point at the second — itself emitted
         // with `strings` emptied below — and the pointer would dead-end on a blank line.
@@ -304,6 +328,7 @@ object VisibleStringsLog {
     val traceId: String?,
     val action: String?,
     val partialCapture: Boolean?,
+    val tree: TrailblazeNode?,
     val timestamp: Instant,
   ) {
     val screenshot: String? = screenshotFile?.let(::captureIdFrom)
@@ -322,6 +347,7 @@ object VisibleStringsLog {
       traceId = traceId?.traceId,
       action = action.type.name,
       partialCapture = captureCoverage?.looksTruncated,
+      tree = trailblazeNodeTree,
       timestamp = timestamp,
     )
 
@@ -335,6 +361,7 @@ object VisibleStringsLog {
       traceId = traceId?.traceId,
       action = displayName ?: "snapshot",
       partialCapture = captureCoverage?.looksTruncated,
+      tree = trailblazeNodeTree,
       timestamp = timestamp,
     )
 
@@ -351,9 +378,20 @@ object VisibleStringsLog {
       action = llmRequestLabel,
       // This log type carries no coverage assessment at all, so completeness is unknowable.
       partialCapture = null,
+      tree = trailblazeNodeTree,
       timestamp = timestamp,
     )
 
     else -> null
+  }
+
+  /** Its strings with the iOS labels checked against its own screenshot, or null when no OCR read
+   *  ran: an annotated screenshot has marks drawn over the very text being looked for. */
+  private fun Capture.drawnLabelsConfirmed(
+    readerFor: (screenshot: String, deviceWidth: Int, deviceHeight: Int) -> ScreenTextReader,
+  ): List<ExtractedString>? {
+    val axeTree = tree?.takeIf { it.driverDetail is DriverNodeDetail.IosAxe } ?: return null
+    if (strings.isNullOrEmpty() || screenshot == null || annotated) return null
+    return VisibleStringExtractor.confirmDrawnLabels(strings, axeTree, readerFor(screenshot, deviceWidth, deviceHeight))
   }
 }

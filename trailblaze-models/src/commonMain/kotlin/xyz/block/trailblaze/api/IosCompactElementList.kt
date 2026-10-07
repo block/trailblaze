@@ -206,9 +206,9 @@ object IosCompactElementList {
         else {
           // No label, no class name. Nodes with identifiable properties (e.g. resourceId)
           // stay suppressed in the default view — they surface via ALL_ELEMENTS above.
-          // Only nodes that are ALSO identifier-less but still tappable get coordinates
-          // emitted here, so the LLM can use tapOnPoint with the exact tree position
-          // instead of visually estimating from the screenshot.
+          // Only nodes that are ALSO identifier-less but still tappable get a ref and their
+          // position emitted here, so the LLM can tap them by ref instead of visually
+          // estimating from the screenshot.
           if (!detail.hasIdentifiableProperties && (!offscreen || includeOffscreen)) {
             node.bounds?.let(::emitPositionOnly)
           }
@@ -304,9 +304,8 @@ object IosCompactElementList {
       //
       // Exception: bare leaf nodes — no children, no label, no class, no identifier — but
       // with valid bounds. These are tappable elements that carry no accessibility metadata
-      // at all (e.g. an unlabelled three-dot icon button). Emit their exact center coordinates
-      // so the LLM can use tapOnPoint with the precise tree position instead of visually
-      // guessing from the screenshot. Only leaf nodes qualify; non-leaf nodes recurse so their
+      // at all (e.g. an unlabelled three-dot icon button). Emit a ref at their exact center
+      // so the LLM can tap them by ref instead of visually guessing from the screenshot. Only leaf nodes qualify; non-leaf nodes recurse so their
       // labeled descendants still surface normally.
       if (node.children.isEmpty() && node.bounds != null && !node.bounds.covers(refAncestorCenter) && label == null && shortClass.isEmpty() && !detail.hasIdentifiableProperties && (!offscreen || includeOffscreen)) {
         emitPositionOnly(node.bounds)

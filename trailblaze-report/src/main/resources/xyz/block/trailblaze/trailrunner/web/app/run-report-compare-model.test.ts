@@ -724,6 +724,17 @@ describe("event content diff", () => {
     expect(diff.addedCount).toBe(2);
   });
 
+  test("an event that is itself a list is summarized by its items", () => {
+    // Some producers write each event as a list of {key, value} entries; stringified whole, every
+    // summary read "[object Object],[object Object]" and no two rows could be told apart.
+    const appinfo = (token: string) => [{ key: "App Token", value: token }, { key: "Device", value: "Pixel" }];
+    const diff = diffEventContent([appinfo("a")], [appinfo("b")]);
+    const pair = (diff.hunks[0] as any).pairs[0];
+    expect(pair.before.summary).toBe('key="App Token" value="a" · key="Device" value="Pixel"');
+    expect(pair.after.summary).toBe('key="App Token" value="b" · key="Device" value="Pixel"');
+    expect((diffEventContent([], [["x", 1]]).hunks[0] as any).rows[0].summary).toBe('"x" · 1');
+  });
+
   test("a removed event shows whole between the matching runs around it", () => {
     const diff = diffEventContent(
       [evt("X", 1), evt("M", 2), evt("Y", 3)],

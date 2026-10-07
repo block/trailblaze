@@ -102,6 +102,13 @@ object VisibleStringExtractor {
   private val AXE_DRAWN_VALUE_TYPES = AXE_TEXT_INPUT_TYPES + setOf("StaticText", "Heading")
   private val WHITESPACE_RUN = Regex("\\s+")
 
+  /** Vision's text recognizer reads lines, and misses a lone glyph about half the time: on a real
+   *  keypad it found five of ten digits. A label that short is left to the type rule. */
+  private const val MIN_OCR_LABEL_LENGTH = 3
+
+  /** How close a misread can come and still count as the label: one wrong character in five. */
+  private const val MIN_DRAWN_SIMILARITY = 0.8
+
   /** Reading order: top to bottom, then left to right. Boundless nodes keep tree order, last. */
   private val READING_ORDER = compareBy<ExtractedString>(
     { it.bounds == null },
@@ -134,6 +141,56 @@ object VisibleStringExtractor {
       }
     }
     return found.dedupePreferringVisible()
+  }
+
+  /**
+   * [strings] with each iOS AXe label filed as [VisibleStringSource.TEXT] checked against the text
+   * [reader] recognizes inside its element's box on the capture's screenshot, and refiled as
+   * [VisibleStringSource.CONTENT_DESCRIPTION] when that text is not there.
+   *
+   * AXe reports an icon-only button exactly as it reports one that draws its label: a label and no
+   * labelled child. Only the pixels tell them apart. A label on an element covered by a sheet or an
+   * overlay is not drawn on that capture either, and is refiled the same way, since AXe reports
+   * nothing about covering. A label several elements share stays drawn when any of their boxes
+   * shows it, since [extract] keeps one copy of it.
+   *
+   * A label OCR cannot judge keeps the rule [extract] applied: one shorter than OCR reads reliably,
+   * one in a script the recognizer does not read, and one whose every box is offscreen or
+   * unreadable.
+   *
+   * Null when no OCR read ran: the capture had no label to check, or [reader] read none of its
+   * boxes. The strings then stand as [extract] filed them, and a caller can say that no OCR
+   * vouches for them.
+   */
+  fun confirmDrawnLabels(
+    strings: List<ExtractedString>,
+    root: TrailblazeNode,
+    reader: ScreenTextReader,
+  ): List<ExtractedString>? {
+    val drawnLabelBoxes: Map<String, List<TrailblazeNode.Bounds>> = root.aggregate().mapNotNull { node ->
+      val detail = node.driverDetail as? DriverNodeDetail.IosAxe ?: return@mapNotNull null
+      val label = detail.label?.normalizeWhitespace()?.takeIf { detail.drawsLabel(node.children) }
+      val bounds = node.bounds?.takeUnless { CompactElementListUtils.hasInvertedBounds(node) }
+      if (label == null || bounds == null) null else label to bounds
+    }.groupBy({ it.first }, { it.second })
+    val candidates = strings.indices.filter { i ->
+      val s = strings[i]
+      s.source == VisibleStringSource.TEXT && s.visible && s.text.isOcrJudgeable() && s.text in drawnLabelBoxes
+    }
+    val boxes = candidates.flatMap { drawnLabelBoxes.getValue(strings[it].text) }.distinct()
+    if (boxes.isEmpty()) return null
+    val recognized = reader.read(boxes)
+      ?.takeIf { it.size == boxes.size && it.any { lines -> lines != null } }
+      ?: return null
+    val linesIn = boxes.zip(recognized).toMap()
+    val undrawn = candidates.filter { i ->
+      val reads = drawnLabelBoxes.getValue(strings[i].text).mapNotNull { linesIn[it] }
+      reads.isNotEmpty() && reads.none { strings[i].text.isDrawnIn(it) }
+    }.toSet()
+    if (undrawn.isEmpty()) return strings
+    return strings
+      .mapIndexed { i, s -> if (i in undrawn) s.copy(source = VisibleStringSource.CONTENT_DESCRIPTION) else s }
+      .dedupePreferringVisible()
   }
 
   /**
@@ -422,6 +479,56 @@ object VisibleStringExtractor {
 
   private fun String.normalizeWhitespace(): String =
     trim().split(WHITESPACE_RUN).joinToString(" ")
+
+  private fun String.ocrKey(): String = lowercase().filter { it.isLetterOrDigit() }
+
+  /** Vision's default recognizer reads Latin and Cyrillic, and returns nothing at all for CJK
+   *  text, which would refile every drawn label on a Japanese screen. */
+  private fun String.isOcrJudgeable(): Boolean {
+    val key = ocrKey()
+    return key.length >= MIN_OCR_LABEL_LENGTH && key.all { it < '\u0250' || it in '\u0400'..'\u04FF' }
+  }
+
+  /** Case, spacing and punctuation are ignored, which OCR reports less faithfully than letters. */
+  private fun String.isDrawnIn(recognized: List<String>): Boolean {
+    val label = ocrKey()
+    val seen = recognized.joinToString("") { it.ocrKey() }
+    // A label too long for its row is drawn cut short: its first part, then an ellipsis.
+    return label in seen || label.resembles(seen) ||
+      seen.length * 2 >= label.length && label.take(seen.length).resembles(seen)
+  }
+
+  /** One wrong character always passes, or a 3- or 4-character label could afford no misread. */
+  private fun String.resembles(other: String): Boolean {
+    val distance = editDistance(this, other)
+    return distance <= 1 || 1.0 - distance.toDouble() / maxOf(length, other.length) >= MIN_DRAWN_SIMILARITY
+  }
+
+  private fun editDistance(a: String, b: String): Int {
+    var previous = IntArray(b.length + 1) { it }
+    for (i in a.indices) {
+      val current = IntArray(b.length + 1)
+      current[0] = i + 1
+      for (j in b.indices) {
+        current[j + 1] = minOf(current[j] + 1, previous[j + 1] + 1, previous[j] + if (a[i] == b[j]) 0 else 1)
+      }
+      previous = current
+    }
+    return previous[b.length]
+  }
+}
+
+/**
+ * Reads the text drawn inside element boxes on one capture's screenshot, for
+ * [VisibleStringExtractor.confirmDrawnLabels].
+ */
+fun interface ScreenTextReader {
+  /**
+   * The lines of text recognized inside each of [boxes], given in the device coordinates the tree
+   * uses, in the same order: null for a box that could not be read, and null for the whole list
+   * when the screenshot could not be read at all.
+   */
+  fun read(boxes: List<TrailblazeNode.Bounds>): List<List<String>?>?
 }
 
 /**

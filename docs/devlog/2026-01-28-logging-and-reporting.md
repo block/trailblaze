@@ -91,6 +91,9 @@ This makes the desktop app an essential development tool—engineers can watch t
 
 ### Web Report Generation
 
+> **Superseded.** Reports now use a TypeScript viewer, not WebAssembly. See
+> [A TypeScript Web UI Instead of Compose](2026-10-06-typescript-web-ui-over-compose.md).
+
 The `trailblaze-report` module generates static HTML/WASM reports from log data:
 
 1. **Log collection**: Gather logs from test execution (local or CI)

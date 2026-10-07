@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Direct-MCP dispatch path: an external MCP client (Claude Code, Codex, Goose)
-# calls a *first-class* TrailblazeTool over `POST /mcp` — `tapOnPoint`,
+# calls a *first-class* TrailblazeTool over `POST /mcp` — `tap`, `pressKey`,
 # `assertVisible`, … — instead of going through the `step` tool's inner agent.
 #
 # Why this needs its own job. The other two Android jobs miss this code path
@@ -184,7 +184,7 @@ if [ "$SETUP_FAILED" != "true" ]; then
     # `verification` or `memory` toolsets (assertVisible, rememberText, …): those
     # appear only when the resolved target declares them, which is why an earlier
     # version of this check passed locally and failed in CI.
-    for required in tapOnPoint tap; do
+    for required in tap pressKey; do
       if ! jq -e --arg n "$required" '.result.tools | map(.name) | index($n)' "$MCP_OUT_DIR/tools-list.json" > /dev/null; then
         echo "ERROR: first-class tool '$required' is not in the advertised surface," \
           "so the direct-MCP dispatch path is not under test. Advertised tools:"
@@ -223,11 +223,12 @@ fi
 # fire-and-forget even though this one happens to have worked.
 # ---------------------------------------------------------------------------
 if [ "$SETUP_FAILED" != "true" ]; then
-  mcp_call_tool ondevice-success tapOnPoint \
-    '{"x":100,"y":100,"reasoning":"pr-checks: dispatch that must report a real outcome"}'
+  # HOME succeeds on any screen and, like `tap`, runs on the device as a Maestro command.
+  mcp_call_tool ondevice-success pressKey \
+    '{"keyCode":"HOME","reasoning":"pr-checks: dispatch that must report a real outcome"}'
   SUCCESS_TEXT="$(jq -r '.result.content[0].text // ""' "$MCP_OUT_DIR/ondevice-success.json")"
   if [ "$(jq -r '.result.isError' "$MCP_OUT_DIR/ondevice-success.json")" != "false" ]; then
-    echo "ERROR: tapOnPoint reported an error: $SUCCESS_TEXT"
+    echo "ERROR: pressKey reported an error: $SUCCESS_TEXT"
     TEST_FAILED=true
   elif printf '%s' "$SUCCESS_TEXT" | grep -qE '^\[OK\] Executed [A-Za-z]+TrailblazeTool$'; then
     echo "ERROR: dispatch returned the outcome-free placeholder: $SUCCESS_TEXT"

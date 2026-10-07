@@ -2232,7 +2232,8 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
    *
    * Not gated on `--no-report`: this is a data artifact a later locale or copy diff reads, not part
    * of the HTML report. It is one file write, plus, for a session with screenshot-less captures and
-   * a recording, probing and decoding that recording once to save their frames.
+   * a recording, probing and decoding that recording once to save their frames, and on macOS one
+   * OCR read per iOS AXe screenshot.
    */
   private fun writeVisibleStrings(sessions: List<Pair<SessionId, File>>) {
     sessions.groupBy({ it.second }, { it.first }).forEach { (logsDir, sessionIds) ->
