@@ -318,7 +318,8 @@ jobs:
       TRAILBLAZE_CAPTURE_VIDEO: "false"
     defaults:
       run:
-        shell: pwsh
+        # Git Bash, which every Windows runner ships, so the steps read like the Linux job's.
+        shell: bash
 
     steps:
       - name: Checkout
@@ -346,43 +347,45 @@ jobs:
           path: trailblaze-uber-jar/
 
       - name: Put the Windows launcher on PATH
+        # The steps call `trailblaze.cmd` by name: the bash launcher in the same directory
+        # would otherwise win under Git Bash, and it is not what a Windows install uses.
         run: |
-          Get-ChildItem trailblaze-uber-jar
-          "${{ github.workspace }}\trailblaze-uber-jar" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          ls -l trailblaze-uber-jar
+          echo "$GITHUB_WORKSPACE\\trailblaze-uber-jar" >> "$GITHUB_PATH"
 
       - name: Create and run Wikipedia trail
         id: run-trails
         continue-on-error: true
-        run: ./.github/pr_run_wikipedia_trails_windows.ps1
+        run: ./.github/pr_run_wikipedia_trails_windows.sh
 
       - name: Generate Trailblaze report
         if: always()
         continue-on-error: true
-        run: |
-          trailblaze report --output-dir trailblaze-logs
-          if (Test-Path trailblaze-logs/report-interactive.html) {
-            Move-Item -Force trailblaze-logs/report-interactive.html trailblaze_report.html
-          }
+        env:
+          TRAILBLAZE_BIN: trailblaze.cmd
+        run: ./.github/pr_generate_trailblaze_report.sh
 
-      - name: Zip logs
+      - name: Upload report
         if: always()
-        continue-on-error: true
-        run: Compress-Archive -Force -Path trailblaze-logs/* -DestinationPath trailblaze-logs.zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: trailblaze-report-wikipedia-windows
+          path: trailblaze-logs/trailblaze_report.html
+          if-no-files-found: warn
 
-      - name: Upload artifacts
+      - name: Upload logs
+        # Uploaded as a directory: Git Bash has no `zip` for pr_create_artifacts.sh.
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: trailblaze-artifacts-wikipedia-windows
-          path: |
-            trailblaze-logs.zip
-            trailblaze_report.html
+          path: trailblaze-logs/
           if-no-files-found: warn
 
       - name: Fail if trails failed
         if: steps.run-trails.outcome == 'failure'
         run: |
-          Write-Host "Wikipedia trail failed on Windows - failing the workflow"
+          echo "Wikipedia trail failed on Windows - failing the workflow"
           exit 1
 
   # PR-time iOS showcase validation shares the same uber JAR built above.
