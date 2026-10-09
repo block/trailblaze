@@ -21,6 +21,7 @@ import xyz.block.trailblaze.logs.server.endpoints.CliStatusResponse
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.tracing.TrailblazeTracer
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.util.isWindows
 import java.io.File
 import java.nio.file.Path
 import java.nio.file.Paths
@@ -2618,7 +2619,7 @@ private fun cliTryStartDaemon(
     DaemonAutoStartAction.SPAWN -> Unit // fall through and actually spawn
   }
 
-  val launcher = findTrailblazeLauncher() ?: run {
+  val spawnCommand = daemonSpawnCommand() ?: run {
     Console.error("Cannot auto-start daemon: trailblaze launcher not found.")
     return DaemonAutoStartOutcome.FAILED
   }
@@ -2691,7 +2692,7 @@ private fun cliTryStartDaemon(
 
   Console.log("Starting Trailblaze daemon...")
   val child = try {
-    val pb = ProcessBuilder(daemonSpawnArgv(launcher, foreground = true, headless = true))
+    val pb = ProcessBuilder(spawnCommand)
     pb.environment().putAll(childEnvironment)
     if (port != TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTP_PORT) {
       pb.environment()["TRAILBLAZE_PORT"] = port.toString()
@@ -2734,7 +2735,7 @@ private fun cliTryStartDaemon(
     // it prevents a transiently failed health probe from electing a second daemon meanwhile.
     Console.log("Trailblaze daemon started.")
   } else if (!child.isAlive) {
-    claimReaper.destroy()
+    claimReaper.cancel()
     releaseDaemonStartupClaim(claimOwner.ownerFile)
     // A child that's already gone can't still be starting, so "needs more time" would send the
     // user to wait on a process that gave up. The exit code plus the daemon log is what actually
@@ -2879,7 +2880,9 @@ private fun processIsAlive(pid: Long): Boolean =
  * alive: [processIsAlive] has already seen the process, so only a positive `Z` may override that —
  * treating a failed `ps` as "dead" would let a CLI elect a second daemon past a live claimant.
  */
-private fun processIsDefunct(pid: Long): Boolean = readPsField(pid, "stat=")?.startsWith("Z") == true
+private fun processIsDefunct(pid: Long): Boolean =
+  // Windows has no zombies: an exited process's handle already answers `isAlive` false.
+  !isWindows() && readPsField(pid, "stat=")?.startsWith("Z") == true
 
 /**
  * One `ps` field for [pid], or null if `ps` failed, answered nothing, or did not finish in time.
@@ -2948,7 +2951,18 @@ private fun processIsSame(owner: DaemonStartupOwner): Boolean {
 internal fun daemonStartupClaimStillHeld(probedIdentity: String?, recordedIdentity: String): Boolean =
   probedIdentity == null || probedIdentity == recordedIdentity
 
-private fun processStartIdentity(pid: Long): String? = readPsField(pid, "lstart=")
+/**
+ * A value that tells this [pid] apart from a later process recycling it: its start time. macOS and
+ * Linux read it from `ps -o lstart=`, the same field the launcher script records, so a claim either
+ * side wrote matches. Windows has no `ps` and no launcher-written claims, so it uses the JDK's own
+ * start instant.
+ */
+private fun processStartIdentity(pid: Long): String? =
+  if (isWindows()) {
+    ProcessHandle.of(pid).flatMap { it.info().startInstant() }.map { it.toString() }.orElse(null)
+  } else {
+    readPsField(pid, "lstart=")
+  }
 
 /** Replace a live claimant PID without exposing an empty or partial startup lock to another CLI. */
 internal fun replaceDaemonStartupPid(ownerFile: File, childPid: Long): Boolean {
@@ -3022,6 +3036,34 @@ internal fun reclaimDaemonStartupClaimIfOwnerExited(pidFile: File) {
  * Positional shell arguments keep paths and values out of the script syntax.
  */
 internal fun scheduleDaemonStartupClaimReaper(
+  pidFile: File,
+  ownerFile: File,
+  childPid: Long,
+): DaemonStartupClaimReaper? {
+  // No `sh` to watch with. Nothing is lost by skipping it: a claim whose owner has exited is
+  // released by the next CLI that tries to claim ([claimDaemonStartup]) or stops the daemon.
+  if (isWindows()) return DaemonStartupClaimReaper.None
+  return scheduleShellDaemonStartupClaimReaper(pidFile, ownerFile, childPid)
+    ?.let(DaemonStartupClaimReaper::Watcher)
+}
+
+/** The watcher [scheduleDaemonStartupClaimReaper] left behind, if the host has one. */
+internal sealed interface DaemonStartupClaimReaper {
+  /** Stop watching, leaving the claim to whoever releases it next. */
+  fun cancel()
+
+  data class Watcher(val process: Process) : DaemonStartupClaimReaper {
+    override fun cancel() {
+      process.destroy()
+    }
+  }
+
+  data object None : DaemonStartupClaimReaper {
+    override fun cancel() = Unit
+  }
+}
+
+private fun scheduleShellDaemonStartupClaimReaper(
   pidFile: File,
   ownerFile: File,
   childPid: Long,

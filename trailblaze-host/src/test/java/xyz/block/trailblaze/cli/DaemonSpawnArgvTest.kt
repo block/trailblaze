@@ -102,6 +102,40 @@ class DaemonSpawnArgvTest {
   }
 
   @Test
+  fun `a host with no launcher spawns the daemon from java and the JAR, start subcommand first`() {
+    val jar = tempFolder.newFile("trailblaze.jar")
+
+    val argv = directJvmDaemonSpawnArgv(
+      javaBin = "C:\\jdk\\bin\\java.exe",
+      jar = jar,
+      currentJvmArgs = listOf(
+        "-Xmx4g",
+        "-Dkotlinx.coroutines.io.parallelism=512",
+        // An IDE debugger on the CLI JVM must not follow it into the daemon: the daemon would
+        // try to bind the same debug port and die.
+        "-agentlib:jdwp=transport=dt_socket,server=y,address=5005",
+        "-Duser.language=en",
+      ),
+    )
+
+    assertEquals(
+      listOf(
+        "C:\\jdk\\bin\\java.exe",
+        "-Xmx4g",
+        "-Dkotlinx.coroutines.io.parallelism=512",
+        "-Djava.awt.headless=true",
+        "-jar",
+        jar.absolutePath,
+        "app",
+        "start",
+        "--foreground",
+        "--headless",
+      ),
+      argv,
+    )
+  }
+
+  @Test
   fun `resolveLauncherBesideJar finds a packaged install's private lib layout`() {
     // Mirrors a packaged install: a private lib directory holds the uber JAR and the launcher
     // extracted from it under the name `trailblaze-launcher`. There is no `libexec/trailblaze`,

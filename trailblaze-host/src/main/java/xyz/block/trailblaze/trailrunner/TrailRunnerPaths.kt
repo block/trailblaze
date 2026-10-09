@@ -41,7 +41,7 @@ internal fun resolveTrailFile(idSegments: List<String>, primary: File, extras: L
   for (suffix in listOf(".trail.yaml", ".yaml")) {
     val candidate = File(root, "$relative$suffix")
     val fileCanon = candidate.canonicalPath
-    if (fileCanon != rootCanon && !fileCanon.startsWith("$rootCanon/")) return null
+    if (fileCanon != rootCanon && !fileCanon.startsWith(rootCanon + File.separator)) return null
     if (candidate.exists() && candidate.isFile) return root to candidate
   }
   return null

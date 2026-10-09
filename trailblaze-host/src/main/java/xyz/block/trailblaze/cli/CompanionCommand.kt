@@ -22,7 +22,9 @@ import xyz.block.trailblaze.trailrunner.CompanionDisconnectRequest
 import xyz.block.trailblaze.trailrunner.CompanionEventRequest
 import xyz.block.trailblaze.trailrunner.CompanionRespondRequest
 import xyz.block.trailblaze.trailrunner.ExternalAgentType
+import xyz.block.trailblaze.ui.TrailblazeDesktopUtil
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.util.isWindows
 import xyz.block.trailblaze.util.runJsonOutput
 import java.io.File
 import java.net.URI
@@ -165,6 +167,7 @@ internal fun daemonSupportsCompanion(port: Int): Boolean = DaemonClient(port = p
 }
 
 internal fun openCompanionWindow(ui: String, port: Int): Boolean {
+  if (isWindows()) return TrailblazeDesktopUtil.openInDefaultBrowser(ui)
   val launcher = findTrailblazeLauncher() ?: return false
   return runCatching {
     ProcessBuilder(launcher.absolutePath, "trailrunner")
