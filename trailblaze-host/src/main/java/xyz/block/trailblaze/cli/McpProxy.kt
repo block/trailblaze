@@ -51,7 +51,9 @@ import picocli.CommandLine
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDevicePort
 import xyz.block.trailblaze.devices.WebInstanceIds
+import xyz.block.trailblaze.trailrunner.daemonJavaBin
 import xyz.block.trailblaze.ui.TrailblazeDesktopUtil
+import xyz.block.trailblaze.util.isWindows
 
 /** What a `/ping` probe learned about the daemon port. */
 enum class DaemonProbe {
@@ -615,8 +617,8 @@ class McpProxy(
       DaemonAutoStartAction.SPAWN -> Unit // fall through and actually spawn
     }
 
-    val launcher = findLauncher()
-    if (launcher == null) {
+    val command = daemonSpawnCommand()
+    if (command == null) {
       log("Cannot auto-start daemon: trailblaze launcher not found. Start it manually with: trailblaze app")
       return false
     }
@@ -626,7 +628,6 @@ class McpProxy(
     // this costs nothing — and it's what makes the `existing.isAlive` guard above mean
     // "the daemon is still coming up" instead of "the process that launched it hasn't
     // returned yet", which was true for a few milliseconds and then never again.
-    val command = daemonSpawnArgv(launcher, foreground = true, headless = true)
     val claimFile = daemonStartupClaimFile(port)
     val claimOwner = when (val claim = claimDaemonStartup(claimFile)) {
       is DaemonStartupClaim.Owner -> claim
@@ -678,8 +679,6 @@ class McpProxy(
       return false
     }
   }
-
-  private fun findLauncher(): File? = findTrailblazeLauncher()
 
   /**
    * Forward a JSON-RPC request to the daemon, retrying if it's down.
@@ -1955,6 +1954,10 @@ internal fun resolveLauncherBesideJar(jarDir: File): File? = LAUNCHER_SIBLING_NA
  * For release builds, checks next to the running JAR, then the system PATH.
  */
 internal fun findTrailblazeLauncher(): File? {
+  // Every launcher this walk can find is a bash script, which Windows cannot exec — and `canExecute`
+  // is true there for any readable file, so the probes below would hand one back anyway. Windows
+  // starts its daemon from the JVM directly instead; see [daemonSpawnCommand].
+  if (isWindows()) return null
   System.getenv("TRAILBLAZE_LAUNCHER")?.let { path ->
     val file = File(path)
     if (file.exists() && file.canExecute()) return file
@@ -1967,6 +1970,56 @@ internal fun findTrailblazeLauncher(): File? {
   }
 
   return findOnPath("trailblaze")
+}
+
+/**
+ * Argv that starts a background daemon (`app start --foreground --headless`), or null when this
+ * process has no way to start one and the caller should fall back to running the daemon in-process.
+ *
+ * macOS and Linux re-enter the launcher script ([daemonSpawnArgv]), which carries the JVM flags and
+ * CDS archive a daemon starts with. Windows has no launcher the JVM can exec: its `trailblaze.cmd`
+ * would run under a `cmd.exe` parent, so the PID the startup claim records would not be the daemon's
+ * and destroying it would orphan the JVM. Windows starts this JVM's own `java` and JAR instead.
+ */
+internal fun daemonSpawnCommand(): List<String>? {
+  if (!isWindows()) {
+    return findTrailblazeLauncher()?.let { daemonSpawnArgv(it, foreground = true, headless = true) }
+  }
+  val jar = McpProxy::class.java.protectionDomain?.codeSource?.location?.toURI()
+    ?.let { File(it) }
+    ?.takeIf { it.isFile && it.extension.equals("jar", ignoreCase = true) }
+    ?: return null
+  return directJvmDaemonSpawnArgv(
+    javaBin = daemonJavaBin(),
+    jar = jar,
+    currentJvmArgs = java.lang.management.ManagementFactory.getRuntimeMXBean().inputArguments,
+  )
+}
+
+/**
+ * The [daemonSpawnCommand] argv for a host with no launcher: `java <flags> -jar <jar> app start
+ * --foreground --headless`. Of this process's own JVM arguments it carries only the ones the
+ * launcher would have set — heap size and IO parallelism — so a debugger agent or an IDE's
+ * `-javaagent` on the CLI JVM does not also attach to the daemon.
+ */
+internal fun directJvmDaemonSpawnArgv(
+  javaBin: String,
+  jar: File,
+  currentJvmArgs: List<String>,
+): List<String> = buildList {
+  add(javaBin)
+  addAll(
+    currentJvmArgs.filter {
+      it.startsWith("-Xmx") || it.startsWith("-Dkotlinx.coroutines.io.parallelism=")
+    },
+  )
+  add("-Djava.awt.headless=true")
+  add("-jar")
+  add(jar.absolutePath)
+  add("app")
+  add("start")
+  add("--foreground")
+  add("--headless")
 }
 
 /**

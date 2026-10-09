@@ -9,7 +9,6 @@ import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
-import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
@@ -133,7 +132,9 @@ class CompanionCommandTest {
     try {
       val owner = assertIs<DaemonStartupClaim.Owner>(claimDaemonStartup(pidFile))
       assertTrue(replaceDaemonStartupPid(owner.ownerFile, child.pid()))
-      val reaper = assertNotNull(scheduleDaemonStartupClaimReaper(pidFile, owner.ownerFile, child.pid()))
+      val reaper = assertIs<DaemonStartupClaimReaper.Watcher>(
+        scheduleDaemonStartupClaimReaper(pidFile, owner.ownerFile, child.pid()),
+      ).process
       assertTrue(pidFile.exists(), "the reaper must retain a live child's claim")
       child.outputStream.bufferedWriter().use { it.newLine() }
       child.waitFor()

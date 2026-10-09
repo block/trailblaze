@@ -55,6 +55,12 @@ you if it's missing):
 curl -fsSL https://raw.githubusercontent.com/block/trailblaze/main/install.sh | bash
 ```
 
+On Windows (web trails only), install from PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/block/trailblaze/main/install.ps1 | iex
+```
+
 Optional extras: `ffmpeg` for video capture in reports, `esbuild` for bundling scripted
 tools (`brew install ffmpeg esbuild`).
 

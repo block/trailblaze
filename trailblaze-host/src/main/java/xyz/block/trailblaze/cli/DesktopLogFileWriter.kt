@@ -68,6 +68,8 @@ object DesktopLogFileWriter {
   private fun rotateIfNeeded(logFile: File) {
     if (logFile.exists() && logFile.length() > MAX_LOG_SIZE_BYTES) {
       val oldFile = File(logFile.parentFile, "${logFile.name}.old")
+      // Windows will not rename onto an existing file, so clear the previous generation first.
+      oldFile.delete()
       logFile.renameTo(oldFile)
     }
   }

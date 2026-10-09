@@ -86,6 +86,7 @@ jobs:
           mkdir -p trailblaze-uber-jar
           cp trailblaze-desktop/build/release/trailblaze.jar trailblaze-uber-jar/
           cp trailblaze-desktop/build/release/trailblaze trailblaze-uber-jar/
+          cp trailblaze-desktop/build/release/trailblaze.cmd trailblaze-uber-jar/
           ls -lh trailblaze-uber-jar/
 
       - name: Upload uber JAR artifact
@@ -301,6 +302,87 @@ jobs:
         if: steps.run-trails.outcome == 'failure'
         run: |
           echo "Wikipedia trails failed - failing the workflow"
+          exit 1
+
+  # The same recorded Wikipedia trail on a Windows host, driven through the Windows launcher
+  # (`trailblaze.cmd`) from the JAR built above on Linux. Windows supports web (Playwright)
+  # trails only. The CLI starts the daemon itself here, as it does for a Windows user.
+  wikipedia-trails-windows:
+    if: github.event_name == 'pull_request'
+    runs-on: windows-latest
+    timeout-minutes: 45
+    needs: build-uber-jar
+    env:
+      OPENAI_API_KEY: no-key-set
+      # The runner image has no ffmpeg; keep this job about running the trail.
+      TRAILBLAZE_CAPTURE_VIDEO: "false"
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: 17
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+
+      - name: Cache Playwright driver
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/trailblaze/playwright-driver
+          key: playwright-driver-${{ runner.os }}-${{ hashFiles('gradle/libs.versions.toml') }}
+
+      - name: Download prebuilt uber JAR
+        uses: actions/download-artifact@v4
+        with:
+          name: trailblaze-uber-jar
+          path: trailblaze-uber-jar/
+
+      - name: Put the Windows launcher on PATH
+        run: |
+          Get-ChildItem trailblaze-uber-jar
+          "${{ github.workspace }}\trailblaze-uber-jar" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Create and run Wikipedia trail
+        id: run-trails
+        continue-on-error: true
+        run: ./.github/pr_run_wikipedia_trails_windows.ps1
+
+      - name: Generate Trailblaze report
+        if: always()
+        continue-on-error: true
+        run: |
+          trailblaze report --output-dir trailblaze-logs
+          if (Test-Path trailblaze-logs/report-interactive.html) {
+            Move-Item -Force trailblaze-logs/report-interactive.html trailblaze_report.html
+          }
+
+      - name: Zip logs
+        if: always()
+        continue-on-error: true
+        run: Compress-Archive -Force -Path trailblaze-logs/* -DestinationPath trailblaze-logs.zip
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trailblaze-artifacts-wikipedia-windows
+          path: |
+            trailblaze-logs.zip
+            trailblaze_report.html
+          if-no-files-found: warn
+
+      - name: Fail if trails failed
+        if: steps.run-trails.outcome == 'failure'
+        run: |
+          Write-Host "Wikipedia trail failed on Windows - failing the workflow"
           exit 1
 
   # PR-time iOS showcase validation shares the same uber JAR built above.

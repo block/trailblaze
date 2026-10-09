@@ -32,10 +32,11 @@ replay → compose your own agent surface.** You can stop at any rung.
 
 ## System Requirements
 
-| | macOS | Linux |
-|---|---|---|
-| **Trailblaze App** | Native window | Default browser |
-| **Headless / CLI** | Supported | Supported |
+| | macOS | Linux | Windows (x64) |
+|---|---|---|---|
+| **Trailblaze App** | Native window | Default browser | Default browser |
+| **Headless / CLI** | Supported | Supported | Supported |
+| **Devices** | Android, iOS, web | Android, web | Web only |
 
 - **JDK 17+** on all platforms
 - **Android SDK** with `adb` on your PATH for Android devices and emulators
@@ -52,6 +53,13 @@ Or install from the GitHub release:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/block/trailblaze/main/install.sh | bash
+```
+
+On Windows, install from PowerShell. This puts `trailblaze.cmd` and the JAR in
+`%USERPROFILE%\.trailblaze\bin` and adds that folder to your user `PATH`:
+
+```powershell
+irm https://raw.githubusercontent.com/block/trailblaze/main/install.ps1 | iex
 ```
 
 Or clone and run from source (`./trailblaze` is the repo-root wrapper that rebuilds and
