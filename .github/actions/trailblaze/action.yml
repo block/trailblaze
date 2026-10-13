@@ -31,7 +31,7 @@ inputs:
   version:
     description: >-
       Trailblaze CLI version, such as 2026.10.06. Defaults to the version in this action's tag
-      (block/trailblaze/github-action@v2026.10.06 runs CLI 2026.10.06).
+      (block/trailblaze/.github/actions/trailblaze@v2026.10.06 runs CLI 2026.10.06).
     default: ""
   cli-artifact:
     description: >-

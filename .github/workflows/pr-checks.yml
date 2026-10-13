@@ -430,8 +430,8 @@ jobs:
           exit 1
 
   # The same three showcase trails, run through the public trail runner (trail-runner.yml +
-  # github-action/) with the CLI this PR built. It dogfoods the runner that other repos call, so a
-  # change that breaks it fails here first. The per-platform jobs above stay until this has a
+  # actions/trailblaze/) with the CLI this PR built. It dogfoods the runner that other repos call,
+  # so a change that breaks it fails here first. The per-platform jobs above stay until this has a
   # track record.
   trail-runner:
     if: github.event_name == 'pull_request'

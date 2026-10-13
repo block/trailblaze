@@ -13,7 +13,7 @@
 #       with:
 #         request: .github/trailblaze-runs.yaml
 #
-# See github-action/README.md for the request format.
+# See .github/actions/trailblaze/README.md for the request format.
 
 name: Trail runner
 
@@ -41,7 +41,7 @@ on:
         type: number
         default: 20
       publish:
-        description: "`none` or `branch`; see github-action/README.md."
+        description: "`none` or `branch`; see .github/actions/trailblaze/README.md."
         type: string
         default: none
       comment:
@@ -69,9 +69,9 @@ jobs:
           repository: ${{ job.workflow_repository }}
           ref: ${{ job.workflow_sha }}
           path: .trailblaze-runner
-          sparse-checkout: github-action
+          sparse-checkout: .github/actions/trailblaze
       - id: plan
-        uses: ./.trailblaze-runner/github-action
+        uses: ./.trailblaze-runner/.github/actions/trailblaze
         with:
           command: plan
           request: ${{ inputs.request }}
@@ -92,12 +92,12 @@ jobs:
           repository: ${{ job.workflow_repository }}
           ref: ${{ job.workflow_sha }}
           path: .trailblaze-runner
-          sparse-checkout: github-action
+          sparse-checkout: .github/actions/trailblaze
       - if: ${{ inputs.app-artifact != '' }}
         uses: actions/download-artifact@v8
         with:
           name: ${{ inputs.app-artifact }}
-      - uses: ./.trailblaze-runner/github-action
+      - uses: ./.trailblaze-runner/.github/actions/trailblaze
         with:
           device: ${{ matrix.device }}
           trails: ${{ matrix.trails }}
@@ -126,9 +126,9 @@ jobs:
           repository: ${{ job.workflow_repository }}
           ref: ${{ job.workflow_sha }}
           path: .trailblaze-runner
-          sparse-checkout: github-action
+          sparse-checkout: .github/actions/trailblaze
       - id: report
-        uses: ./.trailblaze-runner/github-action
+        uses: ./.trailblaze-runner/.github/actions/trailblaze
         with:
           command: report
           version: ${{ inputs.version || job.workflow_ref }}

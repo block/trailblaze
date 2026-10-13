@@ -88,7 +88,7 @@ runs:
 The action under this directory runs one device's trails in a job you already have:
 
 ```yaml
-- uses: block/trailblaze/github-action@<release-tag>
+- uses: block/trailblaze/.github/actions/trailblaze@<release-tag>
   with:
     device: android
     app: app/build/outputs/apk/debug/app-debug.apk
