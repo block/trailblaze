@@ -431,8 +431,8 @@ jobs:
 
   # The same three showcase trails, run through the public trail runner (trail-runner.yml +
   # actions/trailblaze/) with the CLI this PR built. It dogfoods the runner that other repos call,
-  # so a change that breaks it fails here first. The per-platform jobs above stay until this has a
-  # track record.
+  # so a change that breaks it fails here first. It also replaces the Android host-RPC trail job;
+  # the web and iOS trail jobs above stay until this has a track record.
   trail-runner:
     if: github.event_name == 'pull_request'
     needs: build-uber-jar
@@ -540,121 +540,11 @@ jobs:
           echo "Tests failed - failing the workflow"
           exit 1
 
-  # Drives the trail from the host via the Trailblaze CLI (`trailblaze trail …`).
-  # Agent loop runs in-process on the host; tools dispatch over RPC to the bundled
-  # on-device APK that the CLI auto-installs over ADB.
-  android-tests-host-rpc:
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    needs: build-uber-jar
-    env:
-      # Recordings-only — LLM is never invoked. See android-tests-on-device above.
-      OPENAI_API_KEY: no-key-set
-      # Record each session's screen so the report plays the recording (off by default).
-      TRAILBLAZE_CAPTURE_VIDEO: "true"
-
-    steps:
-      - name: Enable KVM group perms
-        if: runner.os == 'Linux'
-        run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
-          ls /dev/kvm
-
-      - name: Keep the daemon's ports out of the ephemeral range
-        # 52525/52526 fall inside Linux's ephemeral range (32768-60999), and the emulator and its
-        # helpers bind random ports from it. One landing on 52525 first makes the daemon exit with
-        # "Address already in use". Reserving them keeps the kernel from handing them out.
-        if: runner.os == 'Linux'
-        run: sudo sysctl -w net.ipv4.ip_local_reserved_ports=52525-52526
-
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Setup Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: zulu
-          java-version: 17
-
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407
-        with:
-          # Drop the action's default `tools` package. Google removed the obsolete SDK Tools
-          # package from the repository, so `sdkmanager tools` fails outright on runner images
-          # that no longer ship it preinstalled. `platform-tools` is what the build needs.
-          packages: platform-tools
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-
-      - name: Download prebuilt uber JAR
-        uses: actions/download-artifact@v4
-        with:
-          name: trailblaze-uber-jar
-          path: trailblaze-uber-jar/
-
-      - name: Install trailblaze from prebuilt artifact
-        env:
-          TRAILBLAZE_ARTIFACT_DIR: ${{ github.workspace }}/trailblaze-uber-jar
-        run: ./scripts/install-trailblaze-from-artifact.sh
-
-      - name: Install ffmpeg
-        # Session video encodes through it; see the script for why it is a pinned build.
-        run: ./.github/install-ffmpeg.sh
-
-      - name: Create and start emulator and run tests (Linux)
-        if: runner.os == 'Linux'
-        uses: reactivecircus/android-emulator-runner@b530d96654c385303d652368551fb075bc2f0b6b
-        id: run-tests-linux
-        continue-on-error: true
-        with:
-          api-level: 34
-          arch: x86_64
-          disable-animations: true
-          disk-size: 6000M
-          heap-size: 600M
-          profile: Nexus 6
-          script: ./.github/pr_run_android_tests_host_rpc.sh
-
-      - name: Verify logs were pulled
-        if: always()
-        run: ./.github/pr_verify_logs_were_pulled.sh
-
-      - name: Generate Trailblaze report
-        if: always()
-        continue-on-error: true
-        run: ./.github/pr_generate_trailblaze_report.sh
-
-      - name: Create artifacts
-        if: always()
-        continue-on-error: true
-        run: ./.github/pr_create_artifacts.sh
-
-      - name: Upload artifacts
-        if: always()  # Ensures this runs even if the previous step failed
-        uses: actions/upload-artifact@v4
-        with:
-          name: trailblaze-artifacts-host-rpc
-          path: |
-            trailblaze-logs.zip
-            trailblaze_report.html
-            logcat.log
-
-      - name: Fail if tests failed
-        if: steps.run-tests-linux.outcome == 'failure'
-        run: |
-          echo "Tests failed - failing the workflow"
-          exit 1
-
   # Drives a first-class TrailblazeTool over the daemon's `POST /mcp` endpoint —
   # the surface an external MCP client (Claude Code, Codex, Goose) uses. This is
   # the only job that reaches `TrailblazeMcpBridgeImpl.executeToolViaRpc` with
   # the interface's `blocking = false` default: android-tests-on-device is pure
-  # instrumentation, and android-tests-host-rpc goes through DesktopYamlRunner.
+  # instrumentation, and trail-runner's `trailblaze run` goes through DesktopYamlRunner.
   # Asserts an on-device failure surfaces as `isError` and a success returns the
   # tool's own output rather than an outcome-free placeholder.
   android-tests-mcp-dispatch:
