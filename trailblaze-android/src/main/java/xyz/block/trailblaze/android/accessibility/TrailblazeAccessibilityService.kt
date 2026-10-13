@@ -582,7 +582,12 @@ class TrailblazeAccessibilityService : AccessibilityService() {
      * Pre-order walk that calls [AccessibilityNodeInfo.refresh] on every node reachable from
      * [root], recycling each child after recursion. Refresh updates the visited copy rather
      * than the platform cache. On API < 29, downstream conversion also refreshes each node
-     * it reads because subtree invalidation can leave stale children in that cache.
+     * it reads because subtree invalidation can leave stale children in that cache (AOSP
+     * b/111554539). Android 10 includes the cache-clearing fix restored by:
+     * https://android.googlesource.com/platform/frameworks/base/+/b2499c55a9ef9e5245ab994683cf8875a0998925
+     *
+     * Refresh bypasses cache insertion by design; see AOSP's "Bypass a11y cache when requested":
+     * https://android.googlesource.com/platform/frameworks/base/+/c140fdc34263caaa021d5c4ec438384de484420d
      *
      * Bounded by [MAX_REFRESH_DEPTH] to guard against StackOverflowError on pathological
      * Compose semantics trees — typical Android UIs stay well under this depth.

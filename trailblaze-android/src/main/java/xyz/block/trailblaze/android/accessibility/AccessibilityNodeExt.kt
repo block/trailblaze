@@ -25,8 +25,11 @@ fun AccessibilityNodeInfo.toAccessibilityNode(
   nodeIdCounter: NodeIdCounter = NodeIdCounter(),
   tally: TreeCaptureTally = TreeCaptureTally(),
 ): AccessibilityNode {
-  // Refresh the copy being converted: a separate refresh walk recycles its copies without
-  // updating the framework cache, whose subtree invalidation can miss children on API 28.
+  // Older caches can retain stale descendants when a subtree-change event comes from an
+  // uncached ancestor (AOSP b/111554539; the cache-clearing fix is present in Android 10):
+  // https://android.googlesource.com/platform/frameworks/base/+/a4002c8daf272f550787d94bed8e81749a891e66
+  // Refresh this copy as it is converted: the earlier walk recycles its refreshed copies
+  // without updating the client cache.
   if (!AndroidSdkVersion.isAtLeast(29)) refresh()
   val nodeRect = Rect().apply { getBoundsInScreen(this) }
   val bounds = AccessibilityNode.Bounds(
