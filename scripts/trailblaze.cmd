@@ -1,10 +1,10 @@
 @echo off
 rem Trailblaze launcher for Windows.
 rem
-rem The Windows counterpart of the `trailblaze` bash launcher beside it. Windows runs web
-rem (Playwright) trails only. This launcher only finds Java and starts the JAR: the JVM starts the
-rem background daemon itself on Windows, so none of the bash launcher's daemon fast paths, CDS
-rem archive or startup lock are needed here.
+rem The Windows counterpart of the `trailblaze` bash launcher beside it. Windows runs Android and
+rem web (Playwright) trails, not iOS. This launcher only finds Java and starts the JAR: the JVM
+rem starts the background daemon itself on Windows, so none of the bash launcher's daemon fast
+rem paths, CDS archive or startup lock are needed here.
 rem
 rem Environment variables:
 rem   TRAILBLAZE_PORT           - HTTP port (default: 52525). Override to run multiple instances.

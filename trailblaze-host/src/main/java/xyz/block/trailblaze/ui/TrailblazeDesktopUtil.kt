@@ -37,8 +37,8 @@ object TrailblazeDesktopUtil {
    *
    * Supported: macOS Apple Silicon (arm64), Linux x64, Linux arm64, Windows x64. Linux also needs
    * glibc 2.27 or newer, which the WebP encoder's natives are built against; this gate does not
-   * check it. Windows runs web (Playwright) trails only — Android and iOS device control are not
-   * wired up there. Unsupported: Intel macOS, Windows arm64, FreeBSD, and any other OS/arch — the
+   * check it. Windows runs Android and web (Playwright) trails; iOS device control needs macOS.
+   * Unsupported: Intel macOS, Windows arm64, FreeBSD, and any other OS/arch — the
    * WebP encoder and QuickJS ship no natives for them, or the uber JAR leaves them out to stay small.
    *
    * Reads `os.name` / `os.arch` directly rather than going through `DesktopOsType`'s
@@ -69,7 +69,7 @@ object TrailblazeDesktopUtil {
         appendLine("  - macOS Apple Silicon (arm64)")
         appendLine("  - Linux x64 (x86_64 / amd64), glibc 2.27+")
         appendLine("  - Linux arm64 (aarch64), glibc 2.27+")
-        append("  - Windows x64 (web trails only)")
+        append("  - Windows x64 (Android and web, no iOS)")
       },
     )
     kotlin.system.exitProcess(1)

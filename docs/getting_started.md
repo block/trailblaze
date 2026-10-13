@@ -36,7 +36,7 @@ replay → compose your own agent surface.** You can stop at any rung.
 |---|---|---|---|
 | **Trailblaze App** | Native window | Default browser | Default browser |
 | **Headless / CLI** | Supported | Supported | Supported |
-| **Devices** | Android, iOS, web | Android, web | Web only |
+| **Devices** | Android, iOS, web | Android, web | Android, web |
 
 - **JDK 17+** on all platforms
 - **Android SDK** with `adb` on your PATH for Android devices and emulators
