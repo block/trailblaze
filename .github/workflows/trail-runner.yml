@@ -1,0 +1,137 @@
+# Runs every trail in a request file, in parallel, and reports once.
+#
+#   plan:   reads the request and makes one job per run per shard
+#   run:    each job boots its device and runs its share of the trails
+#   report: merges every job's sessions into one report, summary, PR comment and verdict
+#
+# Call it from a job in your own workflow:
+#
+#   jobs:
+#     trails:
+#       permissions: { contents: read, pull-requests: write }
+#       uses: block/trailblaze/.github/workflows/trail-runner.yml@<release-tag>
+#       with:
+#         request: .github/trailblaze-runs.yaml
+#
+# See github-action/README.md for the request format.
+
+name: Trail runner
+
+on:
+  workflow_call:
+    inputs:
+      request:
+        description: Request file (YAML or JSON) listing the runs.
+        type: string
+        required: true
+      app-artifact:
+        description: Artifact from the calling workflow holding the app. Its files land in the workspace root.
+        type: string
+        default: ""
+      version:
+        description: Trailblaze CLI release to run. Defaults to the release this workflow is pinned to.
+        type: string
+        default: ""
+      cli-artifact:
+        description: Artifact holding a Trailblaze CLI built earlier in this run, instead of a release.
+        type: string
+        default: ""
+      max-parallel:
+        description: Most jobs to run at once.
+        type: number
+        default: 20
+      publish:
+        description: "`none` or `branch`; see github-action/README.md."
+        type: string
+        default: none
+      comment:
+        description: Post the summary as one PR comment.
+        type: boolean
+        default: true
+    outputs:
+      passed:
+        value: ${{ jobs.report.outputs.passed }}
+      total:
+        value: ${{ jobs.report.outputs.total }}
+
+# Each job checks out this workflow's own commit into .trailblaze-runner and runs the action from
+# there: in a called workflow, `uses: ./...` resolves against the caller's repository.
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .trailblaze-runner
+          sparse-checkout: github-action
+      - id: plan
+        uses: ./.trailblaze-runner/github-action
+        with:
+          command: plan
+          request: ${{ inputs.request }}
+
+  run:
+    needs: plan
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      max-parallel: ${{ inputs.max-parallel }}
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .trailblaze-runner
+          sparse-checkout: github-action
+      - if: ${{ inputs.app-artifact != '' }}
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ inputs.app-artifact }}
+      - uses: ./.trailblaze-runner/github-action
+        with:
+          device: ${{ matrix.device }}
+          trails: ${{ matrix.trails }}
+          app: ${{ matrix.app }}
+          args: ${{ matrix.args }}
+          config-dir: ${{ matrix.config-dir }}
+          setup: ${{ matrix.setup }}
+          android-api-level: ${{ matrix.android-api-level }}
+          android-profile: ${{ matrix.android-profile }}
+          ios-simulator: ${{ matrix.ios-simulator }}
+          version: ${{ inputs.version || job.workflow_ref }}
+          cli-artifact: ${{ inputs.cli-artifact }}
+          artifact-suffix: -${{ matrix.id }}
+          summary: "false"
+
+  report:
+    needs: [plan, run]
+    if: ${{ !cancelled() && needs.plan.result == 'success' }}
+    runs-on: ubuntu-latest
+    outputs:
+      passed: ${{ steps.report.outputs.passed }}
+      total: ${{ steps.report.outputs.total }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .trailblaze-runner
+          sparse-checkout: github-action
+      - id: report
+        uses: ./.trailblaze-runner/github-action
+        with:
+          command: report
+          version: ${{ inputs.version || job.workflow_ref }}
+          cli-artifact: ${{ inputs.cli-artifact }}
+          publish: ${{ inputs.publish }}
+          comment: ${{ inputs.comment }}

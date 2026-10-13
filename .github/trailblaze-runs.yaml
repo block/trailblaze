@@ -1,0 +1,26 @@
+# The showcase trails that pr-checks.yml runs through the trail runner (trail-runner.yml), one per
+# platform. The request format is in github-action/README.md.
+defaults:
+  mode: replay
+  # Scripted tools in a source checkout need the TypeScript SDK's esbuild.
+  setup: cd sdks/typescript && bun install --frozen-lockfile
+runs:
+  - name: android-clock
+    device: android
+    android: { api: 34, profile: Nexus 6 }
+    trails: [trails/clock/set-alarm-730am/trail.yaml]
+
+  - name: web-wikipedia
+    device: web
+    config-dir: examples/wikipedia/trails/config
+    trails: [trails/wikipedia/test-article-shakespeare/trail.yaml]
+
+  - name: ios-contacts
+    device: ios
+    ios: { simulator: iPhone 17 Pro }
+    config-dir: examples/ios-contacts/trails/config
+    # The recording starts on the Contacts list.
+    setup: >-
+      (cd sdks/typescript && bun install --frozen-lockfile)
+      && xcrun simctl launch booted com.apple.MobileAddressBook && sleep 5
+    trails: [trails/ios-contacts/test-create-then-delete/trail.yaml]
