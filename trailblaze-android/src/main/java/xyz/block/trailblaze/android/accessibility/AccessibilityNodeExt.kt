@@ -25,6 +25,9 @@ fun AccessibilityNodeInfo.toAccessibilityNode(
   nodeIdCounter: NodeIdCounter = NodeIdCounter(),
   tally: TreeCaptureTally = TreeCaptureTally(),
 ): AccessibilityNode {
+  // Refresh the copy being converted: a separate refresh walk recycles its copies without
+  // updating the framework cache, whose subtree invalidation can miss children on API 28.
+  if (!AndroidSdkVersion.isAtLeast(29)) refresh()
   val nodeRect = Rect().apply { getBoundsInScreen(this) }
   val bounds = AccessibilityNode.Bounds(
     left = nodeRect.left,

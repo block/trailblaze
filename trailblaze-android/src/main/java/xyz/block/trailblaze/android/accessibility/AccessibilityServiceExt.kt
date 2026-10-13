@@ -10,6 +10,9 @@ import xyz.block.trailblaze.android.AndroidSdkVersion
  * over are counted on [tally] rather than skipped silently — see [TreeCaptureTally].
  */
 fun AccessibilityNodeInfo.toTreeNode(tally: TreeCaptureTally = TreeCaptureTally()): TreeNode {
+  // Refresh the copy being converted: a separate refresh walk recycles its copies without
+  // updating the framework cache, whose subtree invalidation can miss children on API 28.
+  if (!AndroidSdkVersion.isAtLeast(29)) refresh()
   val nodeRect: Rect = Rect().apply { getBoundsInScreen(this) }
 
   // Top-left coordinate

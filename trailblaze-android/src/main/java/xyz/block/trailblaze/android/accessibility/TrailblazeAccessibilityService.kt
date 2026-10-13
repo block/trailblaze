@@ -580,9 +580,9 @@ class TrailblazeAccessibilityService : AccessibilityService() {
 
     /**
      * Pre-order walk that calls [AccessibilityNodeInfo.refresh] on every node reachable from
-     * [root], recycling each child after recursion. The cached node-info entries seen by
-     * later `getChild()` calls in the same capture remain populated with the freshly-fetched
-     * data, so downstream tree walks read current text/state without their own refresh.
+     * [root], recycling each child after recursion. Refresh updates the visited copy rather
+     * than the platform cache. On API < 29, downstream conversion also refreshes each node
+     * it reads because subtree invalidation can leave stale children in that cache.
      *
      * Bounded by [MAX_REFRESH_DEPTH] to guard against StackOverflowError on pathological
      * Compose semantics trees — typical Android UIs stay well under this depth.
