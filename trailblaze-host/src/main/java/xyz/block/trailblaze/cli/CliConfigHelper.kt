@@ -325,12 +325,11 @@ val CONFIG_KEYS: Map<String, ConfigKey> = listOf(
   ),
   ConfigKey(
     // Plain boolean like the sibling capture toggles (`captureLogcat` / `captureIosLogs`), just
-    // defaulting OFF: recordings are large and their timing drifts on some hosts. This is the
-    // persistent opt-in that reaches entry points with no
-    // positive per-run flag — interactive `session start` and MCP sessions. Per-run
-    // `--capture-video` / `--no-capture-video` and `TRAILBLAZE_CAPTURE_VIDEO` both override it.
+    // defaulting OFF: an interactive session can run for hours with no goal. This is the
+    // persistent opt-in for entry points with no per-run flag — `session start` and MCP.
+    // `trailblaze run` records by default regardless of this (`--no-capture-video` skips it).
     name = "capture-video",
-    description = "Record device screen video for each session (default: off — video is opt-in)",
+    description = "Record video in interactive sessions (default: off; `trailblaze run` records by default regardless of this setting)",
     validValues = "true or false",
     get = { config -> config.captureVideo.toString() },
     set = { config, value -> value.toBooleanStrictOrNull()?.let { config.copy(captureVideo = it) } },

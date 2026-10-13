@@ -465,19 +465,16 @@ class TrailblazeBundlePluginFunctionalTest {
         trailblazeBundle {
           trailmapsDir.set(layout.projectDirectory.dir("trailmaps"))
         }
-        tasks.register("dumpCompileDeps") {
-          doLast {
-            val t = tasks.named("compileTrailblazeWorkspace").get()
-            println("DEPS=" + t.taskDependencies.getDependencies(t).map { it.path }.sorted())
-          }
-        }
       """.trimIndent(),
     )
 
-    val result = runner(root, ":consumer:dumpCompileDeps").build()
-    assertEquals(TaskOutcome.SUCCESS, result.task(":consumer:dumpCompileDeps")?.outcome)
-    assertTrue("expected dependsOn the install task; got ${result.output}") {
-      result.output.contains(":trailblaze-scripting-subprocess:installTrailblazeScriptingSdk")
+    // Resolve dependencies while Gradle builds its execution plan. Querying taskDependencies
+    // inside a task action can deadlock on Gradle 9's build lifecycle lock.
+    val result = runner(root, ":consumer:compileTrailblazeWorkspace", "--dry-run").build()
+    val installIndex = result.output.indexOf(":trailblaze-scripting-subprocess:installTrailblazeScriptingSdk SKIPPED")
+    val compileIndex = result.output.indexOf(":consumer:compileTrailblazeWorkspace SKIPPED")
+    assertTrue("expected SDK install before workspace compilation; got ${result.output}") {
+      installIndex >= 0 && compileIndex > installIndex
     }
   }
 
@@ -497,17 +494,13 @@ class TrailblazeBundlePluginFunctionalTest {
         trailblazeBundle {
           trailmapsDir.set(layout.projectDirectory.dir("trailmaps"))
         }
-        tasks.register("dumpCompileDeps") {
-          doLast {
-            val t = tasks.named("compileTrailblazeWorkspace").get()
-            println("DEPS=" + t.taskDependencies.getDependencies(t).map { it.path }.sorted())
-          }
-        }
       """.trimIndent(),
     )
 
-    val result = runner(projectDir, "dumpCompileDeps").build()
-    assertEquals(TaskOutcome.SUCCESS, result.task(":dumpCompileDeps")?.outcome)
+    val result = runner(projectDir, "compileTrailblazeWorkspace", "--dry-run").build()
+    assertTrue("expected workspace compilation in the plan: ${result.output}") {
+      result.output.contains(":compileTrailblazeWorkspace SKIPPED")
+    }
     assertTrue("install task path must not appear when sibling project is absent: ${result.output}") {
       !result.output.contains("installTrailblazeScriptingSdk")
     }

@@ -17,6 +17,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.resolveToolName
+import xyz.block.trailblaze.toolcalls.scrubSensitiveValues
 import xyz.block.trailblaze.toolcalls.toKoogToolDescriptor
 import xyz.block.trailblaze.toolcalls.commands.AssertVisibleTrailblazeTool
 import xyz.block.trailblaze.decision.NextMoveDecisionLlmClient
@@ -324,6 +325,7 @@ suspend fun runPromptsWithKoogStrategyGraph(
       screenText = { sharedScreenProvider().viewHierarchyTextRepresentation },
       env = decisionSettings,
       alwaysShownTools = alwaysShownTools,
+      scrub = { scrubSensitiveValues(it, agent.memory) },
     ),
     logger = logger,
     session = session,

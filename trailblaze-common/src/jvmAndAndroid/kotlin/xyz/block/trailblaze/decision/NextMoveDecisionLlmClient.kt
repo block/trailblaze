@@ -31,6 +31,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.put
+import xyz.block.trailblaze.mcp.agent.KoogStrategyGraphAgent
 import xyz.block.trailblaze.http.CachedTokenCaptureInterceptor
 import xyz.block.trailblaze.http.TrailblazeHttpClientFactory
 import xyz.block.trailblaze.llm.CachedTokenExtractor
@@ -66,7 +67,7 @@ import xyz.block.trailblaze.util.Console
  * screen cost the engine the same time as one): is the step finished, or does the screen need
  * changing or checking; if changing, by a tap, typing or a scroll; then which element, which text the
  * step quotes, or which way. It acts when every answer on the path is sure: a tap at [threshold], a
- * "done" at [doneThreshold] (by default [TREE_THRESHOLD]), a scroll or typing at [TREE_THRESHOLD]. It
+ * "done" at [doneThreshold] (by default [TREE_DONE_THRESHOLD]), a scroll or typing at [TREE_THRESHOLD]. It
  * types only into a focused field the tree is sure is empty, and never the same text twice in a
  * step, and leaves a fourth scroll the same way in a row to the LLM. Taps, scrolls and typing are
  * made on conditional and check-worded steps too, "done" only on a plain action step, and nothing on a verification
@@ -104,18 +105,35 @@ class NextMoveDecisionLlmClient(
   private val showAllToolsAfter: Int? = null,
   /**
    * How sure a "done" must be, when it should differ from the default: [threshold] for the flat
-   * question, [TREE_THRESHOLD] for the tree. A wrong "done" is usually caught by the next step or a
+   * question, [TREE_DONE_THRESHOLD] for the tree. A wrong "done" is usually caught by the next step or a
    * later check, while a wrong tap changes the screen; on a trail's last step with no check after it,
    * nothing catches it.
    */
   private val doneThreshold: Double? = null,
+  /**
+   * Masks resolved secrets in a move's result before the engine sees it: a tool runs with `{{key}}`
+   * tokens already resolved, and `type` reports the text it typed.
+   */
+  private val scrub: (String) -> String = { it },
 ) : LLMClient() {
 
   private val flatDoneThreshold = doneThreshold ?: threshold
-  private val treeDoneThreshold = doneThreshold ?: TREE_THRESHOLD
+  private val treeDoneThreshold = doneThreshold ?: TREE_DONE_THRESHOLD
 
   /** The step's turns left to the LLM so far, for [showAllToolsAfter]. */
   private val llmTurns = AtomicInteger()
+
+  /** What each recent move's `ref` named on the screen it was picked on, by tool call id: see [nameTargets]. */
+  private val targets = recent<String>()
+
+  /**
+   * How each recent move turned out, by tool call id, read from its result while that is the latest
+   * one. The agent swaps an older result that carries a screen for a placeholder, so read later it
+   * says neither what the move did nor whether it failed.
+   */
+  private val outcomes = recent<Outcome>()
+
+  private class Outcome(val succeeded: Boolean, val result: String?)
 
   enum class Mode {
     SHADOW,
@@ -153,6 +171,12 @@ class NextMoveDecisionLlmClient(
     // Every step request offers objectiveStatus; nothing else that reaches an agent's LLM client
     // (element comparison, history compression) does.
     if (tools.none { it.name == OBJECTIVE_STATUS }) return delegate.execute(prompt, model, tools)
+    // A failed capture names no element; the turn still goes ahead.
+    val screen = runCatching { screenText() }.getOrNull()
+    return decide(prompt, model, tools).also { nameTargets(it, screen) }
+  }
+
+  private suspend fun decide(prompt: Prompt, model: LLModel, tools: List<ToolDescriptor>): Message.Assistant {
     val plain = !verification && !WORDED_AS_A_CHECK.containsMatchIn(objective) && !BRANCHES.containsMatchIn(objective)
     val eligible = if (questions == Questions.TREE) !verification else plain
     // Asking can only pay when the answer may be acted on, or when it is being recorded.
@@ -214,6 +238,25 @@ class NextMoveDecisionLlmClient(
             }
           }
         }
+    }
+  }
+
+  /**
+   * Remembers the screen line of the element each move in [answer] names by `ref`, e.g. `[k117] "Add-ons"`,
+   * read from [screen], the one the move was picked on. A tap's result says nothing about what it hit,
+   * and by the next turn the ref may be gone from the screen, so without this the engine's history
+   * shows only `tap` and a ref. Kept out of what the LLM is told: naming the element in its tool
+   * results cost passes.
+   */
+  private fun nameTargets(answer: Message.Assistant, screen: String?) {
+    if (screen.isNullOrBlank()) return
+    val refs by lazy { ScreenRefs.parse(screen) }
+    for (call in answer.parts.filterIsInstance<MessagePart.Tool.Call>()) {
+      val id = call.id ?: continue
+      val args = runCatching { json.parseToJsonElement(call.args.orEmpty()) as? JsonObject }.getOrNull()
+      val ref = (args?.get("ref") as? JsonPrimitive)?.contentOrNull ?: continue
+      val line = refs.firstOrNull { it.ref == ref } ?: continue
+      synchronized(targets) { targets[id] = "[$ref] ${line.label}".trimEnd().take(MAX_TARGET_CHARS) }
     }
   }
 
@@ -307,7 +350,8 @@ class NextMoveDecisionLlmClient(
           judged(response).let { v ->
             val what = if (mode == Mode.SHADOW) "shadow, would ${if (v.act) "act" else "leave it to the LLM"}"
               else if (v.act) "acted" else "left to the LLM"
-            "$what: ${v.option} p=${"%.3f".format(v.p)}${if (v.act) "" else " (${v.why})"}"
+            val bar = barFor(v.option)?.let { " bar=${"%.3f".format(it)}" }.orEmpty()
+            "$what: ${v.option} p=${"%.3f".format(v.p)}$bar${if (v.act) "" else " (${v.why})"}"
           }
         }
         judged(response)
@@ -343,8 +387,8 @@ class NextMoveDecisionLlmClient(
       when {
         !eligible -> "verification or branching step"
         option !in options -> "not one of the options asked about"
-        option == DONE && p < flatDoneThreshold -> "below $flatDoneThreshold"
-        option != DONE && p < threshold -> "below $threshold"
+        option == DONE && p < barFor(DONE)!! -> "below the bar"
+        option.startsWith(TAP_PREFIX) && p < barFor(option)!! -> "below the bar"
         option == DONE && history.isEmpty() -> "done before the step made any move"
         option == DONE && !history.last().succeeded -> "done right after a move that failed"
         option == DONE -> return Verdict(option, p, act = true, why = "sure the step is done")
@@ -354,6 +398,18 @@ class NextMoveDecisionLlmClient(
         else -> return Verdict(option, p, act = true, why = "sure of the tap", tapTool = tapTool)
       }
     return Verdict(option, p, act = false, why = why)
+  }
+
+  /**
+   * The probability [option] needs before it is acted on: every comparison reads it here, and each
+   * decision is logged with it, so the logged bar is the one applied. Null for an option that is
+   * never acted on.
+   */
+  internal fun barFor(option: String): Double? = when {
+    option == DONE -> if (questions == Questions.TREE) treeDoneThreshold else flatDoneThreshold
+    option.startsWith(TAP_PREFIX) -> threshold
+    questions == Questions.TREE && (option.startsWith(SCROLL_PREFIX) || option.startsWith(TYPE_PREFIX)) -> TREE_THRESHOLD
+    else -> null
   }
 
   /**
@@ -473,7 +529,7 @@ class NextMoveDecisionLlmClient(
       put("step_objective", stepText(prompt))
       put(
         "actions_taken_so_far_in_this_step",
-        JsonArray(history.takeLast(5).map { JsonPrimitive(it.text) }.ifEmpty { listOf(JsonPrimitive("(none yet)")) }),
+        JsonArray(history.takeLast(5).map { JsonPrimitive(it.treeText) }.ifEmpty { listOf(JsonPrimitive("(none yet)")) }),
       )
       put("current_screen", screen.take(MAX_SCREEN_CHARS))
       put("step_type", if (verification) "verification" else "action")
@@ -535,7 +591,7 @@ class NextMoveDecisionLlmClient(
     if (move == FINISHED) {
       return when {
         !plain -> no(DONE, pMove, "done on a conditional or check-worded step")
-        pMove < treeDoneThreshold -> no(DONE, pMove, "below $treeDoneThreshold")
+        pMove < barFor(DONE)!! -> no(DONE, pMove, "below the bar")
         history.isEmpty() -> no(DONE, pMove, "done before the step made any move")
         !history.last().succeeded -> no(DONE, pMove, "done right after a move that failed")
         else -> Verdict(DONE, pMove, act = true, why = "sure the step is done")
@@ -554,7 +610,7 @@ class NextMoveDecisionLlmClient(
         val tappedRefs = history.filter { it.tool in TAP_TOOLS }.mapNotNull { it.arg("ref") }.toSet()
         return when {
           ref == NONE || !offeredIn(TREE_ELEMENT, ref) -> no(option, p, "no element picked")
-          p < threshold -> no(option, p, "below $threshold")
+          p < barFor(option)!! -> no(option, p, "below the bar")
           tapTool == null -> no(option, p, "tap not offered")
           ref in tappedRefs -> no(option, p, "this step already tapped it")
           else -> Verdict(
@@ -572,7 +628,7 @@ class NextMoveDecisionLlmClient(
         val inARow = history.takeLastWhile { it.tool == SWIPE && it.arg("direction") == finger }.size
         return when {
           finger == null -> no(option, p, "not one of the options asked about")
-          p < TREE_THRESHOLD -> no(option, p, "below $TREE_THRESHOLD")
+          p < barFor(option)!! -> no(option, p, "below the bar")
           SWIPE !in offered -> no(option, p, "swipe not offered")
           inARow >= MAX_SCROLLS_IN_A_ROW -> no(option, p, "already scrolled this way $inARow times in a row")
           else -> Verdict(option, p, act = true, why = "sure of the scroll", call = SWIPE to buildJsonObject { put("direction", finger) })
@@ -591,7 +647,7 @@ class NextMoveDecisionLlmClient(
         return when {
           TREE_TEXT !in request.questions -> no(option, pPath, "the step quotes no text")
           text == null -> no(option, p, "no quoted text picked")
-          p < TREE_THRESHOLD -> no(option, p, "below $TREE_THRESHOLD")
+          p < barFor(option)!! -> no(option, p, "below the bar")
           typeTool == null -> no(option, p, "typing not offered")
           !focused -> no(option, p, "no field is focused")
           field != FIELD_EMPTY -> no(option, p, "the focused field may already hold text")
@@ -611,20 +667,60 @@ class NextMoveDecisionLlmClient(
     return text.ifBlank { objective }.takeLast(MAX_STEP_CHARS)
   }
 
-  /** A move this step made; [succeeded] is false only when its result says it failed. */
-  internal class Call(val tool: String, val args: JsonObject?, val succeeded: Boolean = true) {
-    val text: String = ("$tool ${args ?: "{}"}".take(200)) + if (succeeded) "" else " (failed)"
+  /**
+   * A move this step made; [succeeded] is false only when its result says it failed, and [result] is
+   * the line of that result saying what the move did. The tree's history ([treeText]) shows it after
+   * `=>`, and the element the move named ([target]) after `on`; the flat question's ([text]) shows
+   * neither, as its replay never had them.
+   */
+  internal class Call(
+    val tool: String,
+    val args: JsonObject?,
+    val succeeded: Boolean = true,
+    val result: String? = null,
+    val target: String? = null,
+  ) {
+    private val move = "$tool ${args ?: "{}"}".take(200)
+    private val failed = if (succeeded) "" else " (failed)"
+    val text: String = move + failed
+    val treeText: String = move + (target?.let { " on $it" } ?: "") + failed + (result?.let { "  =>  $it" } ?: "")
 
     fun arg(name: String): String? = (args?.get(name) as? JsonPrimitive)?.contentOrNull
   }
 
   private fun historyOf(prompt: Prompt): List<Call> {
     val results = prompt.messages.flatMap { it.parts }.filterIsInstance<MessagePart.Tool.Result>().associateBy { it.id }
+    // The results of the last moves made: only these are remembered, so [outcomes] fills in move
+    // order and an older result read again can't push a newer one out.
+    val latest = prompt.messages.drop(prompt.messages.indexOfLast { it is Message.Assistant } + 1)
+      .flatMap { it.parts }.filterIsInstance<MessagePart.Tool.Result>().mapNotNull { it.id }.toSet()
     return prompt.messages.filterIsInstance<Message.Assistant>().flatMap { it.parts }.filterIsInstance<MessagePart.Tool.Call>()
       .map { call ->
         val args = runCatching { json.parseToJsonElement(call.args.orEmpty()) as? JsonObject }.getOrNull()
-        Call(call.tool, args, succeeded = results[call.id]?.let { !reportsFailure(call.tool, it.output) } ?: true)
+        val id = call.id
+        val output = results[id]?.output
+        val outcome = id?.let { synchronized(outcomes) { outcomes[it] } }
+          ?: output?.takeUnless { it == KoogStrategyGraphAgent.STALE_SCREEN_PLACEHOLDER }
+            ?.let { Outcome(!reportsFailure(call.tool, it), resultLine(it)?.let(scrub)) }
+            ?.also { if (id != null && id in latest) synchronized(outcomes) { outcomes[id] = it } }
+        Call(
+          call.tool,
+          args,
+          succeeded = outcome?.succeeded ?: true,
+          result = outcome?.result,
+          target = id?.let { synchronized(targets) { targets[it] } },
+        )
       }
+  }
+
+  /**
+   * The line of a tool result that says what the move did (`Executed tap: Success(…)`), past any loop
+   * warning and without the screen the runner appends after it.
+   */
+  internal fun resultLine(output: String): String? {
+    val lines = output.substringBefore("\n\nCurrent screen:").lines().map { it.trim() }.filter { it.isNotEmpty() }
+    val line = lines.firstOrNull { it.startsWith("Executed ") || it.startsWith("Tool ") } ?: lines.firstOrNull()
+    return line?.replace(WHITESPACE, " ")?.take(MAX_RESULT_CHARS)
   }
 
   /**
@@ -686,8 +782,16 @@ class NextMoveDecisionLlmClient(
     /** `flat` (the default) or `tree`; see [Questions]. */
     const val QUESTIONS_ENV = "TRAILBLAZE_DECISION_MOVES_QUESTIONS"
 
-    /** The tree's bar for a scroll and typing, and for "done" unless the done threshold is set; a tap's is the threshold. */
+    /** The tree's bar for a scroll and typing; a tap's is the threshold. */
     const val TREE_THRESHOLD = 0.9
+
+    /**
+     * The tree's default bar for "done": just over even odds. The engine's unsure "done"s are
+     * calibrated (at 0.8–0.95 the LLM itself finished about half the time), and live, 0.51 after
+     * every move matched 0.9's pass rate at about a third less LLM cost, with no pass lost to an
+     * early finish. Keeping 0.9 right after a tap or typing cost 31% more for the same pass rate.
+     */
+    const val TREE_DONE_THRESHOLD = 0.51
     internal const val TREE_MOVE = "move"
     internal const val TREE_CHANGE = "change"
     internal const val TREE_ELEMENT = "tap"
@@ -767,9 +871,10 @@ class NextMoveDecisionLlmClient(
     /** `swipe` takes the finger's direction: content further down comes into view under a swipe up. */
     private val FINGER_FOR_REVEALING = mapOf("down" to "UP", "up" to "DOWN", "right" to "LEFT", "left" to "RIGHT")
     private const val TREE_MOVE_INSTRUCTIONS =
-      "A UI test agent is carrying out `step_objective` in a mobile app, one move at a time. " +
-        "`actions_taken_so_far_in_this_step` lists its moves in this step (with its own reasoning) and `current_screen` " +
-        "is the screen now. `step_type` says whether the step is an action or a verification. What should the agent do next?"
+      "A UI test agent is carrying out `step_objective`, one step of a longer test, in a mobile app, one move at a time. " +
+        "`actions_taken_so_far_in_this_step` lists its moves in this step (with its own reasoning) and, after =>, what " +
+        "each move returned and `current_screen` is the screen now. `step_type` says whether the step is an action or a " +
+        "verification. What should the agent do next?"
     private val TREE_MOVE_OPTIONS = linkedMapOf(
       FINISHED to "Report the step complete: it has done everything the step asks, and on a verification step a check " +
         "of each thing the step names has passed in this step",
@@ -822,6 +927,16 @@ class NextMoveDecisionLlmClient(
     /** A hosted engine answers in about 0.4s (p90 under 1s); past this the LLM's turn is not held. */
     const val DEFAULT_ENGINE_TIMEOUT_MS = 3_000L
     private const val MAX_STEP_CHARS = 1_200
+    private const val MAX_RESULT_CHARS = 160
+    private const val MAX_TARGET_CHARS = 200
+
+    /** Moves whose element and outcome are remembered: well past the 5 a request shows. */
+    private const val MAX_REMEMBERED = 64
+
+    /** A map that keeps only its [MAX_REMEMBERED] newest entries. */
+    private fun <V> recent() = object : LinkedHashMap<String, V>() {
+      override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, V>?) = size > MAX_REMEMBERED
+    }
     private const val INSTRUCTIONS =
       "A UI test agent is working on `step_objective`. Given what it has done so far and the current screen, " +
         "which single move should it make next?"
@@ -896,7 +1011,7 @@ class NextMoveDecisionLlmClient(
      * server, `TRAILBLAZE_DECISION_MODEL`, `TRAILBLAZE_DECISION_MOVES_THRESHOLD`, and
      * `TRAILBLAZE_DECISION_MOVES_QUESTIONS` (`tree` for the decision tree), `TRAILBLAZE_DECISION_MOVES_HIDE_TOOLS`
      * `TRAILBLAZE_DECISION_MOVES_SHOW_ALL_TOOLS_AFTER` and `TRAILBLAZE_DECISION_MOVES_DONE_THRESHOLD` (by default
-     * the threshold for the flat question, [TREE_THRESHOLD] for the tree). [alwaysShownTools] are the target's
+     * the threshold for the flat question, [TREE_DONE_THRESHOLD] for the tree). [alwaysShownTools] are the target's
      * `always_shown_tools`.
      */
     fun wrapIfEnabled(
@@ -906,6 +1021,7 @@ class NextMoveDecisionLlmClient(
       screenText: () -> String?,
       env: (String) -> String? = System::getenv,
       alwaysShownTools: Set<String> = emptySet(),
+      scrub: (String) -> String = { it },
       engineFor: (url: String, key: String?) -> DecisionEngine = ::cachedEngine,
     ): LLMClient {
       val mode = modeFromEnv(env(MODE_ENV)) ?: return delegate
@@ -947,6 +1063,7 @@ class NextMoveDecisionLlmClient(
         alwaysShownTools = alwaysShownTools,
         showAllToolsAfter = showAllToolsAfter,
         doneThreshold = doneThreshold,
+        scrub = scrub,
       )
     }
   }

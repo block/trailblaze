@@ -15,6 +15,7 @@ import javax.net.ssl.SSLContext
 import javax.net.ssl.TrustManager
 import javax.net.ssl.X509TrustManager
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.util.TrailblazeDispatchers
 
 /**
  * Factory for creating a Trailblaze HttpClient.
@@ -34,14 +35,29 @@ object TrailblazeHttpClientFactory {
     addInterceptor(CachedTokenCaptureInterceptor)
   }
 
+  /**
+   * Verifies certificates against the JVM's CAs plus the OS CA bundle ([SystemCaBundleTrust]), so a
+   * host curl reaches through a corporate or proxy CA is reachable here too.
+   */
   fun createDefaultHttpClient(
     timeoutInSeconds: Long,
+  ) = createDefaultHttpClient(timeoutInSeconds, SystemCaBundleTrust.trustManager)
+
+  internal fun createDefaultHttpClient(
+    timeoutInSeconds: Long,
+    trustManager: X509TrustManager?,
   ) = HttpClient(OkHttp) {
     enablePerfettoTracing()
     enableNetworkLogging()
     engine {
+      // Never Dispatchers.IO (Ktor's default): in-process that is the app's pool. See TrailblazeDispatchers.
+      dispatcher = TrailblazeDispatchers.IO
       config {
         configureOkHttpClient(timeoutInSeconds, false)
+        if (trustManager != null) {
+          val sslContext = SSLContext.getInstance("TLS").apply { init(null, arrayOf(trustManager), null) }
+          sslSocketFactory(sslContext.socketFactory, trustManager)
+        }
       }
     }
   }
@@ -88,6 +104,8 @@ object TrailblazeHttpClientFactory {
     enableNetworkLogging()
     enableWebSockets()
     engine {
+      // Never Dispatchers.IO (Ktor's default): in-process that is the app's pool. See TrailblazeDispatchers.
+      dispatcher = TrailblazeDispatchers.IO
       config {
         configureOkHttpClient(timeoutInSeconds, true)
         if (bypassSystemProxy) {
@@ -111,6 +129,8 @@ object TrailblazeHttpClientFactory {
       }
     }
     engine {
+      // Never Dispatchers.IO (Ktor's default): in-process that is the app's pool. See TrailblazeDispatchers.
+      dispatcher = TrailblazeDispatchers.IO
       config {
         configureOkHttpClient(timeoutInSeconds, true)
       }

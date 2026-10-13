@@ -38,9 +38,18 @@ const val SOURCE_TYPE_HANDWRITTEN = "HANDWRITTEN"
 const val SOURCE_TYPE_GENERATED = "GENERATED"
 
 @Serializable
+@OptIn(ExperimentalSerializationApi::class)
 data class CiSummaryReport(
   val metadata: CiRunMetadata,
   val results: List<SessionResult>,
+  /**
+   * Every actual attempt, in chronological order within each test/device group. [results] keeps
+   * its one-verdict-per-test contract; indexes use these rows to retain retry links without logs
+   * or screenshots. Null when no test retried or on older reports; consumers fall back to [results].
+   * Skipped trails remain in [results] because they made no attempt.
+   */
+  @EncodeDefault(EncodeDefault.Mode.NEVER)
+  val attempts: List<SessionResult>? = null,
 )
 
 @OptIn(ExperimentalSerializationApi::class)

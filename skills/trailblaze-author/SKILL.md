@@ -1,13 +1,9 @@
 ---
 name: trailblaze-author
-description: |
-  Use when turning a captured human demonstration (a Trailblaze App
-  demonstration bundle: demo.yaml + actions.ndjson + per-action
-  screenshots and view hierarchies) into a durable, independently
-  runnable Trailblaze trail. Trigger when a prompt hands you a
-  demonstration bundle directory and asks you to author, generate,
-  or produce the trail for it - or to add another platform's
-  recordings to an existing trail from a new demonstration.
+description: >
+  Use when turning a Trailblaze App demo bundle (demo.yaml, actions.ndjson,
+  screenshots, and view hierarchies) into a runnable Trailblaze trail, or
+  adding another platform's recording to an existing trail.
 ---
 
 # Author a trail from a demonstration bundle

@@ -72,7 +72,7 @@ The full generated table (valid values, defaults) lives in the [CLI reference](C
 | Devices & drivers | `device`, `android-driver`, `ios-driver`, `web-headless`, `target` |
 | Agent & runs | `agent`, `mode`, `max-llm-calls`, `self-heal`, `require-steps` |
 | Screenshots | `screenshot-format`, `screenshot-max-dimensions`, `screenshot-quality` |
-| Capture | `capture-video` (`true`/`false`, default off — the persistent opt-in for session video; env twin `TRAILBLAZE_CAPTURE_VIDEO`, per-run twin `--capture-video`) |
+| Capture | `capture-video` (`true`/`false`, default off — the persistent opt-in for video in interactive sessions; `trailblaze run` records video regardless, `--no-capture-video` skips it; env twin `TRAILBLAZE_CAPTURE_VIDEO`) |
 | Experimental | `stream-screenshots`, `ios-baguette-video`, `disable-animations`, `turbo` |
 
 Experimental keys are tri-state (`true`, `false`, or `unset` to inherit the default) and each has an env-var twin documented below.
@@ -254,7 +254,7 @@ Only set the variables in this section; variables the framework sets for its own
 |---|---|---|---|
 | `TRAILBLAZE_PORT` | `52525` | launch | Daemon HTTP port. Override to run isolated/parallel daemons. Moves the HTTPS port with it (`+1`). Must stay outside `52530-59529` (the device-port range; the HTTPS port, `+1`, is checked too); ideally below `32768` to stay clear of the OS ephemeral range too (`31900` works) — see [Precedence](#precedence) above. |
 | `TRAILBLAZE_HTTPS_PORT` | HTTP port + 1 | launch | Daemon HTTPS port (the adb-reverse target for on-device logging). Must be outside `52530-59529` — see [Precedence](#precedence) above. |
-| `TRAILBLAZE_HOME` | `~/.trailblaze` | launch | Relocates the state directory (logs, TLS keystore, settings) — lets concurrent daemons isolate state. |
+| `TRAILBLAZE_HOME` | `~/.trailblaze` | launch | Relocates the state directory (logs, TLS keystore, settings, and caches including app badges and the native icon helper), letting concurrent daemons isolate state. The `cache/` subdirectory is tagged with `CACHEDIR.TAG` for cache-aware backups. Workspace analyzer caches stay workspace-local and are tagged separately. |
 | `TRAILBLAZE_DISABLE_DESKTOP_LOG_FILE` | unset | launch | Set to `1` or `true` to stop a CLI or daemon process from copying its stdout/stderr to `$TRAILBLAZE_HOME/desktop-logs/trailblaze.log` (`trailblaze-<port>.log` on a custom port). For a CI job that captures and filters the process's output itself, so no unfiltered copy stays on the machine after the job. Anything else leaves the copy on. |
 | `TRAILBLAZE_CONFIG_DIR` | cwd walk-up | command | Authoritative override for the workspace config dir (`trailblaze-config/` or the legacy `trails/config/`). Outranks the working-directory walk-up. |
 | `TRAILBLAZE_DISABLE_DAEMON_AUTOSTART` | unset | use | Kill-switch: "daemon not running" becomes an error instead of an implicit background daemon spawn. |
@@ -263,6 +263,7 @@ Only set the variables in this section; variables the framework sets for its own
 | `TRAILBLAZE_RUN_POLL_TIMEOUT_MS` | `600000` | command | Inactivity watchdog for `trailblaze run`: max time a run may go *without new progress* before the CLI gives up. Not a wall-clock cap — a trail that keeps advancing runs as long as it needs. |
 | `TRAILBLAZE_CLI_PRINT_STACK_TRACES` | unset | use | Print raw stack traces alongside the structured CLI error envelope. |
 | `TRAILBLAZE_IO_PARALLELISM` | `512` when the `trailblaze` launcher starts the JVM | launch | How many blocking operations the JVM may have in flight at once. Raise it if a target declares hundreds of scripted tools: each one runs in a subprocess that holds a slot for the whole session, and running out does not fail on the daemon — it keeps answering `/ping` while every real command hangs. The CLI notices on its next device command: its pre-flight handshake and device probes give up after `TRAILBLAZE_MCP_PREFLIGHT_TIMEOUT_MS` (5 s by default) and name this variable. Read once at JVM start, so a running daemon must be restarted (`trailblaze daemon stop`) for a change to apply. Must be an integer between 1 and 2147483647; the launcher rejects anything else rather than letting the JVM die on it later. Anything below 17 is accepted but leaves no room for scripted tools, because 16 slots are held back for the host's own work. **A JVM that does not come from the launcher does not read this variable**: a `java -jar`, an Android host, or a Gradle test worker gets the JVM default of `max(64, CPU count)` instead, and must be given `-Dkotlinx.coroutines.io.parallelism=<n>` directly. For the packaged desktop app the value is baked in when the installer is built, so changing it on the machine that runs the app has no effect. |
+| `SSL_CERT_FILE` | unset, then `/etc/ssl/certs/ca-certificates.crt` if present | launch | PEM CA bundle whose certificates the CLI and daemon trust for HTTPS on top of the JVM's own, as curl and Python do. For networks whose hosts present certificates from a corporate or proxy CA that the OS trusts but the JDK does not, which otherwise fail with `PKIX path building failed`. Adds trust only: a missing or unparsable bundle leaves the JVM defaults in place. Read once per process, so restart the daemon (`trailblaze daemon stop`) for a change to apply. |
 
 Development-checkout launcher knobs (the `./trailblaze` wrapper script; installed CLIs ignore these): `TRAILBLAZE_MAX_HEAP` (JVM max heap, default `4g` — raise for very large workspaces or heap-hungry report generation), `TRAILBLAZE_JAR` (path to the built uber JAR), `TRAILBLAZE_IPC=0` (disable the daemon IPC fast path), `TRAILBLAZE_REBUILD_GRADLE_TASK` (override the rebuild task), `TRAILBLAZE_FORCE_DAEMON_STOP=1` (stop a busy daemon anyway when the rebuilt JAR needs to take effect now — by default a daemon with in-flight runs is left running).
 
@@ -301,6 +302,13 @@ The accessibility-driver switches below are read inside the Android app/service 
 | `TRAILBLAZE_ANDROID_WIRE_TRANSPORT` | `auto` | launch | Host↔device RPC / log-upload wire format: `auto`, `protobuf`, or `json` (rollback switch). |
 | `TRAILBLAZE_CAPTURE_SECONDARY_TREE` | `false` | session | Capture a secondary view-hierarchy snapshot per selector tool (driver-migration comparison aid). On the iOS host driver the secondary tree is the raw `axe describe-ui` accessibility tree, captured alongside the XCTest hierarchy and carried on tap/swipe/input logs as well as the snapshots (requires the `axe` CLI; without it a capture records no secondary tree). |
 
+On-device switches the accessibility driver reads as Android system properties, per call, so they can be flipped on a live runner with `adb shell setprop <name> <value>`. `0`/`false` turns a default-on switch off; `1`/`true` turns a default-off switch on.
+
+| Sysprop | Default | Purpose |
+|---|---|---|
+| `debug.trailblaze.settle.transitionGate` | on (API 34+) | Hold the capture-time settle gate while an activity change is under way (an activity starting, a window animating), so a capture taken right after a tap returns the new screen rather than the old one. Below API 34 it never runs. Set `0` if a device's `dumpsys` reads are slow or misreport. |
+| `debug.trailblaze.settle.reuseQuietVerdict` | off | Experimental. A pre-action settle returns at once when an earlier one already found the screen quiet and nothing has happened since (no UI event, no input from the driver), instead of waiting out its grace again. |
+
 ### iOS simulators
 
 | Variable | Default | Applied | Purpose |
@@ -330,7 +338,7 @@ The stream and proxy capture switches are experimental and off by default; each 
 
 | Variable | Default | Applied | Purpose |
 |---|---|---|---|
-| `TRAILBLAZE_CAPTURE_VIDEO` | unset | session | Record device screen video for every session in this process (config twin: `capture-video`; per-run flag twin: `--capture-video`). Video is **off by default** — recordings are large and their timing signatures drift on some hosts. Set this to get the recording (and the report's video timeline) for a CI lane or a debugging session without a code change. Only a truthy value opts in — a falsey one reads the same as unset, so unset it to turn video off. Outranked by an explicit `--capture-video` / `--no-capture-video`, and outranks the saved `capture-video` config. |
+| `TRAILBLAZE_CAPTURE_VIDEO` | unset | session | Record device screen video for every session in this process (config twin: `capture-video`; per-run flag twin: `--capture-video`). `trailblaze run` records video by default; interactive sessions (`session start`, `tool`, `blaze`, MCP) are **off by default** because they can run for hours with no goal. Set this to get the recording for interactive sessions or for runs started outside the CLI. Only a truthy value opts in — a falsey one reads the same as unset, so unset it to turn video off. Outranked by an explicit `--capture-video` / `--no-capture-video`, and outranks the saved `capture-video` config. |
 | `TRAILBLAZE_WEB_VIDEO_QUALITY` | `standard` | session | How sharp web session recordings are. `standard` is about 0.5 MB per minute with clean text. `high` keeps small text crisp through scrolling and page changes at about 0.9 MB per minute; a long `high` session can outgrow the 12 MiB the HTML report embeds (around 14 minutes), and the report then shows per-step screenshots instead of the video. Web only: Android and iOS recordings are unaffected. An unrecognized value is logged and reads as `standard`. Read by the daemon — restart it (`trailblaze --stop`) for a change to apply. |
 | `TRAILBLAZE_WEB_REPLAY_CAPTURE` | `tree` | session | What a recorded web replay keeps of the page before each action. `tree` logs the accessibility tree with every element's box (viewport coordinates) from one ARIA snapshot, so `visible-strings.ndjson` carries every string on the page and where it sat — about 10ms per action, written off the replay's thread; the report takes each capture's picture from the session's video. `tree+jpeg` adds a browser-encoded JPEG per action (about 40ms and 40KB), for a report read without its video, such as an export. `off` keeps only the session's final capture and its video. Web only. An unrecognized value reads as `tree`. Read by the daemon — restart it (`trailblaze --stop`) for a change to apply. |
 | `TRAILBLAZE_ANDROID_STREAM_SCREENSHOT` / `TRAILBLAZE_IOS_STREAM_SCREENSHOT` / `TRAILBLAZE_WEB_STREAM_SCREENSHOT` | unset | session | Serve agent-loop screenshots from the device's live video stream instead of per-turn direct captures (config twin: `stream-screenshots`, one toggle for all three platforms). Unmatched captures fall back to a direct screenshot. |
@@ -422,8 +430,8 @@ the environment it was started with.
 | Variable | Default | Effect |
 |---|---|---|
 | `TRAILBLAZE_DECISION_MOVES` | unset (off) | `shadow`: ask on every step request, log the engine's pick and whether it would have acted, always use the LLM's move. `first` (also `1`/`true`, and the one to use): ask the engine, and call the LLM only when it does not act. `race`: ask the engine and the LLM at once, and drop the LLM request when the engine acts; the dropped request is usually still billed, and with the engine answering in about 0.2s it saves no time over `first`. The engine acts only on a tap or "done" at or above the threshold, on a step that is not a verification and has no branches ("if", "on iOS…"); it never taps an element the step already tapped, and never says done before the step has made a move. An engine that errors or takes over 3 seconds leaves the turn to the LLM. |
-| `TRAILBLAZE_DECISION_MOVES_THRESHOLD` | `0.95` | Probability a tap needs before it is acted on, and a "done" too unless the done threshold below is set (with the tree, "done" needs 0.9 unless it is set). |
-| `TRAILBLAZE_DECISION_MOVES_DONE_THRESHOLD` | the threshold above (0.9 with the tree) | Probability a "done" needs before it is acted on. A wrong "done" is usually caught by the next step or a later check, while a wrong tap changes the screen; on a trail's last step with no check after it, nothing catches it. |
+| `TRAILBLAZE_DECISION_MOVES_THRESHOLD` | `0.95` | Probability a tap needs before it is acted on, and a "done" too unless the done threshold below is set (with the tree, "done" needs 0.51 unless it is set). |
+| `TRAILBLAZE_DECISION_MOVES_DONE_THRESHOLD` | the threshold above (0.51 with the tree) | Probability a "done" needs before it is acted on. A wrong "done" is usually caught by the next step or a later check, while a wrong tap changes the screen; on a trail's last step with no check after it, nothing catches it. |
 | `TRAILBLAZE_DECISION_MOVES_QUESTIONS` | `flat` | `tree` asks a decision tree in the same one request (finished, or change the screen; then tap, type or scroll; then which element, quoted text or direction) and also acts on scrolls, typing, and taps on conditional steps. A tap needs the threshold on every answer on its path; a scroll and typing need 0.9, and done needs the done threshold. Typing needs a focused field the tree is sure is empty (typing appends), and is not repeated within a step; after three scrolls the same way in a row, the next one is left to the LLM. |
 | `TRAILBLAZE_DECISION_MOVES_HIDE_TOOLS` | unset | `true` (or `1`), with the tree in `first` mode: on a turn the engine leaves to the LLM, shows the LLM only the general tools (tap, type, scroll, wait, back, checks, done) when the tree rules out every other tool, plus `showTools`, which lists the rest one line each and makes the ones the LLM names callable in the same turn. Cuts most of the tool descriptions the LLM reads. A target's `platforms.<platform>.always_shown_tools` stay shown too. |
 | `TRAILBLAZE_DECISION_MOVES_SHOW_ALL_TOOLS_AFTER` | unset | A number, with `TRAILBLAZE_DECISION_MOVES_HIDE_TOOLS`: once that many of a step's turns have gone to the LLM, it is shown every tool for the rest of the step. |
@@ -432,12 +440,14 @@ the environment it was started with.
 | `TRAILBLAZE_DECISION_MODEL` | `jev-latest` | Model the engine is asked for. |
 
 **What the engine is sent**, on every step request: the step's text, the step's last five moves
-(tool names and arguments), the current screen as text (element labels and their refs, capped at
+(tool names and arguments; with the tree, also each move's result line and the element it named by
+ref, from the screen it was picked on), the current screen as text (element labels and their refs, capped at
 12,000 characters; no screenshot), and the offered tools' names and descriptions. Treat it like the
 LLM provider: screen text can hold whatever the app shows, including test account details.
 
 Each question is logged to the session as a decision request (engine, options with tool descriptions
-shortened, the ten most likely options, and what was done with it), and a move the engine made shows
+shortened, the ten most likely options, and what was done with it, with the probability the pick needed: `acted:
+done_ok p=0.620 bar=0.510`), and a move the engine made shows
 in the report as answered without an LLM and is left out of LLM call counts and cost. The first step
 prints one `[DECISION_MOVES] on: mode=… engine=… threshold=…` line, or why decisions stayed off.
 

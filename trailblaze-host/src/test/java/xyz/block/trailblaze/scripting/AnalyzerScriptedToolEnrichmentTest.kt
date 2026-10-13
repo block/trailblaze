@@ -1162,6 +1162,74 @@ class AnalyzerScriptedToolEnrichmentTest {
     )
   }
 
+  @Test
+  fun `a malformed _meta requiredClassifiers fails the descriptor on the enrichment path`() {
+    // Read downstream as "no restriction", a scalar would load a rig-only tool on every device.
+    val trailmapDir = mkTrailmapDir()
+    val script = mkScript(trailmapDir, "readRig.ts")
+    val analyzer = FakeAnalyzer { _ ->
+      listOf(stubDef(name = "readRig", sourcePath = script.absolutePath, spec = null))
+    }
+    val results = AnalyzerScriptedToolEnrichment(analyzer).enrich(
+      trailmapId = "sampleapp",
+      trailmapDir = trailmapDir,
+      trailmapToolsDir = File(trailmapDir, "tools"),
+      deferredDescriptors = listOf(
+        deferred(
+          relativePath = "tools/readRig.yaml",
+          script = "./readRig.ts",
+          name = "readRig",
+          meta = buildJsonObject { put("trailblaze/requiredClassifiers", JsonPrimitive("rig")) },
+        ),
+      ),
+    )
+
+    val failure = assertIs<ScriptedToolEnrichment.EnrichmentResult.Failed>(results.single())
+    assertTrue(
+      failure.reason.contains("trailblaze/requiredClassifiers"),
+      "expected the offending key in: ${failure.reason}",
+    )
+  }
+
+  @Test
+  fun `a malformed entry _meta requiredClassifiers fails a multi-tool descriptor`() {
+    // Entry `_meta` merges over the descriptor's, so it must get the same shape check.
+    val trailmapDir = mkTrailmapDir()
+    val script = mkScript(trailmapDir, "multiRig.ts")
+    val analyzer = FakeAnalyzer { _ ->
+      listOf(
+        stubDef(name = "anywhere", sourcePath = script.absolutePath),
+        stubDef(name = "readRig", sourcePath = script.absolutePath),
+      )
+    }
+    val results = AnalyzerScriptedToolEnrichment(analyzer).enrich(
+      trailmapId = "sampleapp",
+      trailmapDir = trailmapDir,
+      trailmapToolsDir = File(trailmapDir, "tools"),
+      deferredDescriptors = listOf(
+        ScriptedToolEnrichment.DeferredDescriptor(
+          relativePath = "tools/multiRig.yaml",
+          descriptor = TrailmapScriptedToolFile(
+            script = "./multiRig.ts",
+            tools = listOf(
+              xyz.block.trailblaze.config.project.TrailmapScriptedToolEntry(name = "anywhere"),
+              xyz.block.trailblaze.config.project.TrailmapScriptedToolEntry(
+                name = "readRig",
+                meta = buildJsonObject { put("trailblaze/requiredClassifiers", JsonPrimitive("rig")) },
+              ),
+            ),
+          ),
+        ),
+      ),
+    )
+
+    val failure = assertIs<ScriptedToolEnrichment.EnrichmentResult.Failed>(results.single())
+    assertTrue(
+      failure.reason.contains("readRig") && failure.reason.contains("trailblaze/requiredClassifiers"),
+      "expected the entry and the offending key in: ${failure.reason}",
+    )
+  }
+
   // ============================================================================
   // Description precedence — YAML sidecar > spec `description` > TSDoc-derived.
   // `description` is the tool's primary descriptor field (NOT a `_meta` gate), so

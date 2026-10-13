@@ -2,7 +2,6 @@ package xyz.block.trailblaze.toolcalls.commands
 
 import ai.koog.agents.core.tools.annotations.LLMDescription
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import xyz.block.trailblaze.device.AndroidDeviceCommandExecutor
@@ -13,6 +12,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.util.IosHostSimctlUtils
+import xyz.block.trailblaze.util.TrailblazeDispatchers
 
 /**
  * Opens an app the way tapping its launcher icon does, and returns once it is on screen.
@@ -55,7 +55,7 @@ data class OpenAppTrailblazeTool(
   ): TrailblazeToolResult = try {
     // Every step below blocks (adb / simctl round trips, polling sleeps), so none of it may run on
     // the caller's bounded dispatcher.
-    withContext(Dispatchers.IO) {
+    withContext(TrailblazeDispatchers.IO) {
       when (val platform = toolExecutionContext.trailblazeDeviceInfo.platform) {
         TrailblazeDevicePlatform.ANDROID -> openOnAndroid(toolExecutionContext)
         TrailblazeDevicePlatform.IOS -> openOnIos(toolExecutionContext)

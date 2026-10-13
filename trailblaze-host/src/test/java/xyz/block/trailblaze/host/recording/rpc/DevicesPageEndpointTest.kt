@@ -24,7 +24,7 @@ class DevicesPageEndpointTest {
     assertEquals(ContentType.Text.Html, response.contentType()?.withoutParameters())
     assertEquals("no-store", response.headers["Cache-Control"])
     val html = response.bodyAsText()
-    assertTrue(html.contains("<title>Trailblaze Device Mirror</title>"))
+    assertTrue(html.contains("<title>Trailblaze Device Control</title>"))
     assertTrue(html.contains("/devices/api/stream"))
     assertTrue(html.contains("new VideoDecoder"))
     assertTrue(html.contains("/rpc/SubscribeFramesRequest"))

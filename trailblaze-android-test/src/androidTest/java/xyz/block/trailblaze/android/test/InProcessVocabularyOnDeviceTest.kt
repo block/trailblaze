@@ -139,6 +139,35 @@ class InProcessVocabularyOnDeviceTest {
   }
 
   /**
+   * A wait that runs out fails the way Maestro's does, with "Assertion is false". Callers of
+   * `mobile_maestro` read exactly that text as "not there" and treat anything else as a broken
+   * session, so a miss worded any other way turns a plain "no" into a failed launch.
+   */
+  @Test
+  fun aWaitThatRunsOutReportsMaestrosAssertionMiss() {
+    val visibleMiss = runExpectingError(
+      maestro(
+        """
+        - extendedWaitUntil:
+            visible: "No Such Thing"
+            timeout: 500
+        """.trimIndent(),
+      ),
+    )
+    assertTrue(visibleMiss.contains("Assertion is false"), "got: $visibleMiss")
+    val notVisibleMiss = runExpectingError(
+      maestro(
+        """
+        - assertNotVisible:
+            text: "${MixedUiFixtureActivity.VIEW_BUTTON_LABEL}"
+            timeout: 500
+        """.trimIndent(),
+      ),
+    )
+    assertTrue(notVisibleMiss.contains("Assertion is false"), "got: $notVisibleMiss")
+  }
+
+  /**
    * `optional` says what to do when the SCREEN refuses a step. A step this driver cannot interpret
    * was never attempted, so skipping it would silently drop whatever the recording meant — the
    * failure this driver exists to make loud.

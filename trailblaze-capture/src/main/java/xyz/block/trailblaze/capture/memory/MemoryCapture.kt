@@ -368,7 +368,12 @@ class MemoryCapture(
     // the lock — it is reported as the cost of a reading.
     val (reading, readMs) = readLock.withLock {
       val readStartedNs = System.nanoTime()
-      probe.read(device, app, forceGc) to (System.nanoTime() - readStartedNs) / 1_000_000
+      val reading = if (forcedReason == MemoryChangeDetector.REASON_FINAL) {
+        probe.readFinal(device, app, forceGc)
+      } else {
+        probe.read(device, app, forceGc)
+      }
+      reading to (System.nanoTime() - readStartedNs) / 1_000_000
     }
     if (reading == null) {
       noteUnreadable()

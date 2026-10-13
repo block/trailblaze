@@ -29,6 +29,9 @@ import xyz.block.trailblaze.ui.TrailblazeDeviceManager
  *    "Run on Device" succeeded server-side but did nothing visible to the user.
  *
  *  - **Anything else (iOS, …)** → `runYaml` with a fresh session.
+ *
+ * Every path replays the trail's recorded tools. Callers send a tool the user picked, wrapped in
+ * a one-step trail; letting the AI drive would read the step's title as an instruction instead.
  */
 class RunTrailYamlHandler(
   private val deviceManager: TrailblazeDeviceManager,
@@ -49,7 +52,7 @@ class RunTrailYamlHandler(
     return try {
       when (stream) {
         is OnDeviceRpcDeviceScreenStream -> {
-          stream.dispatchYaml(request.yaml)
+          stream.dispatchYaml(request.yaml, useRecordedSteps = true)
           RpcResult.Success(RunTrailYamlResponse(success = true))
         }
 
@@ -71,6 +74,7 @@ class RunTrailYamlHandler(
             sendSessionEndLog = false,
             existingSessionId = resolution.sessionId,
             referrer = TrailblazeReferrer.RECORDING_TAB_REPLAY,
+            useRecordedSteps = true,
             onComplete = { completion.complete(it) },
           )
           awaitCompletionWithTimeout(completion)
@@ -85,6 +89,7 @@ class RunTrailYamlHandler(
             sendSessionEndLog = true,
             existingSessionId = null,
             referrer = TrailblazeReferrer.RECORDING_TAB_REPLAY,
+            useRecordedSteps = true,
             onComplete = { completion.complete(it) },
           )
           awaitCompletionWithTimeout(completion)

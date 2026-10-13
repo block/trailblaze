@@ -61,6 +61,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
+import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePort
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
@@ -85,6 +86,7 @@ import xyz.block.trailblaze.mcp.models.McpSessionId
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.mcp.newtools.ConfigToolSet
 import xyz.block.trailblaze.mcp.newtools.DeviceClassifiersProvider
+import xyz.block.trailblaze.mcp.newtools.platformOnlyClassifiersDueForReprobe
 import xyz.block.trailblaze.mcp.newtools.platformOnlyDeviceClassifiers
 import xyz.block.trailblaze.mcp.newtools.LogcatToolSet
 import xyz.block.trailblaze.mcp.newtools.ToolDiscoveryToolSet
@@ -684,6 +686,7 @@ class TrailblazeMcpServer(
   private fun buildSyntheticDeviceInfo(
     deviceId: TrailblazeDeviceId,
     driverType: TrailblazeDriverType,
+    classifiers: List<TrailblazeDeviceClassifier> = emptyList(),
   ): xyz.block.trailblaze.devices.TrailblazeDeviceInfo {
     val (width, height) = when (driverType.platform) {
       TrailblazeDevicePlatform.WEB -> 1440 to 900
@@ -694,6 +697,7 @@ class TrailblazeMcpServer(
       trailblazeDriverType = driverType,
       widthPixels = width,
       heightPixels = height,
+      classifiers = classifiers,
     )
   }
 
@@ -754,13 +758,27 @@ class TrailblazeMcpServer(
       val driverType = resolveDriverTypeForDevice(deviceId) ?: return@withLock null
 
       val existing = sessionScriptToolRuntimeBySession[sessionId]
+      // Set when a reuse check re-probes, so the rebuild below doesn't probe a second time.
+      var reprobedClassifiers: List<TrailblazeDeviceClassifier>? = null
       if (
         existing != null &&
         existing.deviceId == deviceId &&
         existing.targetId == target.id &&
         existing.driverType == driverType
       ) {
-        return@withLock existing
+        val nowMs = System.currentTimeMillis()
+        if (!platformOnlyClassifiersDueForReprobe(existing.classifiers, deviceId, existing.classifiersProbedAtMs, nowMs)) {
+          return@withLock existing
+        }
+        // A failed probe degrades to the bare platform, which hides every classifier-gated tool.
+        // Re-ask, and rebuild only if the device now reports more — a device that really has no
+        // sub-category keeps its runtime.
+        val reprobed = deviceClassifiersProvider(deviceId)
+        if (reprobed == existing.classifiers) {
+          return@withLock existing.copy(classifiersProbedAtMs = nowMs)
+            .also { sessionScriptToolRuntimeBySession[sessionId] = it }
+        }
+        reprobedClassifiers = reprobed
       }
       if (existing != null) {
         clearSessionScriptToolRuntime(sessionId)
@@ -836,6 +854,9 @@ class TrailblazeMcpServer(
       ).toTrailblazeToolRepo()
       val launchSessionId = SessionId.sanitized("${sessionId}_${target.id}_${driverType.yamlKey}_script_tools")
       val sessionDir = logsRepo.getSessionDir(launchSessionId)
+      // The device's classifiers gate tools that declare `trailblaze/requiredClassifiers`. Resolved
+      // once per launch; the provider is the same one this server lowers trail recordings with.
+      val sessionClassifiers = reprobedClassifiers ?: deviceClassifiersProvider(deviceId)
 
       // Catalog/framework scripted tools (e.g. openUrl) the catalog could deliver, PLUS the active
       // targets' custom scripted names. Launch them in-process through the SHARED QuickJS launcher —
@@ -863,6 +884,7 @@ class TrailblazeMcpServer(
           (customScriptedToolNames - scope.excluded.scriptedToolNames),
         drivers = listOf(driverType),
         preferHostAgent = TrailblazeConfig.DEFAULT.preferHostAgent,
+        classifiers = sessionClassifiers,
         skipNames = inlineTools.map { ToolName(it.name) }.toSet(),
         logPrefix = "[TrailblazeMcpServer]",
         // Install a real (unrestricted) `fetch` so scripted tools can make HTTP calls without
@@ -879,6 +901,7 @@ class TrailblazeMcpServer(
         driver = driverType,
         preferHostAgent = TrailblazeConfig.DEFAULT.preferHostAgent,
         logPrefix = "[TrailblazeMcpServer]",
+        classifiers = sessionClassifiers,
       )
       val runtime = if (spawnableInlineTools.isNotEmpty()) {
         val inlineToolServers = InlineScriptToolServerSynthesizer.synthesize(
@@ -888,7 +911,7 @@ class TrailblazeMcpServer(
         try {
           McpSubprocessRuntimeLauncher.launchAll(
             mcpServers = inlineToolServers,
-            deviceInfo = buildSyntheticDeviceInfo(deviceId, driverType),
+            deviceInfo = buildSyntheticDeviceInfo(deviceId, driverType, sessionClassifiers),
             config = TrailblazeConfig.DEFAULT,
             sessionId = launchSessionId,
             resourceSessionId = daemonToolSessionId(sessionId, deviceId),
@@ -922,6 +945,8 @@ class TrailblazeMcpServer(
         toolRepo = toolRepo,
         runtime = runtime,
         inProcessRegistrations = inProcessRegistrations,
+        classifiers = sessionClassifiers,
+        classifiersProbedAtMs = System.currentTimeMillis(),
       )
       sessionScriptToolRuntimeBySession[sessionId] = state
       state
@@ -1195,6 +1220,9 @@ class TrailblazeMcpServer(
     val runtime: LaunchedSubprocessRuntime?,
     // In-process QuickJS registrations for catalog/framework scripted tools, disposed at session end.
     val inProcessRegistrations: List<LazyYamlScriptedToolRegistration> = emptyList(),
+    // The device classifiers the tools above were gated against, and when they were last probed.
+    val classifiers: List<TrailblazeDeviceClassifier> = emptyList(),
+    val classifiersProbedAtMs: Long = 0L,
   )
 
   private val sessionScriptToolRuntimeBySession = ConcurrentHashMap<String, SessionScriptToolRuntimeState>()
@@ -2655,6 +2683,13 @@ class TrailblazeMcpServer(
           },
           currentDriverTypeProvider = {
             mcpBridge.getDriverType()
+          },
+          // The classifiers the session's scripted tools were registered against, so the listing
+          // matches what dispatch accepts. No runtime yet = unknown, which lists gated tools.
+          currentDeviceClassifiersProvider = {
+            sessionScriptToolRuntimeBySession[mcpSessionId.sessionId]
+              ?.takeIf { it.deviceId == activeDeviceId(sessionContext) }
+              ?.classifiers
           },
           // resourceSourceProvider intentionally omitted — its default
           // `platformConfigResourceSource()` is workspace-aware, so workspace-authored

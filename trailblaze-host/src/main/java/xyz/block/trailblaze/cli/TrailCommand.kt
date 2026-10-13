@@ -531,10 +531,10 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
   @Option(
     names = ["--capture-video"],
     description = [
-      "Record device screen video for the session. Off by default — video writes large files " +
-        "— pass --capture-video to enable it for a run. " +
-        "When neither flag is passed, inherits TRAILBLAZE_CAPTURE_VIDEO and the saved " +
-        "`trailblaze config capture-video` setting.",
+      "Record device screen video for the session. On by default for `run`; use " +
+        "--no-capture-video to skip it. Interactive sessions (`session start`, `tool`, `blaze`, " +
+        "MCP) stay off unless TRAILBLAZE_CAPTURE_VIDEO or `trailblaze config capture-video` " +
+        "opts them in.",
     ],
     negatable = true,
   )
@@ -622,12 +622,12 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
   var testNameOverride: String? = null
 
   /**
-   * The `--capture-video` value to hand downstream, or null when the user passed neither
-   * `--capture-video` nor `--no-capture-video`. Null is load-bearing: it's what lets
-   * `TRAILBLAZE_CAPTURE_VIDEO` and the persisted `capture-video` config be the middle tier.
-   * Forwarding a resolved `false` here would silently outrank both.
+   * Whether this run records video: on unless `--no-capture-video`. A trail run is bounded and has
+   * a goal, so its recording is worth the disk. Interactive sessions can run for hours with no
+   * goal, so they keep the opt-in default (`TRAILBLAZE_CAPTURE_VIDEO` / `config capture-video`);
+   * those tiers only ever opt in, so resolving here loses nothing for `run`.
    */
-  private fun resolvedCaptureVideo(): Boolean? = if (captureAll) true else captureVideo
+  private fun resolvedCaptureVideo(): Boolean = captureAll || (captureVideo ?: true)
 
   /**
    * Whether the Playwright browser runs headless. Headless unless the run asked for a visible
@@ -639,9 +639,7 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
   internal fun resolvedBrowserHeadless(): Boolean = !showBrowser && headless
 
   /**
-   * The device-log toggles only. Video is deliberately absent: it is forwarded downstream as the
-   * tri-state [resolvedCaptureVideo], and resolving it into a non-null value here would discard
-   * the null that the env and config tiers need.
+   * The device-log toggles only. Video is forwarded downstream separately as [resolvedCaptureVideo].
    */
   private val captureOptions: CaptureOptions get() {
     return CaptureOptions(
@@ -2070,9 +2068,8 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
       // path forwards these via `CliRunRequest`; without this the no-daemon path dropped them
       // and `DesktopYamlRunner` fell back to the persisted desktop appConfig — so
       // `trailblaze run --no-daemon --capture-ios-logs` (and `--no-capture-video` /
-      // `--capture-logcat`) silently had no effect. `null` means "use appConfig", which is what
-      // video wants when neither video flag was passed — that's the tier the env var and
-      // `config capture-video` live in. `--capture-all` folds in via `resolvedCaptureVideo`.
+      // `--capture-logcat`) silently had no effect. `--capture-all` folds in via
+      // `resolvedCaptureVideo`.
       captureVideo = resolvedCaptureVideo(),
       turbo = turbo,
       captureLogcat = captureOptions.captureLogcat,

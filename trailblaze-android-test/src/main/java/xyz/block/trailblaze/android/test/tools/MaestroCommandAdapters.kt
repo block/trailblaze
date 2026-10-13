@@ -159,8 +159,7 @@ internal object MaestroCommandAdapters {
     "assertVisible" -> {
       val timeoutMs = (command.args as? JsonObject)?.get("timeout").longOrRefuse("timeout", tool)
       val selector = selectorFrom(command.args, allowedExtraKeys = setOf("timeout"), tool = tool)
-      AndroidTestAssertVisibleTool(nodeSelector = selector, timeoutMs = timeoutMs)
-        .executeWithAndroidTest(target, context)
+      maestroAssertion(AndroidTestAssertVisibleTool(nodeSelector = selector, timeoutMs = timeoutMs), target, context)
     }
 
     // The negative of `assertVisible`, and the same shape: recorded trails reach for it to prove a
@@ -170,8 +169,7 @@ internal object MaestroCommandAdapters {
     "assertNotVisible" -> {
       val timeoutMs = (command.args as? JsonObject)?.get("timeout").longOrRefuse("timeout", tool)
       val selector = selectorFrom(command.args, allowedExtraKeys = setOf("timeout"), tool = tool)
-      AndroidTestAssertNotVisibleTool(nodeSelector = selector, timeoutMs = timeoutMs)
-        .executeWithAndroidTest(target, context)
+      maestroAssertion(AndroidTestAssertNotVisibleTool(nodeSelector = selector, timeoutMs = timeoutMs), target, context)
     }
 
     "extendedWaitUntil" -> {
@@ -186,15 +184,17 @@ internal object MaestroCommandAdapters {
       val notVisible = args["notVisible"]
       when {
         visible != null && notVisible == null ->
-          AndroidTestAssertVisibleTool(
-            nodeSelector = selectorFrom(visible, tool = tool),
-            timeoutMs = timeoutMs,
-          ).executeWithAndroidTest(target, context)
+          maestroAssertion(
+            AndroidTestAssertVisibleTool(nodeSelector = selectorFrom(visible, tool = tool), timeoutMs = timeoutMs),
+            target,
+            context,
+          )
         notVisible != null && visible == null ->
-          AndroidTestAssertNotVisibleTool(
-            nodeSelector = selectorFrom(notVisible, tool = tool),
-            timeoutMs = timeoutMs,
-          ).executeWithAndroidTest(target, context)
+          maestroAssertion(
+            AndroidTestAssertNotVisibleTool(nodeSelector = selectorFrom(notVisible, tool = tool), timeoutMs = timeoutMs),
+            target,
+            context,
+          )
         else -> unsupported("extendedWaitUntil needs exactly one of visible/notVisible", tool)
       }
     }
@@ -348,6 +348,45 @@ internal object MaestroCommandAdapters {
   }
 
   /**
+   * Runs an assert the way Maestro reports one: a wait that ran out fails with "Assertion is false",
+   * the text Maestro itself throws, so a caller that reads a miss as "not there" works on this
+   * driver too. Every other failure keeps its own message, because it means the check broke, not
+   * that the screen said no.
+   */
+  private fun maestroAssertion(
+    assertion: AndroidTestAssertVisibleTool,
+    target: AndroidTestTarget,
+    context: TrailblazeToolExecutionContext,
+  ): TrailblazeToolResult = maestroAssertion(assertion, "${assertion.nodeSelector.description()} is visible") {
+    assertion.verify(target, context)
+  }
+
+  private fun maestroAssertion(
+    assertion: AndroidTestAssertNotVisibleTool,
+    target: AndroidTestTarget,
+    context: TrailblazeToolExecutionContext,
+  ): TrailblazeToolResult =
+    maestroAssertion(assertion, "${assertion.nodeSelector.description()} is not visible") {
+      assertion.verify(target, context)
+    }
+
+  private inline fun maestroAssertion(
+    assertion: AndroidTestExecutableTool,
+    condition: String,
+    check: () -> TrailblazeToolResult,
+  ): TrailblazeToolResult = try {
+    check()
+  } catch (miss: SelectorWaitMissException) {
+    TrailblazeToolResult.Error.ExceptionThrown(
+      errorMessage = "$MAESTRO_ASSERTION_MISS: $condition\n${miss.message}",
+      command = assertion,
+    )
+  } catch (e: Throwable) {
+    // Throwable, as the tools' own runCatching does: Espresso reports a failed check as an Error.
+    TrailblazeToolResult.Error.ExceptionThrown.fromThrowable(e, assertion)
+  }
+
+  /**
    * Whether Maestro's `optional` is set on this command — on its own map, or on the element
    * selector nested inside it.
    *
@@ -487,4 +526,7 @@ internal object MaestroCommandAdapters {
    * a recording is not unreplayable because its author named a step.
    */
   private val COSMETIC_KEYS = setOf("label", "optional")
+
+  /** What Maestro's own failed assert says, and what callers of `mobile_maestro` match a miss on. */
+  private const val MAESTRO_ASSERTION_MISS = "Assertion is false"
 }

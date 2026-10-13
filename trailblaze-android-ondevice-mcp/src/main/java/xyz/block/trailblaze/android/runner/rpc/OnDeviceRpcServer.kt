@@ -15,7 +15,6 @@ import io.ktor.server.routing.route
 import io.ktor.server.routing.routing
 import io.ktor.server.websocket.WebSockets
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
@@ -27,6 +26,7 @@ import xyz.block.trailblaze.logs.client.TrailblazeSession
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.OnDeviceScreenStateCaptor
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcResult
 import xyz.block.trailblaze.mcp.handlers.DrainSessionRequestHandler
+import xyz.block.trailblaze.util.TrailblazeDispatchers
 import xyz.block.trailblaze.mcp.handlers.GetExecutionStatusRequestHandler
 import xyz.block.trailblaze.mcp.handlers.GetMemoryInfoRequestHandler
 import xyz.block.trailblaze.mcp.handlers.GetScreenStateRequestHandler
@@ -85,7 +85,11 @@ class OnDeviceRpcServer(
 ) {
 
   // Use a dedicated coroutine scope for background jobs
-  private val backgroundScope = CoroutineScope(Dispatchers.IO)
+  // Trailblaze-owned threads, never Dispatchers.IO: in-process that is the app's pool. Every
+  // handler hops onto them too (RpcHandlerExt, OnDeviceRpcWebSocketRoute). What stays on
+  // Dispatchers.IO is CIO's own accept and frame-parse loop, which Ktor does not let a caller move;
+  // that is short non-blocking work, so it only waits for a free worker, never for a whole upload.
+  private val backgroundScope = CoroutineScope(TrailblazeDispatchers.IO)
 
   fun startServer(port: Int, wait: Boolean = true) {
     val server = embeddedServer(

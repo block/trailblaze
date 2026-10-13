@@ -53,11 +53,17 @@ class AgentSkillsDiscoveryTest {
       "multi-line",
       "---\nname: multi-line\ndescription: |\n  Line one of the description.\n  Line two continues it.\n---\nbody",
     )
+    writeSkill(
+      repo,
+      "folded",
+      "---\nname: folded\ndescription: >\n  Folded line one.\n  Folded line two.\n---\nbody",
+    )
     writeSkill(repo, "no-frontmatter", "just a body, no frontmatter block")
 
     val byName = discoverAgentSkills(repo).filter { it.scope == "workspace" }.associateBy { it.name }
 
     assertEquals("Line one of the description. Line two continues it.", byName.getValue("multi-line").description)
+    assertEquals("Folded line one. Folded line two.", byName.getValue("folded").description)
     // Malformed frontmatter degrades to the directory name, never to a missing entry.
     assertTrue("no-frontmatter" in byName)
     assertEquals(null, byName.getValue("no-frontmatter").description)

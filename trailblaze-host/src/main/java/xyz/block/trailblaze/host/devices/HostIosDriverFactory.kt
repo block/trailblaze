@@ -22,6 +22,7 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
 import xyz.block.trailblaze.util.Console
 
 internal object HostIosDriverFactory {
@@ -81,6 +82,18 @@ internal object HostIosDriverFactory {
   fun driverWrapperKey(appTarget: TrailblazeHostAppTarget?): String? =
     appTarget?.takeIf { it.hasCustomIosDriver }?.id
 
+  /** Each device's current target app ids, read by its [KeyboardCheckAppList] on every check. */
+  private val keyboardCheckAppIds = ConcurrentHashMap<String, List<String>>()
+
+  /**
+   * Points [deviceId]'s keyboard check at [appTarget]'s apps. A cached driver is shared by every
+   * target without a custom iOS driver, so a switch between two of them keeps the driver and must
+   * still move the check to the new target's apps.
+   */
+  fun keyboardCheckTargetSelected(deviceId: String, appTarget: TrailblazeHostAppTarget?) {
+    keyboardCheckAppIds[deviceId] = appTarget?.getPossibleAppIdsForPlatform(TrailblazeDevicePlatform.IOS).orEmpty()
+  }
+
   /**
    * Stops the XCTest runner hosts this JVM started when it exits. Without it every `trailblaze stop`
    * leaves one `xcodebuild` per simulator behind, and the next daemon's runner is killed by it.
@@ -116,6 +129,7 @@ internal object HostIosDriverFactory {
     }
     val targetPort = driverHostPort
     val wrapperKey = driverWrapperKey(appTarget)
+    keyboardCheckTargetSelected(deviceId, appTarget)
     var created = false
     val driver = drivers.acquireOrCreate(
       key = deviceId,
@@ -234,7 +248,9 @@ internal object HostIosDriverFactory {
     val xcTestDevice = XCTestIOSDevice(
       deviceId = deviceId,
       client = xcTestDriverClient,
-      getInstalledApps = { XCRunnerCLIUtils().listApps(deviceId) },
+      getInstalledApps = KeyboardCheckAppList(
+        preferredAppIds = { keyboardCheckAppIds[deviceId].orEmpty() },
+      ) { XCRunnerCLIUtils().listApps(deviceId) },
     )
 
     val baseIosDriver = IOSDriver(

@@ -3,89 +3,227 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Trailblaze Device Mirror</title>
+  <title>Trailblaze Device Control</title>
+  <script>
+    (function () {
+      try {
+        var mode = JSON.parse(localStorage.getItem('tb-theme')) || 'system';
+        var prefersLight = window.matchMedia && matchMedia('(prefers-color-scheme: light)').matches;
+        var dark = mode === 'dark' || (mode === 'system' && !prefersLight);
+        document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+      } catch (e) {
+        document.documentElement.setAttribute('data-theme', 'dark');
+      }
+    })();
+  </script>
   <style>
     :root {
+      color-scheme: light;
+      --radius: 10px;
+      --background: oklch(0.985 0.002 247.84);
+      --foreground: oklch(0.145 0.014 258.34);
+      --card: oklch(1 0 0);
+      --primary: oklch(0.205 0.015 258.34);
+      --primary-foreground: oklch(0.985 0.002 247.84);
+      --secondary: oklch(0.96 0.004 264.54);
+      --muted: oklch(0.96 0.004 264.54);
+      --muted-foreground: oklch(0.48 0.021 264.36);
+      --accent: oklch(0.94 0.006 264.53);
+      --destructive: oklch(0.577 0.245 27.325);
+      --border: oklch(0.90 0.007 264.53);
+      --input: oklch(0.90 0.007 264.53);
+      --ring: oklch(0.62 0.15 151.71);
+      --green: oklch(0.53 0.16 149.21);
+      --screen: oklch(0.955 0.004 264.54);
+      --shadow-xs: 0 1px 2px oklch(0 0 0 / 5%);
+      --shadow-sm: 0 1px 3px oklch(0 0 0 / 8%);
+      --font-sans: "Inter Variable", Inter, ui-sans-serif, system-ui, sans-serif;
+      --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    }
+    :root[data-theme="dark"] {
       color-scheme: dark;
-      --bg: #0b0e12;
-      --panel: #12171e;
-      --panel-2: #181e27;
-      --line: #2a3340;
-      --text: #ecf1f7;
-      --muted: #97a4b4;
-      --accent: #5de2a7;
-      --danger: #ff8f8f;
+      --background: oklch(0.135 0.012 258.34);
+      --foreground: oklch(0.97 0.003 264.54);
+      --card: oklch(0.175 0.013 258.34);
+      --primary: oklch(0.92 0.006 264.53);
+      --primary-foreground: oklch(0.205 0.015 258.34);
+      --secondary: oklch(0.235 0.015 258.34);
+      --muted: oklch(0.235 0.015 258.34);
+      --muted-foreground: oklch(0.68 0.015 264.37);
+      --accent: oklch(0.265 0.017 258.34);
+      --destructive: oklch(0.704 0.191 22.216);
+      --border: oklch(1 0 0 / 12%);
+      --input: oklch(1 0 0 / 15%);
+      --ring: oklch(0.72 0.15 150.10);
+      --green: oklch(0.72 0.15 150.10);
+      --screen: oklch(0.11 0.01 258.34);
     }
     * { box-sizing: border-box; }
     html, body { min-height: 100%; }
-    body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.4 system-ui, sans-serif; }
-    header { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 12px; padding: 12px 18px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--bg) 92%, transparent); backdrop-filter: blur(12px); }
-    h1 { margin: 0; font-size: 16px; }
-    .muted { color: var(--muted); }
+    body { margin: 0; background: var(--background); color: var(--foreground); font: 14px/1.45 var(--font-sans); -webkit-font-smoothing: antialiased; }
+    a { color: inherit; text-decoration: none; }
+    :focus-visible { outline: 2px solid color-mix(in oklab, var(--ring) 60%, transparent); outline-offset: 2px; }
+
+    button, select, input, textarea {
+      height: 36px;
+      padding: 0 12px;
+      border: 1px solid var(--input);
+      border-radius: calc(var(--radius) - 2px);
+      background: transparent;
+      color: var(--foreground);
+      box-shadow: var(--shadow-xs);
+      font: inherit;
+      font-size: 14px;
+    }
+    input::placeholder, textarea::placeholder { color: var(--muted-foreground); }
+    input:focus-visible, select:focus-visible, textarea:focus-visible { border-color: var(--ring); outline: 0; box-shadow: 0 0 0 3px color-mix(in oklab, var(--ring) 30%, transparent); }
+    select { padding-right: 32px; appearance: none; background: transparent url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='none' stroke='%23888' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' viewBox='0 0 24 24'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") no-repeat right 10px center; cursor: pointer; }
+    select option { background: var(--card); color: var(--foreground); }
+    button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; background: var(--background); font-weight: 500; white-space: nowrap; cursor: pointer; transition: background .12s, color .12s; }
+    button:hover { background: var(--accent); }
+    button.primary { border-color: transparent; background: var(--primary); color: var(--primary-foreground); }
+    button.primary:hover { background: color-mix(in oklab, var(--primary) 90%, transparent); }
+    button:disabled { opacity: .5; pointer-events: none; }
+
+    header { position: sticky; top: 0; z-index: 20; display: flex; align-items: center; gap: 10px; height: 56px; padding: 0 20px; border-bottom: 1px solid var(--border); background: color-mix(in oklab, var(--background) 88%, transparent); backdrop-filter: blur(12px); }
+    .brand { display: inline-flex; align-items: center; gap: 9px; padding: 4px 6px 4px 4px; margin-left: -4px; border-radius: calc(var(--radius) - 2px); font-size: 14px; font-weight: 650; letter-spacing: -.01em; }
+    .brand:hover { background: var(--accent); }
+    .brand-mark { position: relative; width: 22px; height: 22px; flex: 0 0 22px; border-radius: 6px; background: var(--primary); }
+    .brand-mark::before, .brand-mark::after { position: absolute; content: ""; border-radius: 99px; background: var(--primary-foreground); }
+    .brand-mark::before { width: 4px; height: 4px; top: 5px; left: 5px; box-shadow: 8px 8px 0 var(--primary-foreground); }
+    .brand-mark::after { width: 11px; height: 2px; top: 10px; left: 5.5px; transform: rotate(45deg); }
+    .crumb-sep { color: var(--border); font-size: 18px; font-weight: 300; }
+    h1 { margin: 0; font-size: 14px; font-weight: 600; white-space: nowrap; }
+    .tabs { display: inline-flex; gap: 2px; margin-left: 12px; padding: 3px; border-radius: var(--radius); background: var(--muted); }
+    .tabs a { padding: 4px 12px; border-radius: calc(var(--radius) - 3px); color: var(--muted-foreground); font-size: 13px; font-weight: 500; }
+    .tabs a:hover { color: var(--foreground); }
+    .tabs a[aria-current="page"] { background: var(--background); color: var(--foreground); box-shadow: var(--shadow-xs); }
     .spacer { flex: 1; }
-    button, select, input, textarea { color: var(--text); background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; font: inherit; }
-    button { cursor: pointer; }
-    button:hover { border-color: #48586d; }
-    button.primary { border-color: #2b8a67; background: #164d3a; }
-    button:disabled { opacity: .5; cursor: default; }
-    a { color: var(--accent); text-decoration: none; }
-    .controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 14px 18px; border-bottom: 1px solid var(--line); }
-    .controls label { display: flex; align-items: center; gap: 7px; color: var(--muted); }
-    .controls select { min-width: 190px; max-width: 340px; }
-    #status { min-height: 20px; padding: 0 18px 10px; color: var(--muted); }
-    #status.error { color: var(--danger); }
-    main { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(340px, 100%), 1fr)); gap: 16px; padding: 16px; align-items: start; }
-    main.single { display: flex; justify-content: center; }
-    .device { min-width: 0; border: 1px solid var(--line); border-radius: 14px; overflow: hidden; background: var(--panel); }
-    main.single .device { width: min(520px, 100%); }
-    .device-head { display: flex; align-items: center; gap: 9px; padding: 10px 12px; border-bottom: 1px solid var(--line); }
-    .device-name { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-weight: 650; }
-    .badge { padding: 2px 7px; border: 1px solid var(--line); border-radius: 99px; color: var(--muted); font-size: 11px; }
-    .fps { margin-left: auto; font: 12px ui-monospace, monospace; color: var(--accent); }
-    .screen { position: relative; display: grid; place-items: center; min-height: 280px; max-height: calc(100vh - 245px); background: #000; overflow: hidden; }
-    .screen img, .screen canvas { display: none; max-width: 100%; max-height: calc(100vh - 245px); object-fit: contain; touch-action: none; user-select: none; cursor: crosshair; }
-    .placeholder { padding: 30px; text-align: center; color: var(--muted); }
-    .device-actions { display: flex; flex-wrap: wrap; gap: 7px; padding: 10px; border-top: 1px solid var(--line); }
-    .device-actions input { flex: 1 1 140px; min-width: 0; }
-    .web-navigation { display: flex; gap: 7px; padding: 10px; border-top: 1px solid var(--line); }
+
+    .device-manager { position: relative; min-width: 0; }
+    .device-manager > summary { display: inline-flex; align-items: center; gap: 8px; max-width: min(320px, 100%); height: 32px; padding: 0 10px 0 12px; border: 1px solid var(--input); border-radius: calc(var(--radius) - 2px); background: var(--background); box-shadow: var(--shadow-xs); font-size: 13px; font-weight: 500; list-style: none; cursor: pointer; }
+    .device-manager > summary::-webkit-details-marker { display: none; }
+    .device-manager > summary:hover { background: var(--accent); }
+    .device-manager > summary::before { width: 7px; height: 7px; flex: 0 0 7px; content: ""; border-radius: 99px; background: var(--green); }
+    .device-manager > summary::after { width: 6px; height: 6px; margin: -3px 2px 0 2px; content: ""; border-right: 1.5px solid var(--muted-foreground); border-bottom: 1.5px solid var(--muted-foreground); transform: rotate(45deg); }
+    .device-manager.idle > summary::before { background: var(--muted-foreground); }
+    #managerLabel { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .manager-panel { position: absolute; top: calc(100% + 6px); right: 0; width: min(380px, calc(100vw - 28px)); }
+    .manager-panel .toolbar { flex-direction: column; align-items: stretch; gap: 12px; margin: 0; padding: 14px 16px; box-shadow: 0 12px 32px oklch(0 0 0 / 14%); }
+    .manager-panel .field { display: grid; gap: 6px; font-size: 12px; }
+    .manager-panel .field-label { display: inline; }
+    .manager-panel .field select { width: 100%; max-width: none; }
+    .manager-panel #status { flex: 0 0 auto; padding-left: 0; white-space: normal; text-align: left; }
+    .manager-panel .toolbar-actions .primary { flex: 1; }
+
+    .toolbar { display: flex; align-items: center; gap: 8px; margin: 16px 20px 0; padding: 8px 8px 8px 14px; border: 1px solid var(--border); border-radius: calc(var(--radius) + 4px); background: var(--card); box-shadow: var(--shadow-sm); }
+    body:not(.grid) > .toolbar { max-width: 768px; margin: 16px auto 0; }
+    .toolbar select, .toolbar button { height: 32px; font-size: 13px; }
+    .field { display: flex; flex: 0 1 auto; min-width: 0; color: var(--muted-foreground); font-size: 13px; font-weight: 500; white-space: nowrap; }
+    .field-label { display: none; }
+    .field select { width: 100%; min-width: 0; max-width: 260px; color: var(--foreground); }
+    #refresh { display: grid; width: 32px; padding: 0; place-items: center; }
+    .toolbar-actions { display: flex; gap: 8px; }
+    #status { flex: 1 1 0; min-width: 0; padding-left: 6px; overflow: hidden; color: var(--muted-foreground); font-size: 13px; text-align: right; text-overflow: ellipsis; white-space: nowrap; }
+    #status:empty { display: none; }
+    #status.error { color: var(--destructive); }
+
+    main { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(340px, 100%), 1fr)); gap: 16px; padding: 20px; align-items: start; }
+    .device { min-width: 0; overflow: hidden; border: 1px solid var(--border); border-radius: calc(var(--radius) + 4px); background: var(--card); box-shadow: var(--shadow-sm); }
+    .stage { display: grid; place-items: center; padding: 20px; border-bottom: 1px solid var(--border); background: var(--muted); }
+    .panel { min-width: 0; }
+    main.single { display: block; }
+    main.single .device { display: grid; grid-template-columns: auto minmax(320px, 420px); justify-content: center; align-items: start; gap: 28px; overflow: visible; border: 0; background: none; box-shadow: none; }
+    main.single .stage { position: sticky; top: 76px; padding: 0; border: 0; background: none; }
+    main.single .panel { overflow: hidden; border: 1px solid var(--border); border-radius: calc(var(--radius) + 4px); background: var(--card); box-shadow: var(--shadow-sm); }
+
+    .frame { --frame-pad: 9px; --screen-radius: 30px; position: relative; display: inline-block; max-width: 100%; padding: var(--frame-pad); border-radius: calc(var(--screen-radius) + var(--frame-pad)); background: oklch(0.17 0.01 258); box-shadow: inset 0 0 0 1px oklch(1 0 0 / 10%), 0 0 0 1px color-mix(in oklab, var(--foreground) 12%, transparent), 0 24px 48px -20px oklch(0 0 0 / 40%); }
+    .frame.web { --frame-pad: 0px; --screen-radius: 0px; overflow: hidden; padding-top: 30px; border-radius: 12px; background: var(--card); box-shadow: 0 0 0 1px var(--border), 0 24px 48px -24px oklch(0 0 0 / 35%); }
+    .frame.web::before { position: absolute; top: 11px; left: 12px; width: 8px; height: 8px; content: ""; border-radius: 99px; background: var(--border); box-shadow: 14px 0 0 var(--border), 28px 0 0 var(--border); }
+    .screen { position: relative; display: grid; place-items: center; overflow: hidden; border-radius: var(--screen-radius); background: var(--screen); }
+    .screen img, .screen canvas { display: none; max-width: 100%; max-height: min(560px, calc(100vh - 260px)); object-fit: contain; touch-action: none; user-select: none; cursor: crosshair; }
+    main.single .screen img, main.single .screen canvas { max-width: min(100%, 60vw); max-height: calc(100vh - 120px); }
+    .screen:has(> .placeholder:not([style*="none"])) { width: 240px; height: min(500px, calc(100vh - 260px)); }
+    .frame.web .screen:has(> .placeholder:not([style*="none"])) { width: 480px; max-width: 100%; height: 300px; }
+    main.single .screen:has(> .placeholder:not([style*="none"])) { width: 290px; height: min(620px, calc(100vh - 120px)); }
+    main.single .frame.web .screen:has(> .placeholder:not([style*="none"])) { width: min(640px, 55vw); height: 420px; }
+    .placeholder { padding: 24px; text-align: center; color: var(--muted-foreground); font-size: 13px; }
+
+    .device-head { display: flex; align-items: center; gap: 8px; min-height: 52px; padding: 0 16px; border-bottom: 1px solid var(--border); }
+    .device-name { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-weight: 600; }
+    .badge { flex: 0 0 auto; padding: 2px 8px; border-radius: 99px; background: var(--secondary); color: var(--muted-foreground); font-size: 12px; font-weight: 500; }
+    .fps { margin-left: auto; flex: 0 0 auto; color: var(--muted-foreground); font: 12px var(--font-mono); font-variant-numeric: tabular-nums; }
+    .section-label { margin: 0 0 8px; color: var(--muted-foreground); font-size: 12px; font-weight: 500; }
+    .device-actions, .web-navigation { display: flex; flex-wrap: wrap; gap: 8px; padding: 14px 16px; border-bottom: 1px solid var(--border); }
+    .device-actions .section-label, .web-navigation .section-label { flex: 1 1 100%; margin: 0; }
+    .type-group { display: flex; flex: 1 1 200px; min-width: 0; }
+    .type-group input { flex: 1; min-width: 0; border-top-right-radius: 0; border-bottom-right-radius: 0; }
+    .type-group button { margin-left: -1px; border-top-left-radius: 0; border-bottom-left-radius: 0; }
+    .key-group { display: flex; }
+    .key-group button { border-radius: 0; }
+    .key-group button + button { margin-left: -1px; }
+    .key-group button:first-child { border-radius: calc(var(--radius) - 2px) 0 0 calc(var(--radius) - 2px); }
+    .key-group button:last-child { border-radius: 0 calc(var(--radius) - 2px) calc(var(--radius) - 2px) 0; }
     .web-navigation input { flex: 1; min-width: 0; }
-    .tool-runner { border-top: 1px solid var(--line); }
-    .tool-runner summary { cursor: pointer; padding: 10px; color: var(--muted); }
-    .tool-body { display: grid; gap: 8px; padding: 0 10px 10px; }
-    .tool-picker { display: flex; gap: 7px; }
+    .tool-runner summary { display: flex; align-items: center; gap: 8px; padding: 14px 16px; color: var(--muted-foreground); font-size: 13px; font-weight: 500; list-style: none; cursor: pointer; }
+    .tool-runner summary::-webkit-details-marker { display: none; }
+    .tool-runner summary::before { width: 6px; height: 6px; margin: 0 3px; content: ""; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(-45deg); transition: transform .12s; }
+    .tool-runner[open] summary::before { transform: rotate(45deg); }
+    .tool-runner summary:hover { color: var(--foreground); }
+    .tool-body { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; padding: 0 16px 16px; }
+    .tool-picker { display: flex; gap: 8px; }
     .tool-picker select { flex: 1; min-width: 0; }
-    .tool-description, .tool-status { color: var(--muted); font-size: 12px; }
-    .tool-status.error { color: var(--danger); }
-    .tool-params { display: grid; gap: 7px; }
-    .tool-param { display: grid; grid-template-columns: minmax(110px, .45fr) 1fr; gap: 7px; align-items: center; }
-    .tool-param label { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--muted); font-size: 12px; }
+    .tool-description, .tool-status { color: var(--muted-foreground); font-size: 12px; }
+    .tool-description:empty { display: none; }
+    .tool-status.error { color: var(--destructive); }
+    .tool-params { display: grid; gap: 8px; }
+    .tool-params:empty { display: none; }
+    .tool-param { display: grid; grid-template-columns: minmax(110px, .45fr) 1fr; gap: 8px; align-items: center; }
+    .tool-param label { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--muted-foreground); font: 12px var(--font-mono); }
     .tool-param input, .tool-param select { min-width: 0; width: 100%; }
-    .tool-yaml { width: 100%; min-height: 120px; resize: vertical; font: 12px/1.45 ui-monospace, monospace; }
-    .tool-actions { display: flex; align-items: center; gap: 8px; }
-    .device-error { display: none; padding: 8px 11px; color: var(--danger); border-top: 1px solid var(--line); font-size: 12px; }
+    .tool-yaml { width: 100%; height: auto; min-height: 140px; padding: 10px 12px; resize: vertical; font: 12px/1.5 var(--font-mono); }
+    .tool-actions { display: flex; align-items: center; gap: 10px; }
+    .device-error { display: none; padding: 10px 16px; border-top: 1px solid var(--border); background: color-mix(in oklab, var(--destructive) 8%, transparent); color: var(--destructive); font-size: 12px; }
+    @media (max-width: 860px) {
+      main.single .device { grid-template-columns: minmax(0, 1fr); justify-items: center; }
+      main.single .stage { position: static; }
+      main.single .panel { width: min(560px, 100%); }
+    }
     @media (max-width: 700px) {
-      header { align-items: flex-start; flex-wrap: wrap; }
-      .controls { align-items: stretch; }
-      .controls label { width: 100%; justify-content: space-between; }
-      .controls select { flex: 1; min-width: 0; }
-      .screen, .screen img, .screen canvas { max-height: calc(100vh - 310px); }
+      header { padding: 0 14px; }
+      .crumb-sep, h1 { display: none; }
+      .toolbar, body:not(.grid) > .toolbar { margin: 14px 14px 0; }
+      .field { flex: 1 1 0; }
+      .field select { max-width: none; }
+      body > .toolbar > #status:not(.error) { display: none; }
+      main { padding: 14px; }
     }
   </style>
 </head>
 <body>
   <header>
-    <h1>Device Mirror</h1>
-    <span class="muted">Standalone Trailblaze viewer</span>
+    <a class="brand" href="/"><span class="brand-mark" aria-hidden="true"></span>Trailblaze</a>
+    <span class="crumb-sep" aria-hidden="true">/</span>
+    <h1>Device control</h1>
+    <nav class="tabs" aria-label="View">
+      <a id="tabSingle" href="/devices">Single</a>
+      <a id="tabGrid" href="/devices/all">Grid</a>
+    </nav>
     <span class="spacer"></span>
-    <a id="modeLink" href="/devices/all"></a>
+    <details class="device-manager" id="manager" hidden>
+      <summary><span id="managerLabel">Devices</span></summary>
+      <div class="manager-panel" id="managerPanel"></div>
+    </details>
   </header>
-  <div class="controls">
-    <label>Target app <select id="target"></select></label>
-    <label id="devicePicker">Device <select id="device"></select></label>
-    <button class="primary" id="connect"></button>
-    <button id="refresh">Refresh</button>
+  <div class="toolbar" id="picker">
+    <label class="field"><span class="field-label">Target app</span> <select id="target" aria-label="Target app"></select></label>
+    <label class="field" id="devicePicker"><span class="field-label">Device</span> <select id="device" aria-label="Device"></select></label>
+    <div class="toolbar-actions">
+      <button class="primary" id="connect"></button>
+      <button id="refresh" aria-label="Refresh devices" title="Refresh devices"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg></button>
+    </div>
+    <div id="status" role="status"></div>
   </div>
-  <div id="status"></div>
   <main id="devices"></main>
 
   <script>
@@ -100,22 +238,28 @@
         refresh: document.getElementById('refresh'),
         status: document.getElementById('status'),
         devices: document.getElementById('devices'),
-        modeLink: document.getElementById('modeLink'),
+        tabSingle: document.getElementById('tabSingle'),
+        tabGrid: document.getElementById('tabGrid'),
+        picker: document.getElementById('picker'),
+        manager: document.getElementById('manager'),
+        managerLabel: document.getElementById('managerLabel'),
+        managerPanel: document.getElementById('managerPanel'),
       };
-      const state = { devices: [], entries: new Map(), targetId: null };
+      const state = { devices: [], entries: new Map(), targetId: null, generation: 0 };
       // Auto-upgrade cadence for a WEB mirror stuck on the JPEG/poll fallback: retry the fast CDP
       // screencast this often, treating a probe with no frame within the timeout as still-down.
       const WEB_UPGRADE_RETRY_MS = 4000;
       const WEB_UPGRADE_PROBE_TIMEOUT_MS = 4000;
 
-      els.modeLink.textContent = allMode ? 'Single device' : 'All devices';
-      els.modeLink.href = allMode ? '/devices' : '/devices/all';
-      els.devicePicker.style.display = allMode ? 'none' : 'flex';
+      (allMode ? els.tabGrid : els.tabSingle).setAttribute('aria-current', 'page');
+      document.body.classList.toggle('grid', allMode);
+      els.devicePicker.style.display = allMode ? 'none' : '';
       els.connect.textContent = allMode ? 'Connect all' : 'Connect';
       els.devices.className = allMode ? '' : 'single';
 
       function setStatus(message, error = false) {
         els.status.textContent = message || '';
+        els.status.title = message || '';
         els.status.className = error ? 'error' : '';
       }
 
@@ -156,15 +300,18 @@
         const card = document.createElement('section');
         card.className = 'device';
         card.innerHTML = `
+          <div class="stage"><div class="frame${isWeb ? ' web' : ''}"><div class="screen"><div class="placeholder">Press Connect to control this device.</div><canvas aria-label="Live device video"></canvas><img draggable="false" alt="Live device screen"></div></div></div>
+          <div class="panel">
           <div class="device-head">
-            <span class="device-name"></span><span class="badge"></span><span class="fps">-- fps</span>
+            <span class="device-name"></span><span class="badge"></span><span class="fps">Not connected</span>
           </div>
-          <div class="screen"><div class="placeholder">Press Connect to start mirroring.</div><canvas aria-label="Live device video"></canvas><img draggable="false" alt="Live device screen"></div>
           <div class="device-actions">
-            <input type="text" placeholder="Type text on device" aria-label="Text to type on device">
-            <button data-key="type">Type</button><button data-key="Back">Back</button><button data-key="Home">Home</button><button data-key="Enter">Enter</button>
+            <p class="section-label">Input</p>
+            <div class="type-group"><input type="text" placeholder="Type text on device" aria-label="Text to type on device"><button data-key="type">Type</button></div>
+            <div class="key-group" role="group" aria-label="Device keys"><button data-key="Back">Back</button><button data-key="Home">Home</button><button data-key="Enter">Enter</button></div>
           </div>
           ${isWeb ? `<div class="web-navigation">
+            <p class="section-label">Navigate</p>
             <input class="web-url" type="url" placeholder="https://example.com" aria-label="URL to open">
             <button class="web-open" type="button">Open URL</button>
           </div>` : ''}
@@ -178,9 +325,11 @@
               <div class="tool-actions"><button class="primary tool-run" type="button">Run on device</button><span class="tool-status"></span></div>
             </div>
           </details>
-          <div class="device-error"></div>`;
+          <div class="device-error"></div>
+          </div>`;
         card.querySelector('.device-name').textContent = deviceLabel(device);
-        card.querySelector('.badge').textContent = device.platform || deviceId(device).trailblazeDevicePlatform;
+        const platform = device.platform || deviceId(device).trailblazeDevicePlatform;
+        card.querySelector('.badge').textContent = { IOS: 'iOS', ANDROID: 'Android', WEB: 'Web' }[platform] || platform;
         const entry = {
           device, key, card,
           screen: card.querySelector('.screen'),
@@ -200,7 +349,7 @@
           toolRun: card.querySelector('.tool-run'),
           toolStatus: card.querySelector('.tool-status'),
           tools: [], toolCatalogLoaded: false,
-          socket: null, decoder: null, decoderConfigured: false, fallback: false, stopped: false, objectUrl: null,
+          socket: null, decoder: null, decoderConfigured: false, fallback: false, stopped: false, active: false, objectUrl: null,
           width: 0, height: 0, frameCount: 0, frameWindowAt: performance.now(), lastFrameAt: 0, stallTimer: null,
           pointer: null, onStall: null, webDemoted: false,
         };
@@ -430,7 +579,7 @@
         entry.frameCount++;
         const now = performance.now();
         entry.lastFrameAt = now;
-        if (entry.fps.textContent === '-- fps' || entry.fps.textContent === 'idle') entry.fps.textContent = 'live';
+        if (['Connecting', 'idle'].includes(entry.fps.textContent)) entry.fps.textContent = 'live';
         const elapsed = now - entry.frameWindowAt;
         if (elapsed >= 1000) {
           entry.fps.textContent = `${(entry.frameCount * 1000 / elapsed).toFixed(1)} fps`;
@@ -514,10 +663,11 @@
       async function connect(entry) {
         cleanupEntry(entry, false);
         entry.stopped = false;
+        entry.active = true;
         entry.image.removeAttribute('src');
         entry.image.style.display = 'none';
         entry.canvas.style.display = 'none';
-        entry.fps.textContent = '-- fps';
+        entry.fps.textContent = 'Connecting';
         entry.frameCount = 0;
         entry.frameWindowAt = performance.now();
         entry.lastFrameAt = 0;
@@ -529,11 +679,25 @@
           const connected = await rpc('ConnectToDeviceRequest', { trailblazeDeviceId: deviceId(entry.device) });
           entry.width = connected.deviceWidth;
           entry.height = connected.deviceHeight;
+          if (entry.stopped) {
+            // Abandoned mid-connect, so the disconnect sent on cleanup reached the daemon before this
+            // session existed. Release it now unless a newer card has since claimed the same device.
+            const key = deviceKey(entry.device);
+            const claimed = [...state.entries.values()].some((other) => other.active && deviceKey(other.device) === key);
+            if (!claimed) disconnectDevice(entry.device);
+            return false;
+          }
           entry.placeholder.textContent = 'Connected. Waiting for the first frame…';
           openStream(entry);
+          // Opening it loads the tool catalog, which saves the target, so wait until connect has.
+          if (!allMode) entry.toolRunner.open = true;
+          return true;
         } catch (error) {
+          entry.active = false;
+          entry.fps.textContent = 'Not connected';
           entry.placeholder.textContent = 'Could not connect.';
           showError(entry, error.message);
+          return false;
         }
       }
 
@@ -761,6 +925,7 @@
 
       function cleanupEntry(entry, disconnect = true) {
         entry.stopped = true;
+        entry.active = false;
         entry.fallback = false;
         entry.onStall = null;
         entry.webDemoted = false;
@@ -774,17 +939,22 @@
           entry.decoderConfigured = false;
         }
         if (entry.objectUrl) { URL.revokeObjectURL(entry.objectUrl); entry.objectUrl = null; }
-        if (disconnect) {
-          fetch('/rpc/DisconnectDeviceRequest', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ trailblazeDeviceId: deviceId(entry.device) }), keepalive: true,
-          }).catch(() => {});
-        }
+        if (disconnect) disconnectDevice(entry.device);
+      }
+
+      function disconnectDevice(device) {
+        fetch('/rpc/DisconnectDeviceRequest', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ trailblazeDeviceId: deviceId(device) }), keepalive: true,
+        }).catch(() => {});
       }
 
       function cleanupAll(disconnect = true) {
         for (const entry of state.entries.values()) cleanupEntry(entry, disconnect);
         state.entries.clear();
+        state.generation += 1;
+        els.manager.classList.add('idle');
+        els.managerLabel.textContent = 'Not connected';
       }
 
       function renderDevices() {
@@ -792,6 +962,7 @@
         els.devices.replaceChildren();
         const selected = allMode ? state.devices : state.devices.filter((device) => deviceKey(device) === els.device.value);
         for (const device of selected) els.devices.appendChild(createCard(device).card);
+        els.connect.disabled = selected.length === 0;
       }
 
       async function load() {
@@ -807,7 +978,6 @@
           fillSelect(els.device, state.devices, deviceKey, deviceLabel, state.devices[0] ? deviceKey(state.devices[0]) : null);
           renderDevices();
           setStatus(state.devices.length ? `${state.devices.length} device${state.devices.length === 1 ? '' : 's'} available.` : 'No devices found. Start an emulator or connect a device, then refresh.');
-          els.connect.disabled = state.devices.length === 0;
         } catch (error) { setStatus(error.message, true); }
       }
 
@@ -822,15 +992,35 @@
           if (entry.toolRunner.open) loadToolCatalog(entry);
         }
       };
+      // Once something is connected the picker steps aside: it moves into the header's device
+      // manager, where it still switches or reconnects devices without crowding the controls.
+      function dockPicker(entries) {
+        els.managerPanel.appendChild(els.picker);
+        els.managerLabel.textContent = allMode ? `${entries.length} device${entries.length === 1 ? '' : 's'}` : deviceLabel(entries[0].device);
+        els.manager.classList.remove('idle');
+        els.manager.hidden = false;
+        els.manager.open = false;
+      }
+
       els.device.onchange = renderDevices;
       els.connect.onclick = async () => {
         const entries = [...state.entries.values()];
         if (!entries.length) return;
+        // Refresh and device selection stay usable so a stalled connect can be abandoned; a connect
+        // that resolves after its cards were replaced must not dock the picker under them.
+        const generation = state.generation;
         els.connect.disabled = true;
         setStatus(allMode ? 'Connecting devices…' : 'Connecting device…');
-        await Promise.allSettled(entries.map(connect));
+        const connected = await Promise.all(entries.map(connect));
+        if (generation !== state.generation) return;
         els.connect.disabled = false;
+        const live = entries.filter((_, index) => connected[index]);
+        if (!live.length) {
+          setStatus('Could not connect.', true);
+          return;
+        }
         setStatus('Streaming. Tap, drag, right-click, or use the input controls to interact.');
+        dockPicker(live);
       };
       els.refresh.onclick = load;
       window.addEventListener('beforeunload', () => cleanupAll(true));

@@ -87,16 +87,22 @@ class TrailblazeLogger(
    *
    * @param session The session this screenshot belongs to
    * @param screenState The screen state containing screenshot bytes
+   * @param capturedAt When [screenState] was captured, for a caller that logs it later than that.
+   *   Names the file. Defaults to now.
    * @return The filename where the screenshot was stored, or null if no screenshot
    */
-  fun logScreenState(session: TrailblazeSession, screenState: ScreenState): String? {
+  fun logScreenState(
+    session: TrailblazeSession,
+    screenState: ScreenState,
+    capturedAt: Instant? = null,
+  ): String? {
     val screenshotBytes = screenState.screenshotBytes ?: return null
     // A degraded device can return non-null empty/sub-header bytes; reject them so no 0-byte
     // image and no screenshot-less log is written.
     if (screenshotBytes.size < MIN_IMAGE_HEADER_BYTES) return null
 
     val imageFormat = ImageFormatDetector.detectFormat(screenshotBytes)
-    val timestamp = Clock.System.now()
+    val timestamp = capturedAt ?: Clock.System.now()
     val screenshotFileName = buildScreenshotFileName(
       sessionId = session.sessionId.value,
       epochMs = timestamp.toEpochMilliseconds(),
@@ -120,6 +126,9 @@ class TrailblazeLogger(
    * @param screenState The screen state containing clean screenshot and view hierarchy
    * @param displayName Optional human-readable name for this snapshot (e.g., "login_screen").
    *                    Shown in the snapshot viewer UI. Does not affect the actual filename.
+   * @param capturedAt When [screenState] was captured, for a caller that logs it later than that.
+   *   Becomes the snapshot's timestamp and names its file, so the report still places it before
+   *   the tool it shows the screen for. Defaults to now.
    * @return The filename where the snapshot was stored, or null if no screenshot available
    */
   fun logSnapshot(
@@ -127,8 +136,9 @@ class TrailblazeLogger(
     screenState: ScreenState,
     displayName: String? = null,
     traceId: TraceId? = null,
+    capturedAt: Instant? = null,
   ): String? {
-    val screenshotFileName = logScreenState(session, screenState) ?: return null
+    val screenshotFileName = logScreenState(session, screenState, capturedAt) ?: return null
 
     // If the screenState was captured in migration mode, the producer wraps it in
     // [MigrationScreenState] (the decorator delegates everything else to the primary
@@ -150,7 +160,7 @@ class TrailblazeLogger(
         deviceWidth = screenState.deviceWidth,
         deviceHeight = screenState.deviceHeight,
         session = session.sessionId,
-        timestamp = Clock.System.now(),
+        timestamp = capturedAt ?: Clock.System.now(),
         traceId = traceId,
       )
     )

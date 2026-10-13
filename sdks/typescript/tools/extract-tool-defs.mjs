@@ -147,6 +147,7 @@ const RECOGNIZED_SPEC_FIELDS = new Set([
   "requiresContext",
   "requiresHost",
   "supportedDrivers",
+  "requiredClassifiers",
   "surfaceToLlm",
   "isRecordable",
   "sensitiveArgNames",
@@ -399,7 +400,7 @@ for (const arg of args) {
       // spec — supportedPlatforms / surfaceToLlm / … — was dropped. Surface it so the Kotlin layer
       // can warn (or hard-fail a descriptor-less tool) instead of silently shipping an un-gated tool.
       const uncapturedSpec = !spec && specArgIsUncapturedReference(init);
-      const runtimeError = specRuntimeError(init);
+      const runtimeError = specRuntimeError(init) ?? specRequiredClassifiersError(init);
       if (runtimeError) {
         errors.push({ file: absFile, name, message: `tool '${name}': ${runtimeError}` });
         continue;
@@ -810,6 +811,39 @@ function specRuntimeError(callExpression) {
   }
   if (!SPEC_RUNTIMES.includes(value)) {
     return `spec \`runtime\` is ${JSON.stringify(value)}, expected ${expected}.`;
+  }
+  return null;
+}
+
+/**
+ * Why the inline spec's `requiredClassifiers` can't be used, or null when it is absent or valid.
+ * An error rather than a skip for the same reason as [specRuntimeError]: the field restricts which
+ * devices load the tool, so dropping it would load the tool on every device.
+ */
+function specRequiredClassifiersError(callExpression) {
+  const arg0 = callExpression.arguments?.[0];
+  if (!arg0 || !ts.isObjectLiteralExpression(arg0)) return null;
+  const props = arg0.properties;
+  const isField = (p) =>
+    (ts.isPropertyAssignment(p) || ts.isShorthandPropertyAssignment(p)) &&
+    (ts.isIdentifier(p.name) || ts.isStringLiteral(p.name)) &&
+    p.name.text === "requiredClassifiers";
+  const lastField = props.findLastIndex(isField);
+  const lastSpread = props.findLastIndex((p) => ts.isSpreadAssignment(p));
+  if (lastSpread > lastField) {
+    // With no inline field, a trailing spread is already rejected by [specRuntimeError] unless an
+    // inline `runtime` follows it — the existing partial-capture case for every other field.
+    if (lastField < 0) return null;
+    return `the spec spreads \`${props[lastSpread].expression.getText()}\` after \`requiredClassifiers\`, which may replace it where the analyzer can't read it. Move the inline \`requiredClassifiers\` after the spread.`;
+  }
+  if (lastField < 0) return null;
+  const prop = props[lastField];
+  if (ts.isShorthandPropertyAssignment(prop)) {
+    return "spec `requiredClassifiers` must be written inline as `requiredClassifiers: [\"...\"]`; the analyzer can't read the shorthand `{ requiredClassifiers }`.";
+  }
+  const value = literalValueOf(prop.initializer);
+  if (!Array.isArray(value) || !value.every((v) => typeof v === "string")) {
+    return `spec \`requiredClassifiers\` must be an inline array of string literals (e.g. \`["rig"]\`); the analyzer can't read \`${prop.initializer.getText()}\`, and dropping it would load the tool on every device.`;
   }
   return null;
 }

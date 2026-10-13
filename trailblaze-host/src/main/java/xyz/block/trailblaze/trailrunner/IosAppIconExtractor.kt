@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.trailrunner
 
 import java.io.File
+import xyz.block.trailblaze.ui.TrailblazeDesktopUtil
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.util.IosHostSimctlUtils
 import xyz.block.trailblaze.util.TrailblazeProcessBuilderUtils
@@ -22,7 +23,7 @@ import xyz.block.trailblaze.util.isMacOs
  */
 internal object IosAppIconExtractor {
 
-  private val nativeCacheDir = File(System.getProperty("user.home") ?: ".", ".trailblaze/cache/native")
+  private val nativeCacheDir = File(TrailblazeDesktopUtil.getDefaultAppDataDirectory(), "cache/native")
   private val helperBinary = File(nativeCacheDir, "extract_ios_app_icon")
   private const val HELPER_RESOURCE_PATH = "native/ios/ExtractIosAppIcon.m"
 

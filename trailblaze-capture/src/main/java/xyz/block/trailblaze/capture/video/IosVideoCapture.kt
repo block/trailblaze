@@ -304,6 +304,22 @@ class IosVideoCapture(
     internal const val DOWNSCALE_FILTER = "scale='if(gt(iw,ih),-2,min(iw,720))':'if(gt(iw,ih),min(ih,720),-2)'"
 
     /**
+     * The ffmpeg command [transcodeToWebm] runs. `-fflags +igndts` makes the decoder stamp every
+     * frame with simctl's presentation time and never its decode time.
+     *
+     * simctl's decode times trail its presentation times by seconds (11 s mid-clip in one local
+     * recording), and it occasionally writes two frames with the same presentation time. Left to
+     * itself, ffmpeg counts that duplicate as a faulty timestamp and switches every later frame to
+     * the decode time. Frames whose decode time falls before the previous frame are then clamped
+     * by the WebM muxer onto one instant, and everything after plays seconds early: 191 frames of
+     * an app launch stamped 22.320 s in one CI run, then footage ~12 s ahead of the session.
+     */
+    internal fun transcodeCommand(ffmpegBinary: String, source: File, target: File): List<String> =
+      listOf(ffmpegBinary, "-y", "-fflags", "+igndts", "-i", source.absolutePath, "-an") +
+        RecordingFormat.WEBM.videoFilterArgs(DOWNSCALE_FILTER) + RecordingFormat.WEBM.encodeArgs() +
+        RecordingTailHold.ENCODER_TIME_BASE + target.absolutePath
+
+    /**
      * Whether a finished transcode produced a recording worth delivering — and, when it did not,
      * removes [target] so nothing downstream finds it.
      *
@@ -329,8 +345,7 @@ class IosVideoCapture(
   private fun transcodeToWebm(source: File, target: File, recordedMs: Long): Boolean {
     val timeoutSeconds = transcodeTimeoutSeconds(recordedMs)
     val result = runSubprocessWithTimeout(
-      command = listOf(ffmpegBinary, "-y", "-i", source.absolutePath, "-an") +
-        RecordingFormat.WEBM.videoFilterArgs(DOWNSCALE_FILTER) + RecordingFormat.WEBM.encodeArgs() + RecordingTailHold.ENCODER_TIME_BASE + target.absolutePath,
+      command = transcodeCommand(ffmpegBinary, source, target),
       timeoutSeconds = timeoutSeconds,
     )
     if (!transcodeDelivered(target, result?.exitCode)) {

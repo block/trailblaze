@@ -1,6 +1,9 @@
 package xyz.block.trailblaze.quickjs.tools
 
 import java.io.File
+import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import java.nio.file.Files
 import kotlin.test.AfterTest
 import kotlin.test.Test
@@ -9,7 +12,14 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -363,6 +373,44 @@ class QuickJsToolBundleLauncherTest {
     launchedRuntime = runtime
     val registered = toolRepo.getRegisteredDynamicTools().keys.map { it.toolName }.toSet()
     assertEquals(setOf("onDeviceOk"), registered, "hostOnly must be filtered on-device")
+  }
+
+  @Test
+  fun `launchAll registers a requiredClassifiers tool only on a device carrying the classifier`() = runBlocking {
+    // The launcher must hand the session device's classifiers to the gate. Pinned end to end
+    // (bundle `_meta` → registration) so dropping `deviceInfo.classifiers` at the call site
+    // loads a rig-only tool on every device.
+    val bundleJs = """
+      const tools = (globalThis.__trailblazeTools = globalThis.__trailblazeTools || {});
+      tools["anywhere"] = {
+        name: "anywhere",
+        spec: { description: "Runs anywhere" },
+        handler: async () => ({ content: [{ type: "text", text: "ok" }] }),
+      };
+      tools["rigOnly"] = {
+        name: "rigOnly",
+        spec: { description: "Rig-only", _meta: { "trailblaze/requiredClassifiers": ["rig"] } },
+        handler: async () => ({ content: [{ type: "text", text: "rig" }] }),
+      };
+    """.trimIndent()
+    suspend fun registeredOn(vararg classifiers: String): Set<String> {
+      val repo = TrailblazeToolRepo.withDynamicToolSets()
+      val runtime = QuickJsToolBundleLauncher.launchAll(
+        bundles = listOf(McpServerConfig(script = "ignored.js")),
+        deviceInfo = deviceInfo.copy(classifiers = classifiers.map(::TrailblazeDeviceClassifier)),
+        sessionId = sessionId,
+        toolRepo = repo,
+        preferHostAgent = true,
+        bundleSourceResolver = { InlineBundleSource(bundleJs) },
+      )
+      return try {
+        repo.getRegisteredDynamicTools().keys.map { it.toolName }.toSet()
+      } finally {
+        runtime.shutdownAll()
+      }
+    }
+    assertEquals(setOf("anywhere", "rigOnly"), registeredOn("android", "phone", "rig"))
+    assertEquals(setOf("anywhere"), registeredOn("android", "phone"))
   }
 
   @Test
@@ -815,6 +863,78 @@ class QuickJsToolBundleLauncherTest {
     ) {
       toolRepo.getRegisteredDynamicTools().isEmpty()
     }
+  }
+
+  @Test
+  fun `bundles start alongside each other rather than one after another`() = runBlocking {
+    // Each engine is set up on its own thread. This extension holds every engine's setup until
+    // the other one has reached the same point, which can only happen when both are starting at
+    // once; one-at-a-time, the first waits alone and gives up.
+    val bothStarting = CountDownLatch(2)
+    val sawTheOther = CopyOnWriteArrayList<Boolean>()
+    val extension = QuickJsEngineExtension {
+      bothStarting.countDown()
+      sawTheOther += bothStarting.await(5, TimeUnit.SECONDS)
+    }
+    fun bundle(tool: String) = """
+      globalThis.__trailblazeTools = {
+        $tool: { name: "$tool", spec: {}, handler: async () => ({ content: [] }) },
+      };
+    """.trimIndent()
+
+    val runtime = QuickJsToolBundleLauncher.launchAll(
+      bundles = listOf(McpServerConfig(script = "one.js"), McpServerConfig(script = "two.js")),
+      deviceInfo = deviceInfo,
+      sessionId = sessionId,
+      toolRepo = toolRepo,
+      bundleSourceResolver = { entry ->
+        val name = entry.script!!.removeSuffix(".js")
+        InlineBundleSource(bundle(name), filename = entry.script!!)
+      },
+      engineExtension = extension,
+    )
+    launchedRuntime = runtime
+
+    assertEquals(listOf(true, true), sawTheOther.toList())
+    assertEquals(setOf("one", "two"), toolRepo.getRegisteredDynamicTools().keys.map { it.toolName }.toSet())
+    // Declaration order is kept for everything downstream of the start.
+    assertEquals(listOf(listOf("one"), listOf("two")), runtime.hosts.map { host -> host.listTools().map { it.name } })
+  }
+
+  @Test
+  fun `a launch cancelled while a bundle is still starting closes the engines that did start`() = runBlocking {
+    // The first engine to set up starts at once; the second never finishes its setup, so the
+    // launch is still waiting on it when it is cancelled, and never sees the first one's result.
+    val engineThreads = CopyOnWriteArrayList<Thread>()
+    val blockingExtension = QuickJsEngineExtension {
+      engineThreads += Thread.currentThread()
+      if (engineThreads.indexOf(Thread.currentThread()) == 1) awaitCancellation()
+    }
+    fun bundle(tool: String) = """
+      globalThis.__trailblazeTools = {
+        $tool: { name: "$tool", spec: {}, handler: async () => ({ content: [] }) },
+      };
+    """.trimIndent()
+
+    val launch = launch(Dispatchers.Default) {
+      QuickJsToolBundleLauncher.launchAll(
+        bundles = listOf(McpServerConfig(script = "one.js"), McpServerConfig(script = "two.js")),
+        deviceInfo = deviceInfo,
+        sessionId = sessionId,
+        toolRepo = toolRepo,
+        bundleSourceResolver = { entry -> InlineBundleSource(bundle(entry.script!!.removeSuffix(".js")), filename = entry.script!!) },
+        engineExtension = blockingExtension,
+      )
+    }
+    withTimeout(5_000) { while (engineThreads.size < 2) delay(10) }
+    // Long enough for "one" to finish evaluating its one-line bundle.
+    delay(500)
+    launch.cancelAndJoin()
+
+    val stillOpen = withTimeoutOrNull(5_000) {
+      while (engineThreads.any { it.isAlive }) delay(20)
+    } == null
+    assertEquals(false, stillOpen, "engine threads left running: ${engineThreads.filter { it.isAlive }.map { it.name }}")
   }
 
   @Test

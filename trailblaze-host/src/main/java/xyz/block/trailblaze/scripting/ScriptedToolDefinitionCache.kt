@@ -5,6 +5,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import xyz.block.trailblaze.llm.config.WorkspaceConfigDirHolder
+import xyz.block.trailblaze.ui.TrailblazeDesktopUtil
 import xyz.block.trailblaze.util.Console
 import java.io.File
 import java.nio.file.AtomicMoveNotSupportedException
@@ -81,6 +82,10 @@ internal class ScriptedToolDefinitionCache(
    */
   val dependencyKey: String,
 ) {
+
+  init {
+    TrailblazeDesktopUtil.markCacheDirectory(cacheRoot)
+  }
 
   /**
    * Look up a cache entry for [trailmapToolsDir] keyed on the content hash derived from

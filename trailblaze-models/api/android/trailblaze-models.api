@@ -6002,6 +6002,45 @@ public final class xyz/block/trailblaze/devices/HostPortNamespace {
 	public final fun getCurrent ()Ljava/lang/String;
 }
 
+public abstract interface class xyz/block/trailblaze/devices/RequiredDeviceClassifiers {
+	public static final field Companion Lxyz/block/trailblaze/devices/RequiredDeviceClassifiers$Companion;
+	public static final field META_KEY Ljava/lang/String;
+	public abstract fun isSatisfiedBy (Ljava/util/List;)Z
+}
+
+public final class xyz/block/trailblaze/devices/RequiredDeviceClassifiers$Companion {
+	public static final field META_KEY Ljava/lang/String;
+	public final fun fromMeta (Lkotlinx/serialization/json/JsonObject;)Lxyz/block/trailblaze/devices/RequiredDeviceClassifiers;
+}
+
+public final class xyz/block/trailblaze/devices/RequiredDeviceClassifiers$None : xyz/block/trailblaze/devices/RequiredDeviceClassifiers {
+	public static final field INSTANCE Lxyz/block/trailblaze/devices/RequiredDeviceClassifiers$None;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun isSatisfiedBy (Ljava/util/List;)Z
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class xyz/block/trailblaze/devices/RequiredDeviceClassifiers$Segments : xyz/block/trailblaze/devices/RequiredDeviceClassifiers {
+	public fun <init> (Ljava/util/List;)V
+	public final fun component1 ()Ljava/util/List;
+	public final fun copy (Ljava/util/List;)Lxyz/block/trailblaze/devices/RequiredDeviceClassifiers$Segments;
+	public static synthetic fun copy$default (Lxyz/block/trailblaze/devices/RequiredDeviceClassifiers$Segments;Ljava/util/List;ILjava/lang/Object;)Lxyz/block/trailblaze/devices/RequiredDeviceClassifiers$Segments;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getSegments ()Ljava/util/List;
+	public fun hashCode ()I
+	public fun isSatisfiedBy (Ljava/util/List;)Z
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class xyz/block/trailblaze/devices/RequiredDeviceClassifiers$Unreadable : xyz/block/trailblaze/devices/RequiredDeviceClassifiers {
+	public static final field INSTANCE Lxyz/block/trailblaze/devices/RequiredDeviceClassifiers$Unreadable;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun isSatisfiedBy (Ljava/util/List;)Z
+	public fun toString ()Ljava/lang/String;
+}
+
 public final class xyz/block/trailblaze/devices/ResolvedWebViewport {
 	public static final field Companion Lxyz/block/trailblaze/devices/ResolvedWebViewport$Companion;
 	public fun <init> (IILjava/lang/Double;Ljava/lang/String;Ljava/lang/Boolean;Ljava/lang/Boolean;Ljava/lang/String;)V
@@ -6573,7 +6612,9 @@ public final class xyz/block/trailblaze/host/rpc/ConnectToDeviceResponse {
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getDeviceHeight ()I
 	public final fun getDeviceWidth ()I
+	public final fun getLogSessionId ()Ljava/lang/String;
 	public fun hashCode ()I
+	public final fun setLogSessionId (Ljava/lang/String;)V
 	public fun toString ()Ljava/lang/String;
 }
 

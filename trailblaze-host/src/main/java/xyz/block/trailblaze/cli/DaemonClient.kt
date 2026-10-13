@@ -54,6 +54,13 @@ class DaemonClient(
    */
   private val pollIntervalMs: Long = RUN_POLL_INTERVAL_MS,
   /**
+   * The poll interval while `/cli/run-status` is answering. A finished run is noticed at the next
+   * poll, so at [pollIntervalMs] every run ended up to a second late. After a failed poll the
+   * client goes back to [pollIntervalMs], so the error budget before the ping fallback is
+   * unchanged. Never longer than [pollIntervalMs].
+   */
+  private val healthyPollIntervalMs: Long = HEALTHY_RUN_POLL_INTERVAL_MS,
+  /**
    * How long the run may go WITHOUT a new progress message before the client gives up — an
    * inactivity watchdog, not a wall-clock cap (see [RUN_POLL_TIMEOUT_MS]). Resolved once from
    * [RUN_POLL_TIMEOUT_ENV_VAR] in production; tests inject a small window directly.
@@ -64,6 +71,9 @@ class DaemonClient(
   init {
     require(pollIntervalMs > 0) {
       "pollIntervalMs must be positive, was $pollIntervalMs"
+    }
+    require(healthyPollIntervalMs > 0) {
+      "healthyPollIntervalMs must be positive, was $healthyPollIntervalMs"
     }
     require(runPollTimeoutMs > 0) {
       "runPollTimeoutMs must be positive, was $runPollTimeoutMs"
@@ -267,7 +277,9 @@ class DaemonClient(
     var consecutiveErrors = 0
     try {
       while (true) {
-        kotlinx.coroutines.delay(pollIntervalMs)
+        kotlinx.coroutines.delay(
+          if (consecutiveErrors == 0) minOf(healthyPollIntervalMs, pollIntervalMs) else pollIntervalMs,
+        )
 
         // Time out only after a full window with NO forward progress (wedged daemon backstop).
         if (System.currentTimeMillis() - lastProgressAtMs > runPollTimeoutMs) {
@@ -500,8 +512,11 @@ class DaemonClient(
     /** Read timeout for quick responses */
     const val READ_TIMEOUT_MS = 5000L
 
-    /** Poll interval when checking async run status */
+    /** Poll interval when checking async run status after a failed poll */
     const val RUN_POLL_INTERVAL_MS = 1000L
+
+    /** Poll interval when checking async run status while the daemon is answering */
+    const val HEALTHY_RUN_POLL_INTERVAL_MS = 250L
 
     /**
      * Maximum time to wait for daemon to start.

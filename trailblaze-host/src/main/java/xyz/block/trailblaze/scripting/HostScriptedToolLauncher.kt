@@ -13,6 +13,7 @@ import xyz.block.trailblaze.config.InlineScriptToolConfig
 import xyz.block.trailblaze.config.ScriptedToolNameDiscoverer
 import xyz.block.trailblaze.llm.config.ClasspathResourceDiscovery
 import xyz.block.trailblaze.config.ScriptedToolRuntime
+import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.logs.model.SessionId
@@ -80,12 +81,14 @@ object HostScriptedToolLauncher {
     drivers: Collection<TrailblazeDriverType>,
     preferHostAgent: Boolean,
     logPrefix: String,
+    classifiers: List<TrailblazeDeviceClassifier>? = null,
   ): Pair<List<InlineScriptToolConfig>, List<InlineScriptToolConfig>> =
     SubprocessToolRegistrar.applicableInlineTools(
       tools = tools,
       drivers = drivers,
       preferHostAgent = preferHostAgent,
       logPrefix = logPrefix,
+      classifiers = classifiers,
     ).partition { tool -> ScriptedToolRuntime.resolve(tool.runtime) == ScriptedToolRuntime.SUBPROCESS }
 
   /**
@@ -162,6 +165,7 @@ object HostScriptedToolLauncher {
         drivers = sessionDrivers,
         preferHostAgent = config.preferHostAgent,
         logPrefix = logPrefix,
+        classifiers = deviceInfo.classifiers,
       )
       val targetInlineRegistrations = if (quickJsInlineTools.isNotEmpty()) {
         // Filter out tools an earlier pass already registered (idempotency) up front, so neither the
@@ -207,6 +211,7 @@ object HostScriptedToolLauncher {
         toolNames = toolRepo.allCatalogScriptedToolNames,
         drivers = sessionDrivers,
         preferHostAgent = config.preferHostAgent,
+        classifiers = deviceInfo.classifiers,
         skipNames = targetToolConfigs.map { ToolName(it.name) }.toSet(),
         classLoader = classLoader,
         logPrefix = logPrefix,

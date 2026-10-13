@@ -309,6 +309,8 @@ type AnalysisSubject = {
   key: string;
   label: string;
   context: string;
+  platform?: string;
+  device?: string;
   diagnostic?: AnalysisDiagnostic;
   report_href?: string;
   status?: { tone: string; label: string };
@@ -369,6 +371,8 @@ function analysisSubject(value: unknown): AnalysisSubject | null {
   if (!value || typeof value !== 'object') return null;
   const item = value as Partial<AnalysisSubject>;
   if (!nonEmpty(item.key) || !nonEmpty(item.label) || !nonEmpty(item.context)) return null;
+  const platform = nonEmpty(item.platform) ? item.platform : undefined;
+  const device = nonEmpty(item.device) ? item.device : undefined;
   const diagnostic = analysisDiagnostic(item.diagnostic);
   const reportHref = safeHttpsHref(item.report_href);
   const status = item.status && nonEmpty(item.status.label)
@@ -377,6 +381,8 @@ function analysisSubject(value: unknown): AnalysisSubject | null {
     key: item.key,
     label: item.label,
     context: item.context,
+    ...(platform ? { platform } : {}),
+    ...(device ? { device } : {}),
     ...(diagnostic ? { diagnostic } : {}),
     ...(reportHref ? { report_href: reportHref } : {}),
     ...(status ? { status } : {}),
@@ -460,9 +466,18 @@ function analysisManifest(payload: unknown): AnalysisManifest {
     build_url: safeHttpsHref(root.build_url) || undefined };
 }
 
-function fixCategoryButton(manifest: AnalysisManifest, category: string): string {
+export function repairMachineFor(problem: Pick<AnalysisProblem, 'affected_subjects'>): 'linux' | 'mac-ios' {
+  const hasIosMember = problem.affected_subjects.some((subject) =>
+    [subject.platform, subject.device, subject.context].filter(nonEmpty)
+      .some((value) => /(?:^|[-_\s])ios(?:$|[-_\s])|\biphone\b|\bipad\b/i.test(value)));
+  return hasIosMember ? 'mac-ios' : 'linux';
+}
+
+function fixCategoryButton(manifest: AnalysisManifest, problem: AnalysisProblem): string {
   if (!manifest.fix_category_launcher_url) return '';
-  return `<button type="button" data-tb-fix-category="${escapeHtml(category)}">Fix this category</button><span data-tb-fix-status role="status" aria-live="polite"></span>`;
+  const machine = repairMachineFor(problem);
+  const label = machine === 'mac-ios' ? 'Fix on Mac (iOS)' : 'Fix on Linux';
+  return `<button type="button" data-tb-fix-category="${escapeHtml(problem.id)}">${label}</button><span data-tb-fix-status role="status" aria-live="polite"></span>`;
 }
 
 type CategoryLaunchMessage = { source: unknown; origin: string; data: { type?: string; nonce?: string } };
@@ -595,7 +610,7 @@ function overviewHtml(manifest: AnalysisManifest, href: string): string {
       + diagnosticSummaryHtml(problem.diagnostic_summary)
       + `<h2><a href="${escapeHtml(analysisProblemHref(href, problem.id))}">${escapeHtml(problem.title)}</a></h2>`
       + `<p class="tb-analysis-card-summary">${escapeHtml(problem.attention_summary)}</p>`
-      + `<div class="tb-analysis-card-action"><h3>${actionLabel}</h3><p>${escapeHtml(problem.next_action_or_evidence_needed.text)}</p>${actionLinksHtml(problem)}${fixCategoryButton(manifest, problem.id)}</div>`
+      + `<div class="tb-analysis-card-action"><h3>${actionLabel}</h3><p>${escapeHtml(problem.next_action_or_evidence_needed.text)}</p>${actionLinksHtml(problem)}${fixCategoryButton(manifest, problem)}</div>`
       + `<a class="tb-analysis-open" href="${escapeHtml(analysisProblemHref(href, problem.id))}">Open problem and evidence <span aria-hidden="true">↗</span></a></article>`;
   }).join('');
   return `<main class="tb-analysis" aria-labelledby="tb-analysis-title">`
@@ -635,7 +650,7 @@ function focusedProblemHtml(manifest: AnalysisManifest, problem: AnalysisProblem
     + `<p class="tb-analysis-eyebrow">Analysis / ${escapeHtml(manifest.summary.run_label)}</p>`
     + `<h1 id="tb-analysis-title" tabindex="-1">${escapeHtml(problem.title)}${titlePeriod}</h1>`
     + `<p class="tb-analysis-attention">${escapeHtml(problem.attention_summary)}</p></header>`
-    + `<div class="tb-analysis-priority"><section class="tb-analysis-action"><h2>${actionLabel}</h2><p>${escapeHtml(problem.next_action_or_evidence_needed.text)}</p>${actionLinksHtml(problem)}${fixCategoryButton(manifest, problem.id)}</section>`
+    + `<div class="tb-analysis-priority"><section class="tb-analysis-action"><h2>${actionLabel}</h2><p>${escapeHtml(problem.next_action_or_evidence_needed.text)}</p>${actionLinksHtml(problem)}${fixCategoryButton(manifest, problem)}</section>`
     + `${trailRunButtonsHtml(problem)}</div>`
     + `<section class="tb-analysis-lower tb-analysis-key-evidence"><h2>Key evidence</h2><ul class="tb-analysis-evidence-list">${keyEvidence.map(evidenceHtml).join('')}</ul></section>`
     + `<div class="tb-analysis-detail-grid"><section><h2>Observed facts</h2><ul>${observations}</ul></section>`

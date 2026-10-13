@@ -1104,6 +1104,38 @@ class TrailmapScriptedToolFileTest {
   }
 
   @Test
+  fun `_meta with a scalar trailblaze requiredClassifiers is rejected instead of registering everywhere`() {
+    // Read downstream as an empty list, a malformed value would mean "any device" and put a tool
+    // meant for specially equipped devices on every session.
+    val source = """
+      script: ./tools/foo.ts
+      name: foo_tool
+      _meta:
+        trailblaze/requiredClassifiers: rig
+    """.trimIndent()
+
+    val descriptor = yaml.decodeFromString(TrailmapScriptedToolFile.serializer(), source)
+    val ex = assertFailsWith<IllegalArgumentException> { descriptor.toInlineScriptToolConfig() }
+    val msg = assertNotNull(ex.message)
+    assertTrue(msg.contains("foo_tool"), "expected tool name in: $msg")
+    assertTrue(msg.contains("trailblaze/requiredClassifiers"), "expected key name in: $msg")
+  }
+
+  @Test
+  fun `_meta trailblaze requiredClassifiers list passes through to the runtime config`() {
+    val source = """
+      script: ./tools/foo.ts
+      name: foo_tool
+      _meta:
+        trailblaze/requiredClassifiers: [rig]
+    """.trimIndent()
+
+    val inline = yaml.decodeFromString(TrailmapScriptedToolFile.serializer(), source).toInlineScriptToolConfig()
+    val classifiers = assertNotNull(inline.meta)["trailblaze/requiredClassifiers"] as JsonArray
+    assertEquals(listOf("rig"), classifiers.map { (it as JsonPrimitive).content })
+  }
+
+  @Test
   fun `_meta with non-boolean trailblaze isRecordable is rejected with descriptor-aware error`() {
     val source = """
       script: ./tools/foo.ts

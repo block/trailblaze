@@ -17,6 +17,7 @@ import xyz.block.trailblaze.ui.models.TrailblazeServerState
 import java.awt.Desktop
 import java.io.File
 import java.io.FileWriter
+import java.io.IOException
 import java.net.URI
 import java.net.URLEncoder
 import java.nio.file.Paths
@@ -123,6 +124,28 @@ object TrailblazeDesktopUtil {
     // keystore); without it concurrent daemons race the shared keystore and one dies on boot.
     System.getenv("TRAILBLAZE_HOME")?.takeIf { it.isNotBlank() }?.let { return File(it) }
     return File(System.getProperty("user.home"), DOT_TRAILBLAZE_DIR_NAME)
+  }
+
+  /** Marks regenerable caches for backup exclusion, leaving settings and session logs backed up. */
+  internal fun markCacheDirectory(cacheDir: File = File(getDefaultAppDataDirectory(), "cache")) {
+    try {
+      cacheDir.mkdirs()
+      val tag = File(cacheDir, "CACHEDIR.TAG")
+      val signature = "Signature: 8a477f597d28d172789f06886806bc55".toByteArray(Charsets.US_ASCII)
+      val valid = tag.exists() && tag.inputStream().use {
+        it.readNBytes(signature.size).contentEquals(signature)
+      }
+      if (!valid) {
+        tag.writeText(
+          signature.toString(Charsets.US_ASCII) + "\n" +
+            "# Trailblaze regenerates the contents of this cache directory.\n",
+        )
+      }
+    } catch (e: IOException) {
+      // Backup metadata must not prevent CLI or daemon startup.
+      // Do not initialize Console before the desktop log tee has been installed.
+      System.err.println("Could not mark cache directory for backup exclusion: ${e.message}")
+    }
   }
 
   /**

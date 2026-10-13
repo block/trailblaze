@@ -5,6 +5,7 @@ import assertk.assertions.contains
 import assertk.assertions.isEqualTo
 import assertk.assertions.isFalse
 import assertk.assertions.isGreaterThanOrEqualTo
+import assertk.assertions.isLessThan
 import assertk.assertions.isNotNull
 import assertk.assertions.isTrue
 import io.ktor.http.ContentType
@@ -160,6 +161,57 @@ class DaemonClientPollResilienceTest {
     assertThat(pingCalled).isFalse()
     // And exactly one status call, not 30.
     assertThat(daemon.runStatusResponder.get()).isEqualTo(1)
+  }
+
+  /**
+   * A finished run is noticed at the next poll, so the poll interval is added to every run's wall
+   * time. While the daemon answers, polls come faster than the 1s production interval.
+   */
+  @Test
+  fun runAsync_noticesAFinishedRunWellUnderTheProductionPollInterval() {
+    daemon.runStatusHandler = { n ->
+      if (n < 3) {
+        HttpStatusCode.OK to runStatusJson("RUNNING", null)
+      } else {
+        HttpStatusCode.OK to runStatusJson("COMPLETED", successResultJson())
+      }
+    }
+
+    val startedNs = System.nanoTime()
+    val response = DaemonClient(port = daemon.port).use {
+      it.runSync(CliRunRequest(runYamlRequest = sampleRequest()))
+    }
+    val elapsedMs = (System.nanoTime() - startedNs) / 1_000_000
+
+    assertThat(response.success).isTrue()
+    assertThat(daemon.runStatusResponder.get()).isEqualTo(3)
+    // Three polls at the 1s interval would take 3s.
+    assertThat(elapsedMs).isLessThan(DaemonClient.RUN_POLL_INTERVAL_MS * 2)
+  }
+
+  /**
+   * After a failed poll the client waits the full interval again, so a struggling daemon is not
+   * hammered and the error burst before the ping fallback still spans the same time.
+   */
+  @Test
+  fun runAsync_waitsTheFullIntervalAfterAFailedPoll() {
+    val pollTimesNs = java.util.Collections.synchronizedList(mutableListOf<Long>())
+    daemon.runStatusHandler = { n ->
+      pollTimesNs += System.nanoTime()
+      if (n == 1) {
+        HttpStatusCode.ServiceUnavailable to "{}"
+      } else {
+        HttpStatusCode.OK to runStatusJson("COMPLETED", successResultJson())
+      }
+    }
+
+    val response = DaemonClient(port = daemon.port, pollIntervalMs = 600L, healthyPollIntervalMs = 10L).use {
+      it.runSync(CliRunRequest(runYamlRequest = sampleRequest()))
+    }
+
+    assertThat(response.success).isTrue()
+    assertThat(pollTimesNs.size).isEqualTo(2)
+    assertThat((pollTimesNs[1] - pollTimesNs[0]) / 1_000_000).isGreaterThanOrEqualTo(550L)
   }
 
   /**

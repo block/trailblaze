@@ -7,7 +7,7 @@ import { toSessionPayloads } from "./run-report-extract";
 import { buildMultiReportHtml } from "./run-report-html";
 import { buildViewerShellHtml } from "./run-report-shell-html";
 import { VIEWER_ROUTE_KEYS } from "./run-report-route";
-import { addArchiveUrls, addressWithoutArchive, analysisParamsFrom, analysisProblemHref, gzipAnalysisSnapshot, launchCategoryFix, appendSources, archiveFailure, combineArchives, objectUrlsToRevoke, describeArchive, fetchFailureMessage, focusIndexAfterRemoval, listAnnouncement, loadingMessage, readFailureMessage, removeSourceAt, renderAnalysisView, renderButtonState, renderPlan, sourceKey, sourceListHtml, sourcesPermalink, sourcesShareable, splitArchiveUrls, zipParamsFrom, zipPermalink } from "./run-report-shell";
+import { addArchiveUrls, addressWithoutArchive, analysisParamsFrom, analysisProblemHref, gzipAnalysisSnapshot, launchCategoryFix, appendSources, archiveFailure, combineArchives, objectUrlsToRevoke, describeArchive, fetchFailureMessage, focusIndexAfterRemoval, listAnnouncement, loadingMessage, readFailureMessage, removeSourceAt, renderAnalysisView, renderButtonState, renderPlan, repairMachineFor, sourceKey, sourceListHtml, sourcesPermalink, sourcesShareable, splitArchiveUrls, zipParamsFrom, zipPermalink } from "./run-report-shell";
 import type { ArchiveSource } from "./run-report-shell";
 
 describe("buildViewerShellHtml", () => {
@@ -213,8 +213,31 @@ describe("structured analysis deep links", () => {
     const configured = { ...payload, fix_category_launcher_url: "https://actions.example/fix" };
     const href = "https://viewer.example/?analysis=https%3A%2F%2Fviewer.example%2Fanalysis.json";
     expect(renderAnalysisView(configured, "checkout", href)).toContain('data-tb-fix-category="checkout"');
-    expect((renderAnalysisView(configured, "all", href).match(/Fix this category/g) || []).length).toBe(2);
-    expect(renderAnalysisView(configured, "checkout", "https://viewer.example/?analysis=https%3A%2F%2Fattacker.example%2Fanalysis.json")).not.toContain("Fix this category");
+    expect(renderAnalysisView(configured, "checkout", href)).toContain("Fix on Linux");
+    expect(renderAnalysisView(configured, "checkout", href)).not.toContain("data-tb-fix-machine");
+    expect((renderAnalysisView(configured, "all", href).match(/Fix on Linux/g) || []).length).toBe(2);
+    expect(renderAnalysisView(configured, "checkout", "https://viewer.example/?analysis=https%3A%2F%2Fattacker.example%2Fanalysis.json")).not.toContain("Fix on Linux");
+  });
+
+  test("routes iOS and mixed affected members to the Mac fixer, with Linux as the default", () => {
+    expect(repairMachineFor(payload.problem_sets[0])).toBe("linux");
+    const mixed = {
+      ...payload,
+      fix_category_launcher_url: "https://actions.example/fix",
+      problem_sets: [{
+        ...payload.problem_sets[0],
+        affected_subjects: [{ ...payload.problem_sets[0].affected_subjects[0], platform: "android" }],
+      }, {
+        ...payload.problem_sets[1],
+        affected_subjects: [{ ...payload.problem_sets[1].affected_subjects[0], platform: "ios" }],
+      }],
+    };
+    expect(repairMachineFor(mixed.problem_sets[1])).toBe("mac-ios");
+    expect(repairMachineFor({ affected_subjects: [{ ...payload.problem_sets[0].affected_subjects[0], context: "ios simulator", platform: undefined }] })).toBe("mac-ios");
+    expect(repairMachineFor({ affected_subjects: [{ ...payload.problem_sets[0].affected_subjects[0], context: "mobile", device: "iPhone 15", platform: undefined }] })).toBe("mac-ios");
+    const html = renderAnalysisView(mixed, "all", "https://viewer.example/?analysis=https%3A%2F%2Fviewer.example%2Fanalysis.json");
+    expect(html).toContain("Fix on Linux");
+    expect((html.match(/Fix on Mac \(iOS\)/g) || []).length).toBe(1);
   });
 
   test("puts every failed attempt beside next action with exact trail/replay links and keeps evidence below", () => {

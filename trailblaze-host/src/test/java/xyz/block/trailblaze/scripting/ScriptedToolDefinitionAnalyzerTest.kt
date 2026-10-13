@@ -1378,6 +1378,36 @@ class ScriptedToolDefinitionAnalyzerTest {
   }
 
   @Test
+  fun `with-spec overload — requiredClassifiers is extracted and projected into _meta`() = runBlocking {
+    // The analyzer allowlist and the Kotlin projection are separate lists that must agree; this
+    // drives the field through both, so dropping it from either leaves the tool ungated.
+    assumeAnalyzerRunnable()
+    val toolsDir = tempFolder.newFolder("with-spec-required-classifiers-trailmap-tools")
+    writeTsFixture(
+      toolsDir,
+      "rigTool.ts",
+      """
+        |${declareTypedToolStub()}
+        |interface I { x: string; }
+        |interface O { y: string; }
+        |
+        |export const rigTool = trailblaze.tool<I, O>(
+        |  { requiredClassifiers: ["rig"] },
+        |  async () => ({ y: "" }),
+        |);
+      """.trimMargin(),
+    )
+
+    val def = analyzer.analyze(toolsDir).single()
+    val spec = def.spec ?: fail("expected non-null spec; got bare-handler shape")
+    assertEquals(
+      mapOf("trailblaze/requiredClassifiers" to spec["requiredClassifiers"]),
+      xyz.block.trailblaze.config.project.ScriptedToolDefProjection.projectAnalyzerSpec(spec),
+    )
+    assertEquals(listOf("rig"), spec["requiredClassifiers"]?.jsonArray?.map { it.jsonPrimitive.content })
+  }
+
+  @Test
   fun `with-spec overload — surfaceToLlm and isRecordable are extracted when authored`() = runBlocking {
     // Parallel coverage for the two flags this PR added to the recognized
     // `TrailblazeTypedToolSpec` field set (RECOGNIZED_SPEC_FIELDS). Without
@@ -1504,6 +1534,45 @@ class ScriptedToolDefinitionAnalyzerTest {
       assertTrue(
         error.errors.any { it.toolName == "badRuntimeTool" && it.message.contains("runtime") },
         "$label: expected a runtime error naming the tool; got: ${error.errors}",
+      )
+    }
+  }
+
+  @Test
+  fun `with-spec overload — an unreadable requiredClassifiers is an error, not a tool on every device`() = runBlocking {
+    // Skipping it like other unreadable fields would drop the device restriction and load a
+    // rig-only tool everywhere.
+    assumeAnalyzerRunnable()
+    val badSpecs = listOf(
+      "reference" to "requiredClassifiers: RIG",
+      "scalar" to "requiredClassifiers: \"rig\"",
+      "spread-element" to "requiredClassifiers: [...RIG]",
+      "shorthand" to "requiredClassifiers",
+      "spread-after-field" to "requiredClassifiers: [\"rig\"], ...BASE, runtime: \"inProcess\"",
+    )
+    for ((label, specBody) in badSpecs) {
+      val toolsDir = tempFolder.newFolder("bad-classifiers-$label-trailmap-tools")
+      writeTsFixture(
+        toolsDir,
+        "badClassifierTool.ts",
+        """
+          |${declareTypedToolStub()}
+          |declare const RIG: string[];
+          |declare const requiredClassifiers: string[];
+          |declare const BASE: { requiredClassifiers: string[] };
+          |interface I { x: string; }
+          |interface O { y: string; }
+          |
+          |export const badClassifierTool = trailblaze.tool<I, O>(
+          |  { $specBody },
+          |  async () => ({ y: "" }),
+          |);
+        """.trimMargin(),
+      )
+      val error = assertFailsWith<ScriptedToolDefinitionException>(label) { analyzer.analyze(toolsDir) }
+      assertTrue(
+        error.errors.any { it.toolName == "badClassifierTool" && it.message.contains("requiredClassifiers") },
+        "$label: expected a requiredClassifiers error naming the tool; got: ${error.errors}",
       )
     }
   }

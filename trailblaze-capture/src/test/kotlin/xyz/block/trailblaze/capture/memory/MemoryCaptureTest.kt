@@ -58,8 +58,16 @@ class MemoryCaptureTest {
       }
     }
 
+    /** The closing reading comes back marked, so a test can tell which route served each row. */
+    override fun readFinal(deviceId: String, appId: String?, forceGc: Boolean): MemorySnapshot? =
+      read(deviceId, appId, forceGc)?.copy(source = FINAL_SOURCE)
+
     override fun close() {
       closed = true
+    }
+
+    companion object {
+      const val FINAL_SOURCE = "fake-final"
     }
   }
 
@@ -120,6 +128,25 @@ class MemoryCaptureTest {
     assertEquals(
       setOf("reason", "appId", "pid", "heapUsedKb", "heapLimitKb", "deviceAvailableKb", "gcForced", "source", "readMs"),
       first.keys,
+    )
+  }
+
+  @Test
+  fun `only the closing reading is taken through the probe's final route`() = withSession { sessionDir ->
+    // The session's end waits on the final reading alone, so it is the one a probe may cut short.
+    val probe = FakeProbe().apply { pid = 17220 }
+    val capture = capture(probe)
+    capture.start(sessionDir, "emulator-5554", "com.android.settings")
+    waitForEvents(sessionDir, 1)
+    probe.heapSizeKb += 5_000
+    assertEquals("memory_changed", capture.sampleOnce())
+    capture.stop()
+
+    val written = events(sessionDir)
+    assertEquals(listOf("first", "memory_changed", "final"), written.map { it.reason() })
+    assertEquals(
+      listOf("fake", "fake", FakeProbe.FINAL_SOURCE),
+      written.map { it.data.jsonObject["source"]?.jsonPrimitive?.content },
     )
   }
 

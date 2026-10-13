@@ -52,6 +52,9 @@ class AccessibilityDeviceManager(
   // wasn't constructed with a target (target-agnostic rules / unit-test fixtures);
   // selectors authored without templates work either way.
   private val templateContext: xyz.block.trailblaze.api.TargetTemplateContext? = null,
+  // Drops the capture gate's stable-tree proof whenever this driver dispatches input — see
+  // [dispatchAndAwaitSettleBlocking]. Injectable so a unit test can see when it runs.
+  private val forgetStableTree: () -> Unit = { TrailblazeAccessibilityService.forgetStableTree() },
 ) : DriverDispatch {
 
   companion object {
@@ -263,8 +266,17 @@ class AccessibilityDeviceManager(
         emptyMap()
       },
     ) {
-      TrailblazeAccessibilityService.forgetStableTree()
-      dispatchAction(action)
+      // The stable-tree proof is dropped where input is dispatched (the dispatch wrappers below),
+      // not here. Dropping it before [dispatchAction] made the action's own selector resolution
+      // re-prove a screen the tool call had just proven, ~100 ms per tap for nothing: nothing has
+      // been dispatched yet at that point. The `finally` still covers any branch that reaches the
+      // device without going through a wrapper, so the capture after an action always runs the
+      // full gate.
+      try {
+        dispatchAction(action)
+      } finally {
+        forgetStableTree()
+      }
     }
   }
 
@@ -406,9 +418,13 @@ class AccessibilityDeviceManager(
     // Same keyboard restore as [dispatchAndAwaitSettleBlocking]: callers through this seam
     // (scripted tools) dispatch too, and must not inherit a hidden keyboard.
     TrailblazeAccessibilityService.restoreSoftKeyboardIfPending()
+    forgetStableTree()
     return try {
       action()
     } finally {
+      // Again after the action: a scripted tool that reads the tree after its input can set a
+      // fresh proof before the screen reacts, which the settle below must not reuse.
+      forgetStableTree()
       TrailblazeTracer.traceDetail("awaitSettle", DRIVER_TRACE_CAT) { awaitSettle() }
     }
   }
@@ -423,13 +439,26 @@ class AccessibilityDeviceManager(
    * platform `UiDevice.waitForIdle()` (500ms hardcoded quiet window — the largest per-action cost
    * in recorded replay) and for the `TRAILBLAZE_SETTLE_VIA_WAIT_FOR_IDLE=1` kill-switch.
    */
-  private inline fun <R> dispatchAndAwaitSettleBlocking(action: () -> R): R {
+  private inline fun <R> dispatchAndAwaitSettleBlocking(
+    looksUpItsTargetFirst: Boolean = false,
+    action: () -> R,
+  ): R {
     // If a prior hideKeyboard() left the soft IME in SHOW_MODE_HIDDEN, restore the previous show
     // mode before the next dispatch so subsequent inputText/tap actions see a normally-behaving IMF.
     TrailblazeAccessibilityService.restoreSoftKeyboardIfPending()
+    // Every gesture, key, text entry and focus change goes through here, so this is where the
+    // capture gate's stable-tree proof stops holding: the next capture runs the full gate.
+    //
+    // A routed tap ([looksUpItsTargetFirst]) reads the live tree to find its node and then sends
+    // one input. Its lookup happens before that input, so it may still use the proof; dropping it
+    // first made every ACTION_CLICK tap re-prove the screen the tool call had just proven, ~100 ms.
+    // Every other caller drops it up front, because its action may read the screen after an input
+    // (typing reads its text back).
+    if (!looksUpItsTargetFirst) forgetStableTree()
     return try {
       action()
     } finally {
+      forgetStableTree()
       TrailblazeTracer.traceDetail("awaitSettle", DRIVER_TRACE_CAT) { awaitSettle() }
     }
   }
@@ -580,7 +609,7 @@ class AccessibilityDeviceManager(
           return ExecutionResult(resolvedX = center?.first, resolvedY = center?.second)
         }
         is FocusPlan.DispatchActionFocus -> {
-          val dispatched = dispatchAndAwaitSettleBlocking {
+          val dispatched = dispatchAndAwaitSettleBlocking(looksUpItsTargetFirst = true) {
             TrailblazeAccessibilityService.focusByActionFocusOnBounds(
               plan.bounds.toAndroidRect(),
               plan.className,
@@ -1239,7 +1268,7 @@ class AccessibilityDeviceManager(
       return TapDispatchRoute.GESTURE
     }
     planTextLinkClickRoute(resolvedNode, longPress, tapRoute)?.let { linkText ->
-      return dispatchAndAwaitSettleBlocking {
+      return dispatchAndAwaitSettleBlocking(looksUpItsTargetFirst = true) {
         if (TrailblazeAccessibilityService.clickTextLinkSpan(linkText, centerX, centerY)) {
           Console.log("[tap-route] link-span click dispatched for \"$linkText\"")
           TapDispatchRoute.TEXT_LINK_SPAN
@@ -1277,7 +1306,7 @@ class AccessibilityDeviceManager(
       tapOrLongPress(centerX, centerY, longPress)
       return TapDispatchRoute.GESTURE
     }
-    return dispatchAndAwaitSettleBlocking {
+    return dispatchAndAwaitSettleBlocking(looksUpItsTargetFirst = true) {
       val dispatched = TrailblazeAccessibilityService.tapByActionClickOnBounds(
         plan.bounds.toAndroidRect(),
         plan.className,

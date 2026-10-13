@@ -6,7 +6,9 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
 import xyz.block.trailblaze.device.InstalledApp
+import kotlinx.coroutines.runBlocking
 import xyz.block.trailblaze.util.TrailblazeProcessBuilderUtils.runProcess
+import xyz.block.trailblaze.util.TrailblazeProcessBuilderUtils.runProcessWithTimeout
 
 object IosHostSimctlUtils {
 
@@ -81,6 +83,59 @@ object IosHostSimctlUtils {
     if (output.exitCode != 0) return null
     val path = output.outputLines.firstOrNull()?.trim()?.takeIf { it.isNotEmpty() } ?: return null
     return File(path).takeIf { it.isDirectory }
+  }
+
+  /**
+   * The process identity of [appId] as installed on [deviceId], read from
+   * `xcrun simctl appinfo <deviceId> <appId>`: its `CFBundleExecutable`, which is the name the
+   * unified log records as `process`, and the install's own `.app` directory. A bundle id's last
+   * component is only a guess at either: `com.example.wallet.dogfood` can run as `Wallet` from
+   * `Wallet.app`. Returns null on non-macOS hosts, when the app isn't installed, when appinfo
+   * reports no executable, or when appinfo doesn't answer within [APPINFO_TIMEOUT_SECONDS]: log
+   * capture starts synchronously with the session, so a stalled probe must not hold it up.
+   */
+  fun getInstalledAppProcess(deviceId: String, appId: String): IosAppProcess? {
+    if (!isMacOs()) return null
+    val (output, timedOut) = runBlocking {
+      TrailblazeProcessBuilderUtils.createProcessBuilder(SimctlCommand.argv("appinfo", deviceId, appId))
+        .runProcessWithTimeout(APPINFO_TIMEOUT_SECONDS)
+    }
+    if (timedOut) {
+      Console.log("simctl appinfo for '$appId' timed out after ${APPINFO_TIMEOUT_SECONDS}s")
+      return null
+    }
+    if (output.exitCode != 0) return null
+    return parseAppProcessFromAppInfo(output.outputLines)
+  }
+
+  private const val APPINFO_TIMEOUT_SECONDS = 10L
+
+  /**
+   * Parses [IosAppProcess] from `xcrun simctl appinfo` output, the same plist-style dictionary
+   * one `listapps` entry holds (`    CFBundleExecutable = Wallet;`, `    Path = "/…/Wallet.app";`).
+   *
+   * [IosAppProcess.installDir] is the `.app` directory with its parent, the per-install container
+   * (`/<container-id>/Wallet.app/`). The container is what tells this install apart from another
+   * build of the same app that shares the executable and `.app` names.
+   *
+   * `internal` (widened just enough for the same-module parser unit test): the only production
+   * caller is [getInstalledAppProcess].
+   */
+  internal fun parseAppProcessFromAppInfo(outputLines: List<String>): IosAppProcess? {
+    fun field(key: String): String? {
+      val regex = Regex("^\\s+$key\\s*=\\s*\"?([^;\"]*)\"?\\s*;")
+      return outputLines.firstNotNullOfOrNull { regex.matchEntire(it)?.groupValues?.get(1)?.trim() }
+        ?.takeIf { it.isNotEmpty() }
+    }
+    val executable = field("CFBundleExecutable") ?: return null
+    val pathParts = field("Path")?.trimEnd('/')?.split('/')?.filter { it.isNotEmpty() }.orEmpty()
+    val installDir =
+      if (pathParts.size >= 2 && pathParts.last().endsWith(".app")) {
+        "/${pathParts[pathParts.size - 2]}/${pathParts.last()}/"
+      } else {
+        null
+      }
+    return IosAppProcess(executableName = executable, installDir = installDir)
   }
 
   /**
@@ -417,3 +472,10 @@ object IosHostSimctlUtils {
     }
   }
 }
+
+/**
+ * How an installed iOS app shows up in the unified log: [executableName] is its `process`, and
+ * [installDir] (`/<container-id>/Wallet.app/`) is the directory every one of its binaries,
+ * extensions included, runs from. Null when appinfo reported no `.app` path.
+ */
+data class IosAppProcess(val executableName: String, val installDir: String?)

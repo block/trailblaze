@@ -5,6 +5,7 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.devices.WebInstanceIds
 import xyz.block.trailblaze.host.recording.DeviceConnectionService
+import xyz.block.trailblaze.host.recording.OnDeviceRpcDeviceScreenStream
 import xyz.block.trailblaze.host.rpc.ConnectToDeviceRequest
 import xyz.block.trailblaze.host.rpc.ConnectToDeviceResponse
 import xyz.block.trailblaze.mcp.RpcHandler
@@ -98,7 +99,7 @@ class ConnectToDeviceHandler(
         ConnectToDeviceResponse(
           deviceWidth = result.stream.deviceWidth,
           deviceHeight = result.stream.deviceHeight,
-        ),
+        ).apply { logSessionId = (result.stream as? OnDeviceRpcDeviceScreenStream)?.logSessionId },
       )
       is HostDeviceSessionManager.ConnectResult.BoundToOtherTarget -> RpcResult.Failure(
         errorType = RpcResult.ErrorType.HTTP_ERROR,

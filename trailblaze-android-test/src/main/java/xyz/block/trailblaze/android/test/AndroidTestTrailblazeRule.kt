@@ -118,6 +118,13 @@ class AndroidTestTrailblazeRule(
   private val preflightTrailAssetPathProvider: () -> String? = { null },
 ) : SimpleTestRuleChain(loggingRule) {
 
+  init {
+    // Built while JUnit enters the rules, which is before the Compose rule's idle wait and the
+    // app launch — the waits this overlaps. See StartupWarmup.
+    StartupWarmup.process.start()
+    loggingRule.warmLogServer()
+  }
+
   /**
    * Lazy so the device-info provider (whose classifiers some catalog scoping reads) is fully
    * initialized first. With no target this is the whole ANDROID_TEST-compatible catalog — which
@@ -138,6 +145,8 @@ class AndroidTestTrailblazeRule(
   private val activityLocaleGate =
     ActivityLocaleGate<Activity>(AppUnderTestLauncher::awaitActivityWithLocale)
   private val preToolSnapshotActivity = ThreadLocal<Activity?>()
+
+  private val stepSnapshotUploads = StepSnapshotUploads()
 
   /**
    * Defers the locale propagation gate until an Activity is actually needed. This closes the
@@ -536,6 +545,8 @@ class AndroidTestTrailblazeRule(
         }
       }
     } finally {
+      // Before the caller ends the session, so the run's last frames land ahead of its end status.
+      stepSnapshotUploads.drain()
       agent.externalMemory = null
       scriptedToolRuntime?.let {
         runBlocking { withContext(NonCancellable) { runCatching { it.shutdownAll() } } }
@@ -626,11 +637,17 @@ class AndroidTestTrailblazeRule(
         return
       }
     runCatching {
-      withPreToolSnapshotActivity(activity) {
+      val screenState = withPreToolSnapshotActivity(activity) { snapshotProvider() }
+      val capturedAt = Clock.System.now()
+      val session = currentSession()
+      val displayName = tool.javaClass.simpleName
+      // Captured here, logged in the background: see StepSnapshotUploads.
+      stepSnapshotUploads.submit {
         loggingRule.logger.logSnapshot(
-          session = currentSession(),
-          screenState = snapshotProvider(),
-          displayName = tool.javaClass.simpleName,
+          session = session,
+          screenState = screenState,
+          displayName = displayName,
+          capturedAt = capturedAt,
         )
       }
     }.onFailure { e ->

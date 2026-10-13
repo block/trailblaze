@@ -23,6 +23,13 @@ interface MemoryProbe {
    */
   fun read(deviceId: String, appId: String?, forceGc: Boolean): MemorySnapshot?
 
+  /**
+   * The session's closing reading. Every other reading runs in the background; the end of the
+   * session waits for this one. A probe whose usual route can stall gives it a short budget and
+   * falls back to its quick route. Defaults to [read].
+   */
+  fun readFinal(deviceId: String, appId: String?, forceGc: Boolean): MemorySnapshot? = read(deviceId, appId, forceGc)
+
   /** Releases anything the probe holds open (an RPC client, a cached limits lookup). */
   fun close() {}
 

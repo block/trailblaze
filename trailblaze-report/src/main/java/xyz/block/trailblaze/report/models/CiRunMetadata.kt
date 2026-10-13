@@ -210,4 +210,7 @@ data class CiRunMetadata(
 
   /** Git branch */
   val git_branch: String? = null,
+
+  /** Repository web URL, without clone credentials, used to link [git_commit]. */
+  val git_repository_url: String? = null,
 )

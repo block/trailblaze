@@ -85,6 +85,8 @@ interface RunMeta {
    * cell inert rather than linked.
    */
   reportUrl?: string;
+  /** This attempt supplies the test-case verdict in the producer's summary. */
+  retainedResult?: boolean;
   /**
    * LLM call count and spend for a run whose payload isn't embedded (see [reportUrl]), precomputed
    * by the generator because there are no calls in the document to count. Null/absent renders as

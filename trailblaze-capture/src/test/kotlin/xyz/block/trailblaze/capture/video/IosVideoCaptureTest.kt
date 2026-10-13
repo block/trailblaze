@@ -1,9 +1,11 @@
 package xyz.block.trailblaze.capture.video
 
 import java.io.File
+import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
 /**
@@ -140,5 +142,65 @@ class IosVideoCaptureTest {
     val encoded = partialWebm(4_096)
     assertTrue(IosVideoCapture.transcodeDelivered(encoded, exitCode = 0), "a clean exit with bytes is a delivery")
     assertTrue(encoded.exists(), "the delivered recording stays on disk")
+  }
+
+  private fun ffmpeg(vararg args: String) {
+    val result = runSubprocessWithTimeout(listOf("ffmpeg", "-y", "-hide_banner", "-loglevel", "error") + args, timeoutSeconds = 60)
+    assertEquals(0, result?.exitCode, "ffmpeg ${args.toList()} failed: ${result?.output}")
+  }
+
+  /** [file]'s video packets as (pts, dts) in decode order, in its stream time base. */
+  private fun packets(file: File): List<Pair<Long, Long>> =
+    runSubprocessWithTimeout(
+      listOf("ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "packet=pts,dts", "-of", "csv=p=0", file.absolutePath),
+      timeoutSeconds = 30,
+    )!!.output.lines().mapNotNull { line -> line.trim().split(",").takeIf { it.size == 2 }?.let { it[0].toLong() to it[1].toLong() } }
+
+  /** [file]'s frame times in ms, in the order a player shows them. */
+  private fun frameTimesMs(file: File): List<Long> =
+    runSubprocessWithTimeout(
+      listOf("ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "packet=pts_time", "-of", "csv=p=0", file.absolutePath),
+      timeoutSeconds = 30,
+    )!!.output.lines().mapNotNull { it.trim().toDoubleOrNull() }.map { Math.round(it * 1000) }.sorted()
+
+  @Test
+  fun `a repeated timestamp in simctl's mp4 moves no later frame`() {
+    val dir = Files.createTempDirectory("ios-transcode-").toFile()
+    try {
+      // H.264 with B-frames over bursts of change between still stretches, like simctl's stream.
+      val frameMs = listOf(0, 40, 80, 120, 1500, 1540, 1580, 1620, 4000, 4040, 4080, 4120, 7000, 7040, 7080, 7120)
+      val setpts = frameMs.withIndex().joinToString("") { (i, ms) -> "if(eq(N\\,$i)\\,$ms\\," } + "PTS" + ")".repeat(frameMs.size)
+      val encoded = File(dir, "encoded.mp4")
+      ffmpeg(
+        "-f", "lavfi", "-i", "testsrc=size=64x48:rate=25", "-vf", "settb=1/1000,setpts='$setpts'",
+        "-frames:v", frameMs.size.toString(), "-c:v", "libx264", "-bf", "2", "-pix_fmt", "yuv420p",
+        "-fps_mode", "passthrough", "-video_track_timescale", "1000", encoded.absolutePath,
+      )
+      // simctl's two quirks: decode times seconds behind presentation, and a frame stamped with its
+      // predecessor's presentation time, here the eighth frame shown.
+      val written = packets(encoded)
+      val shown = written.map { it.first }.sorted()
+      val repeated = written.indexOfFirst { it.first == shown[7] }
+      val recording = File(dir, "recording.mp4")
+      ffmpeg(
+        "-i", encoded.absolutePath, "-c", "copy",
+        "-bsf:v", "setts=pts=if(eq(N\\,$repeated)\\,${shown[6] + 1_000}\\,PTS+1000)",
+        "-video_track_timescale", "1000", recording.absolutePath,
+      )
+      val recorded = frameTimesMs(recording)
+      val expected = recorded.map { it - recorded.first() }
+      assertEquals(recorded[6], recorded[7], "the fixture repeats a timestamp")
+
+      val webm = File(dir, "video.webm")
+      ffmpeg(*IosVideoCapture.transcodeCommand("ffmpeg", recording, webm).drop(1).toTypedArray())
+      assertEquals(expected, frameTimesMs(webm), "every frame keeps the time simctl gave it")
+
+      // The same encode without the fix, to show the fixture trips ffmpeg's timestamp guess.
+      val unfixed = File(dir, "unfixed.webm")
+      ffmpeg(*IosVideoCapture.transcodeCommand("ffmpeg", recording, unfixed).drop(1).filter { it != "-fflags" && it != "+igndts" }.toTypedArray())
+      assertNotEquals(expected, frameTimesMs(unfixed), "without -fflags +igndts later frames move onto decode times")
+    } finally {
+      dir.deleteRecursively()
+    }
   }
 }

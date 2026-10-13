@@ -5565,7 +5565,7 @@ describe("RUN_REPORT_VIEWER (rendered output)", () => {
     test("each matrix cell links out to its own run's report instead of opening in-document", () => {
       const out = renderViewer({ generatedAt: "now", sessions: [stub("android-phone", "passed"), stub("ios-iphone", "failed")] });
       // One row, a cell per classifier — the same matrix an embedded multi-device report renders.
-      expect(out.match(/<div class="nm">checkout\/pay<\/div>/g)).toHaveLength(1);
+      expect(out.match(/title="Compare this trail across its runs">checkout\/pay<\/a>/g)).toHaveLength(1);
       expect(out).toContain('<span class="pk">android-phone</span>');
       expect(out).toContain('<span class="pk">ios-iphone</span>');
       // The open control is an anchor to that run's report, opened in a new tab.
@@ -5577,6 +5577,39 @@ describe("RUN_REPORT_VIEWER (rendered output)", () => {
       // The cell still reads its outcome and duration off the stub.
       expect(out).toContain('<div class="idxcell failed">');
       expect(out).toContain('<span class="pvtxt">35.4s</span>');
+    });
+
+    test("index selection opens just the chosen runs in the shared comparison viewer", () => {
+      const sessions = [stub("android-phone", "passed"), stub("ios-iphone", "failed"), stub("android-tablet", "passed")];
+      const initial = renderViewer({ generatedAt: "now", sessions });
+      expect(initial).toContain('data-index-compare');
+      const selected = renderViewer({ generatedAt: "now", sessions }, { toggleCompare: true, pick: [1, 0] });
+      const href = selected.match(/<a class="btn pickopen ready" href="([^"]+)"/)![1].replaceAll('&amp;', '&');
+      const url = new URL(href);
+      expect(url.searchParams.getAll('zip')).toEqual([
+        'https://cdn.example/runs/android-phone.zip', 'https://cdn.example/runs/ios-iphone.zip',
+      ]);
+      expect(url.searchParams.get('view')).toBe('compare');
+      expect(url.searchParams.get('pick')).toBe('0,1');
+      expect(selected).toContain('data-pick="2"');
+      expect(selected).not.toContain('data-session');
+    });
+
+    test("unuploaded sessions are visible but have no comparison checkbox", () => {
+      const sessions = [stub("android-phone", "passed"), stub("ios-iphone", "failed"), stub("android-tablet", "failed", { reportUrl: undefined })];
+      const out = renderViewer({ generatedAt: "now", sessions }, { toggleCompare: true });
+      expect(out).toContain('data-pick="0"');
+      expect(out).toContain('data-pick="1"');
+      expect(out).not.toContain('data-pick="2"');
+    });
+
+    test("adding retry history preserves an earlier retained pass as the verdict", () => {
+      const first = stub("android-phone", "passed", { retainedResult: true, ranAt: "2026-08-24 01:00:00" });
+      const second = stub("android-phone", "failed", { ranAt: "2026-08-24 02:00:00" });
+      const out = renderViewer({ generatedAt: "now", sessions: [first, second] });
+      expect(out).toContain('data-index-section="passed"');
+      expect(out).not.toContain('data-index-section="failed"');
+      expect(out).toContain('2 attempts');
     });
 
     test("a single-device index links out from its flat rows too", () => {

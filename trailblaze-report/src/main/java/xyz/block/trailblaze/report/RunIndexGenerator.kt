@@ -27,10 +27,12 @@ import xyz.block.trailblaze.yaml.toJsonObject
  * payload: it is built from `test_report.json` ([CiSummaryReport]) alone, so its size tracks the
  * number of tests rather than the number of screenshots, and it always publishes.
  *
- * Each result row becomes a LINK-OUT STUB — `meta` only, no logs — carrying `meta.reportUrl`
+ * Each attempt (or retained result on an older report) becomes a LINK-OUT STUB — `meta` only,
+ * no logs — carrying `meta.reportUrl`
  * pointing at a viewer that loads the run's session archive from its `logs_zip_url`. The viewer
  * renders those stubs as links rather than as in-document detail views (grep `isLinkOut` in
- * run-report-viewer.ts). Everything else — the matrix columns, retry grouping, the pass/fail
+ * run-report-viewer.ts). Comparisons open selected archives together in that shared viewer.
+ * Everything else — the matrix columns, retry grouping, the pass/fail
  * sections, search — comes from the ordinary report renderer, so the index looks and behaves like
  * the report a reader already knows.
  *
@@ -65,11 +67,16 @@ class RunIndexGenerator(
     internal fun stubSessions(reports: List<CiSummaryReport>, viewerBaseUrl: String?): JsonArray =
       buildJsonArray {
         for (report in reports) {
-          for (result in report.results) {
+          for (result in indexResults(report)) {
             add(stubSession(result, report, viewerBaseUrl))
           }
         }
       }
+
+    internal fun indexResults(report: CiSummaryReport): List<SessionResult> =
+      report.attempts?.let { attempts ->
+        attempts + report.results.filter { it.outcome == Outcome.SKIPPED }
+      } ?: report.results
 
     private fun stubSession(
       result: SessionResult,
@@ -90,6 +97,7 @@ class RunIndexGenerator(
     ): JsonObject = buildJsonObject {
       put("title", result.title)
       put("status", statusLabel(result.outcome))
+      if (result.superseded_by == null) put("retainedResult", true)
       // What makes this a STUB, stated independently of whether it ended up with a URL. `reportUrl`
       // can't carry that meaning on its own: a row with no `logs_zip_url`, or any row when no
       // `--viewer-base-url` was given, omits it — and the viewer would then read an evidence-less
@@ -130,7 +138,12 @@ class RunIndexGenerator(
       result.llm_cost_usd?.let { put("llmCostUsd", it) }
       report.metadata.ci_build_url?.takeIf { it.isNotBlank() }?.let { put("buildUrl", it) }
       report.metadata.ci_build_number?.takeIf { it.isNotBlank() }?.let { put("buildNumber", it) }
-      report.metadata.git_commit?.takeIf { it.isNotBlank() }?.let { put("commitSha", it) }
+      report.metadata.git_commit?.takeIf { it.isNotBlank() }?.let { sha ->
+        put("commitSha", sha)
+        GitRepoUrls.webBaseUrl(report.metadata.git_repository_url)?.let { repository ->
+          put("commitUrl", "$repository/commit/$sha")
+        }
+      }
       report.metadata.git_branch?.takeIf { it.isNotBlank() }?.let { put("branch", it) }
       reportUrl(result, viewerBaseUrl)?.let { put("reportUrl", it) }
     }

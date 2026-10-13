@@ -228,7 +228,8 @@ function RunConfigDialog({ trail: initialTrail, seed, pinnedId, go, close, closi
   const [verbose, setVerbose] = React.useState(false);
   const [headless, setHeadless] = React.useState(true);
 
-  const [captureVideo, setCaptureVideo] = React.useState(false);
+  // On, like `trailblaze run`: a trail run has a definite start and end, so its video is bounded.
+  const [captureVideo, setCaptureVideo] = React.useState(true);
   const [captureLogcat, setCaptureLogcat] = React.useState(false);
   const [captureNetwork, setCaptureNetwork] = React.useState(false);
   const [captureIosLogs, setCaptureIosLogs] = React.useState(false);

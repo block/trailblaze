@@ -3,6 +3,7 @@ package xyz.block.trailblaze.quickjs.tools
 import com.dokar.quickjs.QuickJs
 import com.dokar.quickjs.binding.function
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.ExecutorCoroutineDispatcher
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.runBlocking
@@ -364,7 +365,7 @@ class QuickJsToolHost internal constructor(
     if (!isShutdown.compareAndSet(false, true)) return
     evalMutex.withLock {
       withContext(engineDispatcher) {
-        runCatching { quickJs.close() }
+        runCatching { closeEngine(quickJs) }
       }
       runCatching { engineDispatcher.close() }
     }
@@ -379,6 +380,27 @@ class QuickJsToolHost internal constructor(
      * it was, instead of N identical `quickjs-tool-engine` threads.
      */
     private val engineThreadSeq = java.util.concurrent.atomic.AtomicLong(0)
+
+    /**
+     * Serializes creating and closing engines across the whole process. quickjs-kt keeps JNI state
+     * shared by every engine with no locking: a live-engine counter, and cached class references
+     * that each create deletes and replaces and the last close frees. Two engines starting at once
+     * (bundles start concurrently) can free a reference the other is still using, and the process
+     * aborts on "invalid global reference".
+     *
+     * Evaluation stays outside the lock, so bundles still start in parallel. That is safe only while
+     * every binding takes and returns strings or null: the two references a create replaces (the
+     * `kotlin.Unit` and `UByteArray` classes) are read only when converting one of those types, so
+     * no running engine reads them. A binding that returns `Unit` or a byte array reopens the crash.
+     */
+    private val engineLifecycleLock = Any()
+
+    private fun createEngine(jobDispatcher: CoroutineDispatcher): QuickJs =
+      synchronized(engineLifecycleLock) { QuickJs.create(jobDispatcher) }
+
+    private fun closeEngine(quickJs: QuickJs) {
+      synchronized(engineLifecycleLock) { quickJs.close() }
+    }
 
     /**
      * Stand up a fresh QuickJS engine, install the optional host binding, evaluate the bundle.
@@ -426,7 +448,7 @@ class QuickJsToolHost internal constructor(
           // reach the outer catch so engineDispatcher gets closed; hoisting `create` above this
           // try (as an earlier version of this function did) leaks the dedicated thread on that
           // failure, since nothing downstream would ever call engineDispatcher.close().
-          val quickJs = QuickJs.create(engineDispatcher)
+          val quickJs = createEngine(engineDispatcher)
           // Constructed here (before any binding installs) rather than at the end of this
           // function so the HOST_CALL_BINDING closure below can reach `host.hostCallThread` --
           // the reentrancy tripwire that closure sets/clears needs the SAME instance `callTool`/
@@ -565,7 +587,7 @@ class QuickJsToolHost internal constructor(
             // Runs on engineDispatcher (still inside the outer withContext) — freeing the
             // native engine from any other thread is the same cross-thread hazard `evaluate`
             // has, so this can't be hoisted out to the outer catch below.
-            runCatching { quickJs.close() }
+            runCatching { closeEngine(quickJs) }
             throw t
           }
         }

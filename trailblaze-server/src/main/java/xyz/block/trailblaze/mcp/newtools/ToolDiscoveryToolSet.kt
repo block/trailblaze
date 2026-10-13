@@ -14,6 +14,7 @@ import xyz.block.trailblaze.config.InlineScriptToolConfig
 import xyz.block.trailblaze.config.KnownTargetMessages
 import xyz.block.trailblaze.config.ToolNameResolver
 import xyz.block.trailblaze.config.ToolYamlLoader
+import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.llm.config.ConfigResourceSource
 import xyz.block.trailblaze.llm.config.platformConfigResourceSource
@@ -85,6 +86,13 @@ class ToolDiscoveryToolSet(
   private val allTargetAppsProvider: () -> Set<TrailblazeHostAppTarget> = { emptySet() },
   private val currentTargetProvider: () -> TrailblazeHostAppTarget? = { null },
   private val currentDriverTypeProvider: () -> TrailblazeDriverType? = { null },
+  /**
+   * The connected device's classifiers, for tools gated on `trailblaze/requiredClassifiers`.
+   * Consulted only when listing for [currentDriverTypeProvider]'s driver — a listing for another
+   * platform isn't about this device. `null` = unknown, which lists a gated tool rather than hiding
+   * one that may apply.
+   */
+  private val currentDeviceClassifiersProvider: () -> List<TrailblazeDeviceClassifier>? = { null },
   /**
    * Resource source used to discover `*.trailhead.yaml` / `*.shortcut.yaml` configs for role
    * enrichment. Injected by the host bootstrap when a workspace config dir is in play (so a
@@ -1190,7 +1198,7 @@ class ToolDiscoveryToolSet(
     val grouped = target.getInlineScriptTools()
       .mapNotNull { tool ->
         val meta = tool.meta?.let(TrailblazeToolMeta::fromJsonObject) ?: TrailblazeToolMeta()
-        if (!meta.shouldRegister(driverType, preferHostAgent = true)) {
+        if (!meta.shouldRegister(driverType, preferHostAgent = true, classifiersFor(driverType))) {
           null
         } else {
           (meta.toolset ?: "scripted") to inlineToolToDescriptor(tool)
@@ -1209,13 +1217,17 @@ class ToolDiscoveryToolSet(
     }.sortedBy { it.name }
   }
 
+  /** The connected device's classifiers when [driverType] is its driver; otherwise unknown. */
+  private fun classifiersFor(driverType: TrailblazeDriverType): List<TrailblazeDeviceClassifier>? =
+    if (driverType == currentDriverTypeProvider()) currentDeviceClassifiersProvider() else null
+
   private fun getInlineToolDescriptors(
     target: TrailblazeHostAppTarget,
     driverType: TrailblazeDriverType,
   ): List<TrailblazeToolDescriptor> =
     target.getInlineScriptTools().mapNotNull { tool ->
       val meta = tool.meta?.let(TrailblazeToolMeta::fromJsonObject) ?: TrailblazeToolMeta()
-      if (!meta.shouldRegister(driverType, preferHostAgent = true)) {
+      if (!meta.shouldRegister(driverType, preferHostAgent = true, classifiersFor(driverType))) {
         null
       } else {
         inlineToolToDescriptor(tool)

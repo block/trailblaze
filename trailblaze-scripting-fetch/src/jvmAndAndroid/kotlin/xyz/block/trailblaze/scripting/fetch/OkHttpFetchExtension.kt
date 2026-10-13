@@ -8,7 +8,6 @@ import java.util.concurrent.TimeUnit
 import javax.net.ssl.SSLContext
 import javax.net.ssl.TrustManager
 import javax.net.ssl.X509TrustManager
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
@@ -21,6 +20,7 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import xyz.block.trailblaze.quickjs.tools.QuickJsEngineExtension
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.util.TrailblazeDispatchers
 
 /**
  * Installs a real, WHATWG-shaped `globalThis.fetch` into a scripted-tool QuickJS engine, backed by
@@ -152,7 +152,7 @@ class OkHttpFetchExtension(
     // 1.0.5's asyncFunction invoke path has a native JNI reference-lifecycle bug that crashes the
     // JVM (block/trailblaze#194; see QuickJsToolHost's __trailblazeCall install site for the full
     // rationale). runBlocking here blocks the confined engine thread only for the duration of the
-    // call; the actual HTTP request runs on Dispatchers.IO inside executeFetch, not on this thread.
+    // call; the actual HTTP request runs on TrailblazeDispatchers.IO inside executeFetch, not on this thread.
     quickJs.function(FETCH_BINDING_NAME) { args ->
       val requestJson = args.getOrNull(0) as? String
         ?: error("$FETCH_BINDING_NAME requires a request JSON string argument")
@@ -164,7 +164,7 @@ class OkHttpFetchExtension(
 
   /**
    * The pure-ish core: decode a request JSON, enforce the allow-list, perform the HTTP call on
-   * [Dispatchers.IO], and encode the response JSON. Returns a `{ __fetchError }` envelope (never
+   * [TrailblazeDispatchers.IO], and encode the response JSON. Returns a `{ __fetchError }` envelope (never
    * throws out) for a malformed request, a denied host, an unsupported URL, or a transport
    * failure, so the JS shim can turn it into a `TypeError` the author's `try/catch` sees.
    * `internal` so the module's tests can drive it directly without standing up an engine.
@@ -194,7 +194,7 @@ class OkHttpFetchExtension(
     val callClient =
       if (httpUrl.isHttps && isDeviceLocalHost(httpUrl.host)) tlsRelaxedClient else httpClient
     return try {
-      withContext(Dispatchers.IO) {
+      withContext(TrailblazeDispatchers.IO) {
         val startedMs = System.currentTimeMillis()
         callClient.newCall(buildRequest(httpUrl, request)).execute().use { response ->
           val bodyText = response.body.string()

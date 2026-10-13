@@ -130,6 +130,10 @@ Field-level rules:
   Absolute paths pass through unchanged.
 - **`_meta.trailblaze/supportedPlatforms:`** is the platform gate. Case-insensitive
   (`web`, `WEB`, `Web` all collapse to canonical form).
+- **`_meta.trailblaze/requiredClassifiers:`** is the device-classifier gate: the tool
+  registers only when the session device's classifiers include every listed segment
+  (`[rig]` matches `android-phone-rig`, not `android-phone`). Case-insensitive. Must be a
+  list — a scalar fails at load rather than silently registering everywhere.
 - **`inputSchema:` defaults to empty** when omitted. The trailmap loader translates the
   flat map into a `{type: object, properties: {...}, required: [...]}` JSON Schema.
 - **`required: true` is the per-property default.** Set `required: false` to make a

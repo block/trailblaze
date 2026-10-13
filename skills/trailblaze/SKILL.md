@@ -1,13 +1,9 @@
 ---
 name: trailblaze
-description: |
-  Use when working with Trailblaze — natural-language device control
-  for coding agents across iOS, Android, and web, with replayable
-  `.trail.yaml` files as the artifact. Trigger on mentions of
-  Trailblaze, the `trailblaze` CLI, `.trail.yaml` files, trailmaps,
-  waypoints, or requests to drive / author / debug / run UI tests on
-  iOS / Android / web — including authoring a custom typed scripted
-  tool, composing an agent's tool surface, or writing a trailmap.
+description: >
+  Use when working with Trailblaze or its CLI to author, debug, run, or test
+  `.trail.yaml` UI trails, trailmaps, waypoints, or typed scripted tools; or to
+  drive iOS, Android, or web apps in natural language.
 ---
 
 # Trailblaze

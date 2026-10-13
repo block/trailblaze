@@ -3,6 +3,7 @@ package xyz.block.trailblaze.scripting
 import xyz.block.trailblaze.config.InlineScriptToolConfig
 import xyz.block.trailblaze.config.ScriptedToolNameDiscoverer
 import xyz.block.trailblaze.config.ScriptedToolRuntime
+import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.quickjs.tools.QuickJsEngineExtension
@@ -126,6 +127,8 @@ object InProcessScriptedToolLauncher {
    *   enabled on several platforms can carry a tool that runs on only one. Null only for a caller
    *   bound to no session (`DirectMcpToolExecutor`, whose advertised surface isn't driver-scoped
    *   either).
+   * @param classifiers the launch device's classifiers, for `requiredClassifiers`. Null = unknown,
+   *   which skips that gate.
    * @return the registrations created, for session-end disposal via [LazyYamlScriptedToolRegistration.dispose].
    */
   suspend fun launch(
@@ -135,6 +138,7 @@ object InProcessScriptedToolLauncher {
     toolNames: Set<ToolName>,
     drivers: Collection<TrailblazeDriverType>?,
     preferHostAgent: Boolean = true,
+    classifiers: List<TrailblazeDeviceClassifier>? = null,
     skipNames: Set<ToolName> = emptySet(),
     classLoader: ClassLoader? = InProcessScriptedToolLauncher::class.java.classLoader,
     logPrefix: String = "[InProcessScriptedToolLauncher]",
@@ -153,7 +157,7 @@ object InProcessScriptedToolLauncher {
     // tool is a no-op, so skipping it is strictly safer than crashing.
     val alreadyRegistered = toolRepo.getRegisteredDynamicTools().keys
     val resolved = resolveInProcessScriptedTools(toolNames, skipNames + alreadyRegistered, logPrefix)
-      .filter { drivers == null || appliesToSession(it.config, drivers, preferHostAgent) }
+      .filter { drivers == null || appliesToSession(it.config, drivers, preferHostAgent, classifiers) }
     if (resolved.isEmpty()) return emptyList()
 
     val accumulated = mutableListOf<LazyYamlScriptedToolRegistration>()
@@ -212,9 +216,10 @@ object InProcessScriptedToolLauncher {
     config: InlineScriptToolConfig,
     drivers: Collection<TrailblazeDriverType>,
     preferHostAgent: Boolean,
+    classifiers: List<TrailblazeDeviceClassifier>? = null,
   ): Boolean {
     val meta = QuickJsToolMeta.fromSpec(buildJsonObject { config.meta?.let { put("_meta", it) } })
-    return drivers.any { meta.shouldRegister(it, preferHostAgent) }
+    return drivers.any { meta.shouldRegister(it, preferHostAgent, classifiers) }
   }
 
   /**

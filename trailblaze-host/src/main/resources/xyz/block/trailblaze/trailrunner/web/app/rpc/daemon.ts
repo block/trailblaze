@@ -11,10 +11,13 @@
 // Long relative paths to the generated SDK bindings; a workspace package would shorten these later.
 import {
   createRpcClient,
+  type DeviceInteraction,
   type GetConnectedDevicesResponse,
   type GetTargetAppsResponse,
   type SetCurrentTargetAppResponse,
   type TrailblazeDeviceId,
+  type TrailblazeDriverType,
+  type TrailblazeToolDescriptor,
 } from "../../../../../../../../../../../sdks/typescript/src/generated/host-rpc";
 import {
   createTrailRunnerRpcClient,
@@ -124,17 +127,79 @@ export function createDaemonRpc(options: RpcCallOptions = {}) {
       return result.ok;
     },
     /**
-     * ConnectToDeviceRequest → { ok, error }. Same call as connectToDevice but keeps the daemon's
-     * failure reason (e.g. "No target app selected...") so the UI can show the real cause instead
-     * of a generic "could not connect".
+     * ConnectToDeviceRequest → { ok, error, deviceWidth, deviceHeight, logSessionId }. Same call as
+     * connectToDevice but keeps the daemon's failure reason (e.g. "No target app selected...") so the
+     * UI can show the real cause instead of a generic "could not connect", plus the screen size a
+     * mirror maps pointer coordinates against (0 on failure) and the unlisted session the
+     * connection logs into, if any.
      */
     connectToDeviceDetailed: async (
       trailblazeDeviceId: TrailblazeDeviceId,
       targetAppId?: string | null,
-    ): Promise<{ ok: boolean; error: string | null }> => {
+    ): Promise<{ ok: boolean; error: string | null; deviceWidth: number; deviceHeight: number; logSessionId: string | null }> => {
       const result = await rpc.connectToDevice({ trailblazeDeviceId, targetAppId: targetAppId || null });
-      if (!result.ok) console.warn("[TbRpc] RPC call failed:", result.error);
-      return { ok: result.ok, error: result.ok ? null : (result.error && result.error.message) || null };
+      if (!result.ok) {
+        console.warn("[TbRpc] RPC call failed:", result.error);
+        return { ok: false, error: (result.error && result.error.message) || null, deviceWidth: 0, deviceHeight: 0, logSessionId: null };
+      }
+      return {
+        ok: true,
+        error: null,
+        deviceWidth: result.data.deviceWidth,
+        deviceHeight: result.data.deviceHeight,
+        logSessionId: result.data.logSessionId || null,
+      };
+    },
+    /**
+     * DeviceInteractionRequest → { ok, error }. Sends one raw gesture or key to a connected device.
+     * Nothing is recorded; the daemon's `success:false` (e.g. "Device not connected") is an error.
+     */
+    deviceInteraction: async (
+      trailblazeDeviceId: TrailblazeDeviceId,
+      interaction: DeviceInteraction,
+    ): Promise<{ ok: boolean; error: string | null }> => {
+      const result = await rpc.deviceInteraction({ trailblazeDeviceId, interaction });
+      if (!result.ok) {
+        console.warn("[TbRpc] RPC call failed:", result.error);
+        return { ok: false, error: result.error.message };
+      }
+      if (!result.data.success) return { ok: false, error: result.data.errorMessage || "The device did not accept the input." };
+      return { ok: true, error: null };
+    },
+    /** GetToolCatalogRequest → the tools a driver can run (or null). Used by the Devices screen. */
+    getToolCatalog: async (trailblazeDriverType: string): Promise<TrailblazeToolDescriptor[] | null> => {
+      const data = await dataOrNull(
+        rpc.getToolCatalog({ trailblazeDriverType: trailblazeDriverType as TrailblazeDriverType }),
+      );
+      return data ? data.tools : null;
+    },
+    /**
+     * RunTrailYamlRequest → { ok, error }. Runs trail YAML on a connected device, in that device's
+     * existing connection. Android returns once the on-device runner accepts it; web and iOS return
+     * when the run finishes, with the failure reason as the error.
+     */
+    runTrailYaml: async (
+      trailblazeDeviceId: TrailblazeDeviceId,
+      yaml: string,
+    ): Promise<{ ok: boolean; error: string | null }> => {
+      const result = await rpc.runTrailYaml({ trailblazeDeviceId, yaml });
+      if (!result.ok) {
+        console.warn("[TbRpc] RPC call failed:", result.error);
+        return { ok: false, error: result.error.message };
+      }
+      return result.data.success ? { ok: true, error: null } : { ok: false, error: "The run did not complete." };
+    },
+    /** NavigateWebUrlRequest → { ok, error }. Points a connected browser at a URL. */
+    navigateWebUrl: async (
+      trailblazeDeviceId: TrailblazeDeviceId,
+      url: string,
+    ): Promise<{ ok: boolean; error: string | null }> => {
+      const result = await rpc.navigateWebUrl({ trailblazeDeviceId, url });
+      if (!result.ok) {
+        console.warn("[TbRpc] RPC call failed:", result.error);
+        return { ok: false, error: result.error.message };
+      }
+      return result.data.success ? { ok: true, error: null } : { ok: false, error: "The browser did not navigate." };
     },
     /**
      * DisconnectDeviceRequest → success boolean. Releases the daemon's live connection so the next

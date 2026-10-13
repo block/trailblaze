@@ -58,7 +58,7 @@ const NAV = [
 // One door for runs: the Runs screen lists in-flight runs under an "Active" section and finished
 // ones under "Completed", so there's nothing to split across two nav rows. No group heading — it
 // would render "Runs" directly above the single row also labelled "Runs".
-const RUNS_NAV = [{ group: null, items: [['runs', 'Runs', 'gallery-vertical-end']] }];
+const RUNS_NAV = [{ group: null, items: [['runs', 'Runs', 'gallery-vertical-end'], ['devices', 'Devices', 'monitor-smartphone']] }];
 // Trailmaps is reference material, not part of the Blaze→Trails authoring flow — pin it to the
 // bottom of the rail (just above Search), visually separated by a divider.
 const TRAILMAPS = [
@@ -524,6 +524,7 @@ function CommandPalette({ go, openRun, close, closing, trails = [] }) {
     ['play', 'Run a trail…', '⌘↵', () => { openRun(); close(); }],
     ['smartphone', 'Choose target & devices…', '⌘D', () => { go('home'); close(); }],
     ['gallery-vertical-end', 'Go to Runs', '⌘O', () => { go('runs'); close(); }],
+    ['monitor-smartphone', 'Go to Devices', null, () => { go('devices'); close(); }],
     ['wrench', 'Browse custom tools', null, () => { go('tools'); close(); }],
   ].filter(([, label]) => match(label)).map(([ico, label, kbd, fn]) => ({ ico, label, kbd, sub: null, fn }));
 
@@ -733,11 +734,22 @@ const zipReportDeepLink = (() => {
   try { return decodeURIComponent(m[1]); } catch (_) { return m[1]; }
 })();
 
+// Third deep link: #devices opens straight onto the live device mirrors, and #devices/<id> onto
+// one device with the whole screen. `true` for the first, the device id for the second.
+const devicesDeepLink = (() => {
+  const m = /^#devices(?:\/([^/?#]+))?\/?$/.exec(window.location.hash || '');
+  if (!m) return null;
+  if (!m[1]) return true;
+  // A malformed escape must not stop the app from booting; the raw id just finds no device.
+  try { return decodeURIComponent(m[1]); } catch (_) { return m[1]; }
+})();
+
 function App() {
-  const initialRoute = companionDeepLink ? 'companion' : zipReportDeepLink ? 'zip-report' : 'home';
+  const initialRoute = companionDeepLink ? 'companion' : zipReportDeepLink ? 'zip-report' : devicesDeepLink ? 'devices' : 'home';
   const initialPayload = companionDeepLink
     ? { for: 'companion', data: { runId: companionDeepLink } }
-    : zipReportDeepLink ? { for: 'zip-report', data: { zipUrl: zipReportDeepLink } } : {};
+    : zipReportDeepLink ? { for: 'zip-report', data: { zipUrl: zipReportDeepLink } }
+    : typeof devicesDeepLink === 'string' ? { for: 'devices', data: { focus: devicesDeepLink } } : {};
   const [route, setRoute] = useState(initialRoute);
   const [payload, setPayload] = useState(initialPayload);
   // Browser-style view history: a stack of {route, payload} with a pointer.
@@ -914,6 +926,7 @@ function App() {
     active: <RedirectScreen go={go} to="runs" params={pf('active')} />,
     completed: <RedirectScreen go={go} to="runs" params={pf('completed')} />,
     runs: <SessionsScreen initSel={pf('runs').sel} followLive={pf('runs').followLive} go={go} />,
+    devices: <DeviceConsoleScreen go={go} initFocus={pf('devices').focus} />,
     integrations: <IntegrationsScreen go={go} />,
     settings: <SettingsScreen go={go} initTab={pf('settings').tab} />,
     // Deep-link only (#companion/<runId>, opened by `trailblaze companion start`): the read-only

@@ -24,6 +24,7 @@ import org.gradle.api.tasks.PathSensitive
 import org.gradle.api.tasks.PathSensitivity
 import org.gradle.api.tasks.TaskAction
 import org.gradle.process.ExecOperations
+import org.gradle.work.DisableCachingByDefault
 
 /**
  * Nested-block spec for `trailblazeAndroid { inProcessIdle { ... } }` — one instance per
@@ -544,6 +545,7 @@ internal fun appendFileToZip(zip: File, add: File, entryName: String) {
  * one), and so does an unset property: in both cases a stale split from an earlier build is
  * removed so the test APK cannot carry one built against a different app version.
  */
+@DisableCachingByDefault(because = "Uses local Android SDK tools that are not tracked as inputs")
 abstract class BuildTrailblazeInProcessIdleApkTask : DefaultTask() {
   @get:Input abstract val targetApplicationId: Property<String>
 

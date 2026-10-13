@@ -23,6 +23,7 @@ import org.gradle.api.tasks.OutputFile
 import org.gradle.api.tasks.PathSensitive
 import org.gradle.api.tasks.PathSensitivity
 import org.gradle.api.tasks.TaskAction
+import org.gradle.work.DisableCachingByDefault
 
 /**
  * Authoring spec for one bundled author tool script. Registered via the
@@ -95,6 +96,7 @@ abstract class TrailblazeAuthorToolBundlesExtension @Inject constructor(
  * (rather than the dir itself) means a Ctrl-C'd install leaves Gradle still seeing the task as
  * out-of-date next run, instead of silently passing on a half-populated `node_modules/`.
  */
+@DisableCachingByDefault(because = "Caching the install sentinel would not restore local node_modules")
 abstract class InstallAuthorToolDepsTask : DefaultTask() {
 
   @get:InputFile
@@ -230,6 +232,7 @@ abstract class InstallAuthorToolDepsTask : DefaultTask() {
  * flags, they're outside the on-device contract this plugin exists to maintain, and they
  * should drive esbuild themselves.
  */
+@DisableCachingByDefault(because = "Uses locally installed dependencies that are not fully tracked as inputs")
 abstract class BundleAuthorToolsTask @Inject constructor(
   private val objects: ObjectFactory,
 ) : DefaultTask() {

@@ -59,10 +59,11 @@ import kotlin.reflect.KClass
 open class BasePlaywrightNativeTest(
   val config: TrailblazeConfig = TrailblazeConfig.DEFAULT,
   val trailblazeLlmModel: TrailblazeLlmModel = DEFAULT_TRAILBLAZE_LLM_MODEL,
-  val dynamicLlmClient: DynamicLlmClient = TrailblazeHostDynamicLlmClientProvider(
-    trailblazeLlmModel = trailblazeLlmModel,
-    trailblazeDynamicLlmTokenProvider = TrailblazeHostDynamicLlmTokenProvider,
-  ),
+  /**
+   * The app's LLM client factory. Null falls back to the open-source default, which knows only the
+   * built-in providers; see [hasCallerLlmClient].
+   */
+  dynamicLlmClient: DynamicLlmClient? = null,
   customToolClasses: Set<KClass<out TrailblazeTool>> = setOf(),
   appTarget: TrailblazeHostAppTarget? = null,
   val trailblazeDeviceId: TrailblazeDeviceId,
@@ -145,6 +146,18 @@ open class BasePlaywrightNativeTest(
    */
   private val laneLocale: String? = System.getenv(WEB_LOCALE_ENV)?.takeIf { it.isNotBlank() },
 ) {
+
+  val dynamicLlmClient: DynamicLlmClient = dynamicLlmClient ?: TrailblazeHostDynamicLlmClientProvider(
+    trailblazeLlmModel = trailblazeLlmModel,
+    trailblazeDynamicLlmTokenProvider = TrailblazeHostDynamicLlmTokenProvider,
+  )
+
+  /**
+   * Whether the caller supplied [dynamicLlmClient]. A test built without one (the device-connect
+   * path caches one for its browser) can't create clients for app-registered providers, so a run
+   * that brings the app's factory must not reuse it.
+   */
+  val hasCallerLlmClient: Boolean = dynamicLlmClient != null
 
   // When an existing browser is provided, the caller owns its lifecycle — close() will not
   // shut it down. When we create the browser ourselves, we own it and close() will shut it down.
@@ -261,7 +274,7 @@ open class BasePlaywrightNativeTest(
       toolRepo = toolRepo,
       screenStateProvider = webStreamScreenshots.screenStateProvider,
       elementComparator = elementComparator,
-      llmClient = dynamicLlmClient.createLlmClient(),
+      llmClient = this.dynamicLlmClient.createLlmClient(),
       trailblazeLlmModel = trailblazeLlmModel,
       logger = loggingRule.logger,
       sessionProvider = { loggingRule.session ?: error("Session not available - ensure test is running") },
@@ -273,7 +286,7 @@ open class BasePlaywrightNativeTest(
   private val elementComparator by lazy {
     TrailblazeElementComparator(
       screenStateProvider = browserManager::getScreenState,
-      llmClient = dynamicLlmClient.createLlmClient(),
+      llmClient = this.dynamicLlmClient.createLlmClient(),
       trailblazeLlmModel = trailblazeLlmModel,
       toolRepo = toolRepo,
     )

@@ -3,6 +3,7 @@ package xyz.block.trailblaze.codegen
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.descriptors.SerialDescriptor
 import kotlinx.serialization.serializer
+import xyz.block.trailblaze.logs.client.TrailblazeJson
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcRequest
 import java.lang.reflect.ParameterizedType
 import kotlin.reflect.KClass
@@ -26,14 +27,20 @@ object RpcClientTsCodegen {
    * Assemble a full bindings file: [header] + the transport import + the walked TS types
    * ([extraTypeRoots] plus each endpoint's request/response descriptors, deduped by serial name) +
    * a `createXxxRpcClient` named [clientFunctionName]. [surfaceLabel] names the surface in the
-   * client's doc comment (e.g. `"daemon's"`, `"Trail Runner"`).
+   * client's doc comment (e.g. `"daemon's"`, `"Trail Runner"`). [classDiscriminator] is the
+   * polymorphic key the surface's server-side `Json` decodes sealed types with.
+   *
+   * `@JvmOverloads` keeps the five-argument JVM signature that callers compiled before
+   * [classDiscriminator] existed still link against.
    */
+  @JvmOverloads
   fun generate(
     header: String,
     extraTypeRoots: List<SerialDescriptor>,
     requests: List<KClass<out RpcRequest<*>>>,
     clientFunctionName: String,
     surfaceLabel: String,
+    classDiscriminator: String = TrailblazeJson.POLYMORPHIC_CLASS_DISCRIMINATOR,
   ): String {
     require(requests.isNotEmpty()) {
       "RpcClientTsCodegen.generate requires at least one RpcRequest — a client with no endpoints " +
@@ -50,7 +57,11 @@ object RpcClientTsCodegen {
         " (the method name is the request's simpleName minus the \"Request\" suffix)."
     }
     val rpcTypeRoots = endpoints.flatMap { listOf(it.requestDescriptor, it.responseDescriptor) }
-    val typesBody = SerialDescriptorTsCodegen.generate(extraTypeRoots + rpcTypeRoots, header = "")
+    val typesBody = SerialDescriptorTsCodegen.generate(
+      extraTypeRoots + rpcTypeRoots,
+      header = "",
+      classDiscriminator = classDiscriminator,
+    )
     return buildString {
       append(header)
       append(IMPORT_LINE)

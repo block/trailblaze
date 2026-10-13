@@ -13,10 +13,17 @@ import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.util.Collections
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.concurrent.thread
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.joinAll
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Clock
 import org.junit.Test
@@ -447,6 +454,51 @@ class TrailblazeLoggingRuleTest {
 
     assertEquals(1, received.get(), "once the server answers, the next log must reach it")
     assertEquals(1, written.size, "a log the server accepted must not also fall back to disk")
+  }
+
+  @Test
+  fun `logs still reach the server while every Dispatchers IO worker is held by someone else`() {
+    // In-process, Dispatchers.IO is the app's pool, and an app SDK can park on every worker for
+    // minutes. A log upload queued behind it stalled 60-130 s per write. Uploads must not need it.
+    val received = AtomicInteger(0)
+    val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+    server.createContext("/ping") { exchange ->
+      exchange.sendResponseHeaders(200, 0)
+      exchange.responseBody.close()
+    }
+    server.createContext("/agentlog") { exchange ->
+      exchange.requestBody.readBytes()
+      received.incrementAndGet()
+      exchange.sendResponseHeaders(200, 0)
+      exchange.responseBody.close()
+    }
+    server.start()
+    val written = mutableListOf<TrailblazeLog>()
+    val rule = TestLoggingRule(
+      writeLogToDisk = { _, log -> written += log },
+      logsBaseUrl = "http://127.0.0.1:${server.address.port}",
+    )
+    val release = CountDownLatch(1)
+    // Far more blockers than the pool has workers, so every worker is taken whatever its size.
+    val blockers = List(512) { CoroutineScope(Dispatchers.IO).launch { release.await() } }
+    try {
+      val probeRan = CountDownLatch(1)
+      CoroutineScope(Dispatchers.IO).launch { probeRan.countDown() }
+      assertFalse(
+        probeRan.await(500, TimeUnit.MILLISECONDS),
+        "control: Dispatchers.IO must be saturated for this test to mean anything",
+      )
+
+      val upload = thread { rule.endSession(session(), isSuccess = true) }
+      upload.join(10_000)
+
+      assertEquals(1, received.get(), "the log must reach the server while Dispatchers.IO is full")
+      assertTrue(written.isEmpty(), "a log the server accepted must not fall back to disk")
+    } finally {
+      release.countDown()
+      runBlocking { blockers.joinAll() }
+      server.stop(0)
+    }
   }
 
   @Test

@@ -127,6 +127,8 @@ object TrailblazeCli {
     // so the capture has to be in place before the first Console.log call.
     CliOutCapture.install()
 
+    TrailblazeDesktopUtil.markCacheDirectory()
+
     // Wrap appProvider so a workspace-trailmap rebundle runs before the first
     // TrailblazeDesktopApp instance is constructed. Constructor-time field initializers
     // (notably the desktop app's eager `desktopYamlRunner = DesktopYamlRunner(...)`)

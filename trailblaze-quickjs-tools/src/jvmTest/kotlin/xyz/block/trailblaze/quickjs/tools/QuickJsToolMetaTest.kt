@@ -8,6 +8,8 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import xyz.block.trailblaze.devices.RequiredDeviceClassifiers
+import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.toolcalls.DeclaredSensitiveArgs
 
@@ -73,6 +75,39 @@ class QuickJsToolMetaTest {
     )
     assertEquals(DeclaredSensitiveArgs.AllArgsDeclarationUnreadable, malformed.sensitiveArgs)
     assertEquals(setOf("email", "password"), malformed.sensitiveArgs.resolve(setOf("email", "password")))
+  }
+
+  @Test
+  fun `requiredClassifiers registers only when the session device carries every segment`() {
+    val meta = QuickJsToolMeta.fromSpec(
+      metaSpec {
+        put(
+          "trailblaze/requiredClassifiers",
+          buildJsonArray { add(kotlinx.serialization.json.JsonPrimitive("rig")) },
+        )
+      },
+    )
+    val driver = TrailblazeDriverType.DEFAULT_ANDROID
+    fun classifiers(vararg s: String) = s.map(::TrailblazeDeviceClassifier)
+    assertEquals(RequiredDeviceClassifiers.Segments(listOf("rig")), meta.requiredClassifiers)
+    assertTrue(meta.shouldRegister(driver, preferHostAgent = true, classifiers = classifiers("android", "phone", "rig")))
+    assertTrue(meta.shouldRegister(driver, preferHostAgent = true, classifiers = classifiers("Android", "Phone", "Rig")))
+    assertFalse(meta.shouldRegister(driver, preferHostAgent = true, classifiers = classifiers("android", "phone")))
+    assertFalse(meta.shouldRegister(driver, preferHostAgent = true, classifiers = emptyList()))
+    // Unknown device (null) skips the gate — listing surfaces show a tool that may apply.
+    assertTrue(meta.shouldRegister(driver, preferHostAgent = true))
+  }
+
+  @Test
+  fun `a malformed requiredClassifiers registers on no known device`() {
+    // A bundle's own `spec._meta` skips descriptor validation; reading a scalar as "no
+    // requirement" would load a tool meant for specially equipped devices everywhere.
+    val meta = QuickJsToolMeta.fromSpec(metaSpec { put("trailblaze/requiredClassifiers", "rig") })
+    val driver = TrailblazeDriverType.DEFAULT_ANDROID
+    assertEquals(RequiredDeviceClassifiers.Unreadable, meta.requiredClassifiers)
+    assertFalse(
+      meta.shouldRegister(driver, preferHostAgent = true, classifiers = listOf("android", "phone", "rig").map(::TrailblazeDeviceClassifier)),
+    )
   }
 
   private fun metaSpec(build: kotlinx.serialization.json.JsonObjectBuilder.() -> Unit) =

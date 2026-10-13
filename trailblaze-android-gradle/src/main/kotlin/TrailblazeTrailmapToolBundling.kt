@@ -18,6 +18,7 @@ import org.gradle.api.tasks.OutputDirectory
 import org.gradle.api.tasks.PathSensitive
 import org.gradle.api.tasks.PathSensitivity
 import org.gradle.api.tasks.TaskAction
+import org.gradle.work.DisableCachingByDefault
 
 /**
  * Nested-block spec for `trailblazeAndroid { trailmap { ... } }` — one instance per `trailmap { }`
@@ -216,6 +217,7 @@ private fun registerTrailmapToolDefs(
  * Deletes one trailmap's `.tooldefs.json` files from the shared staging root. Not a `Sync` on the
  * stage task: the root also holds every other task's bundles, so only these files may go.
  */
+@DisableCachingByDefault(because = "Deletes stale files from a staging directory shared with other tasks")
 abstract class SweepStagedToolDefsTask : DefaultTask() {
   /**
    * `<stagingRoot>/trails/config/trailmaps/<id>/tools`. Declared as an output although the stage
@@ -239,6 +241,7 @@ abstract class SweepStagedToolDefsTask : DefaultTask() {
 }
 
 /** Runs [ScriptedToolDefsExtraction] over one trailmap's descriptor-less tools. */
+@DisableCachingByDefault(because = "Uses locally installed analyzer tools that are not fully tracked as inputs")
 abstract class ExtractTrailmapToolDefsTask : DefaultTask() {
   @get:Internal abstract val toolsDir: DirectoryProperty
 

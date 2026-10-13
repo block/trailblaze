@@ -122,6 +122,7 @@ class PlaywrightNativeHostDriverDescriptor : HostDriverDescriptor {
       cachedLogsDir = cachedTest?.loggingRule?.logsRepo?.logsDir,
       cachedNoLogging = cachedTest?.loggingRule?.logsRepo?.readOnly ?: false,
       cachedDeviceClassifiers = cachedTest?.deviceClassifierOverride.orEmpty(),
+      cachedHasCallerLlmClient = cachedTest?.hasCallerLlmClient ?: true,
       requestedModel = runYamlRequest.trailblazeLlmModel,
       requestedMaxLlmCalls = runYamlRequest.maxLlmCalls,
       requestedLogsDir = logsDir,
@@ -334,9 +335,13 @@ class PlaywrightNativeHostDriverDescriptor : HostDriverDescriptor {
       requestedNoLogging: Boolean,
       cachedDeviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList(),
       requestedDeviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList(),
+      cachedHasCallerLlmClient: Boolean = true,
     ): PlaywrightCacheResolution = when {
       cachedModel == null -> PlaywrightCacheResolution.NoCachedTest
-      cachedModel == requestedModel &&
+      // A test cached without the app's LLM client (the device-connect path builds one) only knows
+      // the open-source providers, so the first run through here rebuilds it with the run's own.
+      cachedHasCallerLlmClient &&
+        cachedModel == requestedModel &&
         cachedMaxLlmCalls == requestedMaxLlmCalls &&
         cachedNoLogging == requestedNoLogging &&
         cachedDeviceClassifiers == requestedDeviceClassifiers &&
@@ -346,8 +351,9 @@ class PlaywrightNativeHostDriverDescriptor : HostDriverDescriptor {
         // The model, the max-llm-calls cap, the logs directory, the no-logging stance, or the
         // device classifier changed. All five are baked into the cached test (the first two into
         // its lazy agent runner, the next two into its logging rule's LogsRepo, the last into
-        // the device info its sessions report), so the test instance has to be rebuilt; we keep
-        // the cached browser to avoid relaunching Chromium every time.
+        // the device info its sessions report). Or the cached test was built without the app's
+        // LLM client, so its agent can't reach the app's providers. Either way the test instance
+        // has to be rebuilt; we keep the cached browser to avoid relaunching Chromium every time.
         PlaywrightCacheResolution.RebuildWithCachedBrowser(cachedBrowserManager)
       // Defensive: cached model exists but no browser to reuse — treat as no cache.
       // In practice cachedBrowserManager is always non-null when cachedModel is, but

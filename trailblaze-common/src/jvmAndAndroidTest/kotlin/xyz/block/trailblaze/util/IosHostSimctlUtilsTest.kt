@@ -77,6 +77,52 @@ class IosHostSimctlUtilsTest {
   }
 
   @Test
+  fun `parseAppProcessFromAppInfo reads the executable and install directory from appinfo output`() {
+    // Shape of `xcrun simctl appinfo <device-id> com.example.wallet.dogfood`: the executable is
+    // `Wallet`, not the bundle id's last component.
+    val outputLines = """
+      {
+          ApplicationType = User;
+          Bundle = "file:///Users/test/Library/Developer/CoreSimulator/Devices/ABC123/data/Containers/Bundle/Application/DEF456/Wallet.app/";
+          CFBundleDisplayName = Wallet;
+          CFBundleExecutable = Wallet;
+          CFBundleIdentifier = "com.example.wallet.dogfood";
+          CFBundleName = Wallet;
+          GroupContainers =     {
+              "group.com.example.wallet.dogfood" = "file:///Users/test/Library/Developer/CoreSimulator/Devices/ABC123/data/Containers/Shared/AppGroup/GHI789/";
+          };
+          Path = "/Users/test/Library/Developer/CoreSimulator/Devices/ABC123/data/Containers/Bundle/Application/DEF456/Wallet.app";
+      }
+    """.trimIndent().lines()
+
+    assertEquals(
+      IosAppProcess(executableName = "Wallet", installDir = "/DEF456/Wallet.app/"),
+      IosHostSimctlUtils.parseAppProcessFromAppInfo(outputLines),
+    )
+  }
+
+  @Test
+  fun `parseAppProcessFromAppInfo keeps the executable when the path is not an app bundle`() {
+    val outputLines = """
+      {
+          CFBundleExecutable = "Example App";
+          Path = "/tmp/not-a-bundle";
+      }
+    """.trimIndent().lines()
+
+    assertEquals(
+      IosAppProcess(executableName = "Example App", installDir = null),
+      IosHostSimctlUtils.parseAppProcessFromAppInfo(outputLines),
+    )
+  }
+
+  @Test
+  fun `parseAppProcessFromAppInfo returns null without an executable`() {
+    assertNull(IosHostSimctlUtils.parseAppProcessFromAppInfo(listOf("{", "    ApplicationType = User;", "}")))
+    assertNull(IosHostSimctlUtils.parseAppProcessFromAppInfo(emptyList()))
+  }
+
+  @Test
   fun `parseInstalledAppIdsFromListApps extracts bundle IDs from typical listapps output`() {
     // Sample output from `xcrun simctl listapps <device-id>`
     val outputLines = """

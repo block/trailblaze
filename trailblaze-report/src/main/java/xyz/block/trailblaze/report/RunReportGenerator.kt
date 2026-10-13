@@ -708,10 +708,7 @@ class RunReportGenerator(
       val buildNumber = environment.firstValue("CI_BUILD_NUMBER", "BUILDKITE_BUILD_NUMBER", "GITHUB_RUN_NUMBER")
       val commit = environment.firstValue("GIT_COMMIT", "BUILDKITE_COMMIT", "GITHUB_SHA")
       val branch = environment.firstValue("GIT_BRANCH", "BUILDKITE_BRANCH", "GITHUB_REF_NAME")
-      val repository = GitRepoUrls.webBaseUrl(environment["BUILDKITE_REPO"])
-        ?: environment["GITHUB_REPOSITORY"]?.let { repo ->
-          "${environment["GITHUB_SERVER_URL"] ?: "https://github.com"}/$repo"
-        }
+      val repository = repositoryWebUrl(environment)
 
       buildUrl?.takeIf { it.isNotBlank() }?.let { put("buildUrl", it) }
       buildNumber?.takeIf { it.isNotBlank() }?.let { put("buildNumber", it) }
@@ -720,6 +717,15 @@ class RunReportGenerator(
         repository?.let { put("commitUrl", "$it/commit/$sha") }
       }
       branch?.takeIf { it.isNotBlank() }?.let { put("branch", it) }
+    }
+
+    /** Same sanitized repository link for an embedded report and a summary-backed index. */
+    internal fun repositoryWebUrl(environment: Map<String, String>): String? {
+      val repository = GitRepoUrls.webBaseUrl(environment["BUILDKITE_REPO"])
+        ?: environment["GITHUB_REPOSITORY"]?.let { repo ->
+          GitRepoUrls.actionsWebBaseUrl(environment["GITHUB_SERVER_URL"] ?: "https://github.com", repo)
+        }
+      return repository
     }
 
     private fun Map<String, String>.firstValue(vararg keys: String): String? =

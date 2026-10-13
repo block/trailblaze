@@ -3236,6 +3236,12 @@ class TrailblazeMcpBridgeImpl(
           Console.log("[MCP Bridge] App target changed from ${previousTarget?.id} to $appTargetId (custom iOS driver involved) — releasing iOS persistent device for ${deviceId.instanceId}")
           releasePersistentDeviceConnection(deviceId)
         }
+      } else {
+        // The kept driver's keyboard check still asks about the old target's apps first.
+        val deviceId = getEffectiveDeviceId()
+        if (deviceId != null && deviceId.trailblazeDevicePlatform == TrailblazeDevicePlatform.IOS) {
+          HostIosDriverFactory.keyboardCheckTargetSelected(deviceId.instanceId, matchingTarget)
+        }
       }
       releaseAndroidTestConnectionOnTargetChange(previousTarget?.id, appTargetId)
     }

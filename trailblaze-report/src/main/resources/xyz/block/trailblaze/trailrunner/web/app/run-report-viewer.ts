@@ -15,6 +15,7 @@ import { chunkJsonWithoutRuntimeAttachments, eventPrettyText, eventValueText, in
 import { buildExportSchedule, buildPlaybackSchedule, playbackGapMs, playbackPositionAt, videoEndMs } from './run-report-playback';
 import { adjacentMark, entryAtOrBefore, fractionToOffset, snapFraction, timelineTracks, trackMarks, type TimelineTrack, type TrackMark } from './run-report-timeline-tracks';
 import { VIEWER_ROUTE_KEYS } from './run-report-route';
+import { externalComparisonUrl, hasExternalComparison, isExternalRunComparable } from './run-report-index-links';
 import { inspectorKeyForNodeId, isSelectorAnalyzableTree, loadSelectorEngine, loadSelectorEngineFromChunk, mismatchVizHtml, nodeIdForInspectorKey, selectorSuggestionsHtml } from './run-report-selectors';
 import { buildReportTraceModel, createReportTraceModelResolver, failureAnchorIndex as traceFailureAnchorIndex, type ReportTraceGroup, type ReportTraceModel } from './run-report-trace-model';
 import { buildTrailMatrix, captureShotFile, pruneIdleTrailCells, traceDeviceLanes, trailIdentity, trailJoinFor, trailViewScopes, videoShotCaptureId, type DeviceLaneTrace, type TrailCell, type TrailFrame, type TrailJoin, type TrailMatrix, type TrailRow } from './run-report-trail-model';
@@ -4776,6 +4777,19 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     return s.meta && s.meta.steps != null ? s.meta.steps : null;
   };
   const runReportHref = (s) => safeHref(s.meta && s.meta.reportUrl);
+  const remoteSelectable = (s: SessionPayload) => isLinkOut(s) && !isSkipped(s) && isExternalRunComparable(runReportHref(s));
+  const remoteComparisonHref = (runs: number[]) => runs.every((i) => SESSIONS[i] && remoteSelectable(SESSIONS[i]))
+    ? externalComparisonUrl(runs.map((i) => runReportHref(SESSIONS[i]))) : null;
+  // The trail-name link compares a trail's retained runs that have an archive. An attempt with no
+  // link (its upload failed) or a replaced retry is left out rather than disabling the link.
+  const trailRemoteComparisonHref = (key: string) => {
+    const all = trailRuns(key);
+    // Only an index with no retained markers (an older summary) falls back to every run.
+    const scope = all.some((i) => SESSIONS[i].meta.retainedResult) ? all.filter((i) => SESSIONS[i].meta.retainedResult) : all;
+    return remoteComparisonHref(scope.filter((i) => remoteSelectable(SESSIONS[i])));
+  };
+  const indexComparisonAvailable = () => compareViewAvailable()
+    || hasExternalComparison(SESSIONS.filter(remoteSelectable).map(runReportHref));
   /**
    * Element name + attributes for an index control that opens a run — the matrix cell, the flat
    * row, the attempt row. A run carried by this document keeps the interactive in-document form the
@@ -4813,7 +4827,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   const retryOpenKey = (session: number) => `retry:${session}`;
   const pickControl = (s: SessionPayload, session: number, label: string) => {
     if (!st.compareMode) return EMPTY_PICK_SLOT;
-    if (!stageable(s)) return EMPTY_PICK_SLOT;
+    if (!stageable(s) && !remoteSelectable(s)) return EMPTY_PICK_SLOT;
     const on = st.pick.indexOf(session) >= 0;
     return `<label class="idxpick${on ? ' on' : ''}" title="${esc(on ? `Remove ${label} from the selection` : `Select ${label} to compare`)}"><input type="checkbox" data-pick="${session}"${on ? ' checked' : ''} aria-label="${esc(`Select ${label} to compare`)}" /></label>`;
   };
@@ -4948,7 +4962,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     const searchIcon = '<svg class="idxsearchicon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="m10.5 10.5 3 3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>';
     const groupIcon = '<svg class="idxsorticon" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 3.5h3v3H3zm0 6h3v3H3zm5-5h5m-5 6h5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
     const sortIcon = '<svg class="idxsorticon" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 4h10M5 8h8m-6 4h6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>';
-    const compareButton = compareViewAvailable() ? `<button class="btn idxcompare${st.compareMode ? ' active' : ''}" type="button" data-index-compare aria-pressed="${st.compareMode}" title="${st.compareMode ? 'Exit run selection' : 'Select runs to compare'}">${COMPARE_ICON_SVG}<span>Compare</span></button>` : '';
+    const compareButton = indexComparisonAvailable() ? `<button class="btn idxcompare${st.compareMode ? ' active' : ''}" type="button" data-index-compare aria-pressed="${st.compareMode}" title="${st.compareMode ? 'Exit run selection' : 'Select runs to compare'}">${COMPARE_ICON_SVG}<span>Compare</span></button>` : '';
     return `<div class="idxfilter${compareButton ? ' hascompare' : ''}">
       <div class="idxsearch">${searchIcon}<input id="runsearch" type="search" aria-label="Search" placeholder="Search" autocomplete="off" value="${esc(st.runSearch)}" /></div>
       <details class="idxsort idxgroup" id="rungroup" data-rungroup><summary aria-label="Group runs by ${groupLabel}"><span class="idxsortvalue">${groupIcon}<span>${groupLabel}</span></span><span class="idxsortchev" aria-hidden="true"></span></summary><div class="idxsortmenu"><div class="idxsortmenulabel">Group by</div><button class="idxsortoption" type="button" aria-pressed="${st.runGroup === 'status'}" data-run-group="status">Status</button><button class="idxsortoption" type="button" aria-pressed="${st.runGroup === 'owner'}" data-run-group="owner">Owner</button></div></details>
@@ -4963,7 +4977,11 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   const renderPickBar = () => {
     const picked = st.pick.filter((i) => SESSIONS[i]);
     if (!st.compareMode) return '';
-    const ready = picked.length >= 2;
+    const remoteHref = remoteComparisonHref(picked);
+    const ready = picked.length >= 2 && picked.every((i) => stageable(SESSIONS[i]));
+    const open = remoteHref
+      ? `<a class="btn pickopen ready" href="${esc(remoteHref)}" target="_blank" rel="noopener noreferrer">Compare selected</a>`
+      : `<button class="btn pickopen${ready ? ' ready' : ''}" type="button" data-pick-open${ready ? '' : ` disabled title="${picked.length < 2 ? 'Select at least two runs' : 'These runs cannot be compared together'}"`}>Compare selected</button>`;
     // Announced: the count changes under a checkbox the reader is still standing on, and a bar
     // that appears silently is a bar a screen reader never mentions.
     return `<div class="pickbar${compareModeEntering ? ' compareenter' : ''}" role="region" aria-label="Selected runs" aria-live="polite">
@@ -4971,7 +4989,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
         <span class="pickcount"><strong>${picked.length}</strong> selected</span>
         <span class="pickactions">
           <button class="btn" type="button" data-pick-clear${picked.length ? '' : ' disabled'}>Clear</button>
-          <button class="btn pickopen${ready ? ' ready' : ''}" type="button" data-pick-open${ready ? '' : ' disabled title="Select at least two runs"'}>Compare selected</button>
+          ${open}
         </span>
       </div>
     </div>`;
@@ -5115,7 +5133,10 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     });
     return Array.from(byTest.values()).map((group) => {
       const attempts = sortAttempts(group.attempts);
-      const latest = attempts[attempts.length - 1];
+      // Summary indexes retain the producer's verdict even when an earlier pass superseded a
+      // later failure. Embedded reports and older indexes keep their latest-attempt rule.
+      const retained = attempts.filter((attempt) => attempt.s.meta.retainedResult);
+      const latest = retained[retained.length - 1] || attempts[attempts.length - 1];
       return { ...group, attempts, latest, outcome: latest.outcome };
     });
   };
@@ -5156,7 +5177,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   };
 
   // The landing page is grouped by unique trail, not raw session. A retry is attempt history, so
-  // the final attempt determines the section while the earlier attempts remain nested beneath it.
+  // the retained verdict determines the section while the other attempts remain nested beneath it.
   // On mixed-platform reports a trail's per-platform runs share one row (see indexMatrixRows).
   const renderIndex = () => {
     const allRuns = useMatrix ? indexMatrixRows() : indexRunGroups();
@@ -5317,8 +5338,10 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       // opens the cross-device view, the same as the header button. The per-device cells beside it
       // keep opening their own run.
       const rowTrail = trailKey(row.latest.s);
+      const remoteHref = rowTrail ? trailRemoteComparisonHref(rowTrail) : null;
       const name = trailViewAvailableFor(rowTrail) && (trailScopes().get(rowTrail) || []).length > 1
         ? `<button class="nm nmtrail" type="button" data-goto-compare-trail="${esc(rowTrail)}" title="Compare this trail across its runs">${esc(title)}</button>`
+        : remoteHref ? `<a class="nm nmtrail" href="${esc(remoteHref)}" target="_blank" rel="noopener noreferrer" title="Compare this trail across its runs">${esc(title)}</a>`
         : `<div class="nm">${esc(title)}</div>`;
       return `<div class="idxentry" data-run-entry data-search="${esc(search)}">
           <div class="idxrow idxmatrixrow"><div class="idxmain">${name}${subtitle ? `<div class="idxowner">${esc(subtitle)}</div>` : ''}${entryStats(row)}</div><div class="idxcells">${cells}</div></div>

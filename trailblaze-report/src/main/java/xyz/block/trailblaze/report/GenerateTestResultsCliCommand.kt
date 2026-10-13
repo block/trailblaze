@@ -400,6 +400,8 @@ open class GenerateTestResultsCliCommand(
     val summaryReport = CiSummaryReport(
       metadata = metadata,
       results = finalResults,
+      // Only when something retried; otherwise every row would repeat in `results`.
+      attempts = deduplicated.attemptResults.takeIf { it.size > ranResults.size },
     )
 
     val output = outputArg ?: File(logsDir, "trailblaze_test_report.${outputFormat.extension}")
@@ -441,7 +443,7 @@ open class GenerateTestResultsCliCommand(
     // the ones a retry superseded, and it is what the Block subclass uploads to CDP. A skip made
     // no attempt, so a synthetic row here would send an external results sink a test execution
     // that never happened. The report on disk still lists it.
-    generatedAttemptReport = summaryReport.copy(results = deduplicated.attemptResults)
+    generatedAttemptReport = summaryReport.copy(results = deduplicated.attemptResults, attempts = null)
 
     // Clean up file watchers to allow JVM to exit
     if (ownsLogsRepo) logsRepo.close()
@@ -574,6 +576,7 @@ open class GenerateTestResultsCliCommand(
       ci_build_label = getEnv("BUILDKITE_LABEL") ?: getEnv("CI_BUILD_LABEL"),
       git_commit = getEnv("BUILDKITE_COMMIT") ?: getEnv("GIT_COMMIT"),
       git_branch = getEnv("BUILDKITE_BRANCH") ?: getEnv("GIT_BRANCH"),
+      git_repository_url = RunReportGenerator.repositoryWebUrl(environment),
     )
   }
 

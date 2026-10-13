@@ -305,6 +305,16 @@ class AnalyzerScriptedToolEnrichment(
               "exports to the `.ts` file.",
           )
         }
+        // Entry `_meta` merges over the descriptor's, so it needs the same shape check — a scalar
+        // `requiredClassifiers` on one entry must fail the load, not just that tool's registration.
+        multiToolEntries.firstNotNullOfOrNull { entry ->
+          validateKnownMetaShapes(entry.meta)?.let { "tool '${entry.name}': $it" }
+        }?.let { reason ->
+          return ScriptedToolEnrichment.EnrichmentResult.Failed(
+            relativePath = deferred.relativePath,
+            reason = reason,
+          )
+        }
         multiToolEntries.map { entry ->
           buildPartialConfig(
             descriptor = descriptor,
@@ -610,6 +620,12 @@ class AnalyzerScriptedToolEnrichment(
         return "`_meta.trailblaze/supportedPlatforms` expected a YAML list of strings " +
           "(e.g. `[android, web]`), got ${v::class.simpleName} '${v}'. Prefer the top-level " +
           "`supportedPlatforms: [...]` shortcut instead of authoring this key directly."
+      }
+    }
+    meta["trailblaze/requiredClassifiers"]?.let { v ->
+      if (v !is JsonArray || v.any { it !is JsonPrimitive || !(it as JsonPrimitive).isString }) {
+        return "`_meta.trailblaze/requiredClassifiers` expected a YAML list of classifier segments " +
+          "(e.g. `[rig]`), got ${v::class.simpleName} '${v}'."
       }
     }
     meta["trailblaze/sensitiveArgNames"]?.let { v ->

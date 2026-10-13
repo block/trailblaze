@@ -139,12 +139,12 @@ removed in a future release.
                                by default; use --no-capture-network to disable.
                                When neither flag is passed, inherits that saved
                                setting.
-      --[no-]capture-video   Record device screen video for the session. Off by
-                               default — video writes large files — pass
-                               --capture-video to enable it for a run. When
-                               neither flag is passed, inherits
-                               TRAILBLAZE_CAPTURE_VIDEO and the saved
-                               `trailblaze config capture-video` setting.
+      --[no-]capture-video   Record device screen video for the session. On by
+                               default for `run`; use --no-capture-video to
+                               skip it. Interactive sessions (`session start`,
+                               `tool`, `blaze`, MCP) stay off unless
+                               TRAILBLAZE_CAPTURE_VIDEO or `trailblaze config
+                               capture-video` opts them in.
       --compose-port=<composePort>
                              RPC port for Compose driver connections (default:
                                52600)

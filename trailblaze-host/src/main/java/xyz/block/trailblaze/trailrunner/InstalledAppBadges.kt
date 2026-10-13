@@ -6,6 +6,7 @@ import java.util.zip.ZipFile
 import xyz.block.trailblaze.device.InstalledApp
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
+import xyz.block.trailblaze.ui.TrailblazeDesktopUtil
 import xyz.block.trailblaze.util.AndroidHostAdbUtils
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.util.TrailblazeProcessBuilderUtils
@@ -35,7 +36,7 @@ internal object InstalledAppBadges {
   /** What the badge endpoints return: either field absent when the platform couldn't answer. */
   data class Badge(val label: String?, val iconFile: File?)
 
-  private val cacheDir = File(System.getProperty("user.home") ?: ".", ".trailblaze/cache/app-badges")
+  private val cacheDir = File(TrailblazeDesktopUtil.getDefaultAppDataDirectory(), "cache/app-badges")
 
   /**
    * The most recent installed-app inventory per device, memoized by [rememberInventory] each time

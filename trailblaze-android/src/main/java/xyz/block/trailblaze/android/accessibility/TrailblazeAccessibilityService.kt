@@ -95,8 +95,20 @@ class TrailblazeAccessibilityService : AccessibilityService() {
         // text-entry steps complete (the LLM thinks input isn't finalized and loops).
         val cls = event.className?.toString() ?: return
         if (!cls.contains('.')) return
-        if (!isEventFromApplicationWindow(event)) return
-        currentActivityClass = cls
+        when (applicationWindowVerdict(event)) {
+          WindowVerdict.APPLICATION -> synchronized(activityLock) {
+            currentActivityClass = cls
+            pendingActivity = null
+          }
+          // A new activity's window can announce itself before the window list includes it. Keep
+          // the class and decide once the window is listed, instead of dropping it: dropping it
+          // left the previous activity's name on the screen until some later event.
+          WindowVerdict.NOT_LISTED_YET -> {
+            Console.log("[activity] ${cls.substringAfterLast('.')} announced before its window was listed; pending")
+            synchronized(activityLock) { pendingActivity = PendingActivity(event.windowId, cls) }
+          }
+          WindowVerdict.OTHER -> Unit
+        }
       }
       AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED,
       AccessibilityEvent.TYPE_VIEW_SCROLLED,
@@ -185,14 +197,72 @@ class TrailblazeAccessibilityService : AccessibilityService() {
      */
     fun forgetStableTree() {
       lastStableTree = null
+      lastQuietVerdictEventCount = null
     }
+
+    /**
+     * [uiEventCount] when [waitForSettled] last found the screen quiet, or null once this driver has
+     * dispatched input since. Read only when [SettleSwitches.REUSE_QUIET_VERDICT_SYSPROP] is on.
+     */
+    @Volatile private var lastQuietVerdictEventCount: Long? = null
+
+    /**
+     * [uiEventCount] when the last post-action settle went quiet AFTER seeing the action's own
+     * events, or null when it saw none. Good for the next [waitForSettled] only, which consumes it.
+     * Read only when [SettleSwitches.REUSE_QUIET_VERDICT_SYSPROP] is on.
+     */
+    @Volatile private var postActionQuietEventCount: Long? = null
+
+    /** [waitForSettled]'s default grace; a caller passing more is a post-action settle. */
+    private const val DEFAULT_SETTLE_GRACE_MS = 50L
 
     /** The class name of the current foreground activity, tracked from accessibility events. */
     @Volatile internal var currentActivityClass: String? = null
 
+    /**
+     * A window-state change whose window was not in the window list yet when it arrived. See
+     * [resolvePendingActivity].
+     */
+    internal data class PendingActivity(val windowId: Int, val className: String)
+
+    @Volatile private var pendingActivity: PendingActivity? = null
+
+    /**
+     * Guards [currentActivityClass] and [pendingActivity] together: a capture thread resolving a
+     * pending activity must not overwrite a newer one the event thread recorded meanwhile.
+     */
+    private val activityLock = Any()
+
     /** Returns the short name of the current foreground activity (e.g., "HomeActivity"). */
-    fun getCurrentActivity(): String? =
-      currentActivityClass?.substringAfterLast('.')?.takeIf { it.isNotBlank() }
+    fun getCurrentActivity(): String? {
+      resolvePendingActivity()
+      return currentActivityClass?.substringAfterLast('.')?.takeIf { it.isNotBlank() }
+    }
+
+    /**
+     * Settles a [pendingActivity] against the window list as it is now: adopted when its window
+     * turned out to be an application window, dropped when it turned out to be anything else, and
+     * kept while the window is still not listed.
+     */
+    private fun resolvePendingActivity() {
+      val pending = pendingActivity ?: return
+      // Read the window list outside the lock; it is a binder call.
+      val windows = getServiceWindows()
+      val verdict = pendingActivityVerdict(pending.windowId, windows?.map { it.id to it.type })
+      synchronized(activityLock) {
+        // A newer window-state change replaced or cleared this one while the list was read.
+        if (pendingActivity !== pending) return
+        when (verdict) {
+          WindowVerdict.APPLICATION -> {
+            Console.log("[activity] ${pending.className.substringAfterLast('.')} adopted once its window was listed")
+            currentActivityClass = pending.className
+            pendingActivity = null
+          }
+          WindowVerdict.OTHER -> pendingActivity = null
+          WindowVerdict.NOT_LISTED_YET -> Unit
+        }
+      }
+    }
 
     /**
      * Package of the foreground application window, or null when it cannot be established.
@@ -262,7 +332,27 @@ class TrailblazeAccessibilityService : AccessibilityService() {
     ): Boolean {
       val startTime = Clock.System.now().toEpochMilliseconds()
       val eventTimestampAtEntry = lastUiEventTimestampMs
+      // EXPERIMENTAL, off by default — see [SettleSwitches.REUSE_QUIET_VERDICT_SYSPROP]. Only a
+      // pre-action wait (the default grace) may reuse; the post-action settle passes a longer grace
+      // and always waits, and any input this driver dispatches drops the verdict first.
+      if (maxGracePeriodMs <= DEFAULT_SETTLE_GRACE_MS) {
+        // One-shot: only the wait straight after an action may use that action's verdict.
+        val afterAction = postActionQuietEventCount
+        postActionQuietEventCount = null
+        if (SettleSwitches.reuseQuietVerdictEnabled()) {
+          val proven = lastQuietVerdictEventCount
+          if (proven != null && proven == uiEventCount.get()) {
+            Console.log("UI settled after 0ms (quiet verdict reused; no UI events or input since)")
+            return true
+          }
+          if (afterAction != null && afterAction == uiEventCount.get()) {
+            Console.log("UI settled after 0ms (the action's settle saw it react and go quiet; no UI events since)")
+            return true
+          }
+        }
+      }
 
+      if (maxGracePeriodMs > DEFAULT_SETTLE_GRACE_MS) postActionQuietEventCount = null
       val pollIntervalMs = 16L // ~1 frame at 60fps for responsive polling
       var sawNewEvent = false
 
@@ -277,6 +367,7 @@ class TrailblazeAccessibilityService : AccessibilityService() {
           return false
         }
 
+        val eventCountBeforeCheck = uiEventCount.get()
         val currentEventTimestamp = lastUiEventTimestampMs
         val timeSinceLastEvent = now - currentEventTimestamp
 
@@ -295,6 +386,14 @@ class TrailblazeAccessibilityService : AccessibilityService() {
         // Once we've seen events (or grace period expired), check for quiet window.
         if (timeSinceLastEvent >= quietWindowMs) {
           Console.log("UI settled after ${elapsed}ms (quiet for ${timeSinceLastEvent}ms)")
+          // A post-action settle can return before the action's first event, which is the case the
+          // next capture's own grace is there for. So its verdict is never kept as a pre-action one,
+          // and it is offered to the next wait only when it saw the action's events first.
+          if (maxGracePeriodMs <= DEFAULT_SETTLE_GRACE_MS) {
+            lastQuietVerdictEventCount = eventCountBeforeCheck
+          } else {
+            postActionQuietEventCount = if (sawNewEvent) eventCountBeforeCheck else null
+          }
           return true
         }
 
@@ -775,6 +874,21 @@ class TrailblazeAccessibilityService : AccessibilityService() {
      */
     private const val STABILITY_QUIET_MS = 80L
 
+    /**
+     * The quiet window after a window transition the gate held for has ended. The system batches
+     * accessibility window updates while windows move, and publishes the final bounds tens of
+     * milliseconds after the animation's last frame (an API 34 emulator logged ~100 ms), so the
+     * normal [STABILITY_QUIET_MS] could accept the tree just before its bounds move.
+     */
+    private const val STABILITY_POST_TRANSITION_QUIET_MS = 160L
+
+    /**
+     * A transition probe slower than this means the shell is struggling (a probe normally reads in
+     * ~10-20 ms), so the capture stops asking. A read that times out also drops the cached
+     * UiAutomation connection, so retrying it every sample would make things worse.
+     */
+    private const val SLOW_TRANSITION_PROBE_MS = 250L
+
     /** Hard cap on the stability wait — a perpetually-animating screen proceeds instead of blocking. */
     private const val STABILITY_MAX_WAIT_MS = 1000L
 
@@ -870,6 +984,17 @@ class TrailblazeAccessibilityService : AccessibilityService() {
       var previousSignature: Long? = null
       var lastChangeUptimeMs = startUptimeMs
       var loggedTruncated = false
+      val transitionGateOn = WindowTransitionProbe.enabled()
+      var heldForTransition = false
+      var quietRequiredMs = STABILITY_QUIET_MS
+      val transitionProbe = CaptureTransitionProbe(
+        enabled = transitionGateOn,
+        deadlineUptimeMs = deadlineUptimeMs,
+        slowReadMs = SLOW_TRANSITION_PROBE_MS,
+        nowUptimeMs = SystemClock::uptimeMillis,
+        read = { budgetMs -> WindowTransitionProbe.isTransitionPlaying(budgetMs = budgetMs) },
+      )
+      fun probeTransition(): Boolean? = transitionProbe.ask()
       while (true) {
         val root = getApplicationWindowRoot() ?: return null
         try {
@@ -886,6 +1011,14 @@ class TrailblazeAccessibilityService : AccessibilityService() {
                 "[turbo] discarding the inprocess-idle verdict — the tree is now $treeAppId, " +
                   "not the turbo app; judging this screen with the stability loop",
               )
+            } else if (probeTransition() == true) {
+              // The outgoing app can go idle before the incoming window exists, and its tree is
+              // still the foreground root then, so the identity check above passes it.
+              Console.log(
+                "[settle] inprocess-idle answered but a window transition is playing; " +
+                  "judging this screen with the stability loop",
+              )
+              heldForTransition = true
             } else {
               // No refresh here: the capture this gate fronts re-reads every node from the app
               // before it builds anything, so a refresh in the gate would be paid twice. The sample
@@ -919,11 +1052,21 @@ class TrailblazeAccessibilityService : AccessibilityService() {
             // Something moved since the proof. A looping animation can come back to the proven
             // frame on a later capture, so the proof must not outlive this mismatch.
             lastStableTree = null
+            // Ask once up front too, not only when the tree goes quiet. A transition that ends
+            // while the tree is still changing is never seen by the quiet-tree check, and its
+            // final bounds still arrive ~100 ms after its last frame.
+            if (probeTransition() == true) {
+              Console.log("[settle] window transition playing at capture start")
+              heldForTransition = true
+            }
           }
           if (sample.signature != previousSignature) {
+            // A change after a held transition ended is the late window update the longer quiet
+            // window was waiting for; from here the normal quiet window applies.
+            if (previousSignature != null) quietRequiredMs = STABILITY_QUIET_MS
             previousSignature = sample.signature
             lastChangeUptimeMs = now
-          } else if (now - lastChangeUptimeMs >= STABILITY_QUIET_MS) {
+          } else if (now - lastChangeUptimeMs >= quietRequiredMs) {
             var assessment = HierarchyCoverageAssessor.assess(sample.bounds, screenWidth, screenHeight)
             if (assessment.looksTruncated) {
               // Signature is quiet but only a slice of the screen's content is present — likely a
@@ -939,12 +1082,38 @@ class TrailblazeAccessibilityService : AccessibilityService() {
               lastChangeUptimeMs = SystemClock.uptimeMillis()
               assessment = HierarchyCoverageAssessor.assess(sample.bounds, screenWidth, screenHeight)
             }
-            if (!assessment.looksTruncated) {
+            // A quiet tree can still be a window mid-transition: the system animates the window's
+            // surface, not its views, and the bounds jump only when the animation ends. See
+            // [WindowTransitionProbe]. Asked only here, once the tree already looks settled.
+            val quietVerdict = if (assessment.looksTruncated) {
+              null
+            } else {
+              decideQuietTree(
+                transitionPlaying = probeTransition(),
+                heldForTransition = heldForTransition,
+              )
+            }
+            when (quietVerdict) {
+              QuietTreeVerdict.HOLD -> {
+                if (!heldForTransition) {
+                  Console.log("[settle] tree quiet after ${now - startUptimeMs}ms but a window transition is playing — holding")
+                }
+                heldForTransition = true
+              }
+              QuietTreeVerdict.RESTART_QUIET_WINDOW -> {
+                Console.log("[settle] window transition finished after ${SystemClock.uptimeMillis() - startUptimeMs}ms")
+                heldForTransition = false
+                lastChangeUptimeMs = SystemClock.uptimeMillis()
+                quietRequiredMs = STABILITY_POST_TRANSITION_QUIET_MS
+              }
+              QuietTreeVerdict.ACCEPT, null -> Unit
+            }
+            if (quietVerdict == QuietTreeVerdict.ACCEPT) {
               Console.log("[settle] tree stable after ${now - startUptimeMs}ms")
               lastStableTree = StableTreeMemo(sample.signature, uiEventCountBeforeSample, assessment)
               return assessment
             }
-            if (!loggedTruncated) {
+            if (quietVerdict == null && !loggedTruncated) {
               Console.log(
                 "[capture-coverage] settled tree looks truncated (${assessment.reason}); " +
                   "holding for the full tree",
@@ -952,7 +1121,8 @@ class TrailblazeAccessibilityService : AccessibilityService() {
               loggedTruncated = true
             }
           }
-          if (now >= deadlineUptimeMs) {
+          // Read fresh: the coverage refresh and the transition probe above take time of their own.
+          if (SystemClock.uptimeMillis() >= deadlineUptimeMs) {
             val finalAssessment =
               HierarchyCoverageAssessor.assess(sample.bounds, screenWidth, screenHeight)
             if (finalAssessment.looksTruncated) {
@@ -963,6 +1133,8 @@ class TrailblazeAccessibilityService : AccessibilityService() {
                   "the app under test (e.g. incomplete Compose semantics, a custom view that " +
                   "doesn't populate AccessibilityNodeInfo); selectors may miss visible elements",
               )
+            } else if (heldForTransition) {
+              Console.log("[settle] window transition still playing after ${STABILITY_MAX_WAIT_MS}ms — proceeding")
             } else {
               Console.log("[settle] tree still changing after ${STABILITY_MAX_WAIT_MS}ms — proceeding")
             }
@@ -1080,17 +1252,20 @@ class TrailblazeAccessibilityService : AccessibilityService() {
       className.endsWith(IME_SOFT_INPUT_WINDOW_SUFFIX) ||
         className.contains(IME_PACKAGE_FRAGMENT)
 
+    /** Where a window-state change came from, as far as the window list can tell right now. */
+    internal enum class WindowVerdict { APPLICATION, NOT_LISTED_YET, OTHER }
+
     /**
-     * Returns true when [event] is confirmed to originate from a foreground application
-     * window (TYPE_APPLICATION). Looks up the window type via [getServiceWindows] when
-     * possible; on devices where window enumeration is unavailable, falls back to a
-     * negative IME class-name check — accept anything that doesn't look like an IME, which
-     * preserves activity tracking on degraded devices rather than dropping it entirely.
+     * Whether [event] comes from a foreground application window (TYPE_APPLICATION). Looks up the
+     * window type via [getServiceWindows] when possible; on devices where window enumeration is
+     * unavailable, falls back to a negative IME class-name check — accept anything that doesn't
+     * look like an IME, which preserves activity tracking on degraded devices rather than dropping
+     * it entirely.
      *
      * Used to gate `currentActivityClass` updates so System UI / IME / toast / overlay
      * events don't overwrite the foreground app's class.
      */
-    private fun isEventFromApplicationWindow(event: AccessibilityEvent): Boolean {
+    private fun applicationWindowVerdict(event: AccessibilityEvent): WindowVerdict {
       val windowId = event.windowId
       // AccessibilityEvent.getWindowId() returns a non-negative window id, or a negative
       // value when not associated with a window. Anything < 0 means we can't look up the
@@ -1098,19 +1273,27 @@ class TrailblazeAccessibilityService : AccessibilityService() {
       if (windowId >= 0) {
         val windows = getServiceWindows()
         if (!windows.isNullOrEmpty()) {
-          val match = windows.firstOrNull { it.id == windowId } ?: return false
-          // Strict positive: ONLY accept TYPE_APPLICATION. System UI is TYPE_SYSTEM,
-          // toasts TYPE_TOAST, IME TYPE_INPUT_METHOD, overlays TYPE_ACCESSIBILITY_OVERLAY —
-          // none of those are real activities and shouldn't overwrite currentActivityClass.
-          return match.type == AccessibilityWindowInfo.TYPE_APPLICATION
+          return pendingActivityVerdict(windowId, windows.map { it.id to it.type })
         }
       }
       // Fallback when windows enumeration is unavailable (older OEMs, pre-init): we can't
       // confirm the type, so accept anything that doesn't *look* like an IME by class name.
       // This loses precision on degraded devices but preserves the activity-tracking
       // feature there rather than nulling it out entirely.
-      val cls = event.className?.toString() ?: return false
-      return !isImeClassName(cls)
+      val cls = event.className?.toString() ?: return WindowVerdict.OTHER
+      return if (isImeClassName(cls)) WindowVerdict.OTHER else WindowVerdict.APPLICATION
+    }
+
+    /**
+     * The verdict for window [windowId] given the window list as `(id, type)` pairs. Strict
+     * positive: ONLY TYPE_APPLICATION counts. System UI is TYPE_SYSTEM, toasts TYPE_TOAST, IME
+     * TYPE_INPUT_METHOD, overlays TYPE_ACCESSIBILITY_OVERLAY — none of those are real activities.
+     * An unreadable list (null) can no longer confirm anything, so a pending class is dropped.
+     */
+    internal fun pendingActivityVerdict(windowId: Int, windows: List<Pair<Int, Int>>?): WindowVerdict {
+      if (windows.isNullOrEmpty()) return WindowVerdict.OTHER
+      val type = windows.firstOrNull { it.first == windowId }?.second ?: return WindowVerdict.NOT_LISTED_YET
+      return if (type == AccessibilityWindowInfo.TYPE_APPLICATION) WindowVerdict.APPLICATION else WindowVerdict.OTHER
     }
 
     /**

@@ -542,6 +542,24 @@ class RunReportGeneratorTest {
   }
 
   @Test
+  fun reportProvenanceJson_preservesCustomActionsCommitHostWithoutCredentials() {
+    val meta = RunReportGenerator.reportProvenanceJson(
+      mapOf(
+        "GITHUB_SERVER_URL" to "https://ci-user:credential@git.example.com:8443/",
+        "GITHUB_REPOSITORY" to "team/repo",
+        "GITHUB_SHA" to "0123456789abcdef",
+      ),
+    )
+    assertEquals(
+      "https://git.example.com:8443/team/repo/commit/0123456789abcdef",
+      meta["commitUrl"]!!.jsonPrimitive.content,
+    )
+    assertNull(GitRepoUrls.webBaseUrl("https://git.example.com/team/repo"))
+    assertNull(RunReportGenerator.repositoryWebUrl(mapOf("GITHUB_SERVER_URL" to "javascript:alert(1)", "GITHUB_REPOSITORY" to "team/repo")))
+    assertNull(RunReportGenerator.repositoryWebUrl(mapOf("GITHUB_SERVER_URL" to "https://git.example.com", "GITHUB_REPOSITORY" to "team/../repo")))
+  }
+
+  @Test
   fun sessionMetaJson_surfacesFailureReasonAsErrorBanner() {
     val failed = SessionStatus.Ended.Failed(900, "Could not find Pay button")
     val meta = RunReportGenerator.sessionMetaJson(info(failed), failed, noSelfHeal)

@@ -5,6 +5,8 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
+import xyz.block.trailblaze.devices.RequiredDeviceClassifiers
+import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.toolcalls.DeclaredSensitiveArgs
 
@@ -27,6 +29,12 @@ data class QuickJsToolMeta(
    * Values are normalized to uppercase at parse time so authors can write either casing.
    */
   val supportedPlatforms: List<String> = emptyList(),
+  /**
+   * Device-classifier segments the session device must carry. Shares
+   * [RequiredDeviceClassifiers] with the legacy reader, so the two runtimes agree on which devices
+   * a tool loads on — including a malformed declaration, which never registers on a known device.
+   */
+  val requiredClassifiers: RequiredDeviceClassifiers = RequiredDeviceClassifiers.None,
   /**
    * Whether to advertise this tool to the LLM. Unlike [requiresHost] / [supportedDrivers] /
    * [supportedPlatforms], this is NOT a [shouldRegister] gate — a `surfaceToLlm = false` tool
@@ -54,9 +62,14 @@ data class QuickJsToolMeta(
    * Decide whether this tool should register for a session identified by its [driver].
    * On-device callers pass `preferHostAgent = false`, which is what makes
    * `trailblaze/requiresHost: true` tools skip at registration without any extra branching.
-   * Filter order matches the legacy reader's: drivers → platforms → requiresHost.
+   * Filter order matches the legacy reader's: drivers → platforms → requiresHost →
+   * requiredClassifiers.
    */
-  fun shouldRegister(driver: TrailblazeDriverType, preferHostAgent: Boolean): Boolean {
+  fun shouldRegister(
+    driver: TrailblazeDriverType,
+    preferHostAgent: Boolean,
+    classifiers: List<TrailblazeDeviceClassifier>? = null,
+  ): Boolean {
     if (supportedDrivers.isNotEmpty() && driver.yamlKey !in supportedDrivers) {
       return false
     }
@@ -68,7 +81,7 @@ data class QuickJsToolMeta(
     if (requiresHost && !preferHostAgent && driver.executesToolsOnDevice) {
       return false
     }
-    return true
+    return requiredClassifiers.isSatisfiedBy(classifiers)
   }
 
   companion object {
@@ -91,6 +104,8 @@ data class QuickJsToolMeta(
         requiresHost = (meta[KEY_REQUIRES_HOST] as? JsonPrimitive)?.booleanOrNull ?: false,
         supportedDrivers = meta.readStringList(KEY_SUPPORTED_DRIVERS),
         supportedPlatforms = meta.readStringList(KEY_SUPPORTED_PLATFORMS).map { it.uppercase() },
+        // NOT `readStringList` — see [RequiredDeviceClassifiers].
+        requiredClassifiers = RequiredDeviceClassifiers.fromMeta(meta),
         surfaceToLlm = (meta[KEY_SURFACE_TO_LLM] as? JsonPrimitive)?.booleanOrNull ?: true,
         isRecordable = (meta[KEY_IS_RECORDABLE] as? JsonPrimitive)?.booleanOrNull ?: true,
         // NOT `readStringList` — that treats a malformed shape as absent, which for this key means

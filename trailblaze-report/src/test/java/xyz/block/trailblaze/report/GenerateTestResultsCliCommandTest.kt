@@ -187,6 +187,28 @@ class GenerateTestResultsCliCommandTest {
   }
 
   @Test
+  fun `summary repository links discard clone credentials`() {
+    val logsDir = Files.createTempDirectory("trailblaze-report-test").toFile()
+    val outputFile = File(logsDir, "results.json")
+    try {
+      writePassedSession(logsDir, SessionId("repository-session"), webDeviceInfo(), "trails/checkout/pay.trail.yaml")
+      captureStdout {
+        GenerateTestResultsCliCommand(
+          environment = mapOf(
+            "GITHUB_SERVER_URL" to "https://ci-user:credential@git.example.com:8443",
+            "GITHUB_REPOSITORY" to "example/trails.git",
+          ),
+        ).main(arrayOf(logsDir.absolutePath, outputFile.absolutePath, "--output-format", "JSON"))
+      }
+      val report = json.decodeFromString<CiSummaryReport>(outputFile.readText())
+      assertEquals("https://git.example.com:8443/example/trails", report.metadata.git_repository_url)
+      assertFalse(outputFile.readText().contains("credential@"))
+    } finally {
+      logsDir.deleteRecursively()
+    }
+  }
+
+  @Test
   fun `config_id is read from the environment so every leg of a config reports the same value`() {
     // CONFIG_ID and DEVICE_KEY are separate env vars, so every leg of a config reports the same
     // config_id and one predicate gathers them all.
@@ -351,6 +373,7 @@ class GenerateTestResultsCliCommandTest {
       val attempts = command.attemptReport()!!.results
       assertTrue(attempts.none { it.outcome == Outcome.SKIPPED }, "skips reached the attempt projection")
       assertEquals(1, attempts.count { it.outcome == Outcome.PASSED })
+      assertNull(report.attempts, "a run with no retries should not repeat its rows in attempts")
       assertEquals("checkout/refund", skipped.test_key)
       assertEquals("backend outage, see #2194", skipped.failure_reason)
       assertEquals(1, report.results.count { it.outcome == Outcome.PASSED })
@@ -2654,6 +2677,10 @@ class GenerateTestResultsCliCommandTest {
 
       val attempts = command.attemptReport()!!.results.associateBy { it.session_id }
       assertEquals(2, attempts.size)
+      // The on-disk summary is what CI indexes download. Its verdict stays deduplicated, while
+      // the attempt projection survives serialization so earlier sessions remain linkable.
+      assertEquals(listOf(failedSessionId, passedSessionId), report.attempts!!.map { it.session_id })
+      assertEquals(attempts, report.attempts!!.associateBy { it.session_id })
       assertEquals(1, attempts.getValue(failedSessionId).attempt)
       assertEquals(2, attempts.getValue(failedSessionId).total_attempts)
       assertEquals(passedSessionId, attempts.getValue(failedSessionId).superseded_by)

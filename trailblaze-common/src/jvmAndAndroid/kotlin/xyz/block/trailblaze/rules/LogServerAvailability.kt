@@ -29,9 +29,28 @@ class LogServerAvailability(
   private val nowMs: () -> Long = MONOTONIC_MS,
   private val onProbe: (available: Boolean, tookMs: Long) -> Unit = { _, _ -> },
 ) {
-  private var reached = false
+  @Volatile private var reached = false
   private var lastMissAtMs: Long? = null
   private var retryAfterMs = initialRetryAfterMs
+
+  /**
+   * Asks the server ahead of the first [isAvailable], keeping only a yes.
+   *
+   * The first ask is the expensive one: it builds the HTTP client and opens the connection, which
+   * cost about half a second in-process, on the request that starts the run. Asking while the
+   * runner is still waiting for the app moves that cost off it. A no is dropped rather than
+   * recorded, because a channel can come up between this ask and the first log, and a recorded
+   * miss would send that log to disk for a whole backoff window. Not [Synchronized]: a log that
+   * arrives while this is still asking probes for itself instead of waiting behind it.
+   */
+  fun warm() {
+    if (reached) return
+    val startedAt = nowMs()
+    if (probe()) {
+      reached = true
+      onProbe(true, nowMs() - startedAt)
+    }
+  }
 
   /** Cheap once the server has answered; otherwise probes at most once per backoff window. */
   @Synchronized

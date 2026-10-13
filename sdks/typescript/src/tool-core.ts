@@ -114,6 +114,12 @@ export interface TrailblazeTypedToolSpec<TInput = Record<string, unknown>> {
   /** Drivers this tool may register on. Empty / omitted = all drivers. */
   supportedDrivers?: readonly string[];
   /**
+   * Device-classifier segments the session's device must ALL carry for this tool to register,
+   * e.g. `["rig"]` registers only on a device classified `android-phone-rig`. Empty / omitted = any
+   * device. Use it for tools that need hardware or infrastructure only some devices have.
+   */
+  requiredClassifiers?: readonly string[];
+  /**
    * Advertise this tool to the LLM. `false` hides it from the LLM's tool menu while keeping it
    * dispatchable by name (composed by a parent tool) and resolvable for recorded replays — the
    * scripted-tool equivalent of an internal Kotlin step. NOT a registration filter; the tool still

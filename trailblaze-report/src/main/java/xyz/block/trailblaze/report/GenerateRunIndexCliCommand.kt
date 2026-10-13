@@ -59,7 +59,7 @@ class GenerateRunIndexCliCommand(
       runCatching { JSON.decodeFromString<CiSummaryReport>(file.readText()) }
         .getOrElse { error("Could not read ${file.absolutePath} as a Trailblaze test report: ${it.message}") }
     }
-    val rowCount = reports.sumOf { it.results.size }
+    val rowCount = reports.sumOf { RunIndexGenerator.indexResults(it).size }
     if (rowCount == 0) {
       // Not an error: a config whose every shard was skipped legitimately reports nothing, and
       // failing here would turn an empty run into a red step for the wrong reason.

@@ -1565,6 +1565,7 @@ class HostOnDeviceRpcTrailblazeAgentTest {
     // Step 1 + 2: the context the agent built for this dispatch has both fields propagated
     // through from the constructor.
     val ctx = checkNotNull(capturedCtx.get()) { "capturing tool did not receive a context" }
+    assertThat(ctx.captureNetworkTraffic).isEqualTo(true)
     assertThat(ctx.resolvedTarget).isNotNull()
     assertThat(ctx.resolvedTarget?.id).isEqualTo("test-target")
     assertThat(ctx.appId).isEqualTo("com.example.testtarget")

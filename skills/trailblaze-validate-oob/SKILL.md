@@ -1,13 +1,9 @@
 ---
 name: trailblaze-validate-oob
-description: |
-  Use when validating or evaluating Trailblaze's out-of-box (OOB)
-  user experience — does what the `trailblaze` skill claims actually
-  match the real installed CLI? Triggers on requests to "validate the
-  Trailblaze skill", "test the Trailblaze OOB experience", "evaluate
-  Trailblaze UX", "check if the skill matches the CLI", "audit the
-  Trailblaze CLI for new-user friction", or running an OOB regression
-  check after the framework changes.
+description: >
+  Use when checking Trailblaze's out-of-box (OOB) experience against installed
+  CLI behavior: validate the `trailblaze` skill, CLI UX, new-user friction, or
+  a framework regression.
 ---
 
 # Validating Trailblaze's out-of-box experience

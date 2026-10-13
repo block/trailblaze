@@ -510,6 +510,9 @@ kotlin {
         implementation(libs.ktor.server.cio)
         implementation(libs.ktor.server.websockets)
         implementation(libs.ktor.client.mock)
+        // HeldCertificate: a private CA and a server certificate it signs, for testing that the
+        // default client trusts the OS CA bundle.
+        implementation(libs.okhttp.tls)
       }
     }
 

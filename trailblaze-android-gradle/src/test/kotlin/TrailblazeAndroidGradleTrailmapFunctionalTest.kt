@@ -154,22 +154,17 @@ class TrailblazeAndroidGradleTrailmapFunctionalTest {
           }
         }
 
-        tasks.register("dumpDeps") {
-          doLast {
-            val t = tasks.named("bundleTrailmapPOnlyToolBundle").get()
-            println("DEPS=" + t.taskDependencies.getDependencies(t).map { it.path }.sorted())
-          }
-        }
         """
         ),
         tempDirs,
       )
     writeTool(projectDir, "only.ts", TYPED_TOOL_SOURCE)
 
-    val result = gradleRunner(projectDir, "dumpDeps").build()
-    assertEquals(TaskOutcome.SUCCESS, result.task(":dumpDeps")?.outcome)
-    assertTrue("expected per-tool bundle task to dependsOn :stubSdkInstall: ${result.output}") {
-      result.output.contains(":stubSdkInstall")
+    val result = gradleRunner(projectDir, "bundleTrailmapPOnlyToolBundle", "--dry-run").build()
+    val installIndex = result.output.indexOf(":stubSdkInstall SKIPPED")
+    val bundleIndex = result.output.indexOf(":bundleTrailmapPOnlyToolBundle SKIPPED")
+    assertTrue("expected SDK install before tool bundling: ${result.output}") {
+      installIndex >= 0 && bundleIndex > installIndex
     }
   }
 

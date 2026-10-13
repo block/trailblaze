@@ -150,6 +150,7 @@ class HostOnDeviceRpcTrailblazeAgent(
   sessionDirProvider = sessionDirProvider,
   workingDirectory = workingDirectory,
   memory = memory,
+  captureNetworkTraffic = runYamlRequestTemplate.config.captureNetworkTraffic,
 ) {
 
   override val usesAccessibilityDriver: Boolean = true

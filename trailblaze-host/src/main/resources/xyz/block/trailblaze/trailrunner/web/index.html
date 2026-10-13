@@ -57,6 +57,11 @@
 <!-- Decides which run the Active screen follows after a launch: the id dispatch reported, or the
      newest running row when no id is coming. Plain JS with a sibling bun test. -->
 <script src="./app/screens/follow-run-model.js"></script>
+<!-- Devices screen rules: pointer → gesture, mirror → device pixels, tool form → trail YAML.
+     Plain JS with a sibling bun test. -->
+<script src="./app/screens/device-console-model.js"></script>
+<!-- Pure: a device's session logs folded into the focused view's live activity feed. -->
+<script src="./app/screens/device-activity-model.js"></script>
 <!-- Unified trail/blaze YAML producers (config: + trail:, per-step recording keyed by device
      classifier). Single source of truth shared with the recorder screens (thin delegating wrappers)
      and bun tests in app/trail-yaml.test.ts. Plain JS; loaded before the screens. -->
@@ -116,6 +121,7 @@
 <script src="./app/screens/integrations.js"></script>
 <script src="./app/screens/blaze.js"></script>
 <script src="./app/screens/record.js"></script>
+<script src="./app/screens/device-console.js"></script>
 <script src="./app/screens/steps-board.js"></script>
 <script src="./app/screens/trail-tree.js"></script>
 <script src="./app/screens/trail-detail.js"></script>

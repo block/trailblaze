@@ -299,6 +299,22 @@ class NextMoveDecisionLlmClientTest {
   }
 
   @Test
+  fun `each decision is logged with the bar it was held to, acted on or not`() {
+    fun outcome(p: Double, doneThreshold: Double?): String {
+      val logs = mutableListOf<TrailblazeLog>()
+      runBlocking {
+        withContext(DecisionLogContext(SessionId("s"), traceId = null) { logs += it }) {
+          tree(TreeEngine(sure("move" to "finished", p = p)), FakeLlm(), doneThreshold = doneThreshold)
+            .execute(prompt("Tap the Items tab", "tap" to """{"ref":"b34"}"""), MODEL, TOOLS)
+        }
+      }
+      return logs.filterIsInstance<TrailblazeLog.TrailblazeDecisionRequestLog>().single().outcome!!
+    }
+    assertThat(outcome(0.6, doneThreshold = null)).isEqualTo("acted: done_ok p=0.600 bar=0.510")
+    assertThat(outcome(0.6, doneThreshold = 0.8)).isEqualTo("left to the LLM: done_ok p=0.600 bar=0.800 (below the bar)")
+  }
+
+  @Test
   fun `shadow mode still asks about a verification step, and says it would not act`() {
     val engine = ScriptedEngine(NextMoveDecisionLlmClient.DONE)
     val logs = mutableListOf<TrailblazeLog>()
@@ -468,10 +484,12 @@ class NextMoveDecisionLlmClientTest {
     alwaysShownTools: Set<String> = emptySet(),
     showAllToolsAfter: Int? = null,
     doneThreshold: Double? = null,
+    screenText: () -> String = { screen },
+    scrub: (String) -> String = { it },
   ) = NextMoveDecisionLlmClient(
-    llm, engine, "fake", NextMoveDecisionLlmClient.Mode.FIRST, 0.95, objective, verification, { screen },
+    llm, engine, "fake", NextMoveDecisionLlmClient.Mode.FIRST, 0.95, objective, verification, screenText,
     HANG_CONTAINMENT_MS, NextMoveDecisionLlmClient.Questions.TREE, hideTools, alwaysShownTools, showAllToolsAfter,
-    doneThreshold,
+    doneThreshold, scrub,
   )
 
   private fun sure(vararg path: Pair<String, String>, p: Double = 0.99) = path.associate { (q, pick) -> q to (pick to p) }
@@ -792,9 +810,126 @@ class NextMoveDecisionLlmClientTest {
       )
     fun ended(answer: Message.Assistant) = answer.parts.filterIsInstance<MessagePart.Tool.Call>().singleOrNull()?.tool == "objectiveStatus"
     assertThat(ended(answer(0.85, doneThreshold = 0.8))).isTrue()
-    assertThat(ended(answer(0.85, doneThreshold = null))).isFalse()
-    assertThat(ended(answer(0.92, doneThreshold = null))).isTrue()
+    assertThat(ended(answer(0.85, doneThreshold = 0.9))).isFalse()
+    assertThat(ended(answer(0.6, doneThreshold = null))).isTrue()
+    assertThat(ended(answer(0.45, doneThreshold = null))).isFalse()
     assertThat(ended(answer(0.92, doneThreshold = 0.95))).isFalse()
+  }
+
+  @Test
+  fun `the tree's default done bar is the same after a tap as after a check`() {
+    fun ended(lastMove: Pair<String, String>): Boolean {
+      val answer = run(
+        tree(TreeEngine(sure("move" to "finished", p = 0.6)), FakeLlm()),
+        prompt("Tap the Items tab", "tap" to """{"ref":"b34"}""", lastMove),
+      )
+      return answer.parts.filterIsInstance<MessagePart.Tool.Call>().singleOrNull()?.tool == "objectiveStatus"
+    }
+    assertThat(ended("tap" to """{"ref":"a12"}""")).isTrue()
+    assertThat(ended("assertVisible" to """{"ref":"a12"}""")).isTrue()
+  }
+
+  @Test
+  fun `a screen that fails to capture leaves the turn to the LLM rather than failing it`() {
+    val llm = FakeLlm()
+    val client = tree(TreeEngine(sure("move" to "finished")), llm, screenText = { error("capture failed") })
+    assertThat(run(client)).isSameInstanceAs(LLM_ANSWER)
+    assertThat(llm.calls).isEqualTo(1)
+  }
+
+  @Test
+  fun `the engine sees what each move returned, without the screen that came with it`() {
+    val engine = TreeEngine(sure("move" to "finished"))
+    val result = "Executed tap: Success(message=null, structuredContent=null)\n\nCurrent screen:\n[a12] Button \"Items\""
+    run(tree(engine, FakeLlm()), prompt("Tap the Items tab", "tap" to """{"ref":"a12"}""", results = listOf(result)))
+    val history = (engine.requests.single().state as JsonObject).getValue("actions_taken_so_far_in_this_step").toString()
+    assertThat(history).contains("=>  Executed tap: Success(message=null, structuredContent=null)")
+    assertThat(history).doesNotContain("Current screen")
+  }
+
+  @Test
+  fun `a move's result is kept after the agent swaps it for a placeholder`() {
+    val engine = TreeEngine(sure("move" to "finished", p = 0.3))
+    val client = tree(engine, FakeLlm())
+    val failed = "Tool tap failed: IllegalStateException: stale ref\n\nCurrent screen:\n[a12] Button \"Items\""
+    run(client, prompt("Tap the Items tab", "tap" to """{"ref":"a12"}""", results = listOf(failed)))
+    // Turns later, the agent has replaced that older result, screen and all.
+    val pruned = xyz.block.trailblaze.mcp.agent.KoogStrategyGraphAgent.STALE_SCREEN_PLACEHOLDER
+    run(client, prompt("Tap the Items tab", "tap" to """{"ref":"a12"}""", "swipe" to "{}", results = listOf(pruned, "Swiped UP")))
+    val history = (engine.requests.last().state as JsonObject).getValue("actions_taken_so_far_in_this_step").toString()
+    assertThat(history).contains("(failed)  =>  Tool tap failed: IllegalStateException: stale ref")
+    assertThat(history).doesNotContain("older screen state omitted")
+  }
+
+  @Test
+  fun `a failed move's result is not pushed out by older results read again`() {
+    val engine = TreeEngine(sure("move" to "finished", p = 0.3))
+    val client = tree(engine, FakeLlm())
+    val failed = "Tool tap failed: IllegalStateException: stale ref\n\nCurrent screen:\n[a12] Button \"Items\""
+    val pruned = xyz.block.trailblaze.mcp.agent.KoogStrategyGraphAgent.STALE_SCREEN_PLACEHOLDER
+    // More short results than are remembered, none ever pruned, then the failed tap.
+    val older = Array(64) { "swipe" to "{}" }
+    val olderResults = List(64) { "Swiped UP" }
+    run(client, prompt("Tap the Items tab", *older, "tap" to """{"ref":"a12"}""", results = olderResults + failed))
+    // Two moves later the agent has swapped the failed tap's result for a placeholder.
+    run(
+      client,
+      prompt(
+        "Tap the Items tab", *older, "tap" to """{"ref":"a12"}""", "swipe" to "{}", "swipe" to "{}",
+        results = olderResults + pruned + "Swiped UP" + "Swiped UP",
+      ),
+    )
+    val history = (engine.requests.last().state as JsonObject).getValue("actions_taken_so_far_in_this_step").toString()
+    assertThat(history).contains("(failed)  =>  Tool tap failed: IllegalStateException: stale ref")
+  }
+
+  @Test
+  fun `a secret a move's result echoes is masked before the engine sees it`() {
+    val engine = TreeEngine(sure("move" to "finished", p = 0.3))
+    val client = tree(engine, FakeLlm(), scrub = { it.replace("hunter2", "{{password}}") })
+    val typed = "Executed type: Success(message=Typed 'hunter2', structuredContent=null)"
+    run(client, prompt("Type the password", "type" to """{"text":"{{password}}"}""", results = listOf(typed)))
+    val history = (engine.requests.single().state as JsonObject).getValue("actions_taken_so_far_in_this_step").toString()
+    assertThat(history).doesNotContain("hunter2")
+    assertThat(history).contains("Typed '{{password}}'")
+  }
+
+  @Test
+  fun `the flat question's history leaves out what each move returned`() {
+    val engine = ScriptedEngine(NextMoveDecisionLlmClient.DONE)
+    val result = "Executed tap: Success(message=null, structuredContent=null)"
+    run(client(engine, FakeLlm(), NextMoveDecisionLlmClient.Mode.FIRST), prompt("Tap the Items tab", "tap" to """{"ref":"a12"}""", results = listOf(result)))
+    assertThat(engine.requests.single().state.toString()).doesNotContain("=>")
+  }
+
+  @Test
+  fun `the engine's history names the element a tap hit, from the screen the tap was picked on`() {
+    val engine = TreeEngine(sure("move" to "finished", p = 0.3))
+    val tap = Message.Assistant(
+      listOf<MessagePart.ResponsePart>(MessagePart.Tool.Call("c0", "tap", """{"ref":"a12","reasoning":"open it"}""")),
+      ResponseMetaInfo.create(KoogClock.System),
+    )
+    var screen = SCREEN
+    val client = tree(engine, FakeLlm(answers = listOf(tap)), screenText = { screen })
+    // The LLM picks the tap on the first screen; by the next turn that element has gone.
+    run(client, prompt("Tap the Items tab"))
+    screen = "App: com.example.app\n\n[d78] Text \"Item list\""
+    run(client, prompt("Tap the Items tab", "tap" to """{"ref":"a12","reasoning":"open it"}"""))
+    val history = (engine.requests.last().state as JsonObject).getValue("actions_taken_so_far_in_this_step").toString()
+    assertThat(history).contains("""on [a12] Button \"Items\"""")
+  }
+
+  @Test
+  fun `the element a tap hit is left out of the flat question`() {
+    val engine = ScriptedEngine(NextMoveDecisionLlmClient.DONE)
+    val tap = Message.Assistant(
+      listOf<MessagePart.ResponsePart>(MessagePart.Tool.Call("c0", "tap", """{"ref":"a12"}""")),
+      ResponseMetaInfo.create(KoogClock.System),
+    )
+    val client = client(engine, FakeLlm(answers = listOf(tap)), NextMoveDecisionLlmClient.Mode.FIRST)
+    run(client, prompt("Tap the Items tab"))
+    run(client, prompt("Tap the Items tab", "tap" to """{"ref":"a12"}"""))
+    assertThat(engine.requests.last().state.toString()).doesNotContain("on [a12]")
   }
 
   private fun Message.Assistant.call() = parts.filterIsInstance<MessagePart.Tool.Call>().single()

@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.report
 
 import java.net.URLEncoder
+import java.net.URI
 
 fun gitHubTrailSourceUrl(cloneUrl: String?, commit: String?, path: String): String? {
   val base = GitRepoUrls.webBaseUrl(cloneUrl)?.takeIf { it.startsWith("https://github.com/") }
@@ -27,6 +28,17 @@ internal object GitRepoUrls {
   internal data class Parsed(val host: String, val slug: String)
 
   private val SLUG = Regex("^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+  /** Actions identifies its own GitHub server, including enterprise hosts on custom domains. */
+  internal fun actionsWebBaseUrl(serverUrl: String, repository: String): String? {
+    val server = runCatching { URI(serverUrl.trim()) }.getOrNull() ?: return null
+    if (server.scheme !in listOf("https", "http") || server.host == null) return null
+    if (!server.path.isNullOrEmpty() && server.path != "/") return null
+    val slug = repository.trim().removeSuffix("/").removeSuffix(".git")
+    if (!SLUG.matches(slug)) return null
+    // Rebuild the URL so userinfo, queries, and fragments cannot carry clone credentials.
+    return URI(server.scheme, null, server.host, server.port, "/$slug", null, null).toASCIIString()
+  }
 
   /**
    * Host + `owner/repo` for `git@host:owner/repo.git`, `https://host/owner/repo.git`, and

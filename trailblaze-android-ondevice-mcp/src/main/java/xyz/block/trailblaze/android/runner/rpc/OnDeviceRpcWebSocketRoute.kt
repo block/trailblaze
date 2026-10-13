@@ -28,6 +28,7 @@ import xyz.block.trailblaze.ondevice.rpc.proto.RpcRequestEnvelope
 import xyz.block.trailblaze.ondevice.rpc.proto.RpcResponseEnvelope
 import xyz.block.trailblaze.replay.ActionTrace
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.util.TrailblazeDispatchers
 
 internal data class OnDeviceProtoRpcHandlers(
   val getScreenState: suspend (GetScreenStateRequest) -> RpcResult<GetScreenStateResponse>,
@@ -55,7 +56,9 @@ internal fun Route.registerOnDeviceRpcWebSocket(
       // is to attribute the whole request.
       val arrivedNs = System.nanoTime()
       val bytes = frame.readBytes()
-      launch {
+      // On TrailblazeDispatchers.IO, not the session's Dispatchers.IO: in-process that pool is the
+      // app's, and an app SDK holding its workers would stall every RPC behind it.
+      launch(TrailblazeDispatchers.IO) {
         // The only place a whole request is bracketed. `run_yaml` is one replayed action, so its
         // frame arrival is t=0 for the boundary trace and its reply frame is the last boundary;
         // every other op just notes that it overlapped, so a polluted trace is visible.

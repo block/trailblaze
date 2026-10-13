@@ -4,8 +4,11 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import xyz.block.trailblaze.devices.AndroidAccessibilityServiceDrivers
@@ -137,6 +140,78 @@ class DesktopYamlRunner(
     /** Applying a device language always requires a fresh target process. */
     internal fun shouldForceStopTargetApp(requested: Boolean, locale: String?): Boolean =
       requested || locale != null
+
+    /**
+     * The session id to start capture under BEFORE the whole-trail RPC is sent, or null when it can
+     * only be learned from the reply.
+     *
+     * A synchronous [RunYamlRequest] replies when the trail has finished, so a session started from
+     * the reply records nothing: on an in-process run the logcat stream came back empty and memory
+     * held one reading, taken after the trail. The stop then cost every run several seconds on
+     * top — the first memory reading of a just-started capture was still in flight against the
+     * device. A pinned id (the CLI and the daemon both pin one) is the id the device will create
+     * the session under, so capture can start under it while the trail still has to run.
+     */
+    internal fun sessionIdToCaptureBeforeDispatch(runYamlRequest: RunYamlRequest): SessionId? =
+      runYamlRequest.config.overrideSessionId?.takeIf { runYamlRequest.awaitCompletion }
+
+    /**
+     * Sends a synchronous whole-trail request and returns when the run is over: at the reply, or
+     * as soon as the session [pinnedSessionId] names has written its end — whichever comes first.
+     *
+     * The device's end status already reaches the host through the log stream, and the run's
+     * verdict is read from those logs anyway. The reply is a second, slower signal: an in-process
+     * runner's server shares the app's IO threads, and when the app holds them the reply sat for
+     * seconds — once 118 s — behind an end status that had already landed. Settling on whichever
+     * arrives first stops the run waiting on the slow one. A request that fails before any session
+     * starts never writes an end, so its failure reply still wins.
+     *
+     * With no pinned id the end cannot be recognised before the reply names it, so this is just
+     * [sendRequest]. An end status the pinned id already had before the request was sent belongs
+     * to an earlier run, so it is ignored and the reply alone decides.
+     *
+     * [onDispatching] gets the pinned id just before the request is sent, so session-scoped capture
+     * runs while the trail does. If the request then fails or throws, the device never ran that
+     * session and writes nothing for it, so [onAbandoned] gets the id to stop that capture.
+     */
+    internal suspend fun replyOrSessionEnd(
+      pinnedSessionId: SessionId?,
+      sendRequest: suspend () -> RpcResult<RunYamlResponse>,
+      sessionHasEnded: (SessionId) -> Boolean,
+      onDispatching: (SessionId) -> Unit = {},
+      onAbandoned: (SessionId) -> Unit = {},
+      pollIntervalMs: Long = SESSION_END_POLL_MS,
+    ): RpcResult<RunYamlResponse> {
+      if (pinnedSessionId == null) return sendRequest()
+      val endedBeforeDispatch = sessionHasEnded(pinnedSessionId)
+      onDispatching(pinnedSessionId)
+      val result = try {
+        if (endedBeforeDispatch) {
+          sendRequest()
+        } else {
+          coroutineScope {
+            val reply = async { sendRequest() }
+            val ended = async {
+              while (!sessionHasEnded(pinnedSessionId)) delay(pollIntervalMs)
+              RpcResult.Success(RunYamlResponse(sessionId = pinnedSessionId))
+            }
+            select { reply.onAwait { it }; ended.onAwait { it } }
+              .also { reply.cancel(); ended.cancel() }
+          }
+        }
+      } catch (e: CancellationException) {
+        // The run itself was cancelled, possibly mid-trail: its own teardown owns the session.
+        throw e
+      } catch (t: Throwable) {
+        onAbandoned(pinnedSessionId)
+        throw t
+      }
+      if (result is RpcResult.Failure) onAbandoned(pinnedSessionId)
+      return result
+    }
+
+    /** How often [replyOrSessionEnd] looks for the end status; it reads only status logs. */
+    private const val SESSION_END_POLL_MS = 250L
 
     /** Refuses a classifier-qualified run when the installed runner would discard its override. */
     internal fun deviceClassifierOverrideCapabilityRejection(
@@ -1043,6 +1118,12 @@ class DesktopYamlRunner(
                 onConnectionStatus = onConnectionStatus,
                 additionalInstrumentationArgs = additionalInstrumentationArgs,
                 onSessionStarted = captureSessionStarted,
+                onSessionAbandoned = { sid ->
+                  finalizeHostSessionResources(
+                    listOf(sid),
+                    trailblazeDeviceManager.sessionCaptureCoordinator::stopForSession,
+                  )
+                },
               )
             }
           }
@@ -1728,15 +1809,22 @@ class DesktopYamlRunner(
     onProgressMessage: (String) -> Unit,
     additionalInstrumentationArgs: Map<String, String>,
     /**
-     * Fired exactly once after the on-device RPC reports a successful start, BEFORE we begin
-     * polling for completion. The session is live at this point — the on-device runner has
-     * created the session directory and is about to execute the YAML. Callers use this to spin
-     * up out-of-band session-scoped infrastructure that needs to run *while* the YAML executes
-     * (e.g. an Android network-capture activator — it has to be polling its discovery
-     * side-channel before the launch tool's first network call so it can attach to the
-     * target's freshly-opened socket). Defaulted to a no-op so existing callers stay compatible.
+     * Fired with the session id as soon as it is known: before the RPC is sent when the request
+     * pins one (see [sessionIdToCaptureBeforeDispatch]), and again from the reply. Callers use this
+     * to spin up out-of-band session-scoped infrastructure that needs to run *while* the YAML
+     * executes (e.g. an Android network-capture activator — it has to be polling its discovery
+     * side-channel before the launch tool's first network call so it can attach to the target's
+     * freshly-opened socket), so it must be idempotent per session. Defaulted to a no-op so
+     * existing callers stay compatible.
      */
     onSessionStarted: (SessionId) -> Unit = {},
+    /**
+     * Fired with the pinned session id when [onSessionStarted] ran for it before dispatch but the
+     * device never ran the session: the request was refused or threw. The device writes no logs
+     * for that id, so the caller's own session-end cleanup cannot find it; this is the only point
+     * that can stop what [onSessionStarted] started.
+     */
+    onSessionAbandoned: (SessionId) -> Unit = {},
     /**
      * The run's effective target — `targetTestApp ?: trailblazeHostAppTarget`, the same expression
      * [resolveOnDeviceInstrumentationTarget] picks the runner from. See [connectAndEnsureReady].
@@ -1759,8 +1847,34 @@ class DesktopYamlRunner(
 
       withContext(Dispatchers.Default) {
         onConnectionStatus(status)
+        // Errors from the callback are caught so a misbehaving listener can't crash the test run.
+        val notifySessionStarted: (SessionId) -> Unit = { sid ->
+          try {
+            onSessionStarted(sid)
+          } catch (t: Throwable) {
+            Console.log(
+              "[runYamlOnDevice] onSessionStarted callback threw — continuing test run: " +
+                "${t::class.java.simpleName}: ${t.message}"
+            )
+          }
+        }
+        // A synchronous request replies once the trail is over, so session-scoped capture (logcat,
+        // memory, the network bridge) has to start before it is sent. See
+        // sessionIdToCaptureBeforeDispatch.
+        val pinnedSessionId = sessionIdToCaptureBeforeDispatch(runYamlRequest)
         // The capability gate reads the readiness handshake's answer; see startYamlAfterReadiness.
-        when (val result: RpcResult<RunYamlResponse> = startYamlAfterReadiness(onDeviceRpc, readiness, runYamlRequest)) {
+        val result: RpcResult<RunYamlResponse> = replyOrSessionEnd(
+          pinnedSessionId = pinnedSessionId,
+          sendRequest = { startYamlAfterReadiness(onDeviceRpc, readiness, runYamlRequest) },
+          sessionHasEnded = { trailblazeDeviceManager.logsRepo.persistedEndStatus(it) != null },
+          onDispatching = notifySessionStarted,
+          onAbandoned = { sid ->
+            runCatching { onSessionAbandoned(sid) }.onFailure {
+              Console.log("[runYamlOnDevice] onSessionAbandoned callback threw: ${it.message}")
+            }
+          },
+        )
+        when (result) {
           is RpcResult.Failure -> {
             onProgressMessage("Failed to start YAML execution: ${result.message}${result.details?.let { " | $it" } ?: ""}")
             null
@@ -1770,22 +1884,13 @@ class DesktopYamlRunner(
             val runYamlResponse = result.data
             onProgressMessage("YAML test execution started for session: ${runYamlResponse.sessionId}")
 
-            // Notify the caller that the session is live, BEFORE we block on completion. This is
-            // the only window in which session-scoped out-of-band infrastructure (the network
-            // capture bridge, mainly) can attach with the right session ID. Errors from the
-            // callback are caught so a misbehaving listener can't crash the test run.
-            try {
-              onSessionStarted(runYamlResponse.sessionId)
-            } catch (t: Throwable) {
-              Console.log(
-                "[runYamlOnDevice] onSessionStarted callback threw — continuing test run: " +
-                  "${t::class.java.simpleName}: ${t.message}"
-              )
-            }
+            // Also from the reply: an unpinned or fire-and-forget request learns its session id
+            // only here. Idempotent when capture already started under the pinned id above.
+            notifySessionStarted(runYamlResponse.sessionId)
 
-            // Wait for the on-device test to complete. The RPC returns immediately
-            // (fire-and-forget), but we need to block until the session reaches an
-            // Ended status so that logs are fully streamed before the process exits.
+            // Block until the session reaches an Ended status so its logs are fully streamed
+            // before the process exits. A fire-and-forget reply arrives before the trail runs; a
+            // synchronous one after it, when this returns at once.
             awaitOnDeviceSessionCompletion(
               sessionId = runYamlResponse.sessionId,
               trailblazeDeviceId = trailblazeConnectedDevice.trailblazeDeviceId,

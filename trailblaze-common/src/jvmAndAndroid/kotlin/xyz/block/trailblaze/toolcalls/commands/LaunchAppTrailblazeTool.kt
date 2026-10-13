@@ -1,7 +1,6 @@
 package xyz.block.trailblaze.toolcalls.commands
 
 import ai.koog.agents.core.tools.annotations.LLMDescription
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.Serializable
 import maestro.orchestra.Command
@@ -14,6 +13,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.isSuccess
 import xyz.block.trailblaze.yaml.serializers.CaseInsensitiveEnumSerializer
+import xyz.block.trailblaze.util.TrailblazeDispatchers
 
 /**
  * Decides whether an Android launch actually took, re-issuing it once when it didn't.
@@ -215,7 +215,7 @@ Available App Launch Modes:
         // The poll blocks (PollingUtils sleeps the calling thread), so it must not run on the
         // caller's dispatcher.
         awaitForeground = { maxWaitMs ->
-          runBlocking(Dispatchers.IO) {
+          runBlocking(TrailblazeDispatchers.IO) {
             androidDeviceCommandExecutor.waitUntilAppInForeground(
               appId = appId,
               maxWaitMs = maxWaitMs,

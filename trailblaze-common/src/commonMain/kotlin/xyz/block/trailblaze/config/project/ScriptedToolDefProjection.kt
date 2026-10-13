@@ -226,6 +226,7 @@ object ScriptedToolDefProjection {
     "requiresContext",
     "requiresHost",
     "supportedDrivers",
+    "requiredClassifiers",
     "surfaceToLlm",
     "isRecordable",
     "sensitiveArgNames",

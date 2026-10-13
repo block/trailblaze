@@ -20,6 +20,7 @@ import xyz.block.trailblaze.api.TrailblazeNodeSelector
 import xyz.block.trailblaze.config.InlineScriptToolConfig
 import xyz.block.trailblaze.config.TrailheadMetadata
 import xyz.block.trailblaze.scripting.ScriptedToolCatalog
+import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.llm.config.ConfigResourceSource
@@ -2126,6 +2127,49 @@ class ToolDiscoveryToolSetTest {
     val toolNames = scriptedGroup["tools"]!!.jsonArray.map { it.jsonPrimitive.content }
 
     assertContains(toolNames, "web_inline_script_tool")
+  }
+
+  @Test
+  fun `connected discovery lists a requiredClassifiers tool only for a device that carries it`() = runTest {
+    // Discovery must agree with dispatch: a rig-only tool the session never registered can't be
+    // advertised to a non-rig device, and must be advertised to a rig one.
+    val rigTarget = object : TrailblazeHostAppTarget(id = "rigapp", displayName = "Rig App") {
+      override fun getPossibleAppIdsForPlatform(platform: TrailblazeDevicePlatform): List<String>? =
+        if (platform == TrailblazeDevicePlatform.WEB) listOf("rig-web") else null
+
+      override fun internalGetCustomToolsForDriver(
+        driverType: TrailblazeDriverType,
+      ): Set<KClass<out TrailblazeTool>> = emptySet()
+
+      override fun getInlineScriptTools(): List<InlineScriptToolConfig> = listOf(
+        InlineScriptToolConfig(
+          script = "./tools/rig_only.ts",
+          name = "rig_only_tool",
+          description = "Needs rig hardware",
+          meta = buildJsonObject {
+            put("trailblaze/requiredClassifiers", buildJsonArray { add(JsonPrimitive("rig")) })
+            put("trailblaze/toolset", "rig_core")
+          },
+        ),
+      )
+    }
+    suspend fun listedTools(classifiers: List<String>?): List<String> {
+      val toolSet = ToolDiscoveryToolSet(
+        sessionContext = null,
+        allTargetAppsProvider = { setOf(rigTarget) },
+        currentTargetProvider = { null },
+        currentDriverTypeProvider = { TrailblazeDriverType.PLAYWRIGHT_NATIVE },
+        currentDeviceClassifiersProvider = { classifiers?.map(::TrailblazeDeviceClassifier) },
+      )
+      val obj = json.parseToJsonElement(toolSet.toolbox(target = "rigapp")).jsonObject
+      return obj["toolGroups"]?.jsonArray.orEmpty()
+        .flatMap { group -> group.jsonObject["tools"]?.jsonArray.orEmpty().map { it.jsonPrimitive.content } }
+    }
+
+    assertContains(listedTools(listOf("web", "rig")), "rig_only_tool")
+    assertFalse("rig_only_tool" in listedTools(listOf("web")), "a non-rig device must not be offered the tool")
+    // No runtime yet = classifiers unknown: list the tool rather than hide one that may apply.
+    assertContains(listedTools(null), "rig_only_tool")
   }
 
   @Test

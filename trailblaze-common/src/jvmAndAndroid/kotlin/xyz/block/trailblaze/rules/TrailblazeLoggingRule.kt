@@ -1,6 +1,5 @@
 package xyz.block.trailblaze.rules
 
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Clock
 import org.junit.runner.Description
@@ -26,6 +25,7 @@ import xyz.block.trailblaze.devices.TrailblazeDevicePort
 import xyz.block.trailblaze.tracing.TrailblazeTraceExporter
 import xyz.block.trailblaze.tracing.TrailblazeTracer
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.util.TrailblazeDispatchers
 
 /**
  * Base JUnit4 Logging Rule for Trailblaze Tests
@@ -264,7 +264,7 @@ abstract class TrailblazeLoggingRule(
       val sessionId = session?.sessionId ?: SessionId("unknown")
       // False only when the server was reachable and this log missed it: the log then sits on the
       // device's disk while the logs around it reach the host.
-      val reachedServerIfUp = runBlocking(Dispatchers.IO) {
+      val reachedServerIfUp = runBlocking(TrailblazeDispatchers.IO) {
         if (isServerAvailable) {
           try {
             val sent = trailblazeLogServerClient.sendAgentLog(log)
@@ -357,6 +357,18 @@ abstract class TrailblazeLoggingRule(
         }
       },
     )
+  }
+
+  /**
+   * Pings the log server on a background thread, so the first log does not pay for the client
+   * build and the connection. Only a reachable answer is kept: see [LogServerAvailability.warm].
+   * Call it from where the runner is waiting on something else, ahead of the first log.
+   */
+  fun warmLogServer() {
+    if (noLogging) return
+    Thread({ logServerAvailability.warm() }, "trailblaze-log-server-warmup")
+      .apply { isDaemon = true }
+      .start()
   }
 
   /**
@@ -497,7 +509,7 @@ abstract class TrailblazeLoggingRule(
 
   private fun exportTraces(explicitSessionId: SessionId? = null) {
     val sessionId = explicitSessionId ?: session?.sessionId ?: SessionId("unknown")
-    runBlocking(Dispatchers.IO) {
+    runBlocking(TrailblazeDispatchers.IO) {
       TrailblazeTraceExporter.exportAndSave(
         sessionId = sessionId,
         client = trailblazeLogServerClient,
@@ -516,7 +528,7 @@ private class ServerScreenStateLogger(
 ) : ScreenStateLogger {
   override fun logScreenState(screenState: TrailblazeScreenStateLog): String {
     // Send Log
-    return runBlocking(Dispatchers.IO) {
+    return runBlocking(TrailblazeDispatchers.IO) {
       if (isServerAvailable()) {
         try {
           val sent = trailblazeLogServerClient.sendScreenshot(
