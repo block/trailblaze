@@ -108,6 +108,12 @@ jobs:
           android-api-level: ${{ matrix.android-api-level }}
           android-profile: ${{ matrix.android-profile }}
           ios-simulator: ${{ matrix.ios-simulator }}
+          test-apk: ${{ matrix.test-apk }}
+          test-targets: ${{ matrix.test-targets }}
+          test-args: ${{ matrix.test-args }}
+          orchestrator: ${{ matrix.orchestrator }}
+          shard-index: ${{ matrix.shard-index }}
+          shard-count: ${{ matrix.shard-count }}
           version: ${{ inputs.version || job.workflow_ref }}
           cli-artifact: ${{ inputs.cli-artifact }}
           artifact-suffix: -${{ matrix.id }}
@@ -131,6 +137,7 @@ jobs:
         uses: ./.trailblaze-runner/.github/actions/trailblaze
         with:
           command: report
+          shards-passed: ${{ needs.run.result == 'success' }}
           version: ${{ inputs.version || job.workflow_ref }}
           cli-artifact: ${{ inputs.cli-artifact }}
           publish: ${{ inputs.publish }}

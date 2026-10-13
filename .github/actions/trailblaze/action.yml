@@ -19,6 +19,28 @@ inputs:
       App to install before the run: an APK for Android, a simulator `.app` for iOS. Leave empty if
       the app is already on the device or a trailhead installs it.
     default: ""
+  test-apk:
+    description: >-
+      Android instrumentation test APK to run instead of trails, as a device farm would. Its tests
+      write their sessions on the device, and they join the same report.
+    default: ""
+  test-targets:
+    description: >-
+      Which of the test APK's tests to run, one per line, such as `class com.example.LoginTest` or
+      `package com.example`. Leave empty for all of them.
+    default: ""
+  test-args:
+    description: "Instrumentation arguments for the test APK, as a JSON object, such as `{\"key\": \"value\"}`."
+    default: "{}"
+  orchestrator:
+    description: Run the test APK under Android Test Orchestrator, which clears the app's data between tests.
+    default: "false"
+  shard-index:
+    description: This job's shard of the test APK, counting from 0.
+    default: "0"
+  shard-count:
+    description: How many jobs share the test APK; Android's test runner splits its tests between them.
+    default: "1"
   config-dir:
     description: The workspace's `trails/config` directory, when it isn't found from the trails.
     default: ""
@@ -63,6 +85,11 @@ inputs:
     default: ""
   summary:
     description: Write the job summary (and PR comment). Shards turn it off and leave it to `report`.
+    default: "true"
+  shards-passed:
+    description: >-
+      For `report`, whether every shard job succeeded. `false` fails the report even when every
+      session in it passed, since a shard that crashed leaves no session behind.
     default: "true"
   publish:
     description: >-
@@ -183,6 +210,12 @@ runs:
         INPUT_ARGS: ${{ inputs.args }}
         INPUT_CONFIG_DIR: ${{ inputs.config-dir }}
         INPUT_SETUP: ${{ inputs.setup }}
+        INPUT_TEST_APK: ${{ inputs.test-apk }}
+        INPUT_TEST_TARGETS: ${{ inputs.test-targets }}
+        INPUT_TEST_ARGS: ${{ inputs.test-args }}
+        ORCHESTRATOR: ${{ inputs.orchestrator }}
+        SHARD_INDEX: ${{ inputs.shard-index }}
+        SHARD_COUNT: ${{ inputs.shard-count }}
         CAPTURE_VIDEO: ${{ inputs.capture-video }}
       run: bash "$GITHUB_ACTION_PATH/scripts/run.sh"
 
@@ -197,12 +230,21 @@ runs:
         INPUT_ARGS: ${{ inputs.args }}
         INPUT_CONFIG_DIR: ${{ inputs.config-dir }}
         INPUT_SETUP: ${{ inputs.setup }}
+        INPUT_TEST_APK: ${{ inputs.test-apk }}
+        INPUT_TEST_TARGETS: ${{ inputs.test-targets }}
+        INPUT_TEST_ARGS: ${{ inputs.test-args }}
+        ORCHESTRATOR: ${{ inputs.orchestrator }}
+        SHARD_INDEX: ${{ inputs.shard-index }}
+        SHARD_COUNT: ${{ inputs.shard-count }}
         CAPTURE_VIDEO: ${{ inputs.capture-video }}
       with:
         api-level: ${{ inputs.android-api-level }}
         arch: x86_64
         profile: ${{ inputs.android-profile }}
         force-avd-creation: true
+        # Room for a large test APK and the sessions its tests write.
+        disk-size: 6000M
+        heap-size: 600M
         emulator-options: -no-snapshot -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
         disable-animations: true
         script: bash "${{ github.action_path }}/scripts/run.sh"
@@ -226,6 +268,8 @@ runs:
     - name: Merge results
       if: ${{ !cancelled() && inputs.command == 'report' }}
       shell: bash
+      env:
+        SHARDS_PASSED: ${{ inputs.shards-passed }}
       run: bash "$GITHUB_ACTION_PATH/scripts/merge.sh"
 
     - name: Upload report

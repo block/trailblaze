@@ -1,5 +1,6 @@
-# The showcase trails that pr-checks.yml runs through the trail runner (trail-runner.yml), one per
-# platform. The request format is in .github/actions/trailblaze/README.md.
+# What pr-checks.yml runs through the trail runner (trail-runner.yml): the showcase trails, one per
+# platform, and the examples module's on-device Clock test. The request format is in
+# .github/actions/trailblaze/README.md.
 defaults:
   mode: replay
   # Scripted tools in a source checkout need the TypeScript SDK's esbuild.
@@ -9,6 +10,17 @@ runs:
     device: android
     android: { api: 34, profile: Nexus 6 }
     trails: [trails/clock/set-alarm-730am/trail.yaml]
+
+  # The examples module's instrumentation test APK (from pr-checks.yml's build job), run as a
+  # device farm runs one. The trail runs inside the test on the device.
+  - name: android-clock-on-device
+    device: android
+    android: { api: 34, profile: Nexus 6 }
+    test-apk: examples-debug-androidTest.apk
+    test-targets: [class xyz.block.trailblaze.examples.clock.ClockTest]
+    # Replays recordings, so no LLM is called; the client wiring needs a non-empty token.
+    test-args: { trailblaze.llm.auth.token.openai: no-key-set }
+    setup: ""
 
   - name: web-wikipedia
     device: web

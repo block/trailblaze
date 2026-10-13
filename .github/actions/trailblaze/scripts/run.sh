@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Runs the trails on the prepared device. Always exits 0 and leaves the verdict in a file, so the
+# Runs the trails, or the test APK, on the prepared device. Always exits 0 and leaves the verdict in a file, so the
 # export, publish and summary steps still run after a failed trail.
 set -uo pipefail
 status=0
@@ -19,7 +19,9 @@ if [ "$status" = 0 ] && [ -n "$INPUT_APP" ]; then
     ios) xcrun simctl install booted "$INPUT_APP" || status=$? ;;
   esac
 fi
-if [ "$status" = 0 ]; then
+if [ "$status" = 0 ] && [ -n "${INPUT_TEST_APK:-}" ]; then
+  bash "$(dirname "$0")/instrument.sh" || status=$?
+elif [ "$status" = 0 ]; then
   flags=()
   if [ "$CAPTURE_VIDEO" = true ]; then flags+=(--capture-video); fi
   # Both are lists, split on whitespace on purpose.

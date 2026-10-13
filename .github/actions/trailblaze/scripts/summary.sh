@@ -21,14 +21,19 @@ rows() {
 }
 passed=$(rows | awk -F'\t' '$1=="PASSED"' | wc -l | tr -d ' ')
 total=$(rows | wc -l | tr -d ' ')
+verdict=$(cat "$RUNNER_TEMP/trailblaze-exit" 2> /dev/null || echo 1)
 {
   echo "$marker"
-  if [ "$total" -gt 0 ] && [ "$passed" = "$total" ]; then
+  if [ "$verdict" = 0 ] && [ "$total" -gt 0 ] && [ "$passed" = "$total" ]; then
     echo "## Trailblaze: ✅ $passed of $total trails passed"
   else
     echo "## Trailblaze: ❌ $passed of $total trails passed"
   fi
   echo
+  if [ "$verdict" != 0 ] && [ "$total" -gt 0 ] && [ "$passed" = "$total" ]; then
+    echo "A job failed outside these trails, such as a shard that crashed or a test that isn't a trail. See [the run]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)."
+    echo
+  fi
   if [ -n "$REPORT_URL" ]; then
     echo "[Open the full report]($REPORT_URL)"
     echo

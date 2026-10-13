@@ -33,8 +33,9 @@ Replace `<release-tag>` with a Trailblaze release, such as `v2026.10.20`: the ta
 
 ## The request file
 
-YAML, or JSON, which is also valid YAML. Each run is one device; `shards` splits its trails across
-that many parallel jobs, keeping each trail directory together.
+YAML, or JSON, which is also valid YAML. Each run is one kind of device, running either trails or
+an Android instrumentation test APK. `shards` splits a run across that many parallel jobs, each one
+device running its share in turn.
 
 ```yaml
 defaults:
@@ -54,6 +55,13 @@ runs:
   - name: chrome
     device: web                 # Chromium, on ubuntu-latest
     trails: [trails/web/]
+  - name: android-instrumented  # a test APK, as a device farm runs one
+    device: android
+    app: app-debug.apk
+    test-apk: app-debug-androidTest.apk
+    test-targets: [class com.example.LoginTest, package com.example.checkout]
+    orchestrator: true
+    shards: 4
 ```
 
 | Field | Meaning |
@@ -61,14 +69,18 @@ runs:
 | `name` | Lowercase letters, digits and dashes. Names the jobs and artifacts. |
 | `device` | `android`, `ios` or `web`. |
 | `trails` | Files, globs or directories, as `trailblaze run` takes them. |
+| `test-apk` | Android only, instead of `trails`: an instrumentation test APK, such as one the [Gradle plugin](../../../trailblaze-android-gradle/README.md) packages trails into. Its tests' sessions join the same report. |
+| `test-targets` | Which of the test APK's tests to run: `class …`, `package …`, `annotation …`, `size …`, or a `not` form such as `notClass …`. All of them when omitted. |
+| `test-args` | Instrumentation arguments for the test APK, such as a sentinel token. Gradle passes these at `connectedAndroidTest` time; they aren't in the APK. |
+| `orchestrator` | Run the test APK under Android Test Orchestrator, which clears the app's data between tests so each one starts clean on a shared device. |
 | `app` | APK or simulator `.app` to install first, relative to the workspace. |
-| `shards` | Parallel jobs for this run. Capped at the number of trails. |
-| `mode` | `replay` (default), `self-heal` or `ai`. The last two need an LLM key. |
+| `shards` | Parallel jobs for this run. Trails are dealt out by directory, keeping each trail's files together, and capped at the number of trails. A test APK uses Android's own sharding (`numShards` / `shardIndex`), which splits its tests by a hash of their names. |
+| `mode` | `replay` (default), `self-heal` or `ai`. The last two need an LLM key. Trails only. |
 | `android` | `api` (default 34) and `profile` (default `pixel_6`). Use the device the trails were recorded on. |
 | `ios` | `simulator` (default `iPhone 17 Pro`). |
 | `config-dir` | The workspace's `trails/config`, when it isn't found from the trails. |
 | `setup` | Shell command run once the device is up, before the trails. |
-| `args` | Extra `trailblaze run` flags. |
+| `args` | Extra `trailblaze run` flags. Trails only. |
 | `runs-on` | Override the runner label. |
 
 ## Workflow inputs
@@ -76,7 +88,7 @@ runs:
 | Input | Default | Meaning |
 |---|---|---|
 | `request` | required | The request file. |
-| `app-artifact` | none | Artifact from your workflow holding the app. Its files land in the workspace root. |
+| `app-artifact` | none | Artifact from your workflow holding the app, and the test APK if a run uses one. Its files land in the workspace root. |
 | `version` | the pinned tag | A different CLI release. |
 | `cli-artifact` | none | Artifact holding `trailblaze` and `trailblaze.jar` built earlier in the run. |
 | `max-parallel` | 20 | Most jobs at once. |

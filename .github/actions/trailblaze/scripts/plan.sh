@@ -13,12 +13,21 @@
 #       device: ios
 #       ios: { simulator: iPhone 17 Pro }
 #       trails: [trails/]
+#     - name: instrumented                  # an Android test APK instead of trails
+#       device: android
+#       test-apk: app-debug-androidTest.apk
+#       test-targets: [class com.example.LoginTest]
+#       test-args: { some.runner.arg: value }
+#       orchestrator: true
+#       shards: 2
 #
 # Optional on any run: `mode` (replay | self-heal | ai), `args` (extra `trailblaze run` flags),
 # `config-dir` (the workspace's trails/config, when it isn't found from the trails), `setup` (a
 # shell command run on the device's runner before the trails) and `runs-on`.
 #
-# A shard gets whole trail directories, so a trail's platform files always stay together.
+# A trail run's shard gets whole trail directories, so a trail's platform files always stay
+# together. A test APK run's shards are Android's own: each runs the APK with numShards and its
+# shardIndex, and the test runner picks that shard's tests.
 set -euo pipefail
 shopt -s nullglob
 shopt -s globstar 2> /dev/null || true  # bash 4+, so `**` matches nested directories
@@ -75,6 +84,37 @@ for i in $(seq 0 $(($(jq length <<< "$runs") - 1))); do
   esac
   extra=$(jq -r '.args // ""' <<< "$run")
   [ -z "$extra" ] || args+=" $extra"
+  shards=$(jq -r '.shards // 1' <<< "$run")
+  [[ "$shards" =~ ^[1-9][0-9]*$ ]] || fail "Run $name: shards must be a positive number."
+
+  test_apk=$(jq -r '.["test-apk"] // ""' <<< "$run")
+  if [ -n "$test_apk" ]; then
+    [ "$device" = android ] || fail "Run $name: test-apk needs device android."
+    jq -e '.trails == null' <<< "$run" > /dev/null || fail "Run $name: give trails or test-apk, not both."
+    targets=$(jq -r '.["test-targets"] // [] | if type == "string" then [.] else . end | .[]' <<< "$run")
+    while read -r t; do
+      [ -z "$t" ] || [[ "$t" =~ ^(class|notClass|package|notPackage|annotation|notAnnotation|size)\ [^[:space:]]+$ ]] \
+        || fail "Run $name: test target '$t' should look like 'class com.example.LoginTest' or 'package com.example'."
+    done <<< "$targets"
+    jq -e '.["test-args"] // {} | type == "object" and all(.[]; type != "object" and type != "array")' <<< "$run" > /dev/null \
+      || fail "Run $name: test-args should map instrumentation argument names to values."
+    for s in $(seq 1 "$shards"); do
+      label="$name"
+      [ "$shards" = 1 ] || label="$name ($s/$shards)"
+      id="$name"
+      [ "$shards" = 1 ] || id="$name-$s"
+      entries=$(jq -c --argjson run "$run" --arg id "$id" --arg label "$label" --arg runner "$runner" \
+        --arg targets "$targets" --arg index "$((s - 1))" --arg count "$shards" \
+        '. + [{id: $id, label: $label, runner: ($run["runs-on"] // $runner), device: "android",
+          trails: "", args: "", app: ($run.app // ""), "test-apk": $run["test-apk"],
+          "test-targets": $targets, "test-args": ($run["test-args"] // {} | map_values(tostring) | tojson),
+          orchestrator: (($run.orchestrator // false) | tostring), "shard-index": $index, "shard-count": $count,
+          "android-api-level": (($run.android.api // 34) | tostring),
+          "android-profile": ($run.android.profile // "pixel_6"), "ios-simulator": "",
+          "config-dir": "", setup: ($run.setup // "")}]' <<< "$entries")
+    done
+    continue
+  fi
 
   units=()
   while read -r u; do units+=("$u"); done < <(
@@ -82,8 +122,6 @@ for i in $(seq 0 $(($(jq length <<< "$runs") - 1))); do
       | while read -r p; do trail_dirs "$p"; done | outermost
   )
   [ "${#units[@]}" -gt 0 ] || fail "Run $name: no trails found under $(jq -c '.trails' <<< "$run")."
-  shards=$(jq -r '.shards // 1' <<< "$run")
-  [[ "$shards" =~ ^[1-9][0-9]*$ ]] || fail "Run $name: shards must be a positive number."
   [ "$shards" -le "${#units[@]}" ] || shards=${#units[@]}
 
   for s in $(seq 1 "$shards"); do
@@ -102,10 +140,13 @@ for i in $(seq 0 $(($(jq length <<< "$runs") - 1))); do
         "android-api-level": (($run.android.api // 34) | tostring),
         "android-profile": ($run.android.profile // "pixel_6"),
         "ios-simulator": ($run.ios.simulator // "iPhone 17 Pro"),
-        "config-dir": ($run["config-dir"] // ""), setup: ($run.setup // "")}]' <<< "$entries")
+        "config-dir": ($run["config-dir"] // ""), setup: ($run.setup // ""),
+        "test-apk": "", "test-targets": "", "test-args": "{}", orchestrator: "false",
+        "shard-index": "0", "shard-count": "1"}]' <<< "$entries")
   done
 done
 
 [ "$(jq length <<< "$entries")" -le 256 ] || fail "The request makes $(jq length <<< "$entries") jobs; GitHub allows 256."
-jq -r '.[] | "\(.label)\t\(.runner)\t\(.trails)"' <<< "$entries" | column -t -s $'\t'
+jq -r '.[] | "\(.label)\t\(.runner)\t\(if .["test-apk"] != "" then .["test-apk"] else .trails end)"' \
+  <<< "$entries" | column -t -s $'\t'
 echo "matrix=$(jq -c '{include: .}' <<< "$entries")" >> "$GITHUB_OUTPUT"

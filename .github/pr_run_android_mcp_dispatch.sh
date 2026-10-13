@@ -3,11 +3,11 @@
 # calls a *first-class* TrailblazeTool over `POST /mcp` — `tap`, `pressKey`,
 # `assertVisible`, … — instead of going through the `step` tool's inner agent.
 #
-# Why this needs its own job. The other two Android jobs miss this code path
+# Why this needs its own job. The trail runner's Android runs miss this code path
 # entirely:
-#   * `pr_run_android_tests_on_device.sh` is pure instrumentation
-#     (`connectedDebugAndroidTest`); no host bridge is involved.
-#   * `pr_run_android_tests_host_rpc.sh` drives `trailblaze trail …`, which goes
+#   * Its on-device run is pure instrumentation (`am instrument`); no host bridge
+#     is involved.
+#   * Its `trailblaze run` runs go
 #     through DesktopYamlRunner → HostOnDeviceRpcTrailblazeAgent, not the MCP
 #     bridge.
 # Only the first-class MCP surface reaches
