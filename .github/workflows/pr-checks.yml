@@ -86,6 +86,7 @@ jobs:
           mkdir -p trailblaze-uber-jar
           cp trailblaze-desktop/build/release/trailblaze.jar trailblaze-uber-jar/
           cp trailblaze-desktop/build/release/trailblaze trailblaze-uber-jar/
+          cp trailblaze-desktop/build/release/trailblaze.cmd trailblaze-uber-jar/
           ls -lh trailblaze-uber-jar/
 
       - name: Upload uber JAR artifact
@@ -301,6 +302,141 @@ jobs:
         if: steps.run-trails.outcome == 'failure'
         run: |
           echo "Wikipedia trails failed - failing the workflow"
+          exit 1
+
+  # The same recorded Wikipedia trail on a Windows host, driven through the Windows launcher
+  # (`trailblaze.cmd`) from the JAR built above on Linux. Windows supports web (Playwright)
+  # trails only. The CLI starts the daemon itself here, as it does for a Windows user.
+  wikipedia-trails-windows:
+    if: github.event_name == 'pull_request'
+    runs-on: windows-latest
+    timeout-minutes: 45
+    needs: build-uber-jar
+    env:
+      OPENAI_API_KEY: no-key-set
+      # The runner image has no ffmpeg; keep this job about running the trail.
+      TRAILBLAZE_CAPTURE_VIDEO: "false"
+    defaults:
+      run:
+        # Git Bash, which every Windows runner ships, so the steps read like the Linux job's.
+        shell: bash
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: 17
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+
+      - name: Cache Playwright driver
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/trailblaze/playwright-driver
+          key: playwright-driver-${{ runner.os }}-${{ hashFiles('gradle/libs.versions.toml') }}
+
+      - name: Download prebuilt uber JAR
+        uses: actions/download-artifact@v4
+        with:
+          name: trailblaze-uber-jar
+          path: trailblaze-uber-jar/
+
+      - name: Install with install.ps1
+        # The installer a Windows user runs, given this build instead of a release download, in
+        # Windows PowerShell 5.1: the PowerShell every Windows install has.
+        shell: powershell
+        env:
+          TRAILBLAZE_ARTIFACT_DIR: ${{ github.workspace }}\trailblaze-uber-jar
+        run: |
+          Get-Content ./install.ps1 -Raw | Invoke-Expression
+          $bin = Join-Path $env:USERPROFILE '.trailblaze\bin'
+          $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+          if (-not (($userPath -split ';') -contains $bin)) { throw "install.ps1 did not add $bin to the user PATH" }
+          # A new terminal would pick the PATH change up; later steps here need it handed over.
+          # Windows PowerShell's `-Encoding utf8` writes a byte-order mark, which would corrupt the entry.
+          [IO.File]::AppendAllText($env:GITHUB_PATH, "$bin`n")
+
+      - name: Create and run Wikipedia trail
+        id: run-trails
+        continue-on-error: true
+        run: ./.github/pr_run_wikipedia_trails_windows.sh
+
+      - name: Drive the browser step by step from PowerShell
+        # PowerShell is the shell most Windows users have, so the per-terminal pin is checked from it
+        # too: `device connect` once, then commands with no --device.
+        id: powershell-pins
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $env:TRAILBLAZE_CONFIG_DIR = Join-Path $PWD 'examples/wikipedia/trails/config'
+          $pinFile = Join-Path $env:USERPROFILE '.trailblaze\shell-device-pins-52525.json'
+          trailblaze device connect web
+          if ($LASTEXITCODE -ne 0) { throw 'device connect web failed' }
+          $pins = Get-Content $pinFile -Raw | ConvertFrom-Json
+          if (-not ($pins.shells.PSObject.Properties.Name -contains "$PID")) {
+            throw "device connect did not pin this shell (PID $PID): $(Get-Content $pinFile -Raw)"
+          }
+          trailblaze tool web_navigate url=https://en.wikipedia.org/wiki/Grace_Hopper
+          if ($LASTEXITCODE -ne 0) { throw 'tool with no --device failed' }
+          $snapshot = trailblaze snapshot | Out-String
+          if ($snapshot -notmatch 'Page title: Grace Hopper') { throw "snapshot did not show the page:`n$snapshot" }
+          trailblaze device disconnect
+          if ($LASTEXITCODE -ne 0) { throw 'device disconnect failed' }
+          trailblaze stop
+          Write-Host 'PowerShell pin checks passed'
+
+      - name: Check step-by-step CLI from Git Bash, and Trail Runner
+        id: cli-and-trail-runner
+        continue-on-error: true
+        run: ./.github/windows_validate_cli_and_trail_runner.sh
+
+      - name: Collect logs
+        if: always()
+        continue-on-error: true
+        run: |
+          trailblaze.cmd stop || true
+          mkdir -p trailblaze-logs
+          cp -r "$HOME"/.trailblaze/logs/* trailblaze-logs/ || echo "No logs in $HOME/.trailblaze/logs"
+          cp trail-runner-session.zip trailblaze-logs/ 2>/dev/null || true
+
+      - name: Generate Trailblaze report
+        if: always()
+        continue-on-error: true
+        env:
+          TRAILBLAZE_BIN: trailblaze.cmd
+        run: ./.github/pr_generate_trailblaze_report.sh
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trailblaze-report-wikipedia-windows
+          path: trailblaze-logs/trailblaze_report.html
+          if-no-files-found: warn
+
+      - name: Upload logs
+        # Uploaded as a directory: Git Bash has no `zip` for pr_create_artifacts.sh.
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trailblaze-artifacts-wikipedia-windows
+          path: trailblaze-logs/
+          if-no-files-found: warn
+
+      - name: Fail if any Windows check failed
+        if: >-
+          steps.run-trails.outcome == 'failure' ||
+          steps.powershell-pins.outcome == 'failure' ||
+          steps.cli-and-trail-runner.outcome == 'failure'
+        run: |
+          echo "trail: ${{ steps.run-trails.outcome }}"
+          echo "PowerShell pins: ${{ steps.powershell-pins.outcome }}"
+          echo "Git Bash CLI and Trail Runner: ${{ steps.cli-and-trail-runner.outcome }}"
           exit 1
 
   # PR-time iOS showcase validation shares the same uber JAR built above.

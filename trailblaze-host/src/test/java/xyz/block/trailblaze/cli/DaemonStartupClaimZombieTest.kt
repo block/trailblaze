@@ -9,7 +9,6 @@ import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
-import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import org.junit.Assume.assumeTrue
 
@@ -71,10 +70,10 @@ class DaemonStartupClaimZombieTest {
         val ownerFile = pidFile.resolve("owner-${UUID.randomUUID()}")
         ownerFile.writeText("$zombiePid\n${psField("lstart=", zombiePid)}\n")
 
-        val reaper = assertNotNull(
+        val reaper = assertIs<DaemonStartupClaimReaper.Watcher>(
           scheduleDaemonStartupClaimReaper(pidFile, ownerFile, zombiePid),
           "the reaper must still be schedulable for a PID `ps` can identify",
-        )
+        ).process
         assertTrue(
           reaper.waitFor(30, SECONDS),
           "the reaper is still watching a process that has exited",

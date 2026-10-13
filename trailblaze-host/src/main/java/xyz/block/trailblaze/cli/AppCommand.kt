@@ -5,7 +5,9 @@ import picocli.CommandLine.Command
 import picocli.CommandLine.Option
 import xyz.block.trailblaze.devices.TrailblazeDevicePort
 import xyz.block.trailblaze.ui.TrailblazePortManager
+import xyz.block.trailblaze.ui.TrailblazeDesktopUtil
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.util.isWindows
 import java.io.File
 import java.util.concurrent.Callable
 import kotlin.time.Duration.Companion.seconds
@@ -101,6 +103,7 @@ open class AppCommand : Callable<Int> {
    * launcher's `trailrunner` alias rather than duplicating native-shell orchestration in Kotlin.
    */
   private fun launchTrailRunner(): Int {
+    if (isWindows()) return openTrailRunnerInBrowser()
     val launcher = launcherFinder() ?: run {
       // IDE/direct-JVM runs have no launcher to open the native shell with. Serve Trail Runner
       // from this process instead, so the URL below is live for as long as the run lasts.
@@ -123,6 +126,24 @@ open class AppCommand : Callable<Int> {
     }
   }
 
+  /**
+   * Windows has no launcher to own a native Trail Runner window, so start the daemon here and hand
+   * its URL to the default browser — the shape the launcher already falls back to on a Linux host
+   * with no window shell.
+   */
+  private fun openTrailRunnerInBrowser(): Int {
+    val port = parent.getEffectivePort()
+    if (!ensureDaemonServerRunning(port, respectAutoStartDisable = false)) {
+      return TrailblazeExitCode.INFRA_FAILED.code
+    }
+    val url = "http://localhost:$port/trailrunner/"
+    Console.log("Trailblaze App: $url")
+    if (!TrailblazeDesktopUtil.openInDefaultBrowser(url)) {
+      Console.log("Open this URL in your browser: $url")
+    }
+    return TrailblazeExitCode.SUCCESS.code
+  }
+
   /** Start the daemon as a background process and return control to the terminal. */
   private fun launchInBackground(): Int {
     val port = parent.getEffectivePort()
@@ -132,9 +153,9 @@ open class AppCommand : Callable<Int> {
       httpPort = port,
       httpsPort = parent.getEffectiveHttpsPort(),
     )
-    // IDE/direct-JVM runs do not have the distribution launcher. Keep their established
-    // in-process fallback instead of routing through the launcher-based daemon helper.
-    if (findTrailblazeLauncher() == null) return parent.launchDaemonInForeground()
+    // IDE/direct-JVM runs have no way to spawn a daemon (no launcher, and on Windows no JAR). Keep
+    // their established in-process fallback instead of routing through the daemon spawn helper.
+    if (daemonSpawnCommand() == null) return parent.launchDaemonInForeground()
     return if (ensureDaemonServerRunning(port, respectAutoStartDisable = false)) {
       TrailblazeExitCode.SUCCESS.code
     } else {

@@ -4,6 +4,7 @@ import java.nio.file.Path
 import java.nio.file.Paths
 import xyz.block.trailblaze.config.ServedTrailmaps
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
+import xyz.block.trailblaze.util.isWindows
 
 /**
  * Thread-local context for the *caller's* current working directory.
@@ -176,7 +177,9 @@ internal object CliCallerContext {
    */
   fun callerEnv(name: String): String? {
     val pinned = callerEnvLocal.get()
-    return if (pinned != null) pinned[name] else System.getenv(name)
+    if (pinned != null) return pinned[name]
+    // `trailblaze.cmd` cannot supply the shell PID or a tty check, so the JVM works them out.
+    return System.getenv(name) ?: if (isWindows()) WindowsCallerShell.derivedEnv(name) else null
   }
 
   /** The HTTP port of the daemon running this command, when it arrived through `/cli/exec`. */

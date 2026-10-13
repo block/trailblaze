@@ -257,11 +257,30 @@ class LazyYamlScriptedToolRegistration private constructor(
       if (pathEnv == null) return null
       for (dir in pathEnv.split(File.pathSeparator)) {
         if (dir.isBlank()) continue
-        val candidate = File(dir, "esbuild")
-        if (candidate.exists() && candidate.canExecute()) return candidate
+        for (name in ESBUILD_PATH_NAMES) {
+          val candidate = File(dir, name)
+          if (candidate.exists() && candidate.canExecute()) return candidate
+        }
       }
       return null
     }
+
+    private val isWindowsHost: Boolean = File.separatorChar == '\\'
+
+    /**
+     * Windows never runs the extensionless `esbuild`: npm puts a shell shim there that `canExecute`
+     * accepts (it is true for any readable file) and that cannot be started. A standalone install is
+     * `esbuild.exe`; an npm-global one is the `esbuild.cmd` shim.
+     */
+    private val ESBUILD_PATH_NAMES: List<String> =
+      if (isWindowsHost) listOf("esbuild.exe", "esbuild.cmd") else listOf("esbuild")
+
+    /**
+     * Where an SDK package's `node_modules` keeps the esbuild binary. On Windows `.bin/esbuild` is a
+     * shell shim, so the walk-up goes straight to the platform package npm installs the real one in.
+     */
+    private val ESBUILD_NODE_MODULES_RELPATH: String =
+      if (isWindowsHost) "node_modules/@esbuild/win32-x64/esbuild.exe" else "node_modules/.bin/esbuild"
 
     /**
      * Walk-up half of [resolveEsbuildBinary], pulled out so a unit test can pin the
@@ -281,7 +300,7 @@ class LazyYamlScriptedToolRegistration private constructor(
      * cryptic "Unsupported tool type for RPC execution" at trail-dispatch time.
      */
     internal fun resolveEsbuildViaWalkup(startDir: File): File? {
-      val relativeCandidates = SDK_PACKAGE_SUBPATHS.map { "$it/node_modules/.bin/esbuild" }
+      val relativeCandidates = SDK_PACKAGE_SUBPATHS.map { "$it/$ESBUILD_NODE_MODULES_RELPATH" }
       var current: File? = startDir
       while (current != null) {
         for (rel in relativeCandidates) {

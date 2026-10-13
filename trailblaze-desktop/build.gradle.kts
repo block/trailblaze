@@ -210,11 +210,14 @@ val releaseArtifacts by tasks.registering(Copy::class) {
 
   // Copy the launcher script alongside the JAR. In java -jar mode (the default),
   // it passes the --add-opens JVM flags Skiko needs on macOS.
+  val launcher = project.file("../scripts/trailblaze")
+  // The Windows launcher, for hosts that cannot run the bash one.
+  val windowsLauncher = project.file("../scripts/trailblaze.cmd")
   doLast {
-    val launcher = project.file("../scripts/trailblaze")
     val dest = releaseDir.get().asFile.resolve("trailblaze")
     launcher.copyTo(dest, overwrite = true)
     dest.setExecutable(true)
+    windowsLauncher.copyTo(releaseDir.get().asFile.resolve("trailblaze.cmd"), overwrite = true)
   }
 }
 
@@ -225,11 +228,11 @@ packageUberJar.configure {
   // only class in maestro-client that reads either file, so they are 12.6 MB of dead weight
   // in every JAR download and Homebrew install.
   exclude("maestro-app.apk", "maestro-server.apk")
-  // The WebP encoder ships libwebp for 11 platforms in one artifact. Keep the three
+  // The WebP encoder ships libwebp for 11 platforms in one artifact. Keep the four
   // `TrailblazeDesktopUtil.assertSupportedPlatform()` lets start (linux-x64, linux-arm64,
-  // macos-arm64); the rest can never load.
+  // macos-arm64, windows-x64); the rest can never load.
   exclude(
-    "native/Windows/**",
+    "native/Windows/x86/**",
     "native/Mac/x86_64/**",
     "native/Linux/arm/**",
     "native/Linux/armv6/**",

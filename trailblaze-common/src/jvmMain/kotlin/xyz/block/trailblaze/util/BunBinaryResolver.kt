@@ -44,7 +44,11 @@ object BunBinaryResolver {
   internal fun resolveBunBinary(pathEnv: String?): File? {
     val path = pathEnv ?: return null
     val dirs = path.split(File.pathSeparator).filter { it.isNotBlank() }
-    for (name in listOf("bun", "bun.exe")) {
+    // Windows runs only `bun.exe`. An extensionless `bun` there is an npm-global shell shim, and
+    // `canExecute` is true for any readable file, so probing it first would win and then fail to
+    // start.
+    val names = if (isWindows()) listOf("bun.exe") else listOf("bun", "bun.exe")
+    for (name in names) {
       for (dir in dirs) {
         val candidate = File(dir, name)
         if (candidate.exists() && candidate.canExecute()) return candidate

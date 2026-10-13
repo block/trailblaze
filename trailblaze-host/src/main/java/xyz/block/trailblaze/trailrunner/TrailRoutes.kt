@@ -306,7 +306,7 @@ internal suspend fun buildCreateTrailResponse(deps: TrailRunnerDeps, request: Cr
       val primary = resolvePrimaryRoot(deps.trailsRootProvider)
       val file = File(primary, segments.joinToString("/") + ".trail.yaml")
       val rootCanon = primary.canonicalPath
-      require(file.canonicalPath.startsWith("$rootCanon/")) { "path escapes the trails workspace" }
+      require(file.canonicalPath.startsWith(rootCanon + File.separator)) { "path escapes the trails workspace" }
       val parent = requireNotNull(file.parentFile)
       parent.mkdirs()
       when (BundleStore.writeFile(parent, file.name, yaml, operation = "create")) {
@@ -345,7 +345,7 @@ internal suspend fun buildCreateTrailDirResponse(deps: TrailRunnerDeps, request:
       val primary = resolvePrimaryRoot(deps.trailsRootProvider)
       val dir = File(primary, segments.joinToString("/"))
       val rootCanon = primary.canonicalPath
-      require(dir.canonicalPath.startsWith("$rootCanon/")) { "path escapes the trails workspace" }
+      require(dir.canonicalPath.startsWith(rootCanon + File.separator)) { "path escapes the trails workspace" }
       require(!dir.exists()) { "${dir.name} already exists at that path" }
       require(dir.mkdirs()) { "could not create ${dir.name}" }
       dir.absolutePath

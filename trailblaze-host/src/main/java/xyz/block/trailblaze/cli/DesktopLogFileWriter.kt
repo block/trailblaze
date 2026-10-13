@@ -61,13 +61,17 @@ object DesktopLogFileWriter {
 
     val fileOut = FileOutputStream(logFile, /* append = */ true)
 
-    System.setOut(PrintStream(TeeOutputStream(System.out, fileOut), /* autoFlush = */ true))
-    System.setErr(PrintStream(TeeOutputStream(System.err, fileOut), /* autoFlush = */ true))
+    // UTF-8 rather than the platform charset, which on a Windows JDK 17 is a legacy code page that
+    // turns every check mark into `?`, on the terminal and in the log alike.
+    System.setOut(PrintStream(TeeOutputStream(System.out, fileOut), /* autoFlush = */ true, Charsets.UTF_8))
+    System.setErr(PrintStream(TeeOutputStream(System.err, fileOut), /* autoFlush = */ true, Charsets.UTF_8))
   }
 
   private fun rotateIfNeeded(logFile: File) {
     if (logFile.exists() && logFile.length() > MAX_LOG_SIZE_BYTES) {
       val oldFile = File(logFile.parentFile, "${logFile.name}.old")
+      // Windows will not rename onto an existing file, so clear the previous generation first.
+      oldFile.delete()
       logFile.renameTo(oldFile)
     }
   }

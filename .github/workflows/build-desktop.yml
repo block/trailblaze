@@ -83,6 +83,7 @@ jobs:
           files: |
             trailblaze-desktop/build/compose/jars-shrunk/trailblaze.jar
             scripts/trailblaze
+            scripts/trailblaze.cmd
           generate_release_notes: true
 
       - name: Generate Homebrew Dispatch Token

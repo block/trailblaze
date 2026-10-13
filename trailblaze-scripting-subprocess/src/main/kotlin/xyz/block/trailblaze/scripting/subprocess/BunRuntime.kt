@@ -51,7 +51,10 @@ object BunRuntimeDetector {
     throw NoBunRuntimeException()
   }
 
-  private val BUN_BINARY_NAMES = listOf("bun", "bun.exe")
+  // Windows runs only `bun.exe`: an extensionless `bun` there is an npm-global shell shim that
+  // `canExecute` accepts (it is true for any readable file) and that cannot be started.
+  private val BUN_BINARY_NAMES =
+    if (File.separatorChar == '\\') listOf("bun.exe") else listOf("bun", "bun.exe")
 
   /**
    * Resolves [name] against each entry of the `PATH` env var. Returns the first executable
