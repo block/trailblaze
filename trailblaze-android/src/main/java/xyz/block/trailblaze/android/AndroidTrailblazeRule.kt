@@ -620,8 +620,12 @@ open class AndroidTrailblazeRule(
         OnDeviceTurbo.requireTurboHeld(description.displayName)
       }
     }
-    super.afterTestExecution(description, verdict.sessionResult)
-    verdict.failure?.let { throw it }
+    try {
+      super.afterTestExecution(description, verdict.sessionResult)
+      verdict.failure?.let { throw it }
+    } finally {
+      OnDeviceAccessibilityServiceSetup.disableAccessibilityService()
+    }
   }
 
   /**

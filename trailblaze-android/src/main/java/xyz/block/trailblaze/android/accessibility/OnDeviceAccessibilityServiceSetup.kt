@@ -118,6 +118,41 @@ object OnDeviceAccessibilityServiceSetup {
   }
 
   /**
+   * Removes this test APK's service before instrumentation ends and force-stops the package.
+   *
+   * On API 29, ending instrumentation with the service bound can leave the framework waiting
+   * for a dead service connection. Cycling the enabled-services setting on the next run does
+   * not recover that state. Unbind while the service is alive, preserving other enabled services.
+   */
+  fun disableAccessibilityService(
+    hostPackage: String = getTestPackage(),
+    timeoutMs: Long = 15_000,
+  ) {
+    val serviceComponent = "$hostPackage/$ACCESSIBILITY_SERVICE_CLASS"
+    val currentServices =
+      AdbCommandUtil.execShellCommand("settings get secure enabled_accessibility_services").trim()
+    val services = currentServices.split(":").filter { it.isNotBlank() && it != "null" }
+    if (serviceComponent !in services) return
+
+    val remainingServices = services.filter { it != serviceComponent }
+    if (remainingServices.isEmpty()) {
+      AdbCommandUtil.execShellCommand("settings delete secure enabled_accessibility_services")
+      AdbCommandUtil.execShellCommand("settings put secure accessibility_enabled 0")
+    } else {
+      AdbCommandUtil.execShellCommand(
+        "settings put secure enabled_accessibility_services ${remainingServices.joinToString(":")}"
+      )
+    }
+    PollingUtils.tryUntilSuccessOrThrowException(
+      maxWaitMs = timeoutMs,
+      intervalMs = 100,
+      conditionDescription = "TrailblazeAccessibilityService should be stopped",
+    ) {
+      !TrailblazeAccessibilityService.isServiceRunning()
+    }
+  }
+
+  /**
    * Checks if the accessibility service is running using shell commands to avoid triggering
    * class loading of [TrailblazeAccessibilityService] which may fail on API < 30. Falls back to
    * the in-process static check if the service is running in the same process.
