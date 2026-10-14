@@ -344,3 +344,90 @@ jobs:
         run: |
           echo "MCP dispatch check failed - failing the workflow"
           exit 1
+
+  # Installs this PR's JAR on Windows with install.ps1 and replays a web trail through the installed
+  # trailblaze.cmd launcher, on x64 and on Arm.
+  # Windows on Arm runs the x64 JVM under emulation: two of Trailblaze's native libraries have no
+  # Windows Arm build, so the startup check refuses an Arm JVM.
+  windows-host:
+    name: windows-host (${{ matrix.runner }})
+    needs: build-uber-jar
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [windows-2025, windows-11-arm]
+    env:
+      # The artifact holds the JAR and the bash launcher only, so installing from it also checks
+      # that install.ps1 extracts the Windows launcher from the JAR.
+      TRAILBLAZE_ARTIFACT_DIR: ${{ github.workspace }}\trailblaze-uber-jar
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Choose the install and state directories
+        # A `[` in the install directory checks that the installer treats its paths literally.
+        run: |
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "TRAILBLAZE_DIR=$env:RUNNER_TEMP\Trailblaze[ci]"
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "TRAILBLAZE_HOME=$env:RUNNER_TEMP\trailblaze-home"
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: 17
+          architecture: x64
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+
+      - name: Download uber JAR artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: trailblaze-uber-jar
+          path: trailblaze-uber-jar
+
+      - name: Install with install.ps1
+        run: ./install.ps1
+
+      - name: Reinstall from 32-bit Windows PowerShell
+        # Over the existing install, from the 32-bit PowerShell that Windows redirects away from
+        # System32, where install.ps1 finds tar.exe.
+        run: |
+          & "$env:SystemRoot\SysWOW64\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File ./install.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Put the install on PATH
+        # install.ps1 adds it to the user PATH in the registry, which only processes started
+        # afterwards by Explorer see.
+        run: Add-Content -LiteralPath $env:GITHUB_PATH -Value (Join-Path $env:TRAILBLAZE_DIR 'bin')
+
+      - name: Install the TypeScript SDK's dependencies
+        # The Wikipedia trailmap's scripted tools need the SDK's esbuild in a source checkout.
+        working-directory: sdks/typescript
+        run: bun install --frozen-lockfile
+
+      - name: Replay the Wikipedia web trail
+        # `trailblaze` resolves to trailblaze.cmd on PATH, which PowerShell runs through cmd.exe.
+        env:
+          TRAILBLAZE_CONFIG_DIR: ${{ github.workspace }}\examples\wikipedia\trails\config
+          # The trail replays recorded steps, so no model is called; the provider still needs a key.
+          OPENAI_API_KEY: no-key-set
+        run: trailblaze run trails/wikipedia/test-article-shakespeare/trail.yaml -d web --use-recorded-steps
+
+      - name: Stop the daemon
+        if: always()
+        run: trailblaze app --stop
+
+      - name: Upload Trailblaze logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trailblaze-logs-${{ matrix.runner }}
+          path: ${{ runner.temp }}/trailblaze-home/
+          if-no-files-found: ignore
