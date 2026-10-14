@@ -1,6 +1,6 @@
 # What pr-checks.yml runs through the trail runner (trail-runner.yml): the showcase trails, one per
 # platform, and the examples module's on-device Clock test. The request format is in
-# .github/actions/trailblaze/README.md.
+# docs/github-actions.md.
 defaults:
   mode: replay
   # Scripted tools in a source checkout need the TypeScript SDK's esbuild.

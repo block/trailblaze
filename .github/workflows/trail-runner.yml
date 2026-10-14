@@ -13,7 +13,7 @@
 #       with:
 #         request: .github/trailblaze-runs.yaml
 #
-# See .github/actions/trailblaze/README.md for the request format.
+# See docs/github-actions.md for the request format.
 
 name: Trail runner
 
@@ -41,7 +41,7 @@ on:
         type: number
         default: 20
       publish:
-        description: "`none` or `branch`; see .github/actions/trailblaze/README.md."
+        description: "`none` or `branch`; see docs/github-actions.md."
         type: string
         default: none
       comment:
