@@ -10,6 +10,7 @@ import java.io.File
 import java.time.Instant
 import java.time.format.DateTimeFormatter
 import java.util.concurrent.Callable
+import xyz.block.trailblaze.util.fileUrl
 
 @Command(
   name = "graph",
@@ -132,7 +133,7 @@ class WaypointGraphCommand : Callable<Int> {
         "${data.shortcuts.size} shortcut(s), " +
         "${data.trailheads.size} trailhead(s)",
     )
-    Console.log("Open in a browser: file://${out.absolutePath}")
+    Console.log("Open in a browser: ${out.fileUrl()}")
     return TrailblazeExitCode.SUCCESS.code
   }
 

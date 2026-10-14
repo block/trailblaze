@@ -12,6 +12,7 @@ import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.util.Console
 import java.io.File
 import java.util.concurrent.Callable
+import xyz.block.trailblaze.util.fileUrl
 
 /**
  * Read the human-visible text out of recorded sessions.
@@ -116,7 +117,7 @@ class StringsExtractCommand : Callable<Int> {
         Console.info("${id.value}: no screen captures with a view hierarchy — skipped.")
       } else {
         written++
-        Console.info("file://${file.absolutePath}")
+        Console.info("${file.fileUrl()}")
       }
     }
 

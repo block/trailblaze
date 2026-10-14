@@ -16,6 +16,7 @@ import xyz.block.trailblaze.report.snapshot.SnapshotViewerGenerator
 import xyz.block.trailblaze.report.utils.LogsRepo
 import java.io.File
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.util.fileUrl
 
 open class GenerateReportCliCommand(
   /**
@@ -161,7 +162,7 @@ open class GenerateReportCliCommand(
       if (generatedHtml != null) {
         generatedHtml.copyTo(interactiveHtmlFile, overwrite = true)
         generatedHtml.delete()
-        Console.log("file://${interactiveHtmlFile.absolutePath}")
+        Console.log("${interactiveHtmlFile.fileUrl()}")
       } else {
         // bun is a required dependency, so this is a broken toolchain (or a genuine renderer
         // bug), not a supported degraded mode.

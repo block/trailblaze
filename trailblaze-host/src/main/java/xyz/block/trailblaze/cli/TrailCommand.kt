@@ -81,6 +81,7 @@ import java.util.concurrent.Callable
 import java.util.concurrent.CountDownLatch
 import kotlin.system.exitProcess
 import xyz.block.trailblaze.yaml.TrailMetadataValue
+import xyz.block.trailblaze.util.fileUrl
 
 /**
  * Run one or more trail files (`.trail.yaml` or `blaze.yaml`) on a connected device.
@@ -1237,7 +1238,7 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
           skips = newSkips,
         ).let { report ->
           if (report != null) {
-            Console.info("\nReport: file://${report.absolutePath}")
+            Console.info("\nReport: ${report.fileUrl()}")
           } else {
             Console.error("\nReport generation failed — see the output above. The trail results are unaffected.")
           }
@@ -1254,7 +1255,7 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
         val reportGenerator = app.createCliReportGenerator()
         val markdownFile = reportGenerator.generateMarkdownReport(logsRepo, allNewSessionIds)
         if (markdownFile != null) {
-          Console.info("Markdown: file://${markdownFile.absolutePath}")
+          Console.info("Markdown: ${markdownFile.fileUrl()}")
         }
       } catch (e: Exception) {
         Console.error("Failed to generate markdown report: ${e.message}")

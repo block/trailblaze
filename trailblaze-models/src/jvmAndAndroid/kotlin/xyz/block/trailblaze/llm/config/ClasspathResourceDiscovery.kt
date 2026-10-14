@@ -1,6 +1,8 @@
 package xyz.block.trailblaze.llm.config
 
 import java.io.File
+import java.net.URI
+import java.net.URL
 import java.util.jar.JarFile
 import xyz.block.trailblaze.util.Console
 
@@ -40,7 +42,7 @@ object ClasspathResourceDiscovery {
               ?.forEach { filenames.add(it.name) }
           }
           "jar" -> {
-            val jarPath = url.path.substringAfter("file:").substringBefore("!")
+            val jarPath = jarFileOf(url)
             try {
               JarFile(jarPath).use { jar ->
                 jar.entries().asSequence()
@@ -55,6 +57,19 @@ object ClasspathResourceDiscovery {
       }
     } catch (_: Exception) { /* Fall back gracefully */ }
     return filenames
+  }
+
+  /**
+   * The JAR file a `jar:` resource [url] points into. The URL's file part is percent-encoded, so a
+   * JAR under a directory named `Trailblaze[ci]` or `My Tools` is only found once it is decoded.
+   */
+  private fun jarFileOf(url: URL): File {
+    val fileUrl = url.path.substringBefore("!/")
+    return try {
+      File(URI(fileUrl))
+    } catch (_: Exception) {
+      File(fileUrl.substringAfter("file:"))
+    }
   }
 
   /**
@@ -147,7 +162,7 @@ object ClasspathResourceDiscovery {
               }
           }
           "jar" -> {
-            val jarPath = url.path.substringAfter("file:").substringBefore("!")
+            val jarPath = jarFileOf(url)
             try {
               JarFile(jarPath).use { jar ->
                 jar.entries().asSequence()

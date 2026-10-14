@@ -12,6 +12,7 @@ import xyz.block.trailblaze.util.Console
 import java.io.File
 import java.util.concurrent.Callable
 import kotlin.system.exitProcess
+import xyz.block.trailblaze.util.fileUrl
 
 /**
  * Generate reports from session recordings.
@@ -601,15 +602,15 @@ internal fun generateSessionReport(
   }
 
   Console.info("")
-  Console.info("HTML: file://${htmlFile.absolutePath}")
-  if (jsonFile != null) Console.info("JSON: file://${jsonFile.absolutePath}")
+  Console.info("HTML: ${htmlFile.fileUrl()}")
+  if (jsonFile != null) Console.info("JSON: ${jsonFile.fileUrl()}")
 
   // The animated timeline exports (--video/--gif/--webp) drive headless Playwright over the
   // report's autoplay timeline: --video screen-records `?autoplay=1` playing in real time, and
   // --gif/--webp step `?autoplay=step` one frame at a time (see PlaywrightReportCapture).
   // (--storyboard builds its own grid HTML from logs and only needs a path anchor.)
   if (videoSpec != null || gifSpec != null || webpSpec != null) {
-    Console.log("Recording the report's timeline: file://${htmlFile.absolutePath}")
+    Console.log("Recording the report's timeline: ${htmlFile.fileUrl()}")
   }
 
   val (effectiveGifSpec, effectiveWebpSpec) =
@@ -783,7 +784,7 @@ internal fun generateSessionReport(
   }
 
   if (open) {
-    TrailblazeDesktopUtil.openInDefaultBrowser("file://${htmlFile.absolutePath}")
+    TrailblazeDesktopUtil.openInDefaultBrowser("${htmlFile.fileUrl()}")
   }
 
   return TrailblazeExitCode.SUCCESS.code
