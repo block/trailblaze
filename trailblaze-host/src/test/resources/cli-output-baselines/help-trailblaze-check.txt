@@ -6,7 +6,8 @@
 # small wording / spacing changes can be intentional or accidental.
 # ----------------------------------------------------------------------
 Usage: trailblaze check [-hV] [--all] [--no-typecheck] [--show-typed-tools]
-                        [--workspace=<workspaceDir>] [<trailmap-id>]
+                        [--tests-only] [--workspace=<workspaceDir>]
+                        [<trailmap-id>]
 Validate a trailmap: materialize manifests, type-check its TypeScript, run its
 `*.test.ts` tests.
 Type-checking covers TypeScript/JavaScript sources; tests run via `bun test`.
@@ -43,6 +44,13 @@ re-runs `trailblaze check`).
                              SDK's `ts-json-schema-generator` install are
                              missing — the analyzer skips cleanly with an
                              explanatory log line.
+      --tests-only         Materialize the workspace's SDK + per-trailmap typed
+                             bindings, then run only the trailmaps' `*.test.ts`
+                             unit tests via bun: no typecheck and no trail
+                             validation, and the exit code is the tests' alone.
+                             Fails when no checked trailmap has a test. For CI
+                             gates that judge tool tests apart from the trail
+                             corpus.
   -V, --version            Print version information and exit.
       --workspace=<workspaceDir>
                            Pin the workspace root explicitly (the directory

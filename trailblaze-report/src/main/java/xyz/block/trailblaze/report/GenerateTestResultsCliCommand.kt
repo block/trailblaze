@@ -571,7 +571,10 @@ open class GenerateTestResultsCliCommand(
       ci_build_number = getEnv("BUILDKITE_BUILD_NUMBER") ?: getEnv("CI_BUILD_NUMBER"),
       ci_organization_slug = getEnv("BUILDKITE_ORGANIZATION_SLUG") ?: getEnv("CI_ORGANIZATION_SLUG"),
       ci_pipeline_slug = getEnv("BUILDKITE_PIPELINE_SLUG") ?: getEnv("CI_PIPELINE_SLUG"),
-      ci_build_source = getEnv("BUILDKITE_SOURCE") ?: getEnv("CI_BUILD_SOURCE"),
+      // TRAILBLAZE_BUILD_SOURCE first: a parent pipeline that triggers this build from a schedule
+      // passes it, so the run is recorded as `schedule` rather than the CI's "triggered" source.
+      ci_build_source =
+        getEnv("TRAILBLAZE_BUILD_SOURCE")?.trim() ?: getEnv("BUILDKITE_SOURCE") ?: getEnv("CI_BUILD_SOURCE"),
       ci_build_message = getEnv("BUILDKITE_MESSAGE") ?: getEnv("CI_BUILD_MESSAGE"),
       ci_build_label = getEnv("BUILDKITE_LABEL") ?: getEnv("CI_BUILD_LABEL"),
       git_commit = getEnv("BUILDKITE_COMMIT") ?: getEnv("GIT_COMMIT"),

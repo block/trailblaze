@@ -324,7 +324,7 @@ private class NoOpBridge : TrailblazeMcpBridge {
 
 /** MCP handlers are `suspend ClientConnection.(CallToolRequest) -> CallToolResult`; the
  *  descriptor handlers never touch the connection, so every member can be inert. */
-private object FakeClientConnection : ClientConnection {
+internal object FakeClientConnection : ClientConnection {
   override val sessionId: String = "fake-client-connection"
   override suspend fun notification(notification: ServerNotification, relatedRequestId: RequestId?) {}
   override suspend fun ping(request: PingRequest, options: RequestOptions?): EmptyResult = error("not used")

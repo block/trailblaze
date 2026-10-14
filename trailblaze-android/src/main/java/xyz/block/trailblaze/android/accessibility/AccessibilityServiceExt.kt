@@ -1,6 +1,5 @@
 package xyz.block.trailblaze.android.accessibility
 
-import android.graphics.Rect
 import android.view.accessibility.AccessibilityNodeInfo
 import maestro.TreeNode
 import xyz.block.trailblaze.android.AndroidSdkVersion
@@ -10,7 +9,7 @@ import xyz.block.trailblaze.android.AndroidSdkVersion
  * over are counted on [tally] rather than skipped silently — see [TreeCaptureTally].
  */
 fun AccessibilityNodeInfo.toTreeNode(tally: TreeCaptureTally = TreeCaptureTally()): TreeNode {
-  val nodeRect: Rect = Rect().apply { getBoundsInScreen(this) }
+  val nodeRect = prepareForSnapshot()
 
   // Top-left coordinate
   val topLeftX = nodeRect.left

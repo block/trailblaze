@@ -136,4 +136,34 @@ class TrailRunnerPathsTest {
 
     assertEquals(sourceUrl, toSessionSummary(info).trailSourceUrl)
   }
+
+  @Test
+  fun `a root that ends in a separator still contains its children`() {
+    // A filesystem root's canonical path already ends in a separator: `/` here, `D:\` on Windows.
+    val root = File.listRoots().first().canonicalPath
+    val child = File(root, "tests/smoke.trail.yaml").path
+
+    assertTrue(isInside(child, root))
+    assertTrue(isSameOrInside(root, root))
+    assertFalse(isInside(root, root))
+  }
+
+  @Test
+  fun `a sibling that shares a name prefix is not inside`() {
+    val root = tmp.newFolder("trails").canonicalPath
+
+    assertFalse(isInside("$root-old${File.separator}x.trail.yaml", root))
+    assertTrue(isInside("$root${File.separator}x.trail.yaml", root))
+  }
+
+  @Test
+  fun `a sibling that differs from the root only in case is not inside`() {
+    // In a case-sensitive Windows folder, `TRAILS` and `trails` are two folders.
+    val parent = tmp.newFolder("cased").canonicalPath
+    val root = "$parent${File.separator}trails"
+    val sibling = "$parent${File.separator}TRAILS"
+
+    assertFalse(isInside("$sibling${File.separator}secret.trail.yaml", root))
+    assertFalse(isSameOrInside(sibling, root))
+  }
 }

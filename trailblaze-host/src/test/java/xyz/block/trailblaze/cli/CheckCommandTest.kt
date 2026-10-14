@@ -232,6 +232,53 @@ class CheckCommandTest {
   }
 
   @Test
+  fun `check --tests-only skips the trail validations a full check fails on`() {
+    // A trail with an undeclared `{{args.x}}` fails the arg-token phase, a pure text scan that
+    // needs no bun. A full check reports it; --tests-only must not reach it. With no `*.test.ts`
+    // in the fixture, --tests-only then fails for having nothing to run, which keeps this
+    // deterministic on an agent without bun.
+    val workspaceRoot = newWorkspaceWithTrailmap(trailmapId = "alpha", withTarget = true)
+    File(workspaceRoot, "trails").apply { mkdirs() }.resolve("bad.trail.yaml").writeText(
+      """
+      config:
+        id: test/bad
+      trail:
+      - step: Reply to {{args.sender}}
+      """.trimIndent(),
+    )
+
+    val (fullExit, fullStderr) = captureStderr {
+      CliCallerContext.withCallerCwd(workspaceRoot.toPath()) {
+        CommandLine(CheckCommand()).execute("--no-typecheck")
+      }
+    }
+    assertTrue(fullExit != 0, "A full check should fail on the arg-token finding. stderr:\n$fullStderr")
+    assertTrue(fullStderr.contains("arg-token validation FAILED"), "stderr was:\n$fullStderr")
+
+    val (testsOnlyExit, testsOnlyStderr) = captureStderr {
+      CliCallerContext.withCallerCwd(workspaceRoot.toPath()) {
+        CommandLine(CheckCommand()).execute("--tests-only")
+      }
+    }
+    assertEquals(TrailmapUnitTestRunner.EXIT_USAGE, testsOnlyExit, "stderr was:\n$testsOnlyStderr")
+    assertTrue(testsOnlyStderr.contains("--tests-only found no"), "stderr was:\n$testsOnlyStderr")
+    assertTrue(!testsOnlyStderr.contains("arg-token"), "--tests-only ran a trail phase. stderr:\n$testsOnlyStderr")
+  }
+
+  @Test
+  fun `the test runner passes an empty workspace by default and fails it when tests are required`() {
+    val workspaceRoot = newWorkspaceWithTrailmap(trailmapId = "alpha")
+    val trailmap = File(workspaceRoot, "trails/config/trailmaps/alpha").toPath()
+
+    assertEquals(TrailmapUnitTestRunner.EXIT_OK, TrailmapUnitTestRunner.run(listOf(trailmap)))
+    assertEquals(
+      TrailmapUnitTestRunner.EXIT_USAGE,
+      TrailmapUnitTestRunner.run(listOf(trailmap), requireTests = true),
+    )
+    assertEquals(TrailmapUnitTestRunner.EXIT_USAGE, TrailmapUnitTestRunner.run(emptyList(), requireTests = true))
+  }
+
+  @Test
   fun `check --workspace anchors materialization at the given directory`() {
     val workspaceRoot = newWorkspaceWithTrailmap(trailmapId = "alpha", withTarget = true)
     val isolated = File(workDir, "isolated").apply { mkdirs() }

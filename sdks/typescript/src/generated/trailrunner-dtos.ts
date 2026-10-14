@@ -355,6 +355,7 @@ export interface DirectionStep {
   recording?: ToolRecording | null;
   maxRetries?: number | null;
   isTrailhead?: boolean;
+  isTeardown?: boolean;
   prompt?: string;
 }
 

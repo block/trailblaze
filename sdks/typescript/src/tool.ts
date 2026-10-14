@@ -374,9 +374,9 @@ export function tool(
   // (`ScriptedToolDefinitionAnalyzer`) which walks each `trailblaze.tool(...)` call
   // site via the TypeScript AST. At runtime we discard the spec value and adapt the
   // handler the same way as the bare-handler overload — the analyzer is what
-  // synthesizes the MCP `_meta` for tool advertisement, not this function. Capturing
-  // the spec as a runtime property would create an extra contract for callers to
-  // depend on; deferring until a concrete use case appears keeps the surface minimal.
+  // synthesizes the MCP `_meta` for tool advertisement, not this function. The one
+  // exception is `trailhead.teardown`: a function can't be captured at build time, so it
+  // rides on the returned definition as its `teardown` member.
   //
   // The condition deliberately rejects `null` (which is `typeof === "object"`), arrays
   // (which are also `typeof === "object"`), and any second-arg that isn't a function.
@@ -400,7 +400,7 @@ export function tool(
     // adapter so the typed dispatch boundary can ajv-validate args before invoking
     // the handler. Absent / non-object values are passed as `undefined`, which
     // [defineTypedTool] interprets as "no validation."
-    const specObj = arg0 as TrailblazeTypedToolSpec;
+    const specObj = arg0 as TrailblazeTypedToolSpec<unknown>;
     const inlineSchema = (specObj.inputSchema && typeof specObj.inputSchema === "object" && !Array.isArray(specObj.inputSchema))
       ? (specObj.inputSchema as Record<string, unknown>)
       : undefined;
@@ -408,6 +408,7 @@ export function tool(
       arg1 as (input: unknown, ctx: ToolContext) => Promise<unknown>,
       inlineSchema,
       ajvCompile,
+      specObj.trailhead?.teardown,
     );
   }
   // Imperative path. The overloads above guarantee well-shaped callers reach this

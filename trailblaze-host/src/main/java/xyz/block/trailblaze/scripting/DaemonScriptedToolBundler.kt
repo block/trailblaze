@@ -705,6 +705,7 @@ class DaemonScriptedToolBundler(
       appendLine("    const result = await __userHandler(args, ctx, __client);")
       appendLine("    return __normalizeResult(result);")
       appendLine("  },")
+      appendLine("  teardown: __teardownMember(__userHandler),")
       appendLine("};")
     }
     return InProcessScriptedToolWrapperTemplate.render(

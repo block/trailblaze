@@ -14,9 +14,9 @@ import java.util.concurrent.TimeUnit
  * standalone `trailblaze test` subcommand. The CLI surface that ships meant "Trailblaze
  * test" reads as "run a trail" (Trailblaze's entire raison d'être), which was confusing.
  * The KISS resolution: tests are part of `trailblaze check`'s validation surface, the way
- * `gradle check` includes unit tests. If we ever need a finer-grained invocation
- * ("only run tests, skip everything else"), that becomes `trailblaze check tests` as a
- * subcommand — but we cross that bridge when something demands it, not preemptively.
+ * `gradle check` includes unit tests. The finer-grained "only run tests, skip everything
+ * else" invocation is `trailblaze check --tests-only`, a flag rather than a `check tests`
+ * subcommand because `tests` would collide with the positional `<trailmap-id>`.
  *
  * **Discovery + spawn semantics.** Walk each trailmap's `tools/` for `*.test.ts` files. If a
  * trailmap has none, skip silently. If a trailmap has tests but no sibling `tools/tsconfig.json`,
@@ -58,8 +58,17 @@ internal object TrailmapUnitTestRunner {
    * `trailblaze check tests` (or similar) subcommand ever lands, re-add a `commandLabel`
    * parameter then; threading one through speculatively today violates KISS.
    */
-  fun run(trailmaps: List<Path>): Int {
-    if (trailmaps.isEmpty()) return EXIT_OK
+  fun run(trailmaps: List<Path>, requireTests: Boolean = false): Int {
+    // Decided before the bun probe so a testless workspace gets the same answer on every machine:
+    // a pass by default, a broken gate under `--tests-only`, which asked for tests.
+    if (trailmaps.none { findTestFiles(it.resolve("tools")).isNotEmpty() }) {
+      if (!requireTests) return EXIT_OK
+      Console.error(
+        "trailblaze check: --tests-only found no `*.test.ts` under any checked trailmap's tools/, " +
+          "so there was nothing to run.",
+      )
+      return EXIT_USAGE
+    }
 
     if (!CliPathUtils.isCommandOnPath("bun")) {
       Console.error(

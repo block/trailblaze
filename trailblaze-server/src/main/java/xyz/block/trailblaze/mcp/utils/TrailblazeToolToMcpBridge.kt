@@ -121,6 +121,13 @@ class TrailblazeToolToMcpBridge(
   private val mcpBridge: TrailblazeMcpBridge,
   private val sessionContext: TrailblazeMcpSessionContext? = null,
   private val onProgressToken: ((McpSessionId, RequestId?) -> Unit)? = null,
+  /**
+   * Wraps every `tools/call` this bridge registers, so the server can count it as one of the
+   * session's running calls (a background runtime rebuild waits for those). Runs the call as-is
+   * by default.
+   */
+  private val runAsSessionCall: suspend (McpSessionId, suspend () -> CallToolResult) -> CallToolResult =
+    { _, call -> call() },
 ) {
   private companion object {
     /** Cap on argument-payload characters written to the daemon log; see [argumentsLogPreview]. */
@@ -191,12 +198,14 @@ class TrailblazeToolToMcpBridge(
         description = descriptor.description,
         inputSchema = inputSchema,
       ) { request: CallToolRequest ->
-        handleToolCall(
-          request = request,
-          toolClass = toolClass,
-          toolName = descriptor.name,
-          mcpSessionId = mcpSessionId,
-        )
+        runAsSessionCall(mcpSessionId) {
+          handleToolCall(
+            request = request,
+            toolClass = toolClass,
+            toolName = descriptor.name,
+            mcpSessionId = mcpSessionId,
+          )
+        }
       }
       
       // Track registered tool
@@ -232,12 +241,14 @@ class TrailblazeToolToMcpBridge(
         description = descriptor.description ?: "",
         inputSchema = inputSchema,
       ) { request: CallToolRequest ->
-        handleDescriptorToolCall(
-          request = request,
-          toolName = descriptor.name,
-          mcpSessionId = mcpSessionId,
-          executeDescriptorTool = executeDescriptorTool,
-        )
+        runAsSessionCall(mcpSessionId) {
+          handleDescriptorToolCall(
+            request = request,
+            toolName = descriptor.name,
+            mcpSessionId = mcpSessionId,
+            executeDescriptorTool = executeDescriptorTool,
+          )
+        }
       }
       registeredToolNames.add(descriptor.name)
     }

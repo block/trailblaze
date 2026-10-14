@@ -729,8 +729,9 @@ function extractTrace(rawLogs: TrailblazeLogRecord[]): RawTraceRow[] {
       // `objective` marks the top-level trail steps (ObjectiveStartLog) so the timeline
       // can nest the tool calls / assertions that follow under their step. `trailhead` marks the
       // objective lowered from the trail's `trailhead:` (its step 0) — the DirectionStep.isTrailhead
-      // flag rides through the ObjectiveStartLog's promptStep.
-      const prow = { _trace: traceId, label: truncate(promptText, 120), _logs: [log], tool: log.modelName ? `llm · ${log.modelName}` : 'agent step', ms: log.durationMs || 0, ok: !err, err, screenshotFile, viewHierarchy, viewport, ts, objective: isObjective, trailhead: isObjective && log.promptStep?.isTrailhead === true, ...(llmAt != null ? { llm: llmAt } : {}) };
+      // flag rides through the ObjectiveStartLog's promptStep. `teardown` marks the teardown
+      // objective the runner adds after the trail (DirectionStep.isTeardown).
+      const prow = { _trace: traceId, label: truncate(promptText, 120), _logs: [log], tool: log.modelName ? `llm · ${log.modelName}` : 'agent step', ms: log.durationMs || 0, ok: !err, err, screenshotFile, viewHierarchy, viewport, ts, objective: isObjective, trailhead: isObjective && log.promptStep?.isTrailhead === true, ...(isObjective && log.promptStep?.isTeardown === true ? { teardown: true } : {}), ...(llmAt != null ? { llm: llmAt } : {}) };
       out.push(prow);
       if (isObjective) objRow = prow;
       continue;
@@ -769,13 +770,14 @@ function extractTrace(rawLogs: TrailblazeLogRecord[]): RawTraceRow[] {
       const label = log.displayName === 'final_screenshot' ? 'Final state'
         : log.displayName === 'failure_screenshot' ? 'Failure state'
         : (log.displayName || 'Snapshot');
-      out.push({ label, _logs: [log], tool: '', terminal: true, ms: log.durationMs || 0, ok: log.displayName !== 'failure_screenshot', err: null, screenshotFile, viewHierarchy, ts });
+      const endOfRun = log.displayName === 'final_screenshot' || log.displayName === 'failure_screenshot';
+      out.push({ label, _logs: [log], tool: '', terminal: true, ...(endOfRun ? { endOfRun: true } : {}), ms: log.durationMs || 0, ok: log.displayName !== 'failure_screenshot', err: null, screenshotFile, viewHierarchy, ts });
       continue;
     }
 
     if (err) {
       asserts = new Map(); closeGroup();
-      out.push({ label: 'Error', _logs: [log], tool: '', terminal: true, ms: 0, ok: false, err, screenshotFile, viewHierarchy, ts });
+      out.push({ label: 'Error', _logs: [log], tool: '', terminal: true, endOfRun: true, ms: 0, ok: false, err, screenshotFile, viewHierarchy, ts });
     }
   }
   closeGroup();
@@ -1535,11 +1537,13 @@ function slimTraceForShare(trace: RawTraceRow[] | null | undefined): TraceStep[]
     ...((ids) => (ids.length ? { captureIds: ids } : {}))(pictureFirst(screenshotlessCaptureIds(t._logs || []), t._shotCapture)),
     objective: !!t.objective,
     trailhead: !!t.trailhead,
+    ...(t.teardown ? { teardown: true } : {}),
     selfHeal: !!t.selfHeal,
     selfHealTool: t.selfHealTool || null,
     selfHealError: t.selfHealError || null,
     selfHealSource: !!t.selfHealSource,
     terminal: !!t.terminal,
+    ...(t.endOfRun ? { endOfRun: true } : {}),
     count: t.count || null,
     mark: t.mark || null,
     // When a folded driver action supplied the row's capture or mark, the instant IT ran (see the
@@ -1611,10 +1615,10 @@ function isLlmTurnRow(t: { tool?: string | null; llm?: number | null }): boolean
   return tool === 'agent step' || tool.indexOf('llm') === 0;
 }
 
-// Count real test steps from a trace: objective rows, trailhead excluded — `meta.steps` is the
-// flat trace length (action rows AND step headers), which overstates what a reader calls a step.
+// Count real test steps from a trace: objective rows, trailhead and teardown excluded — `meta.steps`
+// is the flat trace length (action rows AND step headers), which overstates what a reader calls a step.
 function traceStepCount(trace: TraceStep[]): number {
-  return trace.filter((t) => t.objective && !t.trailhead).length;
+  return trace.filter((t) => t.objective && !t.trailhead && !t.teardown).length;
 }
 
 // Count executed tool calls from a trace. Terminal snapshot/error rows carry `terminal` and stay

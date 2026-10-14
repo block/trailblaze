@@ -209,6 +209,29 @@ class GenerateTestResultsCliCommandTest {
   }
 
   @Test
+  fun `a build triggered by a scheduled parent records the parent's source`() {
+    // A triggered build's own source is the CI's "triggered" value, so without the parent's
+    // TRAILBLAZE_BUILD_SOURCE a scheduled run would drop out of every query for scheduled runs.
+    val logsDir = Files.createTempDirectory("trailblaze-report-test").toFile()
+    val outputFile = File(logsDir, "results.json")
+    try {
+      writePassedSession(logsDir, SessionId("2026_10_09_triggered_session"), webDeviceInfo(), "trails/checkout/pay.trail.yaml")
+
+      captureStdout {
+        GenerateTestResultsCliCommand(
+          // Padded, as a hand-written env value can be: queries match the exact `schedule`.
+          environment = mapOf("BUILDKITE_SOURCE" to "trigger_job", "TRAILBLAZE_BUILD_SOURCE" to " schedule "),
+        ).main(arrayOf(logsDir.absolutePath, outputFile.absolutePath, "--output-format", "JSON"))
+      }
+
+      val report = json.decodeFromString<CiSummaryReport>(outputFile.readText())
+      assertEquals("schedule", report.metadata.ci_build_source)
+    } finally {
+      logsDir.deleteRecursively()
+    }
+  }
+
+  @Test
   fun `config_id is read from the environment so every leg of a config reports the same value`() {
     // CONFIG_ID and DEVICE_KEY are separate env vars, so every leg of a config reports the same
     // config_id and one predicate gathers them all.

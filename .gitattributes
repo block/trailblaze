@@ -1,0 +1,3 @@
+# Windows launchers. cmd.exe mis-parses `goto` labels in a batch file with LF-only line endings,
+# so keep CRLF in the checkout (and in the release artifact copied from it) on every platform.
+*.cmd text eol=crlf

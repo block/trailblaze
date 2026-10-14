@@ -143,6 +143,17 @@ class CheckCommand : Callable<Int> {
   var noTypecheck: Boolean = false
 
   @Option(
+    names = ["--tests-only"],
+    description = [
+      "Materialize the workspace's SDK + per-trailmap typed bindings, then run only the " +
+        "trailmaps' `*.test.ts` unit tests via bun: no typecheck and no trail validation, and " +
+        "the exit code is the tests' alone. Fails when no checked trailmap has a test. For CI " +
+        "gates that judge tool tests apart from the trail corpus.",
+    ],
+  )
+  var testsOnly: Boolean = false
+
+  @Option(
     names = ["--show-typed-tools"],
     description = [
       "Print the typed scripted tools (`trailblaze.tool<I, O>({...})`) discovered in each " +
@@ -229,7 +240,7 @@ class CheckCommand : Callable<Int> {
     // script uses `--no-typecheck` because it runs its
     // own legacy-filtered tsc pass — but it still wants bun unit tests to run as part
     // of `check`. Tests are an independent validation axis from tsc.
-    val typecheckExit = if (noTypecheck) {
+    val typecheckExit = if (noTypecheck || testsOnly) {
       0
     } else {
       runTypecheckPhase(workspaceRoot = resolved.workspaceRoot, trailmaps = trailmapsToValidate)
@@ -240,7 +251,7 @@ class CheckCommand : Callable<Int> {
     // in one run" so an author iterating doesn't have to fix one signal, rerun, fix
     // the next, rerun. The aggregate exit code below picks the worst of the two
     // phases.
-    val testExit = TrailmapUnitTestRunner.run(trailmaps = trailmapsToValidate)
+    val testExit = TrailmapUnitTestRunner.run(trailmaps = trailmapsToValidate, requireTests = testsOnly)
 
     // Opt-in diagnostic: print the typed scripted tools
     // (`trailblaze.tool<I, O>({...})`) discovered in each trailmap. Off by default
@@ -256,6 +267,10 @@ class CheckCommand : Callable<Int> {
     if (showTypedTools) {
       emitScriptedToolDefinitionsDebug(trailmapsToValidate, workspaceRoot = resolved.workspaceRoot)
     }
+
+    // `--tests-only` stops here: the phases below judge the workspace's trails, which a tool-test
+    // gate must not inherit (a consumer's trail corpus can carry findings while its tools are fine).
+    if (testsOnly) return testExit
 
     // Type-validate `.trail.yaml` recordings against each trailmap's typed surface. Fails the build
     // by default when a NON-exempt target has findings or can't be validated; per-target

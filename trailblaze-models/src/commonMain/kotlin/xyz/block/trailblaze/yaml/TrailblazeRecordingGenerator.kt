@@ -332,6 +332,13 @@ fun List<TrailblazeLog>.generateRecordedTrailItems(
 
           val objectiveComplete = logs[completeIndex] as ObjectiveCompleteLog
 
+          // A trailhead's `teardown` runs after the trail, outside it: its calls are
+          // never written into the trail, the same way trailhead calls never become prompt steps.
+          if (promptStep is DirectionStep && promptStep.isTeardown) {
+            currentLogIndex = completeIndex
+            continue
+          }
+
           // Collect the recordable TrailblazeToolLog entries assigned to this window (by span
           // overlap, keyed on the window's start index — see [assignToolLogsToWindows]). A call that
           // failed live is never recorded: replaying it fails deterministically, even when the agent

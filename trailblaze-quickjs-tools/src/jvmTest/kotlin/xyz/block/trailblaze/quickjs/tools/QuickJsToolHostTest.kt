@@ -1340,4 +1340,44 @@ class QuickJsToolHostTest {
       "expected the cancellation to propagate out of connect, got: $thrown",
     )
   }
+
+  @Test
+  fun `a tool's teardown member is called with args, ctx and the trail result, and absent reads as null`() = runBlocking {
+    val bundle = """
+      const tools = (globalThis.__trailblazeTools = globalThis.__trailblazeTools || {});
+      tools.signIn = {
+        name: "signIn",
+        spec: {},
+        handler: async () => ({ content: [] }),
+        teardown: async (args, ctx, trailRun) => ({
+          reusable: trailRun.outcome === "passed",
+          reason: args.persona + " / " + ctx.sessionId,
+        }),
+      };
+      tools.plain = { name: "plain", spec: {}, handler: async () => ({ content: [] }) };
+    """.trimIndent()
+    val host = connect(bundle)
+
+    assertTrue(host.hasToolMember("signIn", "teardown"))
+    assertEquals(false, host.hasToolMember("plain", "teardown"))
+    assertEquals(false, host.hasToolMember("missing", "teardown"))
+
+    val result = host.callToolMember(
+      name = "signIn",
+      member = "teardown",
+      args = buildJsonObject { put("persona", "merchant") },
+      ctx = buildJsonObject { put("sessionId", "s-1") },
+      extraArg = buildJsonObject { put("outcome", "passed") },
+    )
+    assertEquals(true, result?.get("reusable")?.jsonPrimitive?.boolean)
+    assertEquals("merchant / s-1", result?.get("reason")?.jsonPrimitive?.content)
+
+    assertNull(
+      host.callToolMember("plain", "teardown", JsonObject(emptyMap()), null, JsonObject(emptyMap())),
+    )
+
+    // The code version a hand-off is keyed on follows the bundle source.
+    assertEquals(host.bundleSha256, connect(bundle).bundleSha256)
+    assertTrue(host.bundleSha256 != connect(bundle + "\n// edited").bundleSha256)
+  }
 }

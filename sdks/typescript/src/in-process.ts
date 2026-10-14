@@ -51,6 +51,20 @@ export {
 } from "./context.js";
 export type { TrailblazeSessionCleanup, TrailblazeSessionResources } from "./session-resources.js";
 export type {
+  EventMatch,
+  EventMatchValue,
+  TeardownResult,
+  SessionEvent,
+  TrailEvents,
+  TrailEventsQueryOptions,
+  TrailheadContext,
+  TrailheadNote,
+  TrailheadNoteInput,
+  PreviousRun,
+  TrailOutcome,
+  TrailRun,
+} from "./trailhead.js";
+export type {
   TrailblazeCallToolResult,
   TrailblazeClient,
   TrailblazeToolEntry,
@@ -96,7 +110,7 @@ export function tool<TInput = Record<string, never>, TResult = string>(
   handler: (input: TInput, ctx: ToolContext) => Promise<TResult>,
 ): TypedToolDefinition<TInput, TResult>;
 export function tool<TInput = Record<string, never>, TResult = string>(
-  spec: TrailblazeTypedToolSpec,
+  spec: TrailblazeTypedToolSpec<TInput>,
   handler: (input: TInput, ctx: ToolContext) => Promise<TResult>,
 ): TypedToolDefinition<TInput, TResult>;
 export function tool(
@@ -117,7 +131,7 @@ export function tool(
     !Array.isArray(arg0) &&
     typeof arg1 === "function"
   ) {
-    const specObj = arg0 as TrailblazeTypedToolSpec;
+    const specObj = arg0 as TrailblazeTypedToolSpec<unknown>;
     const inlineSchema =
       specObj.inputSchema &&
       typeof specObj.inputSchema === "object" &&
@@ -127,6 +141,8 @@ export function tool(
     return defineTypedTool(
       arg1 as (input: unknown, ctx: ToolContext) => Promise<unknown>,
       inlineSchema,
+      undefined,
+      specObj.trailhead?.teardown,
     );
   }
   // Imperative `tool(name, spec, handler)` — unavailable in the slim runtime.

@@ -166,10 +166,19 @@ export function createDaemonRpc(options: RpcCallOptions = {}) {
       if (!result.data.success) return { ok: false, error: result.data.errorMessage || "The device did not accept the input." };
       return { ok: true, error: null };
     },
-    /** GetToolCatalogRequest → the tools a driver can run (or null). Used by the Devices screen. */
-    getToolCatalog: async (trailblazeDriverType: string): Promise<TrailblazeToolDescriptor[] | null> => {
+    /**
+     * GetToolCatalogRequest → the tools a driver can run (or null). Used by the Devices screen. With
+     * the device, tools that need a classifier the device lacks are left out.
+     */
+    getToolCatalog: async (
+      trailblazeDriverType: string,
+      trailblazeDeviceId?: TrailblazeDeviceId | null,
+    ): Promise<TrailblazeToolDescriptor[] | null> => {
       const data = await dataOrNull(
-        rpc.getToolCatalog({ trailblazeDriverType: trailblazeDriverType as TrailblazeDriverType }),
+        rpc.getToolCatalog({
+          trailblazeDriverType: trailblazeDriverType as TrailblazeDriverType,
+          ...(trailblazeDeviceId ? { trailblazeDeviceId } : {}),
+        }),
       );
       return data ? data.tools : null;
     },

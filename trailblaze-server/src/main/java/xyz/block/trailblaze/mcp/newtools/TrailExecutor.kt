@@ -145,26 +145,6 @@ internal fun deviceClassifiersFor(deviceId: TrailblazeDeviceId?): List<Trailblaz
 /** [deviceClassifiersFor] as a [DeviceClassifiersProvider], for use as a parameter default. */
 internal val platformOnlyDeviceClassifiers: DeviceClassifiersProvider = { deviceId -> deviceClassifiersFor(deviceId) }
 
-/** How long a platform-only classification is trusted before a cached session runtime re-probes. */
-internal const val PLATFORM_ONLY_CLASSIFIER_REPROBE_INTERVAL_MS: Long = 30_000L
-
-/**
- * Whether a cached runtime built against [cached] classifiers should re-probe the device.
- *
- * Only a platform-only answer qualifies: it is what a failed or timed-out probe degrades to, and it
- * hides every tool gated on `trailblaze/requiredClassifiers`, so caching it would keep those tools
- * hidden after the device recovers. A specific answer (`android-phone`) came from a probe that
- * succeeded and is kept. Throttled because a device with no sub-category (a web browser) gives a
- * platform-only answer every time, and the runtime is consulted on every tool listing.
- */
-internal fun platformOnlyClassifiersDueForReprobe(
-  cached: List<TrailblazeDeviceClassifier>,
-  deviceId: TrailblazeDeviceId,
-  probedAtMs: Long,
-  nowMs: Long,
-): Boolean = cached == deviceClassifiersFor(deviceId) &&
-  nowMs - probedAtMs >= PLATFORM_ONLY_CLASSIFIER_REPROBE_INTERVAL_MS
-
 /**
  * Default implementation of TrailExecutor.
  *

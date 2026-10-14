@@ -261,6 +261,34 @@ class TrailblazeRecordingGeneratorTest {
   }
 
   @Test
+  fun teardownTeardownIsNeverWrittenIntoTheTrail() {
+    // Teardown runs after the trail; a recordable call it makes must not land in the recording,
+    // neither as its own step nor attached to the trail's last step.
+    val step = DirectionStep(step = "Enter search text")
+    val teardown = DirectionStep(step = "Teardown", recordable = false, isTeardown = true)
+    val logs = listOf(
+      objectiveStart(step),
+      toolLog(InputTextTrailblazeTool(text = "hello"), "inputText"),
+      objectiveComplete(step),
+      objectiveStart(teardown),
+      toolLog(InputTextTrailblazeTool(text = "undo"), "inputText"),
+      objectiveComplete(teardown),
+    )
+
+    val yaml = logs.recordedYaml()
+
+    val expected = """
+      |trail:
+      |  - step: "Enter search text"
+      |    recording:
+      |      android:
+      |        - inputText:
+      |            text: hello
+    """.trimMargin() + "\n"
+    assertThat(yaml).isEqualTo(expected)
+  }
+
+  @Test
   fun emptyObjectiveWindowGeneratesStepWithoutRecording() {
     // Zero recordable tools fired during this window. The generator emits no `recording:` block
     // so replay falls through to AI rather than ghost-passing on an empty recording.

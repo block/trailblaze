@@ -37,6 +37,12 @@ data class DirectionStep(
    * this never appears in a `.trail.yaml`.
    */
   val isTrailhead: Boolean = false,
+  /**
+   * Marks the finish objective that wraps a trailhead's `teardown`, the bookend to
+   * [isTrailhead]. Its tool calls are never written into a recording. Like [isTrailhead], it only
+   * rides through session logs and never appears in a `.trail.yaml`.
+   */
+  val isTeardown: Boolean = false,
 ) : PromptStep {
   override val prompt: String = step
 }

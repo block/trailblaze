@@ -33,6 +33,20 @@ export type {
   TrailblazeSessionResources,
 } from "./session-resources.js";
 export type {
+  EventMatch,
+  EventMatchValue,
+  TeardownResult,
+  SessionEvent,
+  TrailEvents,
+  TrailEventsQueryOptions,
+  TrailheadContext,
+  TrailheadNote,
+  TrailheadNoteInput,
+  PreviousRun,
+  TrailOutcome,
+  TrailRun,
+} from "./trailhead.js";
+export type {
   TrailblazeCallToolResult,
   TrailblazeClient,
   TrailblazeHostFunctionMap,

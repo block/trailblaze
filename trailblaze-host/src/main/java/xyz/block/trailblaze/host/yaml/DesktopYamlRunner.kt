@@ -54,6 +54,8 @@ import xyz.block.trailblaze.model.TrailExecutionResult
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.model.TrailblazeOnDeviceInstrumentationTarget
+import xyz.block.trailblaze.trailhead.TrailheadHandoffStore
+import xyz.block.trailblaze.trailhead.TrailheadRuns
 import xyz.block.trailblaze.transport.AndroidWireTransport
 import xyz.block.trailblaze.ui.TrailblazeAnalytics
 import xyz.block.trailblaze.ui.TrailblazeDeviceManager
@@ -137,9 +139,12 @@ class DesktopYamlRunner(
     internal fun systemLocaleToApply(driverType: TrailblazeDriverType, locale: String?): String? =
       locale?.takeUnless { driverType == TrailblazeDriverType.PLAYWRIGHT_NATIVE }
 
-    /** Applying a device language always requires a fresh target process. */
-    internal fun shouldForceStopTargetApp(requested: Boolean, locale: String?): Boolean =
-      requested || locale != null
+    /**
+     * Applying a device language always requires a fresh target process. A reusable trailhead
+     * hand-off skips the ordinary clean start: the trailhead decides what to keep.
+     */
+    internal fun shouldForceStopTargetApp(requested: Boolean, locale: String?, keepForReuse: Boolean = false): Boolean =
+      (requested && !keepForReuse) || locale != null
 
     /**
      * The session id to start capture under BEFORE the whole-trail RPC is sent, or null when it can
@@ -824,7 +829,17 @@ class DesktopYamlRunner(
       try {
         deviceLocale?.let { DeviceLocaleConfigurator.apply(trailblazeDeviceId, it) }
 
-        if (shouldForceStopTargetApp(forceStopTargetApp, deviceLocale)) {
+        // Only a trail whose trailhead will take the reusable hand-off skips the clean start. A
+        // trail that can't be read here keeps it; the run's own decode reports the error.
+        val keepForReuse = TrailheadRuns.reuseEnabledFromEnv() &&
+          runCatching {
+            createTrailblazeYaml().decodeTrail(
+              yaml = runYamlRequest.yaml,
+              deviceClassifiers = deviceClassifiers,
+              selectedDeviceConfiguration = selectedConfigurationName,
+            )
+          }.getOrNull()?.let { TrailheadHandoffStore.holdsReusableFor(trailblazeDeviceId, it) } == true
+        if (shouldForceStopTargetApp(forceStopTargetApp, deviceLocale, keepForReuse)) {
           // Stop the app this device will actually run. A locale change forces a fresh process even
           // when the caller did not request the usual clean start, or the app could keep rendering
           // with the old language.

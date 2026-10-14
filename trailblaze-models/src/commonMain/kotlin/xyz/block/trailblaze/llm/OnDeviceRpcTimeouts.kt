@@ -27,6 +27,12 @@ object OnDeviceRpcTimeouts {
   const val HANDLER_AWAIT_CAP_MS = 900_000L // 15 min
 
   /**
+   * The cancellation message of a session the handler cancelled at [HANDLER_AWAIT_CAP_MS]. It
+   * marks a timeout rather than a stop, for callers that treat the two differently.
+   */
+  const val HANDLER_AWAIT_CAP_MESSAGE = "RunYamlRequest awaitCompletion exceeded ${HANDLER_AWAIT_CAP_MS}ms"
+
+  /**
    * Buffer between the handler cap and the HTTP read timeout. Gives the handler room to
    * finish its cancel-and-cleanup work and serialize a response before the socket closes.
    */

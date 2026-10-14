@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.host.recording
 
 import kotlinx.serialization.json.Json
+import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.mcp.newtools.ToolDiscoveryIndexResult
 import xyz.block.trailblaze.mcp.newtools.ToolDiscoveryTargetResult
@@ -35,10 +36,14 @@ import xyz.block.trailblaze.ui.TrailblazeDeviceManager
  * so the driver is always known at call time; passing null would degrade to an unfiltered list
  * mixing tools the user can't actually run on their selected device, which is worse UX than
  * hiding the palette entirely.
+ *
+ * [classifiers] are the palette device's, so a `trailblaze/requiredClassifiers` tool is listed only
+ * where it would load. Null means no device to judge, and lists every such tool.
  */
 suspend fun discoverAvailableTools(
   deviceManager: TrailblazeDeviceManager,
   driverType: TrailblazeDriverType,
+  classifiers: List<TrailblazeDeviceClassifier>? = null,
 ): List<TrailblazeToolDescriptor> {
   val currentTarget = deviceManager.getCurrentSelectedTargetApp()
   val toolset = ToolDiscoveryToolSet(
@@ -46,6 +51,7 @@ suspend fun discoverAvailableTools(
     allTargetAppsProvider = { deviceManager.availableAppTargets },
     currentTargetProvider = { currentTarget },
     currentDriverTypeProvider = { driverType },
+    currentDeviceClassifiersProvider = { classifiers },
   )
 
   // Platform tools — pass the `default` sentinel so `handleIndexMode` runs with

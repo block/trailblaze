@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.logs.client
 
 import ai.koog.agents.core.tools.ToolDescriptor
+import java.util.concurrent.ConcurrentHashMap
 import ai.koog.prompt.message.AttachmentContent
 import ai.koog.prompt.message.AttachmentSource
 import ai.koog.prompt.message.Message
@@ -23,6 +24,7 @@ import xyz.block.trailblaze.llm.LlmRequestUsageAndCost
 import xyz.block.trailblaze.llm.LlmTokenBreakdownEstimator
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.logs.client.TrailblazeLog.TrailblazeLlmRequestLog.Action
+import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.logs.model.TrailblazeLlmMessage
 import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toTrailblazeToolDescriptor
@@ -71,6 +73,20 @@ class TrailblazeLogger(
    * a content hash, so both copies resolve identically.
    */
   private val toolCatalogEmitter = TrailblazeToolCatalogEmitter()
+
+  /** Sessions whose failure screenshot is already logged; see [logFailureSnapshot]. */
+  private val failureSnapshotSessions: MutableSet<SessionId> = ConcurrentHashMap.newKeySet()
+
+  /**
+   * Logs [screenState] as [session]'s failure screenshot. A failed trail's teardown runs before
+   * the session ends and can change the screen, so the runner takes this first and the
+   * end-of-run capture skips it ([hasFailureSnapshot]).
+   */
+  fun logFailureSnapshot(session: TrailblazeSession, screenState: ScreenState): String? =
+    logSnapshot(session, screenState, displayName = FAILURE_SNAPSHOT_NAME)
+      ?.also { failureSnapshotSessions += session.sessionId }
+
+  fun hasFailureSnapshot(sessionId: SessionId): Boolean = sessionId in failureSnapshotSessions
 
   /**
    * Emits a log event for the given session.
@@ -765,6 +781,8 @@ class TrailblazeLogger(
      * // Logs will be discarded
      * ```
      */
+    const val FAILURE_SNAPSHOT_NAME: String = "failure_screenshot"
+
     fun createNoOp(): TrailblazeLogger {
       return TrailblazeLogger(
         logEmitter = NoOpLogEmitter,

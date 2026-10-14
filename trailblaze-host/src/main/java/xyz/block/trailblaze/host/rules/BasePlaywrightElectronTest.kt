@@ -33,6 +33,7 @@ import xyz.block.trailblaze.playwright.console.WebConsoleCapture
 import xyz.block.trailblaze.playwright.network.WebNetworkCapture
 import xyz.block.trailblaze.playwright.tools.PlaywrightDesktopLaunchGooseTool
 import xyz.block.trailblaze.playwright.tools.WebToolSetIds
+import xyz.block.trailblaze.trailhead.TrailheadRuns
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.rules.TrailblazeLoggingRule
 import xyz.block.trailblaze.rules.TrailblazeRunnerUtil
@@ -220,7 +221,9 @@ class BasePlaywrightElectronTest(
       playwrightAgent.runTrailblazeTools(
         tools = trailblazeTools,
         traceId = currentToolTraceId,
-        screenState = browserManager.getScreenState(),
+        // Null defers to the context's capture-on-read, so a tool that never reads the screen (the
+        // Teardown step among them) neither waits on a capture nor fails when one does.
+        screenState = null,
         elementComparator = elementComparator,
         screenStateProvider = browserManager::getScreenState,
       ).result
@@ -228,6 +231,7 @@ class BasePlaywrightElectronTest(
     trailblazeLogger = loggingRule.logger,
     sessionProvider = { loggingRule.session ?: error("Session not available - ensure test is running") },
     sessionUpdater = { loggingRule.setSession(it) },
+    trailheadReuse = TrailheadRuns.reuseEnabledFromEnv(),
     // Shares one execution context + snapshot frame across the recording, matching the
     // batching pattern elsewhere. This agent's buildExecutionContext doesn't cache per-call
     // device state today, so the benefit here is reduced frame/ThreadLocal churn rather than
@@ -248,27 +252,30 @@ class BasePlaywrightElectronTest(
   ) {
     val activeRunner: TestAgentRunner = agentRunner
     val activeRunnerUtil = agentRunnerUtil
-    for (item in trailItems) {
-      val itemResult = when (item) {
-        is TrailYamlItem.PromptsTrailItem ->
-          activeRunnerUtil.runPromptSuspend(
-            prompts = item.promptSteps,
-            useRecordedSteps = useRecordedSteps,
-            selfHeal = config.selfHeal,
-            onStepProgress = onStepProgress,
-          )
-        is TrailYamlItem.TrailheadTrailItem ->
-          activeRunnerUtil.runPromptSuspend(
-            prompts = listOf(item.trailhead.toPromptStep()),
-            useRecordedSteps = true,
-            selfHeal = config.selfHeal,
-            onStepProgress = onStepProgress,
-          )
-        is TrailYamlItem.ToolTrailItem -> activeRunnerUtil.runTrailblazeTool(item.tools.map { it.trailblazeTool })
-        is TrailYamlItem.ConfigTrailItem -> item.config.context?.let { activeRunner.appendToSystemPrompt(it) }
-      }
-      if (itemResult is TrailblazeToolResult.Error) {
-        throw TrailblazeException(itemResult.errorMessage)
+    // One trail: the trailhead's teardown runs after it, whatever the outcome.
+    activeRunnerUtil.runTrail {
+      for (item in trailItems) {
+        val itemResult = when (item) {
+          is TrailYamlItem.PromptsTrailItem ->
+            activeRunnerUtil.runPromptSuspend(
+              prompts = item.promptSteps,
+              useRecordedSteps = useRecordedSteps,
+              selfHeal = config.selfHeal,
+              onStepProgress = onStepProgress,
+            )
+          is TrailYamlItem.TrailheadTrailItem ->
+            activeRunnerUtil.runPromptSuspend(
+              prompts = listOf(item.trailhead.toPromptStep()),
+              useRecordedSteps = true,
+              selfHeal = config.selfHeal,
+              onStepProgress = onStepProgress,
+            )
+          is TrailYamlItem.ToolTrailItem -> activeRunnerUtil.runTrailblazeTool(item.tools.map { it.trailblazeTool })
+          is TrailYamlItem.ConfigTrailItem -> item.config.context?.let { activeRunner.appendToSystemPrompt(it) }
+        }
+        if (itemResult is TrailblazeToolResult.Error) {
+          throw TrailblazeException(itemResult.errorMessage)
+        }
       }
     }
   }

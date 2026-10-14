@@ -39,6 +39,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.carriesPayload
+import xyz.block.trailblaze.trailhead.TrailheadRuns
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.utils.NoOpElementComparator
 import xyz.block.trailblaze.yaml.PromptStep
@@ -237,6 +238,9 @@ class AndroidTestTrailblazeRule(
         null
       },
       sharedToolBatch = { block -> agent.runInSharedToolBatch(block) },
+      trailheadReuse = TrailheadRuns.reuseEnabled(
+        InstrumentationRegistry.getArguments().getString(TrailheadRuns.REUSE_INSTRUMENTATION_ARG),
+      ),
     )
   }
 
@@ -513,35 +517,38 @@ class AndroidTestTrailblazeRule(
           engineExtension = OkHttpFetchExtension(),
         )
       }
-      trailItems.forEach { item ->
-        val result = when (item) {
-          is TrailYamlItem.PromptsTrailItem ->
-            runnerUtil.runPrompt(
-              prompts = item.promptSteps,
-              useRecordedSteps = true,
-              selfHeal = false,
-            )
-          is TrailYamlItem.TrailheadTrailItem ->
-            runnerUtil.runPrompt(
-              prompts = listOf(item.trailhead.toPromptStep()),
-              useRecordedSteps = true,
-              selfHeal = false,
-            )
-          is TrailYamlItem.ToolTrailItem ->
-            runToolsSnapshotted(item.tools.map { it.trailblazeTool })
-          // Nothing to do: the fields this driver reads off `config:` (skip, driver, memory) were
-          // all consumed above, and `context:` is an LLM system-prompt hint with no LLM to hint.
-          is TrailYamlItem.ConfigTrailItem -> TrailblazeToolResult.Success()
-        }
-        if (result is TrailblazeToolResult.Error) {
-          throw TrailblazeException(result.errorMessage)
-        }
-        // Same predicate the accessibility rule's fold uses, deliberately shared rather than
-        // restated: a payload-less Success — a `config:` item's synthetic one, but equally a
-        // `tapOn` whose return value is just a verdict — must not overwrite a real tool's
-        // payload, or `[adbShell→stdout, tapOn]` surfaces toolMessage=null to the host.
-        if (result is TrailblazeToolResult.Success && result.carriesPayload()) {
-          lastToolSuccess = result
+      // One trail: the trailhead's teardown runs after it, whatever the outcome.
+      runnerUtil.runTrailBlocking {
+        trailItems.forEach { item ->
+          val result = when (item) {
+            is TrailYamlItem.PromptsTrailItem ->
+              runnerUtil.runPrompt(
+                prompts = item.promptSteps,
+                useRecordedSteps = true,
+                selfHeal = false,
+              )
+            is TrailYamlItem.TrailheadTrailItem ->
+              runnerUtil.runPrompt(
+                prompts = listOf(item.trailhead.toPromptStep()),
+                useRecordedSteps = true,
+                selfHeal = false,
+              )
+            is TrailYamlItem.ToolTrailItem ->
+              runToolsSnapshotted(item.tools.map { it.trailblazeTool })
+            // Nothing to do: the fields this driver reads off `config:` (skip, driver, memory) were
+            // all consumed above, and `context:` is an LLM system-prompt hint with no LLM to hint.
+            is TrailYamlItem.ConfigTrailItem -> TrailblazeToolResult.Success()
+          }
+          if (result is TrailblazeToolResult.Error) {
+            throw TrailblazeException(result.errorMessage)
+          }
+          // Same predicate the accessibility rule's fold uses, deliberately shared rather than
+          // restated: a payload-less Success — a `config:` item's synthetic one, but equally a
+          // `tapOn` whose return value is just a verdict — must not overwrite a real tool's
+          // payload, or `[adbShell→stdout, tapOn]` surfaces toolMessage=null to the host.
+          if (result is TrailblazeToolResult.Success && result.carriesPayload()) {
+            lastToolSuccess = result
+          }
         }
       }
     } finally {

@@ -5,13 +5,38 @@ import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.recordings.TrailRecordings
 import xyz.block.trailblaze.ui.TrailblazeDesktopUtil
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.util.isMacOs
+import xyz.block.trailblaze.util.isWindows
 import java.io.File
+import java.nio.file.Path
+import java.nio.file.Paths
 
 internal fun resolveRoots(trailsRootProvider: () -> File): Pair<File, List<File>> {
   val primary = resolvePrimaryRoot(trailsRootProvider)
   val extras = ExtraTrailRoots.list().map { File(it) }
   return primary to extras
 }
+
+/**
+ * True when canonical path [child] is below canonical path [root]. Compares path components, so a
+ * root that already ends in a separator (a drive root such as `D:\`, or `/`) still contains its
+ * children, and `/a/bc` is not inside `/a/b`. Each component must match exactly, case included:
+ * a Windows path compares case-insensitively, which would put a sibling `TRAILS` folder inside
+ * `trails` when the parent folder is case-sensitive.
+ */
+internal fun isInside(child: String, root: String): Boolean {
+  val childPath = Paths.get(child)
+  val rootPath = Paths.get(root)
+  return childPath.nameCount > rootPath.nameCount && hasExactPrefix(childPath, rootPath)
+}
+
+/** [isInside], or [child] is [root] itself. */
+internal fun isSameOrInside(child: String, root: String): Boolean = hasExactPrefix(Paths.get(child), Paths.get(root))
+
+private fun hasExactPrefix(child: Path, root: Path): Boolean =
+  child.root?.toString() == root.root?.toString() &&
+    child.nameCount >= root.nameCount &&
+    (0 until root.nameCount).all { child.getName(it).toString() == root.getName(it).toString() }
 
 internal fun resolveSafeSessionDir(logsDir: File, id: String): File? {
   // Reject ids that escape the logs dir (path traversal, separators, NUL).
@@ -21,7 +46,7 @@ internal fun resolveSafeSessionDir(logsDir: File, id: String): File? {
   val dir = File(logsDir, id)
   val rootCanon = logsDir.canonicalPath
   val dirCanon = dir.canonicalPath
-  if (dirCanon != rootCanon && !dirCanon.startsWith(rootCanon + File.separator)) return null
+  if (!isSameOrInside(dirCanon, rootCanon)) return null
   return if (dir.isDirectory) dir else null
 }
 
@@ -41,7 +66,7 @@ internal fun resolveTrailFile(idSegments: List<String>, primary: File, extras: L
   for (suffix in listOf(".trail.yaml", ".yaml")) {
     val candidate = File(root, "$relative$suffix")
     val fileCanon = candidate.canonicalPath
-    if (fileCanon != rootCanon && !fileCanon.startsWith("$rootCanon/")) return null
+    if (!isSameOrInside(fileCanon, rootCanon)) return null
     if (candidate.exists() && candidate.isFile) return root to candidate
   }
   return null
@@ -58,15 +83,23 @@ internal fun eventStreamLabel(streamId: String): String {
 internal val EDITOR_CLIS = listOf("cursor", "code", "zed", "subl", "idea", "windsurf")
 
 internal fun openInEditor(file: File): Boolean = runCatching {
-  val osName = System.getProperty("os.name").lowercase()
   val pathDirs = System.getenv("PATH")?.split(File.pathSeparator).orEmpty()
+  // On Windows only a real `.exe` is launched: Java runs a `.cmd`/`.bat` through cmd.exe, which
+  // re-parses the arguments, so a trail path containing `&` or `%` would run as a command.
   val editor = EDITOR_CLIS.firstNotNullOfOrNull { name ->
-    pathDirs.map { File(it, name) }.firstOrNull { it.canExecute() }
+    val fileName = if (isWindows()) "$name.exe" else name
+    pathDirs.map { File(it, fileName) }.firstOrNull { it.isFile && it.canExecute() }
   }
   val cmd = when {
     editor != null -> listOf(editor.absolutePath, file.absolutePath)
-    osName.contains("mac") -> listOf("open", file.absolutePath)
-    osName.contains("win") -> listOf("cmd", "/c", "start", "", file.absolutePath)
+    isMacOs() -> listOf("open", file.absolutePath)
+    // Notepad, not the file's default action: Explorer or `start` would RUN an executable such as a
+    // `.cmd` file, and hand the path to a parser (cmd.exe's, or Explorer's comma split). By its
+    // absolute path, because Windows can resolve a bare name from the working directory (a repo).
+    isWindows() -> {
+      val systemRoot = System.getenv("SystemRoot")?.takeIf { it.isNotBlank() } ?: "C:\\Windows"
+      listOf(File(systemRoot, "System32\\notepad.exe").path, file.absolutePath)
+    }
     else -> listOf("xdg-open", file.absolutePath)
   }
   ProcessBuilder(cmd).start()

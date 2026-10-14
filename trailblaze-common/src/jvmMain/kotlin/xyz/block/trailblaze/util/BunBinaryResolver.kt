@@ -10,13 +10,18 @@ import java.io.File
  * **Bun is the only JS runtime Trailblaze uses.** `setup.sh` installs bun on every CI
  * agent, so there's no behavior incentive to keep a Node fallback.
  *
- * `bun.exe` is tried alongside `bun` for Windows-checkout walk-ups.
- *
  * Returns null when bun is neither on PATH nor resolvable via the repo `bin/` walk-up. Callers
  * degrade gracefully — e.g. the analyzer reports "no tools extracted" and the interactive report
  * generator falls back to the legacy report only.
  */
 object BunBinaryResolver {
+
+  /**
+   * The one file name bun has on this host. Windows runs only `bun.exe`: an extensionless `bun`
+   * there is an npm-global shell shim that `canExecute` accepts (it is true for any readable file)
+   * and that cannot be started. Nowhere else is bun named `bun.exe`.
+   */
+  val BUN_BINARY_NAME: String = if (isWindows()) "bun.exe" else "bun"
 
   fun resolveBunBinary(): File? =
     resolveBunBinary(
@@ -44,18 +49,16 @@ object BunBinaryResolver {
   internal fun resolveBunBinary(pathEnv: String?): File? {
     val path = pathEnv ?: return null
     val dirs = path.split(File.pathSeparator).filter { it.isNotBlank() }
-    for (name in listOf("bun", "bun.exe")) {
-      for (dir in dirs) {
-        val candidate = File(dir, name)
-        if (candidate.exists() && candidate.canExecute()) return candidate
-      }
+    for (dir in dirs) {
+      val candidate = File(dir, BUN_BINARY_NAME)
+      if (candidate.exists() && candidate.canExecute()) return candidate
     }
     return null
   }
 
   /**
    * Walk-up half of [resolveBunBinary]: walk from [startDir] upward looking for the repo's
-   * committed hermit `bin/bun` (or `bin/bun.exe`) symlink. The hermit symlink
+   * committed hermit `bin/bun` symlink. The hermit symlink
    * `bin/bun -> .bun-<version>.pkg` is checked into the repo (see root CLAUDE.md "Toolchain"),
    * so a daemon launched from anywhere under the repo tree resolves it even when the spawning
    * shell never ran `source bin/activate-hermit` — closing the fresh-daemon gap where a JDK-21
@@ -81,10 +84,8 @@ object BunBinaryResolver {
       // Only trust this `bin/` if it's the repo's Hermit toolchain dir (proven by the
       // committed activation script), so we never execute an arbitrary ancestor's `bin/bun`.
       if (File(binDir, "activate-hermit").isFile) {
-        for (name in listOf("bun", "bun.exe")) {
-          val candidate = File(binDir, name)
-          if (candidate.exists() && candidate.canExecute()) return candidate
-        }
+        val candidate = File(binDir, BUN_BINARY_NAME)
+        if (candidate.exists() && candidate.canExecute()) return candidate
       }
       current = current.parentFile
     }

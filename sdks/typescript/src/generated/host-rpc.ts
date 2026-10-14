@@ -57,6 +57,7 @@ export interface GetTargetAppsResponse {
 
 export interface GetToolCatalogRequest {
   trailblazeDriverType: TrailblazeDriverType;
+  trailblazeDeviceId?: TrailblazeDeviceId | null;
 }
 
 export interface GetToolCatalogResponse {

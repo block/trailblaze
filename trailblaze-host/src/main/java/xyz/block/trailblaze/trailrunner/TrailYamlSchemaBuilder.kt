@@ -103,7 +103,7 @@ object TrailYamlSchemaBuilder {
         }
         putJsonObject("tools") {
           put("type", "array")
-          put("description", "A block of tool calls run outside a prompt step (setup/teardown).")
+          put("description", "A block of tool calls run outside a prompt step. It stops at the first failure, so it is not teardown; use a trailhead tool's teardown hook for cleanup.")
           put("items", toolCallItem)
         }
       }

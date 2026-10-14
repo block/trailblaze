@@ -83,7 +83,7 @@ internal object BundleStore {
     val root = roots(primary, extras).getOrNull(idx) ?: return null
     val dir = File(root, rel)
     val rootCanon = root.canonicalPath
-    if (!dir.canonicalPath.startsWith("$rootCanon/")) return null
+    if (!isInside(dir.canonicalPath, rootCanon)) return null
     if (requireBlaze && !File(dir, BLAZE_FILE).isFile) return null
     return ResolvedBundle(dir = dir, root = root, rootIdx = idx, home = rel)
   }
@@ -107,7 +107,7 @@ internal object BundleStore {
       dir = File(primary, "$rel-$n")
       n++
     }
-    require(dir.canonicalPath.startsWith(primary.canonicalPath + "/")) { "destination escapes the trails workspace" }
+    require(isInside(dir.canonicalPath, primary.canonicalPath)) { "destination escapes the trails workspace" }
     check(dir.mkdirs()) { "could not create trail bundle directory" }
     val result = writeFile(dir, BLAZE_FILE, yaml, operation = "create")
     if (result != FileWriteResult.WRITTEN) {
@@ -122,7 +122,7 @@ internal object BundleStore {
   fun readFile(dir: File, name: String): String? {
     if (name.isEmpty() || name.contains('/') || name.contains('\\') || name.contains("..")) return null
     val file = File(dir, name)
-    if (!file.canonicalPath.startsWith(dir.canonicalPath + "/") || !file.isFile) return null
+    if (!isInside(file.canonicalPath, dir.canonicalPath) || !file.isFile) return null
     return file.readText()
   }
 
@@ -136,7 +136,7 @@ internal object BundleStore {
   fun writeFile(dir: File, name: String, content: String, operation: String = "upsert"): FileWriteResult {
     if (name.isEmpty() || name.contains('/') || name.contains('\\') || name.contains("..")) return FileWriteResult.INVALID
     val file = File(dir, name)
-    if (!file.canonicalPath.startsWith(dir.canonicalPath + "/")) return FileWriteResult.INVALID
+    if (!isInside(file.canonicalPath, dir.canonicalPath)) return FileWriteResult.INVALID
     when (operation.lowercase()) {
       "create" -> if (file.exists()) return FileWriteResult.ALREADY_EXISTS
       "update" -> if (!file.isFile) return FileWriteResult.NOT_FOUND
@@ -200,7 +200,13 @@ internal object BundleStore {
   fun deleteFile(dir: File, name: String): Boolean {
     if (name.isEmpty() || name == BLAZE_FILE || name.contains('/') || name.contains('\\') || name.contains("..")) return false
     val file = File(dir, name)
-    if (!file.canonicalPath.startsWith(dir.canonicalPath + "/")) return false
+    if (!isInside(file.canonicalPath, dir.canonicalPath)) return false
+    // Other names can reach the source too: Windows drops a trailing dot or space (`blaze.yaml.`),
+    // and Windows and macOS ignore case (`BLAZE.YAML`). Compare the files themselves.
+    val source = File(dir, BLAZE_FILE)
+    if (source.exists() && runCatching { Files.isSameFile(file.toPath(), source.toPath()) }.getOrDefault(true)) {
+      return false
+    }
     return runCatching { file.delete() }.getOrDefault(false)
   }
 

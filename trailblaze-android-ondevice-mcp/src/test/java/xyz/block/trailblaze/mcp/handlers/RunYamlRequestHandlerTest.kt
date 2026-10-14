@@ -322,6 +322,32 @@ class RunYamlRequestHandlerTest {
   }
 
   /**
+   * The on-device server outlives a trail, so what one trail's tool remembered must not reach
+   * the next trail's tools: each request sees only the snapshot the host sent with it. Trailhead
+   * reuse makes this load-bearing, since the only thing that may pass between trails is a
+   * reusable teardown result.
+   */
+  @Test
+  fun `memory an on-device tool wrote for one trail is not visible to the next trail`() = runTest {
+    val seen = mutableListOf<Map<String, String>>()
+    val handler = createHandler(
+      runTrailblazeYaml = { _, session, agentMemory ->
+        seen += agentMemory.variables.toMap()
+        agentMemory.remember("cartId", "cart-from-trail-1")
+        RunYamlCallbackResult(session = session)
+      },
+    )
+
+    val first = handler.handle(testRequest.copy(awaitCompletion = true, testName = "trail-1"))
+    // A new trail's host memory is empty, so its first dispatch carries an empty snapshot.
+    val second = handler.handle(testRequest.copy(awaitCompletion = true, testName = "trail-2"))
+
+    assertTrue(first is RpcResult.Success && second is RpcResult.Success, "got $first, $second")
+    assertEquals("cart-from-trail-1", first.data.memorySnapshot["cartId"])
+    assertEquals(listOf(emptyMap(), emptyMap()), seen)
+  }
+
+  /**
    * Sync dispatch where the callback throws a non-cancellation exception → response carries
    * `success = false` with the exception's message in `errorMessage`. Pins the contract
    * that the host client reads off the response.

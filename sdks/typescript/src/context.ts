@@ -256,6 +256,12 @@ export interface TrailblazeContext {
    * or tool results. See `ctx.session.registerCleanup`.
    */
   session: TrailblazeSessionResources;
+  /**
+   * The last trail's reusable hand-off the host attached to this invocation
+   * (`_meta.trailblaze.previousRun`), carried as-is; typed handlers read it, validated, as
+   * `ctx.previousRun`. Present only on a trailhead invocation the host found reusable.
+   */
+  previousRun?: unknown;
 }
 
 /** Platform values the host will emit — anything else means envelope drift. */
@@ -363,6 +369,7 @@ export function fromMeta(meta: unknown, logger?: TrailblazeLogger): TrailblazeCo
     memory,
     logger: logger ?? noopLogger,
     session: sessionResourcesFor(sessionId),
+    previousRun: tb["previousRun"] ?? undefined,
   };
 }
 

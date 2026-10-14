@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.usages
 
+import xyz.block.trailblaze.util.hostExecutable
 import java.io.File
 import java.io.IOException
 import java.nio.file.Files
@@ -39,7 +40,7 @@ object GitRefTree {
     if (inRepo.isEmpty()) return emptySet()
     // Not routed through runGit: check-ignore exits 1 to mean "none ignored", which is an answer,
     // not a failure — and the paths travel over stdin (NUL-separated) to dodge arg-length limits.
-    val process = ProcessBuilder("git", "check-ignore", "--stdin", "-z")
+    val process = ProcessBuilder(hostExecutable("git"), "check-ignore", "--stdin", "-z")
       .directory(gitRoot)
       // Discarded rather than left as an unread pipe: this reads stdout only, so a warning on
       // stderr would sit in a buffer nobody drains and a chatty git could block on the write.
@@ -117,7 +118,7 @@ object GitRefTree {
   }
 
   internal fun runGit(workingDir: File, vararg args: String): Result<String> = runCatching {
-    val process = ProcessBuilder("git", *args)
+    val process = ProcessBuilder(hostExecutable("git"), *args)
       .directory(workingDir)
       .start()
     // stderr stays OUT of the returned value: git writes warnings there while still exiting 0 (a

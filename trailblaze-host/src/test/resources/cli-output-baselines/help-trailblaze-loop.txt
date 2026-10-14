@@ -1,0 +1,313 @@
+# This file is a CHECKED-IN baseline of CLI output rendered by trailblaze-host's CLI helpers.
+# It is NOT a contract — if a test fails here because output drifted, decide whether the
+# drift is intentional. The test always (re)writes this file from the current rendered output,
+# then asserts the working tree is clean. So `git diff` of this file IS the failure message.
+# Reviewers: scrutinize diffs to baselines the same way you would scrutinize a UI screenshot —
+# small wording / spacing changes can be intentional or accidental.
+# ----------------------------------------------------------------------
+Usage: trailblaze loop [-hvV] [--all-devices] [--capture-all] [--[no-]
+                       capture-ios-logs] [--[no-]capture-logcat] [--[no-]
+                       capture-memory] [--[no-]capture-network] [--[no-]
+                       capture-video] [--full-report-payloads] [--[no-]
+                       headless] [--markdown] [--no-daemon] [--no-logging]
+                       [--no-report] [--[no-]save-recording] [--self-heal] [--
+                       [no-]turbo] [--[no-]use-recorded-steps]
+                       [--args-file=<file>] [--compose-port=<composePort>]
+                       [--configuration=<name>]
+                       [--device-classifier=<catalog-key>]
+                       [--driver=<driverType>] [--llm=<llm>]
+                       [--llm-model=<llmModel>] [--llm-provider=<llmProvider>]
+                       [--max-llm-calls=<maxLlmCalls>] -n=<count>
+                       [--on-failure=<command>] [--snapshot-baseline=<ref>]
+                       [--snapshot-baseline-threshold=<percent>]
+                       [--test-name=<testNameOverride>] [--arg=KEY=VAL]...
+                       [--bind=<name=deviceId>[,<name=deviceId>...]]...
+                       [-d=<device>[,<device>...]]... [--memory=KEY=VAL]...
+                       [--secret=KEY=VAL]... [--tags=<name>[,<name>...]]...
+                       [<trailFile>...]
+Run a trail's trailhead once, then repeat its steps in a loop.
+
+One session runs the `trailhead:`, then the `trail:` steps --iterations times
+in a row, each pass starting where the previous one left the app. The steps
+should end where they began.
+
+A failed pass is reported, handed to --on-failure, and counted toward
+--iterations. The loop then recovers in a new session that runs the trailhead
+again, and continues with the passes left. It stops early after 3 sessions in a
+row that complete no pass. Exits non-zero if any pass failed.
+
+Takes the `trailblaze run` options, for one trail file. Several devices each
+loop in turn, for --iterations each. Never saves a recording: it would record
+every pass into the trail.
+      [<trailFile>...]       Trail files (.trail.yaml or blaze.yaml), shell
+                               globs, or directories. Directories expand
+                               recursively to every named unified trail, plus
+                               one pick per legacy trail (recording preferred
+                               over NL when both are present). Bare `trailblaze
+                               run` with no arguments is rejected as a misuse —
+                               pass a `.trail.yaml` path or name a directory (e.
+                               g. `trails/`) to fan out under a workspace's
+                               trails directory.
+      --all-devices          Run each trail on EVERY connected device whose
+                               platform the trail supports (its `platform:
+                               `/`driver:` for v1, or its `devices:`/recording
+                               classifiers for the unified format). The opt-in
+                               way to exercise a multi-target trail across
+                               platforms in one command. Mutually exclusive
+                               with `--device` (passing both is rejected).
+                               Connected devices that don't match any supported
+                               platform are skipped.
+      --arg=KEY=VAL          Supply a value for a parameter the trail DECLARES
+                               under `config.args:`. Repeatable (`--arg
+                               recipient=sam@example.com --arg retries=3`).
+                               Unlike --memory, args are declared and typed:
+                               the value is coerced to the arg's declared type,
+                               a missing required arg fails before the run
+                               starts, and an undeclared arg is rejected.
+                               Referenced as `{{args.name}}` in prompts and
+                               tool params. Overrides an --args-file entry with
+                               the same key.
+                             The value is always a string here;
+                               declaration-driven coercion turns `retries=3`
+                               into a number for an `integer` arg. Use
+                               --args-file for structured (array/object) values.
+                             Arg values are logged in cleartext, persisted into
+                               logs/recordings, and surfaced to the LLM — args
+                               are non-sensitive by design. Route passwords,
+                               tokens, or other sensitive data through --secret
+                               memory instead.
+      --args-file=<file>     Read parameter values from a YAML or JSON file (a
+                               map of arg-name to value). Applied BEFORE --arg,
+                               so a --arg KEY=VAL overrides the file entry with
+                               the same key. A YAML-null value is rejected
+                               (args have no null) — use '' for an empty string.
+                             Arg values are logged in cleartext, persisted into
+                               logs/recordings, and surfaced to the LLM — args
+                               are non-sensitive by design. Route passwords,
+                               tokens, or other sensitive data through --secret
+                               memory instead.
+      --bind=<name=deviceId>[,<name=deviceId>...]
+                             Bind a multi-device trail's COMPANION devices for
+                               this run: `--bind buyer=emulator-5562`.
+                               Repeatable or comma-separated. The names come
+                               from the trail's `config.devices:`
+                               configuration; the START device is the one
+                               `--device` names and must NOT be bound here.
+                               Per-run, so two multi-device trails can run
+                               concurrently against different device sets on
+                               one daemon — which `TRAILBLAZE_DEVICE_BINDINGS`
+                               cannot express (it is daemon-wide, and changing
+                               it needs a daemon restart). Takes precedence
+                               over that env var when passed.
+      --capture-all          Enable all capture streams: video, logcat, iOS
+                               logs, memory, network (local dev mode)
+      --[no-]capture-ios-logs
+                             Capture the iOS Simulator system log via `xcrun
+                               simctl spawn log stream` to <session-dir>/device.
+                               log (only takes effect on iOS). On by default;
+                               the stream is scoped to the app under test (the
+                               logcat-equivalent app log, not the system
+                               firehose). Recognized fatal crashes are also
+                               indexed in <session-dir>/events/crash.ndjson.
+                               Use --no-capture-ios-logs to disable.
+      --[no-]capture-logcat  Capture Android logcat (filtered to the app under
+                               test) to <session-dir>/device.log (only takes
+                               effect on Android). Recognized fatal crashes are
+                               also indexed in <session-dir>/events/crash.
+                               ndjson. On by default; use --no-capture-logcat
+                               to disable.
+      --[no-]capture-memory  Track the app under test's memory for the whole
+                               run as `memory` events in
+                               <session-dir>/events/memory.ndjson: a sample
+                               around every tool call, plus one every 5 seconds
+                               whenever it changed, all read in the background
+                               so the run never waits. Android reports heap
+                               used vs. the heap limit, read through the
+                               on-device runner when one is installed and over
+                               adb otherwise; iOS Simulator reports the app's
+                               footprint. For exact before/after figures, start
+                               the daemon with
+                               TRAILBLAZE_MEMORY_DIAGNOSTICS=true: each tool
+                               call then waits for its two readings and Android
+                               collects garbage first. On by default; use
+                               --no-capture-memory to disable.
+      --[no-]capture-network Auto-capture network requests/responses to
+                               <session-dir>/network.ndjson on supported
+                               devices (web today; mobile devices added as
+                               engines land). Mirrors the "Network traffic"
+                               capture default in Trailblaze App Settings. On
+                               by default; use --no-capture-network to disable.
+                               When neither flag is passed, inherits that saved
+                               setting.
+      --[no-]capture-video   Record device screen video for the session. On by
+                               default for `run`; use --no-capture-video to
+                               skip it. Interactive sessions (`session start`,
+                               `tool`, `blaze`, MCP) stay off unless
+                               TRAILBLAZE_CAPTURE_VIDEO or `trailblaze config
+                               capture-video` opts them in.
+      --compose-port=<composePort>
+                             RPC port for Compose driver connections (default:
+                               52600)
+      --configuration=<name> Select which of a trail's `config.devices:`
+                               configurations to run when it declares more than
+                               one. Per-run, like --bind. Naming a
+                               configuration a single-device trail does not
+                               declare is an error rather than a silent
+                               single-device run.
+  -d, --device=<device>[,<device>...]
+                             Device(s) to run on: `<platform>` (e.g. android),
+                               `<platform>/<instanceId>`, or a bare instanceId.
+                               Comma-separated or repeatable to run each trail
+                               on SEVERAL devices (`--device android,ios` → one
+                               run per device). When omitted, resolves to a
+                               pinned (`trailblaze device connect` /
+                               `TRAILBLAZE_DEVICE`) or single connected device;
+                               when 2+ devices are connected and none is
+                               pinned, the run fails and asks you to pass this
+                               (or `--driver` / `--all-devices`). See also
+                               --all-devices.
+      --device-classifier=<catalog-key>
+                             Select a locale/variant-qualified recording for
+                               this run (for example `ios-iphone-es`). The key
+                               must refine the connected device's detected
+                               classifiers. Only valid for a single-device run.
+      --driver=<driverType>  Driver type to use (e.g., PLAYWRIGHT_NATIVE,
+                               ANDROID_ONDEVICE_ACCESSIBILITY). Overrides
+                               driver from trail config.
+      --full-report-payloads Embed full event payloads in the after-run HTML
+                               report even for sessions that passed, instead of
+                               applying the report size budgets (which truncate
+                               large successful network bodies and elide
+                               repeated intermediate snapshots to keep the
+                               report small). Failed sessions always embed full
+                               payloads regardless. The on-disk events/
+                               artifacts are never budgeted, so an existing
+                               session can also be regenerated in full later
+                               via `trailblaze report --full-report-payloads`.
+                               Applies to in-process runs; a run delegated to
+                               an already-running daemon doesn't generate a
+                               report from this process.
+  -h, --help                 Show this help message and exit.
+      --[no-]headless        Launch the Playwright browser headless (default
+                               true). Pass --no-headless or --headless=false to
+                               surface a visible window. Equivalent to
+                               --show-browser when negated.
+      --llm=<llm>            LLM provider/model shorthand (e.g.,
+                               openai/gpt-4-1). Mutually exclusive with
+                               --llm-provider and --llm-model.
+      --llm-model=<llmModel> LLM model ID override (e.g., gemini-3-flash,
+                               gpt-4-1)
+      --llm-provider=<llmProvider>
+                             LLM provider override (e.g., openai, anthropic,
+                               google)
+      --markdown             Generate a markdown report after execution
+      --max-llm-calls=<maxLlmCalls>
+                             Cap the number of LLM calls per objective. Useful
+                               on metered or expensive providers to cut off a
+                               stuck self-heal loop. Must be a positive
+                               integer. Default: 25.
+      --memory=KEY=VAL       Pre-populate trail memory with KEY=VAL before any
+                               step runs. Repeatable (`--memory user=sam
+                               --memory accountTier=PRO`). Overrides any value
+                               with the same key in the trail YAML's `config.
+                               memory:` block. Values are strings; keys must be
+                               non-empty. Visible to `{{name}}` interpolation
+                               and to scripted tools via `ctx.memory.get(name)`.
+                             Values are logged in cleartext and persisted into
+                               the session-start snapshot — use --secret for
+                               passwords, tokens, or other sensitive data.
+  -n, --iterations=<count>   How many passes to run, failed ones included.
+      --no-daemon            Run in-process without delegating to or starting a
+                               persistent daemon. The server shuts down when
+                               the run completes.
+      --no-logging           Disable session logging — no files written to
+                               logs/, run does not appear in Trailblaze App's
+                               Runs list
+      --no-report            Skip HTML report generation after execution
+      --on-failure=<command> Run this shell command for each failed pass, with
+                               the failed session's log directory appended as
+                               its last argument. It runs alongside the loop,
+                               one at a time: the loop waits for it before
+                               starting the next one, and before exiting.
+      --[no-]save-recording  Save the recording back to the trail source
+                               directory after a successful run. Default: on.
+                               Use --no-save-recording to skip. Even when on,
+                               the trail file is only rewritten when a step
+                               self-healed during the run,
+                               --no-use-recorded-steps re-drove every step, or
+                               this device had no recording yet — a clean
+                               replay leaves the file unchanged.
+      --secret=KEY=VAL       Pre-populate trail memory with a SENSITIVE KEY=VAL
+                               before any step runs. Same shape as --memory;
+                               the value is redacted in logs (via
+                               `rememberSensitive`), excluded from the
+                               scripting envelope, and omitted from the
+                               session-start snapshot. Only the KEY appears in
+                               `Started.sensitiveMemoryKeys` so replay knows it
+                               must re-supply the value. Repeatable. Use for
+                               passwords, tokens, API keys, PII.
+      --self-heal            When a recorded step fails, let AI take over and
+                               continue. Overrides the persisted 'trailblaze
+                               config self-heal' setting for this run. Omit to
+                               inherit the saved setting (opt-in, off by
+                               default).
+      --snapshot-baseline=<ref>
+                             Diff this run's `takeSnapshot` captures against a
+                               PREVIOUS run instead of checked-in golden files.
+                               <ref> is an http(s) URL to a session logs zip (e.
+                               g. the CI artifact store's latest_success.zip),
+                               a local zip, or an extracted session directory.
+                               Snapshots are matched by name; a snapshot
+                               missing from the baseline is skipped, a
+                               resolvable mismatch above the threshold fails
+                               the run, and an unresolvable <ref> fails it too.
+                               Alternatively set TRAILBLAZE_SNAPSHOT_BASELINE
+                               on the executing process (the daemon for
+                               delegated runs).
+      --snapshot-baseline-threshold=<percent>
+                             Pass threshold for --snapshot-baseline: a snapshot
+                               passes when its pixel diff percentage is <= this
+                               value. Default: 2.0 (or
+                               TRAILBLAZE_SNAPSHOT_BASELINE_THRESHOLD when set).
+      --tags=<name>[,<name>...]
+                             Only run trails whose `config.tags:` list contains
+                               at least one of the given names. Repeatable
+                               (`--tags smoke --tags login`) or comma-separated
+                               (`--tags smoke,login`). Match is OR across tags.
+                               Untagged trails are excluded when --tags is
+                               specified.
+      --test-name=<testNameOverride>
+                             Override the test name used as the session ID
+                               seed. When set, replaces the default name
+                               derived from the trail filename. Useful in CI
+                               environments where the caller can supply a
+                               richer identifier (e.g. including
+                               suite/section/case context).
+      --[no-]turbo           Turbo mode: let the Android app under test report
+                               when it is idle so the driver waits less after
+                               each action, instead of watching for its screen
+                               to go quiet. Each wait ends at whichever answer
+                               comes first, so this can only make a run faster,
+                               never slower. Needs an app signed with a key
+                               this build carries a helper for (debug and
+                               internal builds; not release or beta) — a run
+                               that can't use it says so and runs at normal
+                               speed. When neither flag is passed, inherits
+                               TRAILBLAZE_TURBO and the saved `trailblaze
+                               config turbo` setting.
+      --[no-]use-recorded-steps
+                             Three-way switch for replay vs. AI-driven
+                               execution:
+                               --use-recorded-steps      Force replay mode (use
+                               the trail's `recording:` tools verbatim).
+                               --no-use-recorded-steps   Force AI mode (ignore
+                               any recordings; LLM drives each step from `step:
+                               ` NL).
+                               (unset, default)          Auto-detect: AI mode
+                               if no `recording:` blocks present, replay if
+                               they are.
+                             Use --no-use-recorded-steps to re-run a trail with
+                               stale selectors and let the agent re-pick
+                               selectors from current page state.
+  -v, --verbose              Enable verbose output
+  -V, --version              Print version information and exit.

@@ -137,7 +137,7 @@ object SessionImporter {
 
       // Create marker files to track that these sessions were imported
       for (sessionId in sessionIds) {
-        val importMarkerFile = File(File(logsRepo.logsDir, sessionId), ".imported")
+        val importMarkerFile = File(File(logsRepo.logsDir, sessionId), LogsRepo.IMPORTED_SESSION_MARKER)
         importMarkerFile.writeText(
           """
           Imported: ${Clock.System.now()}
@@ -221,7 +221,7 @@ object SessionImporter {
     sessionId: String,
     logsRepo: LogsRepo
   ): Boolean {
-    val importMarkerFile = File(File(logsRepo.logsDir, sessionId), ".imported")
+    val importMarkerFile = File(File(logsRepo.logsDir, sessionId), LogsRepo.IMPORTED_SESSION_MARKER)
     return importMarkerFile.exists()
   }
 }

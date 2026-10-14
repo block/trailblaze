@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.report.utils
 
+import kotlin.math.abs
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import kotlinx.datetime.Clock
@@ -736,6 +737,35 @@ class LogsRepo(
   }
 
   /**
+   * [getSessionInfoDirect]'s answer at [getSessionInfoSummary]'s cost whenever the two agree: the
+   * summary when every status log is stamped by the host clock, the full read otherwise.
+   *
+   * A device-stamped status log (an on-device run writes its own `Started`) can only be put on the
+   * host timeline with offsets derived from the session's tool logs, which the summary never reads.
+   * Compared raw against a host-stamped end or file times, a device clock that runs ahead makes a
+   * cancelled session read as in progress and an abandoned one's duration negative.
+   *
+   * A session writes its first status log as it starts, so on a host-stamped session its oldest
+   * file dates from its earliest status stamp. When the two disagree, the summary's answer cannot
+   * be trusted and INFO takes the full read: files much newer than the stamp were copied (an
+   * import, a farm download, an unzip all make every file "just now", so an abandoned session
+   * would read as in progress), and a stamp much newer than the files is on another clock (an
+   * older device log that carries no clock field, whose timeout would come out negative).
+   */
+  fun getSessionInfoAtLeastCost(sessionId: SessionId): SessionInfo? {
+    val files = readLogFilesFromDisk(sessionId)
+    val statusLogs = readSessionStatusLogs(files)
+    if (statusLogs.any { it.clock == TrailblazeClockDomain.DEVICE }) return getSessionInfoDirect(sessionId)
+    // On-device log files are named by time, not class, so none match the status-log filter.
+    if (statusLogs.isEmpty()) return getSessionInfoDirect(sessionId)
+    val oldestFileMs = files.minOf { it.lastModified() }
+    val firstStampMs = statusLogs.minOf { it.timestamp.toEpochMilliseconds() }
+    if (abs(oldestFileMs - firstStampMs) > FILE_TIME_AGREEMENT_MS) return getSessionInfoDirect(sessionId)
+    val lastActivityMs = files.maxOf { it.lastModified() }
+    return buildSessionInfo(statusLogs, lastActivityMsOverride = lastActivityMs)
+  }
+
+  /**
    * The end written for [sessionId], from its status logs only; null until one lands. Unlike
    * [getSessionInfoSummary], never the timeout it synthesizes for a session idle at Started.
    */
@@ -1163,6 +1193,16 @@ class LogsRepo(
   }
 
   companion object {
+
+    /** Written into a session directory by the session importer, after the session's files. */
+    const val IMPORTED_SESSION_MARKER = ".imported"
+
+    /**
+     * How far a session's oldest file time may sit from its earliest status stamp, either way,
+     * before [getSessionInfoAtLeastCost] stops trusting file times. A live host session writes its
+     * first file within milliseconds of that stamp.
+     */
+    private const val FILE_TIME_AGREEMENT_MS = 60_000L
 
     /**
      * Directories the logs dir holds that are not sessions: `RunReportGenerator`'s output and

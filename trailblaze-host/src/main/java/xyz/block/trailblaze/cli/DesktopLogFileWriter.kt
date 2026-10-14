@@ -61,14 +61,23 @@ object DesktopLogFileWriter {
 
     val fileOut = FileOutputStream(logFile, /* append = */ true)
 
-    System.setOut(PrintStream(TeeOutputStream(System.out, fileOut), /* autoFlush = */ true))
-    System.setErr(PrintStream(TeeOutputStream(System.err, fileOut), /* autoFlush = */ true))
+    // UTF-8 rather than the platform charset, which on a Windows JDK 17 is a legacy code page that
+    // turns every check mark into `?`, on the terminal and in the log alike.
+    System.setOut(PrintStream(TeeOutputStream(System.out, fileOut), /* autoFlush = */ true, Charsets.UTF_8))
+    System.setErr(PrintStream(TeeOutputStream(System.err, fileOut), /* autoFlush = */ true, Charsets.UTF_8))
   }
 
   private fun rotateIfNeeded(logFile: File) {
     if (logFile.exists() && logFile.length() > MAX_LOG_SIZE_BYTES) {
       val oldFile = File(logFile.parentFile, "${logFile.name}.old")
-      logFile.renameTo(oldFile)
+      // Windows will not rename onto an existing file, and will not rename a file another process
+      // (a running daemon) holds open. Move the live log aside first, so the previous generation
+      // is only dropped once rotation is certain to succeed. The staging name is this process's
+      // own, so a second CLI rotating at the same moment fails its rename instead of deleting it.
+      val pending = File(logFile.parentFile, "${logFile.name}.old.pending-${ProcessHandle.current().pid()}")
+      if (!logFile.renameTo(pending)) return
+      oldFile.delete()
+      pending.renameTo(oldFile)
     }
   }
 

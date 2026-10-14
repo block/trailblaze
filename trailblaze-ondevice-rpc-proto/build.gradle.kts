@@ -30,7 +30,10 @@ kotlin {
     }
   }
 
-  androidTarget { compilerOptions { jvmTarget = JvmTarget.JVM_17 } }
+  androidTarget {
+    publishLibraryVariants("release", "debug")
+    compilerOptions { jvmTarget = JvmTarget.JVM_17 }
+  }
   jvm { compilerOptions { jvmTarget = JvmTarget.JVM_17 } }
 
   applyDefaultHierarchyTemplate()

@@ -416,18 +416,20 @@ function ToolComposer({ device, connected, target, style }) {
     setToolName(''); setValues({}); setYaml(''); setYamlEdited(false); setRun(null);
   }, [device && device.id, driver, target]);
 
-  // The catalog depends on the driver and on the daemon's target (target tools join it).
+  // The catalog depends on the driver, the daemon's target (target tools join it) and the device
+  // (a tool can require a classifier only some devices carry). Fetched again once the device
+  // connects: a device that couldn't be classified before then lists only its ungated tools.
   React.useEffect(() => {
     if (!driver) { setCatalog({ driver: null, tools: null, loading: false, error: null }); return; }
     let cancelled = false;
     setCatalog({ driver, tools: null, loading: true, error: null });
-    TB.fetchDriverToolCatalog(driver).then((tools) => {
+    TB.fetchDriverToolCatalog(driver, DCM.deviceIdFor(device)).then((tools) => {
       if (cancelled) return;
       if (!tools) setCatalog({ driver, tools: null, loading: false, error: 'Could not load the tool catalog.' });
       else setCatalog({ driver, tools: tools.slice().sort((a, b) => a.name.localeCompare(b.name)), loading: false, error: null });
     });
     return () => { cancelled = true; };
-  }, [driver, target]);
+  }, [driver, target, device && device.id, connected]);
 
   const tools = catalog.tools || [];
   const tool = tools.find((t) => t.name === toolName) || null;

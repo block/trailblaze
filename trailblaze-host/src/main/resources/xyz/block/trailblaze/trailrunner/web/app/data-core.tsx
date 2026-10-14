@@ -254,9 +254,9 @@ async function sendDeviceInteraction(trailblazeDeviceId, interaction) {
 }
 
 // The tools a driver can run, as [{ name, description, requiredParameters, optionalParameters }],
-// or null when the daemon can't answer.
-async function fetchDriverToolCatalog(trailblazeDriverType) {
-  return await window.TbRpc.getToolCatalog(trailblazeDriverType);
+// or null when the daemon can't answer. With the device, only the tools it can load.
+async function fetchDriverToolCatalog(trailblazeDriverType, trailblazeDeviceId) {
+  return await window.TbRpc.getToolCatalog(trailblazeDriverType, trailblazeDeviceId);
 }
 
 // Runs trail YAML in the device's existing connection (no new session on Android or web).

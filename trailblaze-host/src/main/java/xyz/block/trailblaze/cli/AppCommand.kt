@@ -5,8 +5,18 @@ import picocli.CommandLine.Command
 import picocli.CommandLine.Option
 import xyz.block.trailblaze.devices.TrailblazeDevicePort
 import xyz.block.trailblaze.ui.TrailblazePortManager
+import xyz.block.trailblaze.ui.TrailblazeDesktopUtil
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.usages.GitRefTree
+import xyz.block.trailblaze.util.isWindows
 import java.io.File
+import java.net.URI
+import java.net.URLEncoder
+import java.net.http.HttpClient
+import java.net.http.HttpRequest
+import java.net.http.HttpResponse
+import java.nio.charset.StandardCharsets
+import java.time.Duration
 import java.util.concurrent.Callable
 import kotlin.time.Duration.Companion.seconds
 
@@ -101,6 +111,9 @@ open class AppCommand : Callable<Int> {
    * launcher's `trailrunner` alias rather than duplicating native-shell orchestration in Kotlin.
    */
   private fun launchTrailRunner(): Int {
+    // A Windows IDE run has no JAR to spawn a daemon from, so it falls through to serving Trail
+    // Runner in-process below, like an IDE run elsewhere.
+    if (isWindows() && daemonSpawnCommand() != null) return openTrailRunnerInBrowser()
     val launcher = launcherFinder() ?: run {
       // IDE/direct-JVM runs have no launcher to open the native shell with. Serve Trail Runner
       // from this process instead, so the URL below is live for as long as the run lasts.
@@ -123,6 +136,63 @@ open class AppCommand : Callable<Int> {
     }
   }
 
+  /**
+   * Windows has no launcher to own a native Trail Runner window, so start the daemon here and hand
+   * its URL to the default browser — the shape the launcher already falls back to on a Linux host
+   * with no window shell. Like the launcher, it refuses a daemon that serves no Trail Runner and
+   * makes the caller's repo the active workspace first.
+   */
+  private fun openTrailRunnerInBrowser(): Int {
+    val port = parent.getEffectivePort()
+    if (!ensureDaemonServerRunning(port, respectAutoStartDisable = false)) {
+      return TrailblazeExitCode.INFRA_FAILED.code
+    }
+    val url = "http://localhost:$port/trailrunner/"
+    val http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(2)).build()
+    // A daemon started by `trailblaze mcp --http` / `--direct` answers /ping but serves no Trail
+    // Runner, so the browser would show a 404.
+    val servesTrailRunner = runCatching {
+      val request = HttpRequest.newBuilder(URI.create(url)).timeout(Duration.ofSeconds(5)).GET().build()
+      http.send(request, HttpResponse.BodyHandlers.discarding()).statusCode() in 200..299
+    }.getOrDefault(false)
+    if (!servesTrailRunner) {
+      Console.error(
+        "The Trailblaze daemon on port $port does not serve the Trailblaze App (it was likely " +
+          "started by `trailblaze mcp`). Stop it with `trailblaze app --stop`, then rerun.",
+      )
+      return TrailblazeExitCode.INFRA_FAILED.code
+    }
+    activateCallerWorkspace(http, port)
+    Console.log("Trailblaze App: $url")
+    if (!TrailblazeDesktopUtil.openInDefaultBrowser(url)) {
+      Console.log("Open this URL in your browser: $url")
+    }
+    return TrailblazeExitCode.SUCCESS.code
+  }
+
+  /**
+   * Makes the repo containing the caller's working directory the active Trail Runner workspace,
+   * as the shell launcher does: the daemon is long-lived, so a later `trailblaze app` from another
+   * checkout has to switch the running app explicitly.
+   */
+  private fun activateCallerWorkspace(http: HttpClient, port: Int) {
+    val repoRoot = GitRefTree.gitRootOf(File(System.getProperty("user.dir"))) ?: return
+    val activated = runCatching {
+      val form = "path=" + URLEncoder.encode(repoRoot.path, StandardCharsets.UTF_8)
+      val request = HttpRequest.newBuilder(URI.create("http://localhost:$port/trailrunner/api/workspace"))
+        .timeout(Duration.ofSeconds(20))
+        .header("Content-Type", "application/x-www-form-urlencoded")
+        .PUT(HttpRequest.BodyPublishers.ofString(form))
+        .build()
+      http.send(request, HttpResponse.BodyHandlers.discarding()).statusCode() in 200..299
+    }.getOrDefault(false)
+    if (activated) {
+      Console.log("Active workspace: ${repoRoot.path}")
+    } else {
+      Console.log("WARNING: the app opened, but could not switch its workspace to ${repoRoot.path}.")
+    }
+  }
+
   /** Start the daemon as a background process and return control to the terminal. */
   private fun launchInBackground(): Int {
     val port = parent.getEffectivePort()
@@ -132,9 +202,9 @@ open class AppCommand : Callable<Int> {
       httpPort = port,
       httpsPort = parent.getEffectiveHttpsPort(),
     )
-    // IDE/direct-JVM runs do not have the distribution launcher. Keep their established
-    // in-process fallback instead of routing through the launcher-based daemon helper.
-    if (findTrailblazeLauncher() == null) return parent.launchDaemonInForeground()
+    // IDE/direct-JVM runs have no way to spawn a daemon (no launcher, and on Windows no JAR). Keep
+    // their established in-process fallback instead of routing through the daemon spawn helper.
+    if (daemonSpawnCommand() == null) return parent.launchDaemonInForeground()
     return if (ensureDaemonServerRunning(port, respectAutoStartDisable = false)) {
       TrailblazeExitCode.SUCCESS.code
     } else {

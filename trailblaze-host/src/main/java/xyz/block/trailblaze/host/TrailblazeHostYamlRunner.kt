@@ -70,6 +70,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.commands.SwitchDeviceTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
+import xyz.block.trailblaze.trailhead.TrailheadRuns
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
 import xyz.block.trailblaze.toolcalls.ResolvedToolSet
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSetCatalog
@@ -1009,6 +1010,7 @@ object TrailblazeHostYamlRunner {
       sessionUpdater = { loggingRule.setSession(it) },
       onBeforeRecordedTool = migrationHooks?.onBefore,
       onAfterRecordedTool = migrationHooks?.onAfter,
+      trailheadReuse = TrailheadRuns.reuseEnabledFromEnv(),
       // `sharedToolBatch` is deliberately NOT wired here, unlike the other host runners in this
       // file:
       // 1. `agent.executeToolViaRpc` sends each recorded tool as its own single-tool
@@ -1137,31 +1139,36 @@ object TrailblazeHostYamlRunner {
         )
       }
 
-      for (item in trailItems) {
-        val itemResult = when (item) {
-          is TrailYamlItem.PromptsTrailItem ->
-            // Agent-agnostic: replays recorded steps deterministically and delegates only
-            // unrecorded steps to the selected runner (legacy / KOOG). Honor the request's
-            // useRecordedSteps (like the Revyl path) so a forced live re-blaze isn't silently
-            // replayed here. Default unchanged.
-            runnerUtil.runPromptSuspend(
-              prompts = item.promptSteps,
-              useRecordedSteps = runYamlRequest.useRecordedSteps,
-              selfHeal = runYamlRequest.config.selfHeal,
-            )
-          is TrailYamlItem.TrailheadTrailItem ->
-            runnerUtil.runPromptSuspend(
-              prompts = listOf(item.trailhead.toPromptStep()),
-              useRecordedSteps = true,
-              selfHeal = runYamlRequest.config.selfHeal,
-            )
-          is TrailYamlItem.ToolTrailItem ->
-            runnerUtil.runTrailblazeTool(item.tools.map { it.trailblazeTool })
-          is TrailYamlItem.ConfigTrailItem ->
-            item.config.context?.let { runner.appendToSystemPrompt(it) }
-        }
-        if (itemResult is TrailblazeToolResult.Error) {
-          throw TrailblazeException(itemResult.errorMessage)
+      // One trail: the trailhead's teardown runs after it, whatever the outcome.
+      runnerUtil.runTrail {
+        for (item in trailItems) {
+          val itemResult = when (item) {
+            is TrailYamlItem.PromptsTrailItem ->
+              // Agent-agnostic: replays recorded steps deterministically and delegates only
+              // unrecorded steps to the selected runner (legacy / KOOG). Honor the request's
+              // useRecordedSteps (like the Revyl path) so a forced live re-blaze isn't silently
+              // replayed here. Default unchanged.
+              runnerUtil.runPromptSuspend(
+                prompts = item.promptSteps,
+                useRecordedSteps = runYamlRequest.useRecordedSteps,
+                selfHeal = runYamlRequest.config.selfHeal,
+                // The daemon client abandons a run that reports no progress for its watchdog window.
+                onStepProgress = { step, total, text -> onProgressMessage("Step $step/$total: $text") },
+              )
+            is TrailYamlItem.TrailheadTrailItem ->
+              runnerUtil.runPromptSuspend(
+                prompts = listOf(item.trailhead.toPromptStep()),
+                useRecordedSteps = true,
+                selfHeal = runYamlRequest.config.selfHeal,
+              )
+            is TrailYamlItem.ToolTrailItem ->
+              runnerUtil.runTrailblazeTool(item.tools.map { it.trailblazeTool })
+            is TrailYamlItem.ConfigTrailItem ->
+              item.config.context?.let { runner.appendToSystemPrompt(it) }
+          }
+          if (itemResult is TrailblazeToolResult.Error) {
+            throw TrailblazeException(itemResult.errorMessage)
+          }
         }
       }
 

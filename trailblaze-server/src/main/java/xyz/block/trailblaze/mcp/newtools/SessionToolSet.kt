@@ -657,7 +657,9 @@ class SessionToolSet(
         ?: return SessionResult(error = "No active session").toJson()
     }
 
-    val info = logsRepo?.getSessionInfoDirect(sessionId)
+    // Every CLI tool call asks for INFO, and a full read deserializes every log the session has
+    // written, so its cost grew with the session.
+    val info = logsRepo?.getSessionInfoAtLeastCost(sessionId)
     val sessionDir = logsRepo?.getSessionDir(sessionId)
     val statusStr = info?.let { formatStatus(it) } ?: "unknown"
     val displayTitle = info?.displayName ?: sessionContext?.sessionTitle

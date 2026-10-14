@@ -178,6 +178,9 @@ interface TraceStep {
   objective: boolean;
   /** True when the objective is the trail's `trailhead:` (step 0) — rendered as TRAILHEAD, unnumbered. */
   trailhead: boolean;
+  /** True for the "Teardown" objective: the trailhead's teardown after the trail. Never a step
+   * of the trail, never its verdict. */
+  teardown?: boolean;
   /** True when recorded actions for this authored objective failed and self-heal took over. */
   selfHeal?: boolean;
   /** Recorded tool that triggered self-heal, retained for the recovery summary. */
@@ -188,6 +191,12 @@ interface TraceStep {
   selfHealSource?: boolean;
   /** True for trailing non-action rows (final/failure snapshots, errors) — never a step's "first tool call". */
   terminal?: boolean;
+  /**
+   * True for the rows the run logs once it has finished — the final or failure screenshot and the
+   * run's error — which follow any teardown but belong to the trail. A snapshot named during
+   * teardown is terminal but not end-of-run.
+   */
+  endOfRun?: boolean;
   /** Fold count for repeated actions / polled assertions (rendered as ×N), or null. */
   count: number | null;
   mark: ActionMark | null;

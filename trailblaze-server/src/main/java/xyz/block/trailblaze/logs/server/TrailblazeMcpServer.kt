@@ -50,6 +50,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.time.Duration.Companion.seconds
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
@@ -86,7 +87,6 @@ import xyz.block.trailblaze.mcp.models.McpSessionId
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.mcp.newtools.ConfigToolSet
 import xyz.block.trailblaze.mcp.newtools.DeviceClassifiersProvider
-import xyz.block.trailblaze.mcp.newtools.platformOnlyClassifiersDueForReprobe
 import xyz.block.trailblaze.mcp.newtools.platformOnlyDeviceClassifiers
 import xyz.block.trailblaze.mcp.newtools.LogcatToolSet
 import xyz.block.trailblaze.mcp.newtools.ToolDiscoveryToolSet
@@ -757,28 +757,27 @@ class TrailblazeMcpServer(
 
       val driverType = resolveDriverTypeForDevice(deviceId) ?: return@withLock null
 
+      // The device's classifiers gate tools that declare `trailblaze/requiredClassifiers`. Probed
+      // once per (session, device) and re-checked in the background; a changed answer rebuilds
+      // this runtime through the same ensure-then-refresh a target switch uses, with none of the
+      // session's calls running. See [SessionDeviceClassifications].
+      val sessionClassifiers = sessionDeviceClassifications.resolve(
+        sessionId = sessionId,
+        deviceId = deviceId,
+        scope = sessionContext.sendProgressNotificationsScope,
+        gate = runtimeRebuildGate(sessionId),
+        onChanged = { rebuildForChangedClassifiers(sessionId, deviceId) },
+      )
+
       val existing = sessionScriptToolRuntimeBySession[sessionId]
-      // Set when a reuse check re-probes, so the rebuild below doesn't probe a second time.
-      var reprobedClassifiers: List<TrailblazeDeviceClassifier>? = null
       if (
         existing != null &&
         existing.deviceId == deviceId &&
         existing.targetId == target.id &&
-        existing.driverType == driverType
+        existing.driverType == driverType &&
+        existing.classifiers == sessionClassifiers
       ) {
-        val nowMs = System.currentTimeMillis()
-        if (!platformOnlyClassifiersDueForReprobe(existing.classifiers, deviceId, existing.classifiersProbedAtMs, nowMs)) {
-          return@withLock existing
-        }
-        // A failed probe degrades to the bare platform, which hides every classifier-gated tool.
-        // Re-ask, and rebuild only if the device now reports more — a device that really has no
-        // sub-category keeps its runtime.
-        val reprobed = deviceClassifiersProvider(deviceId)
-        if (reprobed == existing.classifiers) {
-          return@withLock existing.copy(classifiersProbedAtMs = nowMs)
-            .also { sessionScriptToolRuntimeBySession[sessionId] = it }
-        }
-        reprobedClassifiers = reprobed
+        return@withLock existing
       }
       if (existing != null) {
         clearSessionScriptToolRuntime(sessionId)
@@ -854,10 +853,6 @@ class TrailblazeMcpServer(
       ).toTrailblazeToolRepo()
       val launchSessionId = SessionId.sanitized("${sessionId}_${target.id}_${driverType.yamlKey}_script_tools")
       val sessionDir = logsRepo.getSessionDir(launchSessionId)
-      // The device's classifiers gate tools that declare `trailblaze/requiredClassifiers`. Resolved
-      // once per launch; the provider is the same one this server lowers trail recordings with.
-      val sessionClassifiers = reprobedClassifiers ?: deviceClassifiersProvider(deviceId)
-
       // Catalog/framework scripted tools (e.g. openUrl) the catalog could deliver, PLUS the active
       // targets' custom scripted names. Launch them in-process through the SHARED QuickJS launcher —
       // the SAME path the host runner uses — so a scripted tool dispatches host-local (its nested
@@ -946,12 +941,41 @@ class TrailblazeMcpServer(
         runtime = runtime,
         inProcessRegistrations = inProcessRegistrations,
         classifiers = sessionClassifiers,
-        classifiersProbedAtMs = System.currentTimeMillis(),
       )
       sessionScriptToolRuntimeBySession[sessionId] = state
       state
     }
   }
+
+  /**
+   * Rebuilds [sessionId]'s scripted-tool runtime and re-registers its tools after its device's
+   * classifiers changed. Runs in the background, so it binds [deviceId] itself — without it, the
+   * bridge resolves the daemon's last-selected device, which may be another session's. The
+   * session's calls wait for it, so both halves are bounded: the rebuild by the descriptor-refresh
+   * deadline; the refresh, which blocks and can't be cancelled from here, by its own deadline inside
+   * [registerTools]. Either half failing throws, so the caller keeps the old answer and retries; the
+   * next call's ensure then rebuilds the runtime back to that answer. A session that has since moved
+   * to another device is left alone: its tools are that device's, not [deviceId]'s.
+   */
+  private suspend fun rebuildForChangedClassifiers(sessionId: String, deviceId: TrailblazeDeviceId) {
+    if (sessionContexts[sessionId]?.associatedDeviceId != deviceId) return
+    withContext(McpDeviceContext.currentDeviceId.asContextElement(deviceId)) {
+      // A rebuild that leaves no scripted tools returns null; only the timeout is a failure.
+      val rebuilt = withTimeoutOrNull(descriptorCollectionTimeoutMsForTest ?: DESCRIPTOR_COLLECTION_TIMEOUT_MS) {
+        ensureSessionScriptToolRuntime(sessionId)
+        true
+      }
+      check(rebuilt != null) { "timed out rebuilding the scripted-tool runtime" }
+      check(refreshToolsForSession(sessionId)) { "the session's scripted/YAML tools failed to register" }
+    }
+  }
+
+  /** Runs [block] as one of [sessionId]'s tool calls; see [RuntimeRebuildGate]. */
+  private suspend fun <T> asSessionToolCall(sessionId: String?, block: suspend () -> T): T =
+    if (sessionId == null) block() else runtimeRebuildGate(sessionId).call(block)
+
+  private fun runtimeRebuildGate(sessionId: String): RuntimeRebuildGate =
+    runtimeRebuildGates.getOrPut(sessionId) { RuntimeRebuildGate() }
 
   /**
    * The bound device's driver type: the connected-device summary's driver when the device is
@@ -1220,17 +1244,25 @@ class TrailblazeMcpServer(
     val runtime: LaunchedSubprocessRuntime?,
     // In-process QuickJS registrations for catalog/framework scripted tools, disposed at session end.
     val inProcessRegistrations: List<LazyYamlScriptedToolRegistration> = emptyList(),
-    // The device classifiers the tools above were gated against, and when they were last probed.
+    // The device classifiers the tools above were gated against.
     val classifiers: List<TrailblazeDeviceClassifier> = emptyList(),
-    val classifiersProbedAtMs: Long = 0L,
   )
 
   private val sessionScriptToolRuntimeBySession = ConcurrentHashMap<String, SessionScriptToolRuntimeState>()
+  private val sessionDeviceClassifications by lazy {
+    SessionDeviceClassifications(
+      probe = { deviceClassifiersProvider(it) },
+      recheckGapsMs = classifierRecheckGapsMsForTest ?: SessionDeviceClassifications.DEFAULT_RECHECK_GAPS_MS,
+    )
+  }
+  private val runtimeRebuildGates = ConcurrentHashMap<String, RuntimeRebuildGate>()
   private val sessionScriptToolRuntimeMutexes = ConcurrentHashMap<String, Mutex>()
   private val closingMcpSessionIds = ConcurrentHashMap.newKeySet<String>()
 
   internal fun markSessionClosing(sessionId: String) {
     closingMcpSessionIds += sessionId
+    sessionDeviceClassifications.forget(sessionId)
+    runtimeRebuildGates.remove(sessionId)
   }
 
   private fun finishSessionClosing(sessionId: String) {
@@ -1272,17 +1304,44 @@ class TrailblazeMcpServer(
     targetId: String,
     driverType: TrailblazeDriverType,
     toolRepo: TrailblazeToolRepo,
+    classifiers: List<TrailblazeDeviceClassifier> = emptyList(),
+    recheckClassifiers: Boolean = false,
   ) {
+    val deviceId = requireNotNull(sessionContexts[sessionId]?.associatedDeviceId) {
+      "Test session $sessionId must bind a device before installing a scripted runtime"
+    }
+    // Recorded alongside, so a later ensure sees the classifiers this runtime was "built" with and
+    // reuses it instead of probing and rebuilding. [recheckClassifiers] also starts the background
+    // re-checks a real probe would, for tests of what a changed answer does to this runtime.
+    if (recheckClassifiers) {
+      val sessionContext = requireNotNull(sessionContexts[sessionId])
+      sessionDeviceClassifications.track(
+        sessionId = sessionId,
+        deviceId = deviceId,
+        classifiers = classifiers,
+        scope = sessionContext.sendProgressNotificationsScope,
+        gate = runtimeRebuildGate(sessionId),
+        onChanged = { rebuildForChangedClassifiers(sessionId, deviceId) },
+      )
+    } else {
+      sessionDeviceClassifications.install(sessionId, deviceId, classifiers)
+    }
     sessionScriptToolRuntimeBySession[sessionId] = SessionScriptToolRuntimeState(
-      deviceId = requireNotNull(sessionContexts[sessionId]?.associatedDeviceId) {
-        "Test session $sessionId must bind a device before installing a scripted runtime"
-      },
+      deviceId = deviceId,
       targetId = targetId,
       driverType = driverType,
       toolRepo = toolRepo,
       runtime = null,
+      classifiers = classifiers,
     )
   }
+
+  /** Test seam: the tool repo of [sessionId]'s current scripted-tool runtime, if one is kept. */
+  internal fun sessionScriptToolRepoForTest(sessionId: String): TrailblazeToolRepo? =
+    sessionScriptToolRuntimeBySession[sessionId]?.toolRepo
+
+  /** Test seam: replaces the classifier re-check schedule; set before the server's first session. */
+  internal var classifierRecheckGapsMsForTest: List<Long>? = null
 
   /**
    * Test seam: fires every time [refreshToolsForSession] is *invoked* with a
@@ -1353,24 +1412,25 @@ class TrailblazeMcpServer(
    * Silently no-ops when [sessionId] is unknown (the session was torn down
    * between the target-change write and our refresh attempt). That's the
    * same shape every other lifecycle helper here uses — production callers
-   * never branch on the outcome.
+   * never branch on the outcome, except a classifier rebuild: it retries while this returns false,
+   * because the target-scoped scripted/YAML tools failed to register.
    */
-  internal fun refreshToolsForSession(sessionId: String) {
-    if (sessionId in closingMcpSessionIds) return
-    val sessionContext = sessionContexts[sessionId] ?: return
+  internal fun refreshToolsForSession(sessionId: String): Boolean {
+    if (sessionId in closingMcpSessionIds) return true
+    val sessionContext = sessionContexts[sessionId] ?: return true
     // Probe fires here — before the [Server] lookup — so tests with fixture
     // sessions that bypass `createSessionForClient` can still observe the
     // caller's decision to refresh. Production deployments always have a
     // [Server] registered, so the re-registration below is the real effect;
     // the probe is purely a unit-test seam.
     onToolsRefreshedForTest?.invoke(sessionId)
-    val mcpServer = sessionMcpServers[sessionId] ?: return
+    val mcpServer = sessionMcpServers[sessionId] ?: return true
     val isCliSession = sessionContext.mcpClientName == TRAILBLAZE_CLI_CLIENT_NAME
     Console.log(
       "[MCP SESSION] Tool surface changed for session $sessionId — re-registering tools" +
         if (isCliSession) " (CLI session: no tools/list_changed emitted)" else " to fire tools/list_changed",
     )
-    registerTools(mcpServer, sessionContext.mcpSessionId, sessionContext)
+    val descriptorToolsRegistered = registerTools(mcpServer, sessionContext.mcpSessionId, sessionContext)
     if (!isCliSession) {
       // The SDK's own ToolListChangedNotification never reaches the client in this deployment:
       // with `enableJsonResponse = true` the StreamableHttp transport routes server-initiated
@@ -1382,6 +1442,7 @@ class TrailblazeMcpServer(
       sessionContext.sendToolListChangedNotification()
     }
     emitDebugState()
+    return descriptorToolsRegistered
   }
 
   /**
@@ -1923,11 +1984,14 @@ class TrailblazeMcpServer(
             put("tool", toolName)
             (argumentsJsonObject["action"] as? JsonPrimitive)?.contentOrNull?.let { put("action", it) }
           }
-          val toolResponse = TrailblazeTracer.traceSuspend("handleToolCall", "mcp", spanArgs) {
-            withTimeout(resolveMcpToolExecutionTimeoutMs()) {
-              withContext(Dispatchers.IO + deviceIdContext) {
-                @OptIn(InternalAgentToolsApi::class)
-                koogTool.executeUnsafe(args = koogToolArgs)
+          // A session tool call: a background classifier rebuild can't swap the runtime under it.
+          val toolResponse = asSessionToolCall(currentMcpSession) {
+            TrailblazeTracer.traceSuspend("handleToolCall", "mcp", spanArgs) {
+              withTimeout(resolveMcpToolExecutionTimeoutMs()) {
+                withContext(Dispatchers.IO + deviceIdContext) {
+                  @OptIn(InternalAgentToolsApi::class)
+                  koogTool.executeUnsafe(args = koogToolArgs)
+                }
               }
             }
           }
@@ -2536,18 +2600,17 @@ class TrailblazeMcpServer(
     mcpServer: Server,
     mcpSessionId: McpSessionId,
     sessionContext: TrailblazeMcpSessionContext,
-  ) {
-    synchronized(sessionContext) {
-      registerToolsLocked(mcpServer, mcpSessionId, sessionContext)
-    }
+  ): Boolean = synchronized(sessionContext) {
+    registerToolsLocked(mcpServer, mcpSessionId, sessionContext)
   }
 
+  /** Returns false when the target-scoped scripted/YAML tools failed to register. */
   @OptIn(InternalAgentToolsApi::class)
   private fun registerToolsLocked(
     mcpServer: Server,
     mcpSessionId: McpSessionId,
     sessionContext: TrailblazeMcpSessionContext,
-  ) {
+  ): Boolean {
     Console.log("[MCP] registerTools called for session ${mcpSessionId.sessionId}")
 
     // Whether the daemon has an LLM configured. Gates the advertisement of the one
@@ -2584,6 +2647,9 @@ class TrailblazeMcpServer(
     val trailblazeToolBridge = TrailblazeToolToMcpBridge(
       mcpBridge = mcpBridge,
       sessionContext = sessionContext,
+      // Class-backed and descriptor-backed (scripted/YAML) calls count as session calls, so a
+      // background classifier rebuild never swaps the runtime under one.
+      runAsSessionCall = { id, call -> asSessionToolCall(id.sessionId, call) },
     )
 
     val initialToolRegistry = ToolRegistry {
@@ -2684,12 +2750,11 @@ class TrailblazeMcpServer(
           currentDriverTypeProvider = {
             mcpBridge.getDriverType()
           },
-          // The classifiers the session's scripted tools were registered against, so the listing
-          // matches what dispatch accepts. No runtime yet = unknown, which lists gated tools.
+          // The classifiers the session's scripted tools are gated against, kept even when the
+          // gate rejected every tool, so the listing matches what dispatch accepts. Not probed
+          // yet = unknown, which lists gated tools.
           currentDeviceClassifiersProvider = {
-            sessionScriptToolRuntimeBySession[mcpSessionId.sessionId]
-              ?.takeIf { it.deviceId == activeDeviceId(sessionContext) }
-              ?.classifiers
+            sessionDeviceClassifications.known(mcpSessionId.sessionId, activeDeviceId(sessionContext))
           },
           // resourceSourceProvider intentionally omitted — its default
           // `platformConfigResourceSource()` is workspace-aware, so workspace-authored
@@ -2946,7 +3011,8 @@ class TrailblazeMcpServer(
     // parse failure inside collectSessionTargetDescriptorTools) must NOT abort the whole refresh
     // — the class-backed tool surface is already registered above and must stay usable. Mirrors
     // the try/catch → empty degradation the class-backed collect* helpers use. The next refresh
-    // (device-connect / target-switch) retries the descriptor surface.
+    // (device-connect / target-switch, or a classifier re-check) retries the descriptor surface.
+    var descriptorToolsRegistered = true
     try {
       val descriptorTools = runBlocking {
         withTimeout(descriptorCollectionTimeoutMsForTest ?: DESCRIPTOR_COLLECTION_TIMEOUT_MS) {
@@ -2974,6 +3040,7 @@ class TrailblazeMcpServer(
         "[MCP] Failed to register target-scoped scripted/YAML MCP tools for session " +
           "${mcpSessionId.sessionId}: ${e.message} — continuing with the class-backed surface",
       )
+      descriptorToolsRegistered = false
     }
 
     // The new surface is fully registered, so now drop only what it no longer contains.
@@ -3010,6 +3077,7 @@ class TrailblazeMcpServer(
     )
 
     mcpServer.onClose { }
+    return descriptorToolsRegistered
   }
 
   /**

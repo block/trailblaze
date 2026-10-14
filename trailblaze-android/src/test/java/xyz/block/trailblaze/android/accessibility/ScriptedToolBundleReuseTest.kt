@@ -5,6 +5,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
+import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
@@ -34,6 +35,8 @@ class ScriptedToolBundleReuseTest {
 
   private val sessionA = SessionId("session-a")
   private val sessionB = SessionId("session-b")
+  private val phone = listOf("android", "phone").map(::TrailblazeDeviceClassifier)
+  private val rig = listOf("android", "phone", "rig").map(::TrailblazeDeviceClassifier)
 
   @BeforeTest
   fun reset() = clearRetained()
@@ -48,35 +51,57 @@ class ScriptedToolBundleReuseTest {
 
   @Test
   fun `nothing is claimable before a launch is retained`() {
-    assertFalse(ScriptedToolBundleReuse.claim(sessionA, newRepo()))
+    assertFalse(ScriptedToolBundleReuse.claim(sessionA, newRepo(), phone))
   }
 
   @Test
   fun `the same session dispatching against the same repo reuses the launch`() {
     val repo = newRepo()
-    ScriptedToolBundleReuse.retain(sessionA, repo, runtime = null)
-    assertTrue(ScriptedToolBundleReuse.claim(sessionA, repo))
+    ScriptedToolBundleReuse.retain(sessionA, repo, phone, runtime = null)
+    assertTrue(ScriptedToolBundleReuse.claim(sessionA, repo, phone))
   }
 
   @Test
   fun `a different repo instance cannot reuse the launch`() {
-    ScriptedToolBundleReuse.retain(sessionA, newRepo(), runtime = null)
-    assertFalse(ScriptedToolBundleReuse.claim(sessionA, newRepo()))
+    ScriptedToolBundleReuse.retain(sessionA, newRepo(), phone, runtime = null)
+    assertFalse(ScriptedToolBundleReuse.claim(sessionA, newRepo(), phone))
+  }
+
+  @Test
+  fun `a device whose classifiers changed cannot reuse the launch`() {
+    // The launch registered only the tools the old classifiers satisfied; reusing it would leave a
+    // `requiredClassifiers` tool hidden after an override is added, or loaded after it is removed.
+    val repo = newRepo()
+    ScriptedToolBundleReuse.retain(sessionA, repo, phone, runtime = null)
+    assertFalse(ScriptedToolBundleReuse.claim(sessionA, repo, rig))
+  }
+
+  @Test
+  fun `a classifier change relaunches instead of reusing`() = runBlocking {
+    val repo = newRepo()
+    val launches = AtomicInteger(0)
+    ScriptedToolBundleReuse.claimOrLaunch(sessionA, repo, phone) { launches.incrementAndGet(); null }
+
+    val reused = ScriptedToolBundleReuse.claimOrLaunch(sessionA, repo, rig) { launches.incrementAndGet(); null }
+
+    assertFalse(reused)
+    assertEquals(2, launches.get())
+    assertTrue(ScriptedToolBundleReuse.claim(sessionA, repo, rig))
   }
 
   @Test
   fun `a different session cannot reuse the launch`() {
     val repo = newRepo()
-    ScriptedToolBundleReuse.retain(sessionA, repo, runtime = null)
-    assertFalse(ScriptedToolBundleReuse.claim(sessionB, repo))
+    ScriptedToolBundleReuse.retain(sessionA, repo, phone, runtime = null)
+    assertFalse(ScriptedToolBundleReuse.claim(sessionB, repo, phone))
   }
 
   @Test
   fun `retaining a new session drops the previous session's claim`() {
     val repoA = newRepo()
-    ScriptedToolBundleReuse.retain(sessionA, repoA, runtime = null)
-    ScriptedToolBundleReuse.retain(sessionB, newRepo(), runtime = null)
-    assertFalse(ScriptedToolBundleReuse.claim(sessionA, repoA))
+    ScriptedToolBundleReuse.retain(sessionA, repoA, phone, runtime = null)
+    ScriptedToolBundleReuse.retain(sessionB, newRepo(), phone, runtime = null)
+    assertFalse(ScriptedToolBundleReuse.claim(sessionA, repoA, phone))
   }
 
   @Test
@@ -93,9 +118,9 @@ class ScriptedToolBundleReuseTest {
   @Test
   fun `releasing makes the launch unclaimable`() {
     val repo = newRepo()
-    ScriptedToolBundleReuse.retain(sessionA, repo, runtime = null)
+    ScriptedToolBundleReuse.retain(sessionA, repo, phone, runtime = null)
     ScriptedToolBundleReuse.release(sessionA)
-    assertFalse(ScriptedToolBundleReuse.claim(sessionA, repo))
+    assertFalse(ScriptedToolBundleReuse.claim(sessionA, repo, phone))
   }
 
   @Test
@@ -105,11 +130,11 @@ class ScriptedToolBundleReuseTest {
     // here after the replacement has retained a launch of its own. Releasing whatever is retained
     // would shut down the live runtime the new session is mid-dispatch on.
     val repoB = newRepo()
-    ScriptedToolBundleReuse.retain(sessionB, repoB, runtime = null)
+    ScriptedToolBundleReuse.retain(sessionB, repoB, phone, runtime = null)
 
     ScriptedToolBundleReuse.release(sessionA)
 
-    assertTrue(ScriptedToolBundleReuse.claim(sessionB, repoB))
+    assertTrue(ScriptedToolBundleReuse.claim(sessionB, repoB, phone))
   }
 
   /**
@@ -126,7 +151,7 @@ class ScriptedToolBundleReuseTest {
     val secondDispatchReturned = CompletableDeferred<Unit>()
 
     val first = async(Dispatchers.Default) {
-      ScriptedToolBundleReuse.claimOrLaunch(sessionA, repo) {
+      ScriptedToolBundleReuse.claimOrLaunch(sessionA, repo, phone) {
         launches.incrementAndGet()
         firstLaunchStarted.complete(Unit)
         // Held open until the second dispatch returns — which, with claim-or-launch serialized, it
@@ -138,7 +163,7 @@ class ScriptedToolBundleReuseTest {
     }
     firstLaunchStarted.await()
     val second = async(Dispatchers.Default) {
-      ScriptedToolBundleReuse.claimOrLaunch(sessionA, repo) {
+      ScriptedToolBundleReuse.claimOrLaunch(sessionA, repo, phone) {
         launches.incrementAndGet()
         null
       }.also { secondDispatchReturned.complete(Unit) }
@@ -152,9 +177,9 @@ class ScriptedToolBundleReuseTest {
   @Test
   fun `draining the device releases the retained launch whichever session holds it`() {
     val repo = newRepo()
-    ScriptedToolBundleReuse.retain(sessionB, repo, runtime = null)
+    ScriptedToolBundleReuse.retain(sessionB, repo, phone, runtime = null)
     ScriptedToolBundleReuse.releaseAll()
-    assertFalse(ScriptedToolBundleReuse.claim(sessionB, repo))
+    assertFalse(ScriptedToolBundleReuse.claim(sessionB, repo, phone))
   }
 
   @Test

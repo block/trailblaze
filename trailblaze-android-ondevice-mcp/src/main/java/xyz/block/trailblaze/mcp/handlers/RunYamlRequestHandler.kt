@@ -502,8 +502,7 @@ class RunYamlRequestHandler(
           // would never get a terminal log. We do the end-session and ExecutionCompleted
           // emission here ourselves after joining the cancelled job, so every RunYamlRequest
           // lifecycle ends with a terminal state regardless of how it unwinds.
-          val timeoutMessage =
-            "RunYamlRequest awaitCompletion exceeded ${OnDeviceRpcTimeouts.HANDLER_AWAIT_CAP_MS}ms"
+          val timeoutMessage = OnDeviceRpcTimeouts.HANDLER_AWAIT_CAP_MESSAGE
           val timeoutTimeMs = System.currentTimeMillis()
           job.cancel(CancellationException(timeoutMessage))
           backgroundScope.launch {

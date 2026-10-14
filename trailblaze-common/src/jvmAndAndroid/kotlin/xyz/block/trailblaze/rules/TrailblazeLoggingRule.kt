@@ -404,31 +404,64 @@ abstract class TrailblazeLoggingRule(
   }
 
   override fun afterTestExecution(description: Description, result: Result<Nothing?>) {
-    // Per-step AgentDriverLog screenshots are all pre-action frames, so capture a
-    // terminal screenshot here or the outcome of the last step is never in the report.
-    session?.let { currentSession ->
-      if (result.isFailure) {
-        captureFailureScreenshot(currentSession)
-      } else {
-        captureFinalScreenshot(currentSession)
+    afterTestExecution(description, result, cleanup = {})
+  }
+
+  /** Captures the terminal screen before cleanup, then includes cleanup failures in the verdict. */
+  fun afterTestExecution(
+    description: Description,
+    result: Result<Nothing?>,
+    cleanup: () -> Unit,
+  ) {
+    var failure = result.exceptionOrNull()
+    fun recordFailure(error: Throwable) {
+      val original = failure
+      if (original == null) failure = error
+      else if (original !== error) original.addSuppressed(error)
+    }
+
+    try {
+      // Per-step AgentDriverLog screenshots are all pre-action frames, so capture a
+      // terminal screenshot here or the outcome of the last step is never in the report.
+      session?.let { currentSession ->
+        if (result.isFailure) {
+          captureFailureScreenshot(currentSession)
+        } else {
+          captureFinalScreenshot(currentSession)
+        }
       }
+    } catch (error: Throwable) {
+      recordFailure(error)
     }
 
-    // Write trace.json BEFORE the terminal status, through the same guarded helper the host paths
-    // use — so this path is equally protected from an export that throws, and a run that ends
-    // through both entry points exports once rather than draining twice. See exportTracesBeforeEnd.
-    exportTracesBeforeEnd(session?.sessionId ?: SessionId("unknown"))
-
-    // End session if it exists
-    session?.let { currentSession ->
-      sessionManager.endSession(
-        session = currentSession,
-        isSuccess = result.isSuccess,
-        exception = result.exceptionOrNull(),
-      )
+    try {
+      cleanup()
+    } catch (error: Throwable) {
+      recordFailure(error)
     }
 
-    session = null
+    try {
+      // Write trace.json BEFORE the terminal status, through the same guarded helper the host paths
+      // use — so this path is equally protected from an export that throws, and a run that ends
+      // through both entry points exports once rather than draining twice. See exportTracesBeforeEnd.
+      exportTracesBeforeEnd(session?.sessionId ?: SessionId("unknown"))
+
+      // End session if it exists
+      session?.let { currentSession ->
+        sessionManager.endSession(
+          session = currentSession,
+          isSuccess = failure == null,
+          exception = failure,
+        )
+      }
+    } catch (error: Throwable) {
+      recordFailure(error)
+    } finally {
+      session = null
+    }
+    // A failing test already reaches JUnit through SimpleTestRule; keep cleanup attached to it.
+    // A failure discovered during teardown must turn an otherwise passing test into a failure.
+    if (result.isSuccess) failure?.let { throw it }
   }
 
   /**
@@ -456,9 +489,13 @@ abstract class TrailblazeLoggingRule(
    * isn't pre-wired onto the rule.
    */
   fun captureFailureScreenshot(session: TrailblazeSession, screenStateProvider: () -> ScreenState) {
+    if (logger.hasFailureSnapshot(session.sessionId)) {
+      Console.log("📸 Failure screenshot already captured before teardown for session ${session.sessionId.value}")
+      return
+    }
     try {
       val screenState = screenStateProvider()
-      logger.logSnapshot(session, screenState, displayName = "failure_screenshot")
+      logger.logFailureSnapshot(session, screenState)
       Console.log("📸 Failure screenshot captured for session ${session.sessionId.value}")
     } catch (e: Exception) {
       Console.log(

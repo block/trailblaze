@@ -19,6 +19,7 @@ import xyz.block.trailblaze.ui.TrailblazeDesktopUtil
 import xyz.block.trailblaze.ui.models.TrailblazeServerState.SavedTrailblazeAppConfig
 import java.io.File
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.util.hostExecutable
 
 /**
  * Describes a single config key: how to read it, write it, and what values are valid.
@@ -438,7 +439,7 @@ object CliConfigHelper {
   }
 
   private fun resolveGitRoot(): File? = try {
-    val process = ProcessBuilder("git", "rev-parse", "--show-toplevel")
+    val process = ProcessBuilder(hostExecutable("git"), "rev-parse", "--show-toplevel")
       .redirectErrorStream(false)
       .start()
     val finished = process.waitFor(2, java.util.concurrent.TimeUnit.SECONDS)

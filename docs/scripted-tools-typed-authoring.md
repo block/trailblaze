@@ -779,8 +779,9 @@ mock client + mock context from `@trailblaze/scripting/testing` — no daemon, n
 no MCP roundtrip:
 
 ```bash
-trailblaze check                  # materialize + tsc + bun test
-trailblaze check --no-typecheck   # tests only, skip tsc
+trailblaze check                  # materialize + tsc + bun test + trail validation
+trailblaze check --no-typecheck   # the same, without tsc
+trailblaze check --tests-only     # materialize + bun test, nothing else
 ```
 
 The mock helpers satisfy the handler signature:

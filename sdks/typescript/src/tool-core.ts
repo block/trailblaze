@@ -21,6 +21,17 @@ import type { TrailblazeClient, TrailblazeHostMethods, TrailblazeToolMethods } f
 import type { TrailblazeContext, TrailblazeDevice, TrailblazeTarget } from "./context.js";
 import type { TrailblazeSessionResources } from "./session-resources.js";
 import { attachMemoryDeltaToResult, createMemory, type TrailblazeMemory } from "./memory.js";
+import {
+  attachTrailheadReportToResult,
+  createTrailheadRecorder,
+  createTrailRun,
+  markErrorWithTrailheadReport,
+  validateTeardownResult,
+  type TeardownHandler,
+  type PreviousRun,
+  type TeardownResult,
+  type TrailheadContext,
+} from "./trailhead.js";
 
 /**
  * Minimal handler context for the typed `trailblaze.tool<I, O>(handler)` authoring surface.
@@ -63,6 +74,14 @@ export interface ToolContext {
    * register release callbacks for handles that must never enter `ctx.memory` or a tool result.
    */
   session?: TrailblazeSessionResources;
+  /**
+   * The last trail's hand-off. Non-null only in a trailhead's own handler, when the last run of
+   * the same trailhead on this device said its setup is reusable (see `trailhead.teardown`).
+   * `null` in every other tool, in `teardown`, and whenever there is nothing to reuse.
+   */
+  previousRun: PreviousRun | null;
+  /** `note(...)` works in any tool and tells the trailhead's `teardown` what to clean up. */
+  trailhead: TrailheadContext;
 }
 
 /**
@@ -192,7 +211,7 @@ export interface TrailblazeTypedToolSpec<TInput = Record<string, unknown>> {
    * projected into the namespaced `trailblaze/...` `_meta` keys the runtime reads to gate
    * execution.
    */
-  trailhead?: TrailheadSpec;
+  trailhead?: TrailheadSpec<TInput>;
 }
 
 /**
@@ -200,7 +219,7 @@ export interface TrailblazeTypedToolSpec<TInput = Record<string, unknown>> {
  * `TrailheadMetadata` data class (`ToolYamlConfig.kt`) that backs `*.trailhead.yaml`'s
  * `trailhead:` block — same two fields, same mutual-exclusion contract.
  */
-export interface TrailheadSpec {
+export interface TrailheadSpec<TInput = Record<string, unknown>> {
   /**
    * The single waypoint this trailhead lands on. Required unless [dynamic] is true — a trailhead
    * with neither is dropped with a warning (not a real bootstrap destination).
@@ -211,6 +230,17 @@ export interface TrailheadSpec {
    * single `to:` waypoint applies. Mutually exclusive with [to]. Defaults to `false`.
    */
   dynamic?: boolean;
+  /**
+   * Teardown and hand-off. Called once after every invocation of this trailhead that started,
+   * however the run ended (passed, failed, cancelled, or the trailhead itself threw), while the
+   * device is still connected. Clean up what the run left behind, then say whether the next run of
+   * this trailhead with identical args can reuse the setup. When it can, the next run's handler
+   * receives the result as `ctx.previousRun`; when it can't, `ctx.previousRun` is `null`.
+   *
+   * It never changes the trail's verdict: a throw or timeout is a warning, and the next run does a
+   * full setup. Never copy secrets into `reason` or `state`.
+   */
+  teardown?: TeardownHandler<TInput, ToolContext>;
 }
 
 /**
@@ -222,11 +252,23 @@ export interface TrailheadSpec {
 export type TypedToolDefinition<
   TInput = Record<string, never>,
   TResult = string,
-> = (
+> = ((
   args: TInput,
   ctx: TrailblazeContext | undefined,
   client: TrailblazeClient,
-) => Promise<TResult>;
+) => Promise<TResult>) & {
+  /**
+   * The spec's `trailhead.teardown`, adapted to the same `(args, ctx, client)` call shape plus
+   * the host's trail-result payload (`{ outcome, notes }`). Present only when the spec defines it;
+   * the synthesized wrappers expose it to the host as the tool's `teardown` member.
+   */
+  teardown?: (
+    args: TInput,
+    ctx: TrailblazeContext | undefined,
+    client: TrailblazeClient,
+    trailRun: unknown,
+  ) => Promise<TeardownResult>;
+};
 
 /**
  * Typed-tool validation failure. Thrown from inside the typed adapter so the synthesized
@@ -269,6 +311,7 @@ export function defineTypedTool<TInput, TResult>(
   handler: (input: TInput, ctx: ToolContext) => Promise<TResult>,
   inputSchema?: Record<string, unknown>,
   compileValidator?: (schema: Record<string, unknown>) => ValidateFunction,
+  teardown?: TeardownHandler<TInput, ToolContext>,
 ): TypedToolDefinition<TInput, TResult> {
   if (typeof handler !== "function") {
     // The `<TInput, TResult>` overloads guarantee a function at type-check time, but a JS-only
@@ -300,7 +343,10 @@ export function defineTypedTool<TInput, TResult>(
   // typed handler wants `(input, ToolContext)`. Build the ToolContext from `client.tools` +
   // `legacyCtx.memory` per-call. When [validator] is non-null, validate `args` first; on rejection
   // throw the typed error the wrapper's host-side dispatch catches.
-  return async (args, legacyCtx, client) => {
+  if (teardown !== undefined && typeof teardown !== "function") {
+    throw new TypeError("trailblaze.tool(spec, handler): spec.trailhead.teardown must be a function.");
+  }
+  const adapter: TypedToolDefinition<TInput, TResult> = async (args, legacyCtx, client) => {
     // Coerce args to a real object reference before validation so ajv's `useDefaults` mutation
     // has somewhere to write JSDoc-derived defaults, and the handler sees the SAME reference. The
     // imperative path in `tool.ts#registerPendingTools` has a sibling block — keep them in lockstep.
@@ -335,6 +381,7 @@ export function defineTypedTool<TInput, TResult>(
     // `device` and `target` ride through from the legacy ctx. Normalize the device block so typed
     // handlers can consistently branch on `ctx.device.driverType`, even when invoked by an older
     // on-device QuickJS host that only emitted the deprecated `driver` alias.
+    const trailhead = createTrailheadRecorder(legacyCtx?.previousRun);
     const toolContext: ToolContext = {
       tools: client.tools,
       host: client.host,
@@ -342,8 +389,25 @@ export function defineTypedTool<TInput, TResult>(
       device: normalizeDevice(legacyCtx?.device),
       target: legacyCtx?.target,
       session: legacyCtx?.session,
+      previousRun: trailhead.previousRun,
+      trailhead: trailhead.context,
     };
-    const out = await handler(validatedArgs as TInput, toolContext);
+    let out: TResult;
+    try {
+      out = await handler(validatedArgs as TInput, toolContext);
+    } catch (e: unknown) {
+      // Notes written before a throw still matter: a tool that created something and then failed
+      // must still tell cleanup about it.
+      throw markErrorWithTrailheadReport(e, trailhead.report());
+    }
+    // Wrapping a result serializes a non-envelope one, which throws on a cycle or a BigInt; the
+    // notes still have to reach cleanup, so they ride the error like a handler's own throw.
+    let withReport: TResult;
+    try {
+      withReport = attachTrailheadReportToResult(out, trailhead.report()) as TResult;
+    } catch (e: unknown) {
+      throw markErrorWithTrailheadReport(e, trailhead.report());
+    }
     // On the subprocess / MCP path, the surrounding `attachMemoryDelta` (tool.ts) drains
     // `ctx.memory` after the handler returns, so leave the raw result alone here. On the in-process
     // / on-device QuickJS path there is no such wrapper AND `ctx.memory` is a raw snapshot the host
@@ -354,9 +418,40 @@ export function defineTypedTool<TInput, TResult>(
     // the delta back into the shared `AgentMemory`, mirroring `SubprocessTrailblazeTool`.
     // Cast: the analyzer treats `<TResult>` as a compile-time signal; at runtime the synthesized
     // wrapper's `__normalizeResult` consumes whatever shape we return (bare value or envelope).
-    if (memoryIsWrapped) return out;
-    return attachMemoryDeltaToResult(out, memory) as TResult;
+    if (memoryIsWrapped) return withReport;
+    return attachMemoryDeltaToResult(withReport, memory) as TResult;
   };
+  if (teardown !== undefined) {
+    adapter.teardown = async (args, legacyCtx, client, trailRunWire) => {
+      const validatedArgs =
+        args != null && typeof args === "object" && !Array.isArray(args) ? args : ({} as TInput);
+      const rawMemory = legacyCtx?.memory;
+      const memory: TrailblazeMemory =
+        rawMemory != null && typeof (rawMemory as TrailblazeMemory).interpolate === "function"
+          ? (rawMemory as TrailblazeMemory)
+          : createMemory(rawMemory as Record<string, string> | undefined);
+      // `previousRun` belongs to the trailhead's own run, not its teardown, and notes written now
+      // would land after the trail they describe — so teardown gets no hand-off and an inert
+      // recorder whose report is discarded.
+      const toolContext: ToolContext = {
+        tools: client.tools,
+        host: client.host,
+        memory,
+        device: normalizeDevice(legacyCtx?.device),
+        target: legacyCtx?.target,
+        session: legacyCtx?.session,
+        previousRun: null,
+        trailhead: createTrailheadRecorder(undefined).context,
+      };
+      const result = await teardown(
+        validatedArgs as TInput,
+        toolContext,
+        createTrailRun(trailRunWire, client),
+      );
+      return validateTeardownResult(result);
+    };
+  }
+  return adapter;
 }
 
 function normalizeDevice(device: TrailblazeDevice | undefined): TrailblazeDevice | undefined {

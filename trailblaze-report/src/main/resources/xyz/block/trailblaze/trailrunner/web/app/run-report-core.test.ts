@@ -17,6 +17,7 @@ import * as RUN_REPORT_CORE_MODULE from "./run-report-core";
 import { declaredTrailSteps, mergeWebHierarchyBounds, traceToolCallCount } from "./run-report-extract";
 import { hitTestNode, inspectorDetailsHtml, inspectorModel, inspectorRectsHtml, inspectorTreeHtml } from "./run-report-inspector";
 import { chunkJsonWithoutRuntimeAttachments } from "./run-report-payload";
+import { failureAnchorIndex } from "./run-report-trace-model";
 import { whenDocumentComplete } from "./run-report-viewer";
 import { trailSourceDetails } from "./report-format";
 // A real captured web hierarchy (405 nodes, both parallel trees), scrubbed of page content — see
@@ -7394,6 +7395,134 @@ describe("RUN_REPORT_VIEWER (rendered output)", () => {
     expect(out).toContain(">TRAILHEAD<");
     expect(out).toContain(">STEP 1<");
     expect(out.indexOf('id="trailhead-heading"')).toBeLessThan(out.indexOf('id="trail-heading"'));
+  });
+
+  test("the trailhead's teardown renders as its own Teardown phase after the trail, unnumbered", () => {
+    const trace = (core as any).slimTraceForShare(core.extractTrace([
+      { class: `${T}.ObjectiveStartLog`, promptStep: { step: "Open the demo app", isTrailhead: true }, timestamp: "2024-01-01T00:00:00Z" },
+      { class: `${T}.ObjectiveStartLog`, promptStep: { step: "Complete checkout" }, timestamp: "2024-01-01T00:00:01Z" },
+      { class: `${T}.ObjectiveStartLog`, promptStep: { step: "Teardown", isTeardown: true }, timestamp: "2024-01-01T00:00:02Z" },
+      { class: `${T}.TrailblazeToolLog`, toolName: "teardown", traceId: "teardown", trailblazeTool: { raw: {} }, successful: true, timestamp: "2024-01-01T00:00:02.500Z" },
+    ]));
+    const out = renderViewer({ generatedAt: "now", sessions: [{ meta: { title: "R", status: "passed" }, trace, llm: [], shots: {} }] });
+    expect(out).toContain('<span class="name" id="teardown-heading">Teardown</span><span class="phasestatus pass">');
+    expect(out).toContain(">TEARDOWN<");
+    expect(out).toContain(">STEP 1<");
+    expect(out).not.toContain(">STEP 2<");
+    expect(out.indexOf('id="trail-heading"')).toBeLessThan(out.indexOf('id="teardown-heading"'));
+  });
+
+  test("a snapshot the teardown takes stays under the Teardown; the run's final state goes with the trail", () => {
+    const trace = (core as any).slimTraceForShare(core.extractTrace([
+      { class: `${T}.ObjectiveStartLog`, promptStep: { step: "Complete checkout" }, timestamp: "2024-01-01T00:00:01Z" },
+      { class: `${T}.ObjectiveStartLog`, promptStep: { step: "Teardown", isTeardown: true }, timestamp: "2024-01-01T00:00:02Z" },
+      { class: `${T}.TrailblazeSnapshotLog`, displayName: "signed_out", screenshotFile: "signed-out.png", timestamp: "2024-01-01T00:00:03Z" },
+      { class: `${T}.TrailblazeSnapshotLog`, displayName: "final_screenshot", screenshotFile: "final.png", timestamp: "2024-01-01T00:00:04Z" },
+    ]));
+    const out = renderViewer({ generatedAt: "now", sessions: [{ meta: { title: "R", status: "passed" }, trace, llm: [], shots: {} }] });
+    const trail = out.slice(out.indexOf('id="trail-heading"'), out.indexOf('id="teardown-heading"'));
+    const teardown = out.slice(out.indexOf('id="teardown-heading"'));
+    expect(teardown).toContain("signed_out");
+    expect(trail).not.toContain("signed_out");
+    expect(trail).toContain("Final state");
+    expect(teardown).not.toContain("Final state");
+  });
+
+  test("a clean teardown collapses behind a check; a failed one opens with a warning", () => {
+    const row = (i: number, label: string, ok: boolean, extra: Record<string, unknown>) => ({ i, label, tool: "agent step", note: null, ms: 0, ts: i, ok, err: ok ? null : "boom", screenshotFile: null, objective: false, trailhead: false, count: null, mark: null, children: [], ...extra });
+    const render = (teardownOk: boolean) => renderViewer({ generatedAt: "now", sessions: [{ meta: { title: "R", status: "passed" }, trace: [
+      row(1, "Complete checkout", true, { objective: true }),
+      row(2, "tapOnElement", true, {}),
+      row(3, "Teardown", teardownOk, { objective: true, teardown: true }),
+      row(4, "teardown", teardownOk, {}),
+    ], llm: [], shots: {} }] });
+    const phase = (out: string) => out.slice(out.indexOf('data-phase="teardown"'), out.indexOf('<div class="steps">', out.indexOf('data-phase="teardown"')));
+    const clean = phase(render(true));
+    expect(clean).toContain('aria-expanded="false"');
+    expect(clean).toContain('<div class="tlphasebody" hidden>');
+    expect(clean).toContain('<span class="phasestatus pass">');
+    expect(clean).toContain("Clean</span>");
+    const failed = phase(render(false));
+    expect(failed).toContain('aria-expanded="true"');
+    expect(failed).not.toContain(" hidden>");
+    expect(failed).toContain('<span class="phasestatus warn">');
+    expect(failed).toContain("Failed</span>");
+  });
+
+  test("a failed trail's end-of-run rows after a clean teardown leave the teardown clean", () => {
+    const row = (i: number, label: string, ok: boolean, extra: Record<string, unknown>) => ({ i, label, tool: "agent step", note: null, ms: 0, ts: i, ok, err: ok ? null : "boom", screenshotFile: null, objective: false, trailhead: false, count: null, mark: null, children: [], ...extra });
+    // The session logs its failure screenshot and error after the teardown objective.
+    const trace = [
+      row(1, "Complete checkout", false, { objective: true }),
+      row(2, "assertVisibleBySelector", false, {}),
+      row(3, "Teardown", true, { objective: true, teardown: true }),
+      row(4, "teardown", true, {}),
+      row(5, "Failure screenshot", false, { terminal: true, endOfRun: true, err: null }),
+      row(6, "Error", false, { terminal: true, endOfRun: true }),
+    ];
+    const out = renderViewer({ generatedAt: "now", sessions: [{ meta: { title: "R", status: "failed" }, trace, llm: [], shots: {} }] });
+    const phase = out.slice(out.indexOf('data-phase="teardown"'), out.indexOf('<div class="steps">', out.indexOf('data-phase="teardown"')));
+    expect(phase).toContain('<span class="phasestatus pass">');
+    expect(phase).toContain('aria-expanded="false"');
+    // They render with the trail, not under the Teardown.
+    expect(out.slice(out.indexOf('id="teardown-heading"'))).not.toContain("Failure screenshot");
+    expect(out.slice(out.indexOf('id="trail-heading"'), out.indexOf('id="teardown-heading"'))).toContain("Failure screenshot");
+    // A run-level error, with no failed objective, still anchors on its end-of-run rows.
+    const runLevel = [row(1, "Complete checkout", true, { objective: true }), ...trace.slice(2)];
+    expect(failureAnchorIndex(runLevel as any)).toBe(3);
+  });
+
+  test("the trailhead states whether it reused the last trail's setup, and why not", () => {
+    const row = (i: number, label: string, extra: Record<string, unknown>) => ({ i, label, tool: "agent step", note: null, ms: 0, ts: i, ok: true, err: null, screenshotFile: null, objective: false, trailhead: false, count: null, mark: null, children: [], ...extra });
+    const trace = [row(1, "Sign in", { objective: true, trailhead: true }), row(2, "signIn", {}), row(3, "Complete checkout", { objective: true })];
+    const render = (records: Record<string, unknown>[]) => renderViewer({ generatedAt: "now", sessions: [{ meta: { title: "R", status: "passed" }, trace, llm: [], shots: {},
+      events: [{ name: "trailhead", total: records.length, truncated: false, events: records.map((d, t) => ({ t, d: JSON.stringify(d) })) }] }] });
+
+    const reused = render([
+      { type: "previousRun", tool: "signIn", previousRun: { sessionId: "run_prev", reason: "still signed in" } },
+      { type: "setup", tool: "signIn", setup: "reused", reason: "still on the home screen", previousRunSessionId: "run_prev" },
+    ]);
+    expect(reused).toContain('<span class="name" id="trailhead-heading">Trailhead</span><span class="phasestatus reused">Reused</span>');
+    expect(reused).toContain("Reused from <code>run_prev</code>");
+    expect(reused).toContain("still on the home screen");
+
+    const full = render([
+      { type: "previousRun", tool: "signIn", previousRun: null, reason: "reuse is off for this lane" },
+      { type: "setup", tool: "signIn", setup: "fullSetup" },
+    ]);
+    expect(full).toContain('<span class="phasestatus full">Full setup</span>');
+    expect(full).toContain('<span class="setupdecisionreason">reuse is off for this lane</span>');
+
+    // A reuse whose catch-up threw: the Trailhead section and the failure banner both say so.
+    const failedTrace = [row(1, "Sign in", { objective: true, trailhead: true, ok: false, err: "Error: cart would not clear" }), row(2, "signIn", { ok: false, err: "Error: cart would not clear" })];
+    const failedReuse = renderViewer({ generatedAt: "now", sessions: [{ meta: { title: "R", status: "failed" }, trace: failedTrace, llm: [], shots: {},
+      events: [{ name: "trailhead", total: 2, truncated: false, events: [
+        { type: "previousRun", tool: "signIn", previousRun: { sessionId: "run_prev", reason: "still signed in" } },
+        { type: "setup", tool: "signIn", setup: "reuseFailed", reason: "on home", error: "cart would not clear", previousRunSessionId: "run_prev", failed: true },
+      ].map((d, t) => ({ t, d: JSON.stringify(d) })) }] }] });
+    expect(failedReuse).toContain('<span class="phasestatus fail">');
+    expect(failedReuse).toContain("Reuse failed</span>");
+    expect(failedReuse).toContain("Failed while reusing setup from <code>run_prev</code>");
+    expect(failedReuse).toContain('<span class="setupdecisionreason setupdecisionerror">cart would not clear</span>');
+    expect(failedReuse).toContain('<span class="failurecontext">While reusing setup from run_prev</span>');
+    expect(reused).not.toContain("failurecontext");
+
+    // A trailhead with no teardown logs no setup record, so there is no decision to state.
+    const none = render([{ type: "previousRun", tool: "signIn", previousRun: null, reason: "this trailhead defines no teardown" }]);
+    expect(none).not.toContain("phasestatus");
+    expect(none).not.toContain("setupdecision");
+  });
+
+  test("a failed teardown never anchors the run's failure", () => {
+    const row = (i: number, label: string, ok: boolean, extra: Record<string, unknown>) => ({ i, label, tool: "agent step", note: null, ms: 0, ts: i, ok, err: ok ? null : "boom", screenshotFile: null, objective: false, trailhead: false, count: null, mark: null, children: [], ...extra });
+    const trace = [
+      row(1, "Complete checkout", true, { objective: true }),
+      row(2, "assertVisibleBySelector", false, {}),
+      row(3, "Teardown", false, { objective: true, teardown: true }),
+      row(4, "teardown", false, {}),
+    ];
+    expect(failureAnchorIndex(trace as any)).toBe(1);
+    expect(failureAnchorIndex(trace.slice(2) as any)).toBe(-1);
   });
 
   test("a failed run opens on its failure and presents the parsed error inside the failed step", () => {

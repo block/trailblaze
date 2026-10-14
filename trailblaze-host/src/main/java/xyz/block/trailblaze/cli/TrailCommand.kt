@@ -651,6 +651,37 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
 
   override fun call(): Int = quietUnlessVerbose(verbose) { runTrail() }
 
+  /**
+   * The trail YAML actually sent to the runner, after templates resolve. Subclasses may rewrite it,
+   * and one that does must turn off `saveRecording`: a pass would save the rewritten run's
+   * recording into the source trail.
+   */
+  internal open fun yamlToRun(yamlContent: String): String = yamlContent
+
+  /** One run of a trail on a device that got as far as a session, as [runAgain] sees it. */
+  internal data class FinishedRun(val passed: Boolean, val sessionDir: File)
+
+  /**
+   * Whether to run the same trail on the same device again after [run]. Subclasses may ask for it.
+   * [run] is null when the run was rejected before its session started, or ran through the daemon
+   * with `--no-logging`. In process, a `--no-logging` run still gets a [FinishedRun], whose
+   * [FinishedRun.sessionDir] was never written.
+   */
+  internal open fun runAgain(run: FinishedRun?): Boolean = false
+
+  /** Set by both run loops after each run that recorded a session; null otherwise. */
+  private var lastRun: FinishedRun? = null
+
+  /** Each device spec, repeated for as long as [runAgain] asks. Lazy: it asks after each run. */
+  private fun withReruns(deviceSpecs: List<String?>): Sequence<String?> = sequence {
+    for (spec in deviceSpecs) {
+      do {
+        lastRun = null
+        yield(spec)
+      } while (runAgain(lastRun))
+    }
+  }
+
   /** The command proper; [call] owns the quiet scope around it. */
   private fun runTrail(): Int {
     // Emit the `trail` → `run` deprecation warning BEFORE the bare-args rejection so a
@@ -1138,7 +1169,7 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
             continue
           }
           // One run per resolved device (usually one; several with --device a,b / --all-devices).
-          for (deviceSpec in deviceSpecs) {
+          for (deviceSpec in withReruns(deviceSpecs)) {
             if (cancelled) break
             val runLabel = if (deviceSpecs.size > 1) {
               "${item.file.name} on ${deviceSpec ?: "default device"}"
@@ -1148,6 +1179,12 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
             Console.info("\n[${index + 1}/$total] Running: $runLabel")
             Console.info(ITEM_DIVIDER)
             val (exitCode, sessionIds) = runSingleTrailFile(item.file, deviceSpec, app)
+            lastRun = sessionIds.lastOrNull()?.let {
+              FinishedRun(
+                passed = exitCode == TrailblazeExitCode.SUCCESS.code,
+                sessionDir = File(app.deviceManager.logsRepo.logsDir, it.value),
+              )
+            }
             allNewSessionIds.addAll(sessionIds)
             if (exitCode == TrailblazeExitCode.SUCCESS.code) {
               passed++
@@ -1367,7 +1404,7 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
             continue
           }
           // One daemon run per resolved device (usually one; several with --device a,b / --all-devices).
-          for (resolvedDeviceSpec in deviceSpecs) {
+          for (resolvedDeviceSpec in withReruns(deviceSpecs)) {
             val runLabel = if (deviceSpecs.size > 1) {
               "${file.name} on ${resolvedDeviceSpec ?: "default device"}"
             } else {
@@ -1377,7 +1414,7 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
             Console.info(ITEM_DIVIDER)
 
             val rawYaml = file.readText()
-            val yamlContent = TrailYamlTemplateResolver.resolve(rawYaml, file)
+            val yamlContent = yamlToRun(TrailYamlTemplateResolver.resolve(rawYaml, file))
             val testName = testNameOverride?.trim()?.takeIf { it.isNotBlank() } ?: deriveTestName(file)
 
             // Surface the effective replay-vs-AI mode to the user before the run kicks off.
@@ -1423,6 +1460,9 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
             // Before the pass/fail split: a failed run still captured screens, and its strings are
             // exactly what someone comparing against a green run wants to read.
             response.sessionId?.let { delegatedSessions += SessionId(it) to sessionLogsDir(response, daemonLogsDir) }
+            lastRun = response.sessionId?.let {
+              FinishedRun(passed = response.success, sessionDir = File(sessionLogsDir(response, daemonLogsDir), it))
+            }
 
             if (response.success) {
               Console.info("✅ PASSED")
@@ -1783,7 +1823,7 @@ open class TrailCommand : Callable<Int>, QuietUnlessVerbose {
   ): Pair<Int, List<SessionId>> {
     // Read the YAML file and resolve template variables (e.g., {{CWD}}, {{BASE_URL}})
     val rawYaml = file.readText()
-    val yamlContent = TrailYamlTemplateResolver.resolve(rawYaml, file)
+    val yamlContent = yamlToRun(TrailYamlTemplateResolver.resolve(rawYaml, file))
     if (verbose) {
       Console.log("Reading trail file: ${file.absolutePath}")
       Console.log("YAML content (${yamlContent.length} bytes)")

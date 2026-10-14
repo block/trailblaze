@@ -1,7 +1,7 @@
 // Behavioral contracts for the report's canonical trace model. These tests cover the authored
 // step/retry structure and exact LLM-call correlation consumed by every report surface.
 import { describe, expect, test } from "bun:test";
-import { buildReportTraceModel, createReportTraceModelResolver, failureAnchorIndex } from "./run-report-trace-model";
+import { buildReportTraceModel, createReportTraceModelResolver, failureAnchorIndex, rowPhase } from "./run-report-trace-model";
 
 const row = (i: number, patch: Partial<TraceStep> = {}): TraceStep => ({
   i,
@@ -198,6 +198,23 @@ describe("buildReportTraceModel", () => {
     const model = buildReportTraceModel([batch], 0);
 
     expect(model.entries.map((e) => [e.kid, e.ts])).toEqual([[null, 900], [0, 920], [1, 950]]);
+  });
+});
+
+describe("rowPhase", () => {
+  test("an end-of-run row after the teardown belongs to the trail, whose section shows it", () => {
+    const trace = [
+      row(1, { objective: true, trailhead: true, label: "Sign in" }),
+      row(2),
+      row(3, { objective: true, label: "Check out" }),
+      row(4, { ok: false }),
+      row(5, { objective: true, teardown: true, label: "Teardown" }),
+      row(6),
+      row(7, { terminal: true, endOfRun: true, ok: false, label: "Error" }),
+    ];
+    const model = buildReportTraceModel(trace, 0);
+    expect([0, 2, 4, 5].map((index) => rowPhase(trace, model, index))).toEqual(["trailhead", "trail", "teardown", "teardown"]);
+    expect(rowPhase(trace, model, 6)).toBe("trail");
   });
 });
 

@@ -64,6 +64,8 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.failureMessage
 import xyz.block.trailblaze.toolcalls.carriesPayload
+import xyz.block.trailblaze.trailhead.TrailheadHandoffStore
+import xyz.block.trailblaze.trailhead.TrailheadRuns
 import xyz.block.trailblaze.yaml.DirectionStep
 import xyz.block.trailblaze.yaml.TrailConfig
 import xyz.block.trailblaze.yaml.TrailYamlItem
@@ -620,7 +622,9 @@ open class AndroidTrailblazeRule(
         OnDeviceTurbo.requireTurboHeld(description.displayName)
       }
     }
-    super.afterTestExecution(description, verdict.sessionResult)
+    trailblazeLoggingRule.afterTestExecution(description, verdict.sessionResult) {
+      OnDeviceAccessibilityServiceSetup.disableAccessibilityService()
+    }
     verdict.failure?.let { throw it }
   }
 
@@ -730,6 +734,9 @@ open class AndroidTrailblazeRule(
       sessionProvider = { trailblazeLoggingRule.session ?: error("Session not available - ensure test is running") },
       sessionUpdater = { trailblazeLoggingRule.setSession(it) },
       onBeforeRecordedTool = onBeforeRecordedTool,
+      trailheadReuse = TrailheadRuns.reuseEnabled(
+        InstrumentationArgUtil.getInstrumentationArg(TrailheadRuns.REUSE_INSTRUMENTATION_ARG),
+      ),
       // Replay each step's recorded tools inside one shared execution context + snapshot frame, so
       // cross-tool device state (e.g. the in-process clipboard cache on the per-context device
       // executor) survives across the recording — matching the legacy single-`- tools:`-block batch.
@@ -899,7 +906,13 @@ open class AndroidTrailblazeRule(
         // `finally`. Deciding and launching separately would let two overlapping dispatches of one
         // session both launch into the repo they now share, and the second would die on the tool
         // names the first registered — see [ScriptedToolBundleReuse.claimOrLaunch].
-        val reused = ScriptedToolBundleReuse.claimOrLaunch(sessionId, trailblazeToolRepo) {
+        // Keyed on the classifiers too: the launch registers only the tools the device's classifiers
+        // satisfied (`trailblaze/requiredClassifiers`), so a changed override must relaunch.
+        val reused = ScriptedToolBundleReuse.claimOrLaunch(
+          sessionId = sessionId,
+          repo = trailblazeToolRepo,
+          classifiers = trailblazeLoggingRule.trailblazeDeviceInfoProvider().classifiers,
+        ) {
           launchToolsetScriptedToolBundles(toolRepo = trailblazeToolRepo, sessionId = sessionId)
         }
         if (reused) {
@@ -914,41 +927,44 @@ open class AndroidTrailblazeRule(
 
       ActionTrace.mark(ActionTrace.Boundary.BUNDLES_LAUNCHED)
 
-      trailItems.forEach { item ->
-        val itemResult = when (item) {
-          is TrailYamlItem.PromptsTrailItem ->
-            // Agent-agnostic: runPrompt replays recorded steps deterministically (zero LLM) and
-            // delegates only the unrecorded steps to the Koog [trailblazeRunner].
-            trailblazeRunnerUtil.runPrompt(
-              prompts = item.promptSteps,
-              useRecordedSteps = useRecordedSteps,
-              selfHeal = resolveSelfHealEnabled(),
-            )
-          is TrailYamlItem.TrailheadTrailItem ->
-            // The trailhead is step 0: run its single lowered step through the same path as any
-            // prompt step (deterministic tool replay, or blaze the NL step if it has no tools).
-            trailblazeRunnerUtil.runPrompt(
-              prompts = listOf(item.trailhead.toPromptStep()),
-              useRecordedSteps = true,
-              selfHeal = resolveSelfHealEnabled(),
-            )
-          is TrailYamlItem.ToolTrailItem -> runTrailblazeTool(item.tools.map { it.trailblazeTool })
-          is TrailYamlItem.ConfigTrailItem -> handleConfig(item.config)
-        }
-        if (itemResult is TrailblazeToolResult.Error) {
-          // A tool that reported an error left its engine in a known state, so the session's
-          // bundles stay reusable.
-          endedInException = false
-          throw TrailblazeException(itemResult.errorMessage)
-        }
-        // Only adopt a Success as the trail's last-tool payload if it actually carries data —
-        // `handleConfig(...)` and prompt-steps that resolve to an empty `Success()` would
-        // otherwise clobber a previous tool's payload (e.g. trail = [adbShell→stdout, config]
-        // would surface `toolMessage=null` instead of the adbShell stdout). The `toolMessage` /
-        // `toolStructuredContent` mirror is specifically the LAST DATA-RETURNING Success — empty
-        // Success() values produced by non-tool items must not overwrite a payload-bearing one.
-        if (itemResult is TrailblazeToolResult.Success && itemResult.carriesPayload()) {
-          lastToolSuccess = itemResult
+      // One trail: the trailhead's teardown runs after it, whatever the outcome.
+      trailblazeRunnerUtil.runTrail {
+        trailItems.forEach { item ->
+          val itemResult = when (item) {
+            is TrailYamlItem.PromptsTrailItem ->
+              // Agent-agnostic: runPrompt replays recorded steps deterministically (zero LLM) and
+              // delegates only the unrecorded steps to the Koog [trailblazeRunner].
+              trailblazeRunnerUtil.runPrompt(
+                prompts = item.promptSteps,
+                useRecordedSteps = useRecordedSteps,
+                selfHeal = resolveSelfHealEnabled(),
+              )
+            is TrailYamlItem.TrailheadTrailItem ->
+              // The trailhead is step 0: run its single lowered step through the same path as any
+              // prompt step (deterministic tool replay, or blaze the NL step if it has no tools).
+              trailblazeRunnerUtil.runPrompt(
+                prompts = listOf(item.trailhead.toPromptStep()),
+                useRecordedSteps = true,
+                selfHeal = resolveSelfHealEnabled(),
+              )
+            is TrailYamlItem.ToolTrailItem -> runTrailblazeTool(item.tools.map { it.trailblazeTool })
+            is TrailYamlItem.ConfigTrailItem -> handleConfig(item.config)
+          }
+          if (itemResult is TrailblazeToolResult.Error) {
+            // A tool that reported an error left its engine in a known state, so the session's
+            // bundles stay reusable.
+            endedInException = false
+            throw TrailblazeException(itemResult.errorMessage)
+          }
+          // Only adopt a Success as the trail's last-tool payload if it actually carries data —
+          // `handleConfig(...)` and prompt-steps that resolve to an empty `Success()` would
+          // otherwise clobber a previous tool's payload (e.g. trail = [adbShell→stdout, config]
+          // would surface `toolMessage=null` instead of the adbShell stdout). The `toolMessage` /
+          // `toolStructuredContent` mirror is specifically the LAST DATA-RETURNING Success — empty
+          // Success() values produced by non-tool items must not overwrite a payload-bearing one.
+          if (itemResult is TrailblazeToolResult.Success && itemResult.carriesPayload()) {
+            lastToolSuccess = itemResult
+          }
         }
       }
       endedInException = false
@@ -1223,16 +1239,26 @@ open class AndroidTrailblazeRule(
     val yamlContent = AndroidAssetsUtil.readAssetAsString(computedAssetPath)
     refuseIfRequiresHost(yamlContent, computedAssetPath)
     val appIdToForceStop = targetAppId ?: defaultForceStopAppId
-    val localeForFreshProcess = if (forceStopApp) {
-      null
-    } else {
-      val classifiers = trailblazeLoggingRule.trailblazeDeviceInfoProvider().classifiers
-      val trailItems = trailblazeYaml.decodeTrail(yamlContent, deviceClassifiers = classifiers)
-      trailblazeYaml.extractTrailConfig(trailItems)
-        ?.locale
-        ?.takeIf { trailblazeYaml.firstSkipReason(trailItems) == null }
+    val reuseEnabled = TrailheadRuns.reuseEnabled(
+      InstrumentationArgUtil.getInstrumentationArg(TrailheadRuns.REUSE_INSTRUMENTATION_ARG),
+    )
+    // Decoded only when the clean-start decision needs it: a reusable hand-off can skip the
+    // ordinary force-stop, but never a locale change. A trail that can't be read keeps its clean
+    // start under reuse; the run's own decode reports the error.
+    val classifiers = trailblazeLoggingRule.trailblazeDeviceInfoProvider().classifiers
+    val trailItems = when {
+      !forceStopApp -> trailblazeYaml.decodeTrail(yamlContent, deviceClassifiers = classifiers)
+      reuseEnabled -> runCatching { trailblazeYaml.decodeTrail(yamlContent, deviceClassifiers = classifiers) }.getOrNull()
+      else -> null
     }
-    if (shouldForceStopTargetApp(forceStopApp, localeForFreshProcess) && appIdToForceStop != null) {
+    val localeForFreshProcess = trailItems?.let { items ->
+      trailblazeYaml.extractTrailConfig(items)
+        ?.locale
+        ?.takeIf { trailblazeYaml.firstSkipReason(items) == null }
+    }
+    val keepForReuse = reuseEnabled && trailItems != null &&
+      TrailheadHandoffStore.holdsReusableFor(trailblazeLoggingRule.trailblazeDeviceInfoProvider().trailblazeDeviceId, trailItems)
+    if (shouldForceStopTargetApp(forceStopApp, localeForFreshProcess, keepForReuse) && appIdToForceStop != null) {
       AdbCommandUtil.forceStopApp(appIdToForceStop)
     }
     runWithSource(
@@ -1247,9 +1273,12 @@ open class AndroidTrailblazeRule(
   }
 
   companion object {
-    /** A locale-bearing trail needs a fresh process even when ordinary clean-start is disabled. */
-    internal fun shouldForceStopTargetApp(requested: Boolean, locale: String?): Boolean =
-      requested || locale != null
+    /**
+     * A locale-bearing trail needs a fresh process even when ordinary clean-start is disabled. A
+     * reusable trailhead hand-off skips the ordinary clean start: the trailhead decides what to keep.
+     */
+    internal fun shouldForceStopTargetApp(requested: Boolean, locale: String?, keepForReuse: Boolean = false): Boolean =
+      (requested && !keepForReuse) || locale != null
 
     /**
      * Only use this on-device when no deviceId is available (like in a connectedDebugAndroidTest)

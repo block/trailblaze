@@ -14,6 +14,12 @@ class AndroidDeviceLocaleTest {
   fun `locale requests force a fresh target process`() {
     assertTrue(shouldForceStopTargetApp(requested = false, locale = "es"))
     assertTrue(shouldForceStopTargetApp(requested = true, locale = null))
+  }
+
+  @Test
+  fun `a reusable trailhead hand-off skips the clean start but not a locale change`() {
+    assertFalse(shouldForceStopTargetApp(requested = true, locale = null, keepForReuse = true))
+    assertTrue(shouldForceStopTargetApp(requested = true, locale = "es", keepForReuse = true))
     assertFalse(shouldForceStopTargetApp(requested = false, locale = null))
   }
 

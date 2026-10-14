@@ -16,6 +16,7 @@ import xyz.block.trailblaze.config.KnownTargetMessages
 import xyz.block.trailblaze.recordings.TrailRecordings
 import xyz.block.trailblaze.ui.TrailblazeDesktopUtil
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.util.hostExecutable
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
 import xyz.block.trailblaze.yaml.unified.UnifiedTrail
 import xyz.block.trailblaze.yaml.unified.UnifiedTrailAdapter
@@ -85,7 +86,7 @@ private fun gitWorktreeInfo(dir: File): Pair<String?, Boolean> {
  * whitespace changes the user never made.
  */
 private fun runGit(dir: File, vararg args: String, timeoutSeconds: Long = 10): String? = runCatching {
-  val process = ProcessBuilder(listOf("git", *args))
+  val process = ProcessBuilder(listOf(hostExecutable("git"), *args))
     .directory(dir)
     .redirectError(ProcessBuilder.Redirect.DISCARD)
     .start()
@@ -306,7 +307,7 @@ internal suspend fun buildCreateTrailResponse(deps: TrailRunnerDeps, request: Cr
       val primary = resolvePrimaryRoot(deps.trailsRootProvider)
       val file = File(primary, segments.joinToString("/") + ".trail.yaml")
       val rootCanon = primary.canonicalPath
-      require(file.canonicalPath.startsWith("$rootCanon/")) { "path escapes the trails workspace" }
+      require(isInside(file.canonicalPath, rootCanon)) { "path escapes the trails workspace" }
       val parent = requireNotNull(file.parentFile)
       parent.mkdirs()
       when (BundleStore.writeFile(parent, file.name, yaml, operation = "create")) {
@@ -345,7 +346,7 @@ internal suspend fun buildCreateTrailDirResponse(deps: TrailRunnerDeps, request:
       val primary = resolvePrimaryRoot(deps.trailsRootProvider)
       val dir = File(primary, segments.joinToString("/"))
       val rootCanon = primary.canonicalPath
-      require(dir.canonicalPath.startsWith("$rootCanon/")) { "path escapes the trails workspace" }
+      require(isInside(dir.canonicalPath, rootCanon)) { "path escapes the trails workspace" }
       require(!dir.exists()) { "${dir.name} already exists at that path" }
       require(dir.mkdirs()) { "could not create ${dir.name}" }
       dir.absolutePath

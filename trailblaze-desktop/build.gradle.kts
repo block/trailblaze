@@ -1,3 +1,5 @@
+import java.util.zip.ZipFile
+
 plugins {
   kotlin("jvm")
   alias(libs.plugins.kotlin.serialization)
@@ -99,9 +101,17 @@ val copyAndroidTestApkToResources by tasks.registering(Copy::class) {
   rename { "trailblaze-ondevice-runner.apk" }
 }
 
+// The bash launcher, carried inside the JAR as the `trailblaze-launcher` entry so an installer
+// or a JAR swap can extract the launcher that belongs to that exact JAR (a JAR is a zip:
+// `unzip -p trailblaze.jar trailblaze-launcher`).
+val launcherScript = layout.projectDirectory.file("../scripts/trailblaze")
+val launcherJarEntry = "trailblaze-launcher"
+
 // Make processResources depend on copying the APK
-tasks.named("processResources") {
+tasks.named<org.gradle.language.jvm.tasks.ProcessResources>("processResources") {
   dependsOn(copyAndroidTestApkToResources)
+  val entryName = launcherJarEntry
+  from(launcherScript) { rename { entryName } }
 }
 
 val packageUberJar = registerPackageUberJarForCurrentOs(
@@ -208,13 +218,31 @@ val releaseArtifacts by tasks.registering(Copy::class) {
   rename(".*", "trailblaze.jar")
   duplicatesStrategy = DuplicatesStrategy.INCLUDE
 
-  // Copy the launcher script alongside the JAR. In java -jar mode (the default),
-  // it passes the --add-opens JVM flags Skiko needs on macOS.
+  // Copy the launcher script alongside the JAR too, for installs and release tooling that
+  // predate the embedded `trailblaze-launcher` entry. In java -jar mode (the default), it passes
+  // the --add-opens JVM flags Skiko needs on macOS.
+  // Locals, not the script-level vals: a task action that reads a script val captures the whole
+  // build script, which the configuration cache cannot serialize.
+  val launcher = launcherScript.asFile
+  val entryName = launcherJarEntry
+  // The Windows launcher, for hosts that cannot run the bash one.
+  val windowsLauncher = project.file("../scripts/trailblaze.cmd")
+  inputs.file(windowsLauncher)
   doLast {
-    val launcher = project.file("../scripts/trailblaze")
     val dest = releaseDir.get().asFile.resolve("trailblaze")
     launcher.copyTo(dest, overwrite = true)
     dest.setExecutable(true)
+    windowsLauncher.copyTo(releaseDir.get().asFile.resolve("trailblaze.cmd"), overwrite = true)
+    // Installers extract the launcher from the JAR, so a JAR without it, or with a different one
+    // than this checkout's, is a broken release rather than a cosmetic difference.
+    val jar = releaseDir.get().asFile.resolve("trailblaze.jar")
+    val embedded = ZipFile(jar).use { zip ->
+      zip.getEntry(entryName)?.let { zip.getInputStream(it).readBytes() }
+    }
+    check(embedded != null) { "$jar has no '$entryName' entry" }
+    check(embedded.contentEquals(launcher.readBytes())) {
+      "$jar carries a '$entryName' that differs from $launcher"
+    }
   }
 }
 
@@ -225,11 +253,11 @@ packageUberJar.configure {
   // only class in maestro-client that reads either file, so they are 12.6 MB of dead weight
   // in every JAR download and Homebrew install.
   exclude("maestro-app.apk", "maestro-server.apk")
-  // The WebP encoder ships libwebp for 11 platforms in one artifact. Keep the three
+  // The WebP encoder ships libwebp for 11 platforms in one artifact. Keep the four
   // `TrailblazeDesktopUtil.assertSupportedPlatform()` lets start (linux-x64, linux-arm64,
-  // macos-arm64); the rest can never load.
+  // macos-arm64, windows-x64); the rest can never load.
   exclude(
-    "native/Windows/**",
+    "native/Windows/x86/**",
     "native/Mac/x86_64/**",
     "native/Linux/arm/**",
     "native/Linux/armv6/**",

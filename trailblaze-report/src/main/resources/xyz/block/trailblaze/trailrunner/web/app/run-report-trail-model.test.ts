@@ -213,6 +213,37 @@ describe("buildTrailMatrix", () => {
     expect(sameCell?.actions.map((a) => a.atMs)).toEqual([0]);
   });
 
+  test("end-of-run rows logged after the teardown don't stretch the trail's last step across it", () => {
+    const model = buildReportTraceModel([
+      row(1, { objective: true, label: "Check out", ts: 1000 }),
+      row(2, { ts: 1000, ms: 2000, ok: false, err: "button missing" }),
+      row(3, { objective: true, teardown: true, label: "Teardown", ts: 3000 }),
+      row(4, { ts: 3000, ms: 40000 }),
+      row(5, { ts: 43000, ms: 0, terminal: true, endOfRun: true, ok: false, label: "Failure screenshot" }),
+    ], 0);
+
+    const matrix = buildTrailMatrix([model], everyShot, isLlmTurn);
+
+    expect(matrix.rows[0].cells[0]?.durationMs).toBe(2000);
+  });
+
+  test("a failed teardown stays off the matrix, so the Trailhead row keeps its own verdict and span", () => {
+    const model = buildReportTraceModel([
+      row(1, { objective: true, trailhead: true, label: "Prepare", ts: 1000 }),
+      row(2, { ts: 1000, ms: 500 }),
+      row(3, { objective: true, label: "Sign in", ts: 2000 }),
+      row(4, { ts: 2000, ms: 1000 }),
+      row(5, { objective: true, teardown: true, label: "Teardown", ts: 9000, ok: false }),
+      row(6, { ts: 9000, ms: 2000, ok: false, err: "teardown failed" }),
+    ], 0);
+
+    const matrix = buildTrailMatrix([model], everyShot, isLlmTurn);
+
+    expect(matrix.rows.map((r) => r.num)).toEqual([0, 1]);
+    expect(matrix.rows[0].cells[0]?.ok).toBe(true);
+    expect(matrix.rows[0].cells[0]?.durationMs).toBe(500);
+  });
+
   test("a crashed run's step reads failed even though no objective recorded the failure", () => {
     // A crash logs no Complete bookend, so every objective row stays ok and only the tool row that
     // died is failed. Without the run's failure anchor the step it died in paints green — the run

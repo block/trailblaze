@@ -1,8 +1,11 @@
 package xyz.block.trailblaze.rules
 
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import kotlinx.datetime.Clock
 import xyz.block.trailblaze.replay.ActionTrace
 import xyz.block.trailblaze.agent.model.AgentTaskStatus
@@ -10,6 +13,7 @@ import xyz.block.trailblaze.agent.model.AgentTaskStatus.Success.ObjectiveComplet
 import xyz.block.trailblaze.agent.model.PromptRecordingResult
 import xyz.block.trailblaze.api.TestAgentRunner
 import xyz.block.trailblaze.exception.TrailblazeException
+import xyz.block.trailblaze.exception.TrailblazeSessionCancelledException
 import xyz.block.trailblaze.exception.TrailheadException
 import xyz.block.trailblaze.logs.client.ObjectiveLogHelper
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
@@ -18,6 +22,12 @@ import xyz.block.trailblaze.logs.client.TrailblazeSession
 import xyz.block.trailblaze.logs.model.TaskId
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
+import xyz.block.trailblaze.trailhead.TeardownTrailblazeTool
+import xyz.block.trailblaze.trailhead.TeardownWire
+import xyz.block.trailblaze.trailhead.TrailOutcome
+import xyz.block.trailblaze.trailhead.TrailheadHandoffStore
+import xyz.block.trailblaze.trailhead.TrailheadRuns
+import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.yaml.DirectionStep
 import xyz.block.trailblaze.yaml.PromptStep
 import xyz.block.trailblaze.yaml.TrailblazeToolYamlWrapper
@@ -82,7 +92,143 @@ class TrailblazeRunnerUtil(
    */
   private val sharedToolBatch:
     (suspend (block: suspend () -> PromptRecordingResult) -> PromptRecordingResult)? = null,
+  /**
+   * Whether a trailhead may receive the last trail's hand-off (`ctx.previousRun`). Off
+   * by default: the runner turns it on per lane, never the trail. `teardown` runs either way.
+   */
+  private val trailheadReuse: Boolean = false,
 ) {
+  /**
+   * Run one whole trail — every [runPrompt] call for it — so the trailhead's `teardown` runs
+   * once after it however it ends, before the session's final status. The trail's own outcome
+   * (its return value or exception) is what the caller sees; `teardown` never changes it.
+   */
+  suspend fun <T> runTrail(block: suspend () -> T): T {
+    var outcome = TrailOutcome.PASSED
+    trailheadRun = null
+    inTrail = true
+    try {
+      return block()
+    } catch (e: Throwable) {
+      outcome = trailOutcomeOf(e)
+      throw e
+    } finally {
+      finishTrailBestEffort(outcome)
+    }
+  }
+
+  /** [runTrail] for runners whose item loop isn't suspending. */
+  fun <T> runTrailBlocking(block: () -> T): T {
+    var outcome = TrailOutcome.PASSED
+    trailheadRun = null
+    inTrail = true
+    try {
+      return block()
+    } catch (e: Throwable) {
+      outcome = trailOutcomeOf(e)
+      throw e
+    } finally {
+      runBlocking { finishTrailBestEffort(outcome) }
+    }
+  }
+
+  // The run this trail's first trailhead step opened, so a later trailhead step (one per device)
+  // joins it. Outside [runTrail] every trailhead step opens a fresh run.
+  @Volatile private var trailheadRun: xyz.block.trailblaze.trailhead.TrailheadRun? = null
+  @Volatile private var inTrail = false
+
+  /** [finishTrail] never replaces the trail's own return value or exception. */
+  private suspend fun finishTrailBestEffort(outcome: TrailOutcome) {
+    try {
+      finishTrail(outcome)
+    } catch (e: Exception) {
+      Console.error("[Teardown] finishing the trail failed: ${e::class.simpleName}: ${e.message}")
+    }
+  }
+
+  private suspend fun finishTrail(outcome: TrailOutcome) {
+    inTrail = false
+    trailheadRun = null
+    val session = try { sessionProvider?.invoke() } catch (_: Exception) { null }
+    val run = session?.let { TrailheadRuns.current(it.sessionId) }
+    if (run == null || run.invocations.isEmpty()) {
+      // No teardown follows this trail, so nothing replaces what an earlier one handed on, yet it
+      // may have changed the device. The runner doesn't know which device, so drop them all.
+      TrailheadHandoffStore.dropAll()
+    }
+    run ?: return
+    try {
+      run.markTrailEnd()
+      if (run.invocations.isEmpty()) return
+      if (outcome == TrailOutcome.FAILED || outcome == TrailOutcome.SETUP_FAILED) captureFailureBeforeTeardown(session)
+      withContext(NonCancellable) {
+        val step = DirectionStep(step = TeardownWire.OBJECTIVE_STEP, recordable = false, isTeardown = true)
+        val stepStartTime = Clock.System.now()
+        val taskId = TaskId.generate()
+        // A log write that fails must not cost the cleanup.
+        logBestEffort("start") { emitObjectiveStart(step) }
+        val result = try {
+          runTrailblazeTool(listOf(TeardownTrailblazeTool(run, outcome)))
+        } catch (e: Exception) {
+          TrailblazeToolResult.Error.ExceptionThrown(errorMessage = "${e::class.simpleName}: ${e.message}")
+        }
+        // Dispatch can fail before the step runs, and the trail may still have changed the device.
+        if (!run.handoffsDropped) TrailheadHandoffStore.dropAll()
+        val failure = (result as? TrailblazeToolResult.Error)?.errorMessage
+        if (failure != null) Console.error("[Teardown] $failure")
+        logBestEffort("end") {
+          emitObjectiveComplete(step, taskId, stepStartTime, success = failure == null, failureReason = failure)
+        }
+      }
+    } finally {
+      TrailheadRuns.close(run)
+    }
+  }
+
+  private inline fun logBestEffort(what: String, block: () -> Unit) {
+    try {
+      block()
+    } catch (e: Exception) {
+      Console.error("[Teardown] logging the Teardown $what failed: ${e::class.simpleName}: ${e.message}")
+    }
+  }
+
+  /** The failure as the trail left it, before teardown can change the screen. Best effort. */
+  private fun captureFailureBeforeTeardown(session: TrailblazeSession) {
+    val logger = trailblazeLogger ?: return
+    try {
+      logger.logFailureSnapshot(session, trailblazeRunner.screenStateProvider())
+    } catch (e: Exception) {
+      Console.log("[Teardown] failure screenshot before teardown failed: ${e::class.simpleName}: ${e.message}")
+    } catch (e: AssertionError) {
+      // Some drivers' captures assert (Compose with more than one root); cleanup still runs.
+      Console.log("[Teardown] failure screenshot before teardown failed: ${e::class.simpleName}: ${e.message}")
+    }
+  }
+
+  private fun trailOutcomeOf(e: Throwable): TrailOutcome = when (e) {
+    is TrailheadException -> TrailOutcome.SETUP_FAILED
+    is CancellationException, is TrailblazeSessionCancelledException -> TrailOutcome.CANCELLED
+    else -> TrailOutcome.FAILED
+  }
+
+  /**
+   * Opens this trail's [xyz.block.trailblaze.trailhead.TrailheadRun] as its trailhead step starts,
+   * so the trailhead tools it names receive `previous` and `teardown` can follow them.
+   */
+  private fun openTrailheadRun(prompt: PromptStep) {
+    val session = try { sessionProvider?.invoke() } catch (_: Exception) { null } ?: return
+    val toolNames = prompt.recording?.tools?.map { it.name }?.toSet().orEmpty()
+    if (toolNames.isEmpty()) return
+    val run = TrailheadRuns.open(session.sessionId, toolNames, trailheadReuse, sameTrail = trailheadRun)
+    if (inTrail) trailheadRun = run
+  }
+
+  private fun markTrailStarted() {
+    val session = try { sessionProvider?.invoke() } catch (_: Exception) { null } ?: return
+    TrailheadRuns.current(session.sessionId)?.markTrailStart()
+  }
+
   fun runPrompt(
     prompts: List<PromptStep>,
     useRecordedSteps: Boolean,
@@ -121,11 +267,14 @@ class TrailblazeRunnerUtil(
       // Rides into every failure message so CI logs can say WHERE the trail died
       // without the reader cross-referencing the trail file.
       val stepLabel = "step ${index + 1} of ${prompts.size}"
+      val isTrailhead = prompt.isTrailheadStep()
+      if (isTrailhead) openTrailheadRun(prompt)
       if (useRecordedSteps && prompt.canPromptStepUseRecording()) {
         runRecordedPrompt(prompt, selfHeal, stepLabel, index)
       } else {
         runAiPrompt(prompt, stepLabel)
       }
+      if (isTrailhead) markTrailStarted()
     }
     return TrailblazeToolResult.Success()
   }

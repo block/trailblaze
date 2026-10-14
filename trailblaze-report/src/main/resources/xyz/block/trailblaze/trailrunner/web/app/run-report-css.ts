@@ -107,6 +107,21 @@ footer { flex-shrink: 0; padding: var(--space-3) var(--page-x); border-top: 1px 
 .tlphasehead .phasechev { width: 16px; height: 16px; display: block; transform: translateY(0) rotate(0); transform-origin: center; transition: transform 120ms ease-out; }
 .phasecontrol[aria-expanded="false"] .phasechev { transform: translateY(0) rotate(-90deg); }
 .tlphasebody { padding: 7px 0 18px; }
+.tlphasehead .phasestatus { height: 22px; display: inline-flex; align-items: center; gap: 5px; margin-left: 10px; padding: 0 8px; border-radius: 99px; background: var(--control-counter-surface); color: var(--sub); font-size: 11px; font-weight: var(--font-weight-emphasis); white-space: nowrap; }
+.tlphasehead .phasestatus .grpstatusicon { width: 13px; height: 13px; flex-shrink: 0; }
+.tlphasehead .phasestatus.pass .grpstatusicon { color: var(--status-passed-mark); }
+.tlphasehead .phasestatus.warn { background: var(--warning-surface); color: var(--warning-text); }
+.tlphasehead .phasestatus.reused { color: var(--status-passed-mark); }
+.tlphasehead .phasestatus.fail { background: var(--danger-surface); color: var(--danger-text); }
+.tlphasehead .phasestatus.fail .grpstatusicon { color: var(--status-failed-mark); }
+.setupdecisions { display: grid; gap: 4px; margin: 0 0 10px; }
+.setupdecision { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; padding: 7px 12px; border: 1px solid var(--line); border-radius: var(--r-md); color: var(--sub); font-size: 12px; }
+.setupdecisionverdict { color: var(--txt); font-weight: var(--font-weight-emphasis); }
+.setupdecision.reused .setupdecisionverdict { color: var(--status-passed-mark); }
+.setupdecision.reuseFailed { border-color: var(--danger-border); background: var(--danger-surface); }
+.setupdecision.reuseFailed .setupdecisionverdict, .setupdecisionerror { color: var(--danger-text); }
+.setupdecisionverdict code, .setupdecisiontool { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11.5px; }
+.setupdecisionreason { flex-basis: 100%; overflow-wrap: anywhere; }
 .tlphase:last-child .tlphasebody { padding-bottom: 0; }
 .tlphasebody[hidden] { display: none; }
 .timelinecontrols { z-index: 7; min-height: 48px; display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); flex-shrink: 0; margin: 0 0 var(--space-3); padding: 7px 10px; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--bg2); }

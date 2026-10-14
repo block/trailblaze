@@ -354,6 +354,83 @@ section in the v2 trail YAML) composes one or more trailheads alongside other to
 e.g. setting a feature flag before invoking a launch trailhead. The trailhead is the
 atom; the trail's setup is the orchestration.
 
+### Trailhead teardown
+
+A TypeScript trailhead can define `teardown`. Trailblaze calls it once after the trail,
+whatever happened: passed, failed, cancelled, or the trailhead itself threw. It cleans up what
+the run left behind and says whether the next trail can reuse this setup.
+
+```ts
+export const myapp_launchAppSignedIn = trailblaze.tool<{ email: string }>(
+  {
+    trailhead: {
+      to: "myapp/android/home_signed_in",
+      async teardown(args, ctx, trailRun) {
+        for (const n of trailRun.notes) if (n.created) await deleteItem(ctx, n.created.id);
+        if (trailRun.outcome !== "passed") return { reusable: false, reason: "trail did not pass" };
+        return { reusable: true, reason: "home screen", state: { cartItems: await cartCount(ctx) } };
+      },
+    },
+  },
+  async (args, ctx) => {
+    if (ctx.previousRun && (await onHomeScreen(ctx))) {
+      return ctx.previousRun.reuse("already signed in on home", async () => {
+        if (ctx.previousRun?.state?.cartItems) await clearCart(ctx);
+      });
+    }
+    // ...full launch and sign-in
+  },
+);
+```
+
+- **`trailRun`** has `outcome`, `notes` (what tools reported with
+  `ctx.trailhead.note({ created: { kind, id } })` or `ctx.trailhead.note({ invalidates: "why" })`),
+  and `events.list()` / `events.query(stream, { match, window, limit })`, which return only the
+  matching records of this session's event streams. Matching runs in Kotlin: equality, nested
+  subset objects, and `RegExp` (flags `i` and `m`; `g` is ignored and any other flag is an error).
+  `events` works only inside `teardown`. In a multi-device trail a query reads the device the trail
+  ended on and skips the other devices' `trailhead` records.
+- **The return value** is `{ reusable, reason, state? }`. `reason` is required and shows in the
+  report. `state` is your own small JSON (16 KB cap, no secrets).
+- **`ctx.previousRun`** is `{ sessionId, reason, state?, reuse(reason, catchUp?) }`: what the
+  last run's `teardown` reported, handed to the next run of the same trailhead on the same device,
+  and only when `teardown` said `reusable: true`. It is a claim to check, not a guarantee. It
+  is `null` otherwise: not reusable, a different tool, code, args, device or driver, reuse off for
+  the lane (`TRAILBLAZE_TRAILHEAD_REUSE`, see [Configuration](configuration.md)), and in every
+  tool that isn't the trailhead. The session log says why it was `null`. A hand-off lasts one
+  trail: the next run of that trailhead consumes it, match or not, and a trail with no
+  `teardown` trailhead drops every pending hand-off in the runner, because the runner can't tell
+  which device that trail changed. Reuse is off on Compose and Revyl, whose device ids don't tell
+  one app or cloud device from the next.
+- **A reusable hand-off skips the runner's clean start.** Runners normally force-stop the app
+  before each trail. With reuse on, a trail whose trailhead has a reusable hand-off waiting on the
+  device leaves the app running and the trailhead decides; every other trail keeps its clean start. So a full setup must establish its own starting state
+  (relaunch the app, for example) rather than count on the runner having stopped it. A trail with
+  a `locale` still gets a fresh process.
+- **`reuse(reason, catchUp?)`** skips the full setup. It logs the attempt, runs `catchUp` (what the
+  last run left to finish) and resolves with its result. If `catchUp` or the rest of the handler
+  throws, the trailhead fails and the report says it failed while reusing that session's setup.
+  Without a call the log says "full setup".
+- **Two hooks, two kinds of work.** `teardown` runs even when no trail follows, so it does the
+  cleanup that can't wait: records on a server, leases, uploads. Work that a full setup also undoes
+  (back to the home screen, clear a cart) can wait for the next trailhead: record it in `state` and
+  do it there when `ctx.previousRun` arrives. Defer nothing else, because when it is `null` the
+  next trailhead does a full setup and never sees what was left.
+- **`reusable` is forced to `false`** when the trail did not pass, when `teardown` throws or
+  runs past its 45-second budget, when the session holds a resource the host releases at session
+  end, when a step noted `invalidates`, or when `state` is over 16 KB (it is dropped). The budget
+  is best effort while `teardown` waits on a nested tool call, which runs to its own timeout.
+- **In a multi-device trail** a trailhead's `teardown` runs only if the trail ended on the device
+  that trailhead set up. Otherwise it is skipped and reported as failed, since its cleanup would
+  land on the wrong device; switch back before the trail ends to keep it.
+- **It never changes the verdict.** A failing `teardown` shows as a failed "Teardown"
+  section in the report, after the trail; the trail keeps its own result. Its tool calls are never
+  written into a recording.
+
+`teardown` is supported for in-process (QuickJS) TypeScript tools run by `trailblaze run`
+and the JUnit runners. It is not called for subprocess tools or for trails run step by step over
+MCP.
+
 ### Authoring forms
 
 The body of any of the three classes uses one of `class:` (Kotlin-backed) or `tools:`

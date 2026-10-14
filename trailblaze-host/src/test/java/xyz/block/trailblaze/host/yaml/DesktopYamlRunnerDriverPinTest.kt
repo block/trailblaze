@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.host.yaml
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
@@ -65,6 +66,12 @@ class DesktopYamlRunnerDriverPinTest {
   fun `device locale forces a fresh target process`() {
     assertTrue(DesktopYamlRunner.shouldForceStopTargetApp(requested = false, locale = "es"))
     assertTrue(DesktopYamlRunner.shouldForceStopTargetApp(requested = true, locale = null))
+  }
+
+  @Test
+  fun `a reusable trailhead hand-off skips the clean start but not a locale change`() {
+    assertFalse(DesktopYamlRunner.shouldForceStopTargetApp(requested = true, locale = null, keepForReuse = true))
+    assertTrue(DesktopYamlRunner.shouldForceStopTargetApp(requested = true, locale = "es", keepForReuse = true))
   }
 
   @Test

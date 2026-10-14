@@ -18,7 +18,7 @@ object GitUtils {
    */
   private fun gitStdout(vararg args: String, workingDir: File? = null): String? = try {
     val processResult = TrailblazeProcessBuilderUtils.createProcessBuilder(
-      args = listOf("git", *args),
+      args = listOf(hostExecutable("git"), *args),
       workingDir = workingDir,
       mergeErrorStream = false,
     ).runProcess { }

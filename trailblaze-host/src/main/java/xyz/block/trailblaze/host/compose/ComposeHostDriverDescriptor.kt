@@ -240,6 +240,7 @@ class ComposeHostDriverDescriptor(
         // Thread the session tool repo through so framework-tool composition resolves by name and
         // so the KOOG strategy graph's dynamic-tool execution context is satisfied.
         trailblazeToolRepo = toolRepo,
+        sessionDirProvider = loggingRule.logsRepo::getSessionDir,
       )
     } catch (e: Exception) {
       rpcClient.close()
@@ -283,7 +284,9 @@ class ComposeHostDriverDescriptor(
         agent.runTrailblazeTools(
           trailblazeTools,
           runYamlRequest.traceId,
-          screenState = screenStateProvider(),
+          // Null defers to the context's capture-on-read, so a tool that never reads the screen (the
+          // Teardown step among them) neither waits on a capture nor fails when one does.
+          screenState = null,
           elementComparator = elementComparator,
           screenStateProvider = screenStateProvider,
         ).result
@@ -293,6 +296,9 @@ class ComposeHostDriverDescriptor(
         loggingRule.session ?: error("Session not available - ensure test is running")
       },
       sessionUpdater = { loggingRule.setSession(it) },
+      // Off: every Compose app shares the device id `compose` whatever its RPC port, so a hand-off
+      // could reach a different app.
+      trailheadReuse = false,
       // Shares one execution context + snapshot frame across the recording, matching the
       // batching pattern elsewhere. Unlike the Android/host-Maestro wiring, this agent's
       // buildExecutionContext doesn't cache per-call device state today, so the benefit here
@@ -402,31 +408,34 @@ class ComposeHostDriverDescriptor(
         trailName = trailConfig?.title ?: runYamlRequest.trailFilePath,
       )
 
-      for (item in trailItems) {
-        val itemResult = when (item) {
-          // Agent-agnostic: replays recorded steps deterministically and delegates only unrecorded
-          // steps to the selected runner (legacy / KOOG). ComposeRpcTrailblazeAgent is now a
-          // BaseTrailblazeAgent, so the KOOG strategy graph drives it through the same seam as the
-          // other drivers. Default unchanged.
-          is TrailYamlItem.PromptsTrailItem ->
-            trailblazeRunnerUtil.runPromptSuspend(
-              prompts = item.promptSteps,
-              useRecordedSteps = runYamlRequest.useRecordedSteps,
-              selfHeal = runYamlRequest.config.selfHeal,
-            )
-          is TrailYamlItem.TrailheadTrailItem ->
-            trailblazeRunnerUtil.runPromptSuspend(
-              prompts = listOf(item.trailhead.toPromptStep()),
-              useRecordedSteps = true,
-              selfHeal = runYamlRequest.config.selfHeal,
-            )
-          is TrailYamlItem.ToolTrailItem ->
-            trailblazeRunnerUtil.runTrailblazeTool(item.tools.map { it.trailblazeTool })
-          is TrailYamlItem.ConfigTrailItem ->
-            item.config.context?.let { trailblazeRunner.appendToSystemPrompt(it) }
-        }
-        if (itemResult is TrailblazeToolResult.Error) {
-          throw TrailblazeException(itemResult.errorMessage)
+      // One trail: the trailhead's teardown runs after it, whatever the outcome.
+      trailblazeRunnerUtil.runTrail {
+        for (item in trailItems) {
+          val itemResult = when (item) {
+            // Agent-agnostic: replays recorded steps deterministically and delegates only unrecorded
+            // steps to the selected runner (legacy / KOOG). ComposeRpcTrailblazeAgent is now a
+            // BaseTrailblazeAgent, so the KOOG strategy graph drives it through the same seam as the
+            // other drivers. Default unchanged.
+            is TrailYamlItem.PromptsTrailItem ->
+              trailblazeRunnerUtil.runPromptSuspend(
+                prompts = item.promptSteps,
+                useRecordedSteps = runYamlRequest.useRecordedSteps,
+                selfHeal = runYamlRequest.config.selfHeal,
+              )
+            is TrailYamlItem.TrailheadTrailItem ->
+              trailblazeRunnerUtil.runPromptSuspend(
+                prompts = listOf(item.trailhead.toPromptStep()),
+                useRecordedSteps = true,
+                selfHeal = runYamlRequest.config.selfHeal,
+              )
+            is TrailYamlItem.ToolTrailItem ->
+              trailblazeRunnerUtil.runTrailblazeTool(item.tools.map { it.trailblazeTool })
+            is TrailYamlItem.ConfigTrailItem ->
+              item.config.context?.let { trailblazeRunner.appendToSystemPrompt(it) }
+          }
+          if (itemResult is TrailblazeToolResult.Error) {
+            throw TrailblazeException(itemResult.errorMessage)
+          }
         }
       }
 

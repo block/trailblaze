@@ -12,6 +12,7 @@ import kotlinx.serialization.json.put
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.tracing.TrailblazeTracer
+import xyz.block.trailblaze.trailhead.TrailEventsHostFunctions
 import xyz.block.trailblaze.util.Console
 
 /**
@@ -60,6 +61,7 @@ object TrailblazeHostFunctionDispatcher {
     context: TrailblazeToolExecutionContext,
     registry: TrailblazeHostFunctionRegistry,
   ): Outcome {
+    if (TrailEventsHostFunctions.handles(name)) return callFramework(name, argsJson, context)
     val entry = registry.resolve(name)
       ?: return Outcome.Failure(
         "No host function named '$name'. Registered: ${registry.all.keys.joinToString().ifEmpty { "(none)" }}.",
@@ -105,6 +107,22 @@ object TrailblazeHostFunctionDispatcher {
       Outcome.Success(TrailblazeJsonInstance.encodeToJsonElement(entry.resultSerializer, result))
     } catch (e: Exception) {
       Outcome.Failure("Host function '$name' could not encode its result: ${e::class.simpleName}")
+    }
+  }
+
+  /** Framework host functions ([TrailEventsHostFunctions]) — answered before any trailmap's. */
+  private fun callFramework(name: String, argsJson: String, context: TrailblazeToolExecutionContext): Outcome {
+    val args = try {
+      strictJson.parseToJsonElement(argsJson.ifBlank { "{}" }) as? JsonObject
+    } catch (_: SerializationException) {
+      null
+    } ?: return Outcome.Failure("Host function '$name' takes an object of arguments.")
+    return try {
+      Outcome.Success(TrailEventsHostFunctions.call(name, args, context))
+    } catch (e: TrailblazeHostFunctionException) {
+      Outcome.Failure(e.message.orEmpty())
+    } catch (e: Exception) {
+      Outcome.Failure("Host function '$name' threw ${e::class.simpleName}: ${e.message}")
     }
   }
 

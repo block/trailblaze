@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.android.accessibility
 
 import android.app.UiAutomation
+import android.os.SystemClock
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.Configurator
 import xyz.block.trailblaze.AdbCommandUtil
@@ -50,8 +51,13 @@ object OnDeviceAccessibilityServiceSetup {
       return
     }
 
-    enableAccessibilityService(serviceComponent)
-    waitForServiceRunning(serviceComponent, timeoutMs)
+    startAccessibilityServiceWithRollback(
+      start = {
+        enableAccessibilityService(serviceComponent)
+        waitForServiceRunning(serviceComponent, timeoutMs)
+      },
+      rollback = { disableAccessibilityService(hostPackage, timeoutMs) },
+    )
   }
 
   /**
@@ -115,6 +121,27 @@ object OnDeviceAccessibilityServiceSetup {
     )
     AdbCommandUtil.execShellCommand("settings put secure accessibility_enabled 1")
     Console.log("Accessibility service enabled in system settings.")
+  }
+
+  /**
+   * Removes this test APK's service before instrumentation ends and waits for it to stop.
+   *
+   * On API 29, ending instrumentation with the service bound can leave the framework waiting
+   * for a dead service connection. Cycling the enabled-services setting on the next run does
+   * not recover that state. Unbind while the service is alive, preserving other enabled services.
+   */
+  fun disableAccessibilityService(
+    hostPackage: String = getTestPackage(),
+    timeoutMs: Long = 15_000,
+  ) {
+    shutdownAccessibilityService(
+      serviceComponent = "$hostPackage/$ACCESSIBILITY_SERVICE_CLASS",
+      timeoutMs = timeoutMs,
+      execShell = AdbCommandUtil::execShellCommand,
+      isRunning = TrailblazeAccessibilityService::isServiceRunning,
+      nowMs = SystemClock::elapsedRealtime,
+      sleepMs = { Thread.sleep(it) },
+    )
   }
 
   /**

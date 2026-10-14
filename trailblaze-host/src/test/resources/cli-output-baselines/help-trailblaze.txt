@@ -22,6 +22,7 @@ Trailblaze - AI-powered device automation
   toolbox      Browse available tools by target app and platform
   run, trail   Run a trail file (.trail.yaml) — execute a scripted test on a
                  device.
+  loop         Run a trail's trailhead once, then repeat its steps in a loop.
   usages       Find every trail that directly invokes a tool (IDE "Find Usages"
                  for tools).
   session      Manage the current device session — save it as a replayable

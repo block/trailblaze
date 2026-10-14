@@ -9,6 +9,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class BundleStoreTest {
@@ -25,6 +26,22 @@ class BundleStoreTest {
 
     assertEquals(BundleStore.FileWriteResult.ALREADY_EXISTS, result)
     assertEquals("old", File(bundle, "ios.trail.yaml").readText())
+  }
+
+  @Test
+  fun `deleting a variant never removes the source, whatever spelling names it`() {
+    val bundle = tmp.newFolder("bundle")
+    File(bundle, "blaze.yaml").writeText("source")
+    File(bundle, "ios.trail.yaml").writeText("variant")
+
+    // Each spelling names the source on some filesystem: case-insensitive ones (macOS, Windows)
+    // and Windows, which also drops a trailing dot or space.
+    for (alias in listOf("blaze.yaml", "BLAZE.YAML", "Blaze.yaml")) {
+      assertFalse(BundleStore.deleteFile(bundle, alias), alias)
+      assertEquals("source", File(bundle, "blaze.yaml").readText(), alias)
+    }
+    assertTrue(BundleStore.deleteFile(bundle, "ios.trail.yaml"))
+    assertFalse(File(bundle, "ios.trail.yaml").exists())
   }
 
   @Test

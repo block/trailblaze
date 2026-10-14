@@ -104,6 +104,7 @@ object TrailblazeCli {
     appProvider: () -> TrailblazeDesktopApp,
     configProvider: () -> TrailblazeDesktopAppConfig,
     extraSubcommands: () -> List<Any> = ::emptyList,
+    windowsSupported: Boolean = true,
   ) {
     // Every Trailblaze process is a macOS agent app (LSUIElement). Read at AWT initialization,
     // so it must be set before ANY code path loads an AWT class: a CLI command or daemon that
@@ -114,7 +115,7 @@ object TrailblazeCli {
     // Fail fast on Intel macOS / Windows with a clear "platform unsupported"
     // message — runs before any code path could touch a native library the JAR
     // leaves out for those hosts and fail with a cryptic load error instead.
-    TrailblazeDesktopUtil.assertSupportedPlatform()
+    TrailblazeDesktopUtil.assertSupportedPlatform(windowsSupported)
 
     // Install the workspace-config-dir resolver into the model-level holder so the
     // default `platformConfigResourceSource()` layers workspace-on-disk over the
@@ -511,6 +512,7 @@ class TrailblazeVersionProvider : IVersionProvider {
     ToolCommand::class,
     ToolboxCommand::class,
     TrailCommand::class,
+    LoopCommand::class,
     UsagesCommand::class,
     SessionCommand::class,
     ReportCommand::class,
@@ -704,7 +706,7 @@ internal class GroupedCommandListRenderer(
     ),
     Group(
       "Trail:",
-      listOf("run", "usages", "session", "report", "strings", "viewer", "profile", "results", "waypoint"),
+      listOf("run", "loop", "usages", "session", "report", "strings", "viewer", "profile", "results", "waypoint"),
     ),
     Group(
       "Setup:",

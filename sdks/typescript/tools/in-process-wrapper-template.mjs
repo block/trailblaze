@@ -75,6 +75,17 @@ function __normalizeResult(result) {
   return { content: [{ type: 'text', text: JSON.stringify(result) }], structuredContent: result };
 }
 
+// A trailhead's `trailhead.teardown`, which the typed authoring surface attaches to the tool
+// definition. The host calls it as the tool's `teardown` member (QuickJsToolHost.callToolMember)
+// with `(args, ctx, trailRun)`; its result rides back as structuredContent.
+function __teardownMember(def) {
+  if (typeof def.teardown !== 'function') return undefined;
+  return async (args, ctx, trailRun) => {
+    const result = await def.teardown(args, ctx, __client, trailRun);
+    return { content: [{ type: 'text', text: JSON.stringify(result) }], structuredContent: result };
+  };
+}
+
 globalThis.__trailblazeTools = globalThis.__trailblazeTools || {};
 // __TRAILBLAZE_REGISTRATION__
 // __TRAILBLAZE_MULTI_EXPORT_REGISTRATION_BEGIN__
@@ -89,6 +100,7 @@ for (const __exportName of Object.keys(__userModule)) {
       const result = await __def(args, ctx, __client);
       return __normalizeResult(result);
     },
+    teardown: __teardownMember(__def),
   };
 }
 // __TRAILBLAZE_MULTI_EXPORT_REGISTRATION_END__

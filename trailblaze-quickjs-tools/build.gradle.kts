@@ -44,11 +44,18 @@ trailblazeAuthorToolBundles {
     entryPoint.set("bench.ts")
     autoInstall.set(false) // No package.json in that dir; the SDK's esbuild is what we need.
   }
+  // An SDK-authored trailhead with `teardown`, for `QuickJsTrailheadTeardownTest`.
+  register("trailheadTeardown") {
+    sourceDir.set(layout.projectDirectory.dir("src/jvmTest/fixtures/trailhead-teardown"))
+    entryPoint.set("trailhead.ts")
+    autoInstall.set(false) // No package.json in that dir; the SDK's esbuild is what we need.
+  }
 }
 
 tasks.named("bundleSampleAppTypedAuthorTool") { dependsOn(installTrailblazeScriptingSdkTaskPath) }
 tasks.named("bundleOnDeviceMemoryProbeAuthorTool") { dependsOn(installTrailblazeScriptingSdkTaskPath) }
 tasks.named("bundleDispatchBenchmarkAuthorTool") { dependsOn(installTrailblazeScriptingSdkTaskPath) }
+tasks.named("bundleTrailheadTeardownAuthorTool") { dependsOn(installTrailblazeScriptingSdkTaskPath) }
 
 // Wire the produced bundle into jvmTest as a system property and a task dependency. The
 // `SampleAppToolsDemoTest.on-device TS bundles via esbuild and runs in QuickJS` test reads
@@ -65,14 +72,19 @@ val onDeviceMemoryProbeBundle = tasks.named("bundleOnDeviceMemoryProbeAuthorTool
 val dispatchBenchmarkBundle = tasks.named("bundleDispatchBenchmarkAuthorTool").map { task ->
   (task as BundleAuthorToolsTask).outputFile.get().asFile.absolutePath
 }
+val trailheadTeardownBundle = tasks.named("bundleTrailheadTeardownAuthorTool").map { task ->
+  (task as BundleAuthorToolsTask).outputFile.get().asFile.absolutePath
+}
 tasks.withType<Test>().configureEach {
   if (name == "jvmTest") {
     dependsOn("bundleSampleAppTypedAuthorTool")
     dependsOn("bundleOnDeviceMemoryProbeAuthorTool")
     dependsOn("bundleDispatchBenchmarkAuthorTool")
+    dependsOn("bundleTrailheadTeardownAuthorTool")
     systemProperty("trailblaze.test.sampleAppTypedBundle", sampleAppTypedBundle.get())
     systemProperty("trailblaze.test.onDeviceMemoryProbeBundle", onDeviceMemoryProbeBundle.get())
     systemProperty("trailblaze.test.dispatchBenchmarkBundle", dispatchBenchmarkBundle.get())
+    systemProperty("trailblaze.test.trailheadTeardownBundle", trailheadTeardownBundle.get())
     // Opt-in for QuickJsToolDispatchBenchmark. A provider, not System.getenv in the test, so the
     // configuration cache keys on it instead of replaying a stale value into later runs:
     //   ./gradlew :trailblaze-quickjs-tools:jvmTest --tests '*QuickJsToolDispatchBenchmark*' \
@@ -95,6 +107,7 @@ android {
 
 kotlin {
   androidTarget {
+    publishLibraryVariants("release", "debug")
     compilerOptions {
       jvmTarget = JvmTarget.JVM_17
     }

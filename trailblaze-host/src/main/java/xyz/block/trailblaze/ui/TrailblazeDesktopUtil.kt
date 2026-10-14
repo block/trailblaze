@@ -35,10 +35,11 @@ object TrailblazeDesktopUtil {
    * would fail several layers deep inside a JNI loader the first time anything
    * touched WebP screenshot encoding.
    *
-   * Supported: macOS Apple Silicon (arm64), Linux x64, Linux arm64. Linux also needs glibc 2.27 or
-   * newer, which the WebP encoder's natives are built against; this gate does not check it.
-   * Unsupported: Intel macOS, Windows, FreeBSD, and any other OS/arch — the uber JAR
-   * leaves out the WebP encoder's natives for them to stay small.
+   * Supported: macOS Apple Silicon (arm64), Linux x64, Linux arm64, Windows x64. Linux also needs
+   * glibc 2.27 or newer, which the WebP encoder's natives are built against; this gate does not
+   * check it. Windows runs web (Playwright) trails only — Android and iOS device control are not
+   * wired up there. Unsupported: Intel macOS, Windows arm64, FreeBSD, and any other OS/arch — the
+   * WebP encoder and QuickJS ship no natives for them, or the uber JAR leaves them out to stay small.
    *
    * Reads `os.name` / `os.arch` directly rather than going through `DesktopOsType`'s
    * mac/Windows/Linux trichotomy: the latter classifies every non-Mac/non-Windows host
@@ -55,20 +56,14 @@ object TrailblazeDesktopUtil {
    * Called once per JVM at the top of [xyz.block.trailblaze.cli.TrailblazeCli.run].
    * That funnel covers every entry point: CLI subcommands, the daemon
    * (`app start`), MCP server, and the desktop GUI.
+   *
+   * @param windowsSupported false for a distribution whose JAR leaves out the Windows natives, so
+   *   Windows is refused here rather than at the first screenshot.
    */
-  fun assertSupportedPlatform() {
+  fun assertSupportedPlatform(windowsSupported: Boolean = true) {
     val osName = System.getProperty("os.name") ?: ""
     val osArch = System.getProperty("os.arch") ?: ""
-    val osNameLower = osName.lowercase()
-    val osArchLower = osArch.lowercase()
-
-    val isMacKernel = osNameLower.contains("mac")
-    val isLinuxKernel = osNameLower.contains("linux")
-    val isX86_64 = osArchLower == "x86_64" || osArchLower == "amd64"
-    val isArm64 = osArchLower == "aarch64"
-
-    val supported = (isMacKernel && isArm64) || (isLinuxKernel && (isX86_64 || isArm64))
-    if (supported) return
+    if (isSupportedPlatform(osName, osArch, windowsSupported)) return
 
     Console.error(
       buildString {
@@ -76,10 +71,27 @@ object TrailblazeDesktopUtil {
         appendLine("Supported platforms:")
         appendLine("  - macOS Apple Silicon (arm64)")
         appendLine("  - Linux x64 (x86_64 / amd64), glibc 2.27+")
-        append("  - Linux arm64 (aarch64), glibc 2.27+")
-      },
+        appendLine("  - Linux arm64 (aarch64), glibc 2.27+")
+        if (windowsSupported) append("  - Windows x64 (web trails only)")
+      }.trimEnd(),
     )
     kotlin.system.exitProcess(1)
+  }
+
+  /** The OS+arch rule behind [assertSupportedPlatform], over raw `os.name` / `os.arch` values. */
+  internal fun isSupportedPlatform(osName: String, osArch: String, windowsSupported: Boolean = true): Boolean {
+    val osNameLower = osName.lowercase()
+    val osArchLower = osArch.lowercase()
+
+    val isMacKernel = osNameLower.contains("mac")
+    val isLinuxKernel = osNameLower.contains("linux")
+    val isWindows = osNameLower.startsWith("windows")
+    val isX86_64 = osArchLower == "x86_64" || osArchLower == "amd64"
+    val isArm64 = osArchLower == "aarch64"
+
+    return (isMacKernel && isArm64) ||
+      (isLinuxKernel && (isX86_64 || isArm64)) ||
+      (windowsSupported && isWindows && isX86_64)
   }
 
   const val DOT_TRAILBLAZE_DIR_NAME: String = ".trailblaze"

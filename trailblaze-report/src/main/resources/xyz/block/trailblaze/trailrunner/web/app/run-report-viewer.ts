@@ -17,7 +17,7 @@ import { adjacentMark, entryAtOrBefore, fractionToOffset, snapFraction, timeline
 import { VIEWER_ROUTE_KEYS } from './run-report-route';
 import { externalComparisonUrl, hasExternalComparison, isExternalRunComparable } from './run-report-index-links';
 import { inspectorKeyForNodeId, isSelectorAnalyzableTree, loadSelectorEngine, loadSelectorEngineFromChunk, mismatchVizHtml, nodeIdForInspectorKey, selectorSuggestionsHtml } from './run-report-selectors';
-import { buildReportTraceModel, createReportTraceModelResolver, failureAnchorIndex as traceFailureAnchorIndex, type ReportTraceGroup, type ReportTraceModel } from './run-report-trace-model';
+import { buildReportTraceModel, createReportTraceModelResolver, failureAnchorIndex as traceFailureAnchorIndex, rowPhase, type ReportTraceGroup, type ReportTraceModel } from './run-report-trace-model';
 import { buildTrailMatrix, captureShotFile, pruneIdleTrailCells, traceDeviceLanes, trailIdentity, trailJoinFor, trailViewScopes, videoShotCaptureId, type DeviceLaneTrace, type TrailCell, type TrailFrame, type TrailJoin, type TrailMatrix, type TrailRow } from './run-report-trail-model';
 import { buildPerfettoTrace, handToPerfetto, openPerfettoWindow, perfettoBuffer, perfettoMemoryFrom, perfettoTraceJson, type PerfettoHost, type PerfettoLane, type PerfettoMemory, type PerfettoStream } from './run-report-perfetto';
 import { alignReplayByStep, aspectHeld, buildReplayMemorySeries, buildReplayTimeline, clampMemorySeries, clampTime, describeMemorySample, fmtMemoryKb, fmtReplayClock, heldClipsTimeAt, laneMarksAt, laneStateAt, laneStops, markWindowMs, memoryEntriesFromStream, MEMORY_SERIES_FIELDS, memoryNearLimit, memoryPoints, memoryPointsAttr, memorySampleAt, memoryStreamName, memoryY, nextStop, remapMemorySeries, replayMemoryScaleKb, replayable, replayChipFor, replayStripZoomMax, replayTickSeconds, replayToolLabelRoom, REPLAY_STRIP_MIN_LABEL_PX, segmentAt, followReplayHead, revealReplayRow, fmtReplaySpan, fmtRulerClock, rangeReplayStrip, replayOpeningMs, replayRecordingStartsMs, replayRulerStep, replayTrackKey, replayTrackOpen, zoomReplayStrip, type ReplayStripZoom, videoClipRate, videoClipTimeAt, type ReplayAlignment, type ReplayLane, type ReplayLaneFailure, type ReplayMemorySeries, type ReplayTimeline } from './run-report-trail-replay';
@@ -1301,6 +1301,30 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     return streams;
   };
   const sessionEvents = (session) => withCrashRows(session.events || eventsInflater.cache.get(session) || null);
+  // What each trailhead did with the previous trail's setup, read from the `trailhead` stream: reused
+  // it, tried to and failed, or ran in full and why ctx.previousRun was null. Only a trailhead that
+  // defines teardown logs a `setup` record, so a trail whose trailhead has none shows no decision.
+  const trailheadSetupDecisions = (session) => {
+    const stream = (sessionEvents(session) || []).find((s) => s && s.name === 'trailhead');
+    const offered = new Map();
+    const decisions = [];
+    ((stream && stream.events) || []).forEach((e) => {
+      let data;
+      try { data = JSON.parse(e.d); } catch { return; }
+      if (!data || typeof data.tool !== 'string') return;
+      if (data.type === 'previousRun') offered.set(data.tool, data);
+      if (data.type !== 'setup') return;
+      const last = offered.get(data.tool);
+      if (data.setup === 'reused' || data.setup === 'reuseFailed') {
+        const failed = data.setup === 'reuseFailed';
+        decisions.push({ tool: data.tool, kind: failed ? 'reuseFailed' : 'reused', sessionId: data.previousRunSessionId || null, reason: String(data.reason || ''), error: failed && data.error ? String(data.error) : '' });
+      } else {
+        const why = !last ? '' : last.previousRun ? `the trailhead did not reuse ${last.previousRun.sessionId}` : String(last.reason || '');
+        decisions.push({ tool: data.tool, kind: 'full', sessionId: null, reason: why, error: '' });
+      }
+    });
+    return decisions;
+  };
   // The session has events to show: inflated (or inline) streams, or a compressed payload that
   // will inflate once the session opens.
   const hasEvents = (session) => Boolean((sessionEvents(session) || []).length || session.eventsGz);
@@ -1424,7 +1448,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   // `kid` narrows the step selection to one folded child dispatch (index into the row's children):
   // the preview pane shows that dispatch's own frame and its args panel expands — how a batched
   // step's every interaction is reachable (WASM-report parity). Null selects the row itself.
-  const st = { view: MULTI ? 'index' : 'detail', session: 0, tab: 'timeline', step: 0, kid: null, llmSel: 0, tlStreams: [], tlEventKinds: allTimelineEventKinds(), tlMenuOpen: false, tlEventMenuOpen: false, tlTracksOpen: false, tlTrackOpen: openTrackSet(), tlTrackSel: null as string | null, tlSeek: null as { ms: number; step: number; kid: number | null } | null, trailheadOpen: true, trailOpen: true, stepsOpen: {}, kidsOpen: {}, lightboxAll: false, lightboxZoom: 1, strMode: 'string' as 'string' | 'screen', strSel: null as number | null, strScreen: 0, strHit: 0, strKinds: { ...DEFAULT_STRING_KINDS } as Record<StringKind, boolean>, strVis: DEFAULT_STRING_VISIBILITY as StringVisibility, strQ: '', runGroup: 'status', runSort: 'original', runSearch: '', idxOpen: [], compareMode: false, playing: false, vSpeed: 1, vDevice: null as string | null, pageTransition: '', trailMode: 'steps', trailAll: false, trailGridStrip: false, trailAlign: 'clock' as 'clock' | 'step', trailRowsOpen: {}, trailTracksOpen: {} as Record<string, boolean>, trailStripZoom: null as ReplayStripZoom | null, trailT: -1, trailLane: null, trailSpeed: 10, trailLanesOff: {}, trailPick: null as number[] | null, pick: [] as number[], backTo: '', backToTrail: null as { session: number; tab: string; lanesOff: Record<string, boolean>; tracksOpen: Record<string, boolean> } | null, backToCompare: null as { lanesOff: Record<string, boolean>; tracksOpen: Record<string, boolean> } | null, cmpBase: defaultComparePair()[0] || 0, cmpVs: defaultComparePair()[1] || 1, cmpGapsOpen: {}, cmpEventsOpen: {} as Record<string, boolean>, cmpStreamsOpen: {} as Record<string, boolean>, cmpJumpAt: {} as Record<string, number>, cmpTab: 'screens', cmpStream: null as string | null, cmpEventGroup: 'stream' as 'stream' | 'step', cmpEventStep: null as string | null, cmpEventPlace: 0, cmpEventSearch: '', cmpEventDiffOnly: true, cmpMissing: null as { missingIds: string[]; wantedIds: { base: string | null; vs: string | null }; shownBase: number; shownVs: number; widenable: boolean } | null };
+  const st = { view: MULTI ? 'index' : 'detail', session: 0, tab: 'timeline', step: 0, kid: null, llmSel: 0, tlStreams: [], tlEventKinds: allTimelineEventKinds(), tlMenuOpen: false, tlEventMenuOpen: false, tlTracksOpen: false, tlTrackOpen: openTrackSet(), tlTrackSel: null as string | null, tlSeek: null as { ms: number; step: number; kid: number | null } | null, trailheadOpen: true, trailOpen: true, teardownOpen: true, stepsOpen: {}, kidsOpen: {}, lightboxAll: false, lightboxZoom: 1, strMode: 'string' as 'string' | 'screen', strSel: null as number | null, strScreen: 0, strHit: 0, strKinds: { ...DEFAULT_STRING_KINDS } as Record<StringKind, boolean>, strVis: DEFAULT_STRING_VISIBILITY as StringVisibility, strQ: '', runGroup: 'status', runSort: 'original', runSearch: '', idxOpen: [], compareMode: false, playing: false, vSpeed: 1, vDevice: null as string | null, pageTransition: '', trailMode: 'steps', trailAll: false, trailGridStrip: false, trailAlign: 'clock' as 'clock' | 'step', trailRowsOpen: {}, trailTracksOpen: {} as Record<string, boolean>, trailStripZoom: null as ReplayStripZoom | null, trailT: -1, trailLane: null, trailSpeed: 10, trailLanesOff: {}, trailPick: null as number[] | null, pick: [] as number[], backTo: '', backToTrail: null as { session: number; tab: string; lanesOff: Record<string, boolean>; tracksOpen: Record<string, boolean> } | null, backToCompare: null as { lanesOff: Record<string, boolean>; tracksOpen: Record<string, boolean> } | null, cmpBase: defaultComparePair()[0] || 0, cmpVs: defaultComparePair()[1] || 1, cmpGapsOpen: {}, cmpEventsOpen: {} as Record<string, boolean>, cmpStreamsOpen: {} as Record<string, boolean>, cmpJumpAt: {} as Record<string, number>, cmpTab: 'screens', cmpStream: null as string | null, cmpEventGroup: 'stream' as 'stream' | 'step', cmpEventStep: null as string | null, cmpEventPlace: 0, cmpEventSearch: '', cmpEventDiffOnly: true, cmpMissing: null as { missingIds: string[]; wantedIds: { base: string | null; vs: string | null }; shownBase: number; shownVs: number; widenable: boolean } | null };
   const resetEventNavigator = () => {
     st.cmpStream = null;
     st.cmpEventGroup = 'stream';
@@ -1635,6 +1659,11 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     // authored Trail remains the dominant content. A setup failure overrides that default.
     st.trailheadOpen = trailStart < 0 || failureIsInTrailhead || trailheadRows <= 12;
     if (firstFail < 0 && !st.trailheadOpen && trailStart >= 0) st.step = D.trace[trailStart].i;
+    // A clean teardown is a footnote under the verdict; a failed one is worth reading, so only a
+    // failure opens the phase.
+    const teardownStart = D.trace.findIndex((t) => t.objective && t.teardown);
+    // The session's end-of-run rows follow the teardown but are the trail's (see buildReportTraceModel).
+    st.teardownOpen = teardownStart >= 0 && D.trace.slice(teardownStart).some((t) => t.ok === false && !t.endOfRun);
     // A run still in progress has no conclusion to lead with, and its interesting end is the end:
     // open on the newest row so the first thing on screen is what the device is doing now. The
     // live seam below keeps following that tail on each update.
@@ -1700,9 +1729,10 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   const revealTimelineStep = (stepId) => {
     const index = traceModel().indexById.get(stepId);
     if (index == null) return;
-    const trailStart = D.trace.findIndex((t) => t.objective && !t.trailhead);
-    if (trailStart >= 0 && index >= trailStart) st.trailOpen = true;
-    else if (D.trace.some((t) => t.objective && t.trailhead)) st.trailheadOpen = true;
+    const phase = rowPhase(D.trace, traceModel(), index);
+    if (phase === 'teardown') st.teardownOpen = true;
+    else if (phase === 'trail') st.trailOpen = true;
+    else if (phase === 'trailhead') st.trailheadOpen = true;
     // Navigating into a step the reader had collapsed re-opens it, so a selection is never stranded
     // behind a closed header. This only ever CLEARS a toggle — see groupOpen on why it never sets one.
     const headerId = groupHeaderIdOf(stepId);
@@ -2267,6 +2297,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   // The step outcome, stated twice on purpose: as the colour of its STEP token (scannable down a
   // long collapsed trail) and as a word in its status line (readable, and not colour-only).
   const stepStatusIcon = (glyph) => `<svg class="grpstatusicon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="currentColor" opacity=".16"/><path d="${glyph}" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+  const PHASE_WARNING_ICON_SVG = '<svg class="grpstatusicon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.2 14.4 13.4H1.6Z" fill="currentColor" opacity=".16" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><path d="M8 6.4v3M8 11.4v.1" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>';
   const STEP_STATUS_ICON_SVG = {
     pass: stepStatusIcon('m4.8 8.3 2.2 2.2 4.2-4.6'),
     fail: stepStatusIcon('m5.6 5.6 4.8 4.8M10.4 5.6l-4.8 4.8'),
@@ -2406,9 +2437,13 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     const typeName = parsed.type.split('.').pop() || parsed.type;
     const causeName = failureCauseName(parsed);
     const causeTitle = causeName === typeName ? parsed.type : `Derived from error message · reported type: ${typeName}`;
+    // A trailhead that failed while reusing the last trail's setup failed before any normal setup
+    // ran; say so first, or the failure reads like an ordinary sign-in bug.
+    const failedReuse = trailheadSetupDecisions(D).find((d) => d.kind === 'reuseFailed');
+    const reuseContext = failedReuse ? `<span class="failurecontext">While reusing setup from ${esc(failedReuse.sessionId || 'the previous trail')}</span>` : '';
     const yamlLink = failedStep && (D.recordingYaml || D.originalYaml) ? `<button type="button" class="yamllink" data-yaml-step="${esc(failedStep.i)}">View YAML</button>` : '';
     return `<section class="failurepanel" aria-labelledby="failure-title">
-      <div class="failurehead"><span class="failureicon" aria-hidden="true">!</span><span class="failuretitle" id="failure-title">ERROR</span>${D.meta && D.meta.failureCode ? `<span class="failurecode">${esc(D.meta.failureCode)}</span>` : ''}</div>
+      <div class="failurehead"><span class="failureicon" aria-hidden="true">!</span><span class="failuretitle" id="failure-title">ERROR</span>${D.meta && D.meta.failureCode ? `<span class="failurecode">${esc(D.meta.failureCode)}</span>` : ''}${reuseContext}</div>
       ${failedTool ? `<div class="failuretool"><div class="k">Failed tool call</div><div class="failuretoolvalue"><span class="failuretoolname">${esc(failedTool.label)}</span>${failedTool.tool ? `<code class="failuretoolargs mono">${esc(failedTool.tool)}</code>` : ''}${yamlLink}</div></div>` : yamlLink}
       <div class="failurebody"><div class="failurefield"><div class="k">Cause</div><span class="failuretype" title="${esc(causeTitle)}">${esc(causeName)}</span></div><div class="failurefield"><div class="k">Message</div><div class="failuremessage">${failureMessageHtml(parsed.message)}</div></div></div>
       ${parsed.stack ? `<details class="failurestack" open><summary>Stack trace<span class="frames">${frames} frame${frames === 1 ? '' : 's'}</span></summary><pre class="mono">${esc(parsed.stack)}</pre></details>` : ''}
@@ -3548,7 +3583,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
           fmtDur(durationMs),
         ].filter(Boolean).join(' · ');
         const hdr = g.header ? `<button type="button" class="grphdr${isTrailhead ? ' trailhead' : ''}" data-group="${g.header.i}" aria-expanded="${open}" data-group-leads="${leads}">
-            <span class="stepheaderrail"><span class="chip ${mood}">${isTrailhead ? 'TRAILHEAD' : `STEP ${g.num}`}</span><span class="grpdisclosure">${STEP_DISCLOSURE_SVG}</span></span>
+            <span class="stepheaderrail"><span class="chip ${mood}">${isTrailhead ? 'TRAILHEAD' : g.header.teardown ? 'TEARDOWN' : `STEP ${g.num}`}</span><span class="grpdisclosure">${STEP_DISCLOSURE_SVG}</span></span>
             <span class="lbl">${esc(g.header.label)}</span>
             <span class="grpstatus ${mood}">${STEP_STATUS_ICON_SVG[mood]}${esc(status)}</span>
           </button>` : '';
@@ -3561,7 +3596,9 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
         return `<div class="stepgroup${selfHealed ? ' selfhealed' : failed ? ' failed' : ''}">${hdr}<div class="stepgroupbody"${open ? '' : ' hidden'}>${headerEvents}${inlineHeaderFailure}${inlineHeaderSelfHeal}${items}</div></div>`;
       }).join('');
       const trailheadGroups = groups.filter((g) => g.header && g.header.trailhead);
-      const trailGroups = groups.filter((g) => !g.header || !g.header.trailhead);
+      // The trailhead's teardown runs after the verdict: its own phase, never a numbered step.
+      const teardownGroups = groups.filter((g) => g.header && g.header.teardown);
+      const trailGroups = groups.filter((g) => !g.header || (!g.header.trailhead && !g.header.teardown));
       const trailStepCount = trailGroups.filter((g) => g.header).length;
       // The steps a failure cut off. Nothing in the logs records them — a step that never started
       // emitted no objective — so the timeline used to just stop, taking with it the "which stage
@@ -3595,10 +3632,26 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       };
       const trailheadStats = phaseStats(trailheadGroups);
       const trailStats = phaseStats(trailGroups);
+      const teardownStats = phaseStats(teardownGroups);
+      // A failed teardown is a warning, not a failure: the trail's verdict stands either way.
+      const teardownFailed = teardownGroups.some((g) => !g.header.ok || g.items.some((t) => t.ok === false));
+      const teardownStatus = teardownGroups.length
+        ? `<span class="phasestatus ${teardownFailed ? 'warn' : 'pass'}">${teardownFailed ? PHASE_WARNING_ICON_SVG : STEP_STATUS_ICON_SVG.pass}${teardownFailed ? 'Failed' : 'Clean'}</span>`
+        : '';
+      const setupDecisions = trailheadSetupDecisions(D);
+      // A failed reuse outranks a successful one: it is the line a triager needs first.
+      const setupKind = setupDecisions.some((d) => d.kind === 'reuseFailed') ? 'reuseFailed' : setupDecisions.some((d) => d.kind === 'reused') ? 'reused' : 'full';
+      const trailheadStatus = setupDecisions.length
+        ? `<span class="phasestatus ${setupKind === 'reuseFailed' ? 'fail' : setupKind}">${setupKind === 'reuseFailed' ? `${STEP_STATUS_ICON_SVG.fail}Reuse failed` : setupKind === 'reused' ? 'Reused' : 'Full setup'}</span>`
+        : '';
+      const setupDecisionsHtml = setupDecisions.length
+        ? `<div class="setupdecisions">${setupDecisions.map((d) => `<div class="setupdecision ${d.kind}"><span class="setupdecisionverdict">${d.kind === 'full' ? 'Full setup' : `${d.kind === 'reuseFailed' ? 'Failed while reusing setup from' : 'Reused from'} <code>${esc(d.sessionId || 'the previous trail')}</code>`}</span><span class="setupdecisiontool">${esc(d.tool)}</span>${d.reason ? `<span class="setupdecisionreason">${esc(d.reason)}</span>` : ''}${d.error ? `<span class="setupdecisionreason setupdecisionerror">${esc(d.error)}</span>` : ''}</div>`).join('')}</div>`
+        : '';
       const phaseDisclosure = '<span class="phasedisclosure" aria-hidden="true"><svg class="phasechev" viewBox="0 0 16 16"><path d="m4 6 4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></span>';
       stepsHtml = `<div class="timelinephases">
-        ${trailheadGroups.length ? `<section class="tlphase trailhead" aria-labelledby="trailhead-heading"><div class="tlphasehead"><button type="button" class="phasecontrol" data-phase="trailhead" aria-expanded="${st.trailheadOpen}">${phaseDisclosure}<span class="name" id="trailhead-heading">Trailhead</span><span class="desc">${trailheadStats.actions}</span>${trailheadStats.duration ? `<span class="phaseduration">${trailheadStats.duration}</span>` : ''}</button></div><div class="tlphasebody"${st.trailheadOpen ? '' : ' hidden'}><div class="steps">${groupsHtml(trailheadGroups)}</div></div></section>` : ''}
+        ${trailheadGroups.length ? `<section class="tlphase trailhead" aria-labelledby="trailhead-heading"><div class="tlphasehead"><button type="button" class="phasecontrol" data-phase="trailhead" aria-expanded="${st.trailheadOpen}">${phaseDisclosure}<span class="name" id="trailhead-heading">Trailhead</span>${trailheadStatus}<span class="desc">${trailheadStats.actions}</span>${trailheadStats.duration ? `<span class="phaseduration">${trailheadStats.duration}</span>` : ''}</button></div><div class="tlphasebody"${st.trailheadOpen ? '' : ' hidden'}>${setupDecisionsHtml}<div class="steps">${groupsHtml(trailheadGroups)}</div></div></section>` : ''}
         ${trailGroups.length || skippedSteps.length ? `<section class="tlphase" aria-labelledby="trail-heading"><div class="tlphasehead"><button type="button" class="phasecontrol" data-phase="trail" aria-expanded="${st.trailOpen}">${phaseDisclosure}<span class="name" id="trail-heading">Trail</span><span class="counttoken">${trailStepCount}${skippedSteps.length ? `/${trailStepCount + skippedSteps.length}` : ''}</span><span class="desc">${trailStats.actions}</span>${trailStats.duration ? `<span class="phaseduration">${trailStats.duration}</span>` : ''}</button></div><div class="tlphasebody"${st.trailOpen ? '' : ' hidden'}><div class="steps">${groupsHtml(trailGroups)}${skippedHtml}</div></div></section>` : ''}
+        ${teardownGroups.length ? `<section class="tlphase teardown" aria-labelledby="teardown-heading"><div class="tlphasehead"><button type="button" class="phasecontrol" data-phase="teardown" aria-expanded="${st.teardownOpen}">${phaseDisclosure}<span class="name" id="teardown-heading">Teardown</span>${teardownStatus}<span class="desc">${teardownStats.actions}</span>${teardownStats.duration ? `<span class="phaseduration">${teardownStats.duration}</span>` : ''}</button></div><div class="tlphasebody"${st.teardownOpen ? '' : ' hidden'}><div class="steps">${groupsHtml(teardownGroups)}</div></div></section>` : ''}
       </div>`;
     }
     const paneView = timelinePaneView(true);
@@ -9390,7 +9443,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   const revealTimelineStepInPlace = () => {
     revealTimelineStep(st.step);
     root.querySelectorAll<HTMLElement>('[data-phase]').forEach((control) => {
-      const open = control.dataset.phase === 'trailhead' ? st.trailheadOpen : st.trailOpen;
+      const open = control.dataset.phase === 'trailhead' ? st.trailheadOpen : control.dataset.phase === 'teardown' ? st.teardownOpen : st.trailOpen;
       control.setAttribute('aria-expanded', String(open));
       const body = control.closest('.tlphase')?.querySelector<HTMLElement>('.tlphasebody');
       if (body) body.hidden = !open;
@@ -10384,6 +10437,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       const open = control.getAttribute('aria-expanded') !== 'true';
       if (phase === 'trailhead') st.trailheadOpen = open;
       if (phase === 'trail') st.trailOpen = open;
+      if (phase === 'teardown') st.teardownOpen = open;
       control.setAttribute('aria-expanded', String(open));
       const body = control.closest('.tlphase')?.querySelector<HTMLElement>('.tlphasebody');
       if (body) body.hidden = !open;

@@ -29,6 +29,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolParameterDescriptor
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.util.Console
 import java.io.File
+import xyz.block.trailblaze.util.isWindows
 
 /**
  * Session-scoped registration for an inline scripted tool declared under a trailmap manifest's
@@ -133,6 +134,9 @@ class LazyYamlScriptedToolRegistration private constructor(
     val serializer = QuickJsToolSerializer(
       name,
       host,
+      // The inner tool carries the binding too, so a call that reaches it without this wrapper
+      // (a trailhead's `teardown`, run after the trail by the framework) still has a context.
+      binding = binding,
       isRecordable = effectiveIsRecordable,
       sensitiveArgs = effectiveSensitiveArgs,
     )
@@ -257,11 +261,29 @@ class LazyYamlScriptedToolRegistration private constructor(
       if (pathEnv == null) return null
       for (dir in pathEnv.split(File.pathSeparator)) {
         if (dir.isBlank()) continue
-        val candidate = File(dir, "esbuild")
-        if (candidate.exists() && candidate.canExecute()) return candidate
+        for (name in ESBUILD_PATH_NAMES) {
+          val candidate = File(dir, name)
+          if (candidate.exists() && candidate.canExecute()) return candidate
+        }
       }
       return null
     }
+
+    /**
+     * On Windows only a native `esbuild.exe` qualifies. npm's extensionless `esbuild` is a shell
+     * shim that `canExecute` accepts (it is true for any readable file) and that cannot be started,
+     * and its `esbuild.cmd` shim would run through cmd.exe, which re-parses the tool paths passed to
+     * it. Without one on `PATH`, the walk-up below finds the SDK's own `esbuild.exe`.
+     */
+    private val ESBUILD_PATH_NAMES: List<String> =
+      if (isWindows()) listOf("esbuild.exe") else listOf("esbuild")
+
+    /**
+     * Where an SDK package's `node_modules` keeps the esbuild binary. On Windows `.bin/esbuild` is a
+     * shell shim, so the walk-up goes straight to the platform package npm installs the real one in.
+     */
+    private val ESBUILD_NODE_MODULES_RELPATH: String =
+      if (isWindows()) "node_modules/@esbuild/win32-x64/esbuild.exe" else "node_modules/.bin/esbuild"
 
     /**
      * Walk-up half of [resolveEsbuildBinary], pulled out so a unit test can pin the
@@ -281,7 +303,7 @@ class LazyYamlScriptedToolRegistration private constructor(
      * cryptic "Unsupported tool type for RPC execution" at trail-dispatch time.
      */
     internal fun resolveEsbuildViaWalkup(startDir: File): File? {
-      val relativeCandidates = SDK_PACKAGE_SUBPATHS.map { "$it/node_modules/.bin/esbuild" }
+      val relativeCandidates = SDK_PACKAGE_SUBPATHS.map { "$it/$ESBUILD_NODE_MODULES_RELPATH" }
       var current: File? = startDir
       while (current != null) {
         for (rel in relativeCandidates) {

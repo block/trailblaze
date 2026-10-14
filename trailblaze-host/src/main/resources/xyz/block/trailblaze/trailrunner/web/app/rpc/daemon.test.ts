@@ -136,6 +136,19 @@ describe("createDaemonRpc", () => {
     expect(tools?.map((t) => t.name)).toEqual(["tapOnPoint"]);
   });
 
+  test("getToolCatalog names the device so its classifiers gate the list", async () => {
+    const { impl, calls } = fakeFetch(200, { tools: [] });
+    const rpc = createDaemonRpc({ baseUrl: "http://daemon", fetchImpl: impl });
+    const device = { instanceId: "emulator-5554", trailblazeDevicePlatform: "ANDROID" } as const;
+
+    await rpc.getToolCatalog("ANDROID_ONDEVICE_ACCESSIBILITY", device);
+
+    expect(JSON.parse(calls[0].init!.body as string)).toEqual({
+      trailblazeDriverType: "ANDROID_ONDEVICE_ACCESSIBILITY",
+      trailblazeDeviceId: device,
+    });
+  });
+
   test("runTrailYaml surfaces the daemon's failure reason", async () => {
     const { impl, calls } = fakeFetch(500, { message: "Trail run failed: element not found" });
     const rpc = createDaemonRpc({ baseUrl: "http://daemon", fetchImpl: impl });

@@ -15,8 +15,10 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.logs.client.TrailblazeLog
+import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionStatus
+import xyz.block.trailblaze.logs.model.TrailblazeClockDomain
 import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.mcp.TrailblazeMcpBridge
 import xyz.block.trailblaze.mcp.TrailblazeMcpMode
@@ -735,6 +737,267 @@ class SessionToolSetTest {
       )
 
       assertEquals("Succeeded (1m 35s)", Json.parseToJsonElement(result).jsonObject["status"]!!.jsonPrimitive.content)
+    } finally {
+      logsDir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun `session INFO reads an on-device session's end even when the device clock runs ahead`() = runTest {
+    // The device writes Started on its own clock, 10 minutes ahead; the host writes the cancel.
+    // Raw stamps put Started after the cancel, so a reader that skips clock correction reports a
+    // session the host already cancelled as still in progress.
+    val skewMs = 10 * 60_000L
+    val hostStartMs = kotlinx.datetime.Instant.parse("2026-09-24T10:00:00Z").toEpochMilliseconds()
+    val ms = kotlinx.datetime.Instant::fromEpochMilliseconds
+    val logsDir = java.nio.file.Files.createTempDirectory("session-skew-").toFile()
+    try {
+      val logs = listOf(
+        TrailblazeLog.TrailblazeSessionStatusChangeLog(
+          sessionStatus = SessionStatus.Started(
+            trailConfig = null,
+            trailFilePath = null,
+            hasRecordedSteps = false,
+            testMethodName = "Tap the login button",
+            testClassName = "OnDevice",
+            trailblazeDeviceInfo = TrailblazeDeviceInfo(
+              trailblazeDeviceId = TrailblazeDeviceId(
+                instanceId = "emulator-5554",
+                trailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID,
+              ),
+              trailblazeDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+              widthPixels = 1080,
+              heightPixels = 2400,
+              classifiers = emptyList(),
+            ),
+            trailblazeDeviceId = null,
+          ),
+          session = trailblazeSessionId,
+          timestamp = ms(hostStartMs + skewMs),
+          clock = TrailblazeClockDomain.DEVICE,
+        ),
+        // The tool log that anchors the device clock: device-stamped, received by the host 1 s on.
+        TrailblazeLog.TrailblazeToolLog(
+          trailblazeTool = OtherTrailblazeTool(toolName = "tapOn"),
+          toolName = "tapOn",
+          successful = true,
+          traceId = null,
+          durationMs = 1_000L,
+          session = trailblazeSessionId,
+          timestamp = ms(hostStartMs + 5_000L + skewMs),
+          clock = TrailblazeClockDomain.DEVICE,
+          hostReceivedAt = ms(hostStartMs + 6_000L),
+        ),
+        TrailblazeLog.TrailblazeSessionStatusChangeLog(
+          sessionStatus = SessionStatus.Ended.Cancelled(durationMs = 30_000L, cancellationMessage = null),
+          session = trailblazeSessionId,
+          timestamp = ms(hostStartMs + 30_000L),
+          clock = TrailblazeClockDomain.HOST,
+        ),
+      )
+      val sessionDir = File(logsDir, trailblazeSessionId.value).apply { mkdirs() }
+      logs.forEachIndexed { index, log ->
+        sessionDir.resolve("00${index + 1}_${log::class.simpleName}.json")
+          .writeText(xyz.block.trailblaze.logs.client.TrailblazeJsonInstance.encodeToString<TrailblazeLog>(log))
+      }
+      val toolSet = SessionToolSet(
+        sessionContext = createSessionContext(),
+        mcpBridge = SessionTestBridge(),
+        logsRepo = LogsRepo(logsDir = logsDir, watchFileSystem = false),
+      )
+
+      val result = toolSet.session(action = SessionToolSet.SessionAction.INFO, id = trailblazeSessionId.value)
+
+      assertEquals("Cancelled (30.0s)", Json.parseToJsonElement(result).jsonObject["status"]!!.jsonPrimitive.content)
+    } finally {
+      logsDir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun `session INFO reports a copied session left at Started as timed out, not in progress`() = runTest {
+    // Importing, a farm download or an unzip rewrites every file, so file times say "just now" even
+    // though the session's own logs stopped half an hour ago. No import marker: the farm download
+    // writes none.
+    val startMs = kotlinx.datetime.Clock.System.now().toEpochMilliseconds() - 30 * 60_000L
+    val ms = kotlinx.datetime.Instant::fromEpochMilliseconds
+    val logsDir = java.nio.file.Files.createTempDirectory("session-imported-").toFile()
+    try {
+      val logs = listOf(
+        TrailblazeLog.TrailblazeSessionStatusChangeLog(
+          sessionStatus = SessionStatus.Started(
+            trailConfig = null,
+            trailFilePath = null,
+            hasRecordedSteps = false,
+            testMethodName = "Tap the login button",
+            testClassName = "Imported",
+            trailblazeDeviceInfo = TrailblazeDeviceInfo(
+              trailblazeDeviceId = TrailblazeDeviceId(
+                instanceId = "emulator-5554",
+                trailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID,
+              ),
+              trailblazeDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+              widthPixels = 1080,
+              heightPixels = 2400,
+              classifiers = emptyList(),
+            ),
+            trailblazeDeviceId = null,
+          ),
+          session = trailblazeSessionId,
+          timestamp = ms(startMs),
+        ),
+        TrailblazeLog.TrailblazeToolLog(
+          trailblazeTool = OtherTrailblazeTool(toolName = "tapOn"),
+          toolName = "tapOn",
+          successful = true,
+          traceId = null,
+          durationMs = 1_000L,
+          session = trailblazeSessionId,
+          timestamp = ms(startMs + 60_000L),
+        ),
+      )
+      val sessionDir = File(logsDir, trailblazeSessionId.value).apply { mkdirs() }
+      logs.forEachIndexed { index, log ->
+        sessionDir.resolve("00${index + 1}_${log::class.simpleName}.json")
+          .writeText(xyz.block.trailblaze.logs.client.TrailblazeJsonInstance.encodeToString<TrailblazeLog>(log))
+      }
+      val toolSet = SessionToolSet(
+        sessionContext = createSessionContext(),
+        mcpBridge = SessionTestBridge(),
+        logsRepo = LogsRepo(logsDir = logsDir, watchFileSystem = false),
+      )
+
+      val result = toolSet.session(action = SessionToolSet.SessionAction.INFO, id = trailblazeSessionId.value)
+
+      val status = Json.parseToJsonElement(result).jsonObject["status"]!!.jsonPrimitive.content
+      assertTrue(status.startsWith("Timeout"), "expected a timed-out session, got: $status")
+    } finally {
+      logsDir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun `session INFO never reports a negative duration for an older log whose stamp runs ahead of its files`() = runTest {
+    // Logs written before status logs carried a clock field: the device stamped Started 10 minutes
+    // ahead of the host, with no `clock` to say so, and the files were written 5 minutes ago. The
+    // summary read dates last activity from file times, so it put the start after the last activity
+    // and reported a negative timeout. INFO must answer what the full read answers instead.
+    val skewMs = 10 * 60_000L
+    val hostStartMs = kotlinx.datetime.Clock.System.now().toEpochMilliseconds() - 5 * 60_000L
+    val ms = kotlinx.datetime.Instant::fromEpochMilliseconds
+    val logsDir = java.nio.file.Files.createTempDirectory("session-legacy-skew-").toFile()
+    try {
+      val logs = listOf(
+        TrailblazeLog.TrailblazeSessionStatusChangeLog(
+          sessionStatus = SessionStatus.Started(
+            trailConfig = null,
+            trailFilePath = null,
+            hasRecordedSteps = false,
+            testMethodName = "Tap the login button",
+            testClassName = "OnDevice",
+            trailblazeDeviceInfo = TrailblazeDeviceInfo(
+              trailblazeDeviceId = TrailblazeDeviceId(
+                instanceId = "emulator-5554",
+                trailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID,
+              ),
+              trailblazeDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+              widthPixels = 1080,
+              heightPixels = 2400,
+              classifiers = emptyList(),
+            ),
+            trailblazeDeviceId = null,
+          ),
+          session = trailblazeSessionId,
+          timestamp = ms(hostStartMs + skewMs),
+        ),
+        TrailblazeLog.TrailblazeToolLog(
+          trailblazeTool = OtherTrailblazeTool(toolName = "tapOn"),
+          toolName = "tapOn",
+          successful = true,
+          traceId = null,
+          durationMs = 1_000L,
+          session = trailblazeSessionId,
+          timestamp = ms(hostStartMs + 5_000L + skewMs),
+          hostReceivedAt = ms(hostStartMs + 6_000L),
+        ),
+      )
+      val sessionDir = File(logsDir, trailblazeSessionId.value).apply { mkdirs() }
+      logs.forEachIndexed { index, log ->
+        sessionDir.resolve("00${index + 1}_${log::class.simpleName}.json").apply {
+          writeText(xyz.block.trailblaze.logs.client.TrailblazeJsonInstance.encodeToString<TrailblazeLog>(log))
+          setLastModified(hostStartMs + index * 6_000L)
+        }
+      }
+      val toolSet = SessionToolSet(
+        sessionContext = createSessionContext(),
+        mcpBridge = SessionTestBridge(),
+        logsRepo = LogsRepo(logsDir = logsDir, watchFileSystem = false),
+      )
+
+      val result = toolSet.session(action = SessionToolSet.SessionAction.INFO, id = trailblazeSessionId.value)
+
+      val status = Json.parseToJsonElement(result).jsonObject["status"]!!.jsonPrimitive.content
+      assertFalse(status.contains("(-"), "expected no negative duration, got: $status")
+    } finally {
+      logsDir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun `session INFO reads a session whose log files are named the on-device way`() = runTest {
+    // On-device logs are named by session, time and sequence, with no class name in the file name.
+    val startMs = kotlinx.datetime.Clock.System.now().toEpochMilliseconds() - 60_000L
+    val ms = kotlinx.datetime.Instant::fromEpochMilliseconds
+    val logsDir = java.nio.file.Files.createTempDirectory("session-ondevice-names-").toFile()
+    try {
+      val logs = listOf(
+        TrailblazeLog.TrailblazeSessionStatusChangeLog(
+          sessionStatus = SessionStatus.Started(
+            trailConfig = null,
+            trailFilePath = null,
+            hasRecordedSteps = false,
+            testMethodName = "Tap the login button",
+            testClassName = "OnDevice",
+            trailblazeDeviceInfo = TrailblazeDeviceInfo(
+              trailblazeDeviceId = TrailblazeDeviceId(
+                instanceId = "emulator-5554",
+                trailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID,
+              ),
+              trailblazeDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+              widthPixels = 1080,
+              heightPixels = 2400,
+              classifiers = emptyList(),
+            ),
+            trailblazeDeviceId = null,
+          ),
+          session = trailblazeSessionId,
+          timestamp = ms(startMs),
+        ),
+        TrailblazeLog.TrailblazeSessionStatusChangeLog(
+          sessionStatus = SessionStatus.Ended.Succeeded(durationMs = 12_500L),
+          session = trailblazeSessionId,
+          timestamp = ms(startMs + 12_500L),
+        ),
+      )
+      val sessionDir = File(logsDir, trailblazeSessionId.value).apply { mkdirs() }
+      logs.forEachIndexed { index, log ->
+        val fileName = xyz.block.trailblaze.logs.client.OnDeviceLogFileName.forLog(
+          trailblazeSessionId,
+          log.timestamp.toEpochMilliseconds(),
+        )
+        assertFalse(fileName.contains("TrailblazeSessionStatusChangeLog"), "fixture must use the on-device name")
+        sessionDir.resolve(fileName)
+          .writeText(xyz.block.trailblaze.logs.client.TrailblazeJsonInstance.encodeToString<TrailblazeLog>(log))
+      }
+      val toolSet = SessionToolSet(
+        sessionContext = createSessionContext(),
+        mcpBridge = SessionTestBridge(),
+        logsRepo = LogsRepo(logsDir = logsDir, watchFileSystem = false),
+      )
+
+      val result = toolSet.session(action = SessionToolSet.SessionAction.INFO, id = trailblazeSessionId.value)
+
+      assertEquals("Succeeded (12.5s)", Json.parseToJsonElement(result).jsonObject["status"]!!.jsonPrimitive.content)
     } finally {
       logsDir.deleteRecursively()
     }

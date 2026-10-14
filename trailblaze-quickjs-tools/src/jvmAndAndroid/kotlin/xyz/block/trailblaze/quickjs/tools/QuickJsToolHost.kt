@@ -43,6 +43,8 @@ class QuickJsToolHost internal constructor(
    * Owned by this host; closed in [shutdown].
    */
   private val engineDispatcher: ExecutorCoroutineDispatcher,
+  /** SHA-256 hex of the evaluated bundle source — see [bundleSha256]. */
+  private val sourceSha256: String = "",
 ) {
 
   /**
@@ -137,7 +139,49 @@ class QuickJsToolHost internal constructor(
    *   Pass `null` to send `undefined` to the handler — useful for ad-hoc invocations outside
    *   a session.
    */
-  suspend fun callTool(name: String, args: JsonObject, ctx: JsonObject? = null): JsonObject = run {
+  suspend fun callTool(name: String, args: JsonObject, ctx: JsonObject? = null): JsonObject =
+    dispatch(name = name, member = HANDLER_MEMBER, args = args, ctx = ctx, extraArg = null)
+      ?: error("Tool '$name' registered no handler")
+
+  /**
+   * Invoke a secondary [member] of a registered tool — today only `teardown`, a trailhead's
+   * teardown — as `tool[member](args, ctx, extraArg)`. Returns null when the tool is registered but
+   * doesn't define [member], so callers can tell "absent" from "failed". Throws, like [callTool],
+   * when no tool named [name] is registered.
+   */
+  suspend fun callToolMember(
+    name: String,
+    member: String,
+    args: JsonObject,
+    ctx: JsonObject?,
+    extraArg: JsonObject,
+  ): JsonObject? = dispatch(name = name, member = member, args = args, ctx = ctx, extraArg = extraArg)
+
+  /** Whether [name]'s registry entry defines [member] as a function. */
+  suspend fun hasToolMember(name: String, member: String): Boolean = run {
+    checkNotReentrant("hasToolMember")
+    evalMutex.withLock {
+      withContext(engineDispatcher) {
+        quickJs.evaluate<Boolean>(
+          "(function(){ const t = (globalThis.__trailblazeTools || {})[${jsString(name)}]; " +
+            "return !!t && typeof t[${jsString(member)}] === 'function'; })()",
+          "has-member.js",
+          false,
+        )
+      }
+    }
+  }
+
+  /** SHA-256 of the bundle source this host evaluated; identifies the tool code version. */
+  val bundleSha256: String get() = sourceSha256
+
+  private suspend fun dispatch(
+    name: String,
+    member: String,
+    args: JsonObject,
+    ctx: JsonObject?,
+    extraArg: JsonObject?,
+  ): JsonObject? = run {
     checkNotReentrant("callTool")
     evalMutex.withLock {
       withContext(engineDispatcher) {
@@ -149,6 +193,11 @@ class QuickJsToolHost internal constructor(
         // bytes into characters QuickJS reads through the string-literal grammar (which treats
         // them as ordinary characters), and `JSON.parse` reconstructs the object on the JS side.
         val argsLiteral = jsString(JSON.encodeToString(JsonObject.serializer(), args))
+        val extraLiteral = if (extraArg != null) {
+          "JSON.parse(${jsString(JSON.encodeToString(JsonObject.serializer(), extraArg))})"
+        } else {
+          "undefined"
+        }
         val ctxLiteral = if (ctx != null) {
           // Same string-literal-then-parse trick. Wrapping in `JSON.parse(<literal>)` produces
           // an Object the handler sees as `ctx`.
@@ -186,6 +235,8 @@ class QuickJsToolHost internal constructor(
           }
           const __args = JSON.parse(${argsLiteral});
           const __ctx = ${ctxLiteral};
+          const __extra = ${extraLiteral};
+          const __member = tool[${jsString(member)}];
           // Inject framework-provided resolver methods on `ctx.target`. Methods can't
           // survive the JSON-serialization round-trip (host → JS engine), so we attach
           // them here on the JS side after deserialization. The methods read from the
@@ -233,7 +284,13 @@ class QuickJsToolHost internal constructor(
           // check would misclassify them as successes and silently swallow the failure.
           let __dispatchCaught = false;
           try {
-            __dispatchResult = await tool.handler(__args, __ctx);
+            if (typeof __member !== 'function') {
+              __dispatchResult = { ${MEMBER_ABSENT_KEY}: true };
+            } else if (__extra === undefined) {
+              __dispatchResult = await __member(__args, __ctx);
+            } else {
+              __dispatchResult = await __member(__args, __ctx, __extra);
+            }
           } catch (e) {
             __dispatchError = e;
             __dispatchCaught = true;
@@ -315,24 +372,56 @@ class QuickJsToolHost internal constructor(
             if (__structured !== undefined) {
               __envelope.structuredContent = __structured;
             }
+            // Trailhead notes a tool wrote before it threw (tool-core.ts marks the error), so the
+            // trailhead's teardown still learns what the failed tool created.
+            try {
+              const __report = (__e !== null && __e !== undefined && typeof __e === 'object')
+                ? __e[Symbol.for('trailblaze.trailhead.report')]
+                : undefined;
+              if (__report !== undefined && __report !== null && typeof __report === 'object') {
+                __envelope._meta = { trailblaze: { trailhead: __report } };
+              }
+            } catch (__reportError) {
+              // A hostile accessor loses the notes, never the envelope.
+            }
             try {
               globalThis.__trailblazeLastResult = JSON.stringify(__envelope);
             } catch (__payloadStringifyError) {
               // Non-JSON-serializable `data` (cycles, BigInt) must not cost the envelope —
-              // ship it payload-less rather than crash the dispatch.
-              globalThis.__trailblazeLastResult = JSON.stringify({
-                isError: true,
-                content: [{ type: 'text', text: __name + ': ' + __msg + __stack }]
-              });
+              // ship it payload-less rather than crash the dispatch. The trailhead notes stay:
+              // teardown needs them to clean up what the tool created.
+              const __bare = { isError: true, content: [{ type: 'text', text: __name + ': ' + __msg + __stack }] };
+              try {
+                globalThis.__trailblazeLastResult = JSON.stringify(
+                  __envelope._meta === undefined ? __bare : Object.assign({}, __bare, { _meta: __envelope._meta }),
+                );
+              } catch (__metaStringifyError) {
+                globalThis.__trailblazeLastResult = JSON.stringify(__bare);
+              }
             }
           } else {
             try {
               globalThis.__trailblazeLastResult = JSON.stringify(__dispatchResult == null ? {} : __dispatchResult);
             } catch (e) {
-              globalThis.__trailblazeLastResult = JSON.stringify({
+              const __bare = {
                 isError: true,
                 content: [{ type: 'text', text: 'Tool ' + ${jsString(name)} + ' returned a non-JSON-serializable value: ' + (e && e.message || String(e)) }]
-              });
+              };
+              // Keep the envelope's `_meta` (trailhead notes) when it serializes on its own:
+              // teardown needs them to clean up what the tool created.
+              let __meta;
+              try {
+                __meta = (__dispatchResult !== null && typeof __dispatchResult === 'object') ? __dispatchResult._meta : undefined;
+              } catch (__metaReadError) {
+                __meta = undefined;
+              }
+              try {
+                globalThis.__trailblazeLastResult = JSON.stringify(
+                  __meta === undefined ? __bare : Object.assign({}, __bare, { _meta: __meta }),
+                );
+              } catch (__metaStringifyError) {
+                globalThis.__trailblazeLastResult = JSON.stringify(__bare);
+              }
             }
           }
         """.trimIndent()
@@ -342,7 +431,8 @@ class QuickJsToolHost internal constructor(
           "read-result.js",
           false,
         )
-        JSON.parseToJsonElement(resultJson).jsonObject
+        val result = JSON.parseToJsonElement(resultJson).jsonObject
+        if (result[MEMBER_ABSENT_KEY] != null) null else result
       }
     }
   }
@@ -453,7 +543,7 @@ class QuickJsToolHost internal constructor(
           // function so the HOST_CALL_BINDING closure below can reach `host.hostCallThread` --
           // the reentrancy tripwire that closure sets/clears needs the SAME instance `callTool`/
           // `listTools` check against.
-          val host = QuickJsToolHost(quickJs, engineDispatcher)
+          val host = QuickJsToolHost(quickJs, engineDispatcher, sha256Hex(bundleJs))
           try {
             if (hostBinding != null) {
               // Synchronous binding, NOT asyncFunction. The JVM crash once blamed on asyncFunction
@@ -600,6 +690,20 @@ class QuickJsToolHost internal constructor(
         throw t
       }
     }
+
+    /** The registry member every tool dispatches through by default. */
+    const val HANDLER_MEMBER: String = "handler"
+
+    /** The registry member holding a trailhead's teardown; see [callToolMember]. */
+    const val TEARDOWN_MEMBER: String = "teardown"
+
+    /** Marker the dispatcher writes when the requested member isn't defined. */
+    private const val MEMBER_ABSENT_KEY: String = "__trailblazeMemberAbsent"
+
+    private fun sha256Hex(source: String): String =
+      java.security.MessageDigest.getInstance("SHA-256")
+        .digest(source.toByteArray(Charsets.UTF_8))
+        .joinToString("") { "%02x".format(it) }
 
     /** Name of the host binding installed for `trailblaze.call(name, args)` round-trips. */
     const val HOST_CALL_BINDING: String = "__trailblazeCall"

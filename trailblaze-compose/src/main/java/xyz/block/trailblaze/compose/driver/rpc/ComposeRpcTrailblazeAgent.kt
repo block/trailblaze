@@ -20,6 +20,7 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
+import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.logs.model.TraceId.Companion.TraceOrigin
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcResult
@@ -33,6 +34,7 @@ import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.utils.ElementComparator
 import xyz.block.trailblaze.utils.NoOpElementComparator
 import java.io.Closeable
+import java.io.File
 import java.util.concurrent.atomic.AtomicReference
 
 /**
@@ -56,6 +58,8 @@ class ComposeRpcTrailblazeAgent(
   override val sessionProvider: TrailblazeSessionProvider,
   override val trailblazeDeviceInfoProvider: () -> TrailblazeDeviceInfo,
   override val trailblazeToolRepo: TrailblazeToolRepo? = null,
+  /** Where trailhead events are written and queried; null leaves them off. */
+  private val sessionDirProvider: ((SessionId) -> File)? = null,
 ) : BaseTrailblazeAgent(),
   Closeable {
 
@@ -88,6 +92,7 @@ class ComposeRpcTrailblazeAgent(
       trailblazeLogger = trailblazeLogger,
       memory = memory,
       maestroTrailblazeAgent = null,
+      sessionDirProvider = sessionDirProvider,
       // Route nested framework-tool calls — a custom/scripted tool composing an action via
       // `ctx.invokeFrameworkTool(...)` or a scripting callback — back through this agent so a nested
       // ComposeExecutableTool dispatches over RPC. Without it the bridge falls back to

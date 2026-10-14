@@ -1,6 +1,23 @@
 package xyz.block.trailblaze.logs.server
 
+import ai.koog.agents.core.tools.ToolRegistry
+import ai.koog.agents.core.tools.annotations.LLMDescription
+import ai.koog.agents.core.tools.annotations.Tool
+import ai.koog.agents.core.tools.reflect.ToolSet
+import ai.koog.agents.core.tools.reflect.asTools
+import io.modelcontextprotocol.kotlin.sdk.types.CallToolRequest
+import io.modelcontextprotocol.kotlin.sdk.types.CallToolRequestParams
+import java.util.Collections
+import java.util.concurrent.atomic.AtomicInteger
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.asContextElement
+import kotlinx.coroutines.delay
+import xyz.block.trailblaze.mcp.utils.FakeClientConnection
+import kotlin.test.assertSame
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.JsonElement
@@ -19,6 +36,7 @@ import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.ScreenshotScalingConfig
 import xyz.block.trailblaze.config.InlineScriptToolConfig
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
+import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
@@ -30,6 +48,8 @@ import xyz.block.trailblaze.mcp.TrailblazeMcpBridge
 import xyz.block.trailblaze.mcp.TrailblazeMcpSessionContext
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetScreenStateResponse
 import xyz.block.trailblaze.mcp.models.McpSessionId
+import xyz.block.trailblaze.mcp.newtools.DeviceClassifiersProvider
+import xyz.block.trailblaze.mcp.newtools.platformOnlyDeviceClassifiers
 import kotlinx.serialization.Serializable
 import xyz.block.trailblaze.mcp.utils.McpToolArgumentValidationException
 import xyz.block.trailblaze.mcp.utils.McpToolExecutionException
@@ -52,6 +72,8 @@ import kotlin.reflect.KClass
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
+import kotlin.test.assertNotSame
+import kotlin.test.assertNull
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
@@ -104,12 +126,16 @@ class TrailblazeMcpServerDescriptorToolsTest {
     excludedYamlNames = setOf(ToolName("eraseText")),
   )
 
-  private fun newServer(bridge: TrailblazeMcpBridge): TrailblazeMcpServer = TrailblazeMcpServer(
+  private fun newServer(
+    bridge: TrailblazeMcpBridge,
+    deviceClassifiersProvider: DeviceClassifiersProvider = platformOnlyDeviceClassifiers,
+  ): TrailblazeMcpServer = TrailblazeMcpServer(
     logsRepo = LogsRepo(logsDir = tempFolder.newFolder("logs"), watchFileSystem = false),
     mcpBridge = bridge,
     trailsDirProvider = { tempFolder.newFolder("trails") },
     targetTestAppProvider = { TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget },
     llmModelListsProvider = { emptySet() },
+    deviceClassifiersProvider = deviceClassifiersProvider,
   )
 
   private fun ctx(sessionId: String): TrailblazeMcpSessionContext = TrailblazeMcpSessionContext(
@@ -237,6 +263,300 @@ class TrailblazeMcpServerDescriptorToolsTest {
 
     assertEquals("[OK] executed", result, "Executor result must be returned to the MCP handler")
     assertEquals(1, bridge.executedTools.size, "Exactly one tool must reach the bridge executor")
+  }
+
+  @Test
+  fun `a re-check that changes the device's classifiers rebuilds the runtime and refreshes tools`() {
+    // The runtime was gated against `android-phone`; the device now also reports `rig`. A runtime
+    // kept across that change would keep hiding rig-only tools (or keep a dropped one loaded).
+    val bridge = RecordingBridge(targets = setOf(eraseTarget), currentTargetId = eraseTarget.id)
+    val server = TrailblazeMcpServer(
+      logsRepo = LogsRepo(logsDir = tempFolder.newFolder("logs"), watchFileSystem = false),
+      mcpBridge = bridge,
+      trailsDirProvider = { tempFolder.newFolder("trails") },
+      targetTestAppProvider = { TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget },
+      llmModelListsProvider = { emptySet() },
+      deviceClassifiersProvider = { listOf("android", "phone", "rig").map(::TrailblazeDeviceClassifier) },
+    )
+    server.classifierRecheckGapsMsForTest = listOf(50L)
+    val sessionId = "classifier-recheck-session"
+    server.installSessionContextForTest(sessionId, ctx(sessionId))
+    val refreshed = CompletableDeferred<String>()
+    var refreshDevice: TrailblazeDeviceId? = null
+    server.onToolsRefreshedForTest = {
+      refreshDevice = McpDeviceContext.currentDeviceId.get()
+      refreshed.complete(it)
+    }
+    val builtForPhone = TrailblazeToolRepo(
+      TrailblazeToolSet.DynamicTrailblazeToolSet(
+        name = "BuiltForPhone",
+        toolClasses = emptySet(),
+        yamlToolNames = setOf(ToolName("eraseText")),
+        scriptedToolNames = emptySet(),
+      ),
+    )
+    server.installSessionScriptToolRuntimeForTest(
+      sessionId = sessionId,
+      targetId = eraseTarget.id,
+      driverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
+      toolRepo = builtForPhone,
+      classifiers = listOf("android", "phone").map(::TrailblazeDeviceClassifier),
+      recheckClassifiers = true,
+    )
+
+    val refreshedSession = runBlocking { withTimeout(10_000) { refreshed.await() } }
+
+    assertEquals(sessionId, refreshedSession, "the session's tools/list must be refreshed")
+    assertNotSame(
+      builtForPhone,
+      server.sessionScriptToolRepoForTest(sessionId),
+      "the runtime gated against the old classifiers must be rebuilt, not reused",
+    )
+    // The rebuild runs in the background, where nothing else binds a device: without its own
+    // binding the bridge would fall back to the daemon's last-selected device.
+    assertEquals(androidDevice, refreshDevice, "the rebuild must run against the session's own device")
+  }
+
+  @Test(timeout = 30_000)
+  fun `a rebuild that times out keeps the old runtime and is retried`() {
+    val bridge = RecordingBridge(targets = setOf(eraseTarget), currentTargetId = eraseTarget.id)
+    val server = TrailblazeMcpServer(
+      logsRepo = LogsRepo(logsDir = tempFolder.newFolder("logs"), watchFileSystem = false),
+      mcpBridge = bridge,
+      trailsDirProvider = { tempFolder.newFolder("trails") },
+      targetTestAppProvider = { TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget },
+      llmModelListsProvider = { emptySet() },
+      deviceClassifiersProvider = { rigClassifiers },
+    )
+    server.classifierRecheckGapsMsForTest = listOf(50L)
+    server.descriptorCollectionTimeoutMsForTest = 250
+    val sessionId = "classifier-timeout-session"
+    server.installSessionContextForTest(sessionId, ctx(sessionId))
+    val refreshed = CompletableDeferred<String>()
+    server.onToolsRefreshedForTest = { refreshed.complete(it) }
+    val builtForPhone = eraseTextRepo()
+    // The device wedges before the re-check, so the rebuild it starts can't finish.
+    bridge.hangDeviceDiscovery = true
+    server.installSessionScriptToolRuntimeForTest(
+      sessionId = sessionId,
+      targetId = eraseTarget.id,
+      driverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
+      toolRepo = builtForPhone,
+      classifiers = phoneClassifiers,
+      recheckClassifiers = true,
+    )
+
+    runBlocking {
+      withTimeout(10_000) {
+        // A second hung discovery means the first rebuild hit its deadline and was retried.
+        while (bridge.hungDiscoveries.get() < 2) delay(10)
+      }
+    }
+    assertFalse(refreshed.isCompleted, "a rebuild that timed out must not refresh the tools")
+    assertSame(builtForPhone, server.sessionScriptToolRepoForTest(sessionId), "the old runtime must be kept")
+
+    // Once the device answers, a retry applies the change.
+    bridge.hangDeviceDiscovery = false
+    assertEquals(sessionId, runBlocking { withTimeout(10_000) { refreshed.await() } })
+    assertNotSame(builtForPhone, server.sessionScriptToolRepoForTest(sessionId))
+  }
+
+  @Test(timeout = 30_000)
+  fun `a rebuild that leaves no scripted tools still refreshes the tools`() {
+    val bridge = RecordingBridge(targets = setOf(eraseTarget), currentTargetId = eraseTarget.id)
+    val server = newServer(bridge, deviceClassifiersProvider = { rigClassifiers })
+    server.classifierRecheckGapsMsForTest = listOf(50L)
+    val sessionId = "classifier-empty-rebuild-session"
+    server.installSessionContextForTest(sessionId, ctx(sessionId))
+    val refreshed = CompletableDeferred<String>()
+    server.onToolsRefreshedForTest = { refreshed.complete(it) }
+    server.installSessionScriptToolRuntimeForTest(
+      sessionId = sessionId,
+      targetId = eraseTarget.id,
+      driverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
+      toolRepo = eraseTextRepo(),
+      classifiers = phoneClassifiers,
+      recheckClassifiers = true,
+    )
+    // By the re-check the device has no target, so the rebuild has nothing to run.
+    bridge.currentTargetId = null
+
+    assertEquals(sessionId, runBlocking { withTimeout(10_000) { refreshed.await() } })
+    assertNull(server.sessionScriptToolRepoForTest(sessionId), "the old runtime must be dropped")
+  }
+
+  @Test(timeout = 30_000)
+  fun `a re-check for a device the session has left changes nothing`() {
+    val bridge = RecordingBridge(targets = setOf(eraseTarget), currentTargetId = eraseTarget.id)
+    val probes = AtomicInteger(0)
+    val server = newServer(bridge, deviceClassifiersProvider = { probes.incrementAndGet(); rigClassifiers })
+    server.classifierRecheckGapsMsForTest = listOf(50L)
+    val sessionId = "classifier-left-device-session"
+    val sessionContext = ctx(sessionId)
+    server.installSessionContextForTest(sessionId, sessionContext)
+    val refreshes = AtomicInteger(0)
+    server.onToolsRefreshedForTest = { refreshes.incrementAndGet() }
+    val builtForPhone = eraseTextRepo()
+    server.installSessionScriptToolRuntimeForTest(
+      sessionId = sessionId,
+      targetId = eraseTarget.id,
+      driverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
+      toolRepo = builtForPhone,
+      classifiers = phoneClassifiers,
+      recheckClassifiers = true,
+    )
+    // The session moves to a device that never resolves classifiers (e.g. it has no target).
+    sessionContext.setAssociatedDevice(TrailblazeDeviceId("emulator-5556", TrailblazeDevicePlatform.ANDROID))
+
+    runBlocking {
+      withTimeout(10_000) { while (probes.get() < 1) delay(10) }
+      delay(500)
+    }
+    assertEquals(0, refreshes.get(), "the old device's change must not re-register the session's tools")
+    assertSame(builtForPhone, server.sessionScriptToolRepoForTest(sessionId))
+  }
+
+  @Test(timeout = 30_000)
+  fun `a rebuild whose tools fail to register is retried`() {
+    val bridge = RecordingBridge(targets = setOf(eraseTarget), currentTargetId = eraseTarget.id)
+    val server = newServer(bridge, deviceClassifiersProvider = { rigClassifiers })
+    server.classifierRecheckGapsMsForTest = listOf(50L)
+    server.descriptorCollectionTimeoutMsForTest = 250
+    val sessionId = "classifier-refresh-failure-session"
+    server.installSessionContextForTest(sessionId, ctx(sessionId))
+    val mcpServer = server.configureMcpServer()
+    server.installSessionMcpServerForTest(sessionId, mcpServer)
+    val refreshes = AtomicInteger(0)
+    // The first refresh's descriptor collection wedges past its deadline.
+    server.onToolsRefreshedForTest = { if (refreshes.incrementAndGet() == 1) bridge.hangDeviceDiscovery = true }
+    server.installSessionScriptToolRuntimeForTest(
+      sessionId = sessionId,
+      targetId = eraseTarget.id,
+      driverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
+      toolRepo = eraseTextRepo(),
+      classifiers = phoneClassifiers,
+      recheckClassifiers = true,
+    )
+
+    // The device's answer never changes again, so only a retry of the failed apply registers them.
+    runBlocking {
+      withTimeout(10_000) {
+        while (bridge.hungDiscoveries.get() < 1) delay(10)
+        bridge.hangDeviceDiscovery = false
+        while (!mcpServer.tools.containsKey("eraseText")) delay(10)
+      }
+    }
+    assertTrue(refreshes.get() >= 2, "the tools must be registered by a retry, not the failed refresh")
+  }
+
+  // A background rebuild must never swap the runtime under a running call, whichever way that
+  // call reached MCP. Each test holds one call open on a different registration path.
+
+  @Test(timeout = 30_000)
+  fun `a classifier rebuild waits for a running scripted or YAML tool call`() {
+    assertClassifierRebuildWaitsForRunningCall(
+      target = eraseTarget,
+      toolName = "eraseText",
+      arguments = buildJsonObject { put("charactersToErase", 1) },
+    )
+  }
+
+  @Test(timeout = 30_000)
+  fun `a classifier rebuild waits for a running class-backed tool call`() {
+    assertClassifierRebuildWaitsForRunningCall(
+      target = ClassToolTarget(id = "classapp", customTools = setOf(HeldClassTool::class)),
+      toolName = "heldClassTool",
+      arguments = buildJsonObject { },
+    )
+  }
+
+  @Test(timeout = 30_000)
+  fun `a classifier rebuild waits for a running session tool call`() {
+    assertClassifierRebuildWaitsForRunningCall(
+      target = eraseTarget,
+      toolName = "heldKoogTool",
+      arguments = buildJsonObject { },
+    )
+  }
+
+  private val phoneClassifiers = listOf("android", "phone").map(::TrailblazeDeviceClassifier)
+  private val rigClassifiers = listOf("android", "phone", "rig").map(::TrailblazeDeviceClassifier)
+
+  private fun eraseTextRepo() = TrailblazeToolRepo(
+    TrailblazeToolSet.DynamicTrailblazeToolSet(
+      name = "BuiltForPhone",
+      toolClasses = emptySet(),
+      yamlToolNames = setOf(ToolName("eraseText")),
+      scriptedToolNames = emptySet(),
+    ),
+  )
+
+  /**
+   * Holds a call to [toolName] open through its registered MCP handler, lets the device's
+   * classifiers change meanwhile, and asserts the rebuild that change starts runs only after the
+   * call finishes.
+   */
+  private fun assertClassifierRebuildWaitsForRunningCall(
+    target: TrailblazeHostAppTarget,
+    toolName: String,
+    arguments: kotlinx.serialization.json.JsonObject,
+  ) {
+    val hold = CallHold()
+    val bridge = RecordingBridge(targets = setOf(target), currentTargetId = target.id)
+    bridge.callHold = hold
+    val classifierAnswer = CompletableDeferred<List<TrailblazeDeviceClassifier>>()
+    val server = TrailblazeMcpServer(
+      logsRepo = LogsRepo(logsDir = tempFolder.newFolder("logs"), watchFileSystem = false),
+      mcpBridge = bridge,
+      trailsDirProvider = { tempFolder.newFolder("trails") },
+      targetTestAppProvider = { TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget },
+      llmModelListsProvider = { emptySet() },
+      additionalToolsProvider = { _, _ -> ToolRegistry { tools(HeldKoogToolSet(hold).asTools()) } },
+      // The re-check's probe answers only when the test says so, once the call is running.
+      deviceClassifiersProvider = { classifierAnswer.await() },
+    )
+    server.classifierRecheckGapsMsForTest = listOf(10L)
+    val sessionId = "held-$toolName"
+    val sessionContext = ctx(sessionId)
+    server.installSessionContextForTest(sessionId, sessionContext)
+    val refreshed = CompletableDeferred<Unit>()
+    server.onToolsRefreshedForTest = {
+      hold.events += "refreshed"
+      refreshed.complete(Unit)
+    }
+    server.installSessionScriptToolRuntimeForTest(
+      sessionId = sessionId,
+      targetId = target.id,
+      driverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
+      toolRepo = eraseTextRepo(),
+      classifiers = phoneClassifiers,
+      recheckClassifiers = true,
+    )
+    val mcpServer = server.configureMcpServer()
+    server.registerTools(mcpServer, McpSessionId(sessionId), sessionContext)
+    val registered = mcpServer.tools[toolName]
+      ?: fail("$toolName must be registered. Registered: ${mcpServer.tools.keys.sorted()}")
+
+    runBlocking {
+      withTimeout(20_000) {
+        // The HTTP handler binds the calling session, as it does in production.
+        val call = async(Dispatchers.Default + TrailblazeMcpServer.currentMcpSessionId.asContextElement(sessionId)) {
+          registered.handler.invoke(
+            FakeClientConnection,
+            CallToolRequest(CallToolRequestParams(name = toolName, arguments = arguments)),
+          )
+        }
+        hold.started.await()
+        classifierAnswer.complete(rigClassifiers)
+        delay(300)
+        assertEquals(emptyList(), hold.events.toList(), "the rebuild must not start while the call runs")
+
+        hold.release.complete(Unit)
+        call.await()
+        refreshed.await()
+      }
+    }
+    assertEquals(listOf("call finished", "refreshed"), hold.events.toList())
   }
 
   @Test
@@ -1070,6 +1390,35 @@ class TrailblazeMcpServerDescriptorToolsTest {
     }
   }
 
+  /** A tool call the test holds open, recording when it finishes. */
+  internal class CallHold {
+    val started = CompletableDeferred<Unit>()
+    val release = CompletableDeferred<Unit>()
+    val events: MutableList<String> = Collections.synchronizedList(mutableListOf())
+
+    suspend fun hold() {
+      started.complete(Unit)
+      release.await()
+      events += "call finished"
+    }
+  }
+
+  /** A koog tool, which reaches MCP through the server's own registration rather than the bridge. */
+  internal class HeldKoogToolSet(private val hold: CallHold) : ToolSet {
+    @LLMDescription("Runs until the test releases it.")
+    @Tool("heldKoogTool")
+    suspend fun heldKoogTool(): String {
+      hold.hold()
+      return "done"
+    }
+  }
+
+  /** A class-backed tool, registered from its class rather than from a descriptor. */
+  @Serializable
+  @TrailblazeToolClass("heldClassTool")
+  @LLMDescription("Runs until the test releases it.")
+  private class HeldClassTool : TrailblazeTool
+
   /** Inert tool identity used to observe nested dispatch reaching the bridge. */
   private class NestedProbeTool : TrailblazeTool
 
@@ -1110,9 +1459,15 @@ class TrailblazeMcpServerDescriptorToolsTest {
      * the live failure mode of a stuck cold scripted-tool runtime build (device discovery /
      * on-device session launch that never completes).
      */
-    private val hangDeviceDiscovery: Boolean = false,
+    var hangDeviceDiscovery: Boolean = false,
   ) : TrailblazeMcpBridge {
     val executedTools = mutableListOf<TrailblazeTool>()
+
+    /** How many device discoveries have hung, so a test can wait for a deadline to pass. */
+    val hungDiscoveries = AtomicInteger(0)
+
+    /** Set to hold every dispatch until the test releases it. */
+    var callHold: CallHold? = null
 
     /** Device id bound in [McpDeviceContext] at the moment each tool dispatched (null if unbound). */
     val dispatchedDeviceInstanceIds = mutableListOf<String?>()
@@ -1125,7 +1480,10 @@ class TrailblazeMcpServerDescriptorToolsTest {
     override fun getSessionTargetAppIdForDevice(deviceId: TrailblazeDeviceId): String? = currentTargetId
 
     override suspend fun getAvailableDevices(): Set<TrailblazeConnectedDeviceSummary> {
-      if (hangDeviceDiscovery) awaitCancellation()
+      if (hangDeviceDiscovery) {
+        hungDiscoveries.incrementAndGet()
+        awaitCancellation()
+      }
       return setOf(
         TrailblazeConnectedDeviceSummary(
           trailblazeDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
@@ -1145,6 +1503,7 @@ class TrailblazeMcpServerDescriptorToolsTest {
       executedTools += tool
       dispatchedDeviceInstanceIds += McpDeviceContext.currentDeviceId.get()?.instanceId
       dispatchedTraceIds += traceId
+      callHold?.hold()
       return "[OK] executed"
     }
 
