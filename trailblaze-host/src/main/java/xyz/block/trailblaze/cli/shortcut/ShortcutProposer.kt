@@ -87,7 +87,7 @@ object ShortcutProposer {
     }
 
     object PressBack : ToolBody() {
-      override val toolName = "pressBackButton"
+      override val toolName = "pressKey"
     }
 
     data class InputText(val text: String) : ToolBody() {

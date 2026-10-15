@@ -44,8 +44,19 @@ object CrashEventArtifactWriter {
     ),
   )
 
-  internal fun write(sessionDir: File, deviceLog: File, platform: TrailblazeDevicePlatform) {
-    val events = detect(deviceLog, platform)
+  /**
+   * Indexes [deviceLog]'s crashes into the session's crash stream. With [appProcessName], an iOS
+   * crash line counts only when that process logged it, so an extension that crashed beside the app
+   * leaves its lines in the log without failing the run. A continuation line belongs to the record
+   * above it; a line with no process to attribute it to still counts.
+   */
+  internal fun write(
+    sessionDir: File,
+    deviceLog: File,
+    platform: TrailblazeDevicePlatform,
+    appProcessName: String? = null,
+  ) {
+    val events = detect(deviceLog, platform, appProcessName)
     if (events.isEmpty()) return
 
     runCatching {
@@ -65,11 +76,18 @@ object CrashEventArtifactWriter {
       }
   }
 
-  private fun detect(deviceLog: File, platform: TrailblazeDevicePlatform): List<CrashEvent> {
+  private fun detect(
+    deviceLog: File,
+    platform: TrailblazeDevicePlatform,
+    appProcessName: String?,
+  ): List<CrashEvent> {
     if (!deviceLog.isFile || deviceLog.length() == 0L) return emptyList()
 
     val events = mutableListOf<CrashEvent>()
+    val otherProcesses = mutableMapOf<String, Int>()
     var lastTimestampMs: Long? = null
+    // The process column of the record the current line belongs to; its continuation lines inherit it.
+    var recordColumn: String? = null
     var lineNumber = 0
     runCatching {
         deviceLog.bufferedReader(Charsets.UTF_8).useLines { lines ->
@@ -77,7 +95,17 @@ object CrashEventArtifactWriter {
             lineNumber++
             val parsed = LogcatParser.parseLine(line)
             parsed.epochMs?.let { lastTimestampMs = it }
+            if (platform == TrailblazeDevicePlatform.IOS && IOS_RECORD_START.containsMatchIn(line)) {
+              recordColumn = iosProcessColumnOf(line)
+            }
             val (kind, match) = signatureFor(line, platform) ?: continue
+            if (platform == TrailblazeDevicePlatform.IOS && appProcessName != null) {
+              val column = recordColumn
+              if (column != null && !iosColumnNames(column, appProcessName)) {
+                otherProcesses.merge(column.replaceFirst(IOS_LOG_TYPE, ""), 1, Int::plus)
+                continue
+              }
+            }
             events += CrashEvent(
               timeMs = parsed.epochMs ?: lastTimestampMs ?: 0L,
               kind = kind,
@@ -90,8 +118,43 @@ object CrashEventArtifactWriter {
         }
       }
       .onFailure { Console.log("[crash-events] could not read ${deviceLog.absolutePath}: ${it.message}") }
+    if (otherProcesses.isNotEmpty()) {
+      Console.log(
+        "[crash-events] not counting crash line(s) from processes other than '$appProcessName': " +
+          otherProcesses.entries.joinToString { (process, count) -> "$process ($count)" },
+      )
+    }
     return events
   }
+
+  /**
+   * The process column of an iOS `log stream` line, type token included: `Df Name` in the compact
+   * style's `<date> <time> Df Name[pid:tid]`, `Name` in `<date> <time>  Name[pid]`. Null for a line
+   * without one, such as a multi-line message's continuation.
+   */
+  internal fun iosProcessColumnOf(line: String): String? =
+    IOS_PROCESS_COLUMN.find(line)?.groupValues?.get(1)?.trim()?.takeIf { it.isNotEmpty() }
+
+  /**
+   * Whether an iOS process [column] names [process]. A column may or may not lead with a type token,
+   * and a name's first word can look like one (`My App`), so either reading naming [process] counts:
+   * a doubt keeps the crash rather than dropping the app's own.
+   */
+  internal fun iosColumnNames(column: String, process: String): Boolean =
+    column.equals(process, ignoreCase = true) ||
+      column.replaceFirst(IOS_TYPE_TOKEN_SHAPE, "").equals(process, ignoreCase = true)
+
+  private val IOS_PROCESS_COLUMN =
+    Regex("^\\d{4}-\\d{2}-\\d{2}\\s+\\S+\\s+(.+?)\\[\\d+(?::[0-9a-fA-Fx]+)?\\]")
+
+  /** The compact style's type tokens (Default, Debug, Info, Error, Fault, Activity), for display. */
+  private val IOS_LOG_TYPE = Regex("^(?:Df|Db|I|E|F|A)\\s+")
+
+  /** Anything shaped like a type token, so one [IOS_LOG_TYPE] doesn't list can't hide a crash. */
+  private val IOS_TYPE_TOKEN_SHAPE = Regex("^\\S{1,2}\\s+")
+
+  /** A `log stream` record starts with its date; any other line continues the record above it. */
+  private val IOS_RECORD_START = Regex("^\\d{4}-\\d{2}-\\d{2}\\s")
 
   /**
    * The failure for a run whose session recorded a crash, naming the first one; null when the

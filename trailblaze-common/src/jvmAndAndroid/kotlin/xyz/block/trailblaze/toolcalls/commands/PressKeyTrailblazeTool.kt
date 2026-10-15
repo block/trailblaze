@@ -5,6 +5,7 @@ import kotlinx.serialization.Serializable
 import maestro.KeyCode
 import maestro.orchestra.Command
 import maestro.orchestra.PressKeyCommand
+import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.toolcalls.MapsToMaestroCommands
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
@@ -16,9 +17,9 @@ import xyz.block.trailblaze.yaml.serializers.CaseInsensitiveEnumSerializer
 @TrailblazeToolClass("pressKey")
 @LLMDescription(
   """
-Press a special key: BACK (previous screen, Android only), ENTER (submit), HOME (home screen,
-backgrounding the app), BACKSPACE (delete before the caret), TAB (next field), ESCAPE (dismiss
-keyboard or modal).
+Press a special key: BACK (previous screen, Android only; on iOS tap the app's own back
+control), ENTER (submit), HOME (home screen, backgrounding the app), BACKSPACE (delete before the
+caret), TAB (next field), ESCAPE (dismiss keyboard or modal).
 """,
 )
 data class PressKeyTrailblazeTool(
@@ -61,6 +62,17 @@ data class PressKeyTrailblazeTool(
   override suspend fun execute(
     toolExecutionContext: TrailblazeToolExecutionContext,
   ): TrailblazeToolResult {
+    // iOS has no system back, and every iOS driver skips BACK. Fail instead of reporting a press
+    // that never happened, so the agent taps the app's back control rather than carrying on from
+    // the wrong screen.
+    if (keyCode == PressKeyCode.BACK &&
+      toolExecutionContext.trailblazeDeviceInfo.platform == TrailblazeDevicePlatform.IOS
+    ) {
+      return TrailblazeToolResult.Error.ExceptionThrown(
+        errorMessage = "iOS has no system back button. Tap the app's own back or close control instead.",
+        command = this,
+      )
+    }
     val result = super.execute(toolExecutionContext)
     if (result.isSuccess()) return TrailblazeToolResult.Success(message = "Pressed ${keyCode.name}")
     return result

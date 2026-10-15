@@ -5062,6 +5062,17 @@ describe("RUN_REPORT_VIEWER (rendered output)", () => {
     expect(out).not.toContain("Exported from Trailblaze");
   });
 
+  test("index search matches a trail's authored context", () => {
+    const out = renderViewer({
+      generatedAt: "now",
+      sessions: [
+        { ...session("Push notification", "passed"), meta: { title: "Push notification", status: "passed", context: "Choice must persist" } },
+        { ...session("Sign-in flow", "passed"), meta: { title: "Sign-in flow", status: "passed" } },
+      ],
+    });
+    expect(out).toContain('data-search="push notification choice must persist passed"');
+  });
+
   test("multi-session index offers metadata search without a redundant result counter", () => {
     const out = renderViewer({
       generatedAt: "now",
@@ -7152,6 +7163,22 @@ describe("RUN_REPORT_VIEWER (rendered output)", () => {
       sessions: [{ meta: { title: "R", status: "passed" }, trace: slim, llm: [], shots: {}, recordingYaml: null }],
     });
     expect(bare).not.toContain("App version");
+  });
+
+  test("the Info tab leads with the trail's authored context", () => {
+    const meta = { title: "Push notification", status: "passed", context: "Setting must persist.\n\nSetup:\n<signed in>" };
+    const info = renderViewer({ generatedAt: "now", sessions: [{ meta, trace: slim, llm: [], shots: {}, recordingYaml: null }] }, { tab: "info" });
+    // Context is escaped and keeps its line breaks for the pre-wrap block.
+    expect(info).toContain('<div class="eyebrow">About this trail</div><div class="trailcontext">Setting must persist.\n\nSetup:\n&lt;signed in&gt;</div>');
+    expect(core.RUN_REPORT_CSS).toContain(".trailcontext {");
+    const bare = renderViewer({ generatedAt: "now", sessions: [{ meta: { title: "R", status: "passed" }, trace: slim, llm: [], shots: {}, recordingYaml: null }] }, { tab: "info" });
+    expect(bare).not.toContain("About this trail");
+  });
+
+  test("the trail's context stays out of the run header", () => {
+    const meta = { title: "Push notification", status: "passed", context: "Setting must persist." };
+    const out = renderViewer({ generatedAt: "now", sessions: [{ meta, trace: slim, llm: [], shots: {}, recordingYaml: null }] });
+    expect(out).not.toContain("Setting must persist.");
   });
 
   test("detail tabs share one page heading and content frame", () => {

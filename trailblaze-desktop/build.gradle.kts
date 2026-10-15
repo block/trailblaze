@@ -107,11 +107,35 @@ val copyAndroidTestApkToResources by tasks.registering(Copy::class) {
 val launcherScript = layout.projectDirectory.file("../scripts/trailblaze")
 val launcherJarEntry = "trailblaze-launcher"
 
+// The Windows launcher, carried inside the JAR as the `trailblaze-launcher.cmd` entry for the same
+// reason, and normalized to CRLF on the way in: cmd.exe mis-parses `goto` labels in a batch file
+// with LF-only line endings. `.gitattributes` gives a normal checkout CRLF, but a copy that arrived
+// any other way (an archive, `git show`, a host's own autocrlf setting) can be LF, and the entry
+// must be CRLF whatever the build host checked out.
+val windowsLauncherJarEntry = "trailblaze-launcher.cmd"
+val crlfWindowsLauncher = layout.buildDirectory.file("generated/launcher/trailblaze.cmd")
+val generateWindowsLauncher by tasks.registering {
+  description = "Normalizes the Windows launcher to CRLF line endings"
+  val source = layout.projectDirectory.file("../scripts/trailblaze.cmd")
+  val output = crlfWindowsLauncher
+  inputs.file(source)
+  outputs.file(output)
+  doLast {
+    val text = source.asFile.readText().replace("\r\n", "\n").replace("\n", "\r\n")
+    output.get().asFile.apply {
+      parentFile.mkdirs()
+      writeText(text)
+    }
+  }
+}
+
 // Make processResources depend on copying the APK
 tasks.named<org.gradle.language.jvm.tasks.ProcessResources>("processResources") {
   dependsOn(copyAndroidTestApkToResources)
   val entryName = launcherJarEntry
   from(launcherScript) { rename { entryName } }
+  val windowsEntryName = windowsLauncherJarEntry
+  from(generateWindowsLauncher) { rename { windowsEntryName } }
 }
 
 val packageUberJar = registerPackageUberJarForCurrentOs(
@@ -226,13 +250,15 @@ val releaseArtifacts by tasks.registering(Copy::class) {
   val launcher = launcherScript.asFile
   val entryName = launcherJarEntry
   // The Windows launcher, for hosts that cannot run the bash one.
-  val windowsLauncher = project.file("../scripts/trailblaze.cmd")
+  dependsOn(generateWindowsLauncher)
+  val windowsLauncher = crlfWindowsLauncher
   inputs.file(windowsLauncher)
+  val windowsEntryName = windowsLauncherJarEntry
   doLast {
     val dest = releaseDir.get().asFile.resolve("trailblaze")
     launcher.copyTo(dest, overwrite = true)
     dest.setExecutable(true)
-    windowsLauncher.copyTo(releaseDir.get().asFile.resolve("trailblaze.cmd"), overwrite = true)
+    windowsLauncher.get().asFile.copyTo(releaseDir.get().asFile.resolve("trailblaze.cmd"), overwrite = true)
     // Installers extract the launcher from the JAR, so a JAR without it, or with a different one
     // than this checkout's, is a broken release rather than a cosmetic difference.
     val jar = releaseDir.get().asFile.resolve("trailblaze.jar")
@@ -242,6 +268,14 @@ val releaseArtifacts by tasks.registering(Copy::class) {
     check(embedded != null) { "$jar has no '$entryName' entry" }
     check(embedded.contentEquals(launcher.readBytes())) {
       "$jar carries a '$entryName' that differs from $launcher"
+    }
+    // Same for the Windows launcher, which must also still be CRLF.
+    val embeddedCmd = ZipFile(jar).use { zip ->
+      zip.getEntry(windowsEntryName)?.let { zip.getInputStream(it).readBytes() }
+    }
+    check(embeddedCmd != null) { "$jar has no '$windowsEntryName' entry" }
+    check(embeddedCmd.contentEquals(windowsLauncher.get().asFile.readBytes())) {
+      "$jar carries a '$windowsEntryName' that differs from the CRLF-normalized trailblaze.cmd"
     }
   }
 }

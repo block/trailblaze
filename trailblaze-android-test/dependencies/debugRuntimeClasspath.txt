@@ -1,9 +1,11 @@
 :trailblaze-common
+:trailblaze-http
 :trailblaze-models
 :trailblaze-ondevice-rpc-proto
 :trailblaze-quickjs-tools
 :trailblaze-scripting-fetch
 :trailblaze-tracing
+:trailblaze-trail-format
 ai.koog:agents-core-android:1.2.0
 ai.koog:agents-core:1.2.0
 ai.koog:agents-features-event-handler-android:1.2.0

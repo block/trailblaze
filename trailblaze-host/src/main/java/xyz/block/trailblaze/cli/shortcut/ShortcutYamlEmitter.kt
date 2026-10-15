@@ -54,7 +54,8 @@ object ShortcutYamlEmitter {
         sb.appendLine("      direction: ${yamlQuote(body.direction)}")
       }
       ToolBody.PressBack -> {
-        sb.appendLine("  - pressBackButton: {}")
+        sb.appendLine("  - pressKey:")
+        sb.appendLine("      keyCode: BACK")
       }
       is ToolBody.InputText -> {
         sb.appendLine("  - inputText:")

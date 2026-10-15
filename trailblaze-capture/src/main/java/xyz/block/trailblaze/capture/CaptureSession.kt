@@ -60,6 +60,7 @@ class CaptureSession internal constructor(
   fun stopAll(writeMetadata: Boolean = true): List<CaptureArtifact> {
     val artifacts = mutableListOf<CaptureArtifact>()
     var appScopedDeviceLog: CaptureArtifact? = null
+    var appProcessName: String? = null
     for (stream in streams) {
       try {
         Console.log("Stopping ${stream.type} capture...")
@@ -81,6 +82,7 @@ class CaptureSession internal constructor(
             stream.isAppScoped
           ) {
             appScopedDeviceLog = artifact
+            appProcessName = stream.appProcessName
           }
           Console.log(
             "${stream.type} captured: ${artifact.file.name} (${artifact.file.length() / 1024}KB)"
@@ -95,12 +97,12 @@ class CaptureSession internal constructor(
       if (writeMetadata) {
         artifacts.first().file.parentFile?.let { CaptureMetadata.write(it, artifacts) }
       }
-      writeCrashEvents(appScopedDeviceLog)
+      writeCrashEvents(appScopedDeviceLog, appProcessName)
     }
     return artifacts
   }
 
-  private fun writeCrashEvents(deviceLogArtifact: CaptureArtifact?) {
+  private fun writeCrashEvents(deviceLogArtifact: CaptureArtifact?, appProcessName: String?) {
     val devicePlatform = platform ?: return
     if (devicePlatform != TrailblazeDevicePlatform.ANDROID && devicePlatform != TrailblazeDevicePlatform.IOS) {
       return
@@ -111,6 +113,7 @@ class CaptureSession internal constructor(
       sessionDir = sessionDir,
       deviceLog = deviceLog,
       platform = devicePlatform,
+      appProcessName = appProcessName,
     )
   }
 

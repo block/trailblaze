@@ -515,8 +515,8 @@ class AppTargetDiscoveryTest {
     // Pin the override contract documented on
     // `TrailblazeSerializationInitializer.registerWorkspaceYamlTools`. A workspace
     // `*.tool.yaml` at the same trailmap-scoped relPath as the framework-bundled tool —
-    // `<workspace>/trails/config/trailmaps/trailblaze/tools/pressBack.tool.yaml` vs the
-    // classpath-shipped `trails/config/trailmaps/trailblaze/tools/pressBack.tool.yaml` from
+    // `<workspace>/trails/config/trailmaps/trailblaze/tools/eraseText.tool.yaml` vs the
+    // classpath-shipped `trails/config/trailmaps/trailblaze/tools/eraseText.tool.yaml` from
     // `trailblaze-common` — must reach the overlay so the workspace body wins. The collision
     // is now same-relPath (both layouts are trailmap-scoped), handled by
     // `CompositeConfigResourceSource`'s workspace-wins layering before the loader sees it.
@@ -525,19 +525,19 @@ class AppTargetDiscoveryTest {
     // effect.
     val workspace = tempFolder.newFolder("workspace")
     val toolsDir = File(workspace, "trails/config/trailmaps/trailblaze/tools").apply { mkdirs() }
-    File(toolsDir, "pressBack.tool.yaml").writeText(
+    File(toolsDir, "eraseText.tool.yaml").writeText(
       """
-      id: pressBack
+      id: eraseText
       description: |
-        Workspace-authored override of the bundled `pressBack` tool. The body is
+        Workspace-authored override of the bundled `eraseText` tool. The body is
         intentionally distinct from the framework's so the test can verify which
         version landed in the registry.
       parameters: []
       tools:
         - mobile_maestro:
             commands:
-              - back: {}
-              - back: {}
+              - eraseText: {}
+              - eraseText: {}
       """.trimIndent(),
     )
     File(workspace, "trails/config/trailblaze.yaml").apply {
@@ -551,14 +551,14 @@ class AppTargetDiscoveryTest {
       },
     )
 
-    val resolved = TrailblazeSerializationInitializer.buildYamlDefinedTools()[ToolName("pressBack")]
-    assertNotNull(resolved, "pressBack must still be reachable after the workspace override registers")
+    val resolved = TrailblazeSerializationInitializer.buildYamlDefinedTools()[ToolName("eraseText")]
+    assertNotNull(resolved, "eraseText must still be reachable after the workspace override registers")
     // The workspace version's description starts with "Workspace-authored override" — the
-    // bundled framework one starts with "Navigates back one screen". Asserting on the
+    // bundled framework one starts with "Erase characters". Asserting on the
     // description is the cleanest signal of which body won the union.
     assertTrue(
       resolved.description.orEmpty().startsWith("Workspace-authored override"),
-      "Workspace `pressBack` must override the classpath-bundled one, but the resolved " +
+      "Workspace `eraseText` must override the classpath-bundled one, but the resolved " +
         "config's description was: '${resolved.description}'",
     )
   }
@@ -652,7 +652,7 @@ class AppTargetDiscoveryTest {
   fun `classpath-bundled yaml tools are not accidentally registered as workspace overlay`() {
     // Pin the fix for the operational regression flagged in the second lead-dev review:
     // `AppTargetDiscovery.registerWorkspaceYamlTools` walks the composite resource source
-    // (classpath + workspace filesystem). Pre-fix, classpath-bundled tools (`pressBack`,
+    // (classpath + workspace filesystem). Pre-fix, classpath-bundled tools (e.g.
     // `eraseText`) got included in `allDiscovered`, force-flipped to `requires_host =
     // true`, and registered into the workspace overlay — silently changing their
     // dispatch path through the new host-expansion gate in `TrailblazeMcpBridgeImpl.
@@ -669,7 +669,7 @@ class AppTargetDiscoveryTest {
       writeText("")
     }
     // No workspace `*.tool.yaml` files. Discovery should NOT register anything in the
-    // overlay — bundled `pressBack` and `eraseText` (which the composite source walks)
+    // overlay — bundled tools like `eraseText` (which the composite source walks)
     // are equal to their classpath cache entries and get filtered out.
 
     AppTargetDiscovery.discover(

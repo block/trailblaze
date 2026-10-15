@@ -524,7 +524,7 @@ class PerTrailmapClientDtsEmitterTest {
     // The durable fix: the surface is derived from `isRecordable`, so recordable tools that live in
     // NO tool_sets (the selector-migration pipeline's `assertVisibleBySelector` /
     // `assertNotVisibleBySelector`, which the LLM never picks) and YAML-defined recordable tools
-    // (`eraseText` / `pressBack`) land in EVERY binding — even a trailmap with no tool_sets and no
+    // (`eraseText`) land in EVERY binding — even a trailmap with no tool_sets and no
     // scripted tools of its own. Selector-typed args the descriptor path strips are re-injected, and
     // HAND_CURATED_RECORDABLE tools are left to built-in-tools.ts so the two surfaces don't collide.
     val trailmapDir = newTrailmapDir("recordable_surface_pack")
@@ -568,7 +568,6 @@ class PerTrailmapClientDtsEmitterTest {
     }
     // YAML-defined recordable tools flow in from their config params.
     assertTrue("expected YAML-defined eraseText: $rendered") { rendered.contains("eraseText:") }
-    assertTrue("expected YAML-defined pressBack: $rendered") { rendered.contains("pressBack:") }
     // HAND_CURATED_RECORDABLE tools are skipped here (they stay in built-in-tools.ts).
     assertFalse("mobile_maestro must be left to built-in-tools.ts: $rendered") {
       rendered.contains("mobile_maestro:")

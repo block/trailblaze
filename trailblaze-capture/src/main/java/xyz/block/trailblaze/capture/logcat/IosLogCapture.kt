@@ -35,6 +35,9 @@ class IosLogCapture : CaptureStream, AppScopedCaptureStream {
   override var isAppScoped: Boolean = false
     private set
 
+  override var appProcessName: String? = null
+    private set
+
   private var process: Process? = null
   private var outputFile: File? = null
   private var startTimestampMs: Long = 0
@@ -42,12 +45,17 @@ class IosLogCapture : CaptureStream, AppScopedCaptureStream {
   override fun start(sessionDir: File, deviceId: String, appId: String?) {
     if (!isMacOs()) return
     isAppScoped = false
+    appProcessName = null
     startTimestampMs = System.currentTimeMillis()
     outputFile = File(sessionDir, CaptureFilenames.DEVICE_LOG)
 
     val installed = appId?.let { IosHostSimctlUtils.getInstalledAppProcess(deviceId, it) }
     val (command, appScoped) = buildIosLogStreamCommand(deviceId, appId, installed)
     isAppScoped = appScoped
+    // The install's extensions log into the same device.log, and a crash of theirs is not the app's.
+    // Only appinfo's executable name can tell them apart: the bundle-id guess may not be the app's
+    // real name, and trusting it would discard the app's own crashes.
+    if (appScoped) appProcessName = installed?.executableName
     if (!appScoped && appId != null) {
       Console.log(
         "iOS log capture: appId '$appId' resolved to a blank process name; " +
@@ -187,9 +195,13 @@ internal fun buildIosLogStreamPredicate(appId: String?, installed: IosAppProcess
       "subsystem ==[c] \"$appId\" OR " +
       "subsystem BEGINSWITH[c] \"$appId.\""
   }
-  val processName = installed?.executableName ?: appId.substringAfterLast(".")
+  val processName = iosAppProcessName(appId, installed)
   if (processName.isBlank()) return null
   return "process ==[c] \"$processName\" OR " +
     "subsystem BEGINSWITH[c] \"$appId\" OR " +
     "processImagePath CONTAINS[c] \"$processName\""
 }
+
+/** The app's process name: the executable appinfo reported, or else the last bundle-id component. */
+internal fun iosAppProcessName(appId: String, installed: IosAppProcess?): String =
+  installed?.executableName ?: appId.substringAfterLast(".")

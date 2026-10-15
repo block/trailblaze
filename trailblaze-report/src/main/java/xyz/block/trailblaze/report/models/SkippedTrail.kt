@@ -62,6 +62,12 @@ data class SkippedTrail(
    */
   val metadata: Map<String, TrailMetadataValue>? = null,
 
+  /**
+   * The trail's `config.context`, so a skipped row matches the same index search its runs do.
+   * Null for records written before this field existed, and for trails that author none.
+   */
+  val context: String? = null,
+
   /** The resolved `config.skip:` reason. Never blank - a blank reason means "not skipped". */
   val reason: String,
 

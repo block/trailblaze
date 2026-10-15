@@ -73,11 +73,11 @@ class DirectMcpToolExecutorTest {
       tools.any { it.name == "openUrl" },
       "Should include openUrl from NAVIGATION",
     )
-    // pressBack is YAML-defined and part of the NAVIGATION catalog entry; it must appear in
+    // eraseText is YAML-defined and part of the CORE_INTERACTION catalog entry; it must appear in
     // the advertised descriptor list or the LLM won't know it's available.
     assertTrue(
-      tools.any { it.name == "pressBack" },
-      "Should include pressBack (YAML-defined) from NAVIGATION",
+      tools.any { it.name == "eraseText" },
+      "Should include eraseText (YAML-defined) from CORE_INTERACTION",
     )
   }
 
@@ -97,7 +97,7 @@ class DirectMcpToolExecutorTest {
 
     assertTrue(executor.isToolAvailable("tap"), "tap should be available")
     // YAML-defined tool must be reported as available the same way class-backed tools are.
-    assertTrue(executor.isToolAvailable("pressBack"), "pressBack (YAML-defined) should be available")
+    assertTrue(executor.isToolAvailable("eraseText"), "eraseText (YAML-defined) should be available")
   }
 
   @Test
@@ -228,17 +228,16 @@ class DirectMcpToolExecutorTest {
     }
 
   @Test
-  fun `executeToolByName handles pressBack from NAVIGATION category`() =
+  fun `executeToolByName handles eraseText from CORE_INTERACTION category`() =
     runTest {
-      // pressBack is a YAML-defined tool (`trails/config/tools/pressBack.yaml` via
-      // `tools:` composition) that ships as part of the `navigation` catalog entry. This
-      // is the load-bearing regression guard for YAML-defined tool execution through
-      // DirectMcpToolExecutor: the executor must advertise `pressBack` in the NAVIGATION
-      // category and route its execution through the same polymorphic tool serializer
-      // that handles class-backed tools.
+      // eraseText is a YAML-defined tool (`eraseText.tool.yaml` via `tools:` composition) that
+      // ships as part of the `core_interaction` catalog entry. This is the load-bearing
+      // regression guard for YAML-defined tool execution through DirectMcpToolExecutor: the
+      // executor must advertise `eraseText` in the CORE_INTERACTION category and route its
+      // execution through the same polymorphic tool serializer that handles class-backed tools.
       val mockBridge =
         ConfigurableMockBridge().apply {
-          executeToolResult = "[OK] Pressed back"
+          executeToolResult = "[OK] Erased text"
         }
       val executor =
         createExecutor(
@@ -247,10 +246,10 @@ class DirectMcpToolExecutorTest {
         )
       val args = buildJsonObject {}
 
-      val result = executor.executeToolByName("pressBack", args)
+      val result = executor.executeToolByName("eraseText", args)
 
       assertIs<ToolExecutionResult.Success>(result)
-      assertEquals("pressBack", result.toolName)
+      assertEquals("eraseText", result.toolName)
     }
 
   @Test

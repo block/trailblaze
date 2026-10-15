@@ -80,7 +80,7 @@ abstract class TrailblazeHostAppTarget(
    *
    * [yamlToolNames] carries YAML-defined tool names (no [KClass] backing) so discovery
    * output can advertise them alongside [toolClasses]. Without this, name-only tools
-   * referenced from toolset YAML (e.g. `eraseText`, `pressBack`) would silently drop
+   * referenced from toolset YAML (e.g. `eraseText`) would silently drop
    * out of `toolbox` listings even though the executor accepts them.
    *
    * [scriptedToolNames] carries scripted (`.ts` / `.js`) tool names — the third backing — for the
@@ -131,7 +131,7 @@ abstract class TrailblazeHostAppTarget(
    * YAML-defined (`tools:` mode) tool names this target wants to exclude for the given driver.
    *
    * Mirrors [getExcludedToolsForDriver] for tools that have no [KClass] backing. Without this,
-   * a target YAML's `excluded_tools: [pressBack]` would silently drop on the floor at resolution
+   * a target YAML's `excluded_tools: [eraseText]` would silently drop on the floor at resolution
    * time — the parallel of the bug fixed for the inclusion side in `getCustomYamlToolNamesForDriver`.
    *
    * Default empty; YAML-backed targets populate from their per-platform `excluded_tools` lists.
@@ -314,7 +314,7 @@ abstract class TrailblazeHostAppTarget(
     listOfNotNull(getTrailblazeOnDeviceInstrumentationTarget(), getAndroidTestInstrumentationTarget())
 
   data object DefaultTrailblazeHostAppTarget : TrailblazeHostAppTarget(
-    id = "default",
+    id = xyz.block.trailblaze.config.DEFAULT_TRAILBLAZE_TARGET_ID,
     displayName = "Default",
   ) {
     // Empty list (not null) honors the base-class contract: every platform is supported,

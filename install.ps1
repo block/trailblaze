@@ -1,6 +1,7 @@
 # Trailblaze installer for Windows
 #
-# Downloads a Trailblaze release (JAR + Windows launcher) from GitHub. Windows runs web
+# Downloads a Trailblaze release JAR from GitHub and extracts the Windows launcher the JAR
+# carries (its `trailblaze-launcher.cmd` entry), so the two always match. Windows runs web
 # (Playwright) trails only; Android and iOS device control need a macOS or Linux host.
 #
 # Install (Windows PowerShell 5.1 or PowerShell 7):
@@ -9,8 +10,8 @@
 # Environment variables:
 #   TRAILBLAZE_VERSION  - Install a specific version (e.g. "0.3.0"). Default: latest.
 #   TRAILBLAZE_DIR      - Install directory. Default: %USERPROFILE%\.trailblaze
-#   TRAILBLAZE_ARTIFACT_DIR - Install trailblaze.jar + trailblaze.cmd from this local directory
-#                         instead of downloading a release (CI installs its own build this way).
+#   TRAILBLAZE_ARTIFACT_DIR - Install trailblaze.jar from this local directory instead of
+#                         downloading a release (CI installs its own build this way).
 
 # `irm | iex` runs this in the caller's own session. The script block keeps its variables and
 # preferences out of that session, and errors `throw` rather than `exit`, which would close it.
@@ -68,40 +69,155 @@ foreach ($optional in @(
 # ---------------------------------------------------------------------------
 
 New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
+# Absolute from here on: .NET resolves a relative path against the process directory, not PowerShell's.
+$BinDir = (Get-Item -LiteralPath $BinDir).FullName
 $jarPath = Join-Path $BinDir 'trailblaze.jar'
 $launcherPath = Join-Path $BinDir 'trailblaze.cmd'
 
-if ($env:TRAILBLAZE_ARTIFACT_DIR) {
-  $Version = "from $($env:TRAILBLAZE_ARTIFACT_DIR)"
-  foreach ($name in @('trailblaze.jar', 'trailblaze.cmd')) {
-    $source = Join-Path $env:TRAILBLAZE_ARTIFACT_DIR $name
-    if (-not (Test-Path $source)) { Fail "$source not found." }
-    Copy-Item -Force $source (Join-Path $BinDir $name)
-  }
-  Info "Installed $Version"
-} else {
-  if ($env:TRAILBLAZE_VERSION) {
-    $Tag = "v$($env:TRAILBLAZE_VERSION)"
-    Info "Installing Trailblaze $Tag"
-  } else {
-    Info 'Fetching latest release...'
-    $Tag = (Invoke-RestMethod -UseBasicParsing "https://api.github.com/repos/$Repo/releases/latest").tag_name
-    if (-not $Tag) { Fail 'Could not determine latest release. Set TRAILBLAZE_VERSION manually.' }
-    Info "Latest release: $Tag"
-  }
-  $Version = $Tag.TrimStart('v')
-  $ReleaseUrl = "https://github.com/$Repo/releases/download/$Tag"
-
-  # The launcher first: a release without one predates Windows support, and its JAR refuses to start.
-  Info 'Downloading launcher...'
+# Writes the JAR's `trailblaze-launcher.cmd` entry to $dest; $false if it cannot. A JAR is a zip,
+# and Windows 10+ ships bsdtar as tar.exe, which reads one: no Java needed, and no Expand-Archive,
+# which Windows PowerShell 5.1 refuses for any file not named .zip. tar.exe is called by its
+# System32 path because Git for Windows puts a GNU tar that cannot read zips ahead of it on PATH,
+# and through Sysnative from a 32-bit PowerShell, which Windows otherwise points at SysWOW64.
+#
+# Every path below is -LiteralPath: the install directory is the user's, and a `[` in it would
+# otherwise be read as a wildcard.
+function Extract-Launcher($jar, $dest) {
+  $systemDir = if ([Environment]::Is64BitProcess) { 'System32' } else { 'Sysnative' }
+  $tar = Join-Path $env:SystemRoot "$systemDir\tar.exe"
+  if (-not (Test-Path -LiteralPath $tar)) { return $false }
+  $stage = Join-Path (Split-Path $dest) '.trailblaze-launcher-extract'
+  Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
+  New-Item -ItemType Directory -Force -Path $stage | Out-Null
   try {
-    Invoke-WebRequest -UseBasicParsing "$ReleaseUrl/trailblaze.cmd" -OutFile $launcherPath
-  } catch {
-    Fail "Trailblaze $Tag has no Windows launcher; it predates Windows support. Install a newer release."
+    # tar.exe reports a missing entry on stderr, which Windows PowerShell 5.1 turns into an error
+    # under 'Stop'; the exit code is what decides.
+    $tarExit = & {
+      $ErrorActionPreference = 'Continue'
+      & $tar -xf $jar -C $stage 'trailblaze-launcher.cmd' 2>&1 | Out-Null
+      $LASTEXITCODE
+    }
+    $extracted = Join-Path $stage 'trailblaze-launcher.cmd'
+    if ($tarExit -ne 0 -or -not (Test-Path -LiteralPath $extracted) -or (Get-Item -LiteralPath $extracted).Length -eq 0) { return $false }
+    Move-Item -LiteralPath $extracted -Destination $dest -Force
+    return $true
+  } finally {
+    Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
   }
+}
 
-  Info 'Downloading trailblaze.jar...'
-  Invoke-WebRequest -UseBasicParsing "$ReleaseUrl/trailblaze.jar" -OutFile $jarPath
+# The new JAR and launcher are staged beside the installed ones and moved over them together, JAR
+# first: a running Trailblaze keeps its JAR open and Windows will not move an open file, so a
+# failure there leaves the old install whole rather than a new launcher on an old JAR. The old JAR
+# is kept until the launcher is in place, and put back if either move after it fails.
+$jarStaged = "$jarPath.download"
+$launcherStaged = "$launcherPath.download"
+$jarPrevious = "$jarPath.previous"
+function Remove-Staged {
+  foreach ($staged in @($jarStaged, $launcherStaged)) {
+    Remove-Item -LiteralPath $staged -Force -ErrorAction SilentlyContinue
+  }
+}
+# Moves the old JAR back over whatever is at $jarPath; $false if that fails too, which leaves it
+# at $jarPrevious rather than losing it.
+function Restore-Previous {
+  if (-not (Test-Path -LiteralPath $jarPrevious)) { return $true }
+  try {
+    Move-Item -LiteralPath $jarPrevious -Destination $jarPath -Force
+    return $true
+  } catch {
+    return $false
+  }
+}
+
+function Fail-AndRestore($what) {
+  $restored = Restore-Previous
+  Remove-Staged
+  if ($restored) { Fail "$what, so the previous install was left in place. Close whatever has it open, then install again." }
+  Fail "$what, and the previous JAR could not be put back: it is at $jarPrevious. Close whatever has $jarPath open, then install again."
+}
+
+function Install-Staged {
+  # An install whose rollback could not finish left the working JAR aside: put it back first.
+  if ((Test-Path -LiteralPath $jarPrevious) -and -not (Test-Path -LiteralPath $jarPath)) {
+    Move-Item -LiteralPath $jarPrevious -Destination $jarPath
+  }
+  try {
+    if (Test-Path -LiteralPath $jarPath) { Move-Item -LiteralPath $jarPath -Destination $jarPrevious -Force }
+  } catch {
+    Remove-Staged
+    Fail "Could not replace $jarPath, which a running Trailblaze keeps open. Run 'trailblaze stop', then install again."
+  }
+  try {
+    Move-Item -LiteralPath $jarStaged -Destination $jarPath
+  } catch {
+    Fail-AndRestore "Could not move the new JAR to $jarPath"
+  }
+  try {
+    Move-Item -LiteralPath $launcherStaged -Destination $launcherPath -Force
+  } catch {
+    Fail-AndRestore "Could not replace $launcherPath"
+  }
+  Remove-Item -LiteralPath $jarPrevious -Force -ErrorAction SilentlyContinue
+}
+
+# One install at a time per directory: two would share the staging files and the old JAR's backup,
+# and one could move away the JAR the other just put in place. The lock is a file opened with no
+# sharing, so it is released when this install finishes or its process ends.
+try {
+  $installLock = [System.IO.File]::Open((Join-Path $BinDir '.install.lock'), 'OpenOrCreate', 'ReadWrite', 'None')
+} catch {
+  Fail "Another Trailblaze install into $BinDir is running. Wait for it to finish, then install again."
+}
+try {
+  if ($env:TRAILBLAZE_ARTIFACT_DIR) {
+    $Version = "from $($env:TRAILBLAZE_ARTIFACT_DIR)"
+    $source = Join-Path $env:TRAILBLAZE_ARTIFACT_DIR 'trailblaze.jar'
+    if (-not (Test-Path -LiteralPath $source)) { Fail "$source not found." }
+    Copy-Item -LiteralPath $source -Destination $jarStaged -Force
+    if (-not (Extract-Launcher $jarStaged $launcherStaged)) {
+      # A JAR built before the launcher was embedded: use the copy laid down beside it.
+      $sibling = Join-Path $env:TRAILBLAZE_ARTIFACT_DIR 'trailblaze.cmd'
+      if (-not (Test-Path -LiteralPath $sibling)) {
+        Remove-Staged
+        Fail "$source has no trailblaze-launcher.cmd entry, and $sibling is missing."
+      }
+      Copy-Item -LiteralPath $sibling -Destination $launcherStaged -Force
+    }
+    Install-Staged
+    Info "Installed $Version"
+  } else {
+    if ($env:TRAILBLAZE_VERSION) {
+      $Tag = "v$($env:TRAILBLAZE_VERSION)"
+      Info "Installing Trailblaze $Tag"
+    } else {
+      Info 'Fetching latest release...'
+      $Tag = (Invoke-RestMethod -UseBasicParsing "https://api.github.com/repos/$Repo/releases/latest").tag_name
+      if (-not $Tag) { Fail 'Could not determine latest release. Set TRAILBLAZE_VERSION manually.' }
+      Info "Latest release: $Tag"
+    }
+    $Version = $Tag.TrimStart('v')
+    $ReleaseUrl = "https://github.com/$Repo/releases/download/$Tag"
+
+    Info 'Downloading trailblaze.jar...'
+    Invoke-WebRequest -UseBasicParsing "$ReleaseUrl/trailblaze.jar" -OutFile $jarStaged
+    if (Extract-Launcher $jarStaged $launcherStaged) {
+      Info 'Extracted the launcher from trailblaze.jar'
+    } else {
+      # Releases from before the launcher was embedded in the JAR publish it as its own asset, and a
+      # release with neither predates Windows support: its JAR refuses to start.
+      Info 'Downloading launcher...'
+      try {
+        Invoke-WebRequest -UseBasicParsing "$ReleaseUrl/trailblaze.cmd" -OutFile $launcherStaged
+      } catch {
+        Remove-Staged
+        Fail "Trailblaze $Tag has no Windows launcher; it predates Windows support. Install a newer release."
+      }
+    }
+    Install-Staged
+  }
+} finally {
+  $installLock.Dispose()
 }
 
 # ---------------------------------------------------------------------------

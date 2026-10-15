@@ -639,7 +639,7 @@ private fun upsertTrailheadItem(
   val mergedTools = when {
     existing.tools == null -> trailheadTools
     trailheadTools == null -> existing.tools
-    else -> existing.tools + trailheadTools
+    else -> existing.tools.orEmpty() + trailheadTools
   }
   Console.log(
     "[recording-merge] folded a repeated trailhead objective window (self-heal/retry) into the " +

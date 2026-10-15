@@ -192,6 +192,7 @@ kotlin {
 
   sourceSets {
     commonMain.dependencies {
+      api(project(":trailblaze-trail-format"))
       implementation(libs.coroutines)
       implementation(libs.kaml)
       implementation(libs.koog.agents.tools)

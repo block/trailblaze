@@ -1,8 +1,10 @@
 :trailblaze-capture
 :trailblaze-common
+:trailblaze-http
 :trailblaze-models
 :trailblaze-ondevice-rpc-proto
 :trailblaze-tracing
+:trailblaze-trail-format
 ai.koog:agents-core-jvm:1.2.0
 ai.koog:agents-core:1.2.0
 ai.koog:agents-features-event-handler-jvm:1.2.0

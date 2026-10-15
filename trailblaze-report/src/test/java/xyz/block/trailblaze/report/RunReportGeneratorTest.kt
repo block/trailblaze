@@ -97,6 +97,7 @@ class RunReportGeneratorTest {
     trailId: String? = "checkout/refund",
     target: String? = "shop",
     metadata: Map<String, TrailMetadataValue>? = null,
+    context: String? = null,
   ) = SkippedTrail(
     trail_path = "trails/checkout/refund.trail.yaml",
     title = "Refund an order",
@@ -107,6 +108,7 @@ class RunReportGeneratorTest {
     platform = "android",
     device_classifier = "android-phone",
     metadata = metadata,
+    context = context,
     recorded_at_epoch_ms = 1_700_000_000_000L,
   )
 
@@ -140,6 +142,13 @@ class RunReportGeneratorTest {
     val emitted = meta["metadata"]!!.jsonObject
     assertEquals("checkout-team", emitted["owner"]!!.jsonPrimitive.content)
     assertEquals("1017", emitted["testRailCaseId"]!!.jsonPrimitive.content)
+  }
+
+  @Test
+  fun skipSessionJson_carriesTheTrailsContextLikeARun() {
+    val meta = RunReportGenerator.skipSessionJson(skipRecord(context = "Refund must reach the card."))["meta"]!!.jsonObject
+    assertEquals("Refund must reach the card.", meta["context"]!!.jsonPrimitive.content)
+    assertNull(RunReportGenerator.skipSessionJson(skipRecord())["meta"]!!.jsonObject["context"])
   }
 
   @Test
@@ -429,6 +438,17 @@ class RunReportGeneratorTest {
     assertEquals("./trailblaze run trails/Login/login.trail.yaml", meta["cmd"]!!.jsonPrimitive.content)
     // A passing run has no error banner.
     assertNull(meta["error"])
+  }
+
+  @Test
+  fun sessionMetaJson_carriesTheTrailsAuthoredContext() {
+    val passed = SessionStatus.Ended.Succeeded(1)
+    val config = TrailConfig(id = "suite/case", title = "Push notification", context = "Setting must persist.\n\nSetup:\nSigned in.")
+    val meta = RunReportGenerator.sessionMetaJson(info(passed).copy(trailConfig = config), passed, noSelfHeal)
+    assertEquals("Setting must persist.\n\nSetup:\nSigned in.", meta["context"]!!.jsonPrimitive.content)
+    // The key is absent when the trail doesn't author it.
+    val bare = RunReportGenerator.sessionMetaJson(info(passed), passed, noSelfHeal)
+    assertNull(bare["context"])
   }
 
   @Test

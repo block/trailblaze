@@ -35,6 +35,14 @@ interface CaptureStream {
 /** Implemented by capture streams that can prove their output is restricted to the target app. */
 internal interface AppScopedCaptureStream {
   val isAppScoped: Boolean
+
+  /**
+   * The app's own process name, when the stream's output also carries other processes' lines (an
+   * iOS install's extensions run beside the app). Only that process's crashes fail the run. Null
+   * when every line is the app's, or when the name isn't known for certain.
+   */
+  val appProcessName: String?
+    get() = null
 }
 
 /** Which side of a tool call a [ToolCallAwareCaptureStream] is being told about. */

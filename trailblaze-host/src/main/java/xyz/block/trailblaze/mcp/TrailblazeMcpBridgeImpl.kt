@@ -944,7 +944,7 @@ class TrailblazeMcpBridgeImpl(
      * The residual gap is a composed tool without `requires_host` whose children include a
      * host-local one: the agent routes that child to the host, this ships the parent to the
      * device and the child comes back "Unknown tool". Nothing in the shipped set has that shape
-     * (`eraseText` / `pressBack` expand to Maestro primitives), and workspace YAML configs
+     * (`eraseText` expands to Maestro primitives), and workspace YAML configs
      * default to `requires_host = true`, so closing it would cost every composed tool an extra
      * round trip to fix a case that doesn't exist yet. Add the child-inspection here if one shows
      * up.

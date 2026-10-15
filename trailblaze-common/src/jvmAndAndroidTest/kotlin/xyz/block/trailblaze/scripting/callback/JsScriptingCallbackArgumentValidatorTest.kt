@@ -9,6 +9,9 @@ import assertk.assertions.isNull
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import org.junit.Test
+import xyz.block.trailblaze.config.ToolYamlConfig
+import xyz.block.trailblaze.config.TrailblazeConfigYaml
+import xyz.block.trailblaze.logs.client.TrailblazeSerializationInitializer
 import xyz.block.trailblaze.toolcalls.DynamicTrailblazeToolRegistration
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.ToolName
@@ -259,25 +262,42 @@ class JsScriptingCallbackArgumentValidatorTest {
   @Test
   fun `validate enforces empty-arg contract for YAML tools with empty parameters list`() {
     // The other half of the strict-empty fix: YAML tools that exhaustively declare
-    // `parameters: []` (the shipped `pressBack.tool.yaml` is the canonical example) must
-    // reject extra keys, not skip the gate like dynamic tools do. The class-backed
-    // `NoArgTool` test pins the same behavior for the Kotlin path; this test pins it for
-    // the YAML path so a refactor that re-introduces `.ifEmpty { null }` on the YAML
-    // branches can't slip through unnoticed.
-    val repo = repoWithYaml("pressBack")
+    // `parameters: []` must reject extra keys, not skip the gate like dynamic tools do. The
+    // class-backed `NoArgTool` test pins the same behavior for the Kotlin path; this test pins
+    // it for the YAML path so a refactor that re-introduces `.ifEmpty { null }` on the YAML
+    // branches can't slip through unnoticed. No shipped YAML tool takes zero args, so register
+    // a fixture through the workspace overlay.
+    val config = TrailblazeConfigYaml.instance.decodeFromString(
+      ToolYamlConfig.serializer(),
+      """
+      id: noArgYamlTool
+      description: No-arg YAML fixture tool.
+      parameters: []
+      tools:
+        - mobile_maestro:
+            commands:
+              - back: {}
+      """.trimIndent(),
+    ).also { it.validate() }
+    TrailblazeSerializationInitializer.registerWorkspaceYamlTools(mapOf(ToolName("noArgYamlTool") to config))
+    try {
+      val repo = repoWithYaml("noArgYamlTool")
 
-    val emptyOk = JsScriptingCallbackArgumentValidator.validate(repo, "pressBack", "{}")
-    assertThat(emptyOk).isNull()
+      val emptyOk = JsScriptingCallbackArgumentValidator.validate(repo, "noArgYamlTool", "{}")
+      assertThat(emptyOk).isNull()
 
-    val rejected = JsScriptingCallbackArgumentValidator.validate(
-      repo,
-      "pressBack",
-      """{"element":"hint"}""",
-    )
-    assertThat(rejected).isNotNull()
-    assertThat(rejected!!).contains("\"element\"")
-    assertThat(rejected).contains("accepts no arguments")
-    assertThat(rejected).contains("client.tools.pressBack")
+      val rejected = JsScriptingCallbackArgumentValidator.validate(
+        repo,
+        "noArgYamlTool",
+        """{"element":"hint"}""",
+      )
+      assertThat(rejected).isNotNull()
+      assertThat(rejected!!).contains("\"element\"")
+      assertThat(rejected).contains("accepts no arguments")
+      assertThat(rejected).contains("client.tools.noArgYamlTool")
+    } finally {
+      TrailblazeSerializationInitializer.registerWorkspaceYamlTools(emptyMap())
+    }
   }
 
   @Test

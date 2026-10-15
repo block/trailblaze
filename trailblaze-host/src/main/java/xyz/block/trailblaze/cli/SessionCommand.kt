@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.cli
 
+import java.io.File
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
@@ -17,6 +18,7 @@ import xyz.block.trailblaze.logs.server.endpoints.CliDaemonCapabilities
 import xyz.block.trailblaze.mcp.newtools.DeviceManagerToolSet
 import xyz.block.trailblaze.util.Console
 import java.util.concurrent.Callable
+import xyz.block.trailblaze.util.fileUrl
 
 /**
  * Shared usage-error message printed by every `session …` subcommand that accepts the
@@ -1602,7 +1604,7 @@ class SessionInfoCommand : Callable<Int> {
           if (status != null) Console.info("  Status:   $status")
           if (device != null && platform != null) Console.info("  Device:   $device ($platform)")
           else if (device != null) Console.info("  Device:   $device")
-          if (path != null) Console.info("  Path:     file://$path")
+          if (path != null) Console.info("  Path:     ${File(path).fileUrl()}")
         } catch (_: Exception) {
           Console.info(result.content)
         }

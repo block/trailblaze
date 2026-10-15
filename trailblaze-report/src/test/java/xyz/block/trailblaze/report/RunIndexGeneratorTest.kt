@@ -132,6 +132,13 @@ class RunIndexGeneratorTest {
   }
 
   @Test
+  fun `a row's authored context is searchable from the index`() {
+    val withContext = row().copy(context = "Choice must persist.")
+    assertEquals("Choice must persist.", string(RunIndexGenerator.stubMeta(withContext, report(withContext), null), "context"))
+    assertNull(RunIndexGenerator.stubMeta(row(), report(row()), null)["context"])
+  }
+
+  @Test
   fun `a failing row still states its reason as an error`() {
     val failed = row(outcome = Outcome.FAILED).copy(failure_reason = "element not found")
     val meta = RunIndexGenerator.stubMeta(failed, report(failed), null)

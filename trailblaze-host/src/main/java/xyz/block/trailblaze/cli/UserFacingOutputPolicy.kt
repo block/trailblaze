@@ -26,7 +26,7 @@ import xyz.block.trailblaze.util.runQuiet
  *
  * ```
  * [platformConfigResourceSource] Layering user config from: /Users/…/trails/config
- * TrailblazeSerializationInitializer: discovered 2 YAML-defined tools (sample: eraseText, pressBack…)
+ * TrailblazeSerializationInitializer: discovered 2 YAML-defined tools (sample: eraseText…)
  * [ToolCommand] fast-path rejected 'tpaOn' (not in local registry)
  * Unknown tool: tpaOn.
  * Tip: Run 'trailblaze toolbox --device <platform> --target <target>' to see what's available.

@@ -19,6 +19,7 @@ import xyz.block.trailblaze.devices.WebInstanceIds
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionInfo
 import xyz.block.trailblaze.logs.model.SessionStatus
+import xyz.block.trailblaze.yaml.TrailConfig
 
 class TrailRunnerPathsTest {
 
@@ -75,6 +76,15 @@ class TrailRunnerPathsTest {
       classifiers = classifiers.map { TrailblazeDeviceClassifier(it) },
     ),
   )
+
+  @Test
+  fun `a session summary carries the trail's authored context`() {
+    val config = TrailConfig(id = "suite/case", title = "Push notification", context = "Must persist.")
+    val summary = toSessionSummary(sessionOn("emulator-5554", "android", "phone").copy(trailConfig = config))
+    assertEquals("Must persist.", summary.context)
+    val bare = toSessionSummary(sessionOn("emulator-5554", "android", "phone"))
+    assertNull(bare.context)
+  }
 
   @Test
   fun `a session summary names the device instance the run actually used`() {

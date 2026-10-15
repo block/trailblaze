@@ -527,6 +527,7 @@
     meta.duration = formatDuration(Math.max(0, lastAt - firstAt));
     if (firstAt) meta.ranAt = formatRanAt(firstAt);
     if (config && config.id) meta.trailId = config.id;
+    if (config && config.context && String(config.context).trim() !== '') meta.context = config.context;
     if (config && config.metadata && Object.keys(config.metadata).length) meta.metadata = config.metadata;
     var trailFilePath = started && started.trailFilePath;
     if (trailFilePath && trailFilePath.trim() !== '') meta.cmd = './trailblaze run ' + trailFilePath;

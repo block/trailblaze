@@ -4705,7 +4705,12 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     // Consumer-injected `config.metadata` key/values render after the built-in rows, keys as-is.
     const rows = [['Target', m.target], ['App version', m.appVersion], ['Platform', m.platform], ['Device classifier', m.deviceClassifier], ['Device type', m.deviceType], ['Device', m.device], ['Bundle / package ID', m.appId], ['Trail', m.trailId], ['Total duration', m.duration], ['Steps', m.steps ? String(m.steps) : null], ['Ran', m.ranAt], ['Build', m.buildNumber], ['Commit', m.commitSha], ['Branch', m.branch], ...Object.entries(m.metadata || {}).map(([k, v]) => [k, metadataText(v)])]
       .filter(([, v]) => v).map(([k, v]) => `<div class="r"><span class="k">${esc(k)}</span><span class="v">${esc(v)}</span></div>`).join('');
+    // The trail's authored context leads the page: it says what this run was meant to prove.
+    const about = m.context
+      ? `<section class="infosection trailabout"><div class="eyebrow">About this trail</div><div class="trailcontext">${esc(m.context)}</div></section>`
+      : '';
     return viewPage('Run details', '', `<div>
+      ${about}
       ${m.cmd ? `<section class="infosection"><div class="eyebrow">Rerun this in the CLI</div><div class="cmd"><pre class="mono" id="cmd">${esc(m.cmd)}</pre><button class="btn" id="copycmd">Copy</button></div></section>` : ''}
       <section class="infosection"><div class="rows">${sourceRow}${rows}</div></section>
     </div>`);
@@ -5274,7 +5279,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     const searchText = (s, outcome) => {
       const status = String((s.meta && s.meta.status) || 'unknown').toLowerCase();
       const outcomeLabel = indexOutcomeLabel(outcome);
-      return [s.meta.title, status, outcomeLabel !== status ? outcomeLabel : null, s.meta.platform, s.meta.deviceClassifier, s.meta.deviceType, s.meta.device, s.meta.target, s.meta.appId, s.meta.appVersion, s.meta.steps, s.meta.duration, s.meta.ranAt, s.meta.buildNumber, s.meta.commitSha, s.meta.branch, s.meta.failureCode, s.meta.skipReason, ...Object.values(s.meta.metadata || {}).map((v) => metadataText(v))]
+      return [s.meta.title, s.meta.context, status, outcomeLabel !== status ? outcomeLabel : null, s.meta.platform, s.meta.deviceClassifier, s.meta.deviceType, s.meta.device, s.meta.target, s.meta.appId, s.meta.appVersion, s.meta.steps, s.meta.duration, s.meta.ranAt, s.meta.buildNumber, s.meta.commitSha, s.meta.branch, s.meta.failureCode, s.meta.skipReason, ...Object.values(s.meta.metadata || {}).map((v) => metadataText(v))]
         .filter((v) => v != null && v !== '').join(' ').toLowerCase();
     };
     const facts = (pairs) => `<div class="idxfacts">${pairs.map(([label, value]) => `<div class="idxfact"><div class="k">${label}</div><div class="v">${esc(value != null && value !== '' ? value : '—')}</div></div>`).join('')}</div>`;

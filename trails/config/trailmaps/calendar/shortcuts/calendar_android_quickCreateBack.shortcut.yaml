@@ -5,4 +5,5 @@ shortcut:
   to: calendar/android/discard_dialog
 parameters: []
 tools:
-  - pressBack: {}
+  - pressKey:
+      keyCode: BACK

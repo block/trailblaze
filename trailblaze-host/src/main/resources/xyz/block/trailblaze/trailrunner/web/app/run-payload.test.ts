@@ -433,6 +433,12 @@ describe('runMeta', () => {
     expect(Payload.runMeta({ s }).trailSourceUrl).toBe(url);
     expect(Payload.runMeta({ s: Payload.normalizeSummary({ id: 'legacy-run' }) }).trailSourceUrl).toBeUndefined();
   });
+  test("carries the trail's authored context into the live and share report metadata", () => {
+    const meta = Payload.runMeta({ s: Payload.normalizeSummary({ id: 'run', context: 'Must persist.' }) });
+    expect(meta.context).toBe('Must persist.');
+    const bare = Payload.runMeta({ s: Payload.normalizeSummary({ id: 'legacy-run' }) });
+    expect(bare.context).toBeUndefined();
+  });
   const summary = {
     id: 'sess_1',
     title: 'Add item to cart',

@@ -5,4 +5,5 @@ shortcut:
   to: calendar/android/event_detail
 parameters: []
 tools:
-  - pressBack: {}
+  - pressKey:
+      keyCode: BACK

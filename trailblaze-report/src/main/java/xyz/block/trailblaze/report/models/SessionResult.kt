@@ -75,6 +75,12 @@ data class SessionResult(
   val metadata: Map<String, TrailMetadataValue>? = null,
 
   /**
+   * The trail's `config.context` — what the case proves and the setup it assumes — or null when the
+   * trail authored none. Carried so the CI run index can search it without the session's logs.
+   */
+  val context: String? = null,
+
+  /**
    * Path of the trail file this session ran, from `SessionInfo.trailFilePath`, or null when the
    * session named no trail at all.
    *

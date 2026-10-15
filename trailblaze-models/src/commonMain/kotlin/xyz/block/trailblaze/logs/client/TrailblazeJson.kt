@@ -24,7 +24,7 @@ object TrailblazeJson {
    * a single source of truth — changing one without the other would silently break decode
    * of pre-#2634 logs.
    */
-  const val POLYMORPHIC_CLASS_DISCRIMINATOR = "class"
+  const val POLYMORPHIC_CLASS_DISCRIMINATOR = xyz.block.trailblaze.toolcalls.TRAIL_POLYMORPHIC_CLASS_DISCRIMINATOR
 
   fun createTrailblazeJsonInstance(
     allToolClasses: Map<ToolName, KClass<out TrailblazeTool>>,

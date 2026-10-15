@@ -815,7 +815,7 @@ class NextMoveDecisionLlmClient(
      */
     val KEPT_TOOLS = setOf(
       "tap", "web_click", "longPress", "type", "inputText", "eraseText", "clearText", "hideKeyboard",
-      "swipe", "scrollUntilTextIsVisible", "pressBack", "pressKey", "waitForChange", "assertVisible",
+      "swipe", "scrollUntilTextIsVisible", "pressKey", "waitForChange", "assertVisible",
       "assertNotVisibleWithText", "assertWithAi", "assertWaypoint", "requestDetailedViewHierarchy", "takeSnapshot",
       "objectiveStatus",
     )

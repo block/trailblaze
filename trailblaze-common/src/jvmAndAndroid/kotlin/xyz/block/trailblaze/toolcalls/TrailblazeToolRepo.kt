@@ -543,7 +543,7 @@ class TrailblazeToolRepo(
    * `declaresExhaustiveParameters = true`, e.g. a scripted `.ts` tool whose analyzer-generated
    * schema is `properties: {}`). In that case every incoming key is unknown and the
    * validator MUST reject — leniency here would re-introduce the exact silent-drop behavior
-   * this change closes (e.g. for `pressBack` and other no-arg YAML tools).
+   * this change closes (e.g. for no-arg YAML tools).
    */
   @OptIn(InternalSerializationApi::class)
   fun expectedArgumentKeysFor(toolName: String): Set<String>? {
@@ -570,7 +570,7 @@ class TrailblazeToolRepo(
       val config = TrailblazeSerializationInitializer.buildYamlDefinedTools()[typedName]
       if (config != null) {
         // YAML tools: author-controlled exhaustive `parameters:` list. Empty means
-        // "tool takes no args" — reject any incoming key (closes the `pressBack` /
+        // "tool takes no args" — reject any incoming key (closes the
         // no-arg YAML loophole flagged on #3213).
         return config.toTrailblazeToolDescriptor().parameterNames()
       }

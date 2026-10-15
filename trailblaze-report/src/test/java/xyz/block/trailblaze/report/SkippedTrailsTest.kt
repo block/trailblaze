@@ -4,6 +4,7 @@ import java.io.File
 import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlinx.serialization.json.jsonPrimitive
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import xyz.block.trailblaze.report.models.CiRunMetadata
@@ -31,6 +32,7 @@ class SkippedTrailsTest {
     reason: String = "flaky on tablets, see #2194",
     recordedAt: Long = 1_700_000_000_000,
     metadata: Map<String, TrailMetadataValue>? = null,
+    context: String? = null,
   ) = SkippedTrail(
     trail_path = "/repo/trails/$testKey.trail.yaml",
     title = "Pay at checkout",
@@ -41,6 +43,7 @@ class SkippedTrailsTest {
     device_classifier = deviceClassifier,
     trail_source = SOURCE_TYPE_HANDWRITTEN,
     metadata = metadata,
+    context = context,
     recorded_at_epoch_ms = recordedAt,
   )
 
@@ -194,6 +197,15 @@ class SkippedTrailsTest {
     val row = skip(metadata = metadataOf("testRailCaseId" to "1017")).toSessionResult()
 
     assertEquals(metadataOf("testRailCaseId" to "1017"), row.metadata)
+  }
+
+  @Test
+  fun `a skipped row stays searchable by the trail's context in the CI index`() {
+    val row = skip(context = "Payment must settle.").toSessionResult()
+    val meta = RunIndexGenerator.stubMeta(row, CiSummaryReport(metadata = CiRunMetadata(), results = listOf(row)), null)
+
+    assertEquals("Payment must settle.", row.context)
+    assertEquals("Payment must settle.", meta["context"]!!.jsonPrimitive.content)
   }
 
   @Test

@@ -4,9 +4,9 @@
 
 # `pressKey`
 
-Press a special key: BACK (previous screen, Android only), ENTER (submit), HOME (home screen,
-backgrounding the app), BACKSPACE (delete before the caret), TAB (next field), ESCAPE (dismiss
-keyboard or modal).
+Press a special key: BACK (previous screen, Android only; on iOS tap the app's own back
+control), ENTER (submit), HOME (home screen, backgrounding the app), BACKSPACE (delete before the
+caret), TAB (next field), ESCAPE (dismiss keyboard or modal).
 
 ## Source
 

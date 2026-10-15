@@ -295,8 +295,8 @@ trail:
   }
 
   @Test
-  fun deserializePressBackTool() {
-    // `pressBack` is now a YAML-defined tool (see trails/config/tools/pressBack.yaml).
+  fun deserializeYamlDefinedTool() {
+    // `eraseText` is a YAML-defined tool (see trailmaps/trailblaze/tools/eraseText.tool.yaml).
     // It deserializes as a YamlDefinedTrailblazeTool rather than a KClass-backed data object.
     val yaml = """
 config: {}
@@ -304,13 +304,13 @@ trail:
   - step: recorded
     recording:
       android:
-        - pressBack: {}
+        - eraseText: {}
     """.trimIndent()
 
     val tools = decodeRecordedTools(yaml)
     assertThat(tools.size).isEqualTo(1)
     val wrapper = tools[0]
-    assertThat(wrapper.name).isEqualTo("pressBack")
+    assertThat(wrapper.name).isEqualTo("eraseText")
     assertThat(wrapper.trailblazeTool).isInstanceOf(xyz.block.trailblaze.config.YamlDefinedTrailblazeTool::class)
   }
 

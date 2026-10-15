@@ -15,8 +15,6 @@ import xyz.block.trailblaze.util.Console
  * and any future serializer that emits the same shape stay in sync — drift between them would
  * silently lose data on round-trip.
  */
-const val OTHER_TRAILBLAZE_TOOL_NAME_FIELD = "toolName"
-const val OTHER_TRAILBLAZE_TOOL_RAW_FIELD = "raw"
 
 /**
  * Encodes any [TrailblazeTool] into the persisted [OtherTrailblazeTool] `{toolName, raw}`

@@ -247,8 +247,8 @@ object TrailblazeToolSetCatalog {
   /**
    * Returns the YAML-defined tool names for a single catalog entry's [id], ignoring the
    * `alwaysEnabled` auto-inclusion [resolve] performs. Symmetric with [entryToolClasses] for the
-   * `tools:` composition case — entries like `navigation` include YAML-only tools (e.g.
-   * `pressBack`) that have no backing [KClass].
+   * `tools:` composition case — entries like `core_interaction` include YAML-only tools (e.g.
+   * `eraseText`) that have no backing [KClass].
    *
    * Returns an empty set if [id] is not in the catalog.
    */

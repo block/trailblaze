@@ -11,6 +11,7 @@ Entries tagged as **Decision** record significant architectural or technical cho
 
 | Date | Title | Type |
 | :--- | :--- | :--- |
+| 2026-10-13 | [Run Trails on GitHub Actions](2026-10-13-github-actions-trail-runner.md) | Decision |
 | 2026-10-06 | [A TypeScript Web UI Instead of Compose](2026-10-06-typescript-web-ui-over-compose.md) | Decision |
 | 2026-10-05 | [Trailblaze vs Maestro: TypeScript Tools, Subflows and Maestro MCP](2026-10-05-typescript-tools-vs-maestro-javascript-and-subflows.md) | Devlog |
 | 2026-10-04 | [Trailblaze vs Manual Testing: The Remaining Gaps](2026-10-04-trailblaze-vs-manual-testing.md) | Devlog |

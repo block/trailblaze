@@ -449,7 +449,7 @@ class DeviceManagerToolSetTest {
         driverType: TrailblazeDriverType,
       ): Set<ToolName> =
         if (driverType == TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION) {
-          setOf(ToolName("pressBack"), ToolName("eraseText"))
+          setOf(ToolName("eraseText"))
         } else emptySet()
     }
     val bridge = DeviceTestBridge(
@@ -478,7 +478,6 @@ class DeviceManagerToolSetTest {
     // fix the per-device override resolves to `perdeviceapp`, the summary
     // block is emitted, and the YAML-defined tools land in it.
     assertContains(result, "Available ${perDeviceTarget.displayName} tools")
-    assertContains(result, "pressBack")
     assertContains(result, "eraseText")
   }
 
@@ -502,7 +501,7 @@ class DeviceManagerToolSetTest {
       ): Set<kotlin.reflect.KClass<out TrailblazeTool>> = emptySet()
 
       override fun getCustomYamlToolNamesForDriver(driverType: TrailblazeDriverType): Set<ToolName> =
-        setOf(ToolName("pressBack"))
+        setOf(ToolName("eraseText"))
     }
     val bridge = DeviceTestBridge(
       devices = setOf(androidDevice),

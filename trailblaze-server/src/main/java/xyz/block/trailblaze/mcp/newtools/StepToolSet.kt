@@ -1146,7 +1146,7 @@ class StepToolSet(
       return tools
     }
     // Fallback when no device-specific tools are available (e.g. no device connected yet).
-    // Must include YAML-defined tools (e.g. pressBack) alongside class-backed ones so the
+    // Must include YAML-defined tools (e.g. eraseText) alongside class-backed ones so the
     // LLM sees the full toolset even in the no-device state.
     val classDescriptors = ToolSetCategoryMapping.getToolClasses(ToolSetCategory.ALL)
       .mapNotNull { it.toKoogToolDescriptor()?.toTrailblazeToolDescriptor() }

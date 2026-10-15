@@ -610,6 +610,8 @@ class RunReportGenerator(
           skip.metadata?.takeIf { it.isNotEmpty() }?.let { metadata ->
             put("metadata", metadata.toJsonObject())
           }
+          // Same `config.context` [sessionMetaJson] emits, which the index search also reads.
+          skip.context?.takeIf { it.isNotBlank() }?.let { put("context", it) }
           put(
             "ranAt",
             LocalDateTime.ofInstant(
@@ -635,6 +637,8 @@ class RunReportGenerator(
       // page hands off to its all-runs report by this id (see `allRunsUrl`).
       put("sessionId", sessionInfo.sessionId.value)
       put("title", sessionInfo.displayName)
+      // The trail's `config.context`: what the case proves and the setup it assumes.
+      sessionInfo.trailConfig?.context?.takeIf { it.isNotBlank() }?.let { put("context", it) }
       put("status", statusLabel(status))
       sessionInfo.trailConfig?.target?.let { put("target", it) }
       sessionInfo.targetAppInfo?.let { app ->

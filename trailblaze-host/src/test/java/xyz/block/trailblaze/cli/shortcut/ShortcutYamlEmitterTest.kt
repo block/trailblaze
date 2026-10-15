@@ -3,6 +3,9 @@ package xyz.block.trailblaze.cli.shortcut
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonObject
 import xyz.block.trailblaze.api.DriverNodeMatch
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
 import xyz.block.trailblaze.config.ToolYamlConfig
@@ -54,6 +57,24 @@ class ShortcutYamlEmitterTest {
     parsed.validate()
     assertTrue(yaml.contains("scroll:"))
     assertTrue(yaml.contains("forward: true"))
+  }
+
+  @Test
+  fun `emit writes a back body as pressKey BACK`() {
+    val yaml = ShortcutYamlEmitter.emit(
+      shortcutId = "auto-x__to__y",
+      fromWaypointId = "trailmap/x",
+      toWaypointId = "trailmap/y",
+      description = "go back",
+      body = ShortcutProposer.ToolBody.PressBack,
+    )
+    val parsed = WaypointLoader.yaml.decodeFromString(ToolYamlConfig.serializer(), yaml)
+    parsed.validate()
+    // Decoded, not string-matched: the nested `keyCode` is what makes the entry a real tool call.
+    assertEquals(
+      buildJsonObject { putJsonObject("pressKey") { put("keyCode", "BACK") } },
+      parsed.toolsList?.single(),
+    )
   }
 
   @Test

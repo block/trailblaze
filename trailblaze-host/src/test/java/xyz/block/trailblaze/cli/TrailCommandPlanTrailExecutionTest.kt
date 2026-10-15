@@ -37,6 +37,7 @@ class TrailCommandPlanTrailExecutionTest {
     skip: String? = null,
     id: String? = null,
     target: String? = null,
+    context: String? = null,
   ): File {
     dir.mkdirs()
     val file = File(dir, name)
@@ -45,6 +46,7 @@ class TrailCommandPlanTrailExecutionTest {
       appendLine("  title: $title")
       if (id != null) appendLine("  id: $id")
       if (target != null) appendLine("  target: $target")
+      if (context != null) appendLine("  context: \"$context\"")
       if (tags != null) appendLine("  tags: [${tags.joinToString(", ")}]")
       if (skip != null) {
         appendLine("  skip:")
@@ -1025,6 +1027,7 @@ class TrailCommandPlanTrailExecutionTest {
       id = "checkout/refund",
       skip = "see #2194",
       target = "square",
+      context = "Refund must reach the card.",
     )
     // Under `trails/`, so the fallback shows the identity a session for it would carry: the
     // `trails/`-relative short name, not a machine-specific absolute path.
@@ -1055,6 +1058,7 @@ class TrailCommandPlanTrailExecutionTest {
     // beside the row holding the same trail's runs.
     assertEquals("checkout/refund", withConfig.trailId)
     assertEquals("square", withConfig.target)
+    assertEquals("Refund must reach the card.", withConfig.context)
 
     // No `id:` and no `title:`: both fall back to the short trail name, the same rule
     // `SessionInfo.stableTestKey` applies to the same absolute path the CLI stamps on a session
@@ -1082,6 +1086,7 @@ class TrailCommandPlanTrailExecutionTest {
       trailId = "checkout/refund",
       target = "square",
       trailSource = SOURCE_TYPE_GENERATED,
+      context = "Refund must reach the card.",
     )
     val classifiers = listOf(
       TrailblazeDeviceClassifier("android"),
@@ -1107,6 +1112,7 @@ class TrailCommandPlanTrailExecutionTest {
     assertEquals("android", recorded.platform)
     assertEquals("checkout/refund", recorded.trail_id)
     assertEquals("square", recorded.target)
+    assertEquals("Refund must reach the card.", recorded.context)
   }
 
   @Test

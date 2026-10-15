@@ -102,7 +102,7 @@ All 12 Trailblaze tools are fully implemented:
 | launchApp | `revyl device launch --bundle-id <id>` |
 | installApp | `revyl device install --app-url <url>` |
 | eraseText | `revyl device clear-text` |
-| pressBack | `revyl device back` |
+| pressKey (BACK) | `revyl device back` |
 | pressKey | `revyl device key --key ENTER` |
 | openUrl | `revyl device navigate --url "..."` |
 | screenshot | `revyl device screenshot --out <path>` |

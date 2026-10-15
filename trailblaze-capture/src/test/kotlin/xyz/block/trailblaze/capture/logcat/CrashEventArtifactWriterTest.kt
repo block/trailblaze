@@ -211,6 +211,144 @@ class CrashEventArtifactWriterTest {
     }
   }
 
+  @Test
+  fun `an iOS extension's crash beside the app does not fail the app's run`() {
+    val sessionDir = Files.createTempDirectory("crash-event-test").toFile()
+    try {
+      // The app and its widget extension share the install directory, so both reach device.log.
+      val deviceLog = File(sessionDir, "device.log").apply {
+        writeText(
+          """
+          2026-10-08 15:12:04.836 Df Wallet[21054:7b06b] [com.apple.chrono:widget] reloadAllTimelines() - reloaded all timelines
+          2026-10-08 15:12:04.837 Df WalletWidget[21057:7b0ac] (libswiftCore.dylib) Fatal error: Attempted to read an unowned reference but object 0x10f0e0ba0 was already destroyed
+          2026-10-08 15:12:04.993 Df Wallet[21054:7b06b] (libMobileGestalt.dylib) No persisted cache on this platform.
+          """.trimIndent(),
+        )
+      }
+
+      CrashEventArtifactWriter.write(sessionDir, deviceLog, TrailblazeDevicePlatform.IOS, appProcessName = "Wallet")
+
+      assertFalse(File(sessionDir, "${SessionEvents.DIR_NAME}/crash.ndjson").exists())
+      assertNull(CrashEventArtifactWriter.failure(sessionDir))
+    } finally {
+      sessionDir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun `the iOS app's own crash still fails its run when an extension also crashed`() {
+    val sessionDir = Files.createTempDirectory("crash-event-test").toFile()
+    try {
+      val deviceLog = File(sessionDir, "device.log").apply {
+        writeText(
+          """
+          2026-10-08 15:12:04.837 Df WalletWidget[21057:7b0ac] (libswiftCore.dylib) Fatal error: widget state
+          2026-10-08 15:12:05.100 Df Wallet[21054:7b06b] (libswiftCore.dylib) Fatal error: app state
+          """.trimIndent(),
+        )
+      }
+
+      // Process names compare case-insensitively, like the log predicate's [c] clauses.
+      CrashEventArtifactWriter.write(sessionDir, deviceLog, TrailblazeDevicePlatform.IOS, appProcessName = "wallet")
+
+      val failure = assertNotNull(CrashEventArtifactWriter.failure(sessionDir))
+      assertEquals(1, failure.payload["crashCount"]?.jsonPrimitive?.content?.toInt())
+      val source = assertNotNull(failure.payload["firstCrash"]?.jsonObject?.get("source")?.jsonObject)
+      assertEquals(2, source["line"]?.jsonPrimitive?.content?.toInt())
+    } finally {
+      sessionDir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun `an iOS crash on a continuation line belongs to the record above it`() {
+    val sessionDir = Files.createTempDirectory("crash-event-test").toFile()
+    try {
+      val deviceLog = File(sessionDir, "device.log").apply {
+        writeText(
+          """
+          2026-10-08 15:12:04.837 Df WalletWidget[21057:7b0ac] (libswiftCore.dylib) widget timeline failed:
+              Fatal error: widget state
+          2026-10-08 15:12:05.100 Df Wallet[21054:7b06b] (libswiftCore.dylib) app state check failed:
+              Fatal error: app state
+          """.trimIndent(),
+        )
+      }
+
+      CrashEventArtifactWriter.write(sessionDir, deviceLog, TrailblazeDevicePlatform.IOS, appProcessName = "Wallet")
+
+      val failure = assertNotNull(CrashEventArtifactWriter.failure(sessionDir))
+      assertEquals(1, failure.payload["crashCount"]?.jsonPrimitive?.content?.toInt())
+      val source = assertNotNull(failure.payload["firstCrash"]?.jsonObject?.get("source")?.jsonObject)
+      assertEquals(4, source["line"]?.jsonPrimitive?.content?.toInt())
+    } finally {
+      sessionDir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun `an iOS crash line with no process to attribute it to still counts`() {
+    val sessionDir = Files.createTempDirectory("crash-event-test").toFile()
+    try {
+      val deviceLog = File(sessionDir, "device.log").apply {
+        writeText("    Fatal error: continued from the previous line")
+      }
+
+      CrashEventArtifactWriter.write(sessionDir, deviceLog, TrailblazeDevicePlatform.IOS, appProcessName = "Wallet")
+
+      assertNotNull(CrashEventArtifactWriter.failure(sessionDir))
+    } finally {
+      sessionDir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun `an iOS app whose name starts with a short word keeps its crash in either log style`() {
+    val sessionDir = Files.createTempDirectory("crash-event-test").toFile()
+    try {
+      val deviceLog = File(sessionDir, "device.log").apply {
+        writeText(
+          """
+          2026-03-10 14:23:45.678-0700  My App[12345]: Fatal error: plain style
+          2026-10-08 15:12:04.837 Df My App[1:2a] (libswiftCore.dylib) Fatal error: compact style
+          """.trimIndent(),
+        )
+      }
+
+      CrashEventArtifactWriter.write(sessionDir, deviceLog, TrailblazeDevicePlatform.IOS, appProcessName = "My App")
+
+      val failure = assertNotNull(CrashEventArtifactWriter.failure(sessionDir))
+      assertEquals(2, failure.payload["crashCount"]?.jsonPrimitive?.content?.toInt())
+    } finally {
+      sessionDir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun `an iOS process column names its process in both log stream line styles`() {
+    val compact = assertNotNull(
+      CrashEventArtifactWriter.iosProcessColumnOf(
+        "2026-10-08 15:12:04.837 Df WalletWidget[21057:7b0ac] (libswiftCore.dylib) Fatal error: x",
+      ),
+    )
+    assertTrue(CrashEventArtifactWriter.iosColumnNames(compact, "WalletWidget"))
+    assertFalse(CrashEventArtifactWriter.iosColumnNames(compact, "Wallet"))
+
+    val plain = assertNotNull(
+      CrashEventArtifactWriter.iosProcessColumnOf("2026-03-10 14:23:45.678-0700  ExampleApp[12345]: Fatal error: x"),
+    )
+    assertTrue(CrashEventArtifactWriter.iosColumnNames(plain, "exampleapp"))
+    assertFalse(CrashEventArtifactWriter.iosColumnNames(plain, "Example"))
+
+    val spaced = assertNotNull(
+      CrashEventArtifactWriter.iosProcessColumnOf("2026-10-08 15:12:04.837 E  Wallet Beta[1:2a] Fatal error: x"),
+    )
+    assertTrue(CrashEventArtifactWriter.iosColumnNames(spaced, "Wallet Beta"))
+    assertFalse(CrashEventArtifactWriter.iosColumnNames(spaced, "Wallet"))
+
+    assertNull(CrashEventArtifactWriter.iosProcessColumnOf("    Fatal error: continued from the previous line"))
+  }
+
   private data class SignatureCase(
     val platform: TrailblazeDevicePlatform,
     val line: String,

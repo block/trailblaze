@@ -189,7 +189,7 @@ Toolsets are declared in `trailmaps/<id>/toolsets/*.yaml`. They are pure YAML gr
 | `meta` | Yes | `all drivers` | 1 |
 | `mobile_primitives` | Yes | `android-ondevice-accessibility`, `ios-axe`, `ios-host` | 5 |
 | `multi_device` | No | `all drivers` | 1 |
-| `navigation` | No | `android-ondevice-accessibility`, `ios-axe`, `ios-host` | 5 |
+| `navigation` | No | `android-ondevice-accessibility`, `ios-axe`, `ios-host` | 4 |
 | `observation` | No | `android-ondevice-accessibility`, `ios-axe`, `ios-host` | 1 |
 | `revyl_core` | No | `revyl-android`, `revyl-ios` | 7 |
 | `revyl_verification` | No | `revyl-android`, `revyl-ios` | 1 |

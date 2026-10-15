@@ -168,7 +168,7 @@ class YamlBackedHostAppTarget(
   /**
    * For each driver type, the resolved set of *excluded* tools — split into class-backed,
    * YAML-defined, and scripted (`.ts` / `.js`) entries. Mirrors [resolvedCustomToolsByDriver]'s
-   * classification so a target's `excluded_tools: [pressBack]` (YAML) or `excluded_tools: [openUrl]`
+   * classification so a target's `excluded_tools: [eraseText]` (YAML) or `excluded_tools: [openUrl]`
    * (scripted, toolset-delivered) flows through the right exclusion API instead of being swallowed
    * by the resolver as an unknown tool. Before scripted was a recognized bucket here, an
    * `excluded_tools: [openUrl]` entry hit the `else` branch below and was logged as "unknown tool"

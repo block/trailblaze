@@ -543,6 +543,7 @@ open class CliReportGenerator {
       title = title,
       test_key = sessionInfo.stableTestKey,
       metadata = sessionInfo.trailConfig?.metadata,
+      context = sessionInfo.trailConfig?.context?.takeIf { it.isNotBlank() },
       // Blank normalizes to null, as it does for `test_class`/`test_name` below and for
       // `SessionInfo.displayName`: a consumer reads null as "named no trail", and an empty string
       // that survived to the report would answer that question two different ways depending on

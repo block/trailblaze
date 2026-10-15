@@ -550,6 +550,8 @@ data class SessionSummary(
   val metadata: Map<String, TrailMetadataValue>? = null,
   /** Immutable GitHub permalink to the trail source that triggered this run, when known. */
   val trailSourceUrl: String? = null,
+  /** The trail's `config.context`: what the case proves and the setup it assumes. */
+  val context: String? = null,
 )
 
 @Serializable

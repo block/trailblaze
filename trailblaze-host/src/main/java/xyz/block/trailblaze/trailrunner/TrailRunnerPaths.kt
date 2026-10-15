@@ -207,5 +207,6 @@ internal fun toSessionSummary(info: SessionInfo): SessionSummary {
     error = error,
     metadata = info.trailConfig?.metadata?.takeIf { it.isNotEmpty() },
     trailSourceUrl = info.trailSourceUrl,
+    context = info.trailConfig?.context?.takeIf { it.isNotBlank() },
   )
 }

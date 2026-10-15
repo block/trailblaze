@@ -274,7 +274,7 @@ interface TrailblazeMcpBridge {
    *
    * Reading the daemon-wide value from a tool-list / tool-availability path
    * is the bug behind "Tool not valid for the current device/target" being
-   * raised for YAML-defined tools (`pressBack`, `eraseText`, …) on a bound
+   * raised for YAML-defined tools (`eraseText`, …) on a bound
    * device whose `--target` wasn't promoted to the daemon-wide setting.
    * Those tools only land in the available set when the resolved target's
    * trailmap declares the toolset that defines them; without a device-scoped

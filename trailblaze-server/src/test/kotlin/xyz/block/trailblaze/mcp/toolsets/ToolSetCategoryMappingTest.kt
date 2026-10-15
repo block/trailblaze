@@ -16,11 +16,11 @@ import kotlin.test.assertTrue
 class ToolSetCategoryMappingTest {
 
   @Test
-  fun `resolve NAVIGATION includes pressBack in yaml tool names`() {
-    val resolved = ToolSetCategoryMapping.resolve(ToolSetCategory.NAVIGATION)
+  fun `resolve CORE_INTERACTION includes eraseText in yaml tool names`() {
+    val resolved = ToolSetCategoryMapping.resolve(ToolSetCategory.CORE_INTERACTION)
     assertTrue(
-      resolved.yamlToolNames.any { it.toolName == "pressBack" },
-      "NAVIGATION category should expose pressBack (YAML-defined). Got: ${resolved.yamlToolNames}",
+      resolved.yamlToolNames.any { it.toolName == "eraseText" },
+      "CORE_INTERACTION category should expose eraseText (YAML-defined). Got: ${resolved.yamlToolNames}",
     )
   }
 

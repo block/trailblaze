@@ -16,11 +16,11 @@ import kotlin.test.assertTrue
 class TrailblazeToolSetCatalogTest {
 
   @Test
-  fun `entryYamlToolNames returns pressBack for navigation`() {
-    val yamlNames = TrailblazeToolSetCatalog.entryYamlToolNames("navigation")
+  fun `entryYamlToolNames returns eraseText for core_interaction`() {
+    val yamlNames = TrailblazeToolSetCatalog.entryYamlToolNames("core_interaction")
     assertTrue(
-      yamlNames.any { it.toolName == "pressBack" },
-      "navigation catalog entry should expose pressBack (YAML-defined). Got: $yamlNames",
+      yamlNames.any { it.toolName == "eraseText" },
+      "core_interaction catalog entry should expose eraseText (YAML-defined). Got: $yamlNames",
     )
   }
 

@@ -1,0 +1,69 @@
+package xyz.block.trailblaze.devices
+
+/**
+ * Represents a supported Platform.
+ *
+ * The [hidden] flag marks platforms that exist as wired-up first-class citizens but shouldn't
+ * appear in default user-facing surfaces (`device list`, target dropdowns, cross-platform tool
+ * catalogs). It's an "available but undemoed" tier — the full `--device <platform>/<id>` plumbing
+ * works, the platform participates in exhaustive `when` matches, but listings filter it out unless
+ * an `--all`-style flag is passed.
+ *
+ * Today only `DESKTOP` (the Compose desktop driver) uses this: the capability is real (an RPC
+ * server already runs in the desktop app, see `ComposeRpcServer`) but we're not yet committing to
+ * it as a documented public surface. Promote by flipping `hidden` to `false` once we are.
+ */
+enum class TrailblazeDevicePlatform(val displayName: String, val hidden: Boolean = false) {
+  ANDROID("Android"),
+  IOS("iOS"),
+  WEB("Web Browser"),
+
+  /**
+   * A host-side Compose Desktop app under test, exposed via the
+   * [xyz.block.trailblaze.compose.driver.rpc.ComposeRpcServer] it runs on `127.0.0.1:52600`. Hidden
+   * from default listings; surface via `--all`.
+   */
+  DESKTOP("Compose Desktop", hidden = true);
+
+  /**
+   * True for platforms whose device is a virtual one provisioned on demand by downstream device
+   * loading, rather than a physical/emulated device autodetect enumerates: [WEB] (Playwright
+   * browser) and [DESKTOP] (Compose). Device selection ([TrailDeviceSelector]) routes trails that
+   * only declare these platforms to that virtual device regardless of connected real devices.
+   */
+  val usesVirtualDevice: Boolean
+    get() = this == WEB || this == DESKTOP
+
+  fun asTrailblazeDeviceClassifier(): TrailblazeDeviceClassifier =
+    TrailblazeDeviceClassifier(this.name.lowercase())
+
+  /**
+   * Canonical, fully-qualified device identifier: `platform/instanceId` (lowercase platform).
+   * Round-trips through [fromString].
+   *
+   * Examples:
+   * ```text
+   * ANDROID.toFullyQualifiedDeviceId("emulator-5554") → "android/emulator-5554"
+   * IOS.toFullyQualifiedDeviceId("SIM-UUID-1234") → "ios/SIM-UUID-1234"
+   * WEB.toFullyQualifiedDeviceId("checkout") → "web/checkout"
+   * ```
+   */
+  fun toFullyQualifiedDeviceId(instanceId: String): String = "${name.lowercase()}/$instanceId"
+
+  companion object {
+    /**
+     * Matches platform names case-insensitively. Accepts both the bare platform name (`web`,
+     * `android`) and a fully-qualified `--device <platform>/<instanceId>` form (`web/checkout`,
+     * `android/emulator-5562`) — anything before the first `/` segment is what gets compared.
+     * Callers that already split off the platform segment themselves keep working unchanged.
+     */
+    fun fromString(value: String): TrailblazeDevicePlatform? {
+      val platformSegment = value.substringBefore('/').trim()
+      return entries.find { it.name.equals(platformSegment, ignoreCase = true) }
+    }
+
+    /** Default-visible platforms (excludes [hidden] entries like [DESKTOP]). */
+    val visibleEntries: List<TrailblazeDevicePlatform>
+      get() = entries.filter { !it.hidden }
+  }
+}

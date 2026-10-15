@@ -228,7 +228,7 @@ class TargetToolBaselineGenerator(
     // Build per-driver excluded sets. Route through the central `getExcludedToolSurfaceForDriver`
     // accessor so the baseline matrix honors ALL three exclusion backings (class / YAML / scripted)
     // — reading only `getExcludedToolsForDriver` here would miss an `excluded_tools: [openUrl]`
-    // (scripted) or `[pressBack]` (YAML) and render an excluded tool as available.
+    // (scripted) or `[eraseText]` (YAML) and render an excluded tool as available.
     val excluded = allDrivers.associateWith { driverType ->
       target.getExcludedToolSurfaceForDriver(driverType).allToolNameStrings
     }

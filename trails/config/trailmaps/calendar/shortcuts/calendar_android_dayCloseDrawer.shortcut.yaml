@@ -5,4 +5,5 @@ shortcut:
   to: calendar/android/day_view
 parameters: []
 tools:
-  - pressBack: {}
+  - pressKey:
+      keyCode: BACK

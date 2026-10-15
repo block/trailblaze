@@ -272,6 +272,8 @@ and project context to the loop, which the built-in agent can't.
   [Scripted Tools (TypeScript) reference](scripted-tools-typed-authoring.md),
   the [Trailmaps](trailmaps.md) manifest schema, and the [Trailblaze Tools](tools.md)
   catalog of scripted / pure-YAML / Kotlin flavors.
+- **Running trails in CI on GitHub?** See [GitHub Actions](github-actions.md) — one request
+  file lists devices and trails; a reusable workflow shards them and reports on the PR.
 - **Gating CI on which trails a tool change affects?** See the
   [`usages --json` report contract](usages-json.md) — field semantics, the diagnostic-kind
   registry, exit codes, and the versioning policy.

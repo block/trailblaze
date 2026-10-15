@@ -4,7 +4,7 @@ title: Trailblaze Tools
 
 # Trailblaze Tools
 
-Trailblaze ships a catalog of framework tools (`tap`, `inputText`, `pressBack`,
+Trailblaze ships a catalog of framework tools (`tap`, `inputText`, `pressKey`,
 `assertVisible`, …) that cover most UI automation. When your app or test surface needs
 something the catalog doesn't have, you add **custom tools** to a workspace trailmap.
 

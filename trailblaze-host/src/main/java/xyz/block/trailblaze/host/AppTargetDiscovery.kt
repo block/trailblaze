@@ -258,7 +258,7 @@ object AppTargetDiscovery {
    *
    * **Classpath/workspace separation.** The composite resource source walks both layers,
    * so `ToolYamlLoader.discoverYamlDefinedTools(source)` surfaces classpath-bundled tools
-   * (`pressBack`, `eraseText`) alongside workspace files. Pure classpath entries get
+   * (`eraseText`) alongside workspace files. Pure classpath entries get
    * filtered out via the `classpathConfigs[k] == v` equality check — they already live
    * in the serialization initializer's classpath cache, and registering them as workspace
    * overlay entries would force-flip their `requires_host` flag, silently changing their
@@ -297,7 +297,7 @@ object AppTargetDiscovery {
     }
     // Filter out configs that came from the classpath unchanged. `allDiscovered` was
     // walked from a composite resource source (classpath + workspace filesystem), so
-    // classpath-bundled `*.tool.yaml` files (`pressBack`, `eraseText`, etc.) show up
+    // classpath-bundled `*.tool.yaml` files (`eraseText`, etc.) show up
     // alongside any workspace-authored ones. If we registered the full set, the
     // `requires_host = null → true` mutation below would flip THEIR host-vs-device
     // dispatch flag too — silently routing classpath tools through the host-expansion

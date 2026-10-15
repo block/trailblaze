@@ -47,7 +47,7 @@ class DirectMcpToolExecutor(
   /**
    * Combined class-backed + YAML-defined + scripted tool surface for the configured categories.
    * Routed through [ToolSetCategoryMapping.resolve] so we can't accidentally advertise only one
-   * slice — catalog entries like `navigation` include YAML-only tools (e.g. `pressBack`) and
+   * slice — catalog entries like `core_interaction` include YAML-only tools (e.g. `eraseText`) and
    * scripted tools (e.g. `openUrl`) that MCP must handle alongside class-backed tools.
    */
   private val availableTools by lazy { ToolSetCategoryMapping.resolve(categories) }

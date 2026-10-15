@@ -434,6 +434,7 @@ kotlin {
 
     // Shared source set for JVM and Android (Maestro-dependent code)
     val jvmAndAndroid by creating {
+      dependencies { api(project(":trailblaze-http")) }
       dependsOn(commonMain.get())
       dependencies {
         // Koog reasoning-loop core (AIAgent + custom strategy graph) for the KOOG_STRATEGY_GRAPH

@@ -12,6 +12,7 @@ import java.net.URI
 import kotlinx.serialization.json.Json
 import xyz.block.trailblaze.report.models.CiSummaryReport
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.util.fileUrl
 
 /**
  * CLI command that turns one or more `test_report.json` files into a RUN INDEX — the report's
@@ -85,7 +86,7 @@ class GenerateRunIndexCliCommand(
 
     val written = generator.generate(reports, viewerBaseUrl.takeIf { it.isNotBlank() }, output)
       ?: error("Could not generate the run index. See the [RunReportGenerator] output above.")
-    Console.log("file://${written.absolutePath}")
+    Console.log("${written.fileUrl()}")
   }
 
   companion object {

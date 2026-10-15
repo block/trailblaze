@@ -3,12 +3,15 @@ package xyz.block.trailblaze.host.recording
 import xyz.block.trailblaze.api.DriverNodeDetail
 import xyz.block.trailblaze.api.TrailblazeNode
 import xyz.block.trailblaze.api.TrailblazeNodeSelectorGenerator
+import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
+import xyz.block.trailblaze.toolcalls.commands.PressKeyTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.TapOnByElementSelector
 import xyz.block.trailblaze.toolcalls.commands.TapOnPointTrailblazeTool
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -35,6 +38,21 @@ import kotlin.test.assertTrue
 class MaestroInteractionToolFactoryTest {
 
   private val factory = MaestroInteractionToolFactory(deviceWidth = 1080, deviceHeight = 1920)
+
+  // -- Press key tool --------------------------------------------------------
+
+  @Test
+  fun `Back records as pressKey BACK on Android`() {
+    val (tool, _) = assertNotNull(factory.createPressKeyTool("Back"))
+    assertEquals(PressKeyTrailblazeTool.PressKeyCode.BACK, assertIs<PressKeyTrailblazeTool>(tool).keyCode)
+  }
+
+  @Test
+  fun `Back is refused on iOS instead of recording a step that cannot replay`() {
+    val ios = MaestroInteractionToolFactory(deviceWidth = 1170, deviceHeight = 2532, platform = TrailblazeDevicePlatform.IOS)
+    assertNull(ios.createPressKeyTool("Back"))
+    assertNotNull(ios.createPressKeyTool("Enter"), "other keys still record on iOS")
+  }
 
   // -- Tap tool --------------------------------------------------------------
 

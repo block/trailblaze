@@ -227,7 +227,8 @@ trailblaze run flows/login/trail.yaml -d android --self-heal
 ```
 
 By default `trailblaze run` replays the recorded tool sequence with **no LLM in the
-loop** — fast, deterministic, cheap. This is the path CI takes.
+loop** — fast, deterministic, cheap. This is the path CI takes; on GitHub, the
+[trail runner workflow](github-actions.md) runs it for you.
 
 ### When does the LLM actually run?
 

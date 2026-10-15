@@ -368,6 +368,7 @@ class DeviceConnectionService(private val deviceManager: TrailblazeDeviceManager
     val toolFactory = MaestroInteractionToolFactory(
       deviceWidth = stream.deviceWidth,
       deviceHeight = stream.deviceHeight,
+      platform = TrailblazeDevicePlatform.IOS,
     )
     return ConnectionState.Connected(
       RecordingDeviceConnection(

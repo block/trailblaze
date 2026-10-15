@@ -520,6 +520,8 @@ pre { margin: 0; font-size: 11px; line-height: 1.5; color: var(--sub2); white-sp
 .rows .r .k { color: var(--sub); font-size: var(--type-caption); }
 .rows .r .v { overflow-wrap: anywhere; }
 .infosection + .infosection { margin-top: var(--space-5); }
+.trailabout { max-width: var(--content-reading); }
+.trailcontext { color: var(--sub2); font-size: var(--type-small); line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
 .cmd { display: flex; gap: var(--space-2); align-items: flex-start; margin-top: var(--space-2); max-width: var(--content-reading); }
 .cmd pre { flex: 1; }
 .zoom { position: fixed; inset: 0; background: rgba(2,6,12,.9); display: flex; align-items: center; justify-content: center; gap: 32px; cursor: zoom-out; z-index: 99; backdrop-filter: blur(4px); overflow: hidden; }

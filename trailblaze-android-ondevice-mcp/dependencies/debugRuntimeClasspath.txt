@@ -1,8 +1,10 @@
 :trailblaze-agent
 :trailblaze-common
+:trailblaze-http
 :trailblaze-models
 :trailblaze-ondevice-rpc-proto
 :trailblaze-tracing
+:trailblaze-trail-format
 ai.koog:agents-core-android:1.2.0
 ai.koog:agents-core:1.2.0
 ai.koog:agents-ext-android:1.2.0-beta

@@ -32,6 +32,8 @@ interface RunMeta {
   deviceType?: string;
   platform?: string;
   trailId?: string;
+  /** The trail's `config.context`: what the case proves and the setup it assumes. Multi-line. */
+  context?: string;
   trailSourceUrl?: string;
   steps?: number;
   ranAt?: string;

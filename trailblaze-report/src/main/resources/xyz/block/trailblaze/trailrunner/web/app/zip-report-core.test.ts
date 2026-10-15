@@ -441,6 +441,13 @@ describe("run meta derivation", () => {
     expect(meta.generatedAt).toBe("test-time");
     expect(meta.error).toBeUndefined();
     expect(meta.selfHeal).toBeUndefined();
+    // No authored context in this fixture, and `title` above isn't re-emitted as one.
+    expect(meta.context).toBeUndefined();
+  });
+  test("carries the trail's authored context, in parity with sessionMetaJson", () => {
+    const trailConfig = { id: "suites/suite_1/case_2", title: "Remove item from cart", context: "Cart must update.\n\nSetup:\nOne item." };
+    const meta = Zip.buildRunMeta([startedLog({}, { trailConfig }), endedLog("Ended.Succeeded")], { generatedAt: "test-time" });
+    expect(meta.context).toBe("Cart must update.\n\nSetup:\nOne item.");
   });
 
   test("the classifier is the whole compound identity, not the platform-stripped tail", () => {

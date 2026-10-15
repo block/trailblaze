@@ -642,7 +642,7 @@ class ToolDiscoveryToolSet(
     // When a device is connected (or platform filter resolves a driver), show grouped tools.
     // Otherwise, show flat tools by platform.
     if (effectiveDriverType != null) {
-      // Apply targetApp's own exclusions so a `excluded_tools: [pressBack]` declaration in the
+      // Apply targetApp's own exclusions so a `excluded_tools: [eraseText]` declaration in the
       // target YAML doesn't leak into the listing — discovery output should reflect what the
       // executor actually accepts when this target is current.
       val excludedToolNames = getExcludedToolNames(targetApp, effectiveDriverType)
@@ -1082,7 +1082,7 @@ class ToolDiscoveryToolSet(
       // One read of the target's `excluded_tools:` surface across all three backings — the same
       // central accessor the resolver / runtime / on-device paths use. This keeps discovery's
       // hidden set in lockstep with what the agent actually sees: a target's
-      // `excluded_tools: [pressBack]` (YAML) or `[openUrl]` (scripted) is hidden here exactly as
+      // `excluded_tools: [eraseText]` (YAML) or `[openUrl]` (scripted) is hidden here exactly as
       // it's dropped from the LLM surface.
       val excluded = target.getExcludedToolSurfaceForDriver(driverType)
       // Class exclusions resolve to their advertised descriptor name (the @TrailblazeToolClass
@@ -1113,7 +1113,7 @@ class ToolDiscoveryToolSet(
     val resolved = ToolSetCategoryMapping.resolve(category)
     val classDescriptors = resolved.toolClasses
       .mapNotNull { it.toTrailblazeToolDescriptorWithSource() }
-    // Include YAML-defined tools (e.g. `pressBack` in NAVIGATION) so discovery output
+    // Include YAML-defined tools (e.g. `eraseText` in CORE_INTERACTION) so discovery output
     // matches what the executor will actually accept.
     val yamlDescriptors = KoogToolExt.buildTrailblazeDescriptorsForYamlDefined(resolved.yamlToolNames)
     // Include scripted tools (e.g. `openUrl` in NAVIGATION) so discovery output matches the
@@ -1657,7 +1657,7 @@ data class ToolDiscoverySearchMatch(
 /**
  * Combines class-backed and YAML-defined tools from a [TrailblazeHostAppTarget.ToolGroup] into a
  * single descriptor list. Shared by every place that renders a [TrailblazeHostAppTarget.ToolGroup]
- * for discovery / summary output, so YAML-only entries (e.g. `eraseText`, `pressBack`) flow
+ * for discovery / summary output, so YAML-only entries (e.g. `eraseText`) flow
  * through alongside class-backed tools.
  *
  * Class descriptors take precedence on name collision (class-backed implementations are

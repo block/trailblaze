@@ -1259,6 +1259,7 @@ export interface SessionSummary {
   imported?: boolean;
   metadata?: Record<string, TrailMetadataValue> | null;
   trailSourceUrl?: string | null;
+  context?: string | null;
 }
 
 export interface SessionsResponse {

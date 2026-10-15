@@ -76,6 +76,8 @@ include(
   ":trailblaze-desktop",
   ":trailblaze-host",
   ":trailblaze-inprocess-apk",
+  ":trailblaze-http",
+  ":trailblaze-trail-format",
   ":trailblaze-models",
   ":trailblaze-ondevice-rpc-proto",
   ":trailblaze-trailmap-bundler",

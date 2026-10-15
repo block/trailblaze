@@ -1,0 +1,1578 @@
+package xyz.block.trailblaze.yaml.unified
+
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import xyz.block.trailblaze.config.DefaultBehavior
+import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
+import xyz.block.trailblaze.devices.TrailblazeDriverType
+import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
+import xyz.block.trailblaze.toolcalls.CoreTools
+import xyz.block.trailblaze.yaml.DirectionStep
+import xyz.block.trailblaze.yaml.TrailArgConfig
+import xyz.block.trailblaze.yaml.TrailConfig
+import xyz.block.trailblaze.yaml.TrailFormatYaml
+import xyz.block.trailblaze.yaml.TrailSource
+import xyz.block.trailblaze.yaml.TrailSourceType
+import xyz.block.trailblaze.yaml.TrailYamlItem
+import xyz.block.trailblaze.yaml.TrailblazeToolYamlWrapper
+import xyz.block.trailblaze.yaml.VerificationStep
+import xyz.block.trailblaze.yaml.metadataOf
+import xyz.block.trailblaze.yaml.string
+
+/**
+ * Pins the the unified format → v1 lowering used by the runtime: closest-wins classifier
+ * resolution, the lossy-but-correct mapping of step features into `DirectionStep`s, and the
+ * dropped-fields contract for the config.
+ *
+ * This is the bridge that lets the existing v1 executor consume a the unified format trail without
+ * a rewrite. The semantics tested here ARE the runtime semantics a the unified format file actually
+ * sees.
+ */
+class UnifiedTrailAdapterTest {
+
+  @Test
+  fun `closest-wins picks the most specific classifier match`() {
+    val unified =
+      UnifiedTrail(
+        config = UnifiedTrailConfig(id = "x", target = "y"),
+        trail =
+          listOf(
+            UnifiedTrailStep(
+              step = "Tap something",
+              recordings =
+                linkedMapOf(
+                  "ios-iphone" to listOf(toolNamed("specific-iphone")),
+                  "ios" to listOf(toolNamed("family-ios")),
+                ),
+            )
+          ),
+      )
+    val items =
+      UnifiedTrailAdapter.lowerToTrailItems(
+        unified,
+        // iPhone device: provider emits broad-first segments `[ios, iphone]`,
+        // which the lineage joins+expands to `[ios-iphone, ios]`.
+        classifiers = listOf(classifier("ios"), classifier("iphone")),
+      )
+    val step =
+      items.filterIsInstance<TrailYamlItem.PromptsTrailItem>().single().promptSteps.single()
+        as DirectionStep
+    val tools = step.recording?.tools.orEmpty()
+    assertEquals(1, tools.size)
+    assertEquals("specific-iphone", tools[0].name)
+  }
+
+  @Test
+  fun `closest-wins falls through to family classifier when specific not present`() {
+    // An iPad device: provider emits `[ios, ipad]` → lineage `[ios-ipad, ios]`.
+    // The step has only `ios:` recordings → we walk ios-ipad → ios → family.
+    val unified =
+      UnifiedTrail(
+        config = UnifiedTrailConfig(id = "x", target = "y"),
+        trail =
+          listOf(
+            UnifiedTrailStep(
+              step = "Tap something",
+              recordings = mapOf("ios" to listOf(toolNamed("family-ios"))),
+            )
+          ),
+      )
+    val items =
+      UnifiedTrailAdapter.lowerToTrailItems(
+        unified,
+        classifiers = listOf(classifier("ios"), classifier("ipad")),
+      )
+    val step =
+      items.filterIsInstance<TrailYamlItem.PromptsTrailItem>().single().promptSteps.single()
+        as DirectionStep
+    val tools = step.recording?.tools.orEmpty()
+    assertEquals(1, tools.size)
+    assertEquals("family-ios", tools[0].name)
+  }
+
+  @Test
+  fun `an all recording resolves on every device, and any platform key overrides it`() {
+    // The author-facing payoff of the universal root: a trail whose platforms share a recording
+    // declares it ONCE under `all:`; a platform that genuinely diverges keys its own, which wins
+    // on that platform while the others keep the shared entry.
+    val unified =
+      UnifiedTrail(
+        config = UnifiedTrailConfig(id = "x", target = "y"),
+        trail =
+          listOf(
+            UnifiedTrailStep(
+              step = "Tap something",
+              recordings =
+                linkedMapOf(
+                  "all" to listOf(toolNamed("shared")),
+                  "ios" to listOf(toolNamed("ios-divergent")),
+                ),
+            )
+          ),
+      )
+    fun resolvedToolFor(vararg segments: String): String? {
+      val items = UnifiedTrailAdapter.lowerToTrailItems(unified, segments.map { classifier(it) })
+      val step =
+        items.filterIsInstance<TrailYamlItem.PromptsTrailItem>().single().promptSteps.single()
+          as DirectionStep
+      return step.recording?.tools?.singleOrNull()?.name
+    }
+    assertEquals("shared", resolvedToolFor("android", "phone"))
+    assertEquals("shared", resolvedToolFor("web"))
+    assertEquals(
+      "ios-divergent",
+      resolvedToolFor("ios", "iphone"),
+      "a platform key must beat `all:`",
+    )
+  }
+
+  @Test
+  fun `no classifier match leaves recording null — executor falls back to LLM mode`() {
+    val unified =
+      UnifiedTrail(
+        config = UnifiedTrailConfig(id = "x", target = "y"),
+        trail =
+          listOf(
+            UnifiedTrailStep(
+              step = "Tap something",
+              recordings = mapOf("android-phone" to listOf(toolNamed("android-only"))),
+            )
+          ),
+      )
+    val items =
+      UnifiedTrailAdapter.lowerToTrailItems(
+        unified,
+        classifiers = listOf(classifier("ios"), classifier("iphone")),
+      )
+    val step =
+      items.filterIsInstance<TrailYamlItem.PromptsTrailItem>().single().promptSteps.single()
+        as DirectionStep
+    assertNull(step.recording, "no classifier match → no recording → LLM mode at runtime")
+    assertTrue(
+      step.recordable,
+      "recordable defaults to true even when this device has no recording",
+    )
+  }
+
+  @Test
+  fun `explicit empty list lowers to a declared zero-tool recording — deterministic no-op`() {
+    val unified =
+      UnifiedTrail(
+        config = UnifiedTrailConfig(id = "x", target = "y"),
+        trail =
+          listOf(
+            UnifiedTrailStep(
+              step = "Skip on tablet",
+              recordings =
+                linkedMapOf(
+                  "android-tablet" to emptyList(),
+                  "android-phone" to listOf(toolNamed("phone-tool")),
+                ),
+            )
+          ),
+      )
+    val items =
+      UnifiedTrailAdapter.lowerToTrailItems(
+        unified,
+        classifiers = listOf(classifier("android"), classifier("tablet")),
+      )
+    val step =
+      items.filterIsInstance<TrailYamlItem.PromptsTrailItem>().single().promptSteps.single()
+        as DirectionStep
+    // Closest-wins matched `android-tablet`, and the matched list is empty — that's a DECLARED
+    // no-op (non-null recording, zero tools), not the same as no classifier matching at all. The
+    // executor runs zero tools and succeeds without falling through to AI.
+    assertNotNull(step.recording)
+    assertTrue(step.recording!!.tools.isEmpty())
+  }
+
+  @Test
+  fun `lowering drops saved objective status control markers`() {
+    val unified =
+      UnifiedTrail(
+        config = UnifiedTrailConfig(id = "x", target = "y"),
+        trail =
+          listOf(
+            UnifiedTrailStep(
+              step = "Tap something",
+              recordings =
+                mapOf(
+                  "android" to
+                    listOf(
+                      toolNamed("tapOnElementBySelector"),
+                      toolNamed(CoreTools.OBJECTIVE_STATUS),
+                    )
+                ),
+            )
+          ),
+      )
+
+    val items =
+      UnifiedTrailAdapter.lowerToTrailItems(
+        unified,
+        classifiers = listOf(classifier("android"), classifier("phone")),
+      )
+
+    val step =
+      items.filterIsInstance<TrailYamlItem.PromptsTrailItem>().single().promptSteps.single()
+        as DirectionStep
+    assertEquals(listOf("tapOnElementBySelector"), step.recording?.tools?.map { it.name })
+  }
+
+  /**
+   * A legacy leg whose ONLY tool was the completion marker recorded no device action — the step got
+   * there via the agent. Dropping the marker must hand it back to the LLM, NOT leave a matched
+   * zero-tool recording, which is the declared deterministic no-op shape and would silently skip
+   * the step while reporting success. The three "is it recorded?" answers must agree on that.
+   */
+  @Test
+  fun `a marker-only recording lowers to LLM mode, not a zero-tool no-op`() {
+    val unified =
+      UnifiedTrail(
+        config = UnifiedTrailConfig(id = "x", target = "y"),
+        trail =
+          listOf(
+            UnifiedTrailStep(
+              step = "Tap something",
+              recordings = mapOf("android" to listOf(toolNamed(CoreTools.OBJECTIVE_STATUS))),
+            )
+          ),
+      )
+    val classifiers = listOf(classifier("android"), classifier("phone"))
+
+    val items = UnifiedTrailAdapter.lowerToTrailItems(unified, classifiers)
+    val step =
+      items.filterIsInstance<TrailYamlItem.PromptsTrailItem>().single().promptSteps.single()
+        as DirectionStep
+    assertNull(step.recording, "marker-only recording has no replayable action → LLM mode")
+
+    assertFalse(
+      UnifiedTrailAdapter.hasRecordingForDevice(unified, classifiers),
+      "a `requireRecordings` gate must not select a case whose only recording replays nothing",
+    )
+
+    val resolution = UnifiedTrailAdapter.describeRecordingResolution(unified, classifiers)
+    val described = resolution.steps.single()
+    assertNull(described.toolNames, "the census must report what will run, not the raw leg")
+    assertNull(described.resolvedClassifier)
+    assertEquals(listOf(described), resolution.unresolvedDeclared)
+    assertTrue(
+      resolution.deterministicNoOps.isEmpty(),
+      "an LLM step must not be counted as a deterministic no-op",
+    )
+  }
+
+  @Test
+  fun `a marker-only trailhead recording lowers to LLM mode`() {
+    val unified =
+      UnifiedTrail(
+        config = UnifiedTrailConfig(id = "x", target = "y"),
+        trailhead =
+          UnifiedTrailStep(
+            step = "Launch the app",
+            recordings = mapOf("android" to listOf(toolNamed(CoreTools.OBJECTIVE_STATUS))),
+          ),
+        trail = listOf(UnifiedTrailStep(step = "Tap something", recordings = emptyMap())),
+      )
+    val classifiers = listOf(classifier("android"), classifier("phone"))
+
+    val items = UnifiedTrailAdapter.lowerToTrailItems(unified, classifiers)
+    val trailhead = items.filterIsInstance<TrailYamlItem.TrailheadTrailItem>().single()
+    assertNull(trailhead.trailhead.tools)
+    assertFalse(UnifiedTrailAdapter.hasRecordingForDevice(unified, classifiers))
+  }
+
+  /**
+   * The marker filter must not reach the AUTHORED empty list. It carries no marker to drop, so it
+   * stays the matched zero-tool no-op it was written as — the distinction the filter above turns
+   * on.
+   */
+  @Test
+  fun `an authored empty recording is still a deterministic no-op alongside the marker filter`() {
+    val unified =
+      UnifiedTrail(
+        config = UnifiedTrailConfig(id = "x", target = "y"),
+        trail =
+          listOf(
+            UnifiedTrailStep(step = "Skip on phone", recordings = mapOf("android" to emptyList()))
+          ),
+      )
+    val classifiers = listOf(classifier("android"), classifier("phone"))
+
+    val items = UnifiedTrailAdapter.lowerToTrailItems(unified, classifiers)
+    val step =
+      items.filterIsInstance<TrailYamlItem.PromptsTrailItem>().single().promptSteps.single()
+        as DirectionStep
+    assertNotNull(step.recording)
+    assertTrue(step.recording.tools.isEmpty())
+    assertTrue(UnifiedTrailAdapter.hasRecordingForDevice(unified, classifiers))
+
+    val resolution = UnifiedTrailAdapter.describeRecordingResolution(unified, classifiers)
+    assertEquals(emptyList(), resolution.steps.single().toolNames)
+    assertEquals("android", resolution.steps.single().resolvedClassifier)
+    assertEquals(1, resolution.deterministicNoOps.size)
+  }
+
+  @Test
+  fun `recordable false propagates through to the lowered DirectionStep`() {
+    val unified =
+      UnifiedTrail(
+        config = UnifiedTrailConfig(id = "x", target = "y"),
+        trail =
+          listOf(UnifiedTrailStep(step = "LLM step", recordings = emptyMap(), recordable = false)),
+      )
+    val items =
+      UnifiedTrailAdapter.lowerToTrailItems(
+        unified,
+        classifiers = listOf(classifier("android"), classifier("phone")),
+      )
+    val step =
+      items.filterIsInstance<TrailYamlItem.PromptsTrailItem>().single().promptSteps.single()
+        as DirectionStep
+    assertFalse(step.recordable, "recordable: false must survive lowering")
+    assertNull(step.recording)
+  }
+
+  @Test
+  fun `config lowering without a device keeps every device-agnostic scalar field`() {
+    val unifiedConfig =
+      UnifiedTrailConfig(
+        id = "myapp/checkout",
+        target = "myapp",
+        title = "Checkout with a saved card",
+        description = "Open the checkout flow and pay.",
+        priority = "P1",
+        devices =
+          mapOf("android-phone" to devicePin("ANDROID_ONDEVICE_INSTRUMENTATION", locale = "es")),
+        context = "Test context",
+        memory = mapOf("email" to "tb+test@example.com"),
+        metadata =
+          metadataOf(
+            "jira" to "PROJ-123",
+            UnifiedTrailConfig.METADATA_KEY_SOURCE to "HANDWRITTEN",
+            UnifiedTrailConfig.METADATA_KEY_SOURCE_REASON to "authored by hand",
+          ),
+      )
+    val v1 = UnifiedTrailAdapter.lowerConfig(unifiedConfig)
+    assertEquals("myapp/checkout", v1.id)
+    assertEquals("myapp", v1.target)
+    // description is runtime-surfaced; it must round-trip back to v1, not be dropped.
+    assertEquals("Open the checkout flow and pay.", v1.description)
+    assertEquals("Test context", v1.context)
+    assertNull(v1.locale, "locale is resolved from devices only when a device is known")
+    // memory flows through so the v3 runner can pre-seed AgentMemory before the first step.
+    // Without this, `config.memory:` in v3 YAMLs would parse but never reach the runner.
+    assertEquals(mapOf("email" to "tb+test@example.com"), v1.memory)
+    assertEquals("Checkout with a saved card", v1.title)
+    // priority is a first-class unified field and lowers verbatim; source is metadata by nature
+    // in the unified format (reserved bridge keys), but internal tooling reads it as a
+    // first-class v1 field — lowering lifts the bridge keys back onto TrailConfig.source and
+    // strips them from the plain metadata map.
+    assertEquals("P1", v1.priority)
+    assertEquals(
+      TrailSource(type = TrailSourceType.HANDWRITTEN, reason = "authored by hand"),
+      v1.source,
+    )
+    assertEquals(metadataOf("jira" to "PROJ-123"), v1.metadata)
+    // driver is resolved per-device at lowerToTrailItems time, not by lowerConfig alone.
+    assertNull(v1.driver, "lowerConfig without a resolved driver leaves v1.driver null")
+    // platform is the one retired field — derived from the classifier slots, never lowered.
+    assertNull(v1.platform, "the unified format has no platform field — must lower as null")
+  }
+
+  @Test
+  fun `an unrecognized metadata source value is not destroyed by the bridge`() {
+    // `metadata.source` only bridges to TrailConfig.source when it is empty (bare `source: {}`
+    // marker) or a known TrailSourceType name — anything else is the author's own metadata and
+    // must stay in the map untouched instead of being consumed by a failed parse.
+    val v1 =
+      UnifiedTrailAdapter.lowerConfig(
+        UnifiedTrailConfig(
+          metadata = metadataOf(UnifiedTrailConfig.METADATA_KEY_SOURCE to "some-other-system")
+        )
+      )
+    assertNull(v1.source)
+    assertEquals(
+      metadataOf(UnifiedTrailConfig.METADATA_KEY_SOURCE to "some-other-system"),
+      v1.metadata,
+    )
+  }
+
+  /**
+   * A v1 config with every convertible field set — the round-trip test's completeness guard walks
+   * the serial descriptor to enforce that, so a future `TrailConfig` field must be added here (and
+   * thereby to every conversion covered below) before it can ship. One field is deliberately
+   * absent: `platform` (retired — derived from classifier slots).
+   */
+  private fun fullV1Config() =
+    TrailConfig(
+      context = "Extra LLM context",
+      id = "app/checkout",
+      title = "Checkout with a saved card",
+      description = "Open the checkout flow and pay.",
+      priority = "P1",
+      source = TrailSource(type = TrailSourceType.HANDWRITTEN, reason = "authored by hand"),
+      metadata = metadataOf("case" to "C123"),
+      target = "app",
+      driver = "ANDROID_ONDEVICE_ACCESSIBILITY",
+      tags = listOf("smoke"),
+      skip = "blocked on #123",
+      memory = mapOf("email" to "tb+test@example.com"),
+      args =
+        mapOf(
+          "recipient" to TrailArgConfig(type = TrailArgConfig.STRING),
+          "retries" to
+            TrailArgConfig(
+              type = TrailArgConfig.INTEGER,
+              default = DefaultBehavior.Use(JsonPrimitive("3")),
+            ),
+        ),
+      locale = "fr-CA",
+    )
+
+  @Test
+  fun `every v1 config field round-trips v1 to unified to v1 losslessly`() {
+    // One fixture with EVERY v1 TrailConfig field set (the guard below enforces completeness),
+    // pushed through the same conversion the migrator and recorder first-write use, then lowered
+    // back for the recording device. Field-by-field equality plus byte-equal re-encoding: no v1
+    // config field may be silently dropped by the unified format.
+    val v1 = fullV1Config()
+
+    // Fixture-completeness guard: every TrailConfig field must be set above, except the one
+    // with an explicit no-home decision — `platform` (retired: the device set derives from the
+    // classifier slots). encodeDefaults=false omits unset fields, so a newly added v1 field that
+    // this fixture doesn't cover fails here — forcing it into the round-trip (or an explicit
+    // decision) instead of being silently dropped by conversion.
+    val encodedV1 = TrailFormatYaml.defaultYamlInstance.encodeToString(TrailConfig.serializer(), v1)
+    val descriptor = TrailConfig.serializer().descriptor
+    val fieldNames = (0 until descriptor.elementsCount).map { descriptor.getElementName(it) }
+    for (field in fieldNames) {
+      if (field == "platform") continue
+      assertTrue(
+        encodedV1.lineSequence().any { it.startsWith("$field:") },
+        "fixture must set v1 `$field:` so the round-trip covers it — a new TrailConfig field " +
+          "needs a unified home (or an explicit decision like `platform`)",
+      )
+    }
+
+    // v1 → unified, seeded the way the migrator and recorder first-write do: device-agnostic
+    // scalars via the shared helper, the two per-platform v1 scalars keyed under the recording
+    // device's classifier, tags verbatim.
+    val unified =
+      UnifiedTrailAdapter.v1ConfigToUnifiedConfig(v1)
+        .copy(
+          devices = mapOf("android" to devicePin(v1.driver!!, locale = v1.locale)),
+          skip = mapOf("android" to v1.skip!!),
+          tags = v1.tags,
+        )
+    // Pin the unified representation: priority is a top-level unified field; source is NOT — it
+    // rides in metadata under the reserved bridge keys.
+    assertEquals("P1", unified.priority)
+    assertEquals("HANDWRITTEN", unified.metadata?.string(UnifiedTrailConfig.METADATA_KEY_SOURCE))
+    assertEquals(
+      "authored by hand",
+      unified.metadata?.string(UnifiedTrailConfig.METADATA_KEY_SOURCE_REASON),
+    )
+
+    // unified → v1 for an android device (chain [android-phone, android]).
+    val device = listOf(classifier("android"), classifier("phone"))
+    val lowered =
+      UnifiedTrailAdapter.lowerConfig(
+        unified,
+        resolvedDriver = UnifiedTrailAdapter.resolveDriver(unified, device),
+        resolvedSkip = UnifiedTrailAdapter.resolveSkip(unified, device),
+        resolvedLocale = UnifiedTrailAdapter.resolveLocale(unified, device),
+      )
+    assertEquals(v1, lowered, "every v1 config field must survive v1 → unified → v1")
+    assertEquals(
+      encodedV1,
+      TrailFormatYaml.defaultYamlInstance.encodeToString(TrailConfig.serializer(), lowered),
+      "the round-tripped config must re-encode byte-equal to the original",
+    )
+  }
+
+  @Test
+  fun `fillMissingConfigScalars carries every scalar the base lacks`() {
+    // Chained to the same descriptor-guarded fixture as the round-trip test. Device-specific fields
+    // are bridged through config.devices; this checks that every scalar seeded by
+    // v1ConfigToUnifiedConfig is also handled by the fill helper.
+    val scalarSeed = UnifiedTrailAdapter.v1ConfigToUnifiedConfig(fullV1Config())
+    assertEquals(
+      scalarSeed,
+      UnifiedTrailAdapter.fillMissingConfigScalars(UnifiedTrailConfig(), scalarSeed),
+      "an empty base filled from a fully-populated fallback must equal the fallback's scalars",
+    )
+  }
+
+  @Test
+  fun `fillMissingConfigScalars treats placeholders as absent but keeps them when nothing better exists`() {
+    // A first file's blank title must not shadow a later file's populated value…
+    val placeholder = UnifiedTrailConfig(title = "  ")
+    val filled =
+      UnifiedTrailAdapter.fillMissingConfigScalars(
+        placeholder,
+        UnifiedTrailConfig(title = "Real title"),
+      )
+    assertEquals("Real title", filled.title)
+    // …but a placeholder survives when no file declares better.
+    val kept = UnifiedTrailAdapter.fillMissingConfigScalars(placeholder, UnifiedTrailConfig())
+    assertEquals("  ", kept.title)
+  }
+
+  @Test
+  fun `fillMissingConfigScalars merges metadata per key — first file wins a shared key, later files fill new keys`() {
+    // Per-key (not whole-map) merge is what keeps the bridged source lossless: one file's
+    // `source:` and another file's plain metadata both land in the same map, and an atomic
+    // first-map-wins would re-drop whichever the first file lacked.
+    val base = UnifiedTrailConfig(metadata = metadataOf("case" to "C123", "jira" to "PROJ-1"))
+    val fallback =
+      UnifiedTrailConfig(
+        metadata =
+          metadataOf(UnifiedTrailConfig.METADATA_KEY_SOURCE to "HANDWRITTEN", "jira" to "PROJ-2")
+      )
+    val merged = UnifiedTrailAdapter.fillMissingConfigScalars(base, fallback)
+    assertEquals("C123", merged.metadata?.string("case"))
+    assertEquals("HANDWRITTEN", merged.metadata?.string(UnifiedTrailConfig.METADATA_KEY_SOURCE))
+    assertEquals("PROJ-1", merged.metadata?.string("jira"), "base wins a shared key")
+  }
+
+  @Test
+  fun `per-classifier driver resolves closest-wins for the device under test`() {
+    // A multi-platform trail pins a driver per platform; each device gets its own.
+    val unified =
+      UnifiedTrail(
+        config =
+          UnifiedTrailConfig(
+            id = "x",
+            target = "y",
+            devices =
+              linkedMapOf(
+                "android" to devicePin("ANDROID_ONDEVICE_ACCESSIBILITY"),
+                "ios" to devicePin("IOS_HOST"),
+              ),
+          ),
+        trail = listOf(UnifiedTrailStep(step = "s", recordable = false)),
+      )
+
+    fun driverFor(vararg segs: String): String? =
+      UnifiedTrailAdapter.lowerToTrailItems(unified, segs.map { classifier(it) })
+        .filterIsInstance<TrailYamlItem.ConfigTrailItem>()
+        .single()
+        .config
+        .driver
+
+    // android-phone → chain [android-phone, android] → matches the `android` pin.
+    assertEquals("ANDROID_ONDEVICE_ACCESSIBILITY", driverFor("android", "phone"))
+    // iPhone → chain [ios-iphone, ios] → matches the `ios` pin (different driver).
+    assertEquals("IOS_HOST", driverFor("ios", "iphone"))
+  }
+
+  @Test
+  fun `driver is null when the config pins none for the device's classifier chain`() {
+    val unified =
+      UnifiedTrail(
+        config =
+          UnifiedTrailConfig(
+            id = "x",
+            target = "y",
+            devices = mapOf("ios" to devicePin("IOS_HOST")),
+          ),
+        trail = listOf(UnifiedTrailStep(step = "s", recordable = false)),
+      )
+    val v1 =
+      UnifiedTrailAdapter.lowerToTrailItems(
+          unified,
+          listOf(classifier("android"), classifier("phone")),
+        )
+        .filterIsInstance<TrailYamlItem.ConfigTrailItem>()
+        .single()
+        .config
+    assertNull(v1.driver, "no android pin → driver resolves at run time (null here)")
+  }
+
+  @Test
+  fun `per-classifier skip resolves closest-wins for the device under test`() {
+    // A trail skipped on android but not ios: each device sees only its own verdict.
+    val config =
+      UnifiedTrailConfig(
+        id = "x",
+        target = "y",
+        skip = linkedMapOf("android" to "flaky on android — see #123"),
+      )
+    // Android phone → chain [android-phone, android] → matches the `android` skip.
+    assertEquals(
+      "flaky on android — see #123",
+      UnifiedTrailAdapter.resolveSkip(config, listOf(classifier("android"), classifier("phone"))),
+    )
+    // iPhone → chain [ios-iphone, ios] → no match → runs (per-platform skip).
+    assertNull(
+      UnifiedTrailAdapter.resolveSkip(config, listOf(classifier("ios"), classifier("iphone"))),
+      "a skip pinned only to android must not skip an ios run",
+    )
+  }
+
+  @Test
+  fun `an all skip covers every device, and an explicit classifier still outranks it`() {
+    // The shape every "skipped everywhere" trail uses. Enumerating device keys instead is what
+    // lets a leg slip through: which devices actually run a trail is decided by the CI system
+    // dispatching it — which may fan out per recorded leg — not by the trail's own `devices:` map,
+    // so a key list derived from either one silently misses the rest.
+    val config =
+      UnifiedTrailConfig(
+        id = "x",
+        target = "y",
+        skip = linkedMapOf("all" to "never passed — see #123", "ios-ipad" to "different reason"),
+      )
+    for (device in
+      listOf(
+        listOf("android", "phone"),
+        listOf("android", "tablet"),
+        listOf("ios", "iphone"),
+        listOf("web"),
+      )) {
+      assertEquals(
+        "never passed — see #123",
+        UnifiedTrailAdapter.resolveSkip(config, device.map { classifier(it) }),
+        "`all` must resolve for $device — the universal root ends every chain",
+      )
+    }
+    // An explicitly-declared classifier outranks the universal root, so a device that needs its
+    // own reason keeps it.
+    assertEquals(
+      "different reason",
+      UnifiedTrailAdapter.resolveSkip(config, listOf(classifier("ios"), classifier("ipad"))),
+    )
+  }
+
+  @Test
+  fun `resolveSkip device-agnostic — any declared skip counts as skipped`() {
+    val config = UnifiedTrailConfig(id = "x", target = "y", skip = mapOf("ios" to "ios only"))
+    // No classifiers (pre-flight with no device yet): skipped if ANY classifier declares a reason,
+    // so the CLI's skip gate still fires. Blank reasons are ignored.
+    assertEquals("ios only", UnifiedTrailAdapter.resolveSkip(config, emptyList()))
+    assertNull(
+      UnifiedTrailAdapter.resolveSkip(
+        UnifiedTrailConfig(id = "x", target = "y", skip = mapOf("android" to "  ")),
+        emptyList(),
+      ),
+      "a blank skip reason is not a skip",
+    )
+    assertNull(
+      UnifiedTrailAdapter.resolveSkip(UnifiedTrailConfig(id = "x", target = "y"), emptyList()),
+      "no skip map → null",
+    )
+    // Multi-entry map, device-agnostic → deterministic (lowest classifier key), never decode-order.
+    assertEquals(
+      "aaa",
+      UnifiedTrailAdapter.resolveSkip(
+        UnifiedTrailConfig(id = "x", target = "y", skip = linkedMapOf("z" to "zzz", "a" to "aaa")),
+        emptyList(),
+      ),
+      "device-agnostic skip picks the lowest classifier key deterministically",
+    )
+  }
+
+  @Test
+  fun `lowerConfig carries resolved skip and verbatim tags to the v1 TrailConfig`() {
+    val config =
+      UnifiedTrailConfig(
+        id = "x",
+        target = "y",
+        tags = listOf("smoke", "flaky"),
+        skip = mapOf("android" to "blocked"),
+      )
+    // Full lowering (device-aware) resolves the android skip and passes tags through.
+    val v1 =
+      UnifiedTrailAdapter.lowerToTrailItems(
+          config.let {
+            UnifiedTrail(
+              config = it,
+              trail = listOf(UnifiedTrailStep(step = "s", recordable = false)),
+            )
+          },
+          listOf(classifier("android"), classifier("phone")),
+        )
+        .filterIsInstance<TrailYamlItem.ConfigTrailItem>()
+        .single()
+        .config
+    assertEquals("blocked", v1.skip, "resolved per-classifier skip must lower to v1 skip")
+    assertEquals(
+      listOf("smoke", "flaky"),
+      v1.tags,
+      "tags lower verbatim (trail-level, not per-device)",
+    )
+  }
+
+  @Test
+  fun `config lowering preserves null memory when v3 config omits the field`() {
+    val unifiedConfig = UnifiedTrailConfig(id = "x", target = "y")
+    val v1 = UnifiedTrailAdapter.lowerConfig(unifiedConfig)
+    assertNull(v1.memory, "absent config.memory must round-trip to v1 as null, not empty map")
+  }
+
+  @Test
+  fun `resolveDriver resolves the per-classifier pin closest-wins for the device`() {
+    // The driver a unified trail pins for a device must be resolvable BEFORE device selection
+    // (the CLI needs it to pick the ANDROID_ONDEVICE_ACCESSIBILITY device variant rather than
+    // the INSTRUMENTATION default). This is that resolution.
+    val config =
+      UnifiedTrailConfig(
+        id = "x",
+        target = "y",
+        devices =
+          linkedMapOf(
+            "android" to devicePin("ANDROID_ONDEVICE_ACCESSIBILITY"),
+            "android-tablet" to devicePin("ANDROID_ONDEVICE_INSTRUMENTATION"),
+            "ios" to devicePin("IOS_HOST"),
+          ),
+      )
+    // Phone → chain [android-phone, android, phone] → family `android` pin.
+    assertEquals(
+      "ANDROID_ONDEVICE_ACCESSIBILITY",
+      UnifiedTrailAdapter.resolveDriver(config, listOf(classifier("android"), classifier("phone"))),
+    )
+    // Tablet → chain [android-tablet, android, tablet] → the more-specific `android-tablet` pin.
+    assertEquals(
+      "ANDROID_ONDEVICE_INSTRUMENTATION",
+      UnifiedTrailAdapter.resolveDriver(config, listOf(classifier("android"), classifier("tablet"))),
+    )
+    // iPhone → the `ios` pin.
+    assertEquals(
+      "IOS_HOST",
+      UnifiedTrailAdapter.resolveDriver(config, listOf(classifier("ios"), classifier("iphone"))),
+    )
+  }
+
+  @Test
+  fun `resolveDriver returns null when nothing matches or no pins exist`() {
+    val pinned =
+      UnifiedTrailConfig(id = "x", target = "y", devices = mapOf("ios" to devicePin("IOS_HOST")))
+    // Android device, only an ios pin → no match → null (driver resolves at run time).
+    assertNull(
+      UnifiedTrailAdapter.resolveDriver(pinned, listOf(classifier("android"), classifier("phone")))
+    )
+    // Empty classifier list (e.g. no --device spec) → null, never throws.
+    assertNull(UnifiedTrailAdapter.resolveDriver(pinned, emptyList()))
+    // No devices map at all → null.
+    assertNull(
+      UnifiedTrailAdapter.resolveDriver(
+        UnifiedTrailConfig(id = "x", target = "y"),
+        listOf(classifier("android")),
+      )
+    )
+  }
+
+  @Test
+  fun `per-device locale resolves closest-wins and lowers for the running device`() {
+    val unified =
+      UnifiedTrail(
+        config =
+          UnifiedTrailConfig(
+            id = "x",
+            target = "y",
+            devices =
+              linkedMapOf(
+                "android-phone" to devicePin("ANDROID_ONDEVICE_ACCESSIBILITY", locale = "es"),
+                "android-phone-jp" to devicePin("ANDROID_ONDEVICE_ACCESSIBILITY", locale = "ja"),
+                "ios" to devicePin("IOS_HOST"),
+              ),
+          ),
+        trail = listOf(UnifiedTrailStep(step = "s", recordable = false)),
+      )
+
+    fun localeFor(vararg segments: String): String? =
+      UnifiedTrailAdapter.lowerToTrailItems(unified, segments.map { classifier(it) })
+        .filterIsInstance<TrailYamlItem.ConfigTrailItem>()
+        .single()
+        .config
+        .locale
+
+    assertEquals("es", localeFor("android", "phone"))
+    assertEquals("ja", localeFor("android", "phone", "jp"))
+    assertNull(localeFor("ios"))
+  }
+
+  @Test
+  fun `requiresHost resolves per field through the classifier lineage`() {
+    val config =
+      UnifiedTrailConfig(
+        id = "x",
+        target = "y",
+        devices =
+          linkedMapOf(
+            "android" to TrailblazeDeviceDefinition(requiresHost = true),
+            // A narrower entry that leaves the flag unset still inherits it; only an explicit false
+            // opts a device back out.
+            "android-phone" to devicePin("ANDROID_ONDEVICE_ACCESSIBILITY"),
+            "android-tablet" to TrailblazeDeviceDefinition(requiresHost = false),
+            "ios" to devicePin("IOS_HOST"),
+          ),
+      )
+
+    fun requiresHost(vararg segments: String) =
+      UnifiedTrailAdapter.resolveRequiresHost(config, segments.map { classifier(it) })
+
+    assertTrue(
+      requiresHost("android", "phone"),
+      "a driver-only entry does not hide the android flag",
+    )
+    assertTrue(requiresHost("android", "foldable"), "an undeclared android device inherits it")
+    assertFalse(requiresHost("android", "tablet"))
+    assertFalse(requiresHost("ios"))
+    assertFalse(requiresHost("web"), "an undeclared device never requires the host")
+  }
+
+  @Test
+  fun `lowered output has exactly one config item followed by one prompts item`() {
+    val unified =
+      UnifiedTrail(
+        config = UnifiedTrailConfig(id = "x", target = "y"),
+        trail =
+          listOf(
+            UnifiedTrailStep(
+              step = "Step 1",
+              recordings = mapOf("android" to listOf(toolNamed("t1"))),
+            ),
+            UnifiedTrailStep(
+              step = "Step 2",
+              recordings = mapOf("android" to listOf(toolNamed("t2"))),
+            ),
+          ),
+      )
+    val items =
+      UnifiedTrailAdapter.lowerToTrailItems(
+        unified,
+        classifiers = listOf(classifier("android"), classifier("phone")),
+      )
+    assertEquals(2, items.size)
+    assertTrue(items[0] is TrailYamlItem.ConfigTrailItem)
+    val prompts = items[1] as TrailYamlItem.PromptsTrailItem
+    assertEquals(2, prompts.promptSteps.size)
+  }
+
+  @Test
+  fun `empty classifier list lowers to no recordings — config-only safe mode`() {
+    // This is the safe default for callers that only need static config
+    // (e.g. trail-dir resolution / device picking). Recordings get dropped;
+    // the caller is expected to call extractTrailConfig and ignore the
+    // empty prompt list, NOT execute.
+    val unified =
+      UnifiedTrail(
+        config = UnifiedTrailConfig(id = "x", target = "y"),
+        trail =
+          listOf(
+            UnifiedTrailStep(
+              step = "Step 1",
+              recordings = mapOf("android" to listOf(toolNamed("t1"))),
+            )
+          ),
+      )
+    val items = UnifiedTrailAdapter.lowerToTrailItems(unified, classifiers = emptyList())
+    val prompts = items.filterIsInstance<TrailYamlItem.PromptsTrailItem>().single()
+    val step = prompts.promptSteps.single() as DirectionStep
+    assertNotNull(step.step)
+    assertNull(step.recording, "empty classifiers → no closest-wins match → no recording")
+  }
+
+  @Test
+  fun `a verify step lowers to a v1 VerificationStep with its recording and overrides`() {
+    // Verify semantics are load-bearing at run time (assertion-scoped tool surface,
+    // auto-terminate, never self-healed) — the lowering must produce a VerificationStep,
+    // not silently downgrade to a DirectionStep.
+    val unified =
+      UnifiedTrail(
+        config = UnifiedTrailConfig(id = "x", target = "y"),
+        trail =
+          listOf(
+            UnifiedTrailStep(step = "Open the cart"),
+            UnifiedTrailStep(
+              step = "The cart shows 2 items",
+              verify = true,
+              recordings = mapOf("android" to listOf(toolNamed("assert-items"))),
+              maxRetries = 5,
+            ),
+          ),
+      )
+    val steps =
+      UnifiedTrailAdapter.lowerToTrailItems(
+          unified,
+          classifiers = listOf(classifier("android"), classifier("phone")),
+        )
+        .filterIsInstance<TrailYamlItem.PromptsTrailItem>()
+        .single()
+        .promptSteps
+
+    assertTrue(steps[0] is DirectionStep, "a plain step lowers to DirectionStep")
+    val verify = steps[1] as VerificationStep
+    assertEquals("The cart shows 2 items", verify.prompt)
+    assertEquals(listOf("assert-items"), verify.recording?.tools?.map { it.name })
+    assertEquals(5, verify.maxRetries)
+    assertTrue(verify.recordable)
+  }
+
+  @Test
+  fun `an always-LLM verify step lowers to a recordable-false VerificationStep`() {
+    val unified =
+      UnifiedTrail(
+        config = UnifiedTrailConfig(id = "x", target = "y"),
+        trail =
+          listOf(
+            UnifiedTrailStep(
+              step = "The receipt banner is correct",
+              verify = true,
+              recordable = false,
+            )
+          ),
+      )
+    val step =
+      UnifiedTrailAdapter.lowerToTrailItems(
+          unified,
+          classifiers = listOf(classifier("android"), classifier("phone")),
+        )
+        .filterIsInstance<TrailYamlItem.PromptsTrailItem>()
+        .single()
+        .promptSteps
+        .single() as VerificationStep
+    assertFalse(step.recordable, "recordable: false must survive lowering on a verify step")
+    assertNull(step.recording)
+  }
+
+  @Test
+  fun `maxRetries on a unified step lowers to DirectionStep maxRetries`() {
+    // Regression guard for codex P1 on PR #3476: the per-step retry override must
+    // round-trip from the unified format all the way to the v1 DirectionStep the
+    // executor consumes — otherwise the feature is unreachable from any trail
+    // authored in the unified YAML shape.
+    val unified =
+      UnifiedTrail(
+        config = UnifiedTrailConfig(id = "x", target = "y"),
+        trail =
+          listOf(
+            UnifiedTrailStep(step = "Enter 6-digit passcode", maxRetries = 10),
+            UnifiedTrailStep(step = "Default-retry step"),
+          ),
+      )
+    val items = UnifiedTrailAdapter.lowerToTrailItems(unified, classifiers = emptyList())
+    val prompts = items.filterIsInstance<TrailYamlItem.PromptsTrailItem>().single()
+    val steps = prompts.promptSteps.map { it as DirectionStep }
+    assertEquals(10, steps[0].maxRetries, "explicit maxRetries must propagate to lowered step")
+    assertNull(steps[1].maxRetries, "absent maxRetries must lower to null (use trail-wide default)")
+  }
+
+  @Test
+  fun `hasRecordingForDevice — android-only recording counts for android but not ios`() {
+    val unified =
+      UnifiedTrail(
+        config = UnifiedTrailConfig(id = "x", target = "y"),
+        trail =
+          listOf(
+            UnifiedTrailStep(step = "Tap", recordings = mapOf("android" to listOf(toolNamed("t"))))
+          ),
+      )
+    assertTrue(
+      UnifiedTrailAdapter.hasRecordingForDevice(
+        unified,
+        listOf(classifier("android"), classifier("phone")),
+      )
+    )
+    assertFalse(
+      UnifiedTrailAdapter.hasRecordingForDevice(
+        unified,
+        listOf(classifier("ios"), classifier("iphone")),
+      )
+    )
+  }
+
+  @Test
+  fun `hasRecordingForDevice — family android recording covers phone and tablet`() {
+    val unified =
+      UnifiedTrail(
+        config = UnifiedTrailConfig(id = "x", target = "y"),
+        trail =
+          listOf(
+            UnifiedTrailStep(step = "Tap", recordings = mapOf("android" to listOf(toolNamed("t"))))
+          ),
+      )
+    assertTrue(
+      UnifiedTrailAdapter.hasRecordingForDevice(
+        unified,
+        listOf(classifier("android"), classifier("phone")),
+      )
+    )
+    assertTrue(
+      UnifiedTrailAdapter.hasRecordingForDevice(
+        unified,
+        listOf(classifier("android"), classifier("tablet")),
+      )
+    )
+  }
+
+  @Test
+  fun `hasRecordingForDevice — matched empty list counts as a deterministic recording`() {
+    // A matched `android: []` lowers to a NON-NULL zero-tool ToolRecording (a deterministic no-op,
+    // not LLM mode) in lowerToTrailItems, and hasRecordedSteps counts it — so the gate counts it
+    // too.
+    // Only an UNMATCHED chain (null resolution) is "no recording".
+    val unified =
+      UnifiedTrail(
+        config = UnifiedTrailConfig(id = "x", target = "y"),
+        trail = listOf(UnifiedTrailStep(step = "Tap", recordings = mapOf("android" to emptyList()))),
+      )
+    assertTrue(
+      UnifiedTrailAdapter.hasRecordingForDevice(
+        unified,
+        listOf(classifier("android"), classifier("phone")),
+      ),
+      "a matched android:[] is a deterministic recording for android",
+    )
+    // …but the same `android: []` does NOT match an ios device's chain, so it is not a recording
+    // there (the entry is declared for android only).
+    assertFalse(
+      UnifiedTrailAdapter.hasRecordingForDevice(
+        unified,
+        listOf(classifier("ios"), classifier("iphone")),
+      ),
+      "android:[] must not count for ios (no android in the ios chain)",
+    )
+  }
+
+  @Test
+  fun `hasRecordingForDevice — a recorded trailhead counts even when no step is recorded`() {
+    val unified =
+      UnifiedTrail(
+        config = UnifiedTrailConfig(id = "x", target = "y"),
+        trailhead =
+          UnifiedTrailStep(
+            step = "Launch",
+            recordings = mapOf("android" to listOf(toolNamed("launch"))),
+          ),
+        trail = listOf(UnifiedTrailStep(step = "LLM only")),
+      )
+    assertTrue(
+      UnifiedTrailAdapter.hasRecordingForDevice(
+        unified,
+        listOf(classifier("android"), classifier("phone")),
+      )
+    )
+  }
+
+  @Test
+  fun `a trailhead recorded once under all lowers deterministically on every platform`() {
+    // The trailhead is the deterministic step 0 and — being one tool call per device — the place
+    // cross-platform trails duplicate the most. One `all:` slot must reach both platforms.
+    val unified =
+      UnifiedTrail(
+        config = UnifiedTrailConfig(id = "x", target = "y"),
+        trailhead =
+          UnifiedTrailStep(
+            step = "Launch",
+            recordings = mapOf("all" to listOf(toolNamed("launch"))),
+          ),
+        trail = listOf(UnifiedTrailStep(step = "LLM only")),
+      )
+    for (segments in listOf(listOf("android", "phone"), listOf("ios", "iphone"))) {
+      val items = UnifiedTrailAdapter.lowerToTrailItems(unified, segments.map { classifier(it) })
+      val trailhead = items.filterIsInstance<TrailYamlItem.TrailheadTrailItem>().single().trailhead
+      assertEquals(
+        listOf("launch"),
+        trailhead.tools?.map { it.name },
+        "the all-keyed trailhead must lower for $segments",
+      )
+      assertTrue(
+        UnifiedTrailAdapter.hasRecordingForDevice(unified, segments.map { classifier(it) })
+      )
+    }
+  }
+
+  @Test
+  fun `hasRecordingForDevice — no recordings at all is false`() {
+    val unified =
+      UnifiedTrail(
+        config = UnifiedTrailConfig(id = "x", target = "y"),
+        trail = listOf(UnifiedTrailStep(step = "LLM only")),
+      )
+    assertFalse(
+      UnifiedTrailAdapter.hasRecordingForDevice(
+        unified,
+        listOf(classifier("android"), classifier("phone")),
+      )
+    )
+  }
+
+  // ---- Multi-device configuration names are invisible to classifier lineage ----
+  // Lineage re-probes bare segments, so a configuration named `kiosk` sits on a `kiosk-a`
+  // device's resolution chain — without the invisibility rule the device would resolve the
+  // configuration's legs/pins/skips as if they were its own single-device entries.
+
+  private fun kioskConfiguration() =
+    TrailblazeDeviceDefinition(
+      devices =
+        linkedMapOf(
+          "seller" to TrailblazeDeviceDefinition(classifier = "lab-a"),
+          "buyer" to TrailblazeDeviceDefinition(classifier = "lab-b"),
+        )
+    )
+
+  @Test
+  fun `a recording leg keyed by a configuration name is invisible to a device's classifier chain`() {
+    val unified =
+      UnifiedTrail(
+        config =
+          UnifiedTrailConfig(
+            id = "x",
+            target = "y",
+            devices = linkedMapOf("kiosk" to kioskConfiguration()),
+          ),
+        trail =
+          listOf(
+            UnifiedTrailStep(step = "Tap", recordings = mapOf("kiosk" to listOf(toolNamed("t"))))
+          ),
+      )
+    // `kiosk` is on this device's chain ([kiosk-a, kiosk, a, all]) but names a configuration —
+    // the leg belongs to the multi-device session, not to this single device.
+    assertFalse(
+      UnifiedTrailAdapter.hasRecordingForDevice(
+        unified,
+        listOf(classifier("kiosk"), classifier("a")),
+      )
+    )
+    // A real single-device leg on the same chain still resolves.
+    val withDeviceLeg =
+      unified.copy(
+        trail =
+          listOf(
+            UnifiedTrailStep(
+              step = "Tap",
+              recordings =
+                mapOf(
+                  "kiosk" to listOf(toolNamed("configuration-leg")),
+                  "kiosk-a" to listOf(toolNamed("device-leg")),
+                ),
+            )
+          )
+      )
+    assertTrue(
+      UnifiedTrailAdapter.hasRecordingForDevice(
+        withDeviceLeg,
+        listOf(classifier("kiosk"), classifier("a")),
+      )
+    )
+  }
+
+  @Test
+  fun `lowering skips a configuration-name leg and runs the step in LLM mode`() {
+    val unified =
+      UnifiedTrail(
+        config =
+          UnifiedTrailConfig(
+            id = "x",
+            target = "y",
+            devices = linkedMapOf("kiosk" to kioskConfiguration()),
+          ),
+        trail =
+          listOf(
+            UnifiedTrailStep(step = "Tap", recordings = mapOf("kiosk" to listOf(toolNamed("t"))))
+          ),
+      )
+    val items =
+      UnifiedTrailAdapter.lowerToTrailItems(unified, listOf(classifier("kiosk"), classifier("a")))
+    val step =
+      items.filterIsInstance<TrailYamlItem.PromptsTrailItem>().single().promptSteps.single()
+    assertNull(
+      (step as DirectionStep).recording,
+      "a configuration-name leg must not replay on a device whose chain contains the name",
+    )
+  }
+
+  @Test
+  fun `a device pin still resolves past a configuration entry earlier on the chain`() {
+    val config =
+      UnifiedTrailConfig(
+        id = "x",
+        target = "y",
+        devices =
+          linkedMapOf(
+            "kiosk" to kioskConfiguration(),
+            "kiosk-a" to devicePin("ANDROID_ONDEVICE_ACCESSIBILITY"),
+          ),
+      )
+    assertEquals(
+      "ANDROID_ONDEVICE_ACCESSIBILITY",
+      UnifiedTrailAdapter.resolveDriver(config, listOf(classifier("kiosk"), classifier("a"))),
+    )
+    // A device whose chain reaches ONLY the configuration name resolves nothing.
+    assertNull(UnifiedTrailAdapter.resolveDriver(config, listOf(classifier("kiosk"))))
+  }
+
+  @Test
+  fun `a skip keyed by a configuration name never skips a device via its chain`() {
+    val config =
+      UnifiedTrailConfig(
+        id = "x",
+        target = "y",
+        devices = linkedMapOf("kiosk" to kioskConfiguration()),
+        skip = mapOf("kiosk" to "multi-device session parked — see #123"),
+      )
+    assertNull(
+      UnifiedTrailAdapter.resolveSkip(config, listOf(classifier("kiosk"), classifier("a"))),
+      "the skip belongs to the configuration, not to a device whose chain contains its name",
+    )
+    // Selecting the configuration is the ONE way its skip applies.
+    assertEquals(
+      "multi-device session parked — see #123",
+      UnifiedTrailAdapter.resolveSkip(
+        config,
+        listOf(classifier("kiosk"), classifier("a")),
+        selectedDeviceConfiguration = "kiosk",
+      ),
+    )
+  }
+
+  @Test
+  fun `selecting a configuration resolves its recording leg exactly, ahead of the device chain`() {
+    val unified =
+      UnifiedTrail(
+        config =
+          UnifiedTrailConfig(
+            id = "x",
+            target = "y",
+            devices = linkedMapOf("kiosk" to kioskConfiguration()),
+          ),
+        trail =
+          listOf(
+            UnifiedTrailStep(
+              step = "Tap",
+              recordings =
+                linkedMapOf(
+                  // The start device's own leg would win by chain order — selection must beat it.
+                  "kiosk-a" to listOf(toolNamed("device-leg")),
+                  "kiosk" to listOf(toolNamed("configuration-leg")),
+                ),
+            )
+          ),
+      )
+    val items =
+      UnifiedTrailAdapter.lowerToTrailItems(
+        unified,
+        listOf(classifier("kiosk"), classifier("a")),
+        selectedDeviceConfiguration = "kiosk",
+      )
+    val step =
+      items.filterIsInstance<TrailYamlItem.PromptsTrailItem>().single().promptSteps.single()
+        as DirectionStep
+    assertEquals(
+      listOf("configuration-leg"),
+      step.recording?.tools.orEmpty().map { it.name },
+      "the selected configuration's leg must resolve exactly and first",
+    )
+  }
+
+  @Test
+  fun `selecting an undeclared configuration fails loud`() {
+    val unified =
+      UnifiedTrail(
+        config =
+          UnifiedTrailConfig(
+            id = "x",
+            target = "y",
+            devices = linkedMapOf("kiosk" to kioskConfiguration()),
+          ),
+        trail = listOf(UnifiedTrailStep(step = "Tap")),
+      )
+    val failure =
+      runCatching {
+          UnifiedTrailAdapter.lowerToTrailItems(
+            unified,
+            listOf(classifier("kiosk"), classifier("a")),
+            selectedDeviceConfiguration = "register",
+          )
+        }
+        .exceptionOrNull()
+    assertNotNull(failure, "an undeclared selection must not silently lower as single-device")
+    assertTrue("register" in failure.message.orEmpty() && "kiosk" in failure.message.orEmpty())
+  }
+
+  @Test
+  fun `selecting a configuration makes its legs count as a recording for the start device`() {
+    val unified =
+      UnifiedTrail(
+        config =
+          UnifiedTrailConfig(
+            id = "x",
+            target = "y",
+            devices = linkedMapOf("kiosk" to kioskConfiguration()),
+          ),
+        trail =
+          listOf(
+            UnifiedTrailStep(step = "Tap", recordings = mapOf("kiosk" to listOf(toolNamed("t"))))
+          ),
+      )
+    // Without the selection the trail reads as unrecorded however complete it is — the leg key is
+    // the configuration NAME, and no classifier chain reaches it. A `requireRecordings` gate acting
+    // on that answer drops a trail the executor would replay end to end.
+    assertFalse(
+      UnifiedTrailAdapter.hasRecordingForDevice(unified, listOf(classifier("lab"), classifier("a")))
+    )
+    assertTrue(
+      UnifiedTrailAdapter.hasRecordingForDevice(
+        unified,
+        listOf(classifier("lab"), classifier("a")),
+        selectedDeviceConfiguration = "kiosk",
+      )
+    )
+  }
+
+  @Test
+  fun `a selected configuration's trailhead leg counts on its own`() {
+    val unified =
+      UnifiedTrail(
+        config =
+          UnifiedTrailConfig(
+            id = "x",
+            target = "y",
+            devices = linkedMapOf("kiosk" to kioskConfiguration()),
+          ),
+        trailhead =
+          UnifiedTrailStep(
+            step = "Launch",
+            recordings = mapOf("kiosk" to listOf(toolNamed("launch"))),
+          ),
+        trail = listOf(UnifiedTrailStep(step = "Tap")),
+      )
+    assertTrue(
+      UnifiedTrailAdapter.hasRecordingForDevice(
+        unified,
+        listOf(classifier("lab"), classifier("a")),
+        selectedDeviceConfiguration = "kiosk",
+      ),
+      "the deterministic step 0 is a recording like any other step's leg",
+    )
+  }
+
+  @Test
+  fun `hasRecordingForDevice rejects an undeclared selection instead of answering false`() {
+    val unified =
+      UnifiedTrail(
+        config =
+          UnifiedTrailConfig(
+            id = "x",
+            target = "y",
+            devices = linkedMapOf("kiosk" to kioskConfiguration()),
+          ),
+        trail =
+          listOf(
+            UnifiedTrailStep(step = "Tap", recordings = mapOf("kiosk" to listOf(toolNamed("t"))))
+          ),
+      )
+    val failure =
+      runCatching {
+          UnifiedTrailAdapter.hasRecordingForDevice(
+            unified,
+            listOf(classifier("lab"), classifier("a")),
+            selectedDeviceConfiguration = "register",
+          )
+        }
+        .exceptionOrNull()
+    assertNotNull(failure, "a typo'd selection must fail loud, not read as an unrecorded trail")
+    assertTrue("register" in failure.message.orEmpty() && "kiosk" in failure.message.orEmpty())
+  }
+
+  @Test
+  fun `an unselected configuration's legs stay invisible to another configuration's selection`() {
+    val unified =
+      UnifiedTrail(
+        config =
+          UnifiedTrailConfig(
+            id = "x",
+            target = "y",
+            devices =
+              linkedMapOf("kiosk" to kioskConfiguration(), "register" to kioskConfiguration()),
+          ),
+        trail =
+          listOf(
+            UnifiedTrailStep(step = "Tap", recordings = mapOf("register" to listOf(toolNamed("t"))))
+          ),
+      )
+    assertFalse(
+      UnifiedTrailAdapter.hasRecordingForDevice(
+        unified,
+        listOf(classifier("lab"), classifier("a")),
+        selectedDeviceConfiguration = "kiosk",
+      ),
+      "selecting one configuration must not make another one's legs count",
+    )
+  }
+
+  @Test
+  fun `soleMultiDeviceConfigurationName names the one declared configuration and nothing else`() {
+    val none =
+      UnifiedTrailConfig(
+        id = "x",
+        target = "y",
+        devices = linkedMapOf("android" to devicePin("ANDROID_ONDEVICE_ACCESSIBILITY")),
+      )
+    assertNull(none.soleMultiDeviceConfigurationName, "a single-device trail selects nothing")
+
+    val one =
+      UnifiedTrailConfig(
+        id = "x",
+        target = "y",
+        devices = linkedMapOf("kiosk" to kioskConfiguration()),
+      )
+    assertEquals("kiosk", one.soleMultiDeviceConfigurationName)
+
+    // One configuration alongside a plain device pin still has exactly one configuration to name.
+    // Whether a run BINDS it is a separate question — see implicitMultiDeviceConfigurationName.
+    val mixed =
+      UnifiedTrailConfig(
+        id = "x",
+        target = "y",
+        devices =
+          linkedMapOf(
+            "android" to devicePin("ANDROID_ONDEVICE_ACCESSIBILITY"),
+            "kiosk" to kioskConfiguration(),
+          ),
+      )
+    assertEquals("kiosk", mixed.soleMultiDeviceConfigurationName)
+
+    // Two configurations: a pre-flight surface has nothing to pick between, and the runtime refuses
+    // the trail anyway — so it abstains rather than guessing.
+    val two =
+      UnifiedTrailConfig(
+        id = "x",
+        target = "y",
+        devices = linkedMapOf("kiosk" to kioskConfiguration(), "register" to kioskConfiguration()),
+      )
+    assertNull(two.soleMultiDeviceConfigurationName)
+  }
+
+  @Test
+  fun `a configuration-only trail binds its configuration with or without companions`() {
+    val configurationOnly =
+      UnifiedTrailConfig(devices = linkedMapOf("kiosk" to kioskConfiguration()))
+
+    assertFalse(configurationOnly.declaresSingleDeviceEntries)
+    // Without companions the run still selects it, and is then refused for its unbound members —
+    // it must not degrade to a single-device run of a trail with no single-device legs.
+    assertEquals(
+      "kiosk",
+      configurationOnly.implicitMultiDeviceConfigurationName(bindsCompanionDevices = false),
+    )
+    assertEquals(
+      "kiosk",
+      configurationOnly.implicitMultiDeviceConfigurationName(bindsCompanionDevices = true),
+    )
+  }
+
+  @Test
+  fun `a mixed trail binds its configuration only when the run binds companions`() {
+    val mixed =
+      UnifiedTrailConfig(
+        devices =
+          linkedMapOf(
+            "android-phone" to devicePin("ANDROID_ONDEVICE_ACCESSIBILITY"),
+            "kiosk" to kioskConfiguration(),
+          )
+      )
+
+    assertTrue(mixed.declaresSingleDeviceEntries)
+    assertNull(
+      mixed.implicitMultiDeviceConfigurationName(bindsCompanionDevices = false),
+      "a companion-less run of a mixed trail is an ordinary single-device session",
+    )
+    assertEquals("kiosk", mixed.implicitMultiDeviceConfigurationName(bindsCompanionDevices = true))
+  }
+
+  @Test
+  fun `no implicit configuration when a trail declares none or more than one`() {
+    val none =
+      UnifiedTrailConfig(
+        devices = linkedMapOf("android" to devicePin("ANDROID_ONDEVICE_ACCESSIBILITY"))
+      )
+    val two =
+      UnifiedTrailConfig(
+        devices = linkedMapOf("kiosk" to kioskConfiguration(), "register" to kioskConfiguration())
+      )
+
+    listOf(true, false).forEach { binds ->
+      assertNull(none.implicitMultiDeviceConfigurationName(binds))
+      assertNull(two.implicitMultiDeviceConfigurationName(binds))
+    }
+  }
+
+  /**
+   * The pre-flight gates' view of a mixed trail on a single-device cell: its classifier legs count,
+   * and the configuration's fully-recorded leg does not stand in for a classifier that has none.
+   */
+  @Test
+  fun `a mixed trail's configuration legs are not coverage for a companion-less classifier`() {
+    val unified =
+      TrailFormatYaml()
+        .decodeUnifiedTrail(
+          """
+          config:
+            devices:
+              android-tablet: {}
+              kiosk:
+                devices:
+                  seller: {classifier: lab-a}
+                  buyer: {classifier: lab-b}
+          trail:
+            - step: Tap pay
+              recording:
+                android-tablet:
+                  - tapOnElementWithText: {text: Pay}
+                kiosk:
+                  - tapOnElementWithText: {text: Pay}
+            - step: Hand over
+              recording:
+                kiosk:
+                  - tapOnElementWithText: {text: Done}
+          """
+            .trimIndent()
+        )
+    val phone = listOf(classifier("android"), classifier("phone"))
+
+    assertFalse(
+      UnifiedTrailAdapter.hasRecordingForDevice(
+        unified,
+        phone,
+        unified.config.implicitMultiDeviceConfigurationName(bindsCompanionDevices = false),
+      ),
+      "android-phone has no leg of its own, so a single-device cell must not borrow the configuration's",
+    )
+    assertTrue(
+      UnifiedTrailAdapter.hasRecordingForDevice(
+        unified,
+        phone,
+        unified.config.implicitMultiDeviceConfigurationName(bindsCompanionDevices = true),
+      ),
+      "a cell that binds the configuration replays its fully recorded legs",
+    )
+  }
+
+  private fun classifier(value: String) = TrailblazeDeviceClassifier(value)
+
+  private fun toolNamed(name: String) =
+    TrailblazeToolYamlWrapper(
+      name = name,
+      trailblazeTool =
+        OtherTrailblazeTool(
+          toolName = name,
+          raw = JsonObject(mapOf("marker" to JsonPrimitive(name))),
+        ),
+    )
+}
+
+/** The canonical devices-map value for a driver pin, keeping test fixtures terse. */
+private fun devicePin(driverName: String, locale: String? = null): TrailblazeDeviceDefinition =
+  TrailblazeDeviceDefinition(
+    driver = TrailblazeDriverType.fromString(driverName)!!,
+    locale = locale,
+  )

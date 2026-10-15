@@ -131,6 +131,8 @@ class RunIndexGenerator(
       result.metadata?.takeIf { it.isNotEmpty() }?.let { metadata ->
         put("metadata", metadata.toJsonObject())
       }
+      // Searchable from the index alongside the title; the stub has no logs to recover it from.
+      result.context?.takeIf { it.isNotBlank() }?.let { put("context", it) }
       // LLM figures the index would otherwise have to derive from a payload it doesn't carry.
       // Omitted rather than zeroed when the row didn't record them: the viewer renders an absent
       // count as unknown, and a confident "0 LLM" on an agent-driven run would be a lie.

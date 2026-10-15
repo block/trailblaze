@@ -566,7 +566,7 @@ object PerTrailmapClientDtsEmitter {
    *     Sourcing from the recordable registry — the same set replay decodes against — means the
    *     surface can't silently miss a recordable tool.
    *  3. **YAML-defined (`tools:` mode) recordable tools** ([TrailblazeSerializationInitializer.buildYamlDefinedTools],
-   *     e.g. `eraseText` / `pressBack`) — no Kotlin class, so params come straight from the config.
+   *     e.g. `eraseText`) — no Kotlin class, so params come straight from the config.
    *
    * **Selector args re-injected.** [selectorParamsForTs] recovers the `TrailblazeNodeSelector` /
    * legacy `selector` params that [toScriptedToolDescriptor] strips (they overflow Koog's lowering),
@@ -627,7 +627,7 @@ object PerTrailmapClientDtsEmitter {
       .filter { it.trailblazeToolClassAnnotation().isRecordable }
       .forEach(::addClassTool)
 
-    // 3. YAML-defined recordable tools (`tools:` mode, e.g. eraseText / pressBack).
+    // 3. YAML-defined recordable tools (`tools:` mode, e.g. eraseText).
     TrailblazeSerializationInitializer.buildYamlDefinedTools().forEach { (toolName, config) ->
       val name = toolName.toolName
       if (config.isRecordable == false) return@forEach

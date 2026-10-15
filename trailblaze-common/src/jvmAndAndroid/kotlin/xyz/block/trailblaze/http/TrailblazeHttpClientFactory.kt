@@ -46,19 +46,12 @@ object TrailblazeHttpClientFactory {
   internal fun createDefaultHttpClient(
     timeoutInSeconds: Long,
     trustManager: X509TrustManager?,
-  ) = HttpClient(OkHttp) {
+  ) = TransportHttpClientFactory.createDefaultHttpClient(timeoutInSeconds, trustManager) {
     enablePerfettoTracing()
     enableNetworkLogging()
     engine {
-      // Never Dispatchers.IO (Ktor's default): in-process that is the app's pool. See TrailblazeDispatchers.
       dispatcher = TrailblazeDispatchers.IO
-      config {
-        configureOkHttpClient(timeoutInSeconds, false)
-        if (trustManager != null) {
-          val sslContext = SSLContext.getInstance("TLS").apply { init(null, arrayOf(trustManager), null) }
-          sslSocketFactory(sslContext.socketFactory, trustManager)
-        }
-      }
+      config { addInterceptor(CachedTokenCaptureInterceptor) }
     }
   }
   fun HttpClientConfig<*>.enablePerfettoTracing() {
