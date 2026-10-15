@@ -431,3 +431,89 @@ jobs:
           name: trailblaze-logs-${{ matrix.runner }}
           path: ${{ runner.temp }}/trailblaze-home/
           if-no-files-found: ignore
+
+  # Installs this PR's JAR on Windows with install.ps1, boots an Android emulator on the runner and
+  # replays the Android showcase trail through the installed trailblaze.cmd: the CLI starts the
+  # daemon and installs the on-device APK over adb, as it does for a Windows user with Android
+  # Studio. x64 only: the emulator runs an x86_64 image under the runner's Windows Hypervisor
+  # Platform.
+  windows-android:
+    needs: build-uber-jar
+    runs-on: windows-2025
+    timeout-minutes: 45
+    env:
+      TRAILBLAZE_ARTIFACT_DIR: ${{ github.workspace }}\trailblaze-uber-jar
+      # The trail replays recorded steps, so no model is called; the provider still needs a key.
+      OPENAI_API_KEY: no-key-set
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Choose the install and state directories
+        run: |
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "TRAILBLAZE_DIR=$env:RUNNER_TEMP\Trailblaze"
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "TRAILBLAZE_HOME=$env:RUNNER_TEMP\trailblaze-home"
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: 17
+          architecture: x64
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+
+      - name: Download uber JAR artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: trailblaze-uber-jar
+          path: trailblaze-uber-jar
+
+      - name: Install with install.ps1
+        run: ./install.ps1
+
+      - name: Put the install on PATH
+        run: Add-Content -LiteralPath $env:GITHUB_PATH -Value (Join-Path $env:TRAILBLAZE_DIR 'bin')
+
+      - name: Install the TypeScript SDK's dependencies
+        # The Clock trailmap's scripted tools need the SDK's esbuild in a source checkout.
+        working-directory: sdks/typescript
+        run: bun install --frozen-lockfile
+
+      - name: Boot an Android emulator
+        timeout-minutes: 20
+        shell: bash
+        run: ./.github/windows_boot_android_emulator.sh
+
+      - name: Replay the Android trail and drive the device step by step
+        shell: bash
+        run: ./.github/pr_run_android_trail_windows.sh
+
+      - name: Stop the daemon
+        if: always()
+        run: trailblaze app --stop
+
+      - name: Collect device and emulator logs
+        if: always()
+        shell: bash
+        run: |
+          ADB="$ANDROID_HOME/platform-tools/adb.exe"
+          mkdir -p "$TRAILBLAZE_HOME"
+          # `adb logcat` waits for a device, so only ask a device that is up.
+          if [ "$("$ADB" get-state 2>/dev/null | tr -d '\r')" = device ]; then
+            "$ADB" logcat -d > "$TRAILBLAZE_HOME/logcat.log" 2>&1 || true
+          fi
+          cp emulator.log sdkmanager.log "$TRAILBLAZE_HOME/" 2>/dev/null || true
+
+      - name: Upload Trailblaze logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trailblaze-logs-windows-android
+          path: ${{ runner.temp }}/trailblaze-home/
+          if-no-files-found: ignore

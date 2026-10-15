@@ -55,7 +55,7 @@ you if it's missing):
 curl -fsSL https://raw.githubusercontent.com/block/trailblaze/main/install.sh | bash
 ```
 
-On Windows (web trails only), install from PowerShell:
+On Windows (Android and web; no iOS), install from PowerShell:
 
 ```powershell
 irm https://raw.githubusercontent.com/block/trailblaze/main/install.ps1 | iex

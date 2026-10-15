@@ -8,9 +8,11 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.ui.TrailblazeDesktopUtil
 import xyz.block.trailblaze.util.AndroidHostAdbUtils
+import xyz.block.trailblaze.util.AndroidSdkPaths
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.util.TrailblazeProcessBuilderUtils
 import xyz.block.trailblaze.util.TrailblazeProcessBuilderUtils.runProcess
+import xyz.block.trailblaze.util.isWindows
 
 /**
  * Human label + launcher icon for an installed app, resolved on demand for the Create Target
@@ -314,22 +316,16 @@ internal object InstalledAppBadges {
   }
 
   /**
-   * Newest build-tools' aapt2 under the host Android SDK ($ANDROID_HOME / $ANDROID_SDK_ROOT /
-   * the default macOS and Linux install locations). Resolved once — SDK installs don't change
-   * under a running daemon.
+   * Newest build-tools' aapt2 under the host Android SDK (the same SDK locations adb is found in).
+   * Resolved once — SDK installs don't change under a running daemon.
    */
   private val aapt2: File? by lazy {
-    val sdkRoots = listOfNotNull(
-      System.getenv("ANDROID_HOME"),
-      System.getenv("ANDROID_SDK_ROOT"),
-      System.getProperty("user.home")?.let { "$it/Library/Android/sdk" },
-      System.getProperty("user.home")?.let { "$it/Android/Sdk" },
-    )
-    sdkRoots.asSequence()
+    val executable = if (isWindows()) "aapt2.exe" else "aapt2"
+    AndroidSdkPaths.CANDIDATE_PATHS.asSequence()
       .map { File(it, "build-tools") }
       .filter { it.isDirectory }
       .flatMap { buildTools -> buildTools.listFiles().orEmpty().sortedByDescending { it.name }.asSequence() }
-      .map { File(it, "aapt2") }
+      .map { File(it, executable) }
       .firstOrNull { it.canExecute() }
   }
 

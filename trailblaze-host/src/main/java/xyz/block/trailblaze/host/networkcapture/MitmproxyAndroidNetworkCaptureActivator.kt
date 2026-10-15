@@ -3,6 +3,7 @@ package xyz.block.trailblaze.host.networkcapture
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.util.AndroidHostAdbUtils
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.util.isWindows
 import java.io.File
 import java.net.ServerSocket
 import java.util.concurrent.ConcurrentHashMap
@@ -126,12 +127,14 @@ object MitmproxyAndroidNetworkCaptureActivator : AndroidNetworkCaptureActivator 
       if (File(path).canExecute()) return path
       Console.error("[mitm-capture] $ENV_MITMDUMP=$path is not executable; falling back")
     }
-    val venvMitmdump = File(cacheRoot, "venv/bin/mitmdump")
+    // A Windows venv keeps its executables under Scripts\ and names them .exe.
+    val executable = if (isWindows()) "mitmdump.exe" else "mitmdump"
+    val venvMitmdump = File(cacheRoot, if (isWindows()) "venv/Scripts/$executable" else "venv/bin/$executable")
     if (venvMitmdump.canExecute()) return venvMitmdump.absolutePath
     // Search PATH for an executable `mitmdump`.
     val pathDirs = System.getenv("PATH")?.split(File.pathSeparator).orEmpty()
     return pathDirs.asSequence()
-      .map { File(it, "mitmdump") }
+      .map { File(it, executable) }
       .firstOrNull { it.canExecute() }
       ?.absolutePath
   }
@@ -233,7 +236,7 @@ object MitmproxyAndroidNetworkCaptureActivator : AndroidNetworkCaptureActivator 
       // dangling proxy / untrusted-cert state.
       try {
         val hash = computeAndroidCertHash(caCert)
-          ?: error("could not compute cert hash (is openssl on PATH?)")
+          ?: error("could not compute the CA cert hash")
         certHash = hash
         installCaOnDevice(hash)
         setProxy("$EMULATOR_HOST:$port")
@@ -361,20 +364,27 @@ object MitmproxyAndroidNetworkCaptureActivator : AndroidNetworkCaptureActivator 
   }
 
   /**
-   * Android names system CA files `<subject_hash_old>.0`. Compute it via host `openssl`
-   * (`-subject_hash_old`), which every dev host has. Returns null if openssl is unavailable.
+   * Android names system CA files `<subject_hash_old>.0`, what `openssl x509 -subject_hash_old`
+   * prints. Computed here rather than by running `openssl`, which Windows hosts don't have.
+   * Returns null if the PEM can't be read.
    */
   private fun computeAndroidCertHash(cert: File): String? = try {
-    val proc = ProcessBuilder(
-      "openssl", "x509", "-inform", "PEM", "-subject_hash_old", "-noout", "-in", cert.absolutePath,
-    ).redirectErrorStream(true).start()
-    val out = proc.inputStream.bufferedReader().use { it.readText() }.trim()
-    proc.waitFor(10, java.util.concurrent.TimeUnit.SECONDS)
-    // Only an 8-hex-char subject hash is accepted, so the value spliced into the device shell in
-    // installCaOnDevice can't carry shell metacharacters.
-    out.lineSequence().firstOrNull { it.matches(Regex("[0-9a-f]{8}")) }
+    val x509 = cert.inputStream().use {
+      java.security.cert.CertificateFactory.getInstance("X.509").generateCertificate(it)
+    } as java.security.cert.X509Certificate
+    androidSubjectHashOld(x509.subjectX500Principal.encoded)
   } catch (t: Throwable) {
-    Console.error("[mitm-capture] openssl hash failed: ${t.message}")
+    Console.error("[mitm-capture] CA subject hash failed: ${t.message}")
     null
+  }
+
+  /**
+   * OpenSSL's `X509_NAME_hash_old`: the first four bytes of the MD5 of the DER-encoded subject, read
+   * little-endian, as eight hex digits.
+   */
+  internal fun androidSubjectHashOld(derSubject: ByteArray): String {
+    val md5 = java.security.MessageDigest.getInstance("MD5").digest(derSubject)
+    val hash = (0 until 4).fold(0L) { acc, i -> acc or ((md5[i].toLong() and 0xff) shl (8 * i)) }
+    return "%08x".format(hash)
   }
 }

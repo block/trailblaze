@@ -1,8 +1,8 @@
 # Trailblaze installer for Windows
 #
 # Downloads a Trailblaze release JAR from GitHub and extracts the Windows launcher the JAR
-# carries (its `trailblaze-launcher.cmd` entry), so the two always match. Windows runs web
-# (Playwright) trails only; Android and iOS device control need a macOS or Linux host.
+# carries (its `trailblaze-launcher.cmd` entry), so the two always match. Windows runs Android
+# and web (Playwright) trails; iOS device control needs a macOS host.
 #
 # Install (Windows PowerShell 5.1 or PowerShell 7):
 #   irm https://raw.githubusercontent.com/block/trailblaze/main/install.ps1 | iex
