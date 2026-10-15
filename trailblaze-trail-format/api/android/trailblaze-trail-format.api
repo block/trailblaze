@@ -647,11 +647,13 @@ public final class xyz/block/trailblaze/yaml/TrailArgMapSerializer : kotlinx/ser
 public final class xyz/block/trailblaze/yaml/TrailArgTokens {
 	public static final field ARGS_PREFIX Ljava/lang/String;
 	public static final field INSTANCE Lxyz/block/trailblaze/yaml/TrailArgTokens;
+	public final fun getTOKEN_REGEX ()Lkotlin/text/Regex;
 	public final fun isArgsToken (Ljava/lang/String;)Z
 	public final fun isValidArgName (Ljava/lang/String;)Z
 	public final fun isValidDottedPath (Ljava/lang/String;)Z
 	public final fun malformedTokenMessage (Ljava/lang/String;)Ljava/lang/String;
 	public final fun scanArgsTokens (Ljava/lang/String;)Ljava/util/List;
+	public final fun tokenBody (Lkotlin/text/MatchResult;)Ljava/lang/String;
 	public final fun topLevelArgName (Ljava/lang/String;)Ljava/lang/String;
 	public final fun validate (Ljava/lang/String;Ljava/util/Set;)Ljava/util/List;
 }

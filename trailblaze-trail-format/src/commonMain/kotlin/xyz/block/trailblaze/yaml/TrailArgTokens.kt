@@ -24,8 +24,22 @@ class MalformedArgTokenException(message: String) : IllegalArgumentException(mes
 object TrailArgTokens {
   const val ARGS_PREFIX: String = "args."
 
-  /** Matches `${...}` and `{{...}}`; group 1/2 is the raw body between the delimiters. */
-  private val TOKEN_REGEX = Regex("""\$\{([^}]*)\}|\{\{([^}]*)\}\}""")
+  /**
+   * Every token spelling — `{{{x}}}`, `{{x}}` and `${x}` — in one left-to-right scan, with
+   * Mustache's precedence: `{{` always opens a tag, so `${{x}}` is a literal `$` and an `{{x}}`
+   * token rather than a `${...}` token named `{x`. A `{` later in a `${...}` body still matches, so
+   * a malformed `${args.a{b}` is scanned and rejected by the dotted-path check. Read a match's body
+   * through [tokenBody]. `AgentMemory` interpolates with this same regex, so check time and
+   * dispatch always see the same tokens.
+   */
+  val TOKEN_REGEX: Regex = Regex("""\{\{\{([^}]+)\}\}\}|\{\{([^}]+)\}\}|\$\{(?!\{)([^}]+)\}""")
+
+  /**
+   * The body of a [TOKEN_REGEX] match with surrounding whitespace trimmed, as Mustache does (`{{ x
+   * }}` is `{{x}}`), or null for a blank body (`{{ }}` is not a token).
+   */
+  fun tokenBody(match: MatchResult): String? =
+    match.groupValues.drop(1).firstOrNull { it.isNotEmpty() }?.trim()?.ifEmpty { null }
 
   /** `name` or `name.sub.sub` — each segment a plain identifier, no whitespace or operators. */
   private val DOTTED_PATH_REGEX = Regex("""[a-zA-Z_][a-zA-Z0-9_]*(\.[a-zA-Z_][a-zA-Z0-9_]*)*""")
@@ -62,7 +76,7 @@ object TrailArgTokens {
   fun scanArgsTokens(text: String): List<ArgTokenRef> =
     TOKEN_REGEX.findAll(text)
       .mapNotNull { m ->
-        val body = m.groupValues[1].ifEmpty { m.groupValues[2] }
+        val body = tokenBody(m) ?: return@mapNotNull null
         if (isArgsToken(body)) ArgTokenRef(raw = m.value, body = body) else null
       }
       .toList()

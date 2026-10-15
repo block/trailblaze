@@ -43,6 +43,40 @@ export type { DiscoverSessionsOptions, LoadSurveysOptions, LoadedSurvey } from "
 export { findWorkspaceConfigDir, loadWorkspace } from "./workspace.js";
 export type { Workspace } from "./workspace.js";
 export { renderMarkdown, renderSummaryLines } from "./report.js";
+export {
+  anyNode,
+  classifierChain,
+  loadYamlWaypoints,
+  matchNode,
+  matchScreen,
+  mergeWaypoints,
+  repositoryPath,
+  repositoryRoot,
+  resolveSpec,
+  screensOf,
+  screenshotName,
+  selectorFromYaml,
+  sessionChain,
+  waypointFindings,
+} from "./waypoints.js";
+export type {
+  Anchor,
+  FieldMatch,
+  HierarchyNode,
+  NodeSelector,
+  Screen,
+  ScreenOptions,
+  ScreenSpec,
+  SelectorPattern,
+  Waypoint,
+  WaypointExample,
+} from "./waypoints.js";
+// A session frozen to JSON and read back, so a survey's tests can run it over a recorded session
+// without the session directory.
+export { REQUEST_BODY_LIMIT, SNAPSHOT_FORMAT } from "./snapshot/format.js";
+export type { SessionSnapshot } from "./snapshot/format.js";
+export { NotInSnapshotError, sessionFromSnapshot } from "./snapshot/read.js";
+export { snapshotOf } from "./snapshot/write.js";
 export type {
   AnalyticsEvent,
   SurveySpec,
@@ -63,5 +97,10 @@ export type {
 
 import { survey } from "./survey.js";
 
-/** Same namespace shape authors know from `trailblaze.tool`: `trailblaze.survey(...)`. */
+/**
+ * Same namespace shape authors know from `trailblaze.tool`: `trailblaze.survey(...)`.
+ *
+ * This module runs on the host, not in a browser: it reads sessions through `node:fs`, and its
+ * YAML readers (`loadYamlWaypoints`, trailmap targets) need Bun.
+ */
 export const trailblaze = { survey };

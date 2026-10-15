@@ -139,8 +139,8 @@ class ToolMemoryInterpolationTest {
 
   @Test
   fun `a memory value containing token-like text is injected literally within one pass`() {
-    // The {{}} pass matches against the string as it stood when the pass started, so text a
-    // replacement injects is NOT rescanned by the same pass.
+    // One pass scans the string as it stood when the pass started, so text a replacement
+    // injects is NOT rescanned.
     val memory = AgentMemory().apply {
       remember("greeting", "hi {{name}}")
       remember("name", "sam")
@@ -152,10 +152,9 @@ class ToolMemoryInterpolationTest {
   }
 
   @Test
-  fun `dollar-brace values feed the double-brace pass within one call`() {
-    // The ${} pass runs BEFORE the {{}} pass, so a ${}-injected value containing {{token}}
-    // text IS resolved by the same call — one boundary pass is enough to trigger the re-scan
-    // when the syntaxes differ.
+  fun `a dollar-brace value containing token-like text is also injected literally within one pass`() {
+    // Every spelling resolves in one left-to-right scan, as Mustache does, so a value injected by
+    // a ${} token is not rescanned either — the same result as the {{}} spelling above.
     val memory = AgentMemory().apply {
       remember("greeting", "hi {{name}}")
       remember("name", "sam")
@@ -163,7 +162,7 @@ class ToolMemoryInterpolationTest {
 
     val dispatched = interpolateMemoryInTool(InputTextTrailblazeTool(text = "\${greeting}"), memory)
 
-    assertThat(dispatched.text).isEqualTo("hi sam")
+    assertThat(dispatched.text).isEqualTo("hi {{name}}")
   }
 
   @Test

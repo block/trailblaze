@@ -759,6 +759,31 @@ describe("discovery", () => {
     await expect(loadSurveys([direct], undefined, { trailmaps: [maps] })).rejects.toThrow(/exported by both/);
   });
 
+  test("a staged trailmap's surveys get the loader's SDK, whatever their own tsconfig points at", async () => {
+    // A trailmap's home repo maps the SDK to its own materialized copy (`.trailblaze/sdk/dist/`),
+    // which does not exist where the trailmap is staged. The loader's copy must win, for both
+    // public subpaths, and a helper the survey imports from a sibling trailmap must see it too.
+    const maps = join(root, "staged-trailmaps");
+    mkdirSync(join(maps, "acme", "surveys"), { recursive: true });
+    mkdirSync(join(maps, "kiosk", "surveys"), { recursive: true });
+    writeFileSync(join(maps, "acme", "trailmap.yaml"), "id: acme\n");
+    writeFileSync(join(maps, "kiosk", "trailmap.yaml"), "id: kiosk\n");
+    const tsconfig = JSON.stringify({ compilerOptions: { paths: { "@trailblaze/scripting/*": ["../../../no-such-sdk/dist/*"] } } });
+    writeFileSync(join(maps, "acme", "surveys", "tsconfig.json"), tsconfig);
+    writeFileSync(join(maps, "kiosk", "surveys", "tsconfig.json"), tsconfig);
+    writeFileSync(
+      join(maps, "acme", "surveys", "shared.ts"),
+      `import { matchesPattern } from "@trailblaze/scripting/matcher";\nexport const literal = (s: string) => matchesPattern("$5.00", s, "native");\n`,
+    );
+    writeFileSync(
+      join(maps, "kiosk", "surveys", "kiosk.survey.ts"),
+      `import { trailblaze, isSurvey } from "@trailblaze/scripting/surveys";\nimport { literal } from "../../acme/surveys/shared";\nexport const kioskPrice = trailblaze.survey({ feature: literal("$5.00") && isSurvey ? "price" : "none", footprint: { tools: {} } });\n`,
+    );
+
+    const loaded = await loadSurveys([], undefined, { trailmaps: [maps] });
+    expect(loaded.map((c) => [c.definition.id, c.definition.spec.feature])).toEqual([["kioskPrice", "price"]]);
+  });
+
   test("a workspace is found from anywhere inside it, and carries its own and its trailmaps' surveys", async () => {
     // Running surveys should need no paths: the repo a survey lives in is the workspace it runs in.
     const sdk = JSON.stringify(join(import.meta.dir, "index.ts"));

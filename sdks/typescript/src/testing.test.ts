@@ -148,6 +148,17 @@ describe("createMockClient: tools Proxy guards", () => {
 });
 
 describe("createMockContext", () => {
+  test("memory.interpolate keeps a literal $ before a {{token}}", () => {
+    const ctx = createMockContext({ platform: "ios", memory: { amount: "5" } });
+    expect(ctx.memory.interpolate("pay ${{amount}}")).toBe("pay $5");
+  });
+
+  test("memory.interpolate follows the Mustache-style grammar of the real memory", () => {
+    const ctx = createMockContext({ platform: "ios", memory: { amount: "5", template: "{{amount}}" } });
+    expect(ctx.memory.interpolate("pay {{ amount }} {{{amount}}} ${ amount }")).toBe("pay 5 5 5");
+    expect(ctx.memory.interpolate("{{template}}")).toBe("{{amount}}");
+  });
+
   test("fills defaults for everything except platform", () => {
     const ctx = createMockContext({ platform: "web" });
     expect(ctx.device.platform).toBe("web");

@@ -128,6 +128,42 @@ describe("createMemory: interpolate", () => {
     expect(m.interpolate("{{k}}")).toBe("{{k}}");
   });
 
+  test("a literal $ directly before a {{token}} stays literal, even in blank-unknown mode", () => {
+    // `${{amount}}` is a `$` followed by an `{{amount}}` token. The `${...}` pattern must not
+    // claim `${{amount}` as a token named `{amount`, or blank mode erases the `$` and the value.
+    const ENV_VAR = "TRAILBLAZE_MEMORY_BLANK_UNKNOWN_TOKENS";
+    const prior = process.env[ENV_VAR];
+    const m = createMemory({ amount: "5" });
+    try {
+      expect(m.interpolate("pay ${{amount}}")).toBe("pay $5");
+      process.env[ENV_VAR] = "1";
+      expect(m.interpolate("pay ${{amount}}")).toBe("pay $5");
+    } finally {
+      if (prior === undefined) delete process.env[ENV_VAR];
+      else process.env[ENV_VAR] = prior;
+    }
+  });
+
+  test("whitespace inside a token is ignored and a blank body is not a token, as in Mustache", () => {
+    const m = createMemory({ amount: "5" });
+    expect(m.interpolate("pay {{ amount }}")).toBe("pay 5");
+    expect(m.interpolate("pay {{ memory.amount }}")).toBe("pay 5");
+    expect(m.interpolate("pay ${ amount }")).toBe("pay 5");
+    expect(m.interpolate("pay {{ }}")).toBe("pay {{ }}");
+  });
+
+  test("a triple-brace token resolves like a double-brace one", () => {
+    const m = createMemory({ amount: "5" });
+    expect(m.interpolate("pay {{{amount}}}")).toBe("pay 5");
+    expect(m.interpolate("pay ${{{ amount }}}")).toBe("pay $5");
+  });
+
+  test("an inserted value is never interpolated again", () => {
+    const m = createMemory({ template: "{{secret}}", secret: "hunter2" });
+    expect(m.interpolate("{{template}}")).toBe("{{secret}}");
+    expect(m.interpolate("${template}")).toBe("{{secret}}");
+  });
+
   test("TRAILBLAZE_MEMORY_BLANK_UNKNOWN_TOKENS restores blank substitution, read per call", () => {
     const ENV_VAR = "TRAILBLAZE_MEMORY_BLANK_UNKNOWN_TOKENS";
     const prior = process.env[ENV_VAR];

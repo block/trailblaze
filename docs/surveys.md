@@ -131,8 +131,29 @@ re-runs survey source in the browser, where a scope inferred from the file's loc
 lost. Export names stay unique across every survey loaded, trailmap or not.
 
 A survey imports the SDK as `@trailblaze/scripting/surveys` wherever it lives. The loader
-supplies that module itself, so a trailmap's `surveys/` needs no tsconfig `paths` mapping or
-installed package to run; add a mapping only if you want editor types.
+supplies that module itself (and `@trailblaze/scripting/matcher`), so a trailmap's `surveys/`
+needs no tsconfig `paths` mapping or installed package to run.
+
+To typecheck a trailmap's surveys and run their `*.test.ts` in the repo that owns the trailmap,
+point a `surveys/tsconfig.json` at the SDK `trailblaze check` materializes — the same mapping the
+generated `tools/tsconfig.json` uses:
+
+```json
+{ "compilerOptions": { "paths": { "@trailblaze/scripting/*": ["../../../../.trailblaze/sdk/dist/*"] } } }
+```
+
+`dist/surveys.{d.ts,js}` is the whole authoring surface, including the waypoint engine and session
+snapshots, and its declarations need no node types. The module runs on the host under Bun, not in a
+browser: it reads sessions through `node:fs`, and its YAML readers use `Bun.YAML`. A survey may import a helper from a sibling
+trailmap's `surveys/` by relative path when the two trailmaps always ship together.
+
+### Waypoints
+
+A waypoint names a screen by the view-tree nodes that prove it, so a survey can report which screens
+a session reached. `loadYamlWaypoints(dir, repoRoot)` reads `*.waypoint.yaml` files, and
+`waypointFindings(session, waypoints, { screenshotHosts })` matches them against every view tree
+the session logged. A finding's screenshot link is kept only when it points at a host the caller
+names in `screenshotHosts`, so a report never links somewhere unexpected.
 
 ## What a session exposes
 

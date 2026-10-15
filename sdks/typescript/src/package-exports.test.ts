@@ -22,7 +22,7 @@ const subpaths = Object.keys(packageJson.exports);
 test("the exports map declares at least the known subpaths", () => {
   // A floor, not an exhaustive list — this guards against a truncated / malformed map
   // making the loop below vacuous (zero iterations would otherwise pass silently).
-  expect(subpaths).toEqual(expect.arrayContaining([".", "./in-process", "./sub-process", "./testing", "./matcher"]));
+  expect(subpaths).toEqual(expect.arrayContaining([".", "./in-process", "./sub-process", "./testing", "./matcher", "./surveys"]));
 });
 
 test.each(subpaths)("the %s subpath resolves to a loadable module", async (subpath) => {

@@ -172,7 +172,11 @@ So for a trail that must replay with no LLM, seed the value with
 Recall a stored variable in any later step by interpolating it as
 `{{variable}}` or `${variable}` — in an `inputText`, a search field, an
 `assertVisibleWithText`, etc. The token is substituted at the dispatch
-boundary before the step's tool executes. (This trail-step recall is a
+boundary before the step's tool executes. Tokens follow Mustache's rules:
+spaces inside the braces are ignored (`{{ variable }}`), `{{{variable}}}`
+works too, a `$` right before a token stays a literal `$` (`${{amount}}`
+gives `$5`), and a substituted value is never scanned for tokens again.
+(This trail-step recall is a
 separate mechanism from a YAML-*defined* tool's `tools:` body, which
 interpolates only `{{params.*}}`.)
 

@@ -104,6 +104,27 @@ interface TrailblazeSdkDtsBundleExtension {
    * `../generated/selectors.js`, which erase), so the bundle stays small.
    */
   val sdkMatcherRuntimeOutputFile: RegularFileProperty
+
+  /**
+   * Path to the generated `dist/surveys.d.ts` — the declaration bundle for the
+   * `@trailblaze/scripting/surveys` subpath module (the session-survey authoring surface:
+   * `trailblaze.survey`, the session query types, waypoint matching, session snapshots).
+   * Generated from `src/surveys/index.ts`. Shipped so a trailmap's `surveys/` typechecks and
+   * its `*.test.ts` runs in the trailmap's own repo, the way its tools' tests do.
+   *
+   * Paired with [sdkSurveysRuntimeOutputFile] on the same "both or neither" invariant.
+   */
+  val sdkDtsSurveysBundleOutputFile: RegularFileProperty
+
+  /**
+   * Path to the generated `dist/surveys.js` — the runtime ESM module bun loads when a
+   * trailmap survey or its `*.test.ts` imports from `@trailblaze/scripting/surveys`.
+   *
+   * **Bundled for the node platform**, unlike the other runtime bundles: surveys run on the
+   * host over finished session directories, never in the in-process QuickJS runtime, so the
+   * bundle keeps its `node:` builtin imports (`fs`, `path`, `zlib`, ...) and bun supplies them.
+   */
+  val sdkSurveysRuntimeOutputFile: RegularFileProperty
 }
 
 /**
@@ -140,6 +161,8 @@ class TrailblazeSdkDtsBundlePlugin : Plugin<Project> {
       task.sdkRuntimeBundleOutputFile.set(ext.sdkRuntimeBundleOutputFile)
       task.sdkDtsMatcherBundleOutputFile.set(ext.sdkDtsMatcherBundleOutputFile)
       task.sdkMatcherRuntimeOutputFile.set(ext.sdkMatcherRuntimeOutputFile)
+      task.sdkDtsSurveysBundleOutputFile.set(ext.sdkDtsSurveysBundleOutputFile)
+      task.sdkSurveysRuntimeOutputFile.set(ext.sdkSurveysRuntimeOutputFile)
       task.projectDir.set(project.layout.projectDirectory)
       task.installLogFile.set(project.layout.buildDirectory.file("tmp/bundle-trailblaze-sdk-install.log"))
       task.dtsLogFile.set(project.layout.buildDirectory.file("tmp/bundle-trailblaze-sdk-dts.log"))
@@ -148,6 +171,8 @@ class TrailblazeSdkDtsBundlePlugin : Plugin<Project> {
       task.runtimeBundleLogFile.set(project.layout.buildDirectory.file("tmp/bundle-trailblaze-sdk-runtime.log"))
       task.matcherDtsLogFile.set(project.layout.buildDirectory.file("tmp/bundle-trailblaze-sdk-dts-matcher.log"))
       task.matcherRuntimeLogFile.set(project.layout.buildDirectory.file("tmp/bundle-trailblaze-sdk-matcher-runtime.log"))
+      task.surveysDtsLogFile.set(project.layout.buildDirectory.file("tmp/bundle-trailblaze-sdk-dts-surveys.log"))
+      task.surveysRuntimeLogFile.set(project.layout.buildDirectory.file("tmp/bundle-trailblaze-sdk-surveys-runtime.log"))
       declareSdkDtsBundleInputs(task, ext, project)
       task.outputs.files(
         project.provider {
@@ -194,6 +219,24 @@ class TrailblazeSdkDtsBundlePlugin : Plugin<Project> {
           }
         },
       ).withPropertyName("sdkMatcherRuntime")
+      task.outputs.files(
+        project.provider {
+          if (ext.sdkDtsSurveysBundleOutputFile.isPresent) {
+            project.files(ext.sdkDtsSurveysBundleOutputFile)
+          } else {
+            project.files()
+          }
+        },
+      ).withPropertyName("sdkDtsSurveysBundle")
+      task.outputs.files(
+        project.provider {
+          if (ext.sdkSurveysRuntimeOutputFile.isPresent) {
+            project.files(ext.sdkSurveysRuntimeOutputFile)
+          } else {
+            project.files()
+          }
+        },
+      ).withPropertyName("sdkSurveysRuntime")
 
     }
 
@@ -227,6 +270,14 @@ abstract class BundleTrailblazeSdkDtsTask : DefaultTask() {
   @get:OutputFile
   abstract val sdkMatcherRuntimeOutputFile: RegularFileProperty
 
+  @get:Optional
+  @get:OutputFile
+  abstract val sdkDtsSurveysBundleOutputFile: RegularFileProperty
+
+  @get:Optional
+  @get:OutputFile
+  abstract val sdkSurveysRuntimeOutputFile: RegularFileProperty
+
   @get:Internal
   abstract val projectDir: DirectoryProperty
 
@@ -251,6 +302,12 @@ abstract class BundleTrailblazeSdkDtsTask : DefaultTask() {
   @get:Internal
   abstract val matcherRuntimeLogFile: RegularFileProperty
 
+  @get:Internal
+  abstract val surveysDtsLogFile: RegularFileProperty
+
+  @get:Internal
+  abstract val surveysRuntimeLogFile: RegularFileProperty
+
   @TaskAction
   fun bundle() {
     requireExtensionConfigured(
@@ -260,6 +317,8 @@ abstract class BundleTrailblazeSdkDtsTask : DefaultTask() {
       sdkTestingRuntimeOutputFilePresent = sdkTestingRuntimeOutputFile.isPresent,
       sdkDtsMatcherBundleOutputFilePresent = sdkDtsMatcherBundleOutputFile.isPresent,
       sdkMatcherRuntimeOutputFilePresent = sdkMatcherRuntimeOutputFile.isPresent,
+      sdkDtsSurveysBundleOutputFilePresent = sdkDtsSurveysBundleOutputFile.isPresent,
+      sdkSurveysRuntimeOutputFilePresent = sdkSurveysRuntimeOutputFile.isPresent,
     )
     val sdkDir = trailblazeSdkDir.get().asFile
     val projectDirectory = projectDir.get().asFile
@@ -372,6 +431,44 @@ abstract class BundleTrailblazeSdkDtsTask : DefaultTask() {
           "(${matcherRuntimeFile.length() / 1024} KiB).",
       )
     }
+
+    if (sdkDtsSurveysBundleOutputFile.isPresent) {
+      val surveysDtsFile = sdkDtsSurveysBundleOutputFile.get().asFile
+      logger.lifecycle(
+        "Regenerating SDK surveys .d.ts bundle → ${surveysDtsFile.relativeToOrSelf(projectDirectory)}",
+      )
+      runDtsBundleGenerator(
+        sdkDir = sdkDir,
+        entryFile = File(sdkDir, "src/surveys/index.ts"),
+        outputFile = surveysDtsFile,
+        logFile = surveysDtsLogFile.get().asFile,
+        appendRuntimeGlobals = false,
+      )
+      logger.lifecycle(
+        "Regenerated ${surveysDtsFile.relativeToOrSelf(projectDirectory)} " +
+          "(${surveysDtsFile.length() / 1024} KiB).",
+      )
+    }
+
+    if (sdkSurveysRuntimeOutputFile.isPresent) {
+      val surveysRuntimeFile = sdkSurveysRuntimeOutputFile.get().asFile
+      logger.lifecycle(
+        "Regenerating SDK surveys runtime ESM bundle → ${surveysRuntimeFile.relativeToOrSelf(projectDirectory)}",
+      )
+      // Node platform: surveys read session directories on the host. See
+      // [TrailblazeSdkDtsBundleExtension.sdkSurveysRuntimeOutputFile].
+      runEsbuildEsmBundle(
+        sdkDir = sdkDir,
+        entryFile = File(sdkDir, "src/surveys/index.ts"),
+        outputFile = surveysRuntimeFile,
+        logFile = surveysRuntimeLogFile.get().asFile,
+        platform = "node",
+      )
+      logger.lifecycle(
+        "Regenerated ${surveysRuntimeFile.relativeToOrSelf(projectDirectory)} " +
+          "(${surveysRuntimeFile.length() / 1024} KiB).",
+      )
+    }
   }
 }
 
@@ -382,6 +479,8 @@ private fun requireExtensionConfigured(
   sdkTestingRuntimeOutputFilePresent: Boolean,
   sdkDtsMatcherBundleOutputFilePresent: Boolean,
   sdkMatcherRuntimeOutputFilePresent: Boolean,
+  sdkDtsSurveysBundleOutputFilePresent: Boolean,
+  sdkSurveysRuntimeOutputFilePresent: Boolean,
 ) {
   if (!trailblazeSdkDirPresent || !sdkDtsBundleOutputFilePresent) {
     throw GradleException(
@@ -414,6 +513,15 @@ private fun requireExtensionConfigured(
     runtimePropertyName = "sdkMatcherRuntimeOutputFile",
     runtimeFileName = "matcher.js",
     runtimeSet = sdkMatcherRuntimeOutputFilePresent,
+  )
+  requireSubpathPairWired(
+    subpath = "surveys",
+    dtsPropertyName = "sdkDtsSurveysBundleOutputFile",
+    dtsFileName = "surveys.d.ts",
+    dtsSet = sdkDtsSurveysBundleOutputFilePresent,
+    runtimePropertyName = "sdkSurveysRuntimeOutputFile",
+    runtimeFileName = "surveys.js",
+    runtimeSet = sdkSurveysRuntimeOutputFilePresent,
   )
 }
 
@@ -837,7 +945,13 @@ private fun runEsbuildTranspile(sdkDir: File, entryFile: File, outputFile: File,
  * across machines. Don't add timestamped banners or hash-based suffixes — they would break
  * that reproducibility.
  */
-private fun runEsbuildEsmBundle(sdkDir: File, entryFile: File, outputFile: File, logFile: File) {
+private fun runEsbuildEsmBundle(
+  sdkDir: File,
+  entryFile: File,
+  outputFile: File,
+  logFile: File,
+  platform: String = "neutral",
+) {
   val esbuildBin = File(sdkDir, "node_modules/.bin/esbuild")
   if (!esbuildBin.exists()) {
     throw GradleException(
@@ -856,7 +970,7 @@ private fun runEsbuildEsmBundle(sdkDir: File, entryFile: File, outputFile: File,
     esbuildBin.absolutePath,
     entryFile.absolutePath,
     "--bundle",
-    "--platform=neutral",
+    "--platform=$platform",
     "--format=esm",
     "--target=es2020",
     "--main-fields=module,main",

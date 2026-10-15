@@ -37,6 +37,18 @@ class AgentMemoryArgsTest {
   }
 
   @Test
+  fun `whole-scalar arg is native in every token spelling`() {
+    val memory = memoryWithArgs("retries" to JsonPrimitive(3))
+    for (token in listOf("{{ args.retries }}", "{{{args.retries}}}", "\${args.retries}", "\${ args.retries }")) {
+      val result = memory.interpolateVariablesInJson(JsonPrimitive(token)).jsonPrimitive
+      assertEquals(3, result.int, token)
+      assertTrue(!result.isString, "$token must substitute a native number")
+    }
+    // A literal `$` before the token makes it text, not a whole-scalar token.
+    assertEquals("\$3", memory.interpolateVariablesInJson(JsonPrimitive("\${{args.retries}}")).jsonPrimitive.content)
+  }
+
+  @Test
   fun `whole-scalar boolean arg substitutes the native JSON boolean`() {
     val memory = memoryWithArgs("verbose" to JsonPrimitive(true))
     val result = memory.interpolateVariablesInJson(JsonPrimitive("{{args.verbose}}"))

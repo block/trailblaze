@@ -110,11 +110,14 @@ function createMockMemory(snapshot: Record<string, unknown> | undefined): Trailb
     keys() { return [...map.keys()]; },
     delete(key) { map.delete(key); },
     interpolate(template) {
-      let result = template;
-      for (const re of [/\$\{([^}]+)\}/g, /\{\{([^}]+)\}\}/g]) {
-        result = result.replace(re, (_match, name: string) => get(name) ?? "");
-      }
-      return result;
+      // Same grammar as `memory.ts` (copied, not imported: this module has no runtime imports).
+      return template.replace(
+        /\{\{\{([^}]+)\}\}\}|\{\{([^}]+)\}\}|\$\{(?!\{)([^}]+)\}/g,
+        (match, triple?: string, double?: string, dollar?: string) => {
+          const name = (triple ?? double ?? dollar ?? "").trim();
+          return name === "" ? match : get(name) ?? "";
+        },
+      );
     },
     setJson(key, value) { map.set(key, JSON.stringify(value)); },
     getJson<T,>(key: string): T | undefined {

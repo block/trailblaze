@@ -11,6 +11,7 @@ import { type SurveyDefinition, isSurvey, withId } from "./survey.js";
 import { isSessionDirectory } from "./session.js";
 import { findTrailmapFiles } from "./targets.js";
 import * as surveysSdk from "./index.js";
+import * as matcherSdk from "../matcher/index.js";
 
 const MAX_DEPTH = 4;
 const SURVEY_FILE = /\.survey\.(ts|js|mjs|mts)$/;
@@ -148,9 +149,10 @@ interface BunPluginHost {
 let sdkServed = false;
 
 /**
- * Serves `@trailblaze/scripting/surveys` to survey files from this loader's own copy of the SDK.
- * A survey in another repo's trailmap then imports it with no tsconfig `paths` or installed
- * package, the way the shared surveys resolve it inside this repo.
+ * Serves `@trailblaze/scripting/surveys` and `/matcher` to survey files from this loader's own copy
+ * of the SDK. A survey in another repo's trailmap then imports them with no installed package, and
+ * whatever its own tsconfig `paths` point at (that repo's materialized SDK, absent where the
+ * trailmap is staged), every survey shares the one copy the runner's types and classes come from.
  */
 function serveSdkToSurveys(): void {
   const bun = (globalThis as { Bun?: BunPluginHost }).Bun;
@@ -160,6 +162,7 @@ function serveSdkToSurveys(): void {
     name: "trailblaze-surveys-sdk",
     setup(build) {
       build.module("@trailblaze/scripting/surveys", () => ({ exports: surveysSdk, loader: "object" }));
+      build.module("@trailblaze/scripting/matcher", () => ({ exports: matcherSdk, loader: "object" }));
     },
   });
 }

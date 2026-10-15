@@ -232,12 +232,8 @@ class AgentMemory {
   }
 
   /** True when [text] contains an `args.` token whose top-level arg is seeded as a string primitive. */
-  private fun referencesSeededStringArg(text: String): Boolean = TOKEN_PATTERNS.any { pattern ->
-    pattern.findAll(text).any { match ->
-      val body = match.groupValues[1]
-      body.startsWith(TrailArgTokens.ARGS_PREFIX) &&
-        (_args[TrailArgTokens.topLevelArgName(body)] as? JsonPrimitive)?.isString == true
-    }
+  private fun referencesSeededStringArg(text: String): Boolean = TrailArgTokens.scanArgsTokens(text).any { ref ->
+    (_args[TrailArgTokens.topLevelArgName(ref.body)] as? JsonPrimitive)?.isString == true
   }
 
   /** Set a single arg value directly (used by the RPC crossing that rehydrates args on-device). */
@@ -339,37 +335,28 @@ class AgentMemory {
     input: String,
     blankUnknownTokens: Boolean,
     warnUnknownTokens: Boolean = true,
-  ): String {
-    var result = input
-    for (pattern in TOKEN_PATTERNS) {
-      pattern.findAll(result).forEach { matchResult ->
-        val variableName = matchResult.groupValues[1]
-        if (TrailArgTokens.isArgsToken(variableName)) {
-          // A deferred (array/object) arg is KNOWN, just not yet substitutable — it must never
-          // fall into the unknown-token sink below, which would let the blank-kill-switch turn a
-          // declared value into a silently-wrong empty string. Only a genuinely unknown arg does.
-          when (val resolution = resolveArgToken(variableName)) {
-            is ArgTokenResolution.Resolved ->
-              result = result.replace(matchResult.value, resolution.text)
-            ArgTokenResolution.Deferred -> Unit
-            ArgTokenResolution.Unknown ->
-              result = leaveOrBlankUnknownToken(result, matchResult.value, variableName, blankUnknownTokens, warnUnknownTokens)
-          }
-        } else {
-          val variableValue = lookupVariable(variableName)
-          if (variableValue != null) {
-            result = result.replace(matchResult.value, variableValue)
-          } else {
-            result = leaveOrBlankUnknownToken(result, matchResult.value, variableName, blankUnknownTokens, warnUnknownTokens)
-          }
+  ): String =
+    // One left-to-right pass, like Mustache: an inserted value is never scanned again, so a value
+    // that happens to contain `{{x}}` comes out verbatim.
+    TrailArgTokens.TOKEN_REGEX.replace(input) { match ->
+      val variableName = TrailArgTokens.tokenBody(match) ?: return@replace match.value
+      if (TrailArgTokens.isArgsToken(variableName)) {
+        // A deferred (array/object) arg is KNOWN, just not yet substitutable — it must never
+        // fall into the unknown-token sink below, which would let the blank-kill-switch turn a
+        // declared value into a silently-wrong empty string. Only a genuinely unknown arg does.
+        when (val resolution = resolveArgToken(variableName)) {
+          is ArgTokenResolution.Resolved -> resolution.text
+          ArgTokenResolution.Deferred -> match.value
+          ArgTokenResolution.Unknown ->
+            unknownTokenReplacement(match.value, variableName, blankUnknownTokens, warnUnknownTokens)
         }
+      } else {
+        lookupVariable(variableName)
+          ?: unknownTokenReplacement(match.value, variableName, blankUnknownTokens, warnUnknownTokens)
       }
     }
-    return result
-  }
 
-  private fun leaveOrBlankUnknownToken(
-    result: String,
+  private fun unknownTokenReplacement(
     rawToken: String,
     variableName: String,
     blankUnknownTokens: Boolean,
@@ -378,7 +365,7 @@ class AgentMemory {
     if (warnUnknownTokens) {
       warnUnknownTokenOnce(rawToken, variableName, blankUnknownTokens)
     }
-    return if (blankUnknownTokens) result.replace(rawToken, "") else result
+    return if (blankUnknownTokens) "" else rawToken
   }
 
   /** The outcome of resolving an `args.` token body to its embedded-string form. */
@@ -537,21 +524,10 @@ class AgentMemory {
   }
 }
 
-/** Token spellings recognized by interpolation: `${varName}` and `{{varName}}`. */
-private val TOKEN_PATTERNS = listOf(
-  Regex("\\$\\{([^}]+)\\}"),
-  Regex("\\{\\{([^}]+)\\}\\}"),
-)
-
-/** Anchored single-token spellings for [wholeScalarArgTokenBody] — hoisted like [TOKEN_PATTERNS]
- *  (this runs per string scalar on the dispatch path; no per-call recompilation). */
-private val WHOLE_ARG_TOKEN_CURLY = Regex("""^\{\{(args\.[^}]*)\}\}$""")
-private val WHOLE_ARG_TOKEN_DOLLAR = Regex("""^\$\{(args\.[^}]*)\}$""")
-
-/** If [content] is exactly one `${args.…}` / `{{args.…}}` token (no surrounding text), its body. */
+/** If [content] is exactly one `args.` token in any spelling (no surrounding text), its body. */
 private fun wholeScalarArgTokenBody(content: String): String? {
-  val match = WHOLE_ARG_TOKEN_CURLY.matchEntire(content) ?: WHOLE_ARG_TOKEN_DOLLAR.matchEntire(content)
-  return match?.groupValues?.get(1)
+  val match = TrailArgTokens.TOKEN_REGEX.matchEntire(content) ?: return null
+  return TrailArgTokens.tokenBody(match)?.takeIf(TrailArgTokens::isArgsToken)
 }
 
 /**

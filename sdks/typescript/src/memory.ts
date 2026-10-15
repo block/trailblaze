@@ -129,10 +129,11 @@ export interface DrainableMemory extends TrailblazeMemory {
   [DRAIN_DELTA](): MemoryDelta;
 }
 
-const INTERPOLATE_PATTERNS: readonly RegExp[] = [
-  /\$\{([^}]+)\}/g,
-  /\{\{([^}]+)\}\}/g,
-];
+// Every token spelling — `{{{x}}}`, `{{x}}` and `${x}` — in one left-to-right scan, with
+// Mustache's precedence: `{{` always opens a tag, so `${{x}}` is a literal `$` and an `{{x}}`
+// token. A body is trimmed (`{{ x }}` is `{{x}}`); a blank one is not a token. Mirrors the Kotlin
+// `TrailArgTokens.TOKEN_REGEX` / `tokenBody`; both sides must change together.
+const INTERPOLATE_PATTERN = /\{\{\{([^}]+)\}\}\}|\{\{([^}]+)\}\}|\$\{(?!\{)([^}]+)\}/g;
 
 /**
  * Kill-switch (read per call): restore the silent resolve-to-empty-string behavior for unknown
@@ -259,20 +260,19 @@ export function createMemory(snapshot: Record<string, string> | undefined): Trai
 
   const interpolate = (template: string): string => {
     const blankUnknown = blankUnknownTokensRequestedViaEnv();
-    let result = template;
-    for (const pattern of INTERPOLATE_PATTERNS) {
-      // Fresh regex per use — the `g` flag means the regex object carries `lastIndex`
-      // state that would leak across calls. Cheap to recreate; cheaper than the bugs
-      // a forgotten `lastIndex = 0` produces.
-      const re = new RegExp(pattern.source, "g");
-      result = result.replace(re, (match, name: string) => {
-        const value = lookupToken(name);
-        if (value !== undefined) return value;
-        warnUnknownTokenOnce(match, name, blankUnknown);
-        return blankUnknown ? "" : match;
-      });
-    }
-    return result;
+    // Fresh regex per use — the `g` flag means the regex object carries `lastIndex`
+    // state that would leak across calls. Cheap to recreate; cheaper than the bugs
+    // a forgotten `lastIndex = 0` produces. One pass, like Mustache: an inserted value
+    // is never scanned again.
+    const re = new RegExp(INTERPOLATE_PATTERN.source, "g");
+    return template.replace(re, (match, triple?: string, double?: string, dollar?: string) => {
+      const name = (triple ?? double ?? dollar ?? "").trim();
+      if (name === "") return match;
+      const value = lookupToken(name);
+      if (value !== undefined) return value;
+      warnUnknownTokenOnce(match, name, blankUnknown);
+      return blankUnknown ? "" : match;
+    });
   };
 
   const setJson = <T,>(key: string, value: T): void => {

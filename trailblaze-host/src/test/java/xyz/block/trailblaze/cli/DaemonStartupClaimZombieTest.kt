@@ -179,13 +179,16 @@ class DaemonStartupClaimZombieTest {
    * A parent that `exec`s away can no longer reap, so its already-exited child stays defunct for the
    * parent's lifetime — the state a desktop-app JVM leaves an exited daemon child in. Portable POSIX
    * shell on purpose: no interpreter beyond the `sh` and `ps` the rest of this claim suite uses.
+   *
+   * The child sleeps a second so it exits after the `exec`. A child that exits while the parent is
+   * still the shell can be reaped by it (dash does, intermittently), and then there is no zombie.
    */
   private fun withZombie(body: (pid: Long, identity: String) -> Unit) {
     assumeTrue(
       "zombie process states, `ps -o stat=` and POSIX `sh` are not available on Windows",
       !System.getProperty("os.name").orEmpty().startsWith("Windows", ignoreCase = true),
     )
-    val fixture = ProcessBuilder("sh", "-c", "sleep 0 & printf '%s\\n' \$!; exec sleep 600")
+    val fixture = ProcessBuilder("sh", "-c", "sleep 1 & printf '%s\\n' \$!; exec sleep 600")
       .redirectError(ProcessBuilder.Redirect.DISCARD)
       .start()
     try {
@@ -193,7 +196,7 @@ class DaemonStartupClaimZombieTest {
       assertTrue(zombiePid != null, "the zombie fixture never reported a child PID")
 
       // Without a real zombie every assertion below is vacuous, so this is a failure, not a skip.
-      // Bounded only to contain a hang — the fork and its exit are immediate.
+      // Bounded only to contain a hang — the child exits a second after the fork.
       val deadline = System.nanoTime() + SECONDS.toNanos(30)
       var status = psField("stat=", zombiePid)
       while (!status.startsWith("Z") && System.nanoTime() < deadline) {
